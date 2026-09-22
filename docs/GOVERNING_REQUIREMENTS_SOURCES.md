@@ -49,8 +49,8 @@ The parser also verifies the source procedure catalogs: `T01`–`T08` in the ori
 Run the deterministic registry builder and focused test from the repository root:
 
 ```powershell
-wsl.exe -d Ubuntu -- bash -lc "cd /mnt/c/Users/hakim/LumaOS && python3 scripts/build_requirement_registry.py --check"
-wsl.exe -d Ubuntu -- bash -lc "cd /mnt/c/Users/hakim/LumaOS && python3 -m unittest tests.test_requirement_registry -v"
+wsl.exe -d Ubuntu -- bash -lc "cd /mnt/c/path/to/LumaOS && python3 scripts/build_requirement_registry.py --check"
+wsl.exe -d Ubuntu -- bash -lc "cd /mnt/c/path/to/LumaOS && python3 -m unittest tests.test_requirement_registry -v"
 ```
 
 Any content, package, title, revision-line, requirement-catalog, or procedure-catalog change fails validation until the controlled source record and affected traceability have been reviewed deliberately.

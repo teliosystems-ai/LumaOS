@@ -169,6 +169,34 @@
         "G0-BLK-006",
         "G0-BLK-008"
       ]
+    },
+    {
+      "id": "WL-007",
+      "title": "Pinned Qwen3-1.7B local inference integration smoke",
+      "target_gate": "G1-development-non-closing",
+      "profiles": [
+        "Windows-11-native-development",
+        "Ubuntu-26.04-WSL2-development"
+      ],
+      "owner": "inference-lead",
+      "status": "development-ready",
+      "fixture": {
+        "classification": "licensed-external-not-in-git",
+        "locator": "Qwen/Qwen3-1.7B-GGUF@7fb011e9aee6e4dc7adf8430df9ea8de6a466aa3/Qwen3-1.7B-Q4_K_M.gguf",
+        "digest": "sha256:228fb5627f7510b8b3516cdb6435e4b0d2a2bf330fe5b0ab19284a3570a8bb1f"
+      },
+      "oracle": "The pinned loopback runtime returns the exact requested marker, reports measured completion tokens, remains local-only, and the Luma adapter binds the result to a current resource lease without marking it simulated.",
+      "required_evidence": [
+        "pinned model and runtime digests",
+        "Windows-native CUDA smoke",
+        "Ubuntu-WSL2 CPU smoke",
+        "loopback OpenAI-compatible endpoint through the Luma lease-fenced adapter"
+      ],
+      "evidence": [
+        "docs/gates/g1/development_model_selection.json",
+        "docs/gates/g1/local_model_smoke_2026-09-22.json"
+      ],
+      "limitations": "Development smoke only. The model is 1.7B, both profiles share one physical laptop, WSL is not native Ubuntu certification, and this workload does not replace the governed 4-6B comparison or real 400-405B experiment."
     }
   ]
 }

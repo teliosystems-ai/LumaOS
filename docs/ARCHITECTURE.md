@@ -162,7 +162,7 @@ The supported `0.1.0` artifact is the checksumed source archive created by `scri
 
 The supported process shape is one operator, one local process, one local state directory, and one browser. Ubuntu 24.04 is the primary target. Windows 11 is supported through WSL2 with Ubuntu 24.04. The systemd unit is optional and runs as a user service.
 
-There is no supported reverse proxy, container deployment, multi-user tenancy, privilege separation daemon, bootable image, dual-boot installer, VM manager, 400B model configuration, or cluster topology in this release.
+There is no supported reverse proxy, container deployment, multi-user tenancy, privilege separation daemon, bootable image, dual-boot installer, VM manager, 400–405B model configuration, or cluster topology in this release.
 
 ## Change discipline
 

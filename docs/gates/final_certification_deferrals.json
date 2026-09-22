@@ -1,0 +1,96 @@
+{
+  "schema_version": 1,
+  "record_id": "FINAL-CERT-DEFERRALS-2026-09-22-001",
+  "recorded_on": "2026-09-22",
+  "owner": "requirements-and-release-owner",
+  "development_assessment": "complete-with-deferrals",
+  "certification_assessment": "blocked",
+  "claim_boundary": "This record authorizes continued repository and local-model development on the current native Windows host and Ubuntu WSL guest. It does not waive, pass, narrow, or replace any governing requirement or required final OS certification evidence.",
+  "deferrals": [
+    {
+      "id": "CERT-DEF-001",
+      "gates": ["G0", "G1"],
+      "scope": "two independent physical A1 reference boards",
+      "reason": "Only one physical laptop is available. Native Windows and its Ubuntu WSL guest are two software environments on the same machine.",
+      "required_environment": ["designated E1", "designated E2"],
+      "required_evidence": "Complete firmware/device inventories and the governed offline workflow, failure, pressure, recovery, and performance suite on both boards.",
+      "owner": "platform-lead",
+      "status": "deferred-to-final-certification"
+    },
+    {
+      "id": "CERT-DEF-002",
+      "gates": ["G0", "G1", "G2"],
+      "scope": "Ubuntu 24.04 reproducible baseline and Ubuntu migration lab",
+      "reason": "The current Ubuntu environment is a 26.04 LTS WSL2 guest, not a native 24.04 baseline or migration lab.",
+      "required_environment": ["Ubuntu 24.04 on E1 and E2", "E8 matched 24.04/26.04 images on both A1 boards and one server"],
+      "required_evidence": "Pinned image/package provenance, repeatable construction, native boot, Secure Boot, upgrade, data migration, rollback, and compatibility results.",
+      "owner": "release-engineer",
+      "status": "deferred-to-final-certification"
+    },
+    {
+      "id": "CERT-DEF-003",
+      "gates": ["G0", "G1", "G2"],
+      "scope": "destructive installation, boot, storage, power-loss, and recovery fixtures",
+      "reason": "No separately identified disposable disks or firmware-key recovery fixture is available in the current environment.",
+      "required_environment": ["disposable E1 disk", "disposable E2 disk", "E8 recovery fixtures"],
+      "required_evidence": "Installation target safety, signed UKI/A-B boot, dm-verity, LUKS2 recovery, interrupted update, rollback, power-loss, and model-independent recovery results.",
+      "owner": "qa-lead",
+      "status": "deferred-to-final-certification"
+    },
+    {
+      "id": "CERT-DEF-004",
+      "gates": ["G0", "G1", "G5"],
+      "scope": "operational production signing custody",
+      "reason": "The Admin governance and delegation design is implemented for development, but protected production key storage and human custody are external operational controls.",
+      "required_environment": ["approved protected key store", "separated lab and production trust roots"],
+      "required_evidence": "Named custodians, Admin assignments, bootstrap/recovery, rotation/revocation, key-role separation, signing ceremony, verification exercise, and proof that model-visible processes cannot access private keys.",
+      "owner": "release-engineer",
+      "status": "deferred-to-final-certification"
+    },
+    {
+      "id": "CERT-DEF-005",
+      "gates": ["G1"],
+      "scope": "signed 4–6B compact control model and governed candidate comparison",
+      "reason": "Qwen3-1.7B is intentionally selected only as a low-resource development smoke baseline and is below the governed parameter range.",
+      "required_environment": ["E1", "E2"],
+      "required_evidence": "Legally approved signed packs for at least two 4–6B candidates and one mainstream candidate, exact runtime tuples, offline workflow results, quality adjudication, load/context/pressure/cancellation/recovery measurements, and redistribution decisions.",
+      "owner": "inference-lead",
+      "status": "deferred-to-final-certification"
+    },
+    {
+      "id": "CERT-DEF-006",
+      "gates": ["G0", "G1"],
+      "scope": "complete security, failure-injection, manual, and performance qualification",
+      "reason": "Repository tests and bounded smoke runs cannot exercise all hardware, confinement, key-custody, boot, lifecycle, thermal, or sustained-load conditions.",
+      "required_environment": ["all retained certification tuples"],
+      "required_evidence": "The governing security and manual test suites plus Q01, Q02, Q06–Q08 distributions, negative results, raw artifacts, independent review, and disposition of every severity 0/1 defect.",
+      "owner": "qa-lead",
+      "status": "deferred-to-final-certification"
+    },
+    {
+      "id": "CERT-DEF-007",
+      "gates": ["G1", "G6"],
+      "scope": "real 400–405B placement/load and later execution qualification",
+      "reason": "The current 16 GiB laptop and 4 GiB RTX 3050 do not provide suitable capacity; legal model assets and a large-model host are not available.",
+      "required_environment": ["suitable real large-model hardware", "licensed actual 400–405B asset"],
+      "required_evidence": "The G1 governed real placement/load result or measured blocking constraint, followed by the full G6 execution suite before any large-model product claim. Sparse mappings and fake tensors are not successful model execution.",
+      "owner": "inference-lead",
+      "status": "deferred-to-final-certification"
+    },
+    {
+      "id": "CERT-DEF-008",
+      "gates": ["GWIN0", "GWIN1", "GWIN2"],
+      "scope": "Windows profile qualification",
+      "reason": "Native Windows and WSL are current development lanes, but the required Windows broker, identity mapping, confinement, WSL product packaging, VM, dual-boot, encrypted storage, and recovery labs are not established.",
+      "required_environment": ["qualified Windows 11 x64 WSL2 host", "Windows 11 Pro/Enterprise Hyper-V host", "disposable dual-boot fixture"],
+      "required_evidence": "Applicable W/QW and inherited A1 tests on exact retained Windows, WSL, driver, filesystem, encryption, and accelerator tuples.",
+      "owner": "gwin2-qualification-team",
+      "status": "deferred-to-final-certification"
+    }
+  ],
+  "change_control": {
+    "governed_large_model_range": "400–405B",
+    "450b_status": "outside-current-governing-requirements",
+    "rule": "Adding a 450B target or treating any deferral as a pass requires a controlled requirements revision and updated test, environment, capacity, license, and safety evidence."
+  }
+}

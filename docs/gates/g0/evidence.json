@@ -4,7 +4,10 @@
   "recorded_on": "2026-09-22",
   "owner": "qa-lead",
   "assessment": "blocked",
-  "claim_boundary": "These records describe development evidence only. They do not certify G0, G1, either A1 reference board, a model, an inference runtime, or a service class.",
+  "development_assessment": "complete-with-deferrals",
+  "certification_assessment": "blocked",
+  "certification_disposition": "deferred-to-final-os-testing-and-certification",
+  "claim_boundary": "The repository-local G0 development tranche is accepted with explicit deferrals. These records do not certify G0, G1, either A1 reference board, a model, an inference runtime, production signing custody, or a service class.",
   "items": [
     {
       "id": "G0-EV-001",
@@ -16,7 +19,8 @@
         "docs/adr/0003-artifact-storage.md",
         "docs/adr/0004-policy-model.md",
         "docs/adr/0005-model-pack-and-signing.md",
-        "docs/adr/0006-supported-package-layout.md"
+        "docs/adr/0006-supported-package-layout.md",
+        "docs/adr/0007-admin-delegation-and-signing-custody.md"
       ],
       "gate_closing": false,
       "notes": "The decisions are frozen inputs, but implementation and conformance evidence remain separate."
@@ -96,9 +100,46 @@
       ],
       "environment": "DEV-WSL-UBUNTU-26-01",
       "gate_closing": false,
-      "notes": "The full dependency-free repository check passed and both 105-file source archive formats reproduced byte-for-byte across two builds with verified checksums; WSL 26.04 is not the required Ubuntu 24.04 physical baseline and cannot close G0."
+      "notes": "The retained dependency-free repository check and reproducibility run passed on WSL 26.04. It is historical development evidence; the current revision must pass the final validation run, and WSL cannot close formal G0."
+    },
+    {
+      "id": "G0-EV-009",
+      "subject": "governing-source-ingestion-and-traceability",
+      "result": "development-source-verification-passed",
+      "evidence": [
+        "docs/governing_sources.json",
+        "docs/GOVERNING_REQUIREMENTS_SOURCES.md",
+        "requirements/registry.json"
+      ],
+      "gate_closing": false,
+      "notes": "The supplied governing DOCX files are pinned and all 288 requirements have source text, acceptance/reference data, and source locators. Plan-derived gate mappings remain distinct from source traceability, and source verification is not product acceptance."
+    },
+    {
+      "id": "G0-EV-010",
+      "subject": "admin-governance-and-delegation-decision",
+      "result": "development-decision-accepted",
+      "evidence": [
+        "docs/adr/0007-admin-delegation-and-signing-custody.md",
+        "src/luma_os/administration.py",
+        "tests/test_administration.py"
+      ],
+      "gate_closing": false,
+      "notes": "Admin is the fixed product super-role for finite declared role/activity assignment. It is not Windows Administrator or Linux root and does not establish protected production signing custody."
+    },
+    {
+      "id": "G0-EV-011",
+      "subject": "current-development-environments-and-model-baseline",
+      "result": "accepted-for-development-only",
+      "evidence": [
+        "docs/gates/g0/lab_inventory.json",
+        "docs/gates/g1/development_model_selection.json",
+        "docs/gates/g1/local_model_smoke_2026-09-22.json"
+      ],
+      "environment": "DEV-WIN-WSL-GPU-01",
+      "gate_closing": false,
+      "notes": "Native Windows and Ubuntu 26.04 WSL on the same laptop are accepted as current development lanes. The selected 1.7B model is a smoke baseline, not the governed 4–6B control-model result or a second physical-board result."
     }
   ],
   "open_blocker_record": "docs/gates/g0/blockers.json",
-  "closure_rule": "G0 may be marked passed only after every open blocking record is resolved with retained evidence and the governing development plan exit criteria are independently reviewed."
+  "closure_rule": "Development work may proceed under the explicit deferral register. Formal G0 may be marked passed only after every certification blocker is resolved with retained evidence on the governed environments and the development-plan exit criteria are independently reviewed."
 }

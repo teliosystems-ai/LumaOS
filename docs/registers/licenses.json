@@ -149,6 +149,38 @@
         "copyleft and patent review",
         "vulnerability review"
       ]
+    },
+    {
+      "id": "LIC-010",
+      "component": "Qwen3-1.7B development smoke model (Q4_K_M GGUF)",
+      "version_or_digest": "revision 7fb011e9aee6e4dc7adf8430df9ea8de6a466aa3; sha256:228fb5627f7510b8b3516cdb6435e4b0d2a2bf330fe5b0ab19284a3570a8bb1f",
+      "source": "https://huggingface.co/Qwen/Qwen3-1.7B-GGUF/resolve/7fb011e9aee6e4dc7adf8430df9ea8de6a466aa3/Qwen3-1.7B-Q4_K_M.gguf",
+      "license_expression": "Apache-2.0",
+      "use_scope": "non-redistributed Windows-native and Ubuntu-WSL2 development smoke testing only",
+      "redistributed": false,
+      "owner": "license-owner",
+      "status": "approved-for-development-evaluation",
+      "evidence": [
+        "docs/gates/g1/development_model_selection.json",
+        "docs/gates/g1/local_model_smoke_2026-09-22.json"
+      ],
+      "limitations": "This 1.7B artifact is below the governed 4-6B compact-model class and cannot close the compact-model or 400-405B certification requirements."
+    },
+    {
+      "id": "LIC-011",
+      "component": "llama.cpp development runtime",
+      "version_or_digest": "release b11100; commit 7ab4ee7ba; Ubuntu archive sha256:a836c913236ab4533ef9aaf49f0e1ad2955c8159869d7eec1a9072a92e13d61b; Windows CUDA archive sha256:2e6be5b2e74b8274729437e6bda6973213842b70e72a28e90284394b8e9b411b",
+      "source": "https://github.com/ggml-org/llama.cpp/releases/tag/b11100",
+      "license_expression": "MIT (llama.cpp); exact binary dependency notices retained for separate redistribution review",
+      "use_scope": "non-redistributed local development runtime",
+      "redistributed": false,
+      "owner": "license-owner",
+      "status": "approved-for-development-evaluation",
+      "evidence": [
+        "docs/gates/g1/development_model_selection.json",
+        "docs/gates/g1/local_model_smoke_2026-09-22.json"
+      ],
+      "limitations": "Approval covers the pinned external development assets only. It does not approve bundling runtime binaries or CUDA dependencies in a Luma OS release."
     }
   ]
 }

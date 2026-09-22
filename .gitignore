@@ -25,6 +25,7 @@ var/
 data/
 models/
 weights/
+/docs/Requirements.zip
 *.gguf
 *.safetensors
 *.onnx

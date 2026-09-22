@@ -4,6 +4,9 @@
   "observed_on": "2026-09-22",
   "owner": "platform-lead",
   "status": "partial-blocked",
+  "development_assessment": "accepted-current-host-with-limitations",
+  "certification_assessment": "blocked",
+  "certification_disposition": "deferred-to-final-os-testing-and-certification",
   "privacy": {
     "classification": "public-development-evidence",
     "excluded_fields": [
@@ -17,14 +20,15 @@
     "simulator_is_runtime_evidence": false,
     "nominal_capacity_is_performance_evidence": false,
     "virtual_guest_is_physical_board_evidence": false,
-    "single_host_can_satisfy_two_board_gate": false
+    "single_host_can_satisfy_two_board_gate": false,
+    "native_windows_and_its_wsl_guest_are_independent_boards": false
   },
   "systems": [
     {
       "id": "DEV-WIN-WSL-GPU-01",
-      "role": "developer-host-and-ubuntu-26.04-evaluation-guest",
+      "role": "native-windows-development-host-and-ubuntu-26.04-wsl-development-guest",
       "physical_machine_count": 1,
-      "qualification": "development-evidence-only",
+      "qualification": "development-accepted-not-certified",
       "designated_a1_reference_board": false,
       "host": {
         "manufacturer": "ASUSTeK COMPUTER INC.",
@@ -67,7 +71,7 @@
             "driver_version": "566.07",
             "compute_capability": "8.6",
             "pci_bus_id_redacted": true,
-            "qualification": "telemetry-observed-only"
+            "qualification": "development-cuda-inference-observed-not-certified"
           }
         ],
         "hypervisor_present": true
@@ -94,7 +98,7 @@
             "kind": "dynamic-virtual-disk",
             "physical_capacity_claim": false
           },
-          "qualification": "ubuntu-26.04-wsl-evaluation-only",
+          "qualification": "current-ubuntu-development-environment-not-certified",
           "limitations": [
             "not an Ubuntu 24.04 baseline",
             "not a native physical Ubuntu boot",
@@ -124,42 +128,61 @@
   },
   "platform_baselines": [
     {
+      "id": "current-native-windows-development-lane",
+      "status": "available-with-limitations",
+      "environment": "DEV-WIN-WSL-GPU-01",
+      "gate_use": "development-only"
+    },
+    {
+      "id": "current-ubuntu-wsl-development-lane",
+      "status": "available-with-limitations",
+      "environment": "DEV-WSL-UBUNTU-26-01",
+      "gate_use": "development-only"
+    },
+    {
       "id": "ubuntu-24.04-reproducible-baseline",
       "status": "missing",
       "environment": null,
-      "gate_use": "required-for-G0"
-    },
-    {
-      "id": "ubuntu-26.04-evaluation-path",
-      "status": "available-with-limitations",
-      "environment": "DEV-WSL-UBUNTU-26-01",
-      "gate_use": "evaluation-only"
+      "gate_use": "required-for-formal-certification"
     }
   ],
   "environment_slots": [
     {
       "id": "E0",
-      "definition_status": "unverified-pending-governing-sources",
-      "assignment": null,
-      "status": "blocked"
+      "definition_status": "verified-from-GOV-UBU-001",
+      "name": "emulation and fake backend",
+      "configuration": "VM plus deterministic resource and failure simulator",
+      "required_coverage": "Schemas, overflow, state transitions, synthetic large sizes and contract semantics",
+      "assignment": "repository deterministic fake backend and contract suite; complete VM/resource/failure simulator still absent",
+      "status": "partial-development"
     },
     {
       "id": "E1",
-      "definition_status": "unverified-pending-governing-sources",
-      "assignment": null,
-      "status": "blocked"
+      "definition_status": "verified-from-GOV-UBU-001",
+      "name": "compact physical PC",
+      "configuration": "16 GiB x86-64 with supported CPU and one GPU or NPU path",
+      "required_coverage": "4–6B, 4K and 8K, one sequence, offline and pressure behavior",
+      "assignment": "DEV-WIN-WSL-GPU-01-candidate-only",
+      "status": "candidate-not-designated-or-certified",
+      "notes": "The laptop nominally matches the memory/architecture/accelerator class, but no certification, 4–6B result, native Ubuntu boot, pressure, or offline E1 suite has been completed."
     },
     {
       "id": "E2",
-      "definition_status": "unverified-pending-governing-sources",
+      "definition_status": "verified-from-GOV-UBU-001",
+      "name": "mainstream physical PC",
+      "configuration": "32–64 GiB with a different certified accelerator path",
+      "required_coverage": "Compact, 8–14B and selected 32B; multimodal and app coexistence",
       "assignment": null,
-      "status": "blocked"
+      "status": "missing-deferred-to-final-certification"
     },
     {
       "id": "E8",
-      "definition_status": "unverified-pending-governing-sources",
+      "definition_status": "verified-from-GOV-UBU-001",
+      "name": "Ubuntu migration lab",
+      "configuration": "Matched 24.04 and 26.04 images on both A1 boards and one server",
+      "required_coverage": "Package compatibility, Secure Boot, upgrade, data migration and rollback",
       "assignment": null,
-      "status": "blocked"
+      "status": "missing-deferred-to-final-certification"
     }
   ],
   "fixtures": {

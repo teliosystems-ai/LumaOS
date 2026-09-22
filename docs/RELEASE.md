@@ -6,7 +6,7 @@ This is a review checklist for a source release candidate. It does not initializ
 
 - Review `CHANGELOG.md`, `SUPPORT_MATRIX.md`, and `REQUIREMENTS_COVERAGE.md`.
 - Confirm the release still says it is not production-ready.
-- Confirm no claim is made for a bootable ISO, dual boot, VM lifecycle, 400B models, or cluster certification.
+- Confirm no claim is made for a bootable ISO, dual boot, VM lifecycle, 400–405B models, or cluster certification.
 - Confirm visual-simulator behavior is not cited as runtime acceptance.
 - Confirm model weights, datasets, secrets, local state, and customer data are absent.
 

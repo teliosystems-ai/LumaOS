@@ -1,0 +1,61 @@
+{
+  "schema_version": 1,
+  "record_id": "G1-DEV-MODEL-2026-09-22-001",
+  "recorded_on": "2026-09-22",
+  "owner": "inference-lead",
+  "purpose": "development-smoke-baseline",
+  "status": "selected-for-development-only",
+  "gate_closing": false,
+  "selected_model": {
+    "publisher": "Qwen",
+    "model": "Qwen3-1.7B",
+    "repository": "Qwen/Qwen3-1.7B-GGUF",
+    "revision": "7fb011e9aee6e4dc7adf8430df9ea8de6a466aa3",
+    "artifact": "Qwen3-1.7B-Q4_K_M.gguf",
+    "parameter_class": "1.7B",
+    "quantization": "Q4_K_M",
+    "size_bytes": 1107408544,
+    "sha256": "228fb5627f7510b8b3516cdb6435e4b0d2a2bf330fe5b0ab19284a3570a8bb1f",
+    "license": "Apache-2.0",
+    "asset_location_policy": "outside-git-under-operator-controlled-local-model-store"
+  },
+  "runtime": {
+    "name": "llama.cpp",
+    "release": "b11100",
+    "commit": "7ab4ee7ba",
+    "license": "MIT",
+    "interfaces": [
+      "llama-cli",
+      "OpenAI-compatible loopback HTTP server"
+    ]
+  },
+  "evidence_sources": [
+    "https://huggingface.co/Qwen/Qwen3-1.7B",
+    "https://huggingface.co/Qwen/Qwen3-1.7B-GGUF/resolve/7fb011e9aee6e4dc7adf8430df9ea8de6a466aa3/Qwen3-1.7B-Q4_K_M.gguf",
+    "https://github.com/QwenLM/Qwen3/blob/main/docs/source/run_locally/llama.cpp.md",
+    "https://github.com/ggml-org/llama.cpp/releases/tag/b11100"
+  ],
+  "rationale": [
+    "The pinned Q4 artifact fits the current 4 GiB GPU and the constrained WSL memory allocation.",
+    "The same model/runtime family supports native Windows CUDA and Ubuntu CPU development smoke on the current laptop.",
+    "The license identifiers and immutable artifact identity can be recorded before any broader candidate evaluation."
+  ],
+  "governed_boundaries": {
+    "a1_compact_control_model": {
+      "required_parameter_range": "4–6B",
+      "satisfied_by_selection": false,
+      "status": "deferred-to-final-certification",
+      "reason": "A 1.7B development baseline is below the governed compact-model range."
+    },
+    "large_model_experiment": {
+      "governed_parameter_range": "400–405B",
+      "satisfied_by_selection": false,
+      "status": "deferred-until-suitable-hardware-and-legal-assets-exist"
+    },
+    "450b": {
+      "status": "outside-current-governing-requirements",
+      "change_control_required": true
+    }
+  },
+  "claim_boundary": "Selection means approved as a low-resource development smoke baseline. It is not a signed model pack, a 4–6B comparison candidate result, execution certification, interactive certification, redistribution approval, or model-quality claim."
+}

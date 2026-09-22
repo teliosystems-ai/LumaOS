@@ -3,40 +3,51 @@
   "record_id": "G1-TEST-2026-09-22-001",
   "recorded_on": "2026-09-22",
   "owner": "qa-lead",
-  "code_commit": "b5ca10a4cb6a5f9ae2a2c0f15dc67567ef48be60",
+  "code_commit": "a8ee0850f8569c5029a27c416ebde032cb347b28",
   "environment": "DEV-WSL-UBUNTU-26-01",
+  "additional_environments": [
+    "DEV-WIN-NATIVE-01"
+  ],
   "command": "PYTHONWARNINGS=error python3 scripts/check.py",
   "additional_commands": [
+    "Ubuntu WSL: python3 -m unittest discover -s tests -p 'test_*.py' (98 run, 0 failed, 1 skipped)",
+    "Windows native: python -m unittest discover -s tests -p test_*.py (98 run, 0 failed, 4 skipped)",
     "SOURCE_DATE_EPOCH=0 python3 scripts/build_release.py (executed twice)",
     "cmp first-SHA256SUMS second-SHA256SUMS",
     "sha256sum --check SHA256SUMS"
   ],
   "result": "pass",
   "checks": {
-    "python_modules_compiled": 22,
+    "python_modules_compiled": 24,
     "json_schemas_parsed": 5,
-    "unit_tests_run": 85,
+    "unit_tests_run": 98,
+    "unit_test_lanes": 2,
+    "unit_test_executions": 196,
     "unit_tests_failed": 0,
+    "unit_tests_skipped": {
+      "ubuntu_wsl": 1,
+      "windows_native": 4
+    },
     "warnings_as_errors": true,
     "requirement_entries_validated": 288,
-    "release_files_validated": 105,
+    "release_files_validated": 120,
     "reproducible_source_builds": 2,
     "archive_checksum_verification": "pass",
-    "governing_source_state": "explicitly-blocked",
-    "gate_artifact_state": "G0-and-G1-explicitly-blocked"
+    "governing_source_state": "verified",
+    "gate_artifact_state": "development-complete-with-deferrals; certification-blocked"
   },
   "scope": [
     "Python compilation",
     "release metadata and exact tracked inventory",
     "two-build source-archive reproducibility and checksum verification",
     "governing-source and deterministic registry/gate-report checks",
-    "complete standard-library unittest discovery on the committed code"
+    "complete standard-library unittest discovery on the committed code in native Windows and Ubuntu WSL"
   ],
   "limitations": [
-    "This is development evidence from Ubuntu 26.04 under WSL2, not the required Ubuntu 24.04 physical-board baseline.",
-    "Fake model/signature/telemetry fixtures are not real model, cryptographic custody, hardware, quality, or performance evidence.",
+    "This is development evidence from native Windows 11 and Ubuntu 26.04 under WSL2 on one laptop, not the required independent Ubuntu 24.04 physical-board baseline.",
+    "Unit-test model/signature/telemetry fixtures are not real cryptographic custody, hardware qualification, model quality, or performance evidence; real local-model smokes are recorded separately and remain non-closing.",
     "The optional browser journey skipped because Chrome or Chromium was unavailable.",
-    "This passing repository check does not resolve any open G0 or G1 gate blocker."
+    "This passing repository check supports development completion with explicit deferrals; it does not change blocked formal G0/G1 certification."
   ],
   "gate_closing": false
 }

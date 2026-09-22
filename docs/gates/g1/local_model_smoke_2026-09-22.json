@@ -1,0 +1,178 @@
+{
+  "schema_version": 1,
+  "record_id": "G1-LOCAL-MODEL-SMOKE-2026-09-22-001",
+  "gate": "G1",
+  "recorded_on": "2026-09-22",
+  "owner": "inference-lead",
+  "result": "pass-development-smoke",
+  "development_assessment": "accepted",
+  "certification_assessment": "not-certified",
+  "gate_closing": false,
+  "claim_boundary": "These are real local generation observations for one pinned 1.7B developer asset. They do not satisfy the governed signed 4–6B compact-model requirement, prove model-pack trust, qualify either platform, establish two-board independence, or certify a performance/service class.",
+  "model": {
+    "repository": "Qwen/Qwen3-1.7B-GGUF",
+    "revision": "7fb011e9aee6e4dc7adf8430df9ea8de6a466aa3",
+    "artifact": "Qwen3-1.7B-Q4_K_M.gguf",
+    "size_bytes": 1107408544,
+    "sha256": "228fb5627f7510b8b3516cdb6435e4b0d2a2bf330fe5b0ab19284a3570a8bb1f",
+    "storage": "%LOCALAPPDATA%\\LumaOS\\model-assets (outside the repository)",
+    "signed_model_pack": false
+  },
+  "runtime": {
+    "name": "llama.cpp",
+    "release": "b11100",
+    "commit": "7ab4ee7ba",
+    "network_exposure": "none for CLI smoke; authenticated literal-loopback only for the gateway integration smoke"
+  },
+  "environments": [
+    {
+      "id": "DEV-WIN-NATIVE-CUDA-01",
+      "physical_host_id": "DEV-WIN-WSL-GPU-01",
+      "platform": "native Windows 11 x86_64",
+      "backend": "CUDA",
+      "device": "NVIDIA GeForce RTX 3050 Laptop GPU, 4 GiB, driver 566.07, compute capability 8.6",
+      "runtime_binary_sha256": "5d780dc086fe7ea19adcd1baf2b444182635196d219589f569699b544da0f516",
+      "cuda_library_sha256": "7f70d73952f9f629df803d65ed8b4a5cb7329ee52f2f0cc144b954bb5aa0f92c",
+      "context_tokens": 4096,
+      "prompt": "/no_think Reply with exactly LUMA_GPU_OK and nothing else.",
+      "response": "LUMA_GPU_OK",
+      "all_model_layers_assigned_to_device": true,
+      "observed_prompt_tokens_per_second": 299.07,
+      "observed_generation_tokens_per_second": 79.61,
+      "memory_observation_mib": {
+        "cuda_total": 4095,
+        "cuda_free_before_or_at_report": 1733,
+        "runtime_self": 1550,
+        "model": 1050,
+        "context": 448,
+        "compute": 52,
+        "unaccounted": 811,
+        "host_self": 255
+      }
+    },
+    {
+      "id": "DEV-WSL-UBUNTU-26-CPU-01",
+      "physical_host_id": "DEV-WIN-WSL-GPU-01",
+      "platform": "Ubuntu 26.04 LTS WSL2 x86_64",
+      "backend": "CPU",
+      "threads": 8,
+      "fit": "off",
+      "runtime_binary_sha256": "e307ffc61e310365a518918e15c170b86c3b921f50f182b9fd4f4532d6015342",
+      "context_tokens": 4096,
+      "prompt": "/no_think Reply with exactly LUMA_UBUNTU_OK and nothing else.",
+      "response": "LUMA_UBUNTU_OK",
+      "observed_prompt_tokens_per_second": 82.1,
+      "observed_generation_tokens_per_second": 23.9
+    }
+  ],
+  "gateway_integration": {
+    "environment_id": "ubuntu-wsl-cpu",
+    "status": "pass",
+    "evidence_scope": "development-smoke-only",
+    "gate_closing": false,
+    "runtime_tuple_signed": false,
+    "physical_host_id": "DEV-WIN-WSL-GPU-01",
+    "platform": "Ubuntu 26.04 LTS WSL2 x86_64",
+    "backend": "llama.cpp-b11100",
+    "server_binary_sha256": "92cc2fa99d28dd6404986ae06340966292659ad3c180ff6d881c5cc3adc698f2",
+    "model_id": "qwen3-1.7b-dev",
+    "artifact_sha256": "228fb5627f7510b8b3516cdb6435e4b0d2a2bf330fe5b0ab19284a3570a8bb1f",
+    "context_tokens": 4096,
+    "authenticated_gateway": true,
+    "simulated": false,
+    "remote_fallback_used": false,
+    "prompt_sha256": "bd19f2c32dce1d0376c0671c42b7d2746697c8b467676130f7980921f3d6d082",
+    "response_text": "LUMA_GATEWAY_OK",
+    "response_matched": true,
+    "runtime_options": [
+      "--device none",
+      "--fit off",
+      "8 threads",
+      "4096-token context"
+    ],
+    "luma_path": [
+      "checked ResourceLedger admission",
+      "explicit runtime profile and placement",
+      "short-lived scoped policy grant",
+      "authenticated LocalInferenceGateway",
+      "OpenAI-compatible inference backend"
+    ],
+    "usage": {
+      "prompt_tokens": 24,
+      "completion_tokens": 11,
+      "total_tokens": 35
+    },
+    "timings": {
+      "prompt_milliseconds": 157.928,
+      "prompt_tokens_per_second": 151.968,
+      "generation_milliseconds": 388.034,
+      "generation_tokens_per_second": 25.771,
+      "server_total_milliseconds": 545.96,
+      "end_to_end_harness_milliseconds": 554.318
+    },
+    "cleanup": "server stopped and loopback port confirmed closed"
+  },
+  "windows_gateway_integration": {
+    "environment_id": "windows-native-cuda",
+    "status": "pass",
+    "evidence_scope": "development-smoke-only",
+    "gate_closing": false,
+    "runtime_tuple_signed": false,
+    "physical_host_id": "DEV-WIN-WSL-GPU-01",
+    "platform": "native Windows 11 x86_64",
+    "backend": "llama.cpp-b11100-cuda",
+    "server_binary_sha256": "6b9945c990cd5f2f24a3e3bb3f9b4c74e3232ae6b2f244a855d973ea94289e4c",
+    "device": "NVIDIA GeForce RTX 3050 Laptop GPU",
+    "model_id": "qwen3-1.7b-dev",
+    "artifact_sha256": "228fb5627f7510b8b3516cdb6435e4b0d2a2bf330fe5b0ab19284a3570a8bb1f",
+    "context_tokens": 4096,
+    "all_model_layers_assigned_to_device": true,
+    "authenticated_gateway": true,
+    "simulated": false,
+    "remote_fallback_used": false,
+    "prompt_sha256": "bd19f2c32dce1d0376c0671c42b7d2746697c8b467676130f7980921f3d6d082",
+    "response_text": "LUMA_GATEWAY_OK",
+    "response_matched": true,
+    "runtime_options": [
+      "-ngl all",
+      "4096-token context"
+    ],
+    "luma_path": [
+      "checked ResourceLedger admission",
+      "explicit runtime profile and placement",
+      "short-lived scoped policy grant",
+      "authenticated LocalInferenceGateway",
+      "OpenAI-compatible inference backend"
+    ],
+    "usage": {
+      "prompt_tokens": 28,
+      "completion_tokens": 7,
+      "total_tokens": 35
+    },
+    "timings": {
+      "prompt_milliseconds": 344.412,
+      "prompt_tokens_per_second": 81.298,
+      "generation_milliseconds": 112.591,
+      "generation_tokens_per_second": 53.29,
+      "server_total_milliseconds": 457.0,
+      "end_to_end_harness_milliseconds": 481.887
+    },
+    "cleanup": "server stopped and Windows process confirmed absent"
+  },
+  "summary": {
+    "real_model_execution_observed": true,
+    "windows_native_smoke": "pass",
+    "ubuntu_wsl_smoke": "pass",
+    "luma_gateway_integration_smoke": "pass",
+    "windows_cuda_luma_gateway_integration_smoke": "pass",
+    "independent_physical_machines": 1,
+    "formal_4_6b_requirement_satisfied": false,
+    "formal_g1_certification_satisfied": false
+  },
+  "limitations": [
+    "The two software environments share one physical laptop and one model artifact; they are not two A1 boards.",
+    "The Windows result used native CUDA while the Ubuntu WSL result used CPU; they are not a same-backend comparison.",
+    "The commands tested a bounded exact-response smoke, not task quality, sustained load, cancellation, pressure, recovery, isolation, thermal behavior, or the complete local-file-to-artifact workflow.",
+    "The asset was digest-pinned but was not imported as a signed model pack and cannot receive execution-certified or interactive-certified state."
+  ]
+}

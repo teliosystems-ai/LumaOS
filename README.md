@@ -21,28 +21,35 @@ The implementation is intended for design reviews, local development, automated 
 
 | Area | Status |
 | --- | --- |
-| Ubuntu 24.04 LTS, Python 3.11+ | Primary developer target |
-| Windows 11 with WSL2 + Ubuntu 24.04 | Supported developer path |
-| Native Windows Python | CI-smoke-tested where practical; not the primary runtime |
+| Ubuntu 24.04 LTS, Python 3.11+ | Primary physical-board certification baseline target |
+| Current Ubuntu 26.04 LTS under WSL2 | Active development and test environment; not a certified physical Ubuntu baseline |
+| Current native Windows 11 | Active development and CUDA smoke environment; not a certified Windows product profile |
+| Windows 11 with WSL2 + Ubuntu 24.04 | Intended supported developer path |
+| Native Windows Python | Full current suite passes on Python 3.14; product qualification and Windows ACL/broker work remain |
 | Local deterministic/demo model adapter | Included in MVP scope |
+| Qwen3-1.7B Q4_K_M + llama.cpp | Recommended low-resource development smoke baseline; weights/runtime obtained separately |
+| Signed 4–6B compact control model | Required for formal G1 closure; not yet certified |
 | External model weights | User-supplied and governed by their own licenses |
 | Bootable ISO, installer image, or hardware provisioning | Not supported |
 | Dual boot or VM lifecycle automation | Not supported |
-| 400B model operation or cluster certification | Not supported |
+| 400–405B model operation or cluster certification | Not supported |
 | Production deployment, multi-user tenancy, or remote exposure | Not supported |
 
 See the complete [support matrix](docs/SUPPORT_MATRIX.md) and [requirements coverage](docs/REQUIREMENTS_COVERAGE.md).
 
 The repository also contains repository-local G0/G1 engineering artifacts and
-reference contracts. Neither gate has passed: the deterministic
+reference contracts. Their development scope is complete with explicit
+deferrals, but neither gate has passed formal certification: the deterministic
 [gate report](docs/GATE_REPORT.md) and retained
-[blocker records](docs/gates) distinguish implemented development evidence
-from the missing governing inputs, physical boards, approved model assets, and
-qualification runs.
+[blocker/deferral records](docs/gates) distinguish implemented development
+evidence from missing physical boards, Ubuntu 24.04/E8 fixtures, protected
+production signing custody, signed 4–6B packs, the 400–405B experiment, and
+qualification runs. Native Windows and its Ubuntu WSL guest share one physical
+laptop and therefore never count as two reference boards.
 
 ## Quick start
 
-### Ubuntu 24.04 or WSL2
+### Ubuntu 24.04 or the current Ubuntu WSL development environment
 
 Prerequisites: Python 3.11 or newer and a POSIX shell. No third-party Python package is required to run or test the MVP from source.
 
@@ -71,7 +78,8 @@ make browser-test
 
 ### Windows PowerShell
 
-The supported Windows path is WSL2 with Ubuntu 24.04:
+The intended supported Windows path is WSL2 with Ubuntu 24.04. The current
+Ubuntu 26.04 WSL guest is accepted for development, not certification:
 
 ```powershell
 .\packaging\wsl\install.ps1
@@ -120,6 +128,7 @@ requirements/         Provisional requirement/evidence registry
 - Run locally and bind services to loopback only.
 - Treat every tool invocation as untrusted input/output.
 - Require explicit approval for capabilities that can mutate data or cross a trust boundary.
+- Treat `Admin` as the Luma OS governance role for finite declared delegation, never as implicit Windows Administrator/Linux root authority or a way around effect-time policy.
 - Do not place secrets, credentials, personal data, or proprietary model weights in the repository.
 - Do not expose the MVP directly to a network or use it for production decisions.
 
@@ -129,7 +138,19 @@ Release maintainers should follow the non-publishing checklist in [docs/RELEASE.
 
 ## Models and licensing
 
-No model weights are shipped in this repository or release archives. Any optional runtime, weights, tokenizer, or remote service must be obtained separately by the operator. The operator is responsible for its license, export controls, privacy terms, resource requirements, and output validation. Luma OS project licensing does not grant rights to third-party models.
+No model weights are shipped in this repository or release archives. For this
+16 GiB laptop and 4 GiB RTX 3050, the selected development baseline is the
+digest-pinned `Qwen3-1.7B-Q4_K_M.gguf` with llama.cpp `b11100`. It produced the
+recorded Windows CUDA, Ubuntu WSL CPU, and authenticated Luma-gateway smoke
+results. That selection is below the governed 4–6B A1 range and is not a signed
+or certified model pack.
+
+Any optional runtime, weights, tokenizer, or remote service must be obtained
+separately by the operator. The operator is responsible for its license,
+export controls, privacy terms, resource requirements, and output validation.
+Luma OS project licensing does not grant rights to third-party models. The
+governed large-model range is 400–405B; 450B is outside the current sources and
+requires controlled requirements change.
 
 The supported `0.1.0` distribution is the checksumed source archive created by `make package`. Python wheels are not a supported artifact in this release because the runtime intentionally uses repository-root `web/`, `schemas/`, and `examples/` assets. `pyproject.toml` provides metadata and a developer entry point; it does not make a wheel production-complete.
 

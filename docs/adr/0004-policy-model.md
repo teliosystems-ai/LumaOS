@@ -20,6 +20,8 @@ Model output, workflow plans, local content, and workers are untrusted. Authoriz
 - Workers receive task-specific handles or descriptors, never ambient access to source folders, state databases, signing keys, credentials, devices, or the network.
 - Generated native code and general shell execution remain disabled until the required microVM or independently qualified constrained runtime passes. A normal container is not equivalent evidence.
 - There is no G1 break-glass or silent escalation path. Administrative policy changes are separate authenticated, receipted actions and do not retroactively authorize an in-flight effect.
+- `Admin` is the fixed Luma OS governance role described by ADR-0007. It may define roles and delegate only finite, declared administrative activities. The role is not Windows Administrator or Linux `root`, does not grant ambient effect authority, and cannot be assumed by a model or worker.
+- Administrative delegation never replaces the ordinary capability check. The delegated actor, target, assignment version, expiry/revocation state, and exact resource grant are revalidated at effect time.
 - Missing policy, unavailable broker, unknown capability, stale decision, malformed selector, or failed identity lookup fails closed while preserving model-independent manual recovery access.
 
 ## Consequences
@@ -28,7 +30,8 @@ Model output, workflow plans, local content, and workers are untrusted. Authoriz
 - Revocation, capability substitution, stale lease, confused-deputy, path replacement, and restart tests are required.
 - User convenience may require more explicit grants; broad implicit consent is rejected.
 - Policy records can explain decisions without making receipts tamper-proof.
+- Admin role and delegation receipts establish product governance provenance; they do not prove host integrity or production signing-key custody.
 
 ## G1 change control
 
-Any ambient authority, model-mediated authorization, wildcard effect capability, cached authorization across an effect boundary, or fail-open behavior requires a superseding ADR and adversarial review.
+Any ambient authority, model-mediated authorization, wildcard effect capability, generally delegable `Admin` role, cached authorization across an effect boundary, or fail-open behavior requires a superseding ADR and adversarial review.

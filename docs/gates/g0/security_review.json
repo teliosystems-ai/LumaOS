@@ -4,10 +4,12 @@
   "recorded_on": "2026-09-22",
   "owner": "security-lead",
   "status": "partial",
+  "development_assessment": "accepted-with-certification-deferrals",
+  "certification_assessment": "blocked",
   "gate_closing": false,
   "working_tree_secret_scan": {
     "tool": "ripgrep 15.2.0",
-    "base_commit": "394917fcdc87b5bf4c2d3dd4a9f39ee945f1a414",
+    "base_commit": "a8ee0850f8569c5029a27c416ebde032cb347b28",
     "scope": "current repository working tree, including hidden files and excluding .git",
     "pattern_classes": [
       "PEM/OpenSSH/PGP private-key headers",
@@ -25,7 +27,7 @@
     "evidence": "RELEASE_MANIFEST.json"
   },
   "exposed_interface_review": {
-    "result": "design-reviewed-pending-current-dynamic-run",
+    "result": "design-reviewed-and-loopback-development-smoke-observed",
     "intended_listener": "literal loopback HTTP only",
     "internal_transport": "bounded local IPC contract; production socket and peer-credential plumbing not implemented",
     "evidence": [
@@ -37,7 +39,7 @@
   },
   "limitations": [
     "This is a targeted pattern scan, not a credential-provider or full Git-history scan.",
-    "Binary and external model/runtime assets were not present and were not scanned.",
-    "The complete G0 security review and current-revision dynamic test run remain open."
+    "Model and runtime binaries remain outside the repository and release. Their recorded digests were verified for development use, but they have not received a complete malware, provenance, or supply-chain audit.",
+    "The current repository test run is recorded separately; the complete certification security review on every retained physical tuple remains deferred."
   ]
 }

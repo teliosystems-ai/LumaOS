@@ -4,7 +4,10 @@
   "recorded_on": "2026-09-22",
   "owner": "g1-p0-team",
   "assessment": "blocked",
-  "claim_boundary": "Repository-local contracts and development tests are not a G1 certificate. Fake inference, WSL telemetry, nominal capacity, and source inspection do not substitute for real signed models, both physical A1 boards, security/manual/performance evidence, or the specified large-model experiment.",
+  "development_assessment": "complete-with-deferrals",
+  "certification_assessment": "blocked",
+  "certification_disposition": "deferred-to-final-os-testing-and-certification",
+  "claim_boundary": "The repository-local G1 contract tranche, Admin governance, and real 1.7B smoke are accepted for continued development. They are not a G1 certificate. A 1.7B unsigned developer asset, WSL telemetry, one physical laptop, nominal capacity, and source inspection do not substitute for signed 4–6B packs, both physical A1 boards, complete security/manual/performance evidence, or the real 400–405B experiment.",
   "items": [
     {
       "id": "G1-EV-001",
@@ -16,7 +19,7 @@
         "tests/test_resources.py"
       ],
       "environment": "DEV-WSL-UBUNTU-26-01",
-      "observations": "22 focused resource/fake-inference tests passed within the current 85-test suite with warnings treated as errors.",
+      "observations": "22 focused resource/fake-inference tests passed; the final validation record covers all 98 declared tests in native Windows and Ubuntu WSL with zero failures.",
       "gate_closing": false
     },
     {
@@ -65,7 +68,7 @@
         "tests/test_ipc.py"
       ],
       "environment": "DEV-WSL-UBUNTU-26-01",
-      "observations": "The current committed contract code passed the complete 85-test repository suite with warnings treated as errors; this does not exercise a real model, trust store, production IPC peer credentials, or physical boards.",
+      "observations": "The implementation commit passed all 98 declared repository tests in both native Windows and Ubuntu WSL, with platform-specific skips recorded in the final validation record. The unit suite does not establish production key custody, physical-board qualification, or a certified model tuple; real model observations are recorded separately.",
       "gate_closing": false
     },
     {
@@ -81,9 +84,38 @@
       "environment": "DEV-WIN-WSL-GPU-01",
       "observations": "Three deterministic adapter tests passed, followed by a read-only adapter smoke against WSL host RAM and the observed RTX 3050. No model was loaded, so this does not prove allocation enforcement, inference, isolation, performance, recovery, or a service class.",
       "gate_closing": false
+    },
+    {
+      "id": "G1-EV-006",
+      "subject": "admin-role-delegation-and-policy-mutation-boundary",
+      "result": "development-tests-passed",
+      "evidence": [
+        "docs/adr/0007-admin-delegation-and-signing-custody.md",
+        "src/luma_os/administration.py",
+        "src/luma_os/policy.py",
+        "tests/test_administration.py"
+      ],
+      "environment": "DEV-WSL-UBUNTU-26-01",
+      "observations": "Focused Admin and policy tests passed for finite role/activity assignment, revocation/expiry, hash-linked receipts, non-delegable Admin semantics, and authorization of policy mutations. This is not production signing custody.",
+      "gate_closing": false
+    },
+    {
+      "id": "G1-EV-007",
+      "subject": "real-low-parameter-local-model-smoke",
+      "result": "pass-development-smoke",
+      "evidence": [
+        "docs/gates/g1/development_model_selection.json",
+        "docs/gates/g1/local_model_smoke_2026-09-22.json",
+        "src/luma_os/real_inference.py",
+        "tests/test_real_inference.py"
+      ],
+      "environment": "DEV-WIN-WSL-GPU-01",
+      "observations": "The pinned Qwen3-1.7B Q4_K_M artifact produced exact direct and authenticated Luma-gateway smoke responses with llama.cpp b11100 on native Windows CUDA and Ubuntu WSL CPU. The real gateway path used checked resource admission, a short-lived scoped policy grant, and no remote fallback. Both environments used the same physical laptop. The model is below the governed 4–6B range and the developer asset is not a signed certified model pack.",
+      "gate_closing": false
     }
   ],
   "validation_record": "docs/gates/g1/test_run_2026-09-22.json",
   "open_blocker_record": "docs/gates/g1/blockers.json",
-  "closure_rule": "G1 may be marked passed only when G0 dependencies are resolved and every G1 exit criterion has retained current-revision evidence on the required real environments."
+  "deferral_record": "docs/gates/final_certification_deferrals.json",
+  "closure_rule": "Development may proceed under the explicit deferral record. Formal G1 may be marked passed only when formal G0 dependencies are resolved and every G1 exit criterion has retained current-revision evidence on the required real environments."
 }

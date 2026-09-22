@@ -42,7 +42,10 @@ States only advance. A changed byte, runtime, driver, template, context, or mate
 
 - Signing private keys and recovery material never enter Git, source archives, model packs, logs, or test fixtures.
 - Development/lab keys are distinct from production release keys and are marked non-production in their trust records.
-- The trust store contains public keys, roles, validity bounds, and revocation state. Unknown, expired, revoked, or wrong-role keys fail closed.
+- The trust store contains public keys, roles, allowed purposes, validity bounds, and revocation state. Verification binds a signature to the requested purpose and verification time; unknown, expired, not-yet-valid, revoked, wrong-role, or wrong-purpose keys fail closed.
+- Manifest import, execution certification, and interactive certification are distinct signing purposes. A key authorized for one purpose cannot promote a pack to another lifecycle state.
+- The Luma OS `Admin` role governs the signing-role catalog and may assign finite signing activities to authenticated custodians as defined by ADR-0007. This product authorization never exposes raw key material or substitutes for protected key storage.
+- Each signing operation records the acting principal, assignment and activity, input digest, key identifier, policy version, output digest, and timestamp. A model, model worker, generated program, or ordinary skill cannot be a signing custodian.
 - Pack signatures attest integrity and authorized provenance only. They do not prove model safety, task quality, license compliance, or runtime certification.
 - Execution certificates are separate signed evidence documents referencing the immutable pack and release tuple.
 - Candidate models cannot enter measured comparison until the license register records evaluation and redistribution decisions.
@@ -52,8 +55,8 @@ States only advance. A changed byte, runtime, driver, template, context, or mate
 - Model assets remain outside Git and can be independently acquired where licenses permit.
 - Unsigned developer assets may be inspected only in an explicit development mode and can never receive a release certification state.
 - Import safety, signature/digest tampering, key-role, revocation, tuple drift, and downgrade tests are mandatory.
-- Production signing custody remains a G0/G1 blocker until real owners and protected key storage are assigned.
+- The development governance decision is complete: `Admin` governs roles and signing activities. Production custody remains a formal-certification blocker until named human custodians, protected key storage, recovery, rotation/revocation, separated trust roots, and a retained verification exercise exist.
 
 ## G1 change control
 
-Changing the canonicalization, signature/hash algorithms, state meanings, mandatory manifest identity, trust roles, or allowing certification to float across tuples requires a superseding ADR and migration/security review.
+Changing the canonicalization, signature/hash algorithms, state meanings, mandatory manifest identity, trust roles/purposes/lifecycle checks, or allowing certification to float across tuples requires a superseding ADR and migration/security review.

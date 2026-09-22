@@ -1,15 +1,17 @@
 # Support matrix
 
-Luma OS `0.1.0` is a developer MVP. “Supported” means the repository intends to keep its source-run and test path working; it does not mean production certification or an SLA.
+Luma OS `0.1.0` is a developer MVP. “Supported” means the repository intends to keep its source-run and test path working; it does not mean production certification or an SLA. Development acceptance and formal OS certification are separate axes: G0/G1 development is complete with explicit deferrals, while formal certification remains blocked.
 
 ## Platforms
 
 | Environment | Level | Notes |
 | --- | --- | --- |
-| Ubuntu 24.04 LTS, x86_64, Python 3.11/3.12 | Primary | Source run, tests, packaging, user install, optional systemd user service |
+| Ubuntu 24.04 LTS, x86_64, Python 3.11/3.12 | Primary certification baseline target | Source run, tests, packaging, user install, optional systemd user service; physical-board qualification is deferred |
 | Ubuntu 24.04 LTS, arm64, Python 3.11/3.12 | Best effort | Standard-library design should work; release CI may not exercise arm64 |
-| Windows 11 + WSL2 + Ubuntu 24.04 | Supported developer path | Run inside the Linux distribution; PowerShell helpers do not install or elevate WSL |
-| Native Windows 11 + Python 3.11/3.12 | Smoke only | Core import/tests where platform semantics permit; secure folder traversal is designed for POSIX/WSL |
+| Current Ubuntu 26.04 LTS under WSL2, Python 3.14.4 | Active development environment | Repository checks and CPU model/gateway smoke; not Ubuntu 24.04, native boot, a physical A1 board, or an E8 migration lab |
+| Current native Windows 11 build 26200 | Active development environment | Full current Python suite plus RTX 3050 CUDA direct/gateway smoke passed; this is still not a certified Windows product profile |
+| Windows 11 + WSL2 + Ubuntu 24.04 | Intended supported developer path | Run inside the Linux distribution; PowerShell helpers do not install or elevate WSL |
+| Native Windows 11 + Python 3.11–3.14 | Development test target | The Windows path rejects reserved names and reparse/junction traversal with pre/open/post identity checks. It lacks POSIX `openat` semantics and does not apply or audit a private DACL; installer and certification work must close those boundaries. |
 | macOS | Community/best effort | Not a release target or CI requirement |
 | Containers, servers, cloud hosts | Unsupported | No deployment, isolation, authentication, or remote exposure claim |
 
@@ -29,7 +31,7 @@ Luma OS `0.1.0` is a developer MVP. “Supported” means the repository intends
 | Dependency-free Python runtime | Supported |
 | Loopback web/API process | Supported |
 | One local operator/profile | Supported |
-| Explicit folder enrollment and scoped local reads | Supported on the documented POSIX/WSL path |
+| Explicit folder enrollment and scoped local reads | Supported on the documented POSIX/WSL path; native Windows development path passes current traversal/junction tests but is not ACL/broker-certified |
 | Durable application-owned local artifact writes | Supported |
 | SQLite workflow state and effect receipts | Supported |
 | Verified local state export and clean-directory restore | Supported developer operation |
@@ -39,7 +41,9 @@ Luma OS `0.1.0` is a developer MVP. “Supported” means the repository intends
 | Operator-configured local model endpoint | Optional/best effort |
 | G1 resource/policy/DAG/model-pack/platform contracts | Development prototype only; not product or hardware certification |
 | Deterministic fake inference | Test-only; never runtime, quality, or performance evidence |
-| Real signed compact-model inference | Not yet available or certified |
+| Admin role/delegation | Development implementation; fixed product super-role for finite declared activities, not host administrator/root or a production custody certificate |
+| Qwen3-1.7B Q4_K_M + llama.cpp b11100 | Pinned development smoke baseline; real Windows CUDA, Ubuntu WSL CPU, and authenticated Luma gateway smoke passed |
+| Real signed 4–6B compact-model inference | Not yet available or certified; 1.7B smoke does not satisfy it |
 | Remote/cloud model service | Unsupported by default |
 | Bundled models, weights, tokenizers, or datasets | Not included |
 | General autonomous tool execution | Unsupported |
@@ -64,7 +68,9 @@ Luma OS `0.1.0` is a developer MVP. “Supported” means the repository intends
 
 ## Model scale language
 
-The broader Luma OS product requirements discuss model sizes from compact models through 400B-class systems. That range is a product/deployment taxonomy, **not** a claim that this MVP runs or certifies those models. Version `0.1.0` includes model-pack, resource, and fake-backend development contracts, but no weights, qualified GPU runtime, certified scheduler, distributed inference, performance baseline, hardware qualification, or cluster certification.
+The A1 requirements select a 4–6B compact control model. The governed large-model experiment and later A2 work use the 400–405B range. Those ranges are requirements, **not** claims that this MVP runs or certifies them. A pinned 1.7B model has run locally only as a development smoke baseline. A 450B target is outside the current governing sources and requires controlled requirements change.
+
+Version `0.1.0` includes model-pack, purpose/lifecycle-bound trust-key, resource, real-loopback-adapter, and fake-backend development contracts, but no shipped weights, signed certified 4–6B pack, qualified scheduler, distributed inference, certified performance baseline, two-board hardware qualification, or cluster certification.
 
 Operators who connect a model are responsible for its license, hardware, runtime, endpoint security, privacy, output validation, and cost.
 

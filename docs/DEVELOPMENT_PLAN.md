@@ -12,7 +12,7 @@ The source precedence is:
 2. `Option_Ubuntu_LLM_OS_Functional_Requirements_Development_Testing_4B_to_400B.docx` for the Option A Ubuntu product baseline.
 3. `LLM_OS_Feasibility_HLD_LLD_Engineering_Requirements.docx` for the original architecture and research rationale where the later documents do not supersede it.
 
-These three governing inputs are not present in or tracked by this checkout, so their exact revisions, contents, precedence, and the requirement mappings derived from them cannot currently be independently verified from repository evidence. Their dependency state and the evidence required to accept them are recorded in [GOVERNING_REQUIREMENTS_SOURCES.md](GOVERNING_REQUIREMENTS_SOURCES.md). Until that record is resolved with immutable digests, source-derived mappings in this plan are provisional and the governing-source and complete-traceability portions of G0 cannot close.
+These three governing inputs are present under `docs/Requirements` and pinned by controlled locator, byte size, and SHA-256 in [GOVERNING_REQUIREMENTS_SOURCES.md](GOVERNING_REQUIREMENTS_SOURCES.md). The deterministic registry verifies all 288 source requirements, their normative and acceptance/reference text, and source locators. Gate, owner, profile, and environment mappings remain plan-derived; source verification is necessary traceability evidence, not product acceptance.
 
 All product source, schemas, build definitions, tests, and public fixtures remain in this repository. Model weights, signing secrets, private test data, customer data, and licensed third-party assets stay outside Git and are referenced by immutable digest.
 
@@ -25,17 +25,20 @@ Version `0.1.0` is a developer MVP and a useful input to G0. It currently demons
 - restart-visible SQLite workflow state;
 - idempotent local effects, immutable managed artifacts, and append-only receipts;
 - a loopback-only browser interface with manual operation when no model is configured;
-- source-run paths for Ubuntu 24.04 and Windows 11 through WSL2; and
+- source-run paths for Ubuntu and Windows 11 through WSL2;
+- the current native Windows 11 and Ubuntu 26.04 WSL development lanes on one physical laptop;
+- a fixed Luma OS `Admin` governance role with finite, receipted delegation;
+- a pinned Qwen3-1.7B Q4_K_M development model through llama.cpp on Windows CUDA, Ubuntu WSL CPU, and the authenticated Luma gateway; and
 - repository, API-contract, browser-journey, and deterministic source-package checks.
 
-It has **not** passed formal G0 or G1. Repository-local G1 prototypes now cover a signed model-pack contract, checked resource admission, a deny-by-default policy broker, a typed DAG, deterministic fake inference, local-gateway fencing, platform-adapter scaffolding, and state recovery. It still does not provide an approved real model pack, qualified model runtime, signed skills, worker sandboxing, semantic indexing, multimodal interaction, a bootable image, A/B updates, hardware certification, a Windows file broker, VM or dual-boot lifecycle, 400B qualification, or cluster execution. Existing simulator, fake-backend, WSL, and MVP results are development evidence only.
+It has **not** passed formal G0 or G1. Their repository/local development scope is recorded as **complete with deferrals**, while formal certification remains **blocked**. Repository-local G1 prototypes now cover purpose/lifecycle-bound signed model-pack contracts, checked resource admission, deny-by-default policy and Admin delegation, a typed DAG, deterministic fake inference, real loopback inference, local-gateway fencing, platform-adapter scaffolding, and state recovery. It still does not provide a signed certified 4–6B model pack, qualified two-board model runtime, signed skills, worker sandboxing, semantic indexing, multimodal interaction, a bootable image, A/B updates, hardware certification, a Windows file broker, VM or dual-boot lifecycle, 400–405B qualification, or cluster execution. Existing simulator, fake-backend, WSL, one-laptop real-model, and MVP results are development evidence only.
 
 ### Current stage status
 
 | Stage | Status at this checkpoint |
 | --- | --- |
-| G0 | **Blocked, gate not passed.** The repository baseline, 288-ID provisional registry, gate report, architecture decisions, initial registers, observed development-host inventory, contract checks, and reproducible source-package evidence exist. The three governing inputs, two designated physical A1 boards, Ubuntu 24.04 reproducible baseline, disposable disks, operational signing custody, selected model/runtime licenses, and full manual/security/performance evidence remain open in `docs/gates/g0/blockers.json`. |
-| G1 | **Repository-local contract tranche implemented, gate blocked.** Development evidence covers checked resource admission, deterministic fake inference, cancellation/concurrency and revocation fencing, state migration/export/restore, and the policy/DAG/platform/model-pack/local-gateway contract surfaces. The committed contract tranche passed the complete 85-test WSL development suite with warnings treated as errors. A real approved compact model, two-board offline workflow, candidate measurements, exact retained tuples, boot/recovery spikes, 400â€“405B experiment, and full security/manual/performance evidence remain open in `docs/gates/g1/blockers.json`. This work is preparatory and does not waive the G0 dependency. |
+| G0 | **Development complete with deferrals; formal certification blocked.** Governing source ingestion and 288-ID traceability are verified; the development baseline, decisions including Admin governance, registers, current Windows/WSL inventory, checks, and source-package evidence exist. Two designated physical boards, the Ubuntu 24.04/E8 baselines, disposable disks, protected production signing custody, and complete qualification evidence are deferred in `docs/gates/g0/blockers.json` and `docs/gates/final_certification_deferrals.json`. |
+| G1 | **Development complete with deferrals; formal certification blocked.** Contract evidence covers resources, policy/Admin delegation, typed DAG, model-pack trust lifecycle, fake and real inference, authenticated gateway, cancellation/concurrency/revocation fencing, state transfer, telemetry, and platform adapters. Qwen3-1.7B passed bounded native Windows CUDA and Ubuntu WSL CPU/gateway smoke, but it is below the governed 4–6B range. Signed 4–6B comparison, two-board workflows, boot/recovery, full security/performance evidence, and the real 400–405B experiment are deferred. No deferral waives G0 or G1 exit criteria. |
 | G2, G3, G4, G5 | **Not started.** |
 | GWIN0, GWIN1, GWIN2 | **Not started.** |
 | G6, G7 | **Not started and separately capacity-gated.** |
@@ -94,21 +97,29 @@ here as program infrastructure but close under G4, G5, and GWIN2.
 
 - A machine-readable register for every B1 `FR01–FR60` and `NF01–NF18`, B2 `A001–A140` and `Q01–Q20`, and Windows `W001–W044` and `QW01–QW06` requirement.
 - For every requirement: release, profile applicability, owner, dependency, implementation status, test IDs, environment, and latest evidence state.
-- Architecture decision records for the Python-reference/Rust-production split, service boundaries, transport, artifact storage, policy model, model-pack format, signing, and supported package layout.
+- Architecture decision records for the Python-reference/Rust-production split, service boundaries, transport, artifact storage, policy model, model-pack format, Admin delegation/signing custody, and supported package layout.
 - Two named x86-64 A1 reference machines with firmware and device inventories; an Ubuntu 24.04 reproducible baseline; a separate 26.04 evaluation path; disposable disk fixtures; and initial E0, E1, E2, and E8 environments.
 - Initial workload, adversarial, failure-injection, and license registers. Private fixtures remain outside the public repository.
 - CI lanes for deterministic unit tests, fake-backend contracts, Ubuntu integration, Windows-hosted integration, and reproducible build checks.
 
-**Dependencies:** Hardware access, release ownership, signing design, and an agreed requirements-change process.
+**Dependencies:** Hardware access, release ownership, operational signing custody, and an agreed requirements-change process. The Admin governance/signing-role design is accepted; protected production custody is external certification work.
 
 **Testing phase:**
 
 - **Automated:** Preserve `make check` and the browser journey. Add requirement-register completeness, governing-source digest verification, schema compatibility, database migration, malformed-input, static-analysis, dependency-inventory, and reproducible-build checks. G0 has no source-numbered verification procedure; early `T40–T41`, `V02`, and `V18` scaffolding is non-closing preparation for later gates.
-- **Manual:** Reproduce the current workflow from a clean checkout on Ubuntu and WSL2. Verify that the simulator is not cited as runtime evidence.
+- **Manual:** Reproduce the current workflow from a clean checkout on native Windows and Ubuntu/WSL. Verify that the two environments are recorded as one physical host and that the simulator is not cited as runtime evidence.
 - **Security:** Threat-model review, repository secret scan, third-party/model license inventory, and an initial exposed-interface review.
 - **Performance:** Record the current MVP's startup, request, memory, and storage baseline without assigning a certified service class.
 
 **Exit gate:** Equipment and reproducible baseline images are available; every requirement has an owner and planned test; critical architecture choices for G1 are frozen; unresolved blockers have an owner and decision date.
+
+**2026-09-22 development disposition:** The repository/local G0 tranche is
+accepted as complete with deferrals. Native Windows and the current Ubuntu
+26.04 WSL guest are the active development environments, but they share one
+physical laptop. The host is only an E1 candidate; E2 and E8 are absent, and
+the WSL guest is neither a second board nor the Ubuntu 24.04 physical baseline.
+Those missing environments and destructive/boot/custody tests remain required
+for formal certification.
 
 ## G1 P0 feasibility and core control contracts
 
@@ -139,6 +150,16 @@ here as program infrastructure but close under G4, G5, and GWIN2.
 - **Performance:** Baselines for `Q01`, `Q02`, and `Q06–Q08`; model loading peak, context growth, protected reserve, cancellation latency, and estimator error.
 
 **Exit gate:** The compact workflow operates offline on both boards; no accepted allocation exceeds a domain budget; model failure preserves manual access and recovery; the exact platform, compact model, mainstream candidate, backend, storage, sandbox, and signing directions are selected from recorded evidence.
+
+**2026-09-22 development disposition:** The repository/local G1 tranche is
+accepted as complete with deferrals. Qwen3-1.7B Q4_K_M with llama.cpp b11100
+is the low-resource development baseline and has produced exact bounded output
+on native Windows CUDA and Ubuntu WSL CPU, including real authenticated calls
+through the Luma resource, policy, lease, and gateway path. It is an unsigned
+developer tuple below the required 4–6B range and is not G1-closing evidence.
+The two-board 4–6B comparison, physical boot/recovery/security/performance
+suite, and real 400–405B experiment remain deferred to final OS testing and
+certification. A 450B target is outside the current governing requirements.
 
 ## G2 Ubuntu platform alpha
 
@@ -340,7 +361,7 @@ here as program infrastructure but close under G4, G5, and GWIN2.
 - **Automated:** `T01`, `T05`, `T17`, `T21`, `T25–T26`, `T31`, `T37`, `T43`, `T51–T52`, and `T54`; full inherited policy, artifact, cancellation, and recovery regression.
 - **Manual:** Real 8K and 32K 400–405B runs; rank/device failure, pressure, driver restart, authenticated use, and headless recovery; an E6 clean install with 100 suspend/device cycles; concurrent media generation; and supported/unsupported compatibility-matrix runs.
 - **Security:** User quotas, service identity, management-port isolation, per-rank lease ownership, secret handling, ARM64 boot/driver boundaries, compatibility/media sandboxing, and no mislabeled fallback path.
-- **Performance:** `Q04` for an interactive certificate or `Q05` for asynchronous certification, plus `Q07–Q12`; raw placement, transfer, thermal, energy, latency, and task-success evidence. ARM64, media-generation, and compatibility results are published separately and never inferred from the 400B certificate.
+- **Performance:** `Q04` for an interactive certificate or `Q05` for asynchronous certification, plus `Q07–Q12`; raw placement, transfer, thermal, energy, latency, and task-success evidence. ARM64, media-generation, and compatibility results are published separately and never inferred from a 400–405B certificate.
 
 **Exit gate:** The actual selected model completes `T43` within every physical domain budget and passes inherited security/durability requirements. `A072` media, `A076` compatibility, and `A078` ARM64 capabilities are advertised only after `T37`, `T31`, and `T01`/`T05` respectively pass on their declared tuples; any conditional capability without evidence remains unavailable. Fake tensors, sparse mappings, smaller substitutes, and vendor capacity claims cannot close the gate.
 
@@ -452,14 +473,15 @@ External penetration testing, device-lab access, large-model hardware rental or 
 - Retain Ubuntu 24.04 as the committed baseline until every retained 26.04 tuple passes the promotion gate.
 - Use the authoritative B2 ext4-on-LUKS2 design unless a versioned decision changes it; do not combine it accidentally with the earlier Btrfs recommendation.
 - Record whether Windows profiles can release independently. This plan assumes independent certification, consistent with the Windows release-gate language, while preserving all four as the intended final profile set.
-- Treat boot, partition, Secure Boot, encryption, suspend, power-loss, GPU reset, 400B, and cluster evidence as physical-lab work. CI simulation cannot close those gates.
+- Treat boot, partition, Secure Boot, encryption, suspend, power-loss, GPU reset, 400–405B, and cluster evidence as physical-lab work. CI simulation cannot close those gates. A 450B target requires requirements change control.
+- Keep the Luma OS `Admin` role distinct from Windows Administrator and Linux `root`. Admin can assign finite declared activities, but every effect still requires scoped policy and production signing still requires protected human custody.
 - Keep generated native code disabled until the required microVM or independently qualified constrained runtime passes; a normal container is not an equivalent substitute.
 - Keep A2, A3, and RX outside the first A1 commitment unless separately funded. Their schema recognition in A1 is not an execution certificate.
 - Do not use the visual simulator, allocation simulation, vendor TOPS, nominal RAM/VRAM, or a successful model load as evidence for a complete product claim.
 
 ## Immediate execution order
 
-Development resumes at G0, using `v0.1.0` as the seed rather than restarting the reference implementation. The first implementation tranche is:
+Development used `v0.1.0` as the G0 seed rather than restarting the reference implementation. The first implementation tranche is:
 
 1. add the requirement/evidence registry and gate report;
 2. freeze versioned service, error, artifact, plan, capability, and resource schemas;
@@ -469,11 +491,13 @@ Development resumes at G0, using `v0.1.0` as the seed rather than restarting the
 6. establish the two Ubuntu reference machines and Windows GWIN0 hosts; and
 7. run the G1 test phase before adding broader skills or boot-image scope.
 
-Repository-local items 1â€“4 are now implemented, together with initial policy,
-typed-DAG, model-pack, local-gateway, telemetry, platform-adapter, and recovery
-contracts. The repository-local portion of item 7 passed 85 tests on the WSL
-evaluation environment. Items 5â€“6 and gate-closing tests require
-approved external assets and physical hardware and are recorded as gate
-blockers rather than represented as complete.
+Repository-local items 1–5 are implemented, together with Admin governance,
+purpose/lifecycle-bound model-pack trust, policy, typed-DAG, local-gateway,
+telemetry, platform-adapter, and recovery contracts. Item 5 uses the pinned
+1.7B development baseline and therefore does not close the governed 4–6B
+deliverable. Item 6 and every gate-closing physical-board, boot, recovery,
+signing-custody, security/performance, and 400–405B test are recorded as final
+certification deferrals. Development proceeds to the next implementation
+tranche without representing those deferrals as a formal G0 or G1 pass.
 
 No later-stage support claim should be merged into the support matrix until that stage's exit evidence exists.

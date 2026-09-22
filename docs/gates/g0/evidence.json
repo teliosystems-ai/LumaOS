@@ -96,7 +96,7 @@
       ],
       "environment": "DEV-WSL-UBUNTU-26-01",
       "gate_closing": false,
-      "notes": "The full dependency-free repository check passed and both 104-file source archive formats reproduced byte-for-byte across two builds with verified checksums; WSL 26.04 is not the required Ubuntu 24.04 physical baseline and cannot close G0."
+      "notes": "The full dependency-free repository check passed and both 105-file source archive formats reproduced byte-for-byte across two builds with verified checksums; WSL 26.04 is not the required Ubuntu 24.04 physical baseline and cannot close G0."
     }
   ],
   "open_blocker_record": "docs/gates/g0/blockers.json",

@@ -19,7 +19,7 @@
     "unit_tests_failed": 0,
     "warnings_as_errors": true,
     "requirement_entries_validated": 288,
-    "release_files_validated": 104,
+    "release_files_validated": 105,
     "reproducible_source_builds": 2,
     "archive_checksum_verification": "pass",
     "governing_source_state": "explicitly-blocked",

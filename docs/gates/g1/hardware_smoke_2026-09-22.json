@@ -1,0 +1,32 @@
+{
+  "schema_version": 1,
+  "record_id": "G1-HW-SMOKE-2026-09-22-001",
+  "recorded_on": "2026-09-22",
+  "owner": "platform-lead",
+  "code_commit": "5315718592cea3d9240ca7b25774523137789c22",
+  "environment": "DEV-WIN-WSL-GPU-01",
+  "adapter": "src/luma_os/system_telemetry.py:SystemTelemetryAdapter",
+  "result": "pass-read-only-observation",
+  "observations": [
+    {
+      "domain_id": "host",
+      "sequence": 1,
+      "used_bytes": 3360038912,
+      "total_bytes": 8228859904,
+      "device_error": false
+    },
+    {
+      "domain_id": "gpu0",
+      "sequence": 1,
+      "used_bytes": 1302331392,
+      "total_bytes": 4294967296,
+      "device_error": false
+    }
+  ],
+  "limitations": [
+    "Memory use is a point-in-time telemetry observation and not a benchmark.",
+    "The WSL host is not either required physical A1 board or the Ubuntu 24.04 baseline.",
+    "No model was loaded; this does not prove allocation enforcement, inference, correctness, isolation, recovery, or a service class."
+  ],
+  "gate_closing": false
+}

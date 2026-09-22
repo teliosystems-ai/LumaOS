@@ -75,10 +75,11 @@
       "evidence": [
         "src/luma_os/system_telemetry.py",
         "tests/test_system_telemetry.py",
-        "docs/gates/g0/lab_inventory.json"
+        "docs/gates/g0/lab_inventory.json",
+        "docs/gates/g1/hardware_smoke_2026-09-22.json"
       ],
       "environment": "DEV-WIN-WSL-GPU-01",
-      "observations": "Three deterministic adapter tests passed in the current suite. The separate inventory observes an RTX 3050, but the tests do not prove a model runtime or qualified service class.",
+      "observations": "Three deterministic adapter tests passed, followed by a read-only adapter smoke against WSL host RAM and the observed RTX 3050. No model was loaded, so this does not prove allocation enforcement, inference, isolation, performance, recovery, or a service class.",
       "gate_closing": false
     }
   ],

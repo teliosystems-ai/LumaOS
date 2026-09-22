@@ -48,6 +48,7 @@ REQUIRED_GATE_FILES = (
     "docs/gates/g0/security_review.json",
     "docs/gates/g1/blockers.json",
     "docs/gates/g1/evidence.json",
+    "docs/gates/g1/hardware_smoke_2026-09-22.json",
     "docs/gates/g1/test_run_2026-09-22.json",
     "docs/registers/adversarial.json",
     "docs/registers/failure_injection.json",
@@ -250,6 +251,32 @@ def validate_gate_artifacts() -> None:
         or test_checks.get("unit_tests_failed") != 0
     ):
         raise RuntimeError("G1 repository test record is incomplete")
+
+    hardware_smoke = documents["docs/gates/g1/hardware_smoke_2026-09-22.json"]
+    if (
+        not isinstance(hardware_smoke, dict)
+        or hardware_smoke.get("result") != "pass-read-only-observation"
+        or hardware_smoke.get("gate_closing") is not False
+    ):
+        raise RuntimeError("G1 hardware smoke must remain a passing non-closing observation")
+    observations = hardware_smoke.get("observations")
+    if (
+        not isinstance(observations, list)
+        or len(observations) != 2
+        or any(not isinstance(item, dict) for item in observations)
+        or {item.get("domain_id") for item in observations if isinstance(item, dict)}
+        != {"host", "gpu0"}
+        or any(
+            item.get("device_error") is not False
+            or not isinstance(item.get("total_bytes"), int)
+            or item["total_bytes"] <= 0
+            or not isinstance(item.get("used_bytes"), int)
+            or not 0 <= item["used_bytes"] <= item["total_bytes"]
+            for item in observations
+            if isinstance(item, dict)
+        )
+    ):
+        raise RuntimeError("G1 hardware smoke must contain host and GPU observations")
 
     from build_requirement_registry import build_registry, load_source_record, serialize_registry
     from gate_report import render_report, validate_registry

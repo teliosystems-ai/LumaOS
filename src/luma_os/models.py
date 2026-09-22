@@ -48,13 +48,47 @@ class OpenAICompatibleClient:
             base["detail"] = f"Local model endpoint unavailable: {type(exc).__name__}"
         return base
 
-    def complete(self, messages: list[dict[str, str]], *, temperature: float = 0.0) -> str:
+    def chat_completion(
+        self,
+        messages: list[dict[str, str]],
+        *,
+        temperature: float = 0.0,
+        max_tokens: int | None = None,
+        seed: int | None = None,
+    ) -> dict[str, Any]:
         if not self.configured:
             raise ValidationError("No local model endpoint is configured")
-        payload = self._request(
-            "POST",
-            "/chat/completions",
-            {"model": self.model, "messages": messages, "temperature": temperature},
+        if max_tokens is not None and (
+            not isinstance(max_tokens, int) or isinstance(max_tokens, bool) or max_tokens < 1
+        ):
+            raise ValidationError("max_tokens must be a positive integer")
+        if seed is not None and (not isinstance(seed, int) or isinstance(seed, bool)):
+            raise ValidationError("seed must be an integer")
+        payload: dict[str, Any] = {
+            "model": self.model,
+            "messages": messages,
+            "temperature": temperature,
+            "stream": False,
+        }
+        if max_tokens is not None:
+            payload["max_tokens"] = max_tokens
+        if seed is not None:
+            payload["seed"] = seed
+        return self._request("POST", "/chat/completions", payload)
+
+    def complete(
+        self,
+        messages: list[dict[str, str]],
+        *,
+        temperature: float = 0.0,
+        max_tokens: int | None = None,
+        seed: int | None = None,
+    ) -> str:
+        payload = self.chat_completion(
+            messages,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            seed=seed,
         )
         try:
             return str(payload["choices"][0]["message"]["content"])

@@ -8,9 +8,10 @@ model pack and this repository.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from enum import IntEnum
+from datetime import UTC, datetime
+from enum import Enum, IntEnum
 import hashlib
 import json
 from pathlib import Path, PurePosixPath
@@ -41,10 +42,127 @@ class ModelPackState(IntEnum):
     INTERACTIVE_CERTIFIED = 4
 
 
-class Ed25519Verifier(Protocol):
-    """Trust-store-backed detached Ed25519 verification boundary."""
+class SigningPurpose(str, Enum):
+    """Finite trust-key usages understood by the model-pack boundary."""
+
+    MODEL_PACK_MANIFEST = "model-pack-manifest"
+    EXECUTION_CERTIFICATION = "model-pack-execution-certification"
+    INTERACTIVE_CERTIFICATION = "model-pack-interactive-certification"
+
+
+class SigningRole(str, Enum):
+    """Finite public-key roles kept separate from private-key custody."""
+
+    MODEL_PACK_SIGNER = "model-pack-signer"
+    CERTIFICATION_SIGNER = "model-pack-certification-signer"
+
+
+_PURPOSE_ROLES = {
+    SigningPurpose.MODEL_PACK_MANIFEST: SigningRole.MODEL_PACK_SIGNER,
+    SigningPurpose.EXECUTION_CERTIFICATION: SigningRole.CERTIFICATION_SIGNER,
+    SigningPurpose.INTERACTIVE_CERTIFICATION: SigningRole.CERTIFICATION_SIGNER,
+}
+
+
+class RawEd25519Verifier(Protocol):
+    """Cryptographic verifier whose public-key lookup is keyed by identifier."""
 
     def verify(self, message: bytes, signature: bytes, *, key_id: str) -> bool: ...
+
+
+class Ed25519Verifier(Protocol):
+    """Lifecycle- and purpose-aware detached Ed25519 verification boundary."""
+
+    def verify(
+        self,
+        message: bytes,
+        signature: bytes,
+        *,
+        key_id: str,
+        purpose: SigningPurpose,
+    ) -> bool: ...
+
+
+def _aware_utc(value: datetime, field: str) -> datetime:
+    if not isinstance(value, datetime) or value.tzinfo is None:
+        raise ModelManifestError(f"{field} must be timezone-aware")
+    return value.astimezone(UTC)
+
+
+@dataclass(frozen=True, slots=True)
+class TrustKeyRecord:
+    """Public trust metadata; private signing material is never represented."""
+
+    key_id: str
+    role: SigningRole
+    purposes: tuple[SigningPurpose, ...]
+    not_before: datetime
+    not_after: datetime
+    revoked_at: datetime | None = None
+
+    def __post_init__(self) -> None:
+        _ascii_text(self.key_id, "key_id")
+        if not isinstance(self.role, SigningRole):
+            raise ModelManifestError("trust key role must be a SigningRole")
+        if not self.purposes or any(not isinstance(item, SigningPurpose) for item in self.purposes):
+            raise ModelManifestError("trust key purposes must be a non-empty SigningPurpose tuple")
+        purposes = tuple(sorted(set(self.purposes), key=lambda item: item.value))
+        object.__setattr__(self, "purposes", purposes)
+        not_before = _aware_utc(self.not_before, "not_before")
+        not_after = _aware_utc(self.not_after, "not_after")
+        if not_after <= not_before:
+            raise ModelManifestError("not_after must be later than not_before")
+        object.__setattr__(self, "not_before", not_before)
+        object.__setattr__(self, "not_after", not_after)
+        if self.revoked_at is not None:
+            object.__setattr__(self, "revoked_at", _aware_utc(self.revoked_at, "revoked_at"))
+
+    def permits(self, purpose: SigningPurpose, *, at: datetime) -> bool:
+        observed_at = _aware_utc(at, "verification time")
+        return (
+            purpose in self.purposes
+            and self.not_before <= observed_at < self.not_after
+            and (self.revoked_at is None or observed_at < self.revoked_at)
+        )
+
+
+class PurposeBoundEd25519Verifier:
+    """Apply trust-key usage and lifecycle policy before cryptographic verification."""
+
+    def __init__(
+        self,
+        verifier: RawEd25519Verifier,
+        records: tuple[TrustKeyRecord, ...],
+        *,
+        clock: Callable[[], datetime] | None = None,
+    ) -> None:
+        if not records:
+            raise ModelManifestError("at least one trust key record is required")
+        by_id = {record.key_id: record for record in records}
+        if len(by_id) != len(records):
+            raise ModelManifestError("trust key IDs must be unique")
+        self._verifier = verifier
+        self._records = MappingProxyType(by_id)
+        self._clock = clock or (lambda: datetime.now(UTC))
+
+    def verify(
+        self,
+        message: bytes,
+        signature: bytes,
+        *,
+        key_id: str,
+        purpose: SigningPurpose,
+    ) -> bool:
+        if not isinstance(purpose, SigningPurpose):
+            return False
+        record = self._records.get(key_id)
+        if (
+            record is None
+            or record.role is not _PURPOSE_ROLES[purpose]
+            or not record.permits(purpose, at=self._clock())
+        ):
+            return False
+        return self._verifier.verify(message, signature, key_id=key_id)
 
 
 def _ascii_text(value: object, field: str, *, maximum: int = 512) -> str:
@@ -341,7 +459,12 @@ def verify_model_pack(
     if not signature:
         raise ModelPackIntegrityError("detached signature is empty")
     manifest = ModelManifest.parse(raw_manifest)
-    if not verifier.verify(raw_manifest, signature, key_id=manifest.signer_key_id):
+    if not verifier.verify(
+        raw_manifest,
+        signature,
+        key_id=manifest.signer_key_id,
+        purpose=SigningPurpose.MODEL_PACK_MANIFEST,
+    ):
         raise ModelPackIntegrityError("manifest signature is not trusted")
     if runtime_tuple not in manifest.runtime_tuples:
         raise ModelPackCompatibilityError("runtime tuple is not declared by the model pack")
@@ -440,8 +563,16 @@ def apply_certification(
         raise ModelPackIntegrityError("certificate refers to another model pack")
     if record.runtime_tuple_sha256 != verification.runtime_tuple.digest:
         raise ModelPackIntegrityError("certificate refers to another runtime tuple")
+    purpose = (
+        SigningPurpose.EXECUTION_CERTIFICATION
+        if record.level == "execution"
+        else SigningPurpose.INTERACTIVE_CERTIFICATION
+    )
     if not signature or not verifier.verify(
-        record.canonical_bytes, signature, key_id=record.signer_key_id
+        record.canonical_bytes,
+        signature,
+        key_id=record.signer_key_id,
+        purpose=purpose,
     ):
         raise ModelPackIntegrityError("certification signature is not trusted")
     return ModelPackVerification(

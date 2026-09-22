@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import os
 from pathlib import Path
+import stat
 from typing import Mapping
 
 from .errors import ValidationError
@@ -73,16 +74,38 @@ class LumaConfig:
         )
 
     def ensure_directories(self) -> None:
-        """Create private runtime directories and tighten their permissions."""
+        """Create private runtime directories and tighten POSIX permissions.
+
+        Windows does not implement POSIX directory mode bits: ``chmod(0o700)``
+        is not an ACL operation and ``stat`` reports ``0o777``.  On Windows we
+        still reject symlinks, junctions, and other reparse points, while the
+        directory's inherited DACL remains the platform security boundary.
+        """
 
         self.data_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+        self._secure_directory(self.data_dir)
+        # Validate the state root before creating anything below it.  This
+        # prevents an existing root reparse point from redirecting even the
+        # objects-directory creation outside the configured location.
         self.objects_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
-        for directory in (self.data_dir, self.objects_dir):
-            if directory.is_symlink():
-                raise ValidationError(f"Runtime directory cannot be a symbolic link: {directory}")
-            if not directory.is_dir():
-                raise ValidationError(f"Runtime path is not a directory: {directory}")
-            try:
-                directory.chmod(0o700)
-            except PermissionError as exc:
-                raise ValidationError(f"Cannot secure runtime directory: {directory}") from exc
+        self._secure_directory(self.objects_dir)
+
+    @staticmethod
+    def _secure_directory(directory: Path) -> None:
+        info = os.lstat(directory)
+        attributes = int(getattr(info, "st_file_attributes", 0))
+        reparse_flag = int(getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400))
+        if directory.is_symlink() or attributes & reparse_flag:
+            raise ValidationError(
+                f"Runtime directory cannot be a symbolic link or junction: {directory}"
+            )
+        if not directory.is_dir():
+            raise ValidationError(f"Runtime path is not a directory: {directory}")
+        if os.name == "nt":
+            return
+        try:
+            directory.chmod(0o700)
+        except PermissionError as exc:
+            raise ValidationError(f"Cannot secure runtime directory: {directory}") from exc
+        if directory.stat().st_mode & 0o077:
+            raise ValidationError(f"Runtime directory permissions are not private: {directory}")

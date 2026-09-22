@@ -151,7 +151,11 @@ def export_state(config: LumaConfig, destination: str | os.PathLike[str]) -> dic
                 archive.writestr(_zip_info(DATABASE_NAME), database_bytes)
                 for member, content in objects:
                     archive.writestr(_zip_info(member), content)
-            with temporary_archive.open("rb") as stream:
+            # Windows FlushFileBuffers (used by os.fsync) rejects a read-only
+            # CRT descriptor with EBADF.  Reopen the completed archive with
+            # write access; the bytes are unchanged and both Windows and POSIX
+            # now receive the same durability barrier before the atomic rename.
+            with temporary_archive.open("r+b") as stream:
                 os.fsync(stream.fileno())
             os.chmod(temporary_archive, 0o600)
             os.replace(temporary_archive, output)

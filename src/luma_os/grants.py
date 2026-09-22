@@ -12,6 +12,24 @@ from .db import LumaStore, utc_now
 from .errors import AuthorizationError, NotFoundError, ValidationError
 
 
+def _is_reserved_windows_component(component: str) -> bool:
+    """Provide Python 3.11+ coverage for Win32 reserved path components."""
+
+    platform_check = getattr(os.path, "isreserved", None)
+    if platform_check is not None and platform_check(component):
+        return True
+    if any(ord(character) < 32 for character in component):
+        return True
+    if any(character in '<>:"/\\|?*' for character in component):
+        return True
+    stem = component.rstrip(" .").split(".", 1)[0].upper()
+    return stem in {"CON", "PRN", "AUX", "NUL", "CLOCK$"} or (
+        len(stem) == 4
+        and stem[:3] in {"COM", "LPT"}
+        and stem[3] in "123456789"
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class SafeFile:
     grant_id: str
@@ -46,8 +64,20 @@ class FolderGrantService:
         path = PurePath(relative_path)
         if path.is_absolute() or any(part in ("", ".", "..") for part in path.parts):
             raise ValidationError("Path must stay within the enrolled folder", details={"path": relative_path})
-        if os.name == "nt" and (":" in relative_path or relative_path.startswith(("\\", "/"))):
-            raise ValidationError("Path must be relative to the enrolled folder")
+        if os.name == "nt":
+            if ":" in relative_path or relative_path.startswith(("\\", "/")):
+                raise ValidationError("Path must be relative to the enrolled folder")
+            # Win32 strips trailing spaces/dots from ordinary path components;
+            # accepting them could turn a non-dot component into `.` or `..`.
+            # Reserved device names are not normal filesystem objects either.
+            if any(
+                part.endswith((" ", ".")) or _is_reserved_windows_component(part)
+                for part in path.parts
+            ):
+                raise ValidationError(
+                    "Path contains a reserved Windows component",
+                    details={"path": relative_path},
+                )
         return tuple(path.parts)
 
     def enroll(
@@ -159,6 +189,19 @@ class FolderGrantService:
     def _open_file(self, owner: str, grant_id: str, relative_path: str) -> tuple[int, os.stat_result]:
         grant = self.get(owner, grant_id)
         parts = self._parts(relative_path)
+        if os.name == "nt":
+            try:
+                return self._open_file_windows(grant, parts, relative_path)
+            except FileNotFoundError as exc:
+                raise NotFoundError(
+                    "Source file was not found", details={"path": relative_path}
+                ) from exc
+            except OSError as exc:
+                raise AuthorizationError(
+                    "Source path could not be opened safely; symbolic links and junctions are not followed",
+                    details={"path": relative_path},
+                ) from exc
+
         directory_flag = getattr(os, "O_DIRECTORY", 0)
         no_follow = getattr(os, "O_NOFOLLOW", 0)
         close_on_exec = getattr(os, "O_CLOEXEC", 0)
@@ -199,6 +242,133 @@ class FolderGrantService:
                 os.close(current_fd)
             if root_fd >= 0:
                 os.close(root_fd)
+
+    def _open_file_windows(
+        self,
+        grant: dict[str, object],
+        parts: tuple[str, ...],
+        relative_path: str,
+    ) -> tuple[int, os.stat_result]:
+        """Open a Windows file without relying on unsupported directory FDs.
+
+        CPython's Windows CRT cannot open a directory with ``os.open`` and it
+        does not implement ``dir_fd`` traversal.  The fallback therefore walks
+        every component with ``lstat``, rejects all reparse points (including
+        junctions), verifies canonical containment, opens the final file once,
+        and then rechecks every captured identity before returning the bound
+        descriptor.  A race is rejected before any content is read.
+        """
+
+        root = Path(str(grant["root_path"]))
+        directory_snapshots: list[tuple[Path, tuple[int, int]]] = []
+        descriptor = -1
+        try:
+            root_info = os.lstat(root)
+            self._reject_windows_reparse(root_info, relative_path)
+            if not stat.S_ISDIR(root_info.st_mode):
+                raise AuthorizationError("Enrolled folder is no longer a directory")
+            if root_info.st_dev != grant["root_device"] or root_info.st_ino != grant["root_inode"]:
+                raise AuthorizationError("Enrolled folder identity has changed; enroll it again")
+            directory_snapshots.append((root, self._directory_identity(root_info)))
+
+            current = root
+            for part in parts[:-1]:
+                current = current / part
+                current_info = os.lstat(current)
+                self._reject_windows_reparse(current_info, relative_path)
+                if not stat.S_ISDIR(current_info.st_mode):
+                    raise AuthorizationError(
+                        "Source path could not be opened safely; a parent component is not a directory",
+                        details={"path": relative_path},
+                    )
+                directory_snapshots.append(
+                    (current, self._directory_identity(current_info))
+                )
+
+            target = current / parts[-1]
+            initial = os.lstat(target)
+            self._reject_windows_reparse(initial, relative_path)
+            if not stat.S_ISREG(initial.st_mode):
+                raise ValidationError(
+                    "Source must be a regular file", details={"path": relative_path}
+                )
+            if initial.st_size > self.max_source_bytes:
+                raise ValidationError(
+                    "Source file exceeds the configured size limit",
+                    details={
+                        "path": relative_path,
+                        "size_bytes": initial.st_size,
+                        "limit_bytes": self.max_source_bytes,
+                    },
+                )
+            self._require_windows_containment(root, target, relative_path)
+
+            flags = os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOINHERIT", 0)
+            descriptor = os.open(target, flags)
+            opened = os.fstat(descriptor)
+            if self._file_identity(opened) != self._file_identity(initial):
+                raise AuthorizationError(
+                    "Source path changed while it was being opened",
+                    details={"path": relative_path},
+                )
+
+            for directory, expected in directory_snapshots:
+                observed = os.lstat(directory)
+                self._reject_windows_reparse(observed, relative_path)
+                if self._directory_identity(observed) != expected:
+                    raise AuthorizationError(
+                        "Source path changed while it was being opened",
+                        details={"path": relative_path},
+                    )
+            final_path_info = os.lstat(target)
+            self._reject_windows_reparse(final_path_info, relative_path)
+            if self._file_identity(final_path_info) != self._file_identity(opened):
+                raise AuthorizationError(
+                    "Source path changed while it was being opened",
+                    details={"path": relative_path},
+                )
+            self._require_windows_containment(root, target, relative_path)
+            result = (descriptor, opened)
+            descriptor = -1
+            return result
+        finally:
+            if descriptor >= 0:
+                os.close(descriptor)
+
+    @staticmethod
+    def _reject_windows_reparse(info: os.stat_result, relative_path: str) -> None:
+        attributes = int(getattr(info, "st_file_attributes", 0))
+        reparse_flag = int(getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400))
+        if stat.S_ISLNK(info.st_mode) or attributes & reparse_flag:
+            raise AuthorizationError(
+                "Source path could not be opened safely; symbolic links and junctions are not followed",
+                details={"path": relative_path},
+            )
+
+    @staticmethod
+    def _require_windows_containment(root: Path, target: Path, relative_path: str) -> None:
+        resolved_root = root.resolve(strict=True)
+        resolved_target = target.resolve(strict=True)
+        try:
+            resolved_target.relative_to(resolved_root)
+        except ValueError as exc:
+            raise AuthorizationError(
+                "Source path resolved outside the enrolled folder",
+                details={"path": relative_path},
+            ) from exc
+
+    @staticmethod
+    def _directory_identity(info: os.stat_result) -> tuple[int, int]:
+        return (int(info.st_dev), int(info.st_ino))
+
+    @staticmethod
+    def _file_identity(info: os.stat_result) -> tuple[int, int, int, int]:
+        return (
+            int(info.st_dev),
+            int(info.st_ino),
+            int(info.st_size),
+            int(info.st_mtime_ns),
+        )
 
     @staticmethod
     def _row(row: object) -> dict[str, object]:

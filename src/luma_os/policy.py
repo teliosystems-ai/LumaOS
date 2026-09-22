@@ -149,9 +149,11 @@ class PolicyBroker:
         *,
         clock: Callable[[], datetime] | None = None,
         id_factory: Callable[[], str] | None = None,
+        grant_mutation_authorizer: Callable[[str, str], None] | None = None,
     ) -> None:
         self._clock = clock or (lambda: datetime.now(UTC))
         self._id_factory = id_factory or (lambda: str(uuid.uuid4()))
+        self._grant_mutation_authorizer = grant_mutation_authorizer
         self._grants: dict[str, CapabilityGrant] = {}
         self._policy_version = 0
         self._lock = threading.RLock()
@@ -161,9 +163,10 @@ class PolicyBroker:
         with self._lock:
             return self._policy_version
 
-    def install(self, grant: CapabilityGrant) -> CapabilityGrant:
+    def install(self, grant: CapabilityGrant, *, actor: str | None = None) -> CapabilityGrant:
         if not isinstance(grant, CapabilityGrant):
             raise PolicyValidationError("grant must be a CapabilityGrant")
+        self._authorize_grant_mutation(actor, "policy.grant.install")
         with self._lock:
             existing = self._grants.get(grant.grant_id)
             if existing is not None and grant.version <= existing.version:
@@ -174,8 +177,15 @@ class PolicyBroker:
             self._policy_version += 1
             return grant
 
-    def revoke(self, grant_id: str, *, expected_version: int) -> CapabilityGrant:
+    def revoke(
+        self,
+        grant_id: str,
+        *,
+        expected_version: int,
+        actor: str | None = None,
+    ) -> CapabilityGrant:
         _identifier(grant_id, "grant_id")
+        self._authorize_grant_mutation(actor, "policy.grant.revoke")
         with self._lock:
             current = self._grants.get(grant_id)
             if current is None:
@@ -192,6 +202,47 @@ class PolicyBroker:
             self._grants[grant_id] = revoked
             self._policy_version += 1
             return revoked
+
+    def _authorize_grant_mutation(self, actor: str | None, activity: str) -> None:
+        if self._grant_mutation_authorizer is None:
+            return
+        if actor is None:
+            raise PolicyDenied(
+                self._administrative_denial(activity, ReasonCode.NO_MATCHING_GRANT)
+            )
+        _identifier(actor, "actor")
+        try:
+            self._grant_mutation_authorizer(actor, activity)
+        except Exception as exc:
+            raise PolicyDenied(
+                self._administrative_denial(activity, ReasonCode.NO_MATCHING_GRANT, actor=actor)
+            ) from exc
+
+    def _administrative_denial(
+        self,
+        activity: str,
+        reason: ReasonCode,
+        *,
+        actor: str = "unauthenticated",
+    ) -> PolicyDecision:
+        now = _aware_utc(self._clock(), "clock result")
+        with self._lock:
+            version = self._policy_version
+            digest = self._digest_locked()
+        return PolicyDecision(
+            decision_id=_identifier(self._id_factory(), "decision_id"),
+            policy_version=version,
+            policy_digest=digest,
+            outcome=DecisionOutcome.DENY,
+            reason_code=reason,
+            subject=actor,
+            capability="policy.administration",
+            resource_kind="policy-store",
+            resource_id="capability-grants",
+            operation=activity,
+            evaluated_at=now,
+            evaluated_constraints=("authenticated-admin-activity",),
+        )
 
     def decide(self, request: PolicyRequest, *, at: datetime | None = None) -> PolicyDecision:
         if not isinstance(request, PolicyRequest):

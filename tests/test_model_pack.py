@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from datetime import UTC, datetime, timedelta
 import hashlib
 import json
 from pathlib import Path
@@ -18,7 +19,11 @@ from luma_os.model_pack import (  # noqa: E402
     ModelPackCompatibilityError,
     ModelPackIntegrityError,
     ModelPackState,
+    PurposeBoundEd25519Verifier,
     RuntimeTuple,
+    SigningPurpose,
+    SigningRole,
+    TrustKeyRecord,
     apply_certification,
     canonical_manifest_bytes,
     verify_model_pack,
@@ -26,6 +31,23 @@ from luma_os.model_pack import (  # noqa: E402
 
 
 class StubVerifier:
+    def verify(
+        self,
+        message: bytes,
+        signature: bytes,
+        *,
+        key_id: str,
+        purpose: SigningPurpose,
+    ) -> bool:
+        return (
+            bool(message)
+            and signature == b"trusted-signature"
+            and key_id == "lab-ed25519-1"
+            and isinstance(purpose, SigningPurpose)
+        )
+
+
+class StubRawVerifier:
     def verify(self, message: bytes, signature: bytes, *, key_id: str) -> bool:
         return bool(message) and signature == b"trusted-signature" and key_id == "lab-ed25519-1"
 
@@ -173,6 +195,87 @@ class ModelPackTests(unittest.TestCase):
             self.assertEqual(ModelPackState.INTERACTIVE_CERTIFIED, final.state)
             with self.assertRaises(ModelPackIntegrityError):
                 apply_certification(loaded, interactive, b"trusted-signature", verifier=StubVerifier())
+
+    def test_trust_keys_are_purpose_bound_time_bounded_and_revocable(self) -> None:
+        now = datetime(2026, 9, 22, 12, tzinfo=UTC)
+        manifest_only = TrustKeyRecord(
+            key_id="lab-ed25519-1",
+            role=SigningRole.MODEL_PACK_SIGNER,
+            purposes=(SigningPurpose.MODEL_PACK_MANIFEST,),
+            not_before=now - timedelta(days=1),
+            not_after=now + timedelta(days=1),
+        )
+        verifier = PurposeBoundEd25519Verifier(
+            StubRawVerifier(), (manifest_only,), clock=lambda: now
+        )
+        self.assertTrue(
+            verifier.verify(
+                b"manifest",
+                b"trusted-signature",
+                key_id="lab-ed25519-1",
+                purpose=SigningPurpose.MODEL_PACK_MANIFEST,
+            )
+        )
+        self.assertFalse(
+            verifier.verify(
+                b"certificate",
+                b"trusted-signature",
+                key_id="lab-ed25519-1",
+                purpose=SigningPurpose.EXECUTION_CERTIFICATION,
+            )
+        )
+
+        for restricted in (
+            replace(manifest_only, not_before=now + timedelta(seconds=1)),
+            replace(manifest_only, not_before=now - timedelta(days=2), not_after=now),
+            replace(manifest_only, revoked_at=now - timedelta(seconds=1)),
+            replace(manifest_only, role=SigningRole.CERTIFICATION_SIGNER),
+        ):
+            restricted_verifier = PurposeBoundEd25519Verifier(
+                StubRawVerifier(), (restricted,), clock=lambda: now
+            )
+            self.assertFalse(
+                restricted_verifier.verify(
+                    b"manifest",
+                    b"trusted-signature",
+                    key_id="lab-ed25519-1",
+                    purpose=SigningPurpose.MODEL_PACK_MANIFEST,
+                )
+            )
+
+    def test_manifest_signer_cannot_issue_certification_without_that_usage(self) -> None:
+        now = datetime(2026, 9, 22, 12, tzinfo=UTC)
+        verifier = PurposeBoundEd25519Verifier(
+            StubRawVerifier(),
+            (
+                TrustKeyRecord(
+                    key_id="lab-ed25519-1",
+                    role=SigningRole.MODEL_PACK_SIGNER,
+                    purposes=(SigningPurpose.MODEL_PACK_MANIFEST,),
+                    not_before=now - timedelta(days=1),
+                    not_after=now + timedelta(days=1),
+                ),
+            ),
+            clock=lambda: now,
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self.build_pack(root)
+            loaded = verify_model_pack(root, verifier=verifier, runtime_tuple=self.runtime)
+            certificate = CertificationRecord(
+                level="execution",
+                pack_manifest_sha256=loaded.manifest_sha256,
+                runtime_tuple_sha256=self.runtime.digest,
+                evidence_sha256="c" * 64,
+                signer_key_id="lab-ed25519-1",
+            )
+            with self.assertRaises(ModelPackIntegrityError):
+                apply_certification(
+                    loaded,
+                    certificate,
+                    b"trusted-signature",
+                    verifier=verifier,
+                )
 
 
 if __name__ == "__main__":

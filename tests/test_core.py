@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import http.client
 import json
+import os
 from pathlib import Path
 import sqlite3
+import subprocess
 import sys
 import tempfile
 import threading
@@ -36,7 +38,13 @@ class CoreTestCase(unittest.TestCase):
 
     def test_configuration_and_schema_are_durable(self) -> None:
         self.assertTrue(self.config.db_path.is_file())
-        self.assertEqual(self.config.data_dir.stat().st_mode & 0o777, 0o700)
+        if os.name == "nt":
+            # Windows stat mode bits do not describe the directory DACL, so no
+            # POSIX-mode assertion is meaningful on this platform.
+            self.assertTrue(self.config.data_dir.is_dir())
+            self.assertFalse(self.config.data_dir.is_symlink())
+        else:
+            self.assertEqual(self.config.data_dir.stat().st_mode & 0o777, 0o700)
         with self.service.store.transaction() as connection:
             version = connection.execute("SELECT MAX(version) FROM schema_migrations").fetchone()[0]
             journal_mode = connection.execute("PRAGMA journal_mode").fetchone()[0]
@@ -80,6 +88,60 @@ class CoreTestCase(unittest.TestCase):
         with self.assertRaises(Exception) as raised:
             self.service.grants.read_file("alice", grant["grant_id"], "outside-link.txt")
         self.assertIn("symbolic links", str(raised.exception).lower())
+
+    @unittest.skipUnless(os.name == "nt", "Windows junction semantics only")
+    def test_windows_grants_and_config_reject_junctions(self) -> None:
+        outside = self.root / "outside-directory"
+        outside.mkdir()
+        (outside / "secret.txt").write_text("secret", encoding="utf-8")
+        junction = self.input_dir / "junction"
+        created = subprocess.run(
+            ["cmd.exe", "/d", "/c", "mklink", "/J", str(junction), str(outside)],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if created.returncode != 0:
+            self.skipTest("Directory junctions unavailable")
+        try:
+            grant = self.service.grants.enroll("alice", self.input_dir)
+            with self.assertRaisesRegex(ValidationError, "reserved Windows component"):
+                self.service.grants.read_file(
+                    "alice", grant["grant_id"], ".. /secret.txt"
+                )
+            with self.assertRaisesRegex(Exception, "symbolic links and junctions"):
+                self.service.grants.read_file(
+                    "alice", grant["grant_id"], "junction/secret.txt"
+                )
+        finally:
+            junction.rmdir()
+
+        state_target = self.root / "outside-state"
+        state_target.mkdir()
+        state_junction = self.root / "state-junction"
+        created = subprocess.run(
+            [
+                "cmd.exe",
+                "/d",
+                "/c",
+                "mklink",
+                "/J",
+                str(state_junction),
+                str(state_target),
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if created.returncode != 0:
+            self.skipTest("Directory junctions unavailable")
+        try:
+            redirected = LumaConfig.from_env({}, data_dir=state_junction)
+            with self.assertRaisesRegex(ValidationError, "symbolic link or junction"):
+                redirected.ensure_directories()
+            self.assertFalse((state_target / "objects").exists())
+        finally:
+            state_junction.rmdir()
 
     def test_artifact_versions_and_receipts_are_immutable(self) -> None:
         artifact = self.service.artifacts.create_text(

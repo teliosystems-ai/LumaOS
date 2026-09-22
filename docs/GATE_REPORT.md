@@ -4,14 +4,15 @@
 
 ## Outcome
 
-- Registry state: **PROVISIONAL_BLOCKED**.
+- Registry state: **SOURCE_VERIFIED_PLAN_MAPPINGS_PROVISIONAL**.
 - Explicit catalog entries: **288 / 288**.
-- G0 requirement-traceability status: **BLOCKED**.
+- G0 governing-source traceability status: **VERIFIED**.
+- Requirements with verified structural source fields: **288 / 288**.
 - Requirements with blocked latest evidence: **288**.
 - Requirements with provisional mappings: **288**.
 - No product requirement is closed by this report.
 
-The ID catalog and plan-level assignments are structurally complete. G0 cannot close while the three governing sources are unavailable, their immutable digests are absent, and the provisional mappings have not been semantically reconciled. G1 cannot close while G0 is blocked or while its required runtime, hardware, security, recovery, and performance evidence remains unavailable.
+The three pinned governing sources and the complete 288-ID structural traceability catalog are verified. This resolves the governing-source prerequisite only. The broader G0 gate is not certified by this report, plan-derived mappings remain provisional, and G1 cannot close while its required runtime, hardware, security, recovery, and performance evidence remains unavailable.
 
 ## Catalog coverage
 
@@ -26,17 +27,17 @@ The ID catalog and plan-level assignments are structurally complete. G0 cannot c
 
 ## Governing sources
 
-| Source | Precedence | Availability | Validation | SHA-256 |
-| --- | ---: | --- | --- | --- |
-| GOV-WIN-001 | 1 | missing | blocked | — |
-| GOV-UBU-001 | 2 | missing | blocked | — |
-| GOV-FEA-001 | 3 | missing | blocked | — |
+| Source | Precedence | Revision | Date | Availability | Validation | SHA-256 |
+| --- | ---: | --- | --- | --- | --- | --- |
+| GOV-WIN-001 | 1 | VAR WIN 01 / Version 1.0 | 2026-09-19 | present | verified | 479b310e4027a45ccc3bf09a1f1850672e7841f40a3c2a018e34059109e7166d |
+| GOV-UBU-001 | 2 | Version 2.0 | 2026-09-13 | present | verified | 25b6026916f9cdeb0a108d3f8ad875a704a9162436d317c0c825f00fe8b4f38b |
+| GOV-FEA-001 | 3 | Version 1.0 | 2026-09-10 | present | verified | 05b2e8568e8582c435b10fe6f609f2c7a10737d4efd82d5f1adaea2f37e821e5 |
 
 ## Gate register status
 
 | Gate | Requirements | In progress | Not started | Pass | Fail | Blocked | Status |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |
-| G0 | 0 | 0 | 0 | 0 | 0 | 0 | BLOCKED |
+| G0 | 0 | 0 | 0 | 0 | 0 | 0 | SOURCE-VERIFIED; BROADER GATE OPEN |
 | G1 | 88 | 88 | 0 | 0 | 0 | 88 | BLOCKED |
 | G2 | 34 | 0 | 34 | 0 | 0 | 34 | BLOCKED |
 | G3 | 45 | 0 | 45 | 0 | 0 | 45 | BLOCKED |
@@ -58,13 +59,12 @@ The ID catalog and plan-level assignments are structurally complete. G0 cannot c
 - Exact A077 test mapping recorded: **T40**.
 - Missing numbered procedure: **FR54** (the plan requires RX requirements change control before execution).
 
-Implementation status is a stage-level planning signal, not semantic requirement completion. Gate suites are attached provisionally unless the development plan states an exact mapping.
+Implementation status is a stage-level planning signal, not semantic requirement completion. `source_test_ids` contains only explicit source-row references; planned gate suites remain attached separately and provisionally unless the development plan states an exact mapping.
 
 ## Open blockers
 
 | Blocker | State | Owner | Decision date | Affects | Reason |
 | --- | --- | --- | --- | --- | --- |
-| BLK-GOVERNING-SOURCES | blocked | requirements-and-release-owner | — | G0, G1, G2, G3, G4, G5, G6, G7, RX, GWIN0, GWIN1, GWIN2 | All three governing DOCX inputs are absent and lack immutable digests. |
 | BLK-RX-TEST-PROCEDURE | blocked | rx-research-team | — | RX | FR54 has no source-numbered RX verification procedure; change control is required before RX execution. |
 
 ## Status totals

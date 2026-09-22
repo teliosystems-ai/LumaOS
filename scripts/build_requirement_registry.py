@@ -1,24 +1,30 @@
 #!/usr/bin/env python3
-"""Build the provisional Luma OS requirement registry deterministically.
+"""Build the Luma OS requirement registry deterministically.
 
-The governing DOCX inputs are not present in this checkout.  Consequently this
-builder records the complete identifier catalog and the assignments that are
-explicit in docs/DEVELOPMENT_PLAN.md, but deliberately marks source
-traceability, profile mappings, test mappings, and evidence as provisional or
-blocked.  It must not be used to infer normative requirement text.
+The builder reads the three pinned governing DOCX packages directly with the
+Python standard library.  It verifies their immutable metadata, extracts the
+288 source requirements, and keeps source-verified fields separate from the
+gate, owner, profile, and environment assignments derived from the development
+plan.  Source traceability is not product acceptance evidence.
 """
 
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 from pathlib import Path
+from pathlib import PurePosixPath
+import re
 from typing import Any, Iterable
+import xml.etree.ElementTree as ET
+import zipfile
 
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_OUTPUT = ROOT / "requirements" / "registry.json"
 GOVERNING_SOURCES = ROOT / "docs" / "governing_sources.json"
+WORD_NS = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
 
 
 def _numbered(prefix: str, width: int, *ranges: tuple[int, int]) -> list[str]:
@@ -215,6 +221,277 @@ SOURCE_BY_FAMILY = {
 }
 
 
+def _word_text(element: ET.Element) -> str:
+    """Return visible Word text while preserving the package's character data."""
+
+    return "".join(node.text or "" for node in element.iter(WORD_NS + "t")).strip()
+
+
+def _table_cells(row: ET.Element) -> list[str]:
+    cells: list[str] = []
+    for cell in row.findall(WORD_NS + "tc"):
+        paragraphs = [_word_text(paragraph) for paragraph in cell.iter(WORD_NS + "p")]
+        cells.append(" ".join(text for text in paragraphs if text).strip())
+    return cells
+
+
+def _source_path(locator: str) -> Path:
+    relative = PurePosixPath(locator)
+    if relative.is_absolute() or ".." in relative.parts:
+        raise ValueError(f"governing source locator must be repository-relative: {locator!r}")
+    path = ROOT.joinpath(*relative.parts)
+    try:
+        path.resolve().relative_to(ROOT.resolve())
+    except ValueError as exc:
+        raise ValueError(f"governing source locator escapes repository: {locator!r}") from exc
+    return path
+
+
+def _read_docx(source: dict[str, Any]) -> tuple[ET.Element, dict[str, str], list[tuple[int, str]]]:
+    locator = source.get("locator")
+    if not isinstance(locator, str) or not locator:
+        raise ValueError(f"{source.get('id')} has no controlled DOCX locator")
+    path = _source_path(locator)
+    payload = path.read_bytes()
+    digest = hashlib.sha256(payload).hexdigest()
+    if len(payload) != source.get("size_bytes"):
+        raise ValueError(f"{source['id']} byte size does not match governing_sources.json")
+    if digest != source.get("sha256"):
+        raise ValueError(f"{source['id']} SHA-256 does not match governing_sources.json")
+
+    try:
+        with zipfile.ZipFile(path) as archive:
+            damaged = archive.testzip()
+            if damaged is not None:
+                raise ValueError(f"{source['id']} DOCX contains a damaged member: {damaged}")
+            document = ET.fromstring(archive.read("word/document.xml"))
+            core = ET.fromstring(archive.read("docProps/core.xml"))
+    except (KeyError, zipfile.BadZipFile, ET.ParseError) as exc:
+        raise ValueError(f"{source['id']} is not a readable DOCX package: {exc}") from exc
+
+    core_properties = {
+        node.tag.split("}")[-1]: "".join(node.itertext())
+        for node in core
+    }
+    if core_properties.get("title") != source.get("document_title"):
+        raise ValueError(f"{source['id']} title metadata does not match governing_sources.json")
+    paragraphs = [
+        (index, text)
+        for index, paragraph in enumerate(document.iter(WORD_NS + "p"), 1)
+        if (text := _word_text(paragraph))
+    ]
+    revision_text = source.get("revision_text")
+    if not isinstance(revision_text, str) or revision_text not in {text for _, text in paragraphs}:
+        raise ValueError(f"{source['id']} revision/date line is absent from word/document.xml")
+    return document, core_properties, paragraphs
+
+
+def _explicit_test_ids(*texts: str) -> list[str]:
+    """Expand explicit T/V references while preserving first source occurrence."""
+
+    pattern = re.compile(
+        r"\b(?P<prefix>[TV])(?P<first>[0-9]{2})"
+        r"(?:\s*(?:to|[-–—])\s*(?:(?P=prefix))?(?P<last>[0-9]{2}))?"
+    )
+    result: list[str] = []
+    for text in texts:
+        for match in pattern.finditer(text):
+            prefix = match.group("prefix")
+            first = int(match.group("first"))
+            last = int(match.group("last") or match.group("first"))
+            if last < first:
+                raise ValueError(f"descending test range in source text: {match.group(0)!r}")
+            for number in range(first, last + 1):
+                test_id = f"{prefix}{number:02d}"
+                if test_id not in result:
+                    result.append(test_id)
+    return result
+
+
+def _procedure_catalog(document: ET.Element, prefix: str) -> set[str]:
+    pattern = re.compile(rf"^({re.escape(prefix)}[0-9]{{2}})(?:\b|\s)")
+    identifiers: set[str] = set()
+    for table in document.iter(WORD_NS + "tbl"):
+        for row in table.iter(WORD_NS + "tr"):
+            cells = _table_cells(row)
+            if cells and (match := pattern.match(cells[0])):
+                identifiers.add(match.group(1))
+    for paragraph in document.iter(WORD_NS + "p"):
+        if match := pattern.match(_word_text(paragraph)):
+            identifiers.add(match.group(1))
+    return identifiers
+
+
+def _row_requirement(
+    requirement_id: str,
+    qualifier: str | None,
+    cells: list[str],
+    locator: str,
+) -> dict[str, Any]:
+    family = _family(requirement_id)
+    if len(cells) < 3:
+        raise ValueError(f"{requirement_id} source row has fewer than three cells")
+
+    source_title: str | None = None
+    release_scope: str | None = None
+    source_profiles: list[str] = []
+    if family == "FR":
+        if qualifier not in {"R1", "R2", "RX"}:
+            raise ValueError(f"{requirement_id} has invalid source release scope {qualifier!r}")
+        release_scope = qualifier
+        normative_text = cells[1]
+        acceptance_text = cells[2]
+    elif family == "NF":
+        source_title = qualifier
+        normative_text = cells[1]
+        acceptance_text = cells[2]
+    elif family == "A":
+        if qualifier not in {"A1", "A2", "A3"}:
+            raise ValueError(f"{requirement_id} has invalid source release scope {qualifier!r}")
+        release_scope = qualifier
+        normative_text = cells[1]
+        acceptance_text = cells[2]
+    elif family in {"Q", "QW"}:
+        source_title = cells[1] if family == "Q" else qualifier
+        normative_text = cells[2] if family == "Q" else cells[1]
+        acceptance_text = cells[2]
+    else:
+        raise ValueError(f"unsupported table requirement family: {family}")
+
+    if not normative_text or not acceptance_text:
+        raise ValueError(f"{requirement_id} has an empty normative or acceptance/reference field")
+    return {
+        "source_requirement_title": source_title,
+        "source_release_scope": release_scope,
+        "source_profile_applicability": source_profiles,
+        "source_locator": locator,
+        "normative_text": normative_text,
+        "acceptance_reference_text": acceptance_text,
+        "source_test_ids": _explicit_test_ids(normative_text, acceptance_text),
+        "source_field_status": "verified_structural",
+    }
+
+
+def _extract_table_requirements(
+    source_id: str,
+    document: ET.Element,
+    expected: set[str],
+) -> dict[str, dict[str, Any]]:
+    entries: dict[str, dict[str, Any]] = {}
+    identifier = re.compile(r"^(FR[0-9]{2}|NF[0-9]{2}|A[0-9]{3}|QW[0-9]{2}|Q[0-9]{2})(?:\s+(.+))?$")
+    for table_index, table in enumerate(document.iter(WORD_NS + "tbl"), 1):
+        for row_index, row in enumerate(table.iter(WORD_NS + "tr"), 1):
+            cells = _table_cells(row)
+            if not cells or not (match := identifier.fullmatch(cells[0])):
+                continue
+            requirement_id = match.group(1)
+            if requirement_id not in expected:
+                continue
+            if requirement_id in entries:
+                raise ValueError(f"{source_id} defines {requirement_id} more than once")
+            entries[requirement_id] = _row_requirement(
+                requirement_id,
+                match.group(2),
+                cells,
+                f"word/document.xml table {table_index} row {row_index}",
+            )
+    return entries
+
+
+def _extract_windows_requirements(
+    source_id: str,
+    paragraphs: list[tuple[int, str]],
+    expected: set[str],
+) -> dict[str, dict[str, Any]]:
+    entries: dict[str, dict[str, Any]] = {}
+    heading = re.compile(r"^(W[0-9]{3})\s+(.+)$")
+    profile_prefix = re.compile(r"^Profiles?\s+((?:[NDWV](?:\s+|\.|$))+)")
+    for offset, (paragraph_index, text) in enumerate(paragraphs):
+        match = heading.fullmatch(text)
+        if match is None or match.group(1) not in expected:
+            continue
+        if offset + 2 >= len(paragraphs):
+            continue
+        normative_text = paragraphs[offset + 1][1]
+        acceptance_text = paragraphs[offset + 2][1]
+        profile_match = profile_prefix.match(normative_text)
+        if profile_match is None or not acceptance_text.startswith("References:"):
+            continue
+        requirement_id = match.group(1)
+        if requirement_id in entries:
+            raise ValueError(f"{source_id} defines {requirement_id} more than once")
+        profiles = re.findall(r"[NDWV]", profile_match.group(1))
+        entries[requirement_id] = {
+            "source_requirement_title": match.group(2),
+            "source_release_scope": None,
+            "source_profile_applicability": profiles,
+            "source_locator": f"word/document.xml paragraph {paragraph_index}",
+            "normative_text": normative_text,
+            "acceptance_reference_text": acceptance_text,
+            "source_test_ids": _explicit_test_ids(normative_text, acceptance_text),
+            "source_field_status": "verified_structural",
+        }
+    return entries
+
+
+def extract_governing_requirements(source_record: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    """Verify governing artifacts and return all source requirement fields by ID."""
+
+    if source_record.get("repository_check", {}).get("result") != "verified":
+        raise ValueError("governing source record is not in verified repository state")
+    all_entries: dict[str, dict[str, Any]] = {}
+    for source in source_record.get("sources", []):
+        source_id = source.get("id")
+        if source.get("availability") != "present" or source.get("status") != "verified":
+            raise ValueError(f"{source_id} is not marked present and verified")
+        expected = {
+            requirement_id
+            for requirement_id in _expected_ids()
+            if SOURCE_BY_FAMILY[_family(requirement_id)] == source_id
+        }
+        expected_families = sorted({_family(requirement_id) for requirement_id in expected})
+        if sorted(source.get("requirement_families", [])) != expected_families:
+            raise ValueError(f"{source_id} requirement family metadata is stale")
+        if source.get("package_validation") != "passed":
+            raise ValueError(f"{source_id} DOCX package validation is not passed")
+        document, _, paragraphs = _read_docx(source)
+        entries = _extract_table_requirements(source_id, document, expected)
+        if source_id == "GOV-WIN-001":
+            entries.update(_extract_windows_requirements(source_id, paragraphs, expected))
+        if set(entries) != expected:
+            raise ValueError(
+                f"{source_id} requirement catalog mismatch; "
+                f"missing={sorted(expected - set(entries))}, "
+                f"unexpected={sorted(set(entries) - expected)}"
+            )
+        if source.get("requirement_count") != len(entries):
+            raise ValueError(f"{source_id} requirement_count metadata is stale")
+
+        procedure = source.get("verification_procedure_catalog")
+        if not isinstance(procedure, dict):
+            raise ValueError(f"{source_id} has no verification procedure catalog metadata")
+        prefix = procedure.get("prefix")
+        first = procedure.get("first")
+        last = procedure.get("last")
+        if not isinstance(prefix, str) or not isinstance(first, str) or not isinstance(last, str):
+            raise ValueError(f"{source_id} has invalid verification procedure catalog metadata")
+        expected_procedures = set(
+            _numbered(prefix, 2, (int(first[1:]), int(last[1:])))
+        )
+        actual_procedures = _procedure_catalog(document, prefix)
+        if actual_procedures != expected_procedures or procedure.get("count") != len(actual_procedures):
+            raise ValueError(f"{source_id} verification procedure catalog is incomplete or stale")
+
+        for requirement_id, fields in entries.items():
+            if requirement_id in all_entries:
+                raise ValueError(f"requirement appears in multiple governing sources: {requirement_id}")
+            all_entries[requirement_id] = {"source_id": source_id, **fields}
+
+    if set(all_entries) != _expected_ids():
+        raise ValueError("combined governing sources do not define the exact 288-ID catalog")
+    return all_entries
+
+
 def _family(requirement_id: str) -> str:
     for prefix in ("QW", "FR", "NF", "A", "Q", "W"):
         if requirement_id.startswith(prefix):
@@ -285,6 +562,7 @@ def _sort_key(requirement_id: str) -> tuple[int, int]:
 def build_registry(source_record: dict[str, Any]) -> dict[str, Any]:
     _validate_gate_catalog()
     source_by_id = {source["id"]: source for source in source_record["sources"]}
+    source_requirements = extract_governing_requirements(source_record)
     gate_for = {
         requirement_id: gate
         for gate, requirement_ids in GATE_REQUIREMENTS.items()
@@ -296,7 +574,9 @@ def build_registry(source_record: dict[str, Any]) -> dict[str, Any]:
         gate = gate_for[requirement_id]
         gate_data = GATE_DATA[gate]
         source_id = SOURCE_BY_FAMILY[family]
-        source = source_by_id[source_id]
+        source_fields = source_requirements[requirement_id]
+        if source_fields["source_id"] != source_id:
+            raise AssertionError(f"{requirement_id} resolved to the wrong governing source")
         if requirement_id == "A077":
             test_ids = ["T40"]
             test_mapping_status = "explicit_in_plan"
@@ -327,13 +607,22 @@ def build_registry(source_record: dict[str, Any]) -> dict[str, Any]:
                 "environments": list(gate_data["environments"]),
                 "environment_mapping_status": "provisional_gate_assignment",
                 "source_ids": [source_id],
-                "source_traceability": "blocked",
+                "source_traceability": "verified",
+                "source_requirement_title": source_fields["source_requirement_title"],
+                "source_release_scope": source_fields["source_release_scope"],
+                "source_profile_applicability": source_fields["source_profile_applicability"],
+                "source_locator": source_fields["source_locator"],
+                "normative_text": source_fields["normative_text"],
+                "acceptance_reference_text": source_fields["acceptance_reference_text"],
+                "source_test_ids": source_fields["source_test_ids"],
+                "source_field_status": source_fields["source_field_status"],
                 "mapping_status": "provisional",
                 "latest_evidence": {
                     "state": "blocked",
                     "reason": (
-                        f"{source_id} is {source['status']}; exact normative text and semantic "
-                        "traceability are unavailable."
+                        f"{source_id} source traceability is verified, but no product execution "
+                        "or acceptance evidence is attached; plan-derived assignments do not "
+                        "close the requirement."
                     ),
                     "owner": "requirements-and-release-owner",
                     "as_of": source_record["recorded_at"],
@@ -343,16 +632,18 @@ def build_registry(source_record: dict[str, Any]) -> dict[str, Any]:
         )
     return {
         "schema_version": 1,
-        "catalog_version": "development-plan-2026-09-22-provisional",
+        "catalog_version": "governing-docx-2026-09-22-structural-v1",
         "recorded_at": source_record["recorded_at"],
-        "status": "provisional_blocked",
+        "status": "source_verified_plan_mappings_provisional",
         "normative_boundary": (
-            "This registry enumerates plan-derived IDs and provisional assignments only. "
-            "It does not reproduce or replace absent governing requirement text."
+            "Normative and acceptance/reference fields are deterministic structural extracts "
+            "from the pinned governing DOCX artifacts. Gate, owner, profile, and environment "
+            "assignments remain plan-derived, and source verification is not product evidence."
         ),
         "source_files": [
             "docs/DEVELOPMENT_PLAN.md",
             "docs/governing_sources.json",
+            *[source["locator"] for source in sorted(source_by_id.values(), key=lambda item: item["precedence"])],
         ],
         "governing_source_state": source_record["g0_impact"],
         "profiles": {
@@ -364,14 +655,6 @@ def build_registry(source_record: dict[str, Any]) -> dict[str, Any]:
         "owners": OWNERS,
         "environments": ENVIRONMENTS,
         "blockers": [
-            {
-                "id": "BLK-GOVERNING-SOURCES",
-                "state": "blocked",
-                "owner": "requirements-and-release-owner",
-                "decision_date": None,
-                "reason": "All three governing DOCX inputs are absent and lack immutable digests.",
-                "affects": ["G0", "G1", "G2", "G3", "G4", "G5", "G6", "G7", "RX", "GWIN0", "GWIN1", "GWIN2"],
-            },
             {
                 "id": "BLK-RX-TEST-PROCEDURE",
                 "state": "blocked",

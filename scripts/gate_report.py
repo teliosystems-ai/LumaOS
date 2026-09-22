@@ -65,6 +65,10 @@ def validate_registry(registry: dict[str, Any], sources: dict[str, Any]) -> None
         "test_ids",
         "environments",
         "latest_evidence",
+        "source_locator",
+        "normative_text",
+        "acceptance_reference_text",
+        "source_test_ids",
     }
     for item in requirements:
         missing = sorted(required_fields - set(item))
@@ -80,6 +84,12 @@ def validate_registry(registry: dict[str, Any], sources: dict[str, Any]) -> None
             raise RegistryError(
                 f"{item['id']} refers to unknown environments {sorted(unknown_environments)}"
             )
+        if item.get("source_traceability") != "verified":
+            raise RegistryError(f"{item['id']} does not have verified source traceability")
+        if item.get("source_field_status") != "verified_structural":
+            raise RegistryError(f"{item['id']} source fields are not structurally verified")
+        if not item["source_locator"] or not item["normative_text"] or not item["acceptance_reference_text"]:
+            raise RegistryError(f"{item['id']} has incomplete source fields")
 
 
 def _gate_status(requirements: list[dict[str, Any]]) -> str:
@@ -106,7 +116,8 @@ def render_report(registry: dict[str, Any], sources: dict[str, Any]) -> str:
     implementation_counts = Counter(item["implementation_status"] for item in requirements)
     mapping_counts = Counter(item["mapping_status"] for item in requirements)
     no_numbered_test = [item["id"] for item in requirements if not item["test_ids"]]
-    g0_status = "BLOCKED" if sources["g0_impact"]["status"] == "blocked" else "INCOMPLETE"
+    g0_status = "VERIFIED" if sources["g0_impact"]["status"] == "resolved" else "BLOCKED"
+    traced_count = sum(item.get("source_traceability") == "verified" for item in requirements)
 
     lines = [
         "# Requirement and gate report",
@@ -119,16 +130,17 @@ def render_report(registry: dict[str, Any], sources: dict[str, Any]) -> str:
         "",
         f"- Registry state: **{registry['status'].upper()}**.",
         f"- Explicit catalog entries: **{len(requirements)} / 288**.",
-        f"- G0 requirement-traceability status: **{g0_status}**.",
+        f"- G0 governing-source traceability status: **{g0_status}**.",
+        f"- Requirements with verified structural source fields: **{traced_count} / 288**.",
         f"- Requirements with blocked latest evidence: **{evidence_counts.get('blocked', 0)}**.",
         f"- Requirements with provisional mappings: **{mapping_counts.get('provisional', 0)}**.",
         "- No product requirement is closed by this report.",
         "",
-        "The ID catalog and plan-level assignments are structurally complete. G0 cannot close "
-        "while the three governing sources are unavailable, their immutable digests are absent, "
-        "and the provisional mappings have not been semantically reconciled. G1 cannot close "
-        "while G0 is blocked or while its required runtime, hardware, security, recovery, and "
-        "performance evidence remains unavailable.",
+        "The three pinned governing sources and the complete 288-ID structural traceability "
+        "catalog are verified. This resolves the governing-source prerequisite only. The broader "
+        "G0 gate is not certified by this report, plan-derived mappings remain provisional, and "
+        "G1 cannot close while its required runtime, hardware, security, recovery, and performance "
+        "evidence remains unavailable.",
         "",
         "## Catalog coverage",
         "",
@@ -145,8 +157,8 @@ def render_report(registry: dict[str, Any], sources: dict[str, Any]) -> str:
             "",
             "## Governing sources",
             "",
-            "| Source | Precedence | Availability | Validation | SHA-256 |",
-            "| --- | ---: | --- | --- | --- |",
+            "| Source | Precedence | Revision | Date | Availability | Validation | SHA-256 |",
+            "| --- | ---: | --- | --- | --- | --- | --- |",
         ]
     )
     for source in sorted(sources["sources"], key=lambda item: item["precedence"]):
@@ -156,6 +168,8 @@ def render_report(registry: dict[str, Any], sources: dict[str, Any]) -> str:
                 [
                     _escape(source["id"]),
                     _escape(source["precedence"]),
+                    _escape(source["revision"]),
+                    _escape(source["document_date"]),
                     _escape(source["availability"]),
                     _escape(source["status"]),
                     _escape(source["sha256"]),
@@ -171,7 +185,7 @@ def render_report(registry: dict[str, Any], sources: dict[str, Any]) -> str:
             "",
             "| Gate | Requirements | In progress | Not started | Pass | Fail | Blocked | Status |",
             "| --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |",
-            f"| G0 | 0 | 0 | 0 | 0 | 0 | 0 | {g0_status} |",
+            "| G0 | 0 | 0 | 0 | 0 | 0 | 0 | SOURCE-VERIFIED; BROADER GATE OPEN |",
         ]
     )
     for gate in GATE_ORDER:
@@ -210,7 +224,8 @@ def render_report(registry: dict[str, Any], sources: dict[str, Any]) -> str:
         [
             "",
             "Implementation status is a stage-level planning signal, not semantic requirement "
-            "completion. Gate suites are attached provisionally unless the development plan "
+            "completion. `source_test_ids` contains only explicit source-row references; planned "
+            "gate suites remain attached separately and provisionally unless the development plan "
             "states an exact mapping.",
             "",
             "## Open blockers",

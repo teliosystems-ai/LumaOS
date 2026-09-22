@@ -13,6 +13,7 @@ sys.path.insert(0, str(ROOT / "scripts"))
 
 from build_requirement_registry import (  # noqa: E402
     build_registry,
+    extract_governing_requirements,
     load_source_record,
     serialize_registry,
 )
@@ -70,6 +71,14 @@ class RequirementRegistryTests(unittest.TestCase):
             "environment_mapping_status",
             "source_ids",
             "source_traceability",
+            "source_requirement_title",
+            "source_release_scope",
+            "source_profile_applicability",
+            "source_locator",
+            "normative_text",
+            "acceptance_reference_text",
+            "source_test_ids",
+            "source_field_status",
             "mapping_status",
             "latest_evidence",
         }
@@ -111,8 +120,12 @@ class RequirementRegistryTests(unittest.TestCase):
         self.assertEqual(["T40"], self.by_id["A077"]["test_ids"])
         self.assertEqual("explicit_in_plan", self.by_id["A077"]["test_mapping_status"])
 
-    def test_absent_sources_keep_all_mappings_provisional_and_evidence_blocked(self) -> None:
-        self.assertEqual("blocked", self.sources["g0_impact"]["status"])
+    def test_verified_sources_are_traced_without_claiming_product_evidence(self) -> None:
+        self.assertEqual("resolved", self.sources["g0_impact"]["status"])
+        self.assertEqual(
+            {"verified"},
+            {source["status"] for source in self.sources["sources"]},
+        )
         self.assertEqual(
             {"GOV-FEA-001"},
             {self.by_id[requirement_id]["source_ids"][0] for requirement_id in ("FR01", "NF18")},
@@ -127,10 +140,44 @@ class RequirementRegistryTests(unittest.TestCase):
         )
         for item in self.registry["requirements"]:
             self.assertEqual("provisional", item["mapping_status"], item["id"])
-            self.assertEqual("blocked", item["source_traceability"], item["id"])
+            self.assertEqual("verified", item["source_traceability"], item["id"])
+            self.assertEqual("verified_structural", item["source_field_status"], item["id"])
+            self.assertTrue(item["source_locator"], item["id"])
+            self.assertTrue(item["normative_text"], item["id"])
+            self.assertTrue(item["acceptance_reference_text"], item["id"])
             self.assertEqual("blocked", item["latest_evidence"]["state"], item["id"])
             self.assertTrue(item["latest_evidence"]["reason"], item["id"])
             self.assertTrue(item["latest_evidence"]["owner"], item["id"])
+
+    def test_docx_extraction_matches_all_source_verified_registry_fields(self) -> None:
+        extracted = extract_governing_requirements(self.sources)
+        self.assertEqual(288, len(extracted))
+        for requirement_id, item in self.by_id.items():
+            source = extracted[requirement_id]
+            self.assertEqual(item["source_ids"], [source["source_id"]])
+            for field in (
+                "source_requirement_title",
+                "source_release_scope",
+                "source_profile_applicability",
+                "source_locator",
+                "normative_text",
+                "acceptance_reference_text",
+                "source_test_ids",
+                "source_field_status",
+            ):
+                self.assertEqual(item[field], source[field], f"{requirement_id}: {field}")
+
+    def test_source_release_profiles_and_explicit_tests_are_exact(self) -> None:
+        self.assertEqual("R1", self.by_id["FR01"]["source_release_scope"])
+        self.assertEqual("RX", self.by_id["FR54"]["source_release_scope"])
+        self.assertEqual("A2", self.by_id["A088"]["source_release_scope"])
+        self.assertEqual(["T43"], self.by_id["A088"]["source_test_ids"])
+        self.assertEqual(["N", "D", "W", "V"], self.by_id["W001"]["source_profile_applicability"])
+        self.assertEqual(["V01", "T45"], self.by_id["W001"]["source_test_ids"])
+        self.assertEqual(
+            ["V01", "V12", "V13", "V14", "V15"],
+            self.by_id["QW05"]["source_test_ids"],
+        )
 
     def test_fr54_records_the_missing_numbered_rx_test_without_inventing_one(self) -> None:
         item = self.by_id["FR54"]
@@ -156,10 +203,10 @@ class RequirementRegistryTests(unittest.TestCase):
         expected = serialize_registry(build_registry(load_source_record(SOURCES_PATH)))
         self.assertEqual(expected, REGISTRY_PATH.read_text(encoding="utf-8"))
 
-    def test_checked_in_gate_report_is_deterministic_and_blocking(self) -> None:
+    def test_checked_in_gate_report_is_deterministic_and_keeps_product_evidence_blocked(self) -> None:
         rendered = render_report(self.registry, self.sources)
         self.assertEqual(rendered, REPORT_PATH.read_text(encoding="utf-8"))
-        self.assertIn("G0 requirement-traceability status: **BLOCKED**", rendered)
+        self.assertIn("G0 governing-source traceability status: **VERIFIED**", rendered)
         self.assertIn("| G1 | 88 | 88 | 0 | 0 | 0 | 88 | BLOCKED |", rendered)
         self.assertIn("No product requirement is closed by this report.", rendered)
 

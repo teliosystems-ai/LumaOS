@@ -1,18 +1,19 @@
 {
   "schema_version": 1,
   "recorded_at": "2026-09-22",
-  "record_scope": "Repository working tree and Git-tracked paths",
+  "record_scope": "Pinned DOCX artifacts under docs/Requirements and their deterministic Word XML requirement structures",
   "repository_check": {
-    "docx_files_found": 0,
-    "result": "missing"
+    "docx_files_found": 4,
+    "governing_docx_files_found": 3,
+    "result": "verified"
   },
   "g0_impact": {
-    "status": "blocked",
-    "blocked_checks": [
+    "status": "resolved",
+    "resolved_checks": [
       "governing-source digest verification",
-      "complete requirement-to-source traceability"
+      "complete 288-ID requirement-to-source structural traceability"
     ],
-    "continuation_boundary": "Local MVP implementation and tests may continue as development evidence, but source-dependent requirements and gates cannot close."
+    "continuation_boundary": "The governing-source prerequisite is resolved. Plan-derived assignments and product execution evidence remain separate and do not close G0 or any product gate by themselves."
   },
   "sources": [
     {
@@ -20,39 +21,102 @@
       "filename": "LLM_OS_Windows_Deployment_Requirements_Variation.docx",
       "precedence": 1,
       "scope": "Native, Dual boot, WSL2, and VM profile variations",
-      "availability": "missing",
-      "status": "blocked",
-      "locator": null,
-      "revision": null,
-      "size_bytes": null,
-      "sha256": null,
-      "blocking_reason": "Exact artifact unavailable"
+      "availability": "present",
+      "status": "verified",
+      "locator": "docs/Requirements/LLM_OS_Windows_Deployment_Requirements_Variation.docx",
+      "document_title": "LLM OS Windows Deployment Requirements Variation",
+      "revision": "VAR WIN 01 / Version 1.0",
+      "revision_text": "Variation VAR WIN 01 | Version 1.0 | 19 September 2026",
+      "document_date": "2026-09-19",
+      "size_bytes": 62222,
+      "sha256": "479b310e4027a45ccc3bf09a1f1850672e7841f40a3c2a018e34059109e7166d",
+      "package_validation": "passed",
+      "requirement_families": [
+        "W",
+        "QW"
+      ],
+      "requirement_count": 50,
+      "verification_procedure_catalog": {
+        "prefix": "V",
+        "first": "V01",
+        "last": "V18",
+        "count": 18,
+        "status": "verified"
+      },
+      "blocking_reason": null
     },
     {
       "id": "GOV-UBU-001",
       "filename": "Option_Ubuntu_LLM_OS_Functional_Requirements_Development_Testing_4B_to_400B.docx",
       "precedence": 2,
       "scope": "Option A Ubuntu product baseline",
-      "availability": "missing",
-      "status": "blocked",
-      "locator": null,
-      "revision": null,
-      "size_bytes": null,
-      "sha256": null,
-      "blocking_reason": "Exact artifact unavailable"
+      "availability": "present",
+      "status": "verified",
+      "locator": "docs/Requirements/Option_Ubuntu_LLM_OS_Functional_Requirements_Development_Testing_4B_to_400B.docx",
+      "document_title": "Ubuntu Based LLM Operating System Engineering Requirements",
+      "revision": "Version 2.0",
+      "revision_text": "Version 2.0   13 September 2026",
+      "document_date": "2026-09-13",
+      "size_bytes": 123902,
+      "sha256": "25b6026916f9cdeb0a108d3f8ad875a704a9162436d317c0c825f00fe8b4f38b",
+      "package_validation": "passed",
+      "requirement_families": [
+        "A",
+        "Q"
+      ],
+      "requirement_count": 160,
+      "verification_procedure_catalog": {
+        "prefix": "T",
+        "first": "T01",
+        "last": "T62",
+        "count": 62,
+        "status": "verified"
+      },
+      "blocking_reason": null
     },
     {
       "id": "GOV-FEA-001",
       "filename": "LLM_OS_Feasibility_HLD_LLD_Engineering_Requirements.docx",
       "precedence": 3,
       "scope": "Original architecture and research rationale where later documents do not supersede it",
-      "availability": "missing",
-      "status": "blocked",
-      "locator": null,
-      "revision": null,
-      "size_bytes": null,
-      "sha256": null,
-      "blocking_reason": "Exact artifact unavailable"
+      "availability": "present",
+      "status": "verified",
+      "locator": "docs/Requirements/LLM_OS_Feasibility_HLD_LLD_Engineering_Requirements.docx",
+      "document_title": "LLM Based Operating System Engineering Specification",
+      "revision": "Version 1.0",
+      "revision_text": "Version 1.0 • 10 September 2026 • Engineering baseline for prototyping",
+      "document_date": "2026-09-10",
+      "size_bytes": 473816,
+      "sha256": "05b2e8568e8582c435b10fe6f609f2c7a10737d4efd82d5f1adaea2f37e821e5",
+      "package_validation": "passed",
+      "requirement_families": [
+        "FR",
+        "NF"
+      ],
+      "requirement_count": 78,
+      "verification_procedure_catalog": {
+        "prefix": "T",
+        "first": "T01",
+        "last": "T08",
+        "count": 8,
+        "status": "verified"
+      },
+      "blocking_reason": null
+    }
+  ],
+  "reference_sources": [
+    {
+      "id": "REF-RES-001",
+      "filename": "LLM_OS_Practical_Implementation_Research_Paper.docx",
+      "governing": false,
+      "status": "non_normative_reference",
+      "locator": "docs/Requirements/LLM_OS_Practical_Implementation_Research_Paper.docx",
+      "document_title": "Practical Implementation of an LLM Integrated Operating Environment",
+      "revision": "Version 1.0",
+      "revision_text": "Technical research paper | Version 1.0 | 20 September 2026",
+      "document_date": "2026-09-20",
+      "size_bytes": 395796,
+      "sha256": "40492ebbe83bec0d3677fbf2ab14d3ad5cb59318078a186fdc13371a7f3c9a48"
     }
   ]
 }

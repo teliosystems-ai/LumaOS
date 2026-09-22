@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://luma-os.invalid/schemas/requirement-registry.schema.json",
-  "title": "Luma OS provisional requirement registry",
+  "title": "Luma OS source-traced requirement registry",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -33,6 +33,7 @@
     "status": {
       "enum": [
         "provisional_blocked",
+        "source_verified_plan_mappings_provisional",
         "verified"
       ]
     },
@@ -177,6 +178,14 @@
         "environment_mapping_status",
         "source_ids",
         "source_traceability",
+        "source_requirement_title",
+        "source_release_scope",
+        "source_profile_applicability",
+        "source_locator",
+        "normative_text",
+        "acceptance_reference_text",
+        "source_test_ids",
+        "source_field_status",
         "mapping_status",
         "latest_evidence"
       ],
@@ -307,6 +316,53 @@
             "blocked",
             "verified"
           ]
+        },
+        "source_requirement_title": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source_release_scope": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source_profile_applicability": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "N",
+              "D",
+              "W",
+              "V"
+            ]
+          }
+        },
+        "source_locator": {
+          "type": "string",
+          "pattern": "^word/document\\.xml (table [0-9]+ row [0-9]+|paragraph [0-9]+)$"
+        },
+        "normative_text": {
+          "type": "string",
+          "minLength": 1
+        },
+        "acceptance_reference_text": {
+          "type": "string",
+          "minLength": 1
+        },
+        "source_test_ids": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "pattern": "^[TV][0-9]{2}$"
+          }
+        },
+        "source_field_status": {
+          "const": "verified_structural"
         },
         "mapping_status": {
           "enum": [

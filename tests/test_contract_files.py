@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import sys
 import tempfile
 import unittest
@@ -12,6 +12,9 @@ from luma_os import LumaConfig, LumaService
 
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "scripts"))
+
+from build_release import ReleaseProvenanceError, included_files
 
 
 class ContractFileTests(unittest.TestCase):
@@ -33,8 +36,67 @@ class ContractFileTests(unittest.TestCase):
         manifest = json.loads((ROOT / "RELEASE_MANIFEST.json").read_text(encoding="utf-8"))
         inputs = set(manifest["release_inputs"])
         self.assertTrue({"src", "web", "schemas", "examples", "tests"}.issubset(inputs))
+        required = set(manifest["required_release_files"])
+        self.assertIn("docs/DEVELOPMENT_PLAN.md", required)
+        self.assertIn("docs/GOVERNING_REQUIREMENTS_SOURCES.md", required)
+        self.assertIn("docs/RELEASE.md", required)
+        self.assertTrue(required.issubset(set(manifest["release_files"])))
         self.assertFalse(manifest["external_assets"]["model_weights_included"])
         self.assertEqual("0.1.0", manifest["version"])
+
+    def test_release_builder_uses_inventory_without_git_metadata(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            docs = root / "docs"
+            docs.mkdir()
+            (docs / "tracked.md").write_text("released\n", encoding="utf-8")
+            (docs / "scratch.md").write_text("local only\n", encoding="utf-8")
+            manifest = {
+                "release_inputs": ["docs"],
+                "release_files": ["docs/tracked.md"],
+                "required_release_files": ["docs/tracked.md"],
+                "excluded_from_release": [],
+            }
+
+            selected = included_files(root=root, manifest=manifest)
+
+            self.assertEqual([docs / "tracked.md"], selected)
+
+    def test_release_builder_rejects_an_explicit_untracked_input(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "README.md").write_text("release notes\n", encoding="utf-8")
+            manifest = {
+                "release_inputs": ["README.md"],
+                "release_files": ["README.md"],
+                "required_release_files": ["README.md"],
+                "excluded_from_release": [],
+            }
+
+            with self.assertRaisesRegex(ReleaseProvenanceError, "not tracked by Git"):
+                included_files(root=root, manifest=manifest, tracked=set())
+
+    def test_release_builder_rejects_an_intermediate_symlink(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            root = base / "checkout"
+            outside = base / "outside"
+            root.mkdir()
+            outside.mkdir()
+            (outside / "tracked.md").write_text("outside\n", encoding="utf-8")
+            try:
+                (root / "docs").symlink_to(outside, target_is_directory=True)
+            except OSError as exc:
+                self.skipTest(f"directory symlinks are unavailable: {exc}")
+            manifest = {
+                "release_inputs": ["docs"],
+                "release_files": ["docs/tracked.md"],
+                "required_release_files": ["docs/tracked.md"],
+                "excluded_from_release": [],
+            }
+
+            with self.assertRaisesRegex(ReleaseProvenanceError, "contains a symlink"):
+                included_files(root=root, manifest=manifest, tracked=set())
 
     def test_openapi_describes_prepare_then_run(self) -> None:
         contract = (ROOT / "schemas" / "openapi.yaml").read_text(encoding="utf-8")

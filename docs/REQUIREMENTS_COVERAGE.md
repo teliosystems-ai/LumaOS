@@ -4,6 +4,8 @@
 
 This document translates the broader Luma OS feasibility, functional, deployment, and testing requirements into the deliberately narrow `0.1.0` developer MVP. It distinguishes implemented runtime evidence from interface simulation and future product intent.
 
+The three designated governing DOCX inputs are not present in this checkout. Consequently, this matrix is an MVP scope summary, not independently verified traceability to the governing requirement text. See [GOVERNING_REQUIREMENTS_SOURCES.md](GOVERNING_REQUIREMENTS_SOURCES.md) for the current dependency status and acceptance evidence required.
+
 Status meanings:
 
 - **Implemented** — present in the reference runtime and expected to have automated evidence.

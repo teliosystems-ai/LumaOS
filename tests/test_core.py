@@ -16,6 +16,7 @@ from luma_os import (  # noqa: E402
     ConflictError,
     LumaConfig,
     LumaService,
+    LumaStore,
     ValidationError,
 )
 from luma_os.server import create_server  # noqa: E402
@@ -43,6 +44,23 @@ class CoreTestCase(unittest.TestCase):
         self.assertEqual(journal_mode.lower(), "wal")
         reopened = LumaService(self.config)
         self.assertEqual(reopened.status()["counts"], self.service.status()["counts"])
+
+    def test_store_closes_migration_connection(self) -> None:
+        class TrackingStore(LumaStore):
+            def __init__(self, db_path: str | Path) -> None:
+                self.opened_connections: list[sqlite3.Connection] = []
+                super().__init__(db_path)
+
+            def _connect(self) -> sqlite3.Connection:
+                connection = super()._connect()
+                self.opened_connections.append(connection)
+                return connection
+
+        store = TrackingStore(self.root / "tracked.sqlite3")
+
+        self.assertEqual(len(store.opened_connections), 1)
+        with self.assertRaisesRegex(sqlite3.ProgrammingError, "closed database"):
+            store.opened_connections[0].execute("SELECT 1")
 
     def test_grants_block_escape_and_symlinks(self) -> None:
         source = self.input_dir / "invoice.txt"

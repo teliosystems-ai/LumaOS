@@ -42,6 +42,8 @@ sha256sum --check SHA256SUMS
 
 Build twice from the same tree and epoch, then compare `SHA256SUMS`. Inspect both archive listings. The archive must include `src/`, `tests/`, `web/`, `schemas/`, `examples/`, `docs/`, `scripts/`, and `packaging/`.
 
+`RELEASE_MANIFEST.json` contains the canonical `release_files` inventory. In a Git checkout, the builder verifies that every inventoried file is tracked and that every tracked file under the release inputs is inventoried. In an extracted source archive, that same inventory remains authoritative. Untracked working-tree files are never added implicitly; add each intentional release file to Git and to the inventory before building a candidate.
+
 The official `0.1.0` candidate is source-only. Do not publish a wheel: repository-root runtime assets do not yet have a supported installed-package location.
 
 ## 5. Independent review

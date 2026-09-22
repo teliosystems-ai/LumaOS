@@ -134,7 +134,7 @@ class LumaStore:
         return connection
 
     def _migrate(self) -> None:
-        with self._connect() as connection:
+        with self.transaction() as connection:
             connection.execute("PRAGMA journal_mode = WAL")
             connection.execute(
                 "CREATE TABLE IF NOT EXISTS schema_migrations "

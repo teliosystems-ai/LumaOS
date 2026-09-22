@@ -4,6 +4,17 @@ All notable changes to Luma OS are documented here. The format follows [Keep a C
 
 ## [Unreleased]
 
+### Added
+
+- Governing-requirements source records that explicitly block source-derived
+  traceability until the three approved inputs and their digests are available.
+
+### Fixed
+
+- Close the SQLite migration connection after initialization.
+- Exclude untracked working-tree files from deterministic source archives.
+- Assign the `A077` platform-adapter requirement consistently to G1.
+
 ### Planned
 
 - Gather developer feedback on intent planning, policy gates, and local operations.

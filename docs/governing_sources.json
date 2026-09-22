@@ -1,0 +1,58 @@
+{
+  "schema_version": 1,
+  "recorded_at": "2026-09-22",
+  "record_scope": "Repository working tree and Git-tracked paths",
+  "repository_check": {
+    "docx_files_found": 0,
+    "result": "missing"
+  },
+  "g0_impact": {
+    "status": "blocked",
+    "blocked_checks": [
+      "governing-source digest verification",
+      "complete requirement-to-source traceability"
+    ],
+    "continuation_boundary": "Local MVP implementation and tests may continue as development evidence, but source-dependent requirements and gates cannot close."
+  },
+  "sources": [
+    {
+      "id": "GOV-WIN-001",
+      "filename": "LLM_OS_Windows_Deployment_Requirements_Variation.docx",
+      "precedence": 1,
+      "scope": "Native, Dual boot, WSL2, and VM profile variations",
+      "availability": "missing",
+      "status": "blocked",
+      "locator": null,
+      "revision": null,
+      "size_bytes": null,
+      "sha256": null,
+      "blocking_reason": "Exact artifact unavailable"
+    },
+    {
+      "id": "GOV-UBU-001",
+      "filename": "Option_Ubuntu_LLM_OS_Functional_Requirements_Development_Testing_4B_to_400B.docx",
+      "precedence": 2,
+      "scope": "Option A Ubuntu product baseline",
+      "availability": "missing",
+      "status": "blocked",
+      "locator": null,
+      "revision": null,
+      "size_bytes": null,
+      "sha256": null,
+      "blocking_reason": "Exact artifact unavailable"
+    },
+    {
+      "id": "GOV-FEA-001",
+      "filename": "LLM_OS_Feasibility_HLD_LLD_Engineering_Requirements.docx",
+      "precedence": 3,
+      "scope": "Original architecture and research rationale where later documents do not supersede it",
+      "availability": "missing",
+      "status": "blocked",
+      "locator": null,
+      "revision": null,
+      "size_bytes": null,
+      "sha256": null,
+      "blocking_reason": "Exact artifact unavailable"
+    }
+  ]
+}

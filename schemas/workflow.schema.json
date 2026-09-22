@@ -6,8 +6,10 @@
   "required": ["workflow_id", "owner", "type", "idempotency_key", "state", "attempt", "request", "manual_input", "result", "error", "created_at", "updated_at", "steps"],
   "properties": {
     "workflow_id": {"type": "string", "minLength": 1},
+    "id": {"type": "string", "minLength": 1},
     "owner": {"type": "string", "minLength": 1},
     "type": {"const": "invoice_report.v1"},
+    "kind": {"const": "invoice_report.v1"},
     "idempotency_key": {"type": "string", "minLength": 1},
     "state": {
       "enum": ["VALIDATED", "RUNNING", "WAITING_USER", "SUCCEEDED", "FAILED", "CANCELLED"]

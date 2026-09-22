@@ -266,7 +266,7 @@
           <form class="panel access-form" id="grant-form" novalidate>
             <div class="panel-heading"><div><p class="kicker">New grant</p><h2>Enroll a folder</h2></div></div>
             <label class="field" for="folder-path"><span>Absolute folder path</span><input id="folder-path" name="path" type="text" required autocomplete="off" placeholder="/home/you/Documents/Invoices" aria-describedby="folder-help folder-error"><small id="folder-help">Enter an existing local path. The service validates it.</small><span class="field-error" id="folder-error"></span></label>
-            <fieldset class="permission-fieldset"><legend>Requested permissions</legend><label class="check-row"><input type="checkbox" name="permissions" value="read" checked><span><strong>Read</strong><small>Use files as workflow input.</small></span></label><label class="check-row"><input type="checkbox" name="permissions" value="write"><span><strong>Write</strong><small>Create or update artifacts in this folder.</small></span></label></fieldset>
+            <fieldset class="permission-fieldset"><legend>Requested permissions</legend><label class="check-row"><input type="checkbox" name="permissions" value="read" checked disabled><span><strong>Read source files</strong><small>Use selected files as workflow input. Outputs remain in managed artifact storage.</small></span></label></fieldset>
             <button class="button button-primary" type="submit" id="enroll-button">Enroll folder</button>
             <p class="form-footnote">For this preview, path entry is explicit. A native folder picker may be added later.</p>
           </form>

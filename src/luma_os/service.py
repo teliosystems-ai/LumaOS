@@ -20,7 +20,11 @@ class LumaService:
         self.config = config
         self.store = LumaStore(config.db_path)
         self.receipts = ReceiptService(self.store)
-        self.grants = FolderGrantService(self.store, max_source_bytes=config.max_source_bytes)
+        self.grants = FolderGrantService(
+            self.store,
+            max_source_bytes=config.max_source_bytes,
+            receipts=self.receipts,
+        )
         self.artifacts = ArtifactService(self.store, config.objects_dir, self.receipts)
         self.workflows = InvoiceWorkflowService(self.store, self.grants, self.artifacts)
         self.models = OpenAICompatibleClient(

@@ -89,6 +89,10 @@ journalctl --user -u luma-os.service --since today
 
 Before sharing diagnostics, remove source paths, user names, model endpoint details, workflow inputs/results, artifacts, cookies/session values, and credentials. Never send the SQLite database or objects directory in a public issue.
 
+Keep `LUMA_HOME` on a local filesystem. Workflow leases, effect fences, and
+SQLite durability depend on local operating-system locking semantics; network
+shares are not a supported state location.
+
 ## Reset local development state
 
 There is no automatic reset script because deletion is destructive. To reset, stop the process, resolve the exact `LUMA_HOME`, inspect it, and move that specific directory to a quarantine/backup location. Do not use a broad recursive delete or an unresolved environment variable.

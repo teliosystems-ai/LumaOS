@@ -40,7 +40,7 @@ cd dist
 sha256sum --check SHA256SUMS
 ```
 
-Build twice from the same tree and epoch, then compare `SHA256SUMS`. Inspect both archive listings. The archive must include `src/`, `tests/`, `web/`, `schemas/`, `examples/`, `docs/`, `scripts/`, and `packaging/`.
+Build twice from the same tree and epoch, then compare `SHA256SUMS`. Inspect both archive listings. The archive must include `src/`, `tests/`, `web/`, `schemas/`, `examples/`, `docs/`, `requirements/`, `scripts/`, and `packaging/`. The three governing `.docx` files remain external; verify their pinned digests with `make requirements-sources-check` in the documented workspace layout.
 
 The official `0.1.0` candidate is source-only. Do not publish a wheel: repository-root runtime assets do not yet have a supported installed-package location.
 

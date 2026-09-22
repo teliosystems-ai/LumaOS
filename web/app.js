@@ -542,7 +542,7 @@
     const versions = artifactVersions(artifact);
     const currentNumber = Number(selectedVersion ?? artifact.current_version ?? artifact.version ?? versions.at(-1)?.version ?? 1);
     const current = versions.find((version) => Number(version.version) === currentNumber) ?? artifact;
-    const rawContent = current.content ?? current.text ?? current.data ?? artifact._content ?? artifact.content ?? artifact.text;
+    const rawContent = current._content ?? current.content ?? current.text ?? current.data ?? artifact._content ?? artifact.content ?? artifact.text;
     const content = rawContent === undefined
       ? "Loading artifact content…"
       : typeof rawContent === "string" ? rawContent : JSON.stringify(rawContent, null, 2);
@@ -550,7 +550,7 @@
     container.innerHTML = `
       <div class="artifact-header">
         <div><h2>${escapeHtml(artifact.filename ?? artifact.name ?? "Untitled artifact")}</h2><p>${escapeHtml(artifact.media_type ?? "Unknown media type")} · ${escapeHtml(formatDate(current.created_at ?? artifact.updated_at ?? artifact.created_at))}</p></div>
-        <div class="artifact-header-actions"><a class="button button-secondary" href="${API.artifacts}/${encodeURIComponent(artifactId)}/content" download>Download</a><label class="version-select">Version<select id="artifact-version-select">${versions.map((version) => `<option value="${escapeHtml(version.version)}"${Number(version.version) === currentNumber ? " selected" : ""}>Version ${escapeHtml(version.version)}</option>`).join("")}</select></label></div>
+        <div class="artifact-header-actions"><a class="button button-secondary" href="${API.artifacts}/${encodeURIComponent(artifactId)}/content?version=${encodeURIComponent(currentNumber)}" download>Download</a><label class="version-select">Version<select id="artifact-version-select">${versions.map((version) => `<option value="${escapeHtml(version.version)}"${Number(version.version) === currentNumber ? " selected" : ""}>Version ${escapeHtml(version.version)}</option>`).join("")}</select></label></div>
       </div>
       <pre class="artifact-content">${escapeHtml(content)}</pre>
       <div class="version-history" aria-label="Version history">${versions.map((version) => `<span class="version-chip${Number(version.version) === currentNumber ? " is-current" : ""}">v${escapeHtml(version.version)} · ${escapeHtml(formatDate(version.created_at ?? artifact.created_at, false))}</span>`).join("")}</div>`;
@@ -561,14 +561,36 @@
     renderArtifactList();
     renderArtifactDetail();
     const artifact = selectedArtifact();
-    if (!artifact || artifact._content !== undefined) return;
+    if (!artifact) return;
     try {
-      const content = await api(`${API.artifacts}/${encodeURIComponent(id)}/content`);
-      artifact._content = typeof content === "string" ? content : JSON.stringify(content, null, 2);
+      const detail = await api(`${API.artifacts}/${encodeURIComponent(id)}`);
+      Object.assign(artifact, detail);
+      await loadArtifactVersion(artifact.current_version ?? artifact.version ?? 1);
       renderArtifactDetail();
     } catch (error) {
       artifact._content = `Content could not be loaded.\n\n${error.message}`;
       renderArtifactDetail();
+      toast("Artifact preview unavailable", error.message, "error");
+    }
+  }
+
+  async function loadArtifactVersion(version) {
+    const artifact = selectedArtifact();
+    if (!artifact) return;
+    const versions = artifactVersions(artifact);
+    const selected = versions.find((item) => Number(item.version) === Number(version));
+    if (selected?._content !== undefined) {
+      renderArtifactDetail(version);
+      return;
+    }
+    try {
+      const content = await api(`${API.artifacts}/${encodeURIComponent(entityId(artifact))}/content?version=${encodeURIComponent(version)}`);
+      if (selected) selected._content = typeof content === "string" ? content : JSON.stringify(content, null, 2);
+      else artifact._content = typeof content === "string" ? content : JSON.stringify(content, null, 2);
+      renderArtifactDetail(version);
+    } catch (error) {
+      if (selected) selected._content = `Content could not be loaded.\n\n${error.message}`;
+      renderArtifactDetail(version);
       toast("Artifact preview unavailable", error.message, "error");
     }
   }
@@ -599,6 +621,7 @@
             <span class="grant-icon-small"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7h7l2 2h9v11H3V7Z"/></svg></span>
             <span class="grant-copy"><strong>${escapeHtml(grant.display_name || fileName(path) || "Enrolled folder")}</strong><span title="${escapeHtml(path)}">${escapeHtml(path)}</span></span>
             <span class="scope-chips">${permissions.map((permission) => `<span class="scope-chip">${escapeHtml(permission)}</span>`).join("")}</span>
+            <button class="button button-secondary" type="button" data-revoke-grant="${escapeHtml(entityId(grant))}">Revoke</button>
           </div>`;
         }).join("")
       : emptyInline("Enroll a folder to authorize invoice CSV access.", null, null);
@@ -684,6 +707,23 @@
     } finally {
       button.disabled = false;
       button.textContent = "Enroll folder";
+    }
+  }
+
+  async function revokeGrant(grantId, button) {
+    if (!grantId) return;
+    button.disabled = true;
+    try {
+      await api(`${API.grants}/${encodeURIComponent(grantId)}/revoke`, {
+        method: "POST",
+        body: {},
+      });
+      await Promise.all([loadResource("grants", API.grants), loadResource("receipts", API.receipts)]);
+      renderAll();
+      toast("Folder access revoked", "New reads through this grant are now blocked.");
+    } catch (requestError) {
+      button.disabled = false;
+      toast("Folder access was not revoked", requestError.message, "error");
     }
   }
 
@@ -787,7 +827,10 @@
       const artifactButton = event.target.closest("[data-select-artifact]");
       if (artifactButton) {
         selectArtifact(artifactButton.dataset.selectArtifact);
+        return;
       }
+      const revokeButton = event.target.closest("[data-revoke-grant]");
+      if (revokeButton) revokeGrant(revokeButton.dataset.revokeGrant, revokeButton);
     });
 
     window.addEventListener("hashchange", () => routeTo(window.location.hash.slice(1), { keepHash: true, focus: false }));
@@ -803,7 +846,7 @@
     el("workflow-search").addEventListener("input", renderWorkflowList);
     el("workflow-filter").addEventListener("change", renderWorkflowList);
     el("artifact-detail").addEventListener("change", (event) => {
-      if (event.target.id === "artifact-version-select") renderArtifactDetail(event.target.value);
+      if (event.target.id === "artifact-version-select") loadArtifactVersion(event.target.value);
     });
     el("manual-preview-button").addEventListener("click", () => {
       el("manual-dialog").showModal();

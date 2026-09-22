@@ -2,6 +2,11 @@
 
 This roadmap communicates direction, not a delivery promise. Scope changes require tests, threat-model review, and support-matrix updates.
 
+The detailed engineering sequence, dependencies, test phases, and exit gates are maintained
+in [DEVELOPMENT_PLAN.md](DEVELOPMENT_PLAN.md). The machine-readable ownership source is
+[`requirements/catalog.json`](../requirements/catalog.json); this shorter roadmap remains
+the public release summary.
+
 ## v0.1 — Developer MVP
 
 Goal: prove one complete, local, inspectable workflow through a shared core.

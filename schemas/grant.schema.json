@@ -3,23 +3,27 @@
   "$id": "https://luma-os.org/schemas/grant.schema.json",
   "title": "Luma OS folder grant",
   "type": "object",
-  "required": ["grant_id", "owner", "root_path", "display_name", "scope", "permissions", "created_at", "revoked_at"],
+  "required": ["grant_id", "owner", "root_path", "display_name", "generation", "scope", "permissions", "created_at", "revoked_at"],
   "properties": {
     "grant_id": {"type": "string", "minLength": 1},
+    "id": {"type": "string", "minLength": 1},
     "owner": {"type": "string", "minLength": 1},
     "root_path": {"type": "string", "minLength": 1},
+    "root": {"type": "string", "minLength": 1},
     "root_device": {"type": "integer"},
     "root_inode": {"type": "integer"},
     "display_name": {"type": "string", "minLength": 1},
+    "generation": {"type": "integer", "minimum": 1},
     "scope": {"enum": ["read", "read_write"]},
     "permissions": {
       "type": "array",
-      "items": {"enum": ["read", "index", "write", "export"]},
+      "items": {"enum": ["read", "write"]},
       "uniqueItems": true,
       "minItems": 1
     },
     "created_at": {"type": "string", "format": "date-time"},
-    "revoked_at": {"type": ["string", "null"], "format": "date-time"}
+    "revoked_at": {"type": ["string", "null"], "format": "date-time"},
+    "receipt_id": {"type": "string", "minLength": 1}
   },
   "additionalProperties": false
 }

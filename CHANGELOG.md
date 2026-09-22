@@ -4,6 +4,25 @@ All notable changes to Luma OS are documented here. The format follows [Keep a C
 
 ## [Unreleased]
 
+### Added
+
+- Complete staged development plan for Ubuntu, WSL2, VM, dual-boot, large-model,
+  distributed, and microkernel research tracks.
+- Machine-readable ownership for all 288 B1, B2, and Windows requirement IDs,
+  with a dependency-free validation and reporting command.
+- Real artifact-version history and version-specific content reads.
+- Folder-grant revocation through the local API and browser workspace.
+- Complete OpenAPI route coverage and closed-schema validation against runtime
+  response objects.
+
+### Changed
+
+- New browser, HTTP API, and CLI enrollments are explicitly read-only; workflow outputs remain in
+  managed artifact storage rather than implying writes to source folders.
+- Workflow execution now uses cross-process run leases and effect fences so live
+  work is not misclassified as interrupted and cancellation cannot be followed
+  by a later artifact commit.
+
 ### Planned
 
 - Gather developer feedback on intent planning, policy gates, and local operations.
@@ -26,5 +45,5 @@ All notable changes to Luma OS are documented here. The format follows [Keep a C
 
 - Local-only defaults, no bundled model weights, no privileged installer, and documented trust boundaries.
 
-[Unreleased]: https://github.com/teliosystems/luma-os/compare/v0.1.0...HEAD
-[0.1.0]: https://github.com/teliosystems/luma-os/releases/tag/v0.1.0
+[Unreleased]: https://github.com/teliosystems-ai/LumaOS/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/teliosystems-ai/LumaOS/releases/tag/v0.1.0

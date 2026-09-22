@@ -2,7 +2,7 @@ PYTHON ?= python3
 
 .DEFAULT_GOAL := help
 
-.PHONY: help run test browser-test compile check package install-user uninstall-user
+.PHONY: help run test browser-test requirements-check requirements-sources-check requirements-report compile check package install-user uninstall-user
 
 help: ## Show available targets
 	@awk 'BEGIN {FS = ":.*## "; print "Luma OS developer targets:\n"} /^[a-zA-Z0-9_-]+:.*## / {printf "  %-16s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -15,6 +15,15 @@ test: ## Run dependency-free unit tests
 
 browser-test: ## Run the optional real UI journey (requires Node 22+ and Chrome)
 	@node tests/browser_test.cjs
+
+requirements-check: ## Validate complete requirement-to-stage ownership
+	@$(PYTHON) scripts/requirements_report.py --check
+
+requirements-sources-check: ## Verify the external governing documents by SHA-256
+	@$(PYTHON) scripts/requirements_report.py --check --require-source-files
+
+requirements-report: ## Print the requirement ownership and evidence report
+	@$(PYTHON) scripts/requirements_report.py
 
 compile: ## Compile Python sources without writing inside src
 	@$(PYTHON) scripts/check.py --compile-only

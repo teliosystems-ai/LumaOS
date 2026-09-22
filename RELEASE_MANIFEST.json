@@ -30,6 +30,7 @@
     "schemas",
     "examples",
     "docs",
+    "requirements",
     "scripts",
     "packaging",
     "README.md",

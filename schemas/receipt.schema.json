@@ -7,6 +7,7 @@
   "properties": {
     "sequence": {"type": "integer", "minimum": 1},
     "receipt_id": {"type": "string", "minLength": 1},
+    "id": {"type": "string", "minLength": 1},
     "owner": {"type": "string", "minLength": 1},
     "workflow_id": {"type": ["string", "null"]},
     "step_id": {"type": ["string", "null"]},

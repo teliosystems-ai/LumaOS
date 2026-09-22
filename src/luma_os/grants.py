@@ -8,8 +8,9 @@ from pathlib import Path, PurePath
 import stat
 import uuid
 
+from .artifacts import ReceiptService
 from .db import LumaStore, utc_now
-from .errors import AuthorizationError, NotFoundError, ValidationError
+from .errors import AuthorizationError, ConflictError, NotFoundError, ValidationError
 
 
 @dataclass(frozen=True, slots=True)
@@ -28,9 +29,16 @@ class FolderGrantService:
     caller cannot accidentally reopen a checked path through a changed symlink.
     """
 
-    def __init__(self, store: LumaStore, *, max_source_bytes: int = 10 * 1024 * 1024) -> None:
+    def __init__(
+        self,
+        store: LumaStore,
+        *,
+        max_source_bytes: int = 10 * 1024 * 1024,
+        receipts: ReceiptService | None = None,
+    ) -> None:
         self.store = store
         self.max_source_bytes = max_source_bytes
+        self.receipts = receipts or ReceiptService(store)
 
     @staticmethod
     def _validate_owner(owner: str) -> str:
@@ -59,8 +67,10 @@ class FolderGrantService:
         scope: str = "read",
     ) -> dict[str, object]:
         owner = self._validate_owner(owner)
-        if scope not in {"read", "read_write"}:
-            raise ValidationError("Grant scope must be 'read' or 'read_write'")
+        if scope != "read":
+            raise ValidationError(
+                "This stage supports read-only source-folder grants; outputs use managed artifact storage"
+            )
         requested = Path(path).expanduser()
         try:
             root = requested.resolve(strict=True)
@@ -80,11 +90,14 @@ class FolderGrantService:
             ).fetchone()
             now = utc_now()
             if existing is not None:
-                created_at = existing["created_at"] if existing["revoked_at"] is None else now
+                reactivating = existing["revoked_at"] is not None
+                created_at = now if reactivating else existing["created_at"]
+                generation = int(existing["generation"]) + (1 if reactivating else 0)
                 connection.execute(
-                    "UPDATE folder_grants SET root_device=?, root_inode=?, display_name=?, scope=?, created_at=?, revoked_at=NULL "
+                    "UPDATE folder_grants SET root_device=?, root_inode=?, display_name=?, scope=?, "
+                    "created_at=?, revoked_at=NULL, generation=? "
                     "WHERE grant_id=?",
-                    (info.st_dev, info.st_ino, label, scope, created_at, existing["grant_id"]),
+                    (info.st_dev, info.st_ino, label, scope, created_at, generation, existing["grant_id"]),
                 )
                 row = connection.execute("SELECT * FROM folder_grants WHERE grant_id=?", (existing["grant_id"],)).fetchone()
             else:
@@ -120,15 +133,101 @@ class FolderGrantService:
             raise AuthorizationError("Folder grant has been revoked")
         return self._row(row)
 
-    def revoke(self, owner: str, grant_id: str) -> dict[str, object]:
-        self.get(owner, grant_id)
+    def revoke(
+        self,
+        owner: str,
+        grant_id: str,
+        *,
+        idempotency_key: str | None = None,
+    ) -> dict[str, object]:
+        """Revoke a grant and durably record the transition as one unit."""
+
+        item, _ = self.revoke_with_receipt(owner, grant_id, idempotency_key=idempotency_key)
+        return item
+
+    def revoke_with_receipt(
+        self,
+        owner: str,
+        grant_id: str,
+        *,
+        idempotency_key: str | None = None,
+    ) -> tuple[dict[str, object], dict[str, object]]:
+        """Atomically revoke one activation generation and append its receipt.
+
+        The generation is part of both the default idempotency key and receipt
+        result, so a grant reactivated under the same stable ID can be revoked
+        independently. A caller-supplied key from another operation or older
+        generation fails before grant state is changed.
+        """
+
+        owner = self._validate_owner(owner)
+        if idempotency_key is not None:
+            if not isinstance(idempotency_key, str):
+                raise ValidationError("Idempotency key must be a string")
+            idempotency_key = idempotency_key.strip()
+            if not idempotency_key or len(idempotency_key) > 250 or "\x00" in idempotency_key:
+                raise ValidationError("Idempotency key must be between 1 and 250 characters")
+
         with self.store.transaction(write=True) as connection:
-            connection.execute(
-                "UPDATE folder_grants SET revoked_at=? WHERE grant_id=? AND owner=? AND revoked_at IS NULL",
-                (utc_now(), grant_id, owner),
+            row = connection.execute(
+                "SELECT * FROM folder_grants WHERE grant_id=? AND owner=?",
+                (grant_id, owner),
+            ).fetchone()
+            if row is None:
+                raise NotFoundError("Folder grant was not found")
+
+            generation = int(row["generation"])
+            effect_key = idempotency_key or f"grant:revoke:{grant_id}:generation:{generation}"
+            existing_receipt = connection.execute(
+                "SELECT * FROM effect_receipts WHERE owner=? AND idempotency_key=?",
+                (owner, effect_key),
+            ).fetchone()
+            if existing_receipt is not None:
+                previous = self.receipts._row(existing_receipt)
+                expected_result = {
+                    "grant_id": grant_id,
+                    "generation": generation,
+                    "revoked_at": row["revoked_at"],
+                }
+                exact_replay = (
+                    row["revoked_at"] is not None
+                    and previous["effect_type"] == "grant.revoke"
+                    and previous["target"] == f"grant:{grant_id}"
+                    and previous["status"] == "SUCCEEDED"
+                    and previous["workflow_id"] is None
+                    and previous["step_id"] is None
+                    and previous["result"] == expected_result
+                )
+                if not exact_replay:
+                    raise ConflictError("Idempotency key was already used for a different effect or grant generation")
+                return self._row(row), previous
+
+            if row["revoked_at"] is None:
+                connection.execute(
+                    "UPDATE folder_grants SET revoked_at=? "
+                    "WHERE grant_id=? AND owner=? AND generation=? AND revoked_at IS NULL",
+                    (utc_now(), grant_id, owner, generation),
+                )
+                row = connection.execute(
+                    "SELECT * FROM folder_grants WHERE grant_id=? AND owner=?",
+                    (grant_id, owner),
+                ).fetchone()
+
+            result = {
+                "grant_id": grant_id,
+                "generation": generation,
+                "revoked_at": row["revoked_at"],
+            }
+            receipt = self.receipts.record_in_transaction(
+                connection,
+                owner,
+                idempotency_key=effect_key,
+                effect_type="grant.revoke",
+                target=f"grant:{grant_id}",
+                status="SUCCEEDED",
+                result=result,
             )
-            row = connection.execute("SELECT * FROM folder_grants WHERE grant_id=?", (grant_id,)).fetchone()
-        return self._row(row)
+            return self._row(row), receipt
 
     def inspect_file(self, owner: str, grant_id: str, relative_path: str) -> dict[str, object]:
         descriptor, info = self._open_file(owner, grant_id, relative_path)
@@ -212,8 +311,9 @@ class FolderGrantService:
             "root_device": int(row["root_device"]),  # type: ignore[index]
             "root_inode": int(row["root_inode"]),  # type: ignore[index]
             "display_name": row["display_name"],  # type: ignore[index]
+            "generation": int(row["generation"]),  # type: ignore[index]
             "scope": scope,
-            "permissions": ["read", "index"] if scope == "read" else ["read", "index", "write", "export"],
+            "permissions": ["read"] if scope == "read" else ["read", "write"],
             "created_at": row["created_at"],  # type: ignore[index]
             "revoked_at": row["revoked_at"],  # type: ignore[index]
         }

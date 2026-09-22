@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import http.client
 import json
+import os
 from pathlib import Path
 import sqlite3
+import subprocess
 import sys
 import tempfile
 import threading
@@ -16,6 +18,7 @@ from luma_os import (  # noqa: E402
     ConflictError,
     LumaConfig,
     LumaService,
+    NotFoundError,
     ValidationError,
 )
 from luma_os.server import create_server  # noqa: E402
@@ -199,6 +202,329 @@ class CoreTestCase(unittest.TestCase):
         completed = restarted.workflows.run("alice", workflow["workflow_id"])
         self.assertEqual(completed["state"], "SUCCEEDED")
 
+    def test_cancel_during_calculation_fences_all_artifact_effects(self) -> None:
+        workflow = self.service.workflows.submit(
+            "alice",
+            source_text="date,amount,currency\n2026-08-01,18.00,USD\n",
+            source_format="csv",
+            source_name="cancel-before-effects.csv",
+            idempotency_key="cancel-before-effects",
+        )
+        workflow_id = workflow["workflow_id"]
+        aggregate_entered = threading.Event()
+        release_aggregate = threading.Event()
+        original_aggregate = self.service.workflows._aggregate
+
+        def blocked_aggregate(rows: object) -> object:
+            aggregate_entered.set()
+            if not release_aggregate.wait(timeout=3):
+                raise AssertionError("test did not release the aggregate boundary")
+            return original_aggregate(rows)  # type: ignore[arg-type]
+
+        self.service.workflows._aggregate = blocked_aggregate  # type: ignore[method-assign]
+        run_results: list[dict[str, object]] = []
+        run_errors: list[BaseException] = []
+        cancel_results: list[dict[str, object]] = []
+        cancel_errors: list[BaseException] = []
+
+        def execute() -> None:
+            try:
+                run_results.append(self.service.workflows.run("alice", workflow_id))
+            except BaseException as exc:  # pragma: no cover - surfaced by assertion below
+                run_errors.append(exc)
+
+        def cancel() -> None:
+            try:
+                cancel_results.append(self.service.workflows.cancel("alice", workflow_id))
+            except BaseException as exc:  # pragma: no cover - surfaced by assertion below
+                cancel_errors.append(exc)
+
+        run_thread = threading.Thread(target=execute, daemon=True)
+        run_thread.start()
+        self.assertTrue(aggregate_entered.wait(timeout=3), "workflow never reached aggregate boundary")
+        cancel_thread = threading.Thread(target=cancel, daemon=True)
+        cancel_thread.start()
+        signal = self.service.workflows._cancellation_signal(workflow_id)
+        self.assertTrue(signal.wait(timeout=3), "cancellation signal was not raised")
+        cancel_thread.join(timeout=3)
+        self.assertFalse(cancel_thread.is_alive(), "cancel waited for non-effect computation to drain")
+        self.assertEqual(cancel_errors, [])
+        self.assertEqual(cancel_results[0]["state"], "CANCELLED")
+        release_aggregate.set()
+        run_thread.join(timeout=3)
+
+        self.assertFalse(run_thread.is_alive(), "workflow thread did not stop after cancellation")
+        self.assertEqual(run_errors, [])
+        self.assertEqual(run_results[0]["state"], "CANCELLED")
+        self.assertEqual(self.service.artifacts.list("alice"), [])
+        self.assertEqual(self.service.receipts.list("alice"), [])
+        final = self.service.workflows.get("alice", workflow_id)
+        self.assertEqual(final["state"], "CANCELLED")
+        self.assertTrue(
+            all(step["state"] == "CANCELLED" for step in final["steps"] if step["step_id"].startswith("publish_"))
+        )
+        with self.assertRaises(ConflictError):
+            self.service.workflows.run("alice", workflow_id)
+
+    def test_cancel_during_first_commit_allows_no_later_artifact(self) -> None:
+        workflow = self.service.workflows.submit(
+            "alice",
+            source_text="date,amount,currency\n2026-08-02,21.00,USD\n",
+            source_format="csv",
+            source_name="cancel-during-effect.csv",
+            idempotency_key="cancel-during-effect",
+        )
+        workflow_id = workflow["workflow_id"]
+        commit_entered = threading.Event()
+        release_commit = threading.Event()
+        original_create = self.service.artifacts.create_text
+
+        def blocked_create(*args: object, **kwargs: object) -> dict[str, object]:
+            if kwargs.get("step_id") == "publish_csv":
+                commit_entered.set()
+                if not release_commit.wait(timeout=3):
+                    raise AssertionError("test did not release the artifact boundary")
+            return original_create(*args, **kwargs)  # type: ignore[arg-type]
+
+        self.service.artifacts.create_text = blocked_create  # type: ignore[method-assign]
+        run_results: list[dict[str, object]] = []
+        run_errors: list[BaseException] = []
+        cancel_results: list[dict[str, object]] = []
+        cancel_errors: list[BaseException] = []
+
+        def execute() -> None:
+            try:
+                run_results.append(self.service.workflows.run("alice", workflow_id))
+            except BaseException as exc:  # pragma: no cover - surfaced by assertion below
+                run_errors.append(exc)
+
+        def cancel() -> None:
+            try:
+                cancel_results.append(self.service.workflows.cancel("alice", workflow_id))
+            except BaseException as exc:  # pragma: no cover - surfaced by assertion below
+                cancel_errors.append(exc)
+
+        run_thread = threading.Thread(target=execute, daemon=True)
+        run_thread.start()
+        self.assertTrue(commit_entered.wait(timeout=3), "workflow never reached the first artifact commit")
+        cancel_thread = threading.Thread(target=cancel, daemon=True)
+        cancel_thread.start()
+        signal = self.service.workflows._cancellation_signal(workflow_id)
+        self.assertTrue(signal.wait(timeout=3), "cancellation signal was not raised")
+        self.assertTrue(cancel_thread.is_alive(), "cancel did not wait for the in-flight effect fence")
+        release_commit.set()
+        run_thread.join(timeout=3)
+        cancel_thread.join(timeout=3)
+
+        self.assertFalse(run_thread.is_alive())
+        self.assertFalse(cancel_thread.is_alive())
+        self.assertEqual(run_errors, [])
+        self.assertEqual(cancel_errors, [])
+        self.assertEqual(run_results[0]["state"], "CANCELLED")
+        self.assertEqual(cancel_results[0]["state"], "CANCELLED")
+        artifacts = self.service.artifacts.list("alice")
+        self.assertEqual([item["filename"] for item in artifacts], ["invoice-summary.csv"])
+        self.assertEqual(len(self.service.receipts.list("alice")), 1)
+        final = self.service.workflows.get("alice", workflow_id)
+        step_states = {step["step_id"]: step["state"] for step in final["steps"]}
+        self.assertEqual(step_states["publish_csv"], "SUCCEEDED")
+        self.assertEqual(step_states["publish_report"], "CANCELLED")
+        with self.assertRaises(ConflictError):
+            self.service.workflows.run("alice", workflow_id)
+        self.assertEqual(len(self.service.artifacts.list("alice")), 1)
+
+    def test_concurrent_run_attempts_have_one_effectful_owner(self) -> None:
+        workflow = self.service.workflows.submit(
+            "alice",
+            source_text="date,amount,currency\n2026-08-03,34.00,USD\n",
+            source_format="csv",
+            source_name="concurrent.csv",
+            idempotency_key="concurrent-run",
+        )
+        workflow_id = workflow["workflow_id"]
+        aggregate_entered = threading.Event()
+        release_aggregate = threading.Event()
+        original_aggregate = self.service.workflows._aggregate
+
+        def blocked_aggregate(rows: object) -> object:
+            aggregate_entered.set()
+            if not release_aggregate.wait(timeout=3):
+                raise AssertionError("test did not release the concurrent run")
+            return original_aggregate(rows)  # type: ignore[arg-type]
+
+        self.service.workflows._aggregate = blocked_aggregate  # type: ignore[method-assign]
+        first_results: list[dict[str, object]] = []
+        first_errors: list[BaseException] = []
+
+        def first_run() -> None:
+            try:
+                first_results.append(self.service.workflows.run("alice", workflow_id))
+            except BaseException as exc:  # pragma: no cover - surfaced by assertion below
+                first_errors.append(exc)
+
+        first_thread = threading.Thread(target=first_run, daemon=True)
+        first_thread.start()
+        self.assertTrue(aggregate_entered.wait(timeout=3), "first run did not reach its deterministic boundary")
+        concurrent_service = LumaService(self.config)
+        with self.assertRaisesRegex(ConflictError, "already running"):
+            concurrent_service.workflows.run("alice", workflow_id)
+        release_aggregate.set()
+        first_thread.join(timeout=3)
+
+        self.assertFalse(first_thread.is_alive())
+        self.assertEqual(first_errors, [])
+        self.assertEqual(first_results[0]["state"], "SUCCEEDED")
+        completed = self.service.workflows.get("alice", workflow_id)
+        self.assertEqual(completed["attempt"], 1)
+        self.assertEqual(len(self.service.artifacts.list("alice")), 2)
+        self.assertEqual(len(self.service.receipts.list("alice")), 2)
+        self.assertTrue(all(step["attempt"] == 1 for step in completed["steps"]))
+
+    def test_service_in_another_process_does_not_recover_a_live_run(self) -> None:
+        workflow = self.service.workflows.submit(
+            "alice",
+            source_text="date,amount,currency\n2026-08-04,55.00,USD\n",
+            source_format="csv",
+            source_name="cross-process.csv",
+            idempotency_key="cross-process-live-run",
+        )
+        workflow_id = workflow["workflow_id"]
+        aggregate_entered = threading.Event()
+        release_aggregate = threading.Event()
+        original_aggregate = self.service.workflows._aggregate
+
+        def blocked_aggregate(rows: object) -> object:
+            aggregate_entered.set()
+            if not release_aggregate.wait(timeout=5):
+                raise AssertionError("test did not release the cross-process run")
+            return original_aggregate(rows)  # type: ignore[arg-type]
+
+        self.service.workflows._aggregate = blocked_aggregate  # type: ignore[method-assign]
+        run_results: list[dict[str, object]] = []
+        run_errors: list[BaseException] = []
+
+        def execute() -> None:
+            try:
+                run_results.append(self.service.workflows.run("alice", workflow_id))
+            except BaseException as exc:  # pragma: no cover - surfaced by assertion below
+                run_errors.append(exc)
+
+        run_thread = threading.Thread(target=execute, daemon=True)
+        run_thread.start()
+        self.assertTrue(aggregate_entered.wait(timeout=3), "workflow never reached the cross-process boundary")
+        repo_root = Path(__file__).resolve().parents[1]
+        environment = os.environ.copy()
+        python_path = str(repo_root / "src")
+        if environment.get("PYTHONPATH"):
+            python_path += os.pathsep + environment["PYTHONPATH"]
+        environment["PYTHONPATH"] = python_path
+        child_code = (
+            "import sys; "
+            "from luma_os import LumaConfig,LumaService; "
+            "service=LumaService(LumaConfig.from_env({},data_dir=sys.argv[1])); "
+            "print(service.workflows.get('alice',sys.argv[2])['state'])"
+        )
+        try:
+            child = subprocess.run(
+                [sys.executable, "-c", child_code, str(self.config.data_dir), workflow_id],
+                cwd=repo_root,
+                env=environment,
+                check=True,
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            self.assertEqual(child.stdout.strip(), "RUNNING")
+            self.assertEqual(self.service.workflows.get("alice", workflow_id)["state"], "RUNNING")
+        finally:
+            release_aggregate.set()
+            run_thread.join(timeout=3)
+
+        self.assertFalse(run_thread.is_alive())
+        self.assertEqual(run_errors, [])
+        self.assertEqual(run_results[0]["state"], "SUCCEEDED")
+
+    def test_wrong_owner_cannot_signal_or_cancel_an_active_workflow(self) -> None:
+        workflow = self.service.workflows.submit(
+            "alice",
+            source_text="date,amount,currency\n2026-08-05,89.00,USD\n",
+            source_format="csv",
+            source_name="owner-isolation.csv",
+            idempotency_key="owner-isolation",
+        )
+        workflow_id = workflow["workflow_id"]
+        commit_entered = threading.Event()
+        release_commit = threading.Event()
+        original_create = self.service.artifacts.create_text
+
+        def blocked_create(*args: object, **kwargs: object) -> dict[str, object]:
+            if kwargs.get("step_id") == "publish_csv":
+                commit_entered.set()
+                if not release_commit.wait(timeout=3):
+                    raise AssertionError("test did not release the owner-isolation boundary")
+            return original_create(*args, **kwargs)  # type: ignore[arg-type]
+
+        self.service.artifacts.create_text = blocked_create  # type: ignore[method-assign]
+        run_results: list[dict[str, object]] = []
+        run_errors: list[BaseException] = []
+
+        def execute() -> None:
+            try:
+                run_results.append(self.service.workflows.run("alice", workflow_id))
+            except BaseException as exc:  # pragma: no cover - surfaced by assertion below
+                run_errors.append(exc)
+
+        run_thread = threading.Thread(target=execute, daemon=True)
+        run_thread.start()
+        self.assertTrue(commit_entered.wait(timeout=3), "workflow never reached the owner-isolation boundary")
+        try:
+            with self.assertRaises(NotFoundError):
+                self.service.workflows.cancel("bob", workflow_id)
+            self.assertFalse(self.service.workflows._cancellation_signal(workflow_id).is_set())
+        finally:
+            release_commit.set()
+            run_thread.join(timeout=3)
+
+        self.assertFalse(run_thread.is_alive())
+        self.assertEqual(run_errors, [])
+        self.assertEqual(run_results[0]["state"], "SUCCEEDED")
+
+    def test_manual_rows_cannot_replace_inputs_after_a_durable_effect(self) -> None:
+        workflow = self.service.workflows.submit(
+            "alice",
+            source_text="date,amount,currency\n2026-08-06,144.00,USD\n",
+            source_format="csv",
+            source_name="partial-effect.csv",
+            idempotency_key="partial-effect",
+        )
+        workflow_id = workflow["workflow_id"]
+        original_create = self.service.artifacts.create_text
+        failed_once = False
+
+        def fail_first_report(*args: object, **kwargs: object) -> dict[str, object]:
+            nonlocal failed_once
+            if kwargs.get("step_id") == "publish_report" and not failed_once:
+                failed_once = True
+                raise RuntimeError("injected report failure")
+            return original_create(*args, **kwargs)  # type: ignore[arg-type]
+
+        self.service.artifacts.create_text = fail_first_report  # type: ignore[method-assign]
+        with self.assertRaisesRegex(RuntimeError, "injected report failure"):
+            self.service.workflows.run("alice", workflow_id)
+        self.assertEqual(self.service.workflows.get("alice", workflow_id)["state"], "FAILED")
+        self.assertEqual(len(self.service.receipts.list("alice")), 1)
+
+        with self.assertRaisesRegex(ConflictError, "durable workflow effect"):
+            self.service.workflows.provide_manual_rows(
+                "alice",
+                workflow_id,
+                [{"date": "2026-08-06", "amount": "233.00", "currency": "USD"}],
+            )
+
+        completed = self.service.workflows.run("alice", workflow_id)
+        self.assertEqual(completed["state"], "SUCCEEDED")
+        self.assertEqual(completed["result"]["summary"][0]["total"], "144.00")
+
     def test_http_session_same_origin_and_denial_receipt(self) -> None:
         invoice_path = self.input_dir / "web.csv"
         invoice_path.write_text("date,vendor,amount,currency\n2026-07-01,Web,42.00,USD\n", encoding="utf-8")
@@ -217,7 +543,7 @@ class CoreTestCase(unittest.TestCase):
             self.assertEqual(response.status, 200)
             cookie = response.getheader("Set-Cookie").split(";", 1)[0]
 
-            payload = json.dumps({"path": str(self.input_dir), "permissions": ["read", "index"]})
+            payload = json.dumps({"path": str(self.input_dir), "permissions": ["read"]})
             headers = {
                 "Host": host,
                 "Origin": "http://malicious.invalid",

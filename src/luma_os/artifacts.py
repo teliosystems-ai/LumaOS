@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import re
+import sqlite3
 import tempfile
 from typing import Any
 import uuid
@@ -49,30 +50,62 @@ class ReceiptService:
         """Append one receipt, returning the previous one on exact replay."""
 
         with self.store.transaction(write=True) as connection:
-            existing = connection.execute(
-                "SELECT * FROM effect_receipts WHERE owner=? AND idempotency_key=?",
-                (owner, idempotency_key),
-            ).fetchone()
-            if existing is not None:
-                previous = self._row(existing)
-                signature = (effect_type, target, status, _canonical_json(result), workflow_id, step_id)
-                previous_signature = (
-                    previous["effect_type"], previous["target"], previous["status"],
-                    _canonical_json(previous["result"]), previous["workflow_id"], previous["step_id"],
-                )
-                if signature != previous_signature:
-                    raise ConflictError("Idempotency key was already used for a different effect")
-                return previous
-            receipt_id = str(uuid.uuid4())
-            connection.execute(
-                "INSERT INTO effect_receipts(receipt_id,owner,workflow_id,step_id,idempotency_key,effect_type,target,status,result_json,created_at) "
-                "VALUES (?,?,?,?,?,?,?,?,?,?)",
-                (
-                    receipt_id, owner, workflow_id, step_id, idempotency_key,
-                    effect_type, target, status, _canonical_json(result), utc_now(),
-                ),
+            return self.record_in_transaction(
+                connection,
+                owner,
+                idempotency_key=idempotency_key,
+                effect_type=effect_type,
+                target=target,
+                status=status,
+                result=result,
+                workflow_id=workflow_id,
+                step_id=step_id,
             )
-            row = connection.execute("SELECT * FROM effect_receipts WHERE receipt_id=?", (receipt_id,)).fetchone()
+
+    def record_in_transaction(
+        self,
+        connection: sqlite3.Connection,
+        owner: str,
+        *,
+        idempotency_key: str,
+        effect_type: str,
+        target: str,
+        status: str,
+        result: dict[str, Any],
+        workflow_id: str | None = None,
+        step_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Append a receipt on a caller-owned transaction.
+
+        This variant lets a domain state transition and its effect receipt
+        commit or roll back together. Callers must already hold a write
+        transaction for ``self.store``.
+        """
+
+        existing = connection.execute(
+            "SELECT * FROM effect_receipts WHERE owner=? AND idempotency_key=?",
+            (owner, idempotency_key),
+        ).fetchone()
+        if existing is not None:
+            previous = self._row(existing)
+            signature = (effect_type, target, status, _canonical_json(result), workflow_id, step_id)
+            previous_signature = (
+                previous["effect_type"], previous["target"], previous["status"],
+                _canonical_json(previous["result"]), previous["workflow_id"], previous["step_id"],
+            )
+            if signature != previous_signature:
+                raise ConflictError("Idempotency key was already used for a different effect")
+            return previous
+        receipt_id = str(uuid.uuid4())
+        connection.execute(
+            "INSERT INTO effect_receipts(receipt_id,owner,workflow_id,step_id,idempotency_key,effect_type,target,status,result_json,created_at) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?)",
+            (
+                receipt_id, owner, workflow_id, step_id, idempotency_key,
+                effect_type, target, status, _canonical_json(result), utc_now(),
+            ),
+        )
+        row = connection.execute("SELECT * FROM effect_receipts WHERE receipt_id=?", (receipt_id,)).fetchone()
         return self._row(row)
 
     def list(self, owner: str, *, limit: int = 100) -> list[dict[str, Any]]:
@@ -311,6 +344,22 @@ class ArtifactService:
                 (owner, limit),
             ).fetchall()
         return [self._metadata(row, row) for row in rows]
+
+    def versions(self, owner: str, artifact_id: str) -> list[dict[str, Any]]:
+        """Return the immutable version history for one owned artifact."""
+
+        with self.store.transaction() as connection:
+            artifact = connection.execute(
+                "SELECT * FROM artifacts WHERE artifact_id=? AND owner=?",
+                (artifact_id, owner),
+            ).fetchone()
+            if artifact is None:
+                raise NotFoundError("Artifact was not found")
+            rows = connection.execute(
+                "SELECT * FROM artifact_versions WHERE artifact_id=? ORDER BY version",
+                (artifact_id,),
+            ).fetchall()
+        return [self._metadata(artifact, row) for row in rows]
 
     def _store_blob(self, content: bytes) -> tuple[str, str]:
         content_hash = hashlib.sha256(content).hexdigest()

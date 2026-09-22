@@ -86,7 +86,8 @@ class LumaRequestHandler(BaseHTTPRequestHandler):
         return
 
     def _route_get(self) -> None:
-        path = urlsplit(self.path).path
+        request_url = urlsplit(self.path)
+        path = request_url.path
         if path == "/api/health":
             self._validate_host()
             self._json(200, self.server.service.health(), set_session=True)
@@ -111,14 +112,26 @@ class LumaRequestHandler(BaseHTTPRequestHandler):
                 artifact_id = path[len("/api/artifacts/") : -len("/content")].strip("/")
                 if not artifact_id or "/" in artifact_id:
                     raise NotFoundError("API route was not found")
-                metadata, content = self.server.service.artifacts.read(owner, artifact_id)
+                version = self._query_version(request_url.query)
+                metadata, content = self.server.service.artifacts.read(owner, artifact_id, version=version)
                 self.send_response(200)
                 self.send_header("Content-Type", str(metadata["media_type"]))
                 self.send_header("Content-Length", str(len(content)))
                 self.send_header("X-Content-Type-Options", "nosniff")
+                self.send_header("X-Luma-Artifact-Version", str(metadata["version"]))
                 self.send_header("Content-Disposition", f"attachment; filename={json.dumps(metadata['filename'])}")
                 self.end_headers()
                 self.wfile.write(content)
+            elif path.startswith("/api/artifacts/"):
+                artifact_id = self._single_id(path, "/api/artifacts/")
+                current = self.server.service.artifacts.get(owner, artifact_id)
+                self._json(
+                    200,
+                    {
+                        **current,
+                        "versions": self.server.service.artifacts.versions(owner, artifact_id),
+                    },
+                )
             elif path == "/api/receipts":
                 items = self.server.service.receipts.list(owner) + self.server.service.receipts.list("_system")
                 items.sort(key=lambda item: int(item["sequence"]), reverse=True)
@@ -136,14 +149,18 @@ class LumaRequestHandler(BaseHTTPRequestHandler):
         if path == "/api/grants/enroll":
             permissions = body.get("permissions")
             scope = body.get("scope", "read")
+            if scope != "read":
+                raise ValidationError(
+                    "This stage supports read-only source-folder grants; managed artifacts are stored separately"
+                )
             if permissions is not None:
                 if not isinstance(permissions, list) or not permissions:
                     raise ValidationError("permissions must be a non-empty array")
-                permission_set = set(permissions)
-                allowed = {"read", "index", "write", "export"}
-                if not permission_set <= allowed or "read" not in permission_set:
-                    raise ValidationError("permissions must include read and contain only supported values")
-                scope = "read_write" if permission_set & {"write", "export"} else "read"
+                if permissions != ["read"]:
+                    raise ValidationError(
+                        "This stage supports read-only source-folder grants; managed artifacts are stored separately"
+                    )
+                scope = "read"
             item = self.server.service.grants.enroll(
                 owner,
                 str(body.get("path", "")),
@@ -151,6 +168,29 @@ class LumaRequestHandler(BaseHTTPRequestHandler):
                 scope=str(scope),
             )
             self._json(201, item)
+            return
+        if path.startswith("/api/grants/") and path.endswith("/revoke"):
+            grant_id = path[len("/api/grants/") : -len("/revoke")].strip("/")
+            if not grant_id or "/" in grant_id:
+                raise NotFoundError("API route was not found")
+            unexpected = sorted(set(body) - {"idempotency_key"})
+            if unexpected:
+                raise ValidationError(
+                    "Revoke request contains unsupported fields",
+                    details={"fields": unexpected},
+                )
+            if "idempotency_key" in body:
+                supplied_key = body["idempotency_key"]
+                if not isinstance(supplied_key, str):
+                    raise ValidationError("Idempotency key must be a string")
+            else:
+                supplied_key = self.headers.get("Idempotency-Key")
+            item, receipt = self.server.service.grants.revoke_with_receipt(
+                owner,
+                grant_id,
+                idempotency_key=supplied_key,
+            )
+            self._json(200, {**item, "receipt_id": receipt["receipt_id"]})
             return
         if path == "/api/workflows":
             kind = body.get("kind", body.get("type", "invoice_report.v1"))
@@ -368,6 +408,26 @@ class LumaRequestHandler(BaseHTTPRequestHandler):
         if not value or "/" in value:
             raise NotFoundError("API route was not found")
         return value
+
+    @staticmethod
+    def _query_version(query: str) -> int | None:
+        if not query:
+            return None
+        fields: dict[str, str] = {}
+        for pair in query.split("&"):
+            key, separator, value = pair.partition("=")
+            if not separator or key in fields:
+                raise ValidationError("Query parameters are malformed or duplicated")
+            fields[unquote(key)] = unquote(value)
+        if set(fields) != {"version"}:
+            raise ValidationError("Only the artifact version query parameter is supported")
+        try:
+            version = int(fields["version"])
+        except ValueError as exc:
+            raise ValidationError("Artifact version must be a positive integer") from exc
+        if version <= 0:
+            raise ValidationError("Artifact version must be a positive integer")
+        return version
 
 
 def create_server(

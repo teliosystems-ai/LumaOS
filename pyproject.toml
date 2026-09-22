@@ -27,9 +27,9 @@ classifiers = [
 dependencies = []
 
 [project.urls]
-Documentation = "https://github.com/teliosystems/luma-os/tree/main/docs"
-Issues = "https://github.com/teliosystems/luma-os/issues"
-Source = "https://github.com/teliosystems/luma-os"
+Documentation = "https://github.com/teliosystems-ai/LumaOS/tree/main/docs"
+Issues = "https://github.com/teliosystems-ai/LumaOS/issues"
+Source = "https://github.com/teliosystems-ai/LumaOS"
 
 [project.scripts]
 luma-os = "luma_os.cli:main"

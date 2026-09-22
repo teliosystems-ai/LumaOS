@@ -511,7 +511,7 @@ button.stack-item { width: 100%; border-right: 0; border-bottom: 0; border-left:
 .check-row small { margin-top: 3px; color: var(--ink-faint); font-size: .64rem; }
 .form-footnote { margin: 14px 0 0; color: var(--ink-faint); font-size: .65rem; line-height: 1.45; }
 .grant-list { display: grid; }
-.grant-row { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 12px; padding: 14px 0; border-top: 1px solid var(--line); }
+.grant-row { display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto; align-items: center; gap: 12px; padding: 14px 0; border-top: 1px solid var(--line); }
 .grant-row:first-child { border-top: 0; }
 .grant-icon-small { display: grid; place-items: center; width: 37px; height: 37px; border-radius: 11px; color: #76613c; background: #f4e5c9; }
 .grant-icon-small svg { width: 17px; height: 17px; }
@@ -617,6 +617,8 @@ button.stack-item { width: 100%; border-right: 0; border-bottom: 0; border-left:
   .artifact-header { flex-direction: column; }
   .version-select, .version-select select { width: 100%; }
   .manual-summary { grid-template-columns: 1fr; }
+  .grant-row { grid-template-columns: auto minmax(0, 1fr); }
+  .grant-row .scope-chips, .grant-row .button { grid-column: 2; justify-self: start; }
 }
 
 @media (prefers-reduced-motion: reduce) {

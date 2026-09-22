@@ -42,7 +42,11 @@ def build_parser() -> argparse.ArgumentParser:
     enroll.add_argument("path")
     enroll.add_argument("--data-dir")
     enroll.add_argument("--owner", default="local-user")
-    enroll.add_argument("--read-write", action="store_true")
+    enroll.add_argument(
+        "--read-write",
+        action="store_true",
+        help=argparse.SUPPRESS,
+    )
 
     run = subparsers.add_parser("run-invoices", help="Create and run an invoice report from enrolled files")
     run.add_argument("grant_id")
@@ -66,10 +70,16 @@ def main(argv: list[str] | None = None) -> int:
             print(json.dumps(service.status(), indent=2))
             return 0
         if args.command == "enroll":
+            if args.read_write:
+                raise LumaError(
+                    "unsupported_scope",
+                    "This stage supports read-only source-folder grants; outputs use managed artifact storage",
+                    status=422,
+                )
             grant = service.grants.enroll(
                 args.owner,
                 args.path,
-                scope="read_write" if args.read_write else "read",
+                scope="read",
             )
             print(json.dumps(grant, indent=2))
             return 0

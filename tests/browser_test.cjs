@@ -162,8 +162,13 @@ async function main() {
   const artifactText = await evaluate(`document.querySelector('.artifact-content').textContent`);
   assert.match(artifactText, /(Invoice report|month,currency,invoice_count,total)/);
 
+  await evaluate(`document.querySelector('[data-route="access"]').click(); document.querySelector('[data-revoke-grant]').click()`);
+  await waitFor(`document.querySelectorAll('.grant-row').length===0`, "folder grant revocation");
+  assert.equal(await evaluate(`document.querySelector('#grant-summary').textContent.trim()`), "0");
+  assert.match(await evaluate(`document.querySelector('#enrollment-hint').innerText`), /No active folder/);
+
   await evaluate(`document.querySelector('[data-route="activity"]').click()`);
-  assert.ok(await evaluate(`document.querySelectorAll('.activity-row').length>=2`));
+  assert.ok(await evaluate(`document.querySelectorAll('.activity-row').length>=3`));
 
   await command("Page.reload", {});
   await waitFor(`document.querySelector('#artifact-summary')?.textContent.trim()==='2'`, "reload persistence");
@@ -179,7 +184,7 @@ async function main() {
   const screenshotPath = path.join(temporary, "luma-os-mvp.png");
   fs.writeFileSync(screenshotPath, Buffer.from(screenshot.data, "base64"));
 
-  console.log("Browser integration PASS: enroll, prepare without autorun, explicit run, artifacts, receipts, reload, mobile.");
+  console.log("Browser integration PASS: enroll, prepare without autorun, explicit run, versioned artifacts, revoke, receipts, reload, mobile.");
   console.log(`Screenshot: ${screenshotPath}`);
 }
 

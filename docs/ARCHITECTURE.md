@@ -56,7 +56,7 @@ The default endpoint is `127.0.0.1:8765`. Non-loopback binding is outside the su
 
 ### Folder grants
 
-A folder is inaccessible until the operator enrolls it. A grant records the canonical root, device/inode identity, owner, scope, and revocation state. Source paths are relative to that root.
+A folder is inaccessible until the operator enrolls it. A grant records the canonical root, device/inode identity, owner, scope, activation generation, and revocation state. Source paths are relative to that root. Re-enrolling a revoked folder advances its generation. Revocation and its append-only effect receipt commit in one database transaction, so an idempotency-key collision cannot leave access revoked without matching evidence.
 
 On supported POSIX systems, every component is opened descriptor-relative with no-follow flags, and the root identity is rechecked. This reduces traversal, symlink, and rename/swap risk. Revocation blocks new access but cannot undo effects already committed.
 
@@ -65,6 +65,13 @@ On supported POSIX systems, every component is opened descriptor-relative with n
 The first vertical workflow is `invoice_report.v1`. Preparation validates the request and returns a visible plan without performing its effects. A separate run command performs the workflow. Stable request and idempotency keys prevent accidental duplicate execution.
 
 A workflow has explicit states and ordered steps. Terminal state, error detail, manual-input requirements, output artifacts, and effect receipts survive process restart.
+
+Each executing workflow holds a per-workflow operating-system advisory lease. A
+second process cannot treat live work as interrupted, while a lease released by
+process exit permits immediate deterministic recovery. Artifact commits and the
+terminal success transition also share a separate effect fence with cancellation,
+so cancellation is acknowledged only after any already-running commit boundary
+has drained and no later workflow effect can start.
 
 ### Artifact store
 
@@ -89,7 +96,9 @@ luma-os/
 ├── luma.sqlite3       workflow, grant, artifact, and receipt metadata
 ├── luma.sqlite3-wal   SQLite write-ahead log while active
 ├── luma.sqlite3-shm   SQLite shared memory while active
-└── objects/           application-owned immutable content objects
+├── objects/           application-owned immutable content objects
+├── workflow-locks/    persistent lock files for cross-process run ownership
+└── workflow-effect-locks/ persistent lock files for commit/cancel fencing
 ```
 
 The runtime tightens state directories to user-only permissions where the platform supports it. `LUMA_HOME` selects another state root for development or tests.
@@ -114,6 +123,8 @@ Preparation and execution are separate API actions. UI affordances must not coll
 - No filesystem source read occurs without an active grant.
 - A relative path must remain beneath its enrolled root and must not traverse symlinks.
 - A workflow is prepared before it is run.
+- Only one process may execute a workflow at a time; cancellation fences every
+  durable workflow effect.
 - An idempotency key identifies one logical effect request for one owner.
 - Application output is written to managed storage, not back into source folders by default.
 - Committed effects have receipts; receipts are never updated or deleted through the application.

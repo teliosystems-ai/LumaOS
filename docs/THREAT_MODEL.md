@@ -80,7 +80,8 @@ Automated tests should cover:
 - grant ownership, revocation, and root identity changes;
 - oversized inputs and request bodies;
 - invalid state transitions and idempotency-key reuse with a different payload;
-- repeated run requests and process restart recovery;
+- repeated and cross-process run requests, cancellation races, wrong-owner
+  cancellation, and process restart recovery;
 - append-only receipt enforcement;
 - malformed JSON/CSV and formula-injection-safe output;
 - session, Host, and Origin rejection; and

@@ -3,45 +3,89 @@ info:
   title: Luma OS local API
   version: 0.1.0
   description: >-
-    Loopback-only developer-preview API for the Luma OS shared core. This
+    Loopback-only developer-preview API for the single-user Luma OS shared
+    core. The browser obtains a process-lifetime session cookie from the
+    health or static-file endpoint. API clients may instead use the temporary
+    bearer token printed only when explicitly requested. Browser mutations
+    using the cookie must also send a matching HTTP Origin header. This
     contract does not describe a remote or multi-user service.
 servers:
   - url: http://127.0.0.1:8765
 paths:
   /api/health:
     get:
-      summary: Liveness and version information
+      summary: Obtain liveness information and initialize a local browser session
+      security: []
       responses:
         "200":
-          description: Service is responding
+          description: Service is responding; also sets the local session cookie
+          headers:
+            Set-Cookie:
+              description: Process-lifetime HttpOnly SameSite Strict local session
+              schema: {type: string}
           content:
             application/json:
               schema:
                 type: object
-                required: [status, version]
+                required: [status, service, version]
                 properties:
                   status: {const: ok}
+                  service: {const: luma-os}
                   version: {type: string}
+                additionalProperties: false
+        "403": {$ref: "#/components/responses/Forbidden"}
+
   /api/status:
     get:
-      summary: Runtime, storage, and capability status
+      summary: Read runtime and durable-store status
       responses:
         "200":
           description: Current local service status
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/RuntimeStatus"}
+        "401": {$ref: "#/components/responses/Unauthorized"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+
   /api/models/status:
     get:
-      summary: Optional local model endpoint status
+      summary: Probe the optional operator-configured local model endpoint
+      description: Model availability does not disable deterministic or manual workflows.
       responses:
         "200":
-          description: Model may be unavailable without disabling manual controls
+          description: Configuration and current probe result
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/ModelStatus"}
+        "401": {$ref: "#/components/responses/Unauthorized"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+
   /api/grants:
     get:
       summary: List active and revoked folder grants
       responses:
-        "200": {description: Grant list}
+        "200":
+          description: Grants owned by the local user
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items: {$ref: "./grant.schema.json"}
+                additionalProperties: false
+        "401": {$ref: "#/components/responses/Unauthorized"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+
   /api/grants/enroll:
     post:
       summary: Enroll an existing local folder
+      description: >-
+        Enrollment records an explicit local scope. The current runtime reads
+        source files through grants but publishes generated artifacts only to
+        its managed object store.
       requestBody:
         required: true
         content:
@@ -50,71 +94,443 @@ paths:
               type: object
               required: [path]
               properties:
-                path: {type: string}
+                path: {type: string, minLength: 1}
+                display_name: {type: string, minLength: 1, maxLength: 200}
+                scope:
+                  const: read
+                  description: Source folders are read-only in this stage.
                 permissions:
                   type: array
-                  items: {enum: [read, index, write, export]}
+                  minItems: 1
+                  maxItems: 1
+                  uniqueItems: true
+                  items: {const: read}
       responses:
-        "201": {description: Grant created}
-        "400": {description: Invalid request or folder}
-  /api/workflows:
-    get:
-      summary: List workflows
-      responses:
-        "200": {description: Workflow list}
+        "201":
+          description: Grant created or an existing matching grant reactivated
+          content:
+            application/json:
+              schema: {$ref: "./grant.schema.json"}
+        "401": {$ref: "#/components/responses/Unauthorized"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "413": {$ref: "#/components/responses/RequestTooLarge"}
+        "415": {$ref: "#/components/responses/UnsupportedMediaType"}
+        "422": {$ref: "#/components/responses/ValidationError"}
+
+  /api/grants/{grant_id}/revoke:
     post:
-      summary: Prepare an invoice report workflow without executing it
+      summary: Revoke a folder grant for future access
+      description: >-
+        Revocation blocks subsequent protected reads. It does not remove
+        artifacts, receipts, or workflow history already committed. The state
+        transition and append-only receipt commit atomically. Reactivating the
+        same stable grant ID advances its generation, giving each activation
+        an independent default idempotency key.
+      parameters:
+        - $ref: "#/components/parameters/GrantId"
       requestBody:
         required: true
         content:
           application/json:
             schema:
               type: object
-              required: [kind, source_path]
               properties:
-                kind: {const: invoice_report.v1}
-                source_path: {type: string}
-                idempotency_key: {type: string}
+                idempotency_key:
+                  type: string
+                  minLength: 1
+                  maxLength: 250
+                  description: Optional caller key; omission uses a generation-scoped server key.
+              additionalProperties: false
       responses:
-        "201": {description: Workflow is ready for explicit execution}
-        "403": {description: Source is not covered by a current read grant}
+        "200":
+          description: Revoked grant metadata
+          content:
+            application/json:
+              schema: {$ref: "./grant.schema.json"}
+        "401": {$ref: "#/components/responses/Unauthorized"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        "413": {$ref: "#/components/responses/RequestTooLarge"}
+        "415": {$ref: "#/components/responses/UnsupportedMediaType"}
+        "422": {$ref: "#/components/responses/ValidationError"}
+
+  /api/workflows:
+    get:
+      summary: List workflows
+      responses:
+        "200":
+          description: Workflows owned by the local user, newest first
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items: {$ref: "./workflow.schema.json"}
+                additionalProperties: false
+        "401": {$ref: "#/components/responses/Unauthorized"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+    post:
+      summary: Prepare an invoice report workflow without executing it
+      description: >-
+        A source may be selected by absolute source_path inside an active
+        grant, by grant_id plus relative files, or by inline source_text. This
+        operation records a visible plan but performs no artifact commit.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/WorkflowCreateRequest"}
+      responses:
+        "201":
+          description: Workflow is validated and ready for explicit execution
+          content:
+            application/json:
+              schema: {$ref: "./workflow.schema.json"}
+        "401": {$ref: "#/components/responses/Unauthorized"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        "413": {$ref: "#/components/responses/RequestTooLarge"}
+        "415": {$ref: "#/components/responses/UnsupportedMediaType"}
+        "422": {$ref: "#/components/responses/ValidationError"}
+
   /api/workflows/{workflow_id}:
     get:
-      summary: Read workflow state and steps
+      summary: Read workflow state and ordered steps
       parameters:
-        - in: path
-          name: workflow_id
-          required: true
-          schema: {type: string}
+        - $ref: "#/components/parameters/WorkflowId"
       responses:
-        "200": {description: Workflow state}
-        "404": {description: Unknown workflow}
+        "200":
+          description: Current durable workflow state
+          content:
+            application/json:
+              schema: {$ref: "./workflow.schema.json"}
+        "401": {$ref: "#/components/responses/Unauthorized"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+
   /api/workflows/{workflow_id}/run:
     post:
       summary: Explicitly execute a prepared workflow
+      description: The request body must be a JSON object; an empty object is sufficient.
       parameters:
-        - in: path
-          name: workflow_id
-          required: true
-          schema: {type: string}
+        - $ref: "#/components/parameters/WorkflowId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {type: object}
       responses:
-        "200": {description: Terminal workflow state and committed artifact IDs}
-        "409": {description: Workflow cannot run in its current state}
+        "200":
+          description: Current workflow state, including any committed artifact IDs
+          content:
+            application/json:
+              schema: {$ref: "./workflow.schema.json"}
+        "401": {$ref: "#/components/responses/Unauthorized"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        "413": {$ref: "#/components/responses/RequestTooLarge"}
+        "415": {$ref: "#/components/responses/UnsupportedMediaType"}
+        "422": {$ref: "#/components/responses/ValidationError"}
+        "500": {$ref: "#/components/responses/InternalError"}
+
+  /api/workflows/{workflow_id}/manual:
+    post:
+      summary: Supply reviewed invoice rows for a workflow awaiting manual input
+      parameters:
+        - $ref: "#/components/parameters/WorkflowId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [rows]
+              properties:
+                rows:
+                  type: array
+                  minItems: 1
+                  maxItems: 10000
+                  items: {$ref: "#/components/schemas/ManualInvoiceRow"}
+      responses:
+        "200":
+          description: Workflow returned to a validated state with reviewed rows
+          content:
+            application/json:
+              schema: {$ref: "./workflow.schema.json"}
+        "401": {$ref: "#/components/responses/Unauthorized"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        "413": {$ref: "#/components/responses/RequestTooLarge"}
+        "415": {$ref: "#/components/responses/UnsupportedMediaType"}
+        "422": {$ref: "#/components/responses/ValidationError"}
+
+  /api/workflows/{workflow_id}/cancel:
+    post:
+      summary: Cancel a workflow that has not completed
+      description: The request body must be a JSON object; an empty object is sufficient.
+      parameters:
+        - $ref: "#/components/parameters/WorkflowId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {type: object}
+      responses:
+        "200":
+          description: Workflow and all eligible steps are marked cancelled
+          content:
+            application/json:
+              schema: {$ref: "./workflow.schema.json"}
+        "401": {$ref: "#/components/responses/Unauthorized"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        "413": {$ref: "#/components/responses/RequestTooLarge"}
+        "415": {$ref: "#/components/responses/UnsupportedMediaType"}
+
   /api/artifacts:
     get:
       summary: List durable artifacts and their current versions
       responses:
-        "200": {description: Artifact list}
+        "200":
+          description: Current artifact metadata, newest first
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items: {$ref: "./artifact.schema.json"}
+                additionalProperties: false
+        "401": {$ref: "#/components/responses/Unauthorized"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+
+  /api/artifacts/{artifact_id}:
+    get:
+      summary: Read artifact metadata and retained version history
+      parameters:
+        - $ref: "#/components/parameters/ArtifactId"
+      responses:
+        "200":
+          description: Artifact metadata including its retained versions
+          content:
+            application/json:
+              schema: {$ref: "./artifact.schema.json"}
+        "401": {$ref: "#/components/responses/Unauthorized"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+
+  /api/artifacts/{artifact_id}/content:
+    get:
+      summary: Download the bytes of an artifact version
+      parameters:
+        - $ref: "#/components/parameters/ArtifactId"
+        - in: query
+          name: version
+          required: false
+          description: Omit to download the current version.
+          schema: {type: integer, minimum: 1}
+      responses:
+        "200":
+          description: Artifact bytes with the stored media type and filename
+          headers:
+            Content-Disposition:
+              schema: {type: string}
+            X-Luma-Artifact-Version:
+              description: The immutable version returned by this request.
+              schema: {type: integer, minimum: 1}
+          content:
+            application/octet-stream:
+              schema: {type: string, format: binary}
+            text/csv:
+              schema: {type: string, format: binary}
+            text/markdown:
+              schema: {type: string, format: binary}
+        "401": {$ref: "#/components/responses/Unauthorized"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "422": {$ref: "#/components/responses/ValidationError"}
+        "500": {$ref: "#/components/responses/InternalError"}
+
   /api/receipts:
     get:
       summary: List append-only effect receipts
+      description: Returns at most the 100 newest local-user and system-denial receipts.
       responses:
-        "200": {description: Receipt list}
+        "200":
+          description: Receipt list in descending sequence order
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items: {$ref: "./receipt.schema.json"}
+                additionalProperties: false
+        "401": {$ref: "#/components/responses/Unauthorized"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+
 components:
   securitySchemes:
     localSession:
       type: apiKey
       in: cookie
       name: luma_session
+      description: Process-lifetime cookie issued by the loopback service.
+    localBearer:
+      type: http
+      scheme: bearer
+      description: Temporary process token printed only with the explicit CLI option.
+
+  parameters:
+    GrantId:
+      in: path
+      name: grant_id
+      required: true
+      schema: {type: string, minLength: 1}
+    ArtifactId:
+      in: path
+      name: artifact_id
+      required: true
+      schema: {type: string, minLength: 1}
+    WorkflowId:
+      in: path
+      name: workflow_id
+      required: true
+      schema: {type: string, minLength: 1}
+
+  schemas:
+    RuntimeStatus:
+      type: object
+      required: [status, version, profile, offline_capable, production_security_claim, counts, data_dir]
+      properties:
+        status: {const: ready}
+        version: {type: string}
+        profile: {type: string}
+        offline_capable: {type: boolean}
+        production_security_claim: {type: boolean}
+        counts:
+          type: object
+          required: [active_grants, artifacts, workflows, receipts]
+          properties:
+            active_grants: {type: integer, minimum: 0}
+            artifacts: {type: integer, minimum: 0}
+            workflows: {type: integer, minimum: 0}
+            receipts: {type: integer, minimum: 0}
+          additionalProperties: false
+        data_dir: {type: string, minLength: 1}
+      additionalProperties: false
+
+    ModelStatus:
+      type: object
+      required: [configured, available, endpoint, model, required_for_workflows, detail]
+      properties:
+        configured: {type: boolean}
+        available: {type: boolean}
+        endpoint: {type: [string, "null"]}
+        model: {type: [string, "null"]}
+        required_for_workflows: {const: false}
+        detail: {type: string}
+      additionalProperties: false
+
+    WorkflowCreateRequest:
+      type: object
+      properties:
+        kind: {enum: [invoice_report.v1, invoice_to_report]}
+        type: {enum: [invoice_report.v1, invoice_to_report]}
+        source_path: {type: string, minLength: 1}
+        grant_id: {type: string, minLength: 1}
+        files:
+          type: array
+          minItems: 1
+          maxItems: 100
+          items: {type: string, minLength: 1}
+        source_text: {type: string, minLength: 1}
+        source_format: {enum: [text, csv]}
+        source_name: {type: string, minLength: 1}
+        currency: {type: string, pattern: "^[A-Za-z]{3}$"}
+        idempotency_key: {type: string, minLength: 1, maxLength: 250}
+      anyOf:
+        - required: [source_path]
+        - required: [grant_id, files]
+        - required: [source_text]
+
+    ManualInvoiceRow:
+      type: object
+      required: [date, amount]
+      properties:
+        date: {type: string, minLength: 1}
+        amount: {type: [string, number]}
+        currency: {type: string}
+        vendor: {type: string}
+        source: {type: string}
+
+    ErrorResponse:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code: {type: string, minLength: 1}
+            message: {type: string, minLength: 1}
+            details: {type: object}
+          additionalProperties: false
+      additionalProperties: false
+
+  responses:
+    Unauthorized:
+      description: A valid local session cookie or bearer token is required
+      content:
+        application/json:
+          schema: {$ref: "#/components/schemas/ErrorResponse"}
+    Forbidden:
+      description: Host, Origin, grant, or authorization policy denied the request
+      content:
+        application/json:
+          schema: {$ref: "#/components/schemas/ErrorResponse"}
+    NotFound:
+      description: The requested route or owned object was not found
+      content:
+        application/json:
+          schema: {$ref: "#/components/schemas/ErrorResponse"}
+    Conflict:
+      description: The request conflicts with current state or prior idempotent use
+      content:
+        application/json:
+          schema: {$ref: "#/components/schemas/ErrorResponse"}
+    RequestTooLarge:
+      description: The JSON request body exceeds the configured two MiB limit
+      content:
+        application/json:
+          schema: {$ref: "#/components/schemas/ErrorResponse"}
+    UnsupportedMediaType:
+      description: Content-Type must be application/json
+      content:
+        application/json:
+          schema: {$ref: "#/components/schemas/ErrorResponse"}
+    ValidationError:
+      description: Input failed deterministic validation
+      content:
+        application/json:
+          schema: {$ref: "#/components/schemas/ErrorResponse"}
+    InternalError:
+      description: The local service encountered an unexpected error
+      content:
+        application/json:
+          schema: {$ref: "#/components/schemas/ErrorResponse"}
+
 security:
   - localSession: []
+  - localBearer: []

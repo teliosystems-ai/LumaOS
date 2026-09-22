@@ -1,0 +1,206 @@
+{
+  "schema_version": 1,
+  "catalog_version": "2026-09-22",
+  "purpose": "Machine-readable development ownership and evidence baseline for the Luma OS requirements.",
+  "source_precedence": [
+    "WIN",
+    "B2",
+    "B1"
+  ],
+  "sources": [
+    {
+      "id": "B1",
+      "title": "LLM Based Operating System Engineering Specification",
+      "filename": "LLM_OS_Feasibility_HLD_LLD_Engineering_Requirements.docx",
+      "workspace_path": "../../Requirements/LLM_OS_Feasibility_HLD_LLD_Engineering_Requirements.docx",
+      "sha256": "05b2e8568e8582c435b10fe6f609f2c7a10737d4efd82d5f1adaea2f37e821e5",
+      "distribution": "external governing document; not included in source archives",
+      "version": "1.0",
+      "role": "architecture and original FR and NF baseline"
+    },
+    {
+      "id": "B2",
+      "title": "Ubuntu Based LLM Operating System Engineering Requirements",
+      "filename": "Option_Ubuntu_LLM_OS_Functional_Requirements_Development_Testing_4B_to_400B.docx",
+      "workspace_path": "../../Requirements/Option_Ubuntu_LLM_OS_Functional_Requirements_Development_Testing_4B_to_400B.docx",
+      "sha256": "25b6026916f9cdeb0a108d3f8ad875a704a9162436d317c0c825f00fe8b4f38b",
+      "distribution": "external governing document; not included in source archives",
+      "version": "2.0",
+      "role": "controlling Ubuntu product baseline"
+    },
+    {
+      "id": "WIN",
+      "title": "LLM OS Windows Deployment Requirements Variation",
+      "filename": "LLM_OS_Windows_Deployment_Requirements_Variation.docx",
+      "workspace_path": "../../Requirements/LLM_OS_Windows_Deployment_Requirements_Variation.docx",
+      "sha256": "479b310e4027a45ccc3bf09a1f1850672e7841f40a3c2a018e34059109e7166d",
+      "distribution": "external governing document; not included in source archives",
+      "version": "1.0",
+      "role": "controlling variation for Windows-hosted and coexistence profiles"
+    }
+  ],
+  "requirement_series": [
+    {"prefix": "FR", "first": 1, "last": 60, "width": 2, "source": "B1"},
+    {"prefix": "NF", "first": 1, "last": 18, "width": 2, "source": "B1"},
+    {"prefix": "A", "first": 1, "last": 140, "width": 3, "source": "B2"},
+    {"prefix": "Q", "first": 1, "last": 20, "width": 2, "source": "B2"},
+    {"prefix": "W", "first": 1, "last": 44, "width": 3, "source": "WIN"},
+    {"prefix": "QW", "first": 1, "last": 6, "width": 2, "source": "WIN"}
+  ],
+  "test_series": [
+    {"prefix": "T", "first": 1, "last": 62, "width": 2, "source": "B2"},
+    {"prefix": "V", "first": 1, "last": 18, "width": 2, "source": "WIN"}
+  ],
+  "stages": [
+    {
+      "id": "G0",
+      "name": "Engineering baseline and lab readiness",
+      "window": "Weeks 1-2",
+      "dependencies": [],
+      "primary_requirements": [],
+      "verification": [],
+      "verification_note": "Non-normative readiness evidence: repository validation, source digest verification, architecture decisions, and lab records.",
+      "exit_gate": "Every requirement has development ownership and a test/evidence state; architecture and lab decisions needed by G1 are explicit."
+    },
+    {
+      "id": "G1",
+      "name": "P0 feasibility and core control contracts",
+      "window": "Weeks 3-8",
+      "dependencies": ["G0"],
+      "primary_requirements": [
+        "FR09-FR21", "FR41-FR42", "FR44-FR49", "FR57-FR59",
+        "NF02-NF07", "NF10-NF11", "NF16-NF17",
+        "A009-A028", "A030-A037", "A039-A047", "A049-A056", "A077", "A079-A086"
+      ],
+      "verification": ["T06-T16", "T18-T20", "T22-T33", "T40-T42"],
+      "exit_gate": "A real compact model and one authorized file-to-artifact workflow operate offline on the selected development tuples with bounded resource accounting and model-independent recovery."
+    },
+    {
+      "id": "G2",
+      "name": "Ubuntu platform alpha",
+      "window": "Weeks 9-16",
+      "dependencies": ["G1"],
+      "primary_requirements": [
+        "FR01-FR07", "NF18", "A001-A008", "A101-A116", "A118", "Q15"
+      ],
+      "verification": ["T01-T16", "T27-T30", "T33", "T40", "T45-T51", "T62"],
+      "exit_gate": "T01-T16 and the real vertical workflow pass on both frozen A1 reference machines, including failed boot, model, worker and commit recovery."
+    },
+    {
+      "id": "G3",
+      "name": "Functional beta",
+      "window": "Weeks 17-28",
+      "dependencies": ["G2"],
+      "primary_requirements": [
+        "FR22-FR35", "FR37-FR40", "FR50-FR53", "FR55",
+        "NF01", "NF08", "NF12", "NF14",
+        "A057-A071", "A073-A075"
+      ],
+      "verification": ["T20", "T29", "T31-T42", "T56", "T58-T59"],
+      "exit_gate": "The core journeys use real local inference and files, publish editable artifacts, remain accessible without inference, and recover from the defined faults."
+    },
+    {
+      "id": "G4",
+      "name": "A1 hardening",
+      "window": "Weeks 29-40",
+      "dependencies": ["G3"],
+      "primary_requirements": [
+        "FR60", "NF09", "NF13", "NF15",
+        "A093-A096", "A098-A100", "A131-A135", "A138", "A140",
+        "Q01-Q03", "Q06-Q13", "Q17-Q18"
+      ],
+      "verification": ["T01-T42", "T45-T51", "T56-T59", "T62"],
+      "exit_gate": "Complete A1 traceability, 500 held-out tasks, 300 adversarial cases, 1,000 crash trials, clean restore, external security review and a 72-hour soak pass with no severity 0 or 1 defect."
+    },
+    {
+      "id": "G5",
+      "name": "A1 product release",
+      "window": "Weeks 41-48",
+      "dependencies": ["G4"],
+      "primary_requirements": ["A097", "Q14"],
+      "verification": ["T01-T42", "T45-T51", "T56-T59", "T62"],
+      "exit_gate": "Every applicable mandatory A1 and quality result passes on the exact signed images and certified tuples; simulated evidence does not close a gate."
+    },
+    {
+      "id": "GWIN0",
+      "name": "Windows hosted-platform proof",
+      "window": "After G1; overlaps G2",
+      "dependencies": ["G1"],
+      "primary_requirements": ["W005-W012", "W021-W022", "W030-W032", "W035-W036", "W042-W043"],
+      "verification": [
+        "V01", "V03-V06", "V08-V10", "V15-V16", "V18",
+        "T02", "T13", "T24-T25", "T29-T30", "T40", "T42", "T45", "T51", "T62"
+      ],
+      "exit_gate": "WSL starts the real core and compact inference, reads a host file through the authenticated broker, enforces confinement, and the Hyper-V desktop proof operates."
+    },
+    {
+      "id": "GWIN1",
+      "name": "WSL product beta",
+      "window": "After GWIN0 and G3; overlaps G4",
+      "dependencies": ["GWIN0", "G3"],
+      "primary_requirements": [
+        "W013-W020", "W023-W024", "W034", "W037-W040",
+        "QW01-QW04", "QW06"
+      ],
+      "verification": [
+        "V01", "V03-V12", "V16-V18",
+        "T04", "T32-T36", "T41-T42", "T56-T57", "T59"
+      ],
+      "exit_gate": "Host-file automation, outage reconciliation, update recovery, backup and cross-profile migration pass with zero unauthorized reads or lost acknowledged versions."
+    },
+    {
+      "id": "GWIN2",
+      "name": "Dual boot and virtual machine qualification",
+      "window": "After GWIN1 and the G5 A1 release",
+      "dependencies": ["GWIN1", "G5"],
+      "primary_requirements": ["W001-W004", "W025-W029", "W033", "W041", "W044", "QW05"],
+      "verification": ["V01-V18", "T01", "T05", "T39-T40", "T45-T47", "T49", "T51"],
+      "exit_gate": "Every announced N, D, W or V profile independently passes its inherited and profile-specific evidence gate, including real end-to-end journeys."
+    },
+    {
+      "id": "G6",
+      "name": "A2 large local edition",
+      "window": "Experiments from P0; formal certification after G5, approximately months 12-16",
+      "dependencies": ["G5"],
+      "primary_requirements": [
+        "FR08", "FR36", "FR43", "FR56",
+        "A029", "A038", "A048", "A072", "A076", "A078", "A087-A090", "A117", "A119",
+        "Q04-Q05"
+      ],
+      "verification": ["T01", "T05", "T17", "T21", "T25-T26", "T31", "T37", "T43", "T51-T52", "T54"],
+      "exit_gate": "The declared real 400-405B package completes the suite on the measured topology; fake allocation, sparse mapping or a smaller substitute cannot pass."
+    },
+    {
+      "id": "G7",
+      "name": "A3 distributed edition",
+      "window": "Approximately months 16-22 if funded",
+      "dependencies": ["G6"],
+      "primary_requirements": [
+        "A091-A092", "A120-A130", "A136-A137", "A139", "Q16", "Q19-Q20"
+      ],
+      "verification": ["T41", "T44", "T52-T55", "T58", "T60-T62"],
+      "exit_gate": "Trusted nodes, complete replica reservation, generation fencing, durable state and measured 2, 8 and 32 worker envelopes pass the distributed fault suite."
+    },
+    {
+      "id": "RX",
+      "name": "Microkernel feasibility research",
+      "window": "Separate 6-9 month feasibility track",
+      "dependencies": ["G3"],
+      "primary_requirements": ["FR54"],
+      "verification": [],
+      "verification_note": "A numbered RX procedure must be added through requirements change control before execution.",
+      "exit_gate": "One reference board proves deterministic boot, storage, display/input, DMA isolation, recovery, application compatibility and real accelerator inference before product funding."
+    }
+  ],
+  "current_reference_evidence": [
+    {
+      "status": "reference_partial",
+      "requirements": [
+        "FR13", "FR18", "FR20", "FR23", "FR27", "FR37", "FR57-FR60",
+        "A051-A052", "A057-A059", "A065", "A069", "A079", "A084-A086",
+        "W002", "W007", "W012", "W019", "W040", "W043"
+      ],
+      "evidence": "The v0.1.0 Python reference runtime provides one grant-scoped deterministic workflow, durable artifacts and receipts, restart recovery, loopback controls and a developer WSL path. This is not product qualification."
+    }
+  ]
+}

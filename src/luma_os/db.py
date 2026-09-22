@@ -108,11 +108,16 @@ BEGIN
 END;
 """
 
+MIGRATION_2 = r"""
+ALTER TABLE folder_grants
+ADD COLUMN generation INTEGER NOT NULL DEFAULT 1 CHECK (generation >= 1);
+"""
+
 
 class LumaStore:
     """Small SQLite store using one connection per transaction."""
 
-    latest_schema_version = 1
+    latest_schema_version = 2
 
     def __init__(self, db_path: str | Path) -> None:
         self.db_path = Path(db_path)
@@ -150,6 +155,14 @@ class LumaStore:
                     "BEGIN IMMEDIATE;\n"
                     + MIGRATION_1
                     + f"\nINSERT INTO schema_migrations(version, applied_at) VALUES (1, {timestamp_literal});\n"
+                    + "COMMIT;"
+                )
+            if 2 not in applied:
+                timestamp_literal = connection.execute("SELECT quote(?)", (utc_now(),)).fetchone()[0]
+                connection.executescript(
+                    "BEGIN IMMEDIATE;\n"
+                    + MIGRATION_2
+                    + f"\nINSERT INTO schema_migrations(version, applied_at) VALUES (2, {timestamp_literal});\n"
                     + "COMMIT;"
                 )
 

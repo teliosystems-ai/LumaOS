@@ -33,6 +33,13 @@ The implementation is intended for design reviews, local development, automated 
 
 See the complete [support matrix](docs/SUPPORT_MATRIX.md) and [requirements coverage](docs/REQUIREMENTS_COVERAGE.md).
 
+The product program is organized by objective gates rather than feature claims. See the
+[staged development plan](docs/DEVELOPMENT_PLAN.md) and validate the machine-readable
+requirement ownership catalog with `make requirements-check`.
+When the repository is in the documented workspace layout, maintainers can also
+verify all three external governing documents against their pinned SHA-256
+digests with `make requirements-sources-check`.
+
 ## Quick start
 
 ### Ubuntu 24.04 or WSL2
@@ -53,6 +60,18 @@ Run all repository checks:
 
 ```bash
 make check
+```
+
+Print the complete requirement-to-stage ownership report:
+
+```bash
+make requirements-report
+```
+
+Verify that the external requirement documents are present and unchanged:
+
+```bash
+make requirements-sources-check
 ```
 
 With Node 22+ and Chrome/Chromium installed, run the complete local browser
@@ -100,6 +119,7 @@ An optional systemd **user** service template is available under [`packaging/sys
 ```text
 src/luma_os/          Reference runtime
 tests/                Standard-library automated tests
+requirements/         Source-ID ownership and evidence-state catalog
 scripts/              Source runners, checks, packaging, user install
 packaging/systemd/    Optional Ubuntu user-service template
 packaging/wsl/        Windows 11 / WSL2 helpers

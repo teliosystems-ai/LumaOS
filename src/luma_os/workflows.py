@@ -5,11 +5,15 @@ from __future__ import annotations
 import csv
 from datetime import datetime
 from decimal import Decimal, InvalidOperation
+import errno
 import hashlib
 import io
 import json
-from pathlib import PurePath
+import os
+from pathlib import Path, PurePath
 import re
+import threading
+import time
 from typing import Any, Iterable
 import uuid
 
@@ -24,6 +28,16 @@ STEP_IDS = ("read_sources", "extract_rows", "aggregate", "publish_csv", "publish
 TERMINAL_STATES = {"SUCCEEDED", "FAILED", "CANCELLED"}
 
 
+# All LumaService instances in one process share these fences.  SQLite guards
+# every durable state transition; the fence additionally closes the small gap
+# between checking RUNNING and committing an artifact through ArtifactService,
+# which owns its own transaction.
+_RUNTIME_REGISTRY_LOCK = threading.Lock()
+_WORKFLOW_FENCES: dict[tuple[str, str], threading.RLock] = {}
+_CANCELLATION_SIGNALS: dict[tuple[str, str], threading.Event] = {}
+_ACTIVE_RUNS: set[tuple[str, str]] = set()
+
+
 def _json(value: object) -> str:
     return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
 
@@ -32,6 +46,81 @@ class NeedsManualInput(Exception):
     def __init__(self, issues: list[dict[str, str]]) -> None:
         super().__init__("Invoice data needs manual review")
         self.issues = issues
+
+
+class _WorkflowStopped(Exception):
+    """Internal control flow for a workflow stopped by a concurrent cancel."""
+
+
+class _WorkflowProcessLock:
+    """Portable advisory lock used for run leases and durable-effect fences."""
+
+    def __init__(self, stream: Any) -> None:
+        self._stream = stream
+
+    @classmethod
+    def acquire(cls, path: Path, *, blocking: bool = False) -> _WorkflowProcessLock | None:
+        path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        stream = path.open("a+b")
+        try:
+            os.set_inheritable(stream.fileno(), False)
+            try:
+                path.chmod(0o600)
+            except PermissionError:
+                pass
+            if os.name == "nt":
+                import msvcrt
+
+                stream.seek(0, os.SEEK_END)
+                if stream.tell() == 0:
+                    stream.write(b"\0")
+                    stream.flush()
+                while True:
+                    stream.seek(0)
+                    try:
+                        msvcrt.locking(stream.fileno(), msvcrt.LK_NBLCK, 1)
+                        break
+                    except OSError as exc:
+                        if exc.errno not in {errno.EACCES, errno.EAGAIN, errno.EWOULDBLOCK, errno.EDEADLK}:
+                            raise
+                        if not blocking:
+                            stream.close()
+                            return None
+                        time.sleep(0.05)
+            else:
+                import fcntl
+
+                flags = fcntl.LOCK_EX if blocking else fcntl.LOCK_EX | fcntl.LOCK_NB
+                try:
+                    fcntl.flock(stream.fileno(), flags)
+                except OSError as exc:
+                    if exc.errno not in {errno.EACCES, errno.EAGAIN, errno.EWOULDBLOCK}:
+                        raise
+                    stream.close()
+                    return None
+        except BaseException:
+            if not stream.closed:
+                stream.close()
+            raise
+        return cls(stream)
+
+    def release(self) -> None:
+        stream = self._stream
+        if stream is None:
+            return
+        self._stream = None
+        try:
+            if os.name == "nt":
+                import msvcrt
+
+                stream.seek(0)
+                msvcrt.locking(stream.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                import fcntl
+
+                fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
+        finally:
+            stream.close()
 
 
 class InvoiceWorkflowService:
@@ -48,25 +137,28 @@ class InvoiceWorkflowService:
         self._recover_interrupted()
 
     def _recover_interrupted(self) -> None:
-        """Make work left RUNNING by a stopped single-process service replayable."""
+        """Recover RUNNING work only when no process still owns its execution lock."""
 
-        recovered = _json({"code": "interrupted", "message": "Previous execution stopped and is safe to retry."})
-        with self.store.transaction(write=True) as connection:
+        with self.store.transaction() as connection:
             workflow_ids = [
-                row[0] for row in connection.execute("SELECT workflow_id FROM workflows WHERE state='RUNNING'").fetchall()
+                str(row[0])
+                for row in connection.execute("SELECT workflow_id FROM workflows WHERE state='RUNNING'").fetchall()
             ]
-            if workflow_ids:
-                placeholders = ",".join("?" for _ in workflow_ids)
-                connection.execute(
-                    f"UPDATE workflow_steps SET state='PENDING',error_json=?,updated_at=? "
-                    f"WHERE state='RUNNING' AND workflow_id IN ({placeholders})",
-                    (recovered, utc_now(), *workflow_ids),
-                )
-                connection.execute(
-                    f"UPDATE workflows SET state='VALIDATED',error_json=?,updated_at=? "
-                    f"WHERE workflow_id IN ({placeholders})",
-                    (recovered, utc_now(), *workflow_ids),
-                )
+        for workflow_id in workflow_ids:
+            key = self._runtime_key(workflow_id)
+            with self._fence(workflow_id):
+                with _RUNTIME_REGISTRY_LOCK:
+                    if key in _ACTIVE_RUNS:
+                        continue
+                process_lock = self._process_lock(workflow_id)
+                if process_lock is None:
+                    continue
+                try:
+                    # The state is rechecked by the compare-and-set after the
+                    # process lock proves that no conforming runner is live.
+                    self._recover_workflow(workflow_id)
+                finally:
+                    process_lock.release()
 
     def submit(
         self,
@@ -150,27 +242,55 @@ class InvoiceWorkflowService:
         return self.get(owner, workflow_id)
 
     def run(self, owner: str, workflow_id: str) -> dict[str, Any]:
-        workflow = self.get(owner, workflow_id)
-        if workflow["state"] == "SUCCEEDED":
-            return workflow
-        if workflow["state"] == "CANCELLED":
-            raise ConflictError("Cancelled workflow cannot be run")
-        if workflow["state"] == "RUNNING":
-            raise ConflictError("Workflow is already running")
-        if workflow["state"] == "WAITING_USER" and workflow.get("manual_input") is None:
-            return workflow
-
-        now = utc_now()
-        with self.store.transaction(write=True) as connection:
-            changed = connection.execute(
-                "UPDATE workflows SET state='RUNNING',attempt=attempt+1,error_json=NULL,updated_at=? "
-                "WHERE workflow_id=? AND owner=? AND state NOT IN ('RUNNING','SUCCEEDED','CANCELLED')",
-                (now, workflow_id, owner),
-            ).rowcount
-            if not changed:
-                return self.get(owner, workflow_id)
+        key = self._runtime_key(workflow_id)
+        cancellation = self._cancellation_signal(workflow_id)
+        process_lock: _WorkflowProcessLock | None = None
+        with self._fence(workflow_id):
+            workflow = self.get(owner, workflow_id)
+            if workflow["state"] == "SUCCEEDED":
+                return workflow
+            if workflow["state"] == "CANCELLED":
+                raise ConflictError("Cancelled workflow cannot be run")
+            if workflow["state"] == "WAITING_USER" and workflow.get("manual_input") is None:
+                return workflow
+            if cancellation.is_set():
+                self._mark_cancelled(owner, workflow_id)
+                raise ConflictError("Cancelled workflow cannot be run")
+            process_lock = self._process_lock(workflow_id)
+            if process_lock is None:
+                current = self.get(owner, workflow_id)
+                if current["state"] == "SUCCEEDED":
+                    return current
+                if current["state"] == "CANCELLED":
+                    raise ConflictError("Cancelled workflow cannot be run")
+                if current["state"] == "WAITING_USER" and current.get("manual_input") is None:
+                    return current
+                raise ConflictError("Workflow is already running")
+            try:
+                with _RUNTIME_REGISTRY_LOCK:
+                    if key in _ACTIVE_RUNS:
+                        raise ConflictError("Workflow is already running")
+                if workflow["state"] == "RUNNING":
+                    self._recover_workflow(workflow_id)
+                claim = self._claim_run(owner, workflow_id)
+                if claim != "CLAIMED":
+                    if claim == "CANCELLED":
+                        raise ConflictError("Cancelled workflow cannot be run")
+                    if claim == "RUNNING":
+                        raise ConflictError("Workflow is already running")
+                    current = self.get(owner, workflow_id)
+                    process_lock.release()
+                    process_lock = None
+                    return current
+                with _RUNTIME_REGISTRY_LOCK:
+                    _ACTIVE_RUNS.add(key)
+            except BaseException:
+                process_lock.release()
+                process_lock = None
+                raise
 
         try:
+            workflow = self.get(owner, workflow_id)
             request = workflow["request"]
             manual = workflow.get("manual_input")
             self._step(workflow_id, "read_sources", "RUNNING", increment=True)
@@ -195,42 +315,69 @@ class InvoiceWorkflowService:
                 "row_count": len(rows),
                 "manual_input": manual is not None,
             }
-            self._step(workflow_id, "publish_csv", "RUNNING", increment=True)
-            csv_artifact = self.artifacts.create_text(
-                owner,
-                self._report_csv(aggregates),
-                filename="invoice-summary.csv",
-                media_type="text/csv; charset=utf-8",
-                provenance=provenance,
-                idempotency_key=f"workflow:{workflow_id}:invoice-summary-csv:v1",
-                workflow_id=workflow_id,
-                step_id="publish_csv",
-            )
-            self._step(workflow_id, "publish_csv", "SUCCEEDED")
+            with self._fence(workflow_id):
+                effect_lock = self._effect_lock(workflow_id)
+                try:
+                    self._require_running(owner, workflow_id)
+                    self._step(workflow_id, "publish_csv", "RUNNING", increment=True)
+                    csv_artifact = self.artifacts.create_text(
+                        owner,
+                        self._report_csv(aggregates),
+                        filename="invoice-summary.csv",
+                        media_type="text/csv; charset=utf-8",
+                        provenance=provenance,
+                        idempotency_key=f"workflow:{workflow_id}:invoice-summary-csv:v1",
+                        workflow_id=workflow_id,
+                        step_id="publish_csv",
+                    )
+                    self._step(workflow_id, "publish_csv", "SUCCEEDED")
+                    if cancellation.is_set():
+                        self._mark_cancelled(owner, workflow_id)
+                        raise _WorkflowStopped
+                finally:
+                    effect_lock.release()
 
-            self._step(workflow_id, "publish_report", "RUNNING", increment=True)
-            report_artifact = self.artifacts.create_text(
-                owner,
-                self._report_markdown(rows, aggregates),
-                filename="invoice-report.md",
-                media_type="text/markdown; charset=utf-8",
-                provenance=provenance,
-                idempotency_key=f"workflow:{workflow_id}:invoice-report-md:v1",
-                workflow_id=workflow_id,
-                step_id="publish_report",
-            )
-            self._step(workflow_id, "publish_report", "SUCCEEDED")
-            result = {
-                "row_count": len(rows),
-                "summary": aggregates,
-                "artifacts": [csv_artifact, report_artifact],
-            }
-            with self.store.transaction(write=True) as connection:
-                connection.execute(
-                    "UPDATE workflows SET state='SUCCEEDED',result_json=?,error_json=NULL,updated_at=? WHERE workflow_id=? AND owner=?",
-                    (_json(result), utc_now(), workflow_id, owner),
-                )
-            return self.get(owner, workflow_id)
+            # The final artifact and SUCCEEDED compare-and-set share one fence.
+            # Cancellation either wins before this boundary, or observes a
+            # completed workflow; it can never change CANCELLED back to success.
+            with self._fence(workflow_id):
+                effect_lock = self._effect_lock(workflow_id)
+                try:
+                    self._require_running(owner, workflow_id)
+                    self._step(workflow_id, "publish_report", "RUNNING", increment=True)
+                    report_artifact = self.artifacts.create_text(
+                        owner,
+                        self._report_markdown(rows, aggregates),
+                        filename="invoice-report.md",
+                        media_type="text/markdown; charset=utf-8",
+                        provenance=provenance,
+                        idempotency_key=f"workflow:{workflow_id}:invoice-report-md:v1",
+                        workflow_id=workflow_id,
+                        step_id="publish_report",
+                    )
+                    self._step(workflow_id, "publish_report", "SUCCEEDED")
+                    result = {
+                        "row_count": len(rows),
+                        "summary": aggregates,
+                        "artifacts": [csv_artifact, report_artifact],
+                    }
+                    with self.store.transaction(write=True) as connection:
+                        changed = connection.execute(
+                            "UPDATE workflows SET state='SUCCEEDED',result_json=?,error_json=NULL,updated_at=? "
+                            "WHERE workflow_id=? AND owner=? AND state='RUNNING'",
+                            (_json(result), utc_now(), workflow_id, owner),
+                        ).rowcount
+                    if not changed:
+                        raise _WorkflowStopped
+                    cancellation.clear()
+                    return self.get(owner, workflow_id)
+                finally:
+                    effect_lock.release()
+        except _WorkflowStopped:
+            with self._fence(workflow_id):
+                if cancellation.is_set():
+                    self._mark_cancelled(owner, workflow_id)
+                return self.get(owner, workflow_id)
         except NeedsManualInput as exc:
             fallback = {
                 "message": "Some invoice data could not be parsed deterministically. Review and submit explicit rows.",
@@ -238,59 +385,227 @@ class InvoiceWorkflowService:
                 "required_fields": ["date", "amount"],
                 "optional_fields": ["currency", "vendor", "source"],
             }
-            with self.store.transaction(write=True) as connection:
-                connection.execute(
-                    "UPDATE workflows SET state='WAITING_USER',result_json=?,error_json=?,updated_at=? WHERE workflow_id=? AND owner=?",
-                    (_json({"manual_fallback": fallback}), _json({"code": "manual_input_required"}), utc_now(), workflow_id, owner),
-                )
-            self._step(workflow_id, "extract_rows", "WAITING_USER", error={"issues": exc.issues})
-            return self.get(owner, workflow_id)
+            try:
+                with self._fence(workflow_id):
+                    if cancellation.is_set():
+                        self._mark_cancelled(owner, workflow_id)
+                        return self.get(owner, workflow_id)
+                    self._require_running(owner, workflow_id)
+                    self._step(workflow_id, "extract_rows", "WAITING_USER", error={"issues": exc.issues})
+                    with self.store.transaction(write=True) as connection:
+                        changed = connection.execute(
+                            "UPDATE workflows SET state='WAITING_USER',result_json=?,error_json=?,updated_at=? "
+                            "WHERE workflow_id=? AND owner=? AND state='RUNNING'",
+                            (
+                                _json({"manual_fallback": fallback}),
+                                _json({"code": "manual_input_required"}),
+                                utc_now(),
+                                workflow_id,
+                                owner,
+                            ),
+                        ).rowcount
+                    if not changed:
+                        return self.get(owner, workflow_id)
+                    return self.get(owner, workflow_id)
+            except _WorkflowStopped:
+                if cancellation.is_set():
+                    self._mark_cancelled(owner, workflow_id)
+                return self.get(owner, workflow_id)
         except Exception as exc:
             error = {"code": "workflow_failed", "message": str(exc)}
-            with self.store.transaction(write=True) as connection:
-                connection.execute(
-                    "UPDATE workflows SET state='FAILED',error_json=?,updated_at=? WHERE workflow_id=? AND owner=?",
-                    (_json(error), utc_now(), workflow_id, owner),
-                )
-                connection.execute(
-                    "UPDATE workflow_steps SET state='FAILED',error_json=?,updated_at=? WHERE workflow_id=? AND state='RUNNING'",
-                    (_json(error), utc_now(), workflow_id),
-                )
+            with self._fence(workflow_id):
+                if cancellation.is_set():
+                    self._mark_cancelled(owner, workflow_id)
+                    return self.get(owner, workflow_id)
+                with self.store.transaction(write=True) as connection:
+                    changed = connection.execute(
+                        "UPDATE workflows SET state='FAILED',error_json=?,updated_at=? "
+                        "WHERE workflow_id=? AND owner=? AND state='RUNNING'",
+                        (_json(error), utc_now(), workflow_id, owner),
+                    ).rowcount
+                    if changed:
+                        connection.execute(
+                            "UPDATE workflow_steps SET state='FAILED',error_json=?,updated_at=? "
+                            "WHERE workflow_id=? AND state='RUNNING'",
+                            (_json(error), utc_now(), workflow_id),
+                        )
+                if not changed:
+                    return self.get(owner, workflow_id)
             raise
+        finally:
+            with _RUNTIME_REGISTRY_LOCK:
+                _ACTIVE_RUNS.discard(key)
+            if process_lock is not None:
+                process_lock.release()
+
+    def _runtime_key(self, workflow_id: str) -> tuple[str, str]:
+        return (str(self.store.db_path.resolve()), workflow_id)
+
+    def _fence(self, workflow_id: str) -> threading.RLock:
+        key = self._runtime_key(workflow_id)
+        with _RUNTIME_REGISTRY_LOCK:
+            return _WORKFLOW_FENCES.setdefault(key, threading.RLock())
+
+    def _cancellation_signal(self, workflow_id: str) -> threading.Event:
+        key = self._runtime_key(workflow_id)
+        with _RUNTIME_REGISTRY_LOCK:
+            return _CANCELLATION_SIGNALS.setdefault(key, threading.Event())
+
+    def _process_lock(self, workflow_id: str, *, blocking: bool = False) -> _WorkflowProcessLock | None:
+        digest = self._lock_digest(workflow_id)
+        path = self.store.db_path.parent / "workflow-locks" / f"{digest}.lock"
+        return _WorkflowProcessLock.acquire(path, blocking=blocking)
+
+    def _effect_lock(self, workflow_id: str) -> _WorkflowProcessLock:
+        digest = self._lock_digest(workflow_id)
+        path = self.store.db_path.parent / "workflow-effect-locks" / f"{digest}.lock"
+        process_lock = _WorkflowProcessLock.acquire(path, blocking=True)
+        if process_lock is None:  # pragma: no cover - blocking acquisition either succeeds or raises
+            raise RuntimeError("Could not acquire the workflow effect lock")
+        return process_lock
+
+    def _lock_digest(self, workflow_id: str) -> str:
+        identity = f"{self.store.db_path.resolve()}\0{workflow_id}".encode("utf-8")
+        return hashlib.sha256(identity).hexdigest()
+
+    def _recover_workflow(self, workflow_id: str) -> bool:
+        recovered = _json({"code": "interrupted", "message": "Previous execution stopped and is safe to retry."})
+        now = utc_now()
+        with self.store.transaction(write=True) as connection:
+            changed = connection.execute(
+                "UPDATE workflows SET state='VALIDATED',error_json=?,updated_at=? "
+                "WHERE workflow_id=? AND state='RUNNING'",
+                (recovered, now, workflow_id),
+            ).rowcount
+            if changed:
+                connection.execute(
+                    "UPDATE workflow_steps SET state='PENDING',error_json=?,updated_at=? "
+                    "WHERE workflow_id=? AND state='RUNNING'",
+                    (recovered, now, workflow_id),
+                )
+        return bool(changed)
+
+    def _claim_run(self, owner: str, workflow_id: str) -> str:
+        """Atomically claim an executable workflow and return its prior state."""
+
+        with self.store.transaction(write=True) as connection:
+            row = connection.execute(
+                "SELECT state,manual_input_json FROM workflows WHERE workflow_id=? AND owner=?",
+                (workflow_id, owner),
+            ).fetchone()
+            if row is None:
+                raise NotFoundError("Workflow was not found")
+            state = str(row["state"])
+            if state in {"SUCCEEDED", "RUNNING", "CANCELLED"}:
+                return state
+            if state == "WAITING_USER" and row["manual_input_json"] is None:
+                return state
+            if state not in {"VALIDATED", "FAILED", "WAITING_USER"}:
+                raise ConflictError("Workflow cannot run in its current state", details={"state": state})
+            changed = connection.execute(
+                "UPDATE workflows SET state='RUNNING',attempt=attempt+1,error_json=NULL,updated_at=? "
+                "WHERE workflow_id=? AND owner=? AND state=?",
+                (utc_now(), workflow_id, owner, state),
+            ).rowcount
+            return "CLAIMED" if changed else "CHANGED"
+
+    def _mark_cancelled(self, owner: str, workflow_id: str) -> None:
+        """Compare-and-set cancellation without overwriting a completed run."""
+
+        now = utc_now()
+        with self.store.transaction(write=True) as connection:
+            row = connection.execute(
+                "SELECT state FROM workflows WHERE workflow_id=? AND owner=?",
+                (workflow_id, owner),
+            ).fetchone()
+            if row is None:
+                raise NotFoundError("Workflow was not found")
+            state = str(row["state"])
+            if state == "SUCCEEDED":
+                raise ConflictError("Completed workflow cannot be cancelled")
+            if state == "CANCELLED":
+                return
+            changed = connection.execute(
+                "UPDATE workflows SET state='CANCELLED',updated_at=? "
+                "WHERE workflow_id=? AND owner=? AND state=?",
+                (now, workflow_id, owner, state),
+            ).rowcount
+            if not changed:
+                raise ConflictError("Workflow changed while cancellation was being applied")
+            connection.execute(
+                "UPDATE workflow_steps SET state='CANCELLED',updated_at=? "
+                "WHERE workflow_id=? AND state IN ('PENDING','RUNNING','WAITING_USER')",
+                (now, workflow_id),
+            )
+
+    def _require_running(self, owner: str, workflow_id: str) -> None:
+        if self._cancellation_signal(workflow_id).is_set():
+            self._mark_cancelled(owner, workflow_id)
+            raise _WorkflowStopped
+        with self.store.transaction() as connection:
+            row = connection.execute(
+                "SELECT state FROM workflows WHERE workflow_id=? AND owner=?",
+                (workflow_id, owner),
+            ).fetchone()
+        if row is None:
+            raise NotFoundError("Workflow was not found")
+        if row["state"] != "RUNNING":
+            raise _WorkflowStopped
 
     def provide_manual_rows(self, owner: str, workflow_id: str, rows: list[dict[str, Any]]) -> dict[str, Any]:
-        workflow = self.get(owner, workflow_id)
-        if workflow["state"] not in {"WAITING_USER", "FAILED", "VALIDATED"}:
-            raise ConflictError("Manual rows can only be supplied before a workflow succeeds")
         if not rows or len(rows) > 10_000:
             raise ValidationError("Provide between 1 and 10,000 invoice rows")
         normalized = [self._normalize_manual_row(row, index) for index, row in enumerate(rows)]
-        with self.store.transaction(write=True) as connection:
-            connection.execute(
-                "UPDATE workflows SET manual_input_json=?,state='VALIDATED',result_json=NULL,error_json=NULL,updated_at=? "
-                "WHERE workflow_id=? AND owner=?",
-                (_json({"rows": normalized}), utc_now(), workflow_id, owner),
-            )
-            connection.execute(
-                "UPDATE workflow_steps SET state='PENDING',error_json=NULL,updated_at=? WHERE workflow_id=? AND step_id IN ('extract_rows','aggregate','publish_csv','publish_report')",
-                (utc_now(), workflow_id),
-            )
+        with self._fence(workflow_id):
+            with self.store.transaction(write=True) as connection:
+                row = connection.execute(
+                    "SELECT state FROM workflows WHERE workflow_id=? AND owner=?",
+                    (workflow_id, owner),
+                ).fetchone()
+                if row is None:
+                    raise NotFoundError("Workflow was not found")
+                if row["state"] not in {"WAITING_USER", "FAILED", "VALIDATED"}:
+                    raise ConflictError("Manual rows can only be supplied before a workflow succeeds")
+                durable_effect = connection.execute(
+                    "SELECT 1 FROM effect_receipts WHERE workflow_id=? LIMIT 1",
+                    (workflow_id,),
+                ).fetchone()
+                if durable_effect is not None:
+                    raise ConflictError(
+                        "Manual rows cannot replace inputs after a durable workflow effect; create a new workflow"
+                    )
+                changed = connection.execute(
+                    "UPDATE workflows SET manual_input_json=?,state='VALIDATED',result_json=NULL,error_json=NULL,updated_at=? "
+                    "WHERE workflow_id=? AND owner=? AND state=?",
+                    (_json({"rows": normalized}), utc_now(), workflow_id, owner, row["state"]),
+                ).rowcount
+                if not changed:
+                    raise ConflictError("Workflow changed while manual rows were being supplied")
+                connection.execute(
+                    "UPDATE workflow_steps SET state='PENDING',error_json=NULL,updated_at=? "
+                    "WHERE workflow_id=? AND step_id IN ('extract_rows','aggregate','publish_csv','publish_report')",
+                    (utc_now(), workflow_id),
+                )
         return self.get(owner, workflow_id)
 
     def cancel(self, owner: str, workflow_id: str) -> dict[str, Any]:
-        workflow = self.get(owner, workflow_id)
-        if workflow["state"] == "SUCCEEDED":
-            raise ConflictError("Completed workflow cannot be cancelled")
-        with self.store.transaction(write=True) as connection:
-            connection.execute(
-                "UPDATE workflows SET state='CANCELLED',updated_at=? WHERE workflow_id=? AND owner=?",
-                (utc_now(), workflow_id, owner),
-            )
-            connection.execute(
-                "UPDATE workflow_steps SET state='CANCELLED',updated_at=? WHERE workflow_id=? AND state IN ('PENDING','RUNNING','WAITING_USER')",
-                (utc_now(), workflow_id),
-            )
-        return self.get(owner, workflow_id)
+        # Authenticate ownership before publishing a process-wide signal.  The
+        # signal is intentionally raised before taking the effect fence so an
+        # in-flight runner can observe it at the next durable boundary.
+        self.get(owner, workflow_id)
+        cancellation = self._cancellation_signal(workflow_id)
+        cancellation.set()
+        try:
+            with self._fence(workflow_id):
+                effect_lock = self._effect_lock(workflow_id)
+                try:
+                    self._mark_cancelled(owner, workflow_id)
+                    return self.get(owner, workflow_id)
+                finally:
+                    effect_lock.release()
+        except BaseException:
+            cancellation.clear()
+            raise
 
     def get(self, owner: str, workflow_id: str) -> dict[str, Any]:
         with self.store.transaction() as connection:
@@ -577,10 +892,43 @@ class InvoiceWorkflowService:
         increment: bool = False,
         error: dict[str, Any] | None = None,
     ) -> None:
+        expected_states = {
+            "RUNNING": ("PENDING", "SUCCEEDED", "FAILED", "WAITING_USER"),
+            "SUCCEEDED": ("RUNNING",),
+            "WAITING_USER": ("RUNNING",),
+            "FAILED": ("RUNNING",),
+        }
+        allowed = expected_states.get(state)
+        if allowed is None:
+            raise RuntimeError(f"Unsupported workflow step transition target: {state}")
+        placeholders = ",".join("?" for _ in allowed)
         with self.store.transaction(write=True) as connection:
-            connection.execute(
-                "UPDATE workflow_steps SET state=?,attempt=attempt+?,error_json=?,updated_at=? WHERE workflow_id=? AND step_id=?",
-                (state, 1 if increment else 0, _json(error) if error else None, utc_now(), workflow_id, step_id),
+            changed = connection.execute(
+                "UPDATE workflow_steps SET state=?,attempt=attempt+?,error_json=?,updated_at=? "
+                f"WHERE workflow_id=? AND step_id=? AND state IN ({placeholders}) "
+                "AND EXISTS (SELECT 1 FROM workflows WHERE workflow_id=? AND state='RUNNING')",
+                (
+                    state,
+                    1 if increment else 0,
+                    _json(error) if error else None,
+                    utc_now(),
+                    workflow_id,
+                    step_id,
+                    *allowed,
+                    workflow_id,
+                ),
+            ).rowcount
+            if changed:
+                return
+            workflow = connection.execute(
+                "SELECT state FROM workflows WHERE workflow_id=?",
+                (workflow_id,),
+            ).fetchone()
+            if workflow is not None and workflow["state"] != "RUNNING":
+                raise _WorkflowStopped
+            raise ConflictError(
+                "Workflow step changed while execution was in progress",
+                details={"step_id": step_id, "target_state": state},
             )
 
     @staticmethod

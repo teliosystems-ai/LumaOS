@@ -4,6 +4,12 @@
 
 This document translates the broader Luma OS feasibility, functional, deployment, and testing requirements into the deliberately narrow `0.1.0` developer MVP. It distinguishes implemented runtime evidence from interface simulation and future product intent.
 
+The complete source-ID ownership baseline now lives in
+[`requirements/catalog.json`](../requirements/catalog.json). It covers all 288 B1, B2,
+and Windows requirement IDs and is validated by `make requirements-check`. The
+[staged development plan](DEVELOPMENT_PLAN.md) defines the implementation and test gate
+for each stage. Catalog entries marked `reference_partial` are not product acceptance.
+
 Status meanings:
 
 - **Implemented** — present in the reference runtime and expected to have automated evidence.

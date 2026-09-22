@@ -28,6 +28,7 @@ REQUIRED_DOCS = (
     "docs/ROADMAP.md",
     "docs/SUPPORT_MATRIX.md",
     "docs/OPERATIONS.md",
+    "docs/DEVELOPMENT_PLAN.md",
 )
 REQUIRED_RELEASE_INPUTS = {
     "src",
@@ -38,6 +39,7 @@ REQUIRED_RELEASE_INPUTS = {
     "docs",
     "scripts",
     "packaging",
+    "requirements",
 }
 FORBIDDEN_ASSET_SUFFIXES = {".gguf", ".safetensors", ".onnx", ".ckpt", ".pt", ".pth"}
 
@@ -109,6 +111,20 @@ def validate_repository() -> None:
     report("Repository policy", "required docs/assets present; model weights absent")
 
 
+def validate_requirements_catalog() -> None:
+    result = subprocess.run(
+        [sys.executable, str(ROOT / "scripts" / "requirements_report.py"), "--check"],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    if result.returncode:
+        detail = result.stderr.strip() or result.stdout.strip() or "unknown validation error"
+        raise RuntimeError(f"requirements catalog failed: {detail}")
+    report("Requirements traceability", result.stdout.strip())
+
+
 def run_tests() -> None:
     environment = dict(os.environ)
     current = environment.get("PYTHONPATH")
@@ -133,6 +149,7 @@ def main() -> int:
         if not arguments.compile_only:
             validate_metadata()
             validate_repository()
+            validate_requirements_catalog()
             run_tests()
     except (OSError, ValueError, RuntimeError, py_compile.PyCompileError) as exc:
         print(f"[failed] {exc}", file=sys.stderr)

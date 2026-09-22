@@ -1,0 +1,47 @@
+name: Release candidate check
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+jobs:
+  source-candidate:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Validate tag matches manifest
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: bash
+        run: |
+          expected="v$(python -c 'import json; print(json.load(open("RELEASE_MANIFEST.json", encoding="utf-8"))["version"])')"
+          actual="${GITHUB_REF_NAME}"
+          test "$actual" = "$expected" || { echo "tag $actual does not match $expected"; exit 1; }
+      - name: Run all checks
+        run: python scripts/check.py
+      - name: Build source archives
+        env:
+          SOURCE_DATE_EPOCH: "0"
+        run: python scripts/build_release.py
+      - name: Verify checksums
+        working-directory: dist
+        run: sha256sum --check SHA256SUMS
+      - name: Upload validated candidate
+        uses: actions/upload-artifact@v4
+        with:
+          name: luma-os-${{ github.ref_name }}-source
+          path: dist/
+          if-no-files-found: error
+          retention-days: 30
+
+# This workflow deliberately does not create or publish a GitHub Release.
+# A maintainer must review checksums, changelog, and unsupported-scope language.

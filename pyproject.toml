@@ -1,0 +1,47 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "luma-os"
+version = "0.1.0"
+description = "Local-first, intent-driven operating-environment developer MVP"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "Apache-2.0" }
+authors = [
+  { name = "Telio Systems LLC", email = "info@teliosystems.com" },
+]
+keywords = ["local-first", "ai", "orchestration", "intent", "developer-mvp"]
+classifiers = [
+  "Development Status :: 2 - Pre-Alpha",
+  "Environment :: Console",
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: Apache Software License",
+  "Operating System :: POSIX :: Linux",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Topic :: Software Development :: Libraries :: Application Frameworks",
+]
+dependencies = []
+
+[project.urls]
+Documentation = "https://github.com/teliosystems/luma-os/tree/main/docs"
+Issues = "https://github.com/teliosystems/luma-os/issues"
+Source = "https://github.com/teliosystems/luma-os"
+
+[project.scripts]
+luma-os = "luma_os.cli:main"
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+include-package-data = true
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.luma_os.release]
+supported_distribution = "source-archive"
+wheel_supported = false
+root_runtime_assets = ["web", "schemas", "examples"]

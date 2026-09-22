@@ -1,0 +1,45 @@
+# Python bytecode and caches
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Packaging outputs
+build/
+dist/
+*.egg-info/
+*.whl
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Runtime state and operator-provided assets
+.luma/
+var/
+data/
+models/
+weights/
+*.gguf
+*.safetensors
+*.onnx
+
+# Logs and local configuration
+*.log
+.env
+.env.*
+!.env.example
+config.local.*
+
+# Editors and operating systems
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*~

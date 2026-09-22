@@ -1,0 +1,120 @@
+openapi: 3.1.0
+info:
+  title: Luma OS local API
+  version: 0.1.0
+  description: >-
+    Loopback-only developer-preview API for the Luma OS shared core. This
+    contract does not describe a remote or multi-user service.
+servers:
+  - url: http://127.0.0.1:8765
+paths:
+  /api/health:
+    get:
+      summary: Liveness and version information
+      responses:
+        "200":
+          description: Service is responding
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status, version]
+                properties:
+                  status: {const: ok}
+                  version: {type: string}
+  /api/status:
+    get:
+      summary: Runtime, storage, and capability status
+      responses:
+        "200":
+          description: Current local service status
+  /api/models/status:
+    get:
+      summary: Optional local model endpoint status
+      responses:
+        "200":
+          description: Model may be unavailable without disabling manual controls
+  /api/grants:
+    get:
+      summary: List active and revoked folder grants
+      responses:
+        "200": {description: Grant list}
+  /api/grants/enroll:
+    post:
+      summary: Enroll an existing local folder
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [path]
+              properties:
+                path: {type: string}
+                permissions:
+                  type: array
+                  items: {enum: [read, index, write, export]}
+      responses:
+        "201": {description: Grant created}
+        "400": {description: Invalid request or folder}
+  /api/workflows:
+    get:
+      summary: List workflows
+      responses:
+        "200": {description: Workflow list}
+    post:
+      summary: Prepare an invoice report workflow without executing it
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [kind, source_path]
+              properties:
+                kind: {const: invoice_report.v1}
+                source_path: {type: string}
+                idempotency_key: {type: string}
+      responses:
+        "201": {description: Workflow is ready for explicit execution}
+        "403": {description: Source is not covered by a current read grant}
+  /api/workflows/{workflow_id}:
+    get:
+      summary: Read workflow state and steps
+      parameters:
+        - in: path
+          name: workflow_id
+          required: true
+          schema: {type: string}
+      responses:
+        "200": {description: Workflow state}
+        "404": {description: Unknown workflow}
+  /api/workflows/{workflow_id}/run:
+    post:
+      summary: Explicitly execute a prepared workflow
+      parameters:
+        - in: path
+          name: workflow_id
+          required: true
+          schema: {type: string}
+      responses:
+        "200": {description: Terminal workflow state and committed artifact IDs}
+        "409": {description: Workflow cannot run in its current state}
+  /api/artifacts:
+    get:
+      summary: List durable artifacts and their current versions
+      responses:
+        "200": {description: Artifact list}
+  /api/receipts:
+    get:
+      summary: List append-only effect receipts
+      responses:
+        "200": {description: Receipt list}
+components:
+  securitySchemes:
+    localSession:
+      type: apiKey
+      in: cookie
+      name: luma_session
+security:
+  - localSession: []

@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://luma-os.org/schemas/artifact.schema.json",
+  "title": "Luma OS artifact",
+  "type": "object",
+  "required": ["artifact_id", "owner", "filename", "media_type", "version", "current_version", "content_hash", "size_bytes", "provenance", "created_at", "updated_at"],
+  "properties": {
+    "artifact_id": {"type": "string", "minLength": 1},
+    "owner": {"type": "string", "minLength": 1},
+    "filename": {"type": "string", "minLength": 1},
+    "media_type": {"type": "string", "minLength": 1},
+    "version": {"type": "integer", "minimum": 1},
+    "current_version": {"type": "integer", "minimum": 1},
+    "content_hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "size_bytes": {"type": "integer", "minimum": 0},
+    "created_at": {"type": "string", "format": "date-time"},
+    "updated_at": {"type": "string", "format": "date-time"},
+    "provenance": {"type": "object"}
+  },
+  "additionalProperties": false
+}

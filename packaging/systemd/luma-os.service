@@ -1,0 +1,21 @@
+[Unit]
+Description=Luma OS local developer MVP
+Documentation=file:%h/.local/share/luma-os/releases/0.1.0/README.md
+After=default.target
+
+[Service]
+Type=simple
+Environment=LUMA_HOST=127.0.0.1
+Environment=LUMA_PORT=8765
+ExecStart=%h/.local/bin/luma-os serve
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=%h/.local/state/luma-os
+UMask=0077
+
+[Install]
+WantedBy=default.target

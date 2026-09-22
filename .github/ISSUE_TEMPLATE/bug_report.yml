@@ -1,0 +1,49 @@
+name: Bug report
+description: Report a reproducible problem in the Luma OS developer MVP
+title: "[Bug]: "
+labels: [bug, triage]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Do not report security vulnerabilities or include sensitive data here. Follow SECURITY.md for private reporting.
+  - type: dropdown
+    id: environment
+    attributes:
+      label: Environment
+      options:
+        - Ubuntu 24.04
+        - Windows 11 with WSL2 / Ubuntu 24.04
+        - Native Windows 11 smoke path
+        - Unsupported or other environment
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version or commit
+      placeholder: 0.1.0 or commit SHA
+    validations:
+      required: true
+  - type: textarea
+    id: description
+    attributes:
+      label: What happened?
+      description: Include expected behavior and the smallest reproducible sequence using synthetic data.
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Sanitized diagnostics
+      description: Remove paths, identities, inputs, artifacts, cookies, tokens, endpoints, and credentials.
+      render: text
+  - type: checkboxes
+    id: safety
+    attributes:
+      label: Safety checks
+      options:
+        - label: I used synthetic/non-sensitive data.
+          required: true
+        - label: This is not a private security report.
+          required: true

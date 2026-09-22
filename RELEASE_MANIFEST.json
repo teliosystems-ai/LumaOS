@@ -1,0 +1,73 @@
+{
+  "schema_version": 1,
+  "project": "luma-os",
+  "version": "0.1.0",
+  "release_channel": "developer-mvp",
+  "python": ">=3.11",
+  "runtime_dependencies": [],
+  "entry_points": {
+    "module": "python -m luma_os.cli",
+    "console_script": "luma-os",
+    "posix_source_runner": "scripts/run.sh",
+    "windows_source_runner": "scripts/run.ps1"
+  },
+  "supported_environments": [
+    {
+      "platform": "Ubuntu",
+      "version": "24.04 LTS",
+      "level": "primary-developer"
+    },
+    {
+      "platform": "Windows",
+      "version": "11 with WSL2 and Ubuntu 24.04",
+      "level": "supported-developer"
+    }
+  ],
+  "release_inputs": [
+    "src",
+    "tests",
+    "web",
+    "schemas",
+    "examples",
+    "docs",
+    "scripts",
+    "packaging",
+    "README.md",
+    "LICENSE",
+    "SECURITY.md",
+    "CONTRIBUTING.md",
+    "CODE_OF_CONDUCT.md",
+    "CHANGELOG.md",
+    "Makefile",
+    "pyproject.toml",
+    ".gitignore",
+    ".editorconfig",
+    "RELEASE_MANIFEST.json"
+  ],
+  "excluded_from_release": [
+    ".git",
+    ".github",
+    ".venv",
+    "build",
+    "dist",
+    "models",
+    "weights",
+    "data",
+    "var",
+    "__pycache__"
+  ],
+  "external_assets": {
+    "model_weights_included": false,
+    "datasets_included": false,
+    "operator_responsibility": "Obtain and license all models, weights, datasets, and remote services separately."
+  },
+  "unsupported": [
+    "production deployment",
+    "bootable ISO",
+    "dual-boot installation",
+    "virtual-machine lifecycle automation",
+    "400B model certification",
+    "cluster certification",
+    "simulator-as-acceptance-test"
+  ]
+}

@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://luma-os.org/schemas/workflow.schema.json",
+  "title": "Luma OS workflow state",
+  "type": "object",
+  "required": ["workflow_id", "owner", "type", "idempotency_key", "state", "attempt", "request", "manual_input", "result", "error", "created_at", "updated_at", "steps"],
+  "properties": {
+    "workflow_id": {"type": "string", "minLength": 1},
+    "owner": {"type": "string", "minLength": 1},
+    "type": {"const": "invoice_report.v1"},
+    "idempotency_key": {"type": "string", "minLength": 1},
+    "state": {
+      "enum": ["VALIDATED", "RUNNING", "WAITING_USER", "SUCCEEDED", "FAILED", "CANCELLED"]
+    },
+    "attempt": {"type": "integer", "minimum": 0},
+    "request": {"type": "object"},
+    "manual_input": {"type": ["object", "null"]},
+    "result": {"type": ["object", "null"]},
+    "error": {"type": ["object", "null"]},
+    "created_at": {"type": "string", "format": "date-time"},
+    "updated_at": {"type": "string", "format": "date-time"},
+    "steps": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["step_id", "position", "state", "attempt", "error", "updated_at"],
+        "properties": {
+          "step_id": {"type": "string"},
+          "position": {"type": "integer", "minimum": 0},
+          "state": {"enum": ["PENDING", "RUNNING", "WAITING_USER", "SUCCEEDED", "FAILED", "CANCELLED"]},
+          "attempt": {"type": "integer", "minimum": 0},
+          "error": {"type": ["object", "null"]},
+          "updated_at": {"type": "string", "format": "date-time"}
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false
+}

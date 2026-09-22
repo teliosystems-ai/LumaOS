@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://luma-os.org/schemas/receipt.schema.json",
+  "title": "Luma OS effect receipt",
+  "type": "object",
+  "required": ["sequence", "receipt_id", "owner", "workflow_id", "step_id", "idempotency_key", "effect_type", "target", "status", "result", "created_at"],
+  "properties": {
+    "sequence": {"type": "integer", "minimum": 1},
+    "receipt_id": {"type": "string", "minLength": 1},
+    "owner": {"type": "string", "minLength": 1},
+    "workflow_id": {"type": ["string", "null"]},
+    "step_id": {"type": ["string", "null"]},
+    "idempotency_key": {"type": "string", "minLength": 1},
+    "effect_type": {"type": "string", "minLength": 1},
+    "target": {"type": "string"},
+    "status": {"enum": ["SUCCEEDED", "DENIED", "FAILED", "CANCELLED"]},
+    "result": {"type": "object"},
+    "created_at": {"type": "string", "format": "date-time"}
+  },
+  "additionalProperties": false
+}

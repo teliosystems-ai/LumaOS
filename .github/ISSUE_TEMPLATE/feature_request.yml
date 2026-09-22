@@ -1,0 +1,33 @@
+name: Feature request
+description: Propose a bounded improvement to the developer MVP
+title: "[Feature]: "
+labels: [enhancement, triage]
+body:
+  - type: textarea
+    id: outcome
+    attributes:
+      label: Desired outcome
+      description: What should a local operator be able to accomplish?
+    validations:
+      required: true
+  - type: textarea
+    id: current
+    attributes:
+      label: Current limitation
+      description: What is difficult or impossible today?
+    validations:
+      required: true
+  - type: textarea
+    id: boundary
+    attributes:
+      label: Trust and support boundary
+      description: Note filesystem, network, model, tool, durable-effect, or platform changes.
+  - type: checkboxes
+    id: scope
+    attributes:
+      label: Scope acknowledgment
+      options:
+        - label: I understand v0.1 is not a production OS or remote agent platform.
+          required: true
+        - label: I am not treating the visual simulator as runtime acceptance evidence.
+          required: true

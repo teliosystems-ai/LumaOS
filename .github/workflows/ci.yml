@@ -1,0 +1,94 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ubuntu-checks:
+    name: Full checks · Ubuntu · Python ${{ matrix.python }}
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.11", "3.12"]
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Validate repository
+        run: python scripts/check.py
+
+  windows-smoke:
+    name: Native Windows smoke · Python ${{ matrix.python }}
+    runs-on: windows-2022
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.11", "3.12"]
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Compile source
+        run: python scripts/check.py --compile-only
+      - name: Exercise the native CLI boundary
+        shell: pwsh
+        run: |
+          $env:PYTHONPATH = Join-Path $PWD "src"
+          python -m luma_os.cli --help
+
+  posix-and-release:
+    name: POSIX scripts and reproducible source archives
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Check shell syntax
+        run: bash -n scripts/*.sh packaging/systemd/*.sh
+      - name: Check browser JavaScript syntax
+        run: node --check web/app.js && node --check tests/browser_test.cjs
+      - name: Build source release once
+        env:
+          SOURCE_DATE_EPOCH: "0"
+        run: python scripts/build_release.py
+      - name: Preserve first checksums
+        run: cp dist/SHA256SUMS /tmp/luma-first-SHA256SUMS
+      - name: Build source release again
+        env:
+          SOURCE_DATE_EPOCH: "0"
+        run: python scripts/build_release.py
+      - name: Verify deterministic checksums
+        run: cmp /tmp/luma-first-SHA256SUMS dist/SHA256SUMS
+      - name: Verify archive checksums
+        working-directory: dist
+        run: sha256sum --check SHA256SUMS
+      - name: Upload candidate source archives
+        uses: actions/upload-artifact@v4
+        with:
+          name: luma-os-source-candidate
+          path: |
+            dist/luma-os-*.tar.gz
+            dist/luma-os-*.zip
+            dist/SHA256SUMS
+          if-no-files-found: error
+          retention-days: 14

@@ -1,0 +1,6 @@
+invoice_id,vendor,invoice_date,category,amount,currency
+INV-1001,Northstar Office,2026-09-15,Office supplies,184.25,USD
+INV-1002,Austin Electric,2026-09-16,Utilities,326.70,USD
+INV-1003,Lone Star Hosting,2026-09-18,Cloud services,749.00,USD
+INV-1004,Metro Couriers,2026-09-19,Delivery,92.40,USD
+INV-1005,Northstar Office,2026-09-20,Office supplies,67.85,USD

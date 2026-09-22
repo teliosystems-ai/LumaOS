@@ -600,7 +600,9 @@ def build_registry(source_record: dict[str, Any]) -> dict[str, Any]:
                 "owner": gate_data["owner"],
                 "owner_status": "planned_gate_owner",
                 "dependencies": [source_id, *gate_data["dependencies"]],
-                "implementation_status": "in_progress" if gate == "G1" else "not_started",
+                "implementation_status": (
+                    "in_progress" if gate in {"G1", "G2"} else "not_started"
+                ),
                 "test_ids": test_ids,
                 "test_mapping_status": test_mapping_status,
                 "test_mapping_note": test_mapping_note,

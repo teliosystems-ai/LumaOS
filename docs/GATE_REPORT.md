@@ -12,7 +12,7 @@
 - Requirements with provisional mappings: **288**.
 - No product requirement is closed by this report.
 
-The three pinned governing sources and the complete 288-ID structural traceability catalog are verified. This resolves the governing-source prerequisite only. The broader G0 gate is not certified by this report, plan-derived mappings remain provisional, and G1 cannot close while its required runtime, hardware, security, recovery, and performance evidence remains unavailable.
+The three pinned governing sources and the complete 288-ID structural traceability catalog are verified. This resolves the governing-source prerequisite only. The broader G0 gate is not certified by this report, plan-derived mappings remain provisional, and G1 and G2 cannot close while their required runtime, hardware, security, recovery, and performance evidence remains unavailable.
 
 ## Catalog coverage
 
@@ -39,7 +39,7 @@ The three pinned governing sources and the complete 288-ID structural traceabili
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |
 | G0 | 0 | 0 | 0 | 0 | 0 | 0 | SOURCE-VERIFIED; BROADER GATE OPEN |
 | G1 | 88 | 88 | 0 | 0 | 0 | 88 | BLOCKED |
-| G2 | 34 | 0 | 34 | 0 | 0 | 34 | BLOCKED |
+| G2 | 34 | 34 | 0 | 0 | 0 | 34 | BLOCKED |
 | G3 | 45 | 0 | 45 | 0 | 0 | 45 | BLOCKED |
 | G4 | 31 | 0 | 31 | 0 | 0 | 31 | BLOCKED |
 | G5 | 2 | 0 | 2 | 0 | 0 | 2 | BLOCKED |
@@ -71,7 +71,7 @@ Implementation status is a stage-level planning signal, not semantic requirement
 
 | Dimension | State | Count |
 | --- | --- | ---: |
-| Implementation | in_progress | 88 |
-| Implementation | not_started | 200 |
+| Implementation | in_progress | 122 |
+| Implementation | not_started | 166 |
 | Latest evidence | blocked | 288 |
 | Mapping | provisional | 288 |

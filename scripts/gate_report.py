@@ -139,8 +139,8 @@ def render_report(registry: dict[str, Any], sources: dict[str, Any]) -> str:
         "The three pinned governing sources and the complete 288-ID structural traceability "
         "catalog are verified. This resolves the governing-source prerequisite only. The broader "
         "G0 gate is not certified by this report, plan-derived mappings remain provisional, and "
-        "G1 cannot close while its required runtime, hardware, security, recovery, and performance "
-        "evidence remains unavailable.",
+        "G1 and G2 cannot close while their required runtime, hardware, security, recovery, and "
+        "performance evidence remains unavailable.",
         "",
         "## Catalog coverage",
         "",

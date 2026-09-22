@@ -208,6 +208,7 @@ class RequirementRegistryTests(unittest.TestCase):
         self.assertEqual(rendered, REPORT_PATH.read_text(encoding="utf-8"))
         self.assertIn("G0 governing-source traceability status: **VERIFIED**", rendered)
         self.assertIn("| G1 | 88 | 88 | 0 | 0 | 0 | 88 | BLOCKED |", rendered)
+        self.assertIn("| G2 | 34 | 34 | 0 | 0 | 0 | 34 | BLOCKED |", rendered)
         self.assertIn("No product requirement is closed by this report.", rendered)
 
     def test_report_validation_rejects_duplicate_ids(self) -> None:

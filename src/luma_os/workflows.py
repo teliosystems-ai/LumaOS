@@ -226,10 +226,13 @@ class InvoiceWorkflowService:
                 "artifacts": [csv_artifact, report_artifact],
             }
             with self.store.transaction(write=True) as connection:
-                connection.execute(
-                    "UPDATE workflows SET state='SUCCEEDED',result_json=?,error_json=NULL,updated_at=? WHERE workflow_id=? AND owner=?",
+                changed = connection.execute(
+                    "UPDATE workflows SET state='SUCCEEDED',result_json=?,error_json=NULL,updated_at=? "
+                    "WHERE workflow_id=? AND owner=? AND state='RUNNING'",
                     (_json(result), utc_now(), workflow_id, owner),
-                )
+                ).rowcount
+            if not changed:
+                return self.get(owner, workflow_id)
             return self.get(owner, workflow_id)
         except NeedsManualInput as exc:
             fallback = {
@@ -246,6 +249,9 @@ class InvoiceWorkflowService:
             self._step(workflow_id, "extract_rows", "WAITING_USER", error={"issues": exc.issues})
             return self.get(owner, workflow_id)
         except Exception as exc:
+            current = self.get(owner, workflow_id)
+            if current["state"] == "CANCELLED":
+                return current
             error = {"code": "workflow_failed", "message": str(exc)}
             with self.store.transaction(write=True) as connection:
                 connection.execute(
@@ -578,6 +584,14 @@ class InvoiceWorkflowService:
         error: dict[str, Any] | None = None,
     ) -> None:
         with self.store.transaction(write=True) as connection:
+            workflow = connection.execute(
+                "SELECT state FROM workflows WHERE workflow_id=?",
+                (workflow_id,),
+            ).fetchone()
+            if workflow is None:
+                raise NotFoundError("Workflow was not found")
+            if workflow["state"] == "CANCELLED":
+                raise ConflictError("Workflow was cancelled")
             connection.execute(
                 "UPDATE workflow_steps SET state=?,attempt=attempt+?,error_json=?,updated_at=? WHERE workflow_id=? AND step_id=?",
                 (state, 1 if increment else 0, _json(error) if error else None, utc_now(), workflow_id, step_id),

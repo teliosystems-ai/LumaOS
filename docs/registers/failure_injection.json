@@ -1,0 +1,143 @@
+{
+  "schema_version": 1,
+  "register": "failure-injection",
+  "recorded_on": "2026-09-22",
+  "owner": "qa-lead",
+  "result_rule": "A planned case is not evidence. Each executed case must retain release tuple, seed or trigger, timestamps, expected oracle, observed outcome, and artifact/log digests.",
+  "cases": [
+    {
+      "id": "FI-001",
+      "title": "Terminate model worker in every lifecycle phase",
+      "target_gate": "G1",
+      "owner": "inference-lead",
+      "status": "planned",
+      "injection_points": [
+        "start",
+        "load",
+        "ready",
+        "request",
+        "cancel",
+        "unload"
+      ],
+      "expected_oracle": "Leases reconcile, no false success is reported, manual operation remains available, and restart does not duplicate an effect."
+    },
+    {
+      "id": "FI-002",
+      "title": "Crash at each artifact commit boundary",
+      "target_gate": "G1",
+      "owner": "storage-lead",
+      "status": "planned",
+      "injection_points": [
+        "temporary-file-create",
+        "stream-write",
+        "file-fsync",
+        "atomic-rename",
+        "directory-fsync",
+        "metadata-transaction",
+        "receipt-commit"
+      ],
+      "expected_oracle": "Metadata never references missing bytes; retries are idempotent; orphan objects are detectable; committed effects have exactly one durable receipt."
+    },
+    {
+      "id": "FI-003",
+      "title": "Concurrent reservation and protected-reserve pressure",
+      "target_gate": "G1",
+      "owner": "resource-owner",
+      "status": "development-test-implemented",
+      "injection_points": [
+        "before-admission",
+        "after-reservation",
+        "during-load",
+        "during-context-growth"
+      ],
+      "expected_oracle": "Atomic admission never exceeds a physical-domain budget, protected reserve remains intact, and rejected work has no leaked lease.",
+      "evidence": [
+        "tests/test_resources.py"
+      ],
+      "limitations": "Threaded fake-ledger tests are not physical memory/GPU pressure evidence."
+    },
+    {
+      "id": "FI-004",
+      "title": "Cancel before and during every workflow phase",
+      "target_gate": "G1",
+      "owner": "workflow-lead",
+      "status": "development-test-partial",
+      "injection_points": [
+        "prepared",
+        "queued",
+        "running-before-effect",
+        "effect-in-progress",
+        "after-effect-before-response"
+      ],
+      "expected_oracle": "Cancellation is bounded and durable; already committed effects remain truthful and receipted; no new effect begins after effective cancellation.",
+      "evidence": [
+        "tests/test_control_boundaries.py",
+        "tests/test_typed_dag.py"
+      ],
+      "limitations": "The reference in-process workflow is covered; production worker termination and measured cancellation latency remain open."
+    },
+    {
+      "id": "FI-005",
+      "title": "Model unavailable, timeout, and malformed response",
+      "target_gate": "G1",
+      "owner": "inference-lead",
+      "status": "planned",
+      "injection_points": [
+        "connect",
+        "request",
+        "stream",
+        "response-validation"
+      ],
+      "expected_oracle": "The workflow records an accurate failure or manual-input state; policy is not bypassed and model-independent recovery remains usable."
+    },
+    {
+      "id": "FI-006",
+      "title": "Broker restart and stale lease replay",
+      "target_gate": "G1",
+      "owner": "resource-owner",
+      "status": "planned",
+      "injection_points": [
+        "reservation-created",
+        "lease-issued",
+        "worker-started",
+        "cleanup-started"
+      ],
+      "expected_oracle": "Generation fencing rejects stale actors and restart reconciliation produces neither excess allocation nor duplicate effects."
+    },
+    {
+      "id": "FI-007",
+      "title": "GPU reset or device disappearance",
+      "target_gate": "G1",
+      "owner": "platform-lead",
+      "status": "blocked",
+      "injection_points": [
+        "idle",
+        "model-load",
+        "active-inference"
+      ],
+      "expected_oracle": "The device is quarantined, leases are fenced, failures are reported accurately, and manual recovery remains available.",
+      "blockers": [
+        "qualified physical lab and safe reset procedure"
+      ]
+    },
+    {
+      "id": "FI-008",
+      "title": "Power loss and failed trial boot",
+      "target_gate": "G2",
+      "owner": "platform-lead",
+      "status": "blocked",
+      "injection_points": [
+        "artifact-commit",
+        "database-checkpoint",
+        "update-write",
+        "trial-boot-before-health-ack"
+      ],
+      "expected_oracle": "Acknowledged content remains recoverable and the prior boot slot is selected without an unauthorized effect.",
+      "blockers": [
+        "G0-BLK-002",
+        "G0-BLK-004",
+        "signed A/B boot implementation"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,93 @@
+{
+  "schema_version": 1,
+  "gate": "G0",
+  "recorded_on": "2026-09-22",
+  "owner": "qa-lead",
+  "assessment": "blocked",
+  "claim_boundary": "These records describe development evidence only. They do not certify G0, G1, either A1 reference board, a model, an inference runtime, or a service class.",
+  "items": [
+    {
+      "id": "G0-EV-001",
+      "subject": "critical-architecture-directions",
+      "result": "recorded-and-frozen-for-g1",
+      "evidence": [
+        "docs/adr/0001-python-reference-rust-production.md",
+        "docs/adr/0002-service-boundaries-and-transport.md",
+        "docs/adr/0003-artifact-storage.md",
+        "docs/adr/0004-policy-model.md",
+        "docs/adr/0005-model-pack-and-signing.md",
+        "docs/adr/0006-supported-package-layout.md"
+      ],
+      "gate_closing": false,
+      "notes": "The decisions are frozen inputs, but implementation and conformance evidence remain separate."
+    },
+    {
+      "id": "G0-EV-002",
+      "subject": "windows-development-host-inventory",
+      "result": "observed",
+      "evidence": [
+        "docs/gates/g0/lab_inventory.json"
+      ],
+      "environment": "DEV-WIN-WSL-GPU-01",
+      "gate_closing": false,
+      "notes": "One physical development laptop is not the required pair of named A1 boards."
+    },
+    {
+      "id": "G0-EV-003",
+      "subject": "ubuntu-26.04-wsl-evaluation-path",
+      "result": "observed-with-limitations",
+      "evidence": [
+        "docs/gates/g0/lab_inventory.json"
+      ],
+      "environment": "DEV-WSL-UBUNTU-26-01",
+      "gate_closing": false,
+      "notes": "The guest supports development and compatibility experiments only; it is not the Ubuntu 24.04 reproducible baseline or physical-board evidence."
+    },
+    {
+      "id": "G0-EV-004",
+      "subject": "nvidia-gpu-telemetry",
+      "result": "device-observed",
+      "evidence": [
+        "docs/gates/g0/lab_inventory.json"
+      ],
+      "environment": "DEV-WIN-WSL-GPU-01",
+      "gate_closing": false,
+      "notes": "RTX 3050 presence, nominal VRAM, and /dev/dxg presence do not prove model load, correctness, isolation, performance, or recovery."
+    },
+    {
+      "id": "G0-EV-005",
+      "subject": "initial-test-registers",
+      "result": "skeleton-recorded",
+      "evidence": [
+        "docs/registers/workloads.json",
+        "docs/registers/adversarial.json",
+        "docs/registers/failure_injection.json",
+        "docs/registers/licenses.json"
+      ],
+      "gate_closing": false,
+      "notes": "Owners and status are present; planned or blocked entries are not test results."
+    },
+    {
+      "id": "G0-EV-006",
+      "subject": "initial-secret-dependency-and-interface-review",
+      "result": "partial-development-review",
+      "evidence": [
+        "docs/gates/g0/security_review.json"
+      ],
+      "gate_closing": false,
+      "notes": "The targeted working-tree scan and manifest review passed; history/provider scanning and current dynamic interface evidence remain open."
+    },
+    {
+      "id": "G0-EV-007",
+      "subject": "initial-ci-lanes",
+      "result": "configured-pending-current-run",
+      "evidence": [
+        "docs/gates/g0/ci_lanes.json"
+      ],
+      "gate_closing": false,
+      "notes": "Ubuntu full checks, focused fake/G1 contracts, native Windows contract smoke, and reproducible source-package lanes are declared; configuration is not a passing run."
+    }
+  ],
+  "open_blocker_record": "docs/gates/g0/blockers.json",
+  "closure_rule": "G0 may be marked passed only after every open blocking record is resolved with retained evidence and the governing development plan exit criteria are independently reviewed."
+}

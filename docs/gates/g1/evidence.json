@@ -1,0 +1,87 @@
+{
+  "schema_version": 1,
+  "gate": "G1",
+  "recorded_on": "2026-09-22",
+  "owner": "g1-p0-team",
+  "assessment": "blocked",
+  "claim_boundary": "Repository-local contracts and development tests are not a G1 certificate. Fake inference, WSL telemetry, nominal capacity, and source inspection do not substitute for real signed models, both physical A1 boards, security/manual/performance evidence, or the specified large-model experiment.",
+  "items": [
+    {
+      "id": "G1-EV-001",
+      "subject": "checked-resource-ledger-and-fake-inference",
+      "result": "development-tests-passed",
+      "evidence": [
+        "src/luma_os/resources.py",
+        "src/luma_os/fake_inference.py",
+        "tests/test_resources.py"
+      ],
+      "environment": "DEV-WSL-UBUNTU-26-01",
+      "observations": "21 focused resource tests and the then-current 47-test suite passed with warnings treated as errors.",
+      "gate_closing": false
+    },
+    {
+      "id": "G1-EV-002",
+      "subject": "workflow-cancellation-revocation-and-concurrency",
+      "result": "development-tests-passed",
+      "evidence": [
+        "src/luma_os/artifacts.py",
+        "src/luma_os/workflows.py",
+        "tests/test_control_boundaries.py"
+      ],
+      "environment": "DEV-WSL-UBUNTU-26-01",
+      "observations": "Four focused control-boundary tests passed.",
+      "gate_closing": false
+    },
+    {
+      "id": "G1-EV-003",
+      "subject": "state-export-restore-migration-and-retention",
+      "result": "development-tests-passed",
+      "evidence": [
+        "src/luma_os/state_transfer.py",
+        "tests/test_state_transfer.py"
+      ],
+      "environment": "DEV-WSL-UBUNTU-26-01",
+      "observations": "The state-transfer and core target run passed 14 tests after schema migration 2 was added.",
+      "gate_closing": false
+    },
+    {
+      "id": "G1-EV-004",
+      "subject": "policy-dag-platform-model-pack-and-local-gateway-contracts",
+      "result": "implemented-pending-complete-test-run",
+      "evidence": [
+        "src/luma_os/policy.py",
+        "src/luma_os/typed_dag.py",
+        "src/luma_os/platform_adapter.py",
+        "src/luma_os/model_pack.py",
+        "src/luma_os/runtime_contracts.py",
+        "src/luma_os/inference_gateway.py",
+        "src/luma_os/ipc.py",
+        "tests/test_policy.py",
+        "tests/test_typed_dag.py",
+        "tests/test_platform_adapter.py",
+        "tests/test_model_pack.py",
+        "tests/test_runtime_contracts.py",
+        "tests/test_inference_gateway.py",
+        "tests/test_ipc.py"
+      ],
+      "environment": "not-yet-executed-as-one-current-revision",
+      "observations": "Code and deterministic tests exist, but this record intentionally does not mark unexecuted tests passed.",
+      "gate_closing": false
+    },
+    {
+      "id": "G1-EV-005",
+      "subject": "host-and-gpu-telemetry-adapter",
+      "result": "implemented-pending-complete-test-run",
+      "evidence": [
+        "src/luma_os/system_telemetry.py",
+        "tests/test_system_telemetry.py",
+        "docs/gates/g0/lab_inventory.json"
+      ],
+      "environment": "DEV-WIN-WSL-GPU-01",
+      "observations": "The adapter is read-only and fail-closed. The inventory observes an RTX 3050, but no model runtime or qualified service class.",
+      "gate_closing": false
+    }
+  ],
+  "open_blocker_record": "docs/gates/g1/blockers.json",
+  "closure_rule": "G1 may be marked passed only when G0 dependencies are resolved and every G1 exit criterion has retained current-revision evidence on the required real environments."
+}

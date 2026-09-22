@@ -57,7 +57,17 @@ Use synthetic data for workflow smoke tests. Confirm that:
 
 ## Backup
 
-The MVP has no online backup command. Use this offline procedure:
+The preferred developer backup is a verified state export. It uses SQLite's
+online backup API, includes every content object referenced by the snapshot,
+and records a SHA-256 inventory:
+
+```bash
+./scripts/run.sh export-state /path/outside-luma-home/luma-state.zip
+```
+
+The destination must not already exist and must be outside `LUMA_HOME`.
+Retain the command's archive digest with the backup. For an additional raw
+offline copy, use this procedure:
 
 1. stop the process or user service;
 2. verify no Luma OS process is using the selected `LUMA_HOME`;
@@ -69,7 +79,18 @@ Copying only `luma.sqlite3` may omit WAL state or object content. Backups may co
 
 ## Restore
 
-Restore is best-effort in `0.1.0`:
+Verified archives restore only into a path that does not already exist:
+
+```bash
+./scripts/run.sh restore-state /path/to/luma-state.zip --data-dir /path/to/new-luma-home
+```
+
+The restore rejects duplicate, unlisted, oversized, traversal, symlink,
+digest-mismatched, corrupt-database, and newer-schema input before publishing
+the new state directory. After restore, inspect health, counts, workflows,
+artifacts, and receipts before normal use.
+
+Raw-directory restore remains best-effort:
 
 1. stop Luma OS;
 2. retain the current state directory as a separate rollback copy;
@@ -77,7 +98,29 @@ Restore is best-effort in `0.1.0`:
 4. set `LUMA_HOME` to that path and start the same application version;
 5. inspect health, counts, workflows, artifacts, and receipts before normal use.
 
-The runtime refuses a database schema newer than the running build. There is no supported downgrade migration.
+The runtime upgrades schema version 1 to version 2 transactionally and refuses
+a database schema newer than the running build. There is no supported downgrade
+migration.
+
+## Retention maintenance
+
+The bounded retention control removes only unreferenced content-addressed
+objects. It never deletes artifact metadata, versions, workflows, grants, or
+effect receipts. Preview first:
+
+```bash
+./scripts/run.sh prune-objects
+```
+
+Apply exactly the reported orphan cleanup with:
+
+```bash
+./scripts/run.sh prune-objects --apply
+```
+
+Each preview or applied run is recorded in `state_maintenance_runs`. This is
+storage hygiene, not certified secure deletion or a production retention
+policy.
 
 ## Logs and support bundles
 

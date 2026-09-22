@@ -11,7 +11,9 @@ This document covers the Luma OS `0.1.0` local developer MVP. It identifies engi
 - workflow plans, state, manual inputs, and errors;
 - folder grants and revocation state;
 - append-only effect receipts;
-- optional local model endpoint credentials; and
+- optional local model endpoint credentials;
+- policy grants, resource leases, and local IPC identities;
+- model-pack trust metadata and certification records; and
 - integrity and availability of the operator's machine.
 
 ## Trust zones
@@ -23,6 +25,9 @@ This document covers the Luma OS `0.1.0` local developer MVP. It identifies engi
 | Luma state | Private local directory; operator can still modify it | SQLite/object file reads and writes |
 | Enrolled folder | Contents are untrusted, access is explicitly granted | Descriptor-relative read API |
 | Optional model | Output and availability are untrusted | Configured local HTTP endpoint |
+| G1 model worker | Model/runtime code and output are untrusted | Authenticated local gateway, policy decision, and generation-fenced resource lease |
+| Model-pack store | Content is untrusted until complete inventory, signature, digest, license-use, and runtime-tuple validation | Import/verification boundary |
+| Logical internal services | Caller assertions are untrusted without OS-peer authentication | Bounded, deadline-bearing local IPC envelope |
 | External network | Untrusted and unnecessary for default operation | No supported listener or dependency |
 
 The host OS, Python runtime, browser, WSL distribution, and administrator/root account are outside the security boundary. A compromise of any of them can bypass application controls.
@@ -56,6 +61,11 @@ The host OS, Python runtime, browser, WSL distribution, and administrator/root a
 | Malicious repository change | CI compile/tests/manifest checks, dependency-free runtime, review guidance | Maintainer credentials and GitHub platform remain external risks |
 | Installer overwrites user files | User-only exact paths, install marker, refuse existing unmarked launcher, no sudo | A user can force unsafe manual changes outside scripts |
 | WSL boundary confusion | WSL2 Ubuntu is documented runtime; no automatic distribution install/elevation | Windows host administrators and Windows-mounted file semantics are out of scope |
+| Model-pack or template tampering | Canonical strict manifest, detached Ed25519 verifier boundary, complete declared inventory, SHA-256 checks, exact runtime tuple | Signing custody and real trust-store operation are not established; model safety is not implied |
+| Resource overcommit or stale allocation | Checked 64-bit arithmetic, atomic multi-domain admission, generation-fenced leases, pressure and quarantine state | Prototype accounting is not an OS cgroup/GPU allocation or hardware qualification |
+| Capability substitution or post-approval revocation | Typed exact grants, stable denial reasons, policy digest/version, effect-time revalidation | The existing MVP API is not yet fully mediated by the general broker |
+| Internal IPC spoofing or memory exhaustion | Four-byte bounded framing, strict fields, asserted-caller/peer comparison, deadlines, lease generations | Real Unix peer-credential plumbing and process isolation remain unimplemented |
+| Cancellation races | Workflow state checks before effect commits and DAG cooperative cancellation/checkpoint rules | A handler that ignores the contract can still perform an external effect; production workers require isolation and termination tests |
 
 ## High-risk extension points
 
@@ -68,6 +78,9 @@ The following changes require explicit design and security review before merge:
 - adding OAuth tokens, cloud credentials, or secret storage;
 - adding plugin discovery or dynamic imports;
 - accepting archive extraction or recursive directory ingestion;
+- changing model-pack canonicalization, signature trust, or certification-state semantics;
+- allowing internal messages without authenticated OS-peer binding or bounded framing;
+- allowing a backend to allocate or infer without a current generation-fenced lease;
 - serving multiple users or accepting an asserted remote identity; and
 - replacing append-only local receipts with claims of compliance/audit certification.
 
@@ -84,7 +97,13 @@ Automated tests should cover:
 - append-only receipt enforcement;
 - malformed JSON/CSV and formula-injection-safe output;
 - session, Host, and Origin rejection; and
-- optional model outage or invalid output without loss of manual controls.
+- optional model outage or invalid output without loss of manual controls;
+- model-pack signature, digest, undeclared-file, path, license, and tuple tampering;
+- capability substitution, grant revocation, stale lease, resource overflow,
+  concurrent admission, pressure, and quarantine behavior;
+- malformed/oversized IPC frames, caller/peer mismatch, expired deadlines, and
+  partial lease tokens; and
+- cancellation and restart at each checkpoint/effect boundary.
 
 ## Data retention and deletion
 

@@ -1,0 +1,364 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://luma-os.invalid/schemas/requirement-registry.schema.json",
+  "title": "Luma OS provisional requirement registry",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "catalog_version",
+    "recorded_at",
+    "status",
+    "normative_boundary",
+    "source_files",
+    "governing_source_state",
+    "profiles",
+    "owners",
+    "environments",
+    "blockers",
+    "requirements"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "catalog_version": {
+      "type": "string",
+      "minLength": 1
+    },
+    "recorded_at": {
+      "type": "string",
+      "format": "date"
+    },
+    "status": {
+      "enum": [
+        "provisional_blocked",
+        "verified"
+      ]
+    },
+    "normative_boundary": {
+      "type": "string",
+      "minLength": 1
+    },
+    "source_files": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "governing_source_state": {
+      "type": "object"
+    },
+    "profiles": {
+      "type": "object",
+      "required": [
+        "N",
+        "D",
+        "W",
+        "V"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "N": {
+          "type": "string"
+        },
+        "D": {
+          "type": "string"
+        },
+        "W": {
+          "type": "string"
+        },
+        "V": {
+          "type": "string"
+        }
+      }
+    },
+    "owners": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "environments": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "blockers": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/blocker"
+      }
+    },
+    "requirements": {
+      "type": "array",
+      "minItems": 288,
+      "maxItems": 288,
+      "items": {
+        "$ref": "#/$defs/requirement"
+      }
+    }
+  },
+  "$defs": {
+    "blocker": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "state",
+        "owner",
+        "decision_date",
+        "reason",
+        "affects"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^BLK-[A-Z0-9-]+$"
+        },
+        "state": {
+          "enum": [
+            "blocked",
+            "resolved"
+          ]
+        },
+        "owner": {
+          "type": "string",
+          "minLength": 1
+        },
+        "decision_date": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date"
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        },
+        "affects": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    },
+    "requirement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "family",
+        "release",
+        "closure_gate",
+        "profile_applicability",
+        "profile_mapping_status",
+        "owner",
+        "owner_status",
+        "dependencies",
+        "implementation_status",
+        "test_ids",
+        "test_mapping_status",
+        "test_mapping_note",
+        "environments",
+        "environment_mapping_status",
+        "source_ids",
+        "source_traceability",
+        "mapping_status",
+        "latest_evidence"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^(FR|NF)[0-9]{2}$|^(A|W)[0-9]{3}$|^Q[0-9]{2}$|^QW[0-9]{2}$"
+        },
+        "family": {
+          "enum": [
+            "FR",
+            "NF",
+            "A",
+            "Q",
+            "W",
+            "QW"
+          ]
+        },
+        "release": {
+          "enum": [
+            "A1",
+            "A2",
+            "A3",
+            "A1-WINDOWS",
+            "RX"
+          ]
+        },
+        "closure_gate": {
+          "enum": [
+            "G1",
+            "G2",
+            "G3",
+            "G4",
+            "G5",
+            "G6",
+            "G7",
+            "RX",
+            "GWIN0",
+            "GWIN1",
+            "GWIN2"
+          ]
+        },
+        "profile_applicability": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "N",
+              "D",
+              "W",
+              "V"
+            ]
+          }
+        },
+        "profile_mapping_status": {
+          "const": "provisional_plan_assignment"
+        },
+        "owner": {
+          "type": "string",
+          "minLength": 1
+        },
+        "owner_status": {
+          "const": "planned_gate_owner"
+        },
+        "dependencies": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "implementation_status": {
+          "enum": [
+            "not_started",
+            "in_progress",
+            "implemented",
+            "deferred",
+            "unsupported",
+            "unknown"
+          ]
+        },
+        "test_ids": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "pattern": "^[TV][0-9]{2}$"
+          }
+        },
+        "test_mapping_status": {
+          "enum": [
+            "explicit_in_plan",
+            "provisional_gate_suite",
+            "blocked_pending_change_control",
+            "verified"
+          ]
+        },
+        "test_mapping_note": {
+          "type": "string",
+          "minLength": 1
+        },
+        "environments": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "environment_mapping_status": {
+          "const": "provisional_gate_assignment"
+        },
+        "source_ids": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "pattern": "^GOV-[A-Z]+-[0-9]{3}$"
+          }
+        },
+        "source_traceability": {
+          "enum": [
+            "blocked",
+            "verified"
+          ]
+        },
+        "mapping_status": {
+          "enum": [
+            "provisional",
+            "verified"
+          ]
+        },
+        "latest_evidence": {
+          "$ref": "#/$defs/evidence"
+        }
+      }
+    },
+    "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "state",
+        "reason",
+        "owner",
+        "as_of",
+        "evidence_ids"
+      ],
+      "properties": {
+        "state": {
+          "enum": [
+            "pass",
+            "fail",
+            "blocked",
+            "not_applicable"
+          ]
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        },
+        "owner": {
+          "type": "string",
+          "minLength": 1
+        },
+        "as_of": {
+          "type": "string",
+          "format": "date"
+        },
+        "evidence_ids": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    }
+  }
+}

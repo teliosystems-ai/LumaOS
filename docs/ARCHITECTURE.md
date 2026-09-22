@@ -74,11 +74,43 @@ Artifacts are application-owned outputs, separate from enrolled source files. Me
 
 Every committed effect receives a durable receipt. Receipt rows are append-only at the database layer. They are an audit aid, not a tamper-proof external ledger: an operator with filesystem access can still replace or edit the database.
 
+### State transfer and maintenance
+
+The developer state-transfer path creates an atomic ZIP archive containing a
+consistent SQLite backup, every referenced immutable object, and a complete
+size/SHA-256 inventory. Restore publishes only into a new directory after path,
+inventory, digest, database-integrity, and schema-version validation. Retention
+maintenance is deliberately narrower: it may report or remove unreferenced
+content objects, but cannot delete acknowledged artifact history or append-only
+receipts.
+
 ### Optional model adapter
 
 Model availability is additive. The deterministic/manual workflow remains usable when no endpoint is configured or the endpoint fails. Model output is untrusted data and must be validated before it can influence a plan or effect.
 
 Model binaries, weights, tokenizers, and remote credentials are external operator assets. Their licenses and security posture are not inherited from this repository.
+
+### G1 contract prototypes
+
+The G1 development surface keeps policy, resource admission, inference, and OS
+integration as separate typed boundaries. The resource ledger performs checked
+64-bit accounting and generation-fenced atomic leases. Runtime profiles and
+placement plans bind exact model, tokenizer, template, backend, context, and
+memory choices; the local inference gateway revalidates session identity,
+policy, deadline, and lease state without a remote fallback path.
+
+Model packs use a strict canonical manifest, detached Ed25519 verification
+interface, complete file inventory, and SHA-256 content checks. Recognized,
+loadable, execution-certified, and interactive-certified are distinct monotonic
+states. The repository contains no trusted key, real model asset, or
+certification evidence.
+
+A deterministic typed DAG publishes restart checkpoints only after successful
+typed results. The versioned platform adapter has a deterministic fake and a
+read-only Linux/WSL implementation; its `T40-SCAFFOLD` report is explicitly
+non-closing until the missing governing source defines the authoritative test.
+These modules are reference contracts inside the current Python process, not
+the production service split or hardware qualification described by the ADRs.
 
 ## Storage layout
 

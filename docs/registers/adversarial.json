@@ -1,0 +1,126 @@
+{
+  "schema_version": 1,
+  "register": "adversarial-tests",
+  "recorded_on": "2026-09-22",
+  "owner": "security-lead",
+  "fixture_policy": "Use synthetic public cases where possible. Sensitive exploit corpora and private samples remain outside Git with digest-only references.",
+  "cases": [
+    {
+      "id": "ADV-001",
+      "title": "Indirect prompt injection requests an unauthorized effect",
+      "target_gate": "G1",
+      "owner": "security-lead",
+      "status": "planned",
+      "target": "model-to-workflow boundary",
+      "expected_invariant": "Model output cannot create or widen a grant; the effect is denied and no receipt claims completion.",
+      "fixture": "public-synthetic"
+    },
+    {
+      "id": "ADV-002",
+      "title": "Capability substitution between prepare and run",
+      "target_gate": "G1",
+      "owner": "policy-owner",
+      "status": "development-test-implemented",
+      "target": "policy broker",
+      "expected_invariant": "A capability, subject, or normalized target mismatch fails closed at effect time.",
+      "fixture": "public-synthetic",
+      "evidence": [
+        "tests/test_policy.py",
+        "tests/test_control_boundaries.py"
+      ]
+    },
+    {
+      "id": "ADV-003",
+      "title": "Grant revoked after preparation",
+      "target_gate": "G1",
+      "owner": "policy-owner",
+      "status": "development-test-implemented",
+      "target": "workflow and folder-grant boundary",
+      "expected_invariant": "Revocation prevents every not-yet-committed effect while retaining an explainable workflow state.",
+      "fixture": "public-synthetic",
+      "evidence": [
+        "tests/test_control_boundaries.py"
+      ]
+    },
+    {
+      "id": "ADV-004",
+      "title": "Malformed and oversized local IPC envelope",
+      "target_gate": "G1",
+      "owner": "platform-lead",
+      "status": "development-contract-implemented",
+      "target": "Unix-domain IPC services",
+      "expected_invariant": "Length is bounded before allocation; malformed, unknown-version, spoofed-peer, and truncated messages are rejected without a crash or effect.",
+      "fixture": "generated",
+      "evidence": [
+        "src/luma_os/ipc.py",
+        "tests/test_ipc.py"
+      ],
+      "limitations": "Real Unix socket peer-credential plumbing and process isolation remain unimplemented."
+    },
+    {
+      "id": "ADV-005",
+      "title": "Stale resource lease generation replay",
+      "target_gate": "G1",
+      "owner": "resource-owner",
+      "status": "development-test-implemented",
+      "target": "resource manager and model supervisor",
+      "expected_invariant": "A stale or wrong-owner lease cannot allocate, serve, commit, or release another generation's resources.",
+      "fixture": "generated",
+      "evidence": [
+        "tests/test_resources.py",
+        "tests/test_inference_gateway.py"
+      ]
+    },
+    {
+      "id": "ADV-006",
+      "title": "Model pack manifest, signature, and blob tampering",
+      "target_gate": "G1",
+      "owner": "inference-lead",
+      "status": "development-contract-partial",
+      "target": "model-pack importer",
+      "expected_invariant": "Unknown keys, wrong roles, revoked keys, canonicalization drift, digest mismatches, unsafe paths, and downgrade attempts fail closed.",
+      "fixture": "public-synthetic",
+      "blockers": [
+        "G0-BLK-005"
+      ],
+      "evidence": [
+        "src/luma_os/model_pack.py",
+        "tests/test_model_pack.py"
+      ],
+      "limitations": "The verifier boundary is tested with a stub; no retained trust store, protected signing key, revocation exercise, or real signed pack exists."
+    },
+    {
+      "id": "ADV-007",
+      "title": "Worker attempts filesystem, device, credential, and network escape",
+      "target_gate": "G1",
+      "owner": "security-lead",
+      "status": "blocked",
+      "target": "selected worker sandbox",
+      "expected_invariant": "Access outside task-scoped descriptors and resource limits is denied, logged, and cannot authorize a fallback.",
+      "fixture": "private-external",
+      "blockers": [
+        "sandbox direction and physical Linux environment"
+      ]
+    },
+    {
+      "id": "ADV-008",
+      "title": "Host, Origin, session, and non-loopback forgery",
+      "target_gate": "G1",
+      "owner": "api-owner",
+      "status": "planned",
+      "target": "browser-facing API",
+      "expected_invariant": "Only the authenticated same-origin loopback session is accepted; no LAN listener or remote fallback appears.",
+      "fixture": "generated"
+    },
+    {
+      "id": "ADV-009",
+      "title": "Granted-root symlink and rename replacement",
+      "target_gate": "G1",
+      "owner": "storage-security-owner",
+      "status": "planned",
+      "target": "folder-grant reader",
+      "expected_invariant": "Descriptor-relative no-follow access and root identity checks prevent traversal or replacement outside the grant.",
+      "fixture": "generated"
+    }
+  ]
+}

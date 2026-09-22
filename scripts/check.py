@@ -31,9 +31,31 @@ REQUIRED_DOCS = (
     "docs/RELEASE.md",
     "docs/DEVELOPMENT_PLAN.md",
     "docs/GOVERNING_REQUIREMENTS_SOURCES.md",
+    "docs/GATE_REPORT.md",
 )
 GOVERNING_SOURCE_RECORD = "docs/governing_sources.json"
-REQUIRED_RELEASE_FILES = (*REQUIRED_DOCS, GOVERNING_SOURCE_RECORD)
+REQUIRED_GATE_FILES = (
+    "docs/adr/0001-python-reference-rust-production.md",
+    "docs/adr/0002-service-boundaries-and-transport.md",
+    "docs/adr/0003-artifact-storage.md",
+    "docs/adr/0004-policy-model.md",
+    "docs/adr/0005-model-pack-and-signing.md",
+    "docs/adr/0006-supported-package-layout.md",
+    "docs/gates/g0/blockers.json",
+    "docs/gates/g0/ci_lanes.json",
+    "docs/gates/g0/evidence.json",
+    "docs/gates/g0/lab_inventory.json",
+    "docs/gates/g0/security_review.json",
+    "docs/gates/g1/blockers.json",
+    "docs/gates/g1/evidence.json",
+    "docs/registers/adversarial.json",
+    "docs/registers/failure_injection.json",
+    "docs/registers/licenses.json",
+    "docs/registers/workloads.json",
+    "requirements/registry.json",
+    "requirements/registry.schema.json",
+)
+REQUIRED_RELEASE_FILES = (*REQUIRED_DOCS, GOVERNING_SOURCE_RECORD, *REQUIRED_GATE_FILES)
 GOVERNING_SOURCE_FILENAMES = {
     "LLM_OS_Windows_Deployment_Requirements_Variation.docx",
     "Option_Ubuntu_LLM_OS_Functional_Requirements_Development_Testing_4B_to_400B.docx",
@@ -46,6 +68,7 @@ REQUIRED_RELEASE_INPUTS = {
     "schemas",
     "examples",
     "docs",
+    "requirements",
     "scripts",
     "packaging",
 }
@@ -144,11 +167,103 @@ def validate_governing_sources() -> None:
     report("Governing source record", "three exact dependencies explicitly blocked")
 
 
+def validate_gate_artifacts() -> None:
+    json_paths = [
+        path
+        for path in REQUIRED_GATE_FILES
+        if Path(path).suffix == ".json"
+    ]
+    documents: dict[str, object] = {}
+    for relative in json_paths:
+        documents[relative] = json.loads((ROOT / relative).read_text(encoding="utf-8"))
+
+    for gate in ("g0", "g1"):
+        blockers_path = f"docs/gates/{gate}/blockers.json"
+        evidence_path = f"docs/gates/{gate}/evidence.json"
+        blockers = documents[blockers_path]
+        evidence = documents[evidence_path]
+        if not isinstance(blockers, dict) or blockers.get("status") != "blocked":
+            raise RuntimeError(f"{gate.upper()} blocker record must remain explicitly blocked")
+        blocker_items = blockers.get("blockers")
+        if not isinstance(blocker_items, list) or not blocker_items:
+            raise RuntimeError(f"{gate.upper()} blocker record must contain blockers")
+        for item in blocker_items:
+            if not isinstance(item, dict):
+                raise RuntimeError(f"{gate.upper()} blocker entries must be objects")
+            if item.get("status") != "open" or not item.get("owner") or not item.get("decision_due"):
+                raise RuntimeError(
+                    f"{gate.upper()} blockers must be open and carry owner/decision_due"
+                )
+            evidence_reference = item.get("evidence")
+            evidence_path = PurePosixPath(evidence_reference) if isinstance(evidence_reference, str) else None
+            if (
+                evidence_path is None
+                or evidence_path.is_absolute()
+                or ".." in evidence_path.parts
+                or not ROOT.joinpath(*evidence_path.parts).is_file()
+            ):
+                raise RuntimeError(f"{gate.upper()} blocker evidence must reference a repository file")
+        if not isinstance(evidence, dict) or evidence.get("assessment") != "blocked":
+            raise RuntimeError(f"{gate.upper()} evidence must not claim a passing gate")
+        evidence_items = evidence.get("items")
+        if not isinstance(evidence_items, list) or not evidence_items:
+            raise RuntimeError(f"{gate.upper()} evidence must contain explicit items")
+        if any(not isinstance(item, dict) or item.get("gate_closing") is not False for item in evidence_items):
+            raise RuntimeError(f"{gate.upper()} development evidence must remain non-closing")
+        for item in evidence_items:
+            references = item.get("evidence")
+            if not isinstance(references, list) or not references:
+                raise RuntimeError(f"{gate.upper()} evidence items must reference repository files")
+            for reference in references:
+                evidence_path = PurePosixPath(reference) if isinstance(reference, str) else None
+                if (
+                    evidence_path is None
+                    or evidence_path.is_absolute()
+                    or ".." in evidence_path.parts
+                    or not ROOT.joinpath(*evidence_path.parts).is_file()
+                ):
+                    raise RuntimeError(
+                        f"{gate.upper()} evidence reference is unavailable: {reference!r}"
+                    )
+
+    inventory = documents["docs/gates/g0/lab_inventory.json"]
+    if not isinstance(inventory, dict):
+        raise RuntimeError("G0 lab inventory must be an object")
+    hardware = inventory.get("required_reference_hardware")
+    if not isinstance(hardware, dict) or hardware.get("a1_x86_64_boards_designated") != 0:
+        raise RuntimeError("lab inventory must not claim unverified A1 reference boards")
+
+    from build_requirement_registry import build_registry, load_source_record, serialize_registry
+    from gate_report import render_report, validate_registry
+
+    registry_path = ROOT / "requirements/registry.json"
+    registry = json.loads(registry_path.read_text(encoding="utf-8"))
+    sources = json.loads((ROOT / GOVERNING_SOURCE_RECORD).read_text(encoding="utf-8"))
+    if not isinstance(registry, dict) or not isinstance(sources, dict):
+        raise RuntimeError("registry and governing sources must be JSON objects")
+    validate_registry(registry, sources)
+    expected_registry = serialize_registry(build_registry(load_source_record()))
+    if registry_path.read_text(encoding="utf-8") != expected_registry:
+        raise RuntimeError("checked-in requirement registry is not deterministic/current")
+    expected_report = render_report(registry, sources)
+    if (ROOT / "docs/GATE_REPORT.md").read_text(encoding="utf-8") != expected_report:
+        raise RuntimeError("checked-in gate report is not deterministic/current")
+    json.loads((ROOT / "requirements/registry.schema.json").read_text(encoding="utf-8"))
+    report("Gate artifacts", "288 provisional requirements; G0/G1 explicitly blocked")
+
+
 def validate_repository() -> None:
     missing = [path for path in REQUIRED_RELEASE_FILES if not (ROOT / path).is_file()]
     if missing:
         raise RuntimeError(f"required documentation is missing: {missing}")
-    required_runtime_paths = ("src", "tests", "web/index.html", "schemas", "examples")
+    required_runtime_paths = (
+        "src",
+        "tests",
+        "web/index.html",
+        "schemas",
+        "examples",
+        "requirements",
+    )
     missing_runtime = [path for path in required_runtime_paths if not (ROOT / path).exists()]
     if missing_runtime:
         raise RuntimeError(f"required runtime/release paths are missing: {missing_runtime}")
@@ -201,6 +316,7 @@ def main() -> int:
         if not arguments.compile_only:
             validate_metadata()
             validate_governing_sources()
+            validate_gate_artifacts()
             validate_repository()
             run_tests()
     except (OSError, ValueError, RuntimeError, py_compile.PyCompileError) as exc:

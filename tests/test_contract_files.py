@@ -23,6 +23,7 @@ class ContractFileTests(unittest.TestCase):
         expected = {
             "artifact.schema.json",
             "grant.schema.json",
+            "model-pack.schema.json",
             "receipt.schema.json",
             "workflow.schema.json",
         }
@@ -35,11 +36,15 @@ class ContractFileTests(unittest.TestCase):
     def test_release_manifest_contains_runtime_inputs(self) -> None:
         manifest = json.loads((ROOT / "RELEASE_MANIFEST.json").read_text(encoding="utf-8"))
         inputs = set(manifest["release_inputs"])
-        self.assertTrue({"src", "web", "schemas", "examples", "tests"}.issubset(inputs))
+        self.assertTrue(
+            {"src", "web", "schemas", "examples", "tests", "requirements"}.issubset(inputs)
+        )
         required = set(manifest["required_release_files"])
         self.assertIn("docs/DEVELOPMENT_PLAN.md", required)
         self.assertIn("docs/GOVERNING_REQUIREMENTS_SOURCES.md", required)
         self.assertIn("docs/RELEASE.md", required)
+        self.assertIn("docs/GATE_REPORT.md", required)
+        self.assertIn("requirements/registry.json", required)
         self.assertTrue(required.issubset(set(manifest["release_files"])))
         self.assertFalse(manifest["external_assets"]["model_weights_included"])
         self.assertEqual("0.1.0", manifest["version"])

@@ -28,14 +28,14 @@ Version `0.1.0` is a developer MVP and a useful input to G0. It currently demons
 - source-run paths for Ubuntu 24.04 and Windows 11 through WSL2; and
 - repository, API-contract, browser-journey, and deterministic source-package checks.
 
-It has **not** passed formal G0 or G1. It does not yet provide an embedded model pack, real model-resource admission, a general policy broker, signed skills, worker sandboxing, semantic indexing, multimodal interaction, a bootable image, A/B updates, hardware certification, a Windows file broker, VM or dual-boot lifecycle, 400B qualification, or cluster execution. Existing simulator and MVP results are development evidence only.
+It has **not** passed formal G0 or G1. Repository-local G1 prototypes now cover a signed model-pack contract, checked resource admission, a deny-by-default policy broker, a typed DAG, deterministic fake inference, local-gateway fencing, platform-adapter scaffolding, and state recovery. It still does not provide an approved real model pack, qualified model runtime, signed skills, worker sandboxing, semantic indexing, multimodal interaction, a bootable image, A/B updates, hardware certification, a Windows file broker, VM or dual-boot lifecycle, 400B qualification, or cluster execution. Existing simulator, fake-backend, WSL, and MVP results are development evidence only.
 
 ### Current stage status
 
 | Stage | Status at this checkpoint |
 | --- | --- |
-| G0 | **In progress, gate not passed.** The repository baseline, complete ID catalog, plan, contract checks, and reproducible source-package evidence exist. Hardware/lab inventory, architecture decisions, licenses, platform baselines, and full G0 manual/security/performance evidence remain open. |
-| G1 | **Early risk-reduction tranche in progress, gate not passed.** Workflow durability, idempotent effects, artifact history, and API/schema fidelity have development evidence. Cancellation/concurrency hardening, grant-revocation validation, the resource ledger, fake inference backend, real compact model, measured tuples, sandbox decision, and G1 hardware evidence remain open. This work is preparatory and does not waive the G0 dependency. |
+| G0 | **Blocked, gate not passed.** The repository baseline, 288-ID provisional registry, gate report, architecture decisions, initial registers, observed development-host inventory, contract checks, and reproducible source-package evidence exist. The three governing inputs, two designated physical A1 boards, Ubuntu 24.04 reproducible baseline, disposable disks, operational signing custody, selected model/runtime licenses, and full manual/security/performance evidence remain open in `docs/gates/g0/blockers.json`. |
+| G1 | **Repository-local contract tranche implemented, gate blocked.** Development evidence covers checked resource admission, deterministic fake inference, cancellation/concurrency and revocation fencing, state migration/export/restore, and the policy/DAG/platform/model-pack/local-gateway contract surfaces. The current combined revision still requires a complete test run. A real approved compact model, two-board offline workflow, candidate measurements, exact retained tuples, boot/recovery spikes, 400â€“405B experiment, and full security/manual/performance evidence remain open in `docs/gates/g1/blockers.json`. This work is preparatory and does not waive the G0 dependency. |
 | G2, G3, G4, G5 | **Not started.** |
 | GWIN0, GWIN1, GWIN2 | **Not started.** |
 | G6, G7 | **Not started and separately capacity-gated.** |
@@ -468,5 +468,11 @@ Development resumes at G0, using `v0.1.0` as the seed rather than restarting the
 5. integrate one real compact local model without weakening manual operation;
 6. establish the two Ubuntu reference machines and Windows GWIN0 hosts; and
 7. run the G1 test phase before adding broader skills or boot-image scope.
+
+Repository-local items 1â€“4 are now implemented, together with initial policy,
+typed-DAG, model-pack, local-gateway, telemetry, platform-adapter, and recovery
+contracts. Item 7 remains pending for the combined revision. Items 5â€“6 require
+approved external assets and physical hardware and are recorded as gate
+blockers rather than represented as complete.
 
 No later-stage support claim should be merged into the support matrix until that stage's exit evidence exists.

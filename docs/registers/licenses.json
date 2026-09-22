@@ -1,0 +1,154 @@
+{
+  "schema_version": 1,
+  "register": "licenses-and-redistribution",
+  "recorded_on": "2026-09-22",
+  "owner": "license-owner",
+  "disclaimer": "This is an engineering inventory, not legal advice. Approval must identify the exact artifact version and intended use or redistribution scope.",
+  "entries": [
+    {
+      "id": "LIC-001",
+      "component": "Luma OS repository source",
+      "version_or_digest": "repository-release-tuple",
+      "source": "this repository",
+      "license_expression": "Apache-2.0",
+      "use_scope": "source and release archive",
+      "redistributed": true,
+      "owner": "release-engineer",
+      "status": "recorded",
+      "evidence": [
+        "LICENSE",
+        "pyproject.toml"
+      ]
+    },
+    {
+      "id": "LIC-002",
+      "component": "CPython runtime and standard library",
+      "version_or_digest": null,
+      "source": "operator or operating-system installation",
+      "license_expression": "PSF-2.0-and-component-notices-to-be-verified",
+      "use_scope": "reference runtime and tests",
+      "redistributed": false,
+      "owner": "release-engineer",
+      "status": "review-required-before-bundling",
+      "evidence": []
+    },
+    {
+      "id": "LIC-003",
+      "component": "SQLite used through the Python standard library",
+      "version_or_digest": null,
+      "source": "operator or operating-system installation",
+      "license_expression": "public-domain-claim-to-be-verified-for-exact-build",
+      "use_scope": "reference local metadata store",
+      "redistributed": false,
+      "owner": "storage-lead",
+      "status": "review-required-before-bundling",
+      "evidence": []
+    },
+    {
+      "id": "LIC-004",
+      "component": "Ubuntu, WSL, Windows, NVIDIA driver and GPU runtime",
+      "version_or_digest": "environment-specific",
+      "source": "host and guest platform installation",
+      "license_expression": "multiple-external-platform-licenses",
+      "use_scope": "development environment only",
+      "redistributed": false,
+      "owner": "platform-lead",
+      "status": "external-not-cleared-for-product-redistribution",
+      "evidence": [
+        "docs/gates/g0/lab_inventory.json"
+      ]
+    },
+    {
+      "id": "LIC-005",
+      "component": "Compact 4-6B candidate A and tokenizer",
+      "version_or_digest": null,
+      "source": null,
+      "license_expression": null,
+      "use_scope": "G1 evaluation and possible A1 redistribution",
+      "redistributed": null,
+      "owner": "license-owner",
+      "status": "blocked-unselected",
+      "evidence": [],
+      "required_decisions": [
+        "evaluation permission",
+        "weight redistribution",
+        "tokenizer and template terms",
+        "acceptable-use restrictions",
+        "notice obligations"
+      ]
+    },
+    {
+      "id": "LIC-006",
+      "component": "Compact 4-6B candidate B and tokenizer",
+      "version_or_digest": null,
+      "source": null,
+      "license_expression": null,
+      "use_scope": "G1 evaluation and possible A1 redistribution",
+      "redistributed": null,
+      "owner": "license-owner",
+      "status": "blocked-unselected",
+      "evidence": [],
+      "required_decisions": [
+        "evaluation permission",
+        "weight redistribution",
+        "tokenizer and template terms",
+        "acceptable-use restrictions",
+        "notice obligations"
+      ]
+    },
+    {
+      "id": "LIC-007",
+      "component": "Mainstream comparison model and tokenizer",
+      "version_or_digest": null,
+      "source": null,
+      "license_expression": null,
+      "use_scope": "G1 comparison evaluation",
+      "redistributed": false,
+      "owner": "license-owner",
+      "status": "blocked-unselected",
+      "evidence": [],
+      "required_decisions": [
+        "evaluation permission",
+        "storage and access controls",
+        "result-publication restrictions"
+      ]
+    },
+    {
+      "id": "LIC-008",
+      "component": "400-405B experiment model, tokenizer, and runtime",
+      "version_or_digest": null,
+      "source": null,
+      "license_expression": null,
+      "use_scope": "G1 placement/load experiment only",
+      "redistributed": false,
+      "owner": "license-owner",
+      "status": "blocked-unselected-and-no-capacity",
+      "evidence": [],
+      "required_decisions": [
+        "evaluation permission",
+        "host/data-location restrictions",
+        "runtime license",
+        "telemetry and result-publication restrictions"
+      ]
+    },
+    {
+      "id": "LIC-009",
+      "component": "Future Rust crates and system packages",
+      "version_or_digest": null,
+      "source": null,
+      "license_expression": null,
+      "use_scope": "production services",
+      "redistributed": null,
+      "owner": "release-engineer",
+      "status": "empty-until-dependencies-selected",
+      "evidence": [],
+      "required_decisions": [
+        "lockfile inventory",
+        "source and binary license scan",
+        "notice generation",
+        "copyleft and patent review",
+        "vulnerability review"
+      ]
+    }
+  ]
+}

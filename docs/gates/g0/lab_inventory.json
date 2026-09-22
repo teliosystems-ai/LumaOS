@@ -1,0 +1,175 @@
+{
+  "schema_version": 1,
+  "record_id": "G0-LAB-2026-09-22",
+  "observed_on": "2026-09-22",
+  "owner": "platform-lead",
+  "status": "partial-blocked",
+  "privacy": {
+    "classification": "public-development-evidence",
+    "excluded_fields": [
+      "host name",
+      "user name",
+      "device serial numbers",
+      "network addresses"
+    ]
+  },
+  "evidence_policy": {
+    "simulator_is_runtime_evidence": false,
+    "nominal_capacity_is_performance_evidence": false,
+    "virtual_guest_is_physical_board_evidence": false,
+    "single_host_can_satisfy_two_board_gate": false
+  },
+  "systems": [
+    {
+      "id": "DEV-WIN-WSL-GPU-01",
+      "role": "developer-host-and-ubuntu-26.04-evaluation-guest",
+      "physical_machine_count": 1,
+      "qualification": "development-evidence-only",
+      "designated_a1_reference_board": false,
+      "host": {
+        "manufacturer": "ASUSTeK COMPUTER INC.",
+        "model": "ASUS TUF Gaming A15 FA506NCR_FA506NCR",
+        "os": {
+          "name": "Microsoft Windows 11 Home Single Language",
+          "version": "10.0.26200",
+          "build": "26200",
+          "architecture": "x86_64"
+        },
+        "firmware": {
+          "type": "UEFI-not-independently-verified",
+          "vendor": "American Megatrends International, LLC.",
+          "version": "FA506NCR.304",
+          "release_date": "2025-01-08"
+        },
+        "cpu": {
+          "model": "AMD Ryzen 7 7435HS",
+          "architecture": "x86_64",
+          "physical_cores": 8,
+          "logical_processors": 16
+        },
+        "memory": {
+          "physical_bytes": 16989728768
+        },
+        "storage": [
+          {
+            "model": "MTFDKBA512QGN-1BN1AABGA",
+            "reported_interface": "SCSI",
+            "reported_size_bytes": 512105932800,
+            "role": "host-system-disk",
+            "disposable_fixture": false
+          }
+        ],
+        "accelerators": [
+          {
+            "vendor": "NVIDIA",
+            "model": "NVIDIA GeForce RTX 3050 Laptop GPU",
+            "memory_bytes": 4294967296,
+            "driver_version": "566.07",
+            "compute_capability": "8.6",
+            "pci_bus_id_redacted": true,
+            "qualification": "telemetry-observed-only"
+          }
+        ],
+        "hypervisor_present": true
+      },
+      "guests": [
+        {
+          "id": "DEV-WSL-UBUNTU-26-01",
+          "technology": "WSL2",
+          "distribution_registration": "Ubuntu",
+          "os": {
+            "name": "Ubuntu",
+            "version": "26.04 LTS",
+            "codename": "resolute",
+            "architecture": "x86_64"
+          },
+          "kernel": "6.18.33.2-microsoft-standard-WSL2",
+          "python": "3.14.4",
+          "allocated_logical_cpus": 16,
+          "reported_memory_bytes": 8228859904,
+          "reported_swap_bytes": 2147483648,
+          "gpu_bridge_device": "/dev/dxg-present",
+          "root_filesystem": {
+            "reported_capacity_bytes": 1081101176832,
+            "kind": "dynamic-virtual-disk",
+            "physical_capacity_claim": false
+          },
+          "qualification": "ubuntu-26.04-wsl-evaluation-only",
+          "limitations": [
+            "not an Ubuntu 24.04 baseline",
+            "not a native physical Ubuntu boot",
+            "not a second physical machine",
+            "does not prove firmware, boot, suspend, power-loss, or device-reset behavior",
+            "GPU presence does not prove a model runtime or service class"
+          ]
+        }
+      ],
+      "collection_methods": [
+        "Win32_OperatingSystem",
+        "Win32_ComputerSystem",
+        "Win32_Processor",
+        "Win32_BIOS",
+        "Win32_DiskDrive",
+        "nvidia-smi query",
+        "wsl --list --verbose",
+        "Ubuntu os-release, uname, lscpu, free, df, and /dev/dxg checks"
+      ]
+    }
+  ],
+  "required_reference_hardware": {
+    "a1_x86_64_boards_required": 2,
+    "a1_x86_64_boards_designated": 0,
+    "status": "blocked",
+    "reason": "The one inventoried laptop is a development host and has not been designated or qualified as either required A1 board."
+  },
+  "platform_baselines": [
+    {
+      "id": "ubuntu-24.04-reproducible-baseline",
+      "status": "missing",
+      "environment": null,
+      "gate_use": "required-for-G0"
+    },
+    {
+      "id": "ubuntu-26.04-evaluation-path",
+      "status": "available-with-limitations",
+      "environment": "DEV-WSL-UBUNTU-26-01",
+      "gate_use": "evaluation-only"
+    }
+  ],
+  "environment_slots": [
+    {
+      "id": "E0",
+      "definition_status": "unverified-pending-governing-sources",
+      "assignment": null,
+      "status": "blocked"
+    },
+    {
+      "id": "E1",
+      "definition_status": "unverified-pending-governing-sources",
+      "assignment": null,
+      "status": "blocked"
+    },
+    {
+      "id": "E2",
+      "definition_status": "unverified-pending-governing-sources",
+      "assignment": null,
+      "status": "blocked"
+    },
+    {
+      "id": "E8",
+      "definition_status": "unverified-pending-governing-sources",
+      "assignment": null,
+      "status": "blocked"
+    }
+  ],
+  "fixtures": {
+    "disposable_disk_fixtures": {
+      "count": 0,
+      "status": "missing"
+    },
+    "private_test_data": {
+      "repository_location": null,
+      "policy": "must-remain-outside-git-and-be-referenced-by-digest"
+    }
+  }
+}

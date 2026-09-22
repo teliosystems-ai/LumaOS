@@ -33,6 +33,13 @@ The implementation is intended for design reviews, local development, automated 
 
 See the complete [support matrix](docs/SUPPORT_MATRIX.md) and [requirements coverage](docs/REQUIREMENTS_COVERAGE.md).
 
+The repository also contains repository-local G0/G1 engineering artifacts and
+reference contracts. Neither gate has passed: the deterministic
+[gate report](docs/GATE_REPORT.md) and retained
+[blocker records](docs/gates) distinguish implemented development evidence
+from the missing governing inputs, physical boards, approved model assets, and
+qualification runs.
+
 ## Quick start
 
 ### Ubuntu 24.04 or WSL2
@@ -104,6 +111,7 @@ scripts/              Source runners, checks, packaging, user install
 packaging/systemd/    Optional Ubuntu user-service template
 packaging/wsl/        Windows 11 / WSL2 helpers
 docs/                 Architecture, security, scope, roadmap, operations
+requirements/         Provisional requirement/evidence registry
 .github/               CI and contribution templates
 ```
 

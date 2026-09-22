@@ -1,0 +1,119 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://luma-os.invalid/schemas/model-pack.schema.json",
+  "title": "Luma OS immutable model-pack manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "canonicalization",
+    "signature_algorithm",
+    "pack_id",
+    "pack_version",
+    "model",
+    "context",
+    "blobs",
+    "runtime_tuples",
+    "license",
+    "network_default",
+    "signer_key_id"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "canonicalization": { "const": "RFC8785-ASCII-v1" },
+    "signature_algorithm": { "const": "Ed25519" },
+    "pack_id": { "$ref": "#/$defs/asciiText" },
+    "pack_version": { "$ref": "#/$defs/asciiText" },
+    "model": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["architecture", "identity", "parameter_class", "quantization", "source"],
+      "properties": {
+        "architecture": { "$ref": "#/$defs/asciiText" },
+        "identity": { "$ref": "#/$defs/asciiText" },
+        "parameter_class": { "$ref": "#/$defs/asciiText" },
+        "quantization": { "$ref": "#/$defs/asciiText" },
+        "source": { "$ref": "#/$defs/asciiTextLong" }
+      }
+    },
+    "context": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["maximum_tokens", "template_sha256"],
+      "properties": {
+        "maximum_tokens": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
+        "template_sha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "blobs": {
+      "type": "array",
+      "minItems": 4,
+      "uniqueItems": true,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["role", "path", "sha256", "size_bytes"],
+        "properties": {
+          "role": { "enum": ["model", "tokenizer", "template", "auxiliary", "license"] },
+          "path": { "$ref": "#/$defs/asciiTextLong" },
+          "sha256": { "$ref": "#/$defs/sha256" },
+          "size_bytes": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 }
+        }
+      }
+    },
+    "runtime_tuples": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/runtimeTuple" }
+    },
+    "license": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["identifier", "evaluation", "redistribution", "files"],
+      "properties": {
+        "identifier": { "$ref": "#/$defs/asciiText" },
+        "evaluation": { "enum": ["approved", "denied", "pending"] },
+        "redistribution": { "enum": ["approved", "denied", "not-applicable", "pending"] },
+        "files": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/asciiTextLong" }
+        }
+      }
+    },
+    "network_default": { "const": "deny" },
+    "signer_key_id": { "$ref": "#/$defs/asciiText" }
+  },
+  "$defs": {
+    "asciiText": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512,
+      "pattern": "^[ -~]+$"
+    },
+    "asciiTextLong": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1024,
+      "pattern": "^[ -~]+$"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "runtimeTuple": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["os_family", "architecture", "backend", "backend_version", "device"],
+      "properties": {
+        "os_family": { "$ref": "#/$defs/asciiText" },
+        "architecture": { "$ref": "#/$defs/asciiText" },
+        "backend": { "$ref": "#/$defs/asciiText" },
+        "backend_version": { "$ref": "#/$defs/asciiText" },
+        "device": { "$ref": "#/$defs/asciiText" }
+      }
+    }
+  }
+}

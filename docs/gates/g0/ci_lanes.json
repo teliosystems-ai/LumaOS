@@ -1,0 +1,43 @@
+{
+  "schema_version": 1,
+  "gate": "G0",
+  "recorded_on": "2026-09-22",
+  "owner": "release-engineer",
+  "status": "configured-pending-current-run",
+  "gate_closing": false,
+  "source_workflows": [
+    ".github/workflows/ci.yml",
+    ".github/workflows/release-check.yml"
+  ],
+  "lanes": [
+    {
+      "id": "CI-UBUNTU-FULL",
+      "environment": "ubuntu-24.04",
+      "python": ["3.11", "3.12"],
+      "scope": "compile, metadata, registry, release inventory, and complete unittest discovery"
+    },
+    {
+      "id": "CI-G1-FAKE-CONTRACTS",
+      "environment": "ubuntu-24.04",
+      "python": ["3.12"],
+      "scope": "focused fake inference, resources, policy, DAG, model-pack, IPC, platform, cancellation, and state recovery with warnings as errors"
+    },
+    {
+      "id": "CI-WINDOWS-CONTRACTS",
+      "environment": "windows-2022-native",
+      "python": ["3.11", "3.12"],
+      "scope": "compile, platform-neutral G1 contract tests, and native CLI smoke"
+    },
+    {
+      "id": "CI-REPRODUCIBLE-SOURCE",
+      "environment": "ubuntu-24.04",
+      "python": ["3.12"],
+      "scope": "shell and JavaScript syntax, two deterministic source builds, checksum verification"
+    }
+  ],
+  "limitations": [
+    "Declared workflow configuration is not evidence that the current revision passed.",
+    "The native Windows lane is not WSL2 integration or a Windows product-profile qualification.",
+    "Physical-board, GPU-runtime, boot, recovery, and destructive-disk tests require retained lab execution."
+  ]
+}

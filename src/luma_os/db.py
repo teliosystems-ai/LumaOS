@@ -109,10 +109,25 @@ END;
 """
 
 
+MIGRATION_2 = r"""
+CREATE TABLE state_maintenance_runs (
+    run_id TEXT PRIMARY KEY,
+    operation TEXT NOT NULL CHECK (operation IN ('object_retention')),
+    mode TEXT NOT NULL CHECK (mode IN ('dry_run', 'applied')),
+    object_count INTEGER NOT NULL CHECK (object_count >= 0),
+    reclaimable_bytes INTEGER NOT NULL CHECK (reclaimable_bytes >= 0),
+    details_json TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+
+CREATE INDEX idx_state_maintenance_created ON state_maintenance_runs(created_at DESC);
+"""
+
+
 class LumaStore:
     """Small SQLite store using one connection per transaction."""
 
-    latest_schema_version = 1
+    latest_schema_version = 2
 
     def __init__(self, db_path: str | Path) -> None:
         self.db_path = Path(db_path)
@@ -150,6 +165,15 @@ class LumaStore:
                     "BEGIN IMMEDIATE;\n"
                     + MIGRATION_1
                     + f"\nINSERT INTO schema_migrations(version, applied_at) VALUES (1, {timestamp_literal});\n"
+                    + "COMMIT;"
+                )
+                applied.add(1)
+            if 2 not in applied:
+                timestamp_literal = connection.execute("SELECT quote(?)", (utc_now(),)).fetchone()[0]
+                connection.executescript(
+                    "BEGIN IMMEDIATE;\n"
+                    + MIGRATION_2
+                    + f"\nINSERT INTO schema_migrations(version, applied_at) VALUES (2, {timestamp_literal});\n"
                     + "COMMIT;"
                 )
 

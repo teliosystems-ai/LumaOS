@@ -1,0 +1,174 @@
+{
+  "schema_version": 1,
+  "register": "workloads",
+  "recorded_on": "2026-09-22",
+  "owner": "qa-lead",
+  "fixture_policy": "Public fixtures must be synthetic. Private, licensed, customer, and held-out fixtures remain outside Git and are referenced by immutable digest.",
+  "status_values": [
+    "development-ready",
+    "planned",
+    "blocked",
+    "retired"
+  ],
+  "workloads": [
+    {
+      "id": "WL-001",
+      "title": "Deterministic invoice CSV to managed report",
+      "target_gate": "G1",
+      "profiles": [
+        "Ubuntu",
+        "WSL2-development"
+      ],
+      "owner": "workflow-storage-lead",
+      "status": "development-ready",
+      "fixture": {
+        "classification": "public-synthetic",
+        "locator": "examples/invoices.csv",
+        "digest": null
+      },
+      "oracle": "Parsed totals, artifact bytes, version metadata, workflow state, and one effect receipt match deterministic expectations.",
+      "required_evidence": [
+        "clean-checkout run",
+        "restart-visible state",
+        "idempotent repeated request",
+        "artifact digest and receipt"
+      ],
+      "limitations": "Current Python result is reference-development evidence and does not prove a production service or model."
+    },
+    {
+      "id": "WL-002",
+      "title": "Authorized local file to artifact through generic typed DAG",
+      "target_gate": "G1",
+      "profiles": [
+        "Ubuntu-A1-board-1",
+        "Ubuntu-A1-board-2"
+      ],
+      "owner": "workflow-storage-lead",
+      "status": "blocked",
+      "fixture": {
+        "classification": "public-synthetic",
+        "locator": null,
+        "digest": null
+      },
+      "oracle": "Every step has typed input/output, current policy and lease identity, durable cancellation/recovery state, immutable output, and an effect receipt.",
+      "required_evidence": [
+        "both physical A1 boards",
+        "policy decision record",
+        "resource lease record",
+        "restart and cancellation run"
+      ],
+      "blockers": [
+        "G0-BLK-002",
+        "end-to-end integration of the reference DAG and broker with the MVP workflow"
+      ]
+    },
+    {
+      "id": "WL-003",
+      "title": "Compact 4-6B candidate comparison A",
+      "target_gate": "G1",
+      "profiles": [
+        "Ubuntu-A1-board-1",
+        "Ubuntu-A1-board-2"
+      ],
+      "owner": "inference-lead",
+      "status": "blocked",
+      "fixture": {
+        "classification": "private-or-licensed-external",
+        "locator": null,
+        "digest": null
+      },
+      "oracle": "The exact signed pack/runtime tuple completes the common OS-task set offline with correctness, resource, latency, cancellation, and recovery evidence.",
+      "required_evidence": [
+        "model-pack digest and signature",
+        "license approval",
+        "exact runtime tuple",
+        "warm-request measurements",
+        "both-board results"
+      ],
+      "blockers": [
+        "G0-BLK-002",
+        "G0-BLK-005",
+        "G0-BLK-006"
+      ]
+    },
+    {
+      "id": "WL-004",
+      "title": "Compact 4-6B candidate comparison B",
+      "target_gate": "G1",
+      "profiles": [
+        "Ubuntu-A1-board-1",
+        "Ubuntu-A1-board-2"
+      ],
+      "owner": "inference-lead",
+      "status": "blocked",
+      "fixture": {
+        "classification": "private-or-licensed-external",
+        "locator": null,
+        "digest": null
+      },
+      "oracle": "Uses the identical task set, measurement method, context, and reporting fields as WL-003.",
+      "required_evidence": [
+        "model-pack digest and signature",
+        "license approval",
+        "exact runtime tuple",
+        "warm-request measurements",
+        "both-board results"
+      ],
+      "blockers": [
+        "G0-BLK-002",
+        "G0-BLK-005",
+        "G0-BLK-006"
+      ]
+    },
+    {
+      "id": "WL-005",
+      "title": "Mainstream comparison candidate on common OS tasks",
+      "target_gate": "G1",
+      "profiles": [
+        "suitable-measured-host"
+      ],
+      "owner": "inference-lead",
+      "status": "blocked",
+      "fixture": {
+        "classification": "private-or-licensed-external",
+        "locator": null,
+        "digest": null
+      },
+      "oracle": "Results use the same task definitions and disclose any hardware/runtime differences rather than normalizing them away.",
+      "required_evidence": [
+        "candidate identity and license",
+        "pack/runtime tuple",
+        "common task results"
+      ],
+      "blockers": [
+        "G0-BLK-006"
+      ]
+    },
+    {
+      "id": "WL-006",
+      "title": "Real 400-405B placement and load experiment",
+      "target_gate": "G1",
+      "profiles": [
+        "large-model-test-host"
+      ],
+      "owner": "inference-lead",
+      "status": "blocked",
+      "fixture": {
+        "classification": "licensed-external",
+        "locator": null,
+        "digest": null
+      },
+      "oracle": "Real model weights are placed or a measured blocking constraint is retained; sparse mappings, fake tensors, smaller models, and vendor capacity statements are rejected as success.",
+      "required_evidence": [
+        "physical topology and domain budgets",
+        "model and runtime digests",
+        "peak and steady memory telemetry",
+        "load result or measured blocking constraint"
+      ],
+      "blockers": [
+        "G0-BLK-006",
+        "G0-BLK-008"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,122 @@
+{
+  "schema_version": 1,
+  "gate": "G0",
+  "recorded_on": "2026-09-22",
+  "status": "blocked",
+  "blockers": [
+    {
+      "id": "G0-BLK-001",
+      "title": "Governing requirement artifacts are unavailable",
+      "status": "open",
+      "severity": "gate-blocking",
+      "blocks": [
+        "G0 source digest verification",
+        "G0 complete traceability",
+        "authoritative E0/E1/E2/E8 definitions"
+      ],
+      "owner": "requirements-owner",
+      "decision_due": "2026-09-29",
+      "resolution": "Obtain the three approved source revisions or controlled locators, record revision/size/SHA-256, and review derived mappings.",
+      "evidence": "docs/governing_sources.json"
+    },
+    {
+      "id": "G0-BLK-002",
+      "title": "Two physical x86-64 A1 reference boards are not designated",
+      "status": "open",
+      "severity": "gate-blocking",
+      "blocks": [
+        "G0 lab readiness",
+        "G1 two-board exit evidence"
+      ],
+      "owner": "platform-lead",
+      "decision_due": "2026-10-06",
+      "resolution": "Name and inventory two distinct physical boards, including firmware and devices, then retain acquisition/access records.",
+      "evidence": "docs/gates/g0/lab_inventory.json"
+    },
+    {
+      "id": "G0-BLK-003",
+      "title": "Ubuntu 24.04 reproducible baseline is absent",
+      "status": "open",
+      "severity": "gate-blocking",
+      "blocks": [
+        "G0 baseline-image availability",
+        "G1 platform tuple selection"
+      ],
+      "owner": "release-engineer",
+      "decision_due": "2026-10-06",
+      "resolution": "Build, digest, document, and reproduce an Ubuntu 24.04 baseline on the selected physical boards. Keep the observed 26.04 WSL guest as a separate evaluation path.",
+      "evidence": "docs/gates/g0/lab_inventory.json"
+    },
+    {
+      "id": "G0-BLK-004",
+      "title": "Disposable disk fixtures are unavailable",
+      "status": "open",
+      "severity": "gate-blocking",
+      "blocks": [
+        "destructive install and recovery preparation",
+        "boot and storage failure evidence"
+      ],
+      "owner": "qa-lead",
+      "decision_due": "2026-10-06",
+      "resolution": "Provision separately identified disposable disks for both boards and record sanitization/reimage procedure.",
+      "evidence": "docs/gates/g0/lab_inventory.json"
+    },
+    {
+      "id": "G0-BLK-005",
+      "title": "Signing custody is a design only",
+      "status": "open",
+      "severity": "gate-blocking",
+      "blocks": [
+        "operational signing readiness",
+        "signed G1 model-pack evidence"
+      ],
+      "owner": "release-engineer",
+      "supporting_owner": "security-lead",
+      "decision_due": "2026-10-06",
+      "resolution": "Assign named custodians, create separated lab and production trust roots in approved protected storage, document rotation/revocation, and retain a signed verification exercise.",
+      "evidence": "docs/adr/0005-model-pack-and-signing.md"
+    },
+    {
+      "id": "G0-BLK-006",
+      "title": "Model and runtime license candidates are not selected",
+      "status": "open",
+      "severity": "gate-blocking",
+      "blocks": [
+        "G1 candidate evaluation",
+        "G1 exact runtime tuple selection"
+      ],
+      "owner": "license-owner",
+      "supporting_owner": "inference-lead",
+      "decision_due": "2026-10-06",
+      "resolution": "Identify at least two 4-6B candidates, one mainstream comparison candidate, and their runtimes; record evaluation and redistribution decisions before acquiring assets.",
+      "evidence": "docs/registers/licenses.json"
+    },
+    {
+      "id": "G0-BLK-007",
+      "title": "G0 manual, security, and performance evidence is incomplete",
+      "status": "open",
+      "severity": "gate-blocking",
+      "blocks": [
+        "G0 evidence review"
+      ],
+      "owner": "qa-lead",
+      "supporting_owner": "security-lead",
+      "decision_due": "2026-10-13",
+      "resolution": "Retain clean-checkout Ubuntu 24.04 and WSL workflow runs, secret/license/interface reviews, and labeled startup/request/memory/storage baselines without assigning a service class.",
+      "evidence": "docs/gates/g0/evidence.json"
+    },
+    {
+      "id": "G0-BLK-008",
+      "title": "Large-model experiment capacity is unavailable",
+      "status": "open",
+      "severity": "g1-blocking",
+      "blocks": [
+        "G1 real 400-405B placement/load result or measured hardware constraint"
+      ],
+      "owner": "inference-lead",
+      "decision_due": "2026-10-13",
+      "resolution": "Secure suitable real hardware and legal assets, or record a measured blocking constraint on the specified experiment. The RTX 3050 laptop is not a substitute.",
+      "evidence": "docs/gates/g0/lab_inventory.json"
+    }
+  ]
+}

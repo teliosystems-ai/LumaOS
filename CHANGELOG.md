@@ -8,6 +8,19 @@ All notable changes to Luma OS are documented here. The format follows [Keep a C
 
 - Governing-requirements source records that explicitly block source-derived
   traceability until the three approved inputs and their digests are available.
+- Verified state export/restore, transactional schema migration, and audited
+  orphan-object retention controls.
+- Effect-time workflow cancellation fencing and grant-revocation/concurrency
+  regression coverage.
+- A provisional 288-ID requirement registry, deterministic gate report, G0/G1
+  blocker/evidence records, architecture decisions, and initial lab registers.
+- Checked resource admission and telemetry, deterministic fake inference,
+  runtime-placement and isolated-cache contracts, and an authenticated local
+  inference gateway with no remote fallback.
+- Deny-by-default policy, typed-DAG checkpoint/recovery, versioned Linux/fake
+  platform adapters, and strict signed model-pack verification contracts.
+- Bounded local-IPC framing with strict envelopes, peer-identity checks,
+  deadlines, and stale-lease fields.
 
 ### Fixed
 

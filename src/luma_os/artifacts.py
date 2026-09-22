@@ -154,6 +154,8 @@ class ArtifactService:
                     raise ConflictError("Idempotency key was already used for different artifact content")
                 return self.get(owner, str(result["artifact_id"]), version=int(result["version"]))
 
+        self._assert_workflow_running(owner, workflow_id)
+
         content_hash, storage_path = self._store_blob(content)
         now = utc_now()
         artifact_id = str(uuid.uuid4())
@@ -167,6 +169,7 @@ class ArtifactService:
             "size_bytes": len(content),
         }
         with self.store.transaction(write=True) as connection:
+            self._assert_workflow_running(owner, workflow_id, connection=connection)
             if idempotency_key:
                 existing = connection.execute(
                     "SELECT result_json FROM effect_receipts WHERE owner=? AND idempotency_key=?",
@@ -211,6 +214,7 @@ class ArtifactService:
         workflow_id: str | None = None,
         step_id: str | None = None,
     ) -> dict[str, Any]:
+        self._assert_workflow_running(owner, workflow_id)
         content_hash, storage_path = self._store_blob(content)
         if idempotency_key:
             receipt = self.receipts.find(owner, idempotency_key)
@@ -221,6 +225,7 @@ class ArtifactService:
                 return self.get(owner, artifact_id, version=int(result["version"]))
         now = utc_now()
         with self.store.transaction(write=True) as connection:
+            self._assert_workflow_running(owner, workflow_id, connection=connection)
             if idempotency_key:
                 existing = connection.execute(
                     "SELECT result_json FROM effect_receipts WHERE owner=? AND idempotency_key=?",
@@ -311,6 +316,32 @@ class ArtifactService:
                 (owner, limit),
             ).fetchall()
         return [self._metadata(row, row) for row in rows]
+
+    def _assert_workflow_running(
+        self,
+        owner: str,
+        workflow_id: str | None,
+        *,
+        connection: object | None = None,
+    ) -> None:
+        """Fence workflow-owned effects against cancellation and stale execution."""
+
+        if workflow_id is None:
+            return
+
+        def check(active: object) -> None:
+            row = active.execute(  # type: ignore[attr-defined]
+                "SELECT state FROM workflows WHERE workflow_id=? AND owner=?",
+                (workflow_id, owner),
+            ).fetchone()
+            if row is None or row["state"] != "RUNNING":
+                raise ConflictError("Workflow is no longer authorized to commit effects")
+
+        if connection is not None:
+            check(connection)
+            return
+        with self.store.transaction() as active:
+            check(active)
 
     def _store_blob(self, content: bytes) -> tuple[str, str]:
         content_hash = hashlib.sha256(content).hexdigest()

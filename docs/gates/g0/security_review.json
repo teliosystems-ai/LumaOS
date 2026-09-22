@@ -1,0 +1,43 @@
+{
+  "schema_version": 1,
+  "gate": "G0",
+  "recorded_on": "2026-09-22",
+  "owner": "security-lead",
+  "status": "partial",
+  "gate_closing": false,
+  "working_tree_secret_scan": {
+    "tool": "ripgrep 15.2.0",
+    "base_commit": "394917fcdc87b5bf4c2d3dd4a9f39ee945f1a414",
+    "scope": "current repository working tree, including hidden files and excluding .git",
+    "pattern_classes": [
+      "PEM/OpenSSH/PGP private-key headers",
+      "AWS access-key identifiers",
+      "GitHub token prefixes",
+      "OpenAI-style secret-key prefixes"
+    ],
+    "matches": 0,
+    "result": "pass-development-scan"
+  },
+  "dependency_inventory": {
+    "declared_runtime_dependencies": 0,
+    "model_weights_in_release": false,
+    "result": "pass-manifest-review",
+    "evidence": "RELEASE_MANIFEST.json"
+  },
+  "exposed_interface_review": {
+    "result": "design-reviewed-pending-current-dynamic-run",
+    "intended_listener": "literal loopback HTTP only",
+    "internal_transport": "bounded local IPC contract; production socket and peer-credential plumbing not implemented",
+    "evidence": [
+      "docs/THREAT_MODEL.md",
+      "docs/adr/0002-service-boundaries-and-transport.md",
+      "src/luma_os/server.py",
+      "src/luma_os/ipc.py"
+    ]
+  },
+  "limitations": [
+    "This is a targeted pattern scan, not a credential-provider or full Git-history scan.",
+    "Binary and external model/runtime assets were not present and were not scanned.",
+    "The complete G0 security review and current-revision dynamic test run remain open."
+  ]
+}

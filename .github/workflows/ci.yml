@@ -31,6 +31,37 @@ jobs:
       - name: Validate repository
         run: python scripts/check.py
 
+  g1-contracts:
+    name: Deterministic fake-backend and G1 contracts
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Run focused contracts with warnings as errors
+        shell: bash
+        env:
+          PYTHONWARNINGS: error
+        run: |
+          for test_file in \
+            test_resources.py \
+            test_runtime_contracts.py \
+            test_policy.py \
+            test_typed_dag.py \
+            test_model_pack.py \
+            test_inference_gateway.py \
+            test_ipc.py \
+            test_platform_adapter.py \
+            test_system_telemetry.py \
+            test_control_boundaries.py \
+            test_state_transfer.py
+          do
+            python -m unittest discover -s tests -p "$test_file" -v
+          done
+
   windows-smoke:
     name: Native Windows smoke · Python ${{ matrix.python }}
     runs-on: windows-2022
@@ -47,6 +78,24 @@ jobs:
           python-version: ${{ matrix.python }}
       - name: Compile source
         run: python scripts/check.py --compile-only
+      - name: Run platform-neutral contract tests
+        shell: pwsh
+        run: |
+          $testFiles = @(
+            "test_resources.py",
+            "test_runtime_contracts.py",
+            "test_policy.py",
+            "test_typed_dag.py",
+            "test_model_pack.py",
+            "test_inference_gateway.py",
+            "test_ipc.py",
+            "test_platform_adapter.py",
+            "test_system_telemetry.py"
+          )
+          foreach ($testFile in $testFiles) {
+            python -W error -m unittest discover -s tests -p $testFile -v
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
       - name: Exercise the native CLI boundary
         shell: pwsh
         run: |

@@ -20,7 +20,7 @@ Status meanings:
 | --- | --- | --- | --- |
 | MVP-001 | Intent-driven user interaction | Partial | Invoice-report request becomes an inspectable prepared workflow; no general natural-language agent |
 | MVP-002 | Human-visible plan before effects | Implemented | Separate workflow create/prepare and run operations; workflow/step API records |
-| MVP-003 | Explicit approval/capability boundary | Partial | Folder enrollment and explicit run action; not a general policy language |
+| MVP-003 | Explicit approval/capability boundary | Partial | Folder enrollment and explicit run action plus a deny-by-default typed policy-broker prototype; the MVP API is not yet fully mediated by that broker |
 | MVP-004 | Local-first/offline baseline | Implemented | Standard-library runtime, loopback service, manual workflow works without a model |
 | MVP-005 | Explainable/auditable execution | Partial | Persisted steps, errors, provenance, and effect receipts; not certified tamper evidence |
 | MVP-006 | Durable workflow state | Implemented | SQLite transactions/WAL and restart-visible state |
@@ -28,13 +28,13 @@ Status meanings:
 | MVP-008 | Scoped local file access | Implemented on POSIX/WSL target | Explicit grant, descriptor-relative no-follow read, root identity and size checks |
 | MVP-009 | Semantic file experience | Deferred | Visual product concept exists elsewhere; runtime has scoped paths, not semantic indexing/search |
 | MVP-010 | Versioned managed artifacts | Implemented | Application-owned metadata, versions, content hashes, and object storage |
-| MVP-011 | Local model integration | Partial | Optional endpoint/configuration/status boundary; weights and model runtime are external |
+| MVP-011 | Local model integration | Partial | Strict signed model-pack, runtime-profile, resource-lease, and authenticated local-gateway contracts with deterministic fake inference; real weights, trusted keys, and a qualified model runtime are external and unverified |
 | MVP-012 | No-model/manual degradation | Implemented | Deterministic vertical slice remains usable when model is absent |
 | MVP-013 | Stable local API and schemas | Partial | OpenAPI/JSON schemas provided; compatibility is pre-stable in `0.1.x` |
 | MVP-014 | Privacy and permission visibility | Partial | Grant scope/revocation and local state are visible; no complete privacy dashboard or DLP |
 | MVP-015 | Ubuntu developer deployment | Implemented | Source runner, unprivileged install, optional systemd user unit for Ubuntu 24.04 |
 | MVP-016 | Windows deployment variation | Partial | Windows 11/WSL2 launch path; no native service/installer parity |
-| MVP-017 | Dependency-free automated testing | Implemented | Standard-library compile, unittest, metadata, and source-package checks |
+| MVP-017 | Dependency-free automated testing | Implemented | Standard-library compile, unittest, metadata, provisional registry/gate-report, and source-package checks |
 | MVP-018 | Operational and security documentation | Implemented | Architecture, threat model, operations, support matrix, security policy |
 
 ## Product-scale and deployment requirements
@@ -68,7 +68,7 @@ The standalone visual simulator does not call the reference runtime, so simulato
 
 - independent security review and complete negative-test inventory;
 - stable authentication/session and API compatibility contract;
-- supported backup, migration, retention, and secure-deletion operations;
+- production-grade backup, downgrade migration, policy retention, and secure-deletion operations beyond the bounded verified developer export/restore and orphan-object cleanup;
 - packaged UI/schema asset discovery outside source layout;
 - accessibility and cross-browser verification;
 - performance/resource limits and concurrency characterization;

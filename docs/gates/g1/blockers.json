@@ -1,0 +1,82 @@
+{
+  "schema_version": 1,
+  "gate": "G1",
+  "recorded_on": "2026-09-22",
+  "status": "blocked",
+  "blockers": [
+    {
+      "id": "G1-BLK-001",
+      "title": "G0 exit criteria and governing-source traceability remain open",
+      "status": "open",
+      "severity": "gate-blocking",
+      "owner": "requirements-and-release-owner",
+      "decision_due": "2026-09-29",
+      "resolution": "Resolve the G0 blocker register and accept the immutable governing source revisions before claiming requirement closure.",
+      "evidence": "docs/gates/g0/blockers.json"
+    },
+    {
+      "id": "G1-BLK-002",
+      "title": "No approved signed 4-6B compact model/runtime tuple is available",
+      "status": "open",
+      "severity": "gate-blocking",
+      "owner": "inference-lead",
+      "supporting_owner": "license-owner",
+      "decision_due": "2026-10-13",
+      "resolution": "Select legally approved candidates, acquire assets outside Git, verify signed packs, and retain real offline workflow evidence with exact model, tokenizer, template, context, backend, deadline, and lease identity.",
+      "evidence": "docs/registers/licenses.json"
+    },
+    {
+      "id": "G1-BLK-003",
+      "title": "Two physical A1 boards and Ubuntu 24.04 baseline are unavailable",
+      "status": "open",
+      "severity": "gate-blocking",
+      "owner": "platform-lead",
+      "supporting_owner": "release-engineer",
+      "decision_due": "2026-10-13",
+      "resolution": "Designate both boards, reproduce the 24.04 baseline, and run the full authorized workflow and failure suite on each board.",
+      "evidence": "docs/gates/g0/lab_inventory.json"
+    },
+    {
+      "id": "G1-BLK-004",
+      "title": "Candidate comparison and exact retained runtime tuples are absent",
+      "status": "open",
+      "severity": "gate-blocking",
+      "owner": "inference-lead",
+      "decision_due": "2026-10-20",
+      "resolution": "Measure at least two 4-6B candidates and one mainstream candidate on the same OS tasks, then record the Ubuntu 24.04/26.04 and backend/driver/storage decisions.",
+      "evidence": "docs/gates/g1/evidence.json"
+    },
+    {
+      "id": "G1-BLK-005",
+      "title": "Real 400-405B placement/load experiment lacks suitable hardware and assets",
+      "status": "open",
+      "severity": "gate-blocking",
+      "owner": "inference-lead",
+      "decision_due": "2026-10-20",
+      "resolution": "Use suitable real hardware and licensed assets to retain a placement/load result or measured blocking constraint; fake tensors and sparse mappings are not accepted.",
+      "evidence": "docs/gates/g0/blockers.json"
+    },
+    {
+      "id": "G1-BLK-006",
+      "title": "Service-package, signed UKI/A-B boot, and model-independent recovery spikes are incomplete",
+      "status": "open",
+      "severity": "gate-blocking",
+      "owner": "release-engineer",
+      "supporting_owner": "platform-lead",
+      "decision_due": "2026-10-20",
+      "resolution": "Run the spikes on disposable media using protected lab keys and retain boot, rollback, and recovery evidence without changing the developer-MVP support claim.",
+      "evidence": "docs/adr/0006-supported-package-layout.md"
+    },
+    {
+      "id": "G1-BLK-007",
+      "title": "G1 security, manual failure, and performance evidence is incomplete",
+      "status": "open",
+      "severity": "gate-blocking",
+      "owner": "qa-lead",
+      "supporting_owner": "security-lead",
+      "decision_due": "2026-10-27",
+      "resolution": "Complete the planned prompt/capability/IPC/lease/tamper/sandbox fixtures, lifecycle termination and pressure recovery runs, and Q01/Q02/Q06-Q08 baselines on the retained tuples.",
+      "evidence": "docs/gates/g1/evidence.json"
+    }
+  ]
+}

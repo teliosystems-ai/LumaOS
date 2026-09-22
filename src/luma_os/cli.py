@@ -10,6 +10,7 @@ import sys
 from .errors import LumaError
 from .server import create_server
 from .service import LumaService
+from .state_transfer import export_state, prune_unreferenced_objects, restore_state
 
 
 def _service(data_dir: str | None) -> LumaService:
@@ -51,6 +52,18 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--owner", default="local-user")
     run.add_argument("--currency")
     run.add_argument("--idempotency-key")
+
+    export = subparsers.add_parser("export-state", help="Create a verified state backup archive")
+    export.add_argument("output", type=Path)
+    export.add_argument("--data-dir")
+
+    restore = subparsers.add_parser("restore-state", help="Restore a verified archive into a new state directory")
+    restore.add_argument("archive", type=Path)
+    restore.add_argument("--data-dir", required=True)
+
+    prune = subparsers.add_parser("prune-objects", help="Report unreferenced content objects")
+    prune.add_argument("--data-dir")
+    prune.add_argument("--apply", action="store_true", help="Remove the reported unreferenced objects")
     return parser
 
 
@@ -58,6 +71,10 @@ def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     try:
+        if args.command == "restore-state":
+            result = restore_state(args.archive, args.data_dir)
+            print(json.dumps(result, indent=2))
+            return 0
         service = _service(args.data_dir)
         if args.command == "init":
             print(json.dumps(service.status(), indent=2))
@@ -84,6 +101,12 @@ def main(argv: list[str] | None = None) -> int:
             result = service.workflows.run(args.owner, workflow["workflow_id"])
             print(json.dumps(result, indent=2))
             return 0 if result["state"] == "SUCCEEDED" else 2
+        if args.command == "export-state":
+            print(json.dumps(export_state(service.config, args.output), indent=2))
+            return 0
+        if args.command == "prune-objects":
+            print(json.dumps(prune_unreferenced_objects(service.config, apply=args.apply), indent=2))
+            return 0
         if args.command == "serve":
             server = create_server(
                 service,

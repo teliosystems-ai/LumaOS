@@ -32,15 +32,20 @@ Luma OS `0.1.0` is a developer MVP. “Supported” means the repository intends
 | Explicit folder enrollment and scoped local reads | Supported on the documented POSIX/WSL path |
 | Durable application-owned local artifact writes | Supported |
 | SQLite workflow state and effect receipts | Supported |
+| Verified local state export and clean-directory restore | Supported developer operation |
+| Unreferenced-object retention preview/prune | Supported developer operation; not secure deletion |
 | Invoice report vertical slice | Developer MVP |
 | Offline/manual operation without a model | Required baseline |
 | Operator-configured local model endpoint | Optional/best effort |
+| G1 resource/policy/DAG/model-pack/platform contracts | Development prototype only; not product or hardware certification |
+| Deterministic fake inference | Test-only; never runtime, quality, or performance evidence |
+| Real signed compact-model inference | Not yet available or certified |
 | Remote/cloud model service | Unsupported by default |
 | Bundled models, weights, tokenizers, or datasets | Not included |
 | General autonomous tool execution | Unsupported |
 | Writes back into enrolled source folders | Unsupported by default |
 | Multiple users or remote identity | Unsupported |
-| Production backup, migration, or HA | Unsupported |
+| Production backup, downgrade migration, or HA | Unsupported |
 
 ## Installation and deployment
 
@@ -59,7 +64,7 @@ Luma OS `0.1.0` is a developer MVP. “Supported” means the repository intends
 
 ## Model scale language
 
-The broader Luma OS product requirements discuss model sizes from compact models through 400B-class systems. That range is a product/deployment taxonomy, **not** a claim that this MVP runs or certifies those models. Version `0.1.0` includes no weights, GPU runtime, scheduler, distributed inference, performance baseline, hardware qualification, or cluster certification.
+The broader Luma OS product requirements discuss model sizes from compact models through 400B-class systems. That range is a product/deployment taxonomy, **not** a claim that this MVP runs or certifies those models. Version `0.1.0` includes model-pack, resource, and fake-backend development contracts, but no weights, qualified GPU runtime, certified scheduler, distributed inference, performance baseline, hardware qualification, or cluster certification.
 
 Operators who connect a model are responsible for its license, hardware, runtime, endpoint security, privacy, output validation, and cost.
 

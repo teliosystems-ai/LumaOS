@@ -35,7 +35,7 @@ It has **not** passed formal G0 or G1. Repository-local G1 prototypes now cover 
 | Stage | Status at this checkpoint |
 | --- | --- |
 | G0 | **Blocked, gate not passed.** The repository baseline, 288-ID provisional registry, gate report, architecture decisions, initial registers, observed development-host inventory, contract checks, and reproducible source-package evidence exist. The three governing inputs, two designated physical A1 boards, Ubuntu 24.04 reproducible baseline, disposable disks, operational signing custody, selected model/runtime licenses, and full manual/security/performance evidence remain open in `docs/gates/g0/blockers.json`. |
-| G1 | **Repository-local contract tranche implemented, gate blocked.** Development evidence covers checked resource admission, deterministic fake inference, cancellation/concurrency and revocation fencing, state migration/export/restore, and the policy/DAG/platform/model-pack/local-gateway contract surfaces. The current combined revision still requires a complete test run. A real approved compact model, two-board offline workflow, candidate measurements, exact retained tuples, boot/recovery spikes, 400â€“405B experiment, and full security/manual/performance evidence remain open in `docs/gates/g1/blockers.json`. This work is preparatory and does not waive the G0 dependency. |
+| G1 | **Repository-local contract tranche implemented, gate blocked.** Development evidence covers checked resource admission, deterministic fake inference, cancellation/concurrency and revocation fencing, state migration/export/restore, and the policy/DAG/platform/model-pack/local-gateway contract surfaces. The committed contract tranche passed the complete 85-test WSL development suite with warnings treated as errors. A real approved compact model, two-board offline workflow, candidate measurements, exact retained tuples, boot/recovery spikes, 400â€“405B experiment, and full security/manual/performance evidence remain open in `docs/gates/g1/blockers.json`. This work is preparatory and does not waive the G0 dependency. |
 | G2, G3, G4, G5 | **Not started.** |
 | GWIN0, GWIN1, GWIN2 | **Not started.** |
 | G6, G7 | **Not started and separately capacity-gated.** |
@@ -471,7 +471,8 @@ Development resumes at G0, using `v0.1.0` as the seed rather than restarting the
 
 Repository-local items 1â€“4 are now implemented, together with initial policy,
 typed-DAG, model-pack, local-gateway, telemetry, platform-adapter, and recovery
-contracts. Item 7 remains pending for the combined revision. Items 5â€“6 require
+contracts. The repository-local portion of item 7 passed 85 tests on the WSL
+evaluation environment. Items 5â€“6 and gate-closing tests require
 approved external assets and physical hardware and are recorded as gate
 blockers rather than represented as complete.
 

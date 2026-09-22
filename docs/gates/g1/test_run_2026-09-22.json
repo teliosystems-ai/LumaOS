@@ -1,0 +1,42 @@
+{
+  "schema_version": 1,
+  "record_id": "G1-TEST-2026-09-22-001",
+  "recorded_on": "2026-09-22",
+  "owner": "qa-lead",
+  "code_commit": "b5ca10a4cb6a5f9ae2a2c0f15dc67567ef48be60",
+  "environment": "DEV-WSL-UBUNTU-26-01",
+  "command": "PYTHONWARNINGS=error python3 scripts/check.py",
+  "additional_commands": [
+    "SOURCE_DATE_EPOCH=0 python3 scripts/build_release.py (executed twice)",
+    "cmp first-SHA256SUMS second-SHA256SUMS",
+    "sha256sum --check SHA256SUMS"
+  ],
+  "result": "pass",
+  "checks": {
+    "python_modules_compiled": 22,
+    "json_schemas_parsed": 5,
+    "unit_tests_run": 85,
+    "unit_tests_failed": 0,
+    "warnings_as_errors": true,
+    "requirement_entries_validated": 288,
+    "release_files_validated": 104,
+    "reproducible_source_builds": 2,
+    "archive_checksum_verification": "pass",
+    "governing_source_state": "explicitly-blocked",
+    "gate_artifact_state": "G0-and-G1-explicitly-blocked"
+  },
+  "scope": [
+    "Python compilation",
+    "release metadata and exact tracked inventory",
+    "two-build source-archive reproducibility and checksum verification",
+    "governing-source and deterministic registry/gate-report checks",
+    "complete standard-library unittest discovery on the committed code"
+  ],
+  "limitations": [
+    "This is development evidence from Ubuntu 26.04 under WSL2, not the required Ubuntu 24.04 physical-board baseline.",
+    "Fake model/signature/telemetry fixtures are not real model, cryptographic custody, hardware, quality, or performance evidence.",
+    "The optional browser journey skipped because Chrome or Chromium was unavailable.",
+    "This passing repository check does not resolve any open G0 or G1 gate blocker."
+  ],
+  "gate_closing": false
+}

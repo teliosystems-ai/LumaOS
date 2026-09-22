@@ -16,7 +16,7 @@
         "tests/test_resources.py"
       ],
       "environment": "DEV-WSL-UBUNTU-26-01",
-      "observations": "21 focused resource tests and the then-current 47-test suite passed with warnings treated as errors.",
+      "observations": "22 focused resource/fake-inference tests passed within the current 85-test suite with warnings treated as errors.",
       "gate_closing": false
     },
     {
@@ -47,7 +47,7 @@
     {
       "id": "G1-EV-004",
       "subject": "policy-dag-platform-model-pack-and-local-gateway-contracts",
-      "result": "implemented-pending-complete-test-run",
+      "result": "development-tests-passed",
       "evidence": [
         "src/luma_os/policy.py",
         "src/luma_os/typed_dag.py",
@@ -64,24 +64,25 @@
         "tests/test_inference_gateway.py",
         "tests/test_ipc.py"
       ],
-      "environment": "not-yet-executed-as-one-current-revision",
-      "observations": "Code and deterministic tests exist, but this record intentionally does not mark unexecuted tests passed.",
+      "environment": "DEV-WSL-UBUNTU-26-01",
+      "observations": "The current committed contract code passed the complete 85-test repository suite with warnings treated as errors; this does not exercise a real model, trust store, production IPC peer credentials, or physical boards.",
       "gate_closing": false
     },
     {
       "id": "G1-EV-005",
       "subject": "host-and-gpu-telemetry-adapter",
-      "result": "implemented-pending-complete-test-run",
+      "result": "development-tests-passed",
       "evidence": [
         "src/luma_os/system_telemetry.py",
         "tests/test_system_telemetry.py",
         "docs/gates/g0/lab_inventory.json"
       ],
       "environment": "DEV-WIN-WSL-GPU-01",
-      "observations": "The adapter is read-only and fail-closed. The inventory observes an RTX 3050, but no model runtime or qualified service class.",
+      "observations": "Three deterministic adapter tests passed in the current suite. The separate inventory observes an RTX 3050, but the tests do not prove a model runtime or qualified service class.",
       "gate_closing": false
     }
   ],
+  "validation_record": "docs/gates/g1/test_run_2026-09-22.json",
   "open_blocker_record": "docs/gates/g1/blockers.json",
   "closure_rule": "G1 may be marked passed only when G0 dependencies are resolved and every G1 exit criterion has retained current-revision evidence on the required real environments."
 }

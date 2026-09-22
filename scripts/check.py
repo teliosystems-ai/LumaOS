@@ -48,6 +48,7 @@ REQUIRED_GATE_FILES = (
     "docs/gates/g0/security_review.json",
     "docs/gates/g1/blockers.json",
     "docs/gates/g1/evidence.json",
+    "docs/gates/g1/test_run_2026-09-22.json",
     "docs/registers/adversarial.json",
     "docs/registers/failure_injection.json",
     "docs/registers/licenses.json",
@@ -232,6 +233,23 @@ def validate_gate_artifacts() -> None:
     hardware = inventory.get("required_reference_hardware")
     if not isinstance(hardware, dict) or hardware.get("a1_x86_64_boards_designated") != 0:
         raise RuntimeError("lab inventory must not claim unverified A1 reference boards")
+
+    test_run = documents["docs/gates/g1/test_run_2026-09-22.json"]
+    if (
+        not isinstance(test_run, dict)
+        or test_run.get("result") != "pass"
+        or test_run.get("gate_closing") is not False
+    ):
+        raise RuntimeError("G1 repository test record must be passing but non-closing")
+    code_commit = test_run.get("code_commit")
+    test_checks = test_run.get("checks")
+    if (
+        not isinstance(code_commit, str)
+        or not re.fullmatch(r"[0-9a-f]{40}", code_commit)
+        or not isinstance(test_checks, dict)
+        or test_checks.get("unit_tests_failed") != 0
+    ):
+        raise RuntimeError("G1 repository test record is incomplete")
 
     from build_requirement_registry import build_registry, load_source_record, serialize_registry
     from gate_report import render_report, validate_registry

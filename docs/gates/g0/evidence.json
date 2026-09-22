@@ -86,6 +86,17 @@
       ],
       "gate_closing": false,
       "notes": "Ubuntu full checks, focused fake/G1 contracts, native Windows contract smoke, and reproducible source-package lanes are declared; configuration is not a passing run."
+    },
+    {
+      "id": "G0-EV-008",
+      "subject": "current-repository-check",
+      "result": "development-check-passed",
+      "evidence": [
+        "docs/gates/g1/test_run_2026-09-22.json"
+      ],
+      "environment": "DEV-WSL-UBUNTU-26-01",
+      "gate_closing": false,
+      "notes": "The full dependency-free repository check passed and both 104-file source archive formats reproduced byte-for-byte across two builds with verified checksums; WSL 26.04 is not the required Ubuntu 24.04 physical baseline and cannot close G0."
     }
   ],
   "open_blocker_record": "docs/gates/g0/blockers.json",

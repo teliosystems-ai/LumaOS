@@ -1,0 +1,78 @@
+{
+  "schema_version": 1,
+  "gate": "G2",
+  "recorded_on": "2026-09-22",
+  "owner": "g2-cross-functional-team",
+  "assessment": "blocked",
+  "development_assessment": "in-progress",
+  "certification_assessment": "blocked",
+  "claim_boundary": "This evidence starts the repository-local G2 control-plane tranche. It demonstrates pure, injected contracts for non-destructive installer planning, A/B trial-boot state, and a typed privileged-helper boundary. It does not demonstrate a bootable OS, disk mutation, Secure Boot, UKI, dm-verity, LUKS2, cgroup/AppArmor/seccomp enforcement, KVM isolation, kernel peer credentials, or either physical A1 board.",
+  "implementation_commit": "4ec25b849b3db4363191532bdb06f42894e11253",
+  "items": [
+    {
+      "id": "G2-EV-001",
+      "subject": "non-destructive-installer-preflight-and-destructive-confirmation-contract",
+      "result": "development-tests-passed",
+      "requirements_prepared": ["FR02", "FR03", "A001", "A002", "A108"],
+      "source_tests_prepared": ["T01", "T48"],
+      "evidence": [
+        "src/luma_os/installer.py",
+        "tests/test_installer.py"
+      ],
+      "environment": "DEV-WIN-WSL-GPU-01",
+      "observations": "Fifteen deterministic tests cover exact hardware/disk identity, same-device accelerator qualification, capacity, issued-plan provenance, release/payload/policy binding, authenticated confirmation, effect-time authority, expiry, fresh revalidation, opaque locked-device capabilities, and a durable in-doubt/completed attempt-journal contract. The executor is injected and no disk or OS tool is invoked.",
+      "limitations": "The real binder must exclusively open, lock, re-identify, and retain the exact raw-device handle; the real journal must provide crash-safe durability. Destructive installation and encryption recovery remain blocked.",
+      "gate_closing": false
+    },
+    {
+      "id": "G2-EV-002",
+      "subject": "authenticated-ab-trial-boot-and-fallback-contract",
+      "result": "development-tests-passed",
+      "requirements_prepared": ["FR05", "FR07", "NF18", "A005", "A104", "A105", "A106", "A110", "Q15"],
+      "source_tests_prepared": ["T04", "T46", "T47", "T49"],
+      "evidence": [
+        "src/luma_os/boot_control.py",
+        "tests/test_boot_control.py"
+      ],
+      "environment": "DEV-WIN-WSL-GPU-01",
+      "observations": "Thirteen deterministic tests cover distinct physical slot identities, authenticated state, an external monotonic anchor, hash-linked operation records, monotonic fence epochs, anti-downgrade sequencing, attested boot attempts, essential-health binding, tamper evidence, checkpoint durability/readability, and power-loss reconciliation. Production runtime assertions are prohibited and the suite passes under optimized Python.",
+      "limitations": "Authenticator, anchor CAS, boot observation, durability/readback, bootloader, UKI, verity, encryption, and physical power-loss adapters are injected or absent; no physical boot occurred.",
+      "gate_closing": false
+    },
+    {
+      "id": "G2-EV-003",
+      "subject": "typed-privileged-helper-and-confinement-contract",
+      "result": "development-tests-passed",
+      "requirements_prepared": ["A113", "A114", "A115", "A116", "A118"],
+      "source_tests_prepared": ["T29", "T50", "T51", "T62"],
+      "evidence": [
+        "src/luma_os/privileged_helper.py",
+        "tests/test_privileged_helper.py"
+      ],
+      "environment": "DEV-WIN-WSL-GPU-01",
+      "observations": "Twenty-one deterministic tests cover closed typed actions, canonical bounded input, authenticated peer revalidation immediately before dispatch, request-bound confinement attestations and authority, opaque stable-device capabilities, signed driver/runtime certificate binding, effect-time revocation, persistent pending/completed/failed-unknown journal reconciliation, executor idempotency, and reentrant-callback denial. The suite passes under optimized Python.",
+      "limitations": "The real service must obtain kernel peer credentials, verify signatures and OS enforcement, safely bind devices, provide an atomic durable journal, and operate under bounded watchdogs. No privileged action is executed by this module.",
+      "gate_closing": false
+    },
+    {
+      "id": "G2-EV-004",
+      "subject": "cross-platform-repository-validation",
+      "result": "development-tests-passed",
+      "requirements_prepared": [],
+      "source_tests_prepared": [],
+      "evidence": [
+        "docs/gates/g2/test_run_2026-09-22.json",
+        "scripts/check.py"
+      ],
+      "environment": "DEV-WIN-WSL-GPU-01",
+      "observations": "The complete 147-test suite passed with zero failures in native Windows and Ubuntu WSL; the 49 new safety-boundary tests also passed with Python assertions disabled. These environments share one physical laptop.",
+      "limitations": "Repository tests validate contracts and regressions only. They do not satisfy any physical-board, destructive-media, boot, encryption, confinement, performance, or lifecycle acceptance procedure.",
+      "gate_closing": false
+    }
+  ],
+  "validation_record": "docs/gates/g2/test_run_2026-09-22.json",
+  "test_plan": "docs/gates/g2/test_plan.json",
+  "open_blocker_record": "docs/gates/g2/blockers.json",
+  "deferral_record": "docs/gates/final_certification_deferrals.json",
+  "closure_rule": "G2 remains blocked until T01-T16 and the complete vertical workflow pass on both physical A1 boards, with the required signed media, storage, recovery, confinement, security, lifecycle, and performance evidence."
+}

@@ -28,10 +28,20 @@ Version `0.1.0` is a developer MVP and a useful input to G0. It currently demons
 - source-run paths for Ubuntu and Windows 11 through WSL2;
 - the current native Windows 11 and Ubuntu 26.04 WSL development lanes on one physical laptop;
 - a fixed Luma OS `Admin` governance role with finite, receipted delegation;
-- a pinned Qwen3-1.7B Q4_K_M development model through llama.cpp on Windows CUDA, Ubuntu WSL CPU, and the authenticated Luma gateway; and
+- a pinned Qwen3-1.7B Q4_K_M development model through llama.cpp on Windows CUDA, Ubuntu WSL CPU, and the authenticated Luma gateway;
+- a non-destructive installer contract, pure A/B boot-state model, and typed privileged-helper/confinement contracts with 49 safety tests under normal and optimized-Python execution; and
 - repository, API-contract, browser-journey, and deterministic source-package checks.
 
 It has **not** passed formal G0 or G1. Their repository/local development scope is recorded as **complete with deferrals**, while formal certification remains **blocked**. Repository-local G1 prototypes now cover purpose/lifecycle-bound signed model-pack contracts, checked resource admission, deny-by-default policy and Admin delegation, a typed DAG, deterministic fake inference, real loopback inference, local-gateway fencing, platform-adapter scaffolding, and state recovery. It still does not provide a signed certified 4–6B model pack, qualified two-board model runtime, signed skills, worker sandboxing, semantic indexing, multimodal interaction, a bootable image, A/B updates, hardware certification, a Windows file broker, VM or dual-boot lifecycle, 400–405B qualification, or cluster execution. Existing simulator, fake-backend, WSL, one-laptop real-model, and MVP results are development evidence only.
+
+G2 repository development is **in progress** and formal G2 certification is
+**blocked**. The first G2 tranche at
+`4ec25b849b3db4363191532bdb06f42894e11253` models installer authorization,
+A/B update decisions, privileged-helper dispatch, and confinement evidence as
+pure, fail-closed contracts. It neither performs installation/boot effects nor
+enforces UKI, dm-verity, LUKS, cgroup v2, AppArmor, seccomp, KVM, or real peer
+credentials. Native Windows and Ubuntu WSL remain two development lanes on one
+physical laptop, not the two required A1 boards.
 
 ### Current stage status
 
@@ -39,7 +49,8 @@ It has **not** passed formal G0 or G1. Their repository/local development scope 
 | --- | --- |
 | G0 | **Development complete with deferrals; formal certification blocked.** Governing source ingestion and 288-ID traceability are verified; the development baseline, decisions including Admin governance, registers, current Windows/WSL inventory, checks, and source-package evidence exist. Two designated physical boards, the Ubuntu 24.04/E8 baselines, disposable disks, protected production signing custody, and complete qualification evidence are deferred in `docs/gates/g0/blockers.json` and `docs/gates/final_certification_deferrals.json`. |
 | G1 | **Development complete with deferrals; formal certification blocked.** Contract evidence covers resources, policy/Admin delegation, typed DAG, model-pack trust lifecycle, fake and real inference, authenticated gateway, cancellation/concurrency/revocation fencing, state transfer, telemetry, and platform adapters. Qwen3-1.7B passed bounded native Windows CUDA and Ubuntu WSL CPU/gateway smoke, but it is below the governed 4–6B range. Signed 4–6B comparison, two-board workflows, boot/recovery, full security/performance evidence, and the real 400–405B experiment are deferred. No deferral waives G0 or G1 exit criteria. |
-| G2, G3, G4, G5 | **Not started.** |
+| G2 | **Development in progress; formal certification blocked.** The first repository-local safety-contract tranche has 49 tests under normal and optimized-Python execution for non-destructive installer authorization, pure A/B boot-state transitions, and typed helper/confinement boundaries. No real disk, boot, cryptographic boot-chain, encryption, kernel-control, VM, or peer-credential enforcement has been exercised. |
+| G3, G4, G5 | **Not started.** |
 | GWIN0, GWIN1, GWIN2 | **Not started.** |
 | G6, G7 | **Not started and separately capacity-gated.** |
 | RX | **Not started and not yet authorized.** |
@@ -188,6 +199,26 @@ certification. A 450B target is outside the current governing requirements.
 - **Performance:** `Q01`, `Q02`, `Q06–Q09`; 1,000 compact lifecycle cycles, resource-pressure runs, cancellation boundaries, and initial storage crash matrix.
 
 **Exit gate:** The requirements-defined G2 gate is met: `T01–T16` and the vertical workflow pass on both A1 boards. The alpha survives missing models, worker crashes, a failed staged artifact commit, and a failed trial boot without an unauthorized effect or loss of acknowledged content.
+
+**2026-09-22 development checkpoint:** G2 is in progress, not passed. Commit
+`4ec25b849b3db4363191532bdb06f42894e11253` adds three repository-local
+safety-contract modules and 49 tests that also pass with Python assertions
+disabled. The installer module is
+non-destructive: inventory discovery and the executor are injected, and tests
+exercise preflight, explicit short-lived confirmation, effect-time
+revalidation, exact device binding, replay handling, and an in-doubt journal.
+The A/B module is a pure state-transition model requiring authenticated state,
+a monotonic anchor, trusted observations, health acknowledgement, and fallback
+data-readability evidence. The privileged-helper module defines a closed typed
+request surface, authority/device/certificate binding, attested confinement,
+idempotency, and restart reconciliation.
+
+This checkpoint is development-contract evidence only. It does not mutate a
+disk, select a firmware entry, boot either slot, build or verify a real UKI or
+dm-verity root, unlock LUKS, impose cgroup limits, load AppArmor/seccomp policy,
+launch a KVM microVM, or authenticate a real Unix socket/named-pipe peer. Those
+effects and the two-board Ubuntu 24.04 qualification remain mandatory for G2
+formal certification.
 
 ## G3 Functional beta
 
@@ -497,7 +528,8 @@ telemetry, platform-adapter, and recovery contracts. Item 5 uses the pinned
 1.7B development baseline and therefore does not close the governed 4–6B
 deliverable. Item 6 and every gate-closing physical-board, boot, recovery,
 signing-custody, security/performance, and 400–405B test are recorded as final
-certification deferrals. Development proceeds to the next implementation
-tranche without representing those deferrals as a formal G0 or G1 pass.
+certification deferrals. Development has entered the G2 safety-contract tranche
+without representing those G0/G1 deferrals as passes or the pure G2 contracts
+as OS certification.
 
 No later-stage support claim should be merged into the support matrix until that stage's exit evidence exists.

@@ -21,6 +21,20 @@ All notable changes to Luma OS are documented here. The format follows [Keep a C
   platform adapters, and strict signed model-pack verification contracts.
 - Bounded local-IPC framing with strict envelopes, peer-identity checks,
   deadlines, and stale-lease fields.
+- A non-destructive installer safety contract with immutable inventory,
+  exact-capacity preflight, confirmation, revalidation, device-capability, and
+  durable attempt-journal boundaries.
+- A pure A/B boot-state model with authenticated state, monotonic anchoring,
+  generation/fence checks, health and data-readability evidence, trial failure,
+  and power-loss reconciliation transitions.
+- Typed privileged-helper, authority, device, driver-certificate, confinement,
+  idempotency, and reconciliation contracts, covered together with the
+  installer and boot-state modules by 49 safety tests under normal and
+  optimized-Python execution.
+
+The G2 work above is development-contract evidence only. It does not perform a
+real installation or boot and does not establish UKI, dm-verity, LUKS, cgroup,
+AppArmor, seccomp, KVM, or operating-system peer-credential enforcement.
 
 ### Fixed
 

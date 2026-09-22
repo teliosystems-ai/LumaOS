@@ -2,7 +2,10 @@
 
 ## Status
 
-This document covers the Luma OS `0.1.0` local developer MVP. It identifies engineering controls and residual risk; it is not a security certification or claim of production fitness.
+This document covers the Luma OS `0.1.0` local developer MVP and the first
+repository-local G2 safety-contract tranche. It identifies engineering controls
+and residual risk; it is not a security certification or claim of production
+fitness. G2 development is in progress and formal certification is blocked.
 
 ## Protected assets
 
@@ -14,7 +17,9 @@ This document covers the Luma OS `0.1.0` local developer MVP. It identifies engi
 - optional local model endpoint credentials;
 - policy grants, resource leases, and local IPC identities;
 - Admin role definitions, assignments, revocations, and delegation receipts;
-- model-pack trust metadata and certification records; and
+- model-pack trust metadata and certification records;
+- installer inventory/plan/confirmation/attempt records, A/B boot-state records,
+  and privileged-helper requests, trust decisions, journals, and receipts; and
 - integrity and availability of the operator's machine.
 
 ## Trust zones
@@ -31,6 +36,9 @@ This document covers the Luma OS `0.1.0` local developer MVP. It identifies engi
 | Model-pack store | Content is untrusted until complete inventory, signature, digest, license-use, and runtime-tuple validation | Import/verification boundary |
 | Signing service/key store | Private keys are external protected material and never model-accessible | Digest-bound signing request, key-role validation, and signed result boundary |
 | Logical internal services | Caller assertions are untrusted without OS-peer authentication | Bounded, deadline-bearing local IPC envelope |
+| G2 installer contract | Inventory, confirmation, and requested target are untrusted until bound and revalidated | Pure preflight/authorization/capability/journal boundary; injected discovery and executor |
+| G2 boot-state contract | Restored state and external boot/health/data claims are untrusted | Pure authenticated, monotonic-anchored transition boundary with injected evidence oracles |
+| G2 privileged-helper contract | Wire requests and caller assertions are untrusted | Closed typed actions with injected peer authentication, authority, device/certificate, confinement, journal, and executor boundaries |
 | External network | Untrusted and unnecessary for default operation | No supported listener or dependency |
 
 The host OS, Python runtime, browser, WSL distribution, and administrator/root account are outside the security boundary. A compromise of any of them can bypass application controls.
@@ -74,6 +82,9 @@ compromised Windows Administrator or Linux `root` account safe.
 | Admin role abuse or delegation expansion | Fixed non-ordinary-delegable Admin role; finite activity catalog; authenticated, versioned, expiring/revocable assignments; hash-linked receipts; ordinary effect policy still applies | A compromised Admin principal can make authorized governance changes; multi-party production approval and protected custody remain certification work |
 | Signing-key disclosure or unauthorized signing | Keys remain outside Git/runtime/model context; separate lab and production roots; Admin assigns declared signing activities; digest/key/actor-bound receipts; revoked or wrong-role keys fail closed | Protected production key storage, named human custody, recovery, and ceremony evidence are deferred to final certification |
 | Internal IPC spoofing or memory exhaustion | Four-byte bounded framing, strict fields, asserted-caller/peer comparison, deadlines, lease generations | Real Unix peer-credential plumbing and process isolation remain unimplemented |
+| Installer target substitution or stale confirmation | Stable disk identity, immutable inventory digest, plan/confirmation binding, effect-time revalidation, exact device capability, replay and in-doubt journal rules | Pure non-destructive contract only; no real disk discovery, OS device handle, installer executor, or destructive race testing |
+| A/B state rollback, fork, or false health acknowledgement | Authenticated state, monotonic anchor, hash-chained operations, generation/fence ownership, trusted boot observations, attempt-bound health, and fallback-readability oracle | Pure state machine only; no firmware variables, slot I/O, UKI/dm-verity/LUKS, physical boot, or induced power loss |
+| Privileged-helper argument, authority, device, or confinement substitution | Closed schemas/actions, current peer and deadline checks, exact authority/device/driver binding, trusted confinement attestation, durable idempotency and reconciliation | Injected test doubles only; no privileged process or cgroup/AppArmor/seccomp/KVM/OS peer-credential enforcement |
 | Cancellation races | Workflow state checks before effect commits and DAG cooperative cancellation/checkpoint rules | A handler that ignores the contract can still perform an external effect; production workers require isolation and termination tests |
 
 ## High-risk extension points
@@ -116,7 +127,15 @@ Automated tests should cover:
   concurrent admission, pressure, and quarantine behavior;
 - malformed/oversized IPC frames, caller/peer mismatch, expired deadlines, and
   partial lease tokens; and
-- cancellation and restart at each checkpoint/effect boundary.
+- cancellation and restart at each checkpoint/effect boundary;
+- installer inventory/plan/confirmation/revalidation substitution, replay,
+  expiry, exact-capacity, device-capability, and in-doubt attempt cases;
+- A/B state authentication, monotonic rollback/fork, inactive-slot,
+  anti-downgrade, boot observation, health/data acknowledgement, trial failure,
+  and power-loss reconciliation transitions; and
+- privileged-helper malformed request, peer/authority/device/certificate/
+  confinement substitution, expiry/revocation, replay, concurrency, and restart
+  reconciliation cases.
 
 ## Data retention and deletion
 
@@ -124,6 +143,14 @@ The MVP stores state until the operator removes the selected `LUMA_HOME` directo
 
 ## Not protected or certified
 
-This release does not claim sandboxing, malware scanning, encrypted local storage, production key management or custody, tamper-evident external audit, multi-user isolation, high availability, disaster recovery, privacy-regulation compliance, boot security, model safety, 400–405B operation, or cluster security. A 450B profile is outside the current governing requirement range and would require requirements change control.
+This release does not claim sandboxing, malware scanning, encrypted local
+storage, production key management or custody, tamper-evident external audit,
+multi-user isolation, high availability, disaster recovery,
+privacy-regulation compliance, boot security, model safety, 400–405B operation,
+or cluster security. In particular, the G2 contracts do not claim real disk or
+boot effects, UKI/dm-verity/LUKS, cgroup/AppArmor/seccomp/KVM enforcement, a
+privileged daemon, or operating-system peer authentication. A 450B profile is
+outside the current governing requirement range and would require requirements
+change control.
 
 Report suspected vulnerabilities using [SECURITY.md](../SECURITY.md), not a public issue.

@@ -1,6 +1,6 @@
 # Support matrix
 
-Luma OS `0.1.0` is a developer MVP. “Supported” means the repository intends to keep its source-run and test path working; it does not mean production certification or an SLA. Development acceptance and formal OS certification are separate axes: G0/G1 development is complete with explicit deferrals, while formal certification remains blocked.
+Luma OS `0.1.0` is a developer MVP. “Supported” means the repository intends to keep its source-run and test path working; it does not mean production certification or an SLA. Development acceptance and formal OS certification are separate axes: G0/G1 development is complete with explicit deferrals, while formal certification remains blocked. G2 development is in progress and its formal certification is also blocked.
 
 ## Platforms
 
@@ -42,6 +42,10 @@ Luma OS `0.1.0` is a developer MVP. “Supported” means the repository intends
 | G1 resource/policy/DAG/model-pack/platform contracts | Development prototype only; not product or hardware certification |
 | Deterministic fake inference | Test-only; never runtime, quality, or performance evidence |
 | Admin role/delegation | Development implementation; fixed product super-role for finite declared activities, not host administrator/root or a production custody certificate |
+| G2 installer contract | Development-only and non-destructive; pure inventory/preflight/confirmation/revalidation/capability/journal boundary, not a disk installer |
+| G2 A/B boot-state contract | Development-only pure transition model; no firmware, slot I/O, UKI, dm-verity, LUKS, or actual boot behavior |
+| G2 privileged-helper/confinement contract | Development-only typed boundary with injected trust evidence; no privileged service, cgroup/AppArmor/seccomp/KVM, or real peer-credential enforcement |
+| G2 safety tests | 49 tests across installer, boot-state, and helper modules under normal and optimized-Python execution; contract evidence only, not physical certification |
 | Qwen3-1.7B Q4_K_M + llama.cpp b11100 | Pinned development smoke baseline; real Windows CUDA, Ubuntu WSL CPU, and authenticated Luma gateway smoke passed |
 | Real signed 4–6B compact-model inference | Not yet available or certified; 1.7B smoke does not satisfy it |
 | Remote/cloud model service | Unsupported by default |
@@ -59,6 +63,8 @@ Luma OS `0.1.0` is a developer MVP. “Supported” means the repository intends
 | Run from Git checkout | Supported developer method |
 | Unprivileged user install script | Supported developer convenience |
 | Optional systemd user service | Supported convenience; not enabled automatically |
+| Non-destructive installer safety contract | Development prototype only; cannot install or alter a disk |
+| Pure A/B boot-state contract | Development prototype only; cannot stage, select, boot, or roll back a physical slot |
 | Python wheel | Not a supported `0.1.0` artifact; root assets require source layout |
 | Bootable ISO | Not implemented |
 | Dual-boot installer | Not implemented |

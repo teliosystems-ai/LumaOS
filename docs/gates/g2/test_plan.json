@@ -1,0 +1,67 @@
+{
+  "schema_version": 1,
+  "record_id": "G2-TEST-PLAN-2026-09-22-001",
+  "gate": "G2",
+  "recorded_on": "2026-09-22",
+  "owner": "qa-lead",
+  "status": "development-in-progress",
+  "gate_closing": false,
+  "claim_boundary": "This plan separates locally executable contract tests from physical Ubuntu OS acceptance. Passing fake-device, injected-adapter, native Windows, or Ubuntu WSL tests cannot satisfy a numbered procedure that requires signed media, physical boot, destructive storage, encryption recovery, kernel enforcement, or two A1 boards.",
+  "development_lanes": [
+    {
+      "environment": "DEV-WIN-NATIVE-01",
+      "purpose": "Cross-platform deterministic contract and concurrency tests",
+      "physical_machine": "LAB-LAPTOP-01"
+    },
+    {
+      "environment": "DEV-WSL-UBUNTU-26-01",
+      "purpose": "Strict Linux/POSIX contract tests and non-destructive platform preparation",
+      "physical_machine": "LAB-LAPTOP-01"
+    }
+  ],
+  "contract_tranche": [
+    {
+      "area": "installer-preflight-and-confirmation",
+      "source_requirements": ["FR02", "FR03", "A001", "A002", "A108"],
+      "source_tests": ["T01", "T48"],
+      "artifacts": ["src/luma_os/installer.py", "tests/test_installer.py"],
+      "local_disposition": "deterministic non-destructive contract tests",
+      "formal_disposition": "blocked-pending-disposable-e1-e2-disks-and-encryption-recovery"
+    },
+    {
+      "area": "ab-trial-boot-and-fallback",
+      "source_requirements": ["FR05", "FR07", "NF18", "A005", "A104", "A105", "A106", "A110", "Q15"],
+      "source_tests": ["T04", "T46", "T47", "T49"],
+      "artifacts": ["src/luma_os/boot_control.py", "tests/test_boot_control.py"],
+      "local_disposition": "deterministic state-machine and interruption-model tests",
+      "formal_disposition": "blocked-pending-signed-uki-verity-ab-media-and-physical-power-loss"
+    },
+    {
+      "area": "typed-privileged-helper-and-confinement-boundary",
+      "source_requirements": ["A113", "A114", "A115", "A116", "A118"],
+      "source_tests": ["T29", "T50", "T51", "T62"],
+      "artifacts": ["src/luma_os/privileged_helper.py", "tests/test_privileged_helper.py"],
+      "local_disposition": "typed boundary, trust-adapter, replay, and negative contract tests",
+      "formal_disposition": "blocked-pending-real-peer-credentials-kernel-enforcement-and-qualified-isolation"
+    }
+  ],
+  "remaining_numbered_suite": [
+    "T01-T16",
+    "T27-T30",
+    "T33",
+    "T40",
+    "T45-T51",
+    "T62"
+  ],
+  "mandatory_physical_evidence": [
+    "offline installation and recovery on both E1 and E2",
+    "Secure Boot and UKI tamper rejection",
+    "dm-verity A/B update and three-attempt fallback under power interruption",
+    "LUKS2 recovery credential exercise independent of inference",
+    "100 suspend/resume cycles and 1,000 compact lifecycle cycles",
+    "enforcing cgroup v2, AppArmor, seccomp, device, pinned-memory, and generated-code isolation",
+    "complete vertical workflow from distributed media with missing-model, worker-crash, and failed-artifact-commit cases"
+  ],
+  "severity_rule": "Any unauthorized effect, secret disclosure, committed-data corruption, privilege escape, unrecoverable supported boot, host OOM, post-cancellation effect, or invalid resource reuse blocks the affected release.",
+  "formal_exit_rule": "G2 may pass only after T01-T16 and the complete vertical workflow pass on both physical A1 boards and every mandatory failure case preserves authorization and acknowledged content."
+}

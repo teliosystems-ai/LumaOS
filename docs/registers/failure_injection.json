@@ -125,7 +125,7 @@
       "title": "Power loss and failed trial boot",
       "target_gate": "G2",
       "owner": "platform-lead",
-      "status": "blocked",
+      "status": "development-contract-partial",
       "injection_points": [
         "artifact-commit",
         "database-checkpoint",
@@ -133,6 +133,11 @@
         "trial-boot-before-health-ack"
       ],
       "expected_oracle": "Acknowledged content remains recoverable and the prior boot slot is selected without an unauthorized effect.",
+      "evidence": [
+        "src/luma_os/boot_control.py",
+        "tests/test_boot_control.py"
+      ],
+      "limitations": "Pure state-transition tests cover reconciliation at modeled boundaries only. No process was power-cut, no disk or firmware state was changed, and no real UKI, dm-verity, LUKS, slot, boot, or fallback path was exercised.",
       "blockers": [
         "G0-BLK-002",
         "G0-BLK-004",

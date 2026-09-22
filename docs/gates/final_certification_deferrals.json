@@ -4,12 +4,13 @@
   "recorded_on": "2026-09-22",
   "owner": "requirements-and-release-owner",
   "development_assessment": "complete-with-deferrals",
+  "active_development_gate": "G2",
   "certification_assessment": "blocked",
-  "claim_boundary": "This record authorizes continued repository and local-model development on the current native Windows host and Ubuntu WSL guest. It does not waive, pass, narrow, or replace any governing requirement or required final OS certification evidence.",
+  "claim_boundary": "This record preserves the G0/G1 development disposition and authorizes continued G2 repository-contract work on the current native Windows host and Ubuntu WSL guest. G2 remains in progress. Nothing here waives, passes, narrows, or replaces a governing requirement or required final OS certification evidence.",
   "deferrals": [
     {
       "id": "CERT-DEF-001",
-      "gates": ["G0", "G1"],
+      "gates": ["G0", "G1", "G2"],
       "scope": "two independent physical A1 reference boards",
       "reason": "Only one physical laptop is available. Native Windows and its Ubuntu WSL guest are two software environments on the same machine.",
       "required_environment": ["designated E1", "designated E2"],
@@ -49,7 +50,7 @@
     },
     {
       "id": "CERT-DEF-005",
-      "gates": ["G1"],
+      "gates": ["G1", "G2"],
       "scope": "signed 4–6B compact control model and governed candidate comparison",
       "reason": "Qwen3-1.7B is intentionally selected only as a low-resource development smoke baseline and is below the governed parameter range.",
       "required_environment": ["E1", "E2"],
@@ -59,7 +60,7 @@
     },
     {
       "id": "CERT-DEF-006",
-      "gates": ["G0", "G1"],
+      "gates": ["G0", "G1", "G2"],
       "scope": "complete security, failure-injection, manual, and performance qualification",
       "reason": "Repository tests and bounded smoke runs cannot exercise all hardware, confinement, key-custody, boot, lifecycle, thermal, or sustained-load conditions.",
       "required_environment": ["all retained certification tuples"],

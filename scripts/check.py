@@ -63,6 +63,10 @@ REQUIRED_GATE_FILES = (
     "docs/gates/g1/hardware_smoke_2026-09-22.json",
     "docs/gates/g1/local_model_smoke_2026-09-22.json",
     "docs/gates/g1/test_run_2026-09-22.json",
+    "docs/gates/g2/blockers.json",
+    "docs/gates/g2/evidence.json",
+    "docs/gates/g2/test_plan.json",
+    "docs/gates/g2/test_run_2026-09-22.json",
     "docs/registers/adversarial.json",
     "docs/registers/failure_injection.json",
     "docs/registers/licenses.json",
@@ -80,8 +84,14 @@ REQUIRED_INVENTORY_FILES = (
     *REQUIRED_RELEASE_FILES,
     "scripts/smoke_local_model.py",
     "src/luma_os/administration.py",
+    "src/luma_os/boot_control.py",
+    "src/luma_os/installer.py",
+    "src/luma_os/privileged_helper.py",
     "src/luma_os/real_inference.py",
     "tests/test_administration.py",
+    "tests/test_boot_control.py",
+    "tests/test_installer.py",
+    "tests/test_privileged_helper.py",
     "tests/test_real_inference.py",
 )
 GOVERNING_SOURCE_FILENAMES = {
@@ -427,6 +437,69 @@ def validate_gate_artifacts() -> None:
                     reference, f"{gate.upper()} evidence reference"
                 )
 
+    g2_blockers = documents["docs/gates/g2/blockers.json"]
+    g2_evidence = documents["docs/gates/g2/evidence.json"]
+    for document, label in (
+        (g2_blockers, "G2 blocker record"),
+        (g2_evidence, "G2 evidence record"),
+    ):
+        if (
+            not isinstance(document, dict)
+            or document.get("development_assessment") != "in-progress"
+            or document.get("certification_assessment") != "blocked"
+        ):
+            raise RuntimeError(f"{label} must record in-progress development and blocked certification")
+    if g2_blockers.get("status") != "blocked":
+        raise RuntimeError("G2 blocker record must remain explicitly blocked")
+    g2_blocker_items = g2_blockers.get("blockers")
+    if not isinstance(g2_blocker_items, list) or not g2_blocker_items:
+        raise RuntimeError("G2 blocker record must contain explicit blockers")
+    for item in g2_blocker_items:
+        if (
+            not isinstance(item, dict)
+            or item.get("status") != "deferred-to-final-certification"
+            or not item.get("id")
+            or not item.get("owner")
+            or not item.get("resolution")
+        ):
+            raise RuntimeError("G2 blockers must remain complete certification deferrals")
+        reference = item.get("evidence")
+        references = [reference] if isinstance(reference, str) else reference
+        if not isinstance(references, list) or not references:
+            raise RuntimeError("G2 blockers must reference repository evidence")
+        for repository_reference in references:
+            validate_repository_reference(repository_reference, "G2 blocker evidence")
+    if g2_evidence.get("assessment") != "blocked":
+        raise RuntimeError("G2 evidence must not claim a passing gate")
+    implementation_commit = g2_evidence.get("implementation_commit")
+    if not isinstance(implementation_commit, str) or not re.fullmatch(
+        r"[0-9a-f]{40}", implementation_commit
+    ):
+        raise RuntimeError("G2 evidence must pin the implementation commit")
+    g2_evidence_items = g2_evidence.get("items")
+    if not isinstance(g2_evidence_items, list) or not g2_evidence_items:
+        raise RuntimeError("G2 evidence must contain explicit items")
+    for item in g2_evidence_items:
+        if not isinstance(item, dict) or item.get("gate_closing") is not False:
+            raise RuntimeError("G2 development evidence must remain non-closing")
+        references = item.get("evidence")
+        if not isinstance(references, list) or not references:
+            raise RuntimeError("G2 evidence items must reference repository files")
+        for repository_reference in references:
+            validate_repository_reference(repository_reference, "G2 evidence reference")
+
+    g2_test_plan = documents["docs/gates/g2/test_plan.json"]
+    if (
+        not isinstance(g2_test_plan, dict)
+        or g2_test_plan.get("status") != "development-in-progress"
+        or g2_test_plan.get("gate_closing") is not False
+        or not isinstance(g2_test_plan.get("contract_tranche"), list)
+        or len(g2_test_plan["contract_tranche"]) != 3
+        or not g2_test_plan.get("mandatory_physical_evidence")
+        or not g2_test_plan.get("formal_exit_rule")
+    ):
+        raise RuntimeError("G2 test plan must preserve its development-only and physical-lab boundary")
+
     deferrals = documents["docs/gates/final_certification_deferrals.json"]
     if not isinstance(deferrals, dict):
         raise RuntimeError("final certification deferral record must be an object")
@@ -612,6 +685,45 @@ def validate_gate_artifacts() -> None:
         != "development-complete-with-deferrals; certification-blocked"
     ):
         raise RuntimeError("G1 repository test record carries stale source or gate dispositions")
+
+    g2_test_run = documents["docs/gates/g2/test_run_2026-09-22.json"]
+    if (
+        not isinstance(g2_test_run, dict)
+        or g2_test_run.get("result") != "pass-development-contracts"
+        or g2_test_run.get("gate_closing") is not False
+        or g2_test_run.get("code_commit") != implementation_commit
+    ):
+        raise RuntimeError("G2 repository test record must be passing, pinned, and non-closing")
+    g2_checks = g2_test_run.get("checks")
+    if not isinstance(g2_checks, dict):
+        raise RuntimeError("G2 repository test checks must be an object")
+    current_evidence_counts = {
+        "python_modules_compiled": len(list((ROOT / "src").rglob("*.py"))),
+        "unit_tests_run": declared_test_count,
+        "requirement_entries_validated": 288,
+        "release_files_validated": len(release_manifest.get("release_files", [])),
+    }
+    for field, expected_value in current_evidence_counts.items():
+        if g2_checks.get(field) != expected_value:
+            raise RuntimeError(
+                f"G2 repository test record {field} is stale: "
+                f"expected {expected_value}, found {g2_checks.get(field)!r}"
+            )
+    if (
+        g2_checks.get("unit_test_lanes") != 2
+        or g2_checks.get("unit_test_executions") != declared_test_count * 2
+        or g2_checks.get("unit_tests_failed") != 0
+        or g2_checks.get("optimized_boundary_tests_run") != 49
+        or g2_checks.get("optimized_boundary_tests_failed") != 0
+        or g2_checks.get("g2_requirements_in_progress") != 34
+        or g2_checks.get("g2_requirements_with_passing_product_evidence") != 0
+        or g2_checks.get("reproducible_source_builds") != 2
+        or g2_checks.get("archive_checksum_verification") != "pass"
+        or g2_checks.get("governing_source_state") != "verified"
+        or g2_checks.get("gate_artifact_state")
+        != "development-in-progress; certification-blocked"
+    ):
+        raise RuntimeError("G2 repository test record carries stale results or gate disposition")
 
     hardware_smoke = documents["docs/gates/g1/hardware_smoke_2026-09-22.json"]
     if (

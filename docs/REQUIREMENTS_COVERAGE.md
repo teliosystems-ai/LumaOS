@@ -8,6 +8,11 @@ The three designated governing DOCX inputs are present under `docs/Requirements`
 
 G0 and G1 have two explicit status axes: their repository/local development scope is complete with recorded deferrals, while formal OS certification is blocked until the deferred physical-hardware, model, signing, security, recovery, and performance evidence exists.
 
+G2 uses the same evidence boundary but is currently **in progress**, not
+complete. Its first repository-local tranche consists of non-effecting safety
+contracts and 49 tests under normal and optimized-Python execution; formal G2
+certification remains blocked.
+
 Status meanings:
 
 - **Implemented** — present in the reference runtime and expected to have automated evidence.
@@ -38,6 +43,9 @@ Status meanings:
 | MVP-016 | Windows deployment variation | Partial | Current native Windows is a development/smoke lane and WSL2 is the Linux development lane; no native service/installer, Windows broker, VM, or dual-boot parity |
 | MVP-017 | Dependency-free automated testing | Implemented | Standard-library compile, unittest, metadata, verified governing-source/registry checks, gate report, and source-package checks |
 | MVP-018 | Operational and security documentation | Implemented | Architecture, threat model, operations, support matrix, security policy |
+| MVP-019 | Installer safety boundary | Partial | Non-destructive inventory, preflight, confirmation, revalidation, capability, and journal contracts; no real disk discovery, partitioning, formatting, encryption, or installation |
+| MVP-020 | A/B update and recovery control | Partial | Pure authenticated state-transition model with trial/fallback and power-loss reconciliation rules; no real boot, UKI, dm-verity, firmware, or slot I/O |
+| MVP-021 | Privileged helper and confinement boundary | Partial | Closed typed actions with peer/authority/device/certificate/confinement binding and reconciliation; no privileged daemon or cgroup/AppArmor/seccomp/KVM/peer-credential enforcement |
 
 ## Product-scale and deployment requirements
 
@@ -46,6 +54,7 @@ Status meanings:
 | A1 4–6B compact control model | Deferred to formal certification | The selected 1.7B development baseline does not satisfy the governed range; signed candidate comparison and two-board evidence are required |
 | 400–405B placement/load and A2 profiles | Documented taxonomy and deferred hardware test | No suitable hardware/assets or large-model certification; 450B is outside the governing sources and requires change control |
 | Native Ubuntu “OS” experience | Deferred | Local application on Ubuntu, not a distribution, shell, kernel, or boot image |
+| G2 Ubuntu platform alpha | Development-contract partial; formal certification blocked | Three pure safety-contract modules and 49 tests under normal and optimized-Python execution exist, but no physical installer, boot chain, encrypted storage, kernel confinement, or two-board qualification exists |
 | Dual boot | Unsupported | No partitioning, bootloader, installer, or recovery tooling |
 | Windows native deployment | Deferred | WSL2 is the supported Windows developer route |
 | VM deployment | Unsupported | Source may be manually used in a VM; no image/lifecycle/support claim |
@@ -70,6 +79,13 @@ model smoke on native Windows CUDA and Ubuntu WSL CPU and an authenticated
 loopback call through the Luma resource, policy, lease, and gateway path. This
 is real development execution but remains non-closing evidence.
 
+The G2 development record additionally includes 49 tests, including an
+optimized-Python run, across
+`tests/test_installer.py`, `tests/test_boot_control.py`, and
+`tests/test_privileged_helper.py`. They validate pure/non-destructive contract
+behavior and cannot substitute for physical disk, boot, recovery, encryption,
+confinement, peer-credential, or two-board tests.
+
 The standalone visual simulator does not call the reference runtime, so simulator clicks, screenshots, or DOM tests are UX evidence only and cannot close a runtime requirement.
 
 ## Known gaps before any production discussion
@@ -83,4 +99,7 @@ The standalone visual simulator does not call the reference runtime, so simulato
 - model/tool isolation, provenance, and licensing controls;
 - protected production signing custody despite the accepted Admin governance model;
 - remote/multi-user architecture, if ever authorized; and
-- installation/recovery engineering appropriate to any true OS distribution.
+- installation/recovery engineering appropriate to any true OS distribution;
+  and
+- real G2 installer, UKI/dm-verity A/B boot, LUKS, cgroup/AppArmor/seccomp/KVM,
+  privileged service, peer-credential, power-loss, and two-board qualification.

@@ -1,0 +1,60 @@
+{
+  "schema_version": 1,
+  "record_id": "G2-TEST-2026-09-22-001",
+  "recorded_on": "2026-09-22",
+  "owner": "qa-lead",
+  "code_commit": "4ec25b849b3db4363191532bdb06f42894e11253",
+  "environment": "DEV-WSL-UBUNTU-26-01",
+  "additional_environments": [
+    "DEV-WIN-NATIVE-01"
+  ],
+  "command": "PYTHONWARNINGS=error python3 scripts/check.py",
+  "additional_commands": [
+    "Ubuntu WSL: python3 -m unittest discover -s tests -p 'test_*.py' (147 run, 0 failed, 1 skipped)",
+    "Windows native: python -m unittest discover -s tests -p test_*.py (147 run, 0 failed, 4 skipped)",
+    "Ubuntu WSL optimized: python3 -O -m unittest tests.test_boot_control tests.test_installer tests.test_privileged_helper (49 run, 0 failed)",
+    "SOURCE_DATE_EPOCH=0 python3 scripts/build_release.py (executed twice)",
+    "cmp first-SHA256SUMS second-SHA256SUMS",
+    "sha256sum --check SHA256SUMS"
+  ],
+  "result": "pass-development-contracts",
+  "checks": {
+    "python_modules_compiled": 27,
+    "json_schemas_parsed": 5,
+    "unit_tests_run": 147,
+    "unit_test_lanes": 2,
+    "unit_test_executions": 294,
+    "unit_tests_failed": 0,
+    "unit_tests_skipped": {
+      "ubuntu_wsl": 1,
+      "windows_native": 4
+    },
+    "optimized_boundary_tests_run": 49,
+    "optimized_boundary_tests_failed": 0,
+    "warnings_as_errors": true,
+    "requirement_entries_validated": 288,
+    "g2_requirements_in_progress": 34,
+    "g2_requirements_with_passing_product_evidence": 0,
+    "release_files_validated": 130,
+    "reproducible_source_builds": 2,
+    "archive_checksum_verification": "pass",
+    "governing_source_state": "verified",
+    "gate_artifact_state": "development-in-progress; certification-blocked"
+  },
+  "scope": [
+    "Python compilation and exact release inventory",
+    "deterministic governing-source registry and gate report",
+    "non-destructive installer planning and confirmation contract",
+    "authenticated A/B trial-boot and fallback state contract",
+    "typed privileged-helper, confinement, authorization, device, and replay contract",
+    "normal and optimized-Python execution on the committed code in native Windows and Ubuntu WSL",
+    "two-build source-archive reproducibility and checksum verification"
+  ],
+  "limitations": [
+    "Native Windows and Ubuntu 26.04 WSL are development lanes on one laptop, not the required E1 and E2 physical Ubuntu 24.04 boards.",
+    "All new privileged, disk, boot, anchor, attestation, journal, confinement, device, and executor integrations are injected contracts or fakes; no destructive or privileged host action was performed.",
+    "No signed Ubuntu image, UKI, dm-verity root, LUKS2 recovery, physical trial boot, cgroup/AppArmor/seccomp enforcement, KVM microVM, or production peer-credential service was tested.",
+    "This passing record starts G2 development and is not a formal G2 pass or acceptance result for any of the 34 requirements."
+  ],
+  "gate_closing": false
+}

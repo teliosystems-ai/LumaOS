@@ -47,15 +47,17 @@
       "title": "Malformed and oversized local IPC envelope",
       "target_gate": "G1",
       "owner": "platform-lead",
-      "status": "development-contract-implemented",
-      "target": "Unix-domain IPC services",
+      "status": "development-contract-partial",
+      "target": "Local IPC and privileged-helper boundaries",
       "expected_invariant": "Length is bounded before allocation; malformed, unknown-version, spoofed-peer, and truncated messages are rejected without a crash or effect.",
       "fixture": "generated",
       "evidence": [
         "src/luma_os/ipc.py",
-        "tests/test_ipc.py"
+        "tests/test_ipc.py",
+        "src/luma_os/privileged_helper.py",
+        "tests/test_privileged_helper.py"
       ],
-      "limitations": "Real Unix socket peer-credential plumbing and process isolation remain unimplemented."
+      "limitations": "Parsing and typed dispatch use in-process test doubles. Real Unix socket or Windows named-pipe peer credentials, a separate privileged process, and process/kernel isolation remain unimplemented."
     },
     {
       "id": "ADV-005",
@@ -94,10 +96,15 @@
       "title": "Worker attempts filesystem, device, credential, and network escape",
       "target_gate": "G1",
       "owner": "security-lead",
-      "status": "blocked",
+      "status": "development-contract-partial",
       "target": "selected worker sandbox",
       "expected_invariant": "Access outside task-scoped descriptors and resource limits is denied, logged, and cannot authorize a fallback.",
       "fixture": "private-external",
+      "evidence": [
+        "src/luma_os/privileged_helper.py",
+        "tests/test_privileged_helper.py"
+      ],
+      "limitations": "The typed helper requires trusted confinement attestations and fail-closed native-code modes, but all attestors and executors are injected test doubles. No cgroup, AppArmor, seccomp, KVM microVM, device-node, credential, filesystem, or network isolation was enforced.",
       "blockers": [
         "sandbox direction and physical Linux environment"
       ]
@@ -121,6 +128,36 @@
       "target": "folder-grant reader",
       "expected_invariant": "Descriptor-relative no-follow access and root identity checks prevent traversal or replacement outside the grant.",
       "fixture": "generated"
+    },
+    {
+      "id": "ADV-010",
+      "title": "Installer disk identity, plan, or confirmation substitution",
+      "target_gate": "G2",
+      "owner": "platform-lead",
+      "status": "development-contract-partial",
+      "target": "installer preflight and destructive-action authorization",
+      "expected_invariant": "A stale, aliased, cloned, foreign, expired, replayed, or changed inventory, plan, confirmation, policy, or device capability fails closed before executor dispatch.",
+      "fixture": "generated",
+      "evidence": [
+        "src/luma_os/installer.py",
+        "tests/test_installer.py"
+      ],
+      "limitations": "The installer contract is non-destructive and uses injected discovery, capability binding, journal, and executor doubles. No real disk, partition table, filesystem, encryption, installation, or device-race attack was exercised."
+    },
+    {
+      "id": "ADV-011",
+      "title": "A/B state rollback, forged boot observation, or false health",
+      "target_gate": "G2",
+      "owner": "platform-lead",
+      "status": "development-contract-partial",
+      "target": "A/B boot-state transition boundary",
+      "expected_invariant": "Unauthenticated, stale, forked, downgraded, wrong-slot, wrong-attempt, or unreadable-fallback state cannot become the committed release.",
+      "fixture": "generated",
+      "evidence": [
+        "src/luma_os/boot_control.py",
+        "tests/test_boot_control.py"
+      ],
+      "limitations": "Only a pure state machine and injected authentication, anchor, observation, and data-readability oracles were tested. No UKI, dm-verity, LUKS, firmware variable, physical slot, boot, or induced power-loss behavior was exercised."
     }
   ]
 }

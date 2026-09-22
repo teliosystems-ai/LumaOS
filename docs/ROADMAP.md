@@ -5,6 +5,30 @@ This roadmap communicates direction, not a delivery promise. Scope changes requi
 G0/G1 repository development is recorded as complete with explicit deferrals.
 Formal OS certification is still blocked; the deferrals move hardware-dependent
 testing to the final qualification environments but do not turn it into a pass.
+G2 repository development is in progress, while formal G2 certification is
+blocked pending physical Ubuntu boards, destructive fixtures, and real boot,
+storage, confinement, recovery, security, and performance evidence. Native
+Windows and Ubuntu WSL remain two lanes on one physical laptop.
+
+## G2 platform-alpha safety contracts — in progress
+
+The first G2 tranche provides:
+
+- a non-destructive installer preflight and authorization contract that binds
+  immutable inventory, release/payload/policy versions, explicit confirmation,
+  effect-time revalidation, exact device capability, and attempt journaling;
+- a pure A/B boot-state transition model with authenticated state, monotonic
+  anchoring, generation/fence ownership, trusted observations, health/data
+  acknowledgements, rollback, and power-loss reconciliation; and
+- a closed typed privileged-helper boundary for finite actions, current peer
+  and authority checks, device/driver binding, confinement attestations,
+  idempotent execution, and restart reconciliation.
+
+The tranche has 49 safety tests under normal and optimized-Python execution. It
+does not perform disk or firmware
+changes, boot a release, establish UKI/dm-verity/LUKS, or enforce cgroup,
+AppArmor, seccomp, KVM, or operating-system peer credentials. Those remain
+later implementation and physical-certification work.
 
 ## v0.1 — Developer MVP
 

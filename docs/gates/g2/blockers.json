@@ -1,0 +1,76 @@
+{
+  "schema_version": 1,
+  "gate": "G2",
+  "recorded_on": "2026-09-22",
+  "status": "blocked",
+  "development_assessment": "in-progress",
+  "certification_assessment": "blocked",
+  "claim_boundary": "Repository-local G2 safety contracts may be developed and tested on native Windows and Ubuntu WSL, but neither environment is a physical Ubuntu A1 certification board. Pure state machines, fake devices, injected executors, and WSL observations are non-closing evidence.",
+  "blockers": [
+    {
+      "id": "G2-BLK-001",
+      "title": "Formal G1 entry dependencies remain deferred",
+      "status": "deferred-to-final-certification",
+      "severity": "certification-blocking",
+      "owner": "requirements-and-release-owner",
+      "development_work": "G2 development proceeds only under the existing explicit deferral boundary and inherits the tested G1 interfaces without claiming a certified G1 tuple.",
+      "resolution": "Close all mandatory G1 entry dependencies or approve them through the governed final-certification process without weakening any G2 exit criterion.",
+      "evidence": "docs/gates/g1/blockers.json"
+    },
+    {
+      "id": "G2-BLK-002",
+      "title": "Two native Ubuntu 24.04 A1 boards and disposable disk fixtures are unavailable",
+      "status": "deferred-to-final-certification",
+      "severity": "certification-blocking",
+      "owner": "platform-lead",
+      "supporting_owner": "qa-lead",
+      "development_work": "The current laptop supports non-destructive contract tests only; Windows and its Ubuntu 26.04 WSL guest remain one physical machine.",
+      "resolution": "Establish E1 and E2 with native Ubuntu 24.04, stable device inventories, recoverable firmware keys, and separately identified disposable disks, then execute the destructive installation and recovery suite.",
+      "evidence": "docs/gates/g0/lab_inventory.json"
+    },
+    {
+      "id": "G2-BLK-003",
+      "title": "Signed offline 4-6B release assets and lab signing/recovery custody are absent",
+      "status": "deferred-to-final-certification",
+      "severity": "certification-blocking",
+      "owner": "release-engineer",
+      "supporting_owner": "inference-lead",
+      "development_work": "The pinned 1.7B developer model remains useful for smoke testing but is not eligible for the G2 base image or T02 acceptance.",
+      "resolution": "Produce a verified offline bundle containing a legally approved signed 4-6B pack and exact runtime assets, using protected lab trust roots and independently recoverable credentials.",
+      "evidence": "docs/gates/g1/development_model_selection.json"
+    },
+    {
+      "id": "G2-BLK-004",
+      "title": "Physical verified boot, A/B image, encryption, and recovery implementation is absent",
+      "status": "deferred-to-final-certification",
+      "severity": "certification-blocking",
+      "owner": "platform-lead",
+      "supporting_owner": "release-engineer",
+      "development_work": "Pure installer and boot-state contracts are non-destructive development scaffolding and do not write disks, enroll keys, build a UKI, configure dm-verity/LUKS2, or change firmware state.",
+      "resolution": "Build and sign the Ubuntu image and recovery media, then retain T01 and T03-T05 plus T45-T49 evidence including interruption, tamper, recovery, and three-attempt fallback results on E1 and E2.",
+      "evidence": "docs/gates/final_certification_deferrals.json"
+    },
+    {
+      "id": "G2-BLK-005",
+      "title": "Enforcing cgroup, AppArmor, seccomp, device, peer-credential, and generated-code isolation adapters are absent",
+      "status": "deferred-to-final-certification",
+      "severity": "certification-blocking",
+      "owner": "security-lead",
+      "supporting_owner": "platform-lead",
+      "development_work": "The typed helper boundary uses injected trust, authorization, journal, device, and executor interfaces; it never performs a privileged host action and cannot prove enforcement.",
+      "resolution": "Implement and independently review the Linux privileged service, kernel peer-credential transport, cgroup v2 and device enforcement, signed AppArmor/seccomp policy, and fail-closed KVM microVM or separately qualified constrained runtime on the retained tuples.",
+      "evidence": "docs/THREAT_MODEL.md"
+    },
+    {
+      "id": "G2-BLK-006",
+      "title": "Complete G2 functional, security, lifecycle, and performance suite is not executed",
+      "status": "deferred-to-final-certification",
+      "severity": "certification-blocking",
+      "owner": "qa-lead",
+      "supporting_owner": "security-lead",
+      "development_work": "Deterministic unit and fault-model tests cover only repository-local contracts. They are labeled as non-closing and retain all hardware-dependent cases as blocked.",
+      "resolution": "Complete T01-T16, applicable T27-T30, T33, T40, T45-T51, and T62; the governed security/manual matrix; Q01, Q02, Q06-Q09; 1,000 lifecycle cycles; and both-board vertical workflows.",
+      "evidence": "docs/gates/g2/test_plan.json"
+    }
+  ]
+}

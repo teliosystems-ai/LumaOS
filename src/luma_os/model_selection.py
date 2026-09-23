@@ -21,6 +21,7 @@ from .model_pack import ModelManifest, ModelPackState, ModelPackVerification
 
 JSON_SAFE_INTEGER_MAX = (1 << 53) - 1
 MANUAL_ONLY_PROFILE_ID = "manual-only"
+MAX_CATALOG_PROFILES = 256
 
 
 class ModelSelectionError(ValueError):
@@ -419,6 +420,10 @@ class ModelProfileCatalog:
             not isinstance(item, (ManualOnlyProfile, ModelProfile)) for item in profiles
         ):
             raise ModelSelectionError("profiles must contain selectable profile contracts")
+        if len(profiles) > MAX_CATALOG_PROFILES:
+            raise ModelSelectionError(
+                f"catalog cannot contain more than {MAX_CATALOG_PROFILES} profiles"
+            )
         profile_ids = [item.profile_id for item in profiles]
         if len(profile_ids) != len(set(profile_ids)):
             raise ModelSelectionError("profile IDs must be unique")
@@ -436,6 +441,10 @@ class ModelProfileCatalog:
         raw_profiles = data["profiles"]
         if not isinstance(raw_profiles, list):
             raise ModelSelectionError("profiles must be an array")
+        if len(raw_profiles) > MAX_CATALOG_PROFILES:
+            raise ModelSelectionError(
+                f"catalog cannot contain more than {MAX_CATALOG_PROFILES} profiles"
+            )
         profiles: list[SelectableProfile] = []
         for index, raw_profile in enumerate(raw_profiles):
             if not isinstance(raw_profile, Mapping):

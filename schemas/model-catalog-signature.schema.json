@@ -1,0 +1,221 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://luma-os.invalid/schemas/model-catalog-signature.schema.json",
+  "title": "Luma OS detached model-profile catalog signature envelope",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "statement", "approvals", "signature_encoding", "signature"],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "statement": { "$ref": "#/$defs/statement" },
+    "approvals": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 3,
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/approval" }
+    },
+    "signature_encoding": { "const": "base64" },
+    "signature": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9+/]{86}==$"
+    }
+  },
+  "$defs": {
+    "asciiText": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "pattern": "^[ -~]+$"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "utcTimestamp": {
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"
+    },
+    "releaseRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "artifact_type",
+        "catalog_id",
+        "catalog_sequence",
+        "catalog_sha256",
+        "environment",
+        "not_after",
+        "not_before",
+        "policy_version",
+        "purpose",
+        "release_id",
+        "schema_version",
+        "signature_algorithm",
+        "signer_key_id",
+        "signing_activity",
+        "signing_assignment_id",
+        "signing_assignment_receipt_sha256",
+        "signing_principal_id"
+      ],
+      "properties": {
+        "artifact_type": { "const": "model-profile-catalog-release-request" },
+        "catalog_id": { "$ref": "#/$defs/asciiText" },
+        "catalog_sequence": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "catalog_sha256": { "$ref": "#/$defs/sha256" },
+        "environment": { "enum": ["lab", "production"] },
+        "not_after": { "$ref": "#/$defs/utcTimestamp" },
+        "not_before": { "$ref": "#/$defs/utcTimestamp" },
+        "policy_version": { "$ref": "#/$defs/asciiText" },
+        "purpose": {
+          "enum": ["model-profile-catalog-lab", "model-profile-catalog-production"]
+        },
+        "release_id": { "$ref": "#/$defs/asciiText" },
+        "schema_version": { "const": 1 },
+        "signature_algorithm": { "const": "Ed25519" },
+        "signer_key_id": { "$ref": "#/$defs/asciiText" },
+        "signing_activity": {
+          "enum": ["model-catalog.sign.lab", "model-catalog.sign.production"]
+        },
+        "signing_assignment_id": { "$ref": "#/$defs/asciiText" },
+        "signing_assignment_receipt_sha256": { "$ref": "#/$defs/sha256" },
+        "signing_principal_id": { "$ref": "#/$defs/asciiText" }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "environment": { "const": "lab" } } },
+          "then": {
+            "properties": {
+              "purpose": { "const": "model-profile-catalog-lab" },
+              "signing_activity": { "const": "model-catalog.sign.lab" }
+            }
+          }
+        },
+        {
+          "if": { "properties": { "environment": { "const": "production" } } },
+          "then": {
+            "properties": {
+              "purpose": { "const": "model-profile-catalog-production" },
+              "signing_activity": { "const": "model-catalog.sign.production" }
+            }
+          }
+        }
+      ]
+    },
+    "approval": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "activity",
+        "approved_at",
+        "approval_decision_receipt_sha256",
+        "assignment_id",
+        "assignment_receipt_sha256",
+        "catalog_sha256",
+        "decision",
+        "principal_id",
+        "release_request_sha256",
+        "release_id"
+      ],
+      "properties": {
+        "activity": {
+          "enum": [
+            "model-catalog.approve.lab-release",
+            "model-catalog.approve.license",
+            "model-catalog.approve.release",
+            "model-catalog.approve.security"
+          ]
+        },
+        "approved_at": { "$ref": "#/$defs/utcTimestamp" },
+        "approval_decision_receipt_sha256": { "$ref": "#/$defs/sha256" },
+        "assignment_id": { "$ref": "#/$defs/asciiText" },
+        "assignment_receipt_sha256": { "$ref": "#/$defs/sha256" },
+        "catalog_sha256": { "$ref": "#/$defs/sha256" },
+        "decision": { "const": "approved" },
+        "principal_id": { "$ref": "#/$defs/asciiText" },
+        "release_request_sha256": { "$ref": "#/$defs/sha256" },
+        "release_id": { "$ref": "#/$defs/asciiText" }
+      }
+    },
+    "statement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "approval_set_sha256",
+        "artifact_type",
+        "catalog_id",
+        "catalog_sequence",
+        "catalog_sha256",
+        "environment",
+        "not_after",
+        "not_before",
+        "policy_version",
+        "purpose",
+        "release_id",
+        "release_request_sha256",
+        "schema_version",
+        "signature_algorithm",
+        "signed_at",
+        "signer_key_id",
+        "signing_activity",
+        "signing_assignment_id",
+        "signing_assignment_receipt_sha256",
+        "signing_principal_id"
+      ],
+      "properties": {
+        "approval_set_sha256": { "$ref": "#/$defs/sha256" },
+        "artifact_type": { "const": "model-profile-catalog" },
+        "catalog_id": { "$ref": "#/$defs/asciiText" },
+        "catalog_sequence": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "catalog_sha256": { "$ref": "#/$defs/sha256" },
+        "environment": { "enum": ["lab", "production"] },
+        "not_after": { "$ref": "#/$defs/utcTimestamp" },
+        "not_before": { "$ref": "#/$defs/utcTimestamp" },
+        "policy_version": { "$ref": "#/$defs/asciiText" },
+        "purpose": {
+          "enum": ["model-profile-catalog-lab", "model-profile-catalog-production"]
+        },
+        "release_id": { "$ref": "#/$defs/asciiText" },
+        "release_request_sha256": { "$ref": "#/$defs/sha256" },
+        "schema_version": { "const": 1 },
+        "signature_algorithm": { "const": "Ed25519" },
+        "signed_at": { "$ref": "#/$defs/utcTimestamp" },
+        "signer_key_id": { "$ref": "#/$defs/asciiText" },
+        "signing_activity": {
+          "enum": ["model-catalog.sign.lab", "model-catalog.sign.production"]
+        },
+        "signing_assignment_id": { "$ref": "#/$defs/asciiText" },
+        "signing_assignment_receipt_sha256": { "$ref": "#/$defs/sha256" },
+        "signing_principal_id": { "$ref": "#/$defs/asciiText" }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "environment": { "const": "lab" } } },
+          "then": {
+            "properties": {
+              "purpose": { "const": "model-profile-catalog-lab" },
+              "signing_activity": { "const": "model-catalog.sign.lab" }
+            }
+          }
+        },
+        {
+          "if": { "properties": { "environment": { "const": "production" } } },
+          "then": {
+            "properties": {
+              "purpose": { "const": "model-profile-catalog-production" },
+              "signing_activity": { "const": "model-catalog.sign.production" }
+            }
+          }
+        }
+      ]
+    }
+  }
+}

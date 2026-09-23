@@ -1,0 +1,507 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://luma-os.invalid/schemas/g2-host-inventory.schema.json",
+  "title": "Luma OS G2 non-destructive host inventory",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "record_type",
+    "record_id",
+    "collected_at_utc",
+    "environment_id",
+    "collector",
+    "evidence_boundary",
+    "system",
+    "probe_results",
+    "findings"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "record_type": { "const": "luma-os-g2-host-inventory" },
+    "record_id": { "$ref": "#/$defs/asciiText" },
+    "collected_at_utc": { "type": "string", "format": "date-time" },
+    "environment_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$"
+    },
+    "collector": { "$ref": "#/$defs/collector" },
+    "evidence_boundary": { "$ref": "#/$defs/evidenceBoundary" },
+    "system": { "$ref": "#/$defs/system" },
+    "probe_results": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/probe" }
+    },
+    "findings": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/finding" }
+    }
+  },
+  "$defs": {
+    "asciiText": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1024,
+      "pattern": "^[ -~]+$"
+    },
+    "nullableText": {
+      "type": ["string", "null"],
+      "maxLength": 1024
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "nullableSha256": {
+      "anyOf": [
+        { "$ref": "#/$defs/sha256" },
+        { "type": "null" }
+      ]
+    },
+    "nullableNonNegativeInteger": {
+      "type": ["integer", "null"],
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "collector": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "version",
+        "host_mutation_performed",
+        "commands_are_allowlisted_and_shell_free",
+        "ambient_path_used",
+        "ambient_environment_inherited",
+        "trusted_command_roots",
+        "sensitive_identifiers_included"
+      ],
+      "properties": {
+        "name": { "const": "scripts/collect_g2_host.py" },
+        "version": { "$ref": "#/$defs/asciiText" },
+        "host_mutation_performed": { "const": false },
+        "commands_are_allowlisted_and_shell_free": { "const": true },
+        "ambient_path_used": { "const": false },
+        "ambient_environment_inherited": { "const": false },
+        "trusted_command_roots": {
+          "type": "array",
+          "minItems": 4,
+          "maxItems": 5,
+          "uniqueItems": true,
+          "items": {
+            "enum": ["/usr/sbin", "/usr/bin", "/sbin", "/bin", "/usr/lib/wsl/lib"]
+          },
+          "allOf": [
+            { "contains": { "const": "/usr/sbin" } },
+            { "contains": { "const": "/usr/bin" } },
+            { "contains": { "const": "/sbin" } },
+            { "contains": { "const": "/bin" } }
+          ]
+        },
+        "sensitive_identifiers_included": { "type": "boolean" }
+      }
+    },
+    "evidenceBoundary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["gate_closing", "classification", "reason"],
+      "properties": {
+        "gate_closing": { "const": false },
+        "classification": {
+          "enum": [
+            "physical-candidate-inventory-non-closing",
+            "development-or-ineligible-inventory-non-closing"
+          ]
+        },
+        "reason": { "$ref": "#/$defs/asciiText" }
+      }
+    },
+    "system": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "environment_kind",
+        "environment_detection_source",
+        "native_ubuntu_24_04_amd64_candidate",
+        "pseudonymous_host_identity_sha256",
+        "pseudonymous_host_identity_basis",
+        "pseudonymous_host_identity_limitations",
+        "os",
+        "kernel",
+        "firmware",
+        "cpu",
+        "memory",
+        "security_controls",
+        "storage",
+        "accelerators",
+        "accelerator_device_scan",
+        "package_versions"
+      ],
+      "properties": {
+        "environment_kind": {
+          "enum": ["native", "wsl2", "virtual-machine", "container", "unknown"]
+        },
+        "environment_detection_source": { "$ref": "#/$defs/asciiText" },
+        "native_ubuntu_24_04_amd64_candidate": { "type": "boolean" },
+        "pseudonymous_host_identity_sha256": { "$ref": "#/$defs/nullableSha256" },
+        "pseudonymous_host_identity_basis": {
+          "const": "domain-separated-sha256-of-etc-machine-id"
+        },
+        "pseudonymous_host_identity_limitations": { "$ref": "#/$defs/asciiText" },
+        "os": { "$ref": "#/$defs/os" },
+        "kernel": { "$ref": "#/$defs/kernel" },
+        "firmware": { "$ref": "#/$defs/firmware" },
+        "cpu": { "$ref": "#/$defs/cpu" },
+        "memory": { "$ref": "#/$defs/memory" },
+        "security_controls": { "$ref": "#/$defs/securityControls" },
+        "storage": { "$ref": "#/$defs/storage" },
+        "accelerators": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/accelerator" }
+        },
+        "accelerator_device_scan": { "$ref": "#/$defs/acceleratorDeviceScan" },
+        "package_versions": {
+          "type": "array",
+          "items": { "type": "string", "maxLength": 512 }
+        }
+      }
+    },
+    "os": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "name", "version_id", "version_codename", "architecture"],
+      "properties": {
+        "id": { "$ref": "#/$defs/nullableText" },
+        "name": { "$ref": "#/$defs/nullableText" },
+        "version_id": { "$ref": "#/$defs/nullableText" },
+        "version_codename": { "$ref": "#/$defs/nullableText" },
+        "architecture": { "$ref": "#/$defs/asciiText" }
+      }
+    },
+    "kernel": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["release", "selected_command_line", "full_command_line_sha256"],
+      "properties": {
+        "release": { "type": "string", "maxLength": 512 },
+        "selected_command_line": {
+          "type": "array",
+          "items": { "type": "string", "maxLength": 512 }
+        },
+        "full_command_line_sha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "firmware": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["uefi_present", "efivars_present", "secure_boot", "dmi"],
+      "properties": {
+        "uefi_present": { "type": "boolean" },
+        "efivars_present": { "type": "boolean" },
+        "secure_boot": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["state", "source"],
+          "properties": {
+            "state": { "enum": ["enabled", "disabled", "unknown"] },
+            "source": { "enum": ["efi-variable", "mokutil", "unavailable"] }
+          }
+        },
+        "dmi": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "system_vendor",
+            "product_name",
+            "product_version",
+            "board_vendor",
+            "board_name",
+            "bios_vendor",
+            "bios_version",
+            "bios_date"
+          ],
+          "properties": {
+            "system_vendor": { "$ref": "#/$defs/nullableText" },
+            "product_name": { "$ref": "#/$defs/nullableText" },
+            "product_version": { "$ref": "#/$defs/nullableText" },
+            "board_vendor": { "$ref": "#/$defs/nullableText" },
+            "board_name": { "$ref": "#/$defs/nullableText" },
+            "bios_vendor": { "$ref": "#/$defs/nullableText" },
+            "bios_version": { "$ref": "#/$defs/nullableText" },
+            "bios_date": { "$ref": "#/$defs/nullableText" }
+          }
+        }
+      }
+    },
+    "cpu": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["model", "logical_processors"],
+      "properties": {
+        "model": { "$ref": "#/$defs/nullableText" },
+        "logical_processors": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1048576
+        }
+      }
+    },
+    "memory": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["total_bytes", "available_bytes"],
+      "properties": {
+        "total_bytes": { "$ref": "#/$defs/nullableNonNegativeInteger" },
+        "available_bytes": { "$ref": "#/$defs/nullableNonNegativeInteger" }
+      }
+    },
+    "securityControls": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["cgroup_v2", "apparmor", "seccomp", "kvm", "tpm", "iommu", "lsm_modules"],
+      "properties": {
+        "cgroup_v2": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["available", "controllers"],
+          "properties": {
+            "available": { "type": "boolean" },
+            "controllers": { "type": "array", "items": { "type": "string" } }
+          }
+        },
+        "apparmor": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kernel_enabled", "listed_by_lsm"],
+          "properties": {
+            "kernel_enabled": { "type": "boolean" },
+            "listed_by_lsm": { "type": "boolean" }
+          }
+        },
+        "seccomp": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["collector_process_mode"],
+          "properties": {
+            "collector_process_mode": { "enum": ["disabled", "strict", "filter", "unknown"] }
+          }
+        },
+        "kvm": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["device_present"],
+          "properties": { "device_present": { "type": "boolean" } }
+        },
+        "tpm": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["device_present"],
+          "properties": { "device_present": { "type": "boolean" } }
+        },
+        "iommu": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["groups_path_present", "selected_kernel_arguments"],
+          "properties": {
+            "groups_path_present": { "type": "boolean" },
+            "selected_kernel_arguments": { "type": "array", "items": { "type": "string" } }
+          }
+        },
+        "lsm_modules": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "storage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["root_mount", "block_devices", "verity_probe_status"],
+      "properties": {
+        "root_mount": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["source", "filesystem", "options"],
+          "properties": {
+            "source": { "$ref": "#/$defs/nullableText" },
+            "filesystem": { "$ref": "#/$defs/nullableText" },
+            "options": { "type": "array", "items": { "type": "string" } }
+          }
+        },
+        "block_devices": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/blockDevice" }
+        },
+        "verity_probe_status": { "$ref": "#/$defs/probeStatus" }
+      }
+    },
+    "blockDevice": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kernel_name",
+        "path",
+        "type",
+        "size_bytes",
+        "read_only",
+        "removable",
+        "model",
+        "transport",
+        "filesystem",
+        "mountpoints",
+        "parent_kernel_name",
+        "stable_identity_sha256",
+        "identity_basis",
+        "identity_limitations",
+        "operator_disposition"
+      ],
+      "properties": {
+        "kernel_name": { "type": "string", "maxLength": 256 },
+        "path": { "type": "string", "maxLength": 1024 },
+        "type": { "type": "string", "maxLength": 128 },
+        "size_bytes": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+        "read_only": { "type": "boolean" },
+        "removable": { "type": "boolean" },
+        "model": { "$ref": "#/$defs/nullableText" },
+        "transport": { "$ref": "#/$defs/nullableText" },
+        "filesystem": { "$ref": "#/$defs/nullableText" },
+        "mountpoints": { "type": "array", "items": { "type": "string", "maxLength": 4096 } },
+        "parent_kernel_name": { "$ref": "#/$defs/nullableText" },
+        "stable_identity_sha256": { "$ref": "#/$defs/nullableSha256" },
+        "identity_basis": {
+          "enum": ["hardware-reported-wwn-or-serial", "path-and-kernel-name-fallback"]
+        },
+        "identity_limitations": { "$ref": "#/$defs/asciiText" },
+        "operator_disposition": { "const": "unclassified-never-auto-selected" },
+        "serial": { "$ref": "#/$defs/nullableText" },
+        "wwn": { "$ref": "#/$defs/nullableText" }
+      }
+    },
+    "accelerator": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "source",
+        "vendor",
+        "name",
+        "device_path",
+        "device_identity_sha256",
+        "identity_basis",
+        "driver_version",
+        "memory_bytes",
+        "major",
+        "minor",
+        "mode",
+        "owner_uid",
+        "owner_gid",
+        "readable_by_collector",
+        "writable_by_collector"
+      ],
+      "properties": {
+        "kind": { "enum": ["nvidia-smi", "drm-render", "accel", "wsl-dxg"] },
+        "source": { "enum": ["nvidia-smi", "device-node"] },
+        "vendor": { "$ref": "#/$defs/nullableText" },
+        "name": { "$ref": "#/$defs/asciiText" },
+        "device_path": { "$ref": "#/$defs/nullableText" },
+        "device_identity_sha256": { "$ref": "#/$defs/nullableSha256" },
+        "identity_basis": { "$ref": "#/$defs/asciiText" },
+        "driver_version": { "$ref": "#/$defs/nullableText" },
+        "memory_bytes": { "$ref": "#/$defs/nullableNonNegativeInteger" },
+        "major": { "$ref": "#/$defs/nullableNonNegativeInteger" },
+        "minor": { "$ref": "#/$defs/nullableNonNegativeInteger" },
+        "mode": {
+          "anyOf": [
+            { "type": "string", "pattern": "^[0-7]{4}$" },
+            { "type": "null" }
+          ]
+        },
+        "owner_uid": { "$ref": "#/$defs/nullableNonNegativeInteger" },
+        "owner_gid": { "$ref": "#/$defs/nullableNonNegativeInteger" },
+        "readable_by_collector": { "type": ["boolean", "null"] },
+        "writable_by_collector": { "type": ["boolean", "null"] }
+      }
+    },
+    "acceleratorDeviceScan": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "allowlisted_roots",
+        "maximum_nodes",
+        "truncated",
+        "recursive",
+        "symlinks_followed"
+      ],
+      "properties": {
+        "allowlisted_roots": {
+          "const": ["/dev/dri/renderD[0-9]+", "/dev/accel/accel[0-9]+", "/dev/dxg"]
+        },
+        "maximum_nodes": { "const": 128 },
+        "truncated": { "type": "boolean" },
+        "recursive": { "const": false },
+        "symlinks_followed": { "const": false }
+      }
+    },
+    "probeStatus": {
+      "enum": ["ok", "nonzero", "not-found", "rejected", "timeout", "error"]
+    },
+    "probe": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "probe_id",
+        "argv",
+        "status",
+        "returncode",
+        "stdout_sha256",
+        "stderr_sha256",
+        "resolved_executable_path",
+        "resolved_executable_sha256",
+        "executable_provenance_status",
+        "executable_provenance"
+      ],
+      "properties": {
+        "probe_id": { "$ref": "#/$defs/asciiText" },
+        "argv": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/asciiText" } },
+        "status": { "$ref": "#/$defs/probeStatus" },
+        "returncode": { "type": ["integer", "null"] },
+        "stdout_sha256": { "$ref": "#/$defs/sha256" },
+        "stderr_sha256": { "$ref": "#/$defs/sha256" },
+        "resolved_executable_path": { "$ref": "#/$defs/nullableText" },
+        "resolved_executable_sha256": { "$ref": "#/$defs/nullableSha256" },
+        "executable_provenance_status": {
+          "enum": ["trusted", "not-found", "rejected", "injected-not-recorded"]
+        },
+        "executable_provenance": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/pathProvenance" }
+        }
+      }
+    },
+    "pathProvenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "kind", "owner_uid", "owner_gid", "mode", "size_bytes"],
+      "properties": {
+        "path": { "$ref": "#/$defs/asciiText" },
+        "kind": { "enum": ["regular-file", "directory", "other"] },
+        "owner_uid": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+        "owner_gid": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+        "mode": { "type": "string", "pattern": "^[0-7]{4}$" },
+        "size_bytes": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 }
+      }
+    },
+    "finding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "status", "required_for", "detail"],
+      "properties": {
+        "id": { "$ref": "#/$defs/asciiText" },
+        "status": { "enum": ["pass", "block", "review", "operator-action-required"] },
+        "required_for": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/asciiText" } },
+        "detail": { "$ref": "#/$defs/asciiText" }
+      }
+    }
+  }
+}

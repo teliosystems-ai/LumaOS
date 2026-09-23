@@ -1,0 +1,9 @@
+* text=auto
+
+# Files executed or parsed by Linux must retain LF even in Windows checkouts.
+*.sh text eol=lf
+*.service text eol=lf
+Makefile text eol=lf
+
+# Native Windows launchers retain conventional Windows line endings.
+*.ps1 text eol=crlf

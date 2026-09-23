@@ -51,6 +51,8 @@ class SigningPurpose(str, Enum):
     MODEL_PACK_MANIFEST = "model-pack-manifest"
     EXECUTION_CERTIFICATION = "model-pack-execution-certification"
     INTERACTIVE_CERTIFICATION = "model-pack-interactive-certification"
+    MODEL_PROFILE_CATALOG_LAB = "model-profile-catalog-lab"
+    MODEL_PROFILE_CATALOG_PRODUCTION = "model-profile-catalog-production"
 
 
 class SigningRole(str, Enum):
@@ -58,12 +60,16 @@ class SigningRole(str, Enum):
 
     MODEL_PACK_SIGNER = "model-pack-signer"
     CERTIFICATION_SIGNER = "model-pack-certification-signer"
+    LAB_CATALOG_SIGNER = "model-profile-catalog-lab-signer"
+    PRODUCTION_CATALOG_SIGNER = "model-profile-catalog-production-signer"
 
 
 _PURPOSE_ROLES = {
     SigningPurpose.MODEL_PACK_MANIFEST: SigningRole.MODEL_PACK_SIGNER,
     SigningPurpose.EXECUTION_CERTIFICATION: SigningRole.CERTIFICATION_SIGNER,
     SigningPurpose.INTERACTIVE_CERTIFICATION: SigningRole.CERTIFICATION_SIGNER,
+    SigningPurpose.MODEL_PROFILE_CATALOG_LAB: SigningRole.LAB_CATALOG_SIGNER,
+    SigningPurpose.MODEL_PROFILE_CATALOG_PRODUCTION: SigningRole.PRODUCTION_CATALOG_SIGNER,
 }
 
 
@@ -156,13 +162,32 @@ class PurposeBoundEd25519Verifier:
         key_id: str,
         purpose: SigningPurpose,
     ) -> bool:
+        return self.verify_at(
+            message,
+            signature,
+            key_id=key_id,
+            purpose=purpose,
+            at=self._clock(),
+        )
+
+    def verify_at(
+        self,
+        message: bytes,
+        signature: bytes,
+        *,
+        key_id: str,
+        purpose: SigningPurpose,
+        at: datetime,
+    ) -> bool:
+        """Verify with trust policy evaluated at an explicit evidence time."""
+
         if not isinstance(purpose, SigningPurpose):
             return False
         record = self._records.get(key_id)
         if (
             record is None
             or record.role is not _PURPOSE_ROLES[purpose]
-            or not record.permits(purpose, at=self._clock())
+            or not record.permits(purpose, at=at)
         ):
             return False
         return self._verifier.verify(message, signature, key_id=key_id)

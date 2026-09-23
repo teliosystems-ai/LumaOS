@@ -6,8 +6,11 @@ This runbook defines the decisions, people, protected equipment, artifacts,
 ceremony, and evidence required to turn a tested model profile into a
 production-selectable Luma OS catalog entry. The repository now provides a
 strict detached catalog-signature contract and a no-private-key ceremony
-utility. It does **not** provide production keys, an HSM, a durable Admin
-identity service, a root-signed trust-bundle loader, or a certified model pack.
+utility, plus development reference contracts for root-signed public trust,
+anchored catalog admission, and integrity-protected Admin authorization events.
+It does **not** provide production keys, an HSM, an authenticated/process-
+isolated Admin identity and writer service, protected HMAC-secret custody,
+rollback-resistant production anchors, or a certified model pack.
 
 Completing the development contract on Windows or Ubuntu WSL does not prove
 production custody. A production ceremony must run on controlled native Linux
@@ -34,6 +37,9 @@ can be scheduled:
 | SC-06 | Assign a release ID, monotonically increasing catalog sequence, catalog policy version, activation time, expiry, and rollback floor | Release request signed or authenticated by the release owner |
 | SC-07 | Provide a controlled native Ubuntu ceremony workstation and an independent offline verification workstation | Asset IDs, clean-build or measured-state records, time source, and network-isolation record |
 | SC-08 | Approve retention, audit access, incident response, key rotation, revocation, and destruction periods | Operations policy and evidence-retention schedule |
+| SC-09 | Approve one authoritative Admin writer/identity service, its deployment identity and process boundary, HMAC-secret custody, and trusted clock | Service design, deployment identity, identity proof, secret-custody record, time-source evidence, and negative-test results |
+| SC-10 | Approve a unique deployment/service checkpoint namespace, rollback-resistant compare-and-swap storage, and the non-atomic database/anchor reconciliation procedure | Anchor design, namespace allocation, access policy, backup/recovery rule, and witnessed reconciliation drill |
+| SC-11 | Approve the offline-source descriptor pin, exact installer edition, and consumed-artifact verification process | Signed release decision, canonical descriptor digest, edition digest, final-media inventory, and independent hash/signature results |
 
 Names, private facility details, recovery shares, token PINs, and unredacted HSM
 logs must remain in the restricted evidence store, not this public repository.
@@ -95,9 +101,11 @@ The root-signed public trust bundle must contain key ID, role, allowed purpose,
 public key, validity interval, revocation state, environment, policy version,
 and monotonically increasing bundle version. The installer must reject an
 unknown, expired, not-yet-valid, revoked, wrong-role, wrong-purpose, or
-lab-for-production key. The current repository validates those conditions once
-trusted records are loaded; implementing and reviewing the root-signed durable
-trust-bundle loader remains required before production activation.
+lab-for-production key. The development trust admission contract validates
+those conditions and rechecks exact current trust/catalog state. Production
+activation still requires provisioned roots, protected rollback-resistant
+checkpoint storage, a trusted clock, and independently reviewed platform
+adapters; the repository's in-memory anchor is only a test fake.
 
 ## Required artifacts
 
@@ -123,7 +131,16 @@ Retain these immutable artifacts by SHA-256:
 9. detached envelope conforming to
    `schemas/model-catalog-signature.schema.json`;
 10. root-authorized trust bundle and current revocation list;
-11. independent catalog verification receipt, rollback-floor update receipt,
+11. exact Admin grant, revoke, approval, and signing events; writer-service
+    authentication evidence; event-log checkpoint; and any reconciliation
+    record;
+12. canonical offline installation-source descriptor, separately governed
+    descriptor pin and edition approval, plus independent signature and digest
+    results for every image, payload, package-lock, metadata, and SBOM byte
+    actually placed on media;
+13. independent trust/catalog admission receipts and rollback-floor update
+    receipts; and
+14. independent catalog verification receipt,
     HSM audit event, ceremony log, witness sign-off, and final offline bundle
     inventory.
 
@@ -141,7 +158,10 @@ non-destructive checks can also run in Ubuntu WSL during development:
 cd /path/to/LumaOS
 python3 --version
 openssl version
-PYTHONPATH=src python3 -m unittest tests.test_model_catalog_signing -v
+PYTHONPATH=src python3 -m unittest \
+  tests.test_model_catalog_signing tests.test_signing_trust \
+  tests.test_catalog_admission tests.test_durable_administration \
+  tests.test_installation_source -v
 PYTHONPATH=src python3 -m unittest tests.test_model_pack tests.test_model_selection -v
 python3 scripts/model_catalog_ceremony.py --help
 sha256sum schemas/model-profile.schema.json schemas/model-catalog-signature.schema.json
@@ -222,6 +242,20 @@ exact decision receipt and request digest, and validate each assignment both at
 the approval timestamp and at verification time. Expired, revoked, replayed,
 or metadata-only assignment evidence fails closed.
 
+The development durable store is not that authentication service. It requires
+a separate `AdminEventWriterAuthorizer` for every exact append, then protects
+the accepted canonical event bytes with a sequence/hash chain, HMAC, and
+external checkpoint. The HMAC establishes local at-rest integrity under its
+injected secret, not the identity of the writer. Production must retain the
+external service's identity/policy decision and protect both the HMAC secret
+and checkpoint. A database/anchor mismatch is a reconciliation-required stop;
+it must never be auto-replayed or silently rolled back.
+
+The current store is a singleton log with fixed domains. Do not run independent
+writers or stores against one secret/namespace. Production needs one
+authoritative service and an independently provisioned deployment/service
+domain; multi-host/store replication remains unimplemented.
+
 ### 4. Prepare the exact bytes for the HSM
 
 The utility refuses noncanonical input and existing output paths. It does not
@@ -278,17 +312,39 @@ PYTHONPATH=src python3 scripts/model_catalog_ceremony.py assemble \
 sha256sum catalog.json catalog.sig.json
 ```
 
-The production loader then calls `verify_signed_catalog` with:
+The production loader first admits the root-signed public trust bundle against
+its fixed production checkpoint, then prepares and commits catalog admission
+with:
 
 - `expected_environment="production"`;
 - the exact expected release ID;
-- the externally protected minimum catalog sequence and its digest checkpoint
-  (sequence zero has no digest on first enrollment);
+- accepted catalog policy versions and a trusted live clock;
 - exact `ModelPackVerification` records for every available profile;
-- a `PurposeBoundEd25519Verifier` populated only from a verified production
-  trust bundle; and
-- an Admin authorization adapter that revalidates every approval and signer
-  assignment at the verification time.
+- a public-only crypto provider populated from the anchored production trust
+  bundle;
+- the authenticated durable Admin authorization adapter; and
+- the rollback-resistant production catalog anchor in its fixed environment
+  namespace.
+
+The trust composition root owns that live clock, root policy, public provider,
+and anchors. The clock is never artifact/request data, and later callers may
+not substitute a backdated instant or a different crypto provider. In-process
+authority objects must remain inside an isolated trusted service; Python object
+identity is not a boundary against a hostile peer in the same process.
+
+The `ModelPackVerification` records are retained tuple snapshots. Rechecking an
+admitted catalog proves it still matches those exact records; it does not
+re-hash pack files, re-query certification/revocation state, verify a runtime
+binary still present, or prove loadability. Generate the records from fresh
+independent pack/runtime/certification evidence and prepare a new catalog
+admission whenever any of that state changes.
+
+Preparation is non-authoritative. Commit must compare-and-swap the exact
+checkpoint read during preparation and then retain that exact value. The
+admitted catalog is usable only while the catalog checkpoint, trust bundle,
+signature, approvals, signer, pack bindings, policy, and lifecycle remain
+current. A newer catalog/trust bundle or any clock, Admin, or anchor failure
+invalidates retained authority.
 
 No model process, installer UI, catalog file, or command-line caller may assert
 its own trust record, assignment, hardware result, or rollback floor.
@@ -306,6 +362,14 @@ final bundle from read-only media. Test that a changed catalog byte, signature,
 approval, environment, release, sequence, key role, runtime tuple, or pack
 certification is rejected.
 
+Create the canonical offline-source descriptor only after those artifacts are
+frozen. The release system, not the descriptor or installer caller, must govern
+the descriptor digest and exact edition. Independently hash and verify the
+signature of every referenced artifact from the final media. Schema-v3
+descriptor validation binds those expected values and repeats current catalog/
+trust checks; it does not itself read, authenticate, or authorize the image,
+payload, package, metadata, or SBOM bytes.
+
 ## Acceptance criteria
 
 The signed production catalog/custody item is acceptable only when all of the
@@ -319,6 +383,9 @@ following are retained and independently reviewed:
 - the three approval activities and signing activity are current in the Admin
   system; every assignment and decision-receipt digest matches; and each exact
   approval event is valid both at its approval time and verification time;
+- the production Admin writer service authenticated every exact stored event;
+  the protected HMAC secret and external checkpoint agree with the database;
+  and no reconciliation-required state is open;
 - every approval and the signed statement bind the same reconstructed
   pre-approval release-request digest;
 - the exact canonical catalog and statement digests match the release request;
@@ -331,6 +398,9 @@ following are retained and independently reviewed:
   wrong release, validity failure, rollback, and pack/runtime drift;
 - the final bundle works with networking disabled and contains no private key,
   PIN, recovery material, private roster, or unredacted sensitive HSM log;
+- the governed offline-source pin and edition match the canonical descriptor,
+  and independent checks prove every referenced artifact byte and signature on
+  the distributed media rather than relying on the inert validation receipt;
 - a revocation/rotation drill proves a compromised catalog key can be revoked,
   a replacement key/root record published, a higher sequence signed, and the
   old artifact rejected;
@@ -354,6 +424,8 @@ Ubuntu WSL can legitimately provide:
 Ubuntu WSL cannot close:
 
 - protected HSM custody, USB/token reliability, or offline-root operation;
+- authenticated production Admin writer identity/process isolation, protected
+  HMAC secrets, trusted time, or rollback-resistant external checkpoints;
 - native boot, Secure Boot, UKI, TPM, firmware, LUKS2, dm-verity, or A/B slots;
 - destructive installation or recovery-media evidence;
 - cgroup, device, AppArmor, seccomp, KVM, kernel peer-credential, or physical
@@ -369,14 +441,25 @@ OS, kernel, firmware, HSM, device, model-pack, runtime, and release identities.
 
 Before production activation, implement and independently review:
 
-1. a root-signed, rollback-protected trust-bundle and revocation loader;
-2. a durable authenticated Admin identity/assignment/receipt adapter;
-3. the concrete public Ed25519/HSM-provider verification adapter used by the
-   installer and recovery environment;
-4. durable external storage for the catalog rollback floor;
-5. generation of signed model-pack and certification evidence for the selected
-   Qwen3-4B or other approved profile; and
-6. installer/base-image integration that accepts only a verified catalog
-   receipt and revalidates it immediately before disk mutation and first boot.
+1. provisioned production roots and the platform-qualified public Ed25519/HSM
+   verification adapter used by installer and recovery environments;
+2. an authenticated, process-isolated Admin writer/identity service satisfying
+   the exact writer-authorizer API, with protected HMAC-secret custody and a
+   trusted time source; this must be one authoritative log with a unique
+   deployment/service identity rather than independent stores sharing state;
+3. durable rollback-resistant external compare-and-swap storage for trust,
+   catalog, and Admin checkpoints, plus a reviewed database/anchor
+   reconciliation procedure;
+4. generation of actual signed model-pack, certification, trust-bundle, and
+   production-catalog evidence for Qwen3-4B or another approved profile;
+5. authenticated release governance for the offline descriptor pin and
+   edition, plus independent signature/digest verification of every referenced
+   artifact byte actually consumed; and
+6. privileged installer/base-image/first-boot integration that preserves the
+   schema-v3 revalidation boundary and is qualified on disposable native
+   Ubuntu hardware.
 
 These are explicit G2 deliverables, not documentation-only approvals.
+See [ADR-0010](adr/0010-durable-admin-and-offline-source-revalidation.md) for
+the durable Admin, external-anchor reconciliation, and schema-v3 source-
+revalidation decision.

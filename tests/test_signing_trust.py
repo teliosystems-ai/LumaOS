@@ -58,6 +58,25 @@ class KeyIdOnlyVerifier:
         return True
 
 
+class SwitchablePublicVerifier(TestOnlyPublicVerifier):
+    def __init__(self) -> None:
+        self.fail = False
+        self.reject = False
+
+    def verify(
+        self,
+        message: bytes,
+        signature: bytes,
+        *,
+        public_key: bytes,
+    ) -> bool:
+        if self.fail:
+            raise OSError("simulated public-verifier outage")
+        if self.reject:
+            return False
+        return super().verify(message, signature, public_key=public_key)
+
+
 class SwitchableAnchor(InMemoryDigestAnchor):
     def __init__(self) -> None:
         super().__init__()
@@ -150,7 +169,7 @@ class SigningTrustTests(unittest.TestCase):
             "policy": self.policy,
             "crypto": self.crypto,
             "anchor": anchor,
-            "now": self.now,
+            "clock": lambda: self.now,
         }
         values.update(changes)
         return prepare_trust_bundle(
@@ -166,7 +185,7 @@ class SigningTrustTests(unittest.TestCase):
         candidate = bundle or self.bundle()
         store = anchor or InMemoryDigestAnchor()
         plan = self.prepare(candidate, store)
-        anchored = commit_trust_bundle(plan, anchor=store, now=self.now)
+        anchored = commit_trust_bundle(plan, anchor=store)
         return candidate, store, anchored
 
     def test_genesis_commit_is_required_before_public_keys_can_verify(self) -> None:
@@ -184,12 +203,12 @@ class SigningTrustTests(unittest.TestCase):
                 anchor,
                 _token=object(),
             )
-        anchored = commit_trust_bundle(plan, anchor=anchor, now=self.now)
+        anchored = commit_trust_bundle(plan, anchor=anchor)
         self.assertEqual(bundle.digest, anchored.bundle_sha256)
         self.assertEqual(1, anchored.bundle_sequence)
         self.assertEqual(anchor.read(self.policy.anchor_namespace), anchored.checkpoint)
 
-        verifier = anchored.create_verifier(self.crypto, clock=lambda: self.now)
+        verifier = anchored.create_verifier(self.crypto)
         message = b"catalog statement"
         signature = self.crypto.signature(message, self.leaf_key)
         self.assertTrue(
@@ -210,19 +229,10 @@ class SigningTrustTests(unittest.TestCase):
                 at=self.now,
             )
         )
-        wrong_shape = anchored.create_verifier(
-            KeyIdOnlyVerifier(),  # type: ignore[arg-type]
-            clock=lambda: self.now,
-        )
-        self.assertFalse(
-            wrong_shape.verify_at(
-                message,
-                signature,
-                key_id="catalog-production-1",
-                purpose=SigningPurpose.MODEL_PROFILE_CATALOG_PRODUCTION,
-                at=self.now,
+        with self.assertRaisesRegex(SigningTrustError, "differs"):
+            anchored.create_verifier(
+                KeyIdOnlyVerifier(),  # type: ignore[arg-type]
             )
-        )
 
     def test_parser_rejects_noncanonical_duplicate_unknown_and_oversized_input(self) -> None:
         raw = self.bundle().canonical_bytes
@@ -288,7 +298,7 @@ class SigningTrustTests(unittest.TestCase):
             revocation_reason="compromised",
         )
         _, _, anchored = self.anchor_bundle(self.bundle(keys=(revoked_leaf,)))
-        verifier = anchored.create_verifier(self.crypto, clock=lambda: self.now)
+        verifier = anchored.create_verifier(self.crypto)
         self.assertFalse(
             verifier.verify_at(
                 b"message",
@@ -332,9 +342,7 @@ class SigningTrustTests(unittest.TestCase):
         bundle_expiry = self.now + timedelta(seconds=1)
         expiring_bundle = self.bundle(not_after=bundle_expiry)
         _, _, anchored_bundle = self.anchor_bundle(expiring_bundle)
-        bundle_verifier = anchored_bundle.create_verifier(
-            self.crypto, clock=lambda: self.now
-        )
+        bundle_verifier = anchored_bundle.create_verifier(self.crypto)
         message = b"cached-verifier"
         signature = self.crypto.signature(message, self.leaf_key)
         self.assertTrue(
@@ -368,9 +376,8 @@ class SigningTrustTests(unittest.TestCase):
         anchored_root = commit_trust_bundle(
             root_plan,
             anchor=root_anchor_store,
-            now=self.now,
         )
-        cached = anchored_root.create_verifier(self.crypto, clock=lambda: self.now)
+        cached = anchored_root.create_verifier(self.crypto)
         self.assertFalse(
             cached.verify_at(
                 message,
@@ -378,6 +385,30 @@ class SigningTrustTests(unittest.TestCase):
                 key_id="catalog-production-1",
                 purpose=SigningPurpose.MODEL_PROFILE_CATALOG_PRODUCTION,
                 at=root_expiry,
+            )
+        )
+
+    def test_currentness_uses_retained_live_clock_not_artifact_time(self) -> None:
+        expiry = self.now + timedelta(seconds=1)
+        clock_value = [self.now]
+        bundle = self.bundle(not_after=expiry)
+        anchor = InMemoryDigestAnchor()
+        plan = self.prepare(bundle, anchor, clock=lambda: clock_value[0])
+        anchored = commit_trust_bundle(plan, anchor=anchor)
+        verifier = anchored.create_verifier(self.crypto)
+        message = b"historical-artifact-time"
+        signature = self.crypto.signature(message, self.leaf_key)
+
+        clock_value[0] = expiry
+        with self.assertRaises(TrustBundleVerificationDenied):
+            anchored.ensure_current()
+        self.assertFalse(
+            verifier.verify_at(
+                message,
+                signature,
+                key_id="catalog-production-1",
+                purpose=SigningPurpose.MODEL_PROFILE_CATALOG_PRODUCTION,
+                at=self.now,
             )
         )
 
@@ -437,15 +468,13 @@ class SigningTrustTests(unittest.TestCase):
         first, anchor, anchored_first = self.anchor_bundle()
         same_plan = self.prepare(first, anchor)
         self.assertTrue(same_plan.is_idempotent)
-        reopened = commit_trust_bundle(same_plan, anchor=anchor, now=self.now)
+        reopened = commit_trust_bundle(same_plan, anchor=anchor)
         self.assertEqual(anchored_first.checkpoint, reopened.checkpoint)
 
         second = self.bundle(sequence=2, previous=first.digest)
         second_plan = self.prepare(second, anchor)
         self.assertFalse(second_plan.is_idempotent)
-        anchored_second = commit_trust_bundle(
-            second_plan, anchor=anchor, now=self.now
-        )
+        anchored_second = commit_trust_bundle(second_plan, anchor=anchor)
         self.assertEqual(2, anchored_second.bundle_sequence)
         self.assertEqual(2, anchored_second.checkpoint.generation)
 
@@ -453,12 +482,8 @@ class SigningTrustTests(unittest.TestCase):
         first = self.bundle()
         anchor = SwitchableAnchor()
         first_plan = self.prepare(first, anchor)
-        anchored_first = commit_trust_bundle(
-            first_plan, anchor=anchor, now=self.now
-        )
-        old_verifier = anchored_first.create_verifier(
-            self.crypto, clock=lambda: self.now
-        )
+        anchored_first = commit_trust_bundle(first_plan, anchor=anchor)
+        old_verifier = anchored_first.create_verifier(self.crypto)
         message = b"catalog"
         old_signature = self.crypto.signature(message, self.leaf_key)
         self.assertTrue(
@@ -486,9 +511,7 @@ class SigningTrustTests(unittest.TestCase):
             keys=(revoked, replacement),
         )
         second_plan = self.prepare(second, anchor)
-        anchored_second = commit_trust_bundle(
-            second_plan, anchor=anchor, now=self.now
-        )
+        anchored_second = commit_trust_bundle(second_plan, anchor=anchor)
         self.assertFalse(
             old_verifier.verify_at(
                 message,
@@ -498,9 +521,7 @@ class SigningTrustTests(unittest.TestCase):
                 at=self.now,
             )
         )
-        new_verifier = anchored_second.create_verifier(
-            self.crypto, clock=lambda: self.now
-        )
+        new_verifier = anchored_second.create_verifier(self.crypto)
         new_signature = self.crypto.signature(message, replacement_public_key)
         self.assertTrue(
             new_verifier.verify_at(
@@ -538,7 +559,7 @@ class SigningTrustTests(unittest.TestCase):
         first, anchor, _ = self.anchor_bundle()
         second = self.bundle(sequence=2, previous=first.digest)
         second_plan = self.prepare(second, anchor)
-        commit_trust_bundle(second_plan, anchor=anchor, now=self.now)
+        commit_trust_bundle(second_plan, anchor=anchor)
         with self.assertRaisesRegex(TrustBundleVerificationDenied, "below"):
             self.prepare(first, anchor)
 
@@ -573,7 +594,34 @@ class SigningTrustTests(unittest.TestCase):
             )
         )
         with self.assertRaises(TrustBundleAnchorConflict):
-            commit_trust_bundle(plan, anchor=anchor, now=self.now)
+            commit_trust_bundle(plan, anchor=anchor)
+
+    def test_live_root_verification_is_repeated_at_commit_and_use(self) -> None:
+        provider = SwitchablePublicVerifier()
+        first_anchor = InMemoryDigestAnchor()
+        first_plan = self.prepare(self.bundle(), first_anchor, crypto=provider)
+        provider.fail = True
+        with self.assertRaisesRegex(TrustBundleVerificationDenied, "commit"):
+            commit_trust_bundle(first_plan, anchor=first_anchor)
+        self.assertIsNone(first_anchor.read(self.policy.anchor_namespace))
+
+        provider.fail = False
+        second_anchor = InMemoryDigestAnchor()
+        second_plan = self.prepare(self.bundle(), second_anchor, crypto=provider)
+        anchored = commit_trust_bundle(second_plan, anchor=second_anchor)
+        verifier = anchored.create_verifier(provider)
+        message = b"live-root-revalidation"
+        signature = provider.signature(message, self.leaf_key)
+        provider.reject = True
+        self.assertFalse(
+            verifier.verify_at(
+                message,
+                signature,
+                key_id="catalog-production-1",
+                purpose=SigningPurpose.MODEL_PROFILE_CATALOG_PRODUCTION,
+                at=self.now,
+            )
+        )
 
     def test_prepared_bundle_cannot_be_redirected_to_another_anchor(self) -> None:
         source = InMemoryDigestAnchor()
@@ -582,7 +630,6 @@ class SigningTrustTests(unittest.TestCase):
             commit_trust_bundle(
                 plan,
                 anchor=InMemoryDigestAnchor(),
-                now=self.now,
             )
 
     def test_in_memory_anchor_enforces_generation_and_is_not_production_evidence(self) -> None:
@@ -628,13 +675,11 @@ class SigningTrustTests(unittest.TestCase):
             )
         anchor = InMemoryDigestAnchor()
         expiring = self.bundle(not_after=self.now + timedelta(seconds=1))
-        plan = self.prepare(expiring, anchor)
-        with self.assertRaisesRegex(TrustBundleVerificationDenied, "commit time"):
-            commit_trust_bundle(
-                plan,
-                anchor=anchor,
-                now=self.now + timedelta(seconds=1),
-            )
+        clock_value = [self.now]
+        plan = self.prepare(expiring, anchor, clock=lambda: clock_value[0])
+        clock_value[0] = self.now + timedelta(seconds=1)
+        with self.assertRaisesRegex(TrustBundleVerificationDenied, "commit"):
+            commit_trust_bundle(plan, anchor=anchor)
         schema = json.loads(
             Path("schemas/signing-trust-bundle.schema.json").read_text(
                 encoding="utf-8"

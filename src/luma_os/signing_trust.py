@@ -4,7 +4,11 @@ This module contains no private-key operation.  A trust bundle is useful only
 after an external root verifies its canonical bytes and an independently
 protected monotonic anchor commits its sequence and digest.  The in-repository
 anchor fake is explicitly development-only; native production storage remains
-a platform responsibility.
+a platform responsibility.  Module-private tokens and Python object identity
+are trusted-composition guards, not an authorization boundary against hostile
+code in the same process.  Untrusted plugins, models, and IPC peers must submit
+raw signed artifacts to an isolated trusted service instead of receiving these
+objects.
 """
 
 from __future__ import annotations
@@ -679,6 +683,7 @@ class TrustBundleAdmissionPlan:
     replacement_checkpoint: DigestCheckpoint | None
     prepared_at: datetime
     _anchor: ExternalDigestAnchor = field(repr=False, compare=False)
+    _context: "_TrustVerificationContext" = field(repr=False, compare=False)
     _token: object = field(repr=False, compare=False)
 
     def __post_init__(self) -> None:
@@ -690,6 +695,15 @@ class TrustBundleAdmissionPlan:
     @property
     def is_idempotent(self) -> bool:
         return self.replacement_checkpoint is None
+
+
+@dataclass(frozen=True, slots=True)
+class _TrustVerificationContext:
+    raw_bundle: bytes
+    root_anchors: tuple[RootTrustAnchor, ...]
+    policy: TrustBundlePolicy
+    crypto: PublicEd25519Verifier
+    clock: Callable[[], datetime]
 
 
 class _BoundPublicKeyVerifier:
@@ -758,7 +772,7 @@ class _AnchoredPurposeBoundEd25519Verifier(PurposeBoundEd25519Verifier):
         at: datetime,
     ) -> bool:
         try:
-            self._anchored_trust_bundle.ensure_current(at=at)
+            self._anchored_trust_bundle.ensure_current()
         except (SigningTrustError, TrustBundleVerificationDenied):
             return False
         return super().verify_at(
@@ -779,6 +793,7 @@ class AnchoredTrustBundle:
         "_root_anchor",
         "_anchor",
         "_keys_by_id",
+        "_context",
     )
 
     def __init__(
@@ -789,10 +804,15 @@ class AnchoredTrustBundle:
         anchor: ExternalDigestAnchor,
         *,
         _token: object,
+        _context: _TrustVerificationContext | None = None,
     ) -> None:
         if _token is not _ANCHORED_TOKEN:
             raise SigningTrustError(
                 "anchored trust bundles can only be created by commit_trust_bundle"
+            )
+        if not isinstance(_context, _TrustVerificationContext):
+            raise SigningTrustError(
+                "anchored trust bundle lost its live verification context"
             )
         self._bundle = bundle
         self._checkpoint = checkpoint
@@ -801,6 +821,7 @@ class AnchoredTrustBundle:
         self._keys_by_id = MappingProxyType(
             {item.key_id: item for item in bundle.keys}
         )
+        self._context = _context
 
     @property
     def environment(self) -> str:
@@ -833,31 +854,47 @@ class AnchoredTrustBundle:
     def key_record(self, key_id: str) -> SigningTrustKey | None:
         return self._keys_by_id.get(_ascii_text(key_id, "key_id"))
 
-    def ensure_current(self, *, at: datetime) -> None:
-        observed = _aware_utc(at, "trust verification time")
-        current = _read_checkpoint(self._anchor, self._checkpoint.namespace)
-        if current != self._checkpoint:
-            raise TrustBundleVerificationDenied(
-                "anchored trust bundle is no longer the current checkpoint"
+    def ensure_current(self) -> None:
+        """Revalidate against the trusted live clock retained at admission."""
+
+        observed = _trust_clock_value(self._context.clock)
+        try:
+            revalidated = prepare_trust_bundle(
+                self._context.raw_bundle,
+                root_anchors=self._context.root_anchors,
+                policy=self._context.policy,
+                crypto=self._context.crypto,
+                anchor=self._anchor,
+                clock=lambda: observed,
             )
-        if not self._root_anchor.permits(at=observed):
-            raise TrustBundleVerificationDenied("trust root is not currently permitted")
-        if not self._bundle.not_before <= observed < self._bundle.not_after:
-            raise TrustBundleVerificationDenied("trust bundle is not currently valid")
+        except Exception as exc:
+            raise TrustBundleVerificationDenied(
+                "anchored trust bundle no longer passes live root, policy, "
+                "lifecycle, signature, or checkpoint verification"
+            ) from exc
+        if (
+            revalidated.bundle != self._bundle
+            or revalidated.root_anchor != self._root_anchor
+            or revalidated.expected_checkpoint != self._checkpoint
+            or revalidated.replacement_checkpoint is not None
+        ):
+            raise TrustBundleVerificationDenied(
+                "anchored trust bundle is no longer the exact current checkpoint"
+            )
 
     def create_verifier(
         self,
         crypto: PublicEd25519Verifier,
-        *,
-        clock: Callable[[], datetime] | None = None,
     ) -> PurposeBoundEd25519Verifier:
-        """Create a purpose verifier only from this CAS-committed key set."""
+        """Create the supported verifier from this CAS-committed key set."""
 
         if not callable(getattr(crypto, "verify", None)):
             raise SigningTrustError("public Ed25519 verifier lacks verify()")
-        effective_clock = clock or (lambda: datetime.now(UTC))
-        now = _aware_utc(effective_clock(), "trust verifier clock")
-        self.ensure_current(at=now)
+        if crypto is not self._context.crypto:
+            raise SigningTrustError(
+                "public Ed25519 verifier differs from the provider bound at trust admission"
+            )
+        self.ensure_current()
         raw = _BoundPublicKeyVerifier(
             crypto,
             {item.key_id: item.public_key for item in self._bundle.keys},
@@ -877,7 +914,7 @@ class AnchoredTrustBundle:
             raw,
             records,
             trust_bundle=self,
-            clock=effective_clock,
+            clock=self._context.clock,
         )
 
 
@@ -924,6 +961,16 @@ def _read_checkpoint(
     return checkpoint
 
 
+def _trust_clock_value(clock: Callable[[], datetime]) -> datetime:
+    try:
+        value = clock()
+    except Exception as exc:
+        raise TrustBundleVerificationDenied(
+            "trust authority clock is unavailable"
+        ) from exc
+    return _aware_utc(value, "trust verification time")
+
+
 def prepare_trust_bundle(
     raw_bundle: bytes,
     *,
@@ -931,16 +978,23 @@ def prepare_trust_bundle(
     policy: TrustBundlePolicy,
     crypto: PublicEd25519Verifier,
     anchor: ExternalDigestAnchor,
-    now: datetime | None = None,
+    clock: Callable[[], datetime] | None = None,
 ) -> TrustBundleAdmissionPlan:
-    """Verify a candidate and freeze the exact external-anchor CAS precondition."""
+    """Verify a candidate and freeze the exact external-anchor CAS precondition.
+
+    ``clock`` is trusted composition input and must be a protected live time
+    source, never artifact data or an untrusted request parameter.
+    """
 
     if not isinstance(policy, TrustBundlePolicy):
         raise SigningTrustError("policy must be a TrustBundlePolicy")
     _validate_root_set(root_anchors)
     if not callable(getattr(crypto, "verify", None)):
         raise SigningTrustError("public Ed25519 verifier lacks verify()")
-    observed_at = _aware_utc(now or datetime.now(UTC), "trust verification time")
+    if clock is not None and not callable(clock):
+        raise SigningTrustError("clock must be callable")
+    authority_clock = clock or (lambda: datetime.now(UTC))
+    observed_at = _trust_clock_value(authority_clock)
     bundle = SignedTrustBundle.parse(raw_bundle)
     if bundle.environment != policy.environment:
         raise TrustBundleVerificationDenied(
@@ -1053,6 +1107,13 @@ def prepare_trust_bundle(
             sequence=bundle.bundle_sequence,
             artifact_sha256=bundle.digest,
         )
+    context = _TrustVerificationContext(
+        raw_bundle=raw_bundle,
+        root_anchors=tuple(root_anchors),
+        policy=policy,
+        crypto=crypto,
+        clock=authority_clock,
+    )
     return TrustBundleAdmissionPlan(
         bundle=bundle,
         root_anchor=root_anchor,
@@ -1060,6 +1121,7 @@ def prepare_trust_bundle(
         replacement_checkpoint=replacement,
         prepared_at=observed_at,
         _anchor=anchor,
+        _context=context,
         _token=_PREPARED_TOKEN,
     )
 
@@ -1068,9 +1130,8 @@ def commit_trust_bundle(
     plan: TrustBundleAdmissionPlan,
     *,
     anchor: ExternalDigestAnchor,
-    now: datetime | None = None,
 ) -> AnchoredTrustBundle:
-    """CAS-commit a prepared bundle and return the only verifier-capable type."""
+    """CAS-commit a prepared bundle and return the supported verifier type."""
 
     if not isinstance(plan, TrustBundleAdmissionPlan) or plan._token is not _PREPARED_TOKEN:
         raise SigningTrustError("plan was not produced by prepare_trust_bundle")
@@ -1078,11 +1139,50 @@ def commit_trust_bundle(
         raise TrustBundleVerificationDenied(
             "trust bundle must commit to the anchor used during preparation"
         )
-    observed_at = _aware_utc(now or datetime.now(UTC), "trust commit time")
-    if not plan.root_anchor.permits(at=observed_at):
-        raise TrustBundleVerificationDenied("trust root is not valid at commit time")
-    if not plan.bundle.not_before <= observed_at < plan.bundle.not_after:
-        raise TrustBundleVerificationDenied("trust bundle is not valid at commit time")
+    if not isinstance(plan._context, _TrustVerificationContext):
+        raise SigningTrustError("trust plan lost its live verification context")
+    namespace = plan._context.policy.anchor_namespace
+    before_revalidation = _read_checkpoint(anchor, namespace)
+    if before_revalidation != plan.expected_checkpoint:
+        raise TrustBundleAnchorConflict(
+            "external trust checkpoint changed after preparation"
+        )
+    observed_at = _trust_clock_value(plan._context.clock)
+    try:
+        revalidated = prepare_trust_bundle(
+            plan._context.raw_bundle,
+            root_anchors=plan._context.root_anchors,
+            policy=plan._context.policy,
+            crypto=plan._context.crypto,
+            anchor=anchor,
+            clock=lambda: observed_at,
+        )
+    except Exception as exc:
+        try:
+            after_failure = _read_checkpoint(anchor, namespace)
+        except Exception:
+            after_failure = plan.expected_checkpoint
+        if after_failure != plan.expected_checkpoint:
+            raise TrustBundleAnchorConflict(
+                "external trust checkpoint changed during live verification"
+            ) from exc
+        raise TrustBundleVerificationDenied(
+            "trust bundle no longer passes live verification at commit"
+        ) from exc
+    after_revalidation = _read_checkpoint(anchor, namespace)
+    if after_revalidation != plan.expected_checkpoint:
+        raise TrustBundleAnchorConflict(
+            "external trust checkpoint changed during live verification"
+        )
+    if (
+        revalidated.bundle != plan.bundle
+        or revalidated.root_anchor != plan.root_anchor
+        or revalidated.expected_checkpoint != plan.expected_checkpoint
+        or revalidated.replacement_checkpoint != plan.replacement_checkpoint
+    ):
+        raise TrustBundleVerificationDenied(
+            "live trust verification differs from the prepared candidate"
+        )
 
     if plan.replacement_checkpoint is None:
         current = _read_checkpoint(anchor, plan.expected_checkpoint.namespace)  # type: ignore[union-attr]
@@ -1116,10 +1216,13 @@ def commit_trust_bundle(
         raise TrustBundleAnchorConflict(
             "external trust checkpoint does not bind the verified bundle"
         )
-    return AnchoredTrustBundle(
+    anchored = AnchoredTrustBundle(
         plan.bundle,
         committed,
         plan.root_anchor,
         anchor,
         _token=_ANCHORED_TOKEN,
+        _context=plan._context,
     )
+    anchored.ensure_current()
+    return anchored

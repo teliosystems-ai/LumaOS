@@ -54,6 +54,12 @@ jobs:
             test_model_pack.py \
             test_model_selection.py \
             test_installer.py \
+            test_ed25519_provider.py \
+            test_signing_trust.py \
+            test_catalog_admission.py \
+            test_durable_administration.py \
+            test_installation_source.py \
+            test_installer_source_v3.py \
             test_smoke_local_model.py \
             test_inference_gateway.py \
             test_ipc.py \
@@ -78,6 +84,12 @@ jobs:
             tests.test_model_selection \
             tests.test_g2_host_inventory \
             tests.test_model_catalog_signing \
+            tests.test_ed25519_provider \
+            tests.test_signing_trust \
+            tests.test_catalog_admission \
+            tests.test_durable_administration \
+            tests.test_installation_source \
+            tests.test_installer_source_v3 \
             tests.test_ubuntu_preflight
 
   windows-smoke:
@@ -107,6 +119,12 @@ jobs:
             "test_model_pack.py",
             "test_model_selection.py",
             "test_installer.py",
+            "test_ed25519_provider.py",
+            "test_signing_trust.py",
+            "test_catalog_admission.py",
+            "test_durable_administration.py",
+            "test_installation_source.py",
+            "test_installer_source_v3.py",
             "test_smoke_local_model.py",
             "test_inference_gateway.py",
             "test_ipc.py",
@@ -120,7 +138,7 @@ jobs:
       - name: Run optimized safety, model-selection, and qualification boundaries
         shell: pwsh
         run: |
-          python -O -W error -m unittest tests.test_boot_control tests.test_installer tests.test_privileged_helper tests.test_durable_effects tests.test_model_pack tests.test_model_selection tests.test_g2_host_inventory tests.test_model_catalog_signing tests.test_ubuntu_preflight
+          python -O -W error -m unittest tests.test_boot_control tests.test_installer tests.test_privileged_helper tests.test_durable_effects tests.test_model_pack tests.test_model_selection tests.test_g2_host_inventory tests.test_model_catalog_signing tests.test_ed25519_provider tests.test_signing_trust tests.test_catalog_admission tests.test_durable_administration tests.test_installation_source tests.test_installer_source_v3 tests.test_ubuntu_preflight
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Exercise the native CLI boundary
         shell: pwsh

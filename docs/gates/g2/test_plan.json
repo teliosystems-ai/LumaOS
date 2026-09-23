@@ -6,7 +6,8 @@
   "owner": "qa-lead",
   "status": "development-in-progress",
   "gate_closing": false,
-  "claim_boundary": "This plan separates locally executable safety, model-profile selection, signed-catalog verification, read-only Ubuntu admission, and bounded SQLite durability tests from physical Ubuntu OS acceptance. Passing fake-device, injected-adapter, unsigned-model, temporary SQLite, native Windows, Ubuntu WSL, inventory, or preflight tests cannot satisfy a numbered procedure that requires an actual signed production catalog and custody ceremony, signed media, physical boot, destructive storage, encryption recovery, kernel enforcement, physical crash recovery, or two A1 boards.",
+  "claim_boundary": "This plan separates locally executable safety, model-profile selection, signed-catalog and anchored-trust verification, integrity-protected durable Admin events, inert offline-source and installer schema-v3 revalidation, read-only Ubuntu admission, and bounded SQLite durability tests from physical Ubuntu OS acceptance. Passing fake-device, injected-adapter, test-root, in-memory-anchor, unsigned-model, temporary SQLite, native Windows, Ubuntu WSL, inventory, or preflight tests cannot satisfy a numbered procedure that requires an actual signed production catalog and custody ceremony, authenticated isolated Admin service, protected rollback anchors and secret custody, signed media and consumed artifact-byte verification, physical boot, destructive storage, encryption recovery, kernel enforcement, physical crash recovery, or two A1 boards.",
+  "current_tranche_detached_validation": "pending-after-integration-commit",
   "development_lanes": [
     {
       "environment": "DEV-WIN-WSL-GPU-01",
@@ -88,7 +89,59 @@
         "docs/PRODUCTION_SIGNING_CUSTODY.md"
       ],
       "local_disposition": "deterministic request-before-approval, quorum, purpose, key-lifecycle, rollback, exact-pack, bounded-input, and detached-verification contract tests without private keys",
-      "formal_disposition": "blocked-pending-protected-production-keys-trust-loader-admin-event-adapter-rollback-anchor-signed-packs-and-witnessed-ceremony"
+      "formal_disposition": "blocked-pending-protected-production-roots-keys-admin-writer-service-rollback-anchor-signed-packs-and-witnessed-ceremony"
+    },
+    {
+      "area": "root-signed-trust-and-anchored-catalog-admission",
+      "source_requirements": ["A003"],
+      "source_tests": ["T06"],
+      "artifacts": [
+        "schemas/signing-trust-bundle.schema.json",
+        "src/luma_os/monotonic_anchor.py",
+        "src/luma_os/signing_trust.py",
+        "src/luma_os/catalog_admission.py",
+        "src/luma_os/ed25519_provider.py",
+        "tests/test_signing_trust.py",
+        "tests/test_catalog_admission.py",
+        "tests/test_ed25519_provider.py",
+        "docs/adr/0009-root-signed-trust-and-catalog-admission.md",
+        "docs/PRODUCTION_SIGNING_CUSTODY.md"
+      ],
+      "local_disposition": "deterministic root/leaf validity, environment and purpose separation, exact CAS admission, rollback/fork/race denial, concrete Ed25519 verification, and live transitive trust/catalog freshness tests",
+      "formal_disposition": "blocked-pending-provisioned-production-roots-protected-anchor-trusted-time-hsm-operations-and-witnessed-key-lifecycle"
+    },
+    {
+      "area": "durable-admin-authorization-events",
+      "source_requirements": ["A003", "A115"],
+      "source_tests": ["T06", "T62"],
+      "artifacts": [
+        "schemas/admin-authorization-event.schema.json",
+        "src/luma_os/administration.py",
+        "src/luma_os/durable_administration.py",
+        "src/luma_os/monotonic_anchor.py",
+        "tests/test_durable_administration.py",
+        "docs/adr/0010-durable-admin-and-offline-source-revalidation.md",
+        "docs/PRODUCTION_SIGNING_CUSTODY.md"
+      ],
+      "local_disposition": "bounded canonical SQLite events, HMAC/hash-chain integrity, mandatory external writer authorization, exact query-time authorization, restart/tamper checks, and fail-closed external-anchor reconciliation tests",
+      "formal_disposition": "blocked-pending-authenticated-isolated-admin-writer-protected-secret-and-anchor-trusted-time-per-deployment-domain-separation-and-operational-reconciliation"
+    },
+    {
+      "area": "offline-source-and-installer-schema-v3-revalidation",
+      "source_requirements": ["FR02", "FR03", "A001", "A002", "A003", "A108"],
+      "source_tests": ["T01", "T02", "T06", "T48"],
+      "artifacts": [
+        "schemas/offline-installation-source.schema.json",
+        "src/luma_os/installation_source.py",
+        "src/luma_os/catalog_admission.py",
+        "src/luma_os/installer.py",
+        "tests/test_installation_source.py",
+        "tests/test_installer_source_v3.py",
+        "tests/test_installer.py",
+        "docs/adr/0010-durable-admin-and-offline-source-revalidation.md"
+      ],
+      "local_disposition": "inert canonical descriptor validation plus two fresh raw-source validations around journaling, followed by hardware resampling, model reselection, reauthorization, live catalog/trust checks, and final time/freshness checks",
+      "formal_disposition": "blocked-pending-governed-release-pins-signed-consumed-artifact-byte-verification-offline-media-exclusive-device-binding-destructive-install-boot-and-recovery"
     },
     {
       "area": "ubuntu-host-inventory-and-native-candidate-admission",

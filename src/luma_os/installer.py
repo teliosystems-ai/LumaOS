@@ -15,7 +15,9 @@ import hashlib
 import json
 import re
 import threading
-from typing import Protocol, TypeVar
+from typing import TYPE_CHECKING, Protocol, TypeVar
+
+from .catalog_admission import AnchoredCatalogAdmission
 
 from .model_selection import (
     ModelHardwareSnapshot,
@@ -27,6 +29,9 @@ from .model_selection import (
     assess_model_selection,
     select_model_profile,
 )
+
+if TYPE_CHECKING:
+    from .installation_source import ValidatedInstallationSource
 
 
 U64_MAX = (1 << 64) - 1
@@ -73,6 +78,14 @@ class ConfirmationReplay(ConfirmationDenied):
 
 class InventoryChanged(ConfirmationDenied):
     """Fresh hardware state does not match the state that was confirmed."""
+
+
+class InstallationSourceDenied(InstallerError):
+    """Preflight could not validate the supplied installation-source bytes."""
+
+
+class InstallationSourceChanged(ConfirmationDenied):
+    """Fresh installation-source inputs no longer match the confirmed plan."""
 
 
 def _identifier(value: object, field: str) -> str:
@@ -530,6 +543,32 @@ class EditionSpec:
             "edition disk capacity",
         )
 
+    def canonical_payload(self) -> dict[str, object]:
+        """Return every edition field for cross-contract digest binding."""
+
+        return {
+            "allow_degraded_devices": self.allow_degraded_devices,
+            "edition_id": self.edition_id,
+            "minimum_accelerator_memory_bytes": (
+                self.minimum_accelerator_memory_bytes
+            ),
+            "minimum_ram_bytes": self.minimum_ram_bytes,
+            "partitions": [
+                {
+                    "filesystem": partition.filesystem,
+                    "label": partition.label,
+                    "purpose": partition.purpose,
+                    "size_bytes": partition.size_bytes,
+                }
+                for partition in self.partitions
+            ],
+            "payload_sha256": self.payload_sha256,
+            "policy_version": self.policy_version,
+            "release_sha256": self.release_sha256,
+            "required_device_classes": list(self.required_device_classes),
+            "supported_architectures": list(self.supported_architectures),
+        }
+
 
 @dataclass(frozen=True, slots=True)
 class HardwareAssessment:
@@ -632,10 +671,23 @@ class InstallationPlan:
     effects: tuple[MutationEffect, ...]
     created_at: datetime
     model_selection: ModelSelection | None = None
+    installation_source_environment: str | None = None
+    installation_source_descriptor_sha256: str | None = None
+    installation_source_expected_sha256: str | None = None
+    installation_source_validation_receipt_sha256: str | None = None
+    installation_source_edition_sha256: str | None = None
+    installation_source_catalog_sha256: str | None = None
+    installation_source_catalog_sequence: int | None = None
+    installation_source_catalog_admission_sha256: str | None = None
+    installation_source_trust_bundle_sha256: str | None = None
 
     def __post_init__(self) -> None:
-        if self.schema_version not in {1, 2} or isinstance(self.schema_version, bool):
-            raise InstallerValidationError("installation plan schema_version must be 1 or 2")
+        if self.schema_version not in {1, 2, 3} or isinstance(
+            self.schema_version, bool
+        ):
+            raise InstallerValidationError(
+                "installation plan schema_version must be 1, 2, or 3"
+            )
         if self.schema_version == 1 and self.model_selection is not None:
             raise InstallerValidationError(
                 "schema-version-1 installation plans cannot bind model selection"
@@ -645,6 +697,66 @@ class InstallationPlan:
         ):
             raise InstallerValidationError(
                 "schema-version-2 installation plans require model selection"
+            )
+        if self.schema_version == 3 and not isinstance(
+            self.model_selection, ModelSelection
+        ):
+            raise InstallerValidationError(
+                "schema-version-3 installation plans require model selection"
+            )
+        source_fields = (
+            self.installation_source_environment,
+            self.installation_source_descriptor_sha256,
+            self.installation_source_expected_sha256,
+            self.installation_source_validation_receipt_sha256,
+            self.installation_source_edition_sha256,
+            self.installation_source_catalog_sha256,
+            self.installation_source_catalog_sequence,
+            self.installation_source_catalog_admission_sha256,
+            self.installation_source_trust_bundle_sha256,
+        )
+        if self.schema_version == 3:
+            if any(value is None for value in source_fields):
+                raise InstallerValidationError(
+                    "schema-version-3 plans require every installation-source binding"
+                )
+            if self.installation_source_environment not in {"lab", "production"}:
+                raise InstallerValidationError(
+                    "installation_source_environment must be lab or production"
+                )
+            for field in (
+                "installation_source_descriptor_sha256",
+                "installation_source_expected_sha256",
+                "installation_source_validation_receipt_sha256",
+                "installation_source_edition_sha256",
+                "installation_source_catalog_sha256",
+                "installation_source_catalog_admission_sha256",
+                "installation_source_trust_bundle_sha256",
+            ):
+                _sha256(getattr(self, field), field)
+            _u64(
+                self.installation_source_catalog_sequence,
+                "installation_source_catalog_sequence",
+                positive=True,
+            )
+            if (
+                self.installation_source_descriptor_sha256
+                != self.installation_source_expected_sha256
+            ):
+                raise InstallerValidationError(
+                    "installation-source descriptor and expected digests must match"
+                )
+            if (
+                self.model_selection is not None
+                and self.model_selection.catalog_sha256
+                != self.installation_source_catalog_sha256
+            ):
+                raise InstallerValidationError(
+                    "model selection and installation source must bind one catalog"
+                )
+        elif any(value is not None for value in source_fields):
+            raise InstallerValidationError(
+                "schema-version-1/2 plans cannot contain installation-source bindings"
             )
         _identifier(self.issuer_id, "issuer_id")
         _u64(self.contract_policy_version, "contract_policy_version", positive=True)
@@ -707,12 +819,31 @@ class InstallationPlan:
             "schema_version": self.schema_version,
             "selected_disk": self.selected_disk.canonical_payload(),
         }
-        if self.schema_version == 2:
+        if self.schema_version in {2, 3} and self.model_selection is not None:
             if self.model_selection is None:  # Defensive narrowing after validation.
                 raise InstallerValidationError(
-                    "schema-version-2 plan lost its model selection"
+                    "installation plan lost its model selection"
                 )
             payload["model_selection"] = self.model_selection.canonical_payload()
+        if self.schema_version == 3:
+            payload["installation_source"] = {
+                "artifact_bytes_verified": False,
+                "authority": False,
+                "catalog_admission_sha256": self.installation_source_catalog_admission_sha256,
+                "catalog_sequence": self.installation_source_catalog_sequence,
+                "catalog_sha256": self.installation_source_catalog_sha256,
+                "descriptor_sha256": self.installation_source_descriptor_sha256,
+                "edition_governance_evidence": False,
+                "edition_sha256": self.installation_source_edition_sha256,
+                "environment": self.installation_source_environment,
+                "expected_descriptor_sha256": self.installation_source_expected_sha256,
+                "governed_pin_evidence": False,
+                "installer_authorization": False,
+                "trust_bundle_sha256": self.installation_source_trust_bundle_sha256,
+                "validation_receipt_sha256": (
+                    self.installation_source_validation_receipt_sha256
+                ),
+            }
         return payload
 
     @property
@@ -757,6 +888,9 @@ class InstallationConfirmation:
     authorization: AuthorizationContext
     issued_at: datetime
     expires_at: datetime
+    installation_source_environment: str | None = None
+    installation_source_expected_sha256: str | None = None
+    installation_source_validation_receipt_sha256: str | None = None
 
     def __post_init__(self) -> None:
         _identifier(self.confirmation_id, "confirmation_id")
@@ -771,6 +905,28 @@ class InstallationConfirmation:
             raise InstallerValidationError("confirmation expires_at must be after issued_at")
         object.__setattr__(self, "issued_at", issued)
         object.__setattr__(self, "expires_at", expires)
+        source_bindings = (
+            self.installation_source_environment,
+            self.installation_source_expected_sha256,
+            self.installation_source_validation_receipt_sha256,
+        )
+        if any(value is not None for value in source_bindings):
+            if any(value is None for value in source_bindings):
+                raise InstallerValidationError(
+                    "confirmation installation-source bindings must be all or none"
+                )
+            if self.installation_source_environment not in {"lab", "production"}:
+                raise InstallerValidationError(
+                    "confirmation installation-source environment is invalid"
+                )
+            _sha256(
+                self.installation_source_expected_sha256,
+                "confirmation installation_source_expected_sha256",
+            )
+            _sha256(
+                self.installation_source_validation_receipt_sha256,
+                "confirmation installation_source_validation_receipt_sha256",
+            )
 
 
 @dataclass(frozen=True, slots=True)
@@ -829,6 +985,40 @@ class InstallationAttempt:
             raise InstallerValidationError("completed attempt requires completed_at")
 
 
+@dataclass(frozen=True, slots=True)
+class InstallationSourceInput:
+    """Raw, non-authoritative inputs for one source-validation pass.
+
+    The expected digest is caller supplied.  This object is not governance
+    evidence, does not prove artifact bytes or signatures, and is never effect
+    authority.  Schema-v3 execution asks its provider for a new instance at
+    each validation boundary.
+    """
+
+    raw_descriptor: bytes
+    expected_descriptor_sha256: str
+    expected_environment: str
+    catalog_admission: AnchoredCatalogAdmission
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.raw_descriptor, bytes):
+            raise InstallerValidationError(
+                "installation-source descriptor must be immutable bytes"
+            )
+        _sha256(
+            self.expected_descriptor_sha256,
+            "installation-source expected_descriptor_sha256",
+        )
+        if self.expected_environment not in {"lab", "production"}:
+            raise InstallerValidationError(
+                "installation-source expected_environment must be lab or production"
+            )
+        if not isinstance(self.catalog_admission, AnchoredCatalogAdmission):
+            raise InstallerValidationError(
+                "installation source requires an AnchoredCatalogAdmission"
+            )
+
+
 class EffectAuthorizer(Protocol):
     """Adapter that checks session activity and returns current authority generation."""
 
@@ -862,6 +1052,17 @@ class AttemptJournal(Protocol):
     ) -> None: ...
 
 
+class InstallationSourceProvider(Protocol):
+    """Return fresh source inputs from the trusted installer composition root.
+
+    Untrusted plugins, models, or IPC peers must submit raw identifiers and
+    artifacts to a trusted resolver; a Python admission object is not proof of
+    provenance across an untrusted in-process boundary.
+    """
+
+    def __call__(self) -> InstallationSourceInput: ...
+
+
 class InstallerContract:
     """Thread-safe preflight, confirmation, and one-shot execution boundary."""
 
@@ -876,6 +1077,7 @@ class InstallerContract:
         clock: Callable[[], datetime] | None = None,
         inventory_max_age_seconds: int = 300,
         confirmation_max_lifetime_seconds: int = 120,
+        installation_source_environment: str = "production",
     ) -> None:
         self._issuer_id = _identifier(issuer_id, "issuer_id")
         self._contract_policy_version = _u64(
@@ -902,7 +1104,13 @@ class InstallerContract:
             "confirmation_max_lifetime_seconds",
             positive=True,
         )
+        if installation_source_environment not in {"lab", "production"}:
+            raise InstallerValidationError(
+                "installation_source_environment must be exactly lab or production"
+            )
+        self._installation_source_environment = installation_source_environment
         self._issued_plans: dict[str, InstallationPlan] = {}
+        self._issued_editions: dict[str, EditionSpec] = {}
         self._issued_confirmations: dict[str, InstallationConfirmation] = {}
         self._lock = threading.RLock()
 
@@ -1037,14 +1245,82 @@ class InstallerContract:
         model_catalog: ModelProfileCatalog | None = None,
         model_hardware: ModelHardwareSnapshot | None = None,
         selected_model_profile_id: str | None = None,
+        installation_source_descriptor: bytes | None = None,
+        installation_source_expected_sha256: str | None = None,
+        installation_source_expected_environment: str | None = None,
+        installation_source_catalog_admission: AnchoredCatalogAdmission | None = None,
     ) -> PreflightResult:
+        source_arguments = (
+            installation_source_descriptor,
+            installation_source_expected_sha256,
+            installation_source_expected_environment,
+            installation_source_catalog_admission,
+        )
+        source_requested = any(value is not None for value in source_arguments)
+        if source_requested and any(value is None for value in source_arguments):
+            raise InstallerValidationError(
+                "schema-version-3 preflight requires raw descriptor, expected "
+                "digest, environment, and anchored catalog admission together"
+            )
+
+        source_input: InstallationSourceInput | None = None
+        validated_source: ValidatedInstallationSource | None = None
+        effective_model_catalog = model_catalog
+        if source_requested:
+            if (
+                installation_source_expected_environment
+                != self._installation_source_environment
+            ):
+                raise InstallationSourceDenied(
+                    "installation-source environment differs from contract policy"
+                )
+            if model_catalog is not None:
+                raise InstallerValidationError(
+                    "schema-version-3 derives model catalog from its anchored admission"
+                )
+            if model_hardware is None or selected_model_profile_id is None:
+                raise InstallerValidationError(
+                    "schema-version-3 requires model hardware and a selected profile"
+                )
+            try:
+                source_input = InstallationSourceInput(
+                    raw_descriptor=installation_source_descriptor,  # type: ignore[arg-type]
+                    expected_descriptor_sha256=(
+                        installation_source_expected_sha256  # type: ignore[arg-type]
+                    ),
+                    expected_environment=(
+                        installation_source_expected_environment  # type: ignore[arg-type]
+                    ),
+                    catalog_admission=(
+                        installation_source_catalog_admission  # type: ignore[arg-type]
+                    ),
+                )
+                validated_source = self._validate_installation_source(
+                    source_input,
+                    edition,
+                )
+                if (
+                    self._installation_source_system_architecture(validated_source)
+                    != inventory.architecture
+                ):
+                    raise InstallationSourceDenied(
+                        "installation-source target architecture differs from inventory"
+                    )
+                effective_model_catalog = source_input.catalog_admission.catalog
+            except InstallationSourceDenied:
+                raise
+            except Exception as exc:
+                raise InstallationSourceDenied(
+                    "installation-source preflight validation failed"
+                ) from exc
+
         now = self._now()
         self._require_fresh(inventory, now)
         assessment = self.assess(
             inventory,
             edition,
             selected_disk_id=selected_disk_id,
-            model_catalog=model_catalog,
+            model_catalog=effective_model_catalog,
             model_hardware=model_hardware,
             selected_model_profile_id=selected_model_profile_id,
         )
@@ -1055,10 +1331,10 @@ class InstallerContract:
             raise PreflightDenied(assessment)
 
         model_selection: ModelSelection | None = None
-        if model_catalog is not None and model_hardware is not None:
+        if effective_model_catalog is not None and model_hardware is not None:
             try:
                 model_selection = select_model_profile(
-                    model_catalog,
+                    effective_model_catalog,
                     model_hardware,
                     profile_id=selected_model_profile_id,  # type: ignore[arg-type]
                 )
@@ -1068,6 +1344,34 @@ class InstallerContract:
                 raise InstallerValidationError(
                     "model selection inputs are invalid"
                 ) from exc
+
+        if source_input is not None:
+            try:
+                validated_source = self._validate_installation_source(
+                    source_input,
+                    edition,
+                )
+            except Exception as exc:
+                raise InstallationSourceDenied(
+                    "installation-source context changed during preflight"
+                ) from exc
+            if (
+                self._installation_source_system_architecture(validated_source)
+                != inventory.architecture
+            ):
+                raise InstallationSourceDenied(
+                    "installation-source target architecture differs from inventory"
+                )
+            if (
+                model_selection is not None
+                and model_selection.catalog_sha256
+                != validated_source.receipt.catalog_sha256
+            ):
+                raise InstallationSourceDenied(
+                    "model selection and installation source use different catalogs"
+                )
+            now = self._now()
+            self._require_fresh(inventory, now)
 
         effects: list[MutationEffect] = [
             MutationEffect(
@@ -1092,7 +1396,13 @@ class InstallerContract:
             )
             cursor = _checked_sum([cursor, partition.size_bytes], "partition end")
         plan = InstallationPlan(
-            schema_version=2 if model_selection is not None else 1,
+            schema_version=(
+                3
+                if validated_source is not None
+                else 2
+                if model_selection is not None
+                else 1
+            ),
             issuer_id=self._issuer_id,
             contract_policy_version=self._contract_policy_version,
             edition_id=edition.edition_id,
@@ -1109,9 +1419,55 @@ class InstallerContract:
             effects=tuple(effects),
             created_at=now,
             model_selection=model_selection,
+            installation_source_environment=(
+                source_input.expected_environment
+                if source_input is not None
+                else None
+            ),
+            installation_source_descriptor_sha256=(
+                validated_source.descriptor.digest
+                if validated_source is not None
+                else None
+            ),
+            installation_source_expected_sha256=(
+                source_input.expected_descriptor_sha256
+                if source_input is not None
+                else None
+            ),
+            installation_source_validation_receipt_sha256=(
+                validated_source.receipt_sha256
+                if validated_source is not None
+                else None
+            ),
+            installation_source_edition_sha256=(
+                validated_source.receipt.edition_sha256
+                if validated_source is not None
+                else None
+            ),
+            installation_source_catalog_sha256=(
+                validated_source.receipt.catalog_sha256
+                if validated_source is not None
+                else None
+            ),
+            installation_source_catalog_sequence=(
+                validated_source.receipt.catalog_sequence
+                if validated_source is not None
+                else None
+            ),
+            installation_source_catalog_admission_sha256=(
+                validated_source.receipt.catalog_admission_sha256
+                if validated_source is not None
+                else None
+            ),
+            installation_source_trust_bundle_sha256=(
+                validated_source.receipt.trust_bundle_sha256
+                if validated_source is not None
+                else None
+            ),
         )
         with self._lock:
             self._issued_plans[plan.digest] = plan
+            self._issued_editions[plan.digest] = edition
         return PreflightResult(assessment=assessment, plan=plan)
 
     def confirm(
@@ -1160,6 +1516,21 @@ class InstallerContract:
             authorization=authorization,
             issued_at=now,
             expires_at=expires,
+            installation_source_environment=(
+                plan.installation_source_environment
+                if plan.schema_version == 3
+                else None
+            ),
+            installation_source_expected_sha256=(
+                plan.installation_source_expected_sha256
+                if plan.schema_version == 3
+                else None
+            ),
+            installation_source_validation_receipt_sha256=(
+                plan.installation_source_validation_receipt_sha256
+                if plan.schema_version == 3
+                else None
+            ),
         )
         with self._lock:
             if confirmation_id in self._issued_confirmations:
@@ -1177,6 +1548,7 @@ class InstallerContract:
         executor: Callable[[InstallationPlan, VerifiedDeviceCapability], T],
         model_catalog_provider: Callable[[], ModelProfileCatalog] | None = None,
         model_hardware_provider: Callable[[], ModelHardwareSnapshot] | None = None,
+        installation_source_provider: InstallationSourceProvider | None = None,
     ) -> T:
         if not isinstance(plan, InstallationPlan):
             raise InstallerValidationError("plan must be an InstallationPlan")
@@ -1188,18 +1560,43 @@ class InstallerContract:
             raise InstallerValidationError("authorization must be an AuthorizationContext")
         if not callable(inventory_provider) or not callable(executor):
             raise InstallerValidationError("inventory_provider and executor must be callable")
-        if plan.schema_version == 2:
-            if not callable(model_catalog_provider) or not callable(
-                model_hardware_provider
-            ):
-                raise InstallerValidationError(
-                    "schema-version-2 execution requires model catalog and hardware providers"
-                )
-        elif model_catalog_provider is not None or model_hardware_provider is not None:
+        model_required = plan.model_selection is not None
+        if model_required and not callable(model_hardware_provider):
             raise InstallerValidationError(
-                "schema-version-1 execution cannot accept model revalidation providers"
+                "model-bound execution requires a model hardware provider"
+            )
+        if plan.schema_version == 2 and not callable(model_catalog_provider):
+            raise InstallerValidationError(
+                "schema-version-2 execution requires a model catalog provider"
+            )
+        if plan.schema_version == 3 and model_catalog_provider is not None:
+            raise InstallerValidationError(
+                "schema-version-3 derives model catalog from its source admission"
+            )
+        if not model_required and (
+            model_catalog_provider is not None or model_hardware_provider is not None
+        ):
+            raise InstallerValidationError(
+                "execution without model selection cannot accept model providers"
+            )
+        if plan.schema_version == 3:
+            if not callable(installation_source_provider):
+                raise InstallerValidationError(
+                    "schema-version-3 execution requires an installation-source provider"
+                )
+        elif installation_source_provider is not None:
+            raise InstallerValidationError(
+                "schema-version-1/2 execution cannot accept an installation-source provider"
             )
         self._require_issued_plan(plan)
+        source_edition: EditionSpec | None = None
+        if plan.schema_version == 3:
+            with self._lock:
+                source_edition = self._issued_editions.get(plan.digest)
+            if not isinstance(source_edition, EditionSpec):
+                raise ConfirmationDenied(
+                    "schema-version-3 plan lost its exact edition binding"
+                )
         with self._lock:
             recorded = self._issued_confirmations.get(confirmation.confirmation_id)
             if recorded != confirmation:
@@ -1221,13 +1618,38 @@ class InstallerContract:
         self._require_fresh(fresh, discovery_completed_at)
         self._require_revalidated(plan, fresh)
 
-        if plan.schema_version == 2:
-            # Callability was checked above; these assertions are only for type narrowing.
-            if model_catalog_provider is None or model_hardware_provider is None:
+        fresh_source_input: InstallationSourceInput | None = None
+        if plan.schema_version == 3:
+            if installation_source_provider is None or source_edition is None:
                 raise InstallerValidationError(
-                    "schema-version-2 model providers are missing"
+                    "schema-version-3 source inputs are missing"
                 )
-            fresh_model_catalog = model_catalog_provider()
+            fresh_source_input = self._revalidate_installation_source_from_provider(
+                plan,
+                source_edition,
+                installation_source_provider,
+            )
+            source_discovery_completed_at = self._now()
+            self._require_confirmation_time(
+                confirmation,
+                source_discovery_completed_at,
+            )
+            self._require_fresh(fresh, source_discovery_completed_at)
+
+        if model_required:
+            # Callability was checked above; these checks narrow optional types.
+            if model_hardware_provider is None:
+                raise InstallerValidationError("model hardware provider is missing")
+            if plan.schema_version == 3:
+                if fresh_source_input is None:
+                    raise InstallerValidationError(
+                        "schema-version-3 source revalidation is missing"
+                    )
+                fresh_model_catalog = fresh_source_input.catalog_admission.catalog
+            else:
+                if model_catalog_provider is None:
+                    raise InstallerValidationError("model catalog provider is missing")
+                fresh_model_catalog = model_catalog_provider()
             fresh_model_hardware = model_hardware_provider()
             model_discovery_completed_at = self._now()
             self._require_confirmation_time(
@@ -1256,11 +1678,10 @@ class InstallerContract:
         # These are deliberately the final checks.  A slow inventory provider,
         # capability binder, or journal cannot extend a confirmation or snapshot
         # past its freshness window, and authorization is checked at effect time.
+        effect_model_hardware: ModelHardwareSnapshot | None = None
         if plan.schema_version == 2:
             if model_catalog_provider is None or model_hardware_provider is None:
-                raise InstallerValidationError(
-                    "schema-version-2 model providers are missing"
-                )
+                raise InstallerValidationError("schema-version-2 model providers are missing")
             effect_model_catalog = model_catalog_provider()
             effect_model_hardware = model_hardware_provider()
             model_effect_time = self._now()
@@ -1270,10 +1691,48 @@ class InstallerContract:
                 plan, effect_model_catalog, effect_model_hardware
             )
 
-        self._authorize(authorization, EXECUTE_INSTALL_ACTIVITY)
-        execution_time = self._now()
-        self._require_confirmation_time(confirmation, execution_time)
-        self._require_fresh(fresh, execution_time)
+        if plan.schema_version != 3:
+            # Preserve the schema-v1/v2 effect boundary unchanged.
+            self._authorize(authorization, EXECUTE_INSTALL_ACTIVITY)
+            execution_time = self._now()
+            self._require_confirmation_time(confirmation, execution_time)
+            self._require_fresh(fresh, execution_time)
+
+        if plan.schema_version == 3:
+            if installation_source_provider is None or source_edition is None:
+                raise InstallerValidationError(
+                    "schema-version-3 source inputs are missing"
+                )
+            effect_source_input = self._revalidate_installation_source_from_provider(
+                plan,
+                source_edition,
+                installation_source_provider,
+            )
+            if model_required:
+                if model_hardware_provider is None:
+                    raise InstallerValidationError(
+                        "schema-version-3 model hardware provider is missing"
+                    )
+                effect_model_hardware = model_hardware_provider()
+                self._require_model_revalidated(
+                    plan,
+                    effect_source_input.catalog_admission.catalog,
+                    effect_model_hardware,
+                )
+            # The final source provider may be slow or may trigger external
+            # revocation.  Authorization therefore follows it.  Rechecking the
+            # catalog/trust chain after authorization narrows (but cannot make
+            # atomic) the interval before the injected executor takes effect.
+            self._authorize(authorization, EXECUTE_INSTALL_ACTIVITY)
+            try:
+                effect_source_input.catalog_admission.ensure_current()
+            except Exception as exc:
+                raise InstallationSourceChanged(
+                    "installation-source catalog or trust changed at effect time"
+                ) from exc
+            source_effect_time = self._now()
+            self._require_confirmation_time(confirmation, source_effect_time)
+            self._require_fresh(fresh, source_effect_time)
 
         result = executor(plan, capability)
         completed_at = self._now()
@@ -1295,6 +1754,14 @@ class InstallerContract:
             or plan.contract_policy_version != self._contract_policy_version
         ):
             raise ConfirmationDenied("plan issuer or contract policy version is not current")
+        if (
+            plan.schema_version == 3
+            and plan.installation_source_environment
+            != self._installation_source_environment
+        ):
+            raise ConfirmationDenied(
+                "plan installation-source environment differs from contract policy"
+            )
         with self._lock:
             if self._issued_plans.get(plan.digest) is not plan:
                 raise ConfirmationDenied("plan was not issued by this contract instance")
@@ -1348,6 +1815,31 @@ class InstallerContract:
             raise ConfirmationDenied("confirmation is bound to another disk")
         if confirmation.disk_identity_sha256 != plan.selected_disk.identity_sha256:
             raise ConfirmationDenied("confirmation is bound to another disk state")
+        expected_source_digest = (
+            plan.installation_source_expected_sha256
+            if plan.schema_version == 3
+            else None
+        )
+        expected_source_receipt = (
+            plan.installation_source_validation_receipt_sha256
+            if plan.schema_version == 3
+            else None
+        )
+        if (
+            confirmation.installation_source_environment
+            != (
+                plan.installation_source_environment
+                if plan.schema_version == 3
+                else None
+            )
+            or confirmation.installation_source_expected_sha256
+            != expected_source_digest
+            or confirmation.installation_source_validation_receipt_sha256
+            != expected_source_receipt
+        ):
+            raise ConfirmationDenied(
+                "confirmation installation-source bindings differ from the plan"
+            )
 
     def _require_revalidated(
         self, plan: InstallationPlan, fresh: HardwareInventory
@@ -1370,7 +1862,7 @@ class InstallerContract:
         fresh_catalog: object,
         fresh_hardware: object,
     ) -> None:
-        if plan.schema_version != 2 or not isinstance(
+        if plan.schema_version not in {2, 3} or not isinstance(
             plan.model_selection, ModelSelection
         ):
             raise InventoryChanged("installation plan has no model selection binding")
@@ -1392,6 +1884,100 @@ class InstallerContract:
             raise InventoryChanged(
                 "model catalog, profile, runtime, accelerator, or resources changed "
                 "after confirmation"
+            )
+
+    @staticmethod
+    def _validate_installation_source(
+        source: InstallationSourceInput,
+        edition: EditionSpec,
+    ) -> "ValidatedInstallationSource":
+        # Local import avoids the intentional installation_source -> EditionSpec
+        # dependency becoming an import cycle at module initialization.
+        from .installation_source import validate_installation_source
+
+        return validate_installation_source(
+            source.raw_descriptor,
+            expected_descriptor_sha256=source.expected_descriptor_sha256,
+            expected_environment=source.expected_environment,
+            edition=edition,
+            catalog_admission=source.catalog_admission,
+        )
+
+    @staticmethod
+    def _installation_source_system_architecture(
+        validated: "ValidatedInstallationSource",
+    ) -> str:
+        from .installation_source import system_architecture_for_target
+
+        return system_architecture_for_target(
+            validated.descriptor.target_architecture
+        )
+
+    def _revalidate_installation_source_from_provider(
+        self,
+        plan: InstallationPlan,
+        edition: EditionSpec,
+        provider: InstallationSourceProvider,
+    ) -> InstallationSourceInput:
+        try:
+            fresh = provider()
+        except Exception as exc:
+            raise InstallationSourceChanged(
+                "installation-source provider failed"
+            ) from exc
+        if type(fresh) is not InstallationSourceInput:
+            raise InstallationSourceChanged(
+                "installation-source provider returned invalid raw inputs"
+            )
+        try:
+            validated = self._validate_installation_source(fresh, edition)
+        except Exception as exc:
+            raise InstallationSourceChanged(
+                "fresh installation-source validation failed"
+            ) from exc
+        self._require_installation_source_revalidated(plan, fresh, validated)
+        return fresh
+
+    @staticmethod
+    def _require_installation_source_revalidated(
+        plan: InstallationPlan,
+        source: InstallationSourceInput,
+        validated: "ValidatedInstallationSource",
+    ) -> None:
+        if plan.schema_version != 3:
+            raise InstallationSourceChanged(
+                "installation plan has no installation-source binding"
+            )
+        descriptor = validated.descriptor
+        receipt = validated.receipt
+        if (
+            source.expected_environment != plan.installation_source_environment
+            or receipt.environment != plan.installation_source_environment
+            or descriptor.digest != plan.installation_source_descriptor_sha256
+            or source.expected_descriptor_sha256
+            != plan.installation_source_expected_sha256
+            or receipt.digest
+            != plan.installation_source_validation_receipt_sha256
+            or receipt.edition_sha256 != plan.installation_source_edition_sha256
+            or receipt.catalog_sha256 != plan.installation_source_catalog_sha256
+            or receipt.catalog_sequence
+            != plan.installation_source_catalog_sequence
+            or receipt.catalog_admission_sha256
+            != plan.installation_source_catalog_admission_sha256
+            or receipt.trust_bundle_sha256
+            != plan.installation_source_trust_bundle_sha256
+            or descriptor.os_payload_sha256 != plan.payload_sha256
+            or descriptor.release_metadata_sha256 != plan.release_sha256
+            or InstallerContract._installation_source_system_architecture(validated)
+            != plan.architecture
+            or (
+                plan.model_selection is not None
+                and plan.model_selection.catalog_sha256 != receipt.catalog_sha256
+            )
+        ):
+            raise InstallationSourceChanged(
+                "installation-source descriptor, pin, edition, catalog, or trust "
+                "binding changed after confirmation"
             )
 
     def _require_fresh(self, inventory: HardwareInventory, now: datetime) -> None:
@@ -1422,6 +2008,10 @@ __all__ = [
     "InstallationAttempt",
     "InstallationConfirmation",
     "InstallationPlan",
+    "InstallationSourceChanged",
+    "InstallationSourceDenied",
+    "InstallationSourceInput",
+    "InstallationSourceProvider",
     "InstallerContract",
     "InstallerError",
     "InstallerValidationError",

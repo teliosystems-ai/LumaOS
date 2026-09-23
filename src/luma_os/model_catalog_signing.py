@@ -786,6 +786,24 @@ class CatalogAuthorizationVerifier(Protocol):
     ) -> bool: ...
 
 
+class CatalogAuthorizationBatchVerifier(Protocol):
+    """Optional exact batch authorization extension.
+
+    Implementations must check every approval at both its approval time and
+    ``at``, and the signer at both the statement signing time and ``at``.
+    ``verify_signed_catalog`` retains the item-at-a-time protocol for existing
+    adapters, but prefers this extension when it is present.
+    """
+
+    def catalog_is_authorized(
+        self,
+        approvals: tuple[CatalogApproval, ...],
+        statement: CatalogSignatureStatement,
+        *,
+        at: datetime,
+    ) -> bool: ...
+
+
 @dataclass(frozen=True, slots=True)
 class CatalogVerificationReceipt:
     environment: str
@@ -952,24 +970,52 @@ def verify_signed_catalog(
         raise ModelCatalogVerificationDenied("catalog signing time is in the future")
     if any(approval.approved_at > observed_at for approval in envelope.approvals):
         raise ModelCatalogVerificationDenied("a catalog approval time is in the future")
-    if not all(
-        authorization_verifier.approval_is_authorized(
-            approval, at=approval.approved_at
+    try:
+        batch_authorizer = getattr(
+            authorization_verifier,
+            "catalog_is_authorized",
+            None,
         )
-        and authorization_verifier.approval_is_authorized(
-            approval, at=observed_at
-        )
-        for approval in envelope.approvals
-    ):
-        raise ModelCatalogVerificationDenied(
-            "an exact catalog approval event is not authorized at approval and verification time"
-        )
-    if not authorization_verifier.signer_is_authorized(
-        statement, at=statement.signed_at
-    ) or not authorization_verifier.signer_is_authorized(
-        statement, at=observed_at
-    ):
-        raise ModelCatalogVerificationDenied("the catalog signing custodian is not authorized")
+    except Exception:
+        batch_authorizer = False
+    if batch_authorizer is not None:
+        try:
+            authorizations_valid = (
+                callable(batch_authorizer)
+                and batch_authorizer(
+                    envelope.approvals,
+                    statement,
+                    at=observed_at,
+                )
+                is True
+            )
+        except Exception:
+            authorizations_valid = False
+        if not authorizations_valid:
+            raise ModelCatalogVerificationDenied(
+                "the exact catalog approval and signing batch is not authorized"
+            )
+    else:
+        if not all(
+            authorization_verifier.approval_is_authorized(
+                approval, at=approval.approved_at
+            )
+            and authorization_verifier.approval_is_authorized(
+                approval, at=observed_at
+            )
+            for approval in envelope.approvals
+        ):
+            raise ModelCatalogVerificationDenied(
+                "an exact catalog approval event is not authorized at approval and verification time"
+            )
+        if not authorization_verifier.signer_is_authorized(
+            statement, at=statement.signed_at
+        ) or not authorization_verifier.signer_is_authorized(
+            statement, at=observed_at
+        ):
+            raise ModelCatalogVerificationDenied(
+                "the catalog signing custodian is not authorized"
+            )
     if not signature_verifier.verify_at(
         statement.canonical_bytes,
         envelope.signature,

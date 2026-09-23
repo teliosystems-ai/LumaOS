@@ -5,7 +5,7 @@
   "status": "blocked",
   "development_assessment": "in-progress",
   "certification_assessment": "blocked",
-  "claim_boundary": "Repository-local G2 safety contracts may be developed and tested on native Windows and Ubuntu WSL, but neither environment is a physical Ubuntu A1 certification board. Pure state machines, fake devices, injected executors, and WSL observations are non-closing evidence.",
+  "claim_boundary": "Repository-local G2 safety contracts may be developed and tested on native Windows and Ubuntu WSL, but neither environment is a physical Ubuntu A1 certification board. Pure state machines, test roots, in-memory anchors, integrity-protected development logs, inert descriptors, fake devices, injected executors, and WSL observations are non-closing evidence.",
   "blockers": [
     {
       "id": "G2-BLK-001",
@@ -39,7 +39,7 @@
       "severity": "certification-blocking",
       "owner": "release-engineer",
       "supporting_owner": "inference-lead",
-      "development_work": "A digest-pinned Qwen3-4B Q4_K_M artifact completed bounded native Windows CUDA and Ubuntu WSL CPU/direct-gateway development smoke, and Gemma 4 E2B/E4B candidates are recorded. A request-before-approval detached production-catalog verification contract and no-private-key ceremony utility now fail closed on quorum, metadata, trust lifecycle, rollback, tampering, unbounded input, and exact pack/runtime/certification drift. The Qwen artifact remains unsigned, the Gemma candidates have not been acquired or executed locally, and no protected production ceremony has occurred; none is eligible for the G2 base image or T02 acceptance.",
+      "development_work": "A digest-pinned Qwen3-4B Q4_K_M artifact completed bounded native Windows CUDA and Ubuntu WSL CPU/direct-gateway development smoke, and Gemma 4 E2B/E4B candidates are recorded. Request-before-approval catalog verification, root-signed trust-bundle admission, exact external-checkpoint catalog admission, a concrete public Ed25519 verifier, and an integrity-protected durable Admin event-log adapter now fail closed under deterministic development tests. The Qwen artifact remains unsigned, the Gemma candidates have not been acquired or executed locally, test roots/in-memory anchors are non-production, and no protected production ceremony has occurred; none is eligible for the G2 base image or T02 acceptance.",
       "resolution": "Produce a verified offline bundle containing a legally approved signed 4-6B pack and exact runtime assets, using protected production-purpose trust and key material operated in the controlled lab with independently recoverable credentials.",
       "evidence": [
         "docs/gates/g1/model_candidate_smoke_2026-09-23.json",
@@ -53,7 +53,7 @@
       "severity": "certification-blocking",
       "owner": "platform-lead",
       "supporting_owner": "release-engineer",
-      "development_work": "Pure installer and boot-state contracts remain non-destructive development scaffolding. The physical runbook now defines exact target authorization, signed-input, tamper, slot-interruption, model-independent recovery, LUKS2/TPM, evidence, and stop rules, but no implementation writes disks, enrolls keys, builds a UKI, configures dm-verity/LUKS2, or changes firmware state.",
+      "development_work": "Pure installer and boot-state contracts remain non-destructive development scaffolding. Installer schema v3 validates fresh inert offline-source descriptor bytes twice around journaling, then resamples model hardware, reselects, reauthorizes, and rechecks live catalog/trust and final freshness. The descriptor contains no catalog and neither it nor the caller digest pin proves governance or consumed artifact bytes. The physical runbook defines exact target authorization, signed-input, tamper, slot-interruption, model-independent recovery, LUKS2/TPM, evidence, and stop rules, but no implementation writes disks, enrolls keys, builds a UKI, configures dm-verity/LUKS2, or changes firmware state.",
       "resolution": "Build and sign the Ubuntu image and recovery media, then retain T01 and T03-T05 plus T45-T49 evidence including interruption, tamper, recovery, and three-attempt fallback results on E1 and E2.",
       "evidence": [
         "docs/gates/final_certification_deferrals.json",
@@ -83,10 +83,41 @@
       "severity": "certification-blocking",
       "owner": "qa-lead",
       "supporting_owner": "security-lead",
-      "development_work": "Deterministic unit, fault-model, signed-catalog, and read-only admission tests cover only repository-local contracts. The consolidated operator/runbook package maps the remaining numbered, physical, security, recovery, lifecycle, and performance work, labels it unexecuted, and retains every hardware-dependent case as blocked.",
+      "development_work": "Deterministic unit, fault-model, trust/catalog admission, durable Admin event, offline-source/schema-v3 installer, and read-only host-admission tests cover only repository-local contracts. Focused normal and optimized lanes have exercised the new contracts; the immutable detached full-run/archive record still requires rotation after the integration commit. The consolidated operator/runbook package maps the remaining numbered, physical, security, recovery, lifecycle, and performance work, labels it unexecuted, and retains every hardware-dependent case as blocked.",
       "resolution": "Complete T01-T16, applicable T27-T30, T33, T40, T45-T51, and T62; the governed security/manual matrix; Q01, Q02, Q06-Q09; 1,000 lifecycle cycles; and both-board vertical workflows.",
       "evidence": [
         "docs/gates/g2/test_plan.json",
+        "docs/gates/g2/OPERATOR_APPROVAL_AND_EXECUTION.md",
+        "docs/gates/g2/PHYSICAL_QUALIFICATION_RUNBOOK.md"
+      ]
+    },
+    {
+      "id": "G2-BLK-007",
+      "title": "Production trust, Admin-writer, secret-custody, and rollback-anchor composition is absent",
+      "status": "deferred-to-final-certification",
+      "severity": "certification-blocking",
+      "owner": "security-lead",
+      "supporting_owner": "release-engineer",
+      "development_work": "Repository-local contracts require live exact trust/catalog checkpoints, a mandatory external Admin event-writer authorizer, externally held HMAC material, authenticated bounded event replay, and typed fail-closed reconciliation when SQLite and external-anchor state diverge. They deliberately do not authenticate the writer, protect secrets, provide trusted time, make SQLite and the external CAS atomic, or establish process isolation. The fixed development Admin log domain also cannot safely support independent stores sharing a secret or namespace.",
+      "resolution": "Provision independently recoverable production roots and HSM-backed signing operations; deploy an authenticated isolated Admin writer and reader service; protect trusted time, HMAC material, and external monotonic anchors; define reviewed reconciliation; and assign a unique cryptographic domain, secret, and anchor namespace per deployment/service.",
+      "evidence": [
+        "docs/adr/0009-root-signed-trust-and-catalog-admission.md",
+        "docs/adr/0010-durable-admin-and-offline-source-revalidation.md",
+        "docs/PRODUCTION_SIGNING_CUSTODY.md",
+        "docs/THREAT_MODEL.md"
+      ]
+    },
+    {
+      "id": "G2-BLK-008",
+      "title": "Governed offline release pins and consumed artifact-byte verification are absent",
+      "status": "deferred-to-final-certification",
+      "severity": "certification-blocking",
+      "owner": "release-engineer",
+      "supporting_owner": "platform-lead",
+      "development_work": "The offline-source contract validates canonical metadata bytes, a caller-provided digest, fixed environment, and exact live catalog/trust context, and schema-v3 repeats that validation around journaling. The caller pin is explicitly not release governance, cached validation is not reusable authority, and the injected executor is not supplied verified release artifacts by this contract.",
+      "resolution": "Publish authenticated rollback-protected release governance, build signed offline media, hash and signature-verify every consumed artifact against the governed release immediately before use, bind those measurements through execution receipts, and retain destructive native-Ubuntu installation/boot/recovery evidence.",
+      "evidence": [
+        "docs/adr/0010-durable-admin-and-offline-source-revalidation.md",
         "docs/gates/g2/OPERATOR_APPROVAL_AND_EXECUTION.md",
         "docs/gates/g2/PHYSICAL_QUALIFICATION_RUNBOOK.md"
       ]

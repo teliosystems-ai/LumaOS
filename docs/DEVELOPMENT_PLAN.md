@@ -32,7 +32,12 @@ Version `0.1.0` is a developer MVP and a useful input to G0. It currently demons
 - versioned multi-model manifests and install-time profiles with exact total
   and active parameter counts, manual-only/CPU/CUDA choices, and fail-closed
   RAM, VRAM, storage, context, load, and serving checks;
-- a non-destructive installer contract, pure A/B boot-state model, typed privileged-helper/confinement contracts, SQLite-backed request/effect ledgers, exact multi-model selection, signed-catalog verification, and read-only Ubuntu admission with an expanded 128-test nine-module boundary on native Windows and Ubuntu WSL under normal and optimized-Python execution; and
+- a non-destructive installer contract, pure A/B boot-state model, typed
+  privileged-helper/confinement contracts, SQLite-backed request/effect and
+  Admin-authorization logs, exact multi-model selection, root-signed trust and
+  catalog admission, offline-source revalidation, and read-only Ubuntu
+  admission exercised on native Windows and Ubuntu WSL under normal and
+  optimized-Python execution; and
 - repository, API-contract, browser-journey, and deterministic source-package checks.
 
 It has **not** passed formal G0 or G1. Their repository/local development scope is recorded as **complete with deferrals**, while formal certification remains **blocked**. Repository-local G1 prototypes now cover purpose/lifecycle-bound signed model-pack contracts, checked resource admission, deny-by-default policy and Admin delegation, a typed DAG, deterministic fake inference, real loopback inference, local-gateway fencing, platform-adapter scaffolding, and state recovery. It still does not provide a signed certified 4–6B model pack, qualified two-board model runtime, signed skills, worker sandboxing, semantic indexing, multimodal interaction, a bootable image, A/B updates, hardware certification, a Windows file broker, VM or dual-boot lifecycle, 400–405B qualification, or cluster execution. Existing simulator, fake-backend, WSL, one-laptop real-model, and MVP results are development evidence only.
@@ -61,7 +66,7 @@ laptop, not the two required A1 boards.
 | --- | --- |
 | G0 | **Development complete with deferrals; formal certification blocked.** Governing source ingestion and 288-ID traceability are verified; the development baseline, decisions including Admin governance, registers, current Windows/WSL inventory, checks, and source-package evidence exist. Two designated physical boards, the Ubuntu 24.04/E8 baselines, disposable disks, protected production signing custody, and complete qualification evidence are deferred in `docs/gates/g0/blockers.json` and `docs/gates/final_certification_deferrals.json`. |
 | G1 | **Development complete with deferrals; formal certification blocked.** Contract evidence covers resources, policy/Admin delegation, typed DAG, model-pack trust lifecycle, fake and real inference, authenticated gateway, cancellation/concurrency/revocation fencing, state transfer, telemetry, and platform adapters. Qwen3-4B passed bounded native Windows CUDA and Ubuntu WSL CPU/gateway development smoke, but the external artifact is unsigned and not a certified pack. Signed candidate comparison, two-board workflows, boot/recovery, full security/performance evidence, and the real 400–405B experiment are deferred. No deferral waives G0 or G1 exit criteria. |
-| G2 | **Development in progress; formal certification blocked.** The repository-local expanded boundary has 128 tests on native Windows and Ubuntu WSL under normal and optimized-Python execution for non-destructive installer authorization, exact multi-model/hardware selection, pure A/B boot-state transitions, typed helper/confinement boundaries, durable request/effect coordination, signed-catalog verification, and read-only Ubuntu host admission. No production signing ceremony, real disk, boot, cryptographic boot-chain, encryption, kernel-control, VM, native ACL/DACL, or peer-credential enforcement has been exercised. |
+| G2 | **Development in progress; formal certification blocked.** The evolving repository-local suites exercise non-destructive installer authorization, exact multi-model/hardware selection, pure A/B boot-state transitions, typed helper/confinement boundaries, durable request/effect and Admin-event coordination, signed trust/catalog admission, offline-source revalidation, and read-only Ubuntu host admission on native Windows and Ubuntu WSL under normal and optimized Python. No production Admin/HSM/anchor service, governed release source, real disk, boot, cryptographic boot chain, encryption, kernel control, VM, native ACL/DACL, or peer-credential enforcement has been exercised. |
 | G3, G4, G5 | **Not started.** |
 | GWIN0, GWIN1, GWIN2 | **Not started.** |
 | G6, G7 | **Not started and separately capacity-gated.** |
@@ -220,7 +225,7 @@ certification. A 450B target is outside the current governing requirements.
 
 **2026-09-22 development checkpoint:** G2 is in progress, not passed. Commit
 `4ec25b849b3db4363191532bdb06f42894e11253` adds three repository-local
-safety-contract modules and 49 tests that also pass with Python assertions
+safety-contract modules with tests that also pass with Python assertions
 disabled. The installer module is
 non-destructive: inventory discovery and the executor are injected, and tests
 exercise preflight, explicit short-lived confirmation, effect-time
@@ -253,9 +258,9 @@ ambiguous `APPLYING` or `FAILED_UNKNOWN` record to a semantically bound,
 immutable `COMPLETED` result. Raw CSPRNG-issued 256-bit safe-handle tokens are
 not written to the effect ledger; keyed commitments are retained instead.
 
-The four G2 modules now have 71 contract tests passing in both native Windows
-and Ubuntu WSL under normal and optimized Python. These two lanes are on the
-same physical host and the tests use in-process typed adapters. They do not
+The corresponding contract suites pass in both native Windows and Ubuntu WSL
+under normal and optimized Python. These two lanes are on the same physical
+host and the tests use in-process typed adapters. They do not
 establish a privileged service, kernel peer credentials, native ACL/DACL
 enforcement, protected integrity-key custody, resistance to database deletion
 or rollback, induced power-loss durability, external rollback anchoring, or
@@ -289,6 +294,40 @@ prepare `T01`, `T06`, `T45`, `T49`, `T50`, and the wider physical suite; they
 do not supply production keys or signatures, authorize disk mutation, build a
 bootable image, enforce kernel controls, or replace execution on both physical
 A1 boards.
+
+**2026-09-23 trust, Admin, and offline-source checkpoint:** G2 remains in
+progress and has not passed. Root-signed public trust and catalog admission
+now use fixed environment namespaces and exact external checkpoints. Catalog
+authority is retained only while the exact catalog and trust state, signature,
+approvals, signer, lifecycle, policy, and pack bindings remain current under a
+live clock owned by the trusted composition root. The clock and public crypto
+provider cannot be replaced by later callers. Pack checks use the exact
+retained verification-record snapshot; they do not live-read pack/runtime
+bytes or current certification/loadability. An integrity-protected SQLite
+Admin event log records exact grant,
+revoke, approval, and signing events with bounded replay, hash chaining, an
+injected HMAC secret, mandatory external writer authorization, and exact
+external-checkpoint matching. HMAC protects the stored representation; it does
+not authenticate the originating Admin writer. The contract permits one
+centralized logical log only; independent stores must not share its fixed
+secret/checkpoint domains, and production deployment/service domain separation
+remains unimplemented.
+
+The offline-source descriptor and installer schema version 3 bind raw
+descriptor, edition, release, catalog-admission, and trust digests. Preflight
+validates raw bytes itself, and execution obtains and validates fresh raw
+inputs before device/journal entry and again after journaling at the effect
+boundary. A model-bound plan then resamples hardware and revalidates the model
+against the source admission's catalog before current authorization; catalog/
+trust currentness and time/inventory freshness follow before the injected
+executor. The descriptor, expected digest, edition, and receipt remain inert
+data; they do not prove governed release approval or verify the referenced
+artifact bytes. SQLite/external-anchor updates are not atomic: any mismatch is
+reconciliation-required and authorizes nothing. Production Admin identity and
+process isolation, protected HMAC secrets, trusted time, rollback-resistant
+anchors, governed source pins, consumed-artifact signature/digest checks, HSM
+custody, native Ubuntu 24.04 installation, boot, security, recovery, and
+physical qualification all remain blockers.
 
 ## G3 Functional beta
 
@@ -601,6 +640,9 @@ Item 6 and every gate-closing physical-board, boot, recovery,
 signing-custody, security/performance, and 400–405B test are recorded as final
 certification deferrals. Development has entered the G2 safety-contract tranche
 without representing those G0/G1 deferrals as passes or the pure G2 contracts
-as OS certification.
+as OS certification. Current repository work adds trust/catalog admission,
+integrity-protected Admin-event persistence, and inert offline-source
+revalidation, but production adapters, release artifacts, and physical
+qualification remain ahead of any gate-closing run.
 
 No later-stage support claim should be merged into the support matrix until that stage's exit evidence exists.

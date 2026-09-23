@@ -117,8 +117,15 @@ G2_DEVELOPMENT_EVIDENCE: dict[str, tuple[str, ...]] = {
 G2_DEVELOPMENT_EVIDENCE["A115"] = (
     *G2_DEVELOPMENT_EVIDENCE["A115"],
     "G2-EV-005",
+    "G2-EV-011",
 )
-G2_DEVELOPMENT_EVIDENCE["A003"] = ("G2-EV-006", "G2-EV-007")
+G2_DEVELOPMENT_EVIDENCE["A003"] = (
+    "G2-EV-006",
+    "G2-EV-007",
+    "G2-EV-010",
+    "G2-EV-011",
+    "G2-EV-012",
+)
 for requirement_id in ("A001", "A108"):
     G2_DEVELOPMENT_EVIDENCE[requirement_id] = (
         *G2_DEVELOPMENT_EVIDENCE[requirement_id],
@@ -128,6 +135,11 @@ G2_DEVELOPMENT_EVIDENCE["A001"] = (
     *G2_DEVELOPMENT_EVIDENCE["A001"],
     "G2-EV-008",
 )
+for requirement_id in ("FR02", "FR03", "A001", "A002", "A108"):
+    G2_DEVELOPMENT_EVIDENCE[requirement_id] = (
+        *G2_DEVELOPMENT_EVIDENCE[requirement_id],
+        "G2-EV-012",
+    )
 G2_DEVELOPMENT_EVIDENCE_AS_OF = "2026-09-23"
 
 

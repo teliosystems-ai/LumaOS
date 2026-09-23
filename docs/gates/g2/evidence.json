@@ -6,13 +6,14 @@
   "assessment": "blocked",
   "development_assessment": "in-progress",
   "certification_assessment": "blocked",
-  "claim_boundary": "This evidence advances the repository-local G2 control-plane and qualification-preparation tranche. It demonstrates pure or read-only contracts for non-destructive installer planning, exact install-time model-profile selection, A/B trial-boot state, a typed privileged-helper boundary, bounded SQLite-backed request/effect ledgers, signed model-catalog verification, and Ubuntu host admission/inventory. It also provides operator approval and physical-qualification procedures. It does not demonstrate a bootable OS, disk mutation, an actual signed production catalog or protected key ceremony, Secure Boot/UKI/dm-verity/LUKS2 behavior, enforcing cgroup/AppArmor/seccomp/KVM/device/peer controls, recovery, power-loss behavior, or either physical A1 board.",
+  "claim_boundary": "This evidence advances the repository-local G2 control-plane and qualification-preparation tranche. It demonstrates pure or read-only contracts for non-destructive installer planning, exact install-time model-profile selection, A/B trial-boot state, a typed privileged-helper boundary, bounded SQLite-backed request/effect ledgers, signed model-catalog verification, root-signed trust-bundle and exact anchored catalog admission, integrity-protected durable Admin authorization events, inert offline installation-source descriptors with repeated schema-v3 raw-byte revalidation, and Ubuntu host admission/inventory. It also provides operator approval and physical-qualification procedures. It does not demonstrate a bootable OS, disk mutation, an actual signed production catalog or protected key ceremony, a production authenticated Admin writer or protected external anchor, artifact-byte consumption, Secure Boot/UKI/dm-verity/LUKS2 behavior, enforcing cgroup/AppArmor/seccomp/KVM/device/peer controls, recovery, power-loss behavior, or either physical A1 board.",
   "implementation_commit": "0d7685aaaec2301b9340b710061a447cd3569b83",
+  "current_tranche_detached_validation": "pending-after-integration-commit",
   "items": [
     {
       "id": "G2-EV-001",
       "subject": "non-destructive-installer-preflight-and-destructive-confirmation-contract",
-      "result": "development-tests-passed",
+      "result": "prior-development-run-passed-current-tranche-detached-validation-pending",
       "requirements_prepared": ["FR02", "FR03", "A001", "A002", "A108"],
       "source_tests_prepared": ["T01", "T48"],
       "evidence": [
@@ -66,8 +67,8 @@
         "scripts/check.py"
       ],
       "environment": "DEV-WIN-WSL-GPU-01",
-      "observations": "The complete 222-test suite passed with zero failures in native Windows and Ubuntu WSL; 128 optimized safety/catalog/admission-boundary tests passed in each lane. These environments share one physical laptop.",
-      "limitations": "Repository tests validate contracts and regressions only. The dated test-run and archive-attestation paths are detached repository sidecars intentionally excluded from release archives; an extracted archive validates its included content without them. These results do not satisfy any physical-board, destructive-media, boot, encryption, confinement, performance, or lifecycle acceptance procedure.",
+      "observations": "The referenced detached sidecars record the prior integrated repository run on native Windows and Ubuntu WSL. Focused current-tranche suites have been exercised separately, but a new full-run and reproducible-archive sidecar must be produced only after the integration commit. Both development lanes remain guests of one physical laptop.",
+      "limitations": "Repository tests validate contracts and regressions only. The dated test-run and archive-attestation paths are immutable detached repository sidecars intentionally excluded from release archives; they do not attest the current uncommitted tranche. These results do not satisfy any physical-board, destructive-media, boot, encryption, confinement, performance, or lifecycle acceptance procedure.",
       "gate_closing": false
     },
     {
@@ -126,7 +127,7 @@
       ],
       "environment": "DEV-WIN-WSL-GPU-01",
       "observations": "Twelve deterministic tests pass on native Windows and Ubuntu WSL under normal and optimized Python. They cover a canonical request-before-approval ceremony, three distinct production approval events plus a separate signing custodian, exact release/catalog/sequence/policy/validity/key/assignment binding, purpose and environment separation, signing-time and current authorization/key lifecycle checks, same-sequence digest rollback protection, exact pack/runtime/certification binding, bounded untrusted inputs, tamper rejection, and digest-bound verification receipts. The ceremony utility never accepts a private key.",
-      "limitations": "No production trust-bundle loader, durable Admin approval-event adapter, concrete production Ed25519/HSM verifier, external rollback anchor, signed model pack/certificates, protected key material, or completed human ceremony exists. This contract cannot make an unsigned development catalog production-eligible.",
+      "limitations": "Repository-local anchored trust/catalog and durable Admin development adapters now exist, but no production root provisioning, protected HSM provider, authenticated Admin writer service, per-deployment rollback anchor/secret custody, signed model pack/certificates, protected key material, or completed human ceremony exists. These contracts cannot make an unsigned development catalog production-eligible.",
       "gate_closing": false
     },
     {
@@ -165,9 +166,73 @@
       "observations": "The package specifies owner-provided E1/E2 hardware, exact disposable-disk authorization, firmware and recovery access, network isolation, production signing custody, model/license inputs, witnesses, stop rules, test oracles, evidence layout, and sign-off for the complete G2 physical, security, recovery, lifecycle, and performance scope.",
       "limitations": "A reviewed procedure is not execution evidence. No destructive installation, physical boot, tamper, LUKS2/TPM recovery, power interruption, enforcing isolation, suspend/resume, lifecycle, performance, or two-board workflow was run.",
       "gate_closing": false
+    },
+    {
+      "id": "G2-EV-010",
+      "subject": "root-signed-trust-and-anchored-catalog-admission",
+      "result": "development-tests-passed-detached-record-pending",
+      "requirements_prepared": ["A003"],
+      "source_tests_prepared": ["T06"],
+      "evidence": [
+        "schemas/signing-trust-bundle.schema.json",
+        "src/luma_os/monotonic_anchor.py",
+        "src/luma_os/signing_trust.py",
+        "src/luma_os/catalog_admission.py",
+        "src/luma_os/ed25519_provider.py",
+        "tests/test_signing_trust.py",
+        "tests/test_catalog_admission.py",
+        "tests/test_ed25519_provider.py",
+        "docs/adr/0009-root-signed-trust-and-catalog-admission.md",
+        "docs/PRODUCTION_SIGNING_CUSTODY.md"
+      ],
+      "environment": "DEV-WIN-WSL-GPU-01",
+      "observations": "Deterministic normal and optimized tests exercise root-authorized trust bundles, environment/purpose separation, effective validity containment, exact monotonic checkpoints, catalog admission plans committed by compare-and-swap, transitive live trust/catalog freshness, fail-closed clock and anchor outages, and a concrete public Ed25519 verification provider. An admitted catalog remains authoritative only while its exact catalog and trust checkpoints remain current.",
+      "limitations": "Development in-memory anchors and test roots are not production rollback protection or custody. Production still requires provisioned offline roots, an independently protected monotonic anchor, trusted time and provider composition, HSM-backed signing operations, key lifecycle procedures, and witnessed recovery/revocation ceremonies.",
+      "gate_closing": false
+    },
+    {
+      "id": "G2-EV-011",
+      "subject": "integrity-protected-durable-admin-authorization-event-log",
+      "result": "development-tests-passed-detached-record-pending",
+      "requirements_prepared": ["A003", "A115"],
+      "source_tests_prepared": ["T06", "T62"],
+      "evidence": [
+        "schemas/admin-authorization-event.schema.json",
+        "src/luma_os/administration.py",
+        "src/luma_os/durable_administration.py",
+        "src/luma_os/monotonic_anchor.py",
+        "tests/test_durable_administration.py",
+        "docs/adr/0010-durable-admin-and-offline-source-revalidation.md",
+        "docs/PRODUCTION_SIGNING_CUSTODY.md"
+      ],
+      "environment": "DEV-WIN-WSL-GPU-01",
+      "observations": "A dependency-free SQLite event log uses canonical bounded events, an externally held HMAC secret, hash chaining, monotonic sequence, exact schema-object checks, committed-head readback, restart verification, and an external digest-anchor checkpoint. Every append requires a mandatory external Admin writer authorizer. A complete catalog-authorization call performs one bounded fresh authenticated replay, verifies exact before/after database-head and anchor state, retains no long-lived authorization cache, and observes a durable revocation on the next call.",
+      "limitations": "The HMAC protects stored integrity and does not authenticate the human or service writer. SQLite and the external anchor are not one transaction: DB-ahead or anchor-ahead states require typed fail-closed reconciliation. The current fixed log domain is development-only; production requires an authenticated isolated Admin service, trusted time, protected secret custody, and unique per-deployment/service domain and anchor namespace. Maximum-capacity replay, anchor latency, native filesystem behavior, and lock contention remain unqualified on target hardware.",
+      "gate_closing": false
+    },
+    {
+      "id": "G2-EV-012",
+      "subject": "inert-offline-source-and-installer-schema-v3-revalidation",
+      "result": "development-tests-passed-detached-record-pending",
+      "requirements_prepared": ["FR02", "FR03", "A001", "A002", "A003", "A108"],
+      "source_tests_prepared": ["T01", "T02", "T06", "T48"],
+      "evidence": [
+        "schemas/offline-installation-source.schema.json",
+        "src/luma_os/installation_source.py",
+        "src/luma_os/catalog_admission.py",
+        "src/luma_os/installer.py",
+        "tests/test_installation_source.py",
+        "tests/test_installer_source_v3.py",
+        "tests/test_installer.py",
+        "docs/adr/0010-durable-admin-and-offline-source-revalidation.md"
+      ],
+      "environment": "DEV-WIN-WSL-GPU-01",
+      "observations": "Schema-v3 preflight validates immutable canonical descriptor bytes against a caller pin, contract-fixed environment, and exact live anchored catalog admission. Execution obtains and fully validates fresh raw source input before binding/journaling and again after journaling, then resamples model hardware, reselects the profile from that admission catalog, reauthorizes, checks catalog/trust currentness, and checks confirmation, inventory, and time freshness immediately before the injected executor.",
+      "limitations": "The descriptor is inert and contains no catalog; the catalog is validation context recorded by digest-bound receipts. The caller pin is not governance, a cached validation result is never reusable authority, and no installer consumes or verifies release artifact bytes/signatures. Real offline media creation, governed release pins, exclusive device handling, signed artifact consumption, destructive install, boot, and recovery evidence remain absent.",
+      "gate_closing": false
     }
   ],
-  "validation_record": "docs/gates/g2/test_run_2026-09-23-003.json",
+  "validation_record": "docs/gates/g2/test_run_2026-09-23-004.json",
   "test_plan": "docs/gates/g2/test_plan.json",
   "open_blocker_record": "docs/gates/g2/blockers.json",
   "deferral_record": "docs/gates/final_certification_deferrals.json",

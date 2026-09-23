@@ -32,7 +32,7 @@ The implementation is intended for design reviews, local development, automated 
 | Install-time model profiles | Development contract supports explicit manual-only, CPU, and CUDA choices with exact pack/runtime identity and fail-closed RAM, VRAM, storage, context, load, and serving checks |
 | Signed 4–6B compact control model | Required for formal G1 closure; not yet certified |
 | External model weights | User-supplied and governed by their own licenses |
-| G2 safety, catalog, and Ubuntu-admission contracts | Development-only reference contracts; the expanded 128-test nine-module boundary passes on native Windows and Ubuntu WSL under normal and optimized Python, with no physical effects, production signing ceremony, or OS enforcement |
+| G2 safety, catalog, Admin-event, offline-source, and Ubuntu-admission contracts | Development-only reference contracts exercised on native Windows and Ubuntu WSL under normal and optimized Python; no physical effects, production signing ceremony, production identity/anchor service, or OS enforcement |
 | Bootable ISO, installer image, or hardware provisioning | Not supported |
 | Dual boot or VM lifecycle automation | Not supported |
 | 400–405B model operation or cluster certification | Not supported |
@@ -56,17 +56,26 @@ fail-fast compare-and-swap before adapter entry, and persists a keyed
 commitment instead of a raw high-entropy safe-handle token. It revalidates
 again after the durable `APPLYING` transition, restores a proven-not-applied
 attempt to `PREPARED`, and preserves pre-effect capacity exhaustion as safely
-retryable. The expanded 128-test G2 boundary (76 installer/boot/helper/durable
-tests, 20 model-pack/model-selection tests, and 32 signed-catalog/host-
-inventory/Ubuntu-admission tests) passes on native Windows and Ubuntu WSL
-under normal and optimized Python.
+retryable. The evolving G2 contract suites are exercised on native Windows and
+Ubuntu WSL under normal and optimized Python; the integrated current tranche
+is green in both development lanes, and fixed totals are intentionally omitted.
+
 These contracts do not discover or modify a real disk, boot an image, validate
 or install a UKI/dm-verity/LUKS stack, or enforce cgroup, AppArmor, seccomp,
 KVM, native ACL/DACL policy, or operating-system peer credentials. The catalog
 contract verifies a fully bound request/approval/signature envelope without
-handling private keys; it does not claim that a production catalog or custody
-ceremony exists. The Ubuntu probes are read-only and WSL can never pass native
+handling private keys. Root-signed public trust, anchored catalog admission,
+and an integrity-protected Admin event log are development contracts only:
+production roots, HSM custody, authenticated Admin-service process isolation,
+protected HMAC-secret custody, and rollback-resistant external anchors are not
+present. The Ubuntu probes are read-only and WSL can never pass native
 candidate admission.
+
+The trusted composition root owns the live trust clock and public crypto
+provider; artifact data and later callers cannot replace them. Catalog
+revalidation repeats exact pack-tuple checks against retained verification
+records, but those snapshots do not re-read pack/runtime bytes or prove current
+certification, revocation, or loadability.
 
 The installer contract also accepts an explicit model-profile catalog and
 selected profile. It binds the exact catalog, pack, runtime, context,
@@ -74,6 +83,22 @@ execution mode, resource snapshot, and CUDA device into the installation-plan
 digest, then revalidates them before the injected executor. It never silently
 selects a smaller model or remote service. `manual-only` is an explicit choice,
 not an error fallback.
+
+Installer schema version 3 additionally binds a bounded offline-source
+descriptor to its expected digest, edition, current catalog admission, and
+trust bundle. Preflight validates raw descriptor bytes itself; execution asks
+for fresh raw inputs and validates them before device/journal entry and again
+after journaling at the effect boundary, before current authorization and the
+injected executor. Model-bound plans also resample hardware and revalidate the
+selection against that source admission's catalog before current authorization;
+catalog/trust currentness and time/inventory freshness are then checked before
+executor entry. The descriptor, caller-supplied pin, and validation receipt are
+inert metadata, not signed-release evidence or disk authority, and the referenced
+image/payload/SBOM bytes are not verified by that contract. The authority and
+source boundaries are recorded in
+[ADR-0010](docs/adr/0010-durable-admin-and-offline-source-revalidation.md).
+A prior validation result remains readable as historical data, but it must
+never be reused as authority in place of fresh raw-byte validation.
 
 Formal G2 certification is blocked. The deterministic
 [gate report](docs/GATE_REPORT.md) and retained
@@ -83,8 +108,12 @@ production signing custody, signed 4–6B packs, the 400–405B experiment, and
 qualification runs. Native Windows and its Ubuntu WSL guest share one physical
 laptop and therefore never count as two reference boards. The durable ledgers
 also remain application-level contracts: power-loss qualification, protected
-integrity-key custody, native directory permissions, and a rollback-resistant
-external anchor are not present.
+integrity/HMAC-key custody, an OS-authenticated Admin writer service, native
+directory permissions, and rollback-resistant external anchors are not
+present. A SQLite/external-anchor mismatch is deliberately reconciliation-
+required and authorizes nothing; no cross-system atomicity is claimed. The
+Admin store is a singleton contract: independent stores must not share its
+secret/namespace, and production deployment-domain separation is absent.
 
 ## Quick start
 

@@ -31,13 +31,16 @@ class ContractFileTests(unittest.TestCase):
     def test_json_schemas_are_valid_json_and_have_stable_ids(self) -> None:
         schema_dir = ROOT / "schemas"
         expected = {
+            "admin-authorization-event.schema.json",
             "artifact.schema.json",
             "g2-host-inventory.schema.json",
             "grant.schema.json",
             "model-catalog-signature.schema.json",
             "model-pack.schema.json",
             "model-profile.schema.json",
+            "offline-installation-source.schema.json",
             "receipt.schema.json",
+            "signing-trust-bundle.schema.json",
             "workflow.schema.json",
         }
         self.assertEqual(expected, {path.name for path in schema_dir.glob("*.schema.json")})
@@ -93,7 +96,36 @@ class ContractFileTests(unittest.TestCase):
         }
         self.assertTrue(qualification_governance.issubset(required))
         self.assertTrue(qualification_release_files.issubset(release_files))
-        self.assertEqual(153, len(manifest["release_files"]))
+        trust_and_source_governance = {
+            "docs/adr/0009-root-signed-trust-and-catalog-admission.md",
+            "docs/adr/0010-durable-admin-and-offline-source-revalidation.md",
+        }
+        trust_and_source_release_files = {
+            *trust_and_source_governance,
+            "schemas/admin-authorization-event.schema.json",
+            "schemas/offline-installation-source.schema.json",
+            "schemas/signing-trust-bundle.schema.json",
+            "src/luma_os/catalog_admission.py",
+            "src/luma_os/durable_administration.py",
+            "src/luma_os/ed25519_provider.py",
+            "src/luma_os/installation_source.py",
+            "src/luma_os/monotonic_anchor.py",
+            "src/luma_os/signing_trust.py",
+            "tests/test_catalog_admission.py",
+            "tests/test_durable_administration.py",
+            "tests/test_ed25519_provider.py",
+            "tests/test_installation_source.py",
+            "tests/test_installer_source_v3.py",
+            "tests/test_signing_trust.py",
+        }
+        self.assertTrue(trust_and_source_governance.issubset(required))
+        self.assertTrue(trust_and_source_release_files.issubset(release_files))
+        self.assertEqual(
+            len(manifest["release_files"]),
+            len(release_files),
+            "release inventory paths must be unique",
+        )
+        self.assertEqual(sorted(manifest["release_files"]), manifest["release_files"])
         self.assertTrue(required.issubset(release_files))
         schema_files = {
             path.relative_to(ROOT).as_posix()
@@ -117,6 +149,8 @@ class ContractFileTests(unittest.TestCase):
                 "docs/gates/g2/archive_attestation_2026-09-23-002.json",
                 "docs/gates/g2/test_run_2026-09-23-003.json",
                 "docs/gates/g2/archive_attestation_2026-09-23-003.json",
+                "docs/gates/g2/test_run_2026-09-23-004.json",
+                "docs/gates/g2/archive_attestation_2026-09-23-004.json",
             }.issubset(set(manifest["excluded_from_release"]))
         )
         executable_files = {

@@ -226,7 +226,8 @@
         "owner": "requirements-and-release-owner",
         "as_of": "2026-09-23",
         "evidence_ids": [
-          "G2-EV-001"
+          "G2-EV-001",
+          "G2-EV-012"
         ]
       }
     },
@@ -307,7 +308,8 @@
         "owner": "requirements-and-release-owner",
         "as_of": "2026-09-23",
         "evidence_ids": [
-          "G2-EV-001"
+          "G2-EV-001",
+          "G2-EV-012"
         ]
       }
     },
@@ -5920,7 +5922,8 @@
         "evidence_ids": [
           "G2-EV-001",
           "G2-EV-006",
-          "G2-EV-008"
+          "G2-EV-008",
+          "G2-EV-012"
         ]
       }
     },
@@ -6003,7 +6006,8 @@
         "owner": "requirements-and-release-owner",
         "as_of": "2026-09-23",
         "evidence_ids": [
-          "G2-EV-001"
+          "G2-EV-001",
+          "G2-EV-012"
         ]
       }
     },
@@ -6087,7 +6091,10 @@
         "as_of": "2026-09-23",
         "evidence_ids": [
           "G2-EV-006",
-          "G2-EV-007"
+          "G2-EV-007",
+          "G2-EV-010",
+          "G2-EV-011",
+          "G2-EV-012"
         ]
       }
     },
@@ -14346,7 +14353,8 @@
         "as_of": "2026-09-23",
         "evidence_ids": [
           "G2-EV-001",
-          "G2-EV-006"
+          "G2-EV-006",
+          "G2-EV-012"
         ]
       }
     },
@@ -14926,7 +14934,8 @@
         "as_of": "2026-09-23",
         "evidence_ids": [
           "G2-EV-003",
-          "G2-EV-005"
+          "G2-EV-005",
+          "G2-EV-011"
         ]
       }
     },

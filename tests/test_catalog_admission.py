@@ -21,14 +21,13 @@ from luma_os.catalog_admission import (  # noqa: E402
     prepare_catalog_admission,
 )
 from luma_os.model_catalog_signing import (  # noqa: E402
+    MAX_CATALOG_BYTES,
     ModelCatalogVerificationDenied,
     verify_signed_catalog,
 )
 from luma_os.model_pack import SigningPurpose, SigningRole  # noqa: E402
-from luma_os.monotonic_anchor import (  # noqa: E402
-    DigestCheckpoint,
-    InMemoryDigestAnchor,
-)
+from luma_os.model_selection import MAX_CATALOG_PROFILES  # noqa: E402
+from luma_os.monotonic_anchor import DigestCheckpoint  # noqa: E402
 from luma_os.signing_trust import (  # noqa: E402
     RootTrustAnchor,
     SignedTrustBundle,
@@ -68,12 +67,18 @@ class RecordingAnchor:
     ) -> None:
         self.checkpoint = checkpoint
         self.race_with_identical_replacement = race_with_identical_replacement
+        self.fail_reads = False
+        self.invalid_reads = False
         self.read_namespaces: list[str] = []
         self.cas_calls: list[
             tuple[DigestCheckpoint | None, DigestCheckpoint]
         ] = []
 
     def read(self, namespace: str) -> DigestCheckpoint | None:
+        if self.fail_reads:
+            raise OSError("anchor unavailable")
+        if self.invalid_reads:
+            return {"forged": "checkpoint"}  # type: ignore[return-value]
         self.read_namespaces.append(namespace)
         return self.checkpoint
 
@@ -102,7 +107,12 @@ class CatalogAdmissionTests(unittest.TestCase):
         self.raw_catalog = fixture.catalog_bytes()
         self.crypto = PublicVerifier()
 
-    def anchored_trust(self, environment: str = "production"):
+    def anchored_trust(
+        self,
+        environment: str = "production",
+        *,
+        with_context: bool = False,
+    ):
         production = environment == "production"
         root_public_key = (b"R" if production else b"L") * 32
         leaf_public_key = (b"C" if production else b"K") * 32
@@ -148,24 +158,48 @@ class CatalogAdmissionTests(unittest.TestCase):
             keys=(key,),
             signature=root_signature,
         )
-        trust_anchor = InMemoryDigestAnchor()
+        trust_anchor = RecordingAnchor()
+        policy = TrustBundlePolicy(
+            environment=environment,
+            trust_domain=domain,
+            anchor_namespace=f"tests/signing-trust/{environment}",
+            accepted_policy_versions=("trust-policy-v1",),
+        )
         trust_plan = prepare_trust_bundle(
             bundle.canonical_bytes,
             root_anchors=(root,),
-            policy=TrustBundlePolicy(
-                environment=environment,
-                trust_domain=domain,
-                anchor_namespace=f"tests/signing-trust/{environment}",
-                accepted_policy_versions=("trust-policy-v1",),
-            ),
+            policy=policy,
             crypto=self.crypto,
             anchor=trust_anchor,
-            now=self.now,
+            clock=lambda: self.now,
         )
-        return commit_trust_bundle(
+        anchored = commit_trust_bundle(
             trust_plan,
             anchor=trust_anchor,
-            now=self.now,
+        )
+        if with_context:
+            return anchored, trust_anchor, root, bundle, policy
+        return anchored
+
+    def advance_trust(self, context):
+        _, trust_anchor, root, bundle, policy = context
+        replacement = replace(
+            bundle,
+            bundle_sequence=bundle.bundle_sequence + 1,
+            previous_bundle_sha256=bundle.digest,
+            issued_at=self.now - timedelta(hours=2),
+        )
+        plan = prepare_trust_bundle(
+            replacement.canonical_bytes,
+            root_anchors=(root,),
+            policy=policy,
+            crypto=self.crypto,
+            anchor=trust_anchor,
+            clock=lambda: self.now,
+        )
+        return commit_trust_bundle(
+            plan,
+            anchor=trust_anchor,
         )
 
     def prepare(
@@ -177,6 +211,11 @@ class CatalogAdmissionTests(unittest.TestCase):
         accepted_policies: tuple[str, ...] = ("catalog-policy-v1",),
         environment: str = "production",
         release_id: str = "0.1.0",
+        clock=None,
+        authorization_verifier=None,
+        raw_catalog=None,
+        raw_envelope=None,
+        pack_verifications=None,
     ):
         selected_anchor = anchor or RecordingAnchor()
         envelope = self.fixture.envelope(
@@ -185,17 +224,24 @@ class CatalogAdmissionTests(unittest.TestCase):
             catalog_sequence=sequence,
         )
         plan = prepare_catalog_admission(
-            self.raw_catalog,
-            envelope.canonical_bytes,
+            self.raw_catalog if raw_catalog is None else raw_catalog,
+            envelope.canonical_bytes if raw_envelope is None else raw_envelope,
             expected_environment=environment,
             expected_release_id=release_id,
             accepted_catalog_policy_versions=accepted_policies,
-            pack_verifications=self.fixture.pack_verifications(),
+            pack_verifications=(
+                self.fixture.pack_verifications()
+                if pack_verifications is None
+                else pack_verifications
+            ),
             trust_bundle=trust_bundle or self.anchored_trust(environment),
             crypto=self.crypto,
-            authorization_verifier=signing_fixtures.AuthorizationVerifier(),
+            authorization_verifier=(
+                authorization_verifier
+                or signing_fixtures.AuthorizationVerifier()
+            ),
             anchor=selected_anchor,
-            now=self.now,
+            clock=clock or (lambda: self.now),
         )
         return plan, selected_anchor, envelope
 
@@ -376,6 +422,117 @@ class CatalogAdmissionTests(unittest.TestCase):
         with self.assertRaises(CatalogAdmissionDenied):
             _ = admission.catalog
 
+    def test_authority_stales_after_trust_bundle_advances(self) -> None:
+        context = self.anchored_trust(with_context=True)
+        trust = context[0]
+        plan, anchor, _ = self.prepare(trust_bundle=trust)
+        admission = commit_catalog_admission(plan, anchor=anchor)
+        self.assertEqual(
+            self.raw_catalog,
+            signing_fixtures.canonical_json_bytes(
+                admission.catalog.canonical_payload()
+            ),
+        )
+
+        self.advance_trust(context)
+
+        for access in (
+            lambda: admission.catalog,
+            lambda: admission.statement,
+            lambda: admission.verification_receipt,
+            admission.ensure_current,
+        ):
+            with self.subTest(access=access):
+                with self.assertRaises(CatalogAdmissionDenied):
+                    access()
+
+    def test_authority_stales_on_trust_anchor_outage_or_expiry(self) -> None:
+        context = self.anchored_trust(with_context=True)
+        trust, trust_anchor, _, _, _ = context
+        clock_value = [self.now]
+        plan, anchor, _ = self.prepare(
+            trust_bundle=trust,
+            clock=lambda: clock_value[0],
+        )
+        admission = commit_catalog_admission(plan, anchor=anchor)
+
+        trust_anchor.fail_reads = True
+        with self.assertRaises(CatalogAdmissionDenied):
+            _ = admission.catalog
+        trust_anchor.fail_reads = False
+        clock_value[0] = self.now + timedelta(days=31)
+        with self.assertRaises(CatalogAdmissionDenied):
+            _ = admission.catalog
+
+    def test_commit_and_every_access_recheck_live_admin_authorization(self) -> None:
+        authorizer = signing_fixtures.AuthorizationVerifier()
+        plan, anchor, _ = self.prepare(authorization_verifier=authorizer)
+
+        authorizer.approvals = False
+        with self.assertRaises(CatalogAdmissionDenied):
+            commit_catalog_admission(plan, anchor=anchor)
+        self.assertIsNone(anchor.checkpoint)
+
+        authorizer.approvals = True
+        admission = commit_catalog_admission(plan, anchor=anchor)
+        self.assertEqual(plan.catalog_sha256, admission.catalog.digest)
+
+        authorizer.signer = False
+        for access in (
+            lambda: admission.catalog,
+            lambda: admission.statement,
+            lambda: admission.verification_receipt,
+            admission.ensure_current,
+        ):
+            with self.subTest(access=access):
+                with self.assertRaises(CatalogAdmissionDenied):
+                    access()
+
+    def test_authority_rechecks_catalog_anchor_after_live_admin_verification(self) -> None:
+        anchor = RecordingAnchor()
+
+        class AdvancingAuthorizationVerifier(
+            signing_fixtures.AuthorizationVerifier
+        ):
+            enabled = False
+            advanced = False
+
+            def approval_is_authorized(self, approval, *, at):
+                allowed = super().approval_is_authorized(approval, at=at)
+                if self.enabled and not self.advanced:
+                    checkpoint = anchor.checkpoint
+                    if checkpoint is None:
+                        raise AssertionError("catalog checkpoint must be committed")
+                    anchor.checkpoint = DigestCheckpoint(
+                        namespace=checkpoint.namespace,
+                        generation=checkpoint.generation + 1,
+                        sequence=checkpoint.sequence + 1,
+                        artifact_sha256="f" * 64,
+                    )
+                    self.advanced = True
+                return allowed
+
+        authorizer = AdvancingAuthorizationVerifier()
+        plan, _, _ = self.prepare(
+            anchor=anchor,
+            authorization_verifier=authorizer,
+        )
+        admission = commit_catalog_admission(plan, anchor=anchor)
+
+        authorizer.enabled = True
+        with self.assertRaisesRegex(CatalogAdmissionConflict, "during"):
+            admission.ensure_current()
+        self.assertTrue(authorizer.advanced)
+
+    def test_commit_uses_retained_live_clock_not_a_preparation_timestamp(self) -> None:
+        clock_value = [self.now]
+        plan, anchor, _ = self.prepare(clock=lambda: clock_value[0])
+
+        clock_value[0] = self.now + timedelta(days=31)
+        with self.assertRaises(CatalogAdmissionDenied):
+            commit_catalog_admission(plan, anchor=anchor)
+        self.assertIsNone(anchor.checkpoint)
+
     def test_only_anchored_matching_environment_trust_is_accepted(self) -> None:
         envelope = self.fixture.envelope(self.raw_catalog, catalog_sequence=1)
         with self.assertRaises(CatalogAdmissionDenied):
@@ -390,7 +547,7 @@ class CatalogAdmissionTests(unittest.TestCase):
                 crypto=self.crypto,
                 authorization_verifier=signing_fixtures.AuthorizationVerifier(),
                 anchor=RecordingAnchor(),
-                now=self.now,
+                clock=lambda: self.now,
             )
 
         with self.assertRaisesRegex(CatalogAdmissionDenied, "lab trust"):
@@ -403,6 +560,23 @@ class CatalogAdmissionTests(unittest.TestCase):
             self.prepare(accepted_policies=("catalog-policy-v2",))
         with self.assertRaises(CatalogAdmissionError):
             self.prepare(accepted_policies=())
+
+    def test_retained_live_context_is_bounded_before_copying(self) -> None:
+        for raw in (bytearray(self.raw_catalog), memoryview(self.raw_catalog)):
+            with self.subTest(raw_type=type(raw).__name__):
+                with self.assertRaises(CatalogAdmissionError):
+                    self.prepare(raw_catalog=raw)
+
+        with self.assertRaises(CatalogAdmissionError):
+            self.prepare(raw_catalog=b"x" * (MAX_CATALOG_BYTES + 1))
+
+        verification = next(iter(self.fixture.pack_verifications().values()))
+        oversized = {
+            f"{index:064x}": verification
+            for index in range(MAX_CATALOG_PROFILES + 1)
+        }
+        with self.assertRaises(CatalogAdmissionError):
+            self.prepare(pack_verifications=oversized)
 
     def test_genesis_must_be_sequence_one(self) -> None:
         with self.assertRaisesRegex(CatalogAdmissionDenied, "begin at sequence one"):

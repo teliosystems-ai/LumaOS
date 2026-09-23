@@ -44,11 +44,13 @@ be leaf keys.
 Trust admission is two phase. Preparation verifies canonical form, policy,
 environment, lifecycle, the root signature, sequence, predecessor, and the
 checkpoint read from an external compare-and-swap anchor. Commit succeeds only
-against the same anchor and exact checkpoint observed during preparation. Only
-the committed result can create a purpose-bound verifier. It rechecks the
-root, bundle, leaf, and exact current external checkpoint for every operation,
-so a cached verifier fails after expiry, revocation, anchor failure, or a
-newer bundle.
+against the same anchor and exact checkpoint observed during preparation.
+Within the supported API and trusted composition root, only the committed
+result creates a purpose-bound verifier. It rechecks the root signature,
+bundle policy and lifecycle, leaf, and exact current external checkpoint for
+every operation, using the protected live clock retained at admission. A
+cached verifier therefore fails after expiry, revocation, anchor failure, or a
+newer bundle when that production clock and anchor remain trustworthy.
 
 The repository's in-memory checkpoint implementation is a deterministic test
 fake. It is neither durable nor rollback-resistant and is never production
@@ -79,19 +81,30 @@ A verified catalog receipt is evidence, not authority. Catalog admission:
   signature purpose, pack tuples, and catalog sequence;
 - binds catalog, envelope, trust-bundle, and verification-receipt digests in a
   non-authoritative preparation plan; and
-- returns an authority token only after exact compare-and-swap commit and a
-  retained-value read.
+- through the supported trusted-composition API, returns an authority token
+  only after exact compare-and-swap commit and a retained-value read.
 
 A same-sequence replay is accepted only when the digest is identical and a
 fresh preparation observes that exact checkpoint. A failed compare-and-swap
 never returns authority, even if another writer installed the same value. The
 committed token rechecks that its exact checkpoint remains current before
-exposing authoritative catalog data.
+exposing authoritative catalog data. It also reruns signature, Admin,
+lifecycle, policy, and retained model-pack tuple checks with a trusted live
+clock. The retained `ModelPackVerification` records are trusted composition
+inputs; this step does not reopen or re-hash model-pack bytes in storage.
+
+The module-private seals, object identity checks, and Python types prevent
+accidental misuse inside the trusted composition root; they are not an
+authentication or sandbox boundary against hostile code in the same process.
+Untrusted plugins, models, and IPC peers submit raw signed artifacts or stable
+identifiers to an isolated trusted resolver rather than receiving admission
+plans or authority objects.
 
 ## Consequences
 
-- Callers can no longer choose a catalog rollback floor or construct a
-  production catalog verifier from an unanchored key table.
+- Callers using the supported trusted-composition API cannot choose a catalog
+  rollback floor or construct a production catalog verifier from an
+  unanchored key table.
 - Lab and production catalog namespaces, signing purposes, and roots remain
   distinct.
 - Key rotation and revocation require publishing the next signed trust bundle

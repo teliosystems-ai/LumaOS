@@ -33,21 +33,37 @@ The first G2 tranche provides:
   authorization digest relies on mandatory 256-bit CSPRNG entropy;
 - a bounded, detached signed-catalog contract covering request-before-approval,
   distinct production quorum and custody, exact pack/runtime/certification
-  binding, trust lifecycle, and rollback protection without accepting private
-  keys; and
+  binding, root-signed public trust, exact external-checkpoint admission, and
+  transitive catalog/trust freshness without accepting private keys; pack
+  bindings are retained verification snapshots, not live pack/runtime or
+  certification/loadability checks;
+- an integrity-protected SQLite Admin authorization-event log with exact
+  assignment/approval/signing events, mandatory external writer authorization,
+  and fail-closed external-checkpoint reconciliation; HMAC authenticates stored
+  bytes, not the originating person or service;
+- an inert, bounded offline-source descriptor and installer schema-v3 binding
+  that repeat validation from fresh raw bytes before device/journal entry and
+  after journaling at the effect boundary before current authorization and the
+  injected executor, without treating a caller pin or receipt as release
+  governance or disk authority; and
 - a read-only Ubuntu host inventory and admission contract using trusted probes,
   fresh inventory, live corroboration, and an explicit E1/E2 hardware class.
   WSL is structurally unable to pass native-candidate admission.
 
-The expanded nine-module boundary has 128 safety, catalog, and admission tests
-passing on native Windows and Ubuntu WSL under normal and optimized-Python
-execution. It does not perform a production signing ceremony; change disk,
+The evolving safety, catalog, authorization, source, and admission suites are
+exercised on native Windows and Ubuntu WSL under normal and optimized-Python
+execution; the integrated current tranche is green in both development lanes.
+Fixed totals are omitted while G2 is in progress. This evidence does not
+perform a production signing ceremony; change disk,
 firmware, or other privileged host state; boot a release; establish
 UKI/dm-verity/LUKS; or enforce cgroup, AppArmor, seccomp, KVM, native ACL/DACL
 policy, or operating-system peer credentials. The two development lanes share
-one physical host. Protected production and integrity-key custody, physical
-power-loss testing, and rollback-resistant external anchors remain later
-implementation and physical-certification work.
+one physical host. Protected production and integrity/HMAC-key custody, a
+process-isolated authenticated Admin writer, a unique deployment domain for
+the single authoritative log, governed release pins and consumed-artifact
+verification, physical power-loss testing, and rollback-resistant external
+anchors remain later implementation and physical-certification work.
+Independent Admin stores must not share the current secret/namespace.
 
 ## v0.1 — Developer MVP
 

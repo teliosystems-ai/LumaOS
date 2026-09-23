@@ -1,0 +1,116 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://luma-os.invalid/schemas/offline-installation-source.schema.json",
+  "title": "Luma OS Offline Ubuntu 24.04 Installation Source",
+  "description": "A bounded digest inventory only. Validation does not establish signed-release authenticity, disk-install authority, physical boot evidence, or certification.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "source_kind",
+    "environment",
+    "release_id",
+    "ubuntu_release",
+    "target_architecture",
+    "base_image_sha256",
+    "os_payload_sha256",
+    "release_metadata_sha256",
+    "offline_package_lock_sha256",
+    "sbom_sha256",
+    "packages"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "source_kind": {
+      "const": "offline-ubuntu-installation-source"
+    },
+    "environment": {
+      "enum": [
+        "lab",
+        "production"
+      ]
+    },
+    "release_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:+-]{0,127}$"
+    },
+    "ubuntu_release": {
+      "const": "24.04"
+    },
+    "target_architecture": {
+      "enum": [
+        "amd64",
+        "arm64"
+      ]
+    },
+    "base_image_sha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "os_payload_sha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "release_metadata_sha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "offline_package_lock_sha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "sbom_sha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "packages": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 4096,
+      "items": {
+        "$ref": "#/$defs/package"
+      },
+      "$comment": "The Python contract additionally requires canonical name/architecture/version order, unique name/architecture identities, matching target architecture (or all), and a uint64-bounded aggregate size."
+    }
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "package": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "version",
+        "architecture",
+        "size_bytes",
+        "sha256"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9+.-]{0,127}$"
+        },
+        "version": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9.+:~-]{0,255}$"
+        },
+        "architecture": {
+          "enum": [
+            "amd64",
+            "arm64",
+            "all"
+          ]
+        },
+        "size_bytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 18446744073709551615
+        },
+        "sha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    }
+  },
+  "$comment": "Instances must also be ASCII, no larger than 4194304 bytes, contain no duplicate JSON keys, and exactly equal RFC-style sorted-key compact canonical JSON emitted by the Python contract. The closed object shapes deliberately provide no URL, path, or script fields."
+}

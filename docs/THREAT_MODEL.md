@@ -17,7 +17,10 @@ fitness. G2 development is in progress and formal certification is blocked.
 - optional local model endpoint credentials;
 - policy grants, resource leases, and local IPC identities;
 - Admin role definitions, assignments, revocations, and delegation receipts;
+- integrity-protected Admin authorization events and their external checkpoint;
 - model-pack trust metadata and certification records;
+- root-signed public trust bundles, admitted catalog checkpoints, and offline
+  installation-source descriptor bindings;
 - installer inventory/plan/confirmation/attempt records, A/B boot-state records,
   and privileged-helper requests, trust decisions, SQLite request/effect
   ledgers, and receipts; and
@@ -34,8 +37,12 @@ fitness. G2 development is in progress and formal certification is blocked.
 | Optional model | Output and availability are untrusted | Configured local HTTP endpoint |
 | G1 model worker | Model/runtime code and output are untrusted | Authenticated local gateway, policy decision, and generation-fenced resource lease |
 | Admin control plane | Authenticated product principals may exercise only assigned, declared administrative activities | Versioned assignment, revocation, effect-time policy, and receipt boundary |
+| Durable Admin event store | SQLite and HMAC protect an accepted local representation but do not authenticate its origin or resist rollback alone | Mandatory external writer authorizer, exact event replay, and exact external digest checkpoint |
 | Model-pack store | Content is untrusted until complete inventory, signature, digest, license-use, and runtime-tuple validation | Import/verification boundary |
 | Signing service/key store | Private keys are external protected material and never model-accessible | Digest-bound signing request, key-role validation, and signed result boundary |
+| Catalog admission | A verified receipt or cached catalog object is not continuing authority | Fixed environment namespace, exact external catalog checkpoint, current anchored trust bundle, and live catalog/signature/Admin revalidation |
+| Trust/catalog composition root | Live clock, root policy, public crypto provider, Admin reader, pack-verification snapshots, and anchors are trusted injected dependencies | Retained provider/clock identity and live revalidation guard correct composition, but Python object identity does not isolate hostile same-process code |
+| Offline installation source | Descriptor, caller digest pin, edition object, and validation receipt are untrusted data | Repeated validation from raw bytes against current catalog/trust context; consumed-artifact verification remains external |
 | Logical internal services | Caller assertions are untrusted without OS-peer authentication | Bounded, deadline-bearing local IPC envelope |
 | G2 installer contract | Inventory, confirmation, and requested target are untrusted until bound and revalidated | Pure preflight/authorization/capability/journal boundary; injected discovery and executor |
 | G2 boot-state contract | Restored state and external boot/health/data claims are untrusted | Pure authenticated, monotonic-anchored transition boundary with injected evidence oracles |
@@ -81,7 +88,13 @@ compromised Windows Administrator or Linux `root` account safe.
 | Resource overcommit or stale allocation | Checked 64-bit arithmetic, atomic multi-domain admission, generation-fenced leases, pressure and quarantine state | Prototype accounting is not an OS cgroup/GPU allocation or hardware qualification |
 | Capability substitution or post-approval revocation | Typed exact grants, stable denial reasons, policy digest/version, effect-time revalidation | The existing MVP API is not yet fully mediated by the general broker |
 | Admin role abuse or delegation expansion | Fixed non-ordinary-delegable Admin role; finite activity catalog; authenticated, versioned, expiring/revocable assignments; hash-linked receipts; ordinary effect policy still applies | A compromised Admin principal can make authorized governance changes; multi-party production approval and protected custody remain certification work |
+| Forged or rolled-back Admin authorization event | Canonical bounded events, monotonic sequence/hash chain, HMAC with an external secret, full replay on use, mandatory exact writer authorization, and exact external checkpoint | HMAC authenticates storage acceptance, not the writer. The production Admin identity service, process isolation, protected secret, trusted clock, durable anchor, and reconciliation operations are absent |
+| Admin event-store split brain or domain collision | The development contract permits one centralized logical log only | HMAC and checkpoint domains are fixed; independent stores must not share a secret/namespace. Production deployment identity, namespace allocation, replication consensus, and multi-host fencing are not implemented |
+| SQLite/external-anchor crash window | Database transaction commits before exact external compare-and-swap; any DB-ahead, anchor-ahead, outage, or invalid checkpoint becomes typed reconciliation-required state and authorizes nothing | No distributed atomicity exists. Production needs controlled manual reconciliation; automatically rolling back or replaying an ambiguous authorization is prohibited |
 | Signing-key disclosure or unauthorized signing | Keys remain outside Git/runtime/model context; separate lab and production roots; Admin assigns declared signing activities; digest/key/actor-bound receipts; revoked or wrong-role keys fail closed | Protected production key storage, named human custody, recovery, and ceremony evidence are deferred to final certification |
+| Stale catalog after catalog/trust rotation | Exact catalog checkpoint and exact anchored trust bundle are retained and rechecked with live catalog, signature, approval, signer, lifecycle, pack, and policy validation on authority use | Availability of trusted time, Admin authorization service, roots, and external anchors is required; failure denies use |
+| Stale model-pack verification snapshot | Catalog revalidation repeats exact catalog-to-pack tuple checks against a bounded retained `ModelPackVerification` snapshot | It does not re-read pack/runtime bytes, current certification or revocation state, or loadability; the trusted composition root must refresh evidence and re-admit after change |
+| Forged or stale offline installation source | Canonical bounded descriptor, external expected digest, exact edition/release/architecture/catalog/trust binding, and schema-v3 validation from fresh raw inputs before device/journal entry and after journaling before effect-time authorization/executor entry | A caller-selected pin or edition is not governance, and descriptor validation does not verify signatures or hash the referenced artifact bytes actually consumed |
 | Internal IPC spoofing or memory exhaustion | Four-byte bounded framing, strict fields, asserted-caller/peer comparison, deadlines, lease generations | Real Unix peer-credential plumbing and process isolation remain unimplemented |
 | Installer target substitution or stale confirmation | Stable disk identity, immutable inventory digest, plan/confirmation binding, effect-time revalidation, exact device capability, replay and in-doubt journal rules | Pure non-destructive contract only; no real disk discovery, OS device handle, installer executor, or destructive race testing |
 | A/B state rollback, fork, or false health acknowledgement | Authenticated state, monotonic anchor, hash-chained operations, generation/fence ownership, trusted boot observations, attempt-bound health, and fallback-readability oracle | Pure state machine only; no firmware variables, slot I/O, UKI/dm-verity/LUKS, physical boot, or induced power loss |
@@ -103,6 +116,21 @@ The following changes require explicit design and security review before merge:
 - changing model-pack canonicalization, signature trust, or certification-state semantics;
 - making `Admin` generally delegable, adding wildcard administrative activities, or allowing product administration to imply host privilege;
 - exposing signing material to the model/runtime or removing actor/input/key binding from signing receipts;
+- treating an HMAC, SQLite row, caller-constructed assignment, or module-private
+  object identity as proof of Admin writer identity;
+- accepting an Admin event-log head without its exact external checkpoint, or
+  automatically replaying or rolling back a reconciliation-required state;
+- running independent Admin stores with a shared secret or checkpoint namespace
+  before deployment/service domain separation and writer fencing exist;
+- treating an offline-source descriptor, caller-provided digest, validation
+  receipt, or catalog snapshot as installation authority, or reducing either
+  schema-v3 execution revalidation boundary;
+- caching catalog authority across catalog/trust rotation, expiry, revocation,
+  anchor failure, or failed live Admin revalidation;
+- accepting a caller-selected clock/provider in place of the trust composition
+  root, or treating module-private objects as same-process isolation;
+- treating retained model-pack verification records as live pack-byte,
+  runtime, certification/revocation, or loadability evidence;
 - allowing internal messages without authenticated OS-peer binding or bounded framing;
 - allowing a backend to allocate or infer without a current generation-fenced lease;
 - weakening privileged-effect generation/CAS fencing, redispatching an
@@ -127,7 +155,15 @@ Automated tests should cover:
 - optional model outage or invalid output without loss of manual controls;
 - model-pack signature, digest, undeclared-file, path, license, tuple, wrong-purpose, not-yet-valid, expired-key, and revoked-key tampering;
 - Admin bootstrap, invalid/expired/revoked delegation, role substitution, unauthorized activity, assignment replay, and receipt-chain tampering;
+- Admin-event wrong-secret, noncanonical row, deletion/gap, rollback, anchor
+  mismatch/outage, writer denial/exception, wrong revoke actor, exact approval/
+  signer substitution, restart, clock rollback, and non-atomic reconciliation;
 - signing-role separation, wrong-key, revoked-key, lab/production-root confusion, and proof that model-visible processes cannot read key material;
+- catalog/trust rotation, expiry, and anchor outage after admission, plus live
+  catalog/signature/Admin revalidation at commit and authority access;
+- malformed, oversized, or noncanonical offline descriptors; wrong pin,
+  environment, architecture, release, edition, catalog, or trust binding;
+  forged inert receipts; and changed provider bytes at each schema-v3 boundary;
 - capability substitution, grant revocation, stale lease, resource overflow,
   concurrent admission, pressure, and quarantine behavior;
 - malformed/oversized IPC frames, caller/peer mismatch, expired deadlines, and
@@ -164,5 +200,11 @@ change control. The SQLite helper ledgers are not a certified substitute: they
 have no protected integrity-key custody, encrypted/native-ACL-qualified store,
 rollback-resistant external anchor, induced power-loss evidence, external
 process-kill matrix, or physical effect-adapter qualification.
+The durable Admin event log likewise does not supply authenticated production
+writer identity, protected HMAC-secret custody, trusted time, cross-system
+atomicity, multi-store domain separation, or rollback resistance without its
+external services. Offline-source
+descriptor validation does not establish governed release approval, verify the
+referenced artifact bytes or signatures, or authorize installation.
 
 Report suspected vulnerabilities using [SECURITY.md](../SECURITY.md), not a public issue.

@@ -11,9 +11,11 @@ G0 and G1 have two explicit status axes: their repository/local development scop
 G2 uses the same evidence boundary but is currently **in progress**, not
 complete. Its repository-local tranche consists of non-effecting safety
 contracts, durable request/effect coordination, exact model-profile selection,
-signed model-catalog verification, and read-only Ubuntu admission. Its expanded
-128-test nine-module boundary passes on native Windows and Ubuntu WSL under
-normal and optimized-Python execution; formal G2 certification remains blocked.
+signed model-catalog verification/admission, integrity-protected Admin events,
+offline-source revalidation, and read-only Ubuntu admission. The evolving
+contract suites are exercised on native Windows and Ubuntu WSL under normal
+and optimized-Python execution; the current tranche still requires a final
+integrated green rerun, and formal G2 certification remains blocked.
 
 Status meanings:
 
@@ -29,7 +31,7 @@ Status meanings:
 | --- | --- | --- | --- |
 | MVP-001 | Intent-driven user interaction | Partial | Invoice-report request becomes an inspectable prepared workflow; no general natural-language agent |
 | MVP-002 | Human-visible plan before effects | Implemented | Separate workflow create/prepare and run operations; workflow/step API records |
-| MVP-003 | Explicit approval/capability boundary | Partial | Folder enrollment, explicit run action, deny-by-default typed policy, and fixed Admin role with finite receipted delegation; the MVP API is not yet fully mediated by that broker and Admin is not ambient effect authority |
+| MVP-003 | Explicit approval/capability boundary | Partial | Folder enrollment, explicit run action, deny-by-default typed policy, fixed Admin role, and an integrity-protected exact-event log with mandatory external writer authorization; the MVP API is not fully mediated by that broker, the production Admin identity/process boundary is absent, and Admin is not ambient effect authority |
 | MVP-004 | Local-first/offline baseline | Implemented | Standard-library runtime, loopback service, manual workflow works without a model |
 | MVP-005 | Explainable/auditable execution | Partial | Persisted steps, errors, provenance, and effect receipts; not certified tamper evidence |
 | MVP-006 | Durable workflow state | Implemented | SQLite transactions/WAL and restart-visible state |
@@ -37,7 +39,7 @@ Status meanings:
 | MVP-008 | Scoped local file access | Implemented on POSIX/WSL target | Explicit grant, descriptor-relative no-follow read, root identity and size checks |
 | MVP-009 | Semantic file experience | Deferred | Visual product concept exists elsewhere; runtime has scoped paths, not semantic indexing/search |
 | MVP-010 | Versioned managed artifacts | Implemented | Application-owned metadata, versions, content hashes, and object storage |
-| MVP-011 | Local model integration | Partial | Signed model-pack v2, purpose/lifecycle trust-key, request-before-approval catalog-verification, multiple install-time profile, runtime profile, resource lease, and authenticated local-gateway contracts; pinned Qwen3-4B ran through llama.cpp on Windows CUDA, Ubuntu WSL CPU, and the actual Luma gateway, but remains an unsigned development asset and no protected production ceremony exists |
+| MVP-011 | Local model integration | Partial | Signed model-pack v2, root-signed public trust, exact anchored catalog admission, request-before-approval verification, multiple install-time profiles, runtime profile, resource lease, and authenticated local-gateway contracts; catalog revalidation binds retained pack-verification snapshots rather than live-reading pack/runtime/certification state. Pinned Qwen3-4B ran through llama.cpp on Windows CUDA, Ubuntu WSL CPU, and the actual Luma gateway, but remains an unsigned development asset and no protected production ceremony exists |
 | MVP-012 | No-model/manual degradation | Implemented | Deterministic vertical slice remains usable when model is absent |
 | MVP-013 | Stable local API and schemas | Partial | OpenAPI/JSON schemas provided; compatibility is pre-stable in `0.1.x` |
 | MVP-014 | Privacy and permission visibility | Partial | Grant scope/revocation and local state are visible; no complete privacy dashboard or DLP |
@@ -45,7 +47,7 @@ Status meanings:
 | MVP-016 | Windows deployment variation | Partial | Current native Windows is a development/smoke lane and WSL2 is the Linux development lane; no native service/installer, Windows broker, VM, or dual-boot parity |
 | MVP-017 | Dependency-free automated testing | Implemented | Standard-library compile, unittest, metadata, verified governing-source/registry checks, gate report, and source-package checks |
 | MVP-018 | Operational and security documentation | Implemented | Architecture, threat model, operations, support matrix, security policy |
-| MVP-019 | Installer safety boundary | Partial | Non-destructive inventory, explicit multi-model/manual-only selection, RAM/VRAM/storage/runtime checks, digest-bound plan, confirmation, effect-time revalidation, capability, and journal contracts; no real disk discovery, partitioning, formatting, encryption, or installation |
+| MVP-019 | Installer safety boundary | Partial | Non-destructive inventory, explicit multi-model/manual-only selection, RAM/VRAM/storage/runtime checks, and schema-v3 raw offline-source/catalog/trust revalidation are bound through plan, confirmation, capability, and journal contracts; the caller pin and receipt are not governance, referenced artifact bytes are not verified, and there is no real disk discovery, partitioning, formatting, encryption, or installation |
 | MVP-020 | A/B update and recovery control | Partial | Pure authenticated state-transition model with trial/fallback and power-loss reconciliation rules; no real boot, UKI, dm-verity, firmware, or slot I/O |
 | MVP-021 | Privileged helper and confinement boundary | Partial | Closed typed actions with peer/authority/device/certificate/confinement binding plus SQLite request/effect ledgers, owner/generation fencing, crash-state reconciliation, completion binding, and keyed safe-handle commitments; no privileged daemon, native ACL/DACL, cgroup/AppArmor/seccomp/KVM, peer-credential enforcement, protected key custody, or external rollback anchor |
 
@@ -57,7 +59,7 @@ Status meanings:
 | Multiple install-time model sizes | Development-contract partial | Schema and installer contracts recognize explicit manual-only/CPU/CUDA profiles, exact total/active counts through 405B, fail-closed hardware/resource eligibility, and bounded detached catalog verification; no actual signed production catalog, protected custody ceremony, or physical installer exists |
 | 400–405B placement/load and A2 profiles | Documented taxonomy and deferred hardware test | No suitable hardware/assets or large-model certification; 450B is outside the governing sources and requires change control |
 | Native Ubuntu “OS” experience | Deferred | Local application on Ubuntu, not a distribution, shell, kernel, or boot image |
-| G2 Ubuntu platform alpha | Development-contract partial; formal certification blocked | The expanded 128-test safety/catalog/admission boundary passes on native Windows and Ubuntu WSL under normal and optimized-Python execution, and the operator qualification package is prepared but unexecuted. No actual signed production catalog/custody ceremony, physical installer, boot chain, encrypted storage, kernel confinement, native ACL/DACL qualification, power-loss run, external rollback anchor, protected ledger-key custody, or two-board qualification exists |
+| G2 Ubuntu platform alpha | Development-contract partial; formal certification blocked | The evolving safety/catalog/Admin/source/admission suites are exercised on native Windows and Ubuntu WSL under normal and optimized-Python execution, with a final current-tranche integrated green rerun still required; the operator qualification package is prepared but unexecuted. No actual signed production catalog/custody ceremony, authenticated production Admin service, governed source pin with consumed-artifact verification, physical installer, boot chain, encrypted storage, kernel confinement, native ACL/DACL qualification, power-loss run, rollback-resistant external anchor, protected ledger/HMAC-key custody, or two-board qualification exists |
 | Dual boot | Unsupported | No partitioning, bootloader, installer, or recovery tooling |
 | Windows native deployment | Deferred | WSL2 is the supported Windows developer route |
 | VM deployment | Unsupported | Source may be manually used in a VM; no image/lifecycle/support claim |
@@ -82,13 +84,16 @@ Qwen3 smoke on native Windows CUDA and Ubuntu WSL CPU and an authenticated
 loopback call through the Luma resource, policy, lease, and gateway path. This
 is real development execution but remains unsigned, non-closing evidence.
 
-The current G2 development record additionally includes 128 tests under normal
-and optimized Python on both native Windows and Ubuntu WSL, across
+The current G2 development record additionally includes normal and optimized
+Python runs on both native Windows and Ubuntu WSL across
 `tests/test_installer.py`, `tests/test_boot_control.py`, and
 `tests/test_privileged_helper.py`, plus `tests/test_durable_effects.py`,
 `tests/test_model_pack.py`, `tests/test_model_selection.py`,
-`tests/test_model_catalog_signing.py`, `tests/test_g2_host_inventory.py`, and
-`tests/test_ubuntu_preflight.py`. The
+`tests/test_model_catalog_signing.py`, `tests/test_signing_trust.py`,
+`tests/test_catalog_admission.py`, `tests/test_durable_administration.py`,
+`tests/test_installation_source.py`, `tests/test_g2_host_inventory.py`, and
+`tests/test_ubuntu_preflight.py`. Totals remain intentionally unstated while
+the G2 tranche is changing. The
 durable suite covers `PREPARED`, `APPLYING`, `COMPLETED`, and `FAILED_UNKNOWN`
 crash boundaries, owner/generation fencing, fail-fast dispatch CAS, semantic
 post-CAS current-state validation, safe known-not-applied restoration and
@@ -109,9 +114,19 @@ The standalone visual simulator does not call the reference runtime, so simulato
 - accessibility and cross-browser verification;
 - performance/resource limits and concurrency characterization;
 - model/tool isolation, provenance, and licensing controls;
+- fresh production pack/runtime/certification verification and catalog
+  re-admission when those inputs change; retained tuple records are not live
+  artifact or loadability evidence;
 - protected production signing custody despite the accepted Admin governance model;
-- remote/multi-user architecture, if ever authorized; and
+- an authenticated, process-isolated production Admin writer/identity service,
+  protected HMAC secrets, trusted time, rollback-resistant external anchors,
+  a unique deployment/service domain for the single authoritative log, and an
+  operator-reviewed reconciliation procedure; multi-store replication/domain
+  separation is not implemented;
+- governed offline-release descriptor pins and independent signature/digest
+  verification of every image, payload, package, metadata, and SBOM byte
+  actually consumed;
+- remote/multi-user architecture, if ever authorized;
 - installation/recovery engineering appropriate to any true OS distribution;
-  and
 - real G2 installer, UKI/dm-verity A/B boot, LUKS, cgroup/AppArmor/seccomp/KVM,
   privileged service, peer-credential, power-loss, and two-board qualification.

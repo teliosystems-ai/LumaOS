@@ -1,0 +1,42 @@
+{
+  "schema_version": 1,
+  "record_id": "G2-ARCHIVE-ATTESTATION-2026-09-23-003",
+  "recorded_on": "2026-09-23",
+  "gate": "G2",
+  "owner": "release-lead",
+  "code_commit": "0d7685aaaec2301b9340b710061a447cd3569b83",
+  "release_source_commit": "0e386589f43d836ce6ea33edba24b79ed3f2d11b",
+  "purpose": "Detached two-build release-archive identity and reproducibility attestation",
+  "release_archive_inclusion": "excluded-to-prevent-self-referential-archive-hashes",
+  "archive_input_policy": "canonical-committed-git-blobs-with-explicit-executable-modes",
+  "archive_format_policy": "deterministic-stored-gzip-and-zip-without-runtime-zlib-compression",
+  "executable_release_files": [
+    "packaging/systemd/install-user-service.sh",
+    "scripts/build_release.py",
+    "scripts/check.py",
+    "scripts/install-user.sh",
+    "scripts/run.sh",
+    "scripts/uninstall-user.sh"
+  ],
+  "file_count": 153,
+  "source_date_epoch": 0,
+  "builds": 2,
+  "first_build": {
+    "lane": "Windows 11 native build 26200, Python 3.14.4",
+    "tar_gz_size_bytes": 3778868,
+    "tar_gz_sha256": "107e1fd8d6d714777a6bcc754ea401a527ad0b590788352e12927f75a940a475",
+    "zip_size_bytes": 3675905,
+    "zip_sha256": "0022af0e57db0ebee7f38bfc9a17968a7865fdc1478f4c85eb3b9482c4a5f2bc"
+  },
+  "second_build": {
+    "lane": "Ubuntu 26.04 WSL2, Python 3.14.4",
+    "tar_gz_size_bytes": 3778868,
+    "tar_gz_sha256": "107e1fd8d6d714777a6bcc754ea401a527ad0b590788352e12927f75a940a475",
+    "zip_size_bytes": 3675905,
+    "zip_sha256": "0022af0e57db0ebee7f38bfc9a17968a7865fdc1478f4c85eb3b9482c4a5f2bc"
+  },
+  "checksum_verification": "pass",
+  "status": "verified-reproducible",
+  "claim_boundary": "This detached record is excluded from the release archive, preventing its measured identities from changing the artifacts it attests. Native Windows and Ubuntu WSL independently packaged the 153 canonical files from release_source_commit with the declared executable modes and produced byte-identical tar.gz and ZIP artifacts. The generated SHA256SUMS values matched independent SHA-256 measurements, and extracted Git-less tar.gz and ZIP self-checks each passed 222 tests on native Windows. This is development reproducibility evidence, not G2 certification.",
+  "gate_closing": false
+}

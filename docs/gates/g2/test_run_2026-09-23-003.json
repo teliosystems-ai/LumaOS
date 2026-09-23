@@ -1,0 +1,102 @@
+{
+  "schema_version": 1,
+  "record_id": "G2-TEST-2026-09-23-003",
+  "recorded_on": "2026-09-23",
+  "owner": "qa-lead",
+  "code_commit": "0d7685aaaec2301b9340b710061a447cd3569b83",
+  "release_source_commit": "0e386589f43d836ce6ea33edba24b79ed3f2d11b",
+  "environment": "DEV-WIN-WSL-GPU-01",
+  "additional_environments": [
+    "DEV-WSL-UBUNTU-26-01"
+  ],
+  "physical_host_count": 1,
+  "command": "Windows native: python -W error scripts/check.py; Ubuntu WSL: python3 -W error scripts/check.py",
+  "additional_commands": [
+    "Windows native: python -W error scripts/check.py (222 run, 0 failed, 4 skipped)",
+    "Ubuntu WSL: python3 -W error scripts/check.py (222 run, 0 failed, 1 skipped)",
+    "Windows native optimized: python -O -W error -m unittest tests.test_boot_control tests.test_installer tests.test_privileged_helper tests.test_durable_effects tests.test_model_pack tests.test_model_selection tests.test_g2_host_inventory tests.test_model_catalog_signing tests.test_ubuntu_preflight (128 run, 0 failed)",
+    "Ubuntu WSL optimized: python3 -O -W error -m unittest tests.test_boot_control tests.test_installer tests.test_privileged_helper tests.test_durable_effects tests.test_model_pack tests.test_model_selection tests.test_g2_host_inventory tests.test_model_catalog_signing tests.test_ubuntu_preflight (128 run, 0 failed)",
+    "Ubuntu WSL: bash -n scripts/*.sh packaging/systemd/*.sh and bash scripts/run.sh --help (exit 0)",
+    "Ubuntu WSL: collect_g2_host.py followed by ubuntu_preflight.py --mode development (pass-development-preflight; read_only=true; certification_closing=false)",
+    "SOURCE_DATE_EPOCH=0 scripts/build_release.py from release_source_commit: native Windows first build and Ubuntu WSL second build (153 files; byte-identical tar.gz and ZIP)",
+    "Native Windows extracted tarball and ZIP without Git metadata or detached sidecars: python -W error scripts/check.py (222 run per archive, 0 failed, 4 skipped)",
+    "Detached first/second archive identities and checksum comparison are recorded in docs/gates/g2/archive_attestation_2026-09-23-003.json"
+  ],
+  "result": "pass-development-contracts",
+  "development_assessment": "in-progress",
+  "certification_assessment": "blocked",
+  "checks": {
+    "python_modules_compiled": 31,
+    "json_schemas_parsed": 8,
+    "unit_tests_run_per_lane": 222,
+    "unit_tests_run": 222,
+    "unit_test_lanes": 2,
+    "unit_test_executions": 444,
+    "unit_tests_failed": 0,
+    "unit_tests_skipped": {
+      "ubuntu_wsl": 1,
+      "windows_native": 4
+    },
+    "optimized_boundary_tests_run_per_lane": 128,
+    "optimized_boundary_tests_run": 128,
+    "optimized_boundary_test_lanes": 2,
+    "optimized_boundary_test_executions": 256,
+    "optimized_boundary_tests_failed": 0,
+    "warnings_as_errors": true,
+    "requirement_entries_validated": 288,
+    "g2_requirements_in_progress": 20,
+    "g2_requirements_not_started": 14,
+    "g2_requirements_with_passing_product_evidence": 0,
+    "release_files_validated": 153,
+    "reproducible_source_builds": 2,
+    "archive_checksum_verification": "pass-detached-attestation",
+    "governing_source_state": "verified",
+    "gate_artifact_state": "development-in-progress; certification-blocked"
+  },
+  "wsl_live_preflight": {
+    "distribution": "Ubuntu 26.04 LTS",
+    "virtualization": "WSL2",
+    "kernel": "6.18.33.2-microsoft-standard-WSL2",
+    "python": "3.14.4",
+    "inventory_sha256": "f4af7a41ba70075b352801520a244f7f355fc4764236cb5fbedb13dfd743b35f",
+    "result": "pass-development-preflight",
+    "exit_ready": true,
+    "read_only": true,
+    "certification_closing": false,
+    "native_ubuntu_24_04_candidate": false,
+    "observations": [
+      "8,228,859,904 bytes of visible RAM",
+      "NVIDIA RTX 3050 Laptop GPU with 4 GiB VRAM and /dev/dxg",
+      "cgroup v2, systemd PID 1, and /dev/kvm visible",
+      "project checkout uses a Windows-backed 9p filesystem",
+      "AppArmor enforcement, UEFI/efivars, Secure Boot, and TPM are unavailable or unproven in WSL"
+    ],
+    "disk_policy": "all disks remained unclassified-never-auto-selected; no sensitive disk identifier or destructive authorization was emitted"
+  },
+  "archive_attestation": "docs/gates/g2/archive_attestation_2026-09-23-003.json",
+  "scope": [
+    "Python compilation, eight JSON schemas, and the expected 153-file release inventory",
+    "deterministic governing-source registry and gate report",
+    "non-destructive installer planning, authorization, capability, and durable-attempt contracts",
+    "schema-v2 model packs and exact install-time manual-only, CPU, or CUDA profile selection with resource-fit and effect-time revalidation",
+    "bounded signed-catalog request, approval, custody-separation, signature, trust-lifecycle, rollback, and exact-artifact verification contracts without private keys",
+    "read-only Ubuntu host inventory and live-corroborated development/native-candidate admission with WSL structurally non-closing",
+    "authenticated A/B trial-boot and fallback state contract",
+    "typed privileged-helper, confinement, authorization, device, and replay contract",
+    "bounded authenticated SQLite request and idempotent effect ledgers with helper integration",
+    "normal and optimized-Python execution on the exact release-source commit in native Windows and Ubuntu WSL",
+    "two cross-platform source-archive builds with detached, non-self-referential archive attestation"
+  ],
+  "limitations": [
+    "Native Windows and Ubuntu 26.04 WSL are development lanes on one laptop, not the required E1 and E2 physical Ubuntu 24.04 boards.",
+    "The Qwen3-4B artifact is external, unsigned, and observed only in bounded development smoke; the Gemma 4 candidates were not executed, and no signed production model catalog, protected custody ceremony, or base-image model pack exists.",
+    "The catalog contract does not supply a root-signed trust loader, durable Admin event adapter, concrete production Ed25519/HSM integration, durable external rollback anchor, or signed model-pack/certification artifacts.",
+    "Disk, boot, anchor, attestation, confinement, device-capability, and physical-effect adapters remain injected contracts or fakes; no destructive or privileged host action was performed.",
+    "The live WSL preflight cannot prove native firmware, Secure Boot, TPM/LUKS recovery, AppArmor enforcement, physical disk identity, KVM isolation, or native Ubuntu 24.04 behavior.",
+    "SQLite request/effect ledgers were exercised on development files only and cannot make an external host mutation transactional; ambiguous applying state still requires a trusted production reconciler.",
+    "No signed Ubuntu image, UKI, dm-verity root, LUKS2 recovery, physical trial boot, cgroup/AppArmor/seccomp enforcement, KVM microVM, production peer-credential service, or physical power-loss fixture was tested.",
+    "This test record and the measured archive attestation are detached repository evidence excluded from the release archive to avoid self-reference; the archive remains self-checking without either sidecar.",
+    "This passing record advances G2 development and is not a formal G2 pass or acceptance result for any of the 34 requirements."
+  ],
+  "gate_closing": false
+}

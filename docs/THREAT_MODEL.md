@@ -19,7 +19,8 @@ fitness. G2 development is in progress and formal certification is blocked.
 - Admin role definitions, assignments, revocations, and delegation receipts;
 - model-pack trust metadata and certification records;
 - installer inventory/plan/confirmation/attempt records, A/B boot-state records,
-  and privileged-helper requests, trust decisions, journals, and receipts; and
+  and privileged-helper requests, trust decisions, SQLite request/effect
+  ledgers, and receipts; and
 - integrity and availability of the operator's machine.
 
 ## Trust zones
@@ -38,7 +39,7 @@ fitness. G2 development is in progress and formal certification is blocked.
 | Logical internal services | Caller assertions are untrusted without OS-peer authentication | Bounded, deadline-bearing local IPC envelope |
 | G2 installer contract | Inventory, confirmation, and requested target are untrusted until bound and revalidated | Pure preflight/authorization/capability/journal boundary; injected discovery and executor |
 | G2 boot-state contract | Restored state and external boot/health/data claims are untrusted | Pure authenticated, monotonic-anchored transition boundary with injected evidence oracles |
-| G2 privileged-helper contract | Wire requests and caller assertions are untrusted | Closed typed actions with injected peer authentication, authority, device/certificate, confinement, journal, and executor boundaries |
+| G2 privileged-helper contract | Wire requests, caller assertions, adapter results, and restored ledger rows are untrusted | Closed typed actions with injected peer authentication, authority, device/certificate, confinement, bounded SQLite request/effect ledgers, keyed row integrity, and typed executor/reconciler boundaries |
 | External network | Untrusted and unnecessary for default operation | No supported listener or dependency |
 
 The host OS, Python runtime, browser, WSL distribution, and administrator/root account are outside the security boundary. A compromise of any of them can bypass application controls.
@@ -69,9 +70,9 @@ compromised Windows Administrator or Linux `root` account safe.
 | Cross-site request forgery | Local session binding and mutating-request checks | Browser/profile compromise bypasses application controls |
 | Prompt/model injection | Model output treated as untrusted; deterministic validation and policy remain authoritative | A future adapter may introduce unsafe use if it bypasses validation |
 | Model endpoint exfiltrates data | No endpoint by default; operator configuration required; minimize sent context | Configured endpoint is a separate trust decision and may retain prompts |
-| Duplicate or replayed effects | Owner-scoped idempotency keys, stored request hashes, state transitions, receipts | Incorrectly chosen keys can cause intended requests to collide |
-| Partial write or process crash | SQLite transactions/WAL, atomic object commits, durable workflow state | Power/filesystem failure can still corrupt local storage; backups remain necessary |
-| Receipt tampering | Application-level append-only triggers; receipts linked to workflow/effect | Not externally signed; filesystem owner/root can alter or replace database |
+| Duplicate or replayed effects | Request-derived idempotency keys, request/effect semantic binding, owner/generation compare-and-swap fencing, immutable completion records, and no automatic redispatch after `APPLYING` | Incorrectly chosen caller request IDs can still cause intended requests to collide; external mutations are not made transactional by SQLite |
+| Partial write or process crash | SQLite transactions/WAL, atomic object commits, durable workflow state, and explicit `PREPARED`/`APPLYING`/`COMPLETED`/`FAILED_UNKNOWN` effect states | Only `PREPARED` proves no adapter entry and is safe to reclaim; `APPLYING` or `FAILED_UNKNOWN` requires action-specific reconciliation, and physical power/filesystem failure remains unqualified |
+| Receipt or ledger tampering | Application-level append-only receipt triggers, semantic completion binding, and keyed integrity tags over request/effect ledger rows | No rollback-resistant external anchor, protected integrity-key custody, encrypted store, or certified ACL/DACL; filesystem owner/root can delete or roll back the database |
 | Leakage through logs/errors | Structured public errors, no secrets in repository, local-only operation | Source paths and workflow metadata may still be sensitive on the local account |
 | Malicious repository change | CI compile/tests/manifest checks, dependency-free runtime, review guidance | Maintainer credentials and GitHub platform remain external risks |
 | Installer overwrites user files | User-only exact paths, install marker, refuse existing unmarked launcher, no sudo | A user can force unsafe manual changes outside scripts |
@@ -84,7 +85,8 @@ compromised Windows Administrator or Linux `root` account safe.
 | Internal IPC spoofing or memory exhaustion | Four-byte bounded framing, strict fields, asserted-caller/peer comparison, deadlines, lease generations | Real Unix peer-credential plumbing and process isolation remain unimplemented |
 | Installer target substitution or stale confirmation | Stable disk identity, immutable inventory digest, plan/confirmation binding, effect-time revalidation, exact device capability, replay and in-doubt journal rules | Pure non-destructive contract only; no real disk discovery, OS device handle, installer executor, or destructive race testing |
 | A/B state rollback, fork, or false health acknowledgement | Authenticated state, monotonic anchor, hash-chained operations, generation/fence ownership, trusted boot observations, attempt-bound health, and fallback-readability oracle | Pure state machine only; no firmware variables, slot I/O, UKI/dm-verity/LUKS, physical boot, or induced power loss |
-| Privileged-helper argument, authority, device, or confinement substitution | Closed schemas/actions, current peer and deadline checks, exact authority/device/driver binding, trusted confinement attestation, durable idempotency and reconciliation | Injected test doubles only; no privileged process or cgroup/AppArmor/seccomp/KVM/OS peer-credential enforcement |
+| Privileged-helper argument, authority, device, handle, or confinement substitution | Closed schemas/actions; current peer/deadline checks; exact authority/device/driver binding; trusted confinement attestation; validation before and after durable preparation; CSPRNG-issued 256-bit safe handles whose raw tokens are not persisted and whose ledger projection uses keyed commitments; and completion-to-effect binding | The persisted authorization digest remains safe against guessing only under the mandatory high-entropy handle contract. Injected test doubles provide no privileged process, native handle provenance, native ACL/DACL, cgroup/AppArmor/seccomp/KVM, or OS peer-credential enforcement |
+| Crash, suspension, contention, or capacity pressure around privileged adapter entry | `PREPARED` is safely reclaimable by generation-fenced CAS; a nonblocking CAS commits `APPLYING`; current authority is sampled again after that CAS; a proven-not-applied rejection is restored to `PREPARED`; pre-effect capacity exhaustion remains retryable; `APPLYING` is never automatically redispatched; typed reconciliation alone may establish `COMPLETED` | No external transaction spans SQLite and the host effect, and in-process checking cannot replace capability enforcement inside the production adapter/OS boundary; a crash after `APPLYING` can remain permanently `FAILED_UNKNOWN`, and process-kill/power-loss behavior is not physically qualified |
 | Cancellation races | Workflow state checks before effect commits and DAG cooperative cancellation/checkpoint rules | A handler that ignores the contract can still perform an external effect; production workers require isolation and termination tests |
 
 ## High-risk extension points
@@ -103,6 +105,9 @@ The following changes require explicit design and security review before merge:
 - exposing signing material to the model/runtime or removing actor/input/key binding from signing receipts;
 - allowing internal messages without authenticated OS-peer binding or bounded framing;
 - allowing a backend to allocate or infer without a current generation-fenced lease;
+- weakening privileged-effect generation/CAS fencing, redispatching an
+  `APPLYING`/`FAILED_UNKNOWN` effect, persisting a raw safe-handle token, or
+  accepting completion metadata that is not bound to the stored effect;
 - serving multiple users or accepting an asserted remote identity; and
 - replacing append-only local receipts with claims of compliance/audit certification.
 
@@ -135,7 +140,11 @@ Automated tests should cover:
   and power-loss reconciliation transitions; and
 - privileged-helper malformed request, peer/authority/device/certificate/
   confinement substitution, expiry/revocation, replay, concurrency, and restart
-  reconciliation cases.
+  reconciliation cases;
+- durable helper crash windows before and after `PREPARED`, `APPLYING`, and
+  adapter completion; owner/generation reuse, SQLite lock contention, clock
+  rollback, row tampering, wrong integrity key, safe-handle disclosure, forged
+  completion, and request/effect semantic-substitution cases.
 
 ## Data retention and deletion
 
@@ -151,6 +160,9 @@ or cluster security. In particular, the G2 contracts do not claim real disk or
 boot effects, UKI/dm-verity/LUKS, cgroup/AppArmor/seccomp/KVM enforcement, a
 privileged daemon, or operating-system peer authentication. A 450B profile is
 outside the current governing requirement range and would require requirements
-change control.
+change control. The SQLite helper ledgers are not a certified substitute: they
+have no protected integrity-key custody, encrypted/native-ACL-qualified store,
+rollback-resistant external anchor, induced power-loss evidence, external
+process-kill matrix, or physical effect-adapter qualification.
 
 Report suspected vulnerabilities using [SECURITY.md](../SECURITY.md), not a public issue.

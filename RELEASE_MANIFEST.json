@@ -141,6 +141,7 @@
     "src/luma_os/cli.py",
     "src/luma_os/config.py",
     "src/luma_os/db.py",
+    "src/luma_os/durable_effects.py",
     "src/luma_os/errors.py",
     "src/luma_os/fake_inference.py",
     "src/luma_os/grants.py",
@@ -167,6 +168,7 @@
     "tests/test_contract_files.py",
     "tests/test_control_boundaries.py",
     "tests/test_core.py",
+    "tests/test_durable_effects.py",
     "tests/test_inference_gateway.py",
     "tests/test_installer.py",
     "tests/test_ipc.py",
@@ -184,6 +186,14 @@
     "web/app.js",
     "web/index.html",
     "web/styles.css"
+  ],
+  "executable_release_files": [
+    "packaging/systemd/install-user-service.sh",
+    "scripts/build_release.py",
+    "scripts/check.py",
+    "scripts/install-user.sh",
+    "scripts/run.sh",
+    "scripts/uninstall-user.sh"
   ],
   "required_release_files": [
     "README.md",
@@ -248,6 +258,8 @@
     "models",
     "weights",
     "docs/Requirements.zip",
+    "docs/gates/g2/test_run_2026-09-23.json",
+    "docs/gates/g2/archive_attestation_2026-09-23.json",
     "data",
     "var",
     "__pycache__"

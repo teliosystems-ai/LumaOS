@@ -85,6 +85,42 @@ GATE_REQUIREMENTS: dict[str, list[str]] = {
 }
 
 
+# Repository-local development evidence is deliberately distinct from product
+# acceptance evidence.  A requirement appears here only when a checked-in G2
+# contract directly prepares that requirement; its latest product-evidence
+# state remains blocked until the governed physical procedure passes.
+G2_DEVELOPMENT_EVIDENCE: dict[str, tuple[str, ...]] = {
+    **{
+        requirement_id: ("G2-EV-001",)
+        for requirement_id in ("FR02", "FR03", "A001", "A002", "A108")
+    },
+    **{
+        requirement_id: ("G2-EV-002",)
+        for requirement_id in (
+            "FR05",
+            "FR07",
+            "NF18",
+            "A005",
+            "A104",
+            "A105",
+            "A106",
+            "A110",
+            "Q15",
+        )
+    },
+    **{
+        requirement_id: ("G2-EV-003",)
+        for requirement_id in ("A113", "A114", "A115", "A116", "A118")
+    },
+}
+
+G2_DEVELOPMENT_EVIDENCE["A115"] = (
+    *G2_DEVELOPMENT_EVIDENCE["A115"],
+    "G2-EV-005",
+)
+G2_DEVELOPMENT_EVIDENCE_AS_OF = "2026-09-23"
+
+
 GATE_DATA: dict[str, dict[str, Any]] = {
     "G1": {
         "release": "A1",
@@ -575,6 +611,7 @@ def build_registry(source_record: dict[str, Any]) -> dict[str, Any]:
         gate_data = GATE_DATA[gate]
         source_id = SOURCE_BY_FAMILY[family]
         source_fields = source_requirements[requirement_id]
+        development_evidence_ids = list(G2_DEVELOPMENT_EVIDENCE.get(requirement_id, ()))
         if source_fields["source_id"] != source_id:
             raise AssertionError(f"{requirement_id} resolved to the wrong governing source")
         if requirement_id == "A077":
@@ -601,7 +638,9 @@ def build_registry(source_record: dict[str, Any]) -> dict[str, Any]:
                 "owner_status": "planned_gate_owner",
                 "dependencies": [source_id, *gate_data["dependencies"]],
                 "implementation_status": (
-                    "in_progress" if gate in {"G1", "G2"} else "not_started"
+                    "in_progress"
+                    if gate == "G1" or development_evidence_ids
+                    else "not_started"
                 ),
                 "test_ids": test_ids,
                 "test_mapping_status": test_mapping_status,
@@ -622,13 +661,25 @@ def build_registry(source_record: dict[str, Any]) -> dict[str, Any]:
                 "latest_evidence": {
                     "state": "blocked",
                     "reason": (
-                        f"{source_id} source traceability is verified, but no product execution "
-                        "or acceptance evidence is attached; plan-derived assignments do not "
-                        "close the requirement."
+                        (
+                            "Repository-local development contract evidence is attached, but it "
+                            "is non-closing and no governed product acceptance result exists; "
+                            "the physical requirement remains blocked."
+                        )
+                        if development_evidence_ids
+                        else (
+                            f"{source_id} source traceability is verified, but no product execution "
+                            "or acceptance evidence is attached; plan-derived assignments do not "
+                            "close the requirement."
+                        )
                     ),
                     "owner": "requirements-and-release-owner",
-                    "as_of": source_record["recorded_at"],
-                    "evidence_ids": [],
+                    "as_of": (
+                        G2_DEVELOPMENT_EVIDENCE_AS_OF
+                        if development_evidence_ids
+                        else source_record["recorded_at"]
+                    ),
+                    "evidence_ids": development_evidence_ids,
                 },
             }
         )

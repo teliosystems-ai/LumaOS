@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "register": "adversarial-tests",
-  "recorded_on": "2026-09-22",
+  "recorded_on": "2026-09-23",
   "owner": "security-lead",
   "fixture_policy": "Use synthetic public cases where possible. Sensitive exploit corpora and private samples remain outside Git with digest-only references.",
   "cases": [
@@ -158,6 +158,23 @@
         "tests/test_boot_control.py"
       ],
       "limitations": "Only a pure state machine and injected authentication, anchor, observation, and data-readability oracles were tested. No UKI, dm-verity, LUKS, firmware variable, physical slot, boot, or induced power-loss behavior was exercised."
+    },
+    {
+      "id": "ADV-012",
+      "title": "Privileged-effect ledger tampering, stale ownership, or forged completion",
+      "target_gate": "G2",
+      "owner": "security-lead",
+      "status": "development-contract-partial",
+      "target": "SQLite request journal and privileged-effect ledger",
+      "expected_invariant": "A changed request/effect, stale owner or generation, invalid keyed row tag, malformed or substituted safe handle, post-CAS stale authority, and completion not semantically bound to the stored effect fail closed without adapter redispatch; a proven-not-applied denial returns to PREPARED.",
+      "fixture": "generated",
+      "evidence": [
+        "src/luma_os/durable_effects.py",
+        "src/luma_os/privileged_helper.py",
+        "tests/test_durable_effects.py",
+        "tests/test_privileged_helper.py"
+      ],
+      "limitations": "The keyed integrity and handle-commitment contracts are application-level tests with injected adapters. Integrity-key custody, native ACL/DACL enforcement, database deletion or rollback resistance, OS peer credentials, and physical host effects remain untested."
     }
   ]
 }

@@ -28,19 +28,36 @@ All notable changes to Luma OS are documented here. The format follows [Keep a C
   generation/fence checks, health and data-readability evidence, trial failure,
   and power-loss reconciliation transitions.
 - Typed privileged-helper, authority, device, driver-certificate, confinement,
-  idempotency, and reconciliation contracts, covered together with the
-  installer and boot-state modules by 49 safety tests under normal and
-  optimized-Python execution.
+  idempotency, and reconciliation contracts.
+- SQLite-backed request and privileged-effect ledgers with keyed record
+  integrity, bounded capacity and clock-rollback checks, owner/generation
+  fencing, `PREPARED`/`APPLYING`/`COMPLETED`/`FAILED_UNKNOWN` crash semantics,
+  completion binding, and no automatic redispatch of an ambiguous effect.
+- Mandatory current-state validation around durable preparation, a fail-fast
+  `APPLYING` compare-and-swap immediately before typed adapter entry, and
+  high-entropy safe-handle capabilities whose raw tokens are not persisted;
+  the ledger stores keyed commitments, while the authorization digest relies
+  on the mandatory 256-bit CSPRNG contract. The four G2 contract modules have
+  71 safety tests passing on native Windows and Ubuntu WSL under normal and
+  optimized Python.
 
 The G2 work above is development-contract evidence only. It does not perform a
 real installation or boot and does not establish UKI, dm-verity, LUKS, cgroup,
-AppArmor, seccomp, KVM, or operating-system peer-credential enforcement.
+AppArmor, seccomp, KVM, operating-system peer credentials, native ACL/DACL
+enforcement, physical power-loss behavior, protected integrity-key custody, or
+rollback-resistant external anchoring.
 
 ### Fixed
 
 - Close the SQLite migration connection after initialization.
-- Exclude untracked working-tree files from deterministic source archives.
+- Build deterministic source archives from canonical committed blobs and an
+  explicit executable-file policy, excluding dirty or untracked host inputs
+  and runtime-dependent compression output.
 - Assign the `A077` platform-adapter requirement consistently to G1.
+- Revalidate current authority after the durable `APPLYING` transition and
+  restore a rejected, proven-not-applied attempt to `PREPARED` before retry.
+- Preserve effect-ledger capacity exhaustion as a known-not-applied helper
+  result instead of incorrectly fencing the request as outcome-unknown.
 
 ### Planned
 

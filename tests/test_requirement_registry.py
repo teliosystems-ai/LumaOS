@@ -149,6 +149,44 @@ class RequirementRegistryTests(unittest.TestCase):
             self.assertTrue(item["latest_evidence"]["reason"], item["id"])
             self.assertTrue(item["latest_evidence"]["owner"], item["id"])
 
+    def test_g2_progress_is_requirement_specific_and_non_closing(self) -> None:
+        g2_items = [
+            item for item in self.registry["requirements"] if item["closure_gate"] == "G2"
+        ]
+        statuses = Counter(item["implementation_status"] for item in g2_items)
+        self.assertEqual({"in_progress": 19, "not_started": 15}, dict(statuses))
+
+        untouched = {
+            "FR01",
+            "FR04",
+            "FR06",
+            "A003",
+            "A004",
+            "A006",
+            "A007",
+            "A008",
+            "A101",
+            "A102",
+            "A103",
+            "A107",
+            "A109",
+            "A111",
+            "A112",
+        }
+        self.assertEqual(
+            untouched,
+            {item["id"] for item in g2_items if item["implementation_status"] == "not_started"},
+        )
+        for item in g2_items:
+            evidence_ids = item["latest_evidence"]["evidence_ids"]
+            if item["id"] in untouched:
+                self.assertEqual([], evidence_ids, item["id"])
+                self.assertEqual("2026-09-22", item["latest_evidence"]["as_of"])
+            else:
+                self.assertTrue(evidence_ids, item["id"])
+                self.assertEqual("2026-09-23", item["latest_evidence"]["as_of"])
+            self.assertEqual("blocked", item["latest_evidence"]["state"], item["id"])
+
     def test_docx_extraction_matches_all_source_verified_registry_fields(self) -> None:
         extracted = extract_governing_requirements(self.sources)
         self.assertEqual(288, len(extracted))
@@ -208,7 +246,7 @@ class RequirementRegistryTests(unittest.TestCase):
         self.assertEqual(rendered, REPORT_PATH.read_text(encoding="utf-8"))
         self.assertIn("G0 governing-source traceability status: **VERIFIED**", rendered)
         self.assertIn("| G1 | 88 | 88 | 0 | 0 | 0 | 88 | BLOCKED |", rendered)
-        self.assertIn("| G2 | 34 | 34 | 0 | 0 | 0 | 34 | BLOCKED |", rendered)
+        self.assertIn("| G2 | 34 | 19 | 15 | 0 | 0 | 34 | BLOCKED |", rendered)
         self.assertIn("No product requirement is closed by this report.", rendered)
 
     def test_report_validation_rejects_duplicate_ids(self) -> None:

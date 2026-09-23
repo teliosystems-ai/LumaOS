@@ -1,22 +1,22 @@
 {
   "schema_version": 1,
-  "record_id": "G2-TEST-PLAN-2026-09-22-001",
+  "record_id": "G2-TEST-PLAN-2026-09-23-001",
   "gate": "G2",
-  "recorded_on": "2026-09-22",
+  "recorded_on": "2026-09-23",
   "owner": "qa-lead",
   "status": "development-in-progress",
   "gate_closing": false,
-  "claim_boundary": "This plan separates locally executable contract tests from physical Ubuntu OS acceptance. Passing fake-device, injected-adapter, native Windows, or Ubuntu WSL tests cannot satisfy a numbered procedure that requires signed media, physical boot, destructive storage, encryption recovery, kernel enforcement, or two A1 boards.",
+  "claim_boundary": "This plan separates locally executable contract and bounded SQLite durability tests from physical Ubuntu OS acceptance. Passing fake-device, injected-adapter, temporary SQLite, native Windows, or Ubuntu WSL tests cannot satisfy a numbered procedure that requires signed media, physical boot, destructive storage, encryption recovery, kernel enforcement, physical crash recovery, or two A1 boards.",
   "development_lanes": [
     {
-      "environment": "DEV-WIN-NATIVE-01",
+      "environment": "DEV-WIN-WSL-GPU-01",
       "purpose": "Cross-platform deterministic contract and concurrency tests",
-      "physical_machine": "LAB-LAPTOP-01"
+      "physical_machine": "DEV-WIN-WSL-GPU-01"
     },
     {
       "environment": "DEV-WSL-UBUNTU-26-01",
       "purpose": "Strict Linux/POSIX contract tests and non-destructive platform preparation",
-      "physical_machine": "LAB-LAPTOP-01"
+      "physical_machine": "DEV-WIN-WSL-GPU-01"
     }
   ],
   "contract_tranche": [
@@ -43,6 +43,18 @@
       "artifacts": ["src/luma_os/privileged_helper.py", "tests/test_privileged_helper.py"],
       "local_disposition": "typed boundary, trust-adapter, replay, and negative contract tests",
       "formal_disposition": "blocked-pending-real-peer-credentials-kernel-enforcement-and-qualified-isolation"
+    },
+    {
+      "area": "durable-sqlite-request-and-effect-ledgers",
+      "source_requirements": ["A115"],
+      "source_tests": ["T62"],
+      "artifacts": [
+        "src/luma_os/durable_effects.py",
+        "tests/test_durable_effects.py",
+        "tests/test_privileged_helper.py"
+      ],
+      "local_disposition": "bounded authenticated SQLite ledger, idempotency, crash-window, post-CAS revalidation/restoration, capacity-classification, and helper-integration tests",
+      "formal_disposition": "blocked-pending-protected-production-storage-and-physical-crash-power-loss-reconciliation"
     }
   ],
   "remaining_numbered_suite": [
@@ -63,5 +75,5 @@
     "complete vertical workflow from distributed media with missing-model, worker-crash, and failed-artifact-commit cases"
   ],
   "severity_rule": "Any unauthorized effect, secret disclosure, committed-data corruption, privilege escape, unrecoverable supported boot, host OOM, post-cancellation effect, or invalid resource reuse blocks the affected release.",
-  "formal_exit_rule": "G2 may pass only after T01-T16 and the complete vertical workflow pass on both physical A1 boards and every mandatory failure case preserves authorization and acknowledged content."
+  "formal_exit_rule": "G2 may pass only after T01-T16, applicable T27-T30, T33, T40, T45-T51, and T62; all mandatory physical, security, performance, lifecycle, and failure evidence; and the complete vertical workflow pass on both physical A1 boards while preserving authorization and acknowledged content."
 }

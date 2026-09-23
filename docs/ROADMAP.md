@@ -22,13 +22,24 @@ The first G2 tranche provides:
   acknowledgements, rollback, and power-loss reconciliation; and
 - a closed typed privileged-helper boundary for finite actions, current peer
   and authority checks, device/driver binding, confinement attestations,
-  idempotent execution, and restart reconciliation.
+  idempotent execution, and restart reconciliation; and
+- bounded SQLite request and privileged-effect ledgers with keyed integrity,
+  owner/generation fencing, semantically bound completions, safe takeover of
+  `PREPARED` work, a fail-fast transition into `APPLYING`, post-transition
+  current-state revalidation with safe known-not-applied restoration, no automatic
+  redispatch of ambiguous work, and action-specific reconciliation into
+  `COMPLETED` from `APPLYING` or `FAILED_UNKNOWN`. Raw safe-handle tokens are
+  not persisted: the ledger stores keyed commitments, and the remaining
+  authorization digest relies on mandatory 256-bit CSPRNG entropy.
 
-The tranche has 49 safety tests under normal and optimized-Python execution. It
-does not perform disk or firmware
-changes, boot a release, establish UKI/dm-verity/LUKS, or enforce cgroup,
-AppArmor, seccomp, KVM, or operating-system peer credentials. Those remain
-later implementation and physical-certification work.
+The four-module tranche has 71 safety tests passing on native Windows and
+Ubuntu WSL under normal and optimized-Python execution. It does not perform
+disk, firmware, or other privileged host changes, boot a release, establish
+UKI/dm-verity/LUKS, or enforce cgroup, AppArmor, seccomp, KVM, native ACL/DACL
+policy, or operating-system peer credentials. The two development lanes share
+one physical host. Protected integrity-key custody, power-loss testing, and a
+rollback-resistant external anchor also remain later implementation and
+physical-certification work.
 
 ## v0.1 — Developer MVP
 

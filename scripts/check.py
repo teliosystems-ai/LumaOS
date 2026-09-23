@@ -43,6 +43,9 @@ REQUIRED_SOURCE_DOCUMENTS = (
     "docs/Requirements/Option_Ubuntu_LLM_OS_Functional_Requirements_Development_Testing_4B_to_400B.docx",
 )
 GOVERNING_SOURCE_RECORD = "docs/governing_sources.json"
+G2_TEST_RUN = "docs/gates/g2/test_run_2026-09-23.json"
+G2_ARCHIVE_ATTESTATION = "docs/gates/g2/archive_attestation_2026-09-23.json"
+DETACHED_G2_EVIDENCE_FILES = (G2_TEST_RUN, G2_ARCHIVE_ATTESTATION)
 REQUIRED_GATE_FILES = (
     "docs/adr/0001-python-reference-rust-production.md",
     "docs/adr/0002-service-boundaries-and-transport.md",
@@ -85,11 +88,13 @@ REQUIRED_INVENTORY_FILES = (
     "scripts/smoke_local_model.py",
     "src/luma_os/administration.py",
     "src/luma_os/boot_control.py",
+    "src/luma_os/durable_effects.py",
     "src/luma_os/installer.py",
     "src/luma_os/privileged_helper.py",
     "src/luma_os/real_inference.py",
     "tests/test_administration.py",
     "tests/test_boot_control.py",
+    "tests/test_durable_effects.py",
     "tests/test_installer.py",
     "tests/test_privileged_helper.py",
     "tests/test_real_inference.py",
@@ -112,6 +117,14 @@ REQUIRED_RELEASE_INPUTS = {
 }
 FORBIDDEN_ASSET_SUFFIXES = {".gguf", ".safetensors", ".onnx", ".ckpt", ".pt", ".pth"}
 SOURCE_ARCHIVE_PATH = PurePosixPath("docs/Requirements.zip")
+EXPECTED_EXECUTABLE_RELEASE_FILES = {
+    "packaging/systemd/install-user-service.sh",
+    "scripts/build_release.py",
+    "scripts/check.py",
+    "scripts/install-user.sh",
+    "scripts/run.sh",
+    "scripts/uninstall-user.sh",
+}
 
 
 def report(label: str, detail: str = "") -> None:
@@ -162,6 +175,17 @@ def validate_metadata() -> None:
         raise RuntimeError("release manifest inventory entries must be non-empty strings")
     if len(set(release_files)) != len(release_files):
         raise RuntimeError("release manifest inventory must not contain duplicate paths")
+    executable_files = manifest.get("executable_release_files")
+    if (
+        not isinstance(executable_files, list)
+        or any(not isinstance(path, str) or not path for path in executable_files)
+        or len(set(executable_files)) != len(executable_files)
+        or set(executable_files) != EXPECTED_EXECUTABLE_RELEASE_FILES
+        or not set(executable_files).issubset(release_files)
+    ):
+        raise RuntimeError(
+            "release manifest must retain the exact executable release-file policy"
+        )
     missing_inventory_files = set(REQUIRED_INVENTORY_FILES) - set(release_files)
     if missing_inventory_files:
         raise RuntimeError(
@@ -172,6 +196,13 @@ def validate_metadata() -> None:
     exclusions = manifest.get("excluded_from_release")
     if not isinstance(exclusions, list) or SOURCE_ARCHIVE_PATH.as_posix() not in exclusions:
         raise RuntimeError("release manifest must explicitly exclude docs/Requirements.zip")
+    for detached_path in DETACHED_G2_EVIDENCE_FILES:
+        if detached_path in release_files:
+            raise RuntimeError("detached G2 evidence must not enter the release archive")
+        if detached_path not in exclusions:
+            raise RuntimeError(
+                f"release manifest must explicitly exclude detached evidence: {detached_path}"
+            )
     ignore_lines = {
         line.strip()
         for line in (ROOT / ".gitignore").read_text(encoding="utf-8").splitlines()
@@ -302,14 +333,64 @@ def validate_two_axis_gate_record(document: object, label: str) -> dict[str, obj
     return document
 
 
+def is_repository_checkout() -> bool:
+    """Return whether Git repository metadata is available."""
+
+    return (ROOT / ".git").exists()
+
+
+def detached_evidence_is_tracked() -> bool:
+    """Require detached evidence only after both sidecars enter the Git index."""
+
+    if not is_repository_checkout():
+        return False
+    try:
+        result = subprocess.run(
+            [
+                "git",
+                "ls-files",
+                "--cached",
+                "--full-name",
+                "-z",
+                "--",
+                *DETACHED_G2_EVIDENCE_FILES,
+            ],
+            cwd=ROOT,
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+    except OSError as exc:
+        raise RuntimeError(f"cannot inspect detached G2 evidence tracking: {exc}") from exc
+    if result.returncode:
+        detail = os.fsdecode(result.stderr).strip()
+        suffix = f": {detail}" if detail else ""
+        raise RuntimeError(f"cannot inspect detached G2 evidence tracking{suffix}")
+    tracked = {
+        os.fsdecode(path)
+        for path in result.stdout.split(b"\0")
+        if path
+    }
+    expected = set(DETACHED_G2_EVIDENCE_FILES)
+    if tracked and tracked != expected:
+        raise RuntimeError("detached G2 test and archive records must be tracked together")
+    return tracked == expected
+
+
 def validate_repository_reference(reference: object, label: str) -> None:
     path = PurePosixPath(reference) if isinstance(reference, str) else None
+    structurally_valid = (
+        path is not None and not path.is_absolute() and ".." not in path.parts
+    )
     if (
-        path is None
-        or path.is_absolute()
-        or ".." in path.parts
-        or not ROOT.joinpath(*path.parts).is_file()
+        structurally_valid
+        and reference in DETACHED_G2_EVIDENCE_FILES
+        and not detached_evidence_is_tracked()
     ):
+        return
+    if structurally_valid and ROOT.joinpath(*path.parts).is_file():
+        return
+    if not structurally_valid or not ROOT.joinpath(*path.parts).is_file():
         raise RuntimeError(f"{label} must reference an available repository file: {reference!r}")
 
 
@@ -479,14 +560,42 @@ def validate_gate_artifacts() -> None:
     g2_evidence_items = g2_evidence.get("items")
     if not isinstance(g2_evidence_items, list) or not g2_evidence_items:
         raise RuntimeError("G2 evidence must contain explicit items")
+    evidence_item_ids: set[str] = set()
+    prepared_evidence_by_requirement: dict[str, set[str]] = {}
     for item in g2_evidence_items:
         if not isinstance(item, dict) or item.get("gate_closing") is not False:
             raise RuntimeError("G2 development evidence must remain non-closing")
+        evidence_id = item.get("id")
+        if (
+            not isinstance(evidence_id, str)
+            or not evidence_id
+            or evidence_id in evidence_item_ids
+        ):
+            raise RuntimeError("G2 development evidence IDs must be present and unique")
+        evidence_item_ids.add(evidence_id)
+        prepared_requirements = item.get("requirements_prepared")
+        if not isinstance(prepared_requirements, list) or any(
+            not isinstance(requirement_id, str) for requirement_id in prepared_requirements
+        ):
+            raise RuntimeError("G2 evidence must explicitly list prepared requirements")
+        for requirement_id in prepared_requirements:
+            prepared_evidence_by_requirement.setdefault(requirement_id, set()).add(evidence_id)
         references = item.get("evidence")
         if not isinstance(references, list) or not references:
             raise RuntimeError("G2 evidence items must reference repository files")
         for repository_reference in references:
             validate_repository_reference(repository_reference, "G2 evidence reference")
+    if evidence_item_ids != {f"G2-EV-{index:03d}" for index in range(1, 6)}:
+        raise RuntimeError("G2 evidence must retain the five identified development items")
+    durable_item = next(
+        item for item in g2_evidence_items if item.get("id") == "G2-EV-005"
+    )
+    if (
+        durable_item.get("requirements_prepared") != ["A115"]
+        or durable_item.get("source_tests_prepared") != ["T62"]
+        or g2_evidence.get("validation_record") != G2_TEST_RUN
+    ):
+        raise RuntimeError("G2 durable-ledger evidence mapping is inconsistent")
 
     g2_test_plan = documents["docs/gates/g2/test_plan.json"]
     if (
@@ -494,11 +603,90 @@ def validate_gate_artifacts() -> None:
         or g2_test_plan.get("status") != "development-in-progress"
         or g2_test_plan.get("gate_closing") is not False
         or not isinstance(g2_test_plan.get("contract_tranche"), list)
-        or len(g2_test_plan["contract_tranche"]) != 3
+        or len(g2_test_plan["contract_tranche"]) != 4
         or not g2_test_plan.get("mandatory_physical_evidence")
         or not g2_test_plan.get("formal_exit_rule")
     ):
         raise RuntimeError("G2 test plan must preserve its development-only and physical-lab boundary")
+    inventory = documents["docs/gates/g0/lab_inventory.json"]
+    if not isinstance(inventory, dict):
+        raise RuntimeError("G0 lab inventory must be an object")
+    inventory_systems = inventory.get("systems")
+    if not isinstance(inventory_systems, list) or not inventory_systems:
+        raise RuntimeError("G0 lab inventory must identify the development host")
+    physical_host_ids = {
+        item.get("id")
+        for item in inventory_systems
+        if isinstance(item, dict) and isinstance(item.get("id"), str)
+    }
+    inventory_environment_ids = set(physical_host_ids)
+    for item in inventory_systems:
+        if not isinstance(item, dict):
+            continue
+        guests = item.get("guests")
+        if isinstance(guests, list):
+            inventory_environment_ids.update(
+                guest.get("id")
+                for guest in guests
+                if isinstance(guest, dict) and isinstance(guest.get("id"), str)
+            )
+    development_lanes = g2_test_plan.get("development_lanes")
+    if (
+        not isinstance(development_lanes, list)
+        or len(development_lanes) != 2
+        or any(
+            not isinstance(lane, dict)
+            or lane.get("environment") not in inventory_environment_ids
+            or lane.get("physical_machine") not in physical_host_ids
+            for lane in development_lanes
+        )
+        or len({lane.get("physical_machine") for lane in development_lanes}) != 1
+    ):
+        raise RuntimeError("G2 development lanes must map to the inventoried single physical host")
+    closure_rule = g2_test_plan.get("formal_exit_rule")
+    evidence_closure_rule = g2_evidence.get("closure_rule")
+    required_closure_tokens = (
+        "T01-T16",
+        "T27-T30",
+        "T33",
+        "T40",
+        "T45-T51",
+        "T62",
+        "both physical A1 boards",
+    )
+    if any(
+        not isinstance(rule, str)
+        or any(token not in rule for token in required_closure_tokens)
+        for rule in (closure_rule, evidence_closure_rule)
+    ):
+        raise RuntimeError("G2 closure rules must retain the complete numbered and two-board suite")
+
+    registry_document = json.loads(
+        (ROOT / "requirements/registry.json").read_text(encoding="utf-8")
+    )
+    registry_requirements = registry_document.get("requirements")
+    if not isinstance(registry_requirements, list):
+        raise RuntimeError("requirement registry must contain requirements")
+    g2_registry = {
+        item.get("id"): item
+        for item in registry_requirements
+        if isinstance(item, dict) and item.get("closure_gate") == "G2"
+    }
+    if len(g2_registry) != 34 or set(prepared_evidence_by_requirement) - set(g2_registry):
+        raise RuntimeError("G2 evidence must reference exactly known G2 requirements")
+    for requirement_id, registry_item in g2_registry.items():
+        latest_evidence = registry_item.get("latest_evidence")
+        expected_ids = prepared_evidence_by_requirement.get(requirement_id, set())
+        if (
+            not isinstance(latest_evidence, dict)
+            or set(latest_evidence.get("evidence_ids", [])) != expected_ids
+            or latest_evidence.get("state") != "blocked"
+            or registry_item.get("implementation_status")
+            != ("in_progress" if expected_ids else "not_started")
+        ):
+            raise RuntimeError(
+                f"G2 registry progress/evidence mapping is inconsistent for {requirement_id}"
+            )
 
     deferrals = documents["docs/gates/final_certification_deferrals.json"]
     if not isinstance(deferrals, dict):
@@ -633,9 +821,6 @@ def validate_gate_artifacts() -> None:
     ):
         raise RuntimeError("local model evidence must preserve both gateway smoke lanes")
 
-    inventory = documents["docs/gates/g0/lab_inventory.json"]
-    if not isinstance(inventory, dict):
-        raise RuntimeError("G0 lab inventory must be an object")
     hardware = inventory.get("required_reference_hardware")
     if not isinstance(hardware, dict) or hardware.get("a1_x86_64_boards_designated") != 0:
         raise RuntimeError("lab inventory must not claim unverified A1 reference boards")
@@ -686,44 +871,209 @@ def validate_gate_artifacts() -> None:
     ):
         raise RuntimeError("G1 repository test record carries stale source or gate dispositions")
 
-    g2_test_run = documents["docs/gates/g2/test_run_2026-09-22.json"]
+    historical_g2_run = documents["docs/gates/g2/test_run_2026-09-22.json"]
     if (
+        not isinstance(historical_g2_run, dict)
+        or historical_g2_run.get("result") != "pass-development-contracts"
+        or historical_g2_run.get("gate_closing") is not False
+        or historical_g2_run.get("code_commit")
+        != "4ec25b849b3db4363191532bdb06f42894e11253"
+        or historical_g2_run.get("environment") != "DEV-WSL-UBUNTU-26-01"
+        or historical_g2_run.get("additional_environments")
+        != ["DEV-WIN-NATIVE-01"]
+        or "archive_sha256" in historical_g2_run
+    ):
+        raise RuntimeError("historical G2 test record must remain pinned and non-closing")
+    historical_g2_checks = historical_g2_run.get("checks")
+    historical_g2_expected = {
+        "python_modules_compiled": 27,
+        "json_schemas_parsed": 5,
+        "unit_tests_run": 147,
+        "unit_test_lanes": 2,
+        "unit_test_executions": 294,
+        "unit_tests_failed": 0,
+        "optimized_boundary_tests_run": 49,
+        "optimized_boundary_tests_failed": 0,
+        "requirement_entries_validated": 288,
+        "g2_requirements_in_progress": 34,
+        "g2_requirements_with_passing_product_evidence": 0,
+        "release_files_validated": 130,
+        "reproducible_source_builds": 2,
+        "archive_checksum_verification": "pass",
+        "governing_source_state": "verified",
+        "gate_artifact_state": "development-in-progress; certification-blocked",
+    }
+    if not isinstance(historical_g2_checks, dict) or any(
+        historical_g2_checks.get(field) != expected
+        for field, expected in historical_g2_expected.items()
+    ):
+        raise RuntimeError("historical G2 test counts must remain an immutable snapshot")
+    detached_expected = detached_evidence_is_tracked()
+    detached_presence = [
+        (ROOT / path).is_file() for path in DETACHED_G2_EVIDENCE_FILES
+    ]
+    if detached_expected and not all(detached_presence):
+        raise RuntimeError("detached G2 test and archive records must be supplied together")
+    detached_available = detached_expected and all(detached_presence)
+    g2_test_run = (
+        json.loads((ROOT / G2_TEST_RUN).read_text(encoding="utf-8"))
+        if detached_available
+        else None
+    )
+    if detached_available and (
         not isinstance(g2_test_run, dict)
         or g2_test_run.get("result") != "pass-development-contracts"
+        or g2_test_run.get("development_assessment") != "in-progress"
+        or g2_test_run.get("certification_assessment") != "blocked"
         or g2_test_run.get("gate_closing") is not False
         or g2_test_run.get("code_commit") != implementation_commit
+        or g2_test_run.get("environment") != "DEV-WIN-WSL-GPU-01"
+        or g2_test_run.get("additional_environments")
+        != ["DEV-WSL-UBUNTU-26-01"]
+        or g2_test_run.get("physical_host_count") != 1
+        or g2_test_run.get("archive_attestation") != G2_ARCHIVE_ATTESTATION
     ):
-        raise RuntimeError("G2 repository test record must be passing, pinned, and non-closing")
-    g2_checks = g2_test_run.get("checks")
-    if not isinstance(g2_checks, dict):
-        raise RuntimeError("G2 repository test checks must be an object")
+        raise RuntimeError("current G2 test record must be passing, pinned, and non-closing")
+    g2_checks = g2_test_run.get("checks") if isinstance(g2_test_run, dict) else {}
+    if detached_available and not isinstance(g2_checks, dict):
+        raise RuntimeError("current G2 repository test checks must be an object")
+    g2_in_progress = sum(
+        item.get("implementation_status") == "in_progress"
+        for item in g2_registry.values()
+    )
+    g2_not_started = sum(
+        item.get("implementation_status") == "not_started"
+        for item in g2_registry.values()
+    )
+    g2_passing_product_evidence = sum(
+        isinstance(item.get("latest_evidence"), dict)
+        and item["latest_evidence"].get("state") == "pass"
+        for item in g2_registry.values()
+    )
+    boundary_test_files = (
+        "test_boot_control.py",
+        "test_installer.py",
+        "test_privileged_helper.py",
+        "test_durable_effects.py",
+    )
+    declared_boundary_count = sum(
+        len(
+            re.findall(
+                r"^\s+(?:async\s+)?def\s+test_[A-Za-z0-9_]*\s*\(",
+                (ROOT / "tests" / name).read_text(encoding="utf-8"),
+                re.MULTILINE,
+            )
+        )
+        for name in boundary_test_files
+    )
     current_evidence_counts = {
         "python_modules_compiled": len(list((ROOT / "src").rglob("*.py"))),
+        "json_schemas_parsed": len(list((ROOT / "schemas").glob("*.json"))),
+        "unit_tests_run_per_lane": declared_test_count,
         "unit_tests_run": declared_test_count,
         "requirement_entries_validated": 288,
+        "g2_requirements_in_progress": g2_in_progress,
+        "g2_requirements_not_started": g2_not_started,
+        "g2_requirements_with_passing_product_evidence": g2_passing_product_evidence,
         "release_files_validated": len(release_manifest.get("release_files", [])),
+        "optimized_boundary_tests_run_per_lane": declared_boundary_count,
+        "optimized_boundary_tests_run": declared_boundary_count,
     }
-    for field, expected_value in current_evidence_counts.items():
-        if g2_checks.get(field) != expected_value:
-            raise RuntimeError(
-                f"G2 repository test record {field} is stale: "
-                f"expected {expected_value}, found {g2_checks.get(field)!r}"
-            )
     if (
+        declared_test_count != 170
+        or declared_boundary_count != 71
+        or len(release_manifest.get("release_files", [])) != 132
+    ):
+        raise RuntimeError("current G2 repository test or release counts are stale")
+    if detached_available and any(
+            g2_checks.get(field) != expected
+            for field, expected in current_evidence_counts.items()
+    ):
+        raise RuntimeError("detached G2 repository test counts are stale")
+    if detached_available and (
         g2_checks.get("unit_test_lanes") != 2
         or g2_checks.get("unit_test_executions") != declared_test_count * 2
         or g2_checks.get("unit_tests_failed") != 0
-        or g2_checks.get("optimized_boundary_tests_run") != 49
+        or g2_checks.get("unit_tests_skipped")
+        != {"ubuntu_wsl": 1, "windows_native": 4}
+        or g2_checks.get("optimized_boundary_test_lanes") != 2
+        or g2_checks.get("optimized_boundary_test_executions")
+        != declared_boundary_count * 2
         or g2_checks.get("optimized_boundary_tests_failed") != 0
-        or g2_checks.get("g2_requirements_in_progress") != 34
-        or g2_checks.get("g2_requirements_with_passing_product_evidence") != 0
+        or g2_checks.get("warnings_as_errors") is not True
         or g2_checks.get("reproducible_source_builds") != 2
-        or g2_checks.get("archive_checksum_verification") != "pass"
+        or g2_checks.get("archive_checksum_verification")
+        != "pass-detached-attestation"
         or g2_checks.get("governing_source_state") != "verified"
         or g2_checks.get("gate_artifact_state")
         != "development-in-progress; certification-blocked"
     ):
-        raise RuntimeError("G2 repository test record carries stale results or gate disposition")
+        raise RuntimeError("current G2 test record carries stale results or gate disposition")
+
+    archive_attestation = (
+        json.loads((ROOT / G2_ARCHIVE_ATTESTATION).read_text(encoding="utf-8"))
+        if detached_available
+        else {}
+    )
+    release_source_commit = (
+        g2_test_run.get("release_source_commit")
+        if isinstance(g2_test_run, dict)
+        else None
+    )
+    if detached_available and (
+        not isinstance(archive_attestation, dict)
+        or archive_attestation.get("code_commit") != implementation_commit
+        or not isinstance(release_source_commit, str)
+        or not re.fullmatch(r"[0-9a-f]{40}", release_source_commit)
+        or archive_attestation.get("release_source_commit")
+        != release_source_commit
+        or archive_attestation.get("release_archive_inclusion")
+        != "excluded-to-prevent-self-referential-archive-hashes"
+        or archive_attestation.get("file_count") != 132
+        or archive_attestation.get("source_date_epoch") != 0
+        or archive_attestation.get("builds") != 2
+        or archive_attestation.get("checksum_verification") != "pass"
+        or archive_attestation.get("status") != "verified-reproducible"
+        or archive_attestation.get("gate_closing") is not False
+    ):
+        raise RuntimeError("detached G2 archive attestation is incomplete")
+    build_hashes: list[tuple[str, str]] = []
+    for build_name in (("first_build", "second_build") if detached_available else ()):
+        build = archive_attestation.get(build_name)
+        if not isinstance(build, dict):
+            raise RuntimeError("detached G2 archive build identity is missing")
+        hashes = tuple(build.get(field) for field in ("tar_gz_sha256", "zip_sha256"))
+        if any(
+            not isinstance(value, str)
+            or not re.fullmatch(r"[0-9a-f]{64}", value)
+            or value == "0" * 64
+            for value in hashes
+        ):
+            raise RuntimeError("detached G2 archive hashes must be measured SHA-256 values")
+        build_hashes.append(hashes)  # type: ignore[arg-type]
+    if detached_available and build_hashes[0] != build_hashes[1]:
+        raise RuntimeError("detached G2 archive builds are not reproducible")
+    if detached_available and is_repository_checkout():
+        release_paths = release_manifest.get("release_files", [])
+        result = subprocess.run(
+            [
+                "git",
+                "diff",
+                "--quiet",
+                release_source_commit,
+                "HEAD",
+                "--",
+                *release_paths,
+            ],
+            cwd=ROOT,
+            check=False,
+        )
+        if result.returncode == 1:
+            raise RuntimeError(
+                "release inventory differs from the detached release-source commit"
+            )
+        if result.returncode:
+            raise RuntimeError("cannot compare HEAD with the detached release-source commit")
 
     hardware_smoke = documents["docs/gates/g1/hardware_smoke_2026-09-22.json"]
     if (
@@ -774,7 +1124,13 @@ def validate_gate_artifacts() -> None:
 
 
 def validate_repository() -> None:
-    missing = [path for path in REQUIRED_RELEASE_FILES if not (ROOT / path).is_file()]
+    detached_expected = detached_evidence_is_tracked()
+    required_workspace_files = (
+        (*REQUIRED_RELEASE_FILES, *DETACHED_G2_EVIDENCE_FILES)
+        if detached_expected
+        else REQUIRED_RELEASE_FILES
+    )
+    missing = [path for path in required_workspace_files if not (ROOT / path).is_file()]
     if missing:
         raise RuntimeError(f"required documentation is missing: {missing}")
     required_runtime_paths = (
@@ -794,9 +1150,11 @@ def validate_repository() -> None:
     if tracked is not None:
         if SOURCE_ARCHIVE_PATH in tracked:
             raise RuntimeError("docs/Requirements.zip must remain untracked and outside releases")
-        untracked_files = [path for path in REQUIRED_RELEASE_FILES if PurePosixPath(path) not in tracked]
+        untracked_files = [
+            path for path in required_workspace_files if PurePosixPath(path) not in tracked
+        ]
         if untracked_files:
-            raise RuntimeError(f"required release files are not tracked by Git: {untracked_files}")
+            raise RuntimeError(f"required repository evidence files are not tracked by Git: {untracked_files}")
     release_files = included_files(tracked=tracked)
     forbidden = [
         path.relative_to(ROOT)

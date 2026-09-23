@@ -40,9 +40,9 @@ cd dist
 sha256sum --check SHA256SUMS
 ```
 
-Build twice from the same tree and epoch, then compare `SHA256SUMS`. Inspect both archive listings. The archive must include `src/`, `tests/`, `web/`, `schemas/`, `examples/`, `docs/`, `scripts/`, and `packaging/`.
+Build twice from the same pinned commit and epoch, then compare `SHA256SUMS`. Inspect both archive listings. The archive must include `src/`, `tests/`, `web/`, `schemas/`, `examples/`, `docs/`, `scripts/`, and `packaging/`.
 
-`RELEASE_MANIFEST.json` contains the canonical `release_files` inventory. In a Git checkout, the builder verifies that every inventoried file is tracked and that every tracked file under the release inputs is inventoried. In an extracted source archive, that same inventory remains authoritative. Untracked working-tree files are never added implicitly; add each intentional release file to Git and to the inventory before building a candidate.
+`RELEASE_MANIFEST.json` contains the canonical `release_files` inventory and the explicit `executable_release_files` mode policy. In a Git checkout, the builder rejects staged or unstaged release-content changes, verifies the declared modes against the `HEAD` tree, and packages canonical committed blob bytes rather than host-normalized working-tree bytes. The gzip and ZIP containers use deterministic stored streams so their identities do not depend on the host zlib implementation. In an extracted source archive, the packaged bytes and explicit mode policy remain authoritative, so rebuilding does not depend on the extraction filesystem. Untracked files are never added implicitly; add each intentional release file to Git and to the inventory before building a candidate.
 
 The official `0.1.0` candidate is source-only. Do not publish a wheel: repository-root runtime assets do not yet have a supported installed-package location.
 

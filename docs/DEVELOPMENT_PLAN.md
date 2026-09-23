@@ -29,19 +29,26 @@ Version `0.1.0` is a developer MVP and a useful input to G0. It currently demons
 - the current native Windows 11 and Ubuntu 26.04 WSL development lanes on one physical laptop;
 - a fixed Luma OS `Admin` governance role with finite, receipted delegation;
 - a pinned Qwen3-1.7B Q4_K_M development model through llama.cpp on Windows CUDA, Ubuntu WSL CPU, and the authenticated Luma gateway;
-- a non-destructive installer contract, pure A/B boot-state model, and typed privileged-helper/confinement contracts with 49 safety tests under normal and optimized-Python execution; and
+- a non-destructive installer contract, pure A/B boot-state model, typed privileged-helper/confinement contracts, and SQLite-backed request/effect ledgers with 71 safety tests on native Windows and Ubuntu WSL under normal and optimized-Python execution; and
 - repository, API-contract, browser-journey, and deterministic source-package checks.
 
 It has **not** passed formal G0 or G1. Their repository/local development scope is recorded as **complete with deferrals**, while formal certification remains **blocked**. Repository-local G1 prototypes now cover purpose/lifecycle-bound signed model-pack contracts, checked resource admission, deny-by-default policy and Admin delegation, a typed DAG, deterministic fake inference, real loopback inference, local-gateway fencing, platform-adapter scaffolding, and state recovery. It still does not provide a signed certified 4–6B model pack, qualified two-board model runtime, signed skills, worker sandboxing, semantic indexing, multimodal interaction, a bootable image, A/B updates, hardware certification, a Windows file broker, VM or dual-boot lifecycle, 400–405B qualification, or cluster execution. Existing simulator, fake-backend, WSL, one-laptop real-model, and MVP results are development evidence only.
 
 G2 repository development is **in progress** and formal G2 certification is
-**blocked**. The first G2 tranche at
+**blocked**. The G2 work at
 `4ec25b849b3db4363191532bdb06f42894e11253` models installer authorization,
 A/B update decisions, privileged-helper dispatch, and confinement evidence as
-pure, fail-closed contracts. It neither performs installation/boot effects nor
-enforces UKI, dm-verity, LUKS, cgroup v2, AppArmor, seccomp, KVM, or real peer
-credentials. Native Windows and Ubuntu WSL remain two development lanes on one
-physical laptop, not the two required A1 boards.
+pure, fail-closed contracts. Commit
+`80980acbac461a9d639df483349bb47a639eefca` adds SQLite-backed request and
+effect ledgers, generation/owner fencing, explicit crash-state semantics, and
+a fail-fast pre-dispatch compare-and-swap. Commit
+`8a8fc8291b42b9a76003dd3e71fa99f9a3117e62` adds post-transition current-state
+revalidation, safe `PREPARED` restoration, and known-not-applied capacity
+handling. It neither performs
+installation/boot/host effects nor enforces UKI, dm-verity, LUKS, cgroup v2,
+AppArmor, seccomp, KVM, native ACL/DACL policy, or real peer credentials.
+Native Windows and Ubuntu WSL remain two development lanes on one physical
+laptop, not the two required A1 boards.
 
 ### Current stage status
 
@@ -49,7 +56,7 @@ physical laptop, not the two required A1 boards.
 | --- | --- |
 | G0 | **Development complete with deferrals; formal certification blocked.** Governing source ingestion and 288-ID traceability are verified; the development baseline, decisions including Admin governance, registers, current Windows/WSL inventory, checks, and source-package evidence exist. Two designated physical boards, the Ubuntu 24.04/E8 baselines, disposable disks, protected production signing custody, and complete qualification evidence are deferred in `docs/gates/g0/blockers.json` and `docs/gates/final_certification_deferrals.json`. |
 | G1 | **Development complete with deferrals; formal certification blocked.** Contract evidence covers resources, policy/Admin delegation, typed DAG, model-pack trust lifecycle, fake and real inference, authenticated gateway, cancellation/concurrency/revocation fencing, state transfer, telemetry, and platform adapters. Qwen3-1.7B passed bounded native Windows CUDA and Ubuntu WSL CPU/gateway smoke, but it is below the governed 4–6B range. Signed 4–6B comparison, two-board workflows, boot/recovery, full security/performance evidence, and the real 400–405B experiment are deferred. No deferral waives G0 or G1 exit criteria. |
-| G2 | **Development in progress; formal certification blocked.** The first repository-local safety-contract tranche has 49 tests under normal and optimized-Python execution for non-destructive installer authorization, pure A/B boot-state transitions, and typed helper/confinement boundaries. No real disk, boot, cryptographic boot-chain, encryption, kernel-control, VM, or peer-credential enforcement has been exercised. |
+| G2 | **Development in progress; formal certification blocked.** Four repository-local safety-contract modules have 71 tests on native Windows and Ubuntu WSL under normal and optimized-Python execution for non-destructive installer authorization, pure A/B boot-state transitions, typed helper/confinement boundaries, and durable request/effect coordination. No real disk, boot, cryptographic boot-chain, encryption, kernel-control, VM, native ACL/DACL, or peer-credential enforcement has been exercised. |
 | G3, G4, G5 | **Not started.** |
 | GWIN0, GWIN1, GWIN2 | **Not started.** |
 | G6, G7 | **Not started and separately capacity-gated.** |
@@ -219,6 +226,30 @@ dm-verity root, unlock LUKS, impose cgroup limits, load AppArmor/seccomp policy,
 launch a KVM microVM, or authenticate a real Unix socket/named-pipe peer. Those
 effects and the two-board Ubuntu 24.04 qualification remain mandatory for G2
 formal certification.
+
+**2026-09-23 durable-effect checkpoint:** G2 remains in progress and has not
+passed. Commits `80980acbac461a9d639df483349bb47a639eefca` and
+`8a8fc8291b42b9a76003dd3e71fa99f9a3117e62` add and harden a bounded
+SQLite request journal and typed privileged-effect ledger. `PREPARED` records
+prove that no adapter was entered and may be reclaimed only through an
+owner/generation compare-and-swap with unchanged request semantics and fresh
+authorization evidence. `APPLYING` is durably committed by a fail-fast
+compare-and-swap and current state is revalidated again before adapter entry;
+a proven-not-applied denial is restored to `PREPARED`, while an unprovable
+restoration stays fenced. `APPLYING` is never automatically
+redispatched after a crash. Only action-specific reconciliation can move an
+ambiguous `APPLYING` or `FAILED_UNKNOWN` record to a semantically bound,
+immutable `COMPLETED` result. Raw CSPRNG-issued 256-bit safe-handle tokens are
+not written to the effect ledger; keyed commitments are retained instead.
+
+The four G2 modules now have 71 contract tests passing in both native Windows
+and Ubuntu WSL under normal and optimized Python. These two lanes are on the
+same physical host and the tests use in-process typed adapters. They do not
+establish a privileged service, kernel peer credentials, native ACL/DACL
+enforcement, protected integrity-key custody, resistance to database deletion
+or rollback, induced power-loss durability, external rollback anchoring, or
+physical hardware effects. All such evidence remains required for formal G2
+certification.
 
 ## G3 Functional beta
 

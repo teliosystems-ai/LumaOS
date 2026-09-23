@@ -2,9 +2,13 @@ from __future__ import annotations
 
 import json
 from pathlib import Path, PurePosixPath
+import shutil
+import subprocess
 import sys
+import tarfile
 import tempfile
 import unittest
+import zipfile
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
@@ -14,7 +18,13 @@ from luma_os import LumaConfig, LumaService
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
-from build_release import ReleaseProvenanceError, included_files
+from build_release import (
+    ReleaseProvenanceError,
+    build_tar,
+    build_zip,
+    included_files,
+    release_snapshot,
+)
 
 
 class ContractFileTests(unittest.TestCase):
@@ -46,6 +56,16 @@ class ContractFileTests(unittest.TestCase):
         self.assertIn("docs/GATE_REPORT.md", required)
         self.assertIn("requirements/registry.json", required)
         self.assertTrue(required.issubset(set(manifest["release_files"])))
+        executable_files = {
+            "packaging/systemd/install-user-service.sh",
+            "scripts/build_release.py",
+            "scripts/check.py",
+            "scripts/install-user.sh",
+            "scripts/run.sh",
+            "scripts/uninstall-user.sh",
+        }
+        self.assertEqual(executable_files, set(manifest["executable_release_files"]))
+        self.assertTrue(executable_files.issubset(set(manifest["release_files"])))
         self.assertFalse(manifest["external_assets"]["model_weights_included"])
         self.assertEqual("0.1.0", manifest["version"])
 
@@ -54,18 +74,137 @@ class ContractFileTests(unittest.TestCase):
             root = Path(temporary)
             docs = root / "docs"
             docs.mkdir()
-            (docs / "tracked.md").write_text("released\n", encoding="utf-8")
+            (docs / "tracked.md").write_bytes(b"released\n")
+            tool = docs / "tool.sh"
+            tool.write_bytes(b"#!/bin/sh\nexit 0\n")
+            tool.chmod(0o644)
             (docs / "scratch.md").write_text("local only\n", encoding="utf-8")
             manifest = {
                 "release_inputs": ["docs"],
-                "release_files": ["docs/tracked.md"],
+                "release_files": ["docs/tracked.md", "docs/tool.sh"],
+                "executable_release_files": ["docs/tool.sh"],
                 "required_release_files": ["docs/tracked.md"],
                 "excluded_from_release": [],
             }
 
             selected = included_files(root=root, manifest=manifest)
+            entries, source_commit = release_snapshot(
+                selected,
+                root=root,
+                manifest=manifest,
+                tracked=None,
+            )
+            tar_path = root / "fixture.tar.gz"
+            zip_path = root / "fixture.zip"
+            build_tar(tar_path, entries, 0, archive_root="fixture")
+            build_zip(zip_path, entries, 0, archive_root="fixture")
 
-            self.assertEqual([docs / "tracked.md"], selected)
+            self.assertEqual([docs / "tracked.md", docs / "tool.sh"], selected)
+            self.assertIsNone(source_commit)
+            with tarfile.open(tar_path, "r:gz") as archive:
+                tracked_member = archive.getmember("fixture/docs/tracked.md")
+                tool_member = archive.getmember("fixture/docs/tool.sh")
+                self.assertEqual(0o644, tracked_member.mode)
+                self.assertEqual(0o755, tool_member.mode)
+                self.assertEqual(b"released\n", archive.extractfile(tracked_member).read())
+            with zipfile.ZipFile(zip_path) as archive:
+                tracked_info = archive.getinfo("fixture/docs/tracked.md")
+                tool_info = archive.getinfo("fixture/docs/tool.sh")
+                self.assertEqual(zipfile.ZIP_STORED, tracked_info.compress_type)
+                self.assertEqual(zipfile.ZIP_STORED, tool_info.compress_type)
+                self.assertEqual(0o644, (tracked_info.external_attr >> 16) & 0o777)
+                self.assertEqual(0o755, (tool_info.external_attr >> 16) & 0o777)
+                self.assertEqual(b"released\n", archive.read(tracked_info))
+
+            extracted_root = root / "extracted"
+            with tarfile.open(tar_path, "r:gz") as archive:
+                archive.extractall(extracted_root, filter="data")
+            canonical_root = extracted_root / "fixture"
+            (canonical_root / "docs" / "tracked.md").chmod(0o755)
+            (canonical_root / "docs" / "tool.sh").chmod(0o644)
+            rebuilt_files = included_files(root=canonical_root, manifest=manifest)
+            rebuilt_entries, rebuilt_commit = release_snapshot(
+                rebuilt_files,
+                root=canonical_root,
+                manifest=manifest,
+                tracked=None,
+            )
+            rebuilt_tar = root / "rebuilt.tar.gz"
+            rebuilt_zip = root / "rebuilt.zip"
+            build_tar(rebuilt_tar, rebuilt_entries, 0, archive_root="fixture")
+            build_zip(rebuilt_zip, rebuilt_entries, 0, archive_root="fixture")
+            self.assertIsNone(rebuilt_commit)
+            self.assertEqual(tar_path.read_bytes(), rebuilt_tar.read_bytes())
+            self.assertEqual(zip_path.read_bytes(), rebuilt_zip.read_bytes())
+
+        if shutil.which("git"):
+            with tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                (root / ".gitattributes").write_bytes(b"*.txt text eol=lf\n")
+                payload = root / "payload.txt"
+                payload.write_bytes(b"committed\n")
+                tool = root / "tool.sh"
+                tool.write_bytes(b"#!/bin/sh\nexit 0\n")
+                commands = (
+                    ("init", "--quiet"),
+                    ("config", "user.email", "release-test@example.invalid"),
+                    ("config", "user.name", "Release Test"),
+                    ("add", ".gitattributes", "payload.txt", "tool.sh"),
+                    ("update-index", "--chmod=+x", "tool.sh"),
+                    ("commit", "--quiet", "-m", "fixture"),
+                )
+                for command in commands:
+                    subprocess.run(
+                        ["git", *command],
+                        cwd=root,
+                        check=True,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                    )
+                payload.write_bytes(b"committed\r\n")
+                manifest = {
+                    "release_inputs": ["payload.txt", "tool.sh"],
+                    "release_files": ["payload.txt", "tool.sh"],
+                    "executable_release_files": ["tool.sh"],
+                    "required_release_files": ["payload.txt"],
+                    "excluded_from_release": [],
+                }
+                selected = included_files(root=root, manifest=manifest)
+                entries, source_commit = release_snapshot(
+                    selected,
+                    root=root,
+                    manifest=manifest,
+                    tracked={
+                        PurePosixPath(".gitattributes"),
+                        PurePosixPath("payload.txt"),
+                        PurePosixPath("tool.sh"),
+                    },
+                )
+
+                self.assertRegex(source_commit or "", r"^[0-9a-f]{40}$")
+                self.assertEqual(b"committed\n", entries[0].data)
+                self.assertEqual((0o644, 0o755), tuple(entry.mode for entry in entries))
+                subprocess.run(
+                    ["git", "update-index", "--chmod=-x", "tool.sh"],
+                    cwd=root,
+                    check=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                )
+                with self.assertRaisesRegex(
+                    ReleaseProvenanceError,
+                    "staged or unstaged content changes",
+                ):
+                    release_snapshot(
+                        selected,
+                        root=root,
+                        manifest=manifest,
+                        tracked={
+                            PurePosixPath(".gitattributes"),
+                            PurePosixPath("payload.txt"),
+                            PurePosixPath("tool.sh"),
+                        },
+                    )
 
     def test_release_builder_rejects_an_explicit_untracked_input(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -74,6 +213,7 @@ class ContractFileTests(unittest.TestCase):
             manifest = {
                 "release_inputs": ["README.md"],
                 "release_files": ["README.md"],
+                "executable_release_files": [],
                 "required_release_files": ["README.md"],
                 "excluded_from_release": [],
             }
@@ -96,6 +236,7 @@ class ContractFileTests(unittest.TestCase):
             manifest = {
                 "release_inputs": ["docs"],
                 "release_files": ["docs/tracked.md"],
+                "executable_release_files": [],
                 "required_release_files": ["docs/tracked.md"],
                 "excluded_from_release": [],
             }

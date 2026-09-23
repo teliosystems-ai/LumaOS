@@ -44,8 +44,9 @@ Luma OS `0.1.0` is a developer MVP. “Supported” means the repository intends
 | Admin role/delegation | Development implementation; fixed product super-role for finite declared activities, not host administrator/root or a production custody certificate |
 | G2 installer contract | Development-only and non-destructive; pure inventory/preflight/confirmation/revalidation/capability/journal boundary, not a disk installer |
 | G2 A/B boot-state contract | Development-only pure transition model; no firmware, slot I/O, UKI, dm-verity, LUKS, or actual boot behavior |
-| G2 privileged-helper/confinement contract | Development-only typed boundary with injected trust evidence; no privileged service, cgroup/AppArmor/seccomp/KVM, or real peer-credential enforcement |
-| G2 safety tests | 49 tests across installer, boot-state, and helper modules under normal and optimized-Python execution; contract evidence only, not physical certification |
+| G2 privileged-helper/confinement contract | Development-only typed boundary with injected trust evidence; no privileged service, cgroup/AppArmor/seccomp/KVM, native ACL/DACL, or real peer-credential enforcement |
+| G2 durable request/effect ledgers | Development-only bounded SQLite contracts with keyed integrity, owner/generation fencing, `PREPARED`/`APPLYING`/`COMPLETED`/`FAILED_UNKNOWN` crash semantics, fail-fast dispatch CAS, post-CAS current-state validation, safe known-not-applied restoration, semantic completion binding, and keyed commitments instead of stored raw safe-handle tokens; no protected key custody, external rollback anchor, induced power loss, or physical effect adapter |
+| G2 safety tests | 71 tests across installer, boot-state, helper, and durable-effect modules pass on native Windows and Ubuntu WSL under normal and optimized Python; both lanes share one physical host, and this is contract evidence only, not physical certification |
 | Qwen3-1.7B Q4_K_M + llama.cpp b11100 | Pinned development smoke baseline; real Windows CUDA, Ubuntu WSL CPU, and authenticated Luma gateway smoke passed |
 | Real signed 4–6B compact-model inference | Not yet available or certified; 1.7B smoke does not satisfy it |
 | Remote/cloud model service | Unsupported by default |

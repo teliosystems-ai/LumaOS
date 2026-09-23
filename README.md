@@ -30,7 +30,7 @@ The implementation is intended for design reviews, local development, automated 
 | Qwen3-1.7B Q4_K_M + llama.cpp | Recommended low-resource development smoke baseline; weights/runtime obtained separately |
 | Signed 4–6B compact control model | Required for formal G1 closure; not yet certified |
 | External model weights | User-supplied and governed by their own licenses |
-| G2 installer, A/B boot-state, and privileged-helper contracts | Development-only reference contracts; 49 safety tests pass under optimized Python, with no physical effects or OS enforcement |
+| G2 installer, A/B boot-state, privileged-helper, and durable-effect contracts | Development-only reference contracts; 71 safety tests pass on native Windows and Ubuntu WSL under normal and optimized Python, with no physical effects or OS enforcement |
 | Bootable ISO, installer image, or hardware provisioning | Not supported |
 | Dual boot or VM lifecycle automation | Not supported |
 | 400–405B model operation or cluster certification | Not supported |
@@ -41,13 +41,23 @@ See the complete [support matrix](docs/SUPPORT_MATRIX.md) and [requirements cove
 The repository also contains repository-local gate engineering artifacts and
 reference contracts. G0/G1 development remains complete with explicit
 deferrals, but neither gate has passed formal certification. G2 development is
-now **in progress**: code commit `4ec25b849b3db4363191532bdb06f42894e11253`
-adds a non-destructive installer preflight/authorization contract, a pure A/B
-boot-state transition model, and typed privileged-helper/confinement contracts,
-with 49 safety tests that also pass under optimized Python. These contracts do
-not discover or modify a real
-disk, boot an image, validate or install a UKI/dm-verity/LUKS stack, or enforce
-cgroup, AppArmor, seccomp, KVM, or operating-system peer credentials.
+now **in progress**: code commits
+`4ec25b849b3db4363191532bdb06f42894e11253` and
+`80980acbac461a9d639df483349bb47a639eefca`, with the safety correction at
+`8a8fc8291b42b9a76003dd3e71fa99f9a3117e62`, add a non-destructive installer
+preflight/authorization contract, a pure A/B boot-state transition model,
+typed privileged-helper/confinement contracts, and SQLite-backed request and
+effect ledgers. The effect ledger records `PREPARED`, `APPLYING`, `COMPLETED`,
+and `FAILED_UNKNOWN` crash states, fences owners by generation, uses a
+fail-fast compare-and-swap before adapter entry, and persists a keyed
+commitment instead of a raw high-entropy safe-handle token. It revalidates
+again after the durable `APPLYING` transition, restores a proven-not-applied
+attempt to `PREPARED`, and preserves pre-effect capacity exhaustion as safely
+retryable. The 71 G2 safety
+tests pass on native Windows and Ubuntu WSL under normal and optimized Python.
+These contracts do not discover or modify a real disk, boot an image, validate
+or install a UKI/dm-verity/LUKS stack, or enforce cgroup, AppArmor, seccomp,
+KVM, native ACL/DACL policy, or operating-system peer credentials.
 
 Formal G2 certification is blocked. The deterministic
 [gate report](docs/GATE_REPORT.md) and retained
@@ -55,7 +65,10 @@ Formal G2 certification is blocked. The deterministic
 missing physical boards, Ubuntu 24.04/E8 fixtures, disposable disks, protected
 production signing custody, signed 4–6B packs, the 400–405B experiment, and
 qualification runs. Native Windows and its Ubuntu WSL guest share one physical
-laptop and therefore never count as two reference boards.
+laptop and therefore never count as two reference boards. The durable ledgers
+also remain application-level contracts: power-loss qualification, protected
+integrity-key custody, native directory permissions, and a rollback-resistant
+external anchor are not present.
 
 ## Quick start
 

@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "register": "failure-injection",
-  "recorded_on": "2026-09-22",
+  "recorded_on": "2026-09-23",
   "owner": "qa-lead",
   "result_rule": "A planned case is not evidence. Each executed case must retain release tuple, seed or trigger, timestamps, expected oracle, observed outcome, and artifact/log digests.",
   "cases": [
@@ -142,6 +142,36 @@
         "G0-BLK-002",
         "G0-BLK-004",
         "signed A/B boot implementation"
+      ]
+    },
+    {
+      "id": "FI-009",
+      "title": "Crash at each privileged-effect ledger boundary",
+      "target_gate": "G2",
+      "owner": "platform-lead",
+      "status": "development-contract-partial",
+      "injection_points": [
+        "after-request-reservation",
+        "after-effect-prepared",
+        "before-applying-cas",
+        "after-applying-before-final-validation",
+        "effect-ledger-capacity-before-prepare",
+        "after-applying-before-adapter-return",
+        "after-adapter-return-before-effect-completion",
+        "after-effect-completion-before-request-receipt"
+      ],
+      "expected_oracle": "PREPARED work is safely reauthorized and generation-fenced before retry; a post-CAS denial proven to precede adapter entry is restored to PREPARED; pre-effect capacity exhaustion leaves the request PENDING; APPLYING or FAILED_UNKNOWN work is never automatically redispatched; an action-specific reconciler may establish one semantically bound COMPLETED result; no receipt invents new authorization metadata.",
+      "evidence": [
+        "src/luma_os/durable_effects.py",
+        "src/luma_os/privileged_helper.py",
+        "tests/test_durable_effects.py",
+        "tests/test_privileged_helper.py"
+      ],
+      "limitations": "In-process exceptions and simulated process loss exercise the SQLite contract on native Windows and Ubuntu WSL. No external process-kill matrix, induced host power loss, native privileged adapter, protected key store, or rollback-resistant external anchor was exercised.",
+      "blockers": [
+        "qualified physical lab and safe power-loss procedure",
+        "production privileged service and effect reconcilers",
+        "protected integrity-key custody and external rollback anchor"
       ]
     }
   ]

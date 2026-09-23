@@ -1,13 +1,13 @@
 {
   "schema_version": 1,
   "gate": "G2",
-  "recorded_on": "2026-09-22",
+  "recorded_on": "2026-09-23",
   "owner": "g2-cross-functional-team",
   "assessment": "blocked",
   "development_assessment": "in-progress",
   "certification_assessment": "blocked",
-  "claim_boundary": "This evidence starts the repository-local G2 control-plane tranche. It demonstrates pure, injected contracts for non-destructive installer planning, A/B trial-boot state, and a typed privileged-helper boundary. It does not demonstrate a bootable OS, disk mutation, Secure Boot, UKI, dm-verity, LUKS2, cgroup/AppArmor/seccomp enforcement, KVM isolation, kernel peer credentials, or either physical A1 board.",
-  "implementation_commit": "4ec25b849b3db4363191532bdb06f42894e11253",
+  "claim_boundary": "This evidence advances the repository-local G2 control-plane tranche. It demonstrates pure, injected contracts for non-destructive installer planning, A/B trial-boot state, a typed privileged-helper boundary, and bounded SQLite-backed request/effect ledger integration. It does not demonstrate a bootable OS, disk mutation, Secure Boot, UKI, dm-verity, LUKS2, cgroup/AppArmor/seccomp enforcement, KVM isolation, kernel peer credentials, or either physical A1 board.",
+  "implementation_commit": "8a8fc8291b42b9a76003dd3e71fa99f9a3117e62",
   "items": [
     {
       "id": "G2-EV-001",
@@ -50,7 +50,7 @@
         "tests/test_privileged_helper.py"
       ],
       "environment": "DEV-WIN-WSL-GPU-01",
-      "observations": "Twenty-one deterministic tests cover closed typed actions, canonical bounded input, authenticated peer revalidation immediately before dispatch, request-bound confinement attestations and authority, opaque stable-device capabilities, signed driver/runtime certificate binding, effect-time revocation, persistent pending/completed/failed-unknown journal reconciliation, executor idempotency, and reentrant-callback denial. The suite passes under optimized Python.",
+      "observations": "Twenty-four deterministic tests cover closed typed actions, canonical bounded input, authenticated peer revalidation immediately before dispatch, request-bound confinement attestations and authority, opaque stable-device capabilities, signed driver/runtime certificate binding, effect-time revocation, persistent pending/completed/failed-unknown journal reconciliation, executor idempotency, known-not-applied capacity exhaustion, reentrant-callback denial, and integration with the bounded SQLite request journal and idempotent effect ledger. The suite passes under optimized Python.",
       "limitations": "The real service must obtain kernel peer credentials, verify signatures and OS enforcement, safely bind devices, provide an atomic durable journal, and operate under bounded watchdogs. No privileged action is executed by this module.",
       "gate_closing": false
     },
@@ -61,18 +61,35 @@
       "requirements_prepared": [],
       "source_tests_prepared": [],
       "evidence": [
-        "docs/gates/g2/test_run_2026-09-22.json",
+        "docs/gates/g2/test_run_2026-09-23.json",
+        "docs/gates/g2/archive_attestation_2026-09-23.json",
         "scripts/check.py"
       ],
       "environment": "DEV-WIN-WSL-GPU-01",
-      "observations": "The complete 147-test suite passed with zero failures in native Windows and Ubuntu WSL; the 49 new safety-boundary tests also passed with Python assertions disabled. These environments share one physical laptop.",
-      "limitations": "Repository tests validate contracts and regressions only. They do not satisfy any physical-board, destructive-media, boot, encryption, confinement, performance, or lifecycle acceptance procedure.",
+      "observations": "The complete 170-test suite passed with zero failures in native Windows and Ubuntu WSL; 71 optimized safety-boundary tests passed in each lane. These environments share one physical laptop.",
+      "limitations": "Repository tests validate contracts and regressions only. The dated test-run and archive-attestation paths are detached repository sidecars intentionally excluded from release archives; an extracted archive validates its included content without them. These results do not satisfy any physical-board, destructive-media, boot, encryption, confinement, performance, or lifecycle acceptance procedure.",
+      "gate_closing": false
+    },
+    {
+      "id": "G2-EV-005",
+      "subject": "durable-sqlite-request-and-effect-ledger-integration",
+      "result": "development-tests-passed",
+      "requirements_prepared": ["A115"],
+      "source_tests_prepared": ["T62"],
+      "evidence": [
+        "src/luma_os/durable_effects.py",
+        "tests/test_durable_effects.py",
+        "tests/test_privileged_helper.py"
+      ],
+      "environment": "DEV-WIN-WSL-GPU-01",
+      "observations": "Nineteen deterministic durable-ledger tests exercise bounded authenticated SQLite request/effect records, writer fencing, idempotency, crash-window ambiguity, post-APPLYING current-state revalidation with safe PREPARED restoration, reconciliation, capacity limits, clock rollback, and corruption rejection. The privileged-helper suite integrates the same SQLite request journal and idempotent effect executor across completed, prepared, applying, and known-not-applied capacity recovery paths.",
+      "limitations": "The SQLite ledgers were exercised with development files on one laptop. SQLite cannot make an external host mutation transactional; a production adapter, protected storage policy, watchdog, and physical crash/power-loss reconciliation evidence remain required.",
       "gate_closing": false
     }
   ],
-  "validation_record": "docs/gates/g2/test_run_2026-09-22.json",
+  "validation_record": "docs/gates/g2/test_run_2026-09-23.json",
   "test_plan": "docs/gates/g2/test_plan.json",
   "open_blocker_record": "docs/gates/g2/blockers.json",
   "deferral_record": "docs/gates/final_certification_deferrals.json",
-  "closure_rule": "G2 remains blocked until T01-T16 and the complete vertical workflow pass on both physical A1 boards, with the required signed media, storage, recovery, confinement, security, lifecycle, and performance evidence."
+  "closure_rule": "G2 remains blocked until T01-T16, applicable T27-T30, T33, T40, T45-T51, and T62; the complete vertical workflow on both physical A1 boards; and all required signed-media, storage, recovery, confinement, security, lifecycle, failure, and performance evidence pass."
 }

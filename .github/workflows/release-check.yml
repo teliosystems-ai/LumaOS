@@ -36,7 +36,7 @@ jobs:
         working-directory: dist
         run: sha256sum --check SHA256SUMS
       - name: Upload validated candidate
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: luma-os-${{ github.ref_name }}-source
           path: dist/

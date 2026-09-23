@@ -118,6 +118,12 @@ G2_DEVELOPMENT_EVIDENCE["A115"] = (
     *G2_DEVELOPMENT_EVIDENCE["A115"],
     "G2-EV-005",
 )
+G2_DEVELOPMENT_EVIDENCE["A003"] = ("G2-EV-006",)
+for requirement_id in ("A001", "A108"):
+    G2_DEVELOPMENT_EVIDENCE[requirement_id] = (
+        *G2_DEVELOPMENT_EVIDENCE[requirement_id],
+        "G2-EV-006",
+    )
 G2_DEVELOPMENT_EVIDENCE_AS_OF = "2026-09-23"
 
 

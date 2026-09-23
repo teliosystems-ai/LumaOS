@@ -27,10 +27,12 @@ The implementation is intended for design reviews, local development, automated 
 | Windows 11 with WSL2 + Ubuntu 24.04 | Intended supported developer path |
 | Native Windows Python | Full current suite passes on Python 3.14; product qualification and Windows ACL/broker work remain |
 | Local deterministic/demo model adapter | Included in MVP scope |
-| Qwen3-1.7B Q4_K_M + llama.cpp | Recommended low-resource development smoke baseline; weights/runtime obtained separately |
+| Qwen3-4B Q4_K_M + llama.cpp | Recommended current development profile; real Windows CUDA and Ubuntu WSL CPU/gateway smoke passed, with weights/runtime obtained separately |
+| Gemma 4 E2B / E4B | Catalog candidates only: E2B is the compact comparison candidate; E4B is an 8B-total mainstream candidate; neither has been run or signed here |
+| Install-time model profiles | Development contract supports explicit manual-only, CPU, and CUDA choices with exact pack/runtime identity and fail-closed RAM, VRAM, storage, context, load, and serving checks |
 | Signed 4–6B compact control model | Required for formal G1 closure; not yet certified |
 | External model weights | User-supplied and governed by their own licenses |
-| G2 installer, A/B boot-state, privileged-helper, and durable-effect contracts | Development-only reference contracts; 71 safety tests pass on native Windows and Ubuntu WSL under normal and optimized Python, with no physical effects or OS enforcement |
+| G2 installer, A/B boot-state, privileged-helper, durable-effect, and model-selection contracts | Development-only reference contracts; the expanded 96-test safety/model boundary passes on native Windows and Ubuntu WSL under normal and optimized Python, with no physical effects or OS enforcement |
 | Bootable ISO, installer image, or hardware provisioning | Not supported |
 | Dual boot or VM lifecycle automation | Not supported |
 | 400–405B model operation or cluster certification | Not supported |
@@ -44,7 +46,8 @@ deferrals, but neither gate has passed formal certification. G2 development is
 now **in progress**: code commits
 `4ec25b849b3db4363191532bdb06f42894e11253` and
 `80980acbac461a9d639df483349bb47a639eefca`, with the safety correction at
-`8a8fc8291b42b9a76003dd3e71fa99f9a3117e62`, add a non-destructive installer
+`8a8fc8291b42b9a76003dd3e71fa99f9a3117e62` and multi-model selection at
+`5667e3d8f337dec326dc8afdec91ed34c1c2eb2a`, add a non-destructive installer
 preflight/authorization contract, a pure A/B boot-state transition model,
 typed privileged-helper/confinement contracts, and SQLite-backed request and
 effect ledgers. The effect ledger records `PREPARED`, `APPLYING`, `COMPLETED`,
@@ -53,11 +56,19 @@ fail-fast compare-and-swap before adapter entry, and persists a keyed
 commitment instead of a raw high-entropy safe-handle token. It revalidates
 again after the durable `APPLYING` transition, restores a proven-not-applied
 attempt to `PREPARED`, and preserves pre-effect capacity exhaustion as safely
-retryable. The 71 G2 safety
-tests pass on native Windows and Ubuntu WSL under normal and optimized Python.
+retryable. The expanded 96-test G2 boundary (76 installer/boot/helper/durable
+tests plus 20 model-pack/model-selection tests) passes on native Windows and
+Ubuntu WSL under normal and optimized Python.
 These contracts do not discover or modify a real disk, boot an image, validate
 or install a UKI/dm-verity/LUKS stack, or enforce cgroup, AppArmor, seccomp,
 KVM, native ACL/DACL policy, or operating-system peer credentials.
+
+The installer contract also accepts an explicit model-profile catalog and
+selected profile. It binds the exact catalog, pack, runtime, context,
+execution mode, resource snapshot, and CUDA device into the installation-plan
+digest, then revalidates them before the injected executor. It never silently
+selects a smaller model or remote service. `manual-only` is an explicit choice,
+not an error fallback.
 
 Formal G2 certification is blocked. The deterministic
 [gate report](docs/GATE_REPORT.md) and retained
@@ -162,11 +173,20 @@ Release maintainers should follow the non-publishing checklist in [docs/RELEASE.
 ## Models and licensing
 
 No model weights are shipped in this repository or release archives. For this
-16 GiB laptop and 4 GiB RTX 3050, the selected development baseline is the
-digest-pinned `Qwen3-1.7B-Q4_K_M.gguf` with llama.cpp `b11100`. It produced the
-recorded Windows CUDA, Ubuntu WSL CPU, and authenticated Luma-gateway smoke
-results. That selection is below the governed 4–6B A1 range and is not a signed
-or certified model pack.
+16 GiB laptop and 4 GiB RTX 3050, the recommended current development profile
+is the digest-pinned `Qwen3-4B-Q4_K_M.gguf` with llama.cpp `b11100`. It produced
+recorded exact-output native Windows CUDA and Ubuntu WSL CPU results, including
+authenticated calls through the Luma gateway. This is real 4B development
+execution, but the external artifact remains an unsigned developer asset and
+is not a signed, execution-certified, or interactive-certified model pack.
+
+Gemma 4 E2B and E4B are retained as alternatives, not as measured results.
+Their labels describe effective sizes for dense models with per-layer
+embeddings: E2B records 2.3B effective and 5.1B total parameters, while E4B
+records 4.5B effective and 8B
+total. E2B may enter the governed compact comparison after the requirements
+owner accepts that interpretation; E4B belongs in the mainstream 8B comparison
+and is not represented as a 4–6B-total model.
 
 Any optional runtime, weights, tokenizer, or remote service must be obtained
 separately by the operator. The operator is responsible for its license,

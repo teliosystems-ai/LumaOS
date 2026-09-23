@@ -100,10 +100,23 @@ memory choices; the local inference gateway revalidates session identity,
 policy, deadline, and lease state without a remote fallback path.
 
 Model packs use a strict canonical manifest, detached Ed25519 verification
-interface, complete file inventory, and SHA-256 content checks. Recognized,
+interface, complete file inventory, exact total/active parameter counts,
+ordered model shards, required capabilities, runtime-bound installation
+profiles, and SHA-256 content checks. Recognized,
 loadable, execution-certified, and interactive-certified are distinct monotonic
 states. The repository contains no trusted key, real model asset, or
 certification evidence.
+
+Install-time model selection is a separate immutable contract. A catalog may
+contain multiple CPU and CUDA configurations plus the explicit `manual-only`
+profile. The operator requests one profile; preflight never substitutes a
+different size, device mode, or remote service. Eligibility uses the effective
+hardware snapshot and exact pack/runtime digests, total/active parameter
+counts, context, storage peak, host-memory load/serve reservations, and a
+whole-device accelerator requirement. The selected tuple and hardware snapshot
+are included in the installation-plan digest and checked again before the
+effect executor. These are non-destructive reference contracts, not a bootable
+installer or a signed catalog shipped with `0.1.0`.
 
 A deterministic typed DAG publishes restart checkpoints only after successful
 typed results. The versioned platform adapter has a deterministic fake and a

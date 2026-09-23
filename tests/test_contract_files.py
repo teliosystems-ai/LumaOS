@@ -34,6 +34,7 @@ class ContractFileTests(unittest.TestCase):
             "artifact.schema.json",
             "grant.schema.json",
             "model-pack.schema.json",
+            "model-profile.schema.json",
             "receipt.schema.json",
             "workflow.schema.json",
         }
@@ -49,13 +50,48 @@ class ContractFileTests(unittest.TestCase):
         self.assertTrue(
             {"src", "web", "schemas", "examples", "tests", "requirements"}.issubset(inputs)
         )
+        release_files = set(manifest["release_files"])
         required = set(manifest["required_release_files"])
         self.assertIn("docs/DEVELOPMENT_PLAN.md", required)
         self.assertIn("docs/GOVERNING_REQUIREMENTS_SOURCES.md", required)
         self.assertIn("docs/RELEASE.md", required)
         self.assertIn("docs/GATE_REPORT.md", required)
         self.assertIn("requirements/registry.json", required)
-        self.assertTrue(required.issubset(set(manifest["release_files"])))
+        new_model_governance = {
+            "docs/adr/0008-model-pack-v2-and-install-time-model-selection.md",
+            "docs/gates/g1/model_candidate_smoke_2026-09-23.json",
+        }
+        new_model_release_files = {
+            *new_model_governance,
+            "schemas/model-profile.schema.json",
+            "src/luma_os/model_selection.py",
+            "tests/test_model_selection.py",
+        }
+        self.assertTrue(new_model_governance.issubset(required))
+        self.assertTrue(new_model_release_files.issubset(release_files))
+        self.assertTrue(required.issubset(release_files))
+        schema_files = {
+            path.relative_to(ROOT).as_posix()
+            for path in (ROOT / "schemas").glob("*.schema.json")
+        }
+        self.assertTrue(schema_files.issubset(release_files))
+        self.assertTrue(
+            {
+                "src/luma_os/model_pack.py",
+                "src/luma_os/model_selection.py",
+                "tests/test_model_pack.py",
+                "tests/test_model_selection.py",
+                "tests/test_smoke_local_model.py",
+            }.issubset(release_files)
+        )
+        self.assertTrue(
+            {
+                "docs/gates/g2/test_run_2026-09-23.json",
+                "docs/gates/g2/archive_attestation_2026-09-23.json",
+                "docs/gates/g2/test_run_2026-09-23-002.json",
+                "docs/gates/g2/archive_attestation_2026-09-23-002.json",
+            }.issubset(set(manifest["excluded_from_release"]))
+        )
         executable_files = {
             "packaging/systemd/install-user-service.sh",
             "scripts/build_release.py",
@@ -65,7 +101,7 @@ class ContractFileTests(unittest.TestCase):
             "scripts/uninstall-user.sh",
         }
         self.assertEqual(executable_files, set(manifest["executable_release_files"]))
-        self.assertTrue(executable_files.issubset(set(manifest["release_files"])))
+        self.assertTrue(executable_files.issubset(release_files))
         self.assertFalse(manifest["external_assets"]["model_weights_included"])
         self.assertEqual("0.1.0", manifest["version"])
 

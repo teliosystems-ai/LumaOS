@@ -43,9 +43,29 @@ REQUIRED_SOURCE_DOCUMENTS = (
     "docs/Requirements/Option_Ubuntu_LLM_OS_Functional_Requirements_Development_Testing_4B_to_400B.docx",
 )
 GOVERNING_SOURCE_RECORD = "docs/governing_sources.json"
-G2_TEST_RUN = "docs/gates/g2/test_run_2026-09-23.json"
-G2_ARCHIVE_ATTESTATION = "docs/gates/g2/archive_attestation_2026-09-23.json"
-DETACHED_G2_EVIDENCE_FILES = (G2_TEST_RUN, G2_ARCHIVE_ATTESTATION)
+HISTORICAL_G2_TEST_RUN = "docs/gates/g2/test_run_2026-09-23.json"
+HISTORICAL_G2_ARCHIVE_ATTESTATION = (
+    "docs/gates/g2/archive_attestation_2026-09-23.json"
+)
+G2_TEST_RUN = "docs/gates/g2/test_run_2026-09-23-002.json"
+G2_ARCHIVE_ATTESTATION = "docs/gates/g2/archive_attestation_2026-09-23-002.json"
+HISTORICAL_DETACHED_G2_EVIDENCE_FILES = (
+    HISTORICAL_G2_TEST_RUN,
+    HISTORICAL_G2_ARCHIVE_ATTESTATION,
+)
+CURRENT_DETACHED_G2_EVIDENCE_FILES = (G2_TEST_RUN, G2_ARCHIVE_ATTESTATION)
+DETACHED_G2_EVIDENCE_FILES = (
+    *HISTORICAL_DETACHED_G2_EVIDENCE_FILES,
+    *CURRENT_DETACHED_G2_EVIDENCE_FILES,
+)
+HISTORICAL_DETACHED_G2_SHA256 = {
+    HISTORICAL_G2_TEST_RUN: (
+        "a5ccf0720b2bbcfcd443ea565364a628979afc51724c4f70eb69d8d88be9b628"
+    ),
+    HISTORICAL_G2_ARCHIVE_ATTESTATION: (
+        "a15c067aabd89c69c01cae0ab8b68acecd91155149de8fe3be693db4c632002d"
+    ),
+}
 REQUIRED_GATE_FILES = (
     "docs/adr/0001-python-reference-rust-production.md",
     "docs/adr/0002-service-boundaries-and-transport.md",
@@ -54,6 +74,7 @@ REQUIRED_GATE_FILES = (
     "docs/adr/0005-model-pack-and-signing.md",
     "docs/adr/0006-supported-package-layout.md",
     "docs/adr/0007-admin-delegation-and-signing-custody.md",
+    "docs/adr/0008-model-pack-v2-and-install-time-model-selection.md",
     "docs/gates/final_certification_deferrals.json",
     "docs/gates/g0/blockers.json",
     "docs/gates/g0/ci_lanes.json",
@@ -65,6 +86,7 @@ REQUIRED_GATE_FILES = (
     "docs/gates/g1/evidence.json",
     "docs/gates/g1/hardware_smoke_2026-09-22.json",
     "docs/gates/g1/local_model_smoke_2026-09-22.json",
+    "docs/gates/g1/model_candidate_smoke_2026-09-23.json",
     "docs/gates/g1/test_run_2026-09-22.json",
     "docs/gates/g2/blockers.json",
     "docs/gates/g2/evidence.json",
@@ -85,19 +107,26 @@ REQUIRED_RELEASE_FILES = (
 )
 REQUIRED_INVENTORY_FILES = (
     *REQUIRED_RELEASE_FILES,
+    "schemas/model-pack.schema.json",
+    "schemas/model-profile.schema.json",
     "scripts/smoke_local_model.py",
     "src/luma_os/administration.py",
     "src/luma_os/boot_control.py",
     "src/luma_os/durable_effects.py",
     "src/luma_os/installer.py",
+    "src/luma_os/model_pack.py",
+    "src/luma_os/model_selection.py",
     "src/luma_os/privileged_helper.py",
     "src/luma_os/real_inference.py",
     "tests/test_administration.py",
     "tests/test_boot_control.py",
     "tests/test_durable_effects.py",
     "tests/test_installer.py",
+    "tests/test_model_pack.py",
+    "tests/test_model_selection.py",
     "tests/test_privileged_helper.py",
     "tests/test_real_inference.py",
+    "tests/test_smoke_local_model.py",
 )
 GOVERNING_SOURCE_FILENAMES = {
     "LLM_OS_Windows_Deployment_Requirements_Variation.docx",
@@ -340,7 +369,7 @@ def is_repository_checkout() -> bool:
 
 
 def detached_evidence_is_tracked() -> bool:
-    """Require detached evidence only after both sidecars enter the Git index."""
+    """Require the current detached evidence only after both sidecars are staged."""
 
     if not is_repository_checkout():
         return False
@@ -353,7 +382,7 @@ def detached_evidence_is_tracked() -> bool:
                 "--full-name",
                 "-z",
                 "--",
-                *DETACHED_G2_EVIDENCE_FILES,
+                *CURRENT_DETACHED_G2_EVIDENCE_FILES,
             ],
             cwd=ROOT,
             check=False,
@@ -371,10 +400,26 @@ def detached_evidence_is_tracked() -> bool:
         for path in result.stdout.split(b"\0")
         if path
     }
-    expected = set(DETACHED_G2_EVIDENCE_FILES)
+    expected = set(CURRENT_DETACHED_G2_EVIDENCE_FILES)
     if tracked and tracked != expected:
-        raise RuntimeError("detached G2 test and archive records must be tracked together")
+        raise RuntimeError("current detached G2 test and archive records must be tracked together")
     return tracked == expected
+
+
+def validate_historical_detached_evidence() -> None:
+    """Keep the prior detached release snapshot immutable in repository checkouts."""
+
+    if not is_repository_checkout():
+        return
+    for relative, expected_sha256 in HISTORICAL_DETACHED_G2_SHA256.items():
+        path = ROOT / relative
+        if not path.is_file():
+            raise RuntimeError(f"historical detached G2 evidence is missing: {relative}")
+        actual_sha256 = hashlib.sha256(path.read_bytes()).hexdigest()
+        if actual_sha256 != expected_sha256:
+            raise RuntimeError(
+                f"historical detached G2 evidence changed: {relative}"
+            )
 
 
 def validate_repository_reference(reference: object, label: str) -> None:
@@ -384,8 +429,14 @@ def validate_repository_reference(reference: object, label: str) -> None:
     )
     if (
         structurally_valid
-        and reference in DETACHED_G2_EVIDENCE_FILES
+        and reference in CURRENT_DETACHED_G2_EVIDENCE_FILES
         and not detached_evidence_is_tracked()
+    ):
+        return
+    if (
+        structurally_valid
+        and reference in HISTORICAL_DETACHED_G2_EVIDENCE_FILES
+        and not is_repository_checkout()
     ):
         return
     if structurally_valid and ROOT.joinpath(*path.parts).is_file():
@@ -585,8 +636,8 @@ def validate_gate_artifacts() -> None:
             raise RuntimeError("G2 evidence items must reference repository files")
         for repository_reference in references:
             validate_repository_reference(repository_reference, "G2 evidence reference")
-    if evidence_item_ids != {f"G2-EV-{index:03d}" for index in range(1, 6)}:
-        raise RuntimeError("G2 evidence must retain the five identified development items")
+    if evidence_item_ids != {f"G2-EV-{index:03d}" for index in range(1, 7)}:
+        raise RuntimeError("G2 evidence must retain the six identified development items")
     durable_item = next(
         item for item in g2_evidence_items if item.get("id") == "G2-EV-005"
     )
@@ -596,6 +647,31 @@ def validate_gate_artifacts() -> None:
         or g2_evidence.get("validation_record") != G2_TEST_RUN
     ):
         raise RuntimeError("G2 durable-ledger evidence mapping is inconsistent")
+    model_selection_item = next(
+        item for item in g2_evidence_items if item.get("id") == "G2-EV-006"
+    )
+    model_selection_artifacts = {
+        "schemas/model-pack.schema.json",
+        "schemas/model-profile.schema.json",
+        "src/luma_os/model_pack.py",
+        "src/luma_os/model_selection.py",
+        "src/luma_os/installer.py",
+        "tests/test_model_pack.py",
+        "tests/test_model_selection.py",
+        "tests/test_installer.py",
+    }
+    model_selection_evidence = {
+        *model_selection_artifacts,
+        "docs/gates/g1/model_candidate_smoke_2026-09-23.json",
+    }
+    if (
+        model_selection_item.get("requirements_prepared")
+        != ["A001", "A003", "A108"]
+        or model_selection_item.get("source_tests_prepared")
+        != ["T01", "T02", "T48"]
+        or set(model_selection_item.get("evidence", [])) != model_selection_evidence
+    ):
+        raise RuntimeError("G2 model-selection evidence mapping is inconsistent")
 
     g2_test_plan = documents["docs/gates/g2/test_plan.json"]
     if (
@@ -603,11 +679,27 @@ def validate_gate_artifacts() -> None:
         or g2_test_plan.get("status") != "development-in-progress"
         or g2_test_plan.get("gate_closing") is not False
         or not isinstance(g2_test_plan.get("contract_tranche"), list)
-        or len(g2_test_plan["contract_tranche"]) != 4
+        or len(g2_test_plan["contract_tranche"]) != 5
         or not g2_test_plan.get("mandatory_physical_evidence")
         or not g2_test_plan.get("formal_exit_rule")
     ):
         raise RuntimeError("G2 test plan must preserve its development-only and physical-lab boundary")
+    model_selection_tranches = [
+        tranche
+        for tranche in g2_test_plan["contract_tranche"]
+        if isinstance(tranche, dict)
+        and tranche.get("area") == "install-time-multi-model-selection"
+    ]
+    if (
+        len(model_selection_tranches) != 1
+        or model_selection_tranches[0].get("source_requirements")
+        != ["A001", "A003", "A108"]
+        or model_selection_tranches[0].get("source_tests")
+        != ["T01", "T02", "T48"]
+        or set(model_selection_tranches[0].get("artifacts", []))
+        != model_selection_artifacts
+    ):
+        raise RuntimeError("G2 test plan must retain the model-selection contract tranche")
     inventory = documents["docs/gates/g0/lab_inventory.json"]
     if not isinstance(inventory, dict):
         raise RuntimeError("G0 lab inventory must be an object")
@@ -821,6 +913,121 @@ def validate_gate_artifacts() -> None:
     ):
         raise RuntimeError("local model evidence must preserve both gateway smoke lanes")
 
+    candidate_smoke = documents[
+        "docs/gates/g1/model_candidate_smoke_2026-09-23.json"
+    ]
+    if (
+        not isinstance(candidate_smoke, dict)
+        or candidate_smoke.get("result") != "pass-development-smoke"
+        or candidate_smoke.get("certification_assessment") != "blocked"
+        or candidate_smoke.get("gate_closing") is not False
+    ):
+        raise RuntimeError("model candidate smoke must remain development-only evidence")
+    candidate_items = candidate_smoke.get("candidates")
+    if not isinstance(candidate_items, list) or any(
+        not isinstance(item, dict) for item in candidate_items
+    ):
+        raise RuntimeError("model candidate smoke must retain candidate identities")
+    candidates = {
+        item.get("candidate_id"): item
+        for item in candidate_items
+        if isinstance(item.get("candidate_id"), str)
+    }
+    if set(candidates) != {
+        "qwen3-4b-q4-k-m",
+        "gemma-4-e2b-it-bf16",
+        "gemma-4-e4b-it-bf16",
+    }:
+        raise RuntimeError("model candidate smoke must retain the governed candidate set")
+    qwen_candidate = candidates["qwen3-4b-q4-k-m"]
+    if (
+        qwen_candidate.get("status") != "development-smoke-observed"
+        or qwen_candidate.get("parameter_total") != 4_000_000_000
+        or qwen_candidate.get("parameter_effective") != 4_000_000_000
+        or qwen_candidate.get("signed_model_pack") is not False
+        or not re.fullmatch(r"[0-9a-f]{40}", str(qwen_candidate.get("revision", "")))
+        or not re.fullmatch(
+            r"[0-9a-f]{64}", str(qwen_candidate.get("artifact_sha256", ""))
+        )
+    ):
+        raise RuntimeError("Qwen3-4B candidate identity or trust boundary is inconsistent")
+    if (
+        candidates["gemma-4-e2b-it-bf16"].get("status")
+        != "identified-not-acquired-or-tested"
+        or candidates["gemma-4-e2b-it-bf16"].get("parameter_total")
+        != 5_100_000_000
+        or candidates["gemma-4-e4b-it-bf16"].get("status")
+        != "identified-not-acquired-or-tested"
+        or candidates["gemma-4-e4b-it-bf16"].get("parameter_total")
+        != 8_000_000_000
+        or any(item.get("signed_model_pack") is not False for item in candidates.values())
+    ):
+        raise RuntimeError("Gemma candidates must remain identified but unexecuted and unsigned")
+    candidate_host = candidate_smoke.get("physical_host")
+    candidate_observations = candidate_smoke.get("observations")
+    required_observation_ids = {
+        "QWEN3-4B-WINDOWS-DIRECT-2026-09-23",
+        "QWEN3-4B-WINDOWS-GATEWAY-2026-09-23",
+        "QWEN3-4B-WSL-DIRECT-2026-09-23",
+        "QWEN3-4B-WSL-GATEWAY-2026-09-23",
+    }
+    if (
+        not isinstance(candidate_host, dict)
+        or candidate_host.get("independent_physical_machine_count") != 1
+        or not isinstance(candidate_observations, list)
+        or any(not isinstance(item, dict) for item in candidate_observations)
+        or {item.get("observation_id") for item in candidate_observations}
+        != required_observation_ids
+        or any(
+            item.get("physical_host_id") != candidate_host.get("id")
+            or item.get("simulated") is not False
+            or item.get("response_exact_match") is not True
+            for item in candidate_observations
+        )
+    ):
+        raise RuntimeError("Qwen3-4B smoke must retain four real observations on one host")
+    candidate_summary = candidate_smoke.get("summary")
+    if (
+        not isinstance(candidate_summary, dict)
+        or candidate_summary.get("qwen3_4b_real_model_execution_observed") is not True
+        or candidate_summary.get("gemma_4_e2b_execution_observed") is not False
+        or candidate_summary.get("gemma_4_e4b_execution_observed") is not False
+        or candidate_summary.get("independent_physical_machines") != 1
+        or candidate_summary.get("signed_model_pack_available") is not False
+        or candidate_summary.get("formal_4_6b_requirement_satisfied") is not False
+        or candidate_summary.get("formal_g1_certification_satisfied") is not False
+    ):
+        raise RuntimeError("model candidate summary must preserve its non-certifying boundary")
+    license_register = documents["docs/registers/licenses.json"]
+    workload_register = documents["docs/registers/workloads.json"]
+    license_entries = license_register.get("entries") if isinstance(license_register, dict) else None
+    workload_entries = (
+        workload_register.get("workloads") if isinstance(workload_register, dict) else None
+    )
+    if not isinstance(license_entries, list) or not isinstance(workload_entries, list):
+        raise RuntimeError("model candidate registers must contain entries")
+    qwen_license = next(
+        (item for item in license_entries if isinstance(item, dict) and item.get("id") == "LIC-005"),
+        None,
+    )
+    qwen_workload = next(
+        (item for item in workload_entries if isinstance(item, dict) and item.get("id") == "WL-003"),
+        None,
+    )
+    qwen_license_identity = (
+        qwen_license.get("version_or_digest") if isinstance(qwen_license, dict) else None
+    )
+    qwen_fixture = qwen_workload.get("fixture") if isinstance(qwen_workload, dict) else None
+    if (
+        not isinstance(qwen_license_identity, str)
+        or qwen_candidate["revision"] not in qwen_license_identity
+        or qwen_candidate["artifact_sha256"] not in qwen_license_identity
+        or not isinstance(qwen_fixture, dict)
+        or qwen_fixture.get("digest") != f"sha256:{qwen_candidate['artifact_sha256']}"
+        or qwen_candidate["revision"] not in str(qwen_fixture.get("locator", ""))
+    ):
+        raise RuntimeError("Qwen3-4B smoke identity differs from license or workload registers")
+
     hardware = inventory.get("required_reference_hardware")
     if not isinstance(hardware, dict) or hardware.get("a1_x86_64_boards_designated") != 0:
         raise RuntimeError("lab inventory must not claim unverified A1 reference boards")
@@ -910,7 +1117,7 @@ def validate_gate_artifacts() -> None:
         raise RuntimeError("historical G2 test counts must remain an immutable snapshot")
     detached_expected = detached_evidence_is_tracked()
     detached_presence = [
-        (ROOT / path).is_file() for path in DETACHED_G2_EVIDENCE_FILES
+        (ROOT / path).is_file() for path in CURRENT_DETACHED_G2_EVIDENCE_FILES
     ]
     if detached_expected and not all(detached_presence):
         raise RuntimeError("detached G2 test and archive records must be supplied together")
@@ -955,6 +1162,8 @@ def validate_gate_artifacts() -> None:
         "test_installer.py",
         "test_privileged_helper.py",
         "test_durable_effects.py",
+        "test_model_pack.py",
+        "test_model_selection.py",
     )
     declared_boundary_count = sum(
         len(
@@ -980,9 +1189,9 @@ def validate_gate_artifacts() -> None:
         "optimized_boundary_tests_run": declared_boundary_count,
     }
     if (
-        declared_test_count != 170
-        or declared_boundary_count != 71
-        or len(release_manifest.get("release_files", [])) != 132
+        declared_test_count != 190
+        or declared_boundary_count != 96
+        or len(release_manifest.get("release_files", [])) != 138
     ):
         raise RuntimeError("current G2 repository test or release counts are stale")
     if detached_available and any(
@@ -1029,7 +1238,7 @@ def validate_gate_artifacts() -> None:
         != release_source_commit
         or archive_attestation.get("release_archive_inclusion")
         != "excluded-to-prevent-self-referential-archive-hashes"
-        or archive_attestation.get("file_count") != 132
+        or archive_attestation.get("file_count") != 138
         or archive_attestation.get("source_date_epoch") != 0
         or archive_attestation.get("builds") != 2
         or archive_attestation.get("checksum_verification") != "pass"
@@ -1124,11 +1333,12 @@ def validate_gate_artifacts() -> None:
 
 
 def validate_repository() -> None:
+    validate_historical_detached_evidence()
     detached_expected = detached_evidence_is_tracked()
     required_workspace_files = (
-        (*REQUIRED_RELEASE_FILES, *DETACHED_G2_EVIDENCE_FILES)
-        if detached_expected
-        else REQUIRED_RELEASE_FILES
+        *REQUIRED_RELEASE_FILES,
+        *(HISTORICAL_DETACHED_G2_EVIDENCE_FILES if is_repository_checkout() else ()),
+        *(CURRENT_DETACHED_G2_EVIDENCE_FILES if detached_expected else ()),
     )
     missing = [path for path in required_workspace_files if not (ROOT / path).is_file()]
     if missing:

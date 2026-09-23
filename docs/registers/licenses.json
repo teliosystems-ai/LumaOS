@@ -60,15 +60,17 @@
     },
     {
       "id": "LIC-005",
-      "component": "Compact 4-6B candidate A and tokenizer",
-      "version_or_digest": null,
-      "source": null,
-      "license_expression": null,
+      "component": "Qwen3-4B Q4_K_M compact candidate A and tokenizer",
+      "version_or_digest": "revision bc640142c66e1fdd12af0bd68f40445458f3869b; Qwen3-4B-Q4_K_M.gguf; size 2497280256; sha256:7485fe6f11af29433bc51cab58009521f205840f5b4ae3a32fa7f92e8534fdf5",
+      "source": "https://huggingface.co/Qwen/Qwen3-4B-GGUF",
+      "license_expression": "Apache-2.0",
       "use_scope": "G1 evaluation and possible A1 redistribution",
-      "redistributed": null,
+      "redistributed": false,
       "owner": "license-owner",
-      "status": "blocked-unselected",
-      "evidence": [],
+      "status": "recorded-for-development-evaluation-formal-redistribution-review-pending",
+      "evidence": [
+        "docs/gates/g1/model_candidate_smoke_2026-09-23.json"
+      ],
       "required_decisions": [
         "evaluation permission",
         "weight redistribution",
@@ -79,15 +81,17 @@
     },
     {
       "id": "LIC-006",
-      "component": "Compact 4-6B candidate B and tokenizer",
-      "version_or_digest": null,
-      "source": null,
-      "license_expression": null,
+      "component": "Gemma 4 E2B compact candidate B and tokenizer",
+      "version_or_digest": "revision 3e22461f65e89153144f8adb70e3b8c2cc9845a7; BF16 model.safetensors; size 10246621918; Hub-linked sha256:2db5482b20d746879bb3ef79b5203e9075a2e2b98f54ec7c2f281c1477ddc550; local recomputation pending",
+      "source": "https://huggingface.co/google/gemma-4-E2B-it",
+      "license_expression": "Apache-2.0",
       "use_scope": "G1 evaluation and possible A1 redistribution",
-      "redistributed": null,
+      "redistributed": false,
       "owner": "license-owner",
-      "status": "blocked-unselected",
-      "evidence": [],
+      "status": "identified-hub-digest-and-license-owner-review-pending",
+      "evidence": [
+        "docs/gates/g1/model_candidate_smoke_2026-09-23.json"
+      ],
       "required_decisions": [
         "evaluation permission",
         "weight redistribution",
@@ -98,15 +102,17 @@
     },
     {
       "id": "LIC-007",
-      "component": "Mainstream comparison model and tokenizer",
-      "version_or_digest": null,
-      "source": null,
-      "license_expression": null,
+      "component": "Gemma 4 E4B mainstream comparison model and tokenizer",
+      "version_or_digest": "revision ee0ef6023621cff504d758262d4e04895a5af4a2; BF16 model.safetensors; size 15992595884; Hub-linked sha256:cfbd3d2f1cd71bd471c37fe2bf8546d5028d41e5736f64e1ca6c6b8893125503; local recomputation pending",
+      "source": "https://huggingface.co/google/gemma-4-E4B-it",
+      "license_expression": "Apache-2.0",
       "use_scope": "G1 comparison evaluation",
       "redistributed": false,
       "owner": "license-owner",
-      "status": "blocked-unselected",
-      "evidence": [],
+      "status": "identified-hub-digest-and-license-owner-review-pending",
+      "evidence": [
+        "docs/gates/g1/model_candidate_smoke_2026-09-23.json"
+      ],
       "required_decisions": [
         "evaluation permission",
         "storage and access controls",

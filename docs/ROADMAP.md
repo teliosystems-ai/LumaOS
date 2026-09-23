@@ -32,8 +32,8 @@ The first G2 tranche provides:
   not persisted: the ledger stores keyed commitments, and the remaining
   authorization digest relies on mandatory 256-bit CSPRNG entropy.
 
-The four-module tranche has 71 safety tests passing on native Windows and
-Ubuntu WSL under normal and optimized-Python execution. It does not perform
+The expanded six-module boundary has 96 safety/model tests passing on native
+Windows and Ubuntu WSL under normal and optimized-Python execution. It does not perform
 disk, firmware, or other privileged host changes, boot a release, establish
 UKI/dm-verity/LUKS, or enforce cgroup, AppArmor, seccomp, KVM, native ACL/DACL
 policy, or operating-system peer credentials. The two development lanes share
@@ -52,7 +52,11 @@ Goal: prove one complete, local, inspectable workflow through a shared core.
 - restart-safe workflow state and idempotency;
 - manual/offline baseline with optional model status;
 - current native Windows and Ubuntu 26.04 WSL development lanes, with Ubuntu 24.04 retained as the physical-board certification baseline;
-- a pinned Qwen3-1.7B/llama.cpp development smoke through Windows CUDA, Ubuntu WSL CPU, and the authenticated Luma gateway;
+- a pinned Qwen3-4B Q4_K_M/llama.cpp development profile exercised through
+  Windows CUDA, Ubuntu WSL CPU, and the authenticated Luma gateway;
+- explicit install-time model-profile selection with manual-only, CPU, and
+  CUDA choices, exact identity/resource checks, plan binding, effect-time
+  revalidation, and no silent substitution;
 - an Admin product governance role for finite, receipted delegation, distinct from host administrator/root and production key custody;
 - source release, checksums, CI, and architecture/security documentation.
 
@@ -91,6 +95,8 @@ The following are research themes, not commitments or current support:
 
 - desktop/session integration on Ubuntu;
 - hardware-aware model profiles;
+- signed catalogs spanning compact through 400–405B parameter classes, with
+  each selectable profile made available only after its exact hardware check;
 - native Windows experience beyond WSL2;
 - VM or image distribution;
 - multi-device orchestration; and

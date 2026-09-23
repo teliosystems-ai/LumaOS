@@ -154,13 +154,12 @@ class RequirementRegistryTests(unittest.TestCase):
             item for item in self.registry["requirements"] if item["closure_gate"] == "G2"
         ]
         statuses = Counter(item["implementation_status"] for item in g2_items)
-        self.assertEqual({"in_progress": 19, "not_started": 15}, dict(statuses))
+        self.assertEqual({"in_progress": 20, "not_started": 14}, dict(statuses))
 
         untouched = {
             "FR01",
             "FR04",
             "FR06",
-            "A003",
             "A004",
             "A006",
             "A007",
@@ -246,7 +245,7 @@ class RequirementRegistryTests(unittest.TestCase):
         self.assertEqual(rendered, REPORT_PATH.read_text(encoding="utf-8"))
         self.assertIn("G0 governing-source traceability status: **VERIFIED**", rendered)
         self.assertIn("| G1 | 88 | 88 | 0 | 0 | 0 | 88 | BLOCKED |", rendered)
-        self.assertIn("| G2 | 34 | 19 | 15 | 0 | 0 | 34 | BLOCKED |", rendered)
+        self.assertIn("| G2 | 34 | 20 | 14 | 0 | 0 | 34 | BLOCKED |", rendered)
         self.assertIn("No product requirement is closed by this report.", rendered)
 
     def test_report_validation_rejects_duplicate_ids(self) -> None:

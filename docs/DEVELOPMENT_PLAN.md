@@ -28,8 +28,11 @@ Version `0.1.0` is a developer MVP and a useful input to G0. It currently demons
 - source-run paths for Ubuntu and Windows 11 through WSL2;
 - the current native Windows 11 and Ubuntu 26.04 WSL development lanes on one physical laptop;
 - a fixed Luma OS `Admin` governance role with finite, receipted delegation;
-- a pinned Qwen3-1.7B Q4_K_M development model through llama.cpp on Windows CUDA, Ubuntu WSL CPU, and the authenticated Luma gateway;
-- a non-destructive installer contract, pure A/B boot-state model, typed privileged-helper/confinement contracts, and SQLite-backed request/effect ledgers with 71 safety tests on native Windows and Ubuntu WSL under normal and optimized-Python execution; and
+- a pinned Qwen3-4B Q4_K_M development model through llama.cpp on Windows CUDA, Ubuntu WSL CPU, and the authenticated Luma gateway;
+- versioned multi-model manifests and install-time profiles with exact total
+  and active parameter counts, manual-only/CPU/CUDA choices, and fail-closed
+  RAM, VRAM, storage, context, load, and serving checks;
+- a non-destructive installer contract, pure A/B boot-state model, typed privileged-helper/confinement contracts, SQLite-backed request/effect ledgers, and exact multi-model selection with an expanded 96-test safety/model boundary on native Windows and Ubuntu WSL under normal and optimized-Python execution; and
 - repository, API-contract, browser-journey, and deterministic source-package checks.
 
 It has **not** passed formal G0 or G1. Their repository/local development scope is recorded as **complete with deferrals**, while formal certification remains **blocked**. Repository-local G1 prototypes now cover purpose/lifecycle-bound signed model-pack contracts, checked resource admission, deny-by-default policy and Admin delegation, a typed DAG, deterministic fake inference, real loopback inference, local-gateway fencing, platform-adapter scaffolding, and state recovery. It still does not provide a signed certified 4–6B model pack, qualified two-board model runtime, signed skills, worker sandboxing, semantic indexing, multimodal interaction, a bootable image, A/B updates, hardware certification, a Windows file broker, VM or dual-boot lifecycle, 400–405B qualification, or cluster execution. Existing simulator, fake-backend, WSL, one-laptop real-model, and MVP results are development evidence only.
@@ -44,7 +47,9 @@ effect ledgers, generation/owner fencing, explicit crash-state semantics, and
 a fail-fast pre-dispatch compare-and-swap. Commit
 `8a8fc8291b42b9a76003dd3e71fa99f9a3117e62` adds post-transition current-state
 revalidation, safe `PREPARED` restoration, and known-not-applied capacity
-handling. It neither performs
+handling. Commit `5667e3d8f337dec326dc8afdec91ed34c1c2eb2a` adds exact
+multi-model catalog/profile selection, hardware admission, installer-plan
+binding, and effect-time revalidation. It neither performs
 installation/boot/host effects nor enforces UKI, dm-verity, LUKS, cgroup v2,
 AppArmor, seccomp, KVM, native ACL/DACL policy, or real peer credentials.
 Native Windows and Ubuntu WSL remain two development lanes on one physical
@@ -55,8 +60,8 @@ laptop, not the two required A1 boards.
 | Stage | Status at this checkpoint |
 | --- | --- |
 | G0 | **Development complete with deferrals; formal certification blocked.** Governing source ingestion and 288-ID traceability are verified; the development baseline, decisions including Admin governance, registers, current Windows/WSL inventory, checks, and source-package evidence exist. Two designated physical boards, the Ubuntu 24.04/E8 baselines, disposable disks, protected production signing custody, and complete qualification evidence are deferred in `docs/gates/g0/blockers.json` and `docs/gates/final_certification_deferrals.json`. |
-| G1 | **Development complete with deferrals; formal certification blocked.** Contract evidence covers resources, policy/Admin delegation, typed DAG, model-pack trust lifecycle, fake and real inference, authenticated gateway, cancellation/concurrency/revocation fencing, state transfer, telemetry, and platform adapters. Qwen3-1.7B passed bounded native Windows CUDA and Ubuntu WSL CPU/gateway smoke, but it is below the governed 4–6B range. Signed 4–6B comparison, two-board workflows, boot/recovery, full security/performance evidence, and the real 400–405B experiment are deferred. No deferral waives G0 or G1 exit criteria. |
-| G2 | **Development in progress; formal certification blocked.** Four repository-local safety-contract modules have 71 tests on native Windows and Ubuntu WSL under normal and optimized-Python execution for non-destructive installer authorization, pure A/B boot-state transitions, typed helper/confinement boundaries, and durable request/effect coordination. No real disk, boot, cryptographic boot-chain, encryption, kernel-control, VM, native ACL/DACL, or peer-credential enforcement has been exercised. |
+| G1 | **Development complete with deferrals; formal certification blocked.** Contract evidence covers resources, policy/Admin delegation, typed DAG, model-pack trust lifecycle, fake and real inference, authenticated gateway, cancellation/concurrency/revocation fencing, state transfer, telemetry, and platform adapters. Qwen3-4B passed bounded native Windows CUDA and Ubuntu WSL CPU/gateway development smoke, but the external artifact is unsigned and not a certified pack. Signed candidate comparison, two-board workflows, boot/recovery, full security/performance evidence, and the real 400–405B experiment are deferred. No deferral waives G0 or G1 exit criteria. |
+| G2 | **Development in progress; formal certification blocked.** The repository-local expanded boundary has 96 tests on native Windows and Ubuntu WSL under normal and optimized-Python execution for non-destructive installer authorization, exact multi-model/hardware selection, pure A/B boot-state transitions, typed helper/confinement boundaries, and durable request/effect coordination. No real disk, boot, cryptographic boot-chain, encryption, kernel-control, VM, native ACL/DACL, or peer-credential enforcement has been exercised. |
 | G3, G4, G5 | **Not started.** |
 | GWIN0, GWIN1, GWIN2 | **Not started.** |
 | G6, G7 | **Not started and separately capacity-gated.** |
@@ -169,12 +174,15 @@ for formal certification.
 
 **Exit gate:** The compact workflow operates offline on both boards; no accepted allocation exceeds a domain budget; model failure preserves manual access and recovery; the exact platform, compact model, mainstream candidate, backend, storage, sandbox, and signing directions are selected from recorded evidence.
 
-**2026-09-22 development disposition:** The repository/local G1 tranche is
-accepted as complete with deferrals. Qwen3-1.7B Q4_K_M with llama.cpp b11100
-is the low-resource development baseline and has produced exact bounded output
-on native Windows CUDA and Ubuntu WSL CPU, including real authenticated calls
+**2026-09-23 model-profile addendum:** The repository/local G1 tranche remains
+accepted as complete with deferrals. Qwen3-4B Q4_K_M with llama.cpp b11100 is
+the recommended current development profile and has produced exact bounded
+output on native Windows CUDA and Ubuntu WSL CPU, including authenticated calls
 through the Luma resource, policy, lease, and gateway path. It is an unsigned
-developer tuple below the required 4–6B range and is not G1-closing evidence.
+external developer tuple and is not G1-closing evidence. Gemma 4 E2B is retained
+as a conditional compact candidate with both 5.1B total and 2.3B effective
+counts recorded; Gemma 4 E4B is the 8B-total mainstream candidate, not a
+4–6B-total model. Neither Gemma candidate has been acquired or tested here.
 The two-board 4–6B comparison, physical boot/recovery/security/performance
 suite, and real 400–405B experiment remain deferred to final OS testing and
 certification. A 450B target is outside the current governing requirements.
@@ -188,6 +196,9 @@ certification. A 450B target is outside the current governing requirements.
 **Deliverables:**
 
 - Offline Ubuntu installer and recovery media for two selected x86-64 boards.
+- Installer-time choice among cataloged model parameter/configuration profiles
+  or explicit manual-only mode, with unavailable choices explained after
+  effective hardware and peak-resource checks.
 - Signed UKI, read-only A/B ext4 roots protected by dm-verity, LUKS2 data storage, trial boot, health acknowledgement, and automatic prior-slot selection.
 - Model-independent manual desktop, file export, repair, diagnostics, and clean shutdown.
 - Full model lifecycle, atomic leases, generation fencing, device quarantine, cgroup v2 budgets, pressure state machine, and measured cleanup.
@@ -250,6 +261,20 @@ enforcement, protected integrity-key custody, resistance to database deletion
 or rollback, induced power-loss durability, external rollback anchoring, or
 physical hardware effects. All such evidence remains required for formal G2
 certification.
+
+**2026-09-23 model-selection checkpoint:** G2 remains in progress and has not
+passed. Model-pack schema v2 now binds exact total/active parameter counts,
+ordered shards, required capabilities, runtime tuples, and CPU/CUDA
+installation profiles. A separate immutable catalog supports multiple model
+sizes and explicit `manual-only` operation. Installer schema-v2 plans bind the
+requested catalog/profile, verified pack and runtime digests, context,
+execution mode, effective hardware snapshot, peak storage, load/serve memory,
+and one qualifying CUDA device; the same exact selection is re-evaluated before
+the injected executor. Unknown, unavailable, unverified, incompatible, or
+under-resourced profiles are denied without CPU/manual/remote substitution.
+This is non-destructive contract evidence. The current Qwen3-4B artifact is
+unsigned and outside the release, and no production catalog, base image, model
+import/rollback, destructive installer, or physical-board workflow exists.
 
 ## G3 Functional beta
 
@@ -555,9 +580,10 @@ Development used `v0.1.0` as the G0 seed rather than restarting the reference im
 
 Repository-local items 1–5 are implemented, together with Admin governance,
 purpose/lifecycle-bound model-pack trust, policy, typed-DAG, local-gateway,
-telemetry, platform-adapter, and recovery contracts. Item 5 uses the pinned
-1.7B development baseline and therefore does not close the governed 4–6B
-deliverable. Item 6 and every gate-closing physical-board, boot, recovery,
+telemetry, platform-adapter, and recovery contracts. Item 5 now uses a pinned
+Qwen3-4B development profile, but its unsigned external asset and one-host
+smoke do not close the governed signed-pack/base-image/comparison deliverable.
+Item 6 and every gate-closing physical-board, boot, recovery,
 signing-custody, security/performance, and 400–405B test are recorded as final
 certification deferrals. Development has entered the G2 safety-contract tranche
 without representing those G0/G1 deferrals as passes or the pure G2 contracts

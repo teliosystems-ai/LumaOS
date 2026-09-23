@@ -73,9 +73,9 @@
       "owner": "inference-lead",
       "status": "blocked",
       "fixture": {
-        "classification": "private-or-licensed-external",
-        "locator": null,
-        "digest": null
+        "classification": "licensed-external-not-in-git",
+        "locator": "Qwen/Qwen3-4B-GGUF@bc640142c66e1fdd12af0bd68f40445458f3869b/Qwen3-4B-Q4_K_M.gguf",
+        "digest": "sha256:7485fe6f11af29433bc51cab58009521f205840f5b4ae3a32fa7f92e8534fdf5"
       },
       "oracle": "The exact signed pack/runtime tuple completes the common OS-task set offline with correctness, resource, latency, cancellation, and recovery evidence.",
       "required_evidence": [
@@ -89,7 +89,12 @@
         "G0-BLK-002",
         "G0-BLK-005",
         "G0-BLK-006"
-      ]
+      ],
+      "development_status": "bounded-real-model-smoke-observed-on-one-physical-host",
+      "development_evidence": [
+        "docs/gates/g1/model_candidate_smoke_2026-09-23.json"
+      ],
+      "limitations": "The Qwen3-4B artifact is unsigned and was exercised only as a development asset on native Windows CUDA and Ubuntu WSL CPU on the same physical laptop. This is not the signed common-task comparison, both-board evidence, pressure/recovery suite, task-quality result, or certification required by the oracle."
     },
     {
       "id": "WL-004",
@@ -103,8 +108,8 @@
       "status": "blocked",
       "fixture": {
         "classification": "private-or-licensed-external",
-        "locator": null,
-        "digest": null
+        "locator": "google/gemma-4-E2B-it@3e22461f65e89153144f8adb70e3b8c2cc9845a7/model.safetensors",
+        "digest": "sha256:2db5482b20d746879bb3ef79b5203e9075a2e2b98f54ec7c2f281c1477ddc550"
       },
       "oracle": "Uses the identical task set, measurement method, context, and reporting fields as WL-003.",
       "required_evidence": [
@@ -118,7 +123,12 @@
         "G0-BLK-002",
         "G0-BLK-005",
         "G0-BLK-006"
-      ]
+      ],
+      "development_status": "candidate-identified-hub-digest-recorded-local-verification-and-execution-pending",
+      "development_evidence": [
+        "docs/gates/g1/model_candidate_smoke_2026-09-23.json"
+      ],
+      "limitations": "Gemma 4 E2B is 5.1B total and 2.3B effective and is conditionally classified in the compact tier by total parameters. The official Hub-linked digest has not been recomputed from a local file; no local execution, signed pack, license-owner decision, common-task result, or hardware evidence is present."
     },
     {
       "id": "WL-005",
@@ -131,8 +141,8 @@
       "status": "blocked",
       "fixture": {
         "classification": "private-or-licensed-external",
-        "locator": null,
-        "digest": null
+        "locator": "google/gemma-4-E4B-it@ee0ef6023621cff504d758262d4e04895a5af4a2/model.safetensors",
+        "digest": "sha256:cfbd3d2f1cd71bd471c37fe2bf8546d5028d41e5736f64e1ca6c6b8893125503"
       },
       "oracle": "Results use the same task definitions and disclose any hardware/runtime differences rather than normalizing them away.",
       "required_evidence": [
@@ -142,7 +152,12 @@
       ],
       "blockers": [
         "G0-BLK-006"
-      ]
+      ],
+      "development_status": "candidate-identified-hub-digest-recorded-local-verification-and-execution-pending",
+      "development_evidence": [
+        "docs/gates/g1/model_candidate_smoke_2026-09-23.json"
+      ],
+      "limitations": "Gemma 4 E4B is 8B total and 4.5B effective. It is a mainstream 8-14B candidate, not a governed 4-6B compact candidate. The official Hub-linked digest has not been recomputed from a local file; no local execution, signed pack, license-owner decision, or common-task result is present."
     },
     {
       "id": "WL-006",

@@ -6,7 +6,7 @@
   "owner": "qa-lead",
   "status": "development-in-progress",
   "gate_closing": false,
-  "claim_boundary": "This plan separates locally executable contract and bounded SQLite durability tests from physical Ubuntu OS acceptance. Passing fake-device, injected-adapter, temporary SQLite, native Windows, or Ubuntu WSL tests cannot satisfy a numbered procedure that requires signed media, physical boot, destructive storage, encryption recovery, kernel enforcement, physical crash recovery, or two A1 boards.",
+  "claim_boundary": "This plan separates locally executable safety, model-profile selection, and bounded SQLite durability tests from physical Ubuntu OS acceptance. Passing fake-device, injected-adapter, unsigned-model, temporary SQLite, native Windows, or Ubuntu WSL tests cannot satisfy a numbered procedure that requires a signed production model catalog, signed media, physical boot, destructive storage, encryption recovery, kernel enforcement, physical crash recovery, or two A1 boards.",
   "development_lanes": [
     {
       "environment": "DEV-WIN-WSL-GPU-01",
@@ -55,6 +55,23 @@
       ],
       "local_disposition": "bounded authenticated SQLite ledger, idempotency, crash-window, post-CAS revalidation/restoration, capacity-classification, and helper-integration tests",
       "formal_disposition": "blocked-pending-protected-production-storage-and-physical-crash-power-loss-reconciliation"
+    },
+    {
+      "area": "install-time-multi-model-selection",
+      "source_requirements": ["A001", "A003", "A108"],
+      "source_tests": ["T01", "T02", "T48"],
+      "artifacts": [
+        "schemas/model-pack.schema.json",
+        "schemas/model-profile.schema.json",
+        "src/luma_os/model_pack.py",
+        "src/luma_os/model_selection.py",
+        "src/luma_os/installer.py",
+        "tests/test_model_pack.py",
+        "tests/test_model_selection.py",
+        "tests/test_installer.py"
+      ],
+      "local_disposition": "deterministic schema-v2 pack, profile-catalog, exact hardware-fit, explicit selection, plan-binding, and effect-time revalidation contract tests",
+      "formal_disposition": "blocked-pending-signed-production-catalog-offline-base-image-both-board-resource-and-recovery-evidence"
     }
   ],
   "remaining_numbered_suite": [

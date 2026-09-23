@@ -6,8 +6,8 @@
   "assessment": "blocked",
   "development_assessment": "in-progress",
   "certification_assessment": "blocked",
-  "claim_boundary": "This evidence advances the repository-local G2 control-plane tranche. It demonstrates pure, injected contracts for non-destructive installer planning, A/B trial-boot state, a typed privileged-helper boundary, and bounded SQLite-backed request/effect ledger integration. It does not demonstrate a bootable OS, disk mutation, Secure Boot, UKI, dm-verity, LUKS2, cgroup/AppArmor/seccomp enforcement, KVM isolation, kernel peer credentials, or either physical A1 board.",
-  "implementation_commit": "8a8fc8291b42b9a76003dd3e71fa99f9a3117e62",
+  "claim_boundary": "This evidence advances the repository-local G2 control-plane tranche. It demonstrates pure, injected contracts for non-destructive installer planning, exact install-time model-profile selection, A/B trial-boot state, a typed privileged-helper boundary, and bounded SQLite-backed request/effect ledger integration. It does not demonstrate a bootable OS, disk mutation, a signed production model catalog, Secure Boot, UKI, dm-verity, LUKS2, cgroup/AppArmor/seccomp enforcement, KVM isolation, kernel peer credentials, or either physical A1 board.",
+  "implementation_commit": "5667e3d8f337dec326dc8afdec91ed34c1c2eb2a",
   "items": [
     {
       "id": "G2-EV-001",
@@ -61,12 +61,12 @@
       "requirements_prepared": [],
       "source_tests_prepared": [],
       "evidence": [
-        "docs/gates/g2/test_run_2026-09-23.json",
-        "docs/gates/g2/archive_attestation_2026-09-23.json",
+        "docs/gates/g2/test_run_2026-09-23-002.json",
+        "docs/gates/g2/archive_attestation_2026-09-23-002.json",
         "scripts/check.py"
       ],
       "environment": "DEV-WIN-WSL-GPU-01",
-      "observations": "The complete 170-test suite passed with zero failures in native Windows and Ubuntu WSL; 71 optimized safety-boundary tests passed in each lane. These environments share one physical laptop.",
+      "observations": "The complete 190-test suite passed with zero failures in native Windows and Ubuntu WSL; 96 optimized safety/model-boundary tests passed in each lane. These environments share one physical laptop.",
       "limitations": "Repository tests validate contracts and regressions only. The dated test-run and archive-attestation paths are detached repository sidecars intentionally excluded from release archives; an extracted archive validates its included content without them. These results do not satisfy any physical-board, destructive-media, boot, encryption, confinement, performance, or lifecycle acceptance procedure.",
       "gate_closing": false
     },
@@ -85,9 +85,31 @@
       "observations": "Nineteen deterministic durable-ledger tests exercise bounded authenticated SQLite request/effect records, writer fencing, idempotency, crash-window ambiguity, post-APPLYING current-state revalidation with safe PREPARED restoration, reconciliation, capacity limits, clock rollback, and corruption rejection. The privileged-helper suite integrates the same SQLite request journal and idempotent effect executor across completed, prepared, applying, and known-not-applied capacity recovery paths.",
       "limitations": "The SQLite ledgers were exercised with development files on one laptop. SQLite cannot make an external host mutation transactional; a production adapter, protected storage policy, watchdog, and physical crash/power-loss reconciliation evidence remain required.",
       "gate_closing": false
+    },
+    {
+      "id": "G2-EV-006",
+      "subject": "model-pack-v2-install-time-profile-selection-and-binding-contract",
+      "result": "development-tests-passed",
+      "requirements_prepared": ["A001", "A003", "A108"],
+      "source_tests_prepared": ["T01", "T02", "T48"],
+      "evidence": [
+        "schemas/model-pack.schema.json",
+        "schemas/model-profile.schema.json",
+        "src/luma_os/model_pack.py",
+        "src/luma_os/model_selection.py",
+        "src/luma_os/installer.py",
+        "tests/test_model_pack.py",
+        "tests/test_model_selection.py",
+        "tests/test_installer.py",
+        "docs/gates/g1/model_candidate_smoke_2026-09-23.json"
+      ],
+      "environment": "DEV-WIN-WSL-GPU-01",
+      "observations": "Twenty dedicated model-pack/model-selection tests and five installer-integration tests cover schema-v2 exact total/active counts through 405B, ordered shards and capabilities, explicit manual-only/CPU/CUDA profiles, JSON-safe resource arithmetic, exact pack/runtime/context/resource binding, single-device CUDA fit, denial without substitution, verified-pack bridging, and effect-time catalog/hardware revalidation.",
+      "limitations": "The exercised Qwen3-4B artifact and derived tuple are unsigned development inputs. No signed production catalog, base-image integration, destructive installation, native Ubuntu board, two-board run, complete offline workflow, pressure/recovery qualification, or certified 400–405B hardware result exists.",
+      "gate_closing": false
     }
   ],
-  "validation_record": "docs/gates/g2/test_run_2026-09-23.json",
+  "validation_record": "docs/gates/g2/test_run_2026-09-23-002.json",
   "test_plan": "docs/gates/g2/test_plan.json",
   "open_blocker_record": "docs/gates/g2/blockers.json",
   "deferral_record": "docs/gates/final_certification_deferrals.json",

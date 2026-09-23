@@ -40,15 +40,18 @@ Luma OS `0.1.0` is a developer MVP. “Supported” means the repository intends
 | Offline/manual operation without a model | Required baseline |
 | Operator-configured local model endpoint | Optional/best effort |
 | G1 resource/policy/DAG/model-pack/platform contracts | Development prototype only; not product or hardware certification |
+| Install-time model-profile selection | Development-only contract; explicit manual-only, CPU, or CUDA profile is bound into the plan and must pass exact runtime, host RAM, single-device VRAM, storage-peak, context, load, and serving checks; no silent substitution or remote fallback |
 | Deterministic fake inference | Test-only; never runtime, quality, or performance evidence |
 | Admin role/delegation | Development implementation; fixed product super-role for finite declared activities, not host administrator/root or a production custody certificate |
 | G2 installer contract | Development-only and non-destructive; pure inventory/preflight/confirmation/revalidation/capability/journal boundary, not a disk installer |
 | G2 A/B boot-state contract | Development-only pure transition model; no firmware, slot I/O, UKI, dm-verity, LUKS, or actual boot behavior |
 | G2 privileged-helper/confinement contract | Development-only typed boundary with injected trust evidence; no privileged service, cgroup/AppArmor/seccomp/KVM, native ACL/DACL, or real peer-credential enforcement |
 | G2 durable request/effect ledgers | Development-only bounded SQLite contracts with keyed integrity, owner/generation fencing, `PREPARED`/`APPLYING`/`COMPLETED`/`FAILED_UNKNOWN` crash semantics, fail-fast dispatch CAS, post-CAS current-state validation, safe known-not-applied restoration, semantic completion binding, and keyed commitments instead of stored raw safe-handle tokens; no protected key custody, external rollback anchor, induced power loss, or physical effect adapter |
-| G2 safety tests | 71 tests across installer, boot-state, helper, and durable-effect modules pass on native Windows and Ubuntu WSL under normal and optimized Python; both lanes share one physical host, and this is contract evidence only, not physical certification |
-| Qwen3-1.7B Q4_K_M + llama.cpp b11100 | Pinned development smoke baseline; real Windows CUDA, Ubuntu WSL CPU, and authenticated Luma gateway smoke passed |
-| Real signed 4–6B compact-model inference | Not yet available or certified; 1.7B smoke does not satisfy it |
+| G2 safety/model boundary | 96 tests across installer, boot-state, helper, durable-effect, model-pack, and model-selection modules pass on native Windows and Ubuntu WSL under normal and optimized Python; both lanes share one physical host, and this is contract evidence only, not physical certification |
+| Qwen3-4B Q4_K_M + llama.cpp b11100 | Recommended pinned development profile; real Windows CUDA, Ubuntu WSL CPU, and authenticated Luma gateway smoke passed; external unsigned asset, not certified |
+| Gemma 4 E2B | Alternative compact candidate only; 5.1B total / 2.3B effective must be recorded explicitly; not downloaded, run, signed, or certified here |
+| Gemma 4 E4B | Alternative mainstream candidate; 8B total / 4.5B effective and therefore not a 4–6B-total compact candidate; not downloaded, run, signed, or certified here |
+| Real signed 4–6B compact-model inference | Not yet available or certified; the Qwen3-4B smoke does not replace a signed pack, base-image workflow, comparison, or two-board qualification |
 | Remote/cloud model service | Unsupported by default |
 | Bundled models, weights, tokenizers, or datasets | Not included |
 | General autonomous tool execution | Unsupported |
@@ -75,7 +78,7 @@ Luma OS `0.1.0` is a developer MVP. “Supported” means the repository intends
 
 ## Model scale language
 
-The A1 requirements select a 4–6B compact control model. The governed large-model experiment and later A2 work use the 400–405B range. Those ranges are requirements, **not** claims that this MVP runs or certifies them. A pinned 1.7B model has run locally only as a development smoke baseline. A 450B target is outside the current governing sources and requires controlled requirements change.
+The A1 requirements select a 4–6B compact control model. The governed large-model experiment and later A2 work use the 400–405B range. Those ranges are requirements, **not** claims that this MVP certifies them. A pinned Qwen3-4B model has run locally only as an unsigned development profile. Gemma 4 E2B is 5.1B total / 2.3B effective; Gemma 4 E4B is 8B total / 4.5B effective. A 450B target is outside the current governing sources and requires controlled requirements change.
 
 Version `0.1.0` includes model-pack, purpose/lifecycle-bound trust-key, resource, real-loopback-adapter, and fake-backend development contracts, but no shipped weights, signed certified 4–6B pack, qualified scheduler, distributed inference, certified performance baseline, two-board hardware qualification, or cluster certification.
 

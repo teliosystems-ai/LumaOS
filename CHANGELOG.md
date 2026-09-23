@@ -21,6 +21,17 @@ All notable changes to Luma OS are documented here. The format follows [Keep a C
   platform adapters, and strict signed model-pack verification contracts.
 - Bounded local-IPC framing with strict envelopes, peer-identity checks,
   deadlines, and stale-lease fields.
+- Model-pack schema v2 with exact total/active parameter counts, ordered model
+  shards, required capabilities, and runtime-bound CPU/CUDA installation
+  profiles, plus an immutable multi-profile catalog and hardware-fit contract
+  that recognizes governed ranges through 405B.
+- Explicit install-time `manual-only`, CPU, and CUDA selection bound into the
+  installer plan and confirmation, with storage/load/serve/context checks,
+  same-device accelerator qualification, effect-time revalidation, and no
+  silent profile or remote fallback.
+- A digest-pinned Qwen3-4B Q4_K_M development smoke on native Windows CUDA and
+  Ubuntu WSL CPU through direct llama.cpp and authenticated Luma gateway paths;
+  the asset remains external, unsigned, non-redistributed, and non-certifying.
 - A non-destructive installer safety contract with immutable inventory,
   exact-capacity preflight, confirmation, revalidation, device-capability, and
   durable attempt-journal boundaries.
@@ -37,9 +48,9 @@ All notable changes to Luma OS are documented here. The format follows [Keep a C
   `APPLYING` compare-and-swap immediately before typed adapter entry, and
   high-entropy safe-handle capabilities whose raw tokens are not persisted;
   the ledger stores keyed commitments, while the authorization digest relies
-  on the mandatory 256-bit CSPRNG contract. The four G2 contract modules have
-  71 safety tests passing on native Windows and Ubuntu WSL under normal and
-  optimized Python.
+  on the mandatory 256-bit CSPRNG contract. The expanded six-module G2
+  safety/model boundary has 96 tests passing on native Windows and Ubuntu WSL
+  under normal and optimized Python.
 
 The G2 work above is development-contract evidence only. It does not perform a
 real installation or boot and does not establish UKI, dm-verity, LUKS, cgroup,

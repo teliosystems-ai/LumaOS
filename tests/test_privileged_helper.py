@@ -6,6 +6,7 @@ import hashlib
 import json
 from pathlib import Path
 import sys
+import tempfile
 import threading
 import unittest
 
@@ -27,6 +28,7 @@ from luma_os.privileged_helper import (  # noqa: E402
     GeneratedCodeKind,
     HelperAction,
     HelperDenied,
+    HelperEffectNotApplied,
     HelperExecutionError,
     HelperReplayConflict,
     HelperValidationError,
@@ -38,6 +40,11 @@ from luma_os.privileged_helper import (  # noqa: E402
     ReconciliationState,
     calculate_request_sha256,
     parse_helper_request,
+)
+from luma_os.durable_effects import (  # noqa: E402
+    EffectAdapterReconciliation,
+    SQLiteIdempotentEffectExecutor,
+    SQLiteRequestJournal,
 )
 
 
@@ -64,7 +71,7 @@ class MemoryPersistentJournal:
                 if len(self.records) >= self.capacity:
                     raise RuntimeError("journal full")
                 current = JournalRecord(
-                    request_id, request_sha256, JournalState.PENDING, owner_token, None
+                    request_id, request_sha256, JournalState.PENDING, 1, owner_token, None
                 )
                 self.records[request_id] = current
                 self.leases[request_id] = lease_until
@@ -73,32 +80,53 @@ class MemoryPersistentJournal:
                 return JournalReservation(current, False)
             if current.state is JournalState.PENDING and self.leases[request_id] <= observed_at:
                 current = JournalRecord(
-                    request_id, request_sha256, JournalState.PENDING, owner_token, None
+                    request_id,
+                    request_sha256,
+                    JournalState.PENDING,
+                    current.generation + 1,
+                    owner_token,
+                    None,
                 )
                 self.records[request_id] = current
                 self.leases[request_id] = lease_until
                 return JournalReservation(current, True)
             return JournalReservation(current, False)
 
-    def complete(self, request_id, request_sha256, owner_token, receipt):
+    def complete(self, request_id, request_sha256, owner_token, generation, receipt):
         with self.lock:
             current = self.records[request_id]
             if current.request_sha256 != request_sha256:
                 raise RuntimeError("digest changed")
             if owner_token is not None and current.owner_token != owner_token:
                 raise RuntimeError("owner changed")
+            if current.generation != generation:
+                raise RuntimeError("generation changed")
             self.records[request_id] = JournalRecord(
-                request_id, request_sha256, JournalState.COMPLETED, None, receipt
+                request_id,
+                request_sha256,
+                JournalState.COMPLETED,
+                generation,
+                None,
+                receipt,
             )
             self.leases.pop(request_id, None)
 
-    def mark_failed_unknown(self, request_id, request_sha256, owner_token):
+    def mark_failed_unknown(self, request_id, request_sha256, owner_token, generation):
         with self.lock:
             current = self.records[request_id]
-            if current.request_sha256 != request_sha256 or current.owner_token != owner_token:
-                raise RuntimeError("owner or digest changed")
+            if (
+                current.request_sha256 != request_sha256
+                or current.owner_token != owner_token
+                or current.generation != generation
+            ):
+                raise RuntimeError("owner, generation, or digest changed")
             self.records[request_id] = JournalRecord(
-                request_id, request_sha256, JournalState.FAILED_UNKNOWN, None, None
+                request_id,
+                request_sha256,
+                JournalState.FAILED_UNKNOWN,
+                generation,
+                None,
+                None,
             )
             self.leases.pop(request_id, None)
 
@@ -111,6 +139,7 @@ class RecordingExecutor:
         self.reconciliation = ReconciliationState.NOT_FOUND
         self.raise_after_completion = False
         self.raise_unknown = False
+        self.reject_before_apply = False
         self.reenter = None
         self.reentrant_error = None
 
@@ -131,6 +160,8 @@ class RecordingExecutor:
 
     def execute(self, effect):
         self.effects.append(effect)
+        if self.reject_before_apply:
+            raise HelperEffectNotApplied("effect rejected before adapter entry")
         if self.reenter is not None:
             try:
                 self.reenter()
@@ -143,13 +174,26 @@ class RecordingExecutor:
         self.completions[effect.idempotency_key] = self.completion_for(effect, result)
         if self.raise_after_completion:
             raise RuntimeError("reply lost after committed effect")
-        return result
+        return self.completions[effect.idempotency_key]
 
     def reconcile(self, idempotency_key, request_sha256):
         completion = self.completions.get(idempotency_key)
         if completion is not None:
             return ExecutorReconciliation(ReconciliationState.COMPLETED, completion)
         return ExecutorReconciliation(self.reconciliation)
+
+
+class DurableRecordingAdapter:
+    def __init__(self) -> None:
+        self.calls = 0
+        self.reconciliation = EffectAdapterReconciliation(ReconciliationState.UNKNOWN)
+
+    def apply(self, effect):
+        self.calls += 1
+        return EffectResult("completed", "e" * 64)
+
+    def reconcile(self, effect):
+        return self.reconciliation
 
 
 class PrivilegedHelperTests(unittest.TestCase):
@@ -195,7 +239,12 @@ class PrivilegedHelperTests(unittest.TestCase):
             )
         ).hexdigest()
         return BoundDevice(
-            device_type, major, minor, host, stable, "OpaqueHandleToken_1234567890"
+            device_type,
+            major,
+            minor,
+            host,
+            stable,
+            "luma-handle-v1_" + "a" * 64,
         )
 
     def make_helper(self, *, clock=None, journal=None, executor=None):
@@ -205,8 +254,12 @@ class PrivilegedHelperTests(unittest.TestCase):
 
         def attestor(peer, request, at):
             self.calls.append("attest")
+            evidence_at = self.overrides.get("snapshot_at", at)
+            valid_until = self.overrides.get(
+                "snapshot_valid_until", at + timedelta(seconds=30)
+            )
             return ConfinementAttestation(
-                "attestation-1",
+                self.overrides.get("attestation_id", "attestation-1"),
                 self.overrides.get("attestation_request", request.request_sha256),
                 self.overrides.get("attestation_peer", peer.identity_sha256),
                 self.overrides.get("attestation_action", request.action),
@@ -218,10 +271,10 @@ class PrivilegedHelperTests(unittest.TestCase):
                 request.confinement.profile_sha256,
                 self.flags["enforcing"],
                 request.confinement.qualification_id,
-                at,
-                at + timedelta(seconds=30),
-                "attestation-key-1",
-                b"a" * 64,
+                evidence_at,
+                valid_until,
+                self.overrides.get("attestation_signer", "attestation-key-1"),
+                self.overrides.get("attestation_signature", b"a" * 64),
             )
 
         def confinement_verifier(evidence, at):
@@ -260,7 +313,7 @@ class PrivilegedHelperTests(unittest.TestCase):
         def authorizer(peer, request, capability_sha256, at):
             self.calls.append("authorize")
             return AuthorityDecision(
-                "decision-1",
+                self.overrides.get("decision_id", "decision-1"),
                 self.flags["allowed"],
                 self.overrides.get("authority_id", request.authority_id),
                 self.overrides.get("authority_generation", request.authority_generation),
@@ -269,7 +322,9 @@ class PrivilegedHelperTests(unittest.TestCase):
                 self.overrides.get("authority_action", request.action),
                 self.overrides.get("authority_request", request.request_sha256),
                 self.overrides.get("authority_capability", capability_sha256),
-                at + timedelta(seconds=30),
+                self.overrides.get(
+                    "snapshot_valid_until", at + timedelta(seconds=30)
+                ),
                 self.flags["revoked"],
             )
 
@@ -380,7 +435,7 @@ class PrivilegedHelperTests(unittest.TestCase):
         self.assertEqual(226, effect.device_capability.devices[0].major)
         self.assertFalse(hasattr(effect, "request"))
         self.assertNotIn("/dev/", repr(effect))
-        self.assertNotIn("OpaqueHandleToken", repr(effect))
+        self.assertNotIn("luma-handle-v1_", repr(effect))
         for name in ("command", "shell", "argv", "executable", "register"):
             self.assertFalse(hasattr(effect, name))
 
@@ -612,6 +667,7 @@ class PrivilegedHelperTests(unittest.TestCase):
 
     def test_receipt_records_post_executor_completion_time(self):
         original_execute = self.executor.execute
+        executed_at = self.now
 
         def delayed_execute(effect):
             result = original_execute(effect)
@@ -622,7 +678,7 @@ class PrivilegedHelperTests(unittest.TestCase):
         receipt = self.helper.handle(
             self.seal(self.unsigned("completion-time")), peer=self.peer
         )
-        self.assertEqual(self.now, receipt.executed_at)
+        self.assertEqual(executed_at, receipt.executed_at)
 
     def test_native_code_requires_trusted_microvm_or_constrained_runtime(self):
         value = self.device_request(
@@ -656,6 +712,16 @@ class PrivilegedHelperTests(unittest.TestCase):
                     parse_helper_request(self.seal(value))
 
     def test_device_capability_and_signed_certificate_are_exactly_bound(self):
+        stable = self.stable_device()
+        with self.assertRaises(HelperValidationError):
+            BoundDevice(
+                stable.device_type,
+                stable.major,
+                stable.minor,
+                stable.host_identity_sha256,
+                stable.stable_identity_sha256,
+                "predictable-handle",
+            )
         self.overrides["device_request"] = "0" * 64
         self.denied(DenialReason.DEVICE_BINDING_MISMATCH, self.device_request("bad-device-binding"))
         self.overrides.clear()
@@ -728,11 +794,166 @@ class PrivilegedHelperTests(unittest.TestCase):
             self.now,
             self.now + timedelta(minutes=1),
         )
+        self.now += timedelta(minutes=2)
         restarted = self.make_helper(journal=restarted_journal)
         actual = restarted.handle(raw, peer=self.peer)
         self.assertEqual(expected, actual)
         self.assertEqual(JournalState.COMPLETED, restarted_journal.records[parsed.request_id].state)
         self.assertEqual(1, len(self.executor.effects))
+
+    def test_known_not_applied_failure_remains_safely_retryable(self):
+        raw = self.seal(self.unsigned("known-not-applied"))
+        parsed = parse_helper_request(raw)
+        self.executor.reject_before_apply = True
+        with self.assertRaises(HelperEffectNotApplied):
+            self.helper.handle(raw, peer=self.peer)
+        record = self.journal.records[parsed.request_id]
+        self.assertEqual(JournalState.PENDING, record.state)
+        self.assertEqual(1, record.generation)
+
+        self.executor.reject_before_apply = False
+        self.now += timedelta(seconds=31)
+        receipt = self.make_helper().handle(raw, peer=self.peer)
+        self.assertEqual("completed", receipt.result_code)
+        self.assertEqual(JournalState.COMPLETED, self.journal.records[parsed.request_id].state)
+
+    def test_durable_shared_store_crash_windows_preserve_completion_and_fence_ambiguity(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        root = Path(temporary.name).resolve()
+        key = b"helper-durable-integration-key-material"
+
+        def components(name, adapter):
+            database = root / f"{name}.sqlite3"
+            journal = SQLiteRequestJournal(
+                database,
+                integrity_key=key,
+                capacity=32,
+                retention=timedelta(hours=1),
+                clock=lambda: self.now,
+            )
+            executor = SQLiteIdempotentEffectExecutor(
+                database,
+                integrity_key=key,
+                adapters={HelperAction.ACTIVATE_STAGED_RELEASE: adapter},
+                dispatch_validator=lambda effect, observed_at: True,
+                capacity=32,
+                clock=lambda: self.now,
+            )
+            return journal, executor
+
+        class FailFirstCompletion:
+            def __init__(self, journal):
+                self.journal = journal
+                self.failed = False
+
+            def __getattr__(self, name):
+                return getattr(self.journal, name)
+
+            def complete(self, *args):
+                if not self.failed:
+                    self.failed = True
+                    raise RuntimeError("simulated crash before journal completion")
+                return self.journal.complete(*args)
+
+        adapter = DurableRecordingAdapter()
+        journal, executor = components("completed-window", adapter)
+        raw = self.seal(self.unsigned("durable-completed-window"))
+        original_time = self.now
+        with self.assertRaises(HelperExecutionError):
+            self.make_helper(
+                journal=FailFirstCompletion(journal), executor=executor
+            ).handle(raw, peer=self.peer)
+        self.assertEqual(1, adapter.calls)
+        self.now += timedelta(seconds=31)
+        self.overrides["decision_id"] = "decision-after-restart"
+        recovered = self.make_helper(journal=journal, executor=executor).handle(
+            raw, peer=self.peer
+        )
+        self.assertEqual("decision-1", recovered.decision_id)
+        self.assertEqual(original_time, recovered.executed_at)
+        self.assertEqual(1, adapter.calls)
+        self.overrides.clear()
+
+        class SimulatedProcessLoss(BaseException):
+            pass
+
+        class CrashWindowExecutor:
+            def __init__(self, executor, applying):
+                self.executor = executor
+                self.applying = applying
+
+            def reconcile(self, *args):
+                return self.executor.reconcile(*args)
+
+            def execute(self, effect):
+                document = self.executor._effect_document(effect)
+                encoded = json.dumps(
+                    document, sort_keys=True, separators=(",", ":")
+                )
+                generation, completed = self.executor._prepare(
+                    effect,
+                    encoded,
+                    hashlib.sha256(encoded.encode("ascii")).hexdigest(),
+                    "crashed-effect-owner",
+                )
+                if completed is not None:
+                    return completed
+                if self.applying:
+                    self.executor._begin_apply(
+                        effect.idempotency_key,
+                        effect.request_sha256,
+                        "crashed-effect-owner",
+                        generation,
+                        self.executor._now(),
+                    )
+                raise SimulatedProcessLoss()
+
+        prepared_adapter = DurableRecordingAdapter()
+        prepared_journal, prepared_executor = components(
+            "prepared-window", prepared_adapter
+        )
+        prepared_raw = self.seal(self.unsigned("durable-prepared-window"))
+        with self.assertRaises(SimulatedProcessLoss):
+            self.make_helper(
+                journal=prepared_journal,
+                executor=CrashWindowExecutor(prepared_executor, False),
+            ).handle(prepared_raw, peer=self.peer)
+        self.now += timedelta(seconds=31)
+        self.overrides.update(
+            {
+                "attestation_id": "attestation-after-restart",
+                "attestation_signature": b"b" * 64,
+                "decision_id": "decision-after-prepared-restart",
+            }
+        )
+        prepared_receipt = self.make_helper(
+            journal=prepared_journal, executor=prepared_executor
+        ).handle(prepared_raw, peer=self.peer)
+        self.assertEqual("completed", prepared_receipt.result_code)
+        self.assertEqual(
+            "decision-after-prepared-restart", prepared_receipt.decision_id
+        )
+        self.assertEqual(1, prepared_adapter.calls)
+        self.overrides.clear()
+
+        ambiguous_adapter = DurableRecordingAdapter()
+        ambiguous_journal, ambiguous_executor = components(
+            "applying-window", ambiguous_adapter
+        )
+        ambiguous_raw = self.seal(self.unsigned("durable-applying-window"))
+        with self.assertRaises(SimulatedProcessLoss):
+            self.make_helper(
+                journal=ambiguous_journal,
+                executor=CrashWindowExecutor(ambiguous_executor, True),
+            ).handle(ambiguous_raw, peer=self.peer)
+        self.now += timedelta(seconds=31)
+        with self.assertRaises(HelperDenied) as denied:
+            self.make_helper(
+                journal=ambiguous_journal, executor=ambiguous_executor
+            ).handle(ambiguous_raw, peer=self.peer)
+        self.assertEqual(DenialReason.FAILED_UNKNOWN, denied.exception.reason)
+        self.assertEqual(0, ambiguous_adapter.calls)
 
     def test_active_pending_request_is_not_executed_concurrently(self):
         raw = self.seal(self.unsigned("pending-request"))

@@ -22,6 +22,7 @@ import uuid
 MAX_REQUEST_BYTES = 64 * 1024
 MAX_JSON_DEPTH = 12
 MAX_JSON_VALUES = 256
+SAFE_HANDLE_TOKEN_BITS = 256
 
 
 class HelperError(RuntimeError):
@@ -76,6 +77,10 @@ class HelperExecutionError(HelperError):
     """An effect failed or its outcome could not be safely established."""
 
 
+class HelperEffectNotApplied(HelperExecutionError):
+    """A trusted executor rejected an effect before adapter entry."""
+
+
 class HelperAction(str, Enum):
     ACTIVATE_STAGED_RELEASE = "activate_staged_release"
     SET_RECOVERY_BOOT_ONCE = "set_recovery_boot_once"
@@ -126,7 +131,9 @@ class ReconciliationState(str, Enum):
 
 _ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:@+-]{0,255}\Z")
 _VERSION = re.compile(r"[A-Za-z0-9][A-Za-z0-9._+-]{0,127}\Z")
-_HANDLE = re.compile(r"[A-Za-z0-9_-]{16,256}\Z")
+_HANDLE = re.compile(
+    rf"luma-handle-v1_[0-9a-f]{{{SAFE_HANDLE_TOKEN_BITS // 4}}}\Z"
+)
 _TIMESTAMP = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z\Z")
 _DEVICE_PATH = {
     DeviceType.NVIDIA_COMPUTE: re.compile(r"/dev/nvidia[0-9]+\Z"),
@@ -569,6 +576,14 @@ class ConfinementAttestation:
 
 @dataclass(frozen=True, slots=True)
 class BoundDevice:
+    """A stable device identity plus an opaque trusted-binder capability.
+
+    Production binders must issue ``safe_handle_token`` with 256 bits from a
+    CSPRNG and validators must verify its trusted provenance and liveness. The
+    strict wire format makes that entropy requirement explicit; syntax alone
+    is not proof of correct generation.
+    """
+
     device_type: DeviceType
     major: int
     minor: int
@@ -595,7 +610,9 @@ class BoundDevice:
         if _digest(self.stable_identity_sha256, "bound_device.stable_identity_sha256") != expected:
             raise HelperValidationError("bound device stable identity is inconsistent")
         if not isinstance(self.safe_handle_token, str) or _HANDLE.fullmatch(self.safe_handle_token) is None:
-            raise HelperValidationError("bound device safe handle token is invalid")
+            raise HelperValidationError(
+                "bound device safe handle token must be a v1 256-bit hex token"
+            )
 
 
 @dataclass(frozen=True, slots=True)
@@ -794,6 +811,7 @@ class JournalRecord:
     request_id: str
     request_sha256: str
     state: JournalState
+    generation: int
     owner_token: str | None
     receipt: EffectReceipt | None
 
@@ -802,6 +820,7 @@ class JournalRecord:
         _digest(self.request_sha256, "journal.request_sha256")
         if not isinstance(self.state, JournalState):
             raise HelperValidationError("journal state is invalid")
+        _positive(self.generation, "journal.generation")
         if self.owner_token is not None:
             _identifier(self.owner_token, "journal.owner_token")
         if self.state is JournalState.PENDING:
@@ -845,16 +864,17 @@ class RequestJournal(Protocol):
         request_id: str,
         request_sha256: str,
         owner_token: str | None,
+        generation: int,
         receipt: EffectReceipt,
     ) -> None: ...
 
     def mark_failed_unknown(
-        self, request_id: str, request_sha256: str, owner_token: str
+        self, request_id: str, request_sha256: str, owner_token: str, generation: int
     ) -> None: ...
 
 
 class EffectExecutor(Protocol):
-    def execute(self, effect: AuthorizedEffect) -> EffectResult: ...
+    def execute(self, effect: AuthorizedEffect) -> ExecutorCompletion: ...
 
     def reconcile(
         self, idempotency_key: str, request_sha256: str
@@ -1284,7 +1304,13 @@ class PrivilegedHelper:
             raise HelperDenied(DenialReason.AUTHORITY_EXPIRED)
 
     @staticmethod
-    def _receipt_from_completion(request: HelperRequest, completion: ExecutorCompletion) -> EffectReceipt:
+    def _receipt_from_completion(
+        request: HelperRequest,
+        completion: ExecutorCompletion,
+        *,
+        current_decision_id: str | None = None,
+        current_capability_sha256: str | None = None,
+    ) -> EffectReceipt:
         if (
             completion.request_id != request.request_id
             or completion.request_sha256 != request.request_sha256
@@ -1294,6 +1320,14 @@ class PrivilegedHelper:
             or completion.authority_generation != request.authority_generation
         ):
             raise HelperExecutionError("executor reconciliation binding mismatch")
+        if (
+            current_decision_id is not None
+            and completion.decision_id != current_decision_id
+        ) or (
+            current_capability_sha256 is not None
+            and completion.capability_sha256 != current_capability_sha256
+        ):
+            raise HelperExecutionError("executor completion differs from current authorization")
         return EffectReceipt(
             completion.request_id, completion.request_sha256, completion.idempotency_key,
             completion.subject, completion.action, completion.decision_id,
@@ -1378,18 +1412,56 @@ class PrivilegedHelper:
                 if record.receipt is None:
                     raise HelperDenied(DenialReason.JOURNAL_UNAVAILABLE)
                 return record.receipt  # safe authenticated replay, even after deadline
-            if not reservation.acquired or record.state is JournalState.FAILED_UNKNOWN:
+            if record.state is JournalState.FAILED_UNKNOWN:
                 reconciled = self._reconcile(request)
                 if reconciled is not None:
                     try:
-                        self._journal.complete(request.request_id, request.request_sha256, None, reconciled)
+                        self._journal.complete(
+                            request.request_id,
+                            request.request_sha256,
+                            None,
+                            record.generation,
+                            reconciled,
+                        )
                     except Exception as exc:
                         raise HelperDenied(DenialReason.JOURNAL_UNAVAILABLE) from exc
                     return reconciled
-                if record.state is JournalState.FAILED_UNKNOWN:
-                    raise HelperDenied(DenialReason.FAILED_UNKNOWN)
-                if not reservation.acquired:
-                    raise HelperDenied(DenialReason.REQUEST_IN_PROGRESS)
+                raise HelperDenied(DenialReason.FAILED_UNKNOWN)
+            if not reservation.acquired:
+                raise HelperDenied(DenialReason.REQUEST_IN_PROGRESS)
+
+            # A newly reserved or safely taken-over request first consults the
+            # effect ledger.  This closes the crash window where the effect
+            # committed but the request receipt did not, without minting new
+            # authorization metadata for the old execution.
+            try:
+                reconciled = self._reconcile(request)
+            except HelperDenied as exc:
+                if exc.reason is DenialReason.FAILED_UNKNOWN:
+                    try:
+                        self._journal.mark_failed_unknown(
+                            request.request_id,
+                            request.request_sha256,
+                            owner,
+                            record.generation,
+                        )
+                    except Exception as journal_exc:
+                        raise HelperExecutionError(
+                            "effect outcome and journal state are both unknown"
+                        ) from journal_exc
+                raise
+            if reconciled is not None:
+                try:
+                    self._journal.complete(
+                        request.request_id,
+                        request.request_sha256,
+                        None,
+                        record.generation,
+                        reconciled,
+                    )
+                except Exception as exc:
+                    raise HelperDenied(DenialReason.JOURNAL_UNAVAILABLE) from exc
+                return reconciled
 
             self._fresh(request, self._now())
             self._snapshot(request, peer, self._now())  # initial trust probe
@@ -1410,27 +1482,41 @@ class PrivilegedHelper:
                 snapshot.certificate.digest if snapshot.certificate else None,
             )
             try:
-                result = self._executor.execute(effect)
-                if not isinstance(result, EffectResult):
-                    raise TypeError("executor returned an invalid result")
-                completed_at = self._now()
-                receipt = EffectReceipt(
-                    request.request_id, request.request_sha256, request.idempotency_key,
-                    request.subject, request.action, snapshot.authority.decision_id,
-                    snapshot.authority.authority_generation, snapshot.capability_sha256,
-                    result.result_code, result.evidence_sha256, completed_at,
+                completion = self._executor.execute(effect)
+                if not isinstance(completion, ExecutorCompletion):
+                    raise TypeError("executor returned an invalid completion")
+                receipt = self._receipt_from_completion(
+                    request,
+                    completion,
+                    current_decision_id=snapshot.authority.decision_id,
+                    current_capability_sha256=snapshot.capability_sha256,
                 )
+            except HelperEffectNotApplied:
+                # The executor contract guarantees that the action adapter was
+                # not entered. Keep the leased PENDING record so an expired
+                # lease can be safely reauthorized and retried.
+                raise
             except Exception as exc:
                 try:
                     reconciled = self._reconcile(request)
                 except HelperDenied:
+                    reconciled = None
+                if reconciled is not None and (
+                    reconciled.decision_id != snapshot.authority.decision_id
+                    or reconciled.capability_sha256 != snapshot.capability_sha256
+                ):
+                    # This was a fresh dispatch path, so a completion carrying
+                    # different authorization metadata cannot be substituted.
                     reconciled = None
                 if reconciled is not None:
                     receipt = reconciled
                 else:
                     try:
                         self._journal.mark_failed_unknown(
-                            request.request_id, request.request_sha256, owner
+                            request.request_id,
+                            request.request_sha256,
+                            owner,
+                            record.generation,
                         )
                     except Exception as journal_exc:
                         raise HelperExecutionError(
@@ -1438,7 +1524,13 @@ class PrivilegedHelper:
                         ) from journal_exc
                     raise HelperExecutionError("effect outcome is unknown and fenced") from exc
             try:
-                self._journal.complete(request.request_id, request.request_sha256, owner, receipt)
+                self._journal.complete(
+                    request.request_id,
+                    request.request_sha256,
+                    owner,
+                    record.generation,
+                    receipt,
+                )
             except Exception as exc:
                 raise HelperExecutionError("effect completed but receipt was not committed") from exc
             return receipt

@@ -42,6 +42,7 @@ from luma_os.privileged_helper import (  # noqa: E402
     parse_helper_request,
 )
 from luma_os.durable_effects import (  # noqa: E402
+    DurableCapacityExceeded,
     EffectAdapterReconciliation,
     SQLiteIdempotentEffectExecutor,
     SQLiteRequestJournal,
@@ -816,6 +817,77 @@ class PrivilegedHelperTests(unittest.TestCase):
         receipt = self.make_helper().handle(raw, peer=self.peer)
         self.assertEqual("completed", receipt.result_code)
         self.assertEqual(JournalState.COMPLETED, self.journal.records[parsed.request_id].state)
+
+    def test_effect_capacity_failure_remains_pending_and_retries_after_expiry(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        database = Path(temporary.name).resolve() / "capacity.sqlite3"
+        key = b"helper-capacity-integration-key-v1"
+        journal = SQLiteRequestJournal(
+            database,
+            integrity_key=key,
+            capacity=8,
+            retention=timedelta(hours=1),
+            clock=lambda: self.now,
+        )
+        adapter = DurableRecordingAdapter()
+
+        def executor(capacity):
+            return SQLiteIdempotentEffectExecutor(
+                database,
+                integrity_key=key,
+                adapters={HelperAction.ACTIVATE_STAGED_RELEASE: adapter},
+                dispatch_validator=lambda effect, observed_at: True,
+                capacity=capacity,
+                clock=lambda: self.now,
+            )
+
+        constrained = executor(1)
+        first_raw = self.seal(self.unsigned("capacity-first"))
+        self.make_helper(journal=journal, executor=constrained).handle(
+            first_raw, peer=self.peer
+        )
+        self.assertEqual(1, adapter.calls)
+
+        second_raw = self.seal(self.unsigned("capacity-second"))
+        second = parse_helper_request(second_raw)
+        with self.assertRaises(HelperEffectNotApplied) as raised:
+            self.make_helper(journal=journal, executor=constrained).handle(
+                second_raw, peer=self.peer
+            )
+        self.assertIsInstance(raised.exception.__cause__, DurableCapacityExceeded)
+        self.assertEqual(1, adapter.calls)
+        self.assertEqual(
+            ReconciliationState.NOT_FOUND,
+            constrained.reconcile(
+                second.idempotency_key, second.request_sha256
+            ).state,
+        )
+        pending = journal.reserve(
+            second.request_id,
+            second.request_sha256,
+            "observer-owner-token",
+            self.now,
+            self.now + timedelta(seconds=30),
+        )
+        self.assertFalse(pending.acquired)
+        self.assertEqual(JournalState.PENDING, pending.record.state)
+        self.assertEqual(1, pending.record.generation)
+
+        self.now += timedelta(seconds=31)
+        receipt = self.make_helper(journal=journal, executor=executor(2)).handle(
+            second_raw, peer=self.peer
+        )
+        self.assertEqual("completed", receipt.result_code)
+        self.assertEqual(2, adapter.calls)
+        completed = journal.reserve(
+            second.request_id,
+            second.request_sha256,
+            "observer-owner-token",
+            self.now,
+            self.now + timedelta(seconds=30),
+        )
+        self.assertEqual(JournalState.COMPLETED, completed.record.state)
 
     def test_durable_shared_store_crash_windows_preserve_completion_and_fence_ambiguity(self):
         temporary = tempfile.TemporaryDirectory()

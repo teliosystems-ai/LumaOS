@@ -1962,6 +1962,62 @@ class SQLiteIdempotentEffectExecutor(_SQLiteDurableBase):
             if changed != 1:
                 raise DurableEffectInProgress("effect preparation ownership was lost")
 
+    def _restore_prepared(
+        self,
+        idempotency_key: str,
+        request_sha256: str,
+        owner: str,
+        generation: int,
+        transition_at: datetime,
+    ) -> None:
+        """Restore a known-not-applied post-CAS validation failure.
+
+        The caller may use this only before adapter entry.  Failure to prove
+        the owner/generation transition leaves ``APPLYING`` fenced because the
+        durable outcome can no longer be established safely.
+        """
+
+        with self._transaction() as connection:
+            now = _aware(transition_at, "effect restore time")
+            now_text = self._observe_clock(connection, now)
+            row = connection.execute(
+                "SELECT * FROM effect_ledger WHERE idempotency_key=?", (idempotency_key,)
+            ).fetchone()
+            if row is None:
+                raise DurableStoreUnavailable("applying effect disappeared before restoration")
+            document = self._verify_effect_row(row)
+            if document["request_sha256"] != request_sha256:
+                raise DurableEffectConflict("effect request digest changed")
+            replacement = dict(document)
+            replacement.update(
+                {
+                    "lease_until": _time_text(
+                        now + self._preparation_lease, "effect.lease_until"
+                    ),
+                    "state": EffectLedgerState.PREPARED.value,
+                    "updated_at": now_text,
+                }
+            )
+            changed = connection.execute(
+                "UPDATE effect_ledger SET state='prepared',lease_until=?,updated_at=?,auth_tag=? "
+                "WHERE idempotency_key=? AND request_sha256=? AND state='applying' "
+                "AND owner_token=? AND generation=? AND auth_tag=?",
+                (
+                    replacement["lease_until"],
+                    now_text,
+                    self._tag("effect", replacement),
+                    idempotency_key,
+                    request_sha256,
+                    owner,
+                    generation,
+                    row["auth_tag"],
+                ),
+            ).rowcount
+            if changed != 1:
+                raise DurableStoreUnavailable(
+                    "effect restoration compare-and-swap failed"
+                )
+
     def _mark_effect_unknown(
         self, idempotency_key: str, request_sha256: str, owner: str, generation: int
     ) -> None:
@@ -2087,9 +2143,17 @@ class SQLiteIdempotentEffectExecutor(_SQLiteDurableBase):
             raise HelperEffectNotApplied(
                 "effect was rejected before durable preparation"
             ) from exc
-        generation, completed = self._prepare(
-            effect, effect_json, effect_sha256, owner
-        )
+        try:
+            generation, completed = self._prepare(
+                effect, effect_json, effect_sha256, owner
+            )
+        except DurableCapacityExceeded as exc:
+            # Capacity is checked only after observing that no row exists and
+            # before INSERT/APPLYING/adapter entry.  Preserve that proven
+            # known-not-applied result for the request journal.
+            raise HelperEffectNotApplied(
+                "effect ledger capacity was exhausted before preparation"
+            ) from exc
         if completed is not None:
             return completed
         try:
@@ -2106,11 +2170,34 @@ class SQLiteIdempotentEffectExecutor(_SQLiteDurableBase):
             generation,
             final_validation_at,
         )
+        adapter_entry_at = final_validation_at
         try:
-            # No injected callback occurs between the final current-state
-            # validator and physical adapter entry. The intervening SQLite CAS
-            # uses the already sampled validation timestamp; a concurrent
-            # high-water advance rejects this attempt as safely not applied.
+            # Re-sample after the durable CAS.  The process may have been
+            # suspended between the pre-CAS check and this point even when no
+            # competing database writer advanced the clock high-water mark.
+            adapter_entry_at = self._now()
+            self._validate_dispatch(effect, adapter_entry_at)
+        except Exception as validation_exc:
+            try:
+                self._restore_prepared(
+                    effect.idempotency_key,
+                    effect.request_sha256,
+                    owner,
+                    generation,
+                    adapter_entry_at,
+                )
+            except Exception as restore_exc:
+                raise DurableEffectUnknown(
+                    "post-CAS validation failed and known-not-applied state "
+                    "could not be restored"
+                ) from restore_exc
+            raise HelperEffectNotApplied(
+                "effect was rejected at adapter entry"
+            ) from validation_exc
+        try:
+            # This is the last in-process current-state check before entering
+            # the fixed adapter. Production adapters must additionally enforce
+            # their OS capability at the physical-effect boundary.
             result = adapter.apply(effect)
             if not isinstance(result, EffectResult):
                 raise TypeError("typed effect adapter returned an invalid result")

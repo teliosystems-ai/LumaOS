@@ -814,6 +814,86 @@ class DurableEffectsTests(unittest.TestCase):
             "completed", self.executor().execute(exception_effect).result.result_code
         )
 
+        post_cas_effect = self.effect(
+            "post-cas-validator-denial", request_sha256="b" * 64
+        )
+        post_cas_calls = 0
+
+        def deny_at_adapter_entry(effect, observed_at):
+            nonlocal post_cas_calls
+            post_cas_calls += 1
+            return post_cas_calls < 3
+
+        with self.assertRaises(HelperEffectNotApplied):
+            self.executor(dispatch_validator=deny_at_adapter_entry).execute(
+                post_cas_effect
+            )
+        self.assertEqual(3, post_cas_calls)
+        self.assertEqual(2, self.adapter.calls)
+        self.assertEqual(
+            ReconciliationState.NOT_FOUND,
+            self.executor().reconcile(
+                post_cas_effect.idempotency_key,
+                post_cas_effect.request_sha256,
+            ).state,
+        )
+        with closing(sqlite3.connect(self.database)) as connection:
+            state = connection.execute(
+                "SELECT state FROM effect_ledger WHERE idempotency_key=?",
+                (post_cas_effect.idempotency_key,),
+            ).fetchone()[0]
+        self.assertEqual(EffectLedgerState.PREPARED.value, state)
+        self.assertEqual(
+            "completed", self.executor().execute(post_cas_effect).result.result_code
+        )
+
+    def test_suspension_after_pre_cas_validation_rechecks_time_before_adapter(self) -> None:
+        effect = self.effect(
+            "suspended-before-cas", request_sha256="c" * 64
+        )
+        clock = self.clock
+
+        class SuspendedBeforeCasExecutor(SQLiteIdempotentEffectExecutor):
+            delayed = False
+
+            def _begin_apply(self, *args, **kwargs):
+                if not self.delayed:
+                    self.delayed = True
+                    clock.advance(timedelta(minutes=6))
+                return super()._begin_apply(*args, **kwargs)
+
+        executor = SuspendedBeforeCasExecutor(
+            self.database,
+            integrity_key=KEY,
+            adapters={HelperAction.ACTIVATE_STAGED_RELEASE: self.adapter},
+            dispatch_validator=lambda candidate, observed_at: True,
+            capacity=32,
+            preparation_lease=timedelta(seconds=5),
+            clock=self.clock,
+            busy_timeout=timedelta(milliseconds=100),
+        )
+        with self.assertRaises(HelperEffectNotApplied):
+            executor.execute(effect)
+        self.assertEqual(0, self.adapter.calls)
+        self.assertEqual(
+            ReconciliationState.NOT_FOUND,
+            executor.reconcile(effect.idempotency_key, effect.request_sha256).state,
+        )
+        with closing(sqlite3.connect(self.database)) as connection:
+            state = connection.execute(
+                "SELECT state FROM effect_ledger WHERE idempotency_key=?",
+                (effect.idempotency_key,),
+            ).fetchone()[0]
+        self.assertEqual(EffectLedgerState.PREPARED.value, state)
+
+        self.now = self.clock()
+        refreshed = self.effect(
+            "suspended-before-cas", request_sha256="c" * 64
+        )
+        completion = self.executor().execute(refreshed)
+        self.assertEqual("completed", completion.result.result_code)
+        self.assertEqual(1, self.adapter.calls)
+
     def test_safe_handle_is_committed_not_persisted_and_refresh_is_state_bound(self) -> None:
         token = "luma-handle-v1_" + "a" * 64
         effect = self.device_effect(token)

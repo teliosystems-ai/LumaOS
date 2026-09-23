@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "gate": "G2",
-  "recorded_on": "2026-09-22",
+  "recorded_on": "2026-09-23",
   "status": "blocked",
   "development_assessment": "in-progress",
   "certification_assessment": "blocked",
@@ -24,20 +24,27 @@
       "severity": "certification-blocking",
       "owner": "platform-lead",
       "supporting_owner": "qa-lead",
-      "development_work": "The current laptop supports non-destructive contract tests only; Windows and its Ubuntu 26.04 WSL guest remain one physical machine.",
+      "development_work": "The current laptop supports non-destructive contract tests only; Windows and its Ubuntu 26.04 WSL guest remain one physical machine. A read-only trusted-probe inventory collector and fresh live-corroborated native-candidate preflight are implemented, but their WSL result is explicitly non-closing.",
       "resolution": "Establish E1 and E2 with native Ubuntu 24.04, stable device inventories, recoverable firmware keys, and separately identified disposable disks, then execute the destructive installation and recovery suite.",
-      "evidence": "docs/gates/g0/lab_inventory.json"
+      "evidence": [
+        "docs/gates/g0/lab_inventory.json",
+        "docs/UBUNTU_QUALIFICATION.md",
+        "docs/gates/g2/PHYSICAL_QUALIFICATION_RUNBOOK.md"
+      ]
     },
     {
       "id": "G2-BLK-003",
-      "title": "Signed offline 4-6B release assets and lab signing/recovery custody are absent",
+      "title": "Signed offline 4-6B release assets and production signing/recovery custody are absent",
       "status": "deferred-to-final-certification",
       "severity": "certification-blocking",
       "owner": "release-engineer",
       "supporting_owner": "inference-lead",
-      "development_work": "A digest-pinned Qwen3-4B Q4_K_M artifact completed bounded native Windows CUDA and Ubuntu WSL CPU/direct-gateway development smoke, and Gemma 4 E2B/E4B candidates are recorded. The Qwen artifact and derived tuple remain unsigned development assets, while the Gemma candidates have not been acquired or executed locally; none is eligible for the G2 base image or T02 acceptance.",
-      "resolution": "Produce a verified offline bundle containing a legally approved signed 4-6B pack and exact runtime assets, using protected lab trust roots and independently recoverable credentials.",
-      "evidence": "docs/gates/g1/model_candidate_smoke_2026-09-23.json"
+      "development_work": "A digest-pinned Qwen3-4B Q4_K_M artifact completed bounded native Windows CUDA and Ubuntu WSL CPU/direct-gateway development smoke, and Gemma 4 E2B/E4B candidates are recorded. A request-before-approval detached production-catalog verification contract and no-private-key ceremony utility now fail closed on quorum, metadata, trust lifecycle, rollback, tampering, unbounded input, and exact pack/runtime/certification drift. The Qwen artifact remains unsigned, the Gemma candidates have not been acquired or executed locally, and no protected production ceremony has occurred; none is eligible for the G2 base image or T02 acceptance.",
+      "resolution": "Produce a verified offline bundle containing a legally approved signed 4-6B pack and exact runtime assets, using protected production-purpose trust and key material operated in the controlled lab with independently recoverable credentials.",
+      "evidence": [
+        "docs/gates/g1/model_candidate_smoke_2026-09-23.json",
+        "docs/PRODUCTION_SIGNING_CUSTODY.md"
+      ]
     },
     {
       "id": "G2-BLK-004",
@@ -46,9 +53,13 @@
       "severity": "certification-blocking",
       "owner": "platform-lead",
       "supporting_owner": "release-engineer",
-      "development_work": "Pure installer and boot-state contracts are non-destructive development scaffolding and do not write disks, enroll keys, build a UKI, configure dm-verity/LUKS2, or change firmware state.",
+      "development_work": "Pure installer and boot-state contracts remain non-destructive development scaffolding. The physical runbook now defines exact target authorization, signed-input, tamper, slot-interruption, model-independent recovery, LUKS2/TPM, evidence, and stop rules, but no implementation writes disks, enrolls keys, builds a UKI, configures dm-verity/LUKS2, or changes firmware state.",
       "resolution": "Build and sign the Ubuntu image and recovery media, then retain T01 and T03-T05 plus T45-T49 evidence including interruption, tamper, recovery, and three-attempt fallback results on E1 and E2.",
-      "evidence": "docs/gates/final_certification_deferrals.json"
+      "evidence": [
+        "docs/gates/final_certification_deferrals.json",
+        "docs/gates/g2/OPERATOR_APPROVAL_AND_EXECUTION.md",
+        "docs/gates/g2/PHYSICAL_QUALIFICATION_RUNBOOK.md"
+      ]
     },
     {
       "id": "G2-BLK-005",
@@ -57,9 +68,13 @@
       "severity": "certification-blocking",
       "owner": "security-lead",
       "supporting_owner": "platform-lead",
-      "development_work": "The typed helper boundary uses injected trust, authorization, journal, device, and executor interfaces; it never performs a privileged host action and cannot prove enforcement.",
+      "development_work": "The typed helper boundary uses injected trust, authorization, journal, device, and executor interfaces; it never performs a privileged host action and cannot prove enforcement. Read-only inventory/preflight can require visible live kernel features and trusted probe provenance for lab admission, but presence is not enforcing-policy evidence.",
       "resolution": "Implement and independently review the Linux privileged service, kernel peer-credential transport, cgroup v2 and device enforcement, signed AppArmor/seccomp policy, and fail-closed KVM microVM or separately qualified constrained runtime on the retained tuples.",
-      "evidence": "docs/THREAT_MODEL.md"
+      "evidence": [
+        "docs/THREAT_MODEL.md",
+        "docs/UBUNTU_QUALIFICATION.md",
+        "docs/gates/g2/PHYSICAL_QUALIFICATION_RUNBOOK.md"
+      ]
     },
     {
       "id": "G2-BLK-006",
@@ -68,9 +83,13 @@
       "severity": "certification-blocking",
       "owner": "qa-lead",
       "supporting_owner": "security-lead",
-      "development_work": "Deterministic unit and fault-model tests cover only repository-local contracts. They are labeled as non-closing and retain all hardware-dependent cases as blocked.",
+      "development_work": "Deterministic unit, fault-model, signed-catalog, and read-only admission tests cover only repository-local contracts. The consolidated operator/runbook package maps the remaining numbered, physical, security, recovery, lifecycle, and performance work, labels it unexecuted, and retains every hardware-dependent case as blocked.",
       "resolution": "Complete T01-T16, applicable T27-T30, T33, T40, T45-T51, and T62; the governed security/manual matrix; Q01, Q02, Q06-Q09; 1,000 lifecycle cycles; and both-board vertical workflows.",
-      "evidence": "docs/gates/g2/test_plan.json"
+      "evidence": [
+        "docs/gates/g2/test_plan.json",
+        "docs/gates/g2/OPERATOR_APPROVAL_AND_EXECUTION.md",
+        "docs/gates/g2/PHYSICAL_QUALIFICATION_RUNBOOK.md"
+      ]
     }
   ]
 }

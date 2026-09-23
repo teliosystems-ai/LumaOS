@@ -30,16 +30,24 @@ The first G2 tranche provides:
   redispatch of ambiguous work, and action-specific reconciliation into
   `COMPLETED` from `APPLYING` or `FAILED_UNKNOWN`. Raw safe-handle tokens are
   not persisted: the ledger stores keyed commitments, and the remaining
-  authorization digest relies on mandatory 256-bit CSPRNG entropy.
+  authorization digest relies on mandatory 256-bit CSPRNG entropy;
+- a bounded, detached signed-catalog contract covering request-before-approval,
+  distinct production quorum and custody, exact pack/runtime/certification
+  binding, trust lifecycle, and rollback protection without accepting private
+  keys; and
+- a read-only Ubuntu host inventory and admission contract using trusted probes,
+  fresh inventory, live corroboration, and an explicit E1/E2 hardware class.
+  WSL is structurally unable to pass native-candidate admission.
 
-The expanded six-module boundary has 96 safety/model tests passing on native
-Windows and Ubuntu WSL under normal and optimized-Python execution. It does not perform
-disk, firmware, or other privileged host changes, boot a release, establish
-UKI/dm-verity/LUKS, or enforce cgroup, AppArmor, seccomp, KVM, native ACL/DACL
+The expanded nine-module boundary has 128 safety, catalog, and admission tests
+passing on native Windows and Ubuntu WSL under normal and optimized-Python
+execution. It does not perform a production signing ceremony; change disk,
+firmware, or other privileged host state; boot a release; establish
+UKI/dm-verity/LUKS; or enforce cgroup, AppArmor, seccomp, KVM, native ACL/DACL
 policy, or operating-system peer credentials. The two development lanes share
-one physical host. Protected integrity-key custody, power-loss testing, and a
-rollback-resistant external anchor also remain later implementation and
-physical-certification work.
+one physical host. Protected production and integrity-key custody, physical
+power-loss testing, and rollback-resistant external anchors remain later
+implementation and physical-certification work.
 
 ## v0.1 — Developer MVP
 

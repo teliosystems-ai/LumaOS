@@ -6,8 +6,8 @@
   "assessment": "blocked",
   "development_assessment": "in-progress",
   "certification_assessment": "blocked",
-  "claim_boundary": "This evidence advances the repository-local G2 control-plane tranche. It demonstrates pure, injected contracts for non-destructive installer planning, exact install-time model-profile selection, A/B trial-boot state, a typed privileged-helper boundary, and bounded SQLite-backed request/effect ledger integration. It does not demonstrate a bootable OS, disk mutation, a signed production model catalog, Secure Boot, UKI, dm-verity, LUKS2, cgroup/AppArmor/seccomp enforcement, KVM isolation, kernel peer credentials, or either physical A1 board.",
-  "implementation_commit": "5667e3d8f337dec326dc8afdec91ed34c1c2eb2a",
+  "claim_boundary": "This evidence advances the repository-local G2 control-plane and qualification-preparation tranche. It demonstrates pure or read-only contracts for non-destructive installer planning, exact install-time model-profile selection, A/B trial-boot state, a typed privileged-helper boundary, bounded SQLite-backed request/effect ledgers, signed model-catalog verification, and Ubuntu host admission/inventory. It also provides operator approval and physical-qualification procedures. It does not demonstrate a bootable OS, disk mutation, an actual signed production catalog or protected key ceremony, Secure Boot/UKI/dm-verity/LUKS2 behavior, enforcing cgroup/AppArmor/seccomp/KVM/device/peer controls, recovery, power-loss behavior, or either physical A1 board.",
+  "implementation_commit": "0d7685aaaec2301b9340b710061a447cd3569b83",
   "items": [
     {
       "id": "G2-EV-001",
@@ -61,12 +61,12 @@
       "requirements_prepared": [],
       "source_tests_prepared": [],
       "evidence": [
-        "docs/gates/g2/test_run_2026-09-23-002.json",
-        "docs/gates/g2/archive_attestation_2026-09-23-002.json",
+        "docs/gates/g2/test_run_2026-09-23-003.json",
+        "docs/gates/g2/archive_attestation_2026-09-23-003.json",
         "scripts/check.py"
       ],
       "environment": "DEV-WIN-WSL-GPU-01",
-      "observations": "The complete 190-test suite passed with zero failures in native Windows and Ubuntu WSL; 96 optimized safety/model-boundary tests passed in each lane. These environments share one physical laptop.",
+      "observations": "The complete 222-test suite passed with zero failures in native Windows and Ubuntu WSL; 128 optimized safety/catalog/admission-boundary tests passed in each lane. These environments share one physical laptop.",
       "limitations": "Repository tests validate contracts and regressions only. The dated test-run and archive-attestation paths are detached repository sidecars intentionally excluded from release archives; an extracted archive validates its included content without them. These results do not satisfy any physical-board, destructive-media, boot, encryption, confinement, performance, or lifecycle acceptance procedure.",
       "gate_closing": false
     },
@@ -107,9 +107,67 @@
       "observations": "Twenty dedicated model-pack/model-selection tests and five installer-integration tests cover schema-v2 exact total/active counts through 405B, ordered shards and capabilities, explicit manual-only/CPU/CUDA profiles, JSON-safe resource arithmetic, exact pack/runtime/context/resource binding, single-device CUDA fit, denial without substitution, verified-pack bridging, and effect-time catalog/hardware revalidation.",
       "limitations": "The exercised Qwen3-4B artifact and derived tuple are unsigned development inputs. No signed production catalog, base-image integration, destructive installation, native Ubuntu board, two-board run, complete offline workflow, pressure/recovery qualification, or certified 400–405B hardware result exists.",
       "gate_closing": false
+    },
+    {
+      "id": "G2-EV-007",
+      "subject": "signed-model-catalog-verification-and-custody-contract",
+      "result": "development-tests-passed",
+      "requirements_prepared": ["A003"],
+      "source_tests_prepared": ["T06"],
+      "evidence": [
+        "src/luma_os/model_catalog_signing.py",
+        "src/luma_os/model_pack.py",
+        "src/luma_os/model_selection.py",
+        "schemas/model-catalog-signature.schema.json",
+        "schemas/model-profile.schema.json",
+        "scripts/model_catalog_ceremony.py",
+        "tests/test_model_catalog_signing.py",
+        "docs/PRODUCTION_SIGNING_CUSTODY.md"
+      ],
+      "environment": "DEV-WIN-WSL-GPU-01",
+      "observations": "Twelve deterministic tests pass on native Windows and Ubuntu WSL under normal and optimized Python. They cover a canonical request-before-approval ceremony, three distinct production approval events plus a separate signing custodian, exact release/catalog/sequence/policy/validity/key/assignment binding, purpose and environment separation, signing-time and current authorization/key lifecycle checks, same-sequence digest rollback protection, exact pack/runtime/certification binding, bounded untrusted inputs, tamper rejection, and digest-bound verification receipts. The ceremony utility never accepts a private key.",
+      "limitations": "No production trust-bundle loader, durable Admin approval-event adapter, concrete production Ed25519/HSM verifier, external rollback anchor, signed model pack/certificates, protected key material, or completed human ceremony exists. This contract cannot make an unsigned development catalog production-eligible.",
+      "gate_closing": false
+    },
+    {
+      "id": "G2-EV-008",
+      "subject": "read-only-ubuntu-host-inventory-and-native-candidate-admission",
+      "result": "development-tests-passed",
+      "requirements_prepared": ["A001"],
+      "source_tests_prepared": ["T01", "T45", "T50"],
+      "evidence": [
+        "src/luma_os/g2_host_inventory.py",
+        "scripts/collect_g2_host.py",
+        "scripts/ubuntu_preflight.py",
+        "schemas/g2-host-inventory.schema.json",
+        "tests/test_g2_host_inventory.py",
+        "tests/test_ubuntu_preflight.py",
+        "docs/UBUNTU_QUALIFICATION.md"
+      ],
+      "environment": "DEV-WSL-UBUNTU-26-01",
+      "observations": "Twenty deterministic tests pass on native Windows and Ubuntu WSL, and a live read-only WSL collector-to-preflight run reports Ubuntu 26.04 WSL2 with certification_closing=false. Native admission requires an explicit E1/E2 class, fresh complete inventory, live host/kernel/identity/security/firmware/accelerator corroboration, trusted absolute root-owned command provenance, and no disk reclassification or selection. WSL is structurally unable to pass native-candidate mode.",
+      "limitations": "The observed WSL environment is Ubuntu 26.04 on the same physical Windows laptop, with a Windows-mounted checkout and no native UEFI/Secure Boot/AppArmor/TPM result. Inventory and preflight are admission evidence only; they do not authorize destruction or prove installation, boot, isolation, recovery, lifecycle, or hardware performance.",
+      "gate_closing": false
+    },
+    {
+      "id": "G2-EV-009",
+      "subject": "operator-approval-and-physical-qualification-package",
+      "result": "procedure-prepared-not-executed",
+      "requirements_prepared": [],
+      "source_tests_prepared": ["T01-T16", "T27-T30", "T33", "T40", "T45-T51", "T62"],
+      "evidence": [
+        "docs/gates/g2/OPERATOR_APPROVAL_AND_EXECUTION.md",
+        "docs/gates/g2/PHYSICAL_QUALIFICATION_RUNBOOK.md",
+        "docs/UBUNTU_QUALIFICATION.md",
+        "docs/PRODUCTION_SIGNING_CUSTODY.md"
+      ],
+      "environment": "procedure-only-no-physical-execution",
+      "observations": "The package specifies owner-provided E1/E2 hardware, exact disposable-disk authorization, firmware and recovery access, network isolation, production signing custody, model/license inputs, witnesses, stop rules, test oracles, evidence layout, and sign-off for the complete G2 physical, security, recovery, lifecycle, and performance scope.",
+      "limitations": "A reviewed procedure is not execution evidence. No destructive installation, physical boot, tamper, LUKS2/TPM recovery, power interruption, enforcing isolation, suspend/resume, lifecycle, performance, or two-board workflow was run.",
+      "gate_closing": false
     }
   ],
-  "validation_record": "docs/gates/g2/test_run_2026-09-23-002.json",
+  "validation_record": "docs/gates/g2/test_run_2026-09-23-003.json",
   "test_plan": "docs/gates/g2/test_plan.json",
   "open_blocker_record": "docs/gates/g2/blockers.json",
   "deferral_record": "docs/gates/final_certification_deferrals.json",

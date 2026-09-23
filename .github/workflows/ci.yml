@@ -64,7 +64,7 @@ jobs:
           do
             python -m unittest discover -s tests -p "$test_file" -v
           done
-      - name: Run optimized safety and model-selection boundaries
+      - name: Run optimized safety, model-selection, and qualification boundaries
         shell: bash
         env:
           PYTHONWARNINGS: error
@@ -75,7 +75,10 @@ jobs:
             tests.test_privileged_helper \
             tests.test_durable_effects \
             tests.test_model_pack \
-            tests.test_model_selection
+            tests.test_model_selection \
+            tests.test_g2_host_inventory \
+            tests.test_model_catalog_signing \
+            tests.test_ubuntu_preflight
 
   windows-smoke:
     name: Native Windows smoke · Python ${{ matrix.python }}
@@ -114,10 +117,10 @@ jobs:
             python -W error -m unittest discover -s tests -p $testFile -v
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           }
-      - name: Run optimized safety and model-selection boundaries
+      - name: Run optimized safety, model-selection, and qualification boundaries
         shell: pwsh
         run: |
-          python -O -W error -m unittest tests.test_boot_control tests.test_installer tests.test_privileged_helper tests.test_durable_effects tests.test_model_pack tests.test_model_selection
+          python -O -W error -m unittest tests.test_boot_control tests.test_installer tests.test_privileged_helper tests.test_durable_effects tests.test_model_pack tests.test_model_selection tests.test_g2_host_inventory tests.test_model_catalog_signing tests.test_ubuntu_preflight
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Exercise the native CLI boundary
         shell: pwsh

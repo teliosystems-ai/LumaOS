@@ -32,7 +32,7 @@ The implementation is intended for design reviews, local development, automated 
 | Install-time model profiles | Development contract supports explicit manual-only, CPU, and CUDA choices with exact pack/runtime identity and fail-closed RAM, VRAM, storage, context, load, and serving checks |
 | Signed 4–6B compact control model | Required for formal G1 closure; not yet certified |
 | External model weights | User-supplied and governed by their own licenses |
-| G2 installer, A/B boot-state, privileged-helper, durable-effect, and model-selection contracts | Development-only reference contracts; the expanded 96-test safety/model boundary passes on native Windows and Ubuntu WSL under normal and optimized Python, with no physical effects or OS enforcement |
+| G2 safety, catalog, and Ubuntu-admission contracts | Development-only reference contracts; the expanded 128-test nine-module boundary passes on native Windows and Ubuntu WSL under normal and optimized Python, with no physical effects, production signing ceremony, or OS enforcement |
 | Bootable ISO, installer image, or hardware provisioning | Not supported |
 | Dual boot or VM lifecycle automation | Not supported |
 | 400–405B model operation or cluster certification | Not supported |
@@ -56,12 +56,17 @@ fail-fast compare-and-swap before adapter entry, and persists a keyed
 commitment instead of a raw high-entropy safe-handle token. It revalidates
 again after the durable `APPLYING` transition, restores a proven-not-applied
 attempt to `PREPARED`, and preserves pre-effect capacity exhaustion as safely
-retryable. The expanded 96-test G2 boundary (76 installer/boot/helper/durable
-tests plus 20 model-pack/model-selection tests) passes on native Windows and
-Ubuntu WSL under normal and optimized Python.
+retryable. The expanded 128-test G2 boundary (76 installer/boot/helper/durable
+tests, 20 model-pack/model-selection tests, and 32 signed-catalog/host-
+inventory/Ubuntu-admission tests) passes on native Windows and Ubuntu WSL
+under normal and optimized Python.
 These contracts do not discover or modify a real disk, boot an image, validate
 or install a UKI/dm-verity/LUKS stack, or enforce cgroup, AppArmor, seccomp,
-KVM, native ACL/DACL policy, or operating-system peer credentials.
+KVM, native ACL/DACL policy, or operating-system peer credentials. The catalog
+contract verifies a fully bound request/approval/signature envelope without
+handling private keys; it does not claim that a production catalog or custody
+ceremony exists. The Ubuntu probes are read-only and WSL can never pass native
+candidate admission.
 
 The installer contract also accepts an explicit model-profile catalog and
 selected profile. It binds the exact catalog, pack, runtime, context,
@@ -102,6 +107,19 @@ Run all repository checks:
 ```bash
 make check
 ```
+
+Prepare Ubuntu evidence without installing software or selecting a disk:
+
+```bash
+python3 scripts/collect_g2_host.py --environment-id DEV-UBUNTU --compact
+python3 scripts/ubuntu_preflight.py --mode development --pretty
+```
+
+Native qualification requires a fresh collector file, an explicit `e1` or
+`e2` hardware class, and live corroboration; a pass is admission to the next
+lab step, not permission to write a disk. See
+[`docs/UBUNTU_QUALIFICATION.md`](docs/UBUNTU_QUALIFICATION.md) and the
+[`G2 operator hand-off`](docs/gates/g2/OPERATOR_APPROVAL_AND_EXECUTION.md).
 
 With Node 22+ and Chrome/Chromium installed, run the complete local browser
 journey as an additional check:

@@ -6,7 +6,7 @@
   "owner": "qa-lead",
   "status": "development-in-progress",
   "gate_closing": false,
-  "claim_boundary": "This plan separates locally executable safety, model-profile selection, and bounded SQLite durability tests from physical Ubuntu OS acceptance. Passing fake-device, injected-adapter, unsigned-model, temporary SQLite, native Windows, or Ubuntu WSL tests cannot satisfy a numbered procedure that requires a signed production model catalog, signed media, physical boot, destructive storage, encryption recovery, kernel enforcement, physical crash recovery, or two A1 boards.",
+  "claim_boundary": "This plan separates locally executable safety, model-profile selection, signed-catalog verification, read-only Ubuntu admission, and bounded SQLite durability tests from physical Ubuntu OS acceptance. Passing fake-device, injected-adapter, unsigned-model, temporary SQLite, native Windows, Ubuntu WSL, inventory, or preflight tests cannot satisfy a numbered procedure that requires an actual signed production catalog and custody ceremony, signed media, physical boot, destructive storage, encryption recovery, kernel enforcement, physical crash recovery, or two A1 boards.",
   "development_lanes": [
     {
       "environment": "DEV-WIN-WSL-GPU-01",
@@ -72,8 +72,52 @@
       ],
       "local_disposition": "deterministic schema-v2 pack, profile-catalog, exact hardware-fit, explicit selection, plan-binding, and effect-time revalidation contract tests",
       "formal_disposition": "blocked-pending-signed-production-catalog-offline-base-image-both-board-resource-and-recovery-evidence"
+    },
+    {
+      "area": "signed-model-catalog-verification-and-custody",
+      "source_requirements": ["A003"],
+      "source_tests": ["T06"],
+      "artifacts": [
+        "src/luma_os/model_catalog_signing.py",
+        "src/luma_os/model_pack.py",
+        "src/luma_os/model_selection.py",
+        "schemas/model-catalog-signature.schema.json",
+        "schemas/model-profile.schema.json",
+        "scripts/model_catalog_ceremony.py",
+        "tests/test_model_catalog_signing.py",
+        "docs/PRODUCTION_SIGNING_CUSTODY.md"
+      ],
+      "local_disposition": "deterministic request-before-approval, quorum, purpose, key-lifecycle, rollback, exact-pack, bounded-input, and detached-verification contract tests without private keys",
+      "formal_disposition": "blocked-pending-protected-production-keys-trust-loader-admin-event-adapter-rollback-anchor-signed-packs-and-witnessed-ceremony"
+    },
+    {
+      "area": "ubuntu-host-inventory-and-native-candidate-admission",
+      "source_requirements": ["A001"],
+      "source_tests": ["T01", "T45", "T50"],
+      "artifacts": [
+        "src/luma_os/g2_host_inventory.py",
+        "scripts/collect_g2_host.py",
+        "scripts/ubuntu_preflight.py",
+        "schemas/g2-host-inventory.schema.json",
+        "tests/test_g2_host_inventory.py",
+        "tests/test_ubuntu_preflight.py",
+        "docs/UBUNTU_QUALIFICATION.md"
+      ],
+      "local_disposition": "read-only trusted-probe inventory plus fresh live-corroborated WSL/development and native-E1/E2 candidate admission; WSL is structurally non-closing",
+      "formal_disposition": "blocked-pending-native-e1-e2-inventories-exact-disk-authorizations-and-complete-destructive-security-recovery-qualification"
     }
   ],
+  "operator_qualification_package": {
+    "status": "prepared-not-executed",
+    "artifacts": [
+      "docs/gates/g2/OPERATOR_APPROVAL_AND_EXECUTION.md",
+      "docs/gates/g2/PHYSICAL_QUALIFICATION_RUNBOOK.md",
+      "docs/UBUNTU_QUALIFICATION.md",
+      "docs/PRODUCTION_SIGNING_CUSTODY.md"
+    ],
+    "scope": ["T01-T16", "T27-T30", "T33", "T40", "T45-T51", "T62"],
+    "gate_closing": false
+  },
   "remaining_numbered_suite": [
     "T01-T16",
     "T27-T30",

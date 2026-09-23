@@ -29,7 +29,9 @@ REQUIRED_DOCS = (
     "docs/ROADMAP.md",
     "docs/SUPPORT_MATRIX.md",
     "docs/OPERATIONS.md",
+    "docs/PRODUCTION_SIGNING_CUSTODY.md",
     "docs/RELEASE.md",
+    "docs/UBUNTU_QUALIFICATION.md",
     "docs/DEVELOPMENT_PLAN.md",
     "docs/GOVERNING_REQUIREMENTS_SOURCES.md",
     "docs/GATE_REPORT.md",
@@ -47,11 +49,17 @@ HISTORICAL_G2_TEST_RUN = "docs/gates/g2/test_run_2026-09-23.json"
 HISTORICAL_G2_ARCHIVE_ATTESTATION = (
     "docs/gates/g2/archive_attestation_2026-09-23.json"
 )
-G2_TEST_RUN = "docs/gates/g2/test_run_2026-09-23-002.json"
-G2_ARCHIVE_ATTESTATION = "docs/gates/g2/archive_attestation_2026-09-23-002.json"
+PRIOR_G2_TEST_RUN = "docs/gates/g2/test_run_2026-09-23-002.json"
+PRIOR_G2_ARCHIVE_ATTESTATION = (
+    "docs/gates/g2/archive_attestation_2026-09-23-002.json"
+)
+G2_TEST_RUN = "docs/gates/g2/test_run_2026-09-23-003.json"
+G2_ARCHIVE_ATTESTATION = "docs/gates/g2/archive_attestation_2026-09-23-003.json"
 HISTORICAL_DETACHED_G2_EVIDENCE_FILES = (
     HISTORICAL_G2_TEST_RUN,
     HISTORICAL_G2_ARCHIVE_ATTESTATION,
+    PRIOR_G2_TEST_RUN,
+    PRIOR_G2_ARCHIVE_ATTESTATION,
 )
 CURRENT_DETACHED_G2_EVIDENCE_FILES = (G2_TEST_RUN, G2_ARCHIVE_ATTESTATION)
 DETACHED_G2_EVIDENCE_FILES = (
@@ -64,6 +72,12 @@ HISTORICAL_DETACHED_G2_SHA256 = {
     ),
     HISTORICAL_G2_ARCHIVE_ATTESTATION: (
         "a15c067aabd89c69c01cae0ab8b68acecd91155149de8fe3be693db4c632002d"
+    ),
+    PRIOR_G2_TEST_RUN: (
+        "ccfdb39205ffc3f1653308df2a9953c0b9020cade7bb9ccc2e9538c1cef815e0"
+    ),
+    PRIOR_G2_ARCHIVE_ATTESTATION: (
+        "7160fcbf6b177f0ea8487b4b1857c0a0b3095f6ffbadd12c6d3df6c1136b5360"
     ),
 }
 REQUIRED_GATE_FILES = (
@@ -90,6 +104,8 @@ REQUIRED_GATE_FILES = (
     "docs/gates/g1/test_run_2026-09-22.json",
     "docs/gates/g2/blockers.json",
     "docs/gates/g2/evidence.json",
+    "docs/gates/g2/OPERATOR_APPROVAL_AND_EXECUTION.md",
+    "docs/gates/g2/PHYSICAL_QUALIFICATION_RUNBOOK.md",
     "docs/gates/g2/test_plan.json",
     "docs/gates/g2/test_run_2026-09-22.json",
     "docs/registers/adversarial.json",
@@ -107,13 +123,21 @@ REQUIRED_RELEASE_FILES = (
 )
 REQUIRED_INVENTORY_FILES = (
     *REQUIRED_RELEASE_FILES,
+    ".gitattributes",
+    "schemas/g2-host-inventory.schema.json",
+    "schemas/model-catalog-signature.schema.json",
     "schemas/model-pack.schema.json",
     "schemas/model-profile.schema.json",
+    "scripts/collect_g2_host.py",
+    "scripts/model_catalog_ceremony.py",
     "scripts/smoke_local_model.py",
+    "scripts/ubuntu_preflight.py",
     "src/luma_os/administration.py",
     "src/luma_os/boot_control.py",
     "src/luma_os/durable_effects.py",
+    "src/luma_os/g2_host_inventory.py",
     "src/luma_os/installer.py",
+    "src/luma_os/model_catalog_signing.py",
     "src/luma_os/model_pack.py",
     "src/luma_os/model_selection.py",
     "src/luma_os/privileged_helper.py",
@@ -121,12 +145,15 @@ REQUIRED_INVENTORY_FILES = (
     "tests/test_administration.py",
     "tests/test_boot_control.py",
     "tests/test_durable_effects.py",
+    "tests/test_g2_host_inventory.py",
     "tests/test_installer.py",
+    "tests/test_model_catalog_signing.py",
     "tests/test_model_pack.py",
     "tests/test_model_selection.py",
     "tests/test_privileged_helper.py",
     "tests/test_real_inference.py",
     "tests/test_smoke_local_model.py",
+    "tests/test_ubuntu_preflight.py",
 )
 GOVERNING_SOURCE_FILENAMES = {
     "LLM_OS_Windows_Deployment_Requirements_Variation.docx",
@@ -636,8 +663,8 @@ def validate_gate_artifacts() -> None:
             raise RuntimeError("G2 evidence items must reference repository files")
         for repository_reference in references:
             validate_repository_reference(repository_reference, "G2 evidence reference")
-    if evidence_item_ids != {f"G2-EV-{index:03d}" for index in range(1, 7)}:
-        raise RuntimeError("G2 evidence must retain the six identified development items")
+    if evidence_item_ids != {f"G2-EV-{index:03d}" for index in range(1, 10)}:
+        raise RuntimeError("G2 evidence must retain the nine identified development items")
     durable_item = next(
         item for item in g2_evidence_items if item.get("id") == "G2-EV-005"
     )
@@ -673,13 +700,77 @@ def validate_gate_artifacts() -> None:
     ):
         raise RuntimeError("G2 model-selection evidence mapping is inconsistent")
 
+    signed_catalog_item = next(
+        item for item in g2_evidence_items if item.get("id") == "G2-EV-007"
+    )
+    signed_catalog_artifacts = {
+        "src/luma_os/model_catalog_signing.py",
+        "src/luma_os/model_pack.py",
+        "src/luma_os/model_selection.py",
+        "schemas/model-catalog-signature.schema.json",
+        "schemas/model-profile.schema.json",
+        "scripts/model_catalog_ceremony.py",
+        "tests/test_model_catalog_signing.py",
+        "docs/PRODUCTION_SIGNING_CUSTODY.md",
+    }
+    if (
+        signed_catalog_item.get("subject")
+        != "signed-model-catalog-verification-and-custody-contract"
+        or signed_catalog_item.get("requirements_prepared") != ["A003"]
+        or signed_catalog_item.get("source_tests_prepared") != ["T06"]
+        or set(signed_catalog_item.get("evidence", [])) != signed_catalog_artifacts
+    ):
+        raise RuntimeError("G2 signed-model-catalog evidence mapping is inconsistent")
+
+    host_inventory_item = next(
+        item for item in g2_evidence_items if item.get("id") == "G2-EV-008"
+    )
+    host_inventory_artifacts = {
+        "src/luma_os/g2_host_inventory.py",
+        "scripts/collect_g2_host.py",
+        "scripts/ubuntu_preflight.py",
+        "schemas/g2-host-inventory.schema.json",
+        "tests/test_g2_host_inventory.py",
+        "tests/test_ubuntu_preflight.py",
+        "docs/UBUNTU_QUALIFICATION.md",
+    }
+    if (
+        host_inventory_item.get("subject")
+        != "read-only-ubuntu-host-inventory-and-native-candidate-admission"
+        or host_inventory_item.get("requirements_prepared") != ["A001"]
+        or host_inventory_item.get("source_tests_prepared")
+        != ["T01", "T45", "T50"]
+        or set(host_inventory_item.get("evidence", [])) != host_inventory_artifacts
+    ):
+        raise RuntimeError("G2 Ubuntu host-inventory evidence mapping is inconsistent")
+
+    operator_package_item = next(
+        item for item in g2_evidence_items if item.get("id") == "G2-EV-009"
+    )
+    operator_package_artifacts = {
+        "docs/gates/g2/OPERATOR_APPROVAL_AND_EXECUTION.md",
+        "docs/gates/g2/PHYSICAL_QUALIFICATION_RUNBOOK.md",
+        "docs/UBUNTU_QUALIFICATION.md",
+        "docs/PRODUCTION_SIGNING_CUSTODY.md",
+    }
+    if (
+        operator_package_item.get("subject")
+        != "operator-approval-and-physical-qualification-package"
+        or operator_package_item.get("requirements_prepared") != []
+        or operator_package_item.get("source_tests_prepared")
+        != ["T01-T16", "T27-T30", "T33", "T40", "T45-T51", "T62"]
+        or set(operator_package_item.get("evidence", []))
+        != operator_package_artifacts
+    ):
+        raise RuntimeError("G2 operator-qualification evidence mapping is inconsistent")
+
     g2_test_plan = documents["docs/gates/g2/test_plan.json"]
     if (
         not isinstance(g2_test_plan, dict)
         or g2_test_plan.get("status") != "development-in-progress"
         or g2_test_plan.get("gate_closing") is not False
         or not isinstance(g2_test_plan.get("contract_tranche"), list)
-        or len(g2_test_plan["contract_tranche"]) != 5
+        or len(g2_test_plan["contract_tranche"]) != 7
         or not g2_test_plan.get("mandatory_physical_evidence")
         or not g2_test_plan.get("formal_exit_rule")
     ):
@@ -700,6 +791,37 @@ def validate_gate_artifacts() -> None:
         != model_selection_artifacts
     ):
         raise RuntimeError("G2 test plan must retain the model-selection contract tranche")
+    signed_catalog_tranches = [
+        tranche
+        for tranche in g2_test_plan["contract_tranche"]
+        if isinstance(tranche, dict)
+        and tranche.get("area") == "signed-model-catalog-verification-and-custody"
+    ]
+    if (
+        len(signed_catalog_tranches) != 1
+        or signed_catalog_tranches[0].get("source_requirements")
+        != ["A003"]
+        or signed_catalog_tranches[0].get("source_tests") != ["T06"]
+        or set(signed_catalog_tranches[0].get("artifacts", []))
+        != signed_catalog_artifacts
+    ):
+        raise RuntimeError("G2 test plan must retain the signed-model-catalog tranche")
+    host_inventory_tranches = [
+        tranche
+        for tranche in g2_test_plan["contract_tranche"]
+        if isinstance(tranche, dict)
+        and tranche.get("area")
+        == "ubuntu-host-inventory-and-native-candidate-admission"
+    ]
+    if (
+        len(host_inventory_tranches) != 1
+        or host_inventory_tranches[0].get("source_requirements") != ["A001"]
+        or host_inventory_tranches[0].get("source_tests")
+        != ["T01", "T45", "T50"]
+        or set(host_inventory_tranches[0].get("artifacts", []))
+        != host_inventory_artifacts
+    ):
+        raise RuntimeError("G2 test plan must retain the Ubuntu host-inventory tranche")
     inventory = documents["docs/gates/g0/lab_inventory.json"]
     if not isinstance(inventory, dict):
         raise RuntimeError("G0 lab inventory must be an object")
@@ -1164,6 +1286,9 @@ def validate_gate_artifacts() -> None:
         "test_durable_effects.py",
         "test_model_pack.py",
         "test_model_selection.py",
+        "test_g2_host_inventory.py",
+        "test_model_catalog_signing.py",
+        "test_ubuntu_preflight.py",
     )
     declared_boundary_count = sum(
         len(
@@ -1189,9 +1314,9 @@ def validate_gate_artifacts() -> None:
         "optimized_boundary_tests_run": declared_boundary_count,
     }
     if (
-        declared_test_count != 190
-        or declared_boundary_count != 96
-        or len(release_manifest.get("release_files", [])) != 138
+        declared_test_count != 222
+        or declared_boundary_count != 128
+        or len(release_manifest.get("release_files", [])) != 153
     ):
         raise RuntimeError("current G2 repository test or release counts are stale")
     if detached_available and any(
@@ -1238,7 +1363,7 @@ def validate_gate_artifacts() -> None:
         != release_source_commit
         or archive_attestation.get("release_archive_inclusion")
         != "excluded-to-prevent-self-referential-archive-hashes"
-        or archive_attestation.get("file_count") != 138
+        or archive_attestation.get("file_count") != 153
         or archive_attestation.get("source_date_epoch") != 0
         or archive_attestation.get("builds") != 2
         or archive_attestation.get("checksum_verification") != "pass"

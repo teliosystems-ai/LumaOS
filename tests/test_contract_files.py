@@ -32,7 +32,9 @@ class ContractFileTests(unittest.TestCase):
         schema_dir = ROOT / "schemas"
         expected = {
             "artifact.schema.json",
+            "g2-host-inventory.schema.json",
             "grant.schema.json",
+            "model-catalog-signature.schema.json",
             "model-pack.schema.json",
             "model-profile.schema.json",
             "receipt.schema.json",
@@ -69,6 +71,29 @@ class ContractFileTests(unittest.TestCase):
         }
         self.assertTrue(new_model_governance.issubset(required))
         self.assertTrue(new_model_release_files.issubset(release_files))
+        qualification_governance = {
+            "docs/PRODUCTION_SIGNING_CUSTODY.md",
+            "docs/UBUNTU_QUALIFICATION.md",
+            "docs/gates/g2/OPERATOR_APPROVAL_AND_EXECUTION.md",
+            "docs/gates/g2/PHYSICAL_QUALIFICATION_RUNBOOK.md",
+        }
+        qualification_release_files = {
+            ".gitattributes",
+            *qualification_governance,
+            "schemas/g2-host-inventory.schema.json",
+            "schemas/model-catalog-signature.schema.json",
+            "scripts/collect_g2_host.py",
+            "scripts/model_catalog_ceremony.py",
+            "scripts/ubuntu_preflight.py",
+            "src/luma_os/g2_host_inventory.py",
+            "src/luma_os/model_catalog_signing.py",
+            "tests/test_g2_host_inventory.py",
+            "tests/test_model_catalog_signing.py",
+            "tests/test_ubuntu_preflight.py",
+        }
+        self.assertTrue(qualification_governance.issubset(required))
+        self.assertTrue(qualification_release_files.issubset(release_files))
+        self.assertEqual(153, len(manifest["release_files"]))
         self.assertTrue(required.issubset(release_files))
         schema_files = {
             path.relative_to(ROOT).as_posix()
@@ -90,6 +115,8 @@ class ContractFileTests(unittest.TestCase):
                 "docs/gates/g2/archive_attestation_2026-09-23.json",
                 "docs/gates/g2/test_run_2026-09-23-002.json",
                 "docs/gates/g2/archive_attestation_2026-09-23-002.json",
+                "docs/gates/g2/test_run_2026-09-23-003.json",
+                "docs/gates/g2/archive_attestation_2026-09-23-003.json",
             }.issubset(set(manifest["excluded_from_release"]))
         )
         executable_files = {
@@ -102,6 +129,13 @@ class ContractFileTests(unittest.TestCase):
         }
         self.assertEqual(executable_files, set(manifest["executable_release_files"]))
         self.assertTrue(executable_files.issubset(release_files))
+        self.assertTrue(
+            {
+                "scripts/collect_g2_host.py",
+                "scripts/model_catalog_ceremony.py",
+                "scripts/ubuntu_preflight.py",
+            }.isdisjoint(executable_files)
+        )
         self.assertFalse(manifest["external_assets"]["model_weights_included"])
         self.assertEqual("0.1.0", manifest["version"])
 

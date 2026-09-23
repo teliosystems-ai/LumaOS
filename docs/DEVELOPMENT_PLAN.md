@@ -32,7 +32,7 @@ Version `0.1.0` is a developer MVP and a useful input to G0. It currently demons
 - versioned multi-model manifests and install-time profiles with exact total
   and active parameter counts, manual-only/CPU/CUDA choices, and fail-closed
   RAM, VRAM, storage, context, load, and serving checks;
-- a non-destructive installer contract, pure A/B boot-state model, typed privileged-helper/confinement contracts, SQLite-backed request/effect ledgers, and exact multi-model selection with an expanded 96-test safety/model boundary on native Windows and Ubuntu WSL under normal and optimized-Python execution; and
+- a non-destructive installer contract, pure A/B boot-state model, typed privileged-helper/confinement contracts, SQLite-backed request/effect ledgers, exact multi-model selection, signed-catalog verification, and read-only Ubuntu admission with an expanded 128-test nine-module boundary on native Windows and Ubuntu WSL under normal and optimized-Python execution; and
 - repository, API-contract, browser-journey, and deterministic source-package checks.
 
 It has **not** passed formal G0 or G1. Their repository/local development scope is recorded as **complete with deferrals**, while formal certification remains **blocked**. Repository-local G1 prototypes now cover purpose/lifecycle-bound signed model-pack contracts, checked resource admission, deny-by-default policy and Admin delegation, a typed DAG, deterministic fake inference, real loopback inference, local-gateway fencing, platform-adapter scaffolding, and state recovery. It still does not provide a signed certified 4–6B model pack, qualified two-board model runtime, signed skills, worker sandboxing, semantic indexing, multimodal interaction, a bootable image, A/B updates, hardware certification, a Windows file broker, VM or dual-boot lifecycle, 400–405B qualification, or cluster execution. Existing simulator, fake-backend, WSL, one-laptop real-model, and MVP results are development evidence only.
@@ -61,7 +61,7 @@ laptop, not the two required A1 boards.
 | --- | --- |
 | G0 | **Development complete with deferrals; formal certification blocked.** Governing source ingestion and 288-ID traceability are verified; the development baseline, decisions including Admin governance, registers, current Windows/WSL inventory, checks, and source-package evidence exist. Two designated physical boards, the Ubuntu 24.04/E8 baselines, disposable disks, protected production signing custody, and complete qualification evidence are deferred in `docs/gates/g0/blockers.json` and `docs/gates/final_certification_deferrals.json`. |
 | G1 | **Development complete with deferrals; formal certification blocked.** Contract evidence covers resources, policy/Admin delegation, typed DAG, model-pack trust lifecycle, fake and real inference, authenticated gateway, cancellation/concurrency/revocation fencing, state transfer, telemetry, and platform adapters. Qwen3-4B passed bounded native Windows CUDA and Ubuntu WSL CPU/gateway development smoke, but the external artifact is unsigned and not a certified pack. Signed candidate comparison, two-board workflows, boot/recovery, full security/performance evidence, and the real 400–405B experiment are deferred. No deferral waives G0 or G1 exit criteria. |
-| G2 | **Development in progress; formal certification blocked.** The repository-local expanded boundary has 96 tests on native Windows and Ubuntu WSL under normal and optimized-Python execution for non-destructive installer authorization, exact multi-model/hardware selection, pure A/B boot-state transitions, typed helper/confinement boundaries, and durable request/effect coordination. No real disk, boot, cryptographic boot-chain, encryption, kernel-control, VM, native ACL/DACL, or peer-credential enforcement has been exercised. |
+| G2 | **Development in progress; formal certification blocked.** The repository-local expanded boundary has 128 tests on native Windows and Ubuntu WSL under normal and optimized-Python execution for non-destructive installer authorization, exact multi-model/hardware selection, pure A/B boot-state transitions, typed helper/confinement boundaries, durable request/effect coordination, signed-catalog verification, and read-only Ubuntu host admission. No production signing ceremony, real disk, boot, cryptographic boot-chain, encryption, kernel-control, VM, native ACL/DACL, or peer-credential enforcement has been exercised. |
 | G3, G4, G5 | **Not started.** |
 | GWIN0, GWIN1, GWIN2 | **Not started.** |
 | G6, G7 | **Not started and separately capacity-gated.** |
@@ -275,6 +275,20 @@ under-resourced profiles are denied without CPU/manual/remote substitution.
 This is non-destructive contract evidence. The current Qwen3-4B artifact is
 unsigned and outside the release, and no production catalog, base image, model
 import/rollback, destructive installer, or physical-board workflow exists.
+
+**2026-09-23 catalog and Ubuntu-readiness checkpoint:** G2 remains in progress
+and has not passed. Commit `0d7685aaaec2301b9340b710061a447cd3569b83`
+adds a bounded detached model-catalog verification contract, a request-first
+no-private-key ceremony utility, a trusted-probe Linux host inventory, and a
+fresh live-corroborated Ubuntu admission probe. Production catalog approval
+requires three distinct exact-event approvers and a separate custodian, while
+native admission requires an explicit E1/E2 class and cannot pass on WSL. The
+operator package now defines exact destructive-disk, signing-custody, boot,
+security, recovery, lifecycle, evidence, and sign-off inputs. These additions
+prepare `T01`, `T06`, `T45`, `T49`, `T50`, and the wider physical suite; they
+do not supply production keys or signatures, authorize disk mutation, build a
+bootable image, enforce kernel controls, or replace execution on both physical
+A1 boards.
 
 ## G3 Functional beta
 

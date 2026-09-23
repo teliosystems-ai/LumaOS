@@ -17,6 +17,17 @@ import re
 import threading
 from typing import Protocol, TypeVar
 
+from .model_selection import (
+    ModelHardwareSnapshot,
+    ModelProfileCatalog,
+    ModelSelection,
+    ModelSelectionAssessment,
+    ModelSelectionDenied,
+    ModelSelectionError,
+    assess_model_selection,
+    select_model_profile,
+)
+
 
 U64_MAX = (1 << 64) - 1
 INSTALL_ALIGNMENT_BYTES = 1024 * 1024
@@ -528,6 +539,7 @@ class HardwareAssessment:
     selected_disk_capacity_bytes: int
     required_disk_bytes: int
     degraded_install_allowed: bool
+    model_selection_assessment: ModelSelectionAssessment | None = None
 
     def __post_init__(self) -> None:
         if self.support_status not in {"certified", "degraded", "unsupported"}:
@@ -536,11 +548,21 @@ class HardwareAssessment:
         _u64(self.selected_disk_capacity_bytes, "selected_disk_capacity_bytes")
         _u64(self.required_disk_bytes, "required_disk_bytes", positive=True)
         _strict_bool(self.degraded_install_allowed, "degraded_install_allowed")
+        if self.model_selection_assessment is not None and not isinstance(
+            self.model_selection_assessment, ModelSelectionAssessment
+        ):
+            raise InstallerValidationError(
+                "model_selection_assessment must be a ModelSelectionAssessment"
+            )
 
     @property
     def installation_permitted(self) -> bool:
-        return self.support_status == "certified" or (
+        hardware_permitted = self.support_status == "certified" or (
             self.support_status == "degraded" and self.degraded_install_allowed
+        )
+        return hardware_permitted and (
+            self.model_selection_assessment is None
+            or self.model_selection_assessment.selection_permitted
         )
 
 
@@ -609,10 +631,21 @@ class InstallationPlan:
     required_disk_bytes: int
     effects: tuple[MutationEffect, ...]
     created_at: datetime
+    model_selection: ModelSelection | None = None
 
     def __post_init__(self) -> None:
-        if self.schema_version != 1 or isinstance(self.schema_version, bool):
-            raise InstallerValidationError("installation plan schema_version must be 1")
+        if self.schema_version not in {1, 2} or isinstance(self.schema_version, bool):
+            raise InstallerValidationError("installation plan schema_version must be 1 or 2")
+        if self.schema_version == 1 and self.model_selection is not None:
+            raise InstallerValidationError(
+                "schema-version-1 installation plans cannot bind model selection"
+            )
+        if self.schema_version == 2 and not isinstance(
+            self.model_selection, ModelSelection
+        ):
+            raise InstallerValidationError(
+                "schema-version-2 installation plans require model selection"
+            )
         _identifier(self.issuer_id, "issuer_id")
         _u64(self.contract_policy_version, "contract_policy_version", positive=True)
         _identifier(self.edition_id, "edition_id")
@@ -656,7 +689,7 @@ class InstallationPlan:
             raise InstallerValidationError("plan effects exceed selected disk capacity")
 
     def canonical_payload(self) -> dict[str, object]:
-        return {
+        payload: dict[str, object] = {
             "architecture": self.architecture,
             "contract_policy_version": self.contract_policy_version,
             "created_at": _canonical_datetime(self.created_at),
@@ -674,6 +707,13 @@ class InstallationPlan:
             "schema_version": self.schema_version,
             "selected_disk": self.selected_disk.canonical_payload(),
         }
+        if self.schema_version == 2:
+            if self.model_selection is None:  # Defensive narrowing after validation.
+                raise InstallerValidationError(
+                    "schema-version-2 plan lost its model selection"
+                )
+            payload["model_selection"] = self.model_selection.canonical_payload()
+        return payload
 
     @property
     def digest(self) -> str:
@@ -872,12 +912,35 @@ class InstallerContract:
         edition: EditionSpec,
         *,
         selected_disk_id: str,
+        model_catalog: ModelProfileCatalog | None = None,
+        model_hardware: ModelHardwareSnapshot | None = None,
+        selected_model_profile_id: str | None = None,
     ) -> HardwareAssessment:
         if not isinstance(inventory, HardwareInventory):
             raise InstallerValidationError("inventory must be a HardwareInventory")
         if not isinstance(edition, EditionSpec):
             raise InstallerValidationError("edition must be an EditionSpec")
         selected_disk_id = _stable_disk_id(selected_disk_id, "selected_disk_id")
+        model_inputs = (model_catalog, model_hardware, selected_model_profile_id)
+        if any(value is not None for value in model_inputs) and not all(
+            value is not None for value in model_inputs
+        ):
+            raise InstallerValidationError(
+                "model_catalog, model_hardware, and selected_model_profile_id "
+                "must be supplied together"
+            )
+        if model_catalog is not None and not isinstance(
+            model_catalog, ModelProfileCatalog
+        ):
+            raise InstallerValidationError(
+                "model_catalog must be a ModelProfileCatalog"
+            )
+        if model_hardware is not None and not isinstance(
+            model_hardware, ModelHardwareSnapshot
+        ):
+            raise InstallerValidationError(
+                "model_hardware must be a ModelHardwareSnapshot"
+            )
         disk = inventory.disk(selected_disk_id)
         reasons: list[str] = []
         unsupported = False
@@ -919,6 +982,25 @@ class InstallerContract:
                 degraded = True
                 reasons.append(f"device:{required_class}:degraded")
 
+        model_assessment: ModelSelectionAssessment | None = None
+        if model_catalog is not None and model_hardware is not None:
+            try:
+                model_assessment = assess_model_selection(
+                    model_catalog,
+                    model_hardware,
+                    profile_id=selected_model_profile_id,  # type: ignore[arg-type]
+                )
+            except ModelSelectionError as exc:
+                raise InstallerValidationError(
+                    "model selection inputs are invalid"
+                ) from exc
+            if not model_assessment.selection_permitted:
+                unsupported = True
+                reasons.extend(
+                    f"model-selection:{reason}"
+                    for reason in model_assessment.reasons
+                )
+
         capacity = 0
         if disk is None:
             unsupported = True
@@ -943,6 +1025,7 @@ class InstallerContract:
             selected_disk_capacity_bytes=capacity,
             required_disk_bytes=edition.required_disk_bytes,
             degraded_install_allowed=edition.allow_degraded_devices,
+            model_selection_assessment=model_assessment,
         )
 
     def preflight(
@@ -951,17 +1034,40 @@ class InstallerContract:
         edition: EditionSpec,
         *,
         selected_disk_id: str,
+        model_catalog: ModelProfileCatalog | None = None,
+        model_hardware: ModelHardwareSnapshot | None = None,
+        selected_model_profile_id: str | None = None,
     ) -> PreflightResult:
         now = self._now()
         self._require_fresh(inventory, now)
         assessment = self.assess(
-            inventory, edition, selected_disk_id=selected_disk_id
+            inventory,
+            edition,
+            selected_disk_id=selected_disk_id,
+            model_catalog=model_catalog,
+            model_hardware=model_hardware,
+            selected_model_profile_id=selected_model_profile_id,
         )
         if not assessment.installation_permitted:
             raise PreflightDenied(assessment)
         disk = inventory.disk(selected_disk_id)
         if disk is None:  # Kept explicit for type narrowing and fail-closed behavior.
             raise PreflightDenied(assessment)
+
+        model_selection: ModelSelection | None = None
+        if model_catalog is not None and model_hardware is not None:
+            try:
+                model_selection = select_model_profile(
+                    model_catalog,
+                    model_hardware,
+                    profile_id=selected_model_profile_id,  # type: ignore[arg-type]
+                )
+            except ModelSelectionDenied as exc:
+                raise PreflightDenied(assessment) from exc
+            except ModelSelectionError as exc:
+                raise InstallerValidationError(
+                    "model selection inputs are invalid"
+                ) from exc
 
         effects: list[MutationEffect] = [
             MutationEffect(
@@ -986,7 +1092,7 @@ class InstallerContract:
             )
             cursor = _checked_sum([cursor, partition.size_bytes], "partition end")
         plan = InstallationPlan(
-            schema_version=1,
+            schema_version=2 if model_selection is not None else 1,
             issuer_id=self._issuer_id,
             contract_policy_version=self._contract_policy_version,
             edition_id=edition.edition_id,
@@ -1002,6 +1108,7 @@ class InstallerContract:
             required_disk_bytes=edition.required_disk_bytes,
             effects=tuple(effects),
             created_at=now,
+            model_selection=model_selection,
         )
         with self._lock:
             self._issued_plans[plan.digest] = plan
@@ -1068,6 +1175,8 @@ class InstallerContract:
         authorization: AuthorizationContext,
         inventory_provider: Callable[[], HardwareInventory],
         executor: Callable[[InstallationPlan, VerifiedDeviceCapability], T],
+        model_catalog_provider: Callable[[], ModelProfileCatalog] | None = None,
+        model_hardware_provider: Callable[[], ModelHardwareSnapshot] | None = None,
     ) -> T:
         if not isinstance(plan, InstallationPlan):
             raise InstallerValidationError("plan must be an InstallationPlan")
@@ -1079,6 +1188,17 @@ class InstallerContract:
             raise InstallerValidationError("authorization must be an AuthorizationContext")
         if not callable(inventory_provider) or not callable(executor):
             raise InstallerValidationError("inventory_provider and executor must be callable")
+        if plan.schema_version == 2:
+            if not callable(model_catalog_provider) or not callable(
+                model_hardware_provider
+            ):
+                raise InstallerValidationError(
+                    "schema-version-2 execution requires model catalog and hardware providers"
+                )
+        elif model_catalog_provider is not None or model_hardware_provider is not None:
+            raise InstallerValidationError(
+                "schema-version-1 execution cannot accept model revalidation providers"
+            )
         self._require_issued_plan(plan)
         with self._lock:
             recorded = self._issued_confirmations.get(confirmation.confirmation_id)
@@ -1101,6 +1221,23 @@ class InstallerContract:
         self._require_fresh(fresh, discovery_completed_at)
         self._require_revalidated(plan, fresh)
 
+        if plan.schema_version == 2:
+            # Callability was checked above; these assertions are only for type narrowing.
+            if model_catalog_provider is None or model_hardware_provider is None:
+                raise InstallerValidationError(
+                    "schema-version-2 model providers are missing"
+                )
+            fresh_model_catalog = model_catalog_provider()
+            fresh_model_hardware = model_hardware_provider()
+            model_discovery_completed_at = self._now()
+            self._require_confirmation_time(
+                confirmation, model_discovery_completed_at
+            )
+            self._require_fresh(fresh, model_discovery_completed_at)
+            self._require_model_revalidated(
+                plan, fresh_model_catalog, fresh_model_hardware
+            )
+
         capability = self._device_binder(plan, fresh)
         self._require_capability_binding(plan, fresh, capability)
         attempt = InstallationAttempt(
@@ -1119,6 +1256,20 @@ class InstallerContract:
         # These are deliberately the final checks.  A slow inventory provider,
         # capability binder, or journal cannot extend a confirmation or snapshot
         # past its freshness window, and authorization is checked at effect time.
+        if plan.schema_version == 2:
+            if model_catalog_provider is None or model_hardware_provider is None:
+                raise InstallerValidationError(
+                    "schema-version-2 model providers are missing"
+                )
+            effect_model_catalog = model_catalog_provider()
+            effect_model_hardware = model_hardware_provider()
+            model_effect_time = self._now()
+            self._require_confirmation_time(confirmation, model_effect_time)
+            self._require_fresh(fresh, model_effect_time)
+            self._require_model_revalidated(
+                plan, effect_model_catalog, effect_model_hardware
+            )
+
         self._authorize(authorization, EXECUTE_INSTALL_ACTIVITY)
         execution_time = self._now()
         self._require_confirmation_time(confirmation, execution_time)
@@ -1212,6 +1363,36 @@ class InstallerContract:
         disk = fresh.disk(plan.selected_disk.stable_id)
         if disk is None or disk.identity_sha256 != plan.selected_disk.identity_sha256:
             raise InventoryChanged("selected disk identity changed after confirmation")
+
+    @staticmethod
+    def _require_model_revalidated(
+        plan: InstallationPlan,
+        fresh_catalog: object,
+        fresh_hardware: object,
+    ) -> None:
+        if plan.schema_version != 2 or not isinstance(
+            plan.model_selection, ModelSelection
+        ):
+            raise InventoryChanged("installation plan has no model selection binding")
+        if not isinstance(fresh_catalog, ModelProfileCatalog):
+            raise InventoryChanged("model catalog provider returned an invalid catalog")
+        if not isinstance(fresh_hardware, ModelHardwareSnapshot):
+            raise InventoryChanged("model hardware provider returned an invalid snapshot")
+        try:
+            fresh_selection = select_model_profile(
+                fresh_catalog,
+                fresh_hardware,
+                profile_id=plan.model_selection.profile_id,
+            )
+        except (ModelSelectionDenied, ModelSelectionError) as exc:
+            raise InventoryChanged(
+                "selected model profile no longer passes resource or policy checks"
+            ) from exc
+        if fresh_selection.digest != plan.model_selection.digest:
+            raise InventoryChanged(
+                "model catalog, profile, runtime, accelerator, or resources changed "
+                "after confirmation"
+            )
 
     def _require_fresh(self, inventory: HardwareInventory, now: datetime) -> None:
         if not isinstance(inventory, HardwareInventory):

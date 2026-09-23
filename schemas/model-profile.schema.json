@@ -1,0 +1,118 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://luma-os.invalid/schemas/model-profile.schema.json",
+  "title": "Luma OS install-time model profile catalog",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "catalog_id", "profiles"],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "catalog_id": { "$ref": "#/$defs/asciiText" },
+    "profiles": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "oneOf": [{ "$ref": "#/$defs/manualProfile" }, { "$ref": "#/$defs/modelProfile" }] }
+    }
+  },
+  "$defs": {
+    "asciiText": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "pattern": "^[ -~]+$"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "nonNegativeSafeInteger": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "positiveSafeInteger": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991
+    },
+    "reservation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["domain", "bytes"],
+      "properties": {
+        "domain": { "enum": ["host", "accelerator"] },
+        "bytes": { "$ref": "#/$defs/positiveSafeInteger" }
+      }
+    },
+    "manualProfile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "profile_id", "remote_fallback"],
+      "properties": {
+        "kind": { "const": "manual-only" },
+        "profile_id": { "const": "manual-only" },
+        "remote_fallback": { "const": false }
+      }
+    },
+    "modelProfile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "profile_id",
+        "parameter_total",
+        "parameter_active_min",
+        "parameter_active_max",
+        "model_pack_manifest_sha256",
+        "runtime_tuple_sha256",
+        "install_bytes",
+        "storage_peak_bytes",
+        "minimum_host_ram_bytes",
+        "minimum_accelerator_memory_bytes",
+        "load_reservations",
+        "serve_reservations",
+        "context_tokens",
+        "execution_mode",
+        "availability",
+        "verification_state",
+        "development_state",
+        "certification_state",
+        "remote_fallback"
+      ],
+      "properties": {
+        "kind": { "const": "model" },
+        "profile_id": { "$ref": "#/$defs/asciiText" },
+        "parameter_total": { "$ref": "#/$defs/positiveSafeInteger" },
+        "parameter_active_min": { "$ref": "#/$defs/positiveSafeInteger" },
+        "parameter_active_max": { "$ref": "#/$defs/positiveSafeInteger" },
+        "model_pack_manifest_sha256": { "$ref": "#/$defs/sha256" },
+        "runtime_tuple_sha256": { "$ref": "#/$defs/sha256" },
+        "install_bytes": { "$ref": "#/$defs/positiveSafeInteger" },
+        "storage_peak_bytes": { "$ref": "#/$defs/positiveSafeInteger" },
+        "minimum_host_ram_bytes": { "$ref": "#/$defs/positiveSafeInteger" },
+        "minimum_accelerator_memory_bytes": { "$ref": "#/$defs/nonNegativeSafeInteger" },
+        "load_reservations": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 2,
+          "items": { "$ref": "#/$defs/reservation" }
+        },
+        "serve_reservations": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 2,
+          "items": { "$ref": "#/$defs/reservation" }
+        },
+        "context_tokens": { "$ref": "#/$defs/positiveSafeInteger" },
+        "execution_mode": { "enum": ["cpu", "cuda"] },
+        "availability": { "enum": ["available", "unavailable"] },
+        "verification_state": { "enum": ["verified", "unverified"] },
+        "development_state": { "enum": ["untested", "development-tested"] },
+        "certification_state": {
+          "enum": ["not-certified", "execution-certified", "interactive-certified"]
+        },
+        "remote_fallback": { "const": false }
+      }
+    }
+  }
+}

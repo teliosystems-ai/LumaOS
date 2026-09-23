@@ -28,9 +28,18 @@ from luma_os.installer import (  # noqa: E402
     PreflightDenied,
     VerifiedDeviceCapability,
 )
+from luma_os.model_selection import (  # noqa: E402
+    AcceleratorDevice,
+    ManualOnlyProfile,
+    ModelHardwareSnapshot,
+    ModelProfile,
+    ModelProfileCatalog,
+    ResourceReservation,
+)
 
 
 MIB = 1024 * 1024
+GIB = 1024 * MIB
 
 
 class OpaqueHandle:
@@ -216,13 +225,100 @@ class InstallerContractTests(unittest.TestCase):
         values.update(changes)
         return self.inventory(**values)
 
-    def execute(self, plan, confirmation, *, inventory_provider=None, executor=None):
+    def model_profile(self, **changes: object) -> ModelProfile:
+        values: dict[str, object] = {
+            "profile_id": "qwen3-4b-q4-cuda",
+            "parameter_total": 4_000_000_000,
+            "parameter_active_min": 4_000_000_000,
+            "parameter_active_max": 4_000_000_000,
+            "model_pack_manifest_sha256": "8" * 64,
+            "runtime_tuple_sha256": "9" * 64,
+            "install_bytes": 2 * GIB,
+            "storage_peak_bytes": 4 * GIB,
+            "minimum_host_ram_bytes": 8 * GIB,
+            "minimum_accelerator_memory_bytes": 2 * GIB,
+            "load_reservations": (
+                ResourceReservation("accelerator", 2 * GIB),
+                ResourceReservation("host", 4 * GIB),
+            ),
+            "serve_reservations": (
+                ResourceReservation("accelerator", 2 * GIB),
+                ResourceReservation("host", 8 * GIB),
+            ),
+            "context_tokens": 4096,
+            "execution_mode": "cuda",
+            "availability": "available",
+            "verification_state": "verified",
+            "development_state": "development-tested",
+            "certification_state": "not-certified",
+        }
+        values.update(changes)
+        return ModelProfile(**values)  # type: ignore[arg-type]
+
+    def model_catalog(
+        self,
+        *profiles: ModelProfile,
+        catalog_id: str = "install-v1",
+    ) -> ModelProfileCatalog:
+        return ModelProfileCatalog(
+            1,
+            catalog_id,
+            (ManualOnlyProfile(), *(profiles or (self.model_profile(),))),
+        )
+
+    def model_hardware(self, **changes: object) -> ModelHardwareSnapshot:
+        values: dict[str, object] = {
+            "effective_host_ram_bytes": 16 * GIB,
+            "model_storage_bytes": 8 * GIB,
+            "supported_runtime_tuple_digests": ("9" * 64,),
+            "accelerators": (
+                AcceleratorDevice(
+                    "gpu0",
+                    4 * GIB,
+                    ("9" * 64,),
+                    verified=True,
+                    available=True,
+                ),
+            ),
+        }
+        values.update(changes)
+        return ModelHardwareSnapshot(**values)  # type: ignore[arg-type]
+
+    def model_preflight(
+        self,
+        *,
+        contract: InstallerContract | None = None,
+        catalog: ModelProfileCatalog | None = None,
+        hardware: ModelHardwareSnapshot | None = None,
+        profile_id: str = "qwen3-4b-q4-cuda",
+    ):
+        return (contract or self.contract).preflight(
+            self.inventory(),
+            self.edition,
+            selected_disk_id=self.disk.stable_id,
+            model_catalog=catalog or self.model_catalog(),
+            model_hardware=hardware or self.model_hardware(),
+            selected_model_profile_id=profile_id,
+        )
+
+    def execute(
+        self,
+        plan,
+        confirmation,
+        *,
+        inventory_provider=None,
+        executor=None,
+        model_catalog_provider=None,
+        model_hardware_provider=None,
+    ):
         return self.contract.execute(
             plan,
             confirmation,
             authorization=self.authorization,
             inventory_provider=inventory_provider or self.fresh_inventory,
             executor=executor or (lambda _plan, _capability: "installed"),
+            model_catalog_provider=model_catalog_provider,
+            model_hardware_provider=model_hardware_provider,
         )
 
     def test_strict_decoders_and_numeric_types_fail_closed(self) -> None:
@@ -591,6 +687,199 @@ class InstallerContractTests(unittest.TestCase):
                 inventory_provider=lambda: calls.append("inventory"),  # type: ignore[arg-type]
             )
         self.assertEqual([], calls)
+
+    def test_schema_v2_model_selection_succeeds_and_revalidates_before_effect(self) -> None:
+        catalog = self.model_catalog()
+        hardware = self.model_hardware()
+        result = self.model_preflight(catalog=catalog, hardware=hardware)
+        self.assertEqual(2, result.plan.schema_version)
+        self.assertIsNotNone(result.plan.model_selection)
+        self.assertTrue(
+            result.assessment.model_selection_assessment.selection_permitted  # type: ignore[union-attr]
+        )
+        self.assertEqual(
+            catalog.digest,
+            result.plan.model_selection.catalog_sha256,  # type: ignore[union-attr]
+        )
+        self.assertEqual(
+            hardware.digest,
+            result.plan.model_selection.hardware_snapshot_sha256,  # type: ignore[union-attr]
+        )
+
+        confirmation = self.confirmation(result.plan)
+        self.assertEqual(result.plan.digest, confirmation.plan_digest)
+        self.clock_value += timedelta(seconds=2)
+        received: list[object] = []
+        installed = self.execute(
+            result.plan,
+            confirmation,
+            model_catalog_provider=lambda: catalog,
+            model_hardware_provider=lambda: hardware,
+            executor=lambda _plan, capability: received.append(capability) or "installed-v2",
+        )
+        self.assertEqual("installed-v2", installed)
+        self.assertEqual(1, len(received))
+
+    def test_schema_v2_insufficient_model_resources_fail_preflight(self) -> None:
+        profile = self.model_profile()
+        catalog = self.model_catalog(profile)
+        insufficient = self.model_hardware(effective_host_ram_bytes=8 * GIB - 1)
+        with self.assertRaises(PreflightDenied) as caught:
+            self.model_preflight(catalog=catalog, hardware=insufficient)
+        assessment = caught.exception.assessment
+        self.assertEqual("unsupported", assessment.support_status)
+        self.assertEqual(
+            ("host-memory:insufficient",),
+            assessment.model_selection_assessment.reasons,  # type: ignore[union-attr]
+        )
+        self.assertIn(
+            "model-selection:host-memory:insufficient", assessment.reasons
+        )
+
+    def test_schema_v2_manual_only_is_explicit_and_cuda_never_falls_back(self) -> None:
+        cpu = self.model_profile(
+            profile_id="qwen3-4b-q4-cpu",
+            execution_mode="cpu",
+            minimum_accelerator_memory_bytes=0,
+            load_reservations=(ResourceReservation("host", 4 * GIB),),
+            serve_reservations=(ResourceReservation("host", 8 * GIB),),
+        )
+        cuda = self.model_profile()
+        catalog = self.model_catalog(cpu, cuda)
+        no_model_accelerator = self.model_hardware(accelerators=())
+        with self.assertRaises(PreflightDenied) as caught:
+            self.model_preflight(
+                catalog=catalog,
+                hardware=no_model_accelerator,
+                profile_id=cuda.profile_id,
+            )
+        model_assessment = caught.exception.assessment.model_selection_assessment
+        self.assertEqual(
+            cuda.profile_id,
+            model_assessment.requested_profile_id,  # type: ignore[union-attr]
+        )
+        self.assertEqual(
+            "cuda", model_assessment.execution_mode  # type: ignore[union-attr]
+        )
+        self.assertFalse(model_assessment.selection_permitted)  # type: ignore[union-attr]
+
+        manual = self.model_preflight(
+            catalog=catalog,
+            hardware=ModelHardwareSnapshot(0, 0, (), ()),
+            profile_id="manual-only",
+        )
+        self.assertEqual(2, manual.plan.schema_version)
+        self.assertEqual(
+            "manual-only",
+            manual.plan.model_selection.profile_id,  # type: ignore[union-attr]
+        )
+        self.assertEqual(
+            "manual-only",
+            manual.plan.model_selection.execution_mode,  # type: ignore[union-attr]
+        )
+
+    def test_schema_v2_plan_and_confirmation_bind_exact_model_selection(self) -> None:
+        selected = self.model_preflight().plan
+        legacy = self.preflight().plan
+        self.assertEqual(1, legacy.schema_version)
+        self.assertNotIn("model_selection", legacy.canonical_payload())
+        self.assertNotEqual(legacy.digest, selected.digest)
+        self.assertIn("model_selection", selected.canonical_payload())
+
+        selection = selected.model_selection
+        self.assertIsNotNone(selection)
+        tampered_selection = replace(selection, selected_accelerator_id="gpu1")
+        tampered_plan = replace(selected, model_selection=tampered_selection)
+        self.assertNotEqual(selected.digest, tampered_plan.digest)
+        with self.assertRaisesRegex(ConfirmationDenied, "not issued"):
+            self.confirmation(tampered_plan)
+        confirmation = self.confirmation(selected)
+        self.assertEqual(selected.digest, confirmation.plan_digest)
+
+    def test_schema_v2_effect_time_model_hardware_and_catalog_drift_fail_closed(self) -> None:
+        profile = self.model_profile()
+        catalog = self.model_catalog(profile)
+        hardware = self.model_hardware()
+        cases = (
+            (
+                lambda: catalog,
+                lambda: self.model_hardware(
+                    accelerators=(
+                        replace(hardware.accelerators[0], memory_bytes=2 * GIB - 1),
+                    )
+                ),
+                "resource drift",
+            ),
+            (
+                lambda: self.model_catalog(profile, catalog_id="install-v2-drift"),
+                lambda: hardware,
+                "catalog drift",
+            ),
+        )
+        for number, (catalog_provider, hardware_provider, label) in enumerate(cases, 1):
+            with self.subTest(label=label):
+                journal = MemoryAttemptJournal()
+                contract = self.make_contract(journal=journal)
+                plan = self.model_preflight(
+                    contract=contract, catalog=catalog, hardware=hardware
+                ).plan
+                confirmation = self.confirmation(
+                    plan,
+                    contract=contract,
+                    confirmation_id=f"confirm-model-drift-{number}",
+                )
+                self.clock_value += timedelta(seconds=2)
+                executor_calls: list[object] = []
+                binder_count = len(self.binder.calls)
+                with self.assertRaises(InventoryChanged):
+                    contract.execute(
+                        plan,
+                        confirmation,
+                        authorization=self.authorization,
+                        inventory_provider=self.fresh_inventory,
+                        model_catalog_provider=catalog_provider,
+                        model_hardware_provider=hardware_provider,
+                        executor=lambda _plan, cap: executor_calls.append(cap),
+                    )
+                self.assertEqual(binder_count, len(self.binder.calls))
+                self.assertEqual([], executor_calls)
+                self.assertIsNone(journal.load(plan.digest))
+                self.clock_value = self.now
+
+        journal = MemoryAttemptJournal()
+        contract = self.make_contract(journal=journal)
+        plan = self.model_preflight(
+            contract=contract, catalog=catalog, hardware=hardware
+        ).plan
+        confirmation = self.confirmation(
+            plan,
+            contract=contract,
+            confirmation_id="confirm-model-late-drift",
+        )
+        self.clock_value += timedelta(seconds=2)
+        observations = iter(
+            (
+                hardware,
+                self.model_hardware(
+                    accelerators=(
+                        replace(hardware.accelerators[0], memory_bytes=2 * GIB - 1),
+                    )
+                ),
+            )
+        )
+        executor_calls: list[object] = []
+        with self.assertRaises(InventoryChanged):
+            contract.execute(
+                plan,
+                confirmation,
+                authorization=self.authorization,
+                inventory_provider=self.fresh_inventory,
+                model_catalog_provider=lambda: catalog,
+                model_hardware_provider=lambda: next(observations),
+                executor=lambda _plan, cap: executor_calls.append(cap),
+            )
+        self.assertEqual([], executor_calls)
+        self.assertEqual("in_doubt", journal.load(plan.digest).state)  # type: ignore[union-attr]
 
 
 if __name__ == "__main__":

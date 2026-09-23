@@ -13,6 +13,7 @@ import argparse
 from datetime import UTC, datetime, timedelta
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import secrets
@@ -41,6 +42,7 @@ from luma_os.runtime_contracts import (  # noqa: E402
 
 
 DEFAULT_PROMPT = "/no_think Reply with exactly LUMA_GATEWAY_OK and nothing else."
+JSON_SAFE_INTEGER_MAX = (1 << 53) - 1
 
 
 def _sha256_text(value: str) -> str:
@@ -52,6 +54,50 @@ def _sha256(value: str) -> str:
     if len(normalized) != 64 or any(character not in "0123456789abcdef" for character in normalized):
         raise argparse.ArgumentTypeError("expected a 64-character SHA-256 digest")
     return normalized
+
+
+def _domain_bytes(value: str) -> tuple[str, int]:
+    """Parse one canonical ``domain=bytes`` resource declaration."""
+
+    domain, separator, raw_bytes = value.partition("=")
+    if not separator or not domain or domain.strip() != domain:
+        raise argparse.ArgumentTypeError("expected DOMAIN=BYTES")
+    try:
+        size = int(raw_bytes, 10)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("resource bytes must be an integer") from exc
+    if size < 1 or size > JSON_SAFE_INTEGER_MAX:
+        raise argparse.ArgumentTypeError(
+            "resource bytes must be a positive JSON-safe integer"
+        )
+    return domain, size
+
+
+def _positive_json_safe_integer(value: str) -> int:
+    try:
+        parsed = int(value, 10)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("expected an integer") from exc
+    if parsed < 1 or parsed > JSON_SAFE_INTEGER_MAX:
+        raise argparse.ArgumentTypeError(
+            "expected a positive JSON-safe integer"
+        )
+    return parsed
+
+
+def _resource_map(
+    values: list[tuple[str, int]] | None,
+    *,
+    default: tuple[str, int],
+    label: str,
+) -> dict[str, int]:
+    items = values if values is not None else [default]
+    result: dict[str, int] = {}
+    for domain, size in items:
+        if domain in result:
+            raise SystemExit(f"duplicate {label} domain: {domain}")
+        result[domain] = size
+    return result
 
 
 class _CapturingClient:
@@ -84,14 +130,31 @@ def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--endpoint", default="http://127.0.0.1:18080/v1")
     parser.add_argument("--model-id", default="qwen3-1.7b-dev")
+    parser.add_argument("--profile-id")
     parser.add_argument("--model-sha256", required=True, type=_sha256)
     parser.add_argument("--backend-version", default="llama.cpp-b11100")
     parser.add_argument("--api-key-env", default="LUMA_LOCAL_MODEL_API_KEY")
     parser.add_argument("--timeout-seconds", type=float, default=120.0)
-    parser.add_argument("--context-tokens", type=int, default=4096)
-    parser.add_argument("--max-output-tokens", type=int, default=32)
-    parser.add_argument("--host-budget-bytes", type=int, default=8 * 1024**3)
-    parser.add_argument("--reservation-bytes", type=int, default=2 * 1024**3)
+    parser.add_argument(
+        "--context-tokens", type=_positive_json_safe_integer, default=4096
+    )
+    parser.add_argument(
+        "--max-output-tokens", type=_positive_json_safe_integer, default=32
+    )
+    parser.add_argument(
+        "--domain-budget",
+        action="append",
+        type=_domain_bytes,
+        metavar="DOMAIN=BYTES",
+        help="repeatable resource-domain budget (default: host=8 GiB)",
+    )
+    parser.add_argument(
+        "--reservation",
+        action="append",
+        type=_domain_bytes,
+        metavar="DOMAIN=BYTES",
+        help="repeatable exact placement reservation (default: host=2 GiB)",
+    )
     parser.add_argument("--prompt", default=DEFAULT_PROMPT)
     parser.add_argument("--expected-response", default="LUMA_GATEWAY_OK")
     return parser
@@ -99,10 +162,26 @@ def _parser() -> argparse.ArgumentParser:
 
 def main() -> int:
     args = _parser().parse_args()
-    if args.timeout_seconds <= 0:
-        raise SystemExit("--timeout-seconds must be positive")
-    if args.reservation_bytes < 1 or args.host_budget_bytes < args.reservation_bytes:
-        raise SystemExit("host budget must be at least the positive reservation")
+    if not math.isfinite(args.timeout_seconds) or args.timeout_seconds <= 0:
+        raise SystemExit("--timeout-seconds must be finite and positive")
+    budgets = _resource_map(
+        args.domain_budget,
+        default=("host", 8 * 1024**3),
+        label="budget",
+    )
+    reservations = _resource_map(
+        args.reservation,
+        default=("host", 2 * 1024**3),
+        label="reservation",
+    )
+    for domain, size in reservations.items():
+        if domain not in budgets:
+            raise SystemExit(f"reservation domain has no budget: {domain}")
+        if size > budgets[domain]:
+            raise SystemExit(f"reservation exceeds budget for domain: {domain}")
+    profile_id = args.profile_id or f"{args.model_id}-loopback"
+    grant_id = f"{profile_id}-smoke-grant"
+    request_id = f"{profile_id}-smoke-request"
 
     # These digests identify an unsigned development tuple only.  They do not
     # assert that a governed or signed model pack exists.
@@ -136,9 +215,11 @@ def main() -> int:
     capturing_client = _CapturingClient(client)
 
     now = datetime.now(UTC)
-    ledger = ResourceLedger((MemoryDomain("host", args.host_budget_bytes),))
+    ledger = ResourceLedger(
+        tuple(MemoryDomain(domain, size) for domain, size in sorted(budgets.items()))
+    )
     profile = RuntimeProfile(
-        profile_id="qwen3-1.7b-dev-loopback",
+        profile_id=profile_id,
         model_id=args.model_id,
         model_manifest_sha256=model_manifest_sha256,
         tokenizer_sha256=tokenizer_contract_sha256,
@@ -150,21 +231,24 @@ def main() -> int:
         max_concurrent_requests=1,
     )
     plan = PlacementPlan(
-        "qwen3-1.7b-dev-host-plan",
+        f"{profile_id}-plan",
         profile.profile_id,
-        (MemoryReservation("host", args.reservation_bytes),),
+        tuple(
+            MemoryReservation(domain, size)
+            for domain, size in sorted(reservations.items())
+        ),
     )
     allocation = admit_placement(
         ledger,
         owner_id="modeld-development-smoke",
         profile=profile,
         plan=plan,
-        idempotency_key="qwen3-1.7b-dev-smoke-allocation",
+        idempotency_key=f"{profile_id}-smoke-allocation",
     )
     policy = PolicyBroker()
     policy.install(
         CapabilityGrant(
-            grant_id="qwen3-1.7b-dev-smoke-grant",
+            grant_id=grant_id,
             subject="development-smoke-session",
             capability="model.infer",
             resource_kind="runtime-profile",
@@ -179,7 +263,7 @@ def main() -> int:
         ledger,
         capturing_client,
         model_id=args.model_id,
-        required_reservations={"host": args.reservation_bytes},
+        required_reservations=reservations,
         temperature=0.0,
         seed=42,
     )
@@ -197,13 +281,13 @@ def main() -> int:
     started = monotonic()
     result = gateway.infer(
         GatewayRequest(
-            request_id="qwen3-1.7b-dev-smoke-request",
+            request_id=request_id,
             session_id="development-smoke-session",
             session_token=session_token,
             prompt=args.prompt,
             max_output_tokens=args.max_output_tokens,
             deadline=now + timedelta(seconds=args.timeout_seconds + 5),
-            expected_grant_id="qwen3-1.7b-dev-smoke-grant",
+            expected_grant_id=grant_id,
             expected_grant_version=1,
         )
     )
@@ -223,6 +307,10 @@ def main() -> int:
             "model_manifest_sha256": result.model_manifest_sha256,
             "template_contract_sha256": result.template_sha256,
             "tokenizer_contract_sha256": result.tokenizer_sha256,
+        },
+        "resource_contract": {
+            "domain_budgets_bytes": budgets,
+            "placement_reservations_bytes": reservations,
         },
         "gateway": {
             "authenticated": True,

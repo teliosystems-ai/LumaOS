@@ -14,12 +14,13 @@
     "context",
     "blobs",
     "runtime_tuples",
+    "installation_profiles",
     "license",
     "network_default",
     "signer_key_id"
   ],
   "properties": {
-    "schema_version": { "const": 1 },
+    "schema_version": { "const": 2 },
     "canonicalization": { "const": "RFC8785-ASCII-v1" },
     "signature_algorithm": { "const": "Ed25519" },
     "pack_id": { "$ref": "#/$defs/asciiText" },
@@ -27,12 +28,31 @@
     "model": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["architecture", "identity", "parameter_class", "quantization", "source"],
+      "required": [
+        "architecture",
+        "identity",
+        "parameter_class",
+        "total_parameters",
+        "active_parameters_min",
+        "active_parameters_max",
+        "quantization",
+        "required_features",
+        "source"
+      ],
       "properties": {
         "architecture": { "$ref": "#/$defs/asciiText" },
         "identity": { "$ref": "#/$defs/asciiText" },
         "parameter_class": { "$ref": "#/$defs/asciiText" },
+        "total_parameters": { "$ref": "#/$defs/positiveSafeInteger" },
+        "active_parameters_min": { "$ref": "#/$defs/positiveSafeInteger" },
+        "active_parameters_max": { "$ref": "#/$defs/positiveSafeInteger" },
         "quantization": { "$ref": "#/$defs/asciiText" },
+        "required_features": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/asciiText" }
+        },
         "source": { "$ref": "#/$defs/asciiTextLong" }
       }
     },
@@ -49,23 +69,19 @@
       "type": "array",
       "minItems": 4,
       "uniqueItems": true,
-      "items": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": ["role", "path", "sha256", "size_bytes"],
-        "properties": {
-          "role": { "enum": ["model", "tokenizer", "template", "auxiliary", "license"] },
-          "path": { "$ref": "#/$defs/asciiTextLong" },
-          "sha256": { "$ref": "#/$defs/sha256" },
-          "size_bytes": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 }
-        }
-      }
+      "items": { "$ref": "#/$defs/blobDeclaration" }
     },
     "runtime_tuples": {
       "type": "array",
       "minItems": 1,
       "uniqueItems": true,
       "items": { "$ref": "#/$defs/runtimeTuple" }
+    },
+    "installation_profiles": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/installationProfile" }
     },
     "license": {
       "type": "object",
@@ -103,6 +119,54 @@
       "type": "string",
       "pattern": "^[0-9a-f]{64}$"
     },
+    "positiveSafeInteger": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991
+    },
+    "nonNegativeSafeInteger": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "blobDeclaration": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["role", "path", "sha256", "size_bytes", "shard_index"],
+          "properties": {
+            "role": { "const": "model" },
+            "path": { "$ref": "#/$defs/contentBlobPath" },
+            "sha256": { "$ref": "#/$defs/sha256" },
+            "size_bytes": { "$ref": "#/$defs/positiveSafeInteger" },
+            "shard_index": { "$ref": "#/$defs/nonNegativeSafeInteger" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["role", "path", "sha256", "size_bytes"],
+          "properties": {
+            "role": { "enum": ["tokenizer", "template", "auxiliary"] },
+            "path": { "$ref": "#/$defs/contentBlobPath" },
+            "sha256": { "$ref": "#/$defs/sha256" },
+            "size_bytes": { "$ref": "#/$defs/positiveSafeInteger" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["role", "path", "sha256", "size_bytes"],
+          "properties": {
+            "role": { "const": "license" },
+            "path": { "$ref": "#/$defs/licensePath" },
+            "sha256": { "$ref": "#/$defs/sha256" },
+            "size_bytes": { "$ref": "#/$defs/positiveSafeInteger" }
+          }
+        }
+      ]
+    },
     "runtimeTuple": {
       "type": "object",
       "additionalProperties": false,
@@ -114,6 +178,38 @@
         "backend_version": { "$ref": "#/$defs/asciiText" },
         "device": { "$ref": "#/$defs/asciiText" }
       }
+    },
+    "installationProfile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "profile_id",
+        "runtime_tuple_sha256",
+        "execution_mode",
+        "minimum_host_ram_bytes",
+        "minimum_accelerator_memory_bytes",
+        "minimum_model_storage_bytes",
+        "maximum_context_tokens"
+      ],
+      "properties": {
+        "profile_id": { "$ref": "#/$defs/asciiText" },
+        "runtime_tuple_sha256": { "$ref": "#/$defs/sha256" },
+        "execution_mode": { "enum": ["cpu", "cuda"] },
+        "minimum_host_ram_bytes": { "$ref": "#/$defs/positiveSafeInteger" },
+        "minimum_accelerator_memory_bytes": { "$ref": "#/$defs/nonNegativeSafeInteger" },
+        "minimum_model_storage_bytes": { "$ref": "#/$defs/positiveSafeInteger" },
+        "maximum_context_tokens": { "$ref": "#/$defs/positiveSafeInteger" }
+      }
+    },
+    "contentBlobPath": {
+      "type": "string",
+      "pattern": "^blobs/sha256/[0-9a-f]{64}$"
+    },
+    "licensePath": {
+      "type": "string",
+      "minLength": 10,
+      "maxLength": 1024,
+      "pattern": "^licenses/[ -~]+$"
     }
   }
 }

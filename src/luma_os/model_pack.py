@@ -19,6 +19,9 @@ from types import MappingProxyType
 from typing import Protocol
 
 
+_JSON_SAFE_INTEGER_MAX = (1 << 53) - 1
+
+
 class ModelPackError(RuntimeError):
     """Base class for model-pack rejection."""
 
@@ -181,8 +184,24 @@ def _digest(value: object, field: str) -> str:
 
 
 def _positive_integer(value: object, field: str) -> int:
-    if not isinstance(value, int) or isinstance(value, bool) or value < 1 or value > (1 << 63) - 1:
-        raise ModelManifestError(f"{field} must be a positive signed 64-bit integer")
+    if (
+        not isinstance(value, int)
+        or isinstance(value, bool)
+        or value < 1
+        or value > _JSON_SAFE_INTEGER_MAX
+    ):
+        raise ModelManifestError(f"{field} must be a positive JSON-safe integer")
+    return value
+
+
+def _non_negative_integer(value: object, field: str) -> int:
+    if (
+        not isinstance(value, int)
+        or isinstance(value, bool)
+        or value < 0
+        or value > _JSON_SAFE_INTEGER_MAX
+    ):
+        raise ModelManifestError(f"{field} must be a non-negative JSON-safe integer")
     return value
 
 
@@ -255,6 +274,7 @@ class BlobDeclaration:
     path: PurePosixPath
     sha256: str
     size_bytes: int
+    shard_index: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -282,6 +302,47 @@ class RuntimeTuple:
 
 
 @dataclass(frozen=True, slots=True)
+class InstallationProfile:
+    profile_id: str
+    runtime_tuple_sha256: str
+    execution_mode: str
+    minimum_host_ram_bytes: int
+    minimum_accelerator_memory_bytes: int
+    minimum_model_storage_bytes: int
+    maximum_context_tokens: int
+
+    def __post_init__(self) -> None:
+        _ascii_text(self.profile_id, "installation profile_id")
+        _digest(self.runtime_tuple_sha256, "installation runtime_tuple_sha256")
+        if self.execution_mode not in {"cpu", "cuda"}:
+            raise ModelManifestError("installation execution_mode must be cpu or cuda")
+        _positive_integer(
+            self.minimum_host_ram_bytes,
+            "installation minimum_host_ram_bytes",
+        )
+        accelerator_bytes = _non_negative_integer(
+            self.minimum_accelerator_memory_bytes,
+            "installation minimum_accelerator_memory_bytes",
+        )
+        _positive_integer(
+            self.minimum_model_storage_bytes,
+            "installation minimum_model_storage_bytes",
+        )
+        _positive_integer(
+            self.maximum_context_tokens,
+            "installation maximum_context_tokens",
+        )
+        if self.execution_mode == "cpu" and accelerator_bytes != 0:
+            raise ModelManifestError(
+                "cpu installation profiles must not require accelerator memory"
+            )
+        if self.execution_mode == "cuda" and accelerator_bytes == 0:
+            raise ModelManifestError(
+                "cuda installation profiles must require accelerator memory"
+            )
+
+
+@dataclass(frozen=True, slots=True)
 class ModelManifest:
     document: Mapping[str, object]
     canonical_bytes: bytes
@@ -290,6 +351,12 @@ class ModelManifest:
     signer_key_id: str
     blobs: tuple[BlobDeclaration, ...]
     runtime_tuples: tuple[RuntimeTuple, ...]
+    installation_profiles: tuple[InstallationProfile, ...]
+    total_parameters: int
+    active_parameters_min: int
+    active_parameters_max: int
+    required_features: tuple[str, ...]
+    maximum_context_tokens: int
     license_use: str
     redistribution: str
     network_default: str
@@ -313,6 +380,7 @@ class ModelManifest:
                 "context",
                 "blobs",
                 "runtime_tuples",
+                "installation_profiles",
                 "license",
                 "network_default",
                 "signer_key_id",
@@ -321,7 +389,7 @@ class ModelManifest:
         canonical = canonical_manifest_bytes(root)
         if raw != canonical:
             raise ModelManifestError("manifest bytes are not canonical")
-        if root["schema_version"] != 1:
+        if root["schema_version"] != 2 or isinstance(root["schema_version"], bool):
             raise ModelManifestError("unsupported manifest schema_version")
         if root["canonicalization"] != "RFC8785-ASCII-v1":
             raise ModelManifestError("unsupported canonicalization profile")
@@ -336,12 +404,49 @@ class ModelManifest:
         model = _expect_keys(
             root["model"],
             "model",
-            {"architecture", "identity", "parameter_class", "quantization", "source"},
+            {
+                "architecture",
+                "identity",
+                "parameter_class",
+                "total_parameters",
+                "active_parameters_min",
+                "active_parameters_max",
+                "quantization",
+                "required_features",
+                "source",
+            },
         )
-        for key, value in model.items():
-            _ascii_text(value, f"model.{key}", maximum=1024)
+        for key in ("architecture", "identity", "parameter_class", "quantization"):
+            _ascii_text(model[key], f"model.{key}")
+        _ascii_text(model["source"], "model.source", maximum=1024)
+        total_parameters = _positive_integer(
+            model["total_parameters"], "model.total_parameters"
+        )
+        active_parameters_min = _positive_integer(
+            model["active_parameters_min"], "model.active_parameters_min"
+        )
+        active_parameters_max = _positive_integer(
+            model["active_parameters_max"], "model.active_parameters_max"
+        )
+        if not active_parameters_min <= active_parameters_max <= total_parameters:
+            raise ModelManifestError(
+                "model active parameter range must satisfy min <= max <= total"
+            )
+        raw_required_features = model["required_features"]
+        if not isinstance(raw_required_features, list) or not raw_required_features:
+            raise ModelManifestError("model.required_features must be a non-empty array")
+        required_features = tuple(
+            _ascii_text(value, "model.required_features[]")
+            for value in raw_required_features
+        )
+        if required_features != tuple(sorted(set(required_features))):
+            raise ModelManifestError(
+                "model.required_features must be unique and in canonical order"
+            )
         context = _expect_keys(root["context"], "context", {"maximum_tokens", "template_sha256"})
-        _positive_integer(context["maximum_tokens"], "context.maximum_tokens")
+        maximum_context_tokens = _positive_integer(
+            context["maximum_tokens"], "context.maximum_tokens"
+        )
         template_digest = _digest(context["template_sha256"], "context.template_sha256")
 
         raw_blobs = root["blobs"]
@@ -350,32 +455,57 @@ class ModelManifest:
         blobs: list[BlobDeclaration] = []
         paths: set[PurePosixPath] = set()
         roles: list[str] = []
+        model_shard_indices: list[int] = []
         for index, value in enumerate(raw_blobs):
-            blob = _expect_keys(value, f"blobs[{index}]", {"role", "path", "sha256", "size_bytes"})
-            role = _ascii_text(blob["role"], f"blobs[{index}].role")
+            if not isinstance(value, dict):
+                raise ModelManifestError(f"blobs[{index}] must be an object")
+            role = _ascii_text(value.get("role"), f"blobs[{index}].role")
             if role not in {"model", "tokenizer", "template", "auxiliary", "license"}:
                 raise ModelManifestError(f"unsupported blob role: {role}")
+            blob_keys = {"role", "path", "sha256", "size_bytes"}
+            if role == "model":
+                blob_keys.add("shard_index")
+            blob = _expect_keys(value, f"blobs[{index}]", blob_keys)
             path = _safe_relative_path(blob["path"], f"blobs[{index}].path")
             sha256 = _digest(blob["sha256"], f"blobs[{index}].sha256")
-            if path.parts[0] == "blobs":
-                if path.parts != ("blobs", "sha256", sha256):
-                    raise ModelManifestError("content blobs must use blobs/sha256/<digest>")
-            elif path.parts[0] != "licenses":
-                raise ModelManifestError("declared files must be under blobs/sha256 or licenses")
+            if role == "license":
+                if len(path.parts) < 2 or path.parts[0] != "licenses":
+                    raise ModelManifestError(
+                        "license blobs must use licenses/<declared-license-file>"
+                    )
+            elif path.parts != ("blobs", "sha256", sha256):
+                raise ModelManifestError(
+                    "content blobs must use blobs/sha256/<digest>"
+                )
             if path in paths:
                 raise ModelManifestError(f"duplicate blob path: {path}")
             paths.add(path)
             roles.append(role)
+            shard_index = None
+            if role == "model":
+                shard_index = _non_negative_integer(
+                    blob["shard_index"], f"blobs[{index}].shard_index"
+                )
+                model_shard_indices.append(shard_index)
             blobs.append(
                 BlobDeclaration(
                     role=role,
                     path=path,
                     sha256=sha256,
                     size_bytes=_positive_integer(blob["size_bytes"], f"blobs[{index}].size_bytes"),
+                    shard_index=shard_index,
                 )
             )
-        if any(roles.count(required) != 1 for required in ("model", "tokenizer", "template")):
-            raise ModelManifestError("exactly one model, tokenizer, and template blob is required")
+        if roles.count("model") < 1 or any(
+            roles.count(required) != 1 for required in ("tokenizer", "template")
+        ):
+            raise ModelManifestError(
+                "one or more model blobs and exactly one tokenizer and template blob are required"
+            )
+        if model_shard_indices != list(range(len(model_shard_indices))):
+            raise ModelManifestError(
+                "model shard_index values must be unique, contiguous, and ordered from zero"
+            )
         template_blobs = [blob for blob in blobs if blob.role == "template"]
         if template_blobs[0].sha256 != template_digest:
             raise ModelManifestError("context template digest does not match the template blob")
@@ -393,6 +523,44 @@ class ModelManifest:
             runtime_tuples.append(RuntimeTuple(**item))  # type: ignore[arg-type]
         if len(set(runtime_tuples)) != len(runtime_tuples):
             raise ModelManifestError("runtime_tuples must be unique")
+
+        raw_profiles = root["installation_profiles"]
+        if not isinstance(raw_profiles, list) or not raw_profiles:
+            raise ModelManifestError("installation_profiles must be a non-empty array")
+        installation_profiles: list[InstallationProfile] = []
+        runtime_tuple_digests = {item.digest for item in runtime_tuples}
+        minimum_pack_storage_bytes = sum(blob.size_bytes for blob in blobs)
+        for index, value in enumerate(raw_profiles):
+            item = _expect_keys(
+                value,
+                f"installation_profiles[{index}]",
+                {
+                    "profile_id",
+                    "runtime_tuple_sha256",
+                    "execution_mode",
+                    "minimum_host_ram_bytes",
+                    "minimum_accelerator_memory_bytes",
+                    "minimum_model_storage_bytes",
+                    "maximum_context_tokens",
+                },
+            )
+            profile = InstallationProfile(**item)  # type: ignore[arg-type]
+            if profile.runtime_tuple_sha256 not in runtime_tuple_digests:
+                raise ModelManifestError(
+                    f"installation_profiles[{index}] refers to an undeclared runtime tuple"
+                )
+            if profile.minimum_model_storage_bytes < minimum_pack_storage_bytes:
+                raise ModelManifestError(
+                    f"installation_profiles[{index}] understates model-pack storage"
+                )
+            if profile.maximum_context_tokens > maximum_context_tokens:
+                raise ModelManifestError(
+                    f"installation_profiles[{index}] exceeds the model context limit"
+                )
+            installation_profiles.append(profile)
+        profile_ids = [item.profile_id for item in installation_profiles]
+        if len(profile_ids) != len(set(profile_ids)):
+            raise ModelManifestError("installation profile IDs must be unique")
 
         license_record = _expect_keys(
             root["license"],
@@ -424,6 +592,12 @@ class ModelManifest:
             signer_key_id=signer_key_id,
             blobs=tuple(blobs),
             runtime_tuples=tuple(runtime_tuples),
+            installation_profiles=tuple(installation_profiles),
+            total_parameters=total_parameters,
+            active_parameters_min=active_parameters_min,
+            active_parameters_max=active_parameters_max,
+            required_features=required_features,
+            maximum_context_tokens=maximum_context_tokens,
             license_use=str(license_record["evaluation"]),
             redistribution=str(license_record["redistribution"]),
             network_default=str(root["network_default"]),
@@ -438,6 +612,26 @@ class ModelPackVerification:
     runtime_tuple: RuntimeTuple
     state: ModelPackState
     evidence_sha256: str | None = None
+
+    def __post_init__(self) -> None:
+        _ascii_text(self.pack_id, "verification pack_id")
+        _ascii_text(self.pack_version, "verification pack_version")
+        _digest(self.manifest_sha256, "verification manifest_sha256")
+        if not isinstance(self.runtime_tuple, RuntimeTuple):
+            raise ModelManifestError(
+                "verification runtime_tuple must be a RuntimeTuple"
+            )
+        if not isinstance(self.state, ModelPackState):
+            raise ModelManifestError("verification state must be a ModelPackState")
+        if self.state in {
+            ModelPackState.EXECUTION_CERTIFIED,
+            ModelPackState.INTERACTIVE_CERTIFIED,
+        }:
+            _digest(self.evidence_sha256, "verification evidence_sha256")
+        elif self.evidence_sha256 is not None:
+            raise ModelManifestError(
+                "uncertified verification cannot carry certification evidence"
+            )
 
 
 def verify_model_pack(

@@ -76,6 +76,8 @@ class RoleAssignment:
     assignment_id: str
     subject: str
     role: str
+    role_version: int
+    activities: tuple[str, ...]
     assigned_by: str
     issued_at: datetime
     expires_at: datetime
@@ -89,6 +91,16 @@ class RoleAssignment:
             raise AdministrationValidationError(
                 "the Admin root cannot be delegated through an ordinary role assignment"
             )
+        if (
+            not isinstance(self.role_version, int)
+            or isinstance(self.role_version, bool)
+            or self.role_version < 1
+        ):
+            raise AdministrationValidationError("role_version must be a positive integer")
+        activities = tuple(sorted({_identifier(item, "activity") for item in self.activities}))
+        if not activities:
+            raise AdministrationValidationError("an assignment needs a finite activity snapshot")
+        object.__setattr__(self, "activities", activities)
         if not isinstance(self.version, int) or isinstance(self.version, bool) or self.version < 1:
             raise AdministrationValidationError("assignment version must be a positive integer")
         issued = _aware_utc(self.issued_at, "issued_at")
@@ -99,6 +111,19 @@ class RoleAssignment:
         object.__setattr__(self, "expires_at", expires)
         if self.revoked_at is not None:
             object.__setattr__(self, "revoked_at", _aware_utc(self.revoked_at, "revoked_at"))
+
+    @property
+    def activity_set_digest(self) -> str:
+        """Bind an assignment to the exact delegated role revision and activities."""
+
+        payload = {
+            "activities": list(self.activities),
+            "role": self.role,
+            "role_version": self.role_version,
+        }
+        return hashlib.sha256(
+            json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        ).hexdigest()
 
 
 @dataclass(frozen=True, slots=True)
@@ -230,10 +255,13 @@ class AdminAuthority:
             now = _aware_utc(self._clock(), "clock result")
             if role not in self._roles:
                 raise AdministrationValidationError("role is not defined")
+            role_definition = self._roles[role]
             assignment = RoleAssignment(
                 assignment_id=_identifier(self._id_factory(), "assignment_id"),
                 subject=subject,
                 role=role,
+                role_version=role_definition.version,
+                activities=role_definition.activities,
                 assigned_by=actor,
                 issued_at=now,
                 expires_at=expires,
@@ -241,7 +269,12 @@ class AdminAuthority:
             self._assignments[assignment.assignment_id] = assignment
             self._state_version += 1
             self._record_locked(
-                "role.assign", actor, f"{assignment.assignment_id}:{subject}:{role}"
+                "role.assign",
+                actor,
+                (
+                    f"{assignment.assignment_id}:{subject}:{role}"
+                    f"@{assignment.role_version}:{assignment.activity_set_digest}"
+                ),
             )
             return assignment
 
@@ -293,10 +326,16 @@ class AdminAuthority:
                     and assignment.revoked_at is None
                     and assignment.issued_at <= now < assignment.expires_at
                 ):
-                    role = self._roles.get(assignment.role)
-                    if role is not None and activity in role.activities:
+                    if activity in assignment.activities:
                         return True
             return False
+
+    def get_assignment(self, assignment_id: str) -> RoleAssignment | None:
+        """Return the immutable activity snapshot for an exact assignment ID."""
+
+        assignment_id = _identifier(assignment_id, "assignment_id")
+        with self._lock:
+            return self._assignments.get(assignment_id)
 
     def require_activity(self, subject: str, activity: str) -> None:
         if not self.has_activity(subject, activity):

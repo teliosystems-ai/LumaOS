@@ -112,6 +112,42 @@ class AdministrationTests(unittest.TestCase):
             )
         )
 
+    def test_role_redefinition_cannot_retroactively_expand_an_assignment(self) -> None:
+        role = self.authority.define_role(
+            "primary-admin", "PolicyOperator", ("policy.grant.install",)
+        )
+        original = self.authority.assign_role(
+            "primary-admin",
+            "policy-user-v1",
+            role.name,
+            expires_at=self.now + timedelta(hours=1),
+        )
+
+        expanded = self.authority.define_role(
+            "primary-admin",
+            role.name,
+            ("policy.grant.install", "policy.grant.revoke"),
+            expected_version=role.version,
+        )
+        newer = self.authority.assign_role(
+            "primary-admin",
+            "policy-user-v2",
+            expanded.name,
+            expires_at=self.now + timedelta(hours=1),
+        )
+
+        self.assertEqual(1, original.role_version)
+        self.assertEqual(("policy.grant.install",), original.activities)
+        self.assertEqual(original, self.authority.get_assignment(original.assignment_id))
+        self.assertTrue(self.authority.has_activity("policy-user-v1", "policy.grant.install"))
+        self.assertFalse(self.authority.has_activity("policy-user-v1", "policy.grant.revoke"))
+        self.assertEqual(2, newer.role_version)
+        self.assertEqual(
+            ("policy.grant.install", "policy.grant.revoke"), newer.activities
+        )
+        self.assertTrue(self.authority.has_activity("policy-user-v2", "policy.grant.revoke"))
+        self.assertNotEqual(original.activity_set_digest, newer.activity_set_digest)
+
     def test_policy_grant_mutation_uses_admin_delegation(self) -> None:
         self.authority.define_role(
             "primary-admin",

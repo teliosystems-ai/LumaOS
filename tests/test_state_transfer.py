@@ -106,7 +106,9 @@ class StateTransferTests(unittest.TestCase):
         with zipfile.ZipFile(archive, "r") as source, zipfile.ZipFile(unexpected, "w") as target:
             for info in source.infolist():
                 target.writestr(info, source.read(info.filename))
-            target.writestr("unexpected.txt", json.dumps({"not": "listed"}))
+            # Keep this tamper fixture valid even under SOURCE_DATE_EPOCH=0.
+            unexpected_info = zipfile.ZipInfo("unexpected.txt", (1980, 1, 1, 0, 0, 0))
+            target.writestr(unexpected_info, json.dumps({"not": "listed"}))
         with self.assertRaisesRegex(ValidationError, "unlisted"):
             inspect_state_archive(unexpected)
 

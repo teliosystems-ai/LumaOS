@@ -1,0 +1,78 @@
+{
+  "schema_version": 1,
+  "record_id": "G2-ARCHIVE-ATTESTATION-2026-09-27-004",
+  "recorded_on": "2026-09-27",
+  "gate": "G2",
+  "owner": "release-lead",
+  "code_commit": "97667189e753989b1f01b6722dbcc164b1e7bd93",
+  "release_source_commit": "f2b4d2bf256d23ce06f8d47c09e4c52fde4f5ebe",
+  "purpose": "Detached cross-platform source-archive identity and reproducibility attestation",
+  "release_archive_inclusion": "excluded-to-prevent-self-referential-archive-hashes",
+  "archive_input_policy": "canonical-committed-git-blobs-with-explicit-executable-modes",
+  "archive_format_policy": "deterministic-stored-gzip-and-zip-without-runtime-zlib-compression",
+  "executable_release_files": [
+    "packaging/systemd/install-user-service.sh",
+    "scripts/build_release.py",
+    "scripts/check.py",
+    "scripts/install-user.sh",
+    "scripts/run.sh",
+    "scripts/uninstall-user.sh"
+  ],
+  "file_count": 170,
+  "source_date_epoch": 0,
+  "builds": 2,
+  "first_build": {
+    "lane": "Windows 11 native build 26200, Python 3.14.4",
+    "tar_gz_size_bytes": 4260188,
+    "tar_gz_sha256": "705ea02a6dca64cddcfc8628b2eaa8997a27fa30e40e805ec0fac332e991653a",
+    "zip_size_bytes": 4148987,
+    "zip_sha256": "15218c3b415f252834a9b213e6b1dfbdb9a2ff0ac2c1b2cfa8315080d5323b4e"
+  },
+  "second_build": {
+    "lane": "Ubuntu 26.04 WSL2, Python 3.14.4",
+    "tar_gz_size_bytes": 4260188,
+    "tar_gz_sha256": "705ea02a6dca64cddcfc8628b2eaa8997a27fa30e40e805ec0fac332e991653a",
+    "zip_size_bytes": 4148987,
+    "zip_sha256": "15218c3b415f252834a9b213e6b1dfbdb9a2ff0ac2c1b2cfa8315080d5323b4e"
+  },
+  "extracted_archive_checks": [
+    {
+      "lane": "windows_native",
+      "format": "tar.gz",
+      "tests_run": 320,
+      "failed": 0,
+      "skipped": 5,
+      "log_sha256": "8a6c8dbd030309a6cac4e4dd28e6621a71f0fe8fe1d5d99232e4ebaa7adaabdd"
+    },
+    {
+      "lane": "windows_native",
+      "format": "zip",
+      "tests_run": 320,
+      "failed": 0,
+      "skipped": 5,
+      "log_sha256": "f9910ab281c07c582c3d4d2893cdd7d30a720eaf687b83a55ca1750c34472f31"
+    },
+    {
+      "lane": "ubuntu_wsl",
+      "format": "tar.gz",
+      "tests_run": 320,
+      "failed": 0,
+      "skipped": 1,
+      "log_sha256": "5f0eb468589f3ed633f2855c42a72553fb095c7c84a451bdbf7367aaeb3b0de8"
+    },
+    {
+      "lane": "ubuntu_wsl",
+      "format": "zip",
+      "tests_run": 320,
+      "failed": 0,
+      "skipped": 1,
+      "log_sha256": "59ff36ce52840ff5007188022de2099fb7f5c21cc7596f178c42d9f0ac6609b7"
+    }
+  ],
+  "checksum_verification": "pass",
+  "status": "verified-reproducible",
+  "claim_boundary": "Both development platforms packaged the same 170 canonical committed files with identical member names and modes. Independent SHA-256 measurements matched SHA256SUMS, and the tar.gz and ZIP artifacts are byte-identical across platforms. All four extracted Git-less archives passed scripts/check.py, including their complete unit suite, with warnings treated as errors and SOURCE_DATE_EPOCH=0. Detached records are excluded from each archive; an archive self-check does not verify these external results. This is source-release development evidence, not a signed bootable OS or G2 certification.",
+  "local_artifact_location": "dist/g2-2026-09-27/{windows-final,wsl-final}/",
+  "local_artifact_boundary": "Ignored local build outputs and logs are retained for inspection but are not committed or published. Log digests identify these local observations; they are not signed attestations or independently retained custody evidence.",
+  "gate_closing": false
+}

@@ -1,0 +1,104 @@
+{
+  "schema_version": 1,
+  "record_id": "G2-TEST-2026-09-27-004",
+  "recorded_on": "2026-09-27",
+  "owner": "qa-lead",
+  "code_commit": "97667189e753989b1f01b6722dbcc164b1e7bd93",
+  "release_source_commit": "f2b4d2bf256d23ce06f8d47c09e4c52fde4f5ebe",
+  "commit_boundary": "code_commit identifies the durable Admin and offline-source implementation. release_source_commit additionally includes evidence consistency checks, regression tests, CI history retrieval, release documentation, and the reproducible-build ZIP test-fixture correction.",
+  "environment": "DEV-WIN-WSL-GPU-01",
+  "additional_environments": ["DEV-WSL-UBUNTU-26-01"],
+  "physical_host_count": 1,
+  "command": "Windows native: python -W error scripts/check.py; Ubuntu WSL: python3 -W error scripts/check.py",
+  "additional_commands": [
+    "Both lanes use Python 3.14.4; scripts/check.py explicitly propagates -W error to its unittest child process.",
+    "Windows native: python -W error scripts/check.py (320 run, 0 failures/errors, 5 skipped)",
+    "Ubuntu WSL: python3 -W error scripts/check.py (320 run, 0 failures/errors, 1 skipped)",
+    "Both lanes: python -O -W error -m unittest tests.test_boot_control tests.test_installer tests.test_privileged_helper tests.test_durable_effects tests.test_model_pack tests.test_model_selection tests.test_g2_host_inventory tests.test_model_catalog_signing tests.test_ed25519_provider tests.test_signing_trust tests.test_catalog_admission tests.test_durable_administration tests.test_installation_source tests.test_installer_source_v3 tests.test_ubuntu_preflight (223 run per lane, 0 failures/errors; Windows 1 skip, WSL 0 skips)",
+    "Ubuntu WSL: bash -n for each scripts/*.sh and packaging/systemd/*.sh file, followed by bash scripts/run.sh --help (exit 0)",
+    "Ubuntu WSL: scripts/collect_g2_host.py --environment-id DEV-WSL-UBUNTU-26-01 --output <local-inventory.json> --compact, followed by scripts/ubuntu_preflight.py --mode development --host-inventory <local-inventory.json> --pretty (exit 0, pass-development-preflight)",
+    "SOURCE_DATE_EPOCH=0 scripts/build_release.py from release_source_commit: 170 files; native Windows and Ubuntu WSL produced byte-identical tar.gz and ZIP artifacts.",
+    "Each extracted tar.gz and ZIP in both lanes: python -W error scripts/check.py without Git metadata or detached records (320 run per archive, no failures/errors; Windows 5 skips, WSL 1 skip)."
+  ],
+  "result": "pass-development-contracts",
+  "development_assessment": "in-progress",
+  "certification_assessment": "blocked",
+  "checks": {
+    "python_modules_compiled": 37,
+    "json_schemas_parsed": 11,
+    "unit_tests_run_per_lane": 320,
+    "unit_tests_run": 320,
+    "unit_test_lanes": 2,
+    "unit_test_executions": 640,
+    "unit_tests_failed": 0,
+    "unit_tests_skipped": {"ubuntu_wsl": 1, "windows_native": 5},
+    "optimized_boundary_tests_run_per_lane": 223,
+    "optimized_boundary_tests_run": 223,
+    "optimized_boundary_test_lanes": 2,
+    "optimized_boundary_test_executions": 446,
+    "optimized_boundary_tests_failed": 0,
+    "optimized_boundary_tests_skipped": {"ubuntu_wsl": 0, "windows_native": 1},
+    "warnings_as_errors": true,
+    "requirement_entries_validated": 288,
+    "g2_requirements_in_progress": 20,
+    "g2_requirements_not_started": 14,
+    "g2_requirements_with_passing_product_evidence": 0,
+    "release_files_validated": 170,
+    "reproducible_source_builds": 2,
+    "archive_checksum_verification": "pass-detached-attestation",
+    "governing_source_state": "verified",
+    "gate_artifact_state": "development-in-progress; certification-blocked"
+  },
+  "repository_log_sha256": {
+    "windows_native": "910af1a82febbec7cd864f31e717f7ebfe6471e6253ed7dfcc7c1f227f9b0473",
+    "ubuntu_wsl": "a726c287f2b44f9bc26df7ebc7a9930f0a1858e4d440b053056baa6bc17f6519"
+  },
+  "optimized_log_sha256": {
+    "windows_native": "a1ba7816051449cb041945950a0d6d2dae8206e066d63ea682dbd78b064ddee6",
+    "ubuntu_wsl": "5eab25fc7248ebfdec0c1020f355e94329a5211f4c15e3acb1a7ee6f1880230b"
+  },
+  "wsl_live_preflight": {
+    "observed_at": "2026-09-27T09:37:01.667423Z",
+    "distribution": "Ubuntu 26.04 LTS",
+    "virtualization": "WSL2",
+    "kernel": "6.18.33.2-microsoft-standard-WSL2",
+    "python": "3.14.4",
+    "inventory_sha256": "4ba9bf6186eead27698b1ce48735cb76353a5c6af77b19e274b7ec6dfb21dce1",
+    "result": "pass-development-preflight",
+    "exit_ready": true,
+    "read_only": true,
+    "certification_closing": false,
+    "native_ubuntu_24_04_candidate": false,
+    "observations": [
+      "8,228,847,616 bytes of visible RAM",
+      "NVIDIA GeForce RTX 3050 Laptop GPU with 4 GiB VRAM and /dev/dxg visibility",
+      "cgroup v2, systemd PID 1, and /dev/kvm visible",
+      "project checkout and archive extractions use a Windows-backed 9p filesystem",
+      "AppArmor enforcement, UEFI/efivars, Secure Boot, and TPM remain unavailable or unproven in WSL"
+    ],
+    "disk_policy": "all disks remained unclassified-never-auto-selected; no sensitive disk identifier or destructive authorization was emitted"
+  },
+  "archive_attestation": "docs/gates/g2/archive_attestation_2026-09-27-004.json",
+  "scope": [
+    "Complete repository validation including 288 governing requirements, 37 runtime modules, 11 JSON schemas, and 170 release files",
+    "Live root-signed trust and anchored catalog admission, mandatory Admin writer authorization, bounded authenticated SQLite event replay and revocation",
+    "Inert offline installation-source descriptors and repeated installer schema-v3 validation around journaling, followed by fresh model hardware selection and authorization",
+    "Existing installer, A/B boot, privileged-helper, request/effect durability, model pack/profile, signing, and Ubuntu host-admission contracts",
+    "Regression rejection of contradictory or incomplete detached evidence and duplicate/substituted G2 contract tranches",
+    "Cross-platform optimized boundary execution and reproducible source archives with Git-less self-checks"
+  ],
+  "resolved_during_validation": [
+    "The initial extracted-archive runs failed in the unlisted-ZIP-member test fixture when Python 3.14 consumed SOURCE_DATE_EPOCH=0. The fixture now supplies an explicit ZIP-compatible timestamp, matching the production state exporter. Both platforms and both archive formats passed after rebuilding from the final release-source commit; initial failed outputs are not the attested artifacts."
+  ],
+  "limitations": [
+    "Windows and Ubuntu WSL remain two development lanes on one laptop; neither is an E1/E2 native Ubuntu 24.04 certification board.",
+    "No production signed model catalog, protected signing ceremony, authenticated isolated Admin service, protected secret/time/anchor composition, or governed signed media was produced.",
+    "The offline-source descriptor is inert; signed release artifact consumption and destructive installation remain unimplemented.",
+    "Injected boot, device, isolation, and physical-effect adapters do not prove actual Secure Boot, UKI, dm-verity, LUKS2/TPM recovery, enforcing kernel isolation, power-loss recovery, lifecycle, or performance acceptance.",
+    "SQLite contract tests on development files do not qualify maximum-capacity replay, native-filesystem crash behavior, lock contention, or external-anchor latency.",
+    "No new model inference or GPU performance run was performed; earlier Qwen3-4B observations remain unsigned development smoke and Gemma candidates remain unexecuted.",
+    "Local logs and archives are retained under ignored dist/g2-2026-09-27; log digests are observations, not protected production custody or independent certification.",
+    "This detached record is excluded from release archives and does not close G2 or any of its 34 product requirements."
+  ],
+  "gate_closing": false
+}

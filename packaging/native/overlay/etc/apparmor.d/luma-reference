@@ -1,0 +1,28 @@
+#include <tunables/global>
+profile luma-reference flags=(attach_disconnected) {
+  #include <abstractions/base>
+  /usr/bin/python3* mrix,
+  /usr/lib/** mr,
+  /lib/** mr,
+  /lib64/** mr,
+  /usr/share/luma-os/reference/** r,
+  /usr/share/zoneinfo/** r,
+  /etc/{localtime,nsswitch.conf,hosts,resolv.conf,host.conf,gai.conf} r,
+  /etc/python3*/** r,
+  /proc/sys/kernel/random/boot_id r,
+  owner /proc/@{pid}/** r,
+  owner /var/lib/luma-os/reference/ rw,
+  owner /var/lib/luma-os/reference/** rwk,
+  owner /tmp/** rwk,
+  /dev/urandom r,
+  /dev/random r,
+  /dev/null rw,
+  /run/luma-broker/control.sock rw,
+  network inet stream,
+  network inet6 stream,
+  network unix stream,
+  deny /dev/{mem,kmem,port,kvm,dxg,nvidia*,dri/**} rw,
+  deny /efi/** rwklx,
+  deny /boot/** rwklx,
+  deny /var/lib/luma-os/identity/** rwklx,
+}

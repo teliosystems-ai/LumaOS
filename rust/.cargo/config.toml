@@ -1,0 +1,5 @@
+[source.crates-io]
+replace-with = "ubuntu-packaged"
+
+[source.ubuntu-packaged]
+directory = "/usr/share/cargo/registry"

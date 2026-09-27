@@ -1,0 +1,22 @@
+#!/bin/sh
+# Build only the dependency graph for the signed kernel's selected boot mode.
+# Unit conditions alone do not prevent systemd from starting device dependencies.
+set -eu
+cmdline=$(cat /proc/cmdline)
+case " $cmdline " in
+    *" luma.mode=installed "*)
+        mkdir -p "$1/local-fs.target.wants" "$1/multi-user.target.wants"
+        ln -s /etc/systemd/system/efi.mount "$1/local-fs.target.wants/efi.mount"
+        ln -s /etc/systemd/system/luma-boot-health.service "$1/multi-user.target.wants/luma-boot-health.service"
+        ;;
+    *" luma.mode=live "*)
+        mkdir -p "$1/multi-user.target.wants"
+        consoles=$(cat /sys/class/tty/console/active)
+        case " $consoles " in
+            *" ttyS0 "*) ln -s /etc/systemd/system/luma-live-console.service "$1/multi-user.target.wants/luma-live-console.service" ;;
+        esac
+        case " $consoles " in
+            *" tty0 "*|*" tty1 "*) ln -s /etc/systemd/system/luma-live-vt.service "$1/multi-user.target.wants/luma-live-vt.service" ;;
+        esac
+        ;;
+esac

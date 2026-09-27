@@ -1,0 +1,23 @@
+ARG UBUNTU_BASE=ubuntu@sha256:008173c23f95b170204355c12626cb5a965d779a7e1283b09e9cffbb1bf33ca3
+FROM ${UBUNTU_BASE}
+ARG SNAPSHOT=20260927T000000Z
+ARG EDITION=headless
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update -o APT::Update::Error-Mode=any && \
+    apt-get install -y --no-install-recommends ca-certificates ubuntu-keyring
+RUN apt-get update --snapshot=${SNAPSHOT} -o APT::Update::Error-Mode=any && \
+    apt-get install -y --no-install-recommends --snapshot=${SNAPSHOT} \
+      systemd systemd-sysv systemd-resolved systemd-timesyncd systemd-boot-efi \
+      systemd-ukify libpam-systemd dbus sudo bash coreutils util-linux \
+      linux-image-generic linux-firmware \
+      dracut-core cryptsetup-bin dmsetup e2fsprogs dosfstools gdisk \
+      apparmor apparmor-utils openssl sbsigntool python3 iproute2 \
+      network-manager rsync zstd less nano kmod pciutils usbutils && \
+    if [ "$EDITION" = desktop ]; then \
+      apt-get install -y --no-install-recommends --snapshot=${SNAPSHOT} \
+        xfce4 xfce4-terminal lightdm xserver-xorg-core xserver-xorg-input-libinput \
+        xserver-xorg-video-all dbus-x11 epiphany-browser; \
+    elif [ "$EDITION" != headless ]; then exit 2; fi
+# Image assembly records the exact installed tuple and strips builder/container state.
+RUN apt-get install -y --no-install-recommends --snapshot=${SNAPSHOT} systemd-boot
+CMD ["/sbin/init"]

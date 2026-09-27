@@ -1,0 +1,14 @@
+[Unit]
+Description=Luma installed-system EFI partition
+ConditionKernelCommandLine=luma.mode=installed
+Before=luma-boot-health.service
+
+[Mount]
+What=/dev/disk/by-partlabel/LUMA-ESP
+Where=/efi
+Type=vfat
+Options=umask=0077,nodev,nosuid,noexec
+TimeoutSec=30
+
+[Install]
+WantedBy=local-fs.target

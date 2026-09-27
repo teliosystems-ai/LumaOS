@@ -1,0 +1,47 @@
+name: Native platform boundaries
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'rust/**'
+      - 'packaging/native/**'
+      - '.github/workflows/native-platform.yml'
+  pull_request:
+    paths:
+      - 'rust/**'
+      - 'packaging/native/**'
+      - '.github/workflows/native-platform.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  rust-boundaries:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build pinned Ubuntu toolchain
+        run: >-
+          docker build
+          --build-arg UBUNTU_BASE=ubuntu@sha256:008173c23f95b170204355c12626cb5a965d779a7e1283b09e9cffbb1bf33ca3
+          -f packaging/native/Dockerfile.tools -t luma-native-tools:ci packaging/native
+      - name: Rust tests without network or host devices
+        run: >-
+          docker run --rm --network none
+          --mount type=bind,src="$PWD/rust",dst=/work/rust
+          --workdir /work/rust luma-native-tools:ci cargo test --offline --locked
+      - name: Builder and harness syntax
+        run: |
+          bash -n packaging/native/build.sh
+          sh -n packaging/native/overlay/usr/lib/systemd/system-generators/luma-boot-generator
+          python3 -m py_compile packaging/native/*.py
+      - name: Rust formatting
+        run: >-
+          docker run --rm --network none
+          --mount type=bind,src="$PWD/rust",dst=/work/rust
+          --workdir /work/rust luma-native-tools:ci cargo fmt --check
+
+# Deliberately no disk installation, host firmware enrollment or gate promotion.
+# Full image/VM runs are separately retained image-specific evidence.

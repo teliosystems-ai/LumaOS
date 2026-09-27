@@ -1,0 +1,18 @@
+ARG UBUNTU_BASE=ubuntu:24.04
+FROM ${UBUNTU_BASE}
+ARG SNAPSHOT=20260927T000000Z
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update -o APT::Update::Error-Mode=any && \
+    apt-get install -y --no-install-recommends ca-certificates ubuntu-keyring
+RUN apt-get update --snapshot=${SNAPSHOT} -o APT::Update::Error-Mode=any && \
+    apt-get install -y --no-install-recommends --snapshot=${SNAPSHOT} \
+      ca-certificates ubuntu-keyring rustc cargo gcc libc6-dev \
+      librust-serde-dev librust-serde-derive-dev librust-serde-json-dev \
+      librust-sha2-dev librust-libc-dev \
+      openssl sbsigntool systemd-ukify systemd-boot-efi \
+      cryptsetup-bin e2fsprogs dosfstools mtools gdisk \
+      qemu-system-x86 qemu-utils ovmf zstd python3 rsync \
+      dracut-core kmod cpio squashfs-tools xorriso
+WORKDIR /work
+RUN apt-get install -y --no-install-recommends --snapshot=${SNAPSHOT} python3-virt-firmware
+RUN apt-get install -y --no-install-recommends --snapshot=${SNAPSHOT} rustfmt

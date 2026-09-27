@@ -1,0 +1,10 @@
+[Unit]
+Description=Luma bounded trial failure handling
+ConditionKernelCommandLine=luma.mode=installed
+
+[Service]
+Type=oneshot
+ExecStart=/usr/libexec/luma-os/luma-platform boot-failed
+TimeoutStartSec=30
+StandardOutput=journal+console
+StandardError=journal+console

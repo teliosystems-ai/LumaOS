@@ -1,0 +1,40 @@
+[Unit]
+Description=Luma native privileged platform broker
+After=apparmor.service local-fs.target
+Requires=apparmor.service
+Before=luma-reference.service luma-boot-health.service
+
+[Service]
+Type=simple
+ExecStart=/usr/libexec/luma-os/luma-platform broker
+User=root
+Group=luma-control
+RuntimeDirectory=luma-broker
+RuntimeDirectoryMode=0750
+RuntimeDirectoryPreserve=no
+UMask=0077
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_UNIX
+RestrictNamespaces=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@mount @raw-io @reboot @swap @obsolete @debug
+CapabilityBoundingSet=
+MemoryMax=128M
+TasksMax=32
+CPUQuota=25%
+TimeoutStopSec=5
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

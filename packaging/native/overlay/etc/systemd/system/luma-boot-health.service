@@ -1,0 +1,18 @@
+[Unit]
+Description=Luma model-independent installed boot acknowledgement
+After=luma-broker.service local-fs.target
+Wants=luma-broker.service
+OnFailure=luma-boot-failed.service
+ConditionKernelCommandLine=luma.mode=installed
+RequiresMountsFor=/efi /var
+
+[Service]
+Type=oneshot
+ExecStart=/usr/libexec/luma-os/luma-platform boot-health
+RemainAfterExit=yes
+TimeoutStartSec=30
+StandardOutput=journal+console
+StandardError=journal+console
+
+[Install]
+WantedBy=multi-user.target

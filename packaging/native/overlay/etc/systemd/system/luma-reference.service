@@ -1,0 +1,49 @@
+[Unit]
+Description=Luma unprivileged reference workflow service
+After=luma-broker.service
+Requires=luma-broker.service
+ConditionPathExists=!/var/lib/luma-os/model-disabled
+
+[Service]
+User=luma-control
+Group=luma-control
+Environment=PYTHONPATH=/usr/share/luma-os/reference/src
+Environment=LUMA_HOME=/var/lib/luma-os/reference
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=PYTHONWARNINGS=error
+ExecStart=/usr/bin/python3 -m luma_os.cli serve --host 127.0.0.1 --port 8765
+StateDirectory=luma-os/reference
+StateDirectoryMode=0700
+UMask=0077
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+IPAddressDeny=any
+IPAddressAllow=localhost
+RestrictNamespaces=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @mount @raw-io @reboot @swap @obsolete @debug
+CapabilityBoundingSet=
+AppArmorProfile=luma-reference
+MemoryHigh=384M
+MemoryMax=512M
+MemorySwapMax=0
+TasksMax=64
+CPUQuota=50%
+LimitMEMLOCK=0
+DevicePolicy=closed
+TimeoutStopSec=10
+KillMode=control-group
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target

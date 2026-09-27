@@ -1,0 +1,9 @@
+[workspace]
+members = ["luma-platform"]
+resolver = "2"
+
+[profile.release]
+overflow-checks = true
+panic = "abort"
+strip = true
+lto = true

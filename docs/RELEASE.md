@@ -46,6 +46,24 @@ Build twice from the same pinned commit and epoch, then compare `SHA256SUMS`. In
 
 The official `0.1.0` candidate is source-only. Do not publish a wheel: repository-root runtime assets do not yet have a supported installed-package location.
 
+### Detached G2 validation records
+
+The current test-run and archive-attestation paths are declared in `scripts/check.py`
+and excluded by the release manifest. Record the implementation commit separately
+from the release-source commit, which also contains the validation tooling and
+release documentation. Build both archives from that clean release-source commit;
+then measure and record their identities in the two detached JSON files. Commit
+the evidence pair together without changing any inventoried release file.
+
+`current_tranche_detached_validation` must agree in the G2 evidence and test plan.
+The pending state permits no current detached records. The passing state requires
+both records to be tracked and fully validated in a repository checkout. During
+the source-commit-to-evidence-commit interval, the repository gate check therefore
+fails until the measured pair is staged. An extracted archive intentionally
+contains neither record: its self-check validates the packaged code and metadata,
+but cannot attest the external test results or archive identity. CI needs the
+pinned source commit in its Git history to check the evidence binding.
+
 ## 5. Independent review
 
 Have a second maintainer verify:

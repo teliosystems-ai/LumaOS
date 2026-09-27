@@ -57,8 +57,8 @@ PREVIOUS_G2_TEST_RUN = "docs/gates/g2/test_run_2026-09-23-003.json"
 PREVIOUS_G2_ARCHIVE_ATTESTATION = (
     "docs/gates/g2/archive_attestation_2026-09-23-003.json"
 )
-G2_TEST_RUN = "docs/gates/g2/test_run_2026-09-23-004.json"
-G2_ARCHIVE_ATTESTATION = "docs/gates/g2/archive_attestation_2026-09-23-004.json"
+G2_TEST_RUN = "docs/gates/g2/test_run_2026-09-27-004.json"
+G2_ARCHIVE_ATTESTATION = "docs/gates/g2/archive_attestation_2026-09-27-004.json"
 HISTORICAL_DETACHED_G2_EVIDENCE_FILES = (
     HISTORICAL_G2_TEST_RUN,
     HISTORICAL_G2_ARCHIVE_ATTESTATION,
@@ -478,6 +478,60 @@ def validate_historical_detached_evidence() -> None:
             )
 
 
+def validate_detached_validation_state(
+    evidence: dict[str, object],
+    test_plan: dict[str, object],
+    *,
+    repository: bool,
+    tracked: bool,
+    presence: list[bool],
+) -> None:
+    """A repository pass needs both tracked records; archives exclude both."""
+
+    pending = "pending-after-integration-commit"
+    passed = "passed-development-contracts-non-closing"
+    state = evidence.get("current_tranche_detached_validation")
+    if state not in (pending, passed) or (
+        test_plan.get("current_tranche_detached_validation") != state
+    ):
+        raise RuntimeError("G2 evidence and test plan must agree on detached validation state")
+    if len(presence) != 2 or any(type(value) is not bool for value in presence):
+        raise RuntimeError("G2 detached record presence must describe the exact pair")
+    if not repository:
+        if tracked or any(presence):
+            raise RuntimeError("release archives must exclude detached G2 evidence")
+        return
+    if state == passed:
+        if not tracked or not all(presence):
+            raise RuntimeError("passing G2 detached validation requires both tracked records")
+    elif tracked or any(presence):
+        raise RuntimeError("pending G2 detached validation cannot carry current records")
+
+
+def validate_g2_tranche_identities(tranches: list[object]) -> None:
+    expected = {
+        "installer-preflight-and-confirmation",
+        "ab-trial-boot-and-fallback",
+        "typed-privileged-helper-and-confinement-boundary",
+        "durable-sqlite-request-and-effect-ledgers",
+        "install-time-multi-model-selection",
+        "signed-model-catalog-verification-and-custody",
+        "ubuntu-host-inventory-and-native-candidate-admission",
+        "root-signed-trust-and-anchored-catalog-admission",
+        "durable-admin-authorization-events",
+        "offline-source-and-installer-schema-v3-revalidation",
+    }
+    if (
+        len(tranches) != len(expected)
+        or any(
+            not isinstance(item, dict) or not isinstance(item.get("area"), str)
+            for item in tranches
+        )
+        or {item["area"] for item in tranches} != expected
+    ):
+        raise RuntimeError("G2 test plan must retain ten unique, exact contract tranches")
+
+
 def validate_repository_reference(reference: object, label: str) -> None:
     path = PurePosixPath(reference) if isinstance(reference, str) else None
     structurally_valid = (
@@ -876,6 +930,7 @@ def validate_gate_artifacts() -> None:
         or not g2_test_plan.get("formal_exit_rule")
     ):
         raise RuntimeError("G2 test plan must preserve its development-only and physical-lab boundary")
+    validate_g2_tranche_identities(g2_test_plan["contract_tranche"])
     model_selection_tranches = [
         tranche
         for tranche in g2_test_plan["contract_tranche"]
@@ -1389,6 +1444,13 @@ def validate_gate_artifacts() -> None:
     detached_presence = [
         (ROOT / path).is_file() for path in CURRENT_DETACHED_G2_EVIDENCE_FILES
     ]
+    validate_detached_validation_state(
+        g2_evidence,
+        g2_test_plan,
+        repository=is_repository_checkout(),
+        tracked=detached_expected,
+        presence=detached_presence,
+    )
     if detached_expected and not all(detached_presence):
         raise RuntimeError("detached G2 test and archive records must be supplied together")
     detached_available = detached_expected and all(detached_presence)
@@ -1669,7 +1731,7 @@ def run_tests() -> None:
     current = environment.get("PYTHONPATH")
     environment["PYTHONPATH"] = str(ROOT / "src") + (os.pathsep + current if current else "")
     result = subprocess.run(
-        [sys.executable, "-m", "unittest", "discover", "-s", "tests", "-p", "test_*.py", "-v"],
+        [sys.executable, "-W", "error", "-m", "unittest", "discover", "-s", "tests", "-p", "test_*.py", "-v"],
         cwd=ROOT,
         env=environment,
         check=False,

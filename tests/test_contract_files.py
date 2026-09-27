@@ -25,9 +25,69 @@ from build_release import (
     included_files,
     release_snapshot,
 )
+from check import validate_detached_validation_state, validate_g2_tranche_identities
 
 
 class ContractFileTests(unittest.TestCase):
+    def test_detached_evidence_status_requires_a_complete_tracked_pair(self) -> None:
+        for state in (
+            "pending-after-integration-commit",
+            "passed-development-contracts-non-closing",
+        ):
+            document = {"current_tranche_detached_validation": state}
+            for tracked in (False, True):
+                for presence in ([False, False], [False, True], [True, False], [True, True]):
+                    allowed = (
+                        tracked and all(presence)
+                        if state.startswith("passed")
+                        else not tracked and not any(presence)
+                    )
+                    with self.subTest(state=state, tracked=tracked, presence=presence):
+                        if allowed:
+                            validate_detached_validation_state(
+                                document, document, repository=True,
+                                tracked=tracked, presence=presence,
+                            )
+                        else:
+                            with self.assertRaises(RuntimeError):
+                                validate_detached_validation_state(
+                                    document, document, repository=True,
+                                    tracked=tracked, presence=presence,
+                                )
+            validate_detached_validation_state(
+                document, document, repository=False,
+                tracked=False, presence=[False, False],
+            )
+            with self.assertRaises(RuntimeError):
+                validate_detached_validation_state(
+                    document, document, repository=False,
+                    tracked=False, presence=[True, True],
+                )
+            with self.assertRaises(RuntimeError):
+                validate_detached_validation_state(
+                    document, {}, repository=True,
+                    tracked=False, presence=[False, False],
+                )
+        with self.assertRaises(RuntimeError):
+            validate_detached_validation_state(
+                {}, {}, repository=False, tracked=False, presence=[False, False],
+            )
+
+    def test_g2_tranches_reject_duplicates_substitutions_and_missing_entries(self) -> None:
+        tranches = json.loads(
+            (ROOT / "docs/gates/g2/test_plan.json").read_text(encoding="utf-8")
+        )["contract_tranche"]
+        validate_g2_tranche_identities(tranches)
+        for index in range(len(tranches)):
+            for replacement in (tranches[(index + 1) % len(tranches)], {"area": "unknown"}, None):
+                changed = list(tranches)
+                changed[index] = replacement
+                with self.subTest(index=index, replacement=replacement):
+                    with self.assertRaises(RuntimeError):
+                        validate_g2_tranche_identities(changed)
+        with self.assertRaises(RuntimeError):
+            validate_g2_tranche_identities(tranches[:-1])
+
     def test_json_schemas_are_valid_json_and_have_stable_ids(self) -> None:
         schema_dir = ROOT / "schemas"
         expected = {
@@ -149,8 +209,8 @@ class ContractFileTests(unittest.TestCase):
                 "docs/gates/g2/archive_attestation_2026-09-23-002.json",
                 "docs/gates/g2/test_run_2026-09-23-003.json",
                 "docs/gates/g2/archive_attestation_2026-09-23-003.json",
-                "docs/gates/g2/test_run_2026-09-23-004.json",
-                "docs/gates/g2/archive_attestation_2026-09-23-004.json",
+                "docs/gates/g2/test_run_2026-09-27-004.json",
+                "docs/gates/g2/archive_attestation_2026-09-27-004.json",
             }.issubset(set(manifest["excluded_from_release"]))
         )
         executable_files = {

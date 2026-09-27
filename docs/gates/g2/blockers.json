@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "gate": "G2",
-  "recorded_on": "2026-09-23",
+  "recorded_on": "2026-09-27",
   "status": "blocked",
   "development_assessment": "in-progress",
   "certification_assessment": "blocked",
@@ -83,7 +83,7 @@
       "severity": "certification-blocking",
       "owner": "qa-lead",
       "supporting_owner": "security-lead",
-      "development_work": "Deterministic unit, fault-model, trust/catalog admission, durable Admin event, offline-source/schema-v3 installer, and read-only host-admission tests cover only repository-local contracts. Focused normal and optimized lanes have exercised the new contracts; the immutable detached full-run/archive record still requires rotation after the integration commit. The consolidated operator/runbook package maps the remaining numbered, physical, security, recovery, lifecycle, and performance work, labels it unexecuted, and retains every hardware-dependent case as blocked.",
+      "development_work": "Deterministic unit, fault-model, trust/catalog admission, durable Admin event, offline-source/schema-v3 installer, and read-only host-admission tests cover only repository-local contracts. The current detached development test and archive records are referenced by evidence.json and bind the measured results to their release-source commit. The consolidated operator/runbook package maps the remaining numbered, physical, security, recovery, lifecycle, and performance work, labels it unexecuted, and retains every hardware-dependent case as blocked.",
       "resolution": "Complete T01-T16, applicable T27-T30, T33, T40, T45-T51, and T62; the governed security/manual matrix; Q01, Q02, Q06-Q09; 1,000 lifecycle cycles; and both-board vertical workflows.",
       "evidence": [
         "docs/gates/g2/test_plan.json",

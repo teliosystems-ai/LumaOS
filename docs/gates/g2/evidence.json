@@ -1,19 +1,19 @@
 {
   "schema_version": 1,
   "gate": "G2",
-  "recorded_on": "2026-09-23",
+  "recorded_on": "2026-09-27",
   "owner": "g2-cross-functional-team",
   "assessment": "blocked",
   "development_assessment": "in-progress",
   "certification_assessment": "blocked",
   "claim_boundary": "This evidence advances the repository-local G2 control-plane and qualification-preparation tranche. It demonstrates pure or read-only contracts for non-destructive installer planning, exact install-time model-profile selection, A/B trial-boot state, a typed privileged-helper boundary, bounded SQLite-backed request/effect ledgers, signed model-catalog verification, root-signed trust-bundle and exact anchored catalog admission, integrity-protected durable Admin authorization events, inert offline installation-source descriptors with repeated schema-v3 raw-byte revalidation, and Ubuntu host admission/inventory. It also provides operator approval and physical-qualification procedures. It does not demonstrate a bootable OS, disk mutation, an actual signed production catalog or protected key ceremony, a production authenticated Admin writer or protected external anchor, artifact-byte consumption, Secure Boot/UKI/dm-verity/LUKS2 behavior, enforcing cgroup/AppArmor/seccomp/KVM/device/peer controls, recovery, power-loss behavior, or either physical A1 board.",
-  "implementation_commit": "0d7685aaaec2301b9340b710061a447cd3569b83",
-  "current_tranche_detached_validation": "pending-after-integration-commit",
+  "implementation_commit": "97667189e753989b1f01b6722dbcc164b1e7bd93",
+  "current_tranche_detached_validation": "passed-development-contracts-non-closing",
   "items": [
     {
       "id": "G2-EV-001",
       "subject": "non-destructive-installer-preflight-and-destructive-confirmation-contract",
-      "result": "prior-development-run-passed-current-tranche-detached-validation-pending",
+      "result": "development-tests-passed",
       "requirements_prepared": ["FR02", "FR03", "A001", "A002", "A108"],
       "source_tests_prepared": ["T01", "T48"],
       "evidence": [
@@ -21,7 +21,7 @@
         "tests/test_installer.py"
       ],
       "environment": "DEV-WIN-WSL-GPU-01",
-      "observations": "Fifteen deterministic tests cover exact hardware/disk identity, same-device accelerator qualification, capacity, issued-plan provenance, release/payload/policy binding, authenticated confirmation, effect-time authority, expiry, fresh revalidation, opaque locked-device capabilities, and a durable in-doubt/completed attempt-journal contract. The executor is injected and no disk or OS tool is invoked.",
+      "observations": "Twenty deterministic tests cover exact hardware/disk identity, same-device accelerator qualification, capacity, issued-plan provenance, release/payload/policy binding, authenticated confirmation, effect-time authority, expiry, fresh revalidation, opaque locked-device capabilities, and a durable in-doubt/completed attempt-journal contract. The executor is injected and no disk or OS tool is invoked.",
       "limitations": "The real binder must exclusively open, lock, re-identify, and retain the exact raw-device handle; the real journal must provide crash-safe durability. Destructive installation and encryption recovery remain blocked.",
       "gate_closing": false
     },
@@ -62,13 +62,13 @@
       "requirements_prepared": [],
       "source_tests_prepared": [],
       "evidence": [
-        "docs/gates/g2/test_run_2026-09-23-003.json",
-        "docs/gates/g2/archive_attestation_2026-09-23-003.json",
+        "docs/gates/g2/test_run_2026-09-27-004.json",
+        "docs/gates/g2/archive_attestation_2026-09-27-004.json",
         "scripts/check.py"
       ],
       "environment": "DEV-WIN-WSL-GPU-01",
-      "observations": "The referenced detached sidecars record the prior integrated repository run on native Windows and Ubuntu WSL. Focused current-tranche suites have been exercised separately, but a new full-run and reproducible-archive sidecar must be produced only after the integration commit. Both development lanes remain guests of one physical laptop.",
-      "limitations": "Repository tests validate contracts and regressions only. The dated test-run and archive-attestation paths are immutable detached repository sidecars intentionally excluded from release archives; they do not attest the current uncommitted tranche. These results do not satisfy any physical-board, destructive-media, boot, encryption, confinement, performance, or lifecycle acceptance procedure.",
+      "observations": "The referenced detached records identify the current integrated development tests on native Windows and Ubuntu WSL and the measured source-archive identities. They bind the implementation commit and the exact release-source commit separately. Both development lanes run on one physical laptop.",
+      "limitations": "Repository tests validate contracts and regressions only. The dated test-run and archive-attestation records are intentionally excluded from release archives to avoid self-referential hashes; their absence inside an extracted archive is not verification of the detached results. These results do not satisfy any physical-board, destructive-media, boot, encryption, confinement, performance, or lifecycle acceptance procedure.",
       "gate_closing": false
     },
     {
@@ -170,7 +170,7 @@
     {
       "id": "G2-EV-010",
       "subject": "root-signed-trust-and-anchored-catalog-admission",
-      "result": "development-tests-passed-detached-record-pending",
+      "result": "development-tests-passed",
       "requirements_prepared": ["A003"],
       "source_tests_prepared": ["T06"],
       "evidence": [
@@ -193,7 +193,7 @@
     {
       "id": "G2-EV-011",
       "subject": "integrity-protected-durable-admin-authorization-event-log",
-      "result": "development-tests-passed-detached-record-pending",
+      "result": "development-tests-passed",
       "requirements_prepared": ["A003", "A115"],
       "source_tests_prepared": ["T06", "T62"],
       "evidence": [
@@ -213,7 +213,7 @@
     {
       "id": "G2-EV-012",
       "subject": "inert-offline-source-and-installer-schema-v3-revalidation",
-      "result": "development-tests-passed-detached-record-pending",
+      "result": "development-tests-passed",
       "requirements_prepared": ["FR02", "FR03", "A001", "A002", "A003", "A108"],
       "source_tests_prepared": ["T01", "T02", "T06", "T48"],
       "evidence": [
@@ -232,7 +232,7 @@
       "gate_closing": false
     }
   ],
-  "validation_record": "docs/gates/g2/test_run_2026-09-23-004.json",
+  "validation_record": "docs/gates/g2/test_run_2026-09-27-004.json",
   "test_plan": "docs/gates/g2/test_plan.json",
   "open_blocker_record": "docs/gates/g2/blockers.json",
   "deferral_record": "docs/gates/final_certification_deferrals.json",

@@ -39,7 +39,7 @@ and substantial free build space (allow 40 GiB for one build plus VM tests).
 Run from this repository:
 
 ```sh
-bash packaging/native/build.sh headless
+bash native/image/build.sh headless
 ```
 
 The builder uses an exact Ubuntu base digest and an Ubuntu archive snapshot.
@@ -70,7 +70,7 @@ docker run --rm --network none --device=/dev/kvm \
   --mount type=volume,src=BUILD_VOLUME,dst=/work \
   --mount type=bind,src="$PWD",dst=/repo,readonly \
   luma-native-tools:20260927 \
-  python3 /repo/packaging/native/vm_test.py \
+  python3 /repo/native/image/vm_test.py \
   --image /work/artifacts/luma-native-lab-20260927-headless-1.img \
   --work /work/vm-new-run
 ```
@@ -93,14 +93,14 @@ raw image checksum. Build only the test-tools container (no OS image rebuild):
 ```sh
 docker build \
   --build-arg UBUNTU_BASE=ubuntu@sha256:008173c23f95b170204355c12626cb5a965d779a7e1283b09e9cffbb1bf33ca3 \
-  -f packaging/native/Dockerfile.tools -t luma-native-tools:20260927 packaging/native
+  -f native/image/Dockerfile.tools -t luma-native-tools:20260927 native/image
 docker volume create luma-native-evaluation
 docker run --rm --network none --device=/dev/kvm \
   --mount type=volume,src=luma-native-evaluation,dst=/work \
   --mount type=bind,src=/ABSOLUTE/PATH/TO/VERIFIED-ARTIFACTS,dst=/work/artifacts,readonly \
   --mount type=bind,src="$PWD",dst=/repo,readonly \
   luma-native-tools:20260927 \
-  python3 /repo/packaging/native/vm_test.py \
+  python3 /repo/native/image/vm_test.py \
   --image /work/artifacts/luma-native-lab-20260927-headless-1.img \
   --work /work/vm-native-ubuntu-01
 ```
@@ -129,7 +129,7 @@ glob regression test; see the pinned
 [`loader.conf` contract](https://github.com/systemd/systemd/blob/v255/man/loader.conf.xml).
 
 For update evaluation, build a higher-sequence candidate with
-`bash packaging/native/build.sh headless 2`. Mount its retained volume read-only
+`bash native/image/build.sh headless 2`. Mount its retained volume read-only
 at `/candidate`, keep the original build volume at `/work`, and run
 `update_test.py --image /work/artifacts/ORIGINAL.img
 --candidate /candidate/artifacts/CANDIDATE.img --base-run /work/vm-PASSED

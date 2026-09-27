@@ -5,12 +5,12 @@ on:
   push:
     paths:
       - 'rust/**'
-      - 'packaging/native/**'
+      - 'native/image/**'
       - '.github/workflows/native-platform.yml'
   pull_request:
     paths:
       - 'rust/**'
-      - 'packaging/native/**'
+      - 'native/image/**'
       - '.github/workflows/native-platform.yml'
 
 permissions:
@@ -26,7 +26,7 @@ jobs:
         run: >-
           docker build
           --build-arg UBUNTU_BASE=ubuntu@sha256:008173c23f95b170204355c12626cb5a965d779a7e1283b09e9cffbb1bf33ca3
-          -f packaging/native/Dockerfile.tools -t luma-native-tools:ci packaging/native
+          -f native/image/Dockerfile.tools -t luma-native-tools:ci native/image
       - name: Rust tests without network or host devices
         run: >-
           docker run --rm --network none
@@ -34,9 +34,9 @@ jobs:
           --workdir /work/rust luma-native-tools:ci cargo test --offline --locked
       - name: Builder and harness syntax
         run: |
-          bash -n packaging/native/build.sh
-          sh -n packaging/native/overlay/usr/lib/systemd/system-generators/luma-boot-generator
-          python3 -m py_compile packaging/native/*.py
+          bash -n native/image/build.sh
+          sh -n native/image/overlay/usr/lib/systemd/system-generators/luma-boot-generator
+          python3 -m py_compile native/image/*.py
       - name: Rust formatting
         run: >-
           docker run --rm --network none

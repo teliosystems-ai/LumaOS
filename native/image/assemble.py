@@ -82,7 +82,7 @@ def main() -> None:
     inputs=[]
     snapshot=WORK/'source'
     snapshot.mkdir()
-    for folder in ('rust','packaging/native','src','web','schemas','examples'):
+    for folder in ('rust','native/image','src','web','schemas','examples'):
         for source in sorted((REPO/folder).rglob('*')):
             if source.is_file() and not any(p in ('target','__pycache__') for p in source.relative_to(REPO).parts):
                 if source.is_symlink():raise SystemExit('source snapshot refuses symbolic links')
@@ -112,12 +112,12 @@ def main() -> None:
     shutil.copy2(WORK/'cargo/release/luma-platform',binary)
     binary.chmod(0o755)
     (ROOT/'usr/bin/luma-platform').symlink_to('/usr/libexec/luma-os/luma-platform')
-    shutil.copytree(REPO/'packaging/native/overlay',ROOT,dirs_exist_ok=True)
+    shutil.copytree(REPO/'native/image/overlay',ROOT,dirs_exist_ok=True)
     # WSL Windows-mounted source files often report 0777. Never propagate those
     # host mount permissions into trusted policy directories or service units.
     ROOT.chmod(0o755)
-    for source in (REPO/'packaging/native/overlay').rglob('*'):
-        target=ROOT/source.relative_to(REPO/'packaging/native/overlay')
+    for source in (REPO/'native/image/overlay').rglob('*'):
+        target=ROOT/source.relative_to(REPO/'native/image/overlay')
         target.chmod(0o755 if source.is_dir() or source.suffix=='.sh' or source.parent.name=='system-generators' else 0o644)
     for script in (ROOT/'usr/lib/dracut/modules.d/91luma').glob('*.sh'):
         script.chmod(0o755)

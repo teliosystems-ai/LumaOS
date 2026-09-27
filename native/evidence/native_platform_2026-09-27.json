@@ -1,0 +1,227 @@
+{
+  "schema_version": 1,
+  "recorded_on": "2026-09-27",
+  "component": "native-ubuntu-laboratory-platform",
+  "implementation_commit": "8201727c51931b9e5a227af9a5073d4b5e0bfed4",
+  "gate": "G2",
+  "development_assessment": "in-progress",
+  "certification_assessment": "not-qualified",
+  "gate_closing": false,
+  "test_environment": {
+    "host": "Windows with Ubuntu 26.04 WSL2; one physical development host",
+    "guest": "Ubuntu 24.04 amd64, kernel 6.8.0-142-generic",
+    "virtual_cpus": 2,
+    "guest_memory_mib": 4096,
+    "fresh_target_gib": 32,
+    "guest_network": "disabled",
+    "firmware": "OVMF UEFI",
+    "physical_disks_or_firmware_modified": false
+  },
+  "claim_boundary": "Image-specific virtual-hardware execution of the native laboratory platform. Not production custody, complete native contract integration, physical hardware qualification, or G2 closure.",
+  "delivery": {
+    "directory": "dist/native/20260927T131227Z-headless",
+    "image": "luma-native-lab-20260927-headless-1.img.zst",
+    "compressed_bytes": 2125682095,
+    "compressed_sha256": "ef21ab09a4fafacf0c4c10220048e37d2fc2a70ec34265dfdeb3ae90c16e4125",
+    "raw_bytes": 11895046144,
+    "build": {
+      "status": "built-not-yet-boot-tested",
+      "release": "luma-native-lab-20260927-headless-1",
+      "kernel": "6.8.0-142-generic",
+      "edition": "headless",
+      "root_hash": "d68c1ae5d1a9edff0d9191be0f1c32c31f668275956a71e8cf39a25a34bbf641",
+      "image": "luma-native-lab-20260927-headless-1.img",
+      "image_sha256": "b4e6b304a51444b6ac56ade16977cf0c24a735e088d355a30fd8a26f42d4c5e4",
+      "source_lock_sha256": "d61e597eaa4d53e2b880811c88c8944e8594a94cfd81c26da9791a1de499b833",
+      "production_signed": false,
+      "gate_closing": false
+    }
+  },
+  "validation": {
+    "rust": {
+      "tests": 12,
+      "failed": 0,
+      "result": "passed"
+    },
+    "windows_reference": {
+      "tests_run": 320,
+      "skipped": 5,
+      "result": "passed"
+    },
+    "ubuntu_wsl_reference": {
+      "tests_run": 320,
+      "skipped": 1,
+      "result": "passed"
+    },
+    "native_full": {
+      "result": "passed",
+      "stages": [
+        "install",
+        "installed",
+        "trial-1",
+        "trial-2",
+        "trial-3",
+        "fallback",
+        "recovery",
+        "repaired",
+        "corrupt-trial-1",
+        "corrupt-trial-2",
+        "corrupt-trial-3",
+        "corrupt-fallback",
+        "repair-corruption",
+        "repaired-a"
+      ],
+      "image_sha256": "b4e6b304a51444b6ac56ade16977cf0c24a735e088d355a30fd8a26f42d4c5e4",
+      "acceleration": "kvm",
+      "uefi": true,
+      "secure_boot_tested": false,
+      "installation_tested": true,
+      "gate_closing": false,
+      "image": "/work/artifacts/luma-native-lab-20260927-headless-1.img",
+      "physical_hardware_tested": false,
+      "test_sources": {
+        "assemble.py": "66be553ee3f7424981dc6fe69cd7406fb401872701a8187eccbf4c53793a51f9",
+        "collect_evidence.py": "5b201b3aaa69ee0302cc616842a568566f6d0d26eb090bfc3cb290e4deead80e",
+        "diagnose_fallback.py": "5e9161b6f6e271a8b47a1693d434414a102626cc7f48458f5ca1b082b115c825",
+        "diagnose_trial.py": "4567fb7387126099cf190c7175ad1fb2454ef78f3f5b2d5280c9d38e5f11474c",
+        "export.py": "c9f536d3a0a11fad8f06e4bedaf52e2e4c40a6cc331b7c91adad706c9dd26d33",
+        "prune_intermediates.py": "02f4f68b453cd97d59c57197b0c3ef4ac2c275411e8d3cd64a5eb34de0bcb16b",
+        "secure_boot_negative.py": "ce3e67faa5afd5771bad1565ca778e4c55d7e67ad55b62b3892a1347124dd935",
+        "update_test.py": "cce40cd985e96015dd5b6c4ad0f56c1de547c1235d0a5f3ceeeae8f5db376f0f",
+        "verity_negative.py": "01c205d9ac4bfcbd5089536e30cc9966ca423a8a70013a5fbeb18fa2d4338969",
+        "vm_test.py": "40bc278322daab2f2812cb6c84cdc8da7f57215a30bf3741c5a4a09cbf0775ac"
+      }
+    },
+    "secure_boot_live_smoke": {
+      "result": "passed",
+      "stages": [
+        "install"
+      ],
+      "image_sha256": "b4e6b304a51444b6ac56ade16977cf0c24a735e088d355a30fd8a26f42d4c5e4",
+      "acceleration": "tcg",
+      "uefi": true,
+      "secure_boot_tested": true,
+      "installation_tested": false,
+      "gate_closing": false,
+      "image": "/work/artifacts/luma-native-lab-20260927-headless-1.img",
+      "physical_hardware_tested": false,
+      "test_sources": {
+        "assemble.py": "66be553ee3f7424981dc6fe69cd7406fb401872701a8187eccbf4c53793a51f9",
+        "collect_evidence.py": "5b201b3aaa69ee0302cc616842a568566f6d0d26eb090bfc3cb290e4deead80e",
+        "diagnose_fallback.py": "5e9161b6f6e271a8b47a1693d434414a102626cc7f48458f5ca1b082b115c825",
+        "diagnose_trial.py": "4567fb7387126099cf190c7175ad1fb2454ef78f3f5b2d5280c9d38e5f11474c",
+        "export.py": "c9f536d3a0a11fad8f06e4bedaf52e2e4c40a6cc331b7c91adad706c9dd26d33",
+        "prune_intermediates.py": "02f4f68b453cd97d59c57197b0c3ef4ac2c275411e8d3cd64a5eb34de0bcb16b",
+        "secure_boot_negative.py": "ce3e67faa5afd5771bad1565ca778e4c55d7e67ad55b62b3892a1347124dd935",
+        "update_test.py": "cce40cd985e96015dd5b6c4ad0f56c1de547c1235d0a5f3ceeeae8f5db376f0f",
+        "verity_negative.py": "01c205d9ac4bfcbd5089536e30cc9966ca423a8a70013a5fbeb18fa2d4338969",
+        "vm_test.py": "40bc278322daab2f2812cb6c84cdc8da7f57215a30bf3741c5a4a09cbf0775ac"
+      }
+    },
+    "unsigned_bootloader_refusal": {
+      "result": "passed",
+      "stages": [
+        "unsigned-efi-refusal"
+      ],
+      "image_sha256": "b4e6b304a51444b6ac56ade16977cf0c24a735e088d355a30fd8a26f42d4c5e4",
+      "unsigned_bootloader_sha256": "e9aa554a4e3f2784be0895db0a4349e3dee0e7bfaa3daf6112bc306a5b41bcc7",
+      "secure_boot_tested": true,
+      "acceleration": "tcg",
+      "physical_hardware_tested": false,
+      "gate_closing": false,
+      "installation_tested": false,
+      "test_sources": {
+        "assemble.py": "66be553ee3f7424981dc6fe69cd7406fb401872701a8187eccbf4c53793a51f9",
+        "collect_evidence.py": "5b201b3aaa69ee0302cc616842a568566f6d0d26eb090bfc3cb290e4deead80e",
+        "diagnose_fallback.py": "5e9161b6f6e271a8b47a1693d434414a102626cc7f48458f5ca1b082b115c825",
+        "diagnose_trial.py": "4567fb7387126099cf190c7175ad1fb2454ef78f3f5b2d5280c9d38e5f11474c",
+        "export.py": "c9f536d3a0a11fad8f06e4bedaf52e2e4c40a6cc331b7c91adad706c9dd26d33",
+        "prune_intermediates.py": "02f4f68b453cd97d59c57197b0c3ef4ac2c275411e8d3cd64a5eb34de0bcb16b",
+        "secure_boot_negative.py": "ce3e67faa5afd5771bad1565ca778e4c55d7e67ad55b62b3892a1347124dd935",
+        "update_test.py": "cce40cd985e96015dd5b6c4ad0f56c1de547c1235d0a5f3ceeeae8f5db376f0f",
+        "verity_negative.py": "01c205d9ac4bfcbd5089536e30cc9966ca423a8a70013a5fbeb18fa2d4338969",
+        "vm_test.py": "40bc278322daab2f2812cb6c84cdc8da7f57215a30bf3741c5a4a09cbf0775ac"
+      }
+    },
+    "update": {
+      "result": "passed",
+      "stages": [
+        "stage-update",
+        "updated"
+      ],
+      "image_sha256": "b4e6b304a51444b6ac56ade16977cf0c24a735e088d355a30fd8a26f42d4c5e4",
+      "candidate_image_sha256": "45cdc4f482c2074b194933c2a8f4e9134c44bf1354f9c3c159e7cb08229a72f5",
+      "candidate_release": "luma-native-lab-20260927-headless-2",
+      "acceleration": "kvm",
+      "secure_boot_tested": false,
+      "physical_hardware_tested": false,
+      "gate_closing": false,
+      "test_sources": {
+        "assemble.py": "66be553ee3f7424981dc6fe69cd7406fb401872701a8187eccbf4c53793a51f9",
+        "collect_evidence.py": "5b201b3aaa69ee0302cc616842a568566f6d0d26eb090bfc3cb290e4deead80e",
+        "diagnose_fallback.py": "5e9161b6f6e271a8b47a1693d434414a102626cc7f48458f5ca1b082b115c825",
+        "diagnose_trial.py": "4567fb7387126099cf190c7175ad1fb2454ef78f3f5b2d5280c9d38e5f11474c",
+        "export.py": "c9f536d3a0a11fad8f06e4bedaf52e2e4c40a6cc331b7c91adad706c9dd26d33",
+        "prune_intermediates.py": "02f4f68b453cd97d59c57197b0c3ef4ac2c275411e8d3cd64a5eb34de0bcb16b",
+        "secure_boot_negative.py": "ce3e67faa5afd5771bad1565ca778e4c55d7e67ad55b62b3892a1347124dd935",
+        "update_test.py": "cce40cd985e96015dd5b6c4ad0f56c1de547c1235d0a5f3ceeeae8f5db376f0f",
+        "verity_negative.py": "01c205d9ac4bfcbd5089536e30cc9966ca423a8a70013a5fbeb18fa2d4338969",
+        "vm_test.py": "40bc278322daab2f2812cb6c84cdc8da7f57215a30bf3741c5a4a09cbf0775ac"
+      },
+      "observations": [
+        "inactive-slot update",
+        "encrypted data preserved",
+        "model-disable preserved",
+        "healthy trial acknowledged",
+        "pending transaction cleared",
+        "older sequence refused"
+      ]
+    }
+  },
+  "evidence_inventories": [
+    {
+      "path": "dist/native/20260927T131227Z-headless/evidence-full/evidence-files.json",
+      "sha256": "0947e41c7006a671ed26ad709fe70e5c0a4f2c7faf3d7c132daa9ec927b9f554"
+    },
+    {
+      "path": "dist/native/20260927T131227Z-headless/evidence-secure-boot/evidence-files.json",
+      "sha256": "4099ea97b70a26560219fc4f85c0be04ac94b8e67230f438d1ab3763665dd161"
+    },
+    {
+      "path": "dist/native/20260927T131227Z-headless/evidence-unsigned-refusal/evidence-files.json",
+      "sha256": "16b880e57f0335fc46c979e1b5be188bea276422f8c38033f93e5fa479aaef0e"
+    },
+    {
+      "path": "dist/native/20260927T131227Z-headless/evidence-update/evidence-files.json",
+      "sha256": "2eb3fa27e4c970890d8c392d6f845c685a05549326e958967dd9628abf580a57"
+    }
+  ],
+  "limitations": [
+    "Full installer/fallback/recovery suite used KVM with Secure Boot disabled; Secure Boot positive/negative tests were separate TCG runs.",
+    "One Windows/Ubuntu WSL host; no physical Ubuntu board qualified.",
+    "Manual-only headless image; no weights or native install-time model/supervisor integration.",
+    "Native finite Admin, authenticated durable authorization/effect contract integration, protected anchors and production custody remain implementation work.",
+    "Physical firmware, TPM, accelerator, power-cut, lifecycle, multi-board and full workflow acceptance remain open."
+  ],
+  "operator_guide": "native/image/README.md",
+  "status_addendum": "native/evidence/NATIVE_PLATFORM_STATUS_2026-09-27.md",
+  "update_fixture": {
+    "directory": "dist/native/20260927T151628Z-headless",
+    "image": "luma-native-lab-20260927-headless-2.img.zst",
+    "compressed_bytes": 2125121134,
+    "compressed_sha256": "102883e2e805a2cd665a4973c9217f347ef32d815c0ac73371ff884642508afc",
+    "build": {
+      "status": "built-not-yet-boot-tested",
+      "release": "luma-native-lab-20260927-headless-2",
+      "kernel": "6.8.0-142-generic",
+      "edition": "headless",
+      "root_hash": "02895dc69e9ee879ab09710aad1ece9d1d1927d7dc5a3ad17ed64991af53ae64",
+      "image": "luma-native-lab-20260927-headless-2.img",
+      "image_sha256": "45cdc4f482c2074b194933c2a8f4e9134c44bf1354f9c3c159e7cb08229a72f5",
+      "source_lock_sha256": "d61e597eaa4d53e2b880811c88c8944e8594a94cfd81c26da9791a1de499b833",
+      "production_signed": false,
+      "gate_closing": false
+    },
+    "claim_boundary": "Passed as an update from the primary installed image; not separately full-install-qualified."
+  }
+}

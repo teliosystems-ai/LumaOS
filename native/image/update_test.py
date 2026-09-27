@@ -73,7 +73,8 @@ def main() -> None:
                 vm.run('python3 -c '+shlex.quote(check))
                 vm.run('test ! -e /var/lib/luma-os/pending.json')
                 vm.run('test -f /var/lib/luma-os/model-disabled')
-                vm.run('test "$(systemctl is-active luma-reference.service)" = inactive')
+                vm.run('systemctl is-active luma-reference.service')
+                vm.run('test "$(systemctl is-active luma-model.service)" = inactive')
                 refusal=vm.run('luma-platform update /media/luma',expected=1,timeout=900)
                 if b'update sequence must increase' not in refusal:
                     raise RuntimeError('older bundle was not rejected by sequence admission')

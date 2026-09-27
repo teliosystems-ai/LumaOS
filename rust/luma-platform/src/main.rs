@@ -1,6 +1,7 @@
 //! Native Linux platform boundary. No model-provided command or shell execution.
 mod bundle;
 mod disk;
+mod model;
 mod platform;
 mod service;
 
@@ -41,7 +42,30 @@ fn dispatch() -> Result<()> {
             println!("{}", serde_json::to_string_pretty(&verified.manifest)?);
             Ok(())
         }
-        Some("install") if args.len() == 3 => platform::install(&args[1], Path::new(&args[2])),
+        Some("install") if args.len() == 3 => {
+            platform::install(&args[1], Path::new(&args[2]), None)
+        }
+        Some("install") if args.len() == 5 && args[3] == "--model" => {
+            platform::install(&args[1], Path::new(&args[2]), Some(&args[4]))
+        }
+        Some("models") if args.len() == 1 => model::list(),
+        Some("model-install") if args.len() == 2 => model::install(&args[1]),
+        Some("model-serve") if args.len() == 1 => model::serve(),
+        Some("model-unit") if args.len() == 1 => model::unit(),
+        Some("model-chat") if args.len() == 1 => {
+            require_root()?;
+            platform::require_installed()?;
+            if !std::process::Command::new("/usr/bin/python3")
+                .args(["-I", "/usr/libexec/luma-os/model-chat.py"])
+                .env_clear()
+                .env("PATH", "/usr/bin")
+                .status()?
+                .success()
+            {
+                return Err("local inference failed; manual operation remains available".into());
+            }
+            Ok(())
+        }
         Some("update") if args.len() == 2 => platform::update(Path::new(&args[1])),
         Some("recover") if args.len() >= 3 => platform::recover(&args[1..]),
         Some("broker") if args.len() == 1 => service::serve(),
@@ -50,6 +74,7 @@ fn dispatch() -> Result<()> {
         Some("boot-failed") if args.len() == 1 => platform::boot_failed(),
         Some("init-data") if args.len() == 2 => platform::init_data(&args[1]),
         Some("help" | "--help") | None => {
+            println!("Model operations: models | model-install MODEL-ID | model-chat (prompt on stdin).\nInstaller accepts --model MODEL-ID or --model manual-only; otherwise prompts.\nWeights are acquired from pinned HTTPS publisher URLs after hardware admission.");
             println!("Luma native platform alpha\n\n  inventory\n  verify BUNDLE\n  install /dev/disk/by-id/EXACT-ID BUNDLE\n  update BUNDLE\n  recover unlock /dev/disk/by-id/EXACT-ID\n  recover export /dev/disk/by-id/EXACT-ID EMPTY-DESTINATION\n  recover repair-a|repair-b /dev/disk/by-id/EXACT-ID BUNDLE\n  recover repair-data /dev/disk/by-id/EXACT-ID\n  recover disable-model /dev/disk/by-id/EXACT-ID\n  status\n\nInstall requires local interactive disk confirmation and new credentials.\nLaboratory image: native acceptance and production custody are outstanding.");
             Ok(())
         }

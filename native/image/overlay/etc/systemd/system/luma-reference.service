@@ -2,7 +2,6 @@
 Description=Luma unprivileged reference workflow service
 After=luma-broker.service
 Requires=luma-broker.service
-ConditionPathExists=!/var/lib/luma-os/model-disabled
 
 [Service]
 User=luma-control
@@ -11,6 +10,7 @@ Environment=PYTHONPATH=/usr/share/luma-os/reference/src
 Environment=LUMA_HOME=/var/lib/luma-os/reference
 Environment=PYTHONDONTWRITEBYTECODE=1
 Environment=PYTHONWARNINGS=error
+EnvironmentFile=-/var/lib/luma-os/reference/model.env
 ExecStart=/usr/bin/python3 -m luma_os.cli serve --host 127.0.0.1 --port 8765
 StateDirectory=luma-os/reference
 StateDirectoryMode=0700

@@ -8,6 +8,10 @@ case " $cmdline " in
         mkdir -p "$1/local-fs.target.wants" "$1/multi-user.target.wants"
         ln -s /etc/systemd/system/efi.mount "$1/local-fs.target.wants/efi.mount"
         ln -s /etc/systemd/system/luma-boot-health.service "$1/multi-user.target.wants/luma-boot-health.service"
+        if [ -f /var/lib/luma-os/model-selection.json ]; then
+            mkdir -p "$1/luma-model.service.d"
+            /usr/libexec/luma-os/luma-platform model-unit > "$1/luma-model.service.d/resources.conf"
+        fi
         ;;
     *" luma.mode=live "*)
         mkdir -p "$1/multi-user.target.wants"

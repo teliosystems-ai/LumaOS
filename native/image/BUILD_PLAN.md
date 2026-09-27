@@ -35,3 +35,32 @@ the corresponding build and execution records exist.
 Physical firmware, TPM, accelerator, power-cut, suspend/resume and two-board
 qualification stay open. Missing implementations stay open as well; simulated
 results cannot change either category to complete.
+
+## Model-enabled continuation
+
+The native installer now contains image-owned Qwen3-4B and Qwen3-1.7B CPU
+profiles, explicit manual-only selection, resource admission, pinned HTTPS
+acquisition, exact size/hash verification, and activation of an isolated local
+runtime. Each produced image still needs its own executed evaluation. The model
+runner must pass before a build is described as model-tested. The 1.7B profile
+is a development fallback, not fulfillment of the governed 4–6B model tier.
+
+Remaining implementation/acceptance work must not be converted into hardware
+deferrals:
+
+- Native Rust policy and finite Admin delegation integrated with durable
+  authorization/effect receipts and the complete local-file-to-artifact workflow.
+- Protected production writer identity, clock, checkpoint/rollback anchors,
+  signing custody, revocation/rotation/recovery, and operational reconciliation.
+  Select the deployment design before claiming a production integration. A TPM
+  anchor is not a substitute for the approved Ed25519 signing-custody ceremony.
+- Full governed model-pack/catalog schemas and lifecycle: atomic leases,
+  generation fencing, pressure handling, cleanup evidence and the required
+  lifecycle/performance matrix, including qualified larger/GPU profiles.
+- Complete boot/update/migration interruption matrix, damaged-media recovery,
+  account lifecycle and a qualified model-independent desktop.
+
+Production custody needs owner decisions in
+`docs/PRODUCTION_SIGNING_CUSTODY.md`; destructive physical evaluation needs the
+exact target/firmware approvals in `docs/gates/g2/PHYSICAL_QUALIFICATION_RUNBOOK.md`.
+Laboratory signing and root/sudo operation do not satisfy those requirements.

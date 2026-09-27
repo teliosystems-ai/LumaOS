@@ -1,0 +1,50 @@
+[Unit]
+Description=Luma isolated pinned CPU model runtime
+After=local-fs.target apparmor.service
+Requires=apparmor.service
+ConditionKernelCommandLine=luma.mode=installed
+ConditionPathExists=/var/lib/luma-os/model-selection.json
+ConditionPathExists=!/var/lib/luma-os/model-disabled
+StartLimitIntervalSec=300
+StartLimitBurst=2
+
+[Service]
+User=luma-model
+Group=luma-model
+ExecStart=/usr/libexec/luma-os/luma-platform model-serve
+WorkingDirectory=/usr/libexec/luma-os/llama
+UMask=0077
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_UNIX AF_INET
+IPAddressDeny=any
+IPAddressAllow=localhost
+RestrictNamespaces=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @mount @raw-io @reboot @swap @obsolete @debug
+CapabilityBoundingSet=
+AppArmorProfile=luma-model
+MemoryHigh=2G
+MemoryMax=2560M
+MemorySwapMax=0
+TasksMax=64
+CPUQuota=200%
+LimitMEMLOCK=0
+LimitCORE=0
+DevicePolicy=closed
+TimeoutStopSec=15
+KillMode=control-group
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

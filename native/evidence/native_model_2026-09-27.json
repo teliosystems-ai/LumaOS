@@ -1,0 +1,112 @@
+{
+  "schema_version": 1,
+  "status": "development-in-progress",
+  "gate": "G2",
+  "gate_closing": false,
+  "production_signed": false,
+  "physical_hardware_tested": false,
+  "image": {
+    "export_directory": "dist/native/20260927T195004Z-headless",
+    "retained_volume": "luma-native-build-20260927T195004Z-headless",
+    "file": "luma-native-lab-20260927-headless-3.img.zst",
+    "compressed_bytes": 2156895592,
+    "compressed_sha256": "65bb50c0e4ed90836554d89bef04e5b7c32a804b751cdcc82afc9cdc9bce1d20",
+    "raw_sha256": "8a9f87e31c052646b4b9edad0920de31105bece42231d927e5758b50e1de3429",
+    "source_lock_sha256": "38bf82de62b75968d808e8b907129c3178df40b4fd4502805fc02005b8cdf4d3",
+    "matches_latest_source": false,
+    "boundary": "Headless Ubuntu 24.04 amd64 laboratory candidate, not ISO or production release"
+  },
+  "tested_model": {
+    "id": "qwen3-4b-q4-k-m",
+    "parameters": 4000000000,
+    "runtime": "llama.cpp-b11100-cpu-amd64",
+    "weight_bytes": 2497280256,
+    "weight_sha256": "7485fe6f11af29433bc51cab58009521f205840f5b4ae3a32fa7f92e8534fdf5",
+    "preseeded": false,
+    "downloaded_by_native_installer": true,
+    "guest_memory_mib": 6144,
+    "guest_vcpus": 2,
+    "prompt_tokens": 18,
+    "completion_tokens": 14,
+    "generated_os_effects": false,
+    "larger_models_or_gpu_qualified": false
+  },
+  "image_evidence": [
+    {
+      "directory": "evidence-model",
+      "result": "passed",
+      "stages": ["model-install", "model-inference", "offline-reboot"],
+      "result_sha256": "c687ae5556d1f98bc3558bcf314990c42838022f6a8c87dae0bc2cb4317e11ee",
+      "inventory_sha256": "71f01cfa1f617a9d14eb6cae339a9e6141e2da3b053f815c859aa12c2e1af96e",
+      "acceleration": "kvm",
+      "secure_boot": false
+    },
+    {
+      "directory": "evidence-model-recovery",
+      "result": "passed",
+      "stages": ["independent-recovery-disable", "manual-disabled-boot", "same-size-corruption"],
+      "result_sha256": "4f5de51f1a603edae7e746cd16a7234c2e886de8a0d2ef5cc785ca385dd68278",
+      "inventory_sha256": "4cb41d9199622f23207fb28c21907f6c663314441647613807f2fc4d59f9a7d2",
+      "acceleration": "kvm",
+      "secure_boot": false,
+      "base_fixture_modified": false
+    },
+    {
+      "directory": "evidence-secure-boot",
+      "result": "passed",
+      "scope": "signed live-boot smoke only",
+      "result_sha256": "d1f4823f51c3da0aac1c0f59b189c5b6f1519b2f7ca528b11b48ca318ca639ec",
+      "inventory_sha256": "6290fb60da885564fb7a685b1ea16f4fa9af73b733a3254477d34ca9ae3fd589",
+      "acceleration": "tcg",
+      "secure_boot": true,
+      "installation_tested": false
+    },
+    {
+      "directory": "evidence-unsigned-refusal",
+      "result": "passed",
+      "scope": "virtual firmware rejects unsigned bootloader copy",
+      "result_sha256": "2d9e85c7d9eaabde1ce5f2463fb72a2c08abeccd551caff384b5de271d51e9e1",
+      "inventory_sha256": "b58f0a38cf7183ba2fcddb2ce62b5d8c1c676a671e649f0dc5475109900e29a6",
+      "acceleration": "tcg",
+      "secure_boot": true,
+      "installation_tested": false
+    }
+  ],
+  "source_tests": {
+    "rust": {"run": 19, "failed": 0, "warnings_denied": true},
+    "native_python_windows": {"run": 6, "failed": 0},
+    "native_python_ubuntu": {"run": 6, "failed": 0},
+    "reference_windows": {"run": 320, "failed": 0, "skipped": 5},
+    "reference_ubuntu_wsl": {"run": 320, "failed": 0, "skipped": 1}
+  },
+  "source_only_after_image": [
+    "local inference client redirect refusal",
+    "download progress reporting",
+    "build space preflight",
+    "expanded combined model/recovery runner and sparse VM targets",
+    "additional unit tests and documentation"
+  ],
+  "open_evaluation": [
+    "rebuild latest source and execute its image-specific matrix",
+    "full 14-stage platform regression on the model-enabled image",
+    "signed update and actual guest power-cut runner",
+    "combined five-stage acquisition/recovery runner",
+    "Qwen3-1.7B real execution",
+    "native physical qualification"
+  ],
+  "open_software": [
+    "native finite Admin, policy and durable effects integration",
+    "protected production identity, time, rollback anchors and key lifecycle",
+    "complete governed model-pack and model lifecycle contracts",
+    "qualified desktop and complete vertical workflow",
+    "remaining migration, interruption and adversarial matrix"
+  ],
+  "next_build": {
+    "sequence": 4,
+    "status": "refused-before-build-by-space-preflight",
+    "observed_free_bytes": 4769001472,
+    "required_preflight_bytes": 17179869184,
+    "image_produced": false,
+    "owner_request": "Provide at least 30 GiB additional free space or designate another build drive; confirm protected Admin/checkpoint and production custody design"
+  }
+}

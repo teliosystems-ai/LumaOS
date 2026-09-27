@@ -128,6 +128,11 @@ def main() -> None:
     if not (KEYS/'release.key').exists():
         run('openssl','genpkey','-algorithm','ED25519','-out',KEYS/'release.key')
     run('openssl','pkey','-in',KEYS/'release.key','-pubout','-out',ROOT/'usr/share/luma-os/release.pub')
+    for name in ('model-catalog.json','runtime-lock.json'):
+        shutil.copy2(REPO/'native/image'/name,ROOT/'usr/share/luma-os'/name)
+    run('openssl','pkeyutl','-sign','-rawin','-inkey',KEYS/'release.key',
+        '-in',ROOT/'usr/share/luma-os/model-catalog.json',
+        '-out',ROOT/'usr/share/luma-os/model-catalog.sig')
     if not (KEYS/'secureboot.key').exists():
         run('openssl','req','-new','-x509','-newkey','rsa:3072','-nodes','-sha256','-days','365',
             '-subj','/CN=Luma Native Laboratory Only/','-keyout',KEYS/'secureboot.key','-out',KEYS/'secureboot.pem',stderr=subprocess.DEVNULL)
@@ -148,6 +153,10 @@ def main() -> None:
     run('chroot',ROOT,'groupadd','--gid','990','luma-control')
     run('chroot',ROOT,'useradd','--uid','990','--gid','990','--system','--no-create-home',
         '--home-dir','/var/lib/luma-os/reference','--shell','/usr/sbin/nologin','luma-control')
+    for uid,name in ((989,'luma-model'),(988,'luma-fetch')):
+        run('chroot',ROOT,'groupadd','--gid',str(uid),name)
+        run('chroot',ROOT,'useradd','--uid',str(uid),'--gid',str(uid),'--system','--no-create-home',
+            '--home-dir','/nonexistent','--shell','/usr/sbin/nologin',name)
     run('chroot',ROOT,'passwd','--lock','root')
     # Ubuntu's container image may ship a UID 1000 convenience account. Never
     # carry that account into an OS with operator-created first-user identities.
@@ -180,6 +189,9 @@ def main() -> None:
     for path in ('var/home','var/root','var/lib/luma-os/reference','efi','media/luma'):
         (ROOT/path).mkdir(parents=True,exist_ok=True)
     (ROOT/'var/root').chmod(0o700)
+    connections=ROOT/'var/lib/NetworkManager/system-connections'
+    connections.mkdir(parents=True,exist_ok=True)
+    connections.chmod(0o700)
     os.chown(ROOT/'var/lib/luma-os/reference',990,990)
     put('etc/fstab',
         '/var/home /home none bind 0 0\n'
@@ -190,7 +202,7 @@ def main() -> None:
     put('etc/systemd/system/systemd-bless-boot.service','[Unit]\nDescription=Disabled automatic blessing; luma-boot-health owns acknowledgement\n[Service]\nType=oneshot\nExecStart=/usr/bin/true\n')
     put('etc/systemd/system/sleep.target.d/luma.conf','[Unit]\nConflicts=luma-reference.service\n')
     put('etc/systemd/system/hibernate.target','[Unit]\nDescription=Hibernation is unqualified and disabled\nRefuseManualStart=yes\n')
-    for unit in ('luma-broker.service','luma-reference.service'):
+    for unit in ('luma-broker.service','luma-reference.service','luma-model.service'):
         enable(unit)
     put('etc/issue','Luma native Ubuntu laboratory image. Native qualification is pending.\nRun luma-platform --help. Installation/recovery bundle: /media/luma\n')
     run('cp','-a',ROOT/'var',template)

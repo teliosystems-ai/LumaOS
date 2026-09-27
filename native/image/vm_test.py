@@ -27,7 +27,7 @@ TEST_SOURCES={p.name:hashlib.sha256(p.read_bytes()).hexdigest()
 
 
 class VM:
-    def __init__(self,image: Path,work: Path,target: Path,live: bool,timeout: int,secure_boot: bool=False,acceleration: str='auto',attach_media: bool | None=None,media_format: str='raw'):
+    def __init__(self,image: Path,work: Path,target: Path,live: bool,timeout: int,secure_boot: bool=False,acceleration: str='auto',attach_media: bool | None=None,media_format: str='raw',memory_mib: int=4096,network: bool=False):
         self.work=work;work.mkdir()
         # Preserve virtual NVRAM across the complete installation/boot sequence.
         variables=work.parent/'firmware.fd'
@@ -44,13 +44,14 @@ class VM:
                             '--add-db',owner,cert,'--sb'],check=True)
         firmware='/usr/share/OVMF/OVMF_CODE_4M'+('.secboot' if secure_boot else '')+'.fd'
         self.acceleration=acceleration if acceleration!='auto' else ('kvm' if os.access('/dev/kvm',os.R_OK|os.W_OK) else 'tcg')
-        command=['qemu-system-x86_64','-machine',f'q35,accel={self.acceleration}','-m','4096','-smp','2',
+        if memory_mib not in (4096,6144):raise ValueError('unsupported test memory fixture')
+        command=['qemu-system-x86_64','-machine',f'q35,accel={self.acceleration}','-m',str(memory_mib),'-smp','2',
             '-cpu','host' if self.acceleration=='kvm' else 'max',
             '-drive',f'if=pflash,format=raw,readonly=on,file={firmware}',
             '-drive',f'if=pflash,format=raw,file={variables}',
-            '-drive',f'if=none,id=target,format=qcow2,file={target}',
+            '-drive',f'if=none,id=target,format=qcow2,discard=unmap,detect-zeroes=unmap,file={target}',
             '-device',f'virtio-blk-pci,drive=target,serial=LUMA-VM-TARGET,bootindex={2 if live else 1}',
-            '-nic','none','-display','none','-monitor','none',
+            '-nic','user,model=virtio-net-pci' if network else 'none','-display','none','-monitor','none',
             '-serial',f'unix:{work}/console.sock,server=on,wait=off',
             '-qmp',f'unix:{work}/qmp.sock,server=on,wait=off','-no-reboot']
         if media_format not in ('raw','qcow2'):raise ValueError('unsupported media format')
@@ -134,15 +135,19 @@ def live_ready(vm: VM) -> None:
         vm.run('test "$(od -An -tu1 -j4 /sys/firmware/efi/efivars/SecureBoot-8be4df61-93ca-11d2-aa0d-00e098032b8c | tr -d \' \\n\')" = 1')
 
 
-def install(vm: VM) -> None:
+def install(vm: VM,model: str='manual-only') -> None:
     print('VM: signed bundle verification and installation',flush=True)
     vm.run('mkdir /tmp/bad-bundle && cp /media/luma/release.json /media/luma/release.sig /tmp/bad-bundle/')
     mutation="import json; from pathlib import Path; p=Path('/tmp/bad-bundle/release.json'); m=json.loads(p.read_text()); m['sequence']+=1; p.write_text(json.dumps(m))"
     vm.run('python3 -c '+shlex.quote(mutation))
     vm.run(f'head -c 1048576 {TARGET} | sha256sum > /tmp/before-install.sha256')
-    vm.run(f'luma-platform install {TARGET} /tmp/bad-bundle',expected=1)
+    vm.run(f'luma-platform install {TARGET} /tmp/bad-bundle --model manual-only',expected=1)
     vm.run(f'head -c 1048576 {TARGET} | sha256sum | cmp - /tmp/before-install.sha256')
-    vm.send(f'luma-platform install {TARGET} /media/luma')
+    if model=='manual-only':
+        refused=vm.run(f'luma-platform install {TARGET} /media/luma --model qwen3-4b-q4-k-m',expected=1)
+        if b'cannot be admitted' not in refused:raise RuntimeError('4 GiB fixture did not reject the 4B RAM requirement')
+        vm.run(f'head -c 1048576 {TARGET} | sha256sum | cmp - /tmp/before-install.sha256')
+    vm.send(f'luma-platform install {TARGET} /media/luma --model {shlex.quote(model)}')
     vm.action(rb'Type exactly: ERASE LUMA-VM-TARGET',900);vm.send('ERASE LUMA-VM-TARGET')
     for prompt,value in [(b'First user login name:','lumauser'),(b'Separate administrator login name:','lumaadmin')]:
         vm.expect(prompt);vm.send(value)
@@ -151,7 +156,7 @@ def install(vm: VM) -> None:
                         ('Independent recovery passphrase (retain off this disk)',RECOVERY_PASSWORD)]:
         vm.expect(re.escape(label.encode())+rb' \(at least 16 characters\):');vm.send(value)
         vm.expect(re.escape(('Repeat '+label+':').encode()));vm.send(value)
-    vm.action(b'INSTALLATION COMPLETE:',900);vm.expect(rb'root@[^\r\n]*[#]');vm.run('sync')
+    vm.action(b'INSTALLATION COMPLETE:',3900 if model!='manual-only' else 900);vm.expect(rb'root@[^\r\n]*[#]');vm.run('sync')
 
 
 def installed_login(vm: VM) -> None:
@@ -244,7 +249,8 @@ def repaired_ready(vm: VM,slot: str='b') -> None:
     vm.run(f'grep -qw luma.slot={slot} /proc/cmdline')
     vm.run('grep -Fx persistent-fixture /home/lumauser/recovery-test.txt')
     vm.run('test -f /var/lib/luma-os/model-disabled')
-    vm.run('test "$(systemctl is-active luma-reference.service)" = inactive')
+    vm.run('systemctl is-active luma-reference.service')
+    vm.run('test "$(systemctl is-active luma-model.service)" = inactive')
     vm.run('luma-platform status')
     vm.run('sync')
 

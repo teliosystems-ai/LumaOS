@@ -245,7 +245,7 @@ fn require_live() -> Result<()> {
     Ok(())
 }
 
-fn write_atomic(destination: &Path, bytes: &[u8], mode: u32) -> Result<()> {
+pub(crate) fn write_atomic(destination: &Path, bytes: &[u8], mode: u32) -> Result<()> {
     let parent = destination.parent().ok_or("missing parent")?;
     let mut random = [0u8; 16];
     File::open("/dev/urandom")?.read_exact(&mut random)?;
@@ -514,10 +514,228 @@ fn create_identity(
     Ok(())
 }
 
-pub fn install(selection: &str, source: &Path) -> Result<()> {
+fn copy_network_profiles(source: &Path, destination: &Path) -> Result<()> {
+    use std::os::unix::fs::MetadataExt;
+    if !source.exists() {
+        return Ok(());
+    }
+    let root = fs::symlink_metadata(source)?;
+    if !root.is_dir() || root.uid() != 0 || root.mode() & 0o077 != 0 {
+        return Err("live network profile directory is not private".into());
+    }
+    fs::create_dir_all(destination)?;
+    fs::set_permissions(destination, fs::Permissions::from_mode(0o700))?;
+    let entries: Vec<_> = fs::read_dir(source)?.collect::<std::io::Result<_>>()?;
+    if entries.len() > 32 {
+        return Err("too many network profiles".into());
+    }
+    for entry in entries {
+        if !entry
+            .file_name()
+            .to_string_lossy()
+            .ends_with(".nmconnection")
+        {
+            continue;
+        }
+        let mut file = OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+            .open(entry.path())?;
+        let metadata = file.metadata()?;
+        if !metadata.is_file()
+            || metadata.uid() != 0
+            || metadata.mode() & 0o077 != 0
+            || metadata.len() > 65536
+        {
+            return Err("network profile is not a private bounded regular file".into());
+        }
+        let mut bytes = Vec::new();
+        (&mut file).take(65537).read_to_end(&mut bytes)?;
+        if bytes.len() > 65536 {
+            return Err("network profile changed during capture".into());
+        }
+        write_atomic(&destination.join(entry.file_name()), &bytes, 0o600)?;
+    }
+    Ok(())
+}
+
+pub(crate) fn ensure_model_identities(var: &Path) -> Result<()> {
+    // Upgrade older manual-only data volumes without replacing user identities.
+    // Every step is idempotent; conflicting names, IDs or group members fail closed.
+    let identity = var.join("lib/luma-os/identity");
+    let lock = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .mode(0o600)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(identity.join("migration.lock"))?;
+    if unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
+        return Err("identity migration is already running".into());
+    }
+    for (uid, name) in [(989, "luma-model"), (988, "luma-fetch")] {
+        for (file, entry, number) in [
+            ("group", format!("{name}:x:{uid}:"), Some(uid)),
+            ("gshadow", format!("{name}:!::"), None),
+            (
+                "passwd",
+                format!("{name}:x:{uid}:{uid}::/nonexistent:/usr/sbin/nologin"),
+                Some(uid),
+            ),
+            ("shadow", format!("{name}:!:20000:0:99999:7:::"), None),
+        ] {
+            let at = identity.join(file);
+            let mut input = String::new();
+            OpenOptions::new()
+                .read(true)
+                .custom_flags(libc::O_NOFOLLOW)
+                .open(&at)?
+                .take(1024 * 1024 + 1)
+                .read_to_string(&mut input)?;
+            if input.len() > 1024 * 1024 {
+                return Err("identity store exceeds bound".into());
+            }
+            let matches: Vec<_> = input
+                .lines()
+                .filter(|line| {
+                    let fields: Vec<_> = line.split(':').collect();
+                    fields.first() == Some(&name)
+                        || number.map_or(false, |n| {
+                            fields.get(2).and_then(|s| s.parse::<u32>().ok()) == Some(n)
+                        })
+                })
+                .collect();
+            if !matches.is_empty() {
+                let okay = matches.len() == 1
+                    && if file == "shadow" {
+                        let fields: Vec<_> = matches[0].split(':').collect();
+                        fields.len() == 9
+                            && fields[0] == name
+                            && matches!(fields[1], "!" | "!!" | "*")
+                    } else {
+                        matches[0] == entry
+                    };
+                if !okay {
+                    return Err("model service identity conflicts with existing data; manual reconciliation required".into());
+                }
+            } else {
+                if !input.ends_with('\n') {
+                    return Err("identity store is not line terminated".into());
+                }
+                input.push_str(&entry);
+                input.push('\n');
+                write_atomic(
+                    &at,
+                    input.as_bytes(),
+                    if matches!(file, "shadow" | "gshadow") {
+                        0o600
+                    } else {
+                        0o644
+                    },
+                )?;
+            }
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod identity_migration_tests {
+    use super::*;
+    #[test]
+    fn network_profiles_copy_private_bytes_and_refuse_public_or_symlink_files() {
+        // The native test container runs as root, matching installer ownership.
+        if unsafe { libc::geteuid() } != 0 {
+            return;
+        }
+        let root = std::env::temp_dir().join(format!("luma-network-{}", std::process::id()));
+        let source = root.join("source");
+        let destination = root.join("destination");
+        fs::create_dir_all(&source).unwrap();
+        fs::set_permissions(&source, fs::Permissions::from_mode(0o700)).unwrap();
+        let profile = source.join("private.nmconnection");
+        write_atomic(&profile, b"[connection]\nid=fixture\n", 0o600).unwrap();
+        copy_network_profiles(&source, &destination).unwrap();
+        assert_eq!(
+            fs::read(destination.join("private.nmconnection")).unwrap(),
+            b"[connection]\nid=fixture\n"
+        );
+        assert_eq!(
+            fs::metadata(destination.join("private.nmconnection"))
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o600
+        );
+        fs::set_permissions(&profile, fs::Permissions::from_mode(0o644)).unwrap();
+        assert!(copy_network_profiles(&source, &destination).is_err());
+        fs::remove_file(&profile).unwrap();
+        std::os::unix::fs::symlink("missing", &profile).unwrap();
+        assert!(copy_network_profiles(&source, &destination).is_err());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    fn fixture(label: &str) -> PathBuf {
+        let root =
+            std::env::temp_dir().join(format!("luma-identity-{label}-{}", std::process::id()));
+        let identity = root.join("lib/luma-os/identity");
+        fs::create_dir_all(&identity).unwrap();
+        for (file, text) in [
+            ("passwd", "root:x:0:0:root:/root:/bin/bash\n"),
+            ("shadow", "root:!:20000:0:99999:7:::\n"),
+            ("group", "root:x:0:\n"),
+            ("gshadow", "root:!::\n"),
+        ] {
+            fs::write(identity.join(file), text).unwrap();
+        }
+        root
+    }
+    #[test]
+    fn service_identity_migration_is_idempotent_and_preserves_accounts() {
+        let root = fixture("idempotent");
+        ensure_model_identities(&root).unwrap();
+        let before = fs::read(root.join("lib/luma-os/identity/passwd")).unwrap();
+        ensure_model_identities(&root).unwrap();
+        assert_eq!(
+            before,
+            fs::read(root.join("lib/luma-os/identity/passwd")).unwrap()
+        );
+        assert!(String::from_utf8(before)
+            .unwrap()
+            .starts_with("root:x:0:0:"));
+        fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn service_identity_migration_refuses_existing_uid_and_group_members() {
+        for (label, line) in [
+            ("conflict", "another:x:989:"),
+            ("member", "luma-model:x:989:unexpected"),
+        ] {
+            let root = fixture(label);
+            fs::write(
+                root.join("lib/luma-os/identity/group"),
+                format!("root:x:0:\n{line}\n"),
+            )
+            .unwrap();
+            assert!(ensure_model_identities(&root).is_err());
+            assert_eq!(
+                fs::read_to_string(root.join("lib/luma-os/identity/passwd")).unwrap(),
+                "root:x:0:0:root:/root:/bin/bash\n"
+            );
+            fs::remove_dir_all(root).unwrap();
+        }
+    }
+}
+
+pub fn install(selection: &str, source: &Path, model_id: Option<&str>) -> Result<()> {
     require_live()?;
-    let verified = bundle::verify(source)?;
     let disk = Disk::open(selection, false)?;
+    // Observe available RAM before the live installer's verified bundle
+    // snapshot temporarily occupies memory-backed staging. Recheck again
+    // after releasing that snapshot and before acquiring any model bytes.
+    let model = crate::model::choose(model_id, disk.identity.bytes)?;
+    let verified = bundle::verify(source)?;
     let roots_mib = verified
         .manifest
         .root_bytes
@@ -536,7 +754,7 @@ pub fn install(selection: &str, source: &Path) -> Result<()> {
     if disk.identity.bytes < minimum {
         return Err(format!("disk requires at least {minimum} bytes").into());
     }
-    println!("Release {}: EFI 1 GiB; two {} MiB roots and {} MiB hash partitions; remaining space encrypted. Model profile: manual-only; model admission remains separate.",verified.manifest.release,roots_mib,hashes_mib);
+    println!("Release {}: EFI 1 GiB; two {} MiB roots and {} MiB hash partitions; remaining space encrypted.",verified.manifest.release,roots_mib,hashes_mib);
     disk.confirm("ERASE")?;
     let user = user_name("First user")?;
     let admin = user_name("Separate administrator")?;
@@ -664,6 +882,10 @@ pub fn install(selection: &str, source: &Path) -> Result<()> {
         ],
     )?;
     create_identity(&data.at, &user, &admin, &user_password, &admin_password)?;
+    copy_network_profiles(
+        Path::new("/var/lib/NetworkManager/system-connections"),
+        &data.at.join("lib/NetworkManager/system-connections"),
+    )?;
     write_atomic(
         &data.at.join("lib/luma-os/installed.json"),
         &serde_json::to_vec(&verified.manifest)?,
@@ -676,7 +898,23 @@ pub fn install(selection: &str, source: &Path) -> Result<()> {
     )?;
     publish_efi(&esp.at, &verified, &['a', 'b'], 'a')?;
     command("/usr/bin/sync", &[])?;
+    drop(root);
+    drop(verified);
+    if let Some(profile) = model {
+        if let Err(error) = crate::model::provision(&data.at, &profile) {
+            eprintln!("OS installation is bootable in manual mode, but the selected model was NOT installed. After boot and network setup, retry: sudo luma-platform model-install {}", profile.id);
+            return Err(error);
+        }
+    }
     println!("INSTALLATION COMPLETE: remove recovery media and boot the selected disk. Secure Boot requires the laboratory certificate to be enrolled by the operator. Keep the independent recovery passphrase offline.");
+    Ok(())
+}
+
+pub(crate) fn require_installed() -> Result<()> {
+    running_slot()?;
+    if live()? {
+        return Err("operation requires an installed Luma system".into());
+    }
     Ok(())
 }
 

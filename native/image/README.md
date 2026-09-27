@@ -20,12 +20,66 @@ Read the execution record accompanying the particular image before testing it.
   seccomp/device/cgroup restrictions. No generated native-code execution.
 - Recovery unlock, data export, system-slot repair and worker disablement.
 
-The first image is **headless and manual-only**. It does not include weights,
-a native model supervisor, production Admin/custody/anti-rollback anchoring,
-TPM auto-unlock, a graphical installer, dual boot, or qualification for arbitrary
-hardware. The existing Python multi-model admission contracts are not yet
-connected to this Rust installer. These are implementation gaps, not hardware
-test deferrals. `desktop` is a build option, not a tested desktop claim.
+The original sequence-1 image was **headless and manual-only**. New model-enabled
+builds include a pinned CPU runtime and an image-owned model catalog. Their
+installer downloads and verifies selected weights; weights are not embedded in
+the image or Git. Production Admin/custody/anti-rollback anchoring, TPM auto-unlock,
+a graphical installer, dual boot, and arbitrary-hardware qualification are still
+absent. Native model admission currently covers the catalog below, not the full
+governed multi-model contract/lifecycle matrix. `desktop` remains an untested
+build option. Consult the execution record for the particular image: the old
+image's passing tests do not automatically attest a new build.
+
+## Model selection and installation
+
+Run `luma-platform models` for this image's exact options. The installer prompts
+for a model ID unless `--model` is supplied:
+
+| Profile | CPU admission floor | Download | Context |
+| --- | --- | --- | --- |
+| `qwen3-4b-q4-k-m` | 6,000,000,000 bytes total RAM, 4,000,000,000 available, two CPUs | 2,497,280,256 bytes | 2,048 tokens |
+| `qwen3-1-7b-q4-k-m` | 3,000,000,000 bytes total RAM, 2,000,000,000 available, two CPUs | 1,107,408,544 bytes | 2,048 tokens |
+| `manual-only` | OS requirements only | None | None |
+
+Both model profiles require their download size plus 2 GiB of free encrypted
+storage. These are conservative development admission limits, not performance
+certification. The 1.7B option does not meet the governed 4–6B compact-model tier.
+GPU support and larger parameter tiers cannot be selected without a supported,
+pinned runtime/profile and passing admission/evaluation. Unknown IDs are denied.
+
+Connect Ethernet or configure networking with `nmtui`/`nmcli` on the live image.
+After verifying the image and approving the exact disposable disk:
+
+```sh
+luma-platform install /dev/disk/by-id/EXACT-TARGET-DISK-ID /media/luma --model qwen3-4b-q4-k-m
+```
+
+The model choice is admitted before disk erasure; resources are checked again
+before acquisition. Downloads use immutable publisher URLs, validated HTTPS
+redirects, exact byte counts and SHA-256. The downloader runs as a dedicated
+unprivileged identity, has a kernel output-size limit, and cannot activate a
+partial download. Credentials are newly generated locally; the inference server
+binds only to authenticated loopback and has separate AppArmor/seccomp/cgroup
+restrictions. No remote inference fallback or model-generated OS execution is
+enabled. The lab catalog is signed by the image's lab authority, not production
+custody; Qwen's upstream [model card](https://huggingface.co/Qwen/Qwen3-4B-GGUF)
+identifies Apache-2.0 licensing.
+
+If acquisition fails after the OS installation, the command exits nonzero and
+explicitly reports the missing model. The installed OS remains bootable in
+manual mode. After fixing networking, retry on the installed OS:
+
+```sh
+sudo luma-platform model-install qwen3-4b-q4-k-m
+sudo systemctl status luma-model.service
+printf 'Reply with a short greeting.' | sudo luma-platform model-chat
+```
+
+`model-chat` is a bounded local operator test, not an autonomous action agent.
+Do not paste secrets into test prompts or publish inference logs containing
+private data. Model failure does not prevent OS health acknowledgement or manual
+workflow operation. Recovery's model-disable marker stops inference without
+disabling the reference workflow service in model-enabled images.
 
 The local administrator has normal root/sudo authority. The Rust console path
 is not a production implementation of finite Admin delegation. Do not expose
@@ -36,11 +90,20 @@ use production data or production signing keys.
 
 Requires Docker, internet access to Ubuntu repositories on the first build,
 and substantial free build space (allow 40 GiB for one build plus VM tests).
+The builder refuses to start below 16 GiB free on the repository filesystem.
+Also check Docker's data drive separately; this is not an aggregate reservation
+and does not guarantee space for subsequent VM runs.
 Run from this repository:
 
 ```sh
-bash native/image/build.sh headless
+bash native/image/build.sh headless NEXT_SEQUENCE
 ```
+
+The builder downloads the pinned llama.cpp CPU archive and verifies its official
+digest. An existing archive can be supplied with
+`LUMA_RUNTIME_ARCHIVE=/absolute/path/llama-b11100-bin-ubuntu-x64.tar.gz`;
+the identical size/checksum checks still apply. Runtime build inputs are retained
+under `dist/native-inputs`, outside Git. No arbitrary local binary is accepted.
 
 The builder uses an exact Ubuntu base digest and an Ubuntu archive snapshot.
 `packages.lock`, `toolchain-packages.lock`, `source-lock.json`, signed release
@@ -57,6 +120,10 @@ to a test machine. Public `secureboot.cer` may be transferred with the image.
 Build volumes are retained for diagnosis and VM testing. They are not silently
 deleted. Repeated builds consume additional storage.
 
+`NEXT_SEQUENCE` must be a positive integer greater than the installed release
+for update tests. A fresh build is not an evaluated release. Use the exact image
+filename and build volume printed by that build, not a historical example's ID.
+
 ## First test from an existing native Ubuntu host
 
 Start in a VM with a newly created virtual disk, not your Ubuntu system disk.
@@ -71,7 +138,7 @@ docker run --rm --network none --device=/dev/kvm \
   --mount type=bind,src="$PWD",dst=/repo,readonly \
   luma-native-tools:20260927 \
   python3 /repo/native/image/vm_test.py \
-  --image /work/artifacts/luma-native-lab-20260927-headless-1.img \
+  --image /work/artifacts/EXACT-IMAGE-FROM-BUILD.img \
   --work /work/vm-new-run
 ```
 
@@ -101,7 +168,7 @@ docker run --rm --network none --device=/dev/kvm \
   --mount type=bind,src="$PWD",dst=/repo,readonly \
   luma-native-tools:20260927 \
   python3 /repo/native/image/vm_test.py \
-  --image /work/artifacts/luma-native-lab-20260927-headless-1.img \
+  --image /work/artifacts/EXACT-IMAGE-FROM-BUILD.img \
   --work /work/vm-native-ubuntu-01
 ```
 
@@ -129,7 +196,7 @@ glob regression test; see the pinned
 [`loader.conf` contract](https://github.com/systemd/systemd/blob/v255/man/loader.conf.xml).
 
 For update evaluation, build a higher-sequence candidate with
-`bash native/image/build.sh headless 2`. Mount its retained volume read-only
+`bash native/image/build.sh headless NEXT_SEQUENCE`. Mount its retained volume read-only
 at `/candidate`, keep the original build volume at `/work`, and run
 `update_test.py --image /work/artifacts/ORIGINAL.img
 --candidate /candidate/artifacts/CANDIDATE.img --base-run /work/vm-PASSED
@@ -149,6 +216,49 @@ The exporter includes a hash inventory, not VM disks or firmware variables.
 `native-source.tar.zst` captures the build inputs; test records separately hash
 the test scripts actually present when the runner starts. Failed runs retain
 their diagnostic logs but are never exported as passing evidence.
+
+### Model acquisition and recovery evaluation
+
+The model-specific runner uses a fresh 32 GiB virtual disk, 6 GiB guest memory,
+two virtual CPUs, and outbound NAT only during installation. Run it separately
+from other VMs on a memory-constrained host. It downloads Qwen3-4B from the pinned
+publisher URL; no weights are pre-seeded. It requires approximately 2.5 GB of
+network transfer as well as room for the virtual disk and retained logs.
+
+```sh
+docker run --rm --device=/dev/kvm \
+  --mount type=volume,src=BUILD_VOLUME,dst=/work \
+  --mount type=bind,src="$PWD",dst=/repo,readonly \
+  luma-native-tools:20260927 \
+  python3 /repo/native/image/model_vm_test.py \
+  --image /work/artifacts/EXACT-IMAGE-FROM-BUILD.img \
+  --work /work/vm-model-new
+```
+
+Unlike the offline platform suite, this command deliberately omits
+`--network none`. It opens no guest port forwards. The runner checks real
+completion-token output, unauthorized API refusal, kernel restrictions,
+wrong-length and same-length corrupt weights, cached inference after an offline
+reboot, independent-credential recovery disablement, and manual boot afterward.
+Only a completed `result.json` is a pass; the existence of this script is not
+evidence that these checks have executed on a particular image.
+
+For an already passed model run, `model_recovery_test.py --image
+/work/artifacts/EXACT-IMAGE.img --base-run /work/vm-model-PASSED --work
+/work/vm-model-recovery-new` checks independent recovery disablement, manual
+boot, equal-size corruption refusal and restored health on a new overlay.
+Use the same volume/repository mounts and `--network none`; it retains and
+references the original acquisition evidence rather than claiming a new download.
+
+`update_powercut_test.py` provides a separate, destructive **virtual-disk-only**
+interruption test. Mount the passed original image/run volume read-only at
+`/baseline`, the higher-sequence candidate volume at `/work`, and this repository
+read-only at `/repo`. Pass `--base-image /baseline/artifacts/ORIGINAL.img`,
+`--base-run /baseline/vm-PASSED`, `--candidate /work/artifacts/CANDIDATE.img`,
+and a fresh `--work /work/vm-powercut-new`. The runner cuts QEMU power after
+observed target writes, then checks old-slot recovery, pending-update
+reconciliation, successful retry, and retained user data. It never changes the
+baseline disk and is not physical power-loss qualification.
 
 ## Physical test machine preparation
 
@@ -228,8 +338,10 @@ corruption that automatic repair cannot resolve stops with an error.
 Export to separate mounted storage. The resulting archive is **unencrypted**
 and contains account/state material; protect it accordingly. `unlock` validates
 access and unmounts again. Slot repair rewrites only the selected root/hash/UKI,
-not the data volume. `disable-model` currently disables the entire reference
-workflow worker, while the local console and recovery remain available.
+not the data volume. `disable-model` stops inference in model-enabled images,
+while manual workflow, console and recovery remain available. The original
+sequence-1 image instead disabled the entire reference worker; its historical
+evidence retains that scope.
 
 Retain the image hashes, machine/firmware inventory, consented target identity,
 serial/console logs, boot entries/counters, service/kernel-control observations,

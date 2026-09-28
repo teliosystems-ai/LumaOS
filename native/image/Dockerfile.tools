@@ -16,3 +16,5 @@ RUN apt-get update --snapshot=${SNAPSHOT} -o APT::Update::Error-Mode=any && \
 WORKDIR /work
 RUN apt-get install -y --no-install-recommends --snapshot=${SNAPSHOT} python3-virt-firmware
 RUN apt-get install -y --no-install-recommends --snapshot=${SNAPSHOT} rustfmt
+RUN apt-get install -y --no-install-recommends --snapshot=${SNAPSHOT} \
+    libtss2-dev tpm2-tools swtpm swtpm-tools

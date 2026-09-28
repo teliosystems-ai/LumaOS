@@ -53,6 +53,20 @@ jobs:
             --mount type=bind,src="$PWD",dst=/repo,readonly \
             --mount type=bind,src="$RUNNER_TEMP/luma-storage",dst=/out \
             luma-native-tools:ci bash /repo/native/tests/run_storage_boundaries.sh /out/results
+      - name: Local TPM2 checkpoint boundaries on disposable software TPM
+        run: |
+          mkdir "$RUNNER_TEMP/luma-tpm"
+          docker run --rm --network none --security-opt no-new-privileges \
+            --mount type=bind,src="$PWD",dst=/repo,readonly \
+            --mount type=bind,src="$RUNNER_TEMP/luma-tpm",dst=/out \
+            luma-native-tools:ci bash /repo/native/tests/run_tpm_boundaries.sh /out/results
+      - name: Retain TPM checkpoint diagnostics (no TPM state or secrets)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-tpm-boundaries
+          path: ${{ runner.temp }}/luma-tpm
+          if-no-files-found: ignore
       - name: Retain storage boundary diagnostics
         if: always()
         uses: actions/upload-artifact@v4

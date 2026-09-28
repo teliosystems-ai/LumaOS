@@ -459,6 +459,29 @@ inputs and requires `CAP_SYS_ADMIN` solely for container-local tmpfs/bind tests.
 It must not be run directly on an installed test OS. See the native CI job for
 the exact invocation and the current evidence checkpoint for executed scope.
 
+### Selected Admin variant and pending TPM integration
+
+The owner selected **local TPM2-backed Admin** for the current installer target.
+An external protected Admin service is a future installer variant, never an
+automatic fallback. The exported sequence-4 image still has separate local
+Unix accounts/sudo, **not enrolled product Admin**. Do not interpret that older
+installer as already meeting the TPM requirement.
+
+Current source adds `luma-platform tpm-probe` and
+`luma-platform admin-checkpoint-status`, both root-only read-only diagnostics.
+The first reads `/dev/tpmrm0` clock/PCR data without enrollment; the second
+requires existing protected checkpoint state and credentials and otherwise
+refuses. Neither command clears/provisions a TPM or grants a role. The native
+adapter and inert journal have disposable software-TPM tests, but installer
+admission/enrollment, sealed credentials and the full Admin service remain
+software work. See [the implementation note](../LOCAL_TPM2_ADMIN.md).
+
+`native/tests/run_tpm_boundaries.sh` runs in a fresh tools container with a
+read-only repository mount and dedicated output mount, no network, no host TPM
+devices, no Docker socket and no additional capabilities. Its repeatable
+invocation is in `.github/workflows/native-platform.yml`. Evidence exports
+logs/results/source hashes only, never the emulator state or NV secret.
+
 ### Gate boundary
 
 Actual VM execution demonstrates implemented paths on virtual hardware. It

@@ -19,11 +19,11 @@ requirement.
 | Boot, update, recovery | Signed UKI, A/B verity roots, essential-health acknowledgement, three-attempt fallback, independent export/repair/disable; selected VM faults passed | Complete interruption and migration matrix, including pre-userspace failures; protected production rollback anchors; storage-pressure and recovery-retention cases |
 | Temporary storage | New locked, bounded snapshot/download reconciliation; sparse-aware admission and exact-file cleanup; Linux boundary tests in `native/tests` | New-image boot/service and repeated guest-interruption evaluation; operator-reviewed disposition of legacy snapshots, which cannot safely be assumed inactive |
 | Model lifecycle and resources | Two pinned CPU profiles; hardware admission, isolated UID, authenticated loopback runtime, systemd memory/device/process restrictions; actual inference and offline reboot passed | Full governed model-pack/catalog lifecycle; atomic resource leases and generations, stale-worker fencing, pressure/quarantine/restart policy; 1,000 **real compact-model** cycles with measured resource return and performance distributions |
-| Admin, policy, and effects | Frozen Python contracts and negative tests; native broker verifies kernel peer identity and allows only fixed laboratory operations | Native finite Admin assignment/revocation, authenticated product principals, effect-time grants, integrity-protected durable receipts and reconciliation; current root/sudo operation is not the product Admin service |
+| Admin, policy, and effects | Frozen Python contracts and negative tests; native broker verifies kernel peer identity; new local TPM2 authenticated checkpoint adapter and inert durable audit journal with software-TPM tests | Native enrollment/sealed credential delivery, finite Admin assignment/revocation, authenticated product principals, effect-time grants, durable effect receipts and reconciliation; the checkpoint journal and root/sudo operations are not the product Admin service |
 | Skills and vertical workflow | Isolated reference worker and manual reference interface | Signed skill registry, native typed-DAG validation/supervision, descriptor-scoped file-read and artifact-write skills, deterministic calculation, cancellation/checkpoint/restart semantics; distributed-image file-to-artifact journey through those interfaces |
 | Generated-code isolation | General model-generated shell/native execution is denied | Required microVM or separately qualified constrained runtime and adversarial tests before this capability can be available; a deny-only path is not an implemented execution sandbox |
 | Desktop and account lifecycle | Headless console/manual recovery and installer-created distinct accounts | Required model-independent Wayland desktop, credential/account lifecycle and migration tests; current optional Xfce/X11 packaging is neither a qualified desktop nor fulfillment of the Wayland baseline |
-| Trust and custody integration | Lab release key, signed image bytes, image-owned lab model catalog, reference trust/checkpoint contracts | Selected protected Admin/checkpoint deployment, authenticated writer identity, trusted time, isolated secrets, key rotation/revocation/recovery and reviewed reconciliation; production signatures require approved real custody |
+| Trust and custody integration | Lab release key, signed image bytes, image-owned lab model catalog, reference trust/checkpoint contracts; owner selected local TPM2-backed Admin for current installer | Integrate local TPM2 enrollment, authenticated writer identity, trusted UTC, isolated secrets, key rotation/revocation/recovery and reviewed reconciliation; production signatures require approved real custody; external deployment is a future installer variant |
 | Acceptance automation | Reference suites, native source tests, six selected image-specific VM runners | Traceable coverage of every applicable G2 test, fault and performance requirement, not only the existing happy paths and selected negative cases |
 
 The snapshot 1,000-cycle test is **not** the compact-model lifecycle test.
@@ -52,12 +52,15 @@ Container mount/ENOSPC tests are **not** image boot or physical power-loss tests
 This is a work inventory, not an authorization to erase a physical disk, enroll
 firmware, issue production signatures, or silently change the architecture.
 
-## Owner decision and external inputs
+## Closed deployment decision and remaining external inputs
 
-Choose a local TPM2-backed Admin/checkpoint deployment or an external protected
-Admin/checkpoint service. Define identity enrollment/recovery, trusted time,
-deployment/service namespaces, checkpoint reconciliation and custody operators
-for that choice. TPM-backed anchoring does not replace the required production
+The owner selected **local TPM2-backed Admin/checkpoints** for the current
+installer. An external protected service is deferred to a **future installer
+variant**, not a fallback. See [the local TPM2 implementation note](LOCAL_TPM2_ADMIN.md)
+for implemented boundaries and outstanding software integration. Define and
+implement identity enrollment/recovery, trusted time, deployment namespaces,
+checkpoint reconciliation and custody operators for that choice. TPM-backed
+anchoring does not replace the required production
 signing custody or distinct approval roles. Development fixtures can exercise
 failure semantics but must remain explicitly non-production.
 
@@ -78,3 +81,6 @@ The previously exported sequence-4 image remains unchanged. Its evidence
 cannot be reused as acceptance evidence for subsequent source-only fixes.
 The new storage implementation's executed scope and outstanding image tests
 are recorded in [the storage checkpoint](evidence/NATIVE_STORAGE_STATUS_2026-09-28.md).
+The new TPM adapter/journal is likewise source-level software-TPM evidence,
+not an installed Admin service or physical qualification; see
+[the TPM checkpoint](evidence/NATIVE_TPM_STATUS_2026-09-28.md).

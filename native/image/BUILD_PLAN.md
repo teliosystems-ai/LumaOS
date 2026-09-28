@@ -52,7 +52,9 @@ deferrals:
   authorization/effect receipts and the complete local-file-to-artifact workflow.
 - Protected production writer identity, clock, checkpoint/rollback anchors,
   signing custody, revocation/rotation/recovery, and operational reconciliation.
-  Select the deployment design before claiming a production integration. A TPM
+  The owner selected local TPM2-backed Admin for this installer; the external
+  service is a future installer variant, never an automatic fallback. See
+  `../LOCAL_TPM2_ADMIN.md` for implementation and enrollment work. A TPM
   anchor is not a substitute for the approved Ed25519 signing-custody ceremony.
 - Full governed model-pack/catalog schemas and lifecycle: atomic leases,
   generation fencing, pressure handling, cleanup evidence and the required

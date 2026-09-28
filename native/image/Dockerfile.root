@@ -21,6 +21,8 @@ RUN apt-get update --snapshot=${SNAPSHOT} -o APT::Update::Error-Mode=any && \
 # Image assembly records the exact installed tuple and strips builder/container state.
 RUN apt-get install -y --no-install-recommends --snapshot=${SNAPSHOT} systemd-boot
 RUN apt-get install -y --no-install-recommends --snapshot=${SNAPSHOT} curl libgomp1
+RUN apt-get install -y --no-install-recommends --snapshot=${SNAPSHOT} \
+    libtss2-esys-3.0.2-0t64 libtss2-tctildr0t64 libtss2-tcti-device0t64 tpm2-tools
 COPY llama-runtime.tar.gz /tmp/luma-llama-runtime.tar.gz
 RUN \
     echo 'a836c913236ab4533ef9aaf49f0e1ad2955c8159869d7eec1a9072a92e13d61b  /tmp/luma-llama-runtime.tar.gz' | sha256sum -c - && \

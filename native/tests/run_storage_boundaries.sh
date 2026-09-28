@@ -33,6 +33,8 @@ python3 "$snapshot/native/tests/staging_linux_integration.py" \
     --binary "$CARGO_TARGET_DIR/debug/luma-platform" --output "$output/linux-storage.json"
 python3 -W error -m unittest discover -s "$snapshot/native/tests" -v 2>&1 | tee "$output/native-tests.txt"
 cd "$snapshot"
-sha256sum rust/luma-platform/src/*.rs native/tests/staging_linux_integration.py \
+sha256sum rust/Cargo.toml rust/Cargo.lock rust/.cargo/config.toml \
+    rust/luma-platform/Cargo.toml rust/luma-platform/build.rs \
+    rust/luma-platform/src/*.rs rust/luma-platform/src/*.c native/tests/staging_linux_integration.py \
     native/tests/run_storage_boundaries.sh native/image/overlay/etc/systemd/system/luma-staging-clean.service \
     native/image/assemble.py > "$output/source-sha256.txt"

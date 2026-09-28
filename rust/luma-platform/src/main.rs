@@ -1,10 +1,12 @@
 //! Native Linux platform boundary. No model-provided command or shell execution.
+mod admin_journal;
 mod bundle;
 mod disk;
 mod model;
 mod platform;
 mod service;
 mod staging;
+mod tpm;
 
 use std::path::Path;
 
@@ -28,6 +30,10 @@ fn require_root() -> Result<()> {
 }
 
 fn main() {
+    // Set once before library initialization or worker threads. TPM library
+    // trace logging must never be enabled by an inherited shell environment;
+    // our adapter reports numeric failure codes without authorization bytes.
+    std::env::set_var("TSS2_LOG", "all+NONE");
     if let Err(error) = dispatch() {
         eprintln!("luma-platform: {error}");
         std::process::exit(1);
@@ -38,6 +44,11 @@ fn dispatch() -> Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     match args.first().map(String::as_str) {
         Some("inventory") if args.len() == 1 => disk::inventory(),
+        Some("tpm-probe") if args.len() == 1 => {
+            println!("{}", serde_json::to_string(&tpm::probe()?)?);
+            Ok(())
+        }
+        Some("admin-checkpoint-status") if args.len() == 1 => admin_journal::status(),
         Some("staging-clean") if args.len() == 1 => {
             println!("{}", serde_json::to_string(&staging::clean()?)?);
             Ok(())
@@ -86,6 +97,7 @@ fn dispatch() -> Result<()> {
         Some("boot-failed") if args.len() == 1 => platform::boot_failed(),
         Some("init-data") if args.len() == 2 => platform::init_data(&args[1]),
         Some("help" | "--help") | None => {
+            println!("Local TPM diagnostics: tpm-probe | admin-checkpoint-status (root only; read-only; neither enrolls nor grants Admin). External Admin deployment is deferred.");
             println!("Maintenance: staging-clean | model-clean (root only; preserves active operations and unknown files).");
             println!("Model operations: models | model-install MODEL-ID | model-chat (prompt on stdin).\nInstaller accepts --model MODEL-ID or --model manual-only; otherwise prompts.\nWeights are acquired from pinned HTTPS publisher URLs after hardware admission.");
             println!("Luma native platform alpha\n\n  inventory\n  verify BUNDLE\n  install /dev/disk/by-id/EXACT-ID BUNDLE\n  update BUNDLE\n  recover unlock /dev/disk/by-id/EXACT-ID\n  recover export /dev/disk/by-id/EXACT-ID EMPTY-DESTINATION\n  recover repair-a|repair-b /dev/disk/by-id/EXACT-ID BUNDLE\n  recover repair-data /dev/disk/by-id/EXACT-ID\n  recover disable-model /dev/disk/by-id/EXACT-ID\n  status\n\nInstall requires local interactive disk confirmation and new credentials.\nLaboratory image: native acceptance and production custody are outstanding.");

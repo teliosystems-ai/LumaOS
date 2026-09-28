@@ -1,0 +1,80 @@
+{
+  "schema_version": 1,
+  "recorded_on": "2026-09-28",
+  "result": "passed-selected-source-boundaries",
+  "selected_admin_profile": "local-tpm2",
+  "external_admin_variant": "future-todo-no-fallback",
+  "g2_software_complete": false,
+  "installed_admin_service_complete": false,
+  "sealed_enrollment_tested": false,
+  "image_tested": false,
+  "physical_qualification": false,
+  "gate_closing": false,
+  "source_base_commit": "e2f8f31",
+  "source_state": "working-tree changes identified by retained source-sha256.txt",
+  "evidence_directory": "D:\\LumaOS-builds\\native-tests-20260928-tpm-04",
+  "tools_image": "sha256:f7c1c6dd2a4352d755e73036629c0c0baa49993441cfd8489b5020c8a37a4bdd",
+  "kernel": "6.18.33.2-microsoft-standard-WSL2",
+  "counts": {
+    "ordinary_rust_tests_passed": 36,
+    "emulator_tests_ignored_in_ordinary_run": 3,
+    "explicit_emulator_test_invocations_passed": 4,
+    "emulator_boundary_labels_passed": 17,
+    "durable_audit_appends": 16,
+    "linux_storage_cases_passed": 9,
+    "linux_native_python_tests_passed": 9,
+    "windows_native_python_tests_passed": 9,
+    "windows_reference_tests_run": 320,
+    "windows_reference_tests_skipped": 5
+  },
+  "storage_regression": {
+    "evidence_directory": "D:\\LumaOS-builds\\native-tests-20260928-tpm-storage-02",
+    "binary_sha256": "d5063e373927d4ae6744fbb82b1a4ec7d6899407c8fff24bd86ddcde7a4f8018",
+    "systemd_unit_configuration_verified": true,
+    "systemd_unit_runtime_tested": false,
+    "evidence_files": [
+      {
+        "name": "rust-tests.txt",
+        "bytes": 4186,
+        "sha256": "161841a7bfad535bda66afe9995276fa23700cfac62479c75d5388485ee578be"
+      },
+      {
+        "name": "unit-verification.txt",
+        "bytes": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "name": "linux-storage.json",
+        "bytes": 869,
+        "sha256": "c5fb4c1ac03b0bc7a7454a7a5543788eb8cfec292918ab50f04dfea4289f7c95"
+      },
+      {
+        "name": "native-tests.txt",
+        "bytes": 1370,
+        "sha256": "e402b18a2276f6fd034f81c95a9de60c378eebeeda92c5db0a073a080ab6f6ea"
+      },
+      {
+        "name": "source-sha256.txt",
+        "bytes": 1875,
+        "sha256": "81f4d01ef94bddc6a85f180c72563f634831db794d7bd11996d51d1256273db9"
+      }
+    ]
+  },
+  "evidence_files": [
+    {
+      "name": "transcript.txt",
+      "bytes": 16207,
+      "sha256": "3cc23f7e7156e24a328486e25e28e249dad88a4e4bec7e73be0f75ed7bc35286"
+    },
+    {
+      "name": "result.json",
+      "bytes": 1086,
+      "sha256": "ffeebc736910bd4a7fd1fb9563aafb92c5ef7a775b9c4e650c5d28d30b0bec63"
+    },
+    {
+      "name": "source-sha256.txt",
+      "bytes": 1733,
+      "sha256": "095c1e4d1fb36b7f3a59a19538d02dc52b830eab7960bc27016d36d731a67cb1"
+    }
+  ]
+}

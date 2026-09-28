@@ -120,6 +120,36 @@ to a test machine. Public `secureboot.cer` may be transferred with the image.
 Build volumes are retained for diagnosis and VM testing. They are not silently
 deleted. Repeated builds consume additional storage.
 
+### External build drive (including Windows D: / exFAT)
+
+Create a dedicated directory on the selected drive and ensure WSL can access it.
+For this environment it is `D:\LumaOS-builds`, exposed as `/mnt/d/LumaOS-builds`.
+If WSL has not mounted D:, an authorized operator can mount it with
+`sudo mkdir -p /mnt/d` and `sudo mount -t drvfs D: /mnt/d`; do not format the drive.
+
+```sh
+LUMA_BUILD_ROOT=/mnt/d/LumaOS-builds \
+LUMA_RUNTIME_ARCHIVE=/absolute/path/to/verified-runtime-cache.tar.gz \
+bash native/image/build.sh headless NEXT_SEQUENCE
+```
+
+The runtime cache is optional and is still size/digest checked. With an external
+root, `native-inputs/`, `work/BUILD-ID/artifacts/`, and exported `native/BUILD-ID/`
+are created there. A fresh Docker volume retains the smaller Unix root/source/
+compiler/payload workspace; lab private keys remain in their separate existing
+Docker volume. No Docker-wide storage relocation occurs. Preflight requires
+40 GiB free on the selected output filesystem and 8 GiB on the repository drive;
+also check Docker's actual backing drive. Do not unplug the drive during work.
+
+For VM evaluation bind `D:/LumaOS-builds/work/BUILD-ID` (WSL path
+`/mnt/d/LumaOS-builds/work/BUILD-ID`) at `/work` in place of the build-volume
+mount in the commands below. Disk files and evidence then stay on D:. Unix
+control sockets are temporary and remain inside the container's `/tmp`.
+An exFAT drive is not a Unix root filesystem or a production secret store.
+Generated test disks contain only disposable fixtures; never use production
+credentials/data in them. `storage_probe.py` can first check regular-file fsync,
+locking and qcow2 I/O in a newly created empty directory mounted at `/probe`.
+
 `NEXT_SEQUENCE` must be a positive integer greater than the installed release
 for update tests. A fresh build is not an evaluated release. Use the exact image
 filename and build volume printed by that build, not a historical example's ID.
@@ -243,6 +273,13 @@ reboot, independent-credential recovery disablement, and manual boot afterward.
 Only a completed `result.json` is a pass; the existence of this script is not
 evidence that these checks have executed on a particular image.
 
+`model_reconfigure_test.py --image /work/artifacts/EXACT-IMAGE.img --base-run
+/work/vm-full-PASSED --work /work/vm-small-new` uses a fresh overlay of a passed
+full platform fixture. It downloads Qwen3-1.7B through the installed model
+command, checks that recovery disablement is retained until explicitly cleared,
+and exercises real inference, the smaller memory limit and offline reboot in
+a 4 GiB VM. It is not a fresh OS installation test or a 4–6B-tier qualification.
+
 For an already passed model run, `model_recovery_test.py --image
 /work/artifacts/EXACT-IMAGE.img --base-run /work/vm-model-PASSED --work
 /work/vm-model-recovery-new` checks independent recovery disablement, manual
@@ -259,6 +296,24 @@ and a fresh `--work /work/vm-powercut-new`. The runner cuts QEMU power after
 observed target writes, then checks old-slot recovery, pending-update
 reconciliation, successful retry, and retained user data. It never changes the
 baseline disk and is not physical power-loss qualification.
+
+For the selected laboratory regression set, mount the current work directory at
+`/work`, the prior passing image/run volume read-only at `/baseline`, this
+repository read-only at `/repo`, and the current export folder at `/out`.
+Run inside the tools container with `/dev/kvm` and outbound network available:
+
+```sh
+bash /repo/native/image/evaluate.sh \
+  /work/artifacts/CURRENT.img /baseline/artifacts/ORIGINAL.img \
+  /baseline/vm-full-PASSED new-label
+```
+
+This runs one VM at a time: full platform regression, 4B download/recovery,
+1.7B post-install configuration, update power-cut/retry/older-release refusal,
+virtual Secure Boot smoke and unsigned-loader refusal. Each successful runner
+exports its own hashed evidence. The first failed runner stops the sequence;
+retain its diagnostics and use fresh run names when retrying. Do not treat this
+selected set as the complete governed G2 acceptance matrix.
 
 ## Physical test machine preparation
 

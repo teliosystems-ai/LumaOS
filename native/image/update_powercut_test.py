@@ -66,7 +66,8 @@ def main():
     stages=[];written=None
     for stage in ('cut-during-write','reconcile-and-retry','updated-after-cut'):
         print('Power-cut VM stage: '+stage,flush=True)
-        vm=VM(candidate,work/stage,target,False,2400,attach_media=stage!='updated-after-cut')
+        media=base_image if stage=='updated-after-cut' else candidate
+        vm=VM(media,work/stage,target,False,2400,attach_media=True)
         try:
             installed_login(vm);vm.run('luma-platform boot-health')
             vm.run('grep -Fx persistent-fixture /home/lumauser/recovery-test.txt')
@@ -74,10 +75,12 @@ def main():
                 vm.run('grep -qw luma.slot=a /proc/cmdline')
                 if stage=='reconcile-and-retry':
                     vm.run('test ! -e /var/lib/luma-os/pending.json && test -f /var/lib/luma-os/failed-update.json')
-                qmp=QMP(vm.work/'qmp.sock') if stage=='cut-during-write' else None
-                before=qmp.written() if qmp else None
+                qmp=QMP(vm.socket_dir/'qmp.sock') if stage=='cut-during-write' else None
                 vm.send('luma-platform update /media/luma')
-                vm.action(b'Type exactly: UPDATE LUMA-VM-TARGET',900);vm.send('UPDATE LUMA-VM-TARGET')
+                vm.action(b'Type exactly: UPDATE LUMA-VM-TARGET',900)
+                # Exclude the verified bundle snapshot written before consent.
+                before=qmp.written() if qmp else None
+                vm.send('UPDATE LUMA-VM-TARGET')
                 vm.action(b'Writing and verifying system slot b',60)
                 if qmp:
                     try:
@@ -99,12 +102,18 @@ def main():
                 vm.run('test ! -e /var/lib/luma-os/pending.json')
                 vm.run('systemctl is-active luma-reference.service')
                 vm.run('test -f /var/lib/luma-os/model-disabled')
+                vm.run('test "$(systemctl is-active luma-model.service)" = inactive')
+                refusal=vm.run('luma-platform update /media/luma',expected=1,timeout=900)
+                if b'update sequence must increase' not in refusal:
+                    raise RuntimeError('older signed bundle was not refused')
+                vm.run('test ! -e /var/lib/luma-os/pending.json')
                 vm.run('sync')
             stages.append(stage)
         finally:vm.close()
     record={'result':'passed','stages':stages,'base_image_sha256':prior['image_sha256'],
         'candidate_image_sha256':digest(candidate),'observed_target_write_bytes_at_cut':written,
         'injection':'QEMU SIGKILL during inactive-slot writes','original_fixture_modified':False,
+        'older_signed_sequence_refused':True,'model_disable_preserved':True,
         'physical_power_loss_tested':False,'secure_boot_tested':False,'gate_closing':False,'test_sources':TEST_SOURCES}
     (work/'result.json').write_text(json.dumps(record,indent=2)+'\n');print(json.dumps(record),flush=True)
 

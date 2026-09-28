@@ -15,6 +15,7 @@ import shlex
 import shutil
 import socket
 import subprocess
+import tempfile
 import time
 
 USER_PASSWORD='VM-only-user-passphrase-2026'
@@ -29,6 +30,9 @@ TEST_SOURCES={p.name:hashlib.sha256(p.read_bytes()).hexdigest()
 class VM:
     def __init__(self,image: Path,work: Path,target: Path,live: bool,timeout: int,secure_boot: bool=False,acceleration: str='auto',attach_media: bool | None=None,media_format: str='raw',memory_mib: int=4096,network: bool=False):
         self.work=work;work.mkdir()
+        # External filesystems hold disks/logs, not Unix socket endpoints.
+        self.socket_directory=tempfile.TemporaryDirectory(prefix='luma-vm-',dir='/tmp')
+        self.socket_dir=Path(self.socket_directory.name)
         # Preserve virtual NVRAM across the complete installation/boot sequence.
         variables=work.parent/'firmware.fd'
         fresh_variables=not variables.exists()
@@ -52,8 +56,8 @@ class VM:
             '-drive',f'if=none,id=target,format=qcow2,discard=unmap,detect-zeroes=unmap,file={target}',
             '-device',f'virtio-blk-pci,drive=target,serial=LUMA-VM-TARGET,bootindex={2 if live else 1}',
             '-nic','user,model=virtio-net-pci' if network else 'none','-display','none','-monitor','none',
-            '-serial',f'unix:{work}/console.sock,server=on,wait=off',
-            '-qmp',f'unix:{work}/qmp.sock,server=on,wait=off','-no-reboot']
+            '-serial',f'unix:{self.socket_dir}/console.sock,server=on,wait=off',
+            '-qmp',f'unix:{self.socket_dir}/qmp.sock,server=on,wait=off','-no-reboot']
         if media_format not in ('raw','qcow2'):raise ValueError('unsupported media format')
         if attach_media if attach_media is not None else live:
             command+=['-drive',f'if=none,id=media,format={media_format},readonly=on,file={image}',
@@ -63,11 +67,11 @@ class VM:
         self.log=(work/'serial.log').open('wb');self.buffer=b'';self.counter=0
         self.deadline=time.monotonic()+timeout
         self.console=socket.socket(socket.AF_UNIX)
-        while not (work/'console.sock').exists():
+        while not (self.socket_dir/'console.sock').exists():
             if self.process.poll() is not None:raise RuntimeError((work/'qemu.log').read_text())
             if time.monotonic()>self.deadline:raise TimeoutError('QEMU startup')
             time.sleep(.1)
-        self.console.connect(str(work/'console.sock'))
+        self.console.connect(str(self.socket_dir/'console.sock'))
 
     def expect(self,pattern: bytes,timeout: int=300) -> bytes:
         end=min(self.deadline,time.monotonic()+timeout)
@@ -106,6 +110,7 @@ class VM:
         try:self.process.wait(timeout=10)
         except subprocess.TimeoutExpired:self.process.kill();self.process.wait()
         self.console.close();self.log.close();self.errors.close()
+        self.socket_directory.cleanup()
 
     def wait_exit(self,timeout: int=180) -> int:
         # Keep consuming the serial socket during shutdown: a full console

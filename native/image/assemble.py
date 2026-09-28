@@ -6,6 +6,7 @@ Private laboratory keys stay in the separate /keys volume, outside output/source
 """
 from __future__ import annotations
 import argparse
+import errno
 import hashlib
 import json
 import os
@@ -61,21 +62,39 @@ def enable(unit: str, target: str = 'multi-user.target') -> None:
         link.symlink_to('../' + unit)
 
 
+def stage_payload_member(source: Path, destination: Path) -> None:
+    # External artifacts may lack hardlinks or be on a different filesystem.
+    try:
+        os.link(source, destination)
+    except OSError as error:
+        if error.errno not in (errno.EXDEV, errno.EOPNOTSUPP, errno.ENOSYS):
+            raise
+        with destination.open('xb') as stream:
+            stream.truncate(source.stat().st_size)
+        sparse_copy(source, destination)
+        if digest(source) != digest(destination):
+            raise RuntimeError('payload staging digest mismatch')
+
+
 def main() -> None:
     global REPO
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--edition', choices=('headless','desktop'), default='headless')
     parser.add_argument('--sequence', type=int, default=1)
+    parser.add_argument('--external-artifacts', action='store_true')
     args = parser.parse_args()
     if os.uname().machine != 'x86_64' or run('dpkg','--print-architecture').strip() != 'amd64':
         raise SystemExit('native image assembly requires the amd64 toolchain container')
     if ROOT.resolve() != Path('/work/root') or not (ROOT / 'etc/os-release').exists():
         raise SystemExit('a fresh exported Ubuntu root must exist at /work/root')
-    if OUT.exists():
+    if args.external_artifacts:
+        if OUT.is_symlink() or not OUT.is_mount() or not OUT.is_dir() or any(OUT.iterdir()):
+            raise SystemExit('external artifacts must be a fresh empty mount at /work/artifacts')
+    elif OUT.exists():
         raise SystemExit('artifacts directory exists; use a fresh build volume')
     if not 1 <= args.sequence <= 2**63-1:
         raise SystemExit('sequence must be a positive signed 64-bit integer')
-    OUT.mkdir()
+    if not args.external_artifacts:OUT.mkdir()
     KEYS.mkdir(mode=0o700, exist_ok=True)
     release = f'luma-native-lab-20260927-{args.edition}-{args.sequence}'
     print(f'Assembling {release}', flush=True)
@@ -263,7 +282,7 @@ def main() -> None:
         '-in',OUT/'release.json','-out',OUT/'release.sig')
     payload_tree=WORK/'payload'; payload_tree.mkdir()
     for name in [*names,'release.json','release.sig','packages.lock']:
-        os.link(OUT/name,payload_tree/name)
+        stage_payload_member(OUT/name,payload_tree/name)
     payload=OUT/'payload.ext4'
     with payload.open('xb') as f:f.truncate(6*1024*MIB)
     run('mkfs.ext4','-F','-L','luma-payload','-d',payload_tree,payload)

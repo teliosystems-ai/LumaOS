@@ -421,6 +421,46 @@ passwords, recovery secrets, exported user data, or private firmware keys.
 
 ## Completion boundary
 
+### Pending-image maintenance implementation
+
+The current source adds `luma-platform staging-clean` and `model-clean`, plus
+the installed-boot `luma-staging-clean.service`. These changes are **not in the
+previously exported sequence-4 image**. A new image and its VM results are
+required before using these commands as part of that image's operator handoff.
+
+Verified snapshots use the root-private `staging/verified-v1` namespace. A
+nonblocking exclusive lock lasts through all consumption of the verified
+bytes; acquisition first reconciles inactive snapshots. Cleanup validates a
+bounded, closed inventory before unlinking exact files, rejects links,
+mountpoints and unknown entries, and never traverses recovery mount trees.
+Sparse-copy storage is measured against signed hashes before payload copying;
+the copy is rehashed before it can be consumed. Concurrent external allocation
+can still cause a write failure, which must fail closed and reclaim temporary
+data. This is not a disk-space reservation service.
+
+Model cleanup runs under the model-operation lock and preserves cataloged
+GGUF files. Temporary downloads retain an inode lock inherited by the fetch
+process, so an exited parent does not make a still-running downloader's file
+eligible for cleanup. Unknown filenames, catalog-obsolete temporaries, unsafe
+entries and oversized inventories require investigation rather than deletion.
+
+Legacy `staging/bundle-*` directories are intentionally retained: an older
+binary did not participate in the new locking protocol. Inspect them during
+an approved offline maintenance window; do not remove them based only on age,
+PID guesses, or a blanket recursive cleanup command. Maintenance failures are
+visible in the service journal and do not disable manual recovery or gate
+essential boot health on model availability.
+
+The repeatable source-level Linux storage suite is
+`native/tests/run_storage_boundaries.sh`. Run only in a fresh disposable tools
+container with private mount namespaces, no host devices/network, read-only
+repository input and a dedicated evidence output mount. It snapshots source
+inputs and requires `CAP_SYS_ADMIN` solely for container-local tmpfs/bind tests.
+It must not be run directly on an installed test OS. See the native CI job for
+the exact invocation and the current evidence checkpoint for executed scope.
+
+### Gate boundary
+
 Actual VM execution demonstrates implemented paths on virtual hardware. It
 does not close physical firmware, TPM, accelerator, power-cut, suspend/resume,
 two-board, model-performance, production custody, or full G2 requirements.

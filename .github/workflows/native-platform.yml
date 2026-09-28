@@ -44,6 +44,24 @@ jobs:
           docker run --rm --network none
           --mount type=bind,src="$PWD",dst=/repo,readonly
           --workdir /repo/rust luma-native-tools:ci cargo fmt --check
+      - name: Real Linux staging and storage boundaries
+        run: |
+          mkdir "$RUNNER_TEMP/luma-storage"
+          docker run --rm --network none \
+            --cap-add SYS_ADMIN --security-opt apparmor=unconfined \
+            --security-opt no-new-privileges \
+            --mount type=bind,src="$PWD",dst=/repo,readonly \
+            --mount type=bind,src="$RUNNER_TEMP/luma-storage",dst=/out \
+            luma-native-tools:ci bash /repo/native/tests/run_storage_boundaries.sh /out/results
+      - name: Retain storage boundary diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-storage-boundaries
+          path: ${{ runner.temp }}/luma-storage
+          if-no-files-found: ignore
 
 # Deliberately no disk installation, host firmware enrollment or gate promotion.
 # Full image/VM runs are separately retained image-specific evidence.
+# SYS_ADMIN above is confined to a disposable container's own mount namespace;
+# no host devices, network or Docker socket are supplied to the test container.

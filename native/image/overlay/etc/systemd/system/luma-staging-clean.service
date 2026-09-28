@@ -1,0 +1,37 @@
+[Unit]
+Description=Reconcile inactive Luma verified-bundle snapshots
+After=local-fs.target
+RequiresMountsFor=/var
+ConditionKernelCommandLine=luma.mode=installed
+
+[Service]
+Type=oneshot
+ExecStart=/usr/libexec/luma-os/luma-platform staging-clean
+ExecStart=/usr/libexec/luma-os/luma-platform model-clean
+TimeoutStartSec=30
+UMask=0077
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=/var/lib/luma-os
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_UNIX
+RestrictNamespaces=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @mount @raw-io @reboot @swap @obsolete @debug
+CapabilityBoundingSet=
+MemoryMax=64M
+TasksMax=8
+LimitNOFILE=64
+StandardOutput=journal+console
+StandardError=journal+console
+
+[Install]
+WantedBy=multi-user.target

@@ -233,6 +233,11 @@ fn fetch(at: &Path, p: &Profile) -> Result<()> {
         .write(true)
         .mode(0o600)
         .open(&temporary.0)?;
+    // This open-file-description lock is inherited by curl's stdout. Even if
+    // the owner dies before curl handles PDEATHSIG, cleanup cannot race it.
+    if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
+        return Err("cannot lock model acquisition".into());
+    }
     let mut process = Command::new("/usr/bin/curl");
     process
         .args([
@@ -331,8 +336,16 @@ fn operation_lock(var: &Path) -> Result<File> {
         .write(true)
         .create(true)
         .mode(0o600)
-        .custom_flags(libc::O_NOFOLLOW)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
         .open(state.join("model.lock"))?;
+    let metadata = lock.metadata()?;
+    if !metadata.is_file()
+        || metadata.uid() != 0
+        || metadata.nlink() != 1
+        || metadata.mode() & 0o077 != 0
+    {
+        return Err("unsafe model operation lock".into());
+    }
     if unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
         return Err("another model operation is running".into());
     }
@@ -349,6 +362,7 @@ fn provision_locked(var: &Path, p: &Profile) -> Result<()> {
     let state = var.join(STATE);
     let models = state.join("models");
     safe_dir(&models)?;
+    reconcile_downloads(&models, &catalog()?.models)?;
     platform::ensure_model_identities(var)?;
     check(p, available_space(&models)?)?;
     let file = models.join(format!("{}.gguf", p.id));
@@ -398,6 +412,76 @@ fn provision_locked(var: &Path, p: &Profile) -> Result<()> {
     )?;
     println!("MODEL INSTALLED AND VERIFIED: {}. Inference activates on installed-system boot; no production certification implied.", p.id);
     Ok(())
+}
+
+/// Only image-catalog acquisition temporaries are eligible, never selected
+/// GGUFs, credentials, runtime files, or unknown entries. Caller holds model.lock.
+fn reconcile_downloads(models: &Path, profiles: &[Profile]) -> Result<usize> {
+    let parent = fs::symlink_metadata(models)?;
+    if !parent.is_dir() || parent.uid() != unsafe { libc::geteuid() } || parent.mode() & 0o022 != 0
+    {
+        return Err("unsafe model cleanup directory".into());
+    }
+    let mut pending = Vec::new();
+    let parent_mount = crate::staging::mount_id(models)?;
+    for (count, entry) in fs::read_dir(models)?.enumerate() {
+        if count >= 64 {
+            return Err("model cleanup inventory limit exceeded".into());
+        }
+        let entry = entry?;
+        let name = entry.file_name();
+        let name = name.to_str().ok_or("invalid model cache filename")?;
+        if profiles.iter().any(|p| name == format!("{}.gguf", p.id)) {
+            continue;
+        }
+        let (id, suffix) = name
+            .split_once(".partial-")
+            .ok_or("unknown model cache entry; retained")?;
+        let p = profiles
+            .iter()
+            .find(|p| p.id == id)
+            .ok_or("unknown partial model; retained")?;
+        if suffix.len() != 32
+            || !suffix
+                .bytes()
+                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+        {
+            return Err("invalid partial model name; retained".into());
+        }
+        let path = entry.path();
+        let file = open_regular(&path)?;
+        let m = file.metadata()?;
+        if m.uid() != parent.uid()
+            || m.nlink() != 1
+            || m.dev() != parent.dev()
+            || m.len() > p.bytes
+            || m.mode() & 0o022 != 0
+            || crate::staging::mount_id(&path)? != parent_mount
+        {
+            return Err("unsafe partial model; retained".into());
+        }
+        if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
+            return Err("partial model still has a writer; retry cleanup later".into());
+        }
+        pending.push((path, file));
+    }
+    // Keep every descriptor/lock until the complete inventory has been checked.
+    for (path, _) in &pending {
+        fs::remove_file(path)?;
+    }
+    File::open(models)?.sync_all()?;
+    Ok(pending.len())
+}
+
+pub fn clean() -> Result<usize> {
+    crate::require_root()?;
+    let var = Path::new(VAR);
+    let _lock = operation_lock(var)?;
+    let models = var.join(STATE).join("models");
+    if !models.try_exists()? {
+        return Ok(0);
+    }
+    reconcile_downloads(&models, &catalog()?.models)
 }
 
 fn selected() -> Result<Profile> {
@@ -503,6 +587,90 @@ pub fn serve() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn cleanup_fixture(label: &str) -> (PathBuf, PathBuf, Vec<Profile>) {
+        let dir =
+            std::env::temp_dir().join(format!("luma-download-{label}-{}", std::process::id()));
+        fs::create_dir(&dir).unwrap();
+        fs::set_permissions(&dir, fs::Permissions::from_mode(0o700)).unwrap();
+        let profiles = catalog().unwrap().models;
+        let partial = dir.join(format!("{}.partial-{}", profiles[0].id, "a".repeat(32)));
+        (dir, partial, profiles)
+    }
+
+    #[test]
+    fn orphan_download_is_removed_but_selected_model_survives() {
+        let (dir, partial, profiles) = cleanup_fixture("orphan");
+        fs::write(&partial, b"incomplete").unwrap();
+        let model = dir.join(format!("{}.gguf", profiles[0].id));
+        fs::write(&model, b"selected bytes are never cleanup targets").unwrap();
+        assert_eq!(reconcile_downloads(&dir, &profiles).unwrap(), 1);
+        assert!(!partial.exists());
+        assert_eq!(
+            fs::read(&model).unwrap(),
+            b"selected bytes are never cleanup targets"
+        );
+        assert_eq!(reconcile_downloads(&dir, &profiles).unwrap(), 0);
+        fs::remove_file(model).unwrap();
+        fs::remove_dir(dir).unwrap();
+    }
+
+    #[test]
+    fn inherited_download_descriptor_fences_cleanup_after_owner_close() {
+        let (dir, partial, profiles) = cleanup_fixture("writer");
+        let file = OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .mode(0o600)
+            .open(&partial)
+            .unwrap();
+        assert_eq!(
+            unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) },
+            0
+        );
+        let mut child = Command::new("/bin/sleep")
+            .arg("30")
+            .stdout(Stdio::from(file.try_clone().unwrap()))
+            .spawn()
+            .unwrap();
+        drop(file);
+        let denied = reconcile_downloads(&dir, &profiles).is_err();
+        let preserved = partial.exists();
+        child.kill().unwrap();
+        child.wait().unwrap();
+        assert!(denied && preserved);
+        assert_eq!(reconcile_downloads(&dir, &profiles).unwrap(), 1);
+        fs::remove_dir(dir).unwrap();
+    }
+
+    #[test]
+    fn unsafe_download_inventory_is_retained_before_deletion() {
+        for attack in ["symlink", "hardlink", "oversize", "unknown"] {
+            let (dir, partial, profiles) = cleanup_fixture(attack);
+            let sentinel = dir.with_extension("sentinel");
+            fs::write(&sentinel, b"preserve").unwrap();
+            match attack {
+                "symlink" => std::os::unix::fs::symlink(&sentinel, &partial).unwrap(),
+                "hardlink" => fs::hard_link(&sentinel, &partial).unwrap(),
+                "oversize" => File::create(&partial)
+                    .unwrap()
+                    .set_len(profiles[0].bytes + 1)
+                    .unwrap(),
+                _ => {
+                    fs::write(&partial, b"orphan").unwrap();
+                    fs::write(dir.join("unknown"), b"retain").unwrap();
+                }
+            }
+            assert!(reconcile_downloads(&dir, &profiles).is_err());
+            assert!(partial.symlink_metadata().is_ok());
+            assert_eq!(fs::read(&sentinel).unwrap(), b"preserve");
+            fs::remove_file(partial).unwrap();
+            if attack == "unknown" {
+                fs::remove_file(dir.join("unknown")).unwrap();
+            }
+            fs::remove_file(sentinel).unwrap();
+            fs::remove_dir(dir).unwrap();
+        }
+    }
     #[test]
     fn catalog_is_closed_and_parameter_ranges_are_explicit() {
         assert_eq!(catalog().unwrap().models.len(), 2);

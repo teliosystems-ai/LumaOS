@@ -221,7 +221,7 @@ def main() -> None:
     put('etc/systemd/system/systemd-bless-boot.service','[Unit]\nDescription=Disabled automatic blessing; luma-boot-health owns acknowledgement\n[Service]\nType=oneshot\nExecStart=/usr/bin/true\n')
     put('etc/systemd/system/sleep.target.d/luma.conf','[Unit]\nConflicts=luma-reference.service\n')
     put('etc/systemd/system/hibernate.target','[Unit]\nDescription=Hibernation is unqualified and disabled\nRefuseManualStart=yes\n')
-    for unit in ('luma-broker.service','luma-reference.service','luma-model.service'):
+    for unit in ('luma-broker.service','luma-reference.service','luma-model.service','luma-staging-clean.service'):
         enable(unit)
     put('etc/issue','Luma native Ubuntu laboratory image. Native qualification is pending.\nRun luma-platform --help. Installation/recovery bundle: /media/luma\n')
     run('cp','-a',ROOT/'var',template)

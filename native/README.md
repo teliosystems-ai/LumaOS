@@ -11,6 +11,8 @@ image and Rust platform implementation. It is outside the historical Python
 - [External-drive build and current evaluation checkpoint](evidence/NATIVE_EXTERNAL_STATUS_2026-09-28.md)
 - [Exact-image native Ubuntu test handoff](evidence/TEST_IMAGE_2026-09-28.md)
 - [Implementation plan](image/BUILD_PLAN.md)
+- [Current G2 software completion register](G2_SOFTWARE_STATUS.md)
+- [Source-level storage crash-safety evaluation](evidence/NATIVE_STORAGE_STATUS_2026-09-28.md)
 - [Rust trusted platform source](../rust/luma-platform)
 
 G2 remains in progress. Images are headless and laboratory-signed, not a complete

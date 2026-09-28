@@ -1,0 +1,54 @@
+{
+  "schema_version": 1,
+  "recorded_on": "2026-09-28",
+  "result": "passed-selected-source-boundaries",
+  "g2_software_complete": false,
+  "image_tested": false,
+  "physical_qualification": false,
+  "gate_closing": false,
+  "source_base_commit": "087afae",
+  "source_state": "working-tree changes; listed source hashes matched after execution",
+  "evidence_directory": "D:\\LumaOS-builds\\native-tests-20260928-g2-storage-05",
+  "tools_image": "sha256:7e07833e9324a15e228824fc4977007f851ed0773a2adacc5a7276b10e3bc309",
+  "kernel": "6.18.33.2-microsoft-standard-WSL2",
+  "compiled_test_binary_sha256": "a540349d481a2d3660899c2b3fd112e5b025fb8b722b2e43cc4c0369c14f0bd4",
+  "counts": {
+    "rust_tests_passed": 30,
+    "snapshot_cycles": 1000,
+    "snapshot_process_sigkill_cycles": 8,
+    "linux_integration_cases_passed": 9,
+    "native_python_tests_passed_per_environment": 9,
+    "windows_reference_tests_run": 320,
+    "windows_reference_tests_skipped": 5
+  },
+  "systemd_unit_configuration_verified": true,
+  "systemd_unit_runtime_tested": false,
+  "compact_model_thousand_cycle_qualification": false,
+  "evidence_files": [
+    {
+      "name": "rust-tests.txt",
+      "bytes": 3320,
+      "sha256": "8f58b0104ef6a841c32da373525fd1a6386ac848f7768fd3e673c89b5f7be85a"
+    },
+    {
+      "name": "unit-verification.txt",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "linux-storage.json",
+      "bytes": 869,
+      "sha256": "6d8541fb5525f6846788537e546a12ccda79ca1926d51520e59c5c97bea8ed61"
+    },
+    {
+      "name": "native-tests.txt",
+      "bytes": 1370,
+      "sha256": "e402b18a2276f6fd034f81c95a9de60c378eebeeda92c5db0a073a080ab6f6ea"
+    },
+    {
+      "name": "source-sha256.txt",
+      "bytes": 1129,
+      "sha256": "0ebbfb27c29b17f17f9e0e83874fc72643d030676fda5be397f380f8cbceb9e1"
+    }
+  ]
+}

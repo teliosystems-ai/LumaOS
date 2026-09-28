@@ -38,7 +38,7 @@ pub struct Manifest {
 
 pub struct VerifiedBundle {
     pub manifest: Manifest,
-    directory: PathBuf,
+    snapshot: crate::staging::Snapshot,
 }
 
 impl VerifiedBundle {
@@ -46,14 +46,7 @@ impl VerifiedBundle {
         if !self.manifest.artifacts.iter().any(|a| a.name == name) {
             return Err("artifact absent from signed inventory".into());
         }
-        Ok(self.directory.join(name))
-    }
-}
-
-impl Drop for VerifiedBundle {
-    fn drop(&mut self) {
-        // Only the private, newly allocated directory created by verify().
-        let _ = fs::remove_dir_all(&self.directory);
+        Ok(self.snapshot.path().join(name))
     }
 }
 
@@ -125,7 +118,7 @@ fn open_member(dir: &File, name: &str) -> Result<File> {
         libc::openat(
             dir.as_raw_fd(),
             name.as_ptr(),
-            libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+            libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NONBLOCK,
         )
     };
     if fd < 0 {
@@ -186,63 +179,137 @@ pub fn verify(source: &Path) -> Result<VerifiedBundle> {
     validate_manifest(&m)?;
     let verified = VerifiedBundle {
         manifest: m,
-        directory: private_dir("bundle")?,
+        snapshot: crate::staging::Snapshot::create()?,
     };
     // Verification inputs and every consumed artifact become private snapshots.
-    fs::write(verified.directory.join("release.json"), &bytes)?;
-    fs::write(verified.directory.join("release.sig"), signature)?;
+    for (name, content) in [
+        ("release.json", bytes.as_slice()),
+        ("release.sig", signature.as_slice()),
+    ] {
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(verified.snapshot.path().join(name))?;
+        file.write_all(content)?;
+        file.sync_all()?;
+    }
     let status = Command::new("/usr/bin/openssl")
         .env_clear()
         .env("PATH", "/usr/sbin:/usr/bin")
         .args([
             "pkeyutl", "-verify", "-pubin", "-inkey", TRUST, "-rawin", "-in",
         ])
-        .arg(verified.directory.join("release.json"))
+        .arg(verified.snapshot.path().join("release.json"))
         .arg("-sigfile")
-        .arg(verified.directory.join("release.sig"))
+        .arg(verified.snapshot.path().join("release.sig"))
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .status()?;
     if !status.success() {
         return Err("release signature verification failed".into());
     }
+    // Live /var is memory-backed. Admit measured sparse-copy allocation, not
+    // the logical ext4 image size (which exceeds a small live VM's tmpfs).
+    // Retain source descriptors, verify their bytes, then rehash while copying;
+    // a source mutation between passes cannot become a VerifiedBundle.
+    let mut inputs = Vec::new();
+    let mut total = 0u64;
     for a in &verified.manifest.artifacts {
         let mut input = open_member(&dir, &a.name)?;
-        if input.metadata()?.len() != a.bytes {
-            return Err("artifact size mismatch".into());
-        }
+        total = total
+            .checked_add(process_member(&mut input, a, None)?)
+            .ok_or("snapshot allocation overflow")?;
+        input.seek(SeekFrom::Start(0))?;
+        inputs.push(input);
+    }
+    verified.snapshot.admit(total)?;
+    for (a, input) in verified.manifest.artifacts.iter().zip(&mut inputs) {
         let mut output = OpenOptions::new()
             .write(true)
             .create_new(true)
             .mode(0o600)
-            .open(verified.directory.join(&a.name))?;
-        let mut hash = Sha256::new();
-        let mut remaining = a.bytes;
-        let mut buffer = [0u8; 1024 * 1024];
-        while remaining > 0 {
-            let request = remaining.min(buffer.len() as u64) as usize;
-            input.read_exact(&mut buffer[..request])?;
-            hash.update(&buffer[..request]);
-            if buffer[..request].iter().all(|v| *v == 0) {
-                output.seek(SeekFrom::Current(request as i64))?;
-            } else {
-                output.write_all(&buffer[..request])?;
-            }
-            remaining -= request as u64;
-        }
-        if input.read(&mut buffer[..1])? != 0 || hex(&hash.finalize()) != a.sha256 {
-            return Err("artifact digest mismatch or trailing bytes".into());
-        }
+            .open(verified.snapshot.path().join(&a.name))?;
+        process_member(input, a, Some(&mut output))?;
         output.set_len(a.bytes)?;
         output.sync_all()?;
     }
-    File::open(&verified.directory)?.sync_all()?;
+    File::open(verified.snapshot.path())?.sync_all()?;
     Ok(verified)
+}
+
+fn process_member(
+    input: &mut File,
+    artifact: &Artifact,
+    mut output: Option<&mut File>,
+) -> Result<u64> {
+    if input.metadata()?.len() != artifact.bytes {
+        return Err("artifact size mismatch".into());
+    }
+    let mut hash = Sha256::new();
+    let mut remaining = artifact.bytes;
+    let mut allocation = 0u64;
+    let mut buffer = vec![0u8; 1024 * 1024];
+    while remaining > 0 {
+        let request = remaining.min(buffer.len() as u64) as usize;
+        input.read_exact(&mut buffer[..request])?;
+        hash.update(&buffer[..request]);
+        if buffer[..request].iter().all(|v| *v == 0) {
+            if let Some(file) = output.as_mut() {
+                file.seek(SeekFrom::Current(request as i64))?;
+            }
+        } else {
+            allocation = allocation
+                .checked_add((request as u64 + 4095) / 4096 * 4096)
+                .ok_or("snapshot allocation overflow")?;
+            if let Some(file) = output.as_mut() {
+                file.write_all(&buffer[..request])?;
+            }
+        }
+        remaining -= request as u64;
+    }
+    if input.read(&mut buffer[..1])? != 0 || hex(&hash.finalize()) != artifact.sha256 {
+        return Err("artifact digest mismatch or trailing bytes".into());
+    }
+    Ok(allocation)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn sparse_measurement_is_byte_verified_and_source_mutation_is_refused() {
+        let dir = std::env::temp_dir().join(format!("luma-measure-test-{}", std::process::id()));
+        fs::create_dir(&dir).unwrap();
+        let input_path = dir.join("input");
+        let output_path = dir.join("output");
+        let mut bytes = vec![0u8; 2 * 1024 * 1024];
+        bytes.extend(vec![1u8; 5000]);
+        fs::write(&input_path, &bytes).unwrap();
+        let artifact = Artifact {
+            name: "fixture".into(),
+            bytes: bytes.len() as u64,
+            sha256: hex(&Sha256::digest(&bytes)),
+        };
+        let mut input = File::open(&input_path).unwrap();
+        assert_eq!(process_member(&mut input, &artifact, None).unwrap(), 8192);
+        input.seek(SeekFrom::Start(0)).unwrap();
+        let mut output = File::create(&output_path).unwrap();
+        assert_eq!(
+            process_member(&mut input, &artifact, Some(&mut output)).unwrap(),
+            8192
+        );
+        output.set_len(artifact.bytes).unwrap();
+        assert_eq!(fs::read(&output_path).unwrap(), bytes);
+        bytes[0] = 1;
+        fs::write(&input_path, &bytes).unwrap();
+        input.seek(SeekFrom::Start(0)).unwrap();
+        output.seek(SeekFrom::Start(0)).unwrap();
+        assert!(process_member(&mut input, &artifact, Some(&mut output)).is_err());
+        fs::remove_file(input_path).unwrap();
+        fs::remove_file(output_path).unwrap();
+        fs::remove_dir(dir).unwrap();
+    }
     fn fixture() -> Manifest {
         let root_bytes = 1024 * 1024 * 1024;
         let hash_bytes = 16 * 1024 * 1024;

@@ -4,6 +4,7 @@ mod disk;
 mod model;
 mod platform;
 mod service;
+mod staging;
 
 use std::path::Path;
 
@@ -37,6 +38,10 @@ fn dispatch() -> Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     match args.first().map(String::as_str) {
         Some("inventory") if args.len() == 1 => disk::inventory(),
+        Some("staging-clean") if args.len() == 1 => {
+            println!("{}", serde_json::to_string(&staging::clean()?)?);
+            Ok(())
+        }
         Some("verify") if args.len() == 2 => {
             let verified = bundle::verify(Path::new(&args[1]))?;
             println!("{}", serde_json::to_string_pretty(&verified.manifest)?);
@@ -50,6 +55,13 @@ fn dispatch() -> Result<()> {
         }
         Some("models") if args.len() == 1 => model::list(),
         Some("model-install") if args.len() == 2 => model::install(&args[1]),
+        Some("model-clean") if args.len() == 1 => {
+            println!(
+                "{}",
+                serde_json::json!({"removed_downloads": model::clean()?})
+            );
+            Ok(())
+        }
         Some("model-serve") if args.len() == 1 => model::serve(),
         Some("model-unit") if args.len() == 1 => model::unit(),
         Some("model-chat") if args.len() == 1 => {
@@ -74,6 +86,7 @@ fn dispatch() -> Result<()> {
         Some("boot-failed") if args.len() == 1 => platform::boot_failed(),
         Some("init-data") if args.len() == 2 => platform::init_data(&args[1]),
         Some("help" | "--help") | None => {
+            println!("Maintenance: staging-clean | model-clean (root only; preserves active operations and unknown files).");
             println!("Model operations: models | model-install MODEL-ID | model-chat (prompt on stdin).\nInstaller accepts --model MODEL-ID or --model manual-only; otherwise prompts.\nWeights are acquired from pinned HTTPS publisher URLs after hardware admission.");
             println!("Luma native platform alpha\n\n  inventory\n  verify BUNDLE\n  install /dev/disk/by-id/EXACT-ID BUNDLE\n  update BUNDLE\n  recover unlock /dev/disk/by-id/EXACT-ID\n  recover export /dev/disk/by-id/EXACT-ID EMPTY-DESTINATION\n  recover repair-a|repair-b /dev/disk/by-id/EXACT-ID BUNDLE\n  recover repair-data /dev/disk/by-id/EXACT-ID\n  recover disable-model /dev/disk/by-id/EXACT-ID\n  status\n\nInstall requires local interactive disk confirmation and new credentials.\nLaboratory image: native acceptance and production custody are outstanding.");
             Ok(())

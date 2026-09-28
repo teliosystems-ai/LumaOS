@@ -80,6 +80,26 @@ uint32_t luma_tpm_pcrs(struct luma_tpm *ctx, uint8_t output[64]) {
     return rc;
 }
 
+/* Read-only allocation check. Absence is not a reservation or permission to
+ * provision; GetCapability errors must never be interpreted as an empty slot. */
+uint32_t luma_tpm_index_exists(struct luma_tpm *ctx, uint32_t index, uint8_t *exists) {
+    TPMS_CAPABILITY_DATA *data = NULL;
+    TPMI_YES_NO more = 0;
+    *exists = 1;
+    TSS2_RC rc = Esys_GetCapability(ctx->esys, ESYS_TR_NONE, ESYS_TR_NONE,
+        ESYS_TR_NONE, TPM2_CAP_HANDLES, index, 1, &more, &data);
+    if (!rc) {
+        if (!data || data->capability != TPM2_CAP_HANDLES ||
+            data->data.handles.count > 1 ||
+            (data->data.handles.count && data->data.handles.handle[0] < index) ||
+            (!data->data.handles.count && more))
+            rc = TSS2_ESYS_RC_BAD_VALUE;
+        else *exists = data->data.handles.count && data->data.handles.handle[0] == index;
+    }
+    Esys_Free(data);
+    return rc;
+}
+
 uint32_t luma_tpm_index(struct luma_tpm *ctx, uint32_t index, const uint8_t auth[32],
                        uint8_t name_out[34], uint32_t *attributes, uint16_t *size,
                        uint16_t *algorithm, uint16_t *policy_size) {

@@ -29,6 +29,7 @@ extern "C" {
         safe: *mut u8,
     ) -> u32;
     fn luma_tpm_pcrs(context: *mut c_void, output: *mut u8) -> u32;
+    fn luma_tpm_index_exists(context: *mut c_void, index: u32, exists: *mut u8) -> u32;
     fn luma_tpm_index(
         context: *mut c_void,
         index: u32,
@@ -70,7 +71,8 @@ impl Context {
     }
 
     fn local() -> Result<Self> {
-        let metadata = fs::symlink_metadata(DEVICE)?;
+        let metadata = fs::symlink_metadata(DEVICE)
+            .map_err(|error| format!("local TPM2 required at {DEVICE}: {error}; no fallback"))?;
         if !metadata.file_type().is_char_device() || metadata.uid() != 0 {
             return Err("local TPM2 resource-manager character device required".into());
         }
@@ -99,6 +101,57 @@ impl Context {
         }
         Ok(result)
     }
+
+    fn admission(&mut self) -> Result<Admission> {
+        let mut occupied = 1;
+        check(unsafe { luma_tpm_index_exists(self.0, INDEX, &mut occupied) })?;
+        if occupied != 0 {
+            return Err("local TPM2 Admin index is occupied; preserve existing state; no automatic overwrite or recovery".into());
+        }
+        let mut pcrs = [0u8; 64];
+        check(unsafe { luma_tpm_pcrs(self.0, pcrs.as_mut_ptr()) })?;
+        Ok(Admission {
+            clock: self.clock()?,
+            pcr7_sha256: bundle::hex(&pcrs[..32]),
+            pcr11_sha256: bundle::hex(&pcrs[32..]),
+        })
+    }
+}
+
+/// Read-only admission observation, NOT enrollment, attestation or NV reservation.
+#[derive(Clone, Debug, Serialize)]
+pub struct Admission {
+    clock: Clock,
+    pcr7_sha256: String,
+    pcr11_sha256: String,
+}
+impl Admission {
+    fn compare(&self, current: &Self) -> Result<()> {
+        current.clock.elapsed_since(self.clock)?;
+        if self.pcr7_sha256 != current.pcr7_sha256 || self.pcr11_sha256 != current.pcr11_sha256 {
+            return Err("TPM boot measurements changed during installation admission".into());
+        }
+        Ok(())
+    }
+
+    pub fn recheck(&self) -> Result<()> {
+        self.compare(&installation_admission()?)
+    }
+
+    pub fn intent(&self, admin_login: &str) -> serde_json::Value {
+        // Informational installation intent only. No consumer may use this
+        // record to bootstrap authority: it has no authenticated enrollment.
+        serde_json::json!({"schema_version":1,"profile":PROFILE,
+            "candidate_admin_login":admin_login,"candidate_admin_uid":1001,
+            "checkpoint_index":INDEX,"enrollment_status":"required",
+            "product_admin_active":false,"admission_observation":self,
+            "observation_is_attestation":false,"gate_closing":false})
+    }
+}
+
+pub fn installation_admission() -> Result<Admission> {
+    crate::require_root()?;
+    Context::local()?.admission()
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -111,7 +164,6 @@ pub struct Clock {
 impl Clock {
     /// Future callers must keep grants boot-bound. TPM powered-time is not
     /// UTC and cannot certify catalog wall-clock expiry.
-    #[cfg_attr(not(test), allow(dead_code))] // Used by pending journal/service writer.
     pub fn elapsed_since(self, issued: Self) -> Result<u64> {
         if self.reset_count != issued.reset_count || self.restart_count != issued.restart_count {
             return Err("TPM boot epoch changed; renew authorization".into());
@@ -372,6 +424,50 @@ mod tests {
             exclusive_lock(&dir.join("anchor.lock")).unwrap(),
         )
         .unwrap()
+    }
+
+    #[test]
+    #[ignore = "requires isolated emulator admission fixture"]
+    fn emulator_install_admission() {
+        let (transport, _, _, _) = emulator();
+        let mut context = Context::open(&transport).unwrap();
+        match std::env::var("LUMA_TPM_TEST_ADMISSION").unwrap().as_str() {
+            "free" => {
+                let first = context.admission().unwrap();
+                first.compare(&context.admission().unwrap()).unwrap();
+                let intent = first.intent("lumaadmin");
+                assert_eq!(intent["profile"], "local-tpm2");
+                assert_eq!(intent["enrollment_status"], "required");
+                assert_eq!(intent["product_admin_active"], false);
+            }
+            "occupied" => assert!(context.admission().is_err()),
+            _ => panic!("invalid test fixture mode"),
+        }
+    }
+
+    #[test]
+    fn install_recheck_rejects_epoch_pcr_and_time_changes() {
+        let original = Admission {
+            clock: Clock {
+                milliseconds: 100,
+                reset_count: 1,
+                restart_count: 1,
+            },
+            pcr7_sha256: "11".repeat(32),
+            pcr11_sha256: "22".repeat(32),
+        };
+        original.compare(&original).unwrap();
+        for field in 0..5 {
+            let mut changed = original.clone();
+            match field {
+                0 => changed.clock.milliseconds -= 1,
+                1 => changed.clock.reset_count += 1,
+                2 => changed.clock.restart_count += 1,
+                3 => changed.pcr7_sha256 = "33".repeat(32),
+                _ => changed.pcr11_sha256 = "44".repeat(32),
+            }
+            assert!(original.compare(&changed).is_err());
+        }
     }
 
     #[test]

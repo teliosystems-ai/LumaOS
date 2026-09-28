@@ -23,13 +23,23 @@ def main():
     args.output.mkdir(parents=True)
     repo = args.repository.resolve(strict=True)
     os.umask(0o077)
-    environment = dict(os.environ, CARGO_TARGET_DIR='/tmp/luma-tpm-target', RUSTFLAGS='-Dwarnings')
+    environment = dict(os.environ, CARGO_TARGET_DIR='/tmp/luma-tpm-target',
+                       RUSTFLAGS='-Dwarnings', TSS2_LOG='all+NONE')
     with tempfile.TemporaryDirectory(prefix='luma-tpm-') as folder:
         work = Path(folder)
         state = work / 'state'
         state.mkdir()
         auth = work / 'auth'
-        auth.write_bytes(os.urandom(32))
+        # The tools' file: authorization parser reads TEXT, including hex:;
+        # raw binary containing NUL/CR/LF would be truncated/trimmed. Keep the
+        # native credential binary and a separate private tools-only encoding.
+        # Force those bytes in this TEST fixture to make the regression stable.
+        auth_bytes = bytearray(os.urandom(32))
+        auth_bytes[10] = 0
+        auth_bytes[-2:] = b'\r\n'
+        auth.write_bytes(auth_bytes)
+        tools_auth = work / 'auth-tools'
+        tools_auth.write_text('hex:' + auth_bytes.hex(), encoding='ascii')
         domain = 'ab' * 32
         genesis = hashlib.sha256(b'luma-native-admin-genesis-v1\0' + bytes.fromhex(domain)).digest()
         (work / 'genesis').write_bytes(genesis)
@@ -47,7 +57,7 @@ def main():
                     raise RuntimeError(f'{Path(argv[0]).name} returned {result.returncode}, expected {expected}')
 
             def start():
-                process = subprocess.Popen(['swtpm', 'socket', '--tpm2', '--tpmstate', f'dir={state}',
+                process = subprocess.Popen(['swtpm', 'socket', '--tpm2', '--tpmstate', f'dir={state},mode=0600',
                     '--server', f'type=unixio,path={work}/tpm.sock',
                     '--ctrl', f'type=unixio,path={work}/tpm.sock.ctrl',
                     '--flags', 'not-need-init,startup-clear'], stdout=log, stderr=subprocess.STDOUT)
@@ -60,12 +70,19 @@ def main():
                 return process
 
             emulator = start()
+            environment['LUMA_TPM_TEST_ADMISSION'] = 'free'
+            admission = ['cargo', 'test', '--offline', '--locked',
+                         'tpm::tests::emulator_install_admission',
+                         '--', '--ignored', '--exact', '--nocapture']
+            run(admission)
             run(['tpm2_nvdefine', '-T', transport, '-C', 'o', '-g', 'sha256', '-s', '32',
-                 '-a', '0x02040044', '-p', f'file:{auth}', '0x01804c41'])
+                 '-a', '0x02040044', '-p', f'file:{tools_auth}', '0x01804c41'])
             # Password-session provisioning is deliberately confined to this
             # disposable test fixture; the native adapter uses HMAC sessions.
-            run(['tpm2_nvextend', '-T', transport, '-C', '0x01804c41', '-P', f'file:{auth}',
+            run(['tpm2_nvextend', '-T', transport, '-C', '0x01804c41', '-P', f'file:{tools_auth}',
                  '-i', work/'genesis', '0x01804c41'])
+            environment['LUMA_TPM_TEST_ADMISSION'] = 'occupied'
+            run(admission)
             run(['cargo', 'test', '--offline', '--locked', '--', '--nocapture'])
             run(['cargo', 'test', '--offline', '--locked', 'tpm::tests::emulator_nv_journal_and_rollback',
                  '--', '--ignored', '--exact', '--nocapture'])
@@ -87,8 +104,8 @@ def main():
                        '--', '--ignored', '--exact', '--nocapture']
             run(refused)
             run(['tpm2_nvdefine', '-T', transport, '-C', 'o', '-g', 'sha256', '-s', '32',
-                 '-a', '0x02040004', '-p', f'file:{auth}', '0x01804c41'])
-            run(['tpm2_nvwrite', '-T', transport, '-C', '0x01804c41', '-P', f'file:{auth}',
+                 '-a', '0x02040004', '-p', f'file:{tools_auth}', '0x01804c41'])
+            run(['tpm2_nvwrite', '-T', transport, '-C', '0x01804c41', '-P', f'file:{tools_auth}',
                  '-i', work/'genesis', '0x01804c41'])
             run(refused)
             run(['cargo', 'build', '--offline', '--locked'])
@@ -98,6 +115,7 @@ def main():
             environment['TPM2TOOLS_TCTI'] = transport
             environment['TSS2_TCTI'] = transport
             run([binary, 'tpm-probe'], expected=1)
+            run([binary, 'admin-install-check'], expected=1)
             run([binary, 'admin-checkpoint-status'], expected=1)
         finally:
             if emulator is not None:
@@ -113,7 +131,10 @@ def main():
                        'pending-transaction-refusal', 'nv-persistence-across-tpm-restart',
                        'boot-epoch-expiry', 'unexpected-tpm-advance-refusal',
                        'missing-nv-index-refusal', 'redefined-nv-attributes-refusal',
-                       'no-environment-transport-fallback', 'unenrolled-product-status-refusal'],
+                       'no-environment-transport-fallback', 'unenrolled-product-status-refusal',
+                       'unoccupied-index-admission', 'occupied-index-admission-refusal',
+                       'missing-local-tpm-installer-admission-refusal',
+                       'binary-authorization-with-nul-cr-lf'],
               'physical_tpm_tested':False, 'sealed_credential_enrollment_tested':False,
               'production_admin_authorization_tested':False, 'gate_closing':False}
     transcript = args.output/'transcript.txt'

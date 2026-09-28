@@ -403,6 +403,29 @@ mod tests {
 
     #[test]
     fn thousand_snapshot_cycles_leave_no_payloads() {
+        // The parallel test harness also spawns processes. Between fork and
+        // exec those children can briefly retain another thread's flock fd,
+        // even with CLOEXEC. Test immediate release in an isolated process;
+        // do not weaken the product's correct active-owner refusal or retry it
+        // until it happens to pass.
+        if std::env::var_os("LUMA_STAGING_CYCLE_CHILD").is_none() {
+            let result = Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "staging::tests::thousand_snapshot_cycles_leave_no_payloads",
+                    "--test-threads=1",
+                ])
+                .env("LUMA_STAGING_CYCLE_CHILD", "1")
+                .output()
+                .unwrap();
+            assert!(
+                result.status.success(),
+                "isolated cycles failed: {} {}",
+                String::from_utf8_lossy(&result.stdout),
+                String::from_utf8_lossy(&result.stderr)
+            );
+            return;
+        }
         let at = temporary();
         for _ in 0..1000 {
             let snapshot = Snapshot::create_at(&at).unwrap();

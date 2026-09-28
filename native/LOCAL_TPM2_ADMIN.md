@@ -21,6 +21,10 @@ The product transport is explicitly `device:/dev/tpmrm0`, a root-owned character
 device. Environment-selected TCTIs, TCP transports and external fallback are
 not accepted. Root-only `luma-platform tpm-probe` reads the clock and SHA-256
 PCRs 7 and 11. It does not provision, attest, clear or claim to enroll the TPM.
+`luma-platform admin-install-check` reads the clock/PCRs and checks that the
+proposed NV allocation is unoccupied. A missing local TPM, unsupported PCR read,
+unsafe clock, occupied index or TPM error refuses admission. No environment
+transport fallback, index overwrite or hierarchy mutation is available.
 `luma-platform admin-checkpoint-status` validates existing protected checkpoint
 configuration, credential and journal. Missing enrollment fails closed.
 
@@ -52,6 +56,16 @@ authorize entries; an event containing a UID or role claim grants no authority.
 TPM powered-time is not UTC. Epoch changes/regression invalidate boot-bound
 timing; catalog expiry still needs a reviewed trusted wall-clock design.
 
+The current installer performs read-only admission before target-disk access,
+then rechecks PCRs, clock epoch and index vacancy immediately before disk writes.
+It writes `/var/lib/luma-os/admin-install-intent.json` into encrypted mutable
+state with the candidate account/UID, `enrollment_status: required` and
+`product_admin_active: false`. That record is informational, not authenticated
+bootstrap or a role grant. A limitation warning is printed before destructive
+confirmation and on successful lab installation. No TPM provisioning occurs.
+Recovery/export paths remain independently usable and do not require a vacant
+TPM index. Reinstallation over an occupied index is refused; it is not recovery.
+
 Expected future service inputs (not created by the current installer):
 
 - `/var/lib/luma-os/admin/anchor.json`: closed version/profile/index/Name record.
@@ -66,9 +80,11 @@ complete service confinement boundary remain to be implemented and evaluated.
 
 ## Remaining software before the local installer can be complete
 
-1. Add TPM admission to the installation transaction **before disk mutation**,
-   and bind the selected product Admin principal independently of root/sudo.
-   Require a supported TPM and report why it is refused; no software fallback.
+1. Evaluate the implemented pre-write TPM admission/intent path in a rebuilt
+   image, and bind the selected product Admin principal through authenticated
+   enrollment independently of root/sudo. Admission does not reserve an index
+   or prove that provisioning, sealing, hierarchy authorization or NV capacity
+   will succeed. It is not complete enrollment preflight.
 2. Implement enrollment using an exact approved NV allocation and collision
    refusal, cryptographically random secrets, independently recoverable local
    credentials, and interruption/retry fencing. Never clear the TPM, overwrite
@@ -118,6 +134,8 @@ grants or Docker socket. Test-only index provisioning/undefinition uses the
 disposable emulator and is not linked into the product. Private emulator state
 and random credentials are destroyed on exit, not exported with diagnostics.
 See [the evidence checkpoint](evidence/NATIVE_TPM_STATUS_2026-09-28.md).
+The subsequent admission/VM-fixture evaluation is recorded in
+[the installer admission checkpoint](evidence/NATIVE_TPM_ADMISSION_2026-09-28.md).
 
 Implementation references:
 

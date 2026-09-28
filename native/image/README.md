@@ -467,20 +467,46 @@ automatic fallback. The exported sequence-4 image still has separate local
 Unix accounts/sudo, **not enrolled product Admin**. Do not interpret that older
 installer as already meeting the TPM requirement.
 
-Current source adds `luma-platform tpm-probe` and
-`luma-platform admin-checkpoint-status`, both root-only read-only diagnostics.
-The first reads `/dev/tpmrm0` clock/PCR data without enrollment; the second
-requires existing protected checkpoint state and credentials and otherwise
-refuses. Neither command clears/provisions a TPM or grants a role. The native
-adapter and inert journal have disposable software-TPM tests, but installer
-admission/enrollment, sealed credentials and the full Admin service remain
-software work. See [the implementation note](../LOCAL_TPM2_ADMIN.md).
+Current source adds `luma-platform tpm-probe`, `admin-install-check` and
+`luma-platform admin-checkpoint-status`, all root-only read-only diagnostics.
+The first reads `/dev/tpmrm0` clock/PCR data without enrollment; installation
+admission additionally refuses an occupied checkpoint index. Checkpoint status
+requires existing protected state and credentials and otherwise refuses.
+None clears/provisions a TPM or grants a role. Installation now requires local
+TPM admission before disk access and a second check immediately before disk
+mutation. It records only pending enrollment intent, not active product Admin.
+The native adapter/journal and admission have disposable software-TPM tests,
+but sealed enrollment and the full Admin service remain software work. These
+installer changes are not in the previously exported sequence-4 image. See
+[the implementation note](../LOCAL_TPM2_ADMIN.md).
 
 `native/tests/run_tpm_boundaries.sh` runs in a fresh tools container with a
 read-only repository mount and dedicated output mount, no network, no host TPM
 devices, no Docker socket and no additional capabilities. Its repeatable
 invocation is in `.github/workflows/native-platform.yml`. Evidence exports
 logs/results/source hashes only, never the emulator state or NV secret.
+
+The VM harness now attaches a persistent software TPM to each VM stage. Its
+small private state must live on a filesystem enforcing Linux ownership/modes;
+NTFS/DrvFS artifact and virtual-disk storage is not a substitute. By default it
+uses the run's `tpm/` directory. When `/work` is an external-drive bind mount,
+create a dedicated Docker volume and add these arguments to the VM container:
+
+```sh
+docker volume create luma-native-vm-tpm-state
+# Additional docker run arguments (retain the existing disks/artifacts mounts):
+# --mount type=volume,src=luma-native-vm-tpm-state,dst=/tpm-state
+# --env LUMA_VM_TPM_ROOT=/tpm-state
+```
+
+An exact resolved run path selects a stable isolated namespace within that
+volume. A held lock rejects competing harnesses, and shutdown retains state
+while cleaning only transient sockets. Do not delete/copy TPM state to repair a
+failed enrolled VM. Disk-overlay tests currently select a fresh run namespace;
+authenticated migration/clone behavior must be implemented before using those
+tests as enrolled-Admin continuity evidence. `collect_evidence.py` does not
+export software-TPM state. The fixture requires a disposable tools container
+without physical TPM devices; its transport is never a product fallback.
 
 ### Gate boundary
 

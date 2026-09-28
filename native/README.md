@@ -14,6 +14,7 @@ image and Rust platform implementation. It is outside the historical Python
 - [Current G2 software completion register](G2_SOFTWARE_STATUS.md)
 - [Selected local TPM2 Admin design and future external installer](LOCAL_TPM2_ADMIN.md)
 - [Native TPM checkpoint evaluation](evidence/NATIVE_TPM_STATUS_2026-09-28.md)
+- [Installer TPM admission and VM-fixture evaluation](evidence/NATIVE_TPM_ADMISSION_2026-09-28.md)
 - [Source-level storage crash-safety evaluation](evidence/NATIVE_STORAGE_STATUS_2026-09-28.md)
 - [Rust trusted platform source](../rust/luma-platform)
 

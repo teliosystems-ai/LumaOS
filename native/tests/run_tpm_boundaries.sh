@@ -18,9 +18,11 @@ cmp -- "$0" "$snapshot/native/tests/run_tpm_boundaries.sh"
 cd "$snapshot/rust"
 cargo fmt --check
 python3 "$snapshot/native/tests/tpm_integration.py" --repository "$snapshot" --output "$output"
+python3 -W error -m unittest discover -s "$snapshot/native/tests" -v 2>&1 | tee "$output/native-tests.txt"
 cd "$snapshot"
 sha256sum rust/Cargo.toml rust/Cargo.lock rust/.cargo/config.toml \
     rust/luma-platform/Cargo.toml rust/luma-platform/build.rs \
     rust/luma-platform/src/*.rs rust/luma-platform/src/*.c \
     native/tests/tpm_integration.py native/tests/run_tpm_boundaries.sh \
+    native/tests/test_vm_tpm.py native/image/vm_tpm.py native/image/vm_test.py \
     native/image/Dockerfile.tools > "$output/source-sha256.txt"

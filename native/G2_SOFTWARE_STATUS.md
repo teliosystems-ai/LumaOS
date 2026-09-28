@@ -15,7 +15,7 @@ requirement.
 
 | Component | Implemented/evaluated scope | Remaining work before software completion |
 | --- | --- | --- |
-| Installer and media | Real laboratory-signed Ubuntu 24.04 image; explicit disk consent, LUKS2, independent credentials, install-time manual/4B/1.7B choice, pinned model download, byte verification; sequence-4 VM tests passed | Governed production catalog/pack and offline distribution integration, full rejection/interruption matrix; rebuild and re-evaluate subsequent source changes |
+| Installer and media | Real laboratory-signed Ubuntu 24.04 image; explicit disk consent, LUKS2, independent credentials, install-time manual/4B/1.7B choice, pinned download; sequence-4 VM tests passed; subsequent source adds mandatory pre-write local TPM admission and pending enrollment intent | Sealed Admin enrollment and authenticated bootstrap, governed production catalog/pack and offline distribution, full rejection/interruption matrix; rebuild and evaluate the new admission path in an image |
 | Boot, update, recovery | Signed UKI, A/B verity roots, essential-health acknowledgement, three-attempt fallback, independent export/repair/disable; selected VM faults passed | Complete interruption and migration matrix, including pre-userspace failures; protected production rollback anchors; storage-pressure and recovery-retention cases |
 | Temporary storage | New locked, bounded snapshot/download reconciliation; sparse-aware admission and exact-file cleanup; Linux boundary tests in `native/tests` | New-image boot/service and repeated guest-interruption evaluation; operator-reviewed disposition of legacy snapshots, which cannot safely be assumed inactive |
 | Model lifecycle and resources | Two pinned CPU profiles; hardware admission, isolated UID, authenticated loopback runtime, systemd memory/device/process restrictions; actual inference and offline reboot passed | Full governed model-pack/catalog lifecycle; atomic resource leases and generations, stale-worker fencing, pressure/quarantine/restart policy; 1,000 **real compact-model** cycles with measured resource return and performance distributions |
@@ -84,3 +84,6 @@ are recorded in [the storage checkpoint](evidence/NATIVE_STORAGE_STATUS_2026-09-
 The new TPM adapter/journal is likewise source-level software-TPM evidence,
 not an installed Admin service or physical qualification; see
 [the TPM checkpoint](evidence/NATIVE_TPM_STATUS_2026-09-28.md).
+The subsequent [TPM admission checkpoint](evidence/NATIVE_TPM_ADMISSION_2026-09-28.md)
+adds read-only installer checks and a persistent QEMU software-TPM fixture.
+Its source tests do not establish installed/enrolled Admin or image acceptance.

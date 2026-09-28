@@ -17,6 +17,7 @@ import socket
 import subprocess
 import tempfile
 import time
+from vm_tpm import SoftwareTPM, state_directory
 
 USER_PASSWORD='VM-only-user-passphrase-2026'
 ADMIN_PASSWORD='VM-only-admin-passphrase-2026'
@@ -62,16 +63,23 @@ class VM:
         if attach_media if attach_media is not None else live:
             command+=['-drive',f'if=none,id=media,format={media_format},readonly=on,file={image}',
                       '-device',f'virtio-blk-pci,drive=media,serial=LUMA-LIVE,bootindex={1 if live else 2}']
-        self.errors=(work/'qemu.log').open('wb')
-        self.process=subprocess.Popen(command,stdout=self.errors,stderr=self.errors)
-        self.log=(work/'serial.log').open('wb');self.buffer=b'';self.counter=0
-        self.deadline=time.monotonic()+timeout
-        self.console=socket.socket(socket.AF_UNIX)
-        while not (self.socket_dir/'console.sock').exists():
-            if self.process.poll() is not None:raise RuntimeError((work/'qemu.log').read_text())
-            if time.monotonic()>self.deadline:raise TimeoutError('QEMU startup')
-            time.sleep(.1)
-        self.console.connect(str(self.socket_dir/'console.sock'))
+        self.tpm=self.process=self.errors=self.log=self.console=None
+        try:
+            self.tpm=SoftwareTPM(state_directory(work.parent))
+            command+=self.tpm.qemu_arguments()
+            self.errors=(work/'qemu.log').open('wb')
+            self.process=subprocess.Popen(command,stdout=self.errors,stderr=self.errors)
+            self.log=(work/'serial.log').open('wb');self.buffer=b'';self.counter=0
+            self.deadline=time.monotonic()+timeout
+            self.console=socket.socket(socket.AF_UNIX)
+            while not (self.socket_dir/'console.sock').exists():
+                if self.process.poll() is not None:raise RuntimeError((work/'qemu.log').read_text())
+                if time.monotonic()>self.deadline:raise TimeoutError('QEMU startup')
+                time.sleep(.1)
+            self.console.connect(str(self.socket_dir/'console.sock'))
+        except BaseException:
+            self.close()
+            raise
 
     def expect(self,pattern: bytes,timeout: int=300) -> bytes:
         end=min(self.deadline,time.monotonic()+timeout)
@@ -106,10 +114,15 @@ class VM:
         return result
 
     def close(self) -> None:
-        self.process.terminate()
-        try:self.process.wait(timeout=10)
-        except subprocess.TimeoutExpired:self.process.kill();self.process.wait()
-        self.console.close();self.log.close();self.errors.close()
+        if self.process is not None:
+            self.process.terminate()
+            try:self.process.wait(timeout=10)
+            except subprocess.TimeoutExpired:self.process.kill();self.process.wait()
+            self.process=None
+        for name in ('console','log','errors'):
+            resource=getattr(self,name,None)
+            if resource is not None:resource.close();setattr(self,name,None)
+        if self.tpm is not None:self.tpm.close();self.tpm=None
         self.socket_directory.cleanup()
 
     def wait_exit(self,timeout: int=180) -> int:

@@ -48,6 +48,13 @@ fn dispatch() -> Result<()> {
             println!("{}", serde_json::to_string(&tpm::probe()?)?);
             Ok(())
         }
+        Some("admin-install-check") if args.len() == 1 => {
+            println!(
+                "{}",
+                serde_json::to_string(&tpm::installation_admission()?.intent("unselected"))?
+            );
+            Ok(())
+        }
         Some("admin-checkpoint-status") if args.len() == 1 => admin_journal::status(),
         Some("staging-clean") if args.len() == 1 => {
             println!("{}", serde_json::to_string(&staging::clean()?)?);
@@ -98,6 +105,7 @@ fn dispatch() -> Result<()> {
         Some("init-data") if args.len() == 2 => platform::init_data(&args[1]),
         Some("help" | "--help") | None => {
             println!("Local TPM diagnostics: tpm-probe | admin-checkpoint-status (root only; read-only; neither enrolls nor grants Admin). External Admin deployment is deferred.");
+            println!("Install requires local TPM2 admission before any disk write. admin-install-check is read-only and does not enroll Admin; sealed product enrollment remains pending.");
             println!("Maintenance: staging-clean | model-clean (root only; preserves active operations and unknown files).");
             println!("Model operations: models | model-install MODEL-ID | model-chat (prompt on stdin).\nInstaller accepts --model MODEL-ID or --model manual-only; otherwise prompts.\nWeights are acquired from pinned HTTPS publisher URLs after hardware admission.");
             println!("Luma native platform alpha\n\n  inventory\n  verify BUNDLE\n  install /dev/disk/by-id/EXACT-ID BUNDLE\n  update BUNDLE\n  recover unlock /dev/disk/by-id/EXACT-ID\n  recover export /dev/disk/by-id/EXACT-ID EMPTY-DESTINATION\n  recover repair-a|repair-b /dev/disk/by-id/EXACT-ID BUNDLE\n  recover repair-data /dev/disk/by-id/EXACT-ID\n  recover disable-model /dev/disk/by-id/EXACT-ID\n  status\n\nInstall requires local interactive disk confirmation and new credentials.\nLaboratory image: native acceptance and production custody are outstanding.");

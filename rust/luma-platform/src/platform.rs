@@ -730,6 +730,9 @@ mod identity_migration_tests {
 
 pub fn install(selection: &str, source: &Path, model_id: Option<&str>) -> Result<()> {
     require_live()?;
+    // Local TPM2 is the selected installation profile. This is read-only,
+    // before target admission or credentials, and never selects a fallback.
+    let admin_admission = crate::tpm::installation_admission()?;
     let disk = Disk::open(selection, false)?;
     // Observe available RAM before the live installer's verified bundle
     // snapshot temporarily occupies memory-backed staging. Recheck again
@@ -755,6 +758,7 @@ pub fn install(selection: &str, source: &Path, model_id: Option<&str>) -> Result
         return Err(format!("disk requires at least {minimum} bytes").into());
     }
     println!("Release {}: EFI 1 GiB; two {} MiB roots and {} MiB hash partitions; remaining space encrypted.",verified.manifest.release,roots_mib,hashes_mib);
+    println!("Admin profile: local-tpm2. Laboratory limitation: sealed product Admin enrollment remains required and unavailable; this install creates only separate Unix accounts, not active product Admin authority.");
     disk.confirm("ERASE")?;
     let user = user_name("First user")?;
     let admin = user_name("Separate administrator")?;
@@ -768,6 +772,7 @@ pub fn install(selection: &str, source: &Path, model_id: Option<&str>) -> Result
     if recovery == data_secret {
         return Err("recovery credential must be independent".into());
     }
+    admin_admission.recheck()?;
     disk.recheck()?;
     let size_a = format!("2:0:+{roots_mib}M");
     let size_ha = format!("3:0:+{hashes_mib}M");
@@ -882,6 +887,11 @@ pub fn install(selection: &str, source: &Path, model_id: Option<&str>) -> Result
         ],
     )?;
     create_identity(&data.at, &user, &admin, &user_password, &admin_password)?;
+    write_atomic(
+        &data.at.join("lib/luma-os/admin-install-intent.json"),
+        &serde_json::to_vec(&admin_admission.intent(&admin))?,
+        0o600,
+    )?;
     copy_network_profiles(
         Path::new("/var/lib/NetworkManager/system-connections"),
         &data.at.join("lib/NetworkManager/system-connections"),
@@ -906,6 +916,7 @@ pub fn install(selection: &str, source: &Path, model_id: Option<&str>) -> Result
             return Err(error);
         }
     }
+    println!("ADMIN ENROLLMENT REQUIRED: local TPM2 hardware admission passed, but sealed product Admin enrollment is not implemented in this laboratory installer. The separate Unix administrator is not product Admin.");
     println!("INSTALLATION COMPLETE: remove recovery media and boot the selected disk. Secure Boot requires the laboratory certificate to be enrolled by the operator. Keep the independent recovery passphrase offline.");
     Ok(())
 }

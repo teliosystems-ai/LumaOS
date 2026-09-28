@@ -8,6 +8,7 @@ import argparse
 import hashlib
 import json
 from pathlib import Path
+import shlex
 import socket
 import subprocess
 import time
@@ -99,6 +100,8 @@ def main():
             else:
                 vm.run('grep -qw luma.slot=b /proc/cmdline')
                 vm.run('grep -Fx '+updated['release']+' /usr/share/luma-os/release-id')
+                installed="import json; from pathlib import Path; m=json.loads(Path('/var/lib/luma-os/installed.json').read_text()); assert m['sequence']=="+str(updated['sequence'])
+                vm.run('python3 -c '+shlex.quote(installed))
                 vm.run('test ! -e /var/lib/luma-os/pending.json')
                 vm.run('systemctl is-active luma-reference.service')
                 vm.run('test -f /var/lib/luma-os/model-disabled')
@@ -111,6 +114,7 @@ def main():
             stages.append(stage)
         finally:vm.close()
     record={'result':'passed','stages':stages,'base_image_sha256':prior['image_sha256'],
+        'base_result_sha256':digest(base/'result.json'),'candidate_release':updated['release'],
         'candidate_image_sha256':digest(candidate),'observed_target_write_bytes_at_cut':written,
         'injection':'QEMU SIGKILL during inactive-slot writes','original_fixture_modified':False,
         'older_signed_sequence_refused':True,'model_disable_preserved':True,

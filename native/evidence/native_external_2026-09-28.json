@@ -1,0 +1,167 @@
+{
+  "schema_version": 1,
+  "status": "development-in-progress",
+  "gate": "G2",
+  "gate_closing": false,
+  "production_signed": false,
+  "physical_hardware_tested": false,
+  "implementation_commit": "dbf04ea",
+  "selected_evaluation": {
+    "label": "seq4-01",
+    "result": "passed",
+    "runners": 6,
+    "vm_stages": 26,
+    "exported_evidence_files_verified": 58,
+    "compressed_image_and_export_checksums_verified": true,
+    "complete_governed_g2_matrix": false
+  },
+  "build_storage": {
+    "root": "D:/LumaOS-builds",
+    "filesystem": "exFAT",
+    "large_artifacts_and_virtual_disks_on_external_drive": true,
+    "linux_workspace": "Docker Linux volume",
+    "private_keys": "separate existing laboratory key volume; not exported",
+    "regular_file_lock_and_qcow2_probe": "passed",
+    "physical_disk_formatted": false,
+    "unrelated_services_modified": false
+  },
+  "image": {
+    "export_directory": "D:/LumaOS-builds/native/20260928T124255Z-headless",
+    "working_directory": "D:/LumaOS-builds/work/20260928T124255Z-headless",
+    "retained_linux_volume": "luma-native-build-20260928T124255Z-headless",
+    "file": "luma-native-lab-20260927-headless-4.img.zst",
+    "sequence": 4,
+    "compressed_bytes": 2156815854,
+    "compressed_sha256": "b7f98803ee732525124f27b594cc87b4f2f8b71eb1d833f6da568e386a50514e",
+    "raw_sha256": "5408c3d8430dc085c52b0d816abfcdd3fe68f9b079925a2e469aa7643a5f5197",
+    "source_lock_sha256": "e5472afa5be7ea7fc5cc130a211dde76e039ba5285a6caa37b3cfd6f70f0d644",
+    "source_archive_sha256": "c48c6caa3198630c7261dd11156226b3d8abb7d4b4c7abdbbd7f9245977522a6",
+    "runtime_sources_match_implementation_commit": true,
+    "later_changes": "Documentation and regression runners; each result records executed Python source hashes",
+    "boundary": "Headless Ubuntu 24.04 amd64 laboratory image; not a production or desktop qualification"
+  },
+  "image_evidence": [
+    {
+      "directory": "evidence-seq4-01-full",
+      "result": "passed",
+      "stage_count": 14,
+      "scope": "installation, security, boot-health and verity fallback, independent recovery/export, data preservation and slot repair",
+      "result_sha256": "db99d0a836e97de01cf053d3044a2de40828ba731c3416f2c34abcf6c047f72d",
+      "inventory_sha256": "20dc9f24b7d8e814ef38556b552f3b96289f944fa91e32c9965dc0c662eacd55",
+      "acceleration": "kvm",
+      "secure_boot": false,
+      "installation_tested": true
+    },
+    {
+      "directory": "evidence-seq4-01-model",
+      "result": "passed",
+      "stage_count": 5,
+      "scope": "actual 4B installer acquisition, inference, isolation, corrupt-weight refusal, offline reboot and independent recovery disablement",
+      "result_sha256": "75101636706e24ffa60128f25eb2e54d0bee52f1d5d4f3318fc24d5133ec48a3",
+      "inventory_sha256": "a85b97b9c9f7d8cea1ce8b63a4888f66a5c19a35b4a2bc419a1e206f7c16ef3d",
+      "acceleration": "kvm",
+      "secure_boot": false,
+      "installation_tested": true
+    },
+    {
+      "directory": "evidence-seq4-01-small",
+      "result": "passed",
+      "stage_count": 2,
+      "scope": "installed 1.7B acquisition, preserved recovery disablement, explicit enablement, memory limit, offline inference and invalid-ID refusal",
+      "result_sha256": "b1ffcc615cad6a178ae2765ca85f17a3f8ebea2fa78ac3bf250badcae139f207",
+      "inventory_sha256": "8a8d1f48925ea178c008dc45a619d03fcdaecf504230ef79050d2a2ae6515e20",
+      "secure_boot": false,
+      "installation_tested": false,
+      "original_fixture_modified": false
+    },
+    {
+      "directory": "evidence-seq4-01-powercut",
+      "result": "passed",
+      "stage_count": 3,
+      "scope": "actual inactive-slot write interruption, old-slot reconciliation, retry, sequence-4 promotion, data/model-disable preservation and older signed release refusal",
+      "result_sha256": "2e52e23f6e872919864f04f66d87939587b3fda0625ed03d541c8d30707c64af",
+      "inventory_sha256": "c8d0ce2695fba99d46e1af0b96aeb11b2aad2ab6373d15a927a9bc9827aa692d",
+      "base_result_sha256": "c90001c1e8539009349fd38dce6840b8fb30cb9c138afcfa4bd501d2eabeff12",
+      "observed_target_write_bytes_at_cut": 37515264,
+      "injection": "QEMU SIGKILL during inactive-slot writes, excluding pre-consent bundle snapshot writes",
+      "secure_boot": false,
+      "physical_power_loss_tested": false,
+      "original_fixture_modified": false
+    },
+    {
+      "directory": "evidence-seq4-01-secure",
+      "result": "passed",
+      "stage_count": 1,
+      "scope": "signed live-boot smoke with virtual Secure Boot enabled",
+      "result_sha256": "a02931bb14afad7d7ba24cc432c82b88d81c0b07324cb77cb84e364867b62ed8",
+      "inventory_sha256": "ed861f889f13f473f0ba3cbd42d04d7121f70f3015c173c3b52cd231bc3e77c0",
+      "acceleration": "tcg",
+      "secure_boot": true,
+      "installation_tested": false
+    },
+    {
+      "directory": "evidence-seq4-01-unsigned",
+      "result": "passed",
+      "stage_count": 1,
+      "scope": "virtual firmware refusal of an unsigned bootloader copy",
+      "result_sha256": "1a2089d25e302a0e10b10d02ffd9d99a13c19c4d7de8d0974e1d5e32e00dca5a",
+      "inventory_sha256": "243083a586b5ad50822569b002eeb17a44ac7cc45cf8461f2e225f97c85020f0",
+      "acceleration": "tcg",
+      "secure_boot": true,
+      "installation_tested": false
+    }
+  ],
+  "tested_models": [
+    {
+      "id": "qwen3-4b-q4-k-m",
+      "runtime": "llama.cpp-b11100-cpu-amd64",
+      "weight_bytes": 2497280256,
+      "weight_sha256": "7485fe6f11af29433bc51cab58009521f205840f5b4ae3a32fa7f92e8534fdf5",
+      "preseeded": false,
+      "downloaded_by_native_installer": true,
+      "guest_memory_mib": 6144,
+      "guest_vcpus": 2,
+      "prompt_tokens": 18,
+      "completion_tokens": 14,
+      "generated_os_effects": false,
+      "larger_models_or_gpu_qualified": false
+    },
+    {
+      "id": "qwen3-1-7b-q4-k-m",
+      "runtime": "llama.cpp-b11100-cpu-amd64",
+      "weight_bytes": 1107408544,
+      "weight_sha256": "228fb5627f7510b8b3516cdb6435e4b0d2a2bf330fe5b0ab19284a3570a8bb1f",
+      "preseeded": false,
+      "downloaded_by_installed_model_command": true,
+      "fresh_os_installation_with_this_profile_tested": false,
+      "guest_memory_mib": 4096,
+      "guest_vcpus": 2,
+      "prompt_tokens": 18,
+      "completion_tokens": 14,
+      "offline_inference_tested": true,
+      "generated_os_effects": false,
+      "governed_4_to_6b_tier_qualification": false
+    }
+  ],
+  "source_tests": {
+    "rust": {"run": 19, "failed": 0, "warnings_denied": true},
+    "native_python_windows": {"run": 9, "failed": 0},
+    "native_python_ubuntu": {"run": 9, "failed": 0},
+    "reference_windows": {"run": 320, "failed": 0, "skipped": 5},
+    "reference_ubuntu_wsl": {"run": 320, "failed": 0, "skipped": 1}
+  },
+  "open_selected_evaluation": [],
+  "open_software": [
+    "native finite Admin, policy and durable effects integration",
+    "protected production identity, time, rollback anchors and key lifecycle",
+    "complete governed model-pack and model lifecycle contracts",
+    "qualified desktop and complete vertical workflow",
+    "bounded crash-orphan bundle staging reconciliation, retention and cleanup",
+    "remaining migration, interruption and adversarial matrix"
+  ],
+  "owner_inputs": [
+    "protected Admin/checkpoint deployment architecture selection",
+    "production custody approvals and protected equipment",
+    "native qualification machine, exact disposable target and firmware approvals"
+  ]
+}

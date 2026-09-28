@@ -81,6 +81,22 @@ private data. Model failure does not prevent OS health acknowledgement or manual
 workflow operation. Recovery's model-disable marker stops inference without
 disabling the reference workflow service in model-enabled images.
 
+After recovery disablement, investigate the original fault and repair/reinstall
+the selected profile first. If the administrator explicitly decides to re-enable
+inference on this lab image, with no concurrent installation/update/recovery:
+
+```sh
+sudo test -f /var/lib/luma-os/model-disabled
+sudo rm -- /var/lib/luma-os/model-disabled
+sudo systemctl start luma-model.service
+sudo systemctl status luma-model.service
+```
+
+The marker removal is an intentional local-root maintenance action, not a
+production Admin delegation workflow. Do not clear it automatically on boot or
+as part of a download retry. The runtime still checks the configured model's
+bytes/hash and enforces its sandbox and resource limits when it starts.
+
 The local administrator has normal root/sudo authority. The Rust console path
 is not a production implementation of finite Admin delegation. Do not expose
 the recovery console remotely, deploy this image as a multi-tenant service, or

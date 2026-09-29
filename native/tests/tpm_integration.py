@@ -109,6 +109,38 @@ def main():
             environment['LUMA_TPM_TEST_ADMISSION'] = 'occupied'
             run(admission)
             run(['cargo', 'test', '--offline', '--locked', '--', '--nocapture'])
+            # Real PAM/shadow account checks, confined to this fresh container.
+            # Never create, expire or lock an account on the Windows/WSL host.
+            pam_profile = Path('/etc/pam.d/luma-admin')
+            with pam_profile.open('xb') as stream:
+                stream.write((repo/'native/image/overlay/etc/pam.d/luma-admin').read_bytes())
+            pam_profile.chmod(0o644)
+            account_password = os.urandom(32).hex().encode('ascii')
+            (work/'account-password').write_bytes(account_password)
+            run(['useradd', '--uid', '32001', '--no-create-home', '--shell', '/bin/bash', 'luma-auth-test'])
+            subprocess.run(['chpasswd'], input=b'luma-auth-test:' + account_password + b'\n',
+                           check=True, stdout=log, stderr=subprocess.STDOUT, timeout=30)
+            pam_test = ['cargo', 'test', '--offline', '--locked', 'authentication::tests::local_pam_account',
+                        '--', '--ignored', '--exact', '--nocapture']
+            environment['LUMA_PAM_TEST_MODE'] = 'allow'
+            run(pam_test)
+            environment['LUMA_PAM_TEST_MODE'] = 'deny'
+            run(['usermod', '--lock', 'luma-auth-test'])
+            run(pam_test)
+            run(['usermod', '--unlock', 'luma-auth-test'])
+            run(['chage', '--expiredate', '1', 'luma-auth-test'])
+            run(pam_test)
+            run(['chage', '--expiredate', '-1', 'luma-auth-test'])
+            run(['chage', '--lastday', '0', 'luma-auth-test'])
+            run(pam_test)
+            run(['chage', '--lastday', str(int(time.time() // 86400)), 'luma-auth-test'])
+            run(['usermod', '--shell', '/usr/sbin/nologin', 'luma-auth-test'])
+            run(pam_test)
+            run(['usermod', '--shell', '/bin/bash', 'luma-auth-test'])
+            expected_pam = pam_profile.read_bytes()
+            pam_profile.write_bytes(b'auth sufficient pam_permit.so\naccount sufficient pam_permit.so\n')
+            run(pam_test)
+            pam_profile.write_bytes(expected_pam)
             # Disposable PCR-policy signer, distinct from release/firmware
             # keys; never exported and never used for production approval.
             run(['openssl', 'genpkey', '-algorithm', 'RSA', '-pkeyopt', 'rsa_keygen_bits:2048', '-out', work/'pcr-private.pem'])
@@ -289,7 +321,11 @@ def main():
                        'uki-measurement-prediction-matches-tpm-event-replay',
                        'uki-sysinit-credential-roundtrip', 'uki-ready-phase-credential-allow',
                        'uki-shutdown-phase-refusal', 'uki-initrd-phase-refusal',
-                       'uki-ab-credential-continuity-without-reseal', 'uki-unapproved-event-refusal'],
+                       'uki-ab-credential-continuity-without-reseal', 'uki-unapproved-event-refusal',
+                       'native-pam-account-authentication', 'wrong-password-refusal',
+                       'root-account-refusal', 'locked-account-refusal', 'expired-account-refusal',
+                       'nologin-account-refusal', 'password-change-required-refusal',
+                       'empty-password-refusal', 'unknown-account-refusal', 'pam-profile-substitution-refusal'],
               'sealed_credential_primitive_tested':True,
               'physical_tpm_tested':False, 'sealed_credential_enrollment_tested':False,
               'production_admin_authorization_tested':False, 'gate_closing':False}

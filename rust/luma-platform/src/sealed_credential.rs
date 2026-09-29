@@ -17,13 +17,18 @@ const HELPER: &str = "/usr/bin/systemd-creds";
 
 /// Anonymous, locked, nondumpable memfd mapping. No Debug/Serialize/Clone.
 /// The parent keeps pages locked while the helper accesses the same memfd.
-struct PrivateBuffer {
+pub(crate) struct PrivateBuffer {
     file: File,
     pointer: *mut u8,
     capacity: usize,
 }
 impl PrivateBuffer {
-    fn new(capacity: usize) -> Result<Self> {
+    pub(crate) fn descriptor(&self) -> Result<File> {
+        let mut file = self.file.try_clone()?;
+        file.seek(SeekFrom::Start(0))?;
+        Ok(file)
+    }
+    pub(crate) fn new(capacity: usize) -> Result<Self> {
         if capacity == 0 || capacity > MAX_BLOB {
             return Err("credential buffer outside bound".into());
         }
@@ -64,10 +69,10 @@ impl PrivateBuffer {
         result.bytes_mut().copy_from_slice(bytes);
         Ok(result)
     }
-    fn bytes(&self) -> &[u8] {
+    pub(crate) fn bytes(&self) -> &[u8] {
         unsafe { std::slice::from_raw_parts(self.pointer, self.capacity) }
     }
-    fn bytes_mut(&mut self) -> &mut [u8] {
+    pub(crate) fn bytes_mut(&mut self) -> &mut [u8] {
         unsafe { std::slice::from_raw_parts_mut(self.pointer, self.capacity) }
     }
 }

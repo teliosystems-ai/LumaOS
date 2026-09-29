@@ -146,6 +146,25 @@ new source changes are already present on installation media.
 
 ## Remaining software before the local installer can be complete
 
+The native `admin-auth-check LOGIN` diagnostic now performs masked
+controlling-terminal account authentication on an installed system. A separate
+non-setuid, root-only helper uses the fixed `luma-admin` PAM service, normal
+Ubuntu authentication and account checks, rejects root/system/nologin accounts,
+and never opens a session, changes a password or assigns a role. The caller
+validates its exact image-owned PAM profile and helper ownership/mode, clears
+the helper environment and bounds its execution/output. Password buffers in
+the caller and the helper's input are locked and wiped; PAM's own working
+allocations still need the complete service isolation/swap review. Standard PAM
+authentication auditing can record the account name and outcome, not passwords.
+
+Successful authentication is only a short-lived in-process observation. It is
+not a serializable bearer capability, enrollment record, role assignment or
+authorization for any effect. Enrollment still must bind it to the selected
+principal, deployment and protected TPM state, with identity-generation and
+credential-revocation checks at each authority boundary. The diagnostic does
+not activate product Admin. Real account/terminal tests and limitations are in
+the [authentication checkpoint](evidence/NATIVE_ADMIN_AUTH_2026-09-29.md).
+
 1. Evaluate the implemented pre-write TPM admission/intent path in a rebuilt
    image, and bind the selected product Admin principal through authenticated
    enrollment independently of root/sudo. Admission does not reserve an index

@@ -37,4 +37,4 @@ sha256sum rust/Cargo.toml rust/Cargo.lock rust/.cargo/config.toml \
     rust/luma-platform/Cargo.toml rust/luma-platform/build.rs \
     rust/luma-platform/src/*.rs rust/luma-platform/src/*.c native/tests/staging_linux_integration.py \
     native/tests/run_storage_boundaries.sh native/image/overlay/etc/systemd/system/luma-staging-clean.service \
-    native/image/assemble.py > "$output/source-sha256.txt"
+    native/image/assemble.py native/image/overlay/etc/pam.d/luma-admin > "$output/source-sha256.txt"

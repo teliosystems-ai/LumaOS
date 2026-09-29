@@ -1,0 +1,15 @@
+{
+  "data-root": "/mnt/luma-docker-build/docker",
+  "exec-root": "/run/luma-docker-build/exec",
+  "pidfile": "/run/luma-docker-build/docker.pid",
+  "hosts": ["unix:///run/luma-docker-build/docker.sock"],
+  "storage-driver": "overlay2",
+  "features": {"containerd-snapshotter": false},
+  "bridge": "none",
+  "iptables": false,
+  "ip6tables": false,
+  "ip-forward": false,
+  "ip-masq": false,
+  "log-driver": "local",
+  "log-opts": {"max-size": "10m", "max-file": "3"}
+}

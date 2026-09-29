@@ -27,4 +27,5 @@ sha256sum rust/Cargo.toml rust/Cargo.lock rust/.cargo/config.toml \
     native/tests/test_vm_tpm.py native/image/vm_tpm.py native/image/vm_test.py \
     native/image/boot_policy.py native/image/assemble.py native/image/export.py native/tests/test_boot_policy.py \
     native/image/overlay/usr/lib/dracut/modules.d/92luma-pcrphase/module-setup.sh \
+    native/image/overlay/etc/pam.d/luma-admin \
     native/image/Dockerfile.tools > "$output/source-sha256.txt"

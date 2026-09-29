@@ -3,6 +3,8 @@ set -euo pipefail
 repository=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)
 edition=${1:-headless}
 sequence=${2:-1}
+build_network=${LUMA_BUILD_NETWORK:-default}
+case "$build_network" in default|host|none) ;; *) echo 'unsupported build network' >&2; exit 2;; esac
 case "$edition" in headless|desktop) ;; *) echo 'edition must be headless or desktop' >&2; exit 2;; esac
 if ! [[ "$sequence" =~ ^[1-9][0-9]*$ ]]; then
     echo 'sequence must be a positive integer' >&2; exit 2
@@ -41,8 +43,8 @@ fi
 runtime_args=(--output "$runtime_context")
 if [ -n "${LUMA_RUNTIME_ARCHIVE:-}" ]; then runtime_args+=(--cached "$LUMA_RUNTIME_ARCHIVE"); fi
 python3 "$repository/native/image/prepare_runtime.py" "${runtime_args[@]}"
-docker build --build-arg "UBUNTU_BASE=$base" -f "$repository/native/image/Dockerfile.tools" -t "$tools" "$repository/native/image"
-docker build --build-arg "EDITION=$edition" -f "$repository/native/image/Dockerfile.root" -t "luma-native-root:20260927-$edition" "$runtime_context"
+docker build --network "$build_network" --build-arg "UBUNTU_BASE=$base" -f "$repository/native/image/Dockerfile.tools" -t "$tools" "$repository/native/image"
+docker build --network "$build_network" --build-arg "EDITION=$edition" -f "$repository/native/image/Dockerfile.root" -t "luma-native-root:20260927-$edition" "$runtime_context"
 docker volume create "$volume"
 docker volume create luma-native-lab-keys
 docker run --rm --network none --mount "type=volume,src=$volume,dst=/work" "$tools" mkdir /work/root

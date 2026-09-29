@@ -1,0 +1,54 @@
+{
+  "schema_version": 1,
+  "recorded_on": "2026-09-29",
+  "result": "passed-selected-account-terminal-and-platform-boundaries",
+  "source_base_commit": "2778b51bdc4cc3ff484137ccc0e3b4f87923a37b",
+  "source_state": "subsequent evaluated inputs identified by source-sha256.txt",
+  "evidence_directory": "D:\\LumaOS-builds\\native-tests-20260929-admin-auth-02",
+  "tools_image": "sha256:40d9d50237189a8880580e16edcaf1a3ff81ac996be9b4f180d397c7140b1bce",
+  "pam_package": "1.5.3-5ubuntu5.7",
+  "local_account_authentication_tested": true,
+  "authenticated_enrollment_implemented": false,
+  "product_admin_active": false,
+  "image_rebuilt": false,
+  "all_g2_components_available": false,
+  "guest_os_boot_tested": false,
+  "physical_qualification": false,
+  "g2_software_complete": false,
+  "gate_closing": false,
+  "counts": {
+    "ordinary_rust_tests_passed": 42,
+    "isolated_tests_ignored_in_ordinary_run": 6,
+    "explicit_tpm_test_invocations_passed": 20,
+    "explicit_pam_test_invocations_passed": 6,
+    "runner_boundary_labels_passed": 49,
+    "linux_python_tests_passed": 20
+  },
+  "evidence_files": [
+    {
+      "name": "transcript.txt",
+      "bytes": 49584,
+      "sha256": "8a277a6f8c0b9bf5b7c0263eef75a12e510fc83294f71dffd9e5403dd5be8ec2"
+    },
+    {
+      "name": "uki-policy.json",
+      "bytes": 1225,
+      "sha256": "b9092583898ac636c121344ac9f628b50929be2695b119a9b9c0cf9100b1b9a3"
+    },
+    {
+      "name": "result.json",
+      "bytes": 2392,
+      "sha256": "f6f913fb8b5d197338c98c9e387aed6917aef0d52976d44878a77025af69601c"
+    },
+    {
+      "name": "native-tests.txt",
+      "bytes": 2862,
+      "sha256": "9c542e4084f5d756b40a010d54f9c4267cba2d6f8c48b521c6d92f47d30c9827"
+    },
+    {
+      "name": "source-sha256.txt",
+      "bytes": 2948,
+      "sha256": "7dead9503afe35967421cc442135ed6e575d71c25d5249413cee103b957e85f2"
+    }
+  ]
+}

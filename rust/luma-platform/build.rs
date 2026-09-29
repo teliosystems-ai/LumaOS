@@ -23,4 +23,20 @@ fn main() {
     println!("cargo:rustc-link-lib=static=luma_tpm");
     println!("cargo:rustc-link-lib=tss2-esys");
     println!("cargo:rustc-link-lib=tss2-tctildr");
+    println!("cargo:rerun-if-changed=src/auth_pam.c");
+    assert!(Command::new("cc")
+        .args([
+            "-std=c11",
+            "-O2",
+            "-Wall",
+            "-Wextra",
+            "-Werror",
+            "src/auth_pam.c",
+            "-lpam",
+            "-o"
+        ])
+        .arg(out.join("luma-auth-helper"))
+        .status()
+        .expect("PAM helper compiler")
+        .success());
 }

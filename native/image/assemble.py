@@ -138,6 +138,12 @@ def main() -> None:
     binary.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(WORK/'cargo/release/luma-platform',binary)
     binary.chmod(0o755)
+    helpers = list((WORK/'cargo/release/build').glob('luma-platform-*/out/luma-auth-helper'))
+    if len(helpers) != 1:
+        raise SystemExit('expected one freshly compiled PAM authentication helper')
+    auth_helper = binary.parent/'luma-auth-helper'
+    shutil.copy2(helpers[0], auth_helper)
+    auth_helper.chmod(0o700)  # Never setuid; only the trusted root process calls it.
     (ROOT/'usr/bin/luma-platform').symlink_to('/usr/libexec/luma-os/luma-platform')
     shutil.copytree(REPO/'native/image/overlay',ROOT,dirs_exist_ok=True)
     # WSL Windows-mounted source files often report 0777. Never propagate those

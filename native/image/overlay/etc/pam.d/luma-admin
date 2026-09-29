@@ -1,0 +1,3 @@
+# Luma local account authentication only; not a product role assignment.
+@include common-auth
+@include common-account

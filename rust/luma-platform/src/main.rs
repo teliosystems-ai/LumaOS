@@ -1,5 +1,6 @@
 //! Native Linux platform boundary. No model-provided command or shell execution.
 mod admin_journal;
+mod authentication;
 mod bundle;
 mod disk;
 mod model;
@@ -57,6 +58,7 @@ fn dispatch() -> Result<()> {
             Ok(())
         }
         Some("admin-checkpoint-status") if args.len() == 1 => admin_journal::status(),
+        Some("admin-auth-check") if args.len() == 2 => authentication::check(&args[1]),
         Some("staging-clean") if args.len() == 1 => {
             println!("{}", serde_json::to_string(&staging::clean()?)?);
             Ok(())
@@ -106,6 +108,7 @@ fn dispatch() -> Result<()> {
         Some("init-data") if args.len() == 2 => platform::init_data(&args[1]),
         Some("help" | "--help") | None => {
             println!("Local TPM diagnostics: tpm-probe | admin-checkpoint-status (root only; read-only; neither enrolls nor grants Admin). External Admin deployment is deferred.");
+            println!("admin-auth-check LOGIN: installed-system, controlling-terminal account authentication diagnostic; does not enroll or grant product Admin.");
             println!("Install requires local TPM2 admission before any disk write. admin-install-check is read-only and does not enroll Admin; sealed product enrollment remains pending.");
             println!("Maintenance: staging-clean | model-clean (root only; preserves active operations and unknown files).");
             println!("Model operations: models | model-install MODEL-ID | model-chat (prompt on stdin).\nInstaller accepts --model MODEL-ID or --model manual-only; otherwise prompts.\nWeights are acquired from pinned HTTPS publisher URLs after hardware admission.");

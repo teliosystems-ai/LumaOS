@@ -271,6 +271,9 @@ def main() -> None:
         '--kver',version,ROOT/'boot/luma-initrd')
     initrd = ROOT/'boot/luma-initrd'
     initrd_policy = boot_policy.verify_initrd(initrd)
+    import shutdown_policy
+    shutdown_policy.configure(ROOT, version)
+    initrd_policy['shutdown'] = shutdown_policy.verify_initrd(initrd)
     root_image = OUT/'root.ext4'
     with root_image.open('xb') as f: f.truncate(4*1024*MIB)
     run('mkfs.ext4','-F','-L','luma-root','-d',ROOT,root_image)

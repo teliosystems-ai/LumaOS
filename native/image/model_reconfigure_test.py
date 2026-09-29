@@ -10,7 +10,7 @@ import json
 from pathlib import Path
 import subprocess
 from vm_test import VM, TEST_SOURCES, installed_login
-from model_vm_test import healthy
+from model_vm_test import healthy, infer
 
 MODEL='qwen3-1-7b-q4-k-m'
 
@@ -38,7 +38,7 @@ def main():
     if not backing.is_file() or not backing.is_relative_to(base):raise SystemExit('invalid base disk')
     work.mkdir();target=work/'target.qcow2'
     subprocess.run(['qemu-img','create','-f','qcow2','-F','qcow2','-b',str(backing),str(target)],check=True)
-    stages=[];inference=None
+    stages=[];inference=None;inferences=[]
     for stage in ('install-small-profile','offline-small-profile'):
         print('Model reconfiguration stage: '+stage,flush=True)
         vm=VM(image,work/stage,target,False,5400,network=stage=='install-small-profile')
@@ -55,18 +55,15 @@ def main():
                 vm.run('rm /var/lib/luma-os/model-disabled && systemctl start luma-model.service')
             healthy(vm)
             vm.run('test "$(cat /sys/fs/cgroup/system.slice/luma-model.service/memory.max)" = 2684354560')
-            output=vm.run("printf 'Reply with a short greeting.' | luma-platform model-chat",timeout=240)
-            for line in output.decode(errors='replace').splitlines():
-                if line.startswith('{"model":'):inference=json.loads(line)
-            if not inference or inference['model']!=MODEL or inference['usage']['completion_tokens']<=0:
-                raise RuntimeError('no real small-profile response')
+            inference=infer(vm,MODEL)
+            inferences.append({'stage':stage,'response':inference})
             vm.run('luma-platform model-install not-a-catalog-model',expected=1)
             vm.run('systemctl is-active luma-model.service luma-reference.service')
             vm.run('sync');stages.append(stage)
         finally:vm.close()
     record={'result':'passed','stages':stages,'image_sha256':image_hash,
         'base_result_sha256':digest(base/'result.json'),'base_run':base.name,
-        'model':MODEL,'guest_memory_mib':4096,'inference':inference,
+        'model':MODEL,'guest_memory_mib':4096,'inference':inference,'inferences':inferences,
         'acquisition':'publisher-https-download-by-installed-native-model-command',
         'preseeded_weights':False,'recovery_disable_preserved_until_operator_enable':True,
         'original_fixture_modified':False,'secure_boot_tested':False,

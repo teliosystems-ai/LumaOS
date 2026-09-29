@@ -41,4 +41,5 @@ sha256sum rust/Cargo.toml rust/Cargo.lock rust/.cargo/config.toml \
     native/image/overlay/etc/systemd/system/media-luma.mount \
     native/image/overlay/etc/systemd/system/luma-live-*.service \
     native/image/overlay/etc/udev/rules.d/99-luma-tpm.rules \
+    native/image/overlay/usr/lib/dracut/modules.d/91luma/*.sh \
     native/image/Dockerfile.tools native/image/overlay/etc/pam.d/luma-admin > "$output/source-sha256.txt"

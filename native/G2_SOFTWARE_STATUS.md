@@ -1,6 +1,6 @@
 # G2 software completion register
 
-Updated 2026-09-29. **G2 software is not complete.** This register separates
+Updated 2026-09-30. **G2 software is not complete.** This register separates
 work that can be executed in the current Windows/Ubuntu WSL/VM environment
 from production deployment decisions and physical qualification. It does not
 change the frozen reference release, governing requirements, or exit criteria.
@@ -13,11 +13,23 @@ requirement.
 
 ## Current software inventory and work still required
 
+Latest image-specific result: sequence 8 passed its four-stage manual install,
+installed PAM, measured-credential, cold-reboot, signed A/B continuity and
+unapproved-PCR refusal fixture under TCG/Secure Boot/software TPM. Evidence is
+exported with the image; see [the sequence-8 checkpoint](evidence/TEST_IMAGE_SEQUENCE8_2026-09-30.md).
+That run exposed shutdown storage-teardown warnings, so it does not qualify
+clean shutdown. A source repair and stricter fixture passed unit/sysroot checks;
+sequence 9 is rebuilding for image-level evaluation. Full Admin enrollment and
+the other software components below remain open.
+The [shutdown checkpoint](evidence/NATIVE_SHUTDOWN_2026-09-30.md) records the
+repair, source tests and queued strict/broader VM suites; pending tests are not
+passes and neither suite closes all G2 requirements.
+
 | Component | Implemented/evaluated scope | Remaining work before software completion |
 | --- | --- | --- |
-| Installer and media | Real laboratory-signed Ubuntu 24.04 image; explicit disk consent, LUKS2, independent credentials, install-time manual/4B/1.7B choice, pinned download; sequence-4 VM tests passed; subsequent source adds mandatory pre-write local TPM admission and pending enrollment intent | Sealed Admin enrollment and authenticated bootstrap, governed production catalog/pack and offline distribution, full rejection/interruption matrix; rebuild and evaluate the new admission path in an image |
-| Boot, update, recovery | Signed UKI, A/B verity roots, essential-health acknowledgement, three-attempt fallback, independent export/repair/disable; selected VM faults passed; subsequent builder source adds signed installed PCR policies with artifact and software-TPM replay tests | Integrate/evaluate measured boot phases and credential delivery on rebuilt images; complete interruption and migration matrix, including pre-userspace failures; protected production rollback anchors; storage-pressure and recovery-retention cases |
-| Temporary storage | New locked, bounded snapshot/download reconciliation; sparse-aware admission and exact-file cleanup; Linux boundary tests in `native/tests` | New-image boot/service and repeated guest-interruption evaluation; operator-reviewed disposition of legacy snapshots, which cannot safely be assumed inactive |
+| Installer and media | Real laboratory-signed Ubuntu 24.04 image; explicit disk consent, LUKS2, independent credentials, install-time manual/4B/1.7B choice, pinned download; sequence 8 passed pre-write TPM admission, pending enrollment intent and manual installation on a fresh virtual disk | Sealed Admin enrollment and authenticated bootstrap, governed production catalog/pack and offline distribution, full rejection/interruption matrix; rerun actual model acquisition on the new image |
+| Boot, update, recovery | Signed UKI, A/B verity roots, essential-health acknowledgement, three-attempt fallback, independent export/repair/disable; selected earlier VM faults passed; sequence 8 passed measured phases, public credential continuity through reboot/signed B and unapproved-PCR refusal | Complete confined service credential delivery and lifecycle; evaluate clean-shutdown repair in sequence 9; complete interruption and migration matrix, including pre-userspace failures; protected production rollback anchors; storage-pressure and recovery-retention cases |
+| Temporary storage | Locked, bounded snapshot/download reconciliation; sparse-aware admission and exact-file cleanup; Linux boundary tests in `native/tests`; sequence 8 verified successful startup maintenance service execution | Repeated guest-interruption/pressure evaluation; operator-reviewed disposition of legacy snapshots, which cannot safely be assumed inactive |
 | Model lifecycle and resources | Two pinned CPU profiles; hardware admission, isolated UID, authenticated loopback runtime, systemd memory/device/process restrictions; actual inference and offline reboot passed | Full governed model-pack/catalog lifecycle; atomic resource leases and generations, stale-worker fencing, pressure/quarantine/restart policy; 1,000 **real compact-model** cycles with measured resource return and performance distributions |
 | Admin, policy, and effects | Frozen Python contracts and negative tests; native broker verifies kernel peer identity; local TPM2 checkpoint/journal and signed-PCR sealing; native PAM account authentication with real isolated-account tests | Integrate authenticated enrollment/sealed credential delivery, finite Admin assignment/revocation, product principal binding and lifecycle, effect-time grants, durable effect receipts and reconciliation; account authentication and root/sudo operations are not the product Admin service |
 | Skills and vertical workflow | Isolated reference worker and manual reference interface | Signed skill registry, native typed-DAG validation/supervision, descriptor-scoped file-read and artifact-write skills, deterministic calculation, cancellation/checkpoint/restart semantics; distributed-image file-to-artifact journey through those interfaces |
@@ -76,6 +88,13 @@ suspend/resume behavior require approved native hardware. Exact destructive
 targets and recovery/firmware approvals are still required. See
 `docs/gates/g2/PHYSICAL_QUALIFICATION_RUNBOOK.md` and
 `native/evidence/TEST_IMAGE_2026-09-28.md`.
+
+## Build history (superseded states retained for traceability)
+
+The paragraphs below describe checkpoints at the time they were recorded.
+Use the latest result and inventory at the top for current status: the C: space
+blocker and sequence-6/7 failures were subsequently addressed, and sequence 8
+completed its scoped fixture. Historical pending text is not a current pass.
 
 The sequence-5 image was built and exported on 2026-09-29 after the owner
 reported D: repaired. It includes the later TPM admission, signed-PCR and PAM

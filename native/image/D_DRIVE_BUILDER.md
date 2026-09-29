@@ -55,6 +55,13 @@ filesystem assembly. A bounded local pipeline will run the fresh VM fixture
 only after successful verified export. See the
 [sysroot integration checkpoint](../evidence/NATIVE_INITRD_SYSROOT_2026-09-29.md).
 
+Sequence 8 completed export and its four-stage Admin/PCR VM suite. Shutdown
+storage warnings remained and led to a further source repair. Sequence 9
+(`20260929T221048Z-headless`) is building with that repair; its gated pipeline
+will run strict shutdown/Admin/PCR checks followed by the broader 14-stage VM
+regression. Results are pending; see the
+[shutdown checkpoint](../evidence/NATIVE_SHUTDOWN_2026-09-30.md).
+
 ## Earlier isolated-daemon proposal and storage incident
 
 The build client in this environment uses Docker Engine inside Ubuntu WSL,

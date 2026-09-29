@@ -25,6 +25,7 @@ sha256sum rust/Cargo.toml rust/Cargo.lock rust/.cargo/config.toml \
     rust/luma-platform/src/*.rs rust/luma-platform/src/*.c \
     native/tests/run_tpm_boundaries.sh native/tests/*.py native/image/*.py \
     native/image/overlay/usr/lib/dracut/modules.d/92luma-pcrphase/module-setup.sh \
+    native/image/overlay/usr/lib/dracut/modules.d/91luma/*.sh \
     native/image/overlay/etc/pam.d/luma-admin \
     native/image/overlay/etc/udev/rules.d/99-luma-tpm.rules \
     native/image/overlay/usr/lib/systemd/system-generators/luma-boot-generator \

@@ -13,6 +13,7 @@ import subprocess
 
 from vm_test import (ADMIN_PASSWORD, TEST_SOURCES, VM, install, installed_login,
                      live_ready)
+from vm_shutdown import poweroff
 
 PUBLIC_VALUE = 'public-luma-pcr-credential-fixture'
 CREDENTIAL = '/var/lib/luma-os/vm-public-credential.cred'
@@ -68,6 +69,7 @@ def main():
     parser.add_argument('--work', type=Path, required=True)
     parser.add_argument('--timeout', type=int, default=1800)
     parser.add_argument('--secure-boot', action='store_true')
+    parser.add_argument('--require-clean-shutdown', action='store_true')
     parser.add_argument('--accel', choices=('auto', 'kvm', 'tcg'), default='auto')
     args = parser.parse_args()
     image = args.image.resolve(strict=True)
@@ -107,11 +109,8 @@ def main():
                     vm.run('tpm2_pcrextend -T device:/dev/tpmrm0 11:sha256='+event)
                     vm.run(f'systemd-creds --tpm2-device=/dev/tpmrm0 --name=luma-vm-public '
                            f'--tpm2-signature={SIGNATURE} decrypt {CREDENTIAL} /dev/null', expected=1)
+            poweroff(vm, args.require_clean_shutdown)
             stages.append(name)
-            vm.run('sync')
-            vm.send('systemctl poweroff')
-            if vm.wait_exit() != 0:
-                raise RuntimeError('guest poweroff failed')
         finally:
             vm.close()
     with image.open('rb') as stream:
@@ -121,6 +120,7 @@ def main():
               'pam_authentication_tested': True, 'measured_boot_credential_tested': True,
               'credential_reboot_continuity_tested': True, 'unapproved_pcr_refusal_tested': True,
               'credential_ab_continuity_tested': True,
+              'clean_shutdown_tested': args.require_clean_shutdown,
               'admin_enrollment_tested': False, 'physical_hardware_tested': False,
               'gate_closing': False, 'test_sources': TEST_SOURCES}
     (work/'result.json').write_text(json.dumps(record, indent=2)+'\n')

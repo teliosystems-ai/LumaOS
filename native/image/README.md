@@ -281,6 +281,15 @@ docker run --rm --device=/dev/kvm \
   --work /work/vm-model-new
 ```
 
+Use `--secure-boot --accel tcg --require-clean-shutdown` for the software-TPM,
+TCG fixture on images containing the late-shutdown integration. Omit
+`--device=/dev/kvm` when selecting TCG. This enables Secure Boot in the private
+VM firmware, checks it during every stage, and requires positive filesystem/DM
+teardown after each stage. The result records these options; earlier model
+results are not upgraded. Even without the stricter option, the runner now
+requests guest power-off and requires a successful exit instead of treating
+host termination as clean shutdown.
+
 Unlike the offline platform suite, this command deliberately omits
 `--network none`. It opens no guest port forwards. The runner checks real
 completion-token output, unauthorized API refusal, kernel restrictions,
@@ -538,6 +547,13 @@ records the exact image and fixture-source hashes; no success is inferred merely
 from adding this runner. This exercises the installed systemd credential path,
 not completed native enrollment or a production Admin service. Never attach a
 physical TPM or an existing installation disk to this fixture.
+
+For images containing the late-shutdown integration, add
+`--require-clean-shutdown`. Each stage must have the restore service armed and
+the immutable initrd alias available, then emit `LUMA_SHUTDOWN_STORAGE_CLEAN`
+after the old-root mounts and device-mapper devices are absent. Merely exiting
+QEMU successfully is insufficient. Earlier sequence-8 results did not execute
+this stricter check and retain their shutdown warnings as unresolved evidence.
 
 ### Gate boundary
 

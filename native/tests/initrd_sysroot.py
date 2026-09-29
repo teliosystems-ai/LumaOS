@@ -23,6 +23,7 @@ import boot_policy
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--output', type=Path, required=True)
+    parser.add_argument('--check-shutdown', action='store_true')
     args = parser.parse_args()
     root = Path('/work/root')
     output = args.output.resolve()
@@ -36,13 +37,21 @@ def main():
     paths = ('etc/udev/rules.d/99-luma-tpm.rules',
              'usr/lib/dracut/modules.d/92luma-pcrphase/module-setup.sh')
     sources = {p:hashlib.sha256((root/p).read_bytes()).hexdigest() for p in paths}
+    if args.check_shutdown:
+        for path in (root/'usr/lib/dracut/modules.d/91luma').glob('*.sh'):
+            sources[str(path.relative_to(root))] = hashlib.sha256(path.read_bytes()).hexdigest()
     with tempfile.TemporaryDirectory(prefix='luma-sysroot-initrd-') as folder:
         initrd = Path(folder)/'initrd'
         subprocess.run(['dracut', '--sysroot', str(root), '--force', '--no-kernel',
                         '--tmpdir', '/tmp', '--no-hostonly', '--no-hostonly-cmdline',
                         '--no-compress', '--modules',
-                        'systemd systemd-initrd luma-pcrphase', str(initrd)], check=True)
+                        'systemd systemd-initrd luma-pcrphase'+
+                        (' shutdown dm luma' if args.check_shutdown else ''), str(initrd)], check=True)
         policy = boot_policy.verify_initrd(initrd)
+        if args.check_shutdown:
+            import shutdown_policy
+            policy['shutdown'] = shutdown_policy.verify_initrd(initrd)
+            sources['shutdown_verifier'] = hashlib.sha256(Path(shutdown_policy.__file__).read_bytes()).hexdigest()
     record = {'result':'passed', 'kind':'kernel-less-sysroot-initrd',
               'policy':policy, 'sources':sources, 'os_boot_tested':False,
               'gate_closing':False,

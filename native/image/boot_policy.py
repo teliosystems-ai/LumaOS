@@ -79,9 +79,13 @@ def verify_initrd(initrd):
              for line in listing.splitlines() if line.split()}
     required = {'usr/lib/systemd/systemd-pcrextend',
                 'usr/lib/systemd/system/systemd-pcrphase-initrd.service',
-                'usr/lib/systemd/system/initrd.target.wants/systemd-pcrphase-initrd.service'}
+                'usr/lib/systemd/system/initrd.target.wants/systemd-pcrphase-initrd.service',
+                'etc/udev/rules.d/99-luma-tpm.rules'}
     if not required <= paths or not any('/libtss2-esys.so.' in path for path in paths):
-        raise ValueError('initrd lacks PCR phase helper, unit, activation or TPM library')
+        raise ValueError('initrd lacks PCR phase helper, unit, activation, TPM rules or library')
+    expected_rules = (Path(__file__).parent/'overlay/etc/udev/rules.d/99-luma-tpm.rules').read_bytes()
+    if command('lsinitrd', '--file', 'etc/udev/rules.d/99-luma-tpm.rules', initrd) != expected_rules:
+        raise ValueError('initrd TPM ownership rules differ from image policy')
     return {'phase_module': 'luma-pcrphase', 'required_paths': sorted(required)}
 
 

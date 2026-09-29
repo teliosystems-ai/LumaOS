@@ -28,9 +28,32 @@ remaining implementation and acceptance requirements remain open.
 Sequence 5 completed verified export, but its TCG installation test exposed a
 live-payload device timeout. The corrected sequence-6 build uses
 `D:\LumaOS-builds\work\20260929T175214Z-headless` and export target
-`D:\LumaOS-builds\native\20260929T175214Z-headless`. Its build is in progress;
-do not treat that target as a completed image. See the
-[image/test checkpoint](../evidence/TEST_IMAGE_2026-09-29.md) for exact outcomes.
+`D:\LumaOS-builds\native\20260929T175214Z-headless`. Its verified export completed,
+and live-media mounting passed, but installation was refused because the
+packaged TPM device ownership conflicts with the native admission check. See
+the [sequence-6 checkpoint](../evidence/TEST_IMAGE_SEQUENCE6_2026-09-29.md).
+
+Before another build, C: was observed with 6,105,718,784 free bytes (about
+5.7 GiB), below the builder's 8 GiB minimum; D: had 382,445,289,472 free bytes.
+The TPM ownership repair needs another image, but no rebuild was started and
+no capacity threshold was bypassed. Free space on C: is required (preferably
+12-16 GiB headroom), or a separately approved supported storage relocation.
+No old build volumes, evidence, keys or unrelated data were deleted. Removing
+Linux files alone does not guarantee the Windows-backed virtual disk shrinks.
+
+The owner subsequently freed C: space. Read-only checks reported
+20,226,060,288 free bytes on C: and 372,726,038,528 on D:. The sequence-7
+preflight passed and build `20260929T194815Z-headless` started with the tested
+TPM ownership repair. Its work/export directories follow the same layout on
+D:. Completion, exported digests and boot acceptance are pending; the earlier
+capacity blocker is no longer active for this build.
+
+Sequence 7 then failed its initrd content guard before disk-image generation.
+A separate-root dracut inclusion fix passed a retained-root regression, and
+sequence 8 (`20260929T195529Z-headless`) passed that full-build guard and entered
+filesystem assembly. A bounded local pipeline will run the fresh VM fixture
+only after successful verified export. See the
+[sysroot integration checkpoint](../evidence/NATIVE_INITRD_SYSROOT_2026-09-29.md).
 
 ## Earlier isolated-daemon proposal and storage incident
 

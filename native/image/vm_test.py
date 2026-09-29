@@ -152,6 +152,7 @@ def live_ready(vm: VM) -> None:
     if vm.secure_boot:
         vm.run('test "$(od -An -tu1 -j4 /sys/firmware/efi/efivars/SecureBoot-8be4df61-93ca-11d2-aa0d-00e098032b8c | tr -d \' \\n\')" = 1')
     vm.run('systemctl is-active media-luma.mount && test -s /media/luma/release.json && test -s /media/luma/release.sig')
+    vm.run('stat -c "%F %u %g %a" /dev/tpmrm0 && luma-platform tpm-probe')
 
 
 def install(vm: VM,model: str='manual-only') -> None:
@@ -160,7 +161,9 @@ def install(vm: VM,model: str='manual-only') -> None:
     mutation="import json; from pathlib import Path; p=Path('/tmp/bad-bundle/release.json'); m=json.loads(p.read_text()); m['sequence']+=1; p.write_text(json.dumps(m))"
     vm.run('python3 -c '+shlex.quote(mutation))
     vm.run(f'head -c 1048576 {TARGET} | sha256sum > /tmp/before-install.sha256')
-    vm.run(f'luma-platform install {TARGET} /tmp/bad-bundle --model manual-only',expected=1)
+    refused = vm.run(f'luma-platform install {TARGET} /tmp/bad-bundle --model manual-only',expected=1)
+    if b'release signature verification failed' not in refused:
+        raise RuntimeError('tampered bundle was not rejected at signature verification')
     vm.run(f'head -c 1048576 {TARGET} | sha256sum | cmp - /tmp/before-install.sha256')
     if model=='manual-only':
         refused=vm.run(f'luma-platform install {TARGET} /media/luma --model qwen3-4b-q4-k-m',expected=1)

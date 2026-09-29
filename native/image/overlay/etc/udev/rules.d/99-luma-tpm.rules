@@ -1,0 +1,4 @@
+# Native TPM access belongs to root-invoked platform services, not login users.
+# Final assignments override the packaged tss ownership in live and installed boot.
+SUBSYSTEM=="tpm", KERNEL=="tpm[0-9]*", OWNER:="root", GROUP:="root", MODE:="0600"
+SUBSYSTEM=="tpmrm", KERNEL=="tpmrm[0-9]*", OWNER:="root", GROUP:="root", MODE:="0600"

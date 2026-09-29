@@ -87,6 +87,27 @@ timeout before installation. A live-only, bounded mount fix passed targeted
 Linux tests and a sequence-6 rebuild was started. Installed PAM/PCR acceptance
 remains unexecuted. Neither image is the final all-components G2 image.
 
+Sequence 6 subsequently completed verified export and passed the live mount
+checks. Installation was refused by the native root-owned TPM-device check:
+the packaged udev rules instead assign devices to `tss`. An image/initrd
+root-only rule and more specific VM assertions passed the full native regression
+suite (42 ordinary Rust tests, 20 TPM/6 PAM invocations and 27 Linux Python
+tests). Rebuilding is blocked by C: free space below the 8 GiB build minimum;
+see the
+[sequence-6 checkpoint](evidence/TEST_IMAGE_SEQUENCE6_2026-09-29.md). No
+installed-image PAM, credential continuity or all-components G2 pass is claimed.
+
+The owner subsequently freed C: space; sequence 7 (`20260929T194815Z-headless`)
+passed the space preflight and is rebuilding with the tested TPM ownership
+repair. Export and boot-test results are pending. No prior-image acceptance
+is inherited and no G2 requirement is closed merely by starting this build.
+
+Sequence 7 was subsequently rejected by its initrd guard: the rule-copy helper
+looked on the build host instead of the target sysroot. The corrected module
+passed a read-only retained-root regression. Sequence 8 is building and has
+passed the full-kernel initrd guard; a fresh VM run is gated on successful
+export. See [the sysroot checkpoint](evidence/NATIVE_INITRD_SYSROOT_2026-09-29.md).
+
 The previously exported sequence-4 image remains unchanged. Its evidence
 cannot be reused as acceptance evidence for subsequent source-only fixes.
 The new storage implementation's executed scope and outstanding image tests

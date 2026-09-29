@@ -140,9 +140,13 @@ The artifact, initrd and software-TPM replay checks are recorded in the
 [UKI policy checkpoint](evidence/NATIVE_UKI_POLICY_2026-09-29.md). These do not
 establish that real firmware/stub/boot-phase measurements match on a guest or
 that a confined Admin service receives its credential at the correct phase.
-The previous exported OS
-image is unchanged. Do not enroll against its unsigned-PCR UKIs or assume these
-new source changes are already present on installation media.
+Sequence 6 includes these signed policies and successfully booted the live
+image, but its installer was refused because Ubuntu's packaged udev rules
+assign the TPM device to `tss` while native admission requires root ownership.
+The source repair installs final root:root 0600 rules in both the image and
+initrd and retains the native root-owned-device check. It is not in sequence 6;
+see the [image checkpoint](evidence/TEST_IMAGE_SEQUENCE6_2026-09-29.md).
+Do not interpret live boot or source tests as installed Admin enrollment.
 
 ## Remaining software before the local installer can be complete
 

@@ -133,6 +133,12 @@ class BootPhaseInitrdTests(unittest.TestCase):
         # copytree refuses an existing target; cleanup removes only this copy.
         shutil.copytree(source, module)
         self.addCleanup(shutil.rmtree, module)
+        rules = Path('/etc/udev/rules.d/99-luma-tpm.rules')
+        rules.parent.mkdir(parents=True, exist_ok=True)
+        with rules.open('xb') as stream:
+            self.addCleanup(rules.unlink)
+            stream.write((IMAGE/'overlay/etc/udev/rules.d/99-luma-tpm.rules').read_bytes())
+        rules.chmod(0o644)
         with tempfile.TemporaryDirectory(prefix='luma-initrd-policy-') as folder:
             output = Path(folder) / 'initrd'
             policy.command('dracut', '--force', '--no-kernel', '--no-hostonly',

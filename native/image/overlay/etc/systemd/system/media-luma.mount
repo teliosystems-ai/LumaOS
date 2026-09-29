@@ -1,0 +1,14 @@
+[Unit]
+Description=Luma live installation and recovery payload
+ConditionKernelCommandLine=luma.mode=live
+Before=luma-live-console.service luma-live-vt.service
+
+[Mount]
+What=/dev/disk/by-partlabel/luma-payload
+Where=/media/luma
+Type=ext4
+Options=ro,nodev,nosuid,noexec
+TimeoutSec=90
+
+# Enabled only by luma-boot-generator in live mode. A Wants dependency preserves
+# the recovery console on failure; the generator bounds device discovery to 90s.

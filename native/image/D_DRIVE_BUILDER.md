@@ -1,4 +1,38 @@
-# Dedicated D: Docker builder (blocked by storage health)
+# D: build storage and recovery record
+
+## Resumed external-artifact build
+
+After the owner reported completing repairs on 2026-09-29, a new read-only
+check reported **Healthy / OK**, with no CHKDSK process running. D: remains
+**exFAT**. This is a filesystem-health observation, not a surface-test or
+artifact-integrity certificate; the owner's repair transcript was not imported.
+
+The separate sparse/ACL-backed Docker-daemon proposal below remains unavailable
+on this filesystem. Instead, the existing external-artifact build mode was
+resumed: cached Docker layers, the small Linux workspace and private signing
+keys stay in Ubuntu's C:-backed storage; large public image artifacts and fresh
+VM disks use D:. No drive reformat, Docker migration or private-key transfer
+was performed. The unused 256 GiB backing file is unchanged.
+
+Before launch, the cached root filesystem measured 1,251,774,464 bytes. The
+build preflight recorded 11,964,891,136 free bytes on C: (8 GiB minimum) and
+439,318,478,848 on D: (40 GiB minimum). The cached runtime archive from D:
+was revalidated against its pinned size and SHA-256 before reuse. Old VM disks
+are not reused as qualification evidence.
+
+The fresh sequence-5 build uses `D:\LumaOS-builds\work\20260929T170514Z-headless`
+for artifacts, with export target `D:\LumaOS-builds\native\20260929T170514Z-headless`.
+Build/VM results must be checked before calling this image test-ready. G2's
+remaining implementation and acceptance requirements remain open.
+
+Sequence 5 completed verified export, but its TCG installation test exposed a
+live-payload device timeout. The corrected sequence-6 build uses
+`D:\LumaOS-builds\work\20260929T175214Z-headless` and export target
+`D:\LumaOS-builds\native\20260929T175214Z-headless`. Its build is in progress;
+do not treat that target as a completed image. See the
+[image/test checkpoint](../evidence/TEST_IMAGE_2026-09-29.md) for exact outcomes.
+
+## Earlier isolated-daemon proposal and storage incident
 
 The build client in this environment uses Docker Engine inside Ubuntu WSL,
 not the separate Docker Desktop engine. Its existing `/var/lib/docker` and
@@ -14,7 +48,7 @@ as exFAT, which does not support ACLs or sparse files. No private key transfer
 has occurred. The proposed sparse-file setup requires healthy NTFS storage;
 changing the existing drive's filesystem is not authorized.
 
-## Current state, 2026-09-29
+## Historical state before recovery, 2026-09-29
 
 - Created the dedicated directory and a new empty backing file.
 - Added `docker-d-drive.json` and `start_d_drive_docker.sh`; the shell scripts

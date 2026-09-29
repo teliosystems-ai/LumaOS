@@ -508,6 +508,37 @@ tests as enrolled-Admin continuity evidence. `collect_evidence.py` does not
 export software-TPM state. The fixture requires a disposable tools container
 without physical TPM devices; its transport is never a product fallback.
 
+### Booted account-authentication and PCR fixture
+
+`admin_vm_test.py` adds a separate installed-image check for the native PAM
+diagnostic and signed-PCR credential policy. Use the same disposable VM mounts,
+private `LUMA_VM_TPM_ROOT` volume and KVM device described above, with a fresh
+`/work/vm-*` directory:
+
+```sh
+python3 /repo/native/image/admin_vm_test.py \
+  --image /work/artifacts/EXACT-IMAGE-FROM-BUILD.img \
+  --work /work/vm-admin-new --secure-boot --accel kvm
+```
+
+KVM availability alone does not establish that nested virtualization works.
+If QEMU fails in that backend, retain its logs and use `--accel tcg` with a
+different fresh work directory for software-emulated evaluation. Do not report
+that run as KVM qualification. This occurred on the current WSL host during
+the sequence-5 evaluation.
+
+It installs manual mode, authenticates the public fixture administrator from
+the controlling console, checks wrong-password/non-root rejection, and confirms
+that authentication does not report product Admin authority. A public test
+credential is sealed with PCR7 plus signed PCR11, recovered after a full guest
+shutdown/reboot and a switch to signed slot B, and then refused after an
+unapproved software-TPM PCR extend.
+The image-owned public key must match the boot-provided key. A passing result
+records the exact image and fixture-source hashes; no success is inferred merely
+from adding this runner. This exercises the installed systemd credential path,
+not completed native enrollment or a production Admin service. Never attach a
+physical TPM or an existing installation disk to this fixture.
+
 ### Gate boundary
 
 Actual VM execution demonstrates implemented paths on virtual hardware. It

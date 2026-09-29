@@ -151,6 +151,7 @@ def live_ready(vm: VM) -> None:
     vm.run('grep -Fx "luma-reference (enforce)" /sys/kernel/security/apparmor/profiles')
     if vm.secure_boot:
         vm.run('test "$(od -An -tu1 -j4 /sys/firmware/efi/efivars/SecureBoot-8be4df61-93ca-11d2-aa0d-00e098032b8c | tr -d \' \\n\')" = 1')
+    vm.run('systemctl is-active media-luma.mount && test -s /media/luma/release.json && test -s /media/luma/release.sig')
 
 
 def install(vm: VM,model: str='manual-only') -> None:

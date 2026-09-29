@@ -23,9 +23,10 @@ cd "$snapshot"
 sha256sum rust/Cargo.toml rust/Cargo.lock rust/.cargo/config.toml \
     rust/luma-platform/Cargo.toml rust/luma-platform/build.rs \
     rust/luma-platform/src/*.rs rust/luma-platform/src/*.c \
-    native/tests/tpm_integration.py native/tests/run_tpm_boundaries.sh \
-    native/tests/test_vm_tpm.py native/image/vm_tpm.py native/image/vm_test.py \
-    native/image/boot_policy.py native/image/assemble.py native/image/export.py native/tests/test_boot_policy.py \
+    native/tests/run_tpm_boundaries.sh native/tests/*.py native/image/*.py \
     native/image/overlay/usr/lib/dracut/modules.d/92luma-pcrphase/module-setup.sh \
     native/image/overlay/etc/pam.d/luma-admin \
+    native/image/overlay/usr/lib/systemd/system-generators/luma-boot-generator \
+    native/image/overlay/etc/systemd/system/media-luma.mount \
+    native/image/overlay/etc/systemd/system/luma-live-*.service \
     native/image/Dockerfile.tools > "$output/source-sha256.txt"

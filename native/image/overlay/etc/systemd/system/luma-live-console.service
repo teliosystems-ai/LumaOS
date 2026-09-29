@@ -1,6 +1,6 @@
 [Unit]
 Description=Luma local installation and recovery console
-After=systemd-user-sessions.service
+After=systemd-user-sessions.service media-luma.mount
 ConditionKernelCommandLine=luma.mode=live
 
 [Service]

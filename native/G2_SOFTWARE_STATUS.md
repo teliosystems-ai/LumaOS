@@ -77,6 +77,16 @@ targets and recovery/firmware approvals are still required. See
 `docs/gates/g2/PHYSICAL_QUALIFICATION_RUNBOOK.md` and
 `native/evidence/TEST_IMAGE_2026-09-28.md`.
 
+The sequence-5 image was built and exported on 2026-09-29 after the owner
+reported D: repaired. It includes the later TPM admission, signed-PCR and PAM
+changes, but installation evaluation failed; see the
+[image checkpoint](evidence/TEST_IMAGE_2026-09-29.md). The initial KVM attempt
+failed in QEMU before reaching the live console. TCG boot passed Secure Boot,
+verity and AppArmor checks, then exposed a three-second live-payload device
+timeout before installation. A live-only, bounded mount fix passed targeted
+Linux tests and a sequence-6 rebuild was started. Installed PAM/PCR acceptance
+remains unexecuted. Neither image is the final all-components G2 image.
+
 The previously exported sequence-4 image remains unchanged. Its evidence
 cannot be reused as acceptance evidence for subsequent source-only fixes.
 The new storage implementation's executed scope and outstanding image tests

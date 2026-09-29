@@ -233,8 +233,7 @@ def main() -> None:
     put('etc/fstab',
         '/var/home /home none bind 0 0\n'
         '/var/root /root none bind 0 0\n'
-        'tmpfs /tmp tmpfs mode=1777,nosuid,nodev 0 0\n'
-        'PARTLABEL=luma-payload /media/luma ext4 ro,nodev,nosuid,noexec,nofail,x-systemd.device-timeout=3s 0 0\n')
+        'tmpfs /tmp tmpfs mode=1777,nosuid,nodev 0 0\n')
     put('etc/systemd/journald.conf.d/luma.conf','[Journal]\nStorage=persistent\nSystemMaxUse=128M\nRuntimeMaxUse=64M\n')
     put('etc/systemd/system/systemd-bless-boot.service','[Unit]\nDescription=Disabled automatic blessing; luma-boot-health owns acknowledgement\n[Service]\nType=oneshot\nExecStart=/usr/bin/true\n')
     put('etc/systemd/system/sleep.target.d/luma.conf','[Unit]\nConflicts=luma-reference.service\n')

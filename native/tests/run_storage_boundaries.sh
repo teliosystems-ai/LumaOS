@@ -35,6 +35,9 @@ python3 -W error -m unittest discover -s "$snapshot/native/tests" -v 2>&1 | tee 
 cd "$snapshot"
 sha256sum rust/Cargo.toml rust/Cargo.lock rust/.cargo/config.toml \
     rust/luma-platform/Cargo.toml rust/luma-platform/build.rs \
-    rust/luma-platform/src/*.rs rust/luma-platform/src/*.c native/tests/staging_linux_integration.py \
+    rust/luma-platform/src/*.rs rust/luma-platform/src/*.c native/tests/*.py native/image/*.py \
     native/tests/run_storage_boundaries.sh native/image/overlay/etc/systemd/system/luma-staging-clean.service \
-    native/image/assemble.py native/image/overlay/etc/pam.d/luma-admin > "$output/source-sha256.txt"
+    native/image/overlay/usr/lib/systemd/system-generators/luma-boot-generator \
+    native/image/overlay/etc/systemd/system/media-luma.mount \
+    native/image/overlay/etc/systemd/system/luma-live-*.service \
+    native/image/Dockerfile.tools native/image/overlay/etc/pam.d/luma-admin > "$output/source-sha256.txt"

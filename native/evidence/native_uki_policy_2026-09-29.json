@@ -1,0 +1,57 @@
+{
+  "schema_version": 1,
+  "recorded_on": "2026-09-29",
+  "result": "passed-selected-artifact-initrd-and-emulator-boundaries",
+  "source_base_commit": "7222ad9ba9447eb16700632da7f1d5f683e287e8",
+  "source_state": "subsequent changes identified by retained source-sha256.txt",
+  "evidence_directory": "D:\\LumaOS-builds\\native-tests-20260929-uki-policy-03",
+  "tools_image": "sha256:f7c1c6dd2a4352d755e73036629c0c0baa49993441cfd8489b5020c8a37a4bdd",
+  "kernel": "6.18.33.2-microsoft-standard-WSL2",
+  "signed_uki_builder_integrated": true,
+  "synthetic_pe_artifacts_tested": true,
+  "generated_kernel_less_initrd_tested": true,
+  "actual_tpm_event_replay_tested": true,
+  "sealed_enrollment_implemented": false,
+  "product_admin_active": false,
+  "image_rebuilt": false,
+  "guest_os_boot_tested": false,
+  "physical_qualification": false,
+  "g2_software_complete": false,
+  "gate_closing": false,
+  "counts": {
+    "ordinary_rust_tests_passed": 39,
+    "emulator_tests_ignored_in_ordinary_run": 5,
+    "explicit_emulator_test_invocations_passed": 20,
+    "emulator_boundary_labels_passed": 39,
+    "linux_python_tests_passed": 20,
+    "windows_python_tests_run": 20,
+    "windows_python_tests_skipped": 8
+  },
+  "evidence_files": [
+    {
+      "name": "transcript.txt",
+      "bytes": 48343,
+      "sha256": "c53870464887f0a6833854cf7e93f10743aa5926d412eff6c60284dc5057ad3d"
+    },
+    {
+      "name": "uki-policy.json",
+      "bytes": 1225,
+      "sha256": "6a63b1a55f12d0b02cb26d6130731f42d15e919576a05b7b5443626873b23cdb"
+    },
+    {
+      "name": "result.json",
+      "bytes": 2060,
+      "sha256": "297a31e569e69ab34fd8fe8dfa55b8b118ada32faa50e8999d7130f73923f90e"
+    },
+    {
+      "name": "native-tests.txt",
+      "bytes": 2862,
+      "sha256": "0e74966b42186c5e9b8d51c7f99a6c4910a86d03b703aa9fad87bcee6979dd07"
+    },
+    {
+      "name": "source-sha256.txt",
+      "bytes": 2633,
+      "sha256": "5b361ec954013b1fcde9093042e8a8bac0920e2fb3438afae2e29a79f6d7193d"
+    }
+  ]
+}

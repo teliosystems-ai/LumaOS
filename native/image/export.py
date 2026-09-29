@@ -8,7 +8,7 @@ source=Path('/work/artifacts')
 destination=Path('/out')
 names=[p.name for p in source.glob('*.img.zst')]
 names+=['SHA256SUMS','build.json','packages.lock','release.json','release.sig','secureboot.cer',
-        'source-lock.json','toolchain-packages.lock','native-source.tar.zst']
+        'source-lock.json','toolchain-packages.lock','native-source.tar.zst','boot-policy.json']
 if any(not (source/name).is_file() for name in names):
     raise SystemExit('incomplete artifact inventory; nothing has been exported')
 for name in names:

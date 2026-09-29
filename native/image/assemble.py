@@ -13,6 +13,7 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
+import sys
 
 MIB = 1024 * 1024
 REPO = Path('/repo')
@@ -96,6 +97,11 @@ def main() -> None:
         raise SystemExit('sequence must be a positive signed 64-bit integer')
     if not args.external_artifacts:OUT.mkdir()
     KEYS.mkdir(mode=0o700, exist_ok=True)
+    if KEYS.is_symlink() or not KEYS.is_dir() or KEYS.stat().st_uid != os.geteuid():
+        raise SystemExit('laboratory key volume must be an owned directory, not a link')
+    # Docker creates a fresh volume root with 0755; restrict directory access
+    # before generating any key. Existing private key files are not repaired.
+    KEYS.chmod(0o700)
     release = f'luma-native-lab-20260927-{args.edition}-{args.sequence}'
     print(f'Assembling {release}', flush=True)
     inputs=[]
@@ -119,6 +125,8 @@ def main() -> None:
     # Everything compiled or copied below comes from these captured bytes, not
     # from a mutable workspace that may change while a long build is running.
     REPO=snapshot
+    sys.path.insert(0, str(REPO/'native/image'))
+    import boot_policy
     source_lock=json.dumps({'schema_version':1,'files':inputs},sort_keys=True,indent=2)+'\n'
     (OUT/'source-lock.json').write_text(source_lock)
     put('usr/share/luma-os/source-lock.json',source_lock)
@@ -156,8 +164,12 @@ def main() -> None:
         run('openssl','req','-new','-x509','-newkey','rsa:3072','-nodes','-sha256','-days','365',
             '-subj','/CN=Luma Native Laboratory Only/','-keyout',KEYS/'secureboot.key','-out',KEYS/'secureboot.pem',stderr=subprocess.DEVNULL)
     run('openssl','x509','-in',KEYS/'secureboot.pem','-outform','DER','-out',OUT/'secureboot.cer')
+    pcr_key, pcr_public = boot_policy.prepare_lab_key(KEYS)
     for p in KEYS.iterdir():
         p.chmod(0o600)
+    pcr_public_path = ROOT/'usr/share/luma-os/admin-pcr-public.pem'
+    pcr_public_path.write_bytes(pcr_public)
+    pcr_public_path.chmod(0o644)
     # Never inherit a build host's machine identity, credentials, DNS or mounts.
     for name in ('.dockerenv','etc/hostname','etc/resolv.conf','etc/machine-id','var/lib/dbus/machine-id'):
         p = ROOT/name
@@ -223,6 +235,15 @@ def main() -> None:
     put('etc/systemd/system/hibernate.target','[Unit]\nDescription=Hibernation is unqualified and disabled\nRefuseManualStart=yes\n')
     for unit in ('luma-broker.service','luma-reference.service','luma-model.service','luma-staging-clean.service'):
         enable(unit)
+    # Explicitly activate the packaged measured-UKI userspace phase barriers.
+    # They do not activate Admin or make a missing TPM a general boot dependency.
+    for unit,target in (('systemd-pcrphase-sysinit.service','basic.target'),
+                        ('systemd-pcrphase.service','multi-user.target')):
+        if not (ROOT/'usr/lib/systemd/system'/unit).is_file():
+            raise SystemExit('missing packaged PCR phase unit: '+unit)
+        wanted=ROOT/f'etc/systemd/system/{target}.wants'
+        wanted.mkdir(parents=True,exist_ok=True)
+        (wanted/unit).symlink_to('/usr/lib/systemd/system/'+unit)
     put('etc/issue','Luma native Ubuntu laboratory image. Native qualification is pending.\nRun luma-platform --help. Installation/recovery bundle: /media/luma\n')
     run('cp','-a',ROOT/'var',template)
     versions = run('chroot',ROOT,'dpkg-query','-W','-f=${Package}=${Version}\n')
@@ -240,10 +261,11 @@ def main() -> None:
     # Sysroot mode uses the container's proc/sys without mounting host resources
     # into the target and avoids unsupported proc-less chroot generation.
     run('dracut','--sysroot',ROOT,'--force','--no-hostonly','--no-hostonly-cmdline',
-        '--add','systemd systemd-initrd systemd-veritysetup crypt luma',
+        '--add','systemd systemd-initrd systemd-veritysetup crypt luma luma-pcrphase',
         '--add-drivers','virtio_pci virtio_blk virtio_scsi ext4 dm_verity dm_crypt',
         '--kver',version,ROOT/'boot/luma-initrd')
     initrd = ROOT/'boot/luma-initrd'
+    initrd_policy = boot_policy.verify_initrd(initrd)
     root_image = OUT/'root.ext4'
     with root_image.open('xb') as f: f.truncate(4*1024*MIB)
     run('mkfs.ext4','-F','-L','luma-root','-d',ROOT,root_image)
@@ -254,6 +276,7 @@ def main() -> None:
     run('veritysetup','verify',root_image,verity,roothash)
     os_release = OUT/'uki-os-release'
     os_release.write_text(f'ID=luma\nNAME="Luma Native Laboratory"\nVERSION_ID={args.sequence}\nPRETTY_NAME="{release}"\n')
+    pcr_records = []
     for slot in ('a','b','live'):
         mode = 'live' if slot=='live' else 'installed'
         data = 'luma-live-root' if slot=='live' else f'luma-root-{slot}'
@@ -266,10 +289,16 @@ def main() -> None:
                    'console=tty0 console=ttyS0,115200n8 apparmor=1 security=apparmor '
                    'systemd.show_status=yes rd.shell=0 panic=10')
         run('/usr/lib/systemd/ukify','build','--linux',kernel,'--initrd',initrd,
+            '--config','/dev/null',
             '--cmdline',cmdline,'--os-release','@'+str(os_release),'--uname',version,
             '--secureboot-private-key',KEYS/'secureboot.key',
-            '--secureboot-certificate',KEYS/'secureboot.pem','--output',OUT/f'slot-{slot}.efi')
-        run('sbverify','--cert',KEYS/'secureboot.pem',OUT/f'slot-{slot}.efi')
+            '--secureboot-certificate',KEYS/'secureboot.pem',
+            *boot_policy.signing_arguments(slot,pcr_key,pcr_public_path),
+            '--output',OUT/f'slot-{slot}.efi')
+        pcr_records.append(boot_policy.verify_uki(OUT/f'slot-{slot}.efi',slot,pcr_public,KEYS/'secureboot.pem'))
+    (OUT/'boot-policy.json').write_text(json.dumps({'schema_version':1,'environment':'lab',
+        'slots':pcr_records,'initrd':initrd_policy,
+        'enrollment_active':False,'gate_closing':False},indent=2)+'\n')
     run('sbsign','--key',KEYS/'secureboot.key','--cert',KEYS/'secureboot.pem',
         '--output',OUT/'bootloader.efi','/usr/lib/systemd/boot/efi/systemd-bootx64.efi')
     names=['root.ext4','root.verity','slot-a.efi','slot-b.efi','bootloader.efi','secureboot.cer']
@@ -311,7 +340,7 @@ def main() -> None:
     for source,offset in zip([esp,root_image,verity,payload],offsets):sparse_copy(source,image,offset)
     run('sgdisk','--verify',image)
     run('zstd','-T2','-3',image,'-o',str(image)+'.zst')
-    selected=[image,Path(str(image)+'.zst'),OUT/'release.json',OUT/'release.sig',OUT/'secureboot.cer',OUT/'packages.lock',OUT/'source-lock.json',OUT/'toolchain-packages.lock',OUT/'native-source.tar.zst']
+    selected=[image,Path(str(image)+'.zst'),OUT/'release.json',OUT/'release.sig',OUT/'secureboot.cer',OUT/'packages.lock',OUT/'source-lock.json',OUT/'toolchain-packages.lock',OUT/'native-source.tar.zst',OUT/'boot-policy.json']
     (OUT/'SHA256SUMS').write_text(''.join(f'{digest(p)}  {p.name}\n' for p in selected))
     record={'status':'built-not-yet-boot-tested','release':release,'kernel':version,'edition':args.edition,
             'root_hash':roothash,'image':image.name,'image_sha256':digest(image),

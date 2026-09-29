@@ -108,6 +108,42 @@ denies access until an independently authorized recovery/migration exists.
 The deployment-bound helper name must be deliberately integrated with the
 future service credential loader; the proposed `nv-auth` path is not wired up.
 
+## Image builder: signed installed boot policies
+
+The builder now creates/retains a separate laboratory RSA PCR signer in the
+private key volume (`pcr-policy.key`), distinct from release and Secure Boot
+keys. Only its public bytes enter the verity-protected root at
+`/usr/share/luma-os/admin-pcr-public.pem`. Installed A/B UKIs embed that same
+public key and signed SHA-256 PCR11 policies for
+`enter-initrd:leave-initrd:sysinit` and
+`enter-initrd:leave-initrd:sysinit:ready`. Live installer/recovery UKIs contain
+neither the installed public-key section nor PCR approvals. This keeps live
+media from implicitly becoming an installed Admin unlock environment; authorized
+recovery/enrollment still requires its own independently authenticated flow.
+
+`native/image/boot_policy.py` verifies the Secure Boot signature, exact slot/mode,
+embedded expected public key, closed signature inventory, measured section bytes
+and signature cryptography before assembly continues. A correctly PE-signed
+artifact whose measured bytes no longer match its PCR approvals is rejected.
+Default host ukify configuration is not consumed. The public `boot-policy.json`
+report is exported/checksummed as build evidence, not runtime approval authority.
+
+The `luma-pcrphase` dracut module includes the packaged initrd phase unit and
+systemd 255's `systemd-pcrextend` helper, with the maintained `tpm2-tss` dependency.
+It bridges the packaged dracut module's obsolete `systemd-pcrphase` binary name.
+The builder explicitly activates the packaged sysinit/ready phase units and
+checks the generated initrd for the helper, unit, activation link and TPM library
+before signing. The test suite generates a real **kernel-less** initrd and checks
+those contents; it does not prove native driver loading or service execution.
+
+The artifact, initrd and software-TPM replay checks are recorded in the
+[UKI policy checkpoint](evidence/NATIVE_UKI_POLICY_2026-09-29.md). These do not
+establish that real firmware/stub/boot-phase measurements match on a guest or
+that a confined Admin service receives its credential at the correct phase.
+The previous exported OS
+image is unchanged. Do not enroll against its unsigned-PCR UKIs or assume these
+new source changes are already present on installation media.
+
 ## Remaining software before the local installer can be complete
 
 1. Evaluate the implemented pre-write TPM admission/intent path in a rebuilt
@@ -122,7 +158,9 @@ future service credential loader; the proposed `nv-auth` path is not wired up.
 3. Integrate the sealed credential primitive into authenticated delivery for
    the approved local platform/boot policy. Handle
    signed A/B updates, fallback and recovery without sealing solely to the live
-   installer's PCR values. Exercise changed PCRs, firmware and signer rotation.
+   installer's PCR values. The builder now emits installed signed PCR policies;
+   boot-phase/service execution and signer rotation remain to be qualified.
+   Exercise changed PCRs, firmware and signer rotation.
 4. Define/protect owner/platform hierarchy custody against undefine/redefine
    and clear. An NV public Name identifies its public attributes, **not its
    physical creation instance**. Same-attributes recreation can have the same

@@ -3,6 +3,7 @@
 import argparse
 import base64
 import hashlib
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -174,6 +175,81 @@ def main():
             emulator = start()
             sign_pcr_policy()
             credential('deny')
+            # Exercise the SAME policy builder used by image assembly, then
+            # replay its measured section/phase events into the software TPM.
+            # The small PE fixture is not a bootable Linux OS and this is not
+            # guest-boot evidence. No predicted hash is directly assigned to PCR.
+            spec = importlib.util.spec_from_file_location('boot_policy', repo/'native/image/boot_policy.py')
+            boot_policy = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(boot_policy)
+            run(['openssl', 'req', '-new', '-x509', '-newkey', 'rsa:2048', '-nodes',
+                 '-sha256', '-days', '1', '-subj', '/CN=Disposable UKI TPM Test/',
+                 '-keyout', work/'sb.key', '-out', work/'sb.pem'])
+            (work/'fixture-initrd').write_bytes(b'not-a-bootable-initrd\n')
+            uki_sections = {}
+            uki_records = []
+            for slot in ('a', 'b'):
+                image = work/f'{slot}.efi'
+                run(['/usr/lib/systemd/ukify', 'build', '--config', '/dev/null',
+                     '--linux', '/usr/lib/systemd/boot/efi/linuxx64.efi.stub',
+                     '--initrd', work/'fixture-initrd', '--uname', 'fixture-1',
+                     '--cmdline', f'luma.slot={slot} luma.mode=installed',
+                     '--os-release', 'ID=luma-test\n', '--no-sign-kernel',
+                     '--secureboot-private-key', work/'sb.key', '--secureboot-certificate', work/'sb.pem',
+                     *boot_policy.signing_arguments(slot, work/'pcr-private.pem', work/'pcr-public.pem'),
+                     '--output', image])
+                uki_records.append(boot_policy.verify_uki(image, slot, (work/'pcr-public.pem').read_bytes(), work/'sb.pem'))
+                uki_sections[slot] = boot_policy.read_sections(image)
+
+            def extend_pcr_event(value):
+                run(['tpm2_pcrextend', '-T', transport, '11:sha256=' + hashlib.sha256(value).hexdigest()])
+
+            def measure_sections(slot):
+                sections = uki_sections[slot]
+                (work/'pcr-signature.json').write_bytes(sections['.pcrsig'])
+                for name in boot_policy.SECTIONS:
+                    if '.' + name in sections:
+                        extend_pcr_event(('.' + name).encode('ascii') + b'\0')
+                        extend_pcr_event(sections['.' + name])
+
+            def check_measured_policy(slot):
+                run(['tpm2_pcrread', '-T', transport, 'sha256:11', '-o', work/'observed-pcr'])
+                observed = (work/'observed-pcr').read_bytes()
+                if boot_policy.policy_digest(observed.hex()) not in uki_records[0 if slot == 'a' else 1]['policy_digests']:
+                    raise RuntimeError('actual TPM replay differs from UKI measurement prediction')
+
+            measure_sections('a')
+            for phase in ('enter-initrd', 'leave-initrd', 'sysinit'):
+                extend_pcr_event(phase.encode('ascii'))
+            check_measured_policy('a')
+            credential('seal')
+            sealed_digest = hashlib.sha256((work/'credential.cred').read_bytes()).digest()
+            extend_pcr_event(b'ready')
+            check_measured_policy('a')
+            credential('allow')
+            extend_pcr_event(b'shutdown')
+            credential('deny')
+            run(['tpm2_shutdown', '-T', transport, '-c'])
+            emulator.terminate(); emulator.wait(timeout=10); emulator = None
+            for name in ('tpm.sock', 'tpm.sock.ctrl'):
+                endpoint = work / name
+                if endpoint.exists(): endpoint.unlink()
+            emulator = start()
+            measure_sections('b')
+            extend_pcr_event(b'enter-initrd')
+            credential('deny')
+            for phase in ('leave-initrd', 'sysinit'):
+                extend_pcr_event(phase.encode('ascii'))
+            check_measured_policy('b')
+            credential('allow')
+            if hashlib.sha256((work/'credential.cred').read_bytes()).digest() != sealed_digest:
+                raise RuntimeError('A/B fixture must not reseal the credential')
+            extend_pcr_event(b'unapproved-measurement')
+            credential('deny')
+            (args.output/'uki-policy.json').write_text(json.dumps({'schema_version':1,
+                'fixture':'synthetic-nonbootable-pe', 'guest_boot_tested':False,
+                'actual_tpm_event_replay_tested':True, 'slots':uki_records,
+                'gate_closing':False}, indent=2)+'\n', encoding='utf-8')
             run(['cargo', 'build', '--offline', '--locked'])
             binary = '/tmp/luma-tpm-target/debug/luma-platform'
             # Even when a reachable emulator is advertised in the usual tool
@@ -209,7 +285,11 @@ def main():
                        'unapproved-pcr11-refusal', 'approved-pcr11-update-without-reseal',
                        'wrong-policy-signature-refusal',
                        'sealed-credential-tpm-restart-persistence',
-                       'changed-pcr7-refusal', 'replacement-tpm-credential-refusal'],
+                       'changed-pcr7-refusal', 'replacement-tpm-credential-refusal',
+                       'uki-measurement-prediction-matches-tpm-event-replay',
+                       'uki-sysinit-credential-roundtrip', 'uki-ready-phase-credential-allow',
+                       'uki-shutdown-phase-refusal', 'uki-initrd-phase-refusal',
+                       'uki-ab-credential-continuity-without-reseal', 'uki-unapproved-event-refusal'],
               'sealed_credential_primitive_tested':True,
               'physical_tpm_tested':False, 'sealed_credential_enrollment_tested':False,
               'production_admin_authorization_tested':False, 'gate_closing':False}

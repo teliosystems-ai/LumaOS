@@ -1,0 +1,50 @@
+{
+  "schema_version": 1,
+  "recorded_on": "2026-09-29",
+  "result": "passed-selected-source-and-emulator-boundaries",
+  "selected_admin_profile": "local-tpm2",
+  "g2_software_complete": false,
+  "sealed_credential_primitive_tested": true,
+  "sealed_enrollment_implemented": false,
+  "product_admin_active": false,
+  "image_rebuilt": false,
+  "guest_os_boot_tested": false,
+  "physical_qualification": false,
+  "gate_closing": false,
+  "source_base_commit": "8735919aee3812a308a0b27124ac5d7f074dd1b3",
+  "source_state": "subsequent changes identified by retained source-sha256.txt",
+  "evidence_directory": "D:\\LumaOS-builds\\native-tests-20260929-tpm-sealing-08",
+  "tools_image": "sha256:f7c1c6dd2a4352d755e73036629c0c0baa49993441cfd8489b5020c8a37a4bdd",
+  "kernel": "6.18.33.2-microsoft-standard-WSL2",
+  "counts": {
+    "ordinary_rust_tests_passed": 39,
+    "emulator_tests_ignored_in_ordinary_run": 5,
+    "explicit_emulator_test_invocations_passed": 14,
+    "emulator_boundary_labels_passed": 32,
+    "linux_python_tests_passed": 14,
+    "windows_python_tests_run": 14,
+    "windows_python_tests_skipped": 4
+  },
+  "evidence_files": [
+    {
+      "name": "transcript.txt",
+      "bytes": 33099,
+      "sha256": "d0fd6aa10d675516511dfea09a29a75f3cae2c227b557dac4b5e4651234f1101"
+    },
+    {
+      "name": "result.json",
+      "bytes": 1768,
+      "sha256": "035bf27b9aa6bd8bfbe1b3bcd0dfbe08c252e49c75e01db21057453901d46c3a"
+    },
+    {
+      "name": "native-tests.txt",
+      "bytes": 2015,
+      "sha256": "d44a154aaf75e50625ed947fdedfee575b2452c52aadc1bda1b725e37a432043"
+    },
+    {
+      "name": "source-sha256.txt",
+      "bytes": 2116,
+      "sha256": "23c9d5e5b17141730beee8f2e90c77f0ad77df9990f308143d45b7ec742b2d43"
+    }
+  ]
+}

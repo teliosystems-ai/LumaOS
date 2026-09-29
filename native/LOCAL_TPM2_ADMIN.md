@@ -75,8 +75,38 @@ Expected future service inputs (not created by the current installer):
 
 No service unit currently supplies that credential. Do not manually turn these
 paths into production enrollment. The memory boundary disables core dumps and
-clears the Rust credential buffer; sealed delivery, swap protection and the
-complete service confinement boundary remain to be implemented and evaluated.
+clears the Rust credential buffer; installed sealed delivery and the complete
+service confinement boundary remain to be implemented and evaluated.
+
+## Sealed credential primitive (not installed enrollment)
+
+`rust/luma-platform/src/sealed_credential.rs` adds bounded TPM-only sealing
+through the Ubuntu-packaged systemd 255 credential helper. The fixed profile
+requires SHA-256 PCR7 and signed PCR11, an exact independently supplied public
+key, and a deployment-bound credential name. Only the explicit
+`tpm2-with-public-key` mode is accepted. A bounded header filter rejects host,
+TPM-absent, unsigned-PCR, combined host/TPM and unknown credential profiles
+before decryption; authenticated decryption remains the helper's responsibility.
+There is no public seal/unseal CLI or selectable weaker fallback.
+
+Plaintext input/output use anonymous locked, nondumpable memory mappings, are
+not passed in arguments or ordinary temporary files, and are wiped on release.
+The helper has a cleared environment, fixed executable/device, discarded
+diagnostics, a 30-second deadline and an output-file size limit. These measures
+do **not** establish complete secret isolation: the packaged helper's own
+working allocations, process inspection, swap/service confinement, inherited
+descriptors and physical TPM/bus attacks still need integration and review.
+
+The future trusted service must authenticate the deployment, enrollment record,
+public signer and policy signatures independently of the encrypted blob.
+Caller-supplied metadata is not authority. The primitive does not establish
+approved image admission, signer revocation, trusted UTC, old-image rollback
+prevention or finite Admin roles. A signature for a different PCR11 measurement
+can authorize that measurement without resealing; this is not evidence of a
+working installed A/B enrollment or recovery flow. Changed PCR7 intentionally
+denies access until an independently authorized recovery/migration exists.
+The deployment-bound helper name must be deliberately integrated with the
+future service credential loader; the proposed `nv-auth` path is not wired up.
 
 ## Remaining software before the local installer can be complete
 
@@ -89,7 +119,8 @@ complete service confinement boundary remain to be implemented and evaluated.
    refusal, cryptographically random secrets, independently recoverable local
    credentials, and interruption/retry fencing. Never clear the TPM, overwrite
    someone else's index, or silently take ownership of its hierarchies.
-3. Seal credential delivery to the approved local platform/boot policy. Handle
+3. Integrate the sealed credential primitive into authenticated delivery for
+   the approved local platform/boot policy. Handle
    signed A/B updates, fallback and recovery without sealing solely to the live
    installer's PCR values. Exercise changed PCRs, firmware and signer rotation.
 4. Define/protect owner/platform hierarchy custody against undefine/redefine
@@ -143,8 +174,10 @@ Implementation references:
 - [NV extend semantics](https://github.com/tpm2-software/tpm2-tools/blob/5.7/man/tpm2_nvextend.1.md)
   and [NV definition](https://github.com/tpm2-software/tpm2-tools/blob/5.7/man/tpm2_nvdefine.1.md).
 - [Authorization session behavior](https://github.com/tpm2-software/tpm2-tools/blob/5.7/man/tpm2_startauthsession.1.md).
-- [systemd 255 credential design](https://github.com/systemd/systemd/blob/v255/man/systemd-creds.xml)
-  for the pending sealed-delivery integration, not a claim that it is implemented.
+- [systemd 255 credential design](https://github.com/systemd/systemd/blob/v255/man/systemd-creds.xml),
+  [explicit signed-key option parsing](https://github.com/systemd/systemd/blob/v255/src/creds/creds.c)
+  and [authenticated credential format](https://github.com/systemd/systemd/blob/v255/src/shared/creds-util.c)
+  for the primitive; installed sealed-delivery integration remains pending.
 
 The built Ubuntu toolchain uses TPM2-TSS 4.0.1 and tpm2-tools 5.6; executed
 tool behavior, rather than assuming all newer documentation options exist,

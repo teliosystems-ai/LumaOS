@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Exercise the native checkpoint adapter on a disposable software TPM only."""
 import argparse
+import base64
 import hashlib
 import json
 import os
@@ -69,6 +70,29 @@ def main():
                     time.sleep(.02)
                 return process
 
+            def sign_pcr_policy():
+                # Explicitly own/flush the trial session. Repeated convenience
+                # createpolicy invocations exhaust sessions with direct swtpm
+                # transport (there is no kernel resource manager in this lab).
+                run(['tpm2_startauthsession', '-T', transport, '-S', work/'policy-session'])
+                try:
+                    run(['tpm2_policypcr', '-T', transport, '-S', work/'policy-session',
+                         '-l', 'sha256:11', '-L', work/'pcr-policy'])
+                finally:
+                    run(['tpm2_flushcontext', '-T', transport, work/'policy-session'])
+                run(['openssl', 'dgst', '-sha256', '-sign', work/'pcr-private.pem',
+                     '-out', work/'pcr-signature', work/'pcr-policy'])
+                policy = (work/'pcr-policy').read_bytes()
+                fingerprint = hashlib.sha256((work/'pcr-public.der').read_bytes()).hexdigest()
+                signature = base64.b64encode((work/'pcr-signature').read_bytes()).decode('ascii')
+                (work/'pcr-signature.json').write_text(json.dumps({'sha256':[
+                    {'pcrs':[11], 'pkfp':fingerprint, 'pol':policy.hex(), 'sig':signature}]}), encoding='utf-8')
+
+            def credential(mode):
+                environment['LUMA_TPM_TEST_SEAL'] = mode
+                run(['cargo', 'test', '--offline', '--locked', 'sealed_credential::tests::emulator_signed_credential',
+                     '--', '--ignored', '--exact', '--nocapture'])
+
             emulator = start()
             environment['LUMA_TPM_TEST_ADMISSION'] = 'free'
             admission = ['cargo', 'test', '--offline', '--locked',
@@ -84,6 +108,31 @@ def main():
             environment['LUMA_TPM_TEST_ADMISSION'] = 'occupied'
             run(admission)
             run(['cargo', 'test', '--offline', '--locked', '--', '--nocapture'])
+            # Disposable PCR-policy signer, distinct from release/firmware
+            # keys; never exported and never used for production approval.
+            run(['openssl', 'genpkey', '-algorithm', 'RSA', '-pkeyopt', 'rsa_keygen_bits:2048', '-out', work/'pcr-private.pem'])
+            run(['openssl', 'rsa', '-in', work/'pcr-private.pem', '-pubout', '-out', work/'pcr-public.pem'])
+            run(['openssl', 'rsa', '-in', work/'pcr-private.pem', '-RSAPublicKey_out', '-outform', 'DER', '-out', work/'pcr-public.der'])
+            sign_pcr_policy()
+            credential('seal')
+            # New measured kernel without a signature is denied; an approved
+            # new measurement can open the SAME sealed credential (no reseal).
+            run(['tpm2_pcrextend', '-T', transport, '11:sha256=' + '55'*32])
+            credential('deny')
+            sign_pcr_policy()
+            credential('allow')
+            # A signature under a different private key must fail even when
+            # its JSON falsely claims the enrolled signer's fingerprint.
+            approved_signature = (work/'pcr-signature.json').read_bytes()
+            run(['openssl', 'genpkey', '-algorithm', 'RSA', '-pkeyopt', 'rsa_keygen_bits:2048', '-out', work/'wrong-private.pem'])
+            run(['openssl', 'dgst', '-sha256', '-sign', work/'wrong-private.pem',
+                 '-out', work/'wrong-signature', work/'pcr-policy'])
+            wrong = json.loads(approved_signature)
+            wrong['sha256'][0]['sig'] = base64.b64encode((work/'wrong-signature').read_bytes()).decode('ascii')
+            (work/'pcr-signature.json').write_text(json.dumps(wrong), encoding='utf-8')
+            credential('deny')
+            (work/'pcr-signature.json').write_bytes(approved_signature)
+            credential('allow')
             run(['cargo', 'test', '--offline', '--locked', 'tpm::tests::emulator_nv_journal_and_rollback',
                  '--', '--ignored', '--exact', '--nocapture'])
             run(['tpm2_shutdown', '-T', transport, '-c'])
@@ -94,6 +143,12 @@ def main():
                 endpoint = work / name
                 if endpoint.exists(): endpoint.unlink()
             emulator = start()
+            # PCR11 returns to the startup value; re-approve that measurement
+            # using the same fixture signer, not a new sealed credential.
+            sign_pcr_policy()
+            credential('allow')
+            run(['tpm2_pcrextend', '-T', transport, '7:sha256=' + '66'*32])
+            credential('deny')
             run(['cargo', 'test', '--offline', '--locked', 'tpm::tests::emulator_restart_and_external_change',
                  '--', '--ignored', '--exact', '--nocapture'])
             # Delete/redefine only this container's freshly created emulator
@@ -108,6 +163,17 @@ def main():
             run(['tpm2_nvwrite', '-T', transport, '-C', '0x01804c41', '-P', f'file:{tools_auth}',
                  '-i', work/'genesis', '0x01804c41'])
             run(refused)
+            # Replace only the disposable emulator. Matching startup PCRs and
+            # a valid policy signature cannot unlock a different TPM's blob.
+            emulator.terminate(); emulator.wait(timeout=10); emulator = None
+            for name in ('tpm.sock', 'tpm.sock.ctrl'):
+                endpoint = work / name
+                if endpoint.exists(): endpoint.unlink()
+            state = work / 'replacement-state'
+            state.mkdir()
+            emulator = start()
+            sign_pcr_policy()
+            credential('deny')
             run(['cargo', 'build', '--offline', '--locked'])
             binary = '/tmp/luma-tpm-target/debug/luma-platform'
             # Even when a reachable emulator is advertised in the usual tool
@@ -134,7 +200,17 @@ def main():
                        'no-environment-transport-fallback', 'unenrolled-product-status-refusal',
                        'unoccupied-index-admission', 'occupied-index-admission-refusal',
                        'missing-local-tpm-installer-admission-refusal',
-                       'binary-authorization-with-nul-cr-lf'],
+                       'binary-authorization-with-nul-cr-lf',
+                       'tpm-only-signed-pcr-credential-roundtrip',
+                       'credential-deployment-substitution-refusal',
+                       'credential-payload-tamper-refusal',
+                       'credential-public-key-substitution-refusal',
+                       'credential-missing-signature-refusal',
+                       'unapproved-pcr11-refusal', 'approved-pcr11-update-without-reseal',
+                       'wrong-policy-signature-refusal',
+                       'sealed-credential-tpm-restart-persistence',
+                       'changed-pcr7-refusal', 'replacement-tpm-credential-refusal'],
+              'sealed_credential_primitive_tested':True,
               'physical_tpm_tested':False, 'sealed_credential_enrollment_tested':False,
               'production_admin_authorization_tested':False, 'gate_closing':False}
     transcript = args.output/'transcript.txt'

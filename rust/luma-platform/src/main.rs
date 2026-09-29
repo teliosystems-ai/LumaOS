@@ -4,6 +4,7 @@ mod bundle;
 mod disk;
 mod model;
 mod platform;
+mod sealed_credential;
 mod service;
 mod staging;
 mod tpm;

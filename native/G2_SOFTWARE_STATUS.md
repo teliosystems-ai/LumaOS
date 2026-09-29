@@ -1,6 +1,6 @@
 # G2 software completion register
 
-Updated 2026-09-28. **G2 software is not complete.** This register separates
+Updated 2026-09-29. **G2 software is not complete.** This register separates
 work that can be executed in the current Windows/Ubuntu WSL/VM environment
 from production deployment decisions and physical qualification. It does not
 change the frozen reference release, governing requirements, or exit criteria.
@@ -19,7 +19,7 @@ requirement.
 | Boot, update, recovery | Signed UKI, A/B verity roots, essential-health acknowledgement, three-attempt fallback, independent export/repair/disable; selected VM faults passed | Complete interruption and migration matrix, including pre-userspace failures; protected production rollback anchors; storage-pressure and recovery-retention cases |
 | Temporary storage | New locked, bounded snapshot/download reconciliation; sparse-aware admission and exact-file cleanup; Linux boundary tests in `native/tests` | New-image boot/service and repeated guest-interruption evaluation; operator-reviewed disposition of legacy snapshots, which cannot safely be assumed inactive |
 | Model lifecycle and resources | Two pinned CPU profiles; hardware admission, isolated UID, authenticated loopback runtime, systemd memory/device/process restrictions; actual inference and offline reboot passed | Full governed model-pack/catalog lifecycle; atomic resource leases and generations, stale-worker fencing, pressure/quarantine/restart policy; 1,000 **real compact-model** cycles with measured resource return and performance distributions |
-| Admin, policy, and effects | Frozen Python contracts and negative tests; native broker verifies kernel peer identity; new local TPM2 authenticated checkpoint adapter and inert durable audit journal with software-TPM tests | Native enrollment/sealed credential delivery, finite Admin assignment/revocation, authenticated product principals, effect-time grants, durable effect receipts and reconciliation; the checkpoint journal and root/sudo operations are not the product Admin service |
+| Admin, policy, and effects | Frozen Python contracts and negative tests; native broker verifies kernel peer identity; local TPM2 authenticated checkpoint adapter, inert durable audit journal and signed-PCR sealed credential primitive with software-TPM tests | Integrate native enrollment/sealed credential delivery, finite Admin assignment/revocation, authenticated product principals, effect-time grants, durable effect receipts and reconciliation; the checkpoint journal and root/sudo operations are not the product Admin service |
 | Skills and vertical workflow | Isolated reference worker and manual reference interface | Signed skill registry, native typed-DAG validation/supervision, descriptor-scoped file-read and artifact-write skills, deterministic calculation, cancellation/checkpoint/restart semantics; distributed-image file-to-artifact journey through those interfaces |
 | Generated-code isolation | General model-generated shell/native execution is denied | Required microVM or separately qualified constrained runtime and adversarial tests before this capability can be available; a deny-only path is not an implemented execution sandbox |
 | Desktop and account lifecycle | Headless console/manual recovery and installer-created distinct accounts | Required model-independent Wayland desktop, credential/account lifecycle and migration tests; current optional Xfce/X11 packaging is neither a qualified desktop nor fulfillment of the Wayland baseline |
@@ -87,3 +87,8 @@ not an installed Admin service or physical qualification; see
 The subsequent [TPM admission checkpoint](evidence/NATIVE_TPM_ADMISSION_2026-09-28.md)
 adds read-only installer checks and a persistent QEMU software-TPM fixture.
 Its source tests do not establish installed/enrolled Admin or image acceptance.
+The [sealed credential checkpoint](evidence/NATIVE_TPM_SEALING_2026-09-29.md)
+adds tested fixed-PCR7/signed-PCR11 secret handling, including approved measured
+updates without resealing and rejection of replacement TPMs. Authenticated
+enrollment, signer lifecycle, service confinement and image integration remain
+software work; this primitive does not activate product Admin.

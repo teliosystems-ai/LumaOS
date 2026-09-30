@@ -197,6 +197,26 @@ the harness are public, disposable test data and never image defaults.
 Serial and QEMU logs and successful `result.json` are retained under the VM
 directory. A build record saying `built-not-yet-boot-tested` is not a test pass.
 
+For current images, add `--require-clean-shutdown`: every normal stage must
+power off from inside the guest and emit the verified late filesystem/DM
+teardown marker. Deliberately failed trial stages instead require their
+expected guest reboot/panic; they are not clean-shutdown passes. Without the
+flag, normal stages still require guest poweroff, but do not assert storage
+teardown. Host termination is used only for cleanup, never as a successful
+normal-stage transition. The result lists `poweroff_stages` explicitly.
+
+On TCG with external-drive storage, use `--timeout 5400` for the bounded
+whole-stage budget. Manual installation allows up to 2,700 seconds under TCG
+(900 under KVM); model acquisition allows 3,900 seconds. The whole-stage
+deadline still applies. Preserve timed-out runs and retry in a fresh directory;
+increasing a deadline is not evidence of a successful installation.
+
+Images rebuilt with the transactional recovery-export change can also be tested
+with `--require-atomic-export` (full sequence only). That adds acknowledged user
+content, a real 1 MiB guest tmpfs exhaustion, preservation of the failed partial,
+retry refusal and a complete exported-content hash check. Sequence 9 predates
+this export change; do not claim its tests cover it or use that flag on it.
+
 ### Testing a transferred image without rebuilding it
 
 On the separate native Ubuntu host, copy the complete exported artifact folder
@@ -416,7 +436,22 @@ separate `REPAIR-DATA <identity>` confirmation and writes filesystem metadata;
 it does not format the volume. Back up damaged media before repair. Serious
 corruption that automatic repair cannot resolve stops with an error.
 Export to separate mounted storage. The resulting archive is **unencrypted**
-and contains account/state material; protect it accordingly. `unlock` validates
+and contains account/state material; protect it accordingly. Source builds after
+sequence 9 require an existing empty directory owned by the invoking operator
+(root in recovery), not writable by other users, with no symlink components.
+The destination filesystem must support private file permissions, directory
+locking/synchronization and no-overwrite rename. Unsupported filesystems are
+refused; no weaker publication fallback is used.
+
+The exporter writes `luma-user-data.tar.partial`, synchronizes completed output,
+then publishes `luma-user-data.tar` without replacing any existing file and
+synchronizes the directory. Failures retain partials and refuse reuse of that
+directory. Retain them separately for inspection and select a new empty
+directory for a new attempt. A final directory-sync error is an uncertain
+durability outcome, not a success even if the final name is visible. No automatic
+deletion or resumption occurs. This source repair is not in sequence 9.
+
+`unlock` validates
 access and unmounts again. Slot repair rewrites only the selected root/hash/UKI,
 not the data volume. `disable-model` stops inference in model-enabled images,
 while manual workflow, console and recovery remain available. The original

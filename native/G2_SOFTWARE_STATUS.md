@@ -19,11 +19,20 @@ unapproved-PCR refusal fixture under TCG/Secure Boot/software TPM. Evidence is
 exported with the image; see [the sequence-8 checkpoint](evidence/TEST_IMAGE_SEQUENCE8_2026-09-30.md).
 That run exposed shutdown storage-teardown warnings, so it does not qualify
 clean shutdown. A source repair and stricter fixture passed unit/sysroot checks;
-sequence 9 is rebuilding for image-level evaluation. Full Admin enrollment and
+sequence 9 has been built/exported for image-level evaluation. Its first VM
+installation hit the TCG operation timeout; a fresh bounded retry is running,
+not passed. See [the sequence-9 checkpoint](evidence/TEST_IMAGE_SEQUENCE9_2026-09-30.md).
+Full Admin enrollment and
 the other software components below remain open.
 The [shutdown checkpoint](evidence/NATIVE_SHUTDOWN_2026-09-30.md) records the
 repair, source tests and queued strict/broader VM suites; pending tests are not
 passes and neither suite closes all G2 requirements.
+
+The native recovery exporter now publishes a completed archive only after
+successful tar output and synchronization, retaining failures under `.partial`
+without overwriting existing data. Actual Linux producer/ENOSPC tests passed;
+this later source repair is **not in sequence 9** and requires a rebuild and
+image-level recovery evaluation. See [the export checkpoint](evidence/NATIVE_RECOVERY_EXPORT_2026-09-30.md).
 
 | Component | Implemented/evaluated scope | Remaining work before software completion |
 | --- | --- | --- |

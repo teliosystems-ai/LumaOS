@@ -1075,36 +1075,7 @@ pub fn recover(args: &[String]) -> Result<()> {
     )?;
     if action == "export" {
         let destination = Path::new(&args[2]);
-        if !destination.is_absolute()
-            || fs::symlink_metadata(destination)?.file_type().is_symlink()
-            || !destination.is_dir()
-            || fs::read_dir(destination)?.next().is_some()
-        {
-            return Err("export destination must be an existing empty absolute directory".into());
-        }
-        let output = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .mode(0o600)
-            .open(destination.join("luma-user-data.tar"))?;
-        let status = Command::new("/usr/bin/tar")
-            .env_clear()
-            .args([
-                "--one-file-system",
-                "--numeric-owner",
-                "-cf",
-                "-",
-                "-C",
-                path(&data.at)?,
-                "home",
-                "lib/luma-os",
-            ])
-            .stdout(Stdio::from(output.try_clone()?))
-            .status()?;
-        if !status.success() {
-            return Err("data export failed".into());
-        }
-        output.sync_all()?;
+        crate::recovery_export::export(&data.at, destination)?;
         println!("Encrypted data exported to the operator-selected destination. Protect the unencrypted archive.");
     } else if action == "disable-model" {
         write_atomic(

@@ -18,6 +18,7 @@ import subprocess
 import tempfile
 import time
 from vm_tpm import SoftwareTPM, state_directory
+from vm_shutdown import poweroff
 
 USER_PASSWORD='VM-only-user-passphrase-2026'
 ADMIN_PASSWORD='VM-only-admin-passphrase-2026'
@@ -138,6 +139,13 @@ class VM:
                 elif self.process.poll() is not None:
                     return self.process.returncode
             if self.process.poll() is not None:
+                # QEMU can exit with more than one recv() worth of console
+                # output queued. Retain the complete tail, including the late
+                # storage-teardown marker, before reporting its exit status.
+                while select.select([self.console],[],[],0)[0]:
+                    chunk=self.console.recv(65536)
+                    if not chunk:break
+                    self.log.write(chunk);self.log.flush();self.buffer=(self.buffer+chunk)[-2_000_000:]
                 return self.process.returncode
         raise RuntimeError(f'Guest did not exit within {timeout}s; inspect {self.work}/serial.log')
 
@@ -178,7 +186,11 @@ def install(vm: VM,model: str='manual-only') -> None:
                         ('Independent recovery passphrase (retain off this disk)',RECOVERY_PASSWORD)]:
         vm.expect(re.escape(label.encode())+rb' \(at least 16 characters\):');vm.send(value)
         vm.expect(re.escape(('Repeat '+label+':').encode()));vm.send(value)
-    vm.action(b'INSTALLATION COMPLETE:',3900 if model!='manual-only' else 900);vm.expect(rb'root@[^\r\n]*[#]');vm.run('sync')
+    # Software CPU emulation plus external-drive I/O can exceed the KVM
+    # allowance while copying/verifying both roots and deriving LUKS keys.
+    # The independent whole-stage deadline still caps every operation.
+    install_timeout = 3900 if model!='manual-only' else (2700 if vm.acceleration=='tcg' else 900)
+    vm.action(b'INSTALLATION COMPLETE:',install_timeout);vm.expect(rb'root@[^\r\n]*[#]');vm.run('sync')
 
 
 def installed_login(vm: VM) -> None:
@@ -277,6 +289,38 @@ def repaired_ready(vm: VM,slot: str='b') -> None:
     vm.run('sync')
 
 
+def atomic_export_checks(vm: VM) -> None:
+    # All paths and mounts below exist only inside this disposable VM. The
+    # installed-stage fixture supplies 2 MiB of acknowledged user content.
+    vm.run('test -s /tmp/luma-export/luma-user-data.tar && '
+           'test ! -e /tmp/luma-export/luma-user-data.tar.partial && '
+           'test "$(stat -c %a /tmp/luma-export/luma-user-data.tar)" = 600')
+    vm.run('tar -xOf /tmp/luma-export/luma-user-data.tar home/lumauser/export-large-test '
+           '| sha256sum > /tmp/export-payload.sha256 && '
+           'head -c 2097152 /dev/zero | sha256sum | cmp - /tmp/export-payload.sha256')
+    vm.run('mkdir -m 700 /tmp/luma-export-full && '
+           'mount -t tmpfs -o size=1048576,mode=0700,nodev,nosuid,noexec tmpfs /tmp/luma-export-full')
+    try:
+        for expected in (b'export incomplete; retain luma-user-data.tar.partial',
+                         b'export requires an empty directory'):
+            vm.send(f'luma-platform recover export {TARGET} /tmp/luma-export-full; '
+                    'printf "\\n__EXPORT_FAIL_RC=%s__\\n" "$?"')
+            vm.expect(b'Type exactly: RECOVER LUMA-VM-TARGET');vm.send('RECOVER LUMA-VM-TARGET')
+            vm.expect(b'Enter data or independent recovery passphrase:');vm.send(RECOVERY_PASSWORD)
+            output=vm.expect(rb'\r?\n__EXPORT_FAIL_RC=\d+__\r?\n')
+            if expected not in output or b'\n__EXPORT_FAIL_RC=1__' not in output:
+                raise RuntimeError('export failure was not refused at the required boundary')
+            vm.run('test ! -e /tmp/luma-export-full/luma-user-data.tar && '
+                   'test -s /tmp/luma-export-full/luma-user-data.tar.partial && '
+                   'test "$(stat -c %a /tmp/luma-export-full/luma-user-data.tar.partial)" = 600')
+            if expected.startswith(b'export incomplete'):
+                vm.run('sha256sum /tmp/luma-export-full/luma-user-data.tar.partial > /tmp/export-partial.sha256')
+            else:
+                vm.run('sha256sum -c /tmp/export-partial.sha256')
+    finally:
+        vm.run('umount /tmp/luma-export-full')
+
+
 def corrupt_inactive_root(vm: VM) -> None:
     repaired_ready(vm)
     vm.run('dd if=/dev/zero of=/dev/disk/by-partlabel/luma-root-a bs=4096 count=1 conv=notrunc,fsync')
@@ -302,15 +346,19 @@ def main() -> None:
     parser.add_argument('--image',type=Path,required=True);parser.add_argument('--work',type=Path,required=True)
     parser.add_argument('--timeout',type=int,default=1800);parser.add_argument('--smoke-only',action='store_true')
     parser.add_argument('--secure-boot',action='store_true')
+    parser.add_argument('--require-clean-shutdown',action='store_true')
+    parser.add_argument('--require-atomic-export',action='store_true')
     parser.add_argument('--accel',choices=('auto','kvm','tcg'),default='auto')
     args=parser.parse_args();image=args.image.resolve(strict=True);work=args.work.resolve()
+    if args.require_atomic_export and args.smoke_only:
+        parser.error('--require-atomic-export requires the full installed/recovery sequence')
     if not image.is_file() or not image.is_relative_to('/work/artifacts'):
         raise SystemExit('only generated regular-file images under /work/artifacts are accepted')
     if work.parent!=Path('/work') or not work.name.startswith('vm-') or work.exists():
         raise SystemExit('use a new /work/vm-<run> directory')
     work.mkdir();target=work/'target.qcow2'
     subprocess.run(['qemu-img','create','-f','qcow2',str(target),'32G'],check=True)
-    stages=[]
+    stages=[];shutdown_stages=[]
     sequence=[('install',True),('installed',False),('trial-1',False),('trial-2',False),
               ('trial-3',False),('fallback',False),('recovery',True),('repaired',False),
               ('corrupt-trial-1',False),('corrupt-trial-2',False),('corrupt-trial-3',False),
@@ -320,10 +368,16 @@ def main() -> None:
         try:
             if live:live_ready(vm)
             if name=='install' and not args.smoke_only:install(vm)
-            elif name=='installed':installed_ready(vm);inject_trial_failure(vm)
+            elif name=='installed':
+                installed_ready(vm)
+                if args.require_atomic_export:
+                    vm.run('dd if=/dev/zero of=/home/lumauser/export-large-test bs=1048576 count=2 conv=fsync')
+                inject_trial_failure(vm)
             elif name.startswith('trial-'):failed_trial(vm)
             elif name=='fallback':fallback_ready(vm)
-            elif name=='recovery':recovery(vm)
+            elif name=='recovery':
+                recovery(vm)
+                if args.require_atomic_export:atomic_export_checks(vm)
             elif name=='repaired':corrupt_inactive_root(vm)
             elif name.startswith('corrupt-trial-'):corrupted_trial(vm)
             elif name=='corrupt-fallback':
@@ -332,12 +386,21 @@ def main() -> None:
                 vm.run('python3 -c '+shlex.quote(code))
             elif name=='repair-corruption':repair_corrupted_a(vm)
             elif name=='repaired-a':repaired_ready(vm,'a')
+            # Failed trials explicitly observe a guest-requested reboot (or
+            # verity panic). Every other successful stage must power itself
+            # off; host termination in finally is failure cleanup, not a pass.
+            if not name.startswith(('trial-','corrupt-trial-')):
+                poweroff(vm,args.require_clean_shutdown)
+                shutdown_stages.append(name)
             stages.append(name)
         finally:vm.close()
         if args.smoke_only:break
     with image.open('rb') as stream:image_hash=hashlib.file_digest(stream,'sha256').hexdigest()
     record={'result':'passed','stages':stages,'image_sha256':image_hash,'acceleration':vm.acceleration,
             'uefi':True,'secure_boot_tested':args.secure_boot,'installation_tested':not args.smoke_only,
+            'clean_shutdown_tested':args.require_clean_shutdown,
+            'atomic_export_tested':args.require_atomic_export,
+            'poweroff_stages':shutdown_stages,
             'gate_closing':False,'image':str(image),'physical_hardware_tested':False,
             'test_sources':TEST_SOURCES}
     (work/'result.json').write_text(json.dumps(record,indent=2)+'\n');print(json.dumps(record),flush=True)

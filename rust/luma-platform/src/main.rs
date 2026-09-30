@@ -5,6 +5,7 @@ mod bundle;
 mod disk;
 mod model;
 mod platform;
+mod recovery_export;
 mod sealed_credential;
 mod service;
 mod staging;

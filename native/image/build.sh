@@ -5,6 +5,12 @@ set -euo pipefail
 # long assembly step. Build inputs are separately captured before package work.
 main() {
 repository=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)
+case "${LUMA_BUILD_PROFILE:-auto}" in
+    auto) if [ -f /etc/luma-build/environment.sh ]; then source /etc/luma-build/environment.sh; fi ;;
+    dedicated-d) source /etc/luma-build/environment.sh ;;
+    standard) ;; # Explicit legacy/portable mode; retains its original guards.
+    *) echo 'unknown build profile' >&2; exit 2 ;;
+esac
 edition=${1:-headless}
 sequence=${2:-1}
 build_network=${LUMA_BUILD_NETWORK:-default}
@@ -19,12 +25,10 @@ if [ -n "$build_root" ]; then
     case "$build_root" in /|/mnt|/mnt/?|*','*) echo 'select a dedicated build directory, without commas' >&2; exit 2;; esac
     test -d "$build_root"
 fi
-# External output still requires a smaller Linux workspace. Docker may use a
-# separate drive; its capacity must also be checked by the operator.
-python3 -c 'import shutil,sys; external=sys.argv[2]; desktop=sys.argv[3]=="desktop"; checks=[(sys.argv[1],8 if external else (24 if desktop else 16))]+([(external,60 if desktop else 40)] if external else []); failed=False
-for path,gib in checks:
- free=shutil.disk_usage(path).free; print(f"Build preflight: {path}: {free} free bytes; minimum {gib} GiB",flush=True); failed|=free<gib*1024**3
-sys.exit("Insufficient build headroom; no build started. Docker storage also needs Linux workspace capacity." if failed else 0)' "$repository" "$build_root" "$edition"
+# Only a verified dedicated D:-backed daemon may replace the C: reservation.
+# Missing mounts, wrong daemons and C:-backed client temp paths fail closed.
+python3 "$repository/native/image/build_storage.py" preflight \
+    --repository "$repository" --external "$build_root" --edition "$edition"
 run_id=$(date -u +%Y%m%dT%H%M%SZ)
 volume="luma-native-build-$run_id-$edition"
 export_container="luma-native-export-$run_id"

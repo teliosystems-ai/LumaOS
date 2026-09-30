@@ -1,0 +1,30 @@
+[Unit]
+Description=Luma isolated D-backed Docker build daemon
+Requires=luma-build-store.service luma-build-containerd.service
+After=luma-build-store.service luma-build-containerd.service network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=120
+StartLimitBurst=3
+
+[Service]
+Type=notify
+Slice=luma-build.slice
+MemorySwapMax=0
+Environment=DOCKER_TMPDIR=/mnt/luma-build/tmp/daemon
+Environment=TMPDIR=/mnt/luma-build/tmp/daemon
+ExecStartPre=/usr/bin/python3 /usr/local/libexec/luma-build-storage.py verify
+ExecStart=/usr/bin/dockerd --config-file=/etc/luma-build/docker.json
+ExecReload=/bin/kill -s HUP $MAINPID
+TimeoutStartSec=120
+TimeoutStopSec=120
+Restart=on-failure
+RestartSec=5
+LimitNOFILE=infinity
+LimitNPROC=infinity
+LimitCORE=0
+TasksMax=infinity
+Delegate=yes
+KillMode=process
+
+[Install]
+WantedBy=multi-user.target

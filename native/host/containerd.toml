@@ -1,0 +1,9 @@
+version = 3
+root = '/mnt/luma-build/containerd'
+state = '/run/luma-build-containerd'
+temp = '/mnt/luma-build/tmp/containerd'
+imports = ['/etc/luma-build/containerd.d/*.toml']
+disabled_plugins = ['io.containerd.cri.v1.images', 'io.containerd.cri.v1.runtime', 'io.containerd.grpc.v1.cri']
+
+[grpc]
+address = '/run/luma-build-containerd/containerd.sock'

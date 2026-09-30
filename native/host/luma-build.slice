@@ -1,0 +1,5 @@
+[Unit]
+Description=Luma build workloads without WSL swap writes
+
+[Slice]
+MemorySwapMax=0

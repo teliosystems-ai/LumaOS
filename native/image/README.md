@@ -180,6 +180,15 @@ deleted. Repeated builds consume additional storage.
 
 ### External build drive (including Windows D: / exFAT)
 
+For this machine's dedicated all-build-storage-on-D: setup, see the
+[host profile](../host/README.md). Once installed and verified, `build.sh`
+automatically selects its isolated D-backed Docker daemon and checks the
+actual Linux store and D: capacity instead of reserving 8 GiB on C:. The
+explicit entry point is `bash native/image/build-on-d.sh desktop NEXT_SEQUENCE`.
+The source checkout stays on C:. Missing D: storage is an error, not a fallback.
+The generic external-artifact instructions below describe the older profile,
+which leaves Docker's Linux workspace on its existing backing drive.
+
 Create a dedicated directory on the selected drive and ensure WSL can access it.
 For this environment it is `D:\LumaOS-builds`, exposed as `/mnt/d/LumaOS-builds`.
 If WSL has not mounted D:, an authorized operator can mount it with

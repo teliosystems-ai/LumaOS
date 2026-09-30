@@ -73,6 +73,14 @@ pending until its own `result.json` and exported evidence exist.
 
 ## Harness repairs
 
+Later result: the resumed `vm-model-seq9-tcg-02` reached installed model
+inference, but the guest's `model-chat.py` request timed out and
+`luma-platform model-chat` exited 1. No passing model result was produced.
+The stop-on-failure queue ended before the sequence-10 suites. The prior
+sequence-9 Admin and 14-stage recovery passes remain valid for their own scope;
+they do not establish a model-suite pass. The separate D-backed host setup
+does not repair or qualify this inference failure.
+
 Normal stages in the broader regression now require actual guest poweroff;
 host termination is failure cleanup, not acceptance. Strict mode records the
 verified shutdown marker and exact `poweroff_stages`. The console reader drains

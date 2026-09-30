@@ -1,0 +1,12 @@
+[Unit]
+Description=Luma dedicated D-backed ext4 build store
+After=local-fs.target
+Before=luma-build-docker.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/bin/python3 /usr/local/libexec/luma-build-storage.py mount
+ExecStop=/usr/bin/umount /mnt/luma-build
+TimeoutStartSec=90
+TimeoutStopSec=90

@@ -1,0 +1,20 @@
+{
+  "data-root": "/mnt/luma-build/docker",
+  "exec-root": "/run/luma-build-docker",
+  "pidfile": "/run/luma-build-docker.pid",
+  "hosts": ["unix:///run/luma-build-docker.sock"],
+  "containerd": "/run/luma-build-containerd/containerd.sock",
+  "containerd-namespace": "luma-build",
+  "storage-driver": "overlay2",
+  "features": {"containerd-snapshotter": false},
+  "bridge": "none",
+  "iptables": false,
+  "ip6tables": false,
+  "ip-forward": false,
+  "ip-masq": false,
+  "userland-proxy": false,
+  "exec-opts": ["native.cgroupdriver=systemd"],
+  "cgroup-parent": "luma-build.slice",
+  "log-driver": "local",
+  "log-opts": {"max-size": "10m", "max-file": "3"}
+}

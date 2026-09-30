@@ -30,18 +30,32 @@ an installation pass or evidence that the image itself is necessarily defective.
 The pipeline stopped before installed/PAM/PCR/shutdown, recovery and model
 evaluation. It did not export successful evidence for that failed run.
 
-A fresh `vm-admin-seq9-tcg-02` retry is running under Secure Boot, TCG and
+A fresh `vm-admin-seq9-tcg-02` retry passed under Secure Boot, TCG and
 `--require-clean-shutdown`, with a 5,400-second whole-stage budget and a
-2,700-second manual-install operation allowance. No existing disk is reused.
-The current retry pipeline queues the full 14-stage regression and five-stage
-Qwen3-4B download/inference/offline/recovery suite only after prior success.
+2,700-second manual-install operation allowance. It used a new disposable disk.
+All four stages (install, installed, cold reboot, other signed slot) passed
+native PAM checks, measured-credential continuity/refusal and the strict late
+filesystem/DM teardown assertion. It did not test product Admin enrollment.
+
+Evidence is exported under `admin-shutdown-vm-evidence-02` in the image export
+directory. Its `result.json` SHA-256 is
+`9e064aad4b5c8db7f613d3a6cd31f5089cf075fb8e9a23f290799b260c618f0e`.
+All four serial logs contain a fresh `LUMA_SHUTDOWN_STORAGE_CLEAN` marker.
+They still show an initial `/var` unmount warning before switching into the
+shutdown initrd; dracut subsequently unmounts `/oldroot` and the observation
+hook verifies that old-root mounts and DM devices are gone. This is verified
+late teardown, not a claim of warning-free early shutdown or physical power-off
+qualification.
+
+The full 14-stage regression is running. The five-stage Qwen3-4B
+download/inference/offline/recovery suite remains queued after its success.
 All three suites require clean shutdown on normal poweroff stages. Failed
 trial/panic stages retain their separate expected reboot assertions.
 
 Only the model suite's install guest permits publisher-download networking.
 There are no host disks, physical firmware/TPM changes, forwarded ports or
-production private keys in the fixtures. Results remain pending until their
-own `result.json` and exported evidence exist.
+production private keys in the fixtures. The broader regression/model results
+remain pending until their own `result.json` and exported evidence exist.
 
 ## Harness repairs
 

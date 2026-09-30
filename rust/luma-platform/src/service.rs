@@ -1,14 +1,15 @@
 use crate::{disk::command, Result};
 use serde::{Deserialize, Serialize};
 use std::fs;
-use std::io::{Read, Write};
+use std::io::{self, Read, Write};
 use std::os::fd::AsRawFd;
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::{UnixListener, UnixStream};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const SOCKET: &str = "/run/luma-broker/control.sock";
 const MAX_FRAME: usize = 16384;
+const FRAME_TIMEOUT: Duration = Duration::from_secs(2);
 
 #[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -45,25 +46,73 @@ fn validate(r: &Request, uid: u32, clock: u64) -> Result<()> {
     Ok(())
 }
 
-fn read_frame(stream: &mut UnixStream) -> Result<Vec<u8>> {
+fn remaining(deadline: Instant) -> io::Result<Duration> {
+    deadline
+        .checked_duration_since(Instant::now())
+        .filter(|duration| !duration.is_zero())
+        .ok_or_else(|| io::Error::new(io::ErrorKind::TimedOut, "IPC frame deadline exceeded"))
+}
+
+fn read_until(stream: &mut UnixStream, mut bytes: &mut [u8], deadline: Instant) -> io::Result<()> {
+    while !bytes.is_empty() {
+        stream.set_read_timeout(Some(remaining(deadline)?))?;
+        match stream.read(bytes) {
+            Ok(0) => {
+                return Err(io::Error::new(
+                    io::ErrorKind::UnexpectedEof,
+                    "truncated IPC frame",
+                ))
+            }
+            Ok(size) => bytes = &mut bytes[size..],
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+            Err(error) => return Err(error),
+        }
+    }
+    remaining(deadline)?;
+    Ok(())
+}
+
+fn read_frame_until(stream: &mut UnixStream, deadline: Instant) -> Result<Vec<u8>> {
     let mut header = [0u8; 4];
-    stream.read_exact(&mut header)?;
+    read_until(stream, &mut header, deadline)?;
     let size = u32::from_be_bytes(header) as usize;
     if size == 0 || size > MAX_FRAME {
         return Err("IPC frame size denied".into());
     }
     let mut bytes = vec![0; size];
-    stream.read_exact(&mut bytes)?;
+    read_until(stream, &mut bytes, deadline)?;
     Ok(bytes)
 }
 
-fn write_frame(stream: &mut UnixStream, bytes: &[u8]) -> Result<()> {
-    if bytes.len() > MAX_FRAME {
+fn read_frame(stream: &mut UnixStream) -> Result<Vec<u8>> {
+    // One monotonic budget covers header AND body. SO_RCVTIMEO alone is only
+    // a per-read limit and permits an indefinitely slow fragmented sender.
+    read_frame_until(stream, Instant::now() + FRAME_TIMEOUT)
+}
+
+fn write_frame_until(stream: &mut UnixStream, bytes: &[u8], deadline: Instant) -> Result<()> {
+    if bytes.is_empty() || bytes.len() > MAX_FRAME {
         return Err("response exceeds limit".into());
     }
-    stream.write_all(&(bytes.len() as u32).to_be_bytes())?;
-    stream.write_all(bytes)?;
+    let mut frame = Vec::with_capacity(bytes.len() + 4);
+    frame.extend_from_slice(&(bytes.len() as u32).to_be_bytes());
+    frame.extend_from_slice(bytes);
+    let mut pending = frame.as_slice();
+    while !pending.is_empty() {
+        stream.set_write_timeout(Some(remaining(deadline)?))?;
+        match stream.write(pending) {
+            Ok(0) => return Err("IPC write made no progress".into()),
+            Ok(size) => pending = &pending[size..],
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+            Err(error) => return Err(error.into()),
+        }
+    }
+    remaining(deadline)?;
     Ok(())
+}
+
+fn write_frame(stream: &mut UnixStream, bytes: &[u8]) -> Result<()> {
+    write_frame_until(stream, bytes, Instant::now() + FRAME_TIMEOUT)
 }
 
 fn peer(stream: &UnixStream) -> Result<u32> {
@@ -132,8 +181,6 @@ pub fn serve() -> Result<()> {
     fs::set_permissions(SOCKET, fs::Permissions::from_mode(0o660))?;
     for stream in listener.incoming() {
         let mut stream = stream?;
-        stream.set_read_timeout(Some(Duration::from_secs(2)))?;
-        stream.set_write_timeout(Some(Duration::from_secs(2)))?;
         let response = match handle(&mut stream) {
             Ok(value) => value,
             Err(_) => serde_json::json!({"schema_version":1,"result":"denied"}),
@@ -145,8 +192,6 @@ pub fn serve() -> Result<()> {
 
 pub fn client(action: &str) -> Result<()> {
     let mut socket = UnixStream::connect(SOCKET)?;
-    socket.set_read_timeout(Some(Duration::from_secs(3)))?;
-    socket.set_write_timeout(Some(Duration::from_secs(3)))?;
     if peer(&socket)? != 0 {
         return Err("broker peer is not root".into());
     }
@@ -157,8 +202,18 @@ pub fn client(action: &str) -> Result<()> {
         deadline: now()? + 5,
         action: action.into(),
     };
-    write_frame(&mut socket, &serde_json::to_vec(&request)?)?;
-    println!("{}", String::from_utf8(read_frame(&mut socket)?)?);
+    write_frame_until(
+        &mut socket,
+        &serde_json::to_vec(&request)?,
+        Instant::now() + Duration::from_secs(3),
+    )?;
+    println!(
+        "{}",
+        String::from_utf8(read_frame_until(
+            &mut socket,
+            Instant::now() + Duration::from_secs(3)
+        )?)?
+    );
     Ok(())
 }
 
@@ -195,5 +250,90 @@ mod tests {
     fn actual_socket_peer_comes_from_kernel() {
         let (a, _) = UnixStream::pair().unwrap();
         assert_eq!(peer(&a).unwrap(), unsafe { libc::geteuid() });
+    }
+
+    #[test]
+    fn fragmented_frame_completes_within_one_budget() {
+        let (mut a, mut b) = UnixStream::pair().unwrap();
+        let sender = std::thread::spawn(move || {
+            for byte in [0, 0, 0, 3, b'a', b'b', b'c'] {
+                a.write_all(&[byte]).unwrap();
+                std::thread::sleep(Duration::from_millis(2));
+            }
+        });
+        assert_eq!(read_frame(&mut b).unwrap(), b"abc");
+        sender.join().unwrap();
+    }
+
+    #[test]
+    fn slow_sender_cannot_reset_deadline_between_header_and_body() {
+        let (mut a, mut b) = UnixStream::pair().unwrap();
+        let sender = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(125));
+            let _ = a.write_all(&3u32.to_be_bytes());
+            std::thread::sleep(Duration::from_millis(125));
+            let _ = a.write_all(b"abc");
+        });
+        let error =
+            read_frame_until(&mut b, Instant::now() + Duration::from_millis(200)).unwrap_err();
+        let kind = error.downcast_ref::<io::Error>().unwrap().kind();
+        assert!(matches!(
+            kind,
+            io::ErrorKind::TimedOut | io::ErrorKind::WouldBlock
+        ));
+        drop(b);
+        sender.join().unwrap();
+    }
+
+    #[test]
+    fn expired_budget_refuses_already_buffered_data_and_output() {
+        let (mut a, mut b) = UnixStream::pair().unwrap();
+        a.write_all(&[0, 0, 0, 1, b'x']).unwrap();
+        let past = Instant::now() - Duration::from_secs(1);
+        assert!(read_frame_until(&mut b, past).is_err());
+        assert!(write_frame_until(&mut b, b"response", past).is_err());
+    }
+
+    #[test]
+    fn zero_length_truncated_header_and_truncated_body_are_refused() {
+        for bytes in [&[0u8, 0, 0, 0][..], &[0, 0], &[0, 0, 0, 2, b'x']] {
+            let (mut a, mut b) = UnixStream::pair().unwrap();
+            a.write_all(bytes).unwrap();
+            drop(a);
+            assert!(read_frame(&mut b).is_err());
+        }
+    }
+
+    #[test]
+    fn stalled_response_receiver_is_bounded() {
+        let (mut a, _b) = UnixStream::pair().unwrap();
+        let size: libc::c_int = 4096;
+        assert_eq!(
+            unsafe {
+                libc::setsockopt(
+                    a.as_raw_fd(),
+                    libc::SOL_SOCKET,
+                    libc::SO_SNDBUF,
+                    (&size as *const libc::c_int).cast(),
+                    std::mem::size_of_val(&size) as libc::socklen_t,
+                )
+            },
+            0
+        );
+        assert!(write_frame_until(
+            &mut a,
+            &vec![b'x'; MAX_FRAME],
+            Instant::now() + Duration::from_millis(100)
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn response_round_trip_and_size_boundaries() {
+        let (mut a, mut b) = UnixStream::pair().unwrap();
+        assert!(write_frame(&mut a, b"").is_err());
+        assert!(write_frame(&mut a, &vec![0; MAX_FRAME + 1]).is_err());
+        write_frame(&mut a, b"response").unwrap();
+        assert_eq!(read_frame(&mut b).unwrap(), b"response");
     }
 }

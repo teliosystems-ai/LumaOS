@@ -13,15 +13,14 @@ requirement.
 
 ## Current software inventory and work still required
 
-Latest image-specific result: sequence 8 passed its four-stage manual install,
+Latest image-specific result: sequence 9 passed its four-stage manual install,
 installed PAM, measured-credential, cold-reboot, signed A/B continuity and
 unapproved-PCR refusal fixture under TCG/Secure Boot/software TPM. Evidence is
-exported with the image; see [the sequence-8 checkpoint](evidence/TEST_IMAGE_SEQUENCE8_2026-09-30.md).
-That run exposed shutdown storage-teardown warnings, so it does not qualify
-clean shutdown. A source repair and stricter fixture passed unit/sysroot checks;
-sequence 9 has been built/exported for image-level evaluation. Its first VM
-installation hit the TCG operation timeout; a fresh bounded retry is running,
-not passed. See [the sequence-9 checkpoint](evidence/TEST_IMAGE_SEQUENCE9_2026-09-30.md).
+exported with the image; see [the sequence-9 checkpoint](evidence/TEST_IMAGE_SEQUENCE9_2026-09-30.md).
+Its fresh retry also passed verified late filesystem/DM teardown in every
+stage. The initial `/var` unmount warning remains before the initrd completes
+cleanup; this is not warning-free or physical shutdown qualification. The
+broader recovery regression is running and model evaluation remains queued.
 Full Admin enrollment and
 the other software components below remain open.
 The [shutdown checkpoint](evidence/NATIVE_SHUTDOWN_2026-09-30.md) records the
@@ -34,10 +33,15 @@ without overwriting existing data. Actual Linux producer/ENOSPC tests passed;
 this later source repair is **not in sequence 9** and requires a rebuild and
 image-level recovery evaluation. See [the export checkpoint](evidence/NATIVE_RECOVERY_EXPORT_2026-09-30.md).
 
+Sequence 10 is building with that exporter and a tested monotonic whole-frame
+broker I/O deadline. Exact-source image tests are queued after verified export
+and the current sequence-9 VM pipeline. Source tests and queued executions are
+not image acceptance; see [the IPC/rebuild checkpoint](evidence/NATIVE_IPC_2026-09-30.md).
+
 | Component | Implemented/evaluated scope | Remaining work before software completion |
 | --- | --- | --- |
 | Installer and media | Real laboratory-signed Ubuntu 24.04 image; explicit disk consent, LUKS2, independent credentials, install-time manual/4B/1.7B choice, pinned download; sequence 8 passed pre-write TPM admission, pending enrollment intent and manual installation on a fresh virtual disk | Sealed Admin enrollment and authenticated bootstrap, governed production catalog/pack and offline distribution, full rejection/interruption matrix; rerun actual model acquisition on the new image |
-| Boot, update, recovery | Signed UKI, A/B verity roots, essential-health acknowledgement, three-attempt fallback, independent export/repair/disable; selected earlier VM faults passed; sequence 8 passed measured phases, public credential continuity through reboot/signed B and unapproved-PCR refusal | Complete confined service credential delivery and lifecycle; evaluate clean-shutdown repair in sequence 9; complete interruption and migration matrix, including pre-userspace failures; protected production rollback anchors; storage-pressure and recovery-retention cases |
+| Boot, update, recovery | Signed UKI, A/B verity roots, essential-health acknowledgement, three-attempt fallback, independent export/repair/disable; selected earlier VM faults passed; sequence 9 passed measured phases, public credential continuity through reboot/signed B, unapproved-PCR refusal and verified late shutdown teardown | Complete confined service credential delivery and lifecycle; broaden shutdown/recovery faults; evaluate transactional export in rebuilt image; complete interruption and migration matrix, including pre-userspace failures; protected production rollback anchors; storage-pressure and recovery-retention cases |
 | Temporary storage | Locked, bounded snapshot/download reconciliation; sparse-aware admission and exact-file cleanup; Linux boundary tests in `native/tests`; sequence 8 verified successful startup maintenance service execution | Repeated guest-interruption/pressure evaluation; operator-reviewed disposition of legacy snapshots, which cannot safely be assumed inactive |
 | Model lifecycle and resources | Two pinned CPU profiles; hardware admission, isolated UID, authenticated loopback runtime, systemd memory/device/process restrictions; actual inference and offline reboot passed | Full governed model-pack/catalog lifecycle; atomic resource leases and generations, stale-worker fencing, pressure/quarantine/restart policy; 1,000 **real compact-model** cycles with measured resource return and performance distributions |
 | Admin, policy, and effects | Frozen Python contracts and negative tests; native broker verifies kernel peer identity; local TPM2 checkpoint/journal and signed-PCR sealing; native PAM account authentication with real isolated-account tests | Integrate authenticated enrollment/sealed credential delivery, finite Admin assignment/revocation, product principal binding and lifecycle, effect-time grants, durable effect receipts and reconciliation; account authentication and root/sudo operations are not the product Admin service |

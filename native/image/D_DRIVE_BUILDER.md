@@ -1,5 +1,13 @@
 # D: build storage and recovery record
 
+Current checkpoint, 2026-09-30: sequence 9 passed its four-stage Secure Boot/TCG
+PAM/PCR fixture including verified late storage teardown; broader regression
+is running. Sequence 10 (`20260930T073705Z-headless`) is building on D: with
+the transactional recovery exporter and bounded IPC changes. Its image tests
+are queued after verified export and the current VM pipeline. See the
+[IPC/rebuild checkpoint](../evidence/NATIVE_IPC_2026-09-30.md). Neither image is
+the final all-components G2 release. The older observations below are history.
+
 ## Resumed external-artifact build
 
 After the owner reported completing repairs on 2026-09-29, a new read-only

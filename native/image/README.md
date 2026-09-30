@@ -217,6 +217,13 @@ content, a real 1 MiB guest tmpfs exhaustion, preservation of the failed partial
 retry refusal and a complete exported-content hash check. Sequence 9 predates
 this export change; do not claim its tests cover it or use that flag on it.
 
+The same full sequence accepts `--require-bounded-ipc` for images rebuilt with
+the whole-frame broker deadline. It runs as UID 990 (`luma-control`), drips both
+header and body bytes, requires bounded denial, then checks that a fresh
+authenticated status request succeeds. This does not test full policy/Admin
+authorization, flood fairness or systemctl effect deadlines. Sequence 9 does
+not contain the IPC repair. Both new checks are queued for sequence 10.
+
 ### Testing a transferred image without rebuilding it
 
 On the separate native Ubuntu host, copy the complete exported artifact folder

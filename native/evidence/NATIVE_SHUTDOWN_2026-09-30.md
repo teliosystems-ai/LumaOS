@@ -40,8 +40,11 @@ late-shutdown inventory. This is not an OS shutdown test.
 ## Rebuilt-image execution
 
 Update: sequence 9 completed export. Its first manual-install test timed out;
-a fresh TCG retry with a bounded longer allowance is running. No strict
-shutdown pass is established yet. See [the current image checkpoint](TEST_IMAGE_SEQUENCE9_2026-09-30.md).
+a fresh TCG retry with a bounded longer allowance passed all four Admin/PCR
+fixture stages with the strict shutdown check. The initial `/var` unmount
+warning remains, but the late initrd path now completes verified old-root and
+DM teardown before poweroff. This is not full G2 or physical qualification.
+See [the current image checkpoint](TEST_IMAGE_SEQUENCE9_2026-09-30.md).
 The original queued-run description below is retained as history.
 
 Sequence 9: `20260929T221048Z-headless`.

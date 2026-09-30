@@ -348,10 +348,11 @@ def main() -> None:
     parser.add_argument('--secure-boot',action='store_true')
     parser.add_argument('--require-clean-shutdown',action='store_true')
     parser.add_argument('--require-atomic-export',action='store_true')
+    parser.add_argument('--require-bounded-ipc',action='store_true')
     parser.add_argument('--accel',choices=('auto','kvm','tcg'),default='auto')
     args=parser.parse_args();image=args.image.resolve(strict=True);work=args.work.resolve()
-    if args.require_atomic_export and args.smoke_only:
-        parser.error('--require-atomic-export requires the full installed/recovery sequence')
+    if (args.require_atomic_export or args.require_bounded_ipc) and args.smoke_only:
+        parser.error('export/IPC checks require the full installed/recovery sequence')
     if not image.is_file() or not image.is_relative_to('/work/artifacts'):
         raise SystemExit('only generated regular-file images under /work/artifacts are accepted')
     if work.parent!=Path('/work') or not work.name.startswith('vm-') or work.exists():
@@ -370,6 +371,9 @@ def main() -> None:
             if name=='install' and not args.smoke_only:install(vm)
             elif name=='installed':
                 installed_ready(vm)
+                if args.require_bounded_ipc:
+                    probe=Path(__file__).with_name('broker_vm_probe.py').read_text()
+                    vm.run('runuser -u luma-control -- python3 -c '+shlex.quote(probe),timeout=30)
                 if args.require_atomic_export:
                     vm.run('dd if=/dev/zero of=/home/lumauser/export-large-test bs=1048576 count=2 conv=fsync')
                 inject_trial_failure(vm)
@@ -400,6 +404,7 @@ def main() -> None:
             'uefi':True,'secure_boot_tested':args.secure_boot,'installation_tested':not args.smoke_only,
             'clean_shutdown_tested':args.require_clean_shutdown,
             'atomic_export_tested':args.require_atomic_export,
+            'bounded_ipc_tested':args.require_bounded_ipc,
             'poweroff_stages':shutdown_stages,
             'gate_closing':False,'image':str(image),'physical_hardware_tested':False,
             'test_sources':TEST_SOURCES}

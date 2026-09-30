@@ -47,15 +47,29 @@ hook verifies that old-root mounts and DM devices are gone. This is verified
 late teardown, not a claim of warning-free early shutdown or physical power-off
 qualification.
 
-The full 14-stage regression is running. The five-stage Qwen3-4B
-download/inference/offline/recovery suite remains queued after its success.
+The full 14-stage regression subsequently **passed** in
+`vm-regression-seq9-tcg-02`, including failed-health trial fallback, recovery
+export/disable/repair, three corrupted-root trial failures, fallback and repair
+of slot A. All eight normal poweroff stages passed strict late teardown.
+Evidence is exported under `regression-vm-evidence-02`; result SHA-256:
+`d253aa26629e5ffa0032a38b08cc89ad4177c3772dd15b0975d645cef4faf1f6`.
+Its `atomic_export_tested` remains false: sequence 9 predates that repair.
+
+The following model command failed at argument parsing because the retained
+`model_vm_test.py` did not accept `--timeout`. No model test passed on that
+invocation and no guest was created by it. The resumed five-stage Qwen3-4B
+download/inference/offline/recovery suite now runs in `vm-model-seq9-tcg-02`
+with the exact retained sequence-10 harness source and its existing internal
+5,400-second stage deadline, omitting the unsupported option. That harness
+records its source hashes; it does not modify the sequence-9 image. The
+checkout separately adds and tests an explicit bounded timeout CLI option.
 All three suites require clean shutdown on normal poweroff stages. Failed
 trial/panic stages retain their separate expected reboot assertions.
 
 Only the model suite's install guest permits publisher-download networking.
 There are no host disks, physical firmware/TPM changes, forwarded ports or
-production private keys in the fixtures. The broader regression/model results
-remain pending until their own `result.json` and exported evidence exist.
+production private keys in the fixtures. The resumed model result remains
+pending until its own `result.json` and exported evidence exist.
 
 ## Harness repairs
 

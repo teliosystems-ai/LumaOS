@@ -1,5 +1,9 @@
 #!/bin/bash
 set -euo pipefail
+# Bash parses the entire function before executing it. In particular, it must
+# not resume reading a changed checkout at an old byte offset after Docker's
+# long assembly step. Build inputs are separately captured before package work.
+main() {
 repository=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)
 edition=${1:-headless}
 sequence=${2:-1}
@@ -27,6 +31,7 @@ export_container="luma-native-export-$run_id"
 tools=luma-native-tools:20260927
 base=ubuntu@sha256:008173c23f95b170204355c12626cb5a965d779a7e1283b09e9cffbb1bf33ca3
 runtime_context="${build_root:-$repository/dist}/native-inputs/$run_id-$edition"
+source_context="${build_root:-$repository/dist}/native-sources/$run_id-$edition"
 destination="${build_root:-$repository/dist}/native/$run_id-$edition"
 artifact_mount=()
 artifact_mount_ro=()
@@ -42,9 +47,11 @@ if [ -n "$build_root" ]; then
 fi
 runtime_args=(--output "$runtime_context")
 if [ -n "${LUMA_RUNTIME_ARCHIVE:-}" ]; then runtime_args+=(--cached "$LUMA_RUNTIME_ARCHIVE"); fi
-python3 "$repository/native/image/prepare_runtime.py" "${runtime_args[@]}"
-docker build --network "$build_network" --build-arg "UBUNTU_BASE=$base" -f "$repository/native/image/Dockerfile.tools" -t "$tools" "$repository/native/image"
-docker build --network "$build_network" --build-arg "EDITION=$edition" -f "$repository/native/image/Dockerfile.root" -t "luma-native-root:20260927-$edition" "$runtime_context"
+# Capture before any long download/package build, not only before compilation.
+python3 "$repository/native/image/snapshot.py" --repository "$repository" --output "$source_context"
+python3 "$source_context/native/image/prepare_runtime.py" "${runtime_args[@]}"
+docker build --network "$build_network" --build-arg "UBUNTU_BASE=$base" -f "$source_context/native/image/Dockerfile.tools" -t "$tools" "$source_context/native/image"
+docker build --network "$build_network" --build-arg "EDITION=$edition" -f "$source_context/native/image/Dockerfile.root" -t "luma-native-root:20260927-$edition" "$runtime_context"
 docker volume create "$volume"
 docker volume create luma-native-lab-keys
 docker run --rm --network none --mount "type=volume,src=$volume,dst=/work" "$tools" mkdir /work/root
@@ -56,21 +63,24 @@ docker run --rm --network none \
     --mount "type=volume,src=$volume,dst=/work" \
     "${artifact_mount[@]}" \
     --mount type=volume,src=luma-native-lab-keys,dst=/keys \
-    --mount "type=bind,src=$repository,dst=/repo,readonly" \
+    --mount "type=bind,src=$source_context,dst=/repo,readonly" \
     "$tools" python3 /repo/native/image/assemble.py --edition "$edition" --sequence "$sequence" "${assembly_args[@]}"
 mkdir -p -- "$(dirname -- "$destination")"
 mkdir -- "$destination"
 docker run --rm --network none \
     --mount "type=volume,src=$volume,dst=/work,readonly" \
     "${artifact_mount_ro[@]}" \
-    --mount "type=bind,src=$repository,dst=/repo,readonly" \
+    --mount "type=bind,src=$source_context,dst=/repo,readonly" \
     --mount "type=bind,src=$destination,dst=/out" \
     "$tools" python3 /repo/native/image/export.py
 echo "Image output: $destination"
 echo "Retained Linux build volume: $volume"
+echo "Captured build inputs: $source_context"
 if [ -n "$build_root" ]; then
     echo "External artifact/VM work directory: $external_work (bind at /work for VM tests)"
 else
     echo "VM work remains in volume: $volume"
 fi
 echo 'Laboratory private keys remain in Docker volume luma-native-lab-keys; do not publish that volume.'
+}
+main "$@"

@@ -52,6 +52,13 @@ block device or production private key was exposed.
 
 ## Sequence-10 image integration
 
+Later status: assembly and verified export completed after repair of a
+shell-driver continuation failure; the retained artifacts were reused without
+rebuilding. The original test queue stopped, and a corrected serialized queue
+now follows the resumed sequence-9 model suite. See the
+[build-resumption checkpoint](NATIVE_BUILD_RESUME_2026-09-30.md). The paragraphs
+below retain the original build-start context; queued tests are still not passes.
+
 Build `20260930T073705Z-headless` is running:
 
 - Work: `D:\LumaOS-builds\work\20260930T073705Z-headless`.

@@ -73,14 +73,30 @@ def reject_same_size_corruption(vm):
     vm.run('python3 -c '+shlex.quote(restore))
 
 
-def main():
+def stage_timeout(value):
+    try:
+        seconds = int(value)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError('timeout must be an integer number of seconds') from error
+    if not 60 <= seconds <= 21600:
+        raise argparse.ArgumentTypeError('timeout must be between 60 and 21600 seconds')
+    return seconds
+
+
+def arguments(argv=None):
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--image',type=Path,required=True)
     parser.add_argument('--work',type=Path,required=True)
     parser.add_argument('--secure-boot', action='store_true')
     parser.add_argument('--accel', choices=('auto', 'kvm', 'tcg'), default='auto')
     parser.add_argument('--require-clean-shutdown', action='store_true')
-    args=parser.parse_args();image=args.image.resolve(strict=True);work=args.work.resolve()
+    parser.add_argument('--timeout', type=stage_timeout, default=5400,
+                        help='whole-stage deadline in seconds (60..21600; default: 5400)')
+    return parser.parse_args(argv)
+
+
+def main():
+    args=arguments();image=args.image.resolve(strict=True);work=args.work.resolve()
     if not image.is_file() or not image.is_relative_to('/work/artifacts'):
         raise SystemExit('image must be a generated artifact')
     if work.parent!=Path('/work') or not work.name.startswith('vm-') or work.exists():
@@ -90,7 +106,7 @@ def main():
     stages=[];inference=None;offline_inference=None
     for stage in ('model-install','model-inference','offline-reboot','recovery-disable','disabled-boot'):
         print('Model VM stage: '+stage,flush=True)
-        vm=VM(image,work/stage,target,stage in ('model-install','recovery-disable'),5400,
+        vm=VM(image,work/stage,target,stage in ('model-install','recovery-disable'),args.timeout,
               secure_boot=args.secure_boot,acceleration=args.accel,
               memory_mib=6144,network=stage=='model-install')
         try:
@@ -143,6 +159,7 @@ def main():
         'acquisition':'publisher-https-download-by-native-installer','preseeded_weights':False,
         'inference':inference,'offline_inference':offline_inference,
         'guest_memory_mib':6144,'acceleration':vm.acceleration,
+        'stage_timeout_seconds':args.timeout,
         'secure_boot_tested':args.secure_boot,'clean_shutdown_tested':args.require_clean_shutdown,
         'physical_hardware_tested':False,'gate_closing':False,'test_sources':TEST_SOURCES}
     (work/'result.json').write_text(json.dumps(record,indent=2)+'\n');print(json.dumps(record),flush=True)

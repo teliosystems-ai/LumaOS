@@ -20,7 +20,8 @@ exported with the image; see [the sequence-9 checkpoint](evidence/TEST_IMAGE_SEQ
 Its fresh retry also passed verified late filesystem/DM teardown in every
 stage. The initial `/var` unmount warning remains before the initrd completes
 cleanup; this is not warning-free or physical shutdown qualification. The
-broader recovery regression is running and model evaluation remains queued.
+broader 14-stage recovery regression also passed, with eight strict normal
+poweroff stages; model evaluation has resumed after a launcher argument error.
 Full Admin enrollment and
 the other software components below remain open.
 The [shutdown checkpoint](evidence/NATIVE_SHUTDOWN_2026-09-30.md) records the
@@ -33,17 +34,20 @@ without overwriting existing data. Actual Linux producer/ENOSPC tests passed;
 this later source repair is **not in sequence 9** and requires a rebuild and
 image-level recovery evaluation. See [the export checkpoint](evidence/NATIVE_RECOVERY_EXPORT_2026-09-30.md).
 
-Sequence 10 is building with that exporter and a tested monotonic whole-frame
-broker I/O deadline. Exact-source image tests are queued after verified export
-and the current sequence-9 VM pipeline. Source tests and queued executions are
-not image acceptance; see [the IPC/rebuild checkpoint](evidence/NATIVE_IPC_2026-09-30.md).
+Sequence 10 finished assembly with that exporter and a tested monotonic
+whole-frame broker I/O deadline. Its shell driver failed before export after
+an in-flight source edit; the retained artifacts passed all checksum checks
+and verified export completed without rebuilding. Exact-source image tests remain
+queued after verified export and sequence-9 model evaluation. Source tests and
+queued executions are not image acceptance; see the
+[build-resumption checkpoint](evidence/NATIVE_BUILD_RESUME_2026-09-30.md).
 
 The candidate desktop now packages GNOME/Wayland, with password-required GDM
 restricted to installed boots and no model-service login dependency. A real
 isolated software-rendered compositor and Files, Text Editor and Console
 passed an unprivileged window/surface smoke test; all 60 native Python tests
 passed. This is not installed-image/GDM/session-lifecycle acceptance. The new
-desktop is not in the running sequence-10 headless build. Another full build
+desktop is not in the exported sequence-10 headless image. Another full build
 is blocked by C: falling below the 8 GiB preflight minimum; D: remains the
 artifact drive. See [the desktop checkpoint](evidence/NATIVE_WAYLAND_2026-09-30.md).
 

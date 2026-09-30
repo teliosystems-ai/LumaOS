@@ -155,6 +155,14 @@ digest. An existing archive can be supplied with
 the identical size/checksum checks still apply. Runtime build inputs are retained
 under `dist/native-inputs`, outside Git. No arbitrary local binary is accepted.
 
+Before downloads or package builds, the builder captures bounded source inputs
+under `dist/native-sources/<build-time>-<edition>/`. Runtime pins, both
+Dockerfiles and assembly/export use that captured tree, mounted read-only in
+containers. Links, special files, oversized inputs and changes detected during
+capture are rejected. Failed snapshots remain diagnostic artifacts, not reusable
+build inputs. The shell driver is parsed before its long-running steps, so an
+edit to the original script cannot change its remaining commands mid-build.
+
 The builder uses an exact Ubuntu base digest and an Ubuntu archive snapshot.
 `packages.lock`, `toolchain-packages.lock`, `source-lock.json`, signed release
 metadata and SHA-256 checksums accompany the image. These identify the inputs;
@@ -184,11 +192,12 @@ bash native/image/build.sh headless NEXT_SEQUENCE
 ```
 
 The runtime cache is optional and is still size/digest checked. With an external
-root, `native-inputs/`, `work/BUILD-ID/artifacts/`, and exported `native/BUILD-ID/`
+root, `native-inputs/`, `native-sources/`, `work/BUILD-ID/artifacts/`, and exported `native/BUILD-ID/`
 are created there. A fresh Docker volume retains the smaller Unix root/source/
 compiler/payload workspace; lab private keys remain in their separate existing
 Docker volume. No Docker-wide storage relocation occurs. Preflight requires
-40 GiB free on the selected output filesystem and 8 GiB on the repository drive;
+40 GiB (headless) or 60 GiB (desktop) free on the selected output filesystem,
+and 8 GiB on the repository drive;
 also check Docker's actual backing drive. Do not unplug the drive during work.
 
 For VM evaluation bind `D:/LumaOS-builds/work/BUILD-ID` (WSL path

@@ -127,6 +127,7 @@ def main() -> None:
     REPO=snapshot
     sys.path.insert(0, str(REPO/'native/image'))
     import boot_policy
+    import desktop_policy
     source_lock=json.dumps({'schema_version':1,'files':inputs},sort_keys=True,indent=2)+'\n'
     (OUT/'source-lock.json').write_text(source_lock)
     put('usr/share/luma-os/source-lock.json',source_lock)
@@ -203,6 +204,8 @@ def main() -> None:
     if any(1000 <= int(line.split(':')[2]) < 65534
            for line in (ROOT/'etc/passwd').read_text().splitlines()):
         raise SystemExit('unexpected pre-existing interactive identity in base image')
+    desktop_profile = desktop_policy.configure(ROOT, args.edition)
+    root_mib, payload_mib = desktop_policy.geometry(args.edition)
     template = ROOT/'usr/share/luma-os/var-template'
     # Fresh build-owned exported filesystem only; no host files are involved.
     for relative in ('var/cache/apt/archives','var/lib/apt/lists','var/log','tmp'):
@@ -275,7 +278,7 @@ def main() -> None:
     shutdown_policy.configure(ROOT, version)
     initrd_policy['shutdown'] = shutdown_policy.verify_initrd(initrd)
     root_image = OUT/'root.ext4'
-    with root_image.open('xb') as f: f.truncate(4*1024*MIB)
+    with root_image.open('xb') as f: f.truncate(root_mib*MIB)
     run('mkfs.ext4','-F','-L','luma-root','-d',ROOT,root_image)
     verity = OUT/'root.verity'
     output = run('veritysetup','format',root_image,verity)
@@ -294,6 +297,7 @@ def main() -> None:
                    f'systemd.verity_root_data=/dev/disk/by-partlabel/{data} '
                    f'systemd.verity_root_hash=/dev/disk/by-partlabel/{hash_label} '
                    f'luma.mode={mode} luma.slot={slot} '
+                   f'systemd.unit={desktop_policy.target(args.edition,mode)} '
                    'console=tty0 console=ttyS0,115200n8 apparmor=1 security=apparmor '
                    'systemd.show_status=yes rd.shell=0 panic=10')
         run('/usr/lib/systemd/ukify','build','--linux',kernel,'--initrd',initrd,
@@ -304,6 +308,7 @@ def main() -> None:
             *boot_policy.signing_arguments(slot,pcr_key,pcr_public_path),
             '--output',OUT/f'slot-{slot}.efi')
         pcr_records.append(boot_policy.verify_uki(OUT/f'slot-{slot}.efi',slot,pcr_public,KEYS/'secureboot.pem'))
+        desktop_policy.verify_boot_target(boot_policy.read_sections(OUT/f'slot-{slot}.efi')['.cmdline'],args.edition,mode)
     (OUT/'boot-policy.json').write_text(json.dumps({'schema_version':1,'environment':'lab',
         'slots':pcr_records,'initrd':initrd_policy,
         'enrollment_active':False,'gate_closing':False},indent=2)+'\n')
@@ -321,7 +326,7 @@ def main() -> None:
     for name in [*names,'release.json','release.sig','packages.lock']:
         stage_payload_member(OUT/name,payload_tree/name)
     payload=OUT/'payload.ext4'
-    with payload.open('xb') as f:f.truncate(6*1024*MIB)
+    with payload.open('xb') as f:f.truncate(payload_mib*MIB)
     run('mkfs.ext4','-F','-L','luma-payload','-d',payload_tree,payload)
     esp=OUT/'esp.fat'
     with esp.open('xb') as f:f.truncate(1024*MIB)
@@ -334,7 +339,7 @@ def main() -> None:
     loader=OUT/'loader.conf'; loader.write_text('default luma-live.efi\ntimeout 3\neditor no\n')
     run('mcopy','-i',esp,loader,'::/loader/loader.conf')
     image=OUT/f'{release}.img'
-    sizes=[1024,4096,64,6144]
+    sizes=[1024,root_mib,64,payload_mib]
     with image.open('xb') as f:f.truncate((sum(sizes)+16)*MIB)
     argv=['sgdisk','--clear']
     labels=['LUMA-LIVE-ESP','luma-live-root','luma-live-hash','luma-payload']
@@ -353,7 +358,7 @@ def main() -> None:
     record={'status':'built-not-yet-boot-tested','release':release,'kernel':version,'edition':args.edition,
             'root_hash':roothash,'image':image.name,'image_sha256':digest(image),
             'source_lock_sha256':digest(OUT/'source-lock.json'),
-            'production_signed':False,'gate_closing':False}
+            'desktop':desktop_profile, 'production_signed':False,'gate_closing':False}
     (OUT/'build.json').write_text(json.dumps(record,indent=2)+'\n')
     print(json.dumps(record,indent=2),flush=True)
 

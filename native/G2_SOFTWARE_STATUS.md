@@ -38,6 +38,15 @@ broker I/O deadline. Exact-source image tests are queued after verified export
 and the current sequence-9 VM pipeline. Source tests and queued executions are
 not image acceptance; see [the IPC/rebuild checkpoint](evidence/NATIVE_IPC_2026-09-30.md).
 
+The candidate desktop now packages GNOME/Wayland, with password-required GDM
+restricted to installed boots and no model-service login dependency. A real
+isolated software-rendered compositor and Files, Text Editor and Console
+passed an unprivileged window/surface smoke test; all 60 native Python tests
+passed. This is not installed-image/GDM/session-lifecycle acceptance. The new
+desktop is not in the running sequence-10 headless build. Another full build
+is blocked by C: falling below the 8 GiB preflight minimum; D: remains the
+artifact drive. See [the desktop checkpoint](evidence/NATIVE_WAYLAND_2026-09-30.md).
+
 | Component | Implemented/evaluated scope | Remaining work before software completion |
 | --- | --- | --- |
 | Installer and media | Real laboratory-signed Ubuntu 24.04 image; explicit disk consent, LUKS2, independent credentials, install-time manual/4B/1.7B choice, pinned download; sequence 8 passed pre-write TPM admission, pending enrollment intent and manual installation on a fresh virtual disk | Sealed Admin enrollment and authenticated bootstrap, governed production catalog/pack and offline distribution, full rejection/interruption matrix; rerun actual model acquisition on the new image |
@@ -47,7 +56,7 @@ not image acceptance; see [the IPC/rebuild checkpoint](evidence/NATIVE_IPC_2026-
 | Admin, policy, and effects | Frozen Python contracts and negative tests; native broker verifies kernel peer identity; local TPM2 checkpoint/journal and signed-PCR sealing; native PAM account authentication with real isolated-account tests | Integrate authenticated enrollment/sealed credential delivery, finite Admin assignment/revocation, product principal binding and lifecycle, effect-time grants, durable effect receipts and reconciliation; account authentication and root/sudo operations are not the product Admin service |
 | Skills and vertical workflow | Isolated reference worker and manual reference interface | Signed skill registry, native typed-DAG validation/supervision, descriptor-scoped file-read and artifact-write skills, deterministic calculation, cancellation/checkpoint/restart semantics; distributed-image file-to-artifact journey through those interfaces |
 | Generated-code isolation | General model-generated shell/native execution is denied | Required microVM or separately qualified constrained runtime and adversarial tests before this capability can be available; a deny-only path is not an implemented execution sandbox |
-| Desktop and account lifecycle | Headless console/manual recovery and installer-created distinct accounts | Required model-independent Wayland desktop, credential/account lifecycle and migration tests; current optional Xfce/X11 packaging is neither a qualified desktop nor fulfillment of the Wayland baseline |
+| Desktop and account lifecycle | Headless console/manual recovery and installer-created distinct accounts; candidate GNOME/Wayland packaging and signed boot-target selection; isolated real compositor/Files/editor/terminal surface smoke passed without a model | Build and boot the desktop image; actual GDM authentication, complete manual file workflow, locking, credential/account lifecycle, migration and model-failure tests; container surface tests do not qualify the installed desktop |
 | Trust and custody integration | Lab release key, signed image bytes, image-owned lab model catalog, reference trust/checkpoint contracts; owner selected local TPM2-backed Admin for current installer | Integrate local TPM2 enrollment, authenticated writer identity, trusted UTC, isolated secrets, key rotation/revocation/recovery and reviewed reconciliation; production signatures require approved real custody; external deployment is a future installer variant |
 | Acceptance automation | Reference suites, native source tests, six selected image-specific VM runners | Traceable coverage of every applicable G2 test, fault and performance requirement, not only the existing happy paths and selected negative cases |
 

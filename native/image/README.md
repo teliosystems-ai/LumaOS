@@ -26,9 +26,40 @@ installer downloads and verifies selected weights; weights are not embedded in
 the image or Git. Production Admin/custody/anti-rollback anchoring, TPM auto-unlock,
 a graphical installer, dual boot, and arbitrary-hardware qualification are still
 absent. Native model admission currently covers the catalog below, not the full
-governed multi-model contract/lifecycle matrix. `desktop` remains an untested
-build option. Consult the execution record for the particular image: the old
+governed multi-model contract/lifecycle matrix. `desktop` now selects a candidate
+GNOME/Wayland profile; it is not yet an installed-image qualification. Consult
+the execution record for the particular image: the old
 image's passing tests do not automatically attest a new build.
+
+## Candidate Wayland desktop edition
+
+The `desktop` build uses pinned Ubuntu GNOME/GDM packages, Files, Console,
+Text Editor, Settings and a browser launcher for the local reference workspace.
+The installed signed UKI selects `graphical.target`; live installation/recovery
+and the headless edition explicitly select `multi-user.target`. GDM is limited
+to installed boots and requires the installer-created account password. There
+is no graphical autologin, remote GDM login or dependency on the model service.
+
+The Luma session wrapper refuses X11 and root/service identities. Packaged X11
+session entries are preserved under disabled filenames, not presented as the
+Wayland baseline. Files and desktop controls are independent of the local
+reference web workspace. Console login and the existing offline CLI recovery
+remain the fallback; this change does not implement a graphical installer.
+
+Desktop roots are 6 GiB each, with an 8 GiB offline payload partition on the
+live media. Use a **32 GB or larger USB** for this edition (the existing
+headless media fits a 16 GB device). External-artifact desktop builds require
+60 GiB free on D:/the output filesystem and the unchanged 8 GiB minimum on the
+repository/WSL backing drive; a wholly local desktop build requires 24 GiB.
+These are build thresholds, not certification of arbitrary desktop hardware.
+
+After a desktop image has been built and its checksums verified, native Ubuntu
+testing must cover actual GDM password login to the Luma Wayland session,
+`loginctl show-session "$XDG_SESSION_ID" -p Type`, Files/editor/terminal use
+with inference stopped, logout/login, password changes, screen locking, reboot,
+clean shutdown and a missing/broken model. A packaged compositor smoke test
+does not establish those properties. Existing sequence-9/10 **headless** images
+do not contain this new desktop implementation.
 
 ## Model selection and installation
 
@@ -106,7 +137,10 @@ use production data or production signing keys.
 
 Requires Docker, internet access to Ubuntu repositories on the first build,
 and substantial free build space (allow 40 GiB for one build plus VM tests).
-The builder refuses to start below 16 GiB free on the repository filesystem.
+Without an external build directory, the builder requires 16 GiB free on the
+repository filesystem for headless builds and 24 GiB for desktop builds.
+With external artifacts, it requires 8 GiB there plus 40 GiB (headless) or
+60 GiB (desktop) on the output filesystem.
 Also check Docker's data drive separately; this is not an aggregate reservation
 and does not guarantee space for subsequent VM runs.
 Run from this repository:
@@ -370,7 +404,7 @@ selected set as the complete governed G2 acceptance matrix.
 ## Physical test machine preparation
 
 Use an amd64 UEFI machine, at least 8 GiB RAM, a separate 16 GiB-or-larger USB
-stick, and a **disposable target disk** of at least 32 GiB (64 GiB recommended
+stick (32 GB or larger for the desktop edition), and a **disposable target disk** of at least 32 GiB (64 GiB recommended
 for tests and future model assets). Back up all existing data and recovery keys.
 Disconnect unrelated disks where possible. Legacy BIOS and dual boot are not
 supported by this installer.

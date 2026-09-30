@@ -17,10 +17,10 @@ if [ -n "$build_root" ]; then
 fi
 # External output still requires a smaller Linux workspace. Docker may use a
 # separate drive; its capacity must also be checked by the operator.
-python3 -c 'import shutil,sys; external=sys.argv[2]; checks=[(sys.argv[1],8 if external else 16)]+([(external,40)] if external else []); failed=False
+python3 -c 'import shutil,sys; external=sys.argv[2]; desktop=sys.argv[3]=="desktop"; checks=[(sys.argv[1],8 if external else (24 if desktop else 16))]+([(external,60 if desktop else 40)] if external else []); failed=False
 for path,gib in checks:
  free=shutil.disk_usage(path).free; print(f"Build preflight: {path}: {free} free bytes; minimum {gib} GiB",flush=True); failed|=free<gib*1024**3
-sys.exit("Insufficient build headroom; no build started. Docker storage also needs Linux workspace capacity." if failed else 0)' "$repository" "$build_root"
+sys.exit("Insufficient build headroom; no build started. Docker storage also needs Linux workspace capacity." if failed else 0)' "$repository" "$build_root" "$edition"
 run_id=$(date -u +%Y%m%dT%H%M%SZ)
 volume="luma-native-build-$run_id-$edition"
 export_container="luma-native-export-$run_id"

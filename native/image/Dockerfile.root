@@ -15,8 +15,9 @@ RUN apt-get update --snapshot=${SNAPSHOT} -o APT::Update::Error-Mode=any && \
       network-manager rsync zstd less nano kmod pciutils usbutils && \
     if [ "$EDITION" = desktop ]; then \
       apt-get install -y --no-install-recommends --snapshot=${SNAPSHOT} \
-        xfce4 xfce4-terminal lightdm xserver-xorg-core xserver-xorg-input-libinput \
-        xserver-xorg-video-all dbus-x11 epiphany-browser; \
+        gdm3 gnome-session gnome-shell gnome-console nautilus gnome-text-editor \
+        gnome-control-center network-manager-gnome epiphany-browser \
+        xdg-desktop-portal-gnome fonts-dejavu-core; \
     elif [ "$EDITION" != headless ]; then exit 2; fi
 # Image assembly records the exact installed tuple and strips builder/container state.
 RUN apt-get install -y --no-install-recommends --snapshot=${SNAPSHOT} systemd-boot

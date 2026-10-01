@@ -187,8 +187,15 @@ The builder uses an exact Ubuntu base digest and an Ubuntu archive snapshot.
 `packages.lock`, `toolchain-packages.lock`, `source-lock.json`, signed release
 metadata and SHA-256 checksums accompany the image. These identify the inputs;
 random filesystem identifiers and laboratory keys mean byte-for-byte
-reproducibility is not claimed. The initial CA bootstrap uses authenticated
-Ubuntu APT. No host block device or firmware is opened by the builder.
+reproducibility is not claimed. The initial CA bootstrap uses exact package
+versions from the authenticated, release-only `noble main` archive, with all
+other source lists excluded for that step. The base already supplies Ubuntu's
+archive signing keyring. This avoids upgrading bootstrap dependencies from
+moving update repositories before selecting the snapshot. Subsequent package
+operations select the pinned HTTPS snapshot; no package-signature or TLS
+verification is disabled. See [Ubuntu's snapshot documentation](https://ubuntu.com/server/docs/how-to/software/snapshot-service/)
+and [archive verification model](https://documentation.ubuntu.com/security/software-integrity/archive-verification/).
+No host block device or firmware is opened by the builder.
 
 Output is under `dist/native/<build-time>-headless/`. The `.img.zst` decompresses
 to a GPT disk image of about 11.1 GiB; it is **not an ISO**. Private keys remain

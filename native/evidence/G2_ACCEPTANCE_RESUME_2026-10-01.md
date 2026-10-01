@@ -1,5 +1,12 @@
 # G2 acceptance repairs and resumption — 2026-10-01
 
+Follow-up: the exact sequence-10 regression described as running below has
+since **passed all 14 stages** and its public evidence has been exported.
+The first queued desktop build failed in package bootstrap, before assembly;
+the repair and fresh build are tracked in
+[the subsequent checkpoint](G2_BUILD_SNAPSHOT_2026-10-01.md). The text below
+retains the observations and pending state at the original checkpoint.
+
 G2 is **not complete**. These are source-level fixes and an active image
 evaluation, not complete Admin/policy, workflow, model lifecycle or desktop
 acceptance. The formal two-board and production-custody gate remains open.

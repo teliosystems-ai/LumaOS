@@ -18,12 +18,17 @@ adds a whole-request inference deadline, explicit bounded emulation options,
 failure diagnostics and real poweroff requirements for the remaining follow-up
 VM suites. All 93 native Python tests and 55 ordinary Rust tests passed; the
 seven specialized Rust functions also passed in separate PAM/software-TPM and
-real disk-full export fixtures. Sequence-10 image regression has passed its
-installed slow-frame IPC probes and is continuing on a new D: virtual disk; a candidate desktop
-build is queued behind a successful result. Neither is currently an image pass.
+real disk-full export fixtures. Sequence-10 image regression subsequently
+**passed all 14 stages**, including eight strict normal shutdowns, atomic
+recovery export and installed slow-frame IPC probes, on a fresh D: virtual
+disk. Its public evidence is exported beside the image. The first candidate
+desktop build failed before assembly due to moving bootstrap OpenSSL packages
+conflicting with the pinned snapshot. Both builders now isolate and pin the
+CA bootstrap; a real package-install probe passed and a fresh D: desktop build
+is running. See [the build/evaluation checkpoint](evidence/G2_BUILD_SNAPSHOT_2026-10-01.md).
 The earlier inference failure is not resolved merely by changing its budget.
 
-Latest image-specific result: sequence 9 passed its four-stage manual install,
+Earlier image-specific result: sequence 9 passed its four-stage manual install,
 installed PAM, measured-credential, cold-reboot, signed A/B continuity and
 unapproved-PCR refusal fixture under TCG/Secure Boot/software TPM. Evidence is
 exported with the image; see [the sequence-9 checkpoint](evidence/TEST_IMAGE_SEQUENCE9_2026-09-30.md).
@@ -42,15 +47,17 @@ passes and neither suite closes all G2 requirements.
 The native recovery exporter now publishes a completed archive only after
 successful tar output and synchronization, retaining failures under `.partial`
 without overwriting existing data. Actual Linux producer/ENOSPC tests passed;
-this later source repair is **not in sequence 9** and requires a rebuild and
-image-level recovery evaluation. See [the export checkpoint](evidence/NATIVE_RECOVERY_EXPORT_2026-09-30.md).
+this later source repair is **not in sequence 9**. It is in sequence 10, whose
+image-level recovery evaluation now passed. See [the export checkpoint](evidence/NATIVE_RECOVERY_EXPORT_2026-09-30.md)
+for the earlier source work and the current build/evaluation checkpoint above.
 
 Sequence 10 finished assembly with that exporter and a tested monotonic
 whole-frame broker I/O deadline. Its shell driver failed before export after
 an in-flight source edit; the retained artifacts passed all checksum checks
 and verified export completed without rebuilding. Its test queue stopped when
 sequence-9 model inference failed, before sequence-10 guest acceptance started.
-These image tests need resumption; source tests are not image acceptance. See the
+That initial queue stop was superseded by the fresh passing regression above;
+it does not resolve the model inference failure. See the historical
 [build-resumption checkpoint](evidence/NATIVE_BUILD_RESUME_2026-09-30.md).
 
 The candidate desktop now packages GNOME/Wayland, with password-required GDM
@@ -73,7 +80,7 @@ tests passed. This is host-storage acceptance, not a new G2 OS-image pass. See
 | Component | Implemented/evaluated scope | Remaining work before software completion |
 | --- | --- | --- |
 | Installer and media | Real laboratory-signed Ubuntu 24.04 image; explicit disk consent, LUKS2, independent credentials, install-time manual/4B/1.7B choice, pinned download; sequence 8 passed pre-write TPM admission, pending enrollment intent and manual installation on a fresh virtual disk | Sealed Admin enrollment and authenticated bootstrap, governed production catalog/pack and offline distribution, full rejection/interruption matrix; rerun actual model acquisition on the new image |
-| Boot, update, recovery | Signed UKI, A/B verity roots, essential-health acknowledgement, three-attempt fallback, independent export/repair/disable; selected earlier VM faults passed; sequence 9 passed measured phases, public credential continuity through reboot/signed B, unapproved-PCR refusal and verified late shutdown teardown | Complete confined service credential delivery and lifecycle; broaden shutdown/recovery faults; evaluate transactional export in rebuilt image; complete interruption and migration matrix, including pre-userspace failures; protected production rollback anchors; storage-pressure and recovery-retention cases |
+| Boot, update, recovery | Signed UKI, A/B verity roots, essential-health acknowledgement, three-attempt fallback, independent export/repair/disable; sequence 9 passed measured phases, public credential continuity through reboot/signed B, unapproved-PCR refusal and verified late shutdown teardown; sequence 10 passed the 14-stage regression including atomic export and bounded IPC | Complete confined service credential delivery and lifecycle; broaden shutdown/recovery faults; complete interruption and migration matrix, including pre-userspace failures; protected production rollback anchors; storage-pressure and recovery-retention cases |
 | Temporary storage | Locked, bounded snapshot/download reconciliation; sparse-aware admission and exact-file cleanup; Linux boundary tests in `native/tests`; sequence 8 verified successful startup maintenance service execution | Repeated guest-interruption/pressure evaluation; operator-reviewed disposition of legacy snapshots, which cannot safely be assumed inactive |
 | Model lifecycle and resources | Two pinned CPU profiles; hardware admission, isolated UID, authenticated loopback runtime, systemd memory/device/process restrictions; actual inference and offline reboot passed | Full governed model-pack/catalog lifecycle; atomic resource leases and generations, stale-worker fencing, pressure/quarantine/restart policy; 1,000 **real compact-model** cycles with measured resource return and performance distributions |
 | Admin, policy, and effects | Frozen Python contracts and negative tests; native broker verifies kernel peer identity; local TPM2 checkpoint/journal and signed-PCR sealing; native PAM account authentication with real isolated-account tests | Integrate authenticated enrollment/sealed credential delivery, finite Admin assignment/revocation, product principal binding and lifecycle, effect-time grants, durable effect receipts and reconciliation; account authentication and root/sudo operations are not the product Admin service |

@@ -1,9 +1,15 @@
-ARG UBUNTU_BASE=ubuntu:24.04
+ARG UBUNTU_BASE=ubuntu@sha256:008173c23f95b170204355c12626cb5a965d779a7e1283b09e9cffbb1bf33ca3
 FROM ${UBUNTU_BASE}
 ARG SNAPSHOT=20260927T000000Z
 ENV DEBIAN_FRONTEND=noninteractive
-RUN apt-get update -o APT::Update::Error-Mode=any && \
-    apt-get install -y --no-install-recommends ca-certificates ubuntu-keyring
+# Bootstrap TLS from exact signed noble-release packages, never moving updates.
+# The base has the archive keyring but no CA bundle. Snapshot HTTP redirects to
+# HTTPS; retain TLS verification and use the release-only archive for this step.
+RUN printf '%s\n' 'deb [signed-by=/usr/share/keyrings/ubuntu-archive-keyring.gpg] http://archive.ubuntu.com/ubuntu noble main' > /tmp/luma-bootstrap.list && \
+    apt-get update -o Dir::Etc::sourcelist=/tmp/luma-bootstrap.list -o Dir::Etc::sourceparts=- -o APT::Update::Error-Mode=any && \
+    apt-get install -y --no-install-recommends -o Dir::Etc::sourcelist=/tmp/luma-bootstrap.list -o Dir::Etc::sourceparts=- \
+      ca-certificates=20240203 ubuntu-keyring=2023.11.28.1 openssl=3.0.13-0ubuntu3 && \
+    rm /tmp/luma-bootstrap.list
 RUN apt-get update --snapshot=${SNAPSHOT} -o APT::Update::Error-Mode=any && \
     apt-get install -y --no-install-recommends --snapshot=${SNAPSHOT} \
       ca-certificates ubuntu-keyring rustc cargo gcc libc6-dev \

@@ -7,6 +7,7 @@ no guest port forwarding and no physical disk access. No weight is pre-seeded.
 import argparse
 import hashlib
 import json
+import math
 from pathlib import Path
 import re
 import shlex
@@ -36,9 +37,28 @@ def inference_result(output, model):
     return result
 
 
-def infer(vm, model=MODEL):
-    output = vm.run("printf 'Reply with a short greeting.' | luma-platform model-chat", timeout=240)
-    return inference_result(output, model)
+def inference_budget(acceleration):
+    # Emulation is functional evidence, not native performance qualification.
+    # Keep both the generated token count and the real operation bounded.
+    return (1800, 16) if acceleration == 'tcg' else (180, 128)
+
+
+def infer(vm, model=MODEL, *, bounded=False):
+    seconds, tokens = inference_budget(vm.acceleration) if bounded else (180, 128)
+    command = "printf 'Reply with a short greeting.' | luma-platform model-chat"
+    if bounded:
+        command += f" --timeout-seconds {seconds} --max-tokens {tokens}"
+    output = vm.run(command, timeout=seconds + 60)
+    result = inference_result(output, model)
+    if bounded:
+        elapsed = result.get('elapsed_seconds')
+        if (type(result.get('timeout_seconds')) is not int or result['timeout_seconds'] != seconds
+                or type(result.get('max_tokens')) is not int or result['max_tokens'] != tokens
+                or type(elapsed) not in (int, float) or not math.isfinite(elapsed)
+                or not 0 <= elapsed <= seconds
+                or result['usage']['completion_tokens'] > tokens):
+            raise RuntimeError('inference result does not attest the selected bounded request')
+    return result
 
 
 def healthy(vm):
@@ -46,6 +66,23 @@ def healthy(vm):
     vm.run('python3 -c '+shlex.quote(poll),timeout=330)
     vm.run('systemctl is-active luma-model.service luma-reference.service')
     vm.run('luma-platform boot-health')
+
+
+def failure_diagnostics(vm):
+    # The fixture prompts and account passwords are already public. Never
+    # print service Environment, model-selection credentials or the API key.
+    # Capture runtime pressure/timing so a timeout is diagnosable, not merely
+    # rerun with a larger deadline. Failure here cannot turn a test into a pass.
+    try:
+        vm.run('systemctl show luma-model.service -p ActiveState -p SubState '
+               '-p Result -p MainPID -p MemoryCurrent -p CPUUsageNSec; '
+               'journalctl -u luma-model.service --no-pager -n 120; '
+               'for metric in memory.events memory.current memory.peak cpu.stat; do '
+               'test ! -f /sys/fs/cgroup/system.slice/luma-model.service/$metric || '
+               'cat /sys/fs/cgroup/system.slice/luma-model.service/$metric; done', timeout=30)
+        return True
+    except Exception:
+        return False
 
 
 def disable_from_recovery(vm):
@@ -90,6 +127,8 @@ def arguments(argv=None):
     parser.add_argument('--secure-boot', action='store_true')
     parser.add_argument('--accel', choices=('auto', 'kvm', 'tcg'), default='auto')
     parser.add_argument('--require-clean-shutdown', action='store_true')
+    parser.add_argument('--bounded-model-chat', action='store_true',
+                        help='require new image CLI with whole-request/token budgets; not supported by sequence 10 or earlier')
     parser.add_argument('--timeout', type=stage_timeout, default=5400,
                         help='whole-stage deadline in seconds (60..21600; default: 5400)')
     return parser.parse_args(argv)
@@ -126,7 +165,7 @@ def main():
                 installed_login(vm);healthy(vm)
                 if stage=='model-inference':
                     vm.run('test "$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:8081/v1/models)" = 401')
-                    inference=infer(vm)
+                    inference=infer(vm, bounded=args.bounded_model_chat)
                     vm.run('test "$(cat /sys/fs/cgroup/system.slice/luma-model.service/memory.max)" = 4831838208')
                     vm.run('test "$(cat /sys/fs/cgroup/system.slice/luma-model.service/memory.swap.max)" = 0')
                     vm.run('test "$(cat /sys/fs/cgroup/system.slice/luma-model.service/pids.max)" = 64')
@@ -148,11 +187,21 @@ def main():
                     vm.run('rm /var/lib/luma-os/model-disabled && sync')
                 else:
                     # A healthy listener alone is not offline inference.
-                    offline_inference=infer(vm)
+                    offline_inference=infer(vm, bounded=args.bounded_model_chat)
             if args.secure_boot:
                 vm.run('test "$(od -An -tu1 -j4 /sys/firmware/efi/efivars/SecureBoot-8be4df61-93ca-11d2-aa0d-00e098032b8c | tr -d \' \\n\')" = 1')
             poweroff(vm, args.require_clean_shutdown)
             stages.append(stage)
+        except Exception as error:
+            captured = failure_diagnostics(vm) if stage in ('model-inference', 'offline-reboot') else False
+            # A failed run intentionally has no result.json. Keep the exact
+            # failed stage and selected bounds separate from passed evidence.
+            failure = {'result':'failed', 'stage':stage, 'completed_stages':stages,
+                'error_type':type(error).__name__, 'runtime_diagnostics_captured':captured,
+                'bounded_model_chat':args.bounded_model_chat, 'acceleration':vm.acceleration,
+                'gate_closing':False, 'test_sources':TEST_SOURCES}
+            (work/'failure.json').write_text(json.dumps(failure,indent=2)+'\n')
+            raise
         finally:vm.close()
     with image.open('rb') as stream:digest=hashlib.file_digest(stream,'sha256').hexdigest()
     record={'result':'passed','stages':stages,'image_sha256':digest,'model':MODEL,
@@ -160,6 +209,9 @@ def main():
         'inference':inference,'offline_inference':offline_inference,
         'guest_memory_mib':6144,'acceleration':vm.acceleration,
         'stage_timeout_seconds':args.timeout,
+        'bounded_model_chat':args.bounded_model_chat,
+        'inference_budget':dict(zip(('timeout_seconds','max_tokens'),
+            inference_budget(vm.acceleration) if args.bounded_model_chat else (180, 128))),
         'secure_boot_tested':args.secure_boot,'clean_shutdown_tested':args.require_clean_shutdown,
         'physical_hardware_tested':False,'gate_closing':False,'test_sources':TEST_SOURCES}
     (work/'result.json').write_text(json.dumps(record,indent=2)+'\n');print(json.dumps(record),flush=True)

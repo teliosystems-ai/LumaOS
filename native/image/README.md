@@ -107,6 +107,26 @@ printf 'Reply with a short greeting.' | sudo luma-platform model-chat
 ```
 
 `model-chat` is a bounded local operator test, not an autonomous action agent.
+New images built with the 2026-10-01 helper accept `--timeout-seconds 1..1800`
+and `--max-tokens 1..128`. Defaults remain 180 seconds/128 tokens. One deadline
+covers prompt input, HTTP headers, response bytes, parsing and output; slow
+individual reads cannot extend it indefinitely. Credentials remain local and
+neither a timeout nor model text dispatches an OS effect.
+The smoke request explicitly disables reasoning through the pinned runtime's
+`chat_template_kwargs.enable_thinking=false` and `reasoning_effort=none`
+controls, as documented by [llama.cpp at the pinned commit](https://github.com/ggml-org/llama.cpp/blob/7ab4ee7baad2d920464cbacfad4f4b07cf111fd2/tools/server/README.md#post-v1chatcompletions).
+This keeps a short greeting test's token budget for its visible answer; it is
+not evidence that reasoning was the cause of a previous timeout.
+
+For a short functional check under software CPU emulation:
+
+```sh
+printf 'Reply with a short greeting.' | sudo luma-platform model-chat \
+  --timeout-seconds 1800 --max-tokens 16
+```
+
+This larger explicit emulation budget is not native performance acceptance.
+Sequence 10 and earlier do not support these options; rebuild first.
 Do not paste secrets into test prompts or publish inference logs containing
 private data. Model failure does not prevent OS health acknowledgement or manual
 workflow operation. Recovery's model-disable marker stops inference without
@@ -377,6 +397,15 @@ reboot, independent-credential recovery disablement, and manual boot afterward.
 Only a completed `result.json` is a pass; the existence of this script is not
 evidence that these checks have executed on a particular image.
 
+For images containing the 2026-10-01 bounded helper, add `--bounded-model-chat`.
+It selects 1,800 seconds/16 output tokens under TCG and 180 seconds/128 tokens
+under KVM, verifies the returned budget/elapsed-time observations, and records
+the choice. Without this flag, historical image commands remain unchanged.
+The stage deadline still caps the complete stage. Inference failures retain a
+separate `failure.json` and bounded runtime journal/cgroup diagnostics when the
+guest remains reachable; these are not accepted results. Do not relabel a
+source test, adjusted deadline or modified-guest diagnostic as an image pass.
+
 `model_reconfigure_test.py --image /work/artifacts/EXACT-IMAGE.img --base-run
 /work/vm-full-PASSED --work /work/vm-small-new` uses a fresh overlay of a passed
 full platform fixture. It downloads Qwen3-1.7B through the installed model
@@ -390,6 +419,15 @@ For an already passed model run, `model_recovery_test.py --image
 boot, equal-size corruption refusal and restored health on a new overlay.
 Use the same volume/repository mounts and `--network none`; it retains and
 references the original acquisition evidence rather than claiming a new download.
+
+The reconfiguration, model-recovery and update-power-cut follow-up runners now
+accept `--secure-boot --accel tcg --timeout 5400 --require-clean-shutdown`.
+Every normal stage requires guest-initiated poweroff, even without the strict
+flag. Strict mode additionally requires the fresh late teardown marker and
+records the completed `poweroff_stages`. Only the explicitly injected
+`cut-during-write` stage is killed by the host. Historical results that merely
+synced then terminated QEMU do not inherit these assertions; rerun them.
+The reconfiguration runner also accepts `--bounded-model-chat` for new images.
 
 `update_powercut_test.py` provides a separate, destructive **virtual-disk-only**
 interruption test. Mount the passed original image/run volume read-only at

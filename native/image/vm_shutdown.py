@@ -2,6 +2,17 @@
 import re
 
 
+def verify_secure_boot(vm):
+    vm.run('test "$(od -An -tu1 -j4 /sys/firmware/efi/efivars/'
+           'SecureBoot-8be4df61-93ca-11d2-aa0d-00e098032b8c | tr -d \' \\n\')" = 1')
+
+
+def finish_stage(vm, *, require_clean=False, secure_boot=False):
+    if secure_boot:
+        verify_secure_boot(vm)
+    poweroff(vm, require_clean)
+
+
 def poweroff(vm, require_clean=False):
     if require_clean:
         vm.run('systemctl is-active dracut-shutdown.service && '

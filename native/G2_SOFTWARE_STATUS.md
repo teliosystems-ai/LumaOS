@@ -1,6 +1,6 @@
 # G2 software completion register
 
-Updated 2026-09-30. **G2 software is not complete.** This register separates
+Updated 2026-10-01. **G2 software is not complete.** This register separates
 work that can be executed in the current Windows/Ubuntu WSL/VM environment
 from production deployment decisions and physical qualification. It does not
 change the frozen reference release, governing requirements, or exit criteria.
@@ -12,6 +12,16 @@ unit test, default-deny placeholder, or smaller model cannot close a different
 requirement.
 
 ## Current software inventory and work still required
+
+The [2026-10-01 acceptance checkpoint](evidence/G2_ACCEPTANCE_RESUME_2026-10-01.md)
+adds a whole-request inference deadline, explicit bounded emulation options,
+failure diagnostics and real poweroff requirements for the remaining follow-up
+VM suites. All 93 native Python tests and 55 ordinary Rust tests passed; the
+seven specialized Rust functions also passed in separate PAM/software-TPM and
+real disk-full export fixtures. Sequence-10 image regression has passed its
+installed slow-frame IPC probes and is continuing on a new D: virtual disk; a candidate desktop
+build is queued behind a successful result. Neither is currently an image pass.
+The earlier inference failure is not resolved merely by changing its budget.
 
 Latest image-specific result: sequence 9 passed its four-stage manual install,
 installed PAM, measured-credential, cold-reboot, signed A/B continuity and

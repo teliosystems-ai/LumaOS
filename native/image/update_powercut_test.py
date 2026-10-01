@@ -13,6 +13,8 @@ import socket
 import subprocess
 import time
 from vm_test import VM, TEST_SOURCES, installed_login
+from model_vm_test import stage_timeout
+from vm_shutdown import finish_stage, verify_secure_boot
 
 
 def digest(path):
@@ -38,13 +40,21 @@ class QMP:
     def close(self):self.stream.close();self.socket.close()
 
 
-def main():
+def arguments(argv=None):
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--base-image',type=Path,required=True)
     parser.add_argument('--candidate',type=Path,required=True)
     parser.add_argument('--base-run',type=Path,required=True)
     parser.add_argument('--work',type=Path,required=True)
-    a=parser.parse_args();base_image=a.base_image.resolve(strict=True);candidate=a.candidate.resolve(strict=True)
+    parser.add_argument('--secure-boot', action='store_true')
+    parser.add_argument('--accel', choices=('auto','kvm','tcg'), default='auto')
+    parser.add_argument('--require-clean-shutdown', action='store_true')
+    parser.add_argument('--timeout', type=stage_timeout, default=2400)
+    return parser.parse_args(argv)
+
+
+def main():
+    a=arguments();base_image=a.base_image.resolve(strict=True);candidate=a.candidate.resolve(strict=True)
     base=a.base_run.resolve(strict=True);work=a.work.resolve()
     if not base_image.is_file() or not base_image.is_relative_to('/baseline/artifacts'):
         raise SystemExit('base image must be a readonly baseline artifact')
@@ -64,13 +74,15 @@ def main():
     if not backing.is_file() or not backing.is_relative_to(base):raise SystemExit('invalid baseline disk')
     work.mkdir();target=work/'target.qcow2'
     subprocess.run(['qemu-img','create','-f','qcow2','-F','qcow2','-b',str(backing),str(target)],check=True)
-    stages=[];written=None
+    stages=[];poweroff_stages=[];written=None
     for stage in ('cut-during-write','reconcile-and-retry','updated-after-cut'):
         print('Power-cut VM stage: '+stage,flush=True)
         media=base_image if stage=='updated-after-cut' else candidate
-        vm=VM(media,work/stage,target,False,2400,attach_media=True)
+        vm=VM(media,work/stage,target,False,a.timeout,attach_media=True,
+              secure_boot=a.secure_boot,acceleration=a.accel)
         try:
             installed_login(vm);vm.run('luma-platform boot-health')
+            if a.secure_boot:verify_secure_boot(vm)
             vm.run('grep -Fx persistent-fixture /home/lumauser/recovery-test.txt')
             if stage in ('cut-during-write','reconcile-and-retry'):
                 vm.run('grep -qw luma.slot=a /proc/cmdline')
@@ -111,6 +123,9 @@ def main():
                     raise RuntimeError('older signed bundle was not refused')
                 vm.run('test ! -e /var/lib/luma-os/pending.json')
                 vm.run('sync')
+            if stage != 'cut-during-write':
+                finish_stage(vm, require_clean=a.require_clean_shutdown, secure_boot=a.secure_boot)
+                poweroff_stages.append(stage)
             stages.append(stage)
         finally:vm.close()
     record={'result':'passed','stages':stages,'base_image_sha256':prior['image_sha256'],
@@ -118,7 +133,9 @@ def main():
         'candidate_image_sha256':digest(candidate),'observed_target_write_bytes_at_cut':written,
         'injection':'QEMU SIGKILL during inactive-slot writes','original_fixture_modified':False,
         'older_signed_sequence_refused':True,'model_disable_preserved':True,
-        'physical_power_loss_tested':False,'secure_boot_tested':False,'gate_closing':False,'test_sources':TEST_SOURCES}
+        'physical_power_loss_tested':False,'secure_boot_tested':a.secure_boot,'gate_closing':False,
+        'clean_shutdown_tested':a.require_clean_shutdown,'poweroff_stages':poweroff_stages,
+        'acceleration':vm.acceleration,'stage_timeout_seconds':a.timeout,'test_sources':TEST_SOURCES}
     (work/'result.json').write_text(json.dumps(record,indent=2)+'\n');print(json.dumps(record),flush=True)
 
 

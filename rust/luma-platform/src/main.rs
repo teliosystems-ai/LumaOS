@@ -86,11 +86,14 @@ fn dispatch() -> Result<()> {
         }
         Some("model-serve") if args.len() == 1 => model::serve(),
         Some("model-unit") if args.len() == 1 => model::unit(),
-        Some("model-chat") if args.len() == 1 => {
+        Some("model-chat") => {
             require_root()?;
             platform::require_installed()?;
             if !std::process::Command::new("/usr/bin/python3")
                 .args(["-I", "/usr/libexec/luma-os/model-chat.py"])
+                // The fixed helper parses only bounded numeric options. No
+                // interpreter flags, endpoint, path or shell is caller-selected.
+                .args(&args[1..])
                 .env_clear()
                 .env("PATH", "/usr/bin")
                 .status()?
@@ -112,7 +115,7 @@ fn dispatch() -> Result<()> {
             println!("admin-auth-check LOGIN: installed-system, controlling-terminal account authentication diagnostic; does not enroll or grant product Admin.");
             println!("Install requires local TPM2 admission before any disk write. admin-install-check is read-only and does not enroll Admin; sealed product enrollment remains pending.");
             println!("Maintenance: staging-clean | model-clean (root only; preserves active operations and unknown files).");
-            println!("Model operations: models | model-install MODEL-ID | model-chat (prompt on stdin).\nInstaller accepts --model MODEL-ID or --model manual-only; otherwise prompts.\nWeights are acquired from pinned HTTPS publisher URLs after hardware admission.");
+            println!("Model operations: models | model-install MODEL-ID | model-chat [--timeout-seconds 1..1800] [--max-tokens 1..128] (prompt on stdin).\nInstaller accepts --model MODEL-ID or --model manual-only; otherwise prompts.\nWeights are acquired from pinned HTTPS publisher URLs after hardware admission.");
             println!("Luma native platform alpha\n\n  inventory\n  verify BUNDLE\n  install /dev/disk/by-id/EXACT-ID BUNDLE\n  update BUNDLE\n  recover unlock /dev/disk/by-id/EXACT-ID\n  recover export /dev/disk/by-id/EXACT-ID EMPTY-DESTINATION\n  recover repair-a|repair-b /dev/disk/by-id/EXACT-ID BUNDLE\n  recover repair-data /dev/disk/by-id/EXACT-ID\n  recover disable-model /dev/disk/by-id/EXACT-ID\n  status\n\nInstall requires local interactive disk confirmation and new credentials.\nLaboratory image: native acceptance and production custody are outstanding.");
             Ok(())
         }

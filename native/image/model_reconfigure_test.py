@@ -10,7 +10,8 @@ import json
 from pathlib import Path
 import subprocess
 from vm_test import VM, TEST_SOURCES, installed_login
-from model_vm_test import healthy, infer
+from model_vm_test import healthy, infer, stage_timeout
+from vm_shutdown import finish_stage
 
 MODEL='qwen3-1-7b-q4-k-m'
 
@@ -19,12 +20,21 @@ def digest(path):
     with path.open('rb') as stream:return hashlib.file_digest(stream,'sha256').hexdigest()
 
 
-def main():
+def arguments(argv=None):
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--image',type=Path,required=True)
     parser.add_argument('--base-run',type=Path,required=True)
     parser.add_argument('--work',type=Path,required=True)
-    a=parser.parse_args();image=a.image.resolve(strict=True);base=a.base_run.resolve(strict=True);work=a.work.resolve()
+    parser.add_argument('--secure-boot', action='store_true')
+    parser.add_argument('--accel', choices=('auto','kvm','tcg'), default='auto')
+    parser.add_argument('--require-clean-shutdown', action='store_true')
+    parser.add_argument('--bounded-model-chat', action='store_true')
+    parser.add_argument('--timeout', type=stage_timeout, default=5400)
+    return parser.parse_args(argv)
+
+
+def main():
+    a=arguments();image=a.image.resolve(strict=True);base=a.base_run.resolve(strict=True);work=a.work.resolve()
     if not image.is_file() or not image.is_relative_to('/work/artifacts'):
         raise SystemExit('expected generated image')
     if base.parent!=Path('/work') or not base.name.startswith('vm-'):
@@ -41,7 +51,8 @@ def main():
     stages=[];inference=None;inferences=[]
     for stage in ('install-small-profile','offline-small-profile'):
         print('Model reconfiguration stage: '+stage,flush=True)
-        vm=VM(image,work/stage,target,False,5400,network=stage=='install-small-profile')
+        vm=VM(image,work/stage,target,False,a.timeout,secure_boot=a.secure_boot,
+              acceleration=a.accel,network=stage=='install-small-profile')
         try:
             installed_login(vm);vm.run('luma-platform boot-health')
             vm.run('grep -Fx persistent-fixture /home/lumauser/recovery-test.txt')
@@ -55,18 +66,22 @@ def main():
                 vm.run('rm /var/lib/luma-os/model-disabled && systemctl start luma-model.service')
             healthy(vm)
             vm.run('test "$(cat /sys/fs/cgroup/system.slice/luma-model.service/memory.max)" = 2684354560')
-            inference=infer(vm,MODEL)
+            inference=infer(vm,MODEL,bounded=a.bounded_model_chat)
             inferences.append({'stage':stage,'response':inference})
             vm.run('luma-platform model-install not-a-catalog-model',expected=1)
             vm.run('systemctl is-active luma-model.service luma-reference.service')
-            vm.run('sync');stages.append(stage)
+            finish_stage(vm, require_clean=a.require_clean_shutdown, secure_boot=a.secure_boot)
+            stages.append(stage)
         finally:vm.close()
     record={'result':'passed','stages':stages,'image_sha256':image_hash,
         'base_result_sha256':digest(base/'result.json'),'base_run':base.name,
         'model':MODEL,'guest_memory_mib':4096,'inference':inference,'inferences':inferences,
         'acquisition':'publisher-https-download-by-installed-native-model-command',
         'preseeded_weights':False,'recovery_disable_preserved_until_operator_enable':True,
-        'original_fixture_modified':False,'secure_boot_tested':False,
+        'original_fixture_modified':False,'secure_boot_tested':a.secure_boot,
+        'clean_shutdown_tested':a.require_clean_shutdown,'poweroff_stages':stages,
+        'acceleration':vm.acceleration,'stage_timeout_seconds':a.timeout,
+        'bounded_model_chat':a.bounded_model_chat,
         'physical_hardware_tested':False,'gate_closing':False,'test_sources':TEST_SOURCES}
     (work/'result.json').write_text(json.dumps(record,indent=2)+'\n');print(json.dumps(record),flush=True)
 

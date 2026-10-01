@@ -3,6 +3,7 @@ import importlib.util
 from pathlib import Path
 import tempfile
 import unittest
+from unittest import mock
 
 spec = importlib.util.spec_from_file_location('vm_shutdown',
     Path(__file__).resolve().parents[1]/'image/vm_shutdown.py')
@@ -60,6 +61,25 @@ class ShutdownFixtureTests(unittest.TestCase):
         guest = GuestFixture(self.root)
         shutdown.poweroff(guest)
         self.assertEqual(guest.commands, ['sync', 'systemctl poweroff'])
+
+    def test_stage_completion_checks_secure_boot_before_clean_poweroff(self):
+        guest = GuestFixture(self.root, b'\r\nLUMA_SHUTDOWN_STORAGE_CLEAN\r\n')
+        shutdown.finish_stage(guest, secure_boot=True, require_clean=True)
+        self.assertIn('SecureBoot-8be4df61', guest.commands[0])
+        self.assertIn('dracut-shutdown.service', guest.commands[1])
+        self.assertEqual(guest.commands[-2:], ['sync', 'systemctl poweroff'])
+
+    def test_failed_secure_boot_check_cannot_be_stage_completion(self):
+        guest = mock.Mock()
+        guest.run.side_effect = RuntimeError('Secure Boot disabled')
+        with mock.patch.object(shutdown, 'poweroff') as poweroff, self.assertRaises(RuntimeError):
+            shutdown.finish_stage(guest, secure_boot=True, require_clean=True)
+        poweroff.assert_not_called()
+
+    def test_failed_shutdown_propagates_out_of_stage_completion(self):
+        guest = GuestFixture(self.root, code=1)
+        with self.assertRaises(RuntimeError):
+            shutdown.finish_stage(guest)
 
 
 if __name__ == '__main__':

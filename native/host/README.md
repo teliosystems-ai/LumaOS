@@ -33,6 +33,24 @@ Do not publish the backing file or use it for production signing custody.
 
 ## Operation after host setup has passed validation
 
+For current VM acceptance, use a fresh named volume on this dedicated daemon
+for both media and virtual disks. The sequence-11 6 GiB installer run encountered
+media-read and target-write I/O errors with QEMU files directly on `/mnt/d`.
+An ext4-workspace retry isolates that file path; the exact cause is not yet
+established. See the [I/O checkpoint](../evidence/G2_VM_LINUX_WORKSPACE_2026-10-01.md).
+This still uses the D: backing file, not C: or a newly formatted drive.
+
+After activating and verifying the dedicated profile, create a new empty named
+volume and stage media with `native/image/vm_workspace.py` in the tools container:
+mount the volume at `/work`, the original artifact directory read-only at
+`/input`, and frozen source read-only at `/repo`. Pass
+`--expected-image-sha256 EXACT_RECORDED_IMAGE_SHA256`. The helper requires ext4,
+checks capacity for the image plus 36 GiB, and refuses reused workspaces. It
+copies only raw media, build metadata and the public firmware certificate;
+it is not a complete update-artifact export. Mount staged `/work/artifacts`
+read-only for VM execution. Recheck capacity before another fresh VM disk.
+Retain failed workspaces for diagnosis; do not reuse or silently repair them.
+
 From Ubuntu WSL in the repository:
 
 ```sh

@@ -13,6 +13,14 @@ requirement.
 
 ## Current software inventory and work still required
 
+The [Linux VM workspace checkpoint](evidence/G2_VM_LINUX_WORKSPACE_2026-10-01.md)
+records a second desktop failure: snapshot admission passed at 6 GiB, but media
+read/target write I/O errors stopped installation. No model VM followed.
+Read-only checks did not identify a definitive cause. All 121 native Python
+tests and a bounded QEMU I/O probe on the existing D-backed ext4 store passed.
+The next test stages identical media in a fresh Linux workspace, retaining all
+failed runs. Image transfer is running; desktop/model acceptance is not passed.
+
 The [desktop memory-admission checkpoint](evidence/G2_DESKTOP_MEMORY_2026-10-01.md)
 records an actual sequence-11 installation failure: the 4 GiB VM's live tmpfs
 cannot hold the measured 2.25 GiB private artifact snapshot plus its reserve.
@@ -20,8 +28,8 @@ The failed run is preserved. The retry uses 6 GiB for installation and retains
 4 GiB for installed greeter checks; the model suite remains conditional on a
 passing desktop run. Source now adds explicit tmpfs RAM headroom admission and
 capacity diagnostics. All 62 ordinary Rust tests, 115 native Linux Python tests
-and 13 native Windows desktop-fixture tests passed. The retry has reached
-exact-image verification; neither retry nor a final G2 image is complete.
+and 13 native Windows desktop-fixture tests passed. The retry subsequently
+failed with I/O errors as recorded above; desktop acceptance is not complete.
 This source repair also requires a later image rebuild.
 
 The [bounded broker connection checkpoint](evidence/G2_BROKER_CONNECT_2026-10-01.md)

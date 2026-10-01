@@ -301,7 +301,40 @@ the whole-frame broker deadline. It runs as UID 990 (`luma-control`), drips both
 header and body bytes, requires bounded denial, then checks that a fresh
 authenticated status request succeeds. This does not test full policy/Admin
 authorization, flood fairness or systemctl effect deadlines. Sequence 9 does
-not contain the IPC repair. Both new checks are queued for sequence 10.
+not contain the IPC repair. Both checks passed in the fresh sequence-10
+14-stage regression; see [its checkpoint](../evidence/G2_BUILD_SNAPSHOT_2026-10-01.md).
+
+### Installed desktop greeter evaluation
+
+`desktop_vm_test.py` is a separate three-stage desktop-only fixture: fresh
+manual installation, installed greeter, and cold-boot greeter. Use a new work
+directory with the same read-only artifact/source mounts as the VM tests:
+
+```sh
+python3 /repo/native/image/desktop_vm_test.py \
+  --image /work/artifacts/EXACT-DESKTOP-IMAGE.img \
+  --work /work/vm-desktop-new --secure-boot --accel tcg \
+  --timeout 5400 --require-clean-shutdown
+```
+
+It uses a software-only virtio VGA device, 4 GiB guest RAM, no guest network
+and no host display/GPU/input access. Existing non-graphical VM runners retain
+their original device configuration. On installed boots it checks the signed
+graphical target, active GDM and an actual local seat-0 **Wayland greeter** in
+logind. It repeats that observation after stopping the guest model, broker and
+reference services, then restores them before clean poweroff. No automatic
+login, GDM reconfiguration, PAM bypass or synthetic session is used.
+
+Bounded [QMP screenshot requests](https://www.qemu.org/docs/master/interop/qemu-qmp-ref.html#command-screendump)
+retain fixed-name PNG evidence. The collector can include those greeter images;
+it still excludes VM disks, NVRAM, software TPM state and arbitrary screenshots.
+Failed runs retain `failure.json`, bounded journal diagnostics and an optional
+failure screenshot, not a passing result.
+
+This fixture does **not** authenticate a graphical user, test screen locking,
+run the complete manual graphical workflow, or qualify physical GPUs. Its
+result explicitly keeps those acceptance claims false. A passing QMP transport
+unit/integration test alone is not a passing greeter or boot evaluation.
 
 ### Testing a transferred image without rebuilding it
 

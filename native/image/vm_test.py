@@ -19,6 +19,7 @@ import tempfile
 import time
 from vm_tpm import SoftwareTPM, state_directory
 from vm_shutdown import poweroff
+from vm_display import display_arguments
 
 USER_PASSWORD='VM-only-user-passphrase-2026'
 ADMIN_PASSWORD='VM-only-admin-passphrase-2026'
@@ -30,7 +31,8 @@ TEST_SOURCES={p.name:hashlib.sha256(p.read_bytes()).hexdigest()
 
 
 class VM:
-    def __init__(self,image: Path,work: Path,target: Path,live: bool,timeout: int,secure_boot: bool=False,acceleration: str='auto',attach_media: bool | None=None,media_format: str='raw',memory_mib: int=4096,network: bool=False):
+    def __init__(self,image: Path,work: Path,target: Path,live: bool,timeout: int,secure_boot: bool=False,acceleration: str='auto',attach_media: bool | None=None,media_format: str='raw',memory_mib: int=4096,network: bool=False,graphical: bool=False):
+        display = display_arguments(graphical)
         self.work=work;work.mkdir()
         # External filesystems hold disks/logs, not Unix socket endpoints.
         self.socket_directory=tempfile.TemporaryDirectory(prefix='luma-vm-',dir='/tmp')
@@ -60,6 +62,7 @@ class VM:
             '-nic','user,model=virtio-net-pci' if network else 'none','-display','none','-monitor','none',
             '-serial',f'unix:{self.socket_dir}/console.sock,server=on,wait=off',
             '-qmp',f'unix:{self.socket_dir}/qmp.sock,server=on,wait=off','-no-reboot']
+        command += display
         if media_format not in ('raw','qcow2'):raise ValueError('unsupported media format')
         if attach_media if attach_media is not None else live:
             command+=['-drive',f'if=none,id=media,format={media_format},readonly=on,file={image}',

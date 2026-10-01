@@ -125,18 +125,22 @@ class ModelChatBudgetTests(unittest.TestCase):
                 except (BrokenPipeError, ConnectionResetError):
                     pass
         with http.server.HTTPServer(('127.0.0.1', 0), Trickle) as server:
+            # Bound accept even if client setup fails before connecting. Begin
+            # the body deadline only after real response headers arrive, so
+            # CPU contention cannot turn this into a connect-timeout test.
+            server.timeout = 2
             thread = threading.Thread(target=server.handle_request)
             thread.start()
             try:
-                start = time.monotonic()
-                with self.assertRaises(TimeoutError):
-                    with chat.whole_request_deadline(.2):
-                        with chat.local_opener().open(f'http://127.0.0.1:{server.server_port}', timeout=1) as response:
+                with chat.local_opener().open(f'http://127.0.0.1:{server.server_port}', timeout=2) as response:
+                    start = time.monotonic()
+                    with self.assertRaises(TimeoutError):
+                        with chat.whole_request_deadline(.2):
                             response.read(100)
-                self.assertLess(time.monotonic() - start, 1)
+                    self.assertLess(time.monotonic() - start, 1)
             finally:
                 stop.set()
-                thread.join(2)
+                thread.join(3)
                 self.assertFalse(thread.is_alive())
 
     @unittest.skipUnless(hasattr(signal, 'setitimer'), 'Linux CLI deadline')

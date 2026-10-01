@@ -13,6 +13,15 @@ requirement.
 
 ## Current software inventory and work still required
 
+The [installed-desktop acceptance checkpoint](evidence/G2_DESKTOP_ACCEPTANCE_2026-10-01.md)
+adds exact-image verification, a three-stage installed Wayland/GDM-greeter
+fixture, software-only virtual display and bounded screenshot evidence.
+All 106 native Python tests and a real QMP transport probe passed; that probe
+did not boot an OS. The tools build has succeeded and desktop root packaging
+is progressing on D:. The frozen greeter evaluation is queued only after
+successful export/checksums. It is not yet an installed-desktop pass and does
+not cover graphical password login, locking or the full manual workflow.
+
 The [2026-10-01 acceptance checkpoint](evidence/G2_ACCEPTANCE_RESUME_2026-10-01.md)
 adds a whole-request inference deadline, explicit bounded emulation options,
 failure diagnostics and real poweroff requirements for the remaining follow-up

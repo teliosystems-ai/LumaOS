@@ -404,11 +404,16 @@ their diagnostic logs but are never exported as passing evidence.
 
 ### Model acquisition and recovery evaluation
 
-The model-specific runner uses a fresh 32 GiB virtual disk, 6 GiB guest memory,
-two virtual CPUs, and outbound NAT only during installation. Run it separately
-from other VMs on a memory-constrained host. It downloads Qwen3-4B from the pinned
-publisher URL; no weights are pre-seeded. It requires approximately 2.5 GB of
-network transfer as well as room for the virtual disk and retained logs.
+The model-specific runner uses a fresh 32 GiB virtual disk, two virtual CPUs,
+and outbound NAT only during installation. Run it separately from other VMs
+on a memory-constrained host. Its default remains Qwen3-4B with 6 GiB guest
+RAM and approximately 2.5 GB of download. Explicitly select
+`--model qwen3-1-7b-q4-k-m` to test fresh installation of the existing smaller
+profile, with 4 GiB guest RAM and approximately 1.1 GB of download. This does
+not replace 4B-tier qualification. Both download from their pinned publisher
+URLs; no weights are pre-seeded. Unknown profile names are refused before
+guest execution, and the image's catalog/selected identity, corruption target,
+memory cap and inference result must agree with the selected fixture.
 
 ```sh
 docker run --rm --device=/dev/kvm \
@@ -437,6 +442,13 @@ reboot, independent-credential recovery disablement, and manual boot afterward.
 Only a completed `result.json` is a pass; the existence of this script is not
 evidence that these checks have executed on a particular image.
 
+Corruption checks now require a fresh, exact native refusal from the model
+unit after a captured journal cursor; they cannot pass merely because a prior
+boot or earlier corruption trial logged the same error. Each observation
+records both cursors. The helper follows the packaged
+[systemd 255 journal cursor interface](https://www.freedesktop.org/software/systemd/man/255/journalctl.html#--after-cursor=).
+Historical runs do not inherit this stronger evidence requirement.
+
 For images containing the 2026-10-01 bounded helper, add `--bounded-model-chat`.
 It selects 1,800 seconds/16 output tokens under TCG and 180 seconds/128 tokens
 under KVM, verifies the returned budget/elapsed-time observations, and records
@@ -459,6 +471,9 @@ For an already passed model run, `model_recovery_test.py --image
 boot, equal-size corruption refusal and restored health on a new overlay.
 Use the same volume/repository mounts and `--network none`; it retains and
 references the original acquisition evidence rather than claiming a new download.
+The follow-up binds its memory fixture, selected identity and corruption path
+to the model in the passing base result, supporting either of the two closed
+profiles without silently substituting the default 4B model.
 
 The reconfiguration, model-recovery and update-power-cut follow-up runners now
 accept `--secure-boot --accel tcg --timeout 5400 --require-clean-shutdown`.

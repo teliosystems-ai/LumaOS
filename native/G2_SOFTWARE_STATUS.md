@@ -13,6 +13,14 @@ requirement.
 
 ## Current software inventory and work still required
 
+The [model-profile acceptance checkpoint](evidence/G2_MODEL_PROFILE_ACCEPTANCE_2026-10-01.md)
+adds explicit fresh-install 4B/1.7B evaluation profiles and binds recovery to
+the actual selected model. Corruption checks now require fresh journal-cursor
+evidence, not old errors. All 112 native Python tests passed. The desktop build
+has reached payload assembly; desktop acceptance and then the bounded 4B
+installer/inference suite are serialized behind successful verified output.
+Neither is yet a pass, and 1.7B does not replace required 4B qualification.
+
 The [installed-desktop acceptance checkpoint](evidence/G2_DESKTOP_ACCEPTANCE_2026-10-01.md)
 adds exact-image verification, a three-stage installed Wayland/GDM-greeter
 fixture, software-only virtual display and bounded screenshot evidence.

@@ -10,7 +10,8 @@ import json
 from pathlib import Path
 import subprocess
 from vm_test import VM, TEST_SOURCES, installed_login
-from model_vm_test import healthy, disable_from_recovery, reject_same_size_corruption, stage_timeout
+from model_vm_test import (healthy, disable_from_recovery, reject_same_size_corruption,
+                           stage_timeout, model_fixture, verify_selected)
 from vm_shutdown import finish_stage
 
 
@@ -38,30 +39,31 @@ def main():
         raise SystemExit('expected a retained generated model VM run')
     prior=json.loads((base/'result.json').read_text());image_hash=digest(image)
     if (prior.get('result')!='passed' or prior.get('image_sha256')!=image_hash
-            or 'offline-reboot' not in prior.get('stages',[])
-            or prior.get('model')!='qwen3-4b-q4-k-m'):
+            or 'offline-reboot' not in prior.get('stages',[])):
         raise SystemExit('base must have passed actual model acquisition/inference/offline boot')
+    fixture = model_fixture(prior.get('model'))
     if work.parent!=Path('/work') or not work.name.startswith('vm-') or work.exists():
         raise SystemExit('use a fresh generated VM directory')
     backing=(base/'target.qcow2').resolve(strict=True)
     if not backing.is_file() or not backing.is_relative_to(base):raise SystemExit('invalid base disk')
     work.mkdir();target=work/'target.qcow2'
     subprocess.run(['qemu-img','create','-f','qcow2','-F','qcow2','-b',str(backing),str(target)],check=True)
-    stages=[]
+    stages=[];refusals=[]
     for stage in ('independent-recovery-disable','manual-disabled-boot','same-size-corruption'):
         print('Model recovery stage: '+stage,flush=True)
         vm=VM(image,work/stage,target,stage=='independent-recovery-disable',a.timeout,
-              secure_boot=a.secure_boot,acceleration=a.accel,memory_mib=6144)
+              secure_boot=a.secure_boot,acceleration=a.accel,memory_mib=fixture['guest_memory_mib'])
         try:
             if stage=='independent-recovery-disable':disable_from_recovery(vm)
             else:
                 installed_login(vm)
+                verify_selected(vm, fixture['model'])
                 vm.run('test -f /var/lib/luma-os/model-disabled')
                 vm.run('test "$(systemctl is-active luma-model.service)" = inactive')
                 vm.run('systemctl is-active luma-reference.service && luma-platform boot-health')
                 if stage=='same-size-corruption':
                     vm.run('rm /var/lib/luma-os/model-disabled')
-                    reject_same_size_corruption(vm)
+                    refusals.append(reject_same_size_corruption(vm, fixture['model']))
                     vm.run('systemctl reset-failed luma-model.service && systemctl start luma-model.service')
                     healthy(vm)
             finish_stage(vm, require_clean=a.require_clean_shutdown, secure_boot=a.secure_boot)
@@ -70,6 +72,8 @@ def main():
     record={'result':'passed','stages':stages,'image_sha256':image_hash,
         'base_result_sha256':digest(base/'result.json'),'base_run':base.name,
         'original_fixture_modified':False,'network_enabled':False,
+        'model':fixture['model'],'fixture':fixture,
+        'fresh_integrity_refusals':refusals,
         'secure_boot_tested':a.secure_boot,'physical_hardware_tested':False,'gate_closing':False,
         'clean_shutdown_tested':a.require_clean_shutdown,'poweroff_stages':stages,
         'acceleration':vm.acceleration,'stage_timeout_seconds':a.timeout,

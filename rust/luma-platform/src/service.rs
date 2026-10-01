@@ -2,7 +2,7 @@ use crate::{disk::command, Result};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::io::{self, Read, Write};
-use std::os::fd::AsRawFd;
+use std::os::fd::{AsRawFd, FromRawFd};
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -227,8 +227,54 @@ fn exchange(socket: &mut UnixStream, request: &Request, deadline: Instant) -> Re
     validate_response(&read_frame_until(socket, deadline)?, request)
 }
 
+fn connect_local(path: &str, deadline: Instant) -> io::Result<UnixStream> {
+    remaining(deadline)?;
+    // Linux pathname sockets only; never accept an abstract/truncated name.
+    let mut address: libc::sockaddr_un = unsafe { std::mem::zeroed() };
+    if !path.starts_with('/') || path.len() >= address.sun_path.len() || path.contains('\0') {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "invalid broker socket path",
+        ));
+    }
+    address.sun_family = libc::AF_UNIX as libc::sa_family_t;
+    for (target, byte) in address.sun_path.iter_mut().zip(path.bytes()) {
+        *target = byte as libc::c_char;
+    }
+    // SO_RCVTIMEO does not bound connect(). A full Unix listen queue must
+    // refuse immediately, not block before the request deadline is installed.
+    let fd = unsafe {
+        libc::socket(
+            libc::AF_UNIX,
+            libc::SOCK_STREAM | libc::SOCK_CLOEXEC | libc::SOCK_NONBLOCK,
+            0,
+        )
+    };
+    if fd < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    // Transfer ownership immediately, including all error paths below.
+    let socket = unsafe { UnixStream::from_raw_fd(fd) };
+    let result = unsafe {
+        libc::connect(
+            socket.as_raw_fd(),
+            &address as *const _ as *const libc::sockaddr,
+            std::mem::size_of_val(&address) as libc::socklen_t,
+        )
+    };
+    if result != 0 {
+        // EAGAIN (busy queue), EINTR and all other uncertain outcomes are
+        // refusals. No automatic retry or reuse of a failed connection.
+        return Err(io::Error::last_os_error());
+    }
+    remaining(deadline)?;
+    socket.set_nonblocking(false)?;
+    Ok(socket)
+}
+
 pub fn client(action: &str) -> Result<()> {
-    let mut socket = UnixStream::connect(SOCKET)?;
+    let deadline = Instant::now() + Duration::from_secs(3);
+    let mut socket = connect_local(SOCKET, deadline)?;
     if peer(&socket)? != 0 {
         return Err("broker peer is not root".into());
     }
@@ -239,11 +285,7 @@ pub fn client(action: &str) -> Result<()> {
         deadline: now()? + 5,
         action: action.into(),
     };
-    let response = exchange(
-        &mut socket,
-        &request,
-        Instant::now() + Duration::from_secs(3),
-    )?;
+    let response = exchange(&mut socket, &request, deadline)?;
     println!("{}", serde_json::to_string(&response)?);
     Ok(())
 }
@@ -251,6 +293,81 @@ pub fn client(action: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn client_connection_refuses_invalid_missing_and_expired_endpoints() {
+        for path in [
+            "",
+            "relative",
+            "\0abstract",
+            "/embedded\0suffix",
+            &format!("/{}", "x".repeat(108)),
+        ] {
+            assert_eq!(
+                connect_local(path, Instant::now() + Duration::from_secs(1))
+                    .unwrap_err()
+                    .kind(),
+                io::ErrorKind::InvalidInput
+            );
+        }
+        assert_eq!(
+            connect_local(SOCKET, Instant::now() - Duration::from_secs(1))
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::TimedOut
+        );
+        let missing = format!("/tmp/luma-absent-broker-{}/socket", std::process::id());
+        assert_eq!(
+            connect_local(&missing, Instant::now() + Duration::from_secs(1))
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::NotFound
+        );
+    }
+
+    #[test]
+    fn client_connection_is_cloexec_and_refuses_full_queue_without_waiting() {
+        let directory =
+            std::env::temp_dir().join(format!("luma-broker-connect-{}", std::process::id()));
+        fs::create_dir(&directory).unwrap();
+        let path = directory.join("socket");
+        let listener = UnixListener::bind(&path).unwrap();
+        assert_eq!(unsafe { libc::listen(listener.as_raw_fd(), 1) }, 0);
+        let endpoint = path.to_str().unwrap();
+        let mut held = Vec::new();
+        let mut busy = false;
+        for _ in 0..8 {
+            let started = Instant::now();
+            match connect_local(endpoint, started + Duration::from_secs(3)) {
+                Ok(socket) => {
+                    assert_eq!(peer(&socket).unwrap(), unsafe { libc::geteuid() });
+                    let flags = unsafe { libc::fcntl(socket.as_raw_fd(), libc::F_GETFD) };
+                    assert!(flags >= 0 && flags & libc::FD_CLOEXEC != 0);
+                    let flags = unsafe { libc::fcntl(socket.as_raw_fd(), libc::F_GETFL) };
+                    assert!(flags >= 0 && flags & libc::O_NONBLOCK == 0);
+                    held.push(socket);
+                }
+                Err(error) => {
+                    assert_eq!(error.kind(), io::ErrorKind::WouldBlock);
+                    assert!(started.elapsed() < Duration::from_secs(2));
+                    busy = true;
+                    break;
+                }
+            }
+        }
+        assert!(busy && !held.is_empty());
+        for _ in &held {
+            drop(listener.accept().unwrap());
+        }
+        drop(held);
+        // Capacity recovery is explicit, not an internal retry of a failed call.
+        let recovered = connect_local(endpoint, Instant::now() + Duration::from_secs(1)).unwrap();
+        drop(listener.accept().unwrap());
+        drop(recovered);
+        drop(listener);
+        fs::remove_file(path).unwrap();
+        fs::remove_dir(directory).unwrap();
+    }
 
     fn client_request() -> Request {
         Request {

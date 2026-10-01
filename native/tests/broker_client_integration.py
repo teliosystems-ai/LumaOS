@@ -4,6 +4,8 @@
 Use only in a new disposable container, with no host socket or device mounts.
 """
 import argparse
+from contextlib import ExitStack
+import errno
 import hashlib
 import json
 import os
@@ -11,6 +13,7 @@ from pathlib import Path
 import socket
 import struct
 import subprocess
+import time
 
 
 def receive(connection, size):
@@ -21,6 +24,36 @@ def receive(connection, size):
             raise RuntimeError('client truncated its request')
         data += chunk
     return data
+
+
+def busy_queue(binary, listener, endpoint):
+    """No accepts until the real kernel listen queue has reached capacity."""
+    with ExitStack() as held:
+        queued = 0
+        for _ in range(8):
+            connection = held.enter_context(socket.socket(socket.AF_UNIX))
+            connection.setblocking(False)
+            code = connection.connect_ex(str(endpoint))
+            if code == errno.EAGAIN:
+                break
+            if code != 0:
+                raise RuntimeError('unexpected fixture connection refusal')
+            queued += 1
+        else:
+            raise RuntimeError('fixture did not reach listen queue capacity')
+        if queued == 0:
+            raise RuntimeError('fixture never admitted a connection')
+        started = time.monotonic()
+        result = subprocess.run([str(binary), 'status'], capture_output=True,
+                                env={'PATH':'/usr/bin:/bin'}, timeout=5)
+        elapsed = time.monotonic()-started
+        if result.returncode != 1 or result.stdout or not result.stderr.startswith(b'luma-platform: '):
+            raise RuntimeError('busy broker queue was not refused')
+        for _ in range(queued):
+            listener.accept()[0].close()
+    return {'case':'busy-queue', 'exit_code':result.returncode,
+            'success_output':False, 'queued_connections':queued,
+            'elapsed_seconds':elapsed}
 
 
 def main():
@@ -42,6 +75,8 @@ def main():
         listener.bind(str(directory / 'control.sock'))
         listener.listen(1)
         listener.settimeout(5)
+        observations.append(busy_queue(binary, listener, directory / 'control.sock'))
+        # The first valid exchange also proves recovery after capacity returns.
         for case in ('success', 'denied', 'malformed', 'request-id', 'uid', 'version',
                      'authority', 'generated-code', 'extra', 'trailing', 'duplicate',
                      'truncated', 'oversized', 'empty'):

@@ -13,9 +13,17 @@ requirement.
 
 ## Current software inventory and work still required
 
+The [bounded broker connection checkpoint](evidence/G2_BROKER_CONNECT_2026-10-01.md)
+records commit `c0345fe` and the next client fix: a full Unix listen queue now
+refuses admission instead of blocking before the IPC deadline. All 61 ordinary
+Rust tests, 15 real CLI cases and 112 native Python tests passed. Sequence-11
+artifact checksums and live readiness/refusal probes passed; its desktop VM
+installation is running. No completed desktop/model acceptance is claimed.
+Both later broker client repairs require a new image build.
+
 The [broker client and desktop export checkpoint](evidence/G2_BROKER_CLIENT_2026-10-01.md)
 records the completed sequence-11 desktop image export on D:. The desktop
-acceptance queue has advanced to artifact verification, with the 4B model
+acceptance queue has advanced to fresh virtual installation, with the 4B model
 suite still serialized behind a passing desktop result. Neither is yet a
 pass. A later native client repair rejects denied, malformed or unrelated
 broker replies instead of reporting CLI success; all 59 ordinary Rust tests,

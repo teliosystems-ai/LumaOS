@@ -17,6 +17,12 @@ from vm_shutdown import finish_stage
 from vm_test import VM, TEST_SOURCES, install, installed_login, live_ready
 
 
+def stage_memory(stage):
+    # The live installer retains a private verified desktop bundle in tmpfs.
+    # Keep installed greeter evaluation at 4 GiB, distinct from installation.
+    return {'install': 6144, 'installed-greeter': 4096, 'cold-greeter': 4096}[stage]
+
+
 def verified_image(image):
     build = json.loads((image.parent / 'build.json').read_text())
     if build.get('edition') != 'desktop' or build.get('image') != image.name:
@@ -101,7 +107,8 @@ def desktop_checks(vm):
 
 def diagnostics(vm):
     try:
-        vm.run('systemctl show gdm.service -p ActiveState -p SubState -p Result; '
+        vm.run('df -B1 /var; free -b; findmnt -T /var; '
+               'systemctl show gdm.service -p ActiveState -p SubState -p Result; '
                'loginctl list-sessions --no-pager; '
                'journalctl -u gdm.service --no-pager -n 100; '
                'journalctl _COMM=gnome-shell --no-pager -n 100', timeout=30)
@@ -138,7 +145,8 @@ def main():
     for stage in ('install', 'installed-greeter', 'cold-greeter'):
         print('Desktop VM stage: ' + stage, flush=True)
         vm = VM(image, work / stage, target, stage == 'install', args.timeout,
-                secure_boot=args.secure_boot, acceleration=args.accel, graphical=True)
+                secure_boot=args.secure_boot, acceleration=args.accel, graphical=True,
+                memory_mib=stage_memory(stage))
         try:
             if stage == 'install':
                 live_ready(vm)
@@ -149,7 +157,7 @@ def main():
             finish_stage(vm, require_clean=args.require_clean_shutdown, secure_boot=args.secure_boot)
             stages.append(stage)
         except Exception as error:
-            captured = diagnostics(vm) if stage != 'install' else False
+            captured = diagnostics(vm)
             try:
                 screenshot(vm, 'failure')
             except Exception:
@@ -157,6 +165,7 @@ def main():
             (work / 'failure.json').write_text(json.dumps({
                 'result': 'failed', 'stage': stage, 'completed_stages': stages,
                 'error_type': type(error).__name__, 'diagnostics_captured': captured,
+                'guest_memory_mib': stage_memory(stage),
                 'test_sources': TEST_SOURCES, 'gate_closing': False,
             }, indent=2) + '\n')
             raise
@@ -166,7 +175,9 @@ def main():
         raise RuntimeError('image identity changed during evaluation')
     record = {'result': 'passed', 'stages': stages, 'observations': observations,
               'image_sha256': image_hash, 'acceleration': vm.acceleration,
-              'display': 'virtio-vga-software', 'guest_memory_mib': 4096,
+              'display': 'virtio-vga-software',
+              'guest_memory_mib_by_stage': {stage: stage_memory(stage) for stage in stages},
+              'insufficient_model_memory_tested': False,
               'secure_boot_tested': args.secure_boot,
               'clean_shutdown_tested': args.require_clean_shutdown,
               'installed_wayland_greeter_tested': True, 'user_login_tested': False,

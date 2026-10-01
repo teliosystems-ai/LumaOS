@@ -102,7 +102,7 @@ pub fn list() -> Result<()> {
     Ok(())
 }
 
-fn memory(info: &str, name: &str) -> Result<u64> {
+pub(crate) fn memory(info: &str, name: &str) -> Result<u64> {
     let fields: Vec<_> = info
         .lines()
         .find(|l| l.starts_with(&format!("{name}:")))

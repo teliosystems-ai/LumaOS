@@ -53,6 +53,7 @@ class VM:
         firmware='/usr/share/OVMF/OVMF_CODE_4M'+('.secboot' if secure_boot else '')+'.fd'
         self.acceleration=acceleration if acceleration!='auto' else ('kvm' if os.access('/dev/kvm',os.R_OK|os.W_OK) else 'tcg')
         if memory_mib not in (4096,6144):raise ValueError('unsupported test memory fixture')
+        self.memory_mib=memory_mib
         command=['qemu-system-x86_64','-machine',f'q35,accel={self.acceleration}','-m',str(memory_mib),'-smp','2',
             '-cpu','host' if self.acceleration=='kvm' else 'max',
             '-drive',f'if=pflash,format=raw,readonly=on,file={firmware}',
@@ -176,7 +177,7 @@ def install(vm: VM,model: str='manual-only') -> None:
     if b'release signature verification failed' not in refused:
         raise RuntimeError('tampered bundle was not rejected at signature verification')
     vm.run(f'head -c 1048576 {TARGET} | sha256sum | cmp - /tmp/before-install.sha256')
-    if model=='manual-only':
+    if model=='manual-only' and vm.memory_mib==4096:
         refused=vm.run(f'luma-platform install {TARGET} /media/luma --model qwen3-4b-q4-k-m',expected=1)
         if b'cannot be admitted' not in refused:raise RuntimeError('4 GiB fixture did not reject the 4B RAM requirement')
         vm.run(f'head -c 1048576 {TARGET} | sha256sum | cmp - /tmp/before-install.sha256')

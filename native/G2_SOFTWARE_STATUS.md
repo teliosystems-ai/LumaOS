@@ -13,18 +13,30 @@ requirement.
 
 ## Current software inventory and work still required
 
+The [desktop memory-admission checkpoint](evidence/G2_DESKTOP_MEMORY_2026-10-01.md)
+records an actual sequence-11 installation failure: the 4 GiB VM's live tmpfs
+cannot hold the measured 2.25 GiB private artifact snapshot plus its reserve.
+The failed run is preserved. The retry uses 6 GiB for installation and retains
+4 GiB for installed greeter checks; the model suite remains conditional on a
+passing desktop run. Source now adds explicit tmpfs RAM headroom admission and
+capacity diagnostics. All 62 ordinary Rust tests, 115 native Linux Python tests
+and 13 native Windows desktop-fixture tests passed. The retry has reached
+exact-image verification; neither retry nor a final G2 image is complete.
+This source repair also requires a later image rebuild.
+
 The [bounded broker connection checkpoint](evidence/G2_BROKER_CONNECT_2026-10-01.md)
 records commit `c0345fe` and the next client fix: a full Unix listen queue now
 refuses admission instead of blocking before the IPC deadline. All 61 ordinary
 Rust tests, 15 real CLI cases and 112 native Python tests passed. Sequence-11
-artifact checksums and live readiness/refusal probes passed; its desktop VM
-installation is running. No completed desktop/model acceptance is claimed.
+artifact checksums and live readiness/refusal probes passed; its first desktop
+installation subsequently failed as recorded above. No completed desktop/model
+acceptance is claimed.
 Both later broker client repairs require a new image build.
 
 The [broker client and desktop export checkpoint](evidence/G2_BROKER_CLIENT_2026-10-01.md)
 records the completed sequence-11 desktop image export on D:. The desktop
-acceptance queue has advanced to fresh virtual installation, with the 4B model
-suite still serialized behind a passing desktop result. Neither is yet a
+first acceptance attempt failed; a fresh virtual-installation retry and the
+conditional 4B model suite are described above. Neither is yet a
 pass. A later native client repair rejects denied, malformed or unrelated
 broker replies instead of reporting CLI success; all 59 ordinary Rust tests,
 14 real CLI cases and 112 native Python tests passed. Seven specialized Rust

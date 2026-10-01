@@ -12,6 +12,9 @@ const BASE: &str = "/var/lib/luma-os/staging";
 const NAMESPACE: &str = "verified-v1";
 const MAX_ORPHANS: usize = 32;
 const RESERVE: u64 = 64 * 1024 * 1024;
+// Live staging must leave RAM for the OS and cryptsetup's memory-hard KDF.
+// This admission observation is not an atomic memory lease or OOM guarantee.
+const MEMORY_RESERVE: u64 = 2 * 1024 * 1024 * 1024;
 const MEMBERS: [&str; 8] = [
     "release.json",
     "release.sig",
@@ -237,6 +240,13 @@ impl Snapshot {
             .checked_mul(stat.f_frsize)
             .ok_or("free space overflow")?;
         check_capacity(bytes, available)?;
+        let mut filesystem: libc::statfs = unsafe { std::mem::zeroed() };
+        if unsafe { libc::fstatfs(dir.as_raw_fd(), &mut filesystem) } != 0 {
+            return Err(std::io::Error::last_os_error().into());
+        }
+        if filesystem.f_type == libc::TMPFS_MAGIC {
+            check_memory(bytes, &fs::read_to_string("/proc/meminfo")?)?;
+        }
         if stat.f_favail < (MEMBERS.len() + 1) as u64 {
             return Err("insufficient snapshot inode headroom".into());
         }
@@ -250,7 +260,18 @@ fn check_capacity(bytes: u64, available: u64) -> Result<()> {
         .ok_or("snapshot capacity overflow")?
         > available
     {
-        return Err("insufficient snapshot storage; no payload copied".into());
+        return Err(format!("insufficient snapshot storage; no payload copied: payload {bytes} bytes, reserve {RESERVE} bytes, available {available} bytes; live media requires sufficient RAM-backed staging (desktop installation evaluation uses 6 GiB RAM)").into());
+    }
+    Ok(())
+}
+
+fn check_memory(bytes: u64, info: &str) -> Result<()> {
+    let available = crate::model::memory(info, "MemAvailable")?;
+    let required = bytes
+        .checked_add(MEMORY_RESERVE)
+        .ok_or("snapshot memory overflow")?;
+    if available < required {
+        return Err(format!("insufficient snapshot memory; no payload copied: payload {bytes} bytes, RAM reserve {MEMORY_RESERVE} bytes, available {available} bytes").into());
     }
     Ok(())
 }
@@ -399,6 +420,30 @@ mod tests {
         assert!(check_capacity(1, RESERVE).is_err());
         check_capacity(1, RESERVE + 1).unwrap();
         assert!(check_capacity(u64::MAX, u64::MAX).is_err());
+        let detail = check_capacity(1, RESERVE).unwrap_err().to_string();
+        assert!(
+            detail.contains("payload 1 bytes")
+                && detail.contains(&format!("available {RESERVE} bytes"))
+        );
+    }
+
+    #[test]
+    fn tmpfs_admission_preserves_memory_reserve_and_rejects_bad_observations() {
+        let payload = 3 * 1024 * 1024 * 1024;
+        let required_kib = (payload + MEMORY_RESERVE) / 1024;
+        check_memory(payload, &format!("MemAvailable: {required_kib} kB\n")).unwrap();
+        assert!(
+            check_memory(payload, &format!("MemAvailable: {} kB\n", required_kib - 1)).is_err()
+        );
+        for info in [
+            "",
+            "MemAvailable: 0 kB",
+            "MemAvailable: 999999999 MB",
+            "MemAvailable: 18446744073709551615 kB",
+        ] {
+            assert!(check_memory(payload, info).is_err());
+        }
+        assert!(check_memory(u64::MAX, "MemAvailable: 9999999 kB").is_err());
     }
 
     #[test]

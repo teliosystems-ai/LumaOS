@@ -53,6 +53,14 @@ headless media fits a 16 GB device). External-artifact desktop builds require
 repository/WSL backing drive; a wholly local desktop build requires 24 GiB.
 These are build thresholds, not certification of arbitrary desktop hardware.
 
+Desktop **installation** evaluation uses 6 GiB RAM; installed greeter checks
+use 4 GiB separately. The live installer keeps a private verified bundle in
+RAM-backed `/var`. Sequence 11 needs about 2.25 GiB plus staging headroom and
+failed before disk confirmation in a 4 GiB installation VM. Model admission
+does not cover this separate installer requirement. Do not enlarge tmpfs or
+skip snapshot verification to bypass a refusal. See the
+[measured failure and retry](../evidence/G2_DESKTOP_MEMORY_2026-10-01.md).
+
 After a desktop image has been built and its checksums verified, native Ubuntu
 testing must cover actual GDM password login to the Luma Wayland session,
 `loginctl show-session "$XDG_SESSION_ID" -p Type`, Files/editor/terminal use

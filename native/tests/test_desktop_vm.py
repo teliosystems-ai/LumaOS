@@ -18,6 +18,33 @@ import vm_display
 
 
 class GreeterTests(unittest.TestCase):
+    def test_live_snapshot_memory_is_separate_from_installed_desktop(self):
+        self.assertEqual(desktop.stage_memory('install'), 6144)
+        for stage in ('installed-greeter', 'cold-greeter'):
+            self.assertEqual(desktop.stage_memory(stage), 4096)
+        with self.assertRaises(KeyError):
+            desktop.stage_memory('unqualified')
+
+    def test_failure_diagnostics_include_live_storage_and_memory(self):
+        vm = Mock()
+        self.assertTrue(desktop.diagnostics(vm))
+        command = vm.run.call_args.args[0]
+        self.assertIn('df -B1 /var', command)
+        self.assertIn('free -b', command)
+        self.assertEqual(vm.run.call_args.kwargs['timeout'], 30)
+
+    def test_only_low_memory_fixture_expects_model_ram_refusal(self):
+        for memory in (4096, 6144):
+            vm = Mock(memory_mib=memory, acceleration='tcg')
+            vm.run.side_effect = lambda command, **kwargs: (
+                b'release signature verification failed' if '/tmp/bad-bundle --model' in command
+                else b'cannot be admitted' if '--model qwen3-4b' in command else b'')
+            with contextlib.redirect_stdout(io.StringIO()):
+                desktop.install(vm)
+            commands = [call.args[0] for call in vm.run.call_args_list]
+            self.assertEqual(any('--model qwen3-4b' in command for command in commands), memory == 4096)
+            self.assertTrue(any('/tmp/bad-bundle --model' in command for command in commands))
+
     def test_image_edition_name_and_digest_are_bound_before_guest_execution(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)

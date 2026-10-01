@@ -13,21 +13,31 @@ requirement.
 
 ## Current software inventory and work still required
 
+The [broker client and desktop export checkpoint](evidence/G2_BROKER_CLIENT_2026-10-01.md)
+records the completed sequence-11 desktop image export on D:. The desktop
+acceptance queue has advanced to artifact verification, with the 4B model
+suite still serialized behind a passing desktop result. Neither is yet a
+pass. A later native client repair rejects denied, malformed or unrelated
+broker replies instead of reporting CLI success; all 59 ordinary Rust tests,
+14 real CLI cases and 112 native Python tests passed. Seven specialized Rust
+tests were not rerun. That repair is **not in sequence 11** and requires a later
+rebuild and image-level evaluation.
+
 The [model-profile acceptance checkpoint](evidence/G2_MODEL_PROFILE_ACCEPTANCE_2026-10-01.md)
 adds explicit fresh-install 4B/1.7B evaluation profiles and binds recovery to
 the actual selected model. Corruption checks now require fresh journal-cursor
 evidence, not old errors. All 112 native Python tests passed. The desktop build
-has reached payload assembly; desktop acceptance and then the bounded 4B
-installer/inference suite are serialized behind successful verified output.
+subsequently completed verified export; desktop acceptance and then the bounded
+4B installer/inference suite remain serialized as described above.
 Neither is yet a pass, and 1.7B does not replace required 4B qualification.
 
 The [installed-desktop acceptance checkpoint](evidence/G2_DESKTOP_ACCEPTANCE_2026-10-01.md)
 adds exact-image verification, a three-stage installed Wayland/GDM-greeter
 fixture, software-only virtual display and bounded screenshot evidence.
 All 106 native Python tests and a real QMP transport probe passed; that probe
-did not boot an OS. The tools build has succeeded and desktop root packaging
-is progressing on D:. The frozen greeter evaluation is queued only after
-successful export/checksums. It is not yet an installed-desktop pass and does
+did not boot an OS. Desktop packaging/export subsequently completed on D:.
+The frozen greeter evaluation requires successful artifact checksums before
+starting its VM. It is not yet an installed-desktop pass and does
 not cover graphical password login, locking or the full manual workflow.
 
 The [2026-10-01 acceptance checkpoint](evidence/G2_ACCEPTANCE_RESUME_2026-10-01.md)

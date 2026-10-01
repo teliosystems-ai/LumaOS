@@ -18,13 +18,14 @@ image and Rust platform implementation. It is outside the historical Python
 - [Source-level storage crash-safety evaluation](evidence/NATIVE_STORAGE_STATUS_2026-09-28.md)
 - [Rust trusted platform source](../rust/luma-platform)
 
-G2 remains in progress. Images are headless and laboratory-signed, not a complete
-production OS or hardware certification. The sequence-4 artifacts and VM disks
-are on the owner-designated D: drive. The image has passed full platform regression, Qwen3-4B
-installer acquisition/inference/recovery, Qwen3-1.7B installed configuration and
-offline inference, and the selected guest update-interruption/retry scenario.
-See the current checkpoint for exact image/evidence identities, the separate
-Secure Boot scope, source/image differences and remaining implementation work.
+G2 remains in progress. Headless and candidate GNOME/Wayland desktop images are
+laboratory-signed, not a complete production OS or hardware certification.
+Bulk builds, images and VM disks are on the owner-designated D: drive; source
+stays on C:. The [latest export checkpoint](evidence/G2_BROKER_CLIENT_2026-10-01.md)
+identifies the sequence-11 desktop candidate and source/image differences.
+Desktop and fresh 4B model acceptance remain pending. Earlier sequence-4 model
+and sequence-10 recovery-regression passes do not attest this new image.
+Use the software completion register above for outstanding implementation work.
 
 The original manual-only image was built at `8201727` before tooling moved from
 `packaging/native/` to `native/image/`; its archived source and test evidence

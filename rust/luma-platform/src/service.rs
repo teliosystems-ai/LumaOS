@@ -21,6 +21,36 @@ pub struct Request {
     pub action: String,
 }
 
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct Response {
+    schema_version: u32,
+    request_id: String,
+    authenticated_uid: u32,
+    result: String,
+    implementation: String,
+    generated_native_code: String,
+    certification_closing: bool,
+}
+
+fn validate_response(bytes: &[u8], request: &Request) -> Result<Response> {
+    // A refused/malformed reply is never a successful CLI operation. Do not
+    // surface unvalidated peer text or accidentally echo extra payload fields.
+    let response: Response =
+        serde_json::from_slice(bytes).map_err(|_| "broker response is denied or malformed")?;
+    if response.schema_version != 1
+        || response.request_id != request.request_id
+        || response.authenticated_uid != request.caller
+        || response.result != "ok"
+        || response.implementation != "rust-native-lab"
+        || response.generated_native_code != "denied"
+        || response.certification_closing
+    {
+        return Err("broker response does not match the request or supported contract".into());
+    }
+    Ok(response)
+}
+
 fn now() -> Result<u64> {
     Ok(SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs())
 }
@@ -190,6 +220,13 @@ pub fn serve() -> Result<()> {
     Ok(())
 }
 
+fn exchange(socket: &mut UnixStream, request: &Request, deadline: Instant) -> Result<Response> {
+    // One monotonic budget covers both request output and response input.
+    // This private helper assumes the caller has authenticated the socket.
+    write_frame_until(socket, &serde_json::to_vec(&request)?, deadline)?;
+    validate_response(&read_frame_until(socket, deadline)?, request)
+}
+
 pub fn client(action: &str) -> Result<()> {
     let mut socket = UnixStream::connect(SOCKET)?;
     if peer(&socket)? != 0 {
@@ -202,24 +239,128 @@ pub fn client(action: &str) -> Result<()> {
         deadline: now()? + 5,
         action: action.into(),
     };
-    write_frame_until(
+    let response = exchange(
         &mut socket,
-        &serde_json::to_vec(&request)?,
+        &request,
         Instant::now() + Duration::from_secs(3),
     )?;
-    println!(
-        "{}",
-        String::from_utf8(read_frame_until(
-            &mut socket,
-            Instant::now() + Duration::from_secs(3)
-        )?)?
-    );
+    println!("{}", serde_json::to_string(&response)?);
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn client_request() -> Request {
+        Request {
+            schema_version: 1,
+            request_id: "console-fixture".into(),
+            caller: 990,
+            deadline: 110,
+            action: "status".into(),
+        }
+    }
+
+    fn success_response() -> serde_json::Value {
+        serde_json::json!({"schema_version":1, "request_id":"console-fixture",
+            "authenticated_uid":990, "result":"ok", "implementation":"rust-native-lab",
+            "generated_native_code":"denied", "certification_closing":false})
+    }
+
+    #[test]
+    fn client_accepts_only_correlated_closed_success_response() {
+        let request = client_request();
+        let response = success_response();
+        let checked = validate_response(&serde_json::to_vec(&response).unwrap(), &request).unwrap();
+        assert_eq!(serde_json::to_value(checked).unwrap(), response);
+        for (field, value) in [
+            ("schema_version", serde_json::json!(2)),
+            ("request_id", serde_json::json!("different-request")),
+            ("authenticated_uid", serde_json::json!(0)),
+            ("result", serde_json::json!("denied")),
+            ("implementation", serde_json::json!("other")),
+            ("generated_native_code", serde_json::json!("allowed")),
+            ("certification_closing", serde_json::json!(true)),
+            ("unexpected", serde_json::json!("private-peer-payload")),
+        ] {
+            let mut changed = response.clone();
+            changed[field] = value;
+            let error = validate_response(&serde_json::to_vec(&changed).unwrap(), &request)
+                .unwrap_err()
+                .to_string();
+            assert!(!error.contains("private-peer-payload"));
+        }
+    }
+
+    #[test]
+    fn client_denied_malformed_duplicate_and_trailing_responses_are_errors() {
+        let request = client_request();
+        for bytes in [
+            br#"{"schema_version":1,"result":"denied"}"#.as_slice(),
+            b"private-peer-payload",
+            b"[]",
+            b"null",
+            b"\xff",
+            br#"{"result":"ok","result":"denied"}"#,
+        ] {
+            let error = validate_response(bytes, &request).unwrap_err().to_string();
+            assert!(!error.contains("private-peer-payload"));
+        }
+        let mut trailing = serde_json::to_vec(&success_response()).unwrap();
+        trailing.extend_from_slice(b"\n{}");
+        assert!(validate_response(&trailing, &request).is_err());
+        let duplicate = serde_json::to_string(&success_response())
+            .unwrap()
+            .replacen('{', "{\"result\":\"ok\",", 1);
+        assert!(validate_response(duplicate.as_bytes(), &request).is_err());
+    }
+
+    #[test]
+    fn client_exchange_checks_real_framed_socket_response_before_success() {
+        for response in [
+            success_response(),
+            serde_json::json!({"schema_version":1,"result":"denied"}),
+        ] {
+            let expected_ok = response["result"] == "ok";
+            let (mut client, mut server) = UnixStream::pair().unwrap();
+            let sender = std::thread::spawn(move || {
+                let request: Request =
+                    serde_json::from_slice(&read_frame(&mut server).unwrap()).unwrap();
+                assert_eq!(request.request_id, "console-fixture");
+                assert_eq!(request.caller, 990);
+                write_frame(&mut server, &serde_json::to_vec(&response).unwrap()).unwrap();
+            });
+            assert_eq!(
+                exchange(
+                    &mut client,
+                    &client_request(),
+                    Instant::now() + Duration::from_secs(2)
+                )
+                .is_ok(),
+                expected_ok
+            );
+            sender.join().unwrap();
+        }
+    }
+
+    #[test]
+    fn client_expired_exchange_cannot_send_a_request() {
+        let (mut client, mut server) = UnixStream::pair().unwrap();
+        assert!(exchange(
+            &mut client,
+            &client_request(),
+            Instant::now() - Duration::from_secs(1)
+        )
+        .is_err());
+        server.set_nonblocking(true).unwrap();
+        let mut byte = [0];
+        assert_eq!(
+            server.read(&mut byte).unwrap_err().kind(),
+            io::ErrorKind::WouldBlock
+        );
+    }
+
     #[test]
     fn peer_identity_action_and_time_are_bound() {
         let mut r = Request {

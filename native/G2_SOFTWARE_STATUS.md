@@ -55,6 +55,13 @@ Reviewed interrupted-enrollment recovery, full Admin bootstrap/service, independ
 credential recovery, production custody and installed-image evaluation remain
 open. Targeted checks do not close those requirements.
 
+A [disposable TPM feasibility experiment](evidence/G2_OWNER_CREDENTIAL_FEASIBILITY_2026-10-02.md)
+subsequently passed owner-independent unlock under a persistent storage parent,
+signed PCR 11 renewal, fixed PCR 7 denial, forged-signature refusal and controlled
+restart. It is a test-only `tpm2-tools` protocol, not the native backend; the
+product sealing path and positive checkpoint enrollment remain blocked until that
+backend and its durable parent-allocation transaction are implemented and tested.
+
 The [model-runtime checkpoint](evidence/G2_MODEL_RUNTIME_2026-10-02.md) adds
 single-worker exclusion shared with model activation, inherited lock lifetime,
 verified-weight descriptor handoff and stricter weight/selection metadata checks.

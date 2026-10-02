@@ -38,6 +38,16 @@ def main():
             subprocess.run(['tpm2_changeauth', '-T', transport, '-c', 'o', f'file:{work}/owner.tools'],
                            env=env, check=True, timeout=30, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             subprocess.run(['cargo', 'test', '--offline', '--locked',
+                            'tpm::tests::emulator_existing_owner_parent_provisioning',
+                            '--', '--ignored', '--exact', '--nocapture'],
+                           env=env, check=True, timeout=300)
+            subprocess.run(['tpm2_readpublic', '-T', transport, '-c', '0x81004c41',
+                            '-n', str(work / 'parent.readback')],
+                           env=env, check=True, timeout=30,
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            if (work / 'parent.name').read_bytes() != (work / 'parent.readback').read_bytes():
+                raise RuntimeError('persistent parent TPM Name differs from native readback')
+            subprocess.run(['cargo', 'test', '--offline', '--locked',
                             'tpm::tests::emulator_existing_owner_provisioning',
                             '--', '--ignored', '--exact', '--nocapture'],
                            env=env, check=True, timeout=300)

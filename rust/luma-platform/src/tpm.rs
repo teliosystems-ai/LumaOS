@@ -14,6 +14,7 @@ use std::path::Path;
 pub const PROFILE: &str = "local-tpm2";
 const DEVICE: &str = "/dev/tpmrm0";
 const INDEX: u32 = 0x01804c41;
+const CREDENTIAL_PARENT: u32 = 0x81004c41;
 // AUTHWRITE | TPM_NT_EXTEND | AUTHREAD | NO_DA | WRITTEN. In particular no
 // OWNERWRITE, ordinary NV_Write, POLICYWRITE, WRITE_STCLEAR or ORDERLY.
 const ATTRIBUTES: u32 = 0x22040044;
@@ -49,6 +50,12 @@ extern "C" {
         auth: *const u8,
         genesis: *const u8,
     ) -> u32;
+    fn luma_tpm_provision_parent_existing(
+        context: *mut c_void,
+        owner: *const u8,
+        owner_size: u16,
+        name: *mut u8,
+    ) -> u32;
 }
 
 fn check(code: u32) -> Result<()> {
@@ -67,6 +74,36 @@ impl Drop for Context {
     }
 }
 impl Context {
+    /// Only a durably prepared enrollment transaction may call this one-shot
+    /// persistent allocation. A collision or uncertain reply is never retried.
+    #[allow(dead_code)] // Native credential transaction is the next integration step.
+    fn provision_parent_existing(
+        &mut self,
+        owner: &crate::sealed_credential::PrivateBuffer,
+    ) -> Result<[u8; 34]> {
+        crate::require_root()?;
+        if owner.bytes().is_empty() || owner.bytes().len() > 64 {
+            return Err("existing nonempty TPM owner authorization required".into());
+        }
+        let mut occupied = 1;
+        check(unsafe { luma_tpm_index_exists(self.0, CREDENTIAL_PARENT, &mut occupied) })?;
+        if occupied != 0 {
+            return Err("credential parent handle occupied; preserve existing state".into());
+        }
+        let mut name = [0u8; 34];
+        check(unsafe {
+            luma_tpm_provision_parent_existing(
+                self.0,
+                owner.bytes().as_ptr(),
+                owner.bytes().len() as u16,
+                name.as_mut_ptr(),
+            )
+        })?;
+        if name[..2] != [0, 0x0b] {
+            return Err("invalid credential parent Name".into());
+        }
+        Ok(name)
+    }
     /// Authenticated enrollment must durably fence a sealed proposal
     /// BEFORE entry. No public CLI exposes this low-level write primitive.
     /// Failure is never permission to retry, reset or remove the index.
@@ -462,6 +499,44 @@ pub(crate) fn exclusive_lock(path: &Path) -> Result<File> {
 mod tests {
     use super::*;
     use crate::admin_journal::{Entry, Store};
+
+    #[test]
+    #[ignore = "requires fresh isolated emulator with existing nonempty owner auth"]
+    fn emulator_existing_owner_parent_provisioning() {
+        use crate::sealed_credential::PrivateBuffer;
+        assert!(Path::new("/.dockerenv").is_file());
+        assert!(!Path::new("/dev/tpm0").exists() && !Path::new("/dev/tpmrm0").exists());
+        let directory = std::path::PathBuf::from(std::env::var("LUMA_TPM_TEST_DIRECTORY").unwrap());
+        assert_eq!(directory.parent(), Some(Path::new("/tmp")));
+        assert!(directory
+            .file_name()
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .starts_with("luma-tpm-"));
+        let transport = format!("swtpm:path={}/tpm.sock", directory.display());
+        let mut owner = PrivateBuffer::new(32).unwrap();
+        File::open(directory.join("owner.binary"))
+            .unwrap()
+            .read_exact(owner.bytes_mut())
+            .unwrap();
+        let mut wrong = PrivateBuffer::new(32).unwrap();
+        wrong.bytes_mut().copy_from_slice(owner.bytes());
+        wrong.bytes_mut()[0] ^= 1;
+        let mut context = Context::open(&transport).unwrap();
+        assert!(context.provision_parent_existing(&wrong).is_err());
+        let mut occupied = 1;
+        check(unsafe { luma_tpm_index_exists(context.0, CREDENTIAL_PARENT, &mut occupied) })
+            .unwrap();
+        assert_eq!(occupied, 0);
+        let name = context.provision_parent_existing(&owner).unwrap();
+        assert_eq!(&name[..2], &[0, 0x0b]);
+        fs::write(directory.join("parent.name"), name).unwrap();
+        assert!(context.provision_parent_existing(&owner).is_err());
+        check(unsafe { luma_tpm_index_exists(context.0, CREDENTIAL_PARENT, &mut occupied) })
+            .unwrap();
+        assert_eq!(occupied, 1);
+    }
 
     #[test]
     #[ignore = "requires isolated emulator with existing nonempty owner auth"]

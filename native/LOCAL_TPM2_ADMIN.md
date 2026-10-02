@@ -137,7 +137,9 @@ do not empty/change ownership or weaken PCR policy to make this command work.
 See [the enrollment checkpoint](evidence/G2_ENROLLMENT_TRANSACTION_2026-10-02.md).
 The later [isolated protocol experiment](evidence/G2_OWNER_CREDENTIAL_FEASIBILITY_2026-10-02.md)
 demonstrates a possible persistent-parent replacement, but it has not changed
-the installed command or made enrollment operational.
+the installed command or made enrollment operational. A native one-shot boundary
+now reserves that parent under existing owner authorization in a disposable TPM
+test; no installed entrypoint calls it until its allocation can be fenced durably.
 
 The source command is intended for a newly installed test system after
 operator approval of its TPM allocation. It has not yet been qualified on a

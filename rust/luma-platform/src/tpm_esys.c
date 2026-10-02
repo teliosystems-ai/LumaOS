@@ -249,3 +249,116 @@ uint32_t luma_tpm_provision_existing(struct luma_tpm *ctx,
     explicit_bzero(&nv_auth, sizeof(nv_auth));
     return rc;
 }
+
+/* Reserved storage parent for a future owner-compatible credential backend.
+ * Caller must durably fence this persistent allocation before entry. A lost
+ * EvictControl reply may still mean the handle was written: never retry it or
+ * evict/overwrite an occupied handle. This function changes no hierarchy auth.
+ */
+uint32_t luma_tpm_provision_parent_existing(struct luma_tpm *ctx,
+    const uint8_t *owner, uint16_t owner_size, uint8_t name_out[34]) {
+    if (!ctx || !owner || !owner_size || owner_size > 64 || !name_out)
+        return TSS2_ESYS_RC_BAD_VALUE;
+    if (ctx->nv != ESYS_TR_NONE || ctx->session != ESYS_TR_NONE)
+        return TSS2_ESYS_RC_BAD_SEQUENCE;
+    const uint32_t handle = 0x81004c41;
+    uint8_t occupied = 1;
+    TSS2_RC rc = luma_tpm_index_exists(ctx, handle, &occupied);
+    if (rc) return rc;
+    if (occupied) return TSS2_ESYS_RC_BAD_VALUE;
+
+    ESYS_TR initial = ESYS_TR_NONE, salt_key = ESYS_TR_NONE;
+    ESYS_TR session = ESYS_TR_NONE, primary = ESYS_TR_NONE;
+    ESYS_TR persistent = ESYS_TR_NONE;
+    TPM2B_AUTH owner_auth = {.size = owner_size};
+    memcpy(owner_auth.buffer, owner, owner_size);
+    TPMT_SYM_DEF plain = {.algorithm = TPM2_ALG_NULL};
+    TPMT_SYM_DEF encrypted = {.algorithm = TPM2_ALG_AES,
+        .keyBits = {.aes = 128}, .mode = {.aes = TPM2_ALG_CFB}};
+    TPM2B_SENSITIVE_CREATE sensitive = {0};
+    TPM2B_PUBLIC template = {.publicArea = {
+        .type = TPM2_ALG_RSA, .nameAlg = TPM2_ALG_SHA256,
+        .objectAttributes = TPMA_OBJECT_FIXEDTPM | TPMA_OBJECT_FIXEDPARENT |
+            TPMA_OBJECT_SENSITIVEDATAORIGIN | TPMA_OBJECT_USERWITHAUTH |
+            TPMA_OBJECT_RESTRICTED | TPMA_OBJECT_DECRYPT,
+        .parameters = {.rsaDetail = {
+            .symmetric = {.algorithm = TPM2_ALG_AES, .keyBits = {.aes = 128},
+                          .mode = {.aes = TPM2_ALG_CFB}},
+            .scheme = {.scheme = TPM2_ALG_NULL}, .keyBits = 2048, .exponent = 0}}
+    }};
+    TPM2B_DATA outside = {0};
+    TPML_PCR_SELECTION pcrs = {0};
+
+    /* Create only a temporary NULL-hierarchy salt key. It carries no owner
+     * authorization; all owner commands run through the salted AES session. */
+    rc = Esys_StartAuthSession(ctx->esys, ESYS_TR_NONE, ESYS_TR_NONE,
+        ESYS_TR_NONE, ESYS_TR_NONE, ESYS_TR_NONE, NULL, TPM2_SE_HMAC,
+        &plain, TPM2_ALG_SHA256, &initial);
+    if (!rc) rc = Esys_TRSess_SetAttributes(ctx->esys, initial,
+        TPMA_SESSION_CONTINUESESSION, TPMA_SESSION_CONTINUESESSION);
+    if (!rc) rc = Esys_CreatePrimary(ctx->esys, ESYS_TR_RH_NULL, initial,
+        ESYS_TR_NONE, ESYS_TR_NONE, &sensitive, &template, &outside, &pcrs,
+        &salt_key, NULL, NULL, NULL, NULL);
+    if (initial != ESYS_TR_NONE) {
+        TSS2_RC cleanup = Esys_FlushContext(ctx->esys, initial);
+        if (!rc) rc = cleanup;
+        initial = ESYS_TR_NONE;
+    }
+    if (!rc) rc = Esys_StartAuthSession(ctx->esys, salt_key, ESYS_TR_NONE,
+        ESYS_TR_NONE, ESYS_TR_NONE, ESYS_TR_NONE, NULL, TPM2_SE_HMAC,
+        &encrypted, TPM2_ALG_SHA256, &session);
+    if (!rc) rc = Esys_TRSess_SetAttributes(ctx->esys, session,
+        TPMA_SESSION_CONTINUESESSION | TPMA_SESSION_DECRYPT,
+        TPMA_SESSION_CONTINUESESSION | TPMA_SESSION_DECRYPT | TPMA_SESSION_ENCRYPT);
+    if (!rc) rc = Esys_TR_SetAuth(ctx->esys, ESYS_TR_RH_OWNER, &owner_auth);
+    if (!rc) rc = Esys_CreatePrimary(ctx->esys, ESYS_TR_RH_OWNER, session,
+        ESYS_TR_NONE, ESYS_TR_NONE, &sensitive, &template, &outside, &pcrs,
+        &primary, NULL, NULL, NULL, NULL);
+    if (!rc) rc = Esys_EvictControl(ctx->esys, ESYS_TR_RH_OWNER, primary,
+        session, ESYS_TR_NONE, ESYS_TR_NONE, handle, &persistent);
+    if (!rc) {
+        TPM2B_PUBLIC *public = NULL;
+        TPM2B_NAME *name = NULL;
+        TPM2B_NAME *qualified = NULL;
+        rc = Esys_ReadPublic(ctx->esys, persistent, ESYS_TR_NONE,
+            ESYS_TR_NONE, ESYS_TR_NONE, &public, &name, &qualified);
+        if (!rc) {
+            if (!name || name->size != 34 || !public ||
+                public->publicArea.type != TPM2_ALG_RSA ||
+                public->publicArea.nameAlg != TPM2_ALG_SHA256 ||
+                public->publicArea.parameters.rsaDetail.keyBits != 2048 ||
+                public->publicArea.parameters.rsaDetail.symmetric.algorithm != TPM2_ALG_AES ||
+                public->publicArea.parameters.rsaDetail.symmetric.keyBits.aes != 128 ||
+                public->publicArea.parameters.rsaDetail.symmetric.mode.aes != TPM2_ALG_CFB ||
+                public->publicArea.parameters.rsaDetail.scheme.scheme != TPM2_ALG_NULL ||
+                public->publicArea.authPolicy.size != 0 ||
+                public->publicArea.unique.rsa.size != 256 ||
+                public->publicArea.objectAttributes != template.publicArea.objectAttributes)
+                rc = TSS2_ESYS_RC_BAD_VALUE;
+            else memcpy(name_out, name->name, 34);
+        }
+        Esys_Free(public); Esys_Free(name); Esys_Free(qualified);
+    }
+
+    if (persistent != ESYS_TR_NONE) {
+        TSS2_RC cleanup = Esys_TR_Close(ctx->esys, &persistent);
+        if (!rc) rc = cleanup;
+    }
+    if (primary != ESYS_TR_NONE) {
+        TSS2_RC cleanup = Esys_FlushContext(ctx->esys, primary);
+        if (!rc) rc = cleanup;
+    }
+    if (session != ESYS_TR_NONE) {
+        TSS2_RC cleanup = Esys_FlushContext(ctx->esys, session);
+        if (!rc) rc = cleanup;
+    }
+    if (salt_key != ESYS_TR_NONE) {
+        TSS2_RC cleanup = Esys_FlushContext(ctx->esys, salt_key);
+        if (!rc) rc = cleanup;
+    }
+    TPM2B_AUTH empty = {0};
+    TSS2_RC cleanup = Esys_TR_SetAuth(ctx->esys, ESYS_TR_RH_OWNER, &empty);
+    if (!rc) rc = cleanup;
+    explicit_bzero(&owner_auth, sizeof(owner_auth));
+    return rc;
+}

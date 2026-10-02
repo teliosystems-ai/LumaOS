@@ -2,8 +2,10 @@
 
 The packaged systemd 255 credential helper still blocks G2 checkpoint enrollment
 with a nonempty TPM owner authorization. A disposable software TPM experiment
-established a possible replacement protocol. This result supports a backend
-design; it is not a product credential implementation or an enrollment pass.
+established a possible replacement protocol. A subsequent native TPM boundary
+now allocates and verifies its persistent parent under existing ownership. The
+sealing and unsealing backend and its durable transaction remain unimplemented;
+this is not an enrollment pass.
 
 ## Protocol exercised
 
@@ -38,11 +40,39 @@ This test invokes `tpm2-tools` and uses private fixture files for the random
 owner authorization and test secret. It clears all transient handles only inside
 its disposable TPM. None of those handling choices are approved for the product.
 No host TPM, installed OS, physical restart, updated boot image, or production
-signature was involved. The current product code still calls `systemd-creds` and
-will refuse the selected owner profile. The positive checkpoint enrollment test
-remains pending.
+signature was involved. The current product sealing path still calls
+`systemd-creds` and will refuse the selected owner profile. The positive
+checkpoint enrollment test remains pending.
 
-## Evidence and implementation path
+## Native persistent parent boundary
+
+`tpm_esys.c` now has a one-shot operation for fixed handle `0x81004c41`.
+It refuses a pre-existing handle, authenticates the existing owner through a
+salted encrypted HMAC session, creates the RSA storage parent, persists it, reads
+back its TPM public profile and Name, and releases only the operation's
+temporary handles. It does not change hierarchy authorization, clear the TPM,
+evict an existing object, or retry an uncertain write. The Rust entrypoint has
+no public command and is not called by enrollment: a durable parent-allocation
+record must be implemented before that irreversible operation may be dispatched.
+
+The extended existing-owner integration fixture passed wrong-owner refusal with
+the handle vacant, correct-owner allocation, Name readback, collision refusal,
+the previously implemented NV provisioning, a check that the custodian's owner
+authorization remains valid, and no leaked transient objects. Three ordinary
+TPM Rust tests and the warnings-as-errors native build also passed. This is
+low-level allocation evidence, not a sealed credential or Admin service test.
+
+Final native evidence is at `D:\LumaOS-builds\g2-parent-targeted-20261002-02`.
+Its 146-file source manifest SHA-256 is
+`df4b826d19576936cac3a3a8599a99be4c3c081748de7999359c5708e958ed95`;
+the separately copied integration fixture SHA-256 is
+`a7b4035ee08d8545e25bc2fd69ea37d94928f55369e8efd63c2f23eda081bcbe`;
+the completed test log SHA-256 is
+`3323fbc0105cc4c5edd0e06639917f1021dc3dd093af848325b3898fe4b1f382`.
+An earlier snapshot `-01` also passed before the public-profile readback was
+tightened; it is retained, but `-02` is the final result for this increment.
+
+## Protocol experiment evidence and implementation path
 
 The run is retained at `D:\LumaOS-builds\g2-owner-backend-20261002-01`.
 Its 146-file source manifest SHA-256 is
@@ -51,18 +81,16 @@ the separately copied fixture SHA-256 is
 `80da47edb698d99134c885dc7a68f2c014ede51455e93c958cbb7b6687d887cd`;
 the completed test log SHA-256 is
 `369b40362905252ecd9f85fc525634cceaf0eff4da8c2e4eafa101cccdccbd70`.
-The manifest matches the prior product-source snapshot because this checkpoint
-changes only the separately copied test fixture and documentation. No native
-binary or installer image was rebuilt for this experiment.
+This first manifest matches the prior product-source snapshot because that
+checkpoint changed only the separately copied test fixture and documentation.
+The subsequent native boundary was rebuilt and tested as recorded above. No
+installer image was rebuilt for either increment.
 
-The next implementation must use a fixed local TPM transport and a reviewed
-native boundary for parent creation and sealed child operations. It must check
-handle vacancy and the parent's Name, transmit the existing owner authorization
-from locked memory in an encrypted TPM session, never persist that authorization,
-and durably fence the parent allocation before dispatch. The sealed blob and
-configuration need versioned, bounded parsing and binding to the signer and
-deployment. Runtime unlock must authenticate signed PCR 11 and fixed PCR 7
+The next implementation must durably fence parent allocation before calling the
+native boundary, then create and unseal a child under its pinned Name. The sealed
+blob and configuration need versioned, bounded parsing and binding to the signer
+and deployment. Runtime unlock must authenticate signed PCR 11 and fixed PCR 7
 without a second password, keep plaintext in protected memory, and refuse
-unknown or changed inputs. Tests must include lost replies, collision, malformed
-blobs, owner authorization denial, restart, signed update, recovery, and the
-positive integrated enrollment path before installed-image qualification.
+unknown or changed inputs. Tests must include lost replies, malformed blobs,
+restart, signed update, recovery, and the positive integrated enrollment path
+before installed-image qualification.

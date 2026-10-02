@@ -78,6 +78,42 @@ paths into production enrollment. The memory boundary disables core dumps and
 clears the Rust credential buffer; installed sealed delivery and the complete
 service confinement boundary remain to be implemented and evaluated.
 
+## Explicit committed-audit publication recovery
+
+The native `admin-checkpoint-reconcile` command now inspects an existing pending
+inert audit commit without changing journal bytes. It requires root, an installed
+boot, the fixed local TPM/checkpoint paths and existing credential delivery.
+Because enrollment/delivery is not integrated yet, this is not an operational
+recovery route for a fresh current laboratory installation. Do not fabricate
+credentials or enrollment files to enable it.
+
+The only supported publication is an exact one-entry successor, in the same
+deployment, whose computed head equals the authenticated TPM head. Inspection
+returns the request ID, previous/proposed heads, byte digests and a domain-bound
+`review_sha256`. After review, the explicit invocation is:
+
+```text
+luma-platform admin-checkpoint-reconcile --publish-committed REVIEW-SHA256
+```
+
+It retains the checkpoint writer lock, checks the reviewed bytes and TPM again,
+rejects an in-process clock epoch change/regression, synchronizes the pending
+file, renames it to the journal and synchronizes the directory. The previous
+entries remain as the exact prefix of the published journal. It neither extends
+the TPM nor dispatches/replays any effect. No startup auto-repair, reset, force,
+caller-selected file/transport, uncommitted-proposal discard or empty-genesis
+inference is provided. An absent, malformed, unsafe or inconsistent journal
+remains blocked. If publication already finished but its acknowledgement was
+lost, inspect `admin-checkpoint-status`; do not invent another pending file.
+
+The review digest is not a capability or proof of human authentication. This is
+OS-root maintenance of inert audit data, not product Admin, production effect
+reconciliation, or defense against hostile root replacing files outside the
+sole-writer lock. Enrollment, protected effect receipts, recovery authorization,
+and physical interruption tests still need integration. Targeted unit and real
+software-TPM results are in the
+[publication-recovery checkpoint](evidence/G2_ADMIN_RECOVERY_2026-10-01.md).
+
 ## Sealed credential primitive (not installed enrollment)
 
 `rust/luma-platform/src/sealed_credential.rs` adds bounded TPM-only sealing
@@ -150,6 +186,36 @@ Do not interpret live boot or source tests as installed Admin enrollment.
 
 ## Remaining software before the local installer can be complete
 
+### Local principal binding prerequisite
+
+Fresh installation now creates `/var/lib/luma-os/principals/registry.json`
+inside encrypted mutable state, with a random installation namespace and
+distinct 256-bit IDs for the two local human accounts. Entries carry their
+login/UID, positive generation and enabled state. **Enabled is not Admin or
+any role grant.** The private registry refuses duplicate identities, unknown
+fields, unsafe metadata and runtime auto-initialization. It is currently
+root-controlled metadata, not a TPM-anchored authority/anti-rollback record.
+
+Native PAM authentication captures a principal and bounded local passwd/shadow
+observation before invoking the helper. It then binds the returned UID to that
+same principal and rechecks the registry/account state, including at each use
+of the 30-second in-process observation. Registry replacement, changed
+generation, disablement, changed credentials, duplicate UID or account
+substitution fail closed. Once a change/error is observed, the observation is
+permanently invalid; unlocking does not revive it. Shadow input uses the
+existing locked, nondumpable, wiped buffer and is neither serialized nor logged.
+The diagnostic's output remains explicitly non-authoritative.
+
+No governed principal create/disable/rekey/recovery API is exposed yet, and
+there is no automatic migration of older installations. Do not manually edit
+the registry to establish Admin. Full account lifecycle, serialized effect-time
+authorization, protected generations and TPM-sealed bootstrap still require
+integration. Root rollback/ABA replacement is not prevented by content checks.
+See [the local-principal checkpoint](evidence/G2_LOCAL_PRINCIPALS_2026-10-01.md)
+for targeted checks and the deferred image-level matrix.
+
+### Authentication and outstanding enrollment
+
 The native `admin-auth-check LOGIN` diagnostic now performs masked
 controlling-terminal account authentication on an installed system. A separate
 non-setuid, root-only helper uses the fixed `luma-admin` PAM service, normal
@@ -161,7 +227,7 @@ the caller and the helper's input are locked and wiped; PAM's own working
 allocations still need the complete service isolation/swap review. Standard PAM
 authentication auditing can record the account name and outcome, not passwords.
 
-Successful authentication is only a short-lived in-process observation. It is
+Successful authentication is only a short-lived, principal-bound in-process observation. It is
 not a serializable bearer capability, enrollment record, role assignment or
 authorization for any effect. Enrollment still must bind it to the selected
 principal, deployment and protected TPM state, with identity-generation and

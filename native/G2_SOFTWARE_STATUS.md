@@ -13,13 +13,73 @@ requirement.
 
 ## Current software inventory and work still required
 
+**Execution change requested by the owner:** finish the open G2 implementation
+before another memory-heavy VM/model sweep, then evaluate one consolidated
+image and perform full testing on the separate native Ubuntu machine. WSL
+settings remain unchanged. Only bounded targeted development checks run in
+the meantime. See [the implementation-first sequence](G2_IMPLEMENTATION_FIRST.md).
+This supersedes the immediate sequence-11 retry plans in older checkpoints.
+
+The [committed-audit recovery checkpoint](evidence/G2_ADMIN_RECOVERY_2026-10-01.md)
+adds explicit, digest-reviewed publication of an interrupted journal commit only
+when the authenticated TPM proves the exact one-entry successor. It does not
+write the TPM, replay effects, discard uncommitted proposals or grant Admin.
+Thirteen targeted Rust tests, one isolated software-TPM lost-reply/recovery test
+and the native build passed. The command still requires the outstanding
+enrollment/credential-delivery integration; this is not fresh-image operational
+recovery or production effect reconciliation. No heavyweight suite was started.
+
+The [local-principal checkpoint](evidence/G2_LOCAL_PRINCIPALS_2026-10-01.md)
+adds fresh-install principal IDs and binds the local PAM observation to the
+installation, principal generation, and current account/credential state.
+Missing, disabled, substituted or changed identities refuse authentication;
+an invalidated observation cannot be revived by unlocking the account. This
+is wired into installation and `admin-auth-check`, not a product Admin grant.
+The registry is not TPM-anchored, and governed account lifecycle, enrollment,
+delegation and recovery remain open. Nine targeted Rust tests, six real-PAM
+fixture modes, two packaging checks and the native build passed. Full-image
+testing remains deferred.
+
+The first implementation-first increment adds a durable replay fence to the
+existing root-only worker start/stop broker path, fresh-install journal
+initialization, effect-time rechecks and bounded helper waiting. Uncertain
+effects fence further worker mutations and are never automatically replayed.
+It does **not** enroll Admin, protect the ledger against rollback, or provide
+reviewed reconciliation. Its targeted checks and deferred integrated work are
+recorded in [the broker-effects checkpoint](evidence/G2_BROKER_EFFECTS_2026-10-01.md).
+
+The [model-response and WSL-impact checkpoint](evidence/G2_MODEL_REPLY_2026-10-01.md)
+records a native CLI fix: replies must match the selected model and a single
+completed assistant message, with finite integer token accounting within the
+requested budget. Duplicate JSON, tool-call replies and malformed observations
+are refused without a successful result. All **133 native Linux Python tests**
+and six real CLI/HTTP cases passed; the HTTP server used synthetic responses,
+not a real model. This guest-source change needs a later image rebuild and
+real-model evaluation. Windows had about 2.2 GiB free and six unrelated
+containers were active. The owner's conditional no-impact approval does not
+authorize their interruption; WSL configuration and running workloads remain
+unchanged. All component-level gaps below remain open.
+
+The [host-memory checkpoint](evidence/G2_HOST_MEMORY_2026-10-01.md) records
+successful media staging but an unsuccessful third desktop run. WSL had only
+about 20 MiB available during the 6 GiB guest evaluation; its installer did not
+reach disk confirmation. Only this disposable G2 container was stopped, with
+all named volumes preserved. The queue exited 1 and no model VM started.
+New shared VM admission requires guest RAM plus 2 GiB of observed host headroom
+before stage state, TPM or QEMU startup. All **127 native Linux Python tests
+passed**, and a real read-only host probe refused another 6 GiB launch. The
+current 8 GiB WSL limit cannot meet this threshold. A larger approved test host
+or a separately approved WSL memory/restart change is needed for this fixture.
+This is not a desktop/model pass, a physical diagnosis or G2 closure.
+
 The [Linux VM workspace checkpoint](evidence/G2_VM_LINUX_WORKSPACE_2026-10-01.md)
 records a second desktop failure: snapshot admission passed at 6 GiB, but media
 read/target write I/O errors stopped installation. No model VM followed.
 Read-only checks did not identify a definitive cause. All 121 native Python
 tests and a bounded QEMU I/O probe on the existing D-backed ext4 store passed.
-The next test stages identical media in a fresh Linux workspace, retaining all
-failed runs. Image transfer is running; desktop/model acceptance is not passed.
+The next test staged identical media in a fresh Linux workspace, retaining all
+failed runs. Image transfer/read-back passed; the subsequent run stopped under
+host memory pressure as recorded above. Desktop/model acceptance is not passed.
 
 The [desktop memory-admission checkpoint](evidence/G2_DESKTOP_MEMORY_2026-10-01.md)
 records an actual sequence-11 installation failure: the 4 GiB VM's live tmpfs
@@ -138,7 +198,7 @@ tests passed. This is host-storage acceptance, not a new G2 OS-image pass. See
 | Boot, update, recovery | Signed UKI, A/B verity roots, essential-health acknowledgement, three-attempt fallback, independent export/repair/disable; sequence 9 passed measured phases, public credential continuity through reboot/signed B, unapproved-PCR refusal and verified late shutdown teardown; sequence 10 passed the 14-stage regression including atomic export and bounded IPC | Complete confined service credential delivery and lifecycle; broaden shutdown/recovery faults; complete interruption and migration matrix, including pre-userspace failures; protected production rollback anchors; storage-pressure and recovery-retention cases |
 | Temporary storage | Locked, bounded snapshot/download reconciliation; sparse-aware admission and exact-file cleanup; Linux boundary tests in `native/tests`; sequence 8 verified successful startup maintenance service execution | Repeated guest-interruption/pressure evaluation; operator-reviewed disposition of legacy snapshots, which cannot safely be assumed inactive |
 | Model lifecycle and resources | Two pinned CPU profiles; hardware admission, isolated UID, authenticated loopback runtime, systemd memory/device/process restrictions; actual inference and offline reboot passed | Full governed model-pack/catalog lifecycle; atomic resource leases and generations, stale-worker fencing, pressure/quarantine/restart policy; 1,000 **real compact-model** cycles with measured resource return and performance distributions |
-| Admin, policy, and effects | Frozen Python contracts and negative tests; native broker verifies kernel peer identity; local TPM2 checkpoint/journal and signed-PCR sealing; native PAM account authentication with real isolated-account tests | Integrate authenticated enrollment/sealed credential delivery, finite Admin assignment/revocation, product principal binding and lifecycle, effect-time grants, durable effect receipts and reconciliation; account authentication and root/sudo operations are not the product Admin service |
+| Admin, policy, and effects | Frozen Python contracts and negative tests; kernel peer authentication; local TPM2 checkpoint/journal and signed-PCR sealing; native PAM with installation-scoped principal/generation and credential revalidation; durable replay fence for two laboratory root-only worker effects | Integrate authenticated enrollment/sealed credential delivery, finite Admin assignment/revocation, governed principal/account lifecycle, effect-time grants, protected production effect receipts and reviewed reconciliation; local identity binding and root/sudo operations are not the product Admin service |
 | Skills and vertical workflow | Isolated reference worker and manual reference interface | Signed skill registry, native typed-DAG validation/supervision, descriptor-scoped file-read and artifact-write skills, deterministic calculation, cancellation/checkpoint/restart semantics; distributed-image file-to-artifact journey through those interfaces |
 | Generated-code isolation | General model-generated shell/native execution is denied | Required microVM or separately qualified constrained runtime and adversarial tests before this capability can be available; a deny-only path is not an implemented execution sandbox |
 | Desktop and account lifecycle | Headless console/manual recovery and installer-created distinct accounts; candidate GNOME/Wayland packaging and signed boot-target selection; isolated real compositor/Files/editor/terminal surface smoke passed without a model | Build and boot the desktop image; actual GDM authentication, complete manual file workflow, locking, credential/account lifecycle, migration and model-failure tests; container surface tests do not qualify the installed desktop |

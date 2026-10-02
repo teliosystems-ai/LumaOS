@@ -887,6 +887,11 @@ pub fn install(selection: &str, source: &Path, model_id: Option<&str>) -> Result
         ],
     )?;
     create_identity(&data.at, &user, &admin, &user_password, &admin_password)?;
+    crate::principal::initialize(
+        &data.at.join("lib/luma-os/principals"),
+        &[(&user, 1000), (&admin, 1001)],
+    )?;
+    crate::broker_effects::initialize(&data.at.join("lib/luma-broker"))?;
     write_atomic(
         &data.at.join("lib/luma-os/admin-install-intent.json"),
         &serde_json::to_vec(&admin_admission.intent(&admin))?,

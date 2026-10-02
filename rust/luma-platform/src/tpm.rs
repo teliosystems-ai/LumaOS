@@ -446,6 +446,68 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires fresh isolated emulator journal-recovery fixture"]
+    fn emulator_committed_journal_recovery() {
+        assert!(Path::new("/.dockerenv").is_file());
+        assert!(!Path::new("/dev/tpm0").exists());
+        assert!(!Path::new("/dev/tpmrm0").exists());
+        struct LostReply(LocalAnchor);
+        impl Checkpoint for LostReply {
+            fn read(&mut self) -> Result<[u8; 32]> {
+                self.0.read()
+            }
+            fn clock(&mut self) -> Result<Clock> {
+                self.0.clock()
+            }
+            fn advance(&mut self, expected: [u8; 32], event: [u8; 32]) -> Result<[u8; 32]> {
+                self.0.advance(expected, event)?;
+                Err("fixture drops successful NV extend reply".into())
+            }
+        }
+        let (_, dir, _, _) = emulator();
+        let path = dir.join("journal.json");
+        let original = fs::read(&path).unwrap();
+        let mut store = Store::open(LostReply(connect_fixture()), &path).unwrap();
+        let clock: Clock =
+            serde_json::from_value(store.status().unwrap()["clock"].clone()).unwrap();
+        assert!(store
+            .append(Entry {
+                request_id: "emulator-recovery".into(),
+                authenticated_uid: 1001,
+                clock,
+                activity: "checkpoint.test".into(),
+                payload_sha256: "77".repeat(32),
+            })
+            .is_err());
+        drop(store);
+        assert_eq!(fs::read(&path).unwrap(), original);
+        let pending = path.with_extension("pending.json");
+        let proposed = fs::read(&pending).unwrap();
+        assert!(Store::open(connect_fixture(), &path).is_err());
+        let recovery = crate::admin_journal::Recovery::inspect(connect_fixture(), &path).unwrap();
+        let digest = recovery.digest().unwrap();
+        drop(recovery);
+        let mut before = connect_fixture();
+        let expected = before.read().unwrap();
+        drop(before);
+        let mut store = crate::admin_journal::Recovery::inspect(connect_fixture(), &path)
+            .unwrap()
+            .publish(&digest)
+            .unwrap();
+        assert_eq!(store.status().unwrap()["events"], 1);
+        drop(store);
+        assert!(!pending.exists());
+        assert_eq!(fs::read(&path).unwrap(), proposed);
+        let mut after = connect_fixture();
+        assert_eq!(after.read().unwrap(), expected);
+        drop(after);
+        Store::open(connect_fixture(), &path)
+            .unwrap()
+            .status()
+            .unwrap();
+    }
+
+    #[test]
     fn install_recheck_rejects_epoch_pcr_and_time_changes() {
         let original = Admission {
             clock: Clock {

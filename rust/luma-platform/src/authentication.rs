@@ -1,5 +1,9 @@
 //! Short-lived local account authentication, not product Admin enrollment.
-use crate::{sealed_credential::PrivateBuffer, Result};
+use crate::{
+    principal::{self, AccountBinding},
+    sealed_credential::PrivateBuffer,
+    Result,
+};
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Seek, Write};
 use std::os::fd::AsRawFd;
@@ -116,15 +120,19 @@ impl Drop for Helper {
 // This is intentionally not Clone, Serialize or caller-constructible. It is
 // an ephemeral authentication observation, not a capability or persistent role.
 struct AuthenticatedAccount {
-    uid: u32,
+    binding: AccountBinding,
     completed: Instant,
+}
+fn fresh(completed: Instant) -> Result<()> {
+    if completed.elapsed() > Duration::from_secs(30) {
+        return Err("account authentication expired".into());
+    }
+    Ok(())
 }
 impl AuthenticatedAccount {
     fn current_uid(&self) -> Result<u32> {
-        if self.completed.elapsed() > Duration::from_secs(30) {
-            return Err("account authentication expired".into());
-        }
-        Ok(self.uid)
+        fresh(self.completed)?;
+        self.binding.current_uid()
     }
 }
 
@@ -133,11 +141,28 @@ fn authenticate(
     username: &str,
     password: &PrivateBuffer,
 ) -> Result<AuthenticatedAccount> {
+    authenticate_at(
+        helper,
+        username,
+        password,
+        Path::new(principal::REGISTRY),
+        Path::new(principal::IDENTITY),
+    )
+}
+
+fn authenticate_at(
+    helper: &Path,
+    username: &str,
+    password: &PrivateBuffer,
+    registry: &Path,
+    identity: &Path,
+) -> Result<AuthenticatedAccount> {
     crate::require_root()?;
     login(username)?;
     if password.bytes().len() != LIMIT + 1 {
         return Err("invalid password frame".into());
     }
+    let binding = AccountBinding::capture(registry, identity, username)?;
     let profile = Path::new("/etc/pam.d/luma-admin");
     let metadata = std::fs::symlink_metadata(profile)?;
     if !metadata.is_file()
@@ -201,8 +226,11 @@ fn authenticate(
     if !(1000..65534).contains(&uid) {
         return Err("service/system account refused".into());
     }
+    if binding.current_uid()? != uid {
+        return Err("PAM identity differs from the bound local principal".into());
+    }
     Ok(AuthenticatedAccount {
-        uid,
+        binding,
         completed: Instant::now(),
     })
 }
@@ -292,15 +320,13 @@ mod tests {
             assert!(login(value).is_err());
         }
         login("luma-admin").unwrap();
-        let account = AuthenticatedAccount {
-            uid: 1001,
-            completed: Instant::now() - Duration::from_secs(31),
-        };
-        assert!(account.current_uid().is_err());
+        fresh(Instant::now()).unwrap();
+        assert!(fresh(Instant::now() - Duration::from_secs(31)).is_err());
     }
     #[test]
     #[ignore = "requires isolated real PAM account fixture"]
     fn local_pam_account() {
+        assert!(Path::new("/.dockerenv").is_file());
         let directory = std::env::var("LUMA_TPM_TEST_DIRECTORY").unwrap();
         assert!(directory.starts_with("/tmp/luma-tpm-"));
         let mut password = PrivateBuffer::new(LIMIT + 1).unwrap();
@@ -311,16 +337,58 @@ mod tests {
         .unwrap();
         password.bytes_mut()[..value.len()].copy_from_slice(&value);
         let helper = Path::new(env!("OUT_DIR")).join("luma-auth-helper");
+        let state = Path::new(&directory).join("principals");
+        if !state.exists() {
+            principal::initialize(&state, &[("luma-auth-test", 32001)]).unwrap();
+        }
+        let registry = state.join("registry.json");
+        let observe = |password: &PrivateBuffer| {
+            authenticate_at(
+                &helper,
+                "luma-auth-test",
+                password,
+                &registry,
+                Path::new("/etc"),
+            )
+        };
         let mode = std::env::var("LUMA_PAM_TEST_MODE").unwrap();
-        let result = authenticate(&helper, "luma-auth-test", &password);
+        let result = observe(&password);
         if mode == "allow" {
             assert_eq!(result.unwrap().current_uid().unwrap(), 32001);
             let empty = PrivateBuffer::new(LIMIT + 1).unwrap();
-            assert!(authenticate(&helper, "luma-auth-test", &empty).is_err());
-            assert!(authenticate(&helper, "luma-absent", &password).is_err());
+            assert!(observe(&empty).is_err());
+            assert!(authenticate_at(
+                &helper,
+                "luma-absent",
+                &password,
+                &registry,
+                Path::new("/etc")
+            )
+            .is_err());
             password.bytes_mut()[0] ^= 1;
-            assert!(authenticate(&helper, "luma-auth-test", &password).is_err());
-            assert!(authenticate(&helper, "root", &password).is_err());
+            assert!(observe(&password).is_err());
+            assert!(
+                authenticate_at(&helper, "root", &password, &registry, Path::new("/etc")).is_err()
+            );
+            password.bytes_mut()[0] ^= 1;
+            let bound = observe(&password).unwrap();
+            // The ignored fixture is isolated and owns this exact test account.
+            // Locking its credential after PAM must revoke the observation.
+            assert!(Command::new("/usr/sbin/usermod")
+                .args(["--lock", "luma-auth-test"])
+                .status()
+                .unwrap()
+                .success());
+            assert!(bound.current_uid().is_err());
+            assert!(Command::new("/usr/sbin/usermod")
+                .args(["--unlock", "luma-auth-test"])
+                .status()
+                .unwrap()
+                .success());
+            assert!(bound.current_uid().is_err()); // Unlock cannot revive an invalidated observation.
+            let mut expired = observe(&password).unwrap();
+            expired.completed = Instant::now() - Duration::from_secs(31);
+            assert!(expired.current_uid().is_err());
         } else {
             assert!(result.is_err());
         }

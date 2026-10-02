@@ -9,6 +9,7 @@ use crate::{
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::fs::{self, File};
+use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 
 const MAX_BYTES: u64 = 4 * 1024 * 1024;
@@ -182,6 +183,142 @@ pub fn status() -> Result<()> {
     Ok(())
 }
 
+/// A recovery observation is not authorization. The only supported repair is
+/// publishing an exact one-entry successor that the authenticated TPM already
+/// contains. Never extend the TPM, discard an uncommitted proposal, infer an
+/// empty genesis, or replay a service effect here.
+#[derive(Debug, Serialize, PartialEq, Eq)]
+struct Publication {
+    schema_version: u32,
+    deployment: String,
+    previous_events: usize,
+    request_id: String,
+    previous_head: String,
+    committed_head: String,
+    journal_sha256: String,
+    pending_sha256: String,
+}
+
+pub(crate) struct Recovery<A: Checkpoint> {
+    anchor: A,
+    path: PathBuf,
+    publication: Publication,
+    observed: Clock,
+}
+
+fn publication<A: Checkpoint>(anchor: &mut A, path: &Path) -> Result<Publication> {
+    let current_bytes = tpm::private_read(path, MAX_BYTES)?;
+    let pending_bytes = tpm::private_read(&pending(path), MAX_BYTES)?;
+    let current: Journal = serde_json::from_slice(&current_bytes)?;
+    let proposed: Journal = serde_json::from_slice(&pending_bytes)?;
+    let before = head(&current)?;
+    let after = head(&proposed)?;
+    if proposed.deployment != current.deployment
+        || proposed.entries.len() != current.entries.len() + 1
+        || !proposed.entries.starts_with(&current.entries)
+    {
+        return Err(
+            "pending Admin journal is not an exact one-entry successor; preserve state".into(),
+        );
+    }
+    if anchor.read()? != after {
+        return Err(
+            "TPM does not prove the pending Admin commit; preserve state; no replay".into(),
+        );
+    }
+    Ok(Publication {
+        schema_version: 1,
+        deployment: current.deployment,
+        previous_events: current.entries.len(),
+        request_id: proposed
+            .entries
+            .last()
+            .ok_or("missing pending event")?
+            .request_id
+            .clone(),
+        previous_head: bundle::hex(&before),
+        committed_head: bundle::hex(&after),
+        journal_sha256: bundle::hex(&Sha256::digest(&current_bytes)),
+        pending_sha256: bundle::hex(&Sha256::digest(&pending_bytes)),
+    })
+}
+
+impl<A: Checkpoint> Recovery<A> {
+    pub(crate) fn inspect(mut anchor: A, path: &Path) -> Result<Self> {
+        let observed = anchor.clock()?;
+        let publication = publication(&mut anchor, path)?;
+        anchor.clock()?.elapsed_since(observed)?;
+        Ok(Self {
+            anchor,
+            path: path.into(),
+            publication,
+            observed,
+        })
+    }
+
+    pub(crate) fn digest(&self) -> Result<String> {
+        let mut digest = Sha256::new();
+        digest.update(b"luma-native-admin-publication-v1\0");
+        digest.update(serde_json::to_vec(&self.publication)?);
+        Ok(bundle::hex(&digest.finalize()))
+    }
+
+    fn report(&self) -> Result<serde_json::Value> {
+        Ok(serde_json::json!({
+            "schema_version":1, "action":"publish-already-committed-audit",
+            "review_sha256":self.digest()?, "publication":self.publication,
+            "product_admin_active":false, "effect_replayed":false, "gate_closing":false
+        }))
+    }
+
+    pub(crate) fn publish(mut self, reviewed_digest: &str) -> Result<Store<A>> {
+        tpm::decode::<32>(reviewed_digest)?;
+        if self.digest()? != reviewed_digest {
+            return Err("Admin recovery review does not match current state".into());
+        }
+        // LocalAnchor retains its sole-writer lock throughout inspection,
+        // revalidation and publication. It does not exclude hostile OS root.
+        if publication(&mut self.anchor, &self.path)? != self.publication {
+            return Err("Admin recovery inputs changed after review; preserve state".into());
+        }
+        self.anchor.clock()?.elapsed_since(self.observed)?;
+        // Re-sync the prepared file before rename, including a retry following
+        // a lost write/dir-sync acknowledgement. No journal records are lost:
+        // the successor contains the complete previous prefix.
+        let file = File::options()
+            .read(true)
+            .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+            .open(pending(&self.path))?;
+        file.sync_all()?;
+        fs::rename(pending(&self.path), &self.path)?;
+        File::open(self.path.parent().ok_or("missing journal parent")?)?.sync_all()?;
+        let mut store = Store::open(self.anchor, &self.path)?;
+        store.status()?;
+        Ok(store)
+    }
+}
+
+/// Explicit root maintenance of inert audit data, not product Admin recovery.
+/// No caller-selected paths, transport, credential, TPM write or force/reset.
+pub fn reconcile(reviewed_digest: Option<&str>) -> Result<()> {
+    crate::require_root()?;
+    platform::require_installed()?;
+    let recovery = Recovery::inspect(
+        tpm::LocalAnchor::installed()?,
+        Path::new("/var/lib/luma-os/admin/journal.json"),
+    )?;
+    let mut report = recovery.report()?;
+    if let Some(digest) = reviewed_digest {
+        let mut store = recovery.publish(digest)?;
+        report["published"] = serde_json::json!(true);
+        report["checkpoint"] = store.status()?;
+    } else {
+        report["published"] = serde_json::json!(false);
+    }
+    println!("{}", serde_json::to_string(&report)?);
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -311,6 +448,214 @@ mod tests {
         assert!(Store::open(anchor.clone(), &path).is_err());
         fs::remove_file(pending(&path)).unwrap();
         Store::open(anchor, &path).unwrap().status().unwrap();
+        cleanup(&path);
+    }
+
+    // Recovery is deliberately incapable of extending even in the fixture.
+    #[derive(Clone)]
+    struct ReadOnly {
+        value: Rc<RefCell<[u8; 32]>>,
+        clock: Rc<RefCell<Clock>>,
+    }
+    impl Checkpoint for ReadOnly {
+        fn read(&mut self) -> Result<[u8; 32]> {
+            Ok(*self.value.borrow())
+        }
+        fn clock(&mut self) -> Result<Clock> {
+            Ok(*self.clock.borrow())
+        }
+        fn advance(&mut self, _: [u8; 32], _: [u8; 32]) -> Result<[u8; 32]> {
+            panic!("recovery must never write to the TPM")
+        }
+    }
+
+    fn prepared(label: &str) -> (PathBuf, Journal, ReadOnly) {
+        let (path, mut next, mut anchor) = fixture(label);
+        anchor.1 = true;
+        let mut store = Store::open(anchor.clone(), &path).unwrap();
+        assert!(store.append(entry()).is_err()); // NV applied; reply lost.
+        next.entries.push(entry());
+        let read_only = ReadOnly {
+            value: anchor.0,
+            clock: Rc::new(RefCell::new(Clock {
+                milliseconds: 20,
+                reset_count: 0,
+                restart_count: 0,
+            })),
+        };
+        (path, next, read_only)
+    }
+
+    #[test]
+    fn reviewed_committed_publication_survives_restart_without_tpm_write() {
+        let (path, _, anchor) = prepared("recover");
+        let before = fs::read(&path).unwrap();
+        let proposed = fs::read(pending(&path)).unwrap();
+        let recovery = Recovery::inspect(anchor.clone(), &path).unwrap();
+        let report = recovery.report().unwrap();
+        assert_eq!(report["gate_closing"], false);
+        assert_eq!(report["effect_replayed"], false);
+        assert_eq!(fs::read(&path).unwrap(), before); // inspection is read-only
+        let digest = recovery.digest().unwrap();
+        drop(recovery); // CLI review and apply are separate invocations.
+        let mut store = Recovery::inspect(anchor.clone(), &path)
+            .unwrap()
+            .publish(&digest)
+            .unwrap();
+        assert_eq!(store.status().unwrap()["events"], 1);
+        assert_eq!(fs::read(&path).unwrap(), proposed);
+        assert!(!has_pending(&path).unwrap());
+        drop(store);
+        assert_eq!(
+            Store::open(anchor.clone(), &path)
+                .unwrap()
+                .status()
+                .unwrap()["events"],
+            1
+        );
+        assert!(Recovery::inspect(anchor, &path).is_err()); // no empty/forced repair
+        cleanup(&path);
+    }
+
+    #[test]
+    fn recovery_requires_exact_review_and_rechecks_disk_and_anchor() {
+        let (path, _, anchor) = prepared("review");
+        let original = fs::read(&path).unwrap();
+        let proposal = fs::read(pending(&path)).unwrap();
+        for bad in ["", "force", &"00".repeat(32)] {
+            assert!(Recovery::inspect(anchor.clone(), &path)
+                .unwrap()
+                .publish(bad)
+                .is_err());
+            assert_eq!(fs::read(&path).unwrap(), original);
+            assert_eq!(fs::read(pending(&path)).unwrap(), proposal);
+        }
+        // Even a semantically identical replacement needs a new byte-bound review.
+        for target in [&path, &pending(&path)] {
+            let recovery = Recovery::inspect(anchor.clone(), &path).unwrap();
+            let digest = recovery.digest().unwrap();
+            let previous = fs::read(target).unwrap();
+            let mut changed = previous.clone();
+            changed.push(b'\n');
+            platform::write_atomic(target, &changed, 0o600).unwrap();
+            assert!(recovery.publish(&digest).is_err());
+            platform::write_atomic(target, &previous, 0o600).unwrap();
+        }
+        let recovery = Recovery::inspect(anchor.clone(), &path).unwrap();
+        let digest = recovery.digest().unwrap();
+        *anchor.value.borrow_mut() = [0xff; 32];
+        assert!(recovery.publish(&digest).is_err());
+        assert_eq!(fs::read(&path).unwrap(), original);
+        assert_eq!(fs::read(pending(&path)).unwrap(), proposal);
+        cleanup(&path);
+    }
+
+    #[test]
+    fn uncommitted_foreign_or_non_successor_proposals_remain_fenced() {
+        let (path, mut proposed, anchor) = prepared("invalid-recovery");
+        let original: Journal = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        let committed = *anchor.value.borrow();
+        *anchor.value.borrow_mut() = head(&original).unwrap();
+        assert!(Recovery::inspect(anchor.clone(), &path).is_err());
+        *anchor.value.borrow_mut() = committed;
+        for variant in 0..5 {
+            proposed.entries = vec![entry()];
+            proposed.deployment = original.deployment.clone();
+            match variant {
+                0 => proposed.deployment = "cd".repeat(32),
+                1 => proposed.entries.clear(),
+                2 => {
+                    let mut extra = entry();
+                    extra.request_id = "extra".into();
+                    proposed.entries.push(extra);
+                }
+                3 => proposed.entries[0].authenticated_uid = 0,
+                _ => proposed.entries[0].payload_sha256 = "00".repeat(32),
+            }
+            platform::write_atomic(
+                &pending(&path),
+                &serde_json::to_vec(&proposed).unwrap(),
+                0o600,
+            )
+            .unwrap();
+            // An anchor matching a foreign domain, empty journal or multi-entry
+            // proposal still cannot establish the required successor relation.
+            if variant < 3 {
+                *anchor.value.borrow_mut() = head(&proposed).unwrap();
+            } else {
+                *anchor.value.borrow_mut() = committed;
+            }
+            assert!(Recovery::inspect(anchor.clone(), &path).is_err());
+            assert!(has_pending(&path).unwrap());
+        }
+        cleanup(&path);
+    }
+
+    #[test]
+    fn recovery_cannot_replace_a_committed_prefix() {
+        let (path, mut initial, anchor) = fixture("prefix");
+        let mut store = Store::open(anchor.clone(), &path).unwrap();
+        store.append(entry()).unwrap();
+        initial.entries.push(entry());
+        let mut second = entry();
+        second.request_id = "second".into();
+        initial.entries.push(second);
+        initial.entries[0].payload_sha256 = "33".repeat(32);
+        platform::write_atomic(
+            &pending(&path),
+            &serde_json::to_vec(&initial).unwrap(),
+            0o600,
+        )
+        .unwrap();
+        *anchor.0.borrow_mut() = head(&initial).unwrap();
+        assert!(Recovery::inspect(anchor, &path).is_err());
+        cleanup(&path);
+    }
+
+    #[test]
+    fn recovery_rejects_epoch_changes_and_clock_regression_during_review() {
+        let (path, _, anchor) = prepared("clock-recovery");
+        for variant in 0..3 {
+            *anchor.clock.borrow_mut() = Clock {
+                milliseconds: 20,
+                reset_count: 0,
+                restart_count: 0,
+            };
+            let recovery = Recovery::inspect(anchor.clone(), &path).unwrap();
+            let digest = recovery.digest().unwrap();
+            match variant {
+                0 => anchor.clock.borrow_mut().milliseconds = 19,
+                1 => anchor.clock.borrow_mut().reset_count += 1,
+                _ => anchor.clock.borrow_mut().restart_count += 1,
+            }
+            assert!(recovery.publish(&digest).is_err());
+            assert!(has_pending(&path).unwrap());
+        }
+        cleanup(&path);
+    }
+
+    #[test]
+    fn recovery_rejects_unsafe_or_malformed_pending_without_removing_it() {
+        use std::os::unix::fs::symlink;
+        let (path, _, anchor) = prepared("unsafe-recovery");
+        let at = pending(&path);
+        let good = fs::read(&at).unwrap();
+        for bad in [b"{}".as_slice(), b"null", b"[]"] {
+            platform::write_atomic(&at, bad, 0o600).unwrap();
+            assert!(Recovery::inspect(anchor.clone(), &path).is_err());
+            assert_eq!(fs::read(&at).unwrap(), bad);
+        }
+        platform::write_atomic(&at, &good, 0o644).unwrap();
+        assert!(Recovery::inspect(anchor.clone(), &path).is_err());
+        fs::set_permissions(&at, fs::Permissions::from_mode(0o600)).unwrap();
+        let alias = path.with_extension("alias");
+        fs::hard_link(&at, &alias).unwrap();
+        assert!(Recovery::inspect(anchor.clone(), &path).is_err());
+        fs::remove_file(alias).unwrap();
+        fs::remove_file(&at).unwrap();
+        symlink(path.with_extension("absent"), &at).unwrap();
+        assert!(Recovery::inspect(anchor, &path).is_err());
+        fs::remove_file(at).unwrap();
         cleanup(&path);
     }
 }

@@ -1,0 +1,50 @@
+# G2 implementation-first delivery sequence
+
+Owner direction, 2026-10-01: finish the open implementation work before another
+memory-heavy VM/model sweep; then test one consolidated candidate and perform
+full testing of the produced image on the separate native Ubuntu machine.
+This supersedes earlier plans to retry sequence-11 desktop/model VMs immediately.
+
+## Resource and evidence rules
+
+- Leave WSL memory settings and unrelated workloads unchanged. Do not launch
+  the old frozen acceptance queues or a new full-image build after each patch.
+- Keep source on C: and build/cache/image/evidence storage on D:.
+- Run small targeted compilation, unit and isolated boundary checks as code is
+  changed. They detect implementation defects but are not the full test sweep.
+- After the components below are implemented and reviewed, freeze one candidate
+  source manifest, build its image, and bind every integrated result to that
+  image's digest. Serialize heavyweight tests and retain failed evidence.
+- A failed integrated test requires repair and a new candidate/relevant rerun;
+  "one sweep" does not allow skipping failures or qualifying changed bytes
+  using an older image's passing evidence.
+- The separate Ubuntu machine will test the actual distributed image, including
+  installation/boot/recovery, not merely a source checkout. Physical destructive
+  targets, recovery preparations and firmware changes still require approval.
+
+## Dependency-ordered implementation backlog
+
+Use [G2_SOFTWARE_STATUS.md](G2_SOFTWARE_STATUS.md) for implemented scope and
+evidence. Every row here remains open until its complete implementation exists;
+targeted source checks alone cannot close G2 acceptance.
+
+| Work package | Required integration before candidate freeze |
+| --- | --- |
+| Admin and trust | Fresh-install principal IDs and generation/credential-bound PAM observations now exist. Still integrate authenticated Admin bootstrap, selected local TPM2 provisioning/sealed delivery, finite role assignment/revocation, governed principal lifecycle, signer/time/custody lifecycle and explicit recovery. External Admin remains a future variant. |
+| Policy and durable effects | Effect-time identity/grant checks, durable request/effect receipts, idempotent replay and reviewed uncertain-outcome reconciliation through native production interfaces. The root-only worker replay fence and explicit publication of TPM-proven pending inert audit records are limited increments, not production effect reconciliation or completion. |
+| Signed skills and vertical workflow | Governed signed registry, typed native DAG and supervisor, descriptor-scoped file reads, deterministic calculation, managed artifact writes, cancellation/checkpoints/restart and a manual file-to-artifact journey. |
+| Model lifecycle | Governed catalog/pack admission, install-time profiles and pinned acquisition, atomic resource leases/generations, stale-worker fencing, pressure/quarantine/restart and bounded cleanup. Preserve manual operation without a model. |
+| Generated-code isolation | Implement a supported microVM or separately qualified constrained runtime, with adversarial tests. Keeping execution denied is safe but not completion of the requested capability. |
+| Desktop/accounts | Installed GDM authentication, manual application workflow, locking, credential/account lifecycle, migration and model-failure independence. Packaging and compositor smoke are not sufficient. |
+| Installer/boot/recovery | Integrate all new services into the installer/image, update/fallback and recovery; interruption/migration/storage-pressure handling and no silent reset of uncertain state. |
+| Consolidated acceptance | Add checks for the new components, freeze/build one candidate on D:, execute the applicable integrated suite and real compact-model cycles, then retain the separate Ubuntu/physical results. |
+
+## External evidence remains separate
+
+Production public signing/catalog approvals and actual custody cannot be
+manufactured from laboratory keys. Firmware/TPM/GPU/power-loss qualification,
+both required A1 boards and unavailable large-model hardware remain explicit
+acceptance dependencies. Tests on the separate Ubuntu machine are valuable
+but do not automatically satisfy a requirement for two named boards or other
+hardware tuples. Implement the software paths first and record those remaining
+inputs/qualifications without claiming G2 complete.

@@ -5,6 +5,11 @@ not configuration installed into the Luma OS image. The source repository
 remains at `C:\Users\hakim\LumaOS`. Public images/installers, inputs, logs and
 VM disks remain under `D:\LumaOS-builds`.
 
+Current execution direction: **implementation first**, then a consolidated
+image-test sweep and separate native Ubuntu testing. Do not apply the proposed
+WSL memory increase or restart old VM queues during implementation. Small
+targeted checks remain permitted; see [the agreed sequence](../G2_IMPLEMENTATION_FIRST.md).
+
 The dedicated profile uses:
 
 | Purpose | Location |
@@ -50,6 +55,36 @@ copies only raw media, build metadata and the public firmware certificate;
 it is not a complete update-artifact export. Mount staged `/work/artifacts`
 read-only for VM execution. Recheck capacity before another fresh VM disk.
 Retain failed workspaces for diagnosis; do not reuse or silently repair them.
+
+The shared VM harness now checks Linux `/proc/meminfo` before creating stage
+state, provisioning the software TPM or starting QEMU. It requires the full
+configured guest RAM **plus 2 GiB host headroom** in `MemAvailable`; swap and
+total installed RAM do not substitute for available RAM. A 6 GiB installation
+or 4B guest therefore needs at least 8 GiB **available**, not merely an 8 GiB
+WSL limit. A 4 GiB guest needs 6 GiB available. The prior 6 GiB desktop run drove
+this 8 GiB WSL host to about 20 MiB available and was stopped without a pass.
+See [the memory checkpoint](../evidence/G2_HOST_MEMORY_2026-10-01.md).
+
+This check is a conservative observation, not a reservation or cgroup-limit
+validator; competing allocations and tighter container/ancestor limits still
+matter. Serialize large jobs and use an adequately provisioned host. Do not
+silently shrink the required guest, count swap as RAM, stop unrelated services,
+or change global WSL settings to bypass refusal. A possible 10 GiB WSL limit
+needs operator approval, Windows-memory review and a planned restart, followed
+by fresh admission; it is not an automatic guarantee. Existing frozen queues
+do not inherit new source safeguards and must not be resumed unchanged.
+
+Increasing the WSL memory ceiling is not impact-free. It permits WSL to compete
+for more host RAM, and applying configuration requires a WSL VM restart; a
+global shutdown interrupts all running WSL distributions and their processes.
+On 2026-10-01 the read-only impact check found about 2.2 GiB free Windows RAM
+and six unrelated running containers. No `.wslconfig` existed, and none was
+created. Do not interpret approval conditional on "no effect on other
+processes" as approval to interrupt those workloads. Coordinate saving work,
+gracefully stopping affected applications and cleanly stopping the dedicated
+D-backed store before an approved restart; then recheck both Windows and WSL
+headroom. See [Microsoft's WSL configuration documentation](https://learn.microsoft.com/en-us/windows/wsl/wsl-config)
+and the [impact checkpoint](../evidence/G2_MODEL_REPLY_2026-10-01.md).
 
 From Ubuntu WSL in the repository:
 

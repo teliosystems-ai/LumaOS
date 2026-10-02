@@ -20,6 +20,7 @@ import time
 from vm_tpm import SoftwareTPM, state_directory
 from vm_shutdown import poweroff
 from vm_display import display_arguments
+from vm_memory import admit_guest
 
 USER_PASSWORD='VM-only-user-passphrase-2026'
 ADMIN_PASSWORD='VM-only-admin-passphrase-2026'
@@ -33,6 +34,10 @@ TEST_SOURCES={p.name:hashlib.sha256(p.read_bytes()).hexdigest()
 class VM:
     def __init__(self,image: Path,work: Path,target: Path,live: bool,timeout: int,secure_boot: bool=False,acceleration: str='auto',attach_media: bool | None=None,media_format: str='raw',memory_mib: int=4096,network: bool=False,graphical: bool=False):
         display = display_arguments(graphical)
+        # Refuse before creating stage state, provisioning a software TPM or
+        # starting QEMU. Fully touched guest RAM, not its initial RSS, matters.
+        self.host_memory_admission = admit_guest(memory_mib)
+        print('VM host memory admission: ' + json.dumps(self.host_memory_admission), flush=True)
         self.work=work;work.mkdir()
         # External filesystems hold disks/logs, not Unix socket endpoints.
         self.socket_directory=tempfile.TemporaryDirectory(prefix='luma-vm-',dir='/tmp')

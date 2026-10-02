@@ -77,7 +77,12 @@ the pass here is from actual local execution.
 
 Queue log: `D:\LumaOS-builds\g2-desktop-linux-queue-20261001-01\run.log`.
 Host/storage preflights and the ext4 probe passed. Candidate copy and read-back
-verification are running; neither desktop nor model evaluation has passed.
+verification subsequently passed with the original digest. The desktop run
+then timed out before installation confirmation amid severe host memory
+pressure; the disposable container was stopped, preserving its volumes. The
+queue exited 1 and no model VM started. See the later
+[host-memory checkpoint](G2_HOST_MEMORY_2026-10-01.md). Neither desktop nor model
+evaluation has passed, and no test is currently queued here.
 
 - Workspace volume: `luma-g2-desktop-linux-work-20261001-01`.
 - Probe volume: `luma-g2-desktop-linux-probe-20261001-01`.

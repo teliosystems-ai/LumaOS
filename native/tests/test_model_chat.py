@@ -1,6 +1,7 @@
 """Local inference credentials must never follow a server-directed redirect."""
 import importlib.util
 import contextlib
+import copy
 import http.server
 import io
 import json
@@ -15,6 +16,90 @@ import urllib.request
 SCRIPT=Path(__file__).resolve().parents[1]/'image/overlay/usr/libexec/luma-os/model-chat.py'
 spec=importlib.util.spec_from_file_location('model_chat',SCRIPT)
 chat=importlib.util.module_from_spec(spec);spec.loader.exec_module(chat)
+
+
+def runtime_reply():
+    return {'model':'fixture-model', 'object':'chat.completion',
+            'choices':[{'index':0, 'finish_reason':'stop',
+                        'message':{'role':'assistant', 'content':'Hello'}}],
+            'usage':{'prompt_tokens':8, 'completion_tokens':1, 'total_tokens':9}}
+
+
+class ModelCompletionTests(unittest.TestCase):
+    def parse(self, result):
+        return chat.completion(json.dumps(result).encode(), 'fixture-model', 16)
+
+    def test_exact_model_completion_and_only_bounded_usage_are_returned(self):
+        result = runtime_reply()
+        result['usage']['untrusted_extra'] = 'private-fixture'
+        for reason in ('stop', 'length'):
+            result['choices'][0]['finish_reason'] = reason
+            text, usage = self.parse(result)
+            self.assertEqual(text, 'Hello')
+            self.assertEqual(usage, {'prompt_tokens':8, 'completion_tokens':1, 'total_tokens':9})
+            self.assertNotIn('private-fixture', json.dumps(usage))
+
+    def test_wrong_identity_missing_or_multiple_choices_are_refused(self):
+        baseline = runtime_reply()
+        for key, value in (('model', 'different-model'), ('model', None),
+                           ('object', 'chat.completion.chunk'), ('choices', []),
+                           ('choices', baseline['choices'] * 2), ('choices', [None])):
+            result = copy.deepcopy(baseline)
+            result[key] = value
+            with self.subTest(key=key, value=value), self.assertRaises(chat.InferenceReplyError):
+                self.parse(result)
+        for result in ([], None, {}, 'not-an-object'):
+            with self.subTest(result=result), self.assertRaises(chat.InferenceReplyError):
+                self.parse(result)
+
+    def test_only_finished_assistant_text_without_tool_dispatch_is_accepted(self):
+        for key, value in (('index', True), ('index', 1), ('finish_reason', None),
+                           ('finish_reason', 'tool_calls'), ('message', None)):
+            result = runtime_reply()
+            result['choices'][0][key] = value
+            with self.subTest(key=key, value=value), self.assertRaises(chat.InferenceReplyError):
+                self.parse(result)
+        for key, value in (('role', 'system'), ('content', ''), ('content', '  '),
+                           ('content', []), ('tool_calls', [{'type':'function'}]),
+                           ('function_call', {}), ('refusal', 'refused')):
+            result = runtime_reply()
+            result['choices'][0]['message'][key] = value
+            with self.subTest(key=key, value=value), self.assertRaises(chat.InferenceReplyError):
+                self.parse(result)
+
+    def test_missing_non_integer_negative_over_budget_or_inconsistent_usage_is_refused(self):
+        for usage in (None, {}, {'prompt_tokens':8, 'completion_tokens':1}):
+            result = runtime_reply()
+            result['usage'] = usage
+            with self.subTest(usage=usage), self.assertRaises(chat.InferenceReplyError):
+                self.parse(result)
+        for key, value in (('prompt_tokens', 0), ('prompt_tokens', -1), ('prompt_tokens', True),
+                           ('completion_tokens', 0), ('completion_tokens', 17),
+                           ('completion_tokens', 1.0), ('total_tokens', 10), ('total_tokens', '9')):
+            result = runtime_reply()
+            result['usage'][key] = value
+            with self.subTest(key=key, value=value), self.assertRaises(chat.InferenceReplyError):
+                self.parse(result)
+
+    def test_malformed_duplicate_nonfinite_or_excessively_nested_json_is_refused(self):
+        encoded = json.dumps(runtime_reply()).encode()
+        for raw in (b'\xff', b'{', b'[' * 1500 + b']' * 1500,
+                    encoded.replace(b'"model":', b'"model":"other", "model":', 1),
+                    encoded.replace(b'"completion_tokens":', b'"completion_tokens":99, "completion_tokens":', 1),
+                    encoded.replace(b'"total_tokens": 9', b'"total_tokens": NaN')):
+            with self.subTest(raw=raw[:60]), self.assertRaises(chat.InferenceReplyError):
+                chat.completion(raw, 'fixture-model', 16)
+
+    @unittest.skipUnless(hasattr(signal, 'setitimer'), 'Linux CLI deadline')
+    def test_invalid_reply_returns_no_success_or_untrusted_error_details(self):
+        with mock.patch.object(chat, 'arguments', return_value=chat.arguments([])), \
+                mock.patch.object(chat, 'inference', side_effect=chat.InferenceReplyError('private-fixture')), \
+                contextlib.redirect_stdout(io.StringIO()) as output, self.assertRaises(SystemExit) as error:
+            chat.main()
+        self.assertEqual(output.getvalue(), '')
+        self.assertNotIn('private-fixture', str(error.exception))
+        self.assertIn('response failed validation', str(error.exception))
+        self.assertEqual(signal.getitimer(signal.ITIMER_REAL), (0.0, 0.0))
 
 
 class ModelChatTransportTests(unittest.TestCase):
@@ -43,8 +128,7 @@ class ModelChatBudgetTests(unittest.TestCase):
         # A context-manager transport fixture, not an actual model response.
         transport = mock.MagicMock()
         opener.open.return_value = transport
-        transport.__enter__.return_value.read.return_value = json.dumps({
-            'choices':[{'message':{'content':'Hello'}}], 'usage':{'completion_tokens':1}}).encode()
+        transport.__enter__.return_value.read.return_value = json.dumps(runtime_reply()).encode()
         with mock.patch.object(chat.os, 'geteuid', return_value=0, create=True), \
                 mock.patch.object(chat.sys, 'stdin', stdin), \
                 mock.patch.object(chat.Path, 'read_text', side_effect=['{"id":"fixture-model"}', 'public-fixture-key']), \

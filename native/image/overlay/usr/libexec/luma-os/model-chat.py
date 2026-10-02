@@ -21,6 +21,56 @@ def local_opener():
     return urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect())
 
 
+class InferenceReplyError(ValueError):
+    """Untrusted runtime output must not become a successful smoke result."""
+
+
+def completion(raw, model, max_tokens):
+    def unique_object(pairs):
+        result = {}
+        for key, value in pairs:
+            if key in result:
+                raise InferenceReplyError('duplicate inference response field')
+            result[key] = value
+        return result
+
+    def nonfinite(value):
+        raise InferenceReplyError('nonfinite inference response value')
+
+    try:
+        result = json.loads(raw, object_pairs_hook=unique_object, parse_constant=nonfinite)
+    except (ValueError, UnicodeError, RecursionError):
+        raise InferenceReplyError('invalid inference response encoding') from None
+    if (not isinstance(result, dict) or result.get('model') != model
+            or result.get('object') != 'chat.completion'):
+        raise InferenceReplyError('inference response identity mismatch')
+    choices = result.get('choices')
+    if not isinstance(choices, list) or len(choices) != 1 or not isinstance(choices[0], dict):
+        raise InferenceReplyError('expected one inference completion')
+    choice = choices[0]
+    message = choice.get('message')
+    if (type(choice.get('index')) is not int or choice['index'] != 0
+            or choice.get('finish_reason') not in ('stop', 'length')
+            or not isinstance(message, dict) or message.get('role') != 'assistant'
+            or message.get('tool_calls') not in (None, [])
+            or message.get('function_call') is not None
+            or message.get('refusal') is not None):
+        raise InferenceReplyError('unsupported inference completion')
+    text = message.get('content')
+    if not isinstance(text, str) or not text.strip():
+        raise InferenceReplyError('model returned no text')
+    usage = result.get('usage')
+    keys = ('prompt_tokens', 'completion_tokens', 'total_tokens')
+    if not isinstance(usage, dict) or any(type(usage.get(key)) is not int for key in keys):
+        raise InferenceReplyError('missing or invalid inference usage')
+    if (usage['prompt_tokens'] < 1 or not 1 <= usage['completion_tokens'] <= max_tokens
+            or usage['total_tokens'] != usage['prompt_tokens'] + usage['completion_tokens']):
+        raise InferenceReplyError('inference token budget or accounting mismatch')
+    # Do not relay arbitrary runtime metadata as trusted usage/evidence. Model
+    # text remains untrusted text and is never interpreted as an OS operation.
+    return text, {key: usage[key] for key in keys}
+
+
 def bounded_integer(minimum, maximum):
     def parse(value):
         try:
@@ -76,10 +126,8 @@ def inference(options):
     with local_opener().open(request,timeout=options.timeout_seconds) as response:
         raw=response.read(2*1024*1024+1)
     if len(raw)>2*1024*1024:raise SystemExit('model response exceeds limit')
-    result=json.loads(raw)
-    text=result['choices'][0]['message']['content']
-    if not isinstance(text,str) or not text.strip():raise SystemExit('model returned no text')
-    return {'model':selection['id'],'text':text,'usage':result.get('usage'),
+    text, usage = completion(raw, selection['id'], options.max_tokens)
+    return {'model':selection['id'],'text':text,'usage':usage,
             'effects_executed':False,'certification_closing':False}
 
 
@@ -97,6 +145,8 @@ def main():
         # Do not print request headers, credentials, response bodies or a false
         # result. The caller observes nonzero; no retry or authority escalation.
         raise SystemExit('local inference transport failed or exceeded its deadline; manual operation remains available')
+    except InferenceReplyError:
+        raise SystemExit('local inference response failed validation; manual operation remains available') from None
 
 
 if __name__=='__main__':main()

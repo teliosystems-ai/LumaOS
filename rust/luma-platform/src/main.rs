@@ -1,10 +1,12 @@
 //! Native Linux platform boundary. No model-provided command or shell execution.
 mod admin_journal;
 mod authentication;
+mod broker_effects;
 mod bundle;
 mod disk;
 mod model;
 mod platform;
+mod principal;
 mod recovery_export;
 mod sealed_credential;
 mod service;
@@ -59,6 +61,13 @@ fn dispatch() -> Result<()> {
             Ok(())
         }
         Some("admin-checkpoint-status") if args.len() == 1 => admin_journal::status(),
+        Some("admin-checkpoint-reconcile") if args.len() == 1 => admin_journal::reconcile(None),
+        Some("admin-checkpoint-reconcile")
+            if args.len() == 3 && args[1] == "--publish-committed" =>
+        {
+            admin_journal::reconcile(Some(&args[2]))
+        }
+        Some("broker-effect-status") if args.len() == 1 => broker_effects::status(),
         Some("admin-auth-check") if args.len() == 2 => authentication::check(&args[1]),
         Some("staging-clean") if args.len() == 1 => {
             println!("{}", serde_json::to_string(&staging::clean()?)?);
@@ -112,9 +121,11 @@ fn dispatch() -> Result<()> {
         Some("init-data") if args.len() == 2 => platform::init_data(&args[1]),
         Some("help" | "--help") | None => {
             println!("Local TPM diagnostics: tpm-probe | admin-checkpoint-status (root only; read-only; neither enrolls nor grants Admin). External Admin deployment is deferred.");
+            println!("admin-checkpoint-reconcile [--publish-committed REVIEW-SHA256]: inspect or explicitly publish a TPM-proven pending inert audit commit; never replays effects or resets TPM state. Requires existing enrollment and credential delivery.");
             println!("admin-auth-check LOGIN: installed-system, controlling-terminal account authentication diagnostic; does not enroll or grant product Admin.");
             println!("Install requires local TPM2 admission before any disk write. admin-install-check is read-only and does not enroll Admin; sealed product enrollment remains pending.");
             println!("Maintenance: staging-clean | model-clean (root only; preserves active operations and unknown files).");
+            println!("broker-effect-status: root-only installed laboratory worker-effect receipts; uncertain effects are fenced, never automatically replayed. Not product Admin or TPM rollback protection.");
             println!("Model operations: models | model-install MODEL-ID | model-chat [--timeout-seconds 1..1800] [--max-tokens 1..128] (prompt on stdin).\nInstaller accepts --model MODEL-ID or --model manual-only; otherwise prompts.\nWeights are acquired from pinned HTTPS publisher URLs after hardware admission.");
             println!("Luma native platform alpha\n\n  inventory\n  verify BUNDLE\n  install /dev/disk/by-id/EXACT-ID BUNDLE\n  update BUNDLE\n  recover unlock /dev/disk/by-id/EXACT-ID\n  recover export /dev/disk/by-id/EXACT-ID EMPTY-DESTINATION\n  recover repair-a|repair-b /dev/disk/by-id/EXACT-ID BUNDLE\n  recover repair-data /dev/disk/by-id/EXACT-ID\n  recover disable-model /dev/disk/by-id/EXACT-ID\n  status\n\nInstall requires local interactive disk confirmation and new credentials.\nLaboratory image: native acceptance and production custody are outstanding.");
             Ok(())

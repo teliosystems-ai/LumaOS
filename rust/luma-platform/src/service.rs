@@ -1,10 +1,12 @@
-use crate::{disk::command, Result};
+use crate::{broker_effects, Result};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::io::{self, Read, Write};
 use std::os::fd::{AsRawFd, FromRawFd};
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::{UnixListener, UnixStream};
+use std::path::Path;
+use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const SOCKET: &str = "/run/luma-broker/control.sock";
@@ -163,21 +165,78 @@ fn peer(stream: &UnixStream) -> Result<u32> {
     Ok(credentials.uid)
 }
 
+struct WorkerCommand(Child);
+impl Drop for WorkerCommand {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
+fn wait_worker_command(child: Child, deadline: Instant) -> Result<()> {
+    let mut child = WorkerCommand(child);
+    loop {
+        remaining(deadline)?;
+        if let Some(status) = child.0.try_wait()? {
+            if status.success() {
+                return Ok(());
+            }
+            return Err("worker operation failed; outcome requires reconciliation".into());
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+fn worker_command(action: &broker_effects::Action, deadline: Instant) -> Result<()> {
+    remaining(deadline)?;
+    let verb = match action {
+        broker_effects::Action::StartWorker => "start",
+        broker_effects::Action::StopWorker => "stop",
+    };
+    let child = Command::new("/usr/bin/systemctl")
+        .args([
+            "--no-ask-password",
+            "--no-pager",
+            verb,
+            "luma-reference.service",
+        ])
+        .env_clear()
+        .env("PATH", "/usr/bin")
+        .env("LC_ALL", "C")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()?;
+    // Killing a waiting systemctl does NOT cancel its systemd job. Timeout is
+    // an uncertain external outcome; the durable Applying fence is retained.
+    wait_worker_command(child, deadline)
+}
+
 fn handle(stream: &mut UnixStream) -> Result<serde_json::Value> {
     let uid = peer(stream)?;
     let request: Request = serde_json::from_slice(&read_frame(stream)?)?;
     validate(&request, uid, now()?)?;
-    // Recheck the same kernel peer and deadline immediately before a finite effect.
-    validate(&request, peer(stream)?, now()?)?;
-    match request.action.as_str() {
-        "start-worker" => {
-            security_check()?;
-            command("/usr/bin/systemctl", &["start", "luma-reference.service"])?;
-        }
-        "stop-worker" => {
-            command("/usr/bin/systemctl", &["stop", "luma-reference.service"])?;
-        }
-        _ => {}
+    if request.action != "status" {
+        crate::platform::require_installed()?;
+        let action = broker_effects::Action::parse(&request.action)?;
+        let budget = request.deadline.saturating_sub(now()?).min(10);
+        let deadline = Instant::now() + Duration::from_secs(budget);
+        let mut store = broker_effects::Store::open(Path::new(broker_effects::DIRECTORY))?;
+        store.execute(
+            &request.request_id,
+            uid,
+            action.clone(),
+            || {
+                remaining(deadline)?;
+                if action == broker_effects::Action::StartWorker {
+                    security_check()?;
+                }
+                // The existing kernel peer/root policy is checked AFTER slow
+                // confinement/storage checks, including on historical replay.
+                validate(&request, peer(stream)?, now()?)
+            },
+            || worker_command(&action, deadline),
+        )?;
     }
     Ok(
         serde_json::json!({"schema_version": 1, "request_id": request.request_id,
@@ -293,6 +352,27 @@ pub fn client(action: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn worker_wait_is_bounded_reaps_children_and_preserves_failure() {
+        let success = Command::new("/bin/true").spawn().unwrap();
+        wait_worker_command(success, Instant::now() + Duration::from_secs(2)).unwrap();
+        let failure = Command::new("/bin/false").spawn().unwrap();
+        assert!(wait_worker_command(failure, Instant::now() + Duration::from_secs(2)).is_err());
+        let child = Command::new("/bin/sleep").arg("3").spawn().unwrap();
+        let pid = child.id();
+        let started = Instant::now();
+        assert!(wait_worker_command(child, started + Duration::from_millis(50)).is_err());
+        assert!(started.elapsed() < Duration::from_secs(2));
+        assert_eq!(
+            unsafe { libc::waitpid(pid as i32, std::ptr::null_mut(), libc::WNOHANG) },
+            -1
+        );
+        assert_eq!(
+            io::Error::last_os_error().raw_os_error(),
+            Some(libc::ECHILD)
+        );
+    }
 
     #[test]
     fn client_connection_refuses_invalid_missing_and_expired_endpoints() {

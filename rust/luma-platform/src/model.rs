@@ -4,7 +4,7 @@ use crate::{bundle, disk::command, platform, Result};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::fs::{self, File, OpenOptions};
-use std::io::Read;
+use std::io::{Read, Seek, SeekFrom};
 use std::os::fd::AsRawFd;
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::os::unix::process::CommandExt;
@@ -193,10 +193,14 @@ fn open_regular(at: &Path) -> Result<File> {
     Ok(f)
 }
 
-fn verify_file(at: &Path, p: &Profile) -> Result<()> {
+fn verified_file(at: &Path, p: &Profile) -> Result<File> {
     let mut f = open_regular(at)?;
-    if f.metadata()?.len() != p.bytes {
+    let before = f.metadata()?;
+    if before.len() != p.bytes {
         return Err("model byte count mismatch".into());
+    }
+    if before.uid() != 0 || before.nlink() != 1 || before.mode() & 0o022 != 0 {
+        return Err("unsafe model ownership, links or mode".into());
     }
     let mut hash = Sha256::new();
     let mut remaining = p.bytes;
@@ -212,7 +216,84 @@ fn verify_file(at: &Path, p: &Profile) -> Result<()> {
     if f.read(&mut [0u8; 1])? != 0 || bundle::hex(&hash.finalize()) != p.sha256 {
         return Err("model SHA-256 mismatch".into());
     }
-    Ok(())
+    let after = f.metadata()?;
+    if before.len() != after.len()
+        || before.uid() != after.uid()
+        || before.mode() != after.mode()
+        || after.nlink() != 1
+        || before.mtime() != after.mtime()
+        || before.mtime_nsec() != after.mtime_nsec()
+        || before.ctime() != after.ctime()
+        || before.ctime_nsec() != after.ctime_nsec()
+    {
+        return Err("model metadata changed during verification".into());
+    }
+    f.seek(SeekFrom::Start(0))?;
+    Ok(f)
+}
+
+fn verify_file(at: &Path, p: &Profile) -> Result<()> {
+    verified_file(at, p).map(drop)
+}
+
+/// Single local worker exclusion, not a resource-manager lease or generation.
+/// The root-owned persistent inode must never be unlinked/replaced as cleanup:
+/// the kernel releases the advisory lock when the last inherited FD closes.
+fn runtime_lock(var: &Path, initialize: bool) -> Result<File> {
+    let state = var.join(STATE);
+    let parent = fs::symlink_metadata(&state)?;
+    if !parent.is_dir() || parent.uid() != 0 || parent.mode() & 0o022 != 0 {
+        return Err("unsafe model runtime lock directory".into());
+    }
+    let path = state.join("model-runtime.lock");
+    if initialize {
+        crate::require_root()?;
+        match OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o644)
+            .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+            .open(&path)
+        {
+            Ok(created) => {
+                created.set_permissions(fs::Permissions::from_mode(0o644))?;
+                created.sync_all()?;
+                File::open(&state)?.sync_all()?;
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => (),
+            Err(e) => return Err(e.into()),
+        }
+    }
+    let lock = open_regular(&path)?;
+    let metadata = lock.metadata()?;
+    if metadata.uid() != 0
+        || metadata.nlink() != 1
+        || metadata.mode() & 0o7777 != 0o644
+        || metadata.len() != 0
+    {
+        return Err("unsafe model runtime lock; preserve state".into());
+    }
+    if unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
+        return Err("model runtime or activation is already active".into());
+    }
+    Ok(lock)
+}
+
+/// Only the two reviewed descriptors cross exec. Rust otherwise opens them
+/// CLOEXEC; clear that bit in the child/exec boundary, never globally at open.
+fn inherit_runtime_files(command: &mut Command, model: &File, lock: &File) {
+    let descriptors = [model.as_raw_fd(), lock.as_raw_fd()];
+    unsafe {
+        command.pre_exec(move || {
+            for fd in descriptors {
+                let flags = libc::fcntl(fd, libc::F_GETFD);
+                if flags < 0 || libc::fcntl(fd, libc::F_SETFD, flags & !libc::FD_CLOEXEC) < 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+            }
+            Ok(())
+        });
+    }
 }
 
 struct Temporary(PathBuf);
@@ -359,6 +440,9 @@ pub fn provision(var: &Path, p: &Profile) -> Result<()> {
 }
 
 fn provision_locked(var: &Path, p: &Profile) -> Result<()> {
+    // Excludes a concurrently started/manual worker for the whole activation,
+    // including credential/selection writes. Released before systemd restart.
+    let _runtime = runtime_lock(var, true)?;
     let state = var.join(STATE);
     let models = state.join("models");
     safe_dir(&models)?;
@@ -486,10 +570,17 @@ pub fn clean() -> Result<usize> {
 
 fn selected() -> Result<Profile> {
     let state = Path::new(VAR).join(STATE);
+    selected_at(&state)
+}
+
+fn selected_at(state: &Path) -> Result<Profile> {
     let mut text = String::new();
-    open_regular(&state.join("model-selection.json"))?
-        .take(4097)
-        .read_to_string(&mut text)?;
+    let file = open_regular(&state.join("model-selection.json"))?;
+    let metadata = file.metadata()?;
+    if metadata.uid() != 0 || metadata.nlink() != 1 || metadata.mode() & 0o022 != 0 {
+        return Err("unsafe model selection ownership, links or permissions".into());
+    }
+    file.take(4097).read_to_string(&mut text)?;
     #[derive(Deserialize)]
     #[serde(deny_unknown_fields)]
     struct Selection {
@@ -534,12 +625,17 @@ pub fn serve() -> Result<()> {
         return Err("model runtime requires isolated luma-model identity".into());
     }
     platform::require_installed()?;
+    let runtime = runtime_lock(Path::new(VAR), false)?;
     let p = selected()?;
     let file = Path::new(VAR)
         .join(STATE)
         .join("models")
         .join(format!("{}.gguf", p.id));
-    verify_file(&file, &p)?;
+    let verified = verified_file(&file, &p)?;
+    // The runtime opens this exact verified inode, not the mutable catalog
+    // filename again. This does not defend against a hostile root writing the
+    // same inode in place; root is outside this application's trust boundary.
+    let descriptor = format!("/proc/self/fd/{}", verified.as_raw_fd());
     let info = fs::read_to_string("/proc/meminfo")?;
     if memory(&info, "MemTotal")? < p.minimum_ram_bytes
         || memory(&info, "MemAvailable")? < p.minimum_available_bytes
@@ -548,10 +644,11 @@ pub fn serve() -> Result<()> {
             "insufficient memory at model activation; manual operation remains available".into(),
         );
     }
-    let error = Command::new(RUNTIME)
+    let mut command = Command::new(RUNTIME);
+    command
         .args([
             "--model",
-            file.to_str().ok_or("model path")?,
+            &descriptor,
             "--alias",
             &p.id,
             "--host",
@@ -579,8 +676,9 @@ pub fn serve() -> Result<()> {
         ])
         .env_clear()
         .env("PATH", "/usr/bin")
-        .env("LD_LIBRARY_PATH", "/usr/libexec/luma-os/llama")
-        .exec();
+        .env("LD_LIBRARY_PATH", "/usr/libexec/luma-os/llama");
+    inherit_runtime_files(&mut command, &verified, &runtime);
+    let error = command.exec();
     Err(error.into())
 }
 
@@ -716,12 +814,222 @@ mod tests {
         p.sha256 = "0".repeat(64);
         assert!(verify_file(&path, &p).is_err());
         p.bytes = 11;
-        assert!(verify_file(&path, &p).is_err());
+        assert_eq!(
+            verify_file(&path, &p).unwrap_err().to_string(),
+            "model byte count mismatch"
+        );
         let link = dir.join("link");
         std::os::unix::fs::symlink(&path, &link).unwrap();
         assert!(verify_file(&link, &p).is_err());
         fs::remove_file(link).unwrap();
         fs::remove_file(path).unwrap();
         fs::remove_dir(dir).unwrap();
+    }
+
+    fn runtime_fixture(label: &str) -> (PathBuf, PathBuf, Profile) {
+        let dir =
+            std::env::temp_dir().join(format!("luma-model-runtime-{label}-{}", std::process::id()));
+        fs::create_dir(&dir).unwrap();
+        let state = dir.join(STATE);
+        fs::create_dir_all(&state).unwrap();
+        let file = state.join("fixture.gguf");
+        fs::write(&file, b"verified bytes").unwrap();
+        let mut p = profile("qwen3-4b-q4-k-m").unwrap();
+        p.bytes = 14;
+        p.sha256 = bundle::hex(&Sha256::digest(b"verified bytes"));
+        (dir, file, p)
+    }
+
+    fn remove_runtime_fixture(dir: &Path) {
+        let state = dir.join(STATE);
+        for entry in fs::read_dir(&state).unwrap() {
+            fs::remove_file(entry.unwrap().path()).unwrap();
+        }
+        fs::remove_dir(&state).unwrap();
+        fs::remove_dir(state.parent().unwrap()).unwrap();
+        fs::remove_dir(dir).unwrap();
+    }
+
+    #[test]
+    fn runtime_lock_refuses_duplicates_and_activation_until_release() {
+        let (dir, _, _) = runtime_fixture("exclusive");
+        assert!(runtime_lock(&dir, false).is_err()); // no runtime auto-initialization
+        let lock = runtime_lock(&dir, true).unwrap();
+        assert!(runtime_lock(&dir, false).is_err());
+        assert!(runtime_lock(&dir, true).is_err());
+        drop(lock);
+        runtime_lock(&dir, false).unwrap();
+        remove_runtime_fixture(&dir);
+    }
+
+    #[test]
+    fn isolated_model_uid_can_lock_but_cannot_replace_root_inode() {
+        let (dir, _, _) = runtime_fixture("unprivileged");
+        let state = dir.join(STATE);
+        for directory in [&dir, state.parent().unwrap(), &state] {
+            fs::set_permissions(directory, fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        runtime_lock(&dir, true).unwrap();
+        let mut command = Command::new("/usr/bin/python3");
+        command
+            .args([
+                "-I",
+                "-c",
+                r#"
+import fcntl, os, sys
+assert os.geteuid() == 989 and os.getgroups() == []
+path = sys.argv[1]
+fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+try:
+    os.unlink(path)
+except PermissionError:
+    pass
+else:
+    raise RuntimeError('worker could unlink runtime lock')
+try:
+    os.open(path, os.O_WRONLY)
+except PermissionError:
+    pass
+else:
+    raise RuntimeError('worker could write runtime lock')
+print('ISOLATED_MODEL_LOCK_PASSED')
+"#,
+            ])
+            .arg(state.join("model-runtime.lock"));
+        unsafe {
+            command.pre_exec(|| {
+                // Drop supplementary groups before UID: Command::uid would
+                // run before this hook and make setgroups fail with EPERM.
+                if libc::setgroups(0, std::ptr::null()) != 0
+                    || libc::setgid(989) != 0
+                    || libc::setuid(989) != 0
+                {
+                    return Err(std::io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
+        let output = command.output().unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(output.stdout, b"ISOLATED_MODEL_LOCK_PASSED\n");
+        runtime_lock(&dir, false).unwrap();
+        remove_runtime_fixture(&dir);
+    }
+
+    #[test]
+    fn verified_descriptor_survives_exec_and_path_replacement() {
+        let (dir, file, p) = runtime_fixture("descriptor");
+        let lock = runtime_lock(&dir, true).unwrap();
+        let verified = verified_file(&file, &p).unwrap();
+        assert_ne!(
+            unsafe { libc::fcntl(verified.as_raw_fd(), libc::F_GETFD) } & libc::FD_CLOEXEC,
+            0
+        );
+        fs::rename(&file, file.with_extension("old")).unwrap();
+        fs::write(&file, b"substituted bytes").unwrap();
+        let mut command = Command::new("/bin/cat");
+        command.arg(format!("/proc/self/fd/{}", verified.as_raw_fd()));
+        inherit_runtime_files(&mut command, &verified, &lock);
+        let output = command.output().unwrap();
+        assert!(output.status.success());
+        assert_eq!(output.stdout, b"verified bytes");
+        // Child-only inheritance must not clear CLOEXEC in this parent.
+        assert_ne!(
+            unsafe { libc::fcntl(verified.as_raw_fd(), libc::F_GETFD) } & libc::FD_CLOEXEC,
+            0
+        );
+        assert!(verified_file(&file, &p).is_err());
+        drop(verified);
+        drop(lock);
+        remove_runtime_fixture(&dir);
+    }
+
+    #[test]
+    fn worker_exec_inherits_lock_and_process_death_releases_it() {
+        let (dir, file, p) = runtime_fixture("inheritance");
+        let lock = runtime_lock(&dir, true).unwrap();
+        let verified = verified_file(&file, &p).unwrap();
+        let mut command = Command::new("/bin/sleep");
+        command.arg("30");
+        inherit_runtime_files(&mut command, &verified, &lock);
+        let mut child = command.spawn().unwrap();
+        drop(lock);
+        drop(verified);
+        let duplicate_denied = runtime_lock(&dir, false).is_err();
+        let activation_denied = runtime_lock(&dir, true).is_err();
+        child.kill().unwrap();
+        child.wait().unwrap();
+        assert!(duplicate_denied && activation_denied);
+        runtime_lock(&dir, false).unwrap();
+        remove_runtime_fixture(&dir);
+    }
+
+    #[test]
+    fn runtime_lock_refuses_unsafe_metadata_and_keeps_inode() {
+        use std::os::unix::fs::symlink;
+        let (dir, file, _) = runtime_fixture("lock-metadata");
+        let lock_path = dir.join(STATE).join("model-runtime.lock");
+        runtime_lock(&dir, true).unwrap();
+        let original = fs::metadata(&lock_path).unwrap().ino();
+        for mode in [0o600, 0o666, 0o4644] {
+            fs::set_permissions(&lock_path, fs::Permissions::from_mode(mode)).unwrap();
+            assert!(runtime_lock(&dir, true).is_err());
+            assert_eq!(fs::metadata(&lock_path).unwrap().ino(), original);
+        }
+        fs::set_permissions(&lock_path, fs::Permissions::from_mode(0o644)).unwrap();
+        let alias = lock_path.with_extension("alias");
+        fs::hard_link(&lock_path, &alias).unwrap();
+        assert!(runtime_lock(&dir, false).is_err());
+        fs::remove_file(alias).unwrap();
+        fs::write(&lock_path, b"unexpected").unwrap();
+        assert!(runtime_lock(&dir, true).is_err());
+        fs::remove_file(&lock_path).unwrap();
+        symlink(&file, &lock_path).unwrap();
+        assert!(runtime_lock(&dir, true).is_err());
+        assert_eq!(fs::read(&file).unwrap(), b"verified bytes");
+        remove_runtime_fixture(&dir);
+    }
+
+    #[test]
+    fn verified_model_rejects_mutable_or_aliased_bytes() {
+        let (dir, file, p) = runtime_fixture("model-metadata");
+        fs::set_permissions(&file, fs::Permissions::from_mode(0o666)).unwrap();
+        assert!(verified_file(&file, &p).is_err());
+        fs::set_permissions(&file, fs::Permissions::from_mode(0o644)).unwrap();
+        let alias = file.with_extension("alias");
+        fs::hard_link(&file, &alias).unwrap();
+        assert!(verified_file(&file, &p).is_err());
+        fs::remove_file(alias).unwrap();
+        verified_file(&file, &p).unwrap();
+        remove_runtime_fixture(&dir);
+    }
+
+    #[test]
+    fn selection_refuses_duplicate_fields_and_unsafe_metadata() {
+        let (dir, _, _) = runtime_fixture("selection");
+        let state = dir.join(STATE);
+        let path = state.join("model-selection.json");
+        let good = br#"{"schema_version":1,"id":"qwen3-4b-q4-k-m"}"#;
+        fs::write(&path, good).unwrap();
+        selected_at(&state).unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o666)).unwrap();
+        assert!(selected_at(&state).is_err());
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
+        fs::hard_link(&path, path.with_extension("alias")).unwrap();
+        assert!(selected_at(&state).is_err());
+        fs::remove_file(path.with_extension("alias")).unwrap();
+        for bad in [
+            br#"{"schema_version":1,"id":"qwen3-4b-q4-k-m","id":"qwen3-4b-q4-k-m"}"#.as_slice(),
+            br#"{"schema_version":1,"id":"qwen3-4b-q4-k-m","authority":true}"#,
+        ] {
+            fs::write(&path, bad).unwrap();
+            assert!(selected_at(&state).is_err());
+        }
+        remove_runtime_fixture(&dir);
     }
 }

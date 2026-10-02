@@ -15,6 +15,7 @@ profile luma-model flags=(attach_disconnected) {
   /sys/devices/system/cpu/** r,
   /sys/devices/system/node/** r,
   /var/lib/luma-os/model-selection.json r,
+  /var/lib/luma-os/model-runtime.lock rk,
   /var/lib/luma-os/models/*.gguf mr,
   /var/lib/luma-os/model-auth/api-key r,
   owner /tmp/** rwk,

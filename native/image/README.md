@@ -161,6 +161,35 @@ is not a production implementation of finite Admin delegation. Do not expose
 the recovery console remotely, deploy this image as a multi-tenant service, or
 use production data or production signing keys.
 
+### Pending model-runtime integration (2026-10-02 source)
+
+New source uses a root-owned, zero-length `model-runtime.lock` beside the model
+selection. Provisioning holds it throughout acquisition/activation; the worker
+acquires it before reading the selection and retains it across runtime launch.
+Concurrent workers or an unmanaged worker racing activation are refused. The
+normal installer/reconfiguration path creates the lock; startup never creates
+or replaces it. Do not delete a lock file to bypass a refusal: an old descriptor
+could remain active on the unlinked inode. Investigate/stop the owning worker.
+
+The worker now retains the descriptor used to verify the selected weights and
+passes `/proc/self/fd/N` to the pinned runtime. A replacement filename cannot
+silently change the verified inode at launch. Weights and selection must be
+root-owned, singly linked and not writable by group/other users. This does not
+defend against hostile root modifying the same inode in place.
+
+These changes are not in previously exported images. Existing installations
+missing the lock refuse activation after a binary-only upgrade; no silent
+startup migration is provided. The controlled `model-install MODEL-ID` path
+creates it while holding the model-operation lock, after stopping the managed
+service. Full update/migration and installed AppArmor/llama.cpp descriptor
+qualification remain deferred to the consolidated image suite.
+
+The exclusion lock is **not** the full resource-manager lease/generation system,
+an atomic multi-file activation transaction, or a security boundary against a
+compromised worker deliberately releasing its own descriptors. Cgroup limits
+and runtime confinement remain necessary; pressure/quarantine, stale-worker
+fencing and real model lifecycle evaluation are still open.
+
 ## Build on Ubuntu or Ubuntu WSL
 
 Requires Docker, internet access to Ubuntu repositories on the first build,

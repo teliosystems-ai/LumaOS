@@ -1,6 +1,6 @@
 # G2 software completion register
 
-Updated 2026-10-01. **G2 software is not complete.** This register separates
+Updated 2026-10-02. **G2 software is not complete.** This register separates
 work that can be executed in the current Windows/Ubuntu WSL/VM environment
 from production deployment decisions and physical qualification. It does not
 change the frozen reference release, governing requirements, or exit criteria.
@@ -19,6 +19,16 @@ image and perform full testing on the separate native Ubuntu machine. WSL
 settings remain unchanged. Only bounded targeted development checks run in
 the meantime. See [the implementation-first sequence](G2_IMPLEMENTATION_FIRST.md).
 This supersedes the immediate sequence-11 retry plans in older checkpoints.
+
+The [model-runtime checkpoint](evidence/G2_MODEL_RUNTIME_2026-10-02.md) adds
+single-worker exclusion shared with model activation, inherited lock lifetime,
+verified-weight descriptor handoff and stricter weight/selection metadata checks.
+Fourteen targeted Rust tests, two wiring checks, fifteen existing model-harness
+unit tests, formatting and native build passed on D-backed storage. No LLM or
+VM was loaded. AppArmor parser/enforcement and actual pinned-runtime descriptor
+loading still require image-level evaluation. This is not the full resource
+lease/generation, stale-worker fencing, atomic activation or governed-pack
+lifecycle implementation; those remain open.
 
 The [committed-audit recovery checkpoint](evidence/G2_ADMIN_RECOVERY_2026-10-01.md)
 adds explicit, digest-reviewed publication of an interrupted journal commit only

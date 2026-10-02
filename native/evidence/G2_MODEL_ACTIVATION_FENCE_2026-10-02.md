@@ -175,3 +175,29 @@ one CPU/Cargo job, 768 MiB, no extra swap and 128 PIDs. Twenty-nine Rust
 model tests, six model-runtime policy tests, fifteen VM-harness unit tests,
 formatting, a warning-clean offline build and compiled CLI help passed. No
 installed transition, native Ubuntu qualification or full image test was run.
+
+## Guarded prior restart after a failed stop
+
+A further source increment applies the unchanged-prior recovery guard when
+`model-install` receives an error from the managed worker stop request, before
+candidate activation begins. A stop error can leave the old worker running or
+already stopped. Recovery therefore requests a restart only if the original
+selection, reference environment, credential and pinned weights still verify,
+no activation or recovery-disablement marker exists, and the runtime lock is
+free. If the old worker still owns the lock, recovery refuses a duplicate
+start. An unsuccessful stop remains an error even when a restart is requested;
+neither outcome proves service readiness.
+
+The bounded offline source snapshot is
+`D:\LumaOS-builds\g2-model-activation-targeted-20261002-15`. Its frozen
+`source/build-inputs.json` SHA-256 is
+`a44702ba1df611d5000ae8e1aee1767f1631e96920c09f90d7f47e72e72049e6`;
+`test.log` SHA-256 is
+`4645682b4cf01b54892c0ae246ec18e1a507c8f44401b305535da7ced1e6b7db`.
+The D-backed Docker check passed 30 Rust model tests, six model-runtime policy
+tests, fifteen VM-harness unit tests, formatting, a warning-clean offline
+build and compiled CLI help. It used no network, VM, host TPM or real model
+load, with one CPU/Cargo job, 768 MiB, no extra swap and 128 PIDs. Tests mock
+stop failures and check the held-lock refusal; they do not reproduce a real
+systemd stop timeout, image upgrade or native Ubuntu transition. Broader
+post-stop failure policy and installed qualification remain open.

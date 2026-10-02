@@ -1238,7 +1238,22 @@ fn install_after_preflight<P>(
 ) -> Result<()> {
     preflight()?;
     let prior = prepare()?;
-    stop()?;
+    if let Err(error) = stop() {
+        return if let Some(prior) = prior {
+            match recover(prior) {
+                Ok(()) => Err(format!(
+                    "{error}; unchanged prior model restart requested after failed stop"
+                )
+                .into()),
+                Err(recovery) => Err(format!(
+                    "{error}; prior model not restarted after failed stop: {recovery}"
+                )
+                .into()),
+            }
+        } else {
+            Err(error)
+        };
+    }
     if let Err(error) = activate() {
         return if let Some(prior) = prior {
             match recover(prior) {
@@ -1732,6 +1747,62 @@ mod tests {
         );
     }
     #[test]
+    fn failed_stop_only_requests_guarded_prior_recovery() {
+        use std::cell::RefCell;
+        let calls = RefCell::new(Vec::new());
+        let error = install_after_preflight(
+            || Ok(()),
+            || Ok(Some("prior")),
+            || {
+                calls.borrow_mut().push("stop");
+                Err("stop timed out".into())
+            },
+            || {
+                calls.borrow_mut().push("activate");
+                Ok(())
+            },
+            || {
+                calls.borrow_mut().push("restart candidate");
+                Ok(())
+            },
+            |prior| {
+                assert_eq!(prior, "prior");
+                calls.borrow_mut().push("recover prior");
+                Ok(())
+            },
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains("stop timed out"));
+        assert!(error.contains("prior model restart requested after failed stop"));
+        assert_eq!(*calls.borrow(), ["stop", "recover prior"]);
+
+        let error = install_after_preflight(
+            || Ok(()),
+            || Ok(Some("prior")),
+            || Err("stop timed out".into()),
+            || panic!("activation after failed stop"),
+            || panic!("candidate restart after failed stop"),
+            |_| Err("runtime lock still held".into()),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains("stop timed out"));
+        assert!(error.contains("runtime lock still held"));
+
+        let error = install_after_preflight(
+            || Ok(()),
+            || Ok(None::<&str>),
+            || Err("stop failed without prior worker".into()),
+            || panic!("activation after failed stop"),
+            || panic!("candidate restart after failed stop"),
+            |_| panic!("recovery without prior worker"),
+        )
+        .unwrap_err()
+        .to_string();
+        assert_eq!(error, "stop failed without prior worker");
+    }
+    #[test]
     fn live_unified_cgroup_limit_is_observable() {
         assert!(effective_memory_limit().unwrap() > 0);
     }
@@ -2110,6 +2181,7 @@ print('ISOLATED_MODEL_LOCK_PASSED')
         let state = root.join(STATE);
         write_activation_candidate(&state, &p);
         let runtime = runtime_lock(&root, true).unwrap();
+        assert!(restore_prior(&root, prior_snapshot_at(&state).unwrap()).is_err());
         let prior = prior_snapshot_at(&state).unwrap();
         begin_activation(&state, &p).unwrap();
         drop(runtime);

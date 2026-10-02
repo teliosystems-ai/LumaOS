@@ -213,12 +213,14 @@ cached model needs the 2 GiB free-space reserve, not another full download
 allocation; `model-install-check` verifies the cache before applying that
 threshold. Admission and bytes are rechecked after the stop, so this is not a
 resource reservation or a guarantee that activation and restart will succeed.
-If activation then fails, a restart of a previously running worker is
-requested only when
+If the stop request fails or activation then fails, a restart of a previously
+running worker is requested only when
 its selection, service settings, credential and pinned weights are unchanged,
 the runtime lock is free, and neither an activation fence nor recovery
 disablement is present. The command still fails; check service health
-separately. Partial activation remains fenced for reviewed handling.
+separately. A stop failure while the old worker still holds its runtime lock
+cannot trigger a duplicate restart. Partial activation remains fenced for
+reviewed handling.
 
 The reference service's model environment now lives in root-owned
 `/var/lib/luma-os/model-reference.env`, outside its writable state directory.

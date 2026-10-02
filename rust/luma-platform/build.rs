@@ -22,7 +22,9 @@ fn main() {
     println!("cargo:rustc-link-search=native={}", out.display());
     println!("cargo:rustc-link-lib=static=luma_tpm");
     println!("cargo:rustc-link-lib=tss2-esys");
+    println!("cargo:rustc-link-lib=tss2-mu");
     println!("cargo:rustc-link-lib=tss2-tctildr");
+    println!("cargo:rustc-link-lib=crypto");
     println!("cargo:rerun-if-changed=src/auth_pam.c");
     assert!(Command::new("cc")
         .args([

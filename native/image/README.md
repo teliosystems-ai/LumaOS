@@ -709,7 +709,8 @@ None clears/provisions a TPM or grants a role. Installation now requires local
 TPM admission before disk access and a second check immediately before disk
 mutation. It records only pending enrollment intent, not active product Admin.
 The native adapter/journal and admission have disposable software-TPM tests,
-but sealed enrollment and the full Admin service remain software work. These
+but the newly integrated sealed enrollment still needs image-level testing and
+the full Admin service remains software work. These
 installer changes are not in the previously exported sequence-4 image. See
 [the implementation note](../LOCAL_TPM2_ADMIN.md).
 

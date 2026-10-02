@@ -7,6 +7,7 @@ mod broker_effects;
 mod bundle;
 mod disk;
 mod model;
+mod owner_credential;
 mod platform;
 mod principal;
 mod recovery_export;
@@ -129,7 +130,7 @@ fn dispatch() -> Result<()> {
             println!("admin-checkpoint-enroll LOGIN --existing-owner: explicit installed-root checkpoint enrollment with local PAM and hidden custodian owner authorization; retains interrupted attempts; does not grant product Admin.");
             println!("admin-checkpoint-reconcile [--publish-committed REVIEW-SHA256]: inspect or explicitly publish a TPM-proven pending inert audit commit; never replays effects or resets TPM state. Requires existing enrollment and credential delivery.");
             println!("admin-auth-check LOGIN: installed-system, controlling-terminal account authentication diagnostic; does not enroll or grant product Admin.");
-            println!("Install requires local TPM2 admission before any disk write. admin-install-check is read-only and does not enroll Admin; sealed product enrollment remains pending.");
+            println!("Install requires local TPM2 admission before any disk write. admin-install-check is read-only and does not enroll Admin; explicit checkpoint enrollment remains separate from product Admin activation.");
             println!("Maintenance: staging-clean | model-clean (root only; preserves active operations and unknown files).");
             println!("broker-effect-status: root-only installed laboratory worker-effect receipts; uncertain effects are fenced, never automatically replayed. Not product Admin or TPM rollback protection.");
             println!("Model operations: models | model-install MODEL-ID | model-chat [--timeout-seconds 1..1800] [--max-tokens 1..128] (prompt on stdin).\nInstaller accepts --model MODEL-ID or --model manual-only; otherwise prompts.\nWeights are acquired from pinned HTTPS publisher URLs after hardware admission.");

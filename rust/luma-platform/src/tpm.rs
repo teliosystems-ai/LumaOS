@@ -56,6 +56,42 @@ extern "C" {
         owner_size: u16,
         name: *mut u8,
     ) -> u32;
+    fn luma_tpm_credential_seal(
+        context: *mut c_void,
+        parent_name: *const u8,
+        pem: *const u8,
+        pem_size: u16,
+        secret: *const u8,
+        public_out: *mut u8,
+        public_capacity: usize,
+        public_size: *mut usize,
+        private_out: *mut u8,
+        private_capacity: usize,
+        private_size: *mut usize,
+    ) -> u32;
+    fn luma_tpm_credential_unseal(
+        context: *mut c_void,
+        parent_name: *const u8,
+        pem: *const u8,
+        pem_size: u16,
+        public_blob: *const u8,
+        public_size: usize,
+        private_blob: *const u8,
+        private_size: usize,
+        approved_policy: *const u8,
+        signature: *const u8,
+        signature_size: u16,
+        secret_out: *mut u8,
+    ) -> u32;
+    fn luma_tpm_credential_fingerprint(pem: *const u8, pem_size: u16, output: *mut u8) -> u32;
+    fn luma_tpm_current_policy11(context: *mut c_void, output: *mut u8) -> u32;
+    fn luma_tpm_verify_policy11(
+        context: *mut c_void,
+        pem: *const u8,
+        pem_size: u16,
+        policy: *const u8,
+        signature: *const u8,
+    ) -> u32;
 }
 
 fn check(code: u32) -> Result<()> {
@@ -74,9 +110,113 @@ impl Drop for Context {
     }
 }
 impl Context {
+    fn current_policy11(&mut self) -> Result<[u8; 32]> {
+        let mut digest = [0u8; 32];
+        check(unsafe { luma_tpm_current_policy11(self.0, digest.as_mut_ptr()) })?;
+        Ok(digest)
+    }
+
+    fn verify_policy11(
+        &mut self,
+        public_pem: &[u8],
+        policy: &[u8; 32],
+        signature: &[u8; 256],
+    ) -> Result<()> {
+        if public_pem.is_empty() || public_pem.len() > 4096 {
+            return Err("invalid credential signer public key size".into());
+        }
+        check(unsafe {
+            luma_tpm_verify_policy11(
+                self.0,
+                public_pem.as_ptr(),
+                public_pem.len() as u16,
+                policy.as_ptr(),
+                signature.as_ptr(),
+            )
+        })
+    }
+
+    fn seal_child(
+        &mut self,
+        parent_name: &[u8; 34],
+        public_pem: &[u8],
+        secret: &crate::sealed_credential::Secret,
+    ) -> Result<(Vec<u8>, Vec<u8>)> {
+        crate::require_root()?;
+        if public_pem.is_empty() || public_pem.len() > 4096 {
+            return Err("invalid credential signer public key size".into());
+        }
+        let mut public = vec![0u8; 4096];
+        let mut private = vec![0u8; 4096];
+        let mut public_size = 0;
+        let mut private_size = 0;
+        check(unsafe {
+            luma_tpm_credential_seal(
+                self.0,
+                parent_name.as_ptr(),
+                public_pem.as_ptr(),
+                public_pem.len() as u16,
+                secret.bytes().as_ptr(),
+                public.as_mut_ptr(),
+                public.len(),
+                &mut public_size,
+                private.as_mut_ptr(),
+                private.len(),
+                &mut private_size,
+            )
+        })?;
+        if !(1..=public.len()).contains(&public_size)
+            || !(1..=private.len()).contains(&private_size)
+        {
+            return Err("invalid TPM sealed child size".into());
+        }
+        public.truncate(public_size);
+        private.truncate(private_size);
+        Ok((public, private))
+    }
+
+    fn unseal_child(
+        &mut self,
+        parent_name: &[u8; 34],
+        public_pem: &[u8],
+        public_blob: &[u8],
+        private_blob: &[u8],
+        approved_policy: &[u8; 32],
+        signature: &[u8],
+    ) -> Result<crate::sealed_credential::PrivateBuffer> {
+        crate::require_root()?;
+        if public_pem.is_empty()
+            || public_pem.len() > 4096
+            || public_blob.is_empty()
+            || public_blob.len() > 4096
+            || private_blob.is_empty()
+            || private_blob.len() > 4096
+            || signature.len() != 256
+        {
+            return Err("invalid sealed child input sizes".into());
+        }
+        let mut output = crate::sealed_credential::PrivateBuffer::new(32)?;
+        check(unsafe {
+            luma_tpm_credential_unseal(
+                self.0,
+                parent_name.as_ptr(),
+                public_pem.as_ptr(),
+                public_pem.len() as u16,
+                public_blob.as_ptr(),
+                public_blob.len(),
+                private_blob.as_ptr(),
+                private_blob.len(),
+                approved_policy.as_ptr(),
+                signature.as_ptr(),
+                signature.len() as u16,
+                output.bytes_mut().as_mut_ptr(),
+            )
+        })?;
+        Ok(output)
+    }
+
     /// Only a durably prepared enrollment transaction may call this one-shot
     /// persistent allocation. A collision or uncertain reply is never retried.
-    #[allow(dead_code)] // Native credential transaction is the next integration step.
     fn provision_parent_existing(
         &mut self,
         owner: &crate::sealed_credential::PrivateBuffer,
@@ -188,6 +328,90 @@ impl Context {
     }
 }
 
+pub(crate) fn credential_fingerprint(public_pem: &[u8]) -> Result<[u8; 32]> {
+    if public_pem.is_empty() || public_pem.len() > 4096 {
+        return Err("invalid credential signer public key size".into());
+    }
+    let mut digest = [0u8; 32];
+    check(unsafe {
+        luma_tpm_credential_fingerprint(
+            public_pem.as_ptr(),
+            public_pem.len() as u16,
+            digest.as_mut_ptr(),
+        )
+    })?;
+    Ok(digest)
+}
+
+/// Sealed-child operations use the fixed local TPM transport in the product.
+/// The fixture constructor is private to isolated software-TPM tests.
+pub(crate) struct CredentialDevice(Context);
+impl CredentialDevice {
+    pub(crate) fn local() -> Result<Self> {
+        crate::require_root()?;
+        crate::platform::require_installed()?;
+        Ok(Self(Context::local()?))
+    }
+    #[cfg(test)]
+    pub(crate) fn fixture(directory: &Path) -> Result<Self> {
+        if !Path::new("/.dockerenv").is_file()
+            || Path::new("/dev/tpm0").exists()
+            || Path::new("/dev/tpmrm0").exists()
+            || directory.parent() != Some(Path::new("/tmp"))
+            || !directory
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or("")
+                .starts_with("luma-tpm-")
+        {
+            return Err("isolated software TPM credential fixture required".into());
+        }
+        Ok(Self(Context::open(&format!(
+            "swtpm:path={}/tpm.sock",
+            directory.display()
+        ))?))
+    }
+    pub(crate) fn current_policy11(&mut self) -> Result<[u8; 32]> {
+        self.0.current_policy11()
+    }
+    pub(crate) fn verify_policy11(
+        &mut self,
+        public_pem: &[u8],
+        policy: &[u8; 32],
+        signature: &[u8; 256],
+    ) -> Result<()> {
+        self.0.verify_policy11(public_pem, policy, signature)
+    }
+    pub(crate) fn seal_child(
+        &mut self,
+        parent_name: &[u8; 34],
+        public_pem: &[u8],
+        secret: &crate::sealed_credential::Secret,
+    ) -> Result<(Vec<u8>, Vec<u8>)> {
+        self.0.seal_child(parent_name, public_pem, secret)
+    }
+    pub(crate) fn unseal_child(
+        &mut self,
+        parent_name: &[u8; 34],
+        public_pem: &[u8],
+        public_blob: &[u8],
+        private_blob: &[u8],
+        policy: &[u8; 32],
+        signature: &[u8],
+    ) -> Result<crate::sealed_credential::Secret> {
+        Ok(crate::sealed_credential::Secret::from_buffer(
+            self.0.unseal_child(
+                parent_name,
+                public_pem,
+                public_blob,
+                private_blob,
+                policy,
+                signature,
+            )?,
+        ))
+    }
+}
+
 /// Read-only admission observation, NOT enrollment, attestation or NV reservation.
 #[derive(Clone, Debug, Serialize)]
 pub struct Admission {
@@ -274,6 +498,13 @@ impl Provisioner {
     }
     pub(crate) fn observation(&self) -> &Admission {
         &self.admission
+    }
+    pub(crate) fn provision_parent(
+        &mut self,
+        owner: &crate::sealed_credential::PrivateBuffer,
+    ) -> Result<[u8; 34]> {
+        self.admission.compare(&self.context.admission()?)?;
+        self.context.provision_parent_existing(owner)
     }
     pub(crate) fn provision(
         mut self,
@@ -499,6 +730,104 @@ pub(crate) fn exclusive_lock(path: &Path) -> Result<File> {
 mod tests {
     use super::*;
     use crate::admin_journal::{Entry, Store};
+
+    #[test]
+    #[ignore = "requires fresh isolated existing-owner TPM and signed PCR policy fixture"]
+    fn emulator_native_sealed_child() {
+        use crate::sealed_credential::Secret;
+        assert!(Path::new("/.dockerenv").is_file());
+        assert!(!Path::new("/dev/tpm0").exists() && !Path::new("/dev/tpmrm0").exists());
+        let directory = std::path::PathBuf::from(std::env::var("LUMA_TPM_TEST_DIRECTORY").unwrap());
+        assert_eq!(directory.parent(), Some(Path::new("/tmp")));
+        assert!(directory
+            .file_name()
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .starts_with("luma-tpm-"));
+        let transport = format!("swtpm:path={}/tpm.sock", directory.display());
+        let mut context = Context::open(&transport).unwrap();
+        let name: [u8; 34] = fs::read(directory.join("parent.name"))
+            .unwrap()
+            .try_into()
+            .unwrap();
+        let public_pem = fs::read(directory.join("pcr-public.pem")).unwrap();
+        let mode = std::env::var("LUMA_TPM_TEST_NATIVE_MODE").unwrap();
+        if mode == "seal" {
+            let secret = Secret::generate().unwrap();
+            let (public_blob, private_blob) =
+                context.seal_child(&name, &public_pem, &secret).unwrap();
+            fs::write(directory.join("sealed.pub"), public_blob).unwrap();
+            fs::write(directory.join("sealed.priv"), private_blob).unwrap();
+            fs::write(directory.join("sealed.fixture-secret"), secret.bytes()).unwrap();
+            return;
+        }
+        let public_blob = fs::read(directory.join("sealed.pub")).unwrap();
+        let private_blob = fs::read(directory.join("sealed.priv")).unwrap();
+        let approved: [u8; 32] = fs::read(directory.join("signed.policy"))
+            .unwrap()
+            .try_into()
+            .unwrap();
+        let signature = fs::read(directory.join("signature")).unwrap();
+        match mode.as_str() {
+            "allow" => {
+                let output = context
+                    .unseal_child(
+                        &name,
+                        &public_pem,
+                        &public_blob,
+                        &private_blob,
+                        &approved,
+                        &signature,
+                    )
+                    .unwrap();
+                assert_eq!(
+                    output.bytes(),
+                    fs::read(directory.join("sealed.fixture-secret")).unwrap()
+                );
+            }
+            "deny" => assert!(context
+                .unseal_child(
+                    &name,
+                    &public_pem,
+                    &public_blob,
+                    &private_blob,
+                    &approved,
+                    &signature,
+                )
+                .is_err()),
+            "wrong-name" => {
+                let mut changed = name;
+                changed[20] ^= 1;
+                assert!(context
+                    .unseal_child(
+                        &changed,
+                        &public_pem,
+                        &public_blob,
+                        &private_blob,
+                        &approved,
+                        &signature,
+                    )
+                    .is_err());
+            }
+            "tamper" => {
+                let mut changed = private_blob;
+                let midpoint = changed.len() / 2;
+                changed[midpoint] ^= 1;
+                assert!(context
+                    .unseal_child(
+                        &name,
+                        &public_pem,
+                        &public_blob,
+                        &changed,
+                        &approved,
+                        &signature,
+                    )
+                    .is_err());
+            }
+            _ => panic!("invalid native credential fixture mode"),
+        }
+    }
 
     #[test]
     #[ignore = "requires fresh isolated emulator with existing nonempty owner auth"]

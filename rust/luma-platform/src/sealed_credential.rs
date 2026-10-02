@@ -92,6 +92,10 @@ impl Drop for PrivateBuffer {
 
 pub struct Secret(PrivateBuffer);
 impl Secret {
+    pub(crate) fn from_buffer(buffer: PrivateBuffer) -> Self {
+        assert_eq!(buffer.bytes().len(), 32);
+        Self(buffer)
+    }
     pub fn generate() -> Result<Self> {
         crate::require_root()?;
         let mut buffer = PrivateBuffer::new(32)?;
@@ -203,7 +207,7 @@ fn name(deployment: &str) -> Result<String> {
 }
 
 // Bounded ciphertext decoding only; no plaintext is held in these Vecs.
-fn decode_blob(encoded: &[u8]) -> Result<Vec<u8>> {
+pub(crate) fn decode_blob(encoded: &[u8]) -> Result<Vec<u8>> {
     if encoded.is_empty() || encoded.len() > MAX_BLOB {
         return Err("credential outside bound".into());
     }

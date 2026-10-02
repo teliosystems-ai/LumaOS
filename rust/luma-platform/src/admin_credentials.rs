@@ -1,11 +1,7 @@
-//! Fixed-path sealed delivery for the local checkpoint, not Admin enrollment.
+//! Fixed-path native sealed delivery for the local checkpoint.
 //! Configuration is inert metadata; the image-owned PCR key, signed boot policy,
 //! authenticated TPM unsealing and NV authentication establish the boundary.
-use crate::{
-    bundle,
-    sealed_credential::{self, Secret},
-    tpm, Result,
-};
+use crate::{bundle, owner_credential, sealed_credential::Secret, tpm, Result};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use std::fs::{self, OpenOptions};
@@ -17,10 +13,16 @@ pub(crate) const DIRECTORY: &str = "/var/lib/luma-os/admin";
 pub(crate) const PUBLIC_KEY: &str = "/usr/share/luma-os/admin-pcr-public.pem";
 pub(crate) const BOOT_SIGNATURE: &str = "/run/systemd/tpm2-pcr-signature.json";
 
-pub(crate) fn prepared(deployment: &str, public: &[u8], blob: &[u8]) -> Result<Vec<u8>> {
-    let bytes = serde_json::to_vec(&serde_json::json!({"schema_version":2,
+pub(crate) fn prepared(
+    deployment: &str,
+    parent_name: &[u8; 34],
+    public: &[u8],
+    blob: &[u8],
+) -> Result<Vec<u8>> {
+    let bytes = serde_json::to_vec(&serde_json::json!({"schema_version":3,
         "profile":tpm::PROFILE,"index":0x01804c41u32,
-        "nv_name":bundle::hex(&tpm::checkpoint_name()),"deployment":deployment,
+        "nv_name":bundle::hex(&tpm::checkpoint_name()),"parent_name":bundle::hex(parent_name),
+        "deployment":deployment,
         "pcr_public_key_sha256":bundle::hex(&Sha256::digest(public)),
         "sealed_credential_sha256":bundle::hex(&Sha256::digest(blob))}))?;
     configuration(&bytes)?;
@@ -34,6 +36,7 @@ pub(crate) struct Configuration {
     profile: String,
     pub(crate) index: u32,
     pub(crate) nv_name: String,
+    pub(crate) parent_name: String,
     pub(crate) deployment: String,
     pcr_public_key_sha256: String,
     sealed_credential_sha256: String,
@@ -41,12 +44,17 @@ pub(crate) struct Configuration {
 
 fn configuration(bytes: &[u8]) -> Result<Configuration> {
     let config: Configuration = serde_json::from_slice(bytes)?;
-    if config.schema_version != 2 || config.profile != tpm::PROFILE || config.index != 0x01804c41 {
-        return Err("sealed local Admin configuration v2 required; no plaintext fallback".into());
+    if config.schema_version != 3 || config.profile != tpm::PROFILE || config.index != 0x01804c41 {
+        return Err(
+            "native sealed local Admin configuration v3 required; no legacy fallback".into(),
+        );
     }
     let name = tpm::decode::<34>(&config.nv_name)?;
     if name[..2] != [0, 0x0b] {
         return Err("invalid Admin NV Name algorithm".into());
+    }
+    if name != tpm::checkpoint_name() || tpm::decode::<34>(&config.parent_name)?[..2] != [0, 0x0b] {
+        return Err("checkpoint or credential parent Name differs from enrolled profile".into());
     }
     tpm::decode::<32>(&config.deployment)?;
     tpm::decode::<32>(&config.pcr_public_key_sha256)?;
@@ -101,25 +109,29 @@ pub(crate) fn load_at<F>(
     decrypt: F,
 ) -> Result<(Configuration, Secret)>
 where
-    F: FnOnce(&str, &[u8], &[u8], &[u8]) -> Result<Secret>,
+    F: FnOnce(&str, &[u8; 34], &[u8], &[u8], &[u8]) -> Result<Secret>,
 {
     let config_path = directory.join("anchor.json");
     let config_bytes = tpm::private_read(&config_path, 4096)?;
     let config = configuration(&config_bytes)?;
     let public = public_input(public_path, 4096)?;
     let blob = tpm::private_read(&directory.join("nv-auth.cred"), 16 * 1024)?;
+    let stored_parent = tpm::private_read(&directory.join("parent.name"), 34)?;
     let signature = public_input(signature_path, 16 * 1024)?;
     if blob.is_empty()
         || bundle::hex(&Sha256::digest(&public)) != config.pcr_public_key_sha256
         || bundle::hex(&Sha256::digest(&blob)) != config.sealed_credential_sha256
+        || stored_parent != tpm::decode::<34>(&config.parent_name)?
     {
         return Err("Admin sealed credential or image PCR signer digest mismatch".into());
     }
-    let secret = decrypt(&config.deployment, &public, &blob, &signature)?;
+    let parent_name = tpm::decode::<34>(&config.parent_name)?;
+    let secret = decrypt(&config.deployment, &parent_name, &public, &blob, &signature)?;
     // Do not accept a different enrollment/boot-policy snapshot after a slow
     // helper invocation. All plaintext remains in Secret's locked mapping.
     if tpm::private_read(&config_path, 4096)? != config_bytes
         || tpm::private_read(&directory.join("nv-auth.cred"), 16 * 1024)? != blob
+        || tpm::private_read(&directory.join("parent.name"), 34)? != stored_parent
         || public_input(public_path, 4096)? != public
         || public_input(signature_path, 16 * 1024)? != signature
     {
@@ -135,14 +147,14 @@ pub(crate) fn load() -> Result<(Configuration, Secret)> {
         Path::new(DIRECTORY),
         Path::new(PUBLIC_KEY),
         Path::new(BOOT_SIGNATURE),
-        sealed_credential::unseal,
+        owner_credential::unseal,
     )
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::platform;
+    use crate::{platform, sealed_credential};
     use std::os::unix::fs::PermissionsExt;
     use std::path::PathBuf;
 
@@ -154,8 +166,15 @@ mod tests {
         platform::write_atomic(&dir.join("key.pem"), b"public fixture", 0o644).unwrap();
         platform::write_atomic(&dir.join("signature.json"), b"signed fixture", 0o644).unwrap();
         platform::write_atomic(&dir.join("nv-auth.cred"), b"ciphertext fixture", 0o600).unwrap();
-        let config = serde_json::json!({"schema_version":2,"profile":"local-tpm2",
-            "index":0x01804c41u32,"nv_name":format!("000b{}", "11".repeat(32)),
+        platform::write_atomic(
+            &dir.join("parent.name"),
+            &tpm::decode::<34>(&format!("000b{}", "22".repeat(32))).unwrap(),
+            0o600,
+        )
+        .unwrap();
+        let config = serde_json::json!({"schema_version":3,"profile":"local-tpm2",
+            "index":0x01804c41u32,"nv_name":bundle::hex(&tpm::checkpoint_name()),
+            "parent_name":format!("000b{}", "22".repeat(32)),
             "deployment":"ab".repeat(32),
             "pcr_public_key_sha256":bundle::hex(&Sha256::digest(b"public fixture")),
             "sealed_credential_sha256":bundle::hex(&Sha256::digest(b"ciphertext fixture"))});
@@ -175,7 +194,7 @@ mod tests {
     }
     fn load_fixture<F>(dir: &Path, decrypt: F) -> Result<(Configuration, Secret)>
     where
-        F: FnOnce(&str, &[u8], &[u8], &[u8]) -> Result<Secret>,
+        F: FnOnce(&str, &[u8; 34], &[u8], &[u8], &[u8]) -> Result<Secret>,
     {
         load_at(
             dir,
@@ -184,15 +203,19 @@ mod tests {
             decrypt,
         )
     }
-    fn unopened(_: &str, _: &[u8], _: &[u8], _: &[u8]) -> Result<Secret> {
+    fn unopened(_: &str, _: &[u8; 34], _: &[u8], _: &[u8], _: &[u8]) -> Result<Secret> {
         panic!("invalid input must not invoke decrypt")
     }
 
     #[test]
     fn exact_inputs_delivered_without_plaintext_file() {
         let dir = fixture("inputs");
-        let (config, secret) = load_fixture(&dir, |deployment, public, blob, signature| {
+        let (config, secret) = load_fixture(&dir, |deployment, parent, public, blob, signature| {
             assert_eq!(deployment, "ab".repeat(32));
+            assert_eq!(
+                *parent,
+                tpm::decode::<34>(&format!("000b{}", "22".repeat(32))).unwrap()
+            );
             assert_eq!(public, b"public fixture");
             assert_eq!(blob, b"ciphertext fixture");
             assert_eq!(signature, b"signed fixture");
@@ -201,7 +224,7 @@ mod tests {
         .unwrap();
         assert_eq!(config.index, 0x01804c41);
         assert_eq!(secret.bytes().len(), 32);
-        assert_eq!(fs::read_dir(&dir).unwrap().count(), 4);
+        assert_eq!(fs::read_dir(&dir).unwrap().count(), 5);
         cleanup(&dir);
     }
 
@@ -216,6 +239,7 @@ mod tests {
             ("index", serde_json::json!(0x01804c42u32)),
             ("deployment", serde_json::json!("../bad")),
             ("nv_name", serde_json::json!("00".repeat(34))),
+            ("parent_name", serde_json::json!("00".repeat(34))),
             ("credential_path", serde_json::json!("/tmp/plaintext")),
             (
                 "sealed_credential_sha256",
@@ -231,7 +255,7 @@ mod tests {
         let duplicate =
             String::from_utf8(initial)
                 .unwrap()
-                .replacen('{', "{\"schema_version\":2,", 1);
+                .replacen('{', "{\"schema_version\":3,", 1);
         platform::write_atomic(&path, duplicate.as_bytes(), 0o600).unwrap();
         assert!(load_fixture(&dir, unopened).is_err());
         cleanup(&dir);
@@ -240,11 +264,17 @@ mod tests {
     #[test]
     fn delivery_rechecks_every_input_after_helper_and_propagates_refusal() {
         let dir = fixture("changed");
-        assert!(load_fixture(&dir, |_, _, _, _| Err("TPM refused".into())).is_err());
-        for name in ["anchor.json", "key.pem", "signature.json", "nv-auth.cred"] {
+        assert!(load_fixture(&dir, |_, _, _, _, _| Err("TPM refused".into())).is_err());
+        for name in [
+            "anchor.json",
+            "key.pem",
+            "signature.json",
+            "nv-auth.cred",
+            "parent.name",
+        ] {
             let path = dir.join(name);
             let original = fs::read(&path).unwrap();
-            assert!(load_fixture(&dir, |_, _, _, _| {
+            assert!(load_fixture(&dir, |_, _, _, _, _| {
                 let mut changed = original.clone();
                 changed.push(b'\n');
                 platform::write_atomic(&path, &changed, 0o600)?;
@@ -288,7 +318,13 @@ mod tests {
     fn missing_enrollment_inputs_never_use_plaintext_or_initialize_state() {
         let dir = fixture("missing");
         platform::write_atomic(&dir.join("nv-auth"), &[0x55; 32], 0o600).unwrap();
-        for name in ["anchor.json", "nv-auth.cred", "key.pem", "signature.json"] {
+        for name in [
+            "anchor.json",
+            "nv-auth.cred",
+            "parent.name",
+            "key.pem",
+            "signature.json",
+        ] {
             let path = dir.join(name);
             let saved = fs::read(&path).unwrap();
             fs::remove_file(&path).unwrap();
@@ -325,8 +361,15 @@ mod tests {
             let blob =
                 sealed_credential::fixture_seal(&dir, &deployment, &public, &secret).unwrap();
             platform::write_atomic(&dir.join("nv-auth.cred"), &blob, 0o600).unwrap();
-            let config = serde_json::json!({"schema_version":2,"profile":"local-tpm2",
-                "index":0x01804c41u32,"nv_name":format!("000b{}", "11".repeat(32)),
+            platform::write_atomic(
+                &dir.join("parent.name"),
+                &tpm::decode::<34>(&format!("000b{}", "22".repeat(32))).unwrap(),
+                0o600,
+            )
+            .unwrap();
+            let config = serde_json::json!({"schema_version":3,"profile":"local-tpm2",
+                "index":0x01804c41u32,"nv_name":bundle::hex(&tpm::checkpoint_name()),
+                "parent_name":format!("000b{}", "22".repeat(32)),
                 "deployment":deployment,"pcr_public_key_sha256":bundle::hex(&Sha256::digest(&public)),
                 "sealed_credential_sha256":bundle::hex(&Sha256::digest(&blob))});
             platform::write_atomic(
@@ -348,7 +391,7 @@ mod tests {
             &dir,
             &public_path,
             &signature_path,
-            |deployment, public, blob, signature| {
+            |deployment, _, public, blob, signature| {
                 sealed_credential::fixture_unseal(&dir, deployment, public, blob, signature)
             },
         );

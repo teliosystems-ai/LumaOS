@@ -78,7 +78,25 @@ def main(enrollment=False):
                                 'admin_enrollment::tests::emulator_existing_owner_seal_refusal',
                                 '--', '--ignored', '--exact', '--nocapture'],
                                env=env, check=True, timeout=300)
-                print('EXISTING_OWNER_CREDENTIAL_INCOMPATIBILITY_CONFIRMED; ENROLLMENT_NOT_PASSED', flush=True)
+                print('LEGACY_SYSTEMD_255_EXISTING_OWNER_REFUSAL_CONFIRMED', flush=True)
+                subprocess.run(['cargo', 'test', '--offline', '--locked',
+                                'admin_enrollment::tests::emulator_enrollment',
+                                '--', '--ignored', '--exact', '--nocapture'],
+                               env=env, check=True, timeout=300)
+                def enrolled_delivery(mode):
+                    subprocess.run(['cargo', 'test', '--offline', '--locked',
+                                    'admin_enrollment::tests::emulator_enrolled_delivery',
+                                    '--', '--ignored', '--exact', '--nocapture'],
+                                   env=dict(env, LUMA_TPM_TEST_DELIVERY=mode),
+                                   check=True, timeout=300)
+                enrolled_delivery('allow')
+                command(['tpm2_pcrextend', '-T', transport, '11:sha256=' + '55' * 32])
+                enrolled_delivery('deny')
+                approve()
+                enrolled_delivery('allow')  # same child; newly signed PCR11
+                command(['tpm2_pcrextend', '-T', transport, '7:sha256=' + '66' * 32])
+                enrolled_delivery('deny')  # signed PCR11 cannot waive PCR7
+                print('EXISTING_OWNER_NATIVE_CHECKPOINT_ENROLLMENT_PASSED', flush=True)
                 return
             check('seal')
             check('allow')

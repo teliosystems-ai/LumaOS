@@ -15,6 +15,8 @@ class AdminCredentialPolicyTests(unittest.TestCase):
         self.assertIn('/usr/share/luma-os/admin-pcr-public.pem', loader)
         self.assertIn('/run/systemd/tpm2-pcr-signature.json', loader)
         self.assertIn('crate::platform::require_installed()?', loader)
+        self.assertIn('owner_credential::unseal', loader)
+        self.assertNotIn('sealed_credential::unseal', loader)
         self.assertNotIn('std::env::', loader)
 
     def test_tmpfiles_creates_lock_directory_not_enrollment(self):

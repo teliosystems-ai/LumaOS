@@ -41,28 +41,26 @@ Three ordinary TPM tests, one software-TPM provisioning fixture and the native
 build passed. That checkpoint preceded the explicit enrollment transaction below;
 the installer still does not provision automatically.
 
-The new `admin-checkpoint-enroll LOGIN --existing-owner` source command joins
-principal-bound PAM, masked custodian input, seal/unseal preflight, a synchronized
-pending proposal, one-shot NV provisioning, authenticated readback and no-replace
-publication. It refuses existing or interrupted state and never grants product
-Admin. **Positive integration failed at sealing:** the packaged systemd 255
-credential path does not support nonempty existing owner authorization. A
-separate regression reproduces that refusal without allocating NV; this is not
-passing enrollment. Implement the owner-compatible credential backend first.
-See [the enrollment evidence](evidence/G2_ENROLLMENT_TRANSACTION_2026-10-02.md)
+The `admin-checkpoint-enroll LOGIN --existing-owner` source command now joins
+principal-bound PAM, masked custodian input, a durable parent-allocation intent,
+native signed-PCR sealed-child preparation, a synchronized pending proposal,
+one-shot NV provisioning, authenticated readback and no-replace publication.
+The fixed-path loader uses that native credential format. A positive
+existing-owner enrollment and subsequent credential delivery passed on a
+disposable software TPM. The packaged systemd 255 path still refuses nonempty
+owner authorization; its refusal remains a compatibility regression, not the
+product enrollment path. See [the native enrollment checkpoint](evidence/G2_NATIVE_OWNER_ENROLLMENT_2026-10-02.md),
+[the earlier failed integration](evidence/G2_ENROLLMENT_TRANSACTION_2026-10-02.md),
 and [the operator instructions](LOCAL_TPM2_ADMIN.md#explicit-checkpoint-enrollment).
 Reviewed interrupted-enrollment recovery, full Admin bootstrap/service, independent
 credential recovery, production custody and installed-image evaluation remain
 open. Targeted checks do not close those requirements.
 
-A [disposable TPM feasibility experiment](evidence/G2_OWNER_CREDENTIAL_FEASIBILITY_2026-10-02.md)
-subsequently passed owner-independent unlock under a persistent storage parent,
-signed PCR 11 renewal, fixed PCR 7 denial, forged-signature refusal and controlled
-restart. A native one-shot parent-allocation boundary now passes existing-owner
-software-TPM checks. The experiment's sealing protocol remains test-only; the
-product sealing path and positive checkpoint enrollment stay blocked until the
-native sealed-child backend and durable parent-allocation transaction are built
-and tested.
+The earlier [disposable TPM feasibility experiment](evidence/G2_OWNER_CREDENTIAL_FEASIBILITY_2026-10-02.md)
+informed the native backend now integrated above. The targeted native tests
+exercise signed PCR 11 renewal, fixed PCR 7 denial, forged-signature refusal,
+parent/blob substitution refusal and restart continuity. These are not
+installed-image, hardware, service-confinement or production-custody evidence.
 
 The [model-runtime checkpoint](evidence/G2_MODEL_RUNTIME_2026-10-02.md) adds
 single-worker exclusion shared with model activation, inherited lock lifetime,

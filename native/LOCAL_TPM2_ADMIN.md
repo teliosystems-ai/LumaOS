@@ -54,12 +54,13 @@ own temporary key/sessions. Empty owner authorization is not supported by this
 enrollment profile; the custodian must provide an existing nonempty credential.
 
 The explicit checkpoint enrollment source command composes this boundary with
-local PAM, sealed credential preparation and durable publication, but the
-packaged systemd 255 credential backend blocks nonempty-owner enrollment before
-NV allocation. It is not operational enrollment yet. The installer does not
-invoke it automatically. The transaction persists the sealed proposal and
-interruption fence **before** calling the write boundary. An error can follow an
-applied NV write, so it never retries, resets or automatically cleans up NV state.
+local PAM, native sealed credential preparation and durable publication. Its
+positive existing-owner flow passed on a disposable software TPM; it has not
+been qualified on an installed image. The installer does not invoke it
+automatically. The transaction persists a parent intent **before** allocating
+the persistent parent and a sealed proposal **before** the NV write. An error
+can follow either applied write, so it never retries, resets or automatically
+cleans up TPM state.
 TPM ownership is not the product Admin role; supplying owner authorization
 does not alone authorize bootstrap, signing, or another product effect.
 
@@ -94,12 +95,15 @@ TPM index. Reinstallation over an occupied index is refused; it is not recovery.
 
 Required sealed checkpoint inputs (not created by the current installer):
 
-- `/var/lib/luma-os/admin/anchor.json`: closed schema-v2 profile/index/Name,
+- `/var/lib/luma-os/admin/anchor.json`: closed schema-v3 profile/index/Names,
   deployment, image PCR-key digest and sealed-credential digest record.
 - `/var/lib/luma-os/admin/journal.json`: exact persisted inert audit journal.
 - `/var/lib/luma-os/admin/nv-auth.cred`: private TPM-only encrypted credential.
 - `/var/lib/luma-os/admin/enrollment.json`: inert principal/boot observation whose
   exact bytes derive the deployment namespace committed by the initial TPM head.
+- `/var/lib/luma-os/admin/parent.name`: persistent credential-parent Name.
+- `/var/lib/luma-os/admin.parent-intent/`: retained parent allocation record,
+  input digests and Name; an interrupted attempt is never silently reused.
 - `/usr/share/luma-os/admin-pcr-public.pem`: image-owned approved PCR signing key.
 - `/run/systemd/tpm2-pcr-signature.json`: installed boot's signed PCR policy.
 - `/run/luma-admin/anchor.lock`: exclusive writer lock in a private directory.
@@ -113,12 +117,13 @@ created by a fixed tmpfiles rule; no enrollment/credential is auto-created.
 `admin_credentials.rs` bounds and validates the fixed files, requires a private
 configuration/ciphertext and root-owned, non-writable public inputs, pins the
 image key and ciphertext digests, and rechecks the snapshot after unsealing.
-The helper verifies the ciphertext, deployment-bound name and signed PCR policy.
+The native TPM backend verifies the ciphertext, deployment, persistent parent
+Name and signed PCR policy.
 Metadata/digests alone are not authority. No selectable key, transport or
 credential path is exposed. Missing enrollment remains a refusal.
 
-Do not manually fabricate these paths. The checkpoint transaction is intended to
-create them after the owner-compatible credential backend is implemented.
+Do not manually fabricate these paths. The checkpoint transaction creates them
+only after explicit authorization on the selected installed system.
 Product Admin bootstrap, service confinement, signing/hierarchy custody,
 rotation and recovery are still open. The helper/TSS libraries' working copies
 still need the full service memory/swap review; locking the Rust secret does
@@ -127,19 +132,11 @@ in [the sealed-delivery checkpoint](evidence/G2_ADMIN_DELIVERY_2026-10-02.md).
 
 ## Explicit checkpoint enrollment
 
-**Currently blocked by a credential-backend incompatibility.** A real
-software-TPM integration attempt showed that the packaged systemd 255 helper
-cannot seal with nonempty existing owner authorization. Its credential path uses
-the legacy primary-key creation path rather than an existing persistent SRK.
-Sealing before setting owner authorization is not a solution: unsealing also
-refuses afterward. An owner-compatible, reviewed backend is still required;
-do not empty/change ownership or weaken PCR policy to make this command work.
-See [the enrollment checkpoint](evidence/G2_ENROLLMENT_TRANSACTION_2026-10-02.md).
-The later [isolated protocol experiment](evidence/G2_OWNER_CREDENTIAL_FEASIBILITY_2026-10-02.md)
-demonstrates a possible persistent-parent replacement, but it has not changed
-the installed command or made enrollment operational. A native one-shot boundary
-now reserves that parent under existing owner authorization in a disposable TPM
-test; no installed entrypoint calls it until its allocation can be fenced durably.
+The native existing-owner backend and positive enrollment passed on a
+disposable software TPM. The earlier systemd 255 incompatibility is retained
+as a compatibility regression; the product command no longer uses that helper.
+See [the current checkpoint](evidence/G2_NATIVE_OWNER_ENROLLMENT_2026-10-02.md)
+and [the earlier failed integration](evidence/G2_ENROLLMENT_TRANSACTION_2026-10-02.md).
 
 The source command is intended for a newly installed test system after
 operator approval of its TPM allocation. It has not yet been qualified on a
@@ -153,16 +150,19 @@ sudo luma-platform admin-checkpoint-enroll LOGIN --existing-owner
 `LOGIN` must be the installer's selected account at UID 1001, enabled in the
 local principal registry and accepted by the fixed PAM profile. Root alone,
 the installation intent file, or an owner credential alone is insufficient.
-The command first tests sealing/unsealing against the image-owned key and
-current signed boot policy, then prompts for the existing owner's authorization
+The command first verifies the image-owned key and current signed boot policy,
+then prompts for the existing owner's authorization
 as 2–128 hidden hexadecimal characters (1–64 original bytes), followed by the
 account password. These are separate credentials. The hex is the encoding of
 the existing authorization, not a replacement authorization; never paste it into
 chat, a shell argument, an environment variable, source or logs. Empty ownership
 is unsupported. Luma will not change ownership to make enrollment succeed.
 
-After a successful credential preflight, the transaction retains the sole-writer
-lock and writes a private four-file proposal to
+After authentication, the transaction retains the sole-writer lock and writes a
+private parent-allocation intent to `/var/lib/luma-os/admin.parent-intent`.
+It allocates the fixed persistent parent under the existing owner authorization,
+records its Name, seals and verifies the new secret, then writes a five-file
+proposal to
 `/var/lib/luma-os/admin.enrollment-pending`, synchronizing files, directory and
 parent before any NV write. Immediately before dispatch it rechecks the
 short-lived authenticated principal, credentials, public boot inputs, prepared
@@ -171,7 +171,7 @@ exact NV Name and initial head, then publishes the directory using a no-replace
 rename and synchronizes the parent. Success reports `checkpoint_enrolled: true`
 but `product_admin_active: false` and `role_grant: false`.
 
-Any existing final or pending enrollment refuses, including a partial directory
+Any existing final, parent-intent or pending enrollment refuses, including a partial directory
 or dangling symlink. An error after proposal creation leaves it intact even if
 the TPM rejected the write. Do not delete it, rerun with altered credentials,
 undefine the index, or fabricate a final directory. A reviewed recovery command
@@ -222,24 +222,23 @@ software-TPM results are in the
 
 ## Sealed credential primitive
 
-`rust/luma-platform/src/sealed_credential.rs` adds bounded TPM-only sealing
-through the Ubuntu-packaged systemd 255 credential helper. The fixed profile
-requires SHA-256 PCR7 and signed PCR11, an exact independently supplied public
-key, and a deployment-bound credential name. Only the explicit
-`tpm2-with-public-key` mode is accepted. A bounded header filter rejects host,
-TPM-absent, unsigned-PCR, combined host/TPM and unknown credential profiles
-before decryption; authenticated decryption remains the helper's responsibility.
-There is no public seal/unseal CLI or selectable weaker fallback.
+`rust/luma-platform/src/owner_credential.rs` and the TPM adapter implement
+the product native sealed-child format under the fixed persistent parent.
+The policy fixes SHA-256 PCR 7 and authorizes signed PCR 11 with the exact
+image-owned public key. The versioned envelope binds deployment, parent Name,
+signer fingerprint and bounded TPM public/private blobs. Unknown or legacy
+credential formats refuse without fallback. There is no public seal/unseal CLI.
+The older `sealed_credential.rs` systemd 255 helper remains for compatibility
+regression tests, not product checkpoint delivery.
 
 Plaintext input/output use anonymous locked, nondumpable memory mappings, are
 not passed in arguments or ordinary temporary files, and are wiped on release.
-The helper has a cleared environment, fixed executable/device, discarded
-diagnostics, a 30-second deadline and an output-file size limit. These measures
-do **not** establish complete secret isolation: the packaged helper's own
-working allocations, process inspection, swap/service confinement, inherited
-descriptors and physical TPM/bus attacks still need integration and review.
+The native backend uses the fixed local TPM transport and encrypted sessions
+for secret transfer. These measures do **not** establish complete secret
+isolation: TPM2-TSS/OpenSSL working allocations, process inspection,
+swap/service confinement and physical TPM/bus attacks still need review.
 
-The future trusted service must authenticate the deployment, enrollment record,
+The future trusted service must authenticate the enrollment record,
 public signer and policy signatures independently of the encrypted blob.
 Caller-supplied metadata is not authority. The primitive does not establish
 approved image admission, signer revocation, trusted UTC, old-image rollback
@@ -247,8 +246,8 @@ prevention or finite Admin roles. A signature for a different PCR11 measurement
 can authorize that measurement without resealing; this is not evidence of a
 working installed A/B enrollment or recovery flow. Changed PCR7 intentionally
 denies access until an independently authorized recovery/migration exists.
-The native checkpoint loader now uses the deployment-bound helper name and the
-fixed image key/installed signature paths directly. This replaces the proposed
+The native checkpoint loader uses the deployment-bound envelope and fixed
+image key/installed signature paths directly. This replaces the proposed
 plaintext `nv-auth` path. Explicit checkpoint enrollment also uses this primitive;
 the complete product Admin bootstrap/service remains unimplemented.
 
@@ -349,9 +348,9 @@ the [authentication checkpoint](evidence/NATIVE_ADMIN_AUTH_2026-09-29.md).
    enrollment independently of root/sudo. Admission does not reserve an index
    or prove that provisioning, sealing, hierarchy authorization or NV capacity
    will succeed. It is not complete enrollment preflight.
-2. Qualify the implemented checkpoint enrollment transaction and complete
-   owner-compatible credential backend, independently recoverable local credentials and reviewed interrupted-enrollment
-   recovery. Exact allocation, collision refusal, random secrets and durable
+2. Qualify the implemented native existing-owner checkpoint enrollment on an
+   installed image and complete independently recoverable local credentials
+   and reviewed interrupted-enrollment recovery. Exact allocation, collision refusal, random secrets and durable
    interruption/retry fencing now exist in source. Never clear the TPM, overwrite
    someone else's index, or silently take ownership of its hierarchies.
 3. Integrate the checkpoint enrollment/loader with product Admin bootstrap and the
@@ -401,10 +400,11 @@ tools container, without host TPM devices, network, host services, privilege
 grants or Docker socket. Legacy test-only provisioning/undefinition commands
 use the disposable emulator, not a product command interface. The new native
 fixed-index provisioning primitive has its own existing-owner fixture. A separate
-enrollment acceptance fixture composes sealing, durable preparation, provisioning,
-readback and publication, but failed at sealing with existing ownership and
-remains a pending positive test. A separate compatibility check confirms refusal
-before NV allocation; it is not a passing enrollment or PAM-to-TPM flow.
+enrollment acceptance fixture now passes native sealing, durable parent and NV
+preparation, provisioning, readback, publication and credential delivery with
+existing ownership. The old systemd 255 refusal is retained as a separate
+compatibility check; neither fixture substitutes for installed PAM-to-TPM or
+physical testing.
 Private emulator state
 and random credentials are destroyed on exit, not exported with diagnostics.
 See [the evidence checkpoint](evidence/NATIVE_TPM_STATUS_2026-09-28.md).

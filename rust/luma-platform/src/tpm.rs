@@ -684,6 +684,33 @@ impl LocalAnchor {
             lock,
         )
     }
+
+    /// Connect an already allocated checkpoint using a credential recovered
+    /// from the retained proposal. No TPM write, provisioning or reset occurs.
+    pub(crate) fn pending_enrollment(
+        secret: &crate::sealed_credential::Secret,
+        lock: File,
+    ) -> Result<Self> {
+        crate::require_root()?;
+        crate::platform::require_installed()?;
+        Self::connect(
+            Context::local()?,
+            INDEX,
+            checkpoint_name(),
+            secret.bytes(),
+            lock,
+        )
+    }
+
+    #[cfg(test)]
+    pub(crate) fn pending_enrollment_fixture(
+        directory: &Path,
+        secret: &crate::sealed_credential::Secret,
+        lock: File,
+    ) -> Result<Self> {
+        let context = CredentialDevice::fixture(directory)?.0;
+        Self::connect(context, INDEX, checkpoint_name(), secret.bytes(), lock)
+    }
 }
 
 impl Checkpoint for LocalAnchor {

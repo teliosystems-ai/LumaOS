@@ -74,6 +74,15 @@ def main(enrollment=False):
                 (work / 'owner.hex').write_text('hex:' + owner.hex(), encoding='ascii')
                 command(['tpm2_changeauth', '-T', transport, '-c', 'o',
                          f'file:{work / "owner.hex"}'])
+                if isinstance(enrollment, str) and enrollment.startswith('pending-'):
+                    mode = enrollment.removeprefix('pending-')
+                    subprocess.run(['cargo', 'test', '--offline', '--locked',
+                                    'admin_enrollment::tests::emulator_pending_enrollment_publication',
+                                    '--', '--ignored', '--exact', '--nocapture'],
+                                   env=dict(env, LUMA_TPM_TEST_PENDING=mode),
+                                   check=True, timeout=300)
+                    print('PENDING_ENROLLMENT_MODE_PASSED=' + mode, flush=True)
+                    return
                 if enrollment == 'resume':
                     subprocess.run(['cargo', 'test', '--offline', '--locked',
                                     'admin_enrollment::tests::emulator_resume_bound_parent_without_reallocation',

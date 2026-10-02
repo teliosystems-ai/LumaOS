@@ -188,7 +188,8 @@ not repeat parent allocation; it prepares a new sealed proposal before one NV
 write. A changed digest, unbound parent, pending proposal, occupied NV index or
 any conflict refuses. It has passed a disposable-TPM test, not installed-image
 or physical interruption qualification. Do not use this command to remove or
-repeat an uncertain write. If final publication
+repeat an uncertain write. A separate, narrowly scoped pending-publication
+command is described below. If final publication
 completed but its acknowledgement was lost, use the read-only
 `admin-checkpoint-status` command; that is not permission to repeat provisioning.
 The existing audit reconciliation command below does not recover enrollment.
@@ -196,6 +197,34 @@ The existing audit reconciliation command below does not recover enrollment.
 The transaction's intended output is an inert checkpoint, not finite Admin roles, protected principal
 lifecycle, independent credential recovery, production signing custody, secure
 service confinement or resistance to a hostile OS root. Those remain open.
+
+### Exact committed-pending enrollment publication
+
+If the five-file pending proposal exists and the final credential directory is
+absent, run `sudo luma-platform admin-checkpoint-enrollment-reconcile` to inspect
+it. This command accepts only the original bound parent, unchanged proposal and
+signed current boot inputs, a credential unsealed under that parent, and an
+authenticated fixed TPM NV head equal to the exact enrollment genesis. It does
+not write the TPM. A report with phase `committed_pending_publication` includes
+a `review_sha256` for that exact state; the digest is not human authentication
+or TPM attestation. After independently reviewing the retained enrollment and
+selected principal, publication requires a fresh password check:
+
+```text
+sudo luma-platform admin-checkpoint-enrollment-reconcile --publish-committed LOGIN REVIEW-SHA256
+```
+
+The selected account must still be the original installation principal. The
+command rechecks the retained files, parent binding, boot inputs and TPM head
+after authentication, then no-replace renames the already committed proposal
+and opens the inert checkpoint. It never provisions, extends, replays or resets
+the TPM; it does not grant product Admin. A vacant NV index, wrong head, changed
+files/boot inputs, unbound or different parent, competing final directory, or
+uncertain TPM outcome remains fenced. Do not use it to retry a TPM write or
+delete retained state. Targeted disposable-TPM tests cover committed, vacant
+and wrong-head cases; installed-image, real-hardware and interruption
+qualification remain pending. See the
+[pending-publication checkpoint](evidence/G2_PENDING_ENROLLMENT_PUBLICATION_2026-10-02.md).
 
 ## Explicit committed-audit publication recovery
 

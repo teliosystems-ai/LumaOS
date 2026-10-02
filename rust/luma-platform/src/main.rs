@@ -73,6 +73,14 @@ fn dispatch() -> Result<()> {
         Some("admin-checkpoint-enrollment-resume") if args.len() == 3 => {
             admin_enrollment::resume_bound_parent(&args[1], &args[2])
         }
+        Some("admin-checkpoint-enrollment-reconcile") if args.len() == 1 => {
+            admin_enrollment::reconcile_pending(None, None)
+        }
+        Some("admin-checkpoint-enrollment-reconcile")
+            if args.len() == 4 && args[1] == "--publish-committed" =>
+        {
+            admin_enrollment::reconcile_pending(Some(&args[2]), Some(&args[3]))
+        }
         Some("admin-checkpoint-reconcile") if args.len() == 1 => admin_journal::reconcile(None),
         Some("admin-checkpoint-reconcile")
             if args.len() == 3 && args[1] == "--publish-committed" =>
@@ -136,6 +144,7 @@ fn dispatch() -> Result<()> {
             println!("admin-checkpoint-enroll LOGIN --existing-owner: explicit installed-root checkpoint enrollment with local PAM and hidden custodian owner authorization; retains interrupted attempts; does not grant product Admin.");
             println!("admin-checkpoint-enrollment-inspect: read-only retained-intent and fixed TPM-handle observation; does not repair, retry, delete or grant Admin.");
             println!("admin-checkpoint-enrollment-resume LOGIN REVIEW-SHA256: explicit fresh-auth continuation only from a reviewed, bound parent with no NV proposal or index; never retries parent allocation.");
+            println!("admin-checkpoint-enrollment-reconcile [--publish-committed LOGIN REVIEW-SHA256]: inspect or explicitly publish only an authenticated TPM-committed pending inert enrollment; never repeats a TPM write.");
             println!("admin-checkpoint-reconcile [--publish-committed REVIEW-SHA256]: inspect or explicitly publish a TPM-proven pending inert audit commit; never replays effects or resets TPM state. Requires existing enrollment and credential delivery.");
             println!("admin-auth-check LOGIN: installed-system, controlling-terminal account authentication diagnostic; does not enroll or grant product Admin.");
             println!("Install requires local TPM2 admission before any disk write. admin-install-check is read-only and does not enroll Admin; explicit checkpoint enrollment remains separate from product Admin activation.");

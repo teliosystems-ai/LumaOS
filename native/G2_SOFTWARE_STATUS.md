@@ -57,9 +57,14 @@ independent credential recovery, production custody and installed-image
 evaluation remain open. A [fixed-path inspection command](evidence/G2_ENROLLMENT_INSPECTION_2026-10-02.md)
 reports retained intent and TPM handle occupancy. One narrowly reviewed
 [bound-parent continuation](evidence/G2_BOUND_PARENT_CONTINUATION_2026-10-02.md)
-now passes a disposable-TPM test without repeating parent allocation. Unbound
-parent, uncertain NV write and conflict states remain fenced. Targeted checks
-do not close those requirements.
+now passes a disposable-TPM test without repeating parent allocation. An
+[exact committed-pending publication](evidence/G2_PENDING_ENROLLMENT_PUBLICATION_2026-10-02.md)
+also passed targeted disposable-TPM tests: it authenticates the already-written
+genesis head, requires fresh principal authentication in the product command,
+and publishes only the unchanged pending proposal without a TPM write. Vacant
+NV, wrong head, unbound parent, other uncertain-write and conflict states
+remain fenced. Neither increment is full reviewed enrollment recovery or an
+installed Admin service; targeted checks do not close those requirements.
 
 The earlier [disposable TPM feasibility experiment](evidence/G2_OWNER_CREDENTIAL_FEASIBILITY_2026-10-02.md)
 informed the native backend now integrated above. The targeted native tests

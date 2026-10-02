@@ -14,7 +14,7 @@ use std::fs::{self, File, OpenOptions};
 use std::io::Write;
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 const PENDING: &str = "/var/lib/luma-os/admin.enrollment-pending";
 const PARENT_INTENT: &str = "/var/lib/luma-os/admin.parent-intent";
@@ -536,6 +536,25 @@ impl Proposal {
         }
         Ok(())
     }
+
+    fn from_pending(
+        pending: &Path,
+        intent: &ParentIntent,
+        parent_name: &[u8; 34],
+        public: &[u8],
+    ) -> Result<Self> {
+        let deployment = record_deployment(&intent.record);
+        let blob = tpm::private_read(&pending.join("nv-auth.cred"), 16384)?;
+        let proposal = Self::new(
+            intent.record.clone(),
+            &deployment,
+            parent_name,
+            public,
+            blob,
+        )?;
+        proposal.recheck(pending)?;
+        Ok(proposal)
+    }
 }
 
 fn record_deployment(record: &[u8]) -> String {
@@ -591,6 +610,226 @@ fn commit<A: Checkpoint>(
         "product_admin_active":false,"role_grant":false,"gate_closing":false,
         "checkpoint":checkpoint}),
     )
+}
+
+/// Review of an already TPM-committed but unpublished inert enrollment.
+/// This never provisions, extends, clears or repairs an uncommitted proposal.
+struct PendingRecovery<A: Checkpoint> {
+    anchor: A,
+    intent: ParentIntent,
+    proposal: Proposal,
+    parent_name: [u8; 34],
+    parent_path: PathBuf,
+    pending: PathBuf,
+    final_path: PathBuf,
+    public_path: PathBuf,
+    signature_path: PathBuf,
+    public: Vec<u8>,
+    signature: Vec<u8>,
+    observed: tpm::Clock,
+    review: String,
+}
+impl<A: Checkpoint> PendingRecovery<A> {
+    #[allow(clippy::too_many_arguments)]
+    fn inspect(
+        mut anchor: A,
+        intent: ParentIntent,
+        proposal: Proposal,
+        parent_name: [u8; 34],
+        parent_path: &Path,
+        pending: &Path,
+        final_path: &Path,
+        public_path: &Path,
+        signature_path: &Path,
+        public: Vec<u8>,
+        signature: Vec<u8>,
+    ) -> Result<Self> {
+        if !private_presence(pending)? || private_presence(final_path)? {
+            return Err("pending enrollment publication requires sole pending directory".into());
+        }
+        intent.recheck_bound(parent_path, &parent_name)?;
+        proposal.recheck(pending)?;
+        if ParentIntent::new(
+            intent.record.clone(),
+            &proposal.deployment,
+            &public,
+            &signature,
+        )?
+        .intent
+            != intent.intent
+            || credentials::public_input(public_path, 4096)? != public
+            || credentials::public_input(signature_path, 16384)? != signature
+        {
+            return Err("pending enrollment boot or intent inputs changed".into());
+        }
+        let expected = tpm::extend_value([0; 32], admin_journal::genesis(&proposal.deployment)?);
+        if anchor.read()? != expected {
+            return Err("pending enrollment is not the exact TPM-committed genesis".into());
+        }
+        let observed = anchor.clock()?;
+        let mut digest = Sha256::new();
+        digest.update(b"luma-enrollment-pending-publication-v1\0");
+        digest.update(&intent.record);
+        digest.update(&intent.intent);
+        digest.update(parent_name);
+        for (name, bytes) in &proposal.files {
+            digest.update((name.len() as u16).to_be_bytes());
+            digest.update(name.as_bytes());
+            digest.update((bytes.len() as u32).to_be_bytes());
+            digest.update(bytes);
+        }
+        digest.update(Sha256::digest(&public));
+        digest.update(Sha256::digest(&signature));
+        digest.update(expected);
+        digest.update(observed.reset_count.to_be_bytes());
+        digest.update(observed.restart_count.to_be_bytes());
+        Ok(Self {
+            anchor,
+            intent,
+            proposal,
+            parent_name,
+            parent_path: parent_path.into(),
+            pending: pending.into(),
+            final_path: final_path.into(),
+            public_path: public_path.into(),
+            signature_path: signature_path.into(),
+            public,
+            signature,
+            observed,
+            review: bundle::hex(&digest.finalize()),
+        })
+    }
+
+    fn report(&self) -> Result<serde_json::Value> {
+        Ok(
+            serde_json::json!({"schema_version":1,"phase":"committed_pending_publication",
+            "deployment":self.proposal.deployment,"review_sha256":self.review,
+            "expected_head":bundle::hex(&tpm::extend_value([0; 32],
+                admin_journal::genesis(&self.proposal.deployment)?)),
+            "product_admin_active":false,"role_grant":false,"published":false,
+            "observation_is_attestation":false,"tpm_write_performed":false}),
+        )
+    }
+
+    fn publish(
+        mut self,
+        reviewed: &str,
+        authorize: impl FnOnce() -> Result<()>,
+    ) -> Result<serde_json::Value> {
+        tpm::decode::<32>(reviewed)?;
+        if reviewed != self.review {
+            return Err("pending enrollment review digest mismatch".into());
+        }
+        authorize()?;
+        self.intent
+            .recheck_bound(&self.parent_path, &self.parent_name)?;
+        self.proposal.recheck(&self.pending)?;
+        absent(&self.final_path)?;
+        if credentials::public_input(&self.public_path, 4096)? != self.public
+            || credentials::public_input(&self.signature_path, 16384)? != self.signature
+        {
+            return Err("pending enrollment boot inputs changed after review".into());
+        }
+        self.anchor.clock()?.elapsed_since(self.observed)?;
+        let expected =
+            tpm::extend_value([0; 32], admin_journal::genesis(&self.proposal.deployment)?);
+        if self.anchor.read()? != expected {
+            return Err("pending enrollment TPM head changed after review".into());
+        }
+        publish(&self.pending, &self.final_path)?;
+        self.proposal.recheck(&self.final_path)?;
+        let checkpoint =
+            admin_journal::Store::open(self.anchor, &self.final_path.join("journal.json"))?
+                .status()?;
+        Ok(
+            serde_json::json!({"schema_version":1,"checkpoint_enrolled":true,
+            "published":true,"product_admin_active":false,"role_grant":false,
+            "gate_closing":false,"checkpoint":checkpoint}),
+        )
+    }
+}
+
+/// Inspect or explicitly publish an already committed pending enrollment.
+/// Inspection does not authenticate a human; publication requires fresh PAM.
+/// No branch repeats a TPM write or repairs a vacant/wrong index.
+pub fn reconcile_pending(username: Option<&str>, reviewed: Option<&str>) -> Result<()> {
+    crate::require_root()?;
+    crate::platform::require_installed()?;
+    if username.is_some() != reviewed.is_some() {
+        return Err("publication requires a login and exact reviewed digest".into());
+    }
+    let lock = tpm::exclusive_lock(Path::new(LOCK))?;
+    let parent_path = Path::new(PARENT_INTENT);
+    let pending = Path::new(PENDING);
+    let final_path = Path::new(credentials::DIRECTORY);
+    if !private_presence(pending)? || private_presence(final_path)? {
+        return Err("no sole pending enrollment proposal to review".into());
+    }
+    let (intent, name) = ParentIntent::read_for_inspection(parent_path)?;
+    let name = name.ok_or("unbound parent intent cannot publish pending enrollment")?;
+    if tpm::enrollment_handles(Some(&name))? != (true, true, true) {
+        return Err("pending enrollment TPM handles are absent or changed".into());
+    }
+    let public_path = Path::new(credentials::PUBLIC_KEY);
+    let signature_path = Path::new(credentials::BOOT_SIGNATURE);
+    let public = credentials::public_input(public_path, 4096)?;
+    let signature = credentials::public_input(signature_path, 16384)?;
+    owner_credential::verify_boot(&public, &signature)?;
+    let proposal = Proposal::from_pending(pending, &intent, &name, &public)?;
+    let (config, secret) = credentials::load_at(
+        pending,
+        public_path,
+        signature_path,
+        owner_credential::unseal,
+    )?;
+    if config.deployment != proposal.deployment || config.parent_name != bundle::hex(&name) {
+        return Err("pending credential differs from retained enrollment".into());
+    }
+    let anchor = tpm::LocalAnchor::pending_enrollment(&secret, lock)?;
+    drop(secret);
+    let recovery = PendingRecovery::inspect(
+        anchor,
+        intent,
+        proposal,
+        name,
+        parent_path,
+        pending,
+        final_path,
+        public_path,
+        signature_path,
+        public,
+        signature,
+    )?;
+    if let (Some(username), Some(reviewed)) = (username, reviewed) {
+        let binding = AccountBinding::capture(
+            Path::new(principal::REGISTRY),
+            Path::new(principal::IDENTITY),
+            username,
+        )?;
+        if binding.current_uid()? != 1001
+            || enrollment_identity(&recovery.intent.record)? != binding.identity()?
+        {
+            return Err("pending enrollment principal differs from selected account".into());
+        }
+        let identity = binding.identity()?;
+        let account = authentication::local(username)?;
+        let parent_name = recovery.parent_name;
+        let public = recovery.public.clone();
+        let signature = recovery.signature.clone();
+        let result = recovery.publish(reviewed, || {
+            if binding.identity()? != identity || account.identity()? != identity {
+                return Err("pending publication principal changed after authentication".into());
+            }
+            if tpm::enrollment_handles(Some(&parent_name))? != (true, true, true) {
+                return Err("pending publication TPM handles changed".into());
+            }
+            owner_credential::verify_boot(&public, &signature)
+        })?;
+        println!("{}", serde_json::to_string(&result)?);
+    } else {
+        println!("{}", serde_json::to_string(&recovery.report()?)?);
+    }
+    Ok(())
 }
 
 pub fn enroll(username: &str) -> Result<()> {
@@ -688,6 +927,121 @@ mod tests {
     use std::cell::Cell;
     use std::io::Read;
     use std::path::PathBuf;
+    #[test]
+    #[ignore = "requires fresh isolated existing-owner pending enrollment TPM fixture"]
+    fn emulator_pending_enrollment_publication() {
+        let root = PathBuf::from(std::env::var("LUMA_TPM_TEST_DIRECTORY").unwrap());
+        let mode = std::env::var("LUMA_TPM_TEST_PENDING").unwrap();
+        let public_path = root.join("pcr-public.pem");
+        let signature_path = root.join("pcr-signature.json");
+        let public = credentials::public_input(&public_path, 4096).unwrap();
+        let signature = credentials::public_input(&signature_path, 16384).unwrap();
+        owner_credential::fixture_verify_boot(&root, &public, &signature).unwrap();
+        let mut owner = sealed_credential::PrivateBuffer::new(32).unwrap();
+        File::open(root.join("owner.binary"))
+            .unwrap()
+            .read_exact(owner.bytes_mut())
+            .unwrap();
+        let mut provisioner = tpm::Provisioner::fixture(&root).unwrap();
+        let record = serde_json::to_vec(&serde_json::json!({"kind":"inert-test-enrollment",
+            "admission":provisioner.observation()}))
+        .unwrap();
+        let deployment = record_deployment(&record);
+        let intent = ParentIntent::new(record.clone(), &deployment, &public, &signature).unwrap();
+        let parent_path = root.join("pending-parent-intent");
+        let pending = root.join("pending-enrollment");
+        let final_path = root.join("pending-admin");
+        let name = allocate_parent(
+            &intent,
+            &parent_path,
+            &pending,
+            &final_path,
+            || Ok(()),
+            || provisioner.provision_parent(&owner),
+        )
+        .unwrap();
+        let secret = Secret::generate().unwrap();
+        let blob =
+            owner_credential::fixture_seal(&root, &deployment, &name, &public, &secret).unwrap();
+        let proposal = Proposal::new(record, &deployment, &name, &public, blob).unwrap();
+        proposal.prepare(&pending, &final_path).unwrap();
+        if mode == "vacant" {
+            assert!(tpm::LocalAnchor::pending_enrollment_fixture(
+                &root,
+                &secret,
+                tpm::exclusive_lock(&root.join("vacant.lock")).unwrap(),
+            )
+            .is_err());
+            assert!(pending.is_dir() && !final_path.exists());
+            return;
+        }
+        let genesis = if mode == "wrong-head" {
+            [0x88; 32]
+        } else {
+            admin_journal::genesis(&deployment).unwrap()
+        };
+        let anchor = provisioner
+            .provision(
+                &owner,
+                &secret,
+                genesis,
+                tpm::exclusive_lock(&root.join("initial.lock")).unwrap(),
+            )
+            .unwrap();
+        drop(anchor);
+        let (config, recovered) =
+            credentials::load_at(&pending, &public_path, &signature_path, |d, n, p, b, s| {
+                owner_credential::fixture_unseal(&root, d, n, p, b, s)
+            })
+            .unwrap();
+        assert_eq!(config.deployment, deployment);
+        assert_eq!(recovered.bytes(), secret.bytes());
+        let anchor = tpm::LocalAnchor::pending_enrollment_fixture(
+            &root,
+            &recovered,
+            tpm::exclusive_lock(&root.join("recovery.lock")).unwrap(),
+        )
+        .unwrap();
+        drop(recovered);
+        let (retained, retained_name) = ParentIntent::read_for_inspection(&parent_path).unwrap();
+        assert_eq!(retained_name, Some(name));
+        let restored = Proposal::from_pending(&pending, &retained, &name, &public).unwrap();
+        let recovery = PendingRecovery::inspect(
+            anchor,
+            retained,
+            restored,
+            name,
+            &parent_path,
+            &pending,
+            &final_path,
+            &public_path,
+            &signature_path,
+            public,
+            signature,
+        );
+        if mode == "wrong-head" {
+            assert!(recovery.is_err());
+            assert!(pending.is_dir() && !final_path.exists());
+            return;
+        }
+        assert_eq!(mode, "committed");
+        let recovery = recovery.unwrap();
+        let review = recovery.report().unwrap()["review_sha256"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let result = recovery.publish(&review, || Ok(())).unwrap();
+        assert_eq!(result["published"], true);
+        assert!(!pending.exists());
+        let (_, delivered) = credentials::load_at(
+            &final_path,
+            &public_path,
+            &signature_path,
+            |d, n, p, b, s| owner_credential::fixture_unseal(&root, d, n, p, b, s),
+        )
+        .unwrap();
+        assert_eq!(delivered.bytes(), secret.bytes());
+    }
     #[test]
     #[ignore = "requires fresh isolated existing-owner TPM with signed PCR policy"]
     fn emulator_resume_bound_parent_without_reallocation() {
@@ -1224,6 +1578,145 @@ mod tests {
         assert!(!f.pending.exists());
         f.proposal.recheck(&f.final_path).unwrap();
         assert!(destinations(&f.pending, &f.final_path).is_err());
+    }
+    #[test]
+    fn committed_pending_enrollment_publishes_only_after_exact_review() {
+        let f = Fixture::new("pending-publication");
+        let parent_path = f.root.join("parent-intent");
+        let public_path = f.root.join("pcr-public.pem");
+        let signature_path = f.root.join("pcr-signature.json");
+        crate::platform::write_atomic(&public_path, b"public fixture", 0o644).unwrap();
+        crate::platform::write_atomic(&signature_path, b"signed fixture", 0o644).unwrap();
+        let intent = ParentIntent::new(
+            f.proposal.files[3].1.clone(),
+            &f.proposal.deployment,
+            b"public fixture",
+            b"signed fixture",
+        )
+        .unwrap();
+        intent
+            .prepare(&parent_path, &f.pending, &f.final_path)
+            .unwrap();
+        let name: [u8; 34] = f.proposal.files[4].1.clone().try_into().unwrap();
+        intent.bind_name(&parent_path, &name).unwrap();
+        f.proposal.prepare(&f.pending, &f.final_path).unwrap();
+        let recovery = PendingRecovery::inspect(
+            f.anchor(),
+            intent,
+            Proposal::from_pending(
+                &f.pending,
+                &ParentIntent::read_for_inspection(&parent_path).unwrap().0,
+                &name,
+                b"public fixture",
+            )
+            .unwrap(),
+            name,
+            &parent_path,
+            &f.pending,
+            &f.final_path,
+            &public_path,
+            &signature_path,
+            b"public fixture".to_vec(),
+            b"signed fixture".to_vec(),
+        )
+        .unwrap();
+        let report = recovery.report().unwrap();
+        assert_eq!(report["phase"], "committed_pending_publication");
+        let reviewed = report["review_sha256"].as_str().unwrap().to_owned();
+        assert!(recovery
+            .publish(&"00".repeat(32), || panic!(
+                "invalid review must not authorize"
+            ))
+            .is_err());
+        assert!(f.pending.is_dir());
+        let (intent, _) = ParentIntent::read_for_inspection(&parent_path).unwrap();
+        let proposal =
+            Proposal::from_pending(&f.pending, &intent, &name, b"public fixture").unwrap();
+        let recovery = PendingRecovery::inspect(
+            f.anchor(),
+            intent,
+            proposal,
+            name,
+            &parent_path,
+            &f.pending,
+            &f.final_path,
+            &public_path,
+            &signature_path,
+            b"public fixture".to_vec(),
+            b"signed fixture".to_vec(),
+        )
+        .unwrap();
+        let result = recovery.publish(&reviewed, || Ok(())).unwrap();
+        assert_eq!(result["published"], true);
+        assert!(!f.pending.exists());
+        f.proposal.recheck(&f.final_path).unwrap();
+    }
+    #[test]
+    fn pending_enrollment_refuses_wrong_head_and_changed_files() {
+        let f = Fixture::new("pending-refuse");
+        let parent_path = f.root.join("parent-intent");
+        let public_path = f.root.join("pcr-public.pem");
+        let signature_path = f.root.join("pcr-signature.json");
+        crate::platform::write_atomic(&public_path, b"public fixture", 0o644).unwrap();
+        crate::platform::write_atomic(&signature_path, b"signed fixture", 0o644).unwrap();
+        let intent = ParentIntent::new(
+            f.proposal.files[3].1.clone(),
+            &f.proposal.deployment,
+            b"public fixture",
+            b"signed fixture",
+        )
+        .unwrap();
+        intent
+            .prepare(&parent_path, &f.pending, &f.final_path)
+            .unwrap();
+        let name: [u8; 34] = f.proposal.files[4].1.clone().try_into().unwrap();
+        intent.bind_name(&parent_path, &name).unwrap();
+        f.proposal.prepare(&f.pending, &f.final_path).unwrap();
+        let proposal =
+            Proposal::from_pending(&f.pending, &intent, &name, b"public fixture").unwrap();
+        assert!(PendingRecovery::inspect(
+            Fake([0; 32]),
+            intent,
+            proposal,
+            name,
+            &parent_path,
+            &f.pending,
+            &f.final_path,
+            &public_path,
+            &signature_path,
+            b"public fixture".to_vec(),
+            b"signed fixture".to_vec(),
+        )
+        .is_err());
+        let (intent, _) = ParentIntent::read_for_inspection(&parent_path).unwrap();
+        let proposal =
+            Proposal::from_pending(&f.pending, &intent, &name, b"public fixture").unwrap();
+        let recovery = PendingRecovery::inspect(
+            f.anchor(),
+            intent,
+            proposal,
+            name,
+            &parent_path,
+            &f.pending,
+            &f.final_path,
+            &public_path,
+            &signature_path,
+            b"public fixture".to_vec(),
+            b"signed fixture".to_vec(),
+        )
+        .unwrap();
+        let reviewed = recovery.report().unwrap()["review_sha256"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        assert!(recovery
+            .publish(&reviewed, || {
+                fs::write(f.pending.join("enrollment.json"), b"changed")?;
+                Ok(())
+            })
+            .is_err());
+        assert!(f.pending.is_dir());
+        assert!(!f.final_path.exists());
     }
     #[test]
     fn authorization_failure_retains_fence_without_dispatch() {

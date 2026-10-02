@@ -201,3 +201,32 @@ load, with one CPU/Cargo job, 768 MiB, no extra swap and 128 PIDs. Tests mock
 stop failures and check the held-lock refusal; they do not reproduce a real
 systemd stop timeout, image upgrade or native Ubuntu transition. Broader
 post-stop failure policy and installed qualification remain open.
+
+## Exact prior worker state before stop
+
+The previous `is-active --quiet` check treated every nonzero result as no
+running prior worker. Systemd documents that nonzero means only "not active";
+it does not distinguish an inactive service from a failed state or a query
+failure. The source now reads the unit's machine-readable load, active and
+substate properties. It proceeds only for a loaded `active/running` worker
+(with a validated prior snapshot) or a loaded `inactive/dead` unit (without
+one). Failed, transitioning, missing, malformed or unavailable status refuses
+installation before the managed stop request. Candidate acquisition may
+already have completed, but no model configuration is changed by this check.
+The status is an observation, not a lease: a service can still change state
+between the query and stop request.
+The state-query design follows the [systemd systemctl documentation](https://github.com/systemd/systemd/blob/main/man/systemctl.xml).
+
+The bounded offline source snapshot is
+`D:\LumaOS-builds\g2-model-activation-targeted-20261002-16`. Its frozen
+`source/build-inputs.json` SHA-256 is
+`d38050ff0b6daa586451de0ca36669fd0994684c6539806785b1931a320458c5`;
+`test.log` SHA-256 is
+`b226d634b4250d8da363fe7c2ed7dd52c518552d15967fbf3ae2fc6854ac95c6`.
+The D-backed offline run passed 31 Rust model tests, six policy tests,
+fifteen VM-harness unit tests, formatting, a warning-clean build and compiled
+CLI help, with one CPU/Cargo job, 768 MiB, no extra swap and 128 PIDs. A
+read-only Ubuntu WSL query confirmed the chosen `systemctl show` property
+format. Tests reject failed, transitioning, missing, duplicate and malformed
+status. No installed Luma unit transition, real model, VM or native Ubuntu
+qualification was run; G2 remains open.

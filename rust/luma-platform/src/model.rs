@@ -864,11 +864,51 @@ fn prior_snapshot_at(state: &Path) -> Result<PriorRunning> {
     })
 }
 
+/// A nonzero `is-active` result conflates ordinary inactivity, failed units
+/// and manager/query errors. Only an exact, loaded service state is usable
+/// before a stop request that may need prior-worker recovery.
+fn model_unit_running(success: bool, output: &[u8]) -> Result<bool> {
+    if !success || output.len() > 256 {
+        return Err("model service status unavailable; active model preserved".into());
+    }
+    let mut load = None;
+    let mut active = None;
+    let mut sub = None;
+    for line in std::str::from_utf8(output)?.lines() {
+        if let Some(value) = line.strip_prefix("LoadState=") {
+            if load.replace(value).is_some() {
+                return Err("duplicate model service load state".into());
+            }
+        } else if let Some(value) = line.strip_prefix("ActiveState=") {
+            if active.replace(value).is_some() {
+                return Err("duplicate model service active state".into());
+            }
+        } else if let Some(value) = line.strip_prefix("SubState=") {
+            if sub.replace(value).is_some() {
+                return Err("duplicate model service substate".into());
+            }
+        } else {
+            return Err("unexpected model service status output".into());
+        }
+    }
+    match (load, active, sub) {
+        (Some("loaded"), Some("active"), Some("running")) => Ok(true),
+        (Some("loaded"), Some("inactive"), Some("dead")) => Ok(false),
+        _ => Err("model service state uncertain; active model preserved".into()),
+    }
+}
+
 fn running_prior(var: &Path) -> Result<Option<PriorRunning>> {
-    let status = Command::new("/usr/bin/systemctl")
-        .args(["is-active", "--quiet", "luma-model.service"])
-        .status()?;
-    if status.success() {
+    let output = Command::new("/usr/bin/systemctl")
+        .args([
+            "show",
+            "--all",
+            "--property=LoadState,ActiveState,SubState",
+            "--no-pager",
+            "luma-model.service",
+        ])
+        .output()?;
+    if model_unit_running(output.status.success(), &output.stdout)? {
         Ok(Some(prior_snapshot_at(&var.join(STATE))?))
     } else {
         Ok(None)
@@ -1801,6 +1841,57 @@ mod tests {
         .unwrap_err()
         .to_string();
         assert_eq!(error, "stop failed without prior worker");
+    }
+    #[test]
+    fn prior_worker_status_requires_exact_loaded_running_or_inactive_state() {
+        assert!(model_unit_running(
+            true,
+            b"LoadState=loaded\nActiveState=active\nSubState=running\n"
+        )
+        .unwrap());
+        assert!(!model_unit_running(
+            true,
+            b"SubState=dead\nActiveState=inactive\nLoadState=loaded\n"
+        )
+        .unwrap());
+        for (success, output) in [
+            (
+                false,
+                &b"LoadState=loaded\nActiveState=inactive\nSubState=dead\n"[..],
+            ),
+            (
+                true,
+                &b"LoadState=not-found\nActiveState=inactive\nSubState=dead\n"[..],
+            ),
+            (
+                true,
+                &b"LoadState=loaded\nActiveState=failed\nSubState=failed\n"[..],
+            ),
+            (
+                true,
+                &b"LoadState=loaded\nActiveState=activating\nSubState=start\n"[..],
+            ),
+            (
+                true,
+                &b"LoadState=loaded\nActiveState=deactivating\nSubState=stop\n"[..],
+            ),
+            (
+                true,
+                &b"LoadState=loaded\nActiveState=active\nSubState=exited\n"[..],
+            ),
+            (true, &b"LoadState=loaded\nActiveState=inactive\n"[..]),
+            (
+                true,
+                &b"LoadState=loaded\nActiveState=inactive\nSubState=dead\nSubState=dead\n"[..],
+            ),
+            (
+                true,
+                &b"LoadState=loaded\nActiveState=inactive\nSubState=dead\nExtra=1\n"[..],
+            ),
+            (true, &b"\xff"[..]),
+        ] {
+            assert!(model_unit_running(success, output).is_err());
+        }
     }
     #[test]
     fn live_unified_cgroup_limit_is_observable() {

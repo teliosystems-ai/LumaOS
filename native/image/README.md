@@ -211,7 +211,10 @@ candidate weights before stopping the managed worker. A failed download or
 hash check leaves the current selection and worker untouched. A verified
 cached model needs the 2 GiB free-space reserve, not another full download
 allocation; `model-install-check` verifies the cache before applying that
-threshold. Admission and bytes are rechecked after the stop, so this is not a
+threshold. Before stopping the worker, installation also requires an exact
+loaded `active/running` or `inactive/dead` unit state; failed, transitioning,
+missing or unavailable status refuses the operation. Admission and bytes are
+rechecked after the stop, so this is not a
 resource reservation or a guarantee that activation and restart will succeed.
 If the stop request fails or activation then fails, a restart of a previously
 running worker is requested only when

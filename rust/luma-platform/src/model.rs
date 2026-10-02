@@ -8,7 +8,7 @@ use std::io::{Read, Seek, SeekFrom};
 use std::os::fd::AsRawFd;
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::os::unix::process::CommandExt;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::process::{Command, Stdio};
 
 const CATALOG: &str = include_str!("../../../native/image/model-catalog.json");
@@ -118,6 +118,96 @@ pub(crate) fn memory(info: &str, name: &str) -> Result<u64> {
         .ok_or_else(|| "memory overflow".into())
 }
 
+/// The process may have less RAM than /proc/meminfo reports. Require every
+/// finite cgroup-v2 ancestor limit to fit the selected worker's MemoryMax.
+/// This checks capacity, not a reservation or a pressure prediction.
+fn cgroup_path(text: &str) -> Result<&str> {
+    if text.len() > 4096 {
+        return Err("oversized cgroup observation".into());
+    }
+    let mut paths = text.lines().filter_map(|line| line.strip_prefix("0::"));
+    let path = paths.next().ok_or("unified cgroup path unavailable")?;
+    if paths.next().is_some() || !path.starts_with('/') || path.len() > 1024 {
+        return Err("invalid unified cgroup path".into());
+    }
+    let path = Path::new(path);
+    if path
+        .components()
+        .any(|component| !matches!(component, Component::RootDir | Component::Normal(_)))
+    {
+        return Err("unsafe unified cgroup path".into());
+    }
+    Ok(path.to_str().ok_or("non-UTF-8 unified cgroup path")?)
+}
+
+fn cgroup_limit_at(root: &Path, path: &str) -> Result<u64> {
+    let mut directory = root.to_path_buf();
+    let mut limit = u64::MAX;
+    let mut observe = |directory: &Path| -> Result<()> {
+        if !fs::symlink_metadata(directory)?.is_dir() {
+            return Err("unsafe cgroup directory".into());
+        }
+        let file = directory.join("memory.max");
+        if !fs::symlink_metadata(&file)?.is_file() {
+            return Err("unsafe cgroup memory limit".into());
+        }
+        let mut value = String::new();
+        OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NONBLOCK)
+            .open(file)?
+            .take(33)
+            .read_to_string(&mut value)?;
+        if value.len() > 32 {
+            return Err("oversized cgroup memory limit".into());
+        }
+        let value = value.strip_suffix('\n').unwrap_or(&value);
+        if value != "max" {
+            if value.is_empty() || !value.bytes().all(|byte| byte.is_ascii_digit()) {
+                return Err("invalid cgroup memory limit".into());
+            }
+            let current: u64 = value.parse()?;
+            if current == 0 {
+                return Err("zero cgroup memory limit".into());
+            }
+            limit = limit.min(current);
+        }
+        Ok(())
+    };
+    observe(&directory)?;
+    for component in Path::new(path).components() {
+        match component {
+            Component::RootDir => (),
+            Component::Normal(part) => {
+                directory.push(part);
+                observe(&directory)?;
+            }
+            _ => return Err("unsafe unified cgroup path".into()),
+        }
+    }
+    Ok(limit)
+}
+
+fn effective_memory_limit() -> Result<u64> {
+    let mut observed = String::new();
+    File::open("/proc/self/cgroup")?
+        .take(4097)
+        .read_to_string(&mut observed)?;
+    let path = cgroup_path(&observed)?;
+    cgroup_limit_at(Path::new("/sys/fs/cgroup"), path)
+}
+
+fn admit_cgroup(p: &Profile, limit: u64) -> Result<()> {
+    if limit < p.memory_max_bytes {
+        return Err(format!(
+            "{} cannot be admitted: effective cgroup memory limit {limit} is below worker MemoryMax {}",
+            p.id, p.memory_max_bytes
+        )
+        .into());
+    }
+    Ok(())
+}
+
 fn admit(p: &Profile, total: u64, available: u64, free: u64, cpus: usize) -> Result<()> {
     if total < p.minimum_ram_bytes
         || available < p.minimum_available_bytes
@@ -146,6 +236,7 @@ fn available_space(at: &Path) -> Result<u64> {
 
 pub fn check(p: &Profile, free: u64) -> Result<()> {
     let info = fs::read_to_string("/proc/meminfo")?;
+    admit_cgroup(p, effective_memory_limit()?)?;
     admit(
         p,
         memory(&info, "MemTotal")?,
@@ -627,6 +718,7 @@ pub fn serve() -> Result<()> {
     platform::require_installed()?;
     let runtime = runtime_lock(Path::new(VAR), false)?;
     let p = selected()?;
+    admit_cgroup(&p, effective_memory_limit()?)?;
     let file = Path::new(VAR)
         .join(STATE)
         .join("models")
@@ -791,6 +883,84 @@ mod tests {
         ] {
             assert!(admit(&p, total, available, disk, cpu).is_err());
         }
+    }
+    #[test]
+    fn cgroup_capacity_uses_tightest_ancestor_and_exact_profile_bound() {
+        let root =
+            std::env::temp_dir().join(format!("luma-model-cgroup-capacity-{}", std::process::id()));
+        fs::create_dir(&root).unwrap();
+        fs::create_dir(root.join("parent")).unwrap();
+        fs::create_dir(root.join("parent/worker")).unwrap();
+        fs::write(root.join("memory.max"), b"max\n").unwrap();
+        fs::write(root.join("parent/memory.max"), b"8000000000\n").unwrap();
+        fs::write(root.join("parent/worker/memory.max"), b"5000000000\n").unwrap();
+        let p = profile("qwen3-4b-q4-k-m").unwrap();
+        assert_eq!(
+            cgroup_path("0::/parent/worker\n").unwrap(),
+            "/parent/worker"
+        );
+        assert_eq!(
+            cgroup_limit_at(&root, "/parent/worker").unwrap(),
+            5_000_000_000
+        );
+        admit_cgroup(&p, cgroup_limit_at(&root, "/parent/worker").unwrap()).unwrap();
+        fs::write(root.join("parent/memory.max"), b"4000000000\n").unwrap();
+        assert_eq!(
+            cgroup_limit_at(&root, "/parent/worker").unwrap(),
+            4_000_000_000
+        );
+        assert!(admit_cgroup(&p, cgroup_limit_at(&root, "/parent/worker").unwrap()).is_err());
+        fs::write(root.join("parent/memory.max"), b"max\n").unwrap();
+        fs::write(
+            root.join("parent/worker/memory.max"),
+            format!("{}\n", p.memory_max_bytes),
+        )
+        .unwrap();
+        admit_cgroup(&p, cgroup_limit_at(&root, "/parent/worker").unwrap()).unwrap();
+        for directory in [
+            root.join("parent/worker"),
+            root.join("parent"),
+            root.clone(),
+        ] {
+            fs::remove_file(directory.join("memory.max")).unwrap();
+            fs::remove_dir(directory).unwrap();
+        }
+    }
+    #[test]
+    fn malformed_or_substituted_cgroup_limits_fail_closed() {
+        for input in [
+            "",
+            "1:name=/x\n",
+            "0::relative\n",
+            "0::/../x\n",
+            "0::/x\n0::/y\n",
+        ] {
+            assert!(cgroup_path(input).is_err());
+        }
+        assert!(cgroup_path(&format!("0::/{}\n", "x".repeat(1025))).is_err());
+        let root =
+            std::env::temp_dir().join(format!("luma-model-cgroup-invalid-{}", std::process::id()));
+        fs::create_dir(&root).unwrap();
+        let limit = root.join("memory.max");
+        for input in [
+            b"0\n".as_slice(),
+            b"-1\n",
+            b"1\n\n",
+            b"invalid\n",
+            b"999999999999999999999999999999999\n",
+        ] {
+            fs::write(&limit, input).unwrap();
+            assert!(cgroup_limit_at(&root, "/").is_err());
+        }
+        fs::remove_file(&limit).unwrap();
+        std::os::unix::fs::symlink(root.join("absent"), &limit).unwrap();
+        assert!(cgroup_limit_at(&root, "/").is_err());
+        fs::remove_file(&limit).unwrap();
+        fs::remove_dir(root).unwrap();
+    }
+    #[test]
+    fn live_unified_cgroup_limit_is_observable() {
+        assert!(effective_memory_limit().unwrap() > 0);
     }
     #[test]
     fn memory_observation_is_strict() {

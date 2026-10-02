@@ -6,6 +6,14 @@ service is a **future, separately implemented installer variant**. It is not an
 automatic fallback when a TPM is absent, unavailable, cleared or inconsistent.
 This closes the deployment-selection question, not implementation or acceptance.
 
+Owner decision, 2026-10-02: use **existing TPM ownership**. Enrollment will require
+the custodian's existing nonempty owner authorization, supplied locally through
+the protected enrollment flow. Luma must not take ownership, change owner,
+endorsement or platform credentials, clear the TPM, or delete existing indexes.
+Credentials must never be supplied in chat, command arguments, Git or logs.
+Custodian availability, hardware access and actual enrollment consent remain
+separate from this software-design decision.
+
 This native implementation note supplements the frozen reference ADRs 0001,
 0002, 0007, 0009 and 0010; it does not rewrite them or the release inventory.
 
@@ -31,11 +39,26 @@ configuration, credential and journal. Missing enrollment fails closed.
 The proposed index is `0x01804c41`, SHA-256, 32-byte NV_EXTEND with exact
 AUTHREAD/AUTHWRITE/NO_DA/WRITTEN attributes and pinned public Name. This is a
 development allocation, not permission to overwrite an index on a real machine.
-The 32-byte random authorization is used in TPM HMAC sessions, never a password
-session in the native adapter. Only public digest parameters are sent; the
-adapter does not implement encrypted secret provisioning. An unbound HMAC
-session relies on the high-entropy authorization; replacing it with a human
-password is not supported.
+The 32-byte random NV authorization is used in TPM HMAC sessions, never a
+password session in the native adapter. Ordinary reads/extends send only public
+digest parameters; their unbound HMAC session relies on the high-entropy NV
+authorization, which must not be replaced by a human password.
+
+The new low-level existing-owner provisioning boundary refuses an occupied
+index and accepts only the fixed allocation/profile. It uses a temporary NULL
+hierarchy RSA key to salt an AES-CFB HMAC session, authenticates the existing
+owner, encrypts the new NV authorization parameter, defines the index and
+extends its initial digest. It never changes hierarchy credentials, persists
+the temporary key, clears the TPM or undefines an index. It flushes only its
+own temporary key/sessions. Empty owner authorization is not supported by this
+enrollment profile; the custodian must provide an existing nonempty credential.
+
+This boundary is not exposed by an enrollment CLI or called by the installer
+yet. Its future authenticated caller must persist the sealed proposal and
+interruption fence **before** calling it. An error can follow an applied NV
+write, so it must not trigger a retry, reset or automatic cleanup of NV state.
+TPM ownership is not the product Admin role; supplying owner authorization
+does not alone authorize bootstrap, signing, or another product effect.
 
 The native inert audit journal binds a random deployment namespace, ordered
 records and their payload digests into the TPM extend chain. It is bounded to
@@ -66,24 +89,42 @@ confirmation and on successful lab installation. No TPM provisioning occurs.
 Recovery/export paths remain independently usable and do not require a vacant
 TPM index. Reinstallation over an occupied index is refused; it is not recovery.
 
-Expected future service inputs (not created by the current installer):
+Required sealed checkpoint inputs (not created by the current installer):
 
-- `/var/lib/luma-os/admin/anchor.json`: closed version/profile/index/Name record.
+- `/var/lib/luma-os/admin/anchor.json`: closed schema-v2 profile/index/Name,
+  deployment, image PCR-key digest and sealed-credential digest record.
 - `/var/lib/luma-os/admin/journal.json`: exact persisted inert audit journal.
-- `/run/credentials/luma-admin.service/nv-auth`: private 32-byte authorization.
+- `/var/lib/luma-os/admin/nv-auth.cred`: private TPM-only encrypted credential.
+- `/usr/share/luma-os/admin-pcr-public.pem`: image-owned approved PCR signing key.
+- `/run/systemd/tpm2-pcr-signature.json`: installed boot's signed PCR policy.
 - `/run/luma-admin/anchor.lock`: exclusive writer lock in a private directory.
 
-No service unit currently supplies that credential. Do not manually turn these
-paths into production enrollment. The memory boundary disables core dumps and
-clears the Rust credential buffer; installed sealed delivery and the complete
-service confinement boundary remain to be implemented and evaluated.
+The native checkpoint adapter now unseals directly into locked, nondumpable,
+wiped memory and passes the secret to its authenticated TPM connection. It no
+longer reads a plaintext `/run/credentials/.../nv-auth` file. Legacy schema-v1
+configuration is refused without fallback. The volatile lock directory is
+created by a fixed tmpfiles rule; no enrollment/credential is auto-created.
+
+`admin_credentials.rs` bounds and validates the fixed files, requires a private
+configuration/ciphertext and root-owned, non-writable public inputs, pins the
+image key and ciphertext digests, and rechecks the snapshot after unsealing.
+The helper verifies the ciphertext, deployment-bound name and signed PCR policy.
+Metadata/digests alone are not authority. No selectable key, transport or
+credential path is exposed. Missing enrollment remains a refusal.
+
+Do not manually turn these paths into production enrollment. Authenticated
+bootstrap, NV provisioning, service confinement, signing/hierarchy custody,
+rotation and recovery are still open. The helper/TSS libraries' working copies
+still need the full service memory/swap review; locking the Rust secret does
+not prove every dependent allocation is locked. Targeted evaluation is recorded
+in [the sealed-delivery checkpoint](evidence/G2_ADMIN_DELIVERY_2026-10-02.md).
 
 ## Explicit committed-audit publication recovery
 
 The native `admin-checkpoint-reconcile` command now inspects an existing pending
 inert audit commit without changing journal bytes. It requires root, an installed
 boot, the fixed local TPM/checkpoint paths and existing credential delivery.
-Because enrollment/delivery is not integrated yet, this is not an operational
+Because enrollment is not integrated yet, this is not an operational
 recovery route for a fresh current laboratory installation. Do not fabricate
 credentials or enrollment files to enable it.
 
@@ -141,8 +182,9 @@ prevention or finite Admin roles. A signature for a different PCR11 measurement
 can authorize that measurement without resealing; this is not evidence of a
 working installed A/B enrollment or recovery flow. Changed PCR7 intentionally
 denies access until an independently authorized recovery/migration exists.
-The deployment-bound helper name must be deliberately integrated with the
-future service credential loader; the proposed `nv-auth` path is not wired up.
+The native checkpoint loader now uses the deployment-bound helper name and the
+fixed image key/installed signature paths directly. This replaces the proposed
+plaintext `nv-auth` path, not the missing authenticated enrollment process.
 
 ## Image builder: signed installed boot policies
 
@@ -244,8 +286,8 @@ the [authentication checkpoint](evidence/NATIVE_ADMIN_AUTH_2026-09-29.md).
    refusal, cryptographically random secrets, independently recoverable local
    credentials, and interruption/retry fencing. Never clear the TPM, overwrite
    someone else's index, or silently take ownership of its hierarchies.
-3. Integrate the sealed credential primitive into authenticated delivery for
-   the approved local platform/boot policy. Handle
+3. Integrate the new direct sealed loader with authenticated enrollment and the
+   complete confined service for the approved local platform/boot policy. Handle
    signed A/B updates, fallback and recovery without sealing solely to the live
    installer's PCR values. The builder now emits installed signed PCR policies;
    boot-phase/service execution and signer rotation remain to be qualified.
@@ -288,8 +330,10 @@ TPM loss may trigger implicit migration between variants.
 `native/tests/run_tpm_boundaries.sh` snapshots the source and executes the normal
 Rust suite plus explicitly isolated software-TPM tests. It runs only in a fresh
 tools container, without host TPM devices, network, host services, privilege
-grants or Docker socket. Test-only index provisioning/undefinition uses the
-disposable emulator and is not linked into the product. Private emulator state
+grants or Docker socket. Legacy test-only provisioning/undefinition commands
+use the disposable emulator, not a product command interface. The new native
+fixed-index provisioning primitive has its own existing-owner fixture; it is
+not an operational enrollment workflow. Private emulator state
 and random credentials are destroyed on exit, not exported with diagnostics.
 See [the evidence checkpoint](evidence/NATIVE_TPM_STATUS_2026-09-28.md).
 The subsequent admission/VM-fixture evaluation is recorded in
@@ -304,7 +348,7 @@ Implementation references:
 - [systemd 255 credential design](https://github.com/systemd/systemd/blob/v255/man/systemd-creds.xml),
   [explicit signed-key option parsing](https://github.com/systemd/systemd/blob/v255/src/creds/creds.c)
   and [authenticated credential format](https://github.com/systemd/systemd/blob/v255/src/shared/creds-util.c)
-  for the primitive; installed sealed-delivery integration remains pending.
+  for the primitive; confined-service/enrollment qualification remains pending.
 
 The built Ubuntu toolchain uses TPM2-TSS 4.0.1 and tpm2-tools 5.6; executed
 tool behavior, rather than assuming all newer documentation options exist,

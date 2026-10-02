@@ -382,6 +382,48 @@ pub fn unseal(
 }
 
 #[cfg(test)]
+fn fixture_transport(directory: &std::path::Path) -> Transport {
+    assert!(std::path::Path::new("/.dockerenv").is_file());
+    assert!(!std::path::Path::new("/dev/tpm0").exists());
+    assert!(!std::path::Path::new("/dev/tpmrm0").exists());
+    assert_eq!(directory.parent(), Some(std::path::Path::new("/tmp")));
+    assert!(directory
+        .file_name()
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .starts_with("luma-tpm-"));
+    Transport::Emulator(format!("swtpm:path={}/tpm.sock", directory.display()))
+}
+
+#[cfg(test)]
+pub(crate) fn fixture_seal(
+    directory: &std::path::Path,
+    deployment: &str,
+    public: &[u8],
+    secret: &Secret,
+) -> Result<Vec<u8>> {
+    seal_with(fixture_transport(directory), deployment, public, secret)
+}
+
+#[cfg(test)]
+pub(crate) fn fixture_unseal(
+    directory: &std::path::Path,
+    deployment: &str,
+    public: &[u8],
+    blob: &[u8],
+    signature: &[u8],
+) -> Result<Secret> {
+    unseal_with(
+        fixture_transport(directory),
+        deployment,
+        public,
+        blob,
+        signature,
+    )
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     #[test]

@@ -1,4 +1,5 @@
 //! Native Linux platform boundary. No model-provided command or shell execution.
+mod admin_credentials;
 mod admin_journal;
 mod authentication;
 mod broker_effects;

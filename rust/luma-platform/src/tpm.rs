@@ -1,6 +1,6 @@
 //! Local TPM2 transport and exact NV-extend checkpoint boundary.
-//! No owner/platform authorization, provisioning, clearing, hierarchy changes,
-//! network transport selection, external fallback, or production custody claim.
+//! Existing-owner provisioning boundary; no ownership takeover, clearing,
+//! hierarchy changes, external fallback, or production custody claim.
 use crate::{bundle, Result};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -42,6 +42,13 @@ extern "C" {
     ) -> u32;
     fn luma_tpm_read(context: *mut c_void, value: *mut u8) -> u32;
     fn luma_tpm_extend(context: *mut c_void, digest: *const u8) -> u32;
+    fn luma_tpm_provision_existing(
+        context: *mut c_void,
+        owner: *const u8,
+        owner_size: u16,
+        auth: *const u8,
+        genesis: *const u8,
+    ) -> u32;
 }
 
 fn check(code: u32) -> Result<()> {
@@ -60,6 +67,33 @@ impl Drop for Context {
     }
 }
 impl Context {
+    /// Future authenticated enrollment must durably fence a sealed proposal
+    /// BEFORE entry. No public CLI exposes this low-level write primitive.
+    /// Failure is never permission to retry, reset or remove the index.
+    #[cfg_attr(not(test), allow(dead_code))]
+    fn provision_existing(
+        &mut self,
+        owner: &crate::sealed_credential::PrivateBuffer,
+        secret: &crate::sealed_credential::Secret,
+        genesis: [u8; 32],
+    ) -> Result<()> {
+        crate::require_root()?;
+        if owner.bytes().is_empty() || owner.bytes().len() > 64 {
+            return Err(
+                "existing nonempty TPM owner authorization required, at most 64 bytes".into(),
+            );
+        }
+        self.admission()?;
+        check(unsafe {
+            luma_tpm_provision_existing(
+                self.0,
+                owner.bytes().as_ptr(),
+                owner.bytes().len() as u16,
+                secret.bytes().as_ptr(),
+                genesis.as_ptr(),
+            )
+        })
+    }
     fn open(transport: &str) -> Result<Self> {
         let transport = CString::new(transport)?;
         let mut raw = std::ptr::null_mut();
@@ -264,39 +298,16 @@ impl LocalAnchor {
 
     pub fn installed() -> Result<Self> {
         crate::require_root()?;
-        #[derive(Deserialize)]
-        #[serde(deny_unknown_fields)]
-        struct Config {
-            schema_version: u32,
-            profile: String,
-            index: u32,
-            nv_name: String,
-        }
-        let config: Config = serde_json::from_slice(&private_read(
-            Path::new("/var/lib/luma-os/admin/anchor.json"),
-            4096,
-        )?)?;
-        if config.schema_version != 1 || config.profile != PROFILE {
-            return Err("unsupported Admin checkpoint profile".into());
-        }
-        let mut secret =
-            private_read(Path::new("/run/credentials/luma-admin.service/nv-auth"), 32)?;
-        let secret_array: std::result::Result<&[u8; 32], _> = secret.as_slice().try_into();
-        let result = (|| match secret_array {
-            Ok(auth) => Self::connect(
-                Context::local()?,
-                config.index,
-                decode(&config.nv_name)?,
-                auth,
-                exclusive_lock(Path::new("/run/luma-admin/anchor.lock"))?,
-            ),
-            Err(_) => Err("TPM credential must be exactly 32 bytes".into()),
-        })();
-        // Never log or serialize authorization material, including error paths.
-        for byte in &mut secret {
-            unsafe { std::ptr::write_volatile(byte, 0) };
-        }
-        result
+        crate::platform::require_installed()?;
+        let lock = exclusive_lock(Path::new("/run/luma-admin/anchor.lock"))?;
+        let (config, secret) = crate::admin_credentials::load()?;
+        Self::connect(
+            Context::local()?,
+            config.index,
+            decode(&config.nv_name)?,
+            secret.bytes(),
+            lock,
+        )
     }
 }
 
@@ -383,6 +394,79 @@ pub(crate) fn exclusive_lock(path: &Path) -> Result<File> {
 mod tests {
     use super::*;
     use crate::admin_journal::{Entry, Store};
+
+    #[test]
+    #[ignore = "requires isolated emulator with existing nonempty owner auth"]
+    fn emulator_existing_owner_provisioning() {
+        use crate::sealed_credential::{PrivateBuffer, Secret};
+        assert!(Path::new("/.dockerenv").is_file());
+        assert!(!Path::new("/dev/tpm0").exists() && !Path::new("/dev/tpmrm0").exists());
+        let directory = std::path::PathBuf::from(std::env::var("LUMA_TPM_TEST_DIRECTORY").unwrap());
+        assert_eq!(directory.parent(), Some(Path::new("/tmp")));
+        assert!(directory
+            .file_name()
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .starts_with("luma-tpm-"));
+        let transport = format!("swtpm:path={}/tpm.sock", directory.display());
+        let mut owner = PrivateBuffer::new(32).unwrap();
+        File::open(directory.join("owner.binary"))
+            .unwrap()
+            .read_exact(owner.bytes_mut())
+            .unwrap();
+        let mut wrong = PrivateBuffer::new(32).unwrap();
+        wrong.bytes_mut().copy_from_slice(owner.bytes());
+        wrong.bytes_mut()[0] ^= 1;
+        let secret = Secret::generate().unwrap();
+        let mut context = Context::open(&transport).unwrap();
+        assert!(context
+            .provision_existing(&PrivateBuffer::new(65).unwrap(), &secret, [0x77; 32])
+            .is_err());
+        assert_ne!(
+            unsafe {
+                luma_tpm_provision_existing(
+                    context.0,
+                    owner.bytes().as_ptr(),
+                    0,
+                    secret.bytes().as_ptr(),
+                    [0x77; 32].as_ptr(),
+                )
+            },
+            0
+        );
+        assert!(context
+            .provision_existing(&wrong, &secret, [0x77; 32])
+            .is_err());
+        context.admission().unwrap(); // wrong auth did not allocate the index
+        context
+            .provision_existing(&owner, &secret, [0x77; 32])
+            .unwrap();
+        assert!(context.admission().is_err());
+        let mut public = Vec::new();
+        public.extend(INDEX.to_be_bytes());
+        public.extend(0x000bu16.to_be_bytes());
+        public.extend(ATTRIBUTES.to_be_bytes());
+        public.extend(0u16.to_be_bytes());
+        public.extend(32u16.to_be_bytes());
+        let mut name = [0u8; 34];
+        name[1] = 0xb;
+        name[2..].copy_from_slice(&Sha256::digest(public));
+        let mut anchor = LocalAnchor::connect(
+            Context::open(&transport).unwrap(),
+            INDEX,
+            name,
+            secret.bytes(),
+            exclusive_lock(&directory.join("anchor.lock")).unwrap(),
+        )
+        .unwrap();
+        let expected = extend_value([0; 32], [0x77; 32]);
+        assert_eq!(anchor.read().unwrap(), expected);
+        assert!(context
+            .provision_existing(&owner, &secret, [0x88; 32])
+            .is_err());
+        assert_eq!(anchor.read().unwrap(), expected); // collision never overwrites/extends
+    }
 
     fn emulator() -> (String, std::path::PathBuf, [u8; 32], [u8; 34]) {
         let directory = std::path::PathBuf::from(

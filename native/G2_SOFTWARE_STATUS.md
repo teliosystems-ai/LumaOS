@@ -90,6 +90,15 @@ cgroup observation, and the existing model policy/harness checks passed. This
 does not reserve memory, detect all pressure, or implement resource leases,
 generations or stale-worker fencing; no image or LLM was run for this increment.
 
+The [model reconfiguration preflight checkpoint](evidence/G2_MODEL_PREFLIGHT_2026-10-02.md)
+adds `model-install-check MODEL-ID`, a read-only, non-reserving hardware,
+cgroup and free-space check on the installed system. `model-install` now runs
+that check under its operation lock before stopping the existing worker, then
+rechecks admission during activation. Predictable capacity refusals therefore
+leave the current worker running. Targeted Rust and policy/harness tests passed;
+download failure, interrupted activation, generation fencing and actual
+installed-system service transitions still need implementation/evaluation.
+
 The [committed-audit recovery checkpoint](evidence/G2_ADMIN_RECOVERY_2026-10-01.md)
 adds explicit, digest-reviewed publication of an interrupted journal commit only
 when the authenticated TPM proves the exact one-entry successor. It does not

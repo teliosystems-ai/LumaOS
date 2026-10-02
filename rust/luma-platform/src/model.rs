@@ -685,20 +685,72 @@ fn selected_at(state: &Path) -> Result<Profile> {
     profile(&s.id)
 }
 
+/// Read-only, advisory preflight. Activation repeats admission after stopping
+/// the managed worker; neither observation reserves RAM or storage.
+fn preflight_at(
+    var: &Path,
+    p: &Profile,
+    admit: impl FnOnce(&Profile, u64) -> Result<()>,
+) -> Result<()> {
+    let state = var.join(STATE);
+    let metadata = fs::symlink_metadata(&state)?;
+    if !metadata.is_dir() || metadata.uid() != 0 || metadata.mode() & 0o022 != 0 {
+        return Err("unsafe model preflight state directory".into());
+    }
+    let models = state.join("models");
+    let target = match fs::symlink_metadata(&models) {
+        Ok(m) if m.is_dir() && m.uid() == 0 && m.mode() & 0o022 == 0 => models.as_path(),
+        Ok(_) => return Err("unsafe model cache directory; active model preserved".into()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => state.as_path(),
+        Err(error) => return Err(error.into()),
+    };
+    admit(p, available_space(target)?)
+}
+
+fn install_after_preflight(
+    preflight: impl FnOnce() -> Result<()>,
+    stop: impl FnOnce() -> Result<()>,
+    activate: impl FnOnce() -> Result<()>,
+    restart: impl FnOnce() -> Result<()>,
+) -> Result<()> {
+    preflight()?;
+    stop()?;
+    activate()?;
+    restart()
+}
+
+pub fn install_check(id: &str) -> Result<()> {
+    crate::require_root()?;
+    platform::require_installed()?;
+    let p = profile(id)?;
+    preflight_at(Path::new(VAR), &p, check)?;
+    println!(
+        "{}",
+        serde_json::json!({"schema_version":1,"model":p.id,
+        "preflight_admitted":true,"reservation":false,
+        "activation_guaranteed":false,"gate_closing":false})
+    );
+    Ok(())
+}
+
 pub fn install(id: &str) -> Result<()> {
     crate::require_root()?;
     platform::require_installed()?;
     let p = profile(id)?;
     let _lock = operation_lock(Path::new(VAR))?;
-    // Do not replace a running model or its authentication material.
-    command("/usr/bin/systemctl", &["stop", "luma-model.service"])?;
-    provision_locked(Path::new(VAR), &p)?;
-    command("/usr/bin/systemctl", &["daemon-reload"])?;
-    command(
-        "/usr/bin/systemctl",
-        &["restart", "luma-model.service", "luma-reference.service"],
-    )?;
-    Ok(())
+    install_after_preflight(
+        || preflight_at(Path::new(VAR), &p, check),
+        || command("/usr/bin/systemctl", &["stop", "luma-model.service"]).map(|_| ()),
+        || provision_locked(Path::new(VAR), &p),
+        || {
+            command("/usr/bin/systemctl", &["daemon-reload"])?;
+            command(
+                "/usr/bin/systemctl",
+                &["restart", "luma-model.service", "luma-reference.service"],
+            )?;
+            Ok(())
+        },
+    )
 }
 
 pub fn unit() -> Result<()> {
@@ -957,6 +1009,81 @@ mod tests {
         assert!(cgroup_limit_at(&root, "/").is_err());
         fs::remove_file(&limit).unwrap();
         fs::remove_dir(root).unwrap();
+    }
+    #[test]
+    fn read_only_install_preflight_refuses_unsafe_cache_without_creating_it() {
+        let (dir, _, p) = runtime_fixture("preflight");
+        let state = dir.join(STATE);
+        let models = state.join("models");
+        preflight_at(&dir, &p, |_, free| {
+            assert!(free > 0);
+            Ok(())
+        })
+        .unwrap();
+        assert!(!models.exists());
+        std::os::unix::fs::symlink("missing", &models).unwrap();
+        assert!(preflight_at(&dir, &p, |_, _| panic!("unsafe cache admitted")).is_err());
+        fs::remove_file(&models).unwrap();
+        fs::create_dir(&models).unwrap();
+        fs::set_permissions(&models, fs::Permissions::from_mode(0o777)).unwrap();
+        assert!(preflight_at(&dir, &p, |_, _| panic!("writable cache admitted")).is_err());
+        fs::set_permissions(&models, fs::Permissions::from_mode(0o700)).unwrap();
+        preflight_at(&dir, &p, |_, free| {
+            assert!(free > 0);
+            Ok(())
+        })
+        .unwrap();
+        fs::remove_dir(models).unwrap();
+        remove_runtime_fixture(&dir);
+    }
+    #[test]
+    fn predictable_refusal_cannot_stop_working_model() {
+        use std::cell::RefCell;
+        let calls = RefCell::new(Vec::new());
+        assert!(install_after_preflight(
+            || {
+                calls.borrow_mut().push("preflight");
+                Err("insufficient capacity".into())
+            },
+            || {
+                calls.borrow_mut().push("stop");
+                Ok(())
+            },
+            || {
+                calls.borrow_mut().push("activate");
+                Ok(())
+            },
+            || {
+                calls.borrow_mut().push("restart");
+                Ok(())
+            },
+        )
+        .is_err());
+        assert_eq!(*calls.borrow(), ["preflight"]);
+        calls.borrow_mut().clear();
+        install_after_preflight(
+            || {
+                calls.borrow_mut().push("preflight");
+                Ok(())
+            },
+            || {
+                calls.borrow_mut().push("stop");
+                Ok(())
+            },
+            || {
+                calls.borrow_mut().push("activate");
+                Ok(())
+            },
+            || {
+                calls.borrow_mut().push("restart");
+                Ok(())
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            *calls.borrow(),
+            ["preflight", "stop", "activate", "restart"]
+        );
     }
     #[test]
     fn live_unified_cgroup_limit_is_observable() {

@@ -175,7 +175,11 @@ Any existing final, parent-intent or pending enrollment refuses, including a par
 or dangling symlink. An error after proposal creation leaves it intact even if
 the TPM rejected the write. Do not delete it, rerun with altered credentials,
 undefine the index, or fabricate a final directory. A reviewed recovery command
-for interrupted enrollment remains to be implemented. If final publication
+for interrupted enrollment remains to be implemented. The read-only
+`admin-checkpoint-enrollment-inspect` command reports the fixed parent/NV handle
+occupancy, retained intent, recorded parent Name/profile match and presence of
+pending/final directories. Its observation digest is not TPM attestation or
+permission to resume, remove or repeat a write. If final publication
 completed but its acknowledgement was lost, use the read-only
 `admin-checkpoint-status` command; that is not permission to repeat provisioning.
 The existing audit reconciliation command below does not recover enrollment.

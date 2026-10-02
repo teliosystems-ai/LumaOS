@@ -67,6 +67,9 @@ fn dispatch() -> Result<()> {
         Some("admin-checkpoint-enroll") if args.len() == 3 && args[2] == "--existing-owner" => {
             admin_enrollment::enroll(&args[1])
         }
+        Some("admin-checkpoint-enrollment-inspect") if args.len() == 1 => {
+            admin_enrollment::inspect()
+        }
         Some("admin-checkpoint-reconcile") if args.len() == 1 => admin_journal::reconcile(None),
         Some("admin-checkpoint-reconcile")
             if args.len() == 3 && args[1] == "--publish-committed" =>
@@ -128,6 +131,7 @@ fn dispatch() -> Result<()> {
         Some("help" | "--help") | None => {
             println!("Local TPM diagnostics: tpm-probe | admin-checkpoint-status (root only; read-only; neither enrolls nor grants Admin). External Admin deployment is deferred.");
             println!("admin-checkpoint-enroll LOGIN --existing-owner: explicit installed-root checkpoint enrollment with local PAM and hidden custodian owner authorization; retains interrupted attempts; does not grant product Admin.");
+            println!("admin-checkpoint-enrollment-inspect: read-only retained-intent and fixed TPM-handle observation; does not repair, retry, delete or grant Admin.");
             println!("admin-checkpoint-reconcile [--publish-committed REVIEW-SHA256]: inspect or explicitly publish a TPM-proven pending inert audit commit; never replays effects or resets TPM state. Requires existing enrollment and credential delivery.");
             println!("admin-auth-check LOGIN: installed-system, controlling-terminal account authentication diagnostic; does not enroll or grant product Admin.");
             println!("Install requires local TPM2 admission before any disk write. admin-install-check is read-only and does not enroll Admin; explicit checkpoint enrollment remains separate from product Admin activation.");

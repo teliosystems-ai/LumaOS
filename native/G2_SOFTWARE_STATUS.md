@@ -54,7 +54,10 @@ product enrollment path. See [the native enrollment checkpoint](evidence/G2_NATI
 and [the operator instructions](LOCAL_TPM2_ADMIN.md#explicit-checkpoint-enrollment).
 Reviewed interrupted-enrollment recovery, full Admin bootstrap/service, independent
 credential recovery, production custody and installed-image evaluation remain
-open. Targeted checks do not close those requirements.
+open. A [fixed-path read-only inspection command](evidence/G2_ENROLLMENT_INSPECTION_2026-10-02.md)
+now reports retained intent and TPM handle occupancy without attempting repair
+or retry; it is not reviewed recovery. Targeted checks do not close those
+requirements.
 
 The earlier [disposable TPM feasibility experiment](evidence/G2_OWNER_CREDENTIAL_FEASIBILITY_2026-10-02.md)
 informed the native backend now integrated above. The targeted native tests

@@ -84,6 +84,7 @@ extern "C" {
         secret_out: *mut u8,
     ) -> u32;
     fn luma_tpm_credential_fingerprint(pem: *const u8, pem_size: u16, output: *mut u8) -> u32;
+    fn luma_tpm_credential_parent_matches(context: *mut c_void, expected_name: *const u8) -> u32;
     fn luma_tpm_current_policy11(context: *mut c_void, output: *mut u8) -> u32;
     fn luma_tpm_verify_policy11(
         context: *mut c_void,
@@ -110,6 +111,15 @@ impl Drop for Context {
     }
 }
 impl Context {
+    fn handle_exists(&mut self, handle: u32) -> Result<bool> {
+        let mut occupied = 1;
+        check(unsafe { luma_tpm_index_exists(self.0, handle, &mut occupied) })?;
+        Ok(occupied != 0)
+    }
+
+    fn parent_matches(&mut self, expected_name: &[u8; 34]) -> Result<()> {
+        check(unsafe { luma_tpm_credential_parent_matches(self.0, expected_name.as_ptr()) })
+    }
     fn current_policy11(&mut self) -> Result<[u8; 32]> {
         let mut digest = [0u8; 32];
         check(unsafe { luma_tpm_current_policy11(self.0, digest.as_mut_ptr()) })?;
@@ -459,6 +469,22 @@ pub(crate) fn checkpoint_name() -> [u8; 34] {
     name[1] = 0xb;
     name[2..].copy_from_slice(&Sha256::digest(public));
     name
+}
+
+/// Read-only fixed-handle observation for enrollment inspection. This does
+/// not prove the origin of an occupied handle or authorize retry/removal.
+pub(crate) fn enrollment_handles(parent_name: Option<&[u8; 34]>) -> Result<(bool, bool, bool)> {
+    crate::require_root()?;
+    crate::platform::require_installed()?;
+    let mut context = Context::local()?;
+    let parent = context.handle_exists(CREDENTIAL_PARENT)?;
+    let nv = context.handle_exists(INDEX)?;
+    let parent_profile_matches = if let Some(name) = parent_name {
+        parent && context.parent_matches(name).is_ok()
+    } else {
+        false
+    };
+    Ok((parent, nv, parent_profile_matches))
 }
 
 /// One-shot, fixed-transport provisioning session. The enrollment transaction
@@ -860,6 +886,12 @@ mod tests {
         assert_eq!(occupied, 0);
         let name = context.provision_parent_existing(&owner).unwrap();
         assert_eq!(&name[..2], &[0, 0x0b]);
+        assert!(context.handle_exists(CREDENTIAL_PARENT).unwrap());
+        assert!(!context.handle_exists(INDEX).unwrap());
+        context.parent_matches(&name).unwrap();
+        let mut wrong_name = name;
+        wrong_name[20] ^= 1;
+        assert!(context.parent_matches(&wrong_name).is_err());
         fs::write(directory.join("parent.name"), name).unwrap();
         assert!(context.provision_parent_existing(&owner).is_err());
         check(unsafe { luma_tpm_index_exists(context.0, CREDENTIAL_PARENT, &mut occupied) })

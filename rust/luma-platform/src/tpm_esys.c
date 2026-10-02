@@ -402,6 +402,17 @@ static TSS2_RC credential_parent(struct luma_tpm *ctx,
     return rc;
 }
 
+uint32_t luma_tpm_credential_parent_matches(struct luma_tpm *ctx,
+    const uint8_t expected_name[34]) {
+    ESYS_TR parent = ESYS_TR_NONE;
+    TSS2_RC rc = credential_parent(ctx, expected_name, &parent);
+    if (parent != ESYS_TR_NONE) {
+        TSS2_RC cleanup = Esys_TR_Close(ctx->esys, &parent);
+        if (!rc) rc = cleanup;
+    }
+    return rc;
+}
+
 /* Import exactly an RSA-2048/e65537 PEM verifier; never a private signer.
  * Both sealing and unsealing derive the PolicyAuthorize key Name from this
  * independently pinned public key. */

@@ -7,6 +7,7 @@ use crate::{
     tpm::{self, Checkpoint},
     Result,
 };
+use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use std::ffi::CString;
 use std::fs::{self, File, OpenOptions};
@@ -59,6 +60,18 @@ fn write_new(path: &Path, bytes: &[u8]) -> Result<()> {
 struct ParentIntent {
     record: Vec<u8>,
     intent: Vec<u8>,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct IntentMetadata {
+    schema_version: u32,
+    kind: String,
+    deployment: String,
+    parent_handle: u32,
+    pcr_public_key_sha256: String,
+    boot_signature_sha256: String,
+    product_admin_active: bool,
+    role_grant: bool,
 }
 impl ParentIntent {
     fn new(record: Vec<u8>, deployment: &str, public: &[u8], signature: &[u8]) -> Result<Self> {
@@ -123,6 +136,164 @@ impl ParentIntent {
         }
         Ok(())
     }
+
+    fn read_for_inspection(path: &Path) -> Result<(Self, Option<[u8; 34]>)> {
+        tpm::private_directory(path)?;
+        let record = tpm::private_read(&path.join("enrollment.json"), 16384)?;
+        let intent = tpm::private_read(&path.join("parent-intent.json"), 4096)?;
+        let metadata: IntentMetadata = serde_json::from_slice(&intent)?;
+        if metadata.schema_version != 1
+            || metadata.kind != "existing-owner-credential-parent-intent"
+            || metadata.parent_handle != 0x81004c41
+            || metadata.product_admin_active
+            || metadata.role_grant
+            || record_deployment(&record) != metadata.deployment
+        {
+            return Err("invalid retained parent intent".into());
+        }
+        tpm::decode::<32>(&metadata.pcr_public_key_sha256)?;
+        tpm::decode::<32>(&metadata.boot_signature_sha256)?;
+        let canonical = serde_json::to_vec(&serde_json::json!({
+            "schema_version":1,"kind":"existing-owner-credential-parent-intent",
+            "deployment":metadata.deployment,"parent_handle":0x81004c41u32,
+            "pcr_public_key_sha256":metadata.pcr_public_key_sha256,
+            "boot_signature_sha256":metadata.boot_signature_sha256,
+            "product_admin_active":false,"role_grant":false}))?;
+        if canonical != intent {
+            return Err("noncanonical retained parent intent".into());
+        }
+        let name_path = path.join("parent.name");
+        let name = match fs::symlink_metadata(&name_path) {
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+            Err(e) => return Err(e.into()),
+            Ok(_) => {
+                let bytes = tpm::private_read(&name_path, 34)?;
+                let name: [u8; 34] = bytes.try_into().map_err(|_| "invalid parent Name")?;
+                if name[..2] != [0, 0x0b] {
+                    return Err("invalid parent Name algorithm".into());
+                }
+                Some(name)
+            }
+        };
+        if fs::read_dir(path)?.count() != if name.is_some() { 3 } else { 2 } {
+            return Err("unexpected retained parent intent files".into());
+        }
+        Ok((Self { record, intent }, name))
+    }
+}
+
+fn private_presence(path: &Path) -> Result<bool> {
+    match fs::symlink_metadata(path) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(e) => Err(e.into()),
+        Ok(_) => {
+            tpm::private_directory(path)?;
+            Ok(true)
+        }
+    }
+}
+
+fn inspect_at(
+    parent_path: &Path,
+    pending: &Path,
+    final_path: &Path,
+    handles: impl FnOnce(Option<&[u8; 34]>) -> Result<(bool, bool, bool)>,
+) -> Result<serde_json::Value> {
+    let parent = pending.parent().ok_or("missing enrollment parent")?;
+    if parent_path.parent() != Some(parent)
+        || final_path.parent() != Some(parent)
+        || parent_path == pending
+        || parent_path == final_path
+        || pending == final_path
+    {
+        return Err("invalid enrollment inspection paths".into());
+    }
+    let metadata = fs::symlink_metadata(parent)?;
+    if !metadata.is_dir() || metadata.uid() != 0 || metadata.mode() & 0o022 != 0 {
+        return Err("unsafe enrollment inspection parent".into());
+    }
+    let parent_present = private_presence(parent_path)?;
+    let pending_present = private_presence(pending)?;
+    let final_present = private_presence(final_path)?;
+    let retained = if parent_present {
+        Some(ParentIntent::read_for_inspection(parent_path)?)
+    } else {
+        None
+    };
+    let parent_name = retained.as_ref().and_then(|(_, name)| name.as_ref());
+    let (parent_occupied, nv_occupied, parent_matches) = handles(parent_name)?;
+    let phase = if !parent_present
+        && !pending_present
+        && !final_present
+        && !parent_occupied
+        && !nv_occupied
+    {
+        "not_started"
+    } else if parent_present
+        && parent_name.is_none()
+        && !pending_present
+        && !final_present
+        && !nv_occupied
+    {
+        "parent_write_uncertain"
+    } else if parent_present
+        && parent_name.is_some()
+        && parent_matches
+        && !pending_present
+        && !final_present
+        && !nv_occupied
+    {
+        "parent_bound_proposal_absent"
+    } else if parent_present && parent_matches && pending_present && !final_present {
+        "nv_write_or_publication_uncertain"
+    } else if parent_present && parent_matches && !pending_present && final_present && nv_occupied {
+        "published_unverified"
+    } else {
+        "conflict_preserve_state"
+    };
+    let mut digest = Sha256::new();
+    digest.update(b"luma-enrollment-inspection-v1\0");
+    if let Some((intent, name)) = &retained {
+        digest.update((intent.record.len() as u32).to_be_bytes());
+        digest.update(&intent.record);
+        digest.update((intent.intent.len() as u32).to_be_bytes());
+        digest.update(&intent.intent);
+        if let Some(name) = name {
+            digest.update(name);
+        }
+    }
+    digest.update([
+        parent_present as u8,
+        pending_present as u8,
+        final_present as u8,
+        parent_occupied as u8,
+        nv_occupied as u8,
+        parent_matches as u8,
+    ]);
+    Ok(serde_json::json!({"schema_version":1,"phase":phase,
+        "parent_intent_present":parent_present,"parent_name_recorded":parent_name.is_some(),
+        "parent_handle_occupied":parent_occupied,"parent_name_and_profile_match":parent_matches,
+        "pending_proposal_present":pending_present,"final_directory_present":final_present,
+        "nv_index_occupied":nv_occupied,
+        "observation_sha256":bundle::hex(&digest.finalize()),
+        "observation_is_attestation":false,"mutation_performed":false,
+        "reviewed_recovery_available":false}))
+}
+
+/// Read-only inspection of an interrupted checkpoint enrollment. It does not
+/// authenticate final journal contents or authorize repeat provisioning.
+pub fn inspect() -> Result<()> {
+    crate::require_root()?;
+    crate::platform::require_installed()?;
+    let _lock = tpm::exclusive_lock(Path::new(LOCK))?;
+    let report = inspect_at(
+        Path::new(PARENT_INTENT),
+        Path::new(PENDING),
+        Path::new(credentials::DIRECTORY),
+        tpm::enrollment_handles,
+    )?;
+    println!("{}", serde_json::to_string(&report)?);
+    Ok(())
 }
 
 fn allocate_parent(
@@ -627,6 +798,84 @@ mod tests {
         )
         .is_err());
         assert!(path.is_dir());
+    }
+    #[test]
+    fn inspection_classifies_retained_parent_and_uncertain_nv_without_mutation() {
+        let f = Fixture::new("inspect");
+        let path = f.root.join("parent-intent");
+        let fresh = inspect_at(&path, &f.pending, &f.final_path, |_| {
+            Ok((false, false, false))
+        })
+        .unwrap();
+        assert_eq!(fresh["phase"], "not_started");
+        let intent = ParentIntent::new(
+            f.proposal.files[3].1.clone(),
+            &f.proposal.deployment,
+            b"public fixture",
+            b"signed fixture",
+        )
+        .unwrap();
+        intent.prepare(&path, &f.pending, &f.final_path).unwrap();
+        let uncertain = inspect_at(&path, &f.pending, &f.final_path, |_| {
+            Ok((true, false, false))
+        })
+        .unwrap();
+        assert_eq!(uncertain["phase"], "parent_write_uncertain");
+        assert_eq!(
+            inspect_at(&path, &f.pending, &f.final_path, |_| Ok((
+                true, true, false
+            )))
+            .unwrap()["phase"],
+            "conflict_preserve_state"
+        );
+        let name = tpm::decode::<34>(&format!("000b{}", "22".repeat(32))).unwrap();
+        intent.bind_name(&path, &name).unwrap();
+        let bound = inspect_at(&path, &f.pending, &f.final_path, |_| {
+            Ok((true, false, true))
+        })
+        .unwrap();
+        assert_eq!(bound["phase"], "parent_bound_proposal_absent");
+        assert_eq!(bound["reviewed_recovery_available"], false);
+        assert_ne!(bound["observation_sha256"], uncertain["observation_sha256"]);
+        fs::DirBuilder::new()
+            .mode(0o700)
+            .create(&f.pending)
+            .unwrap();
+        let pending =
+            inspect_at(&path, &f.pending, &f.final_path, |_| Ok((true, true, true))).unwrap();
+        assert_eq!(pending["phase"], "nv_write_or_publication_uncertain");
+        assert_eq!(pending["mutation_performed"], false);
+        assert_eq!(
+            inspect_at(&path, &f.pending, &f.final_path, |_| Ok((
+                true, true, false
+            )))
+            .unwrap()["phase"],
+            "conflict_preserve_state"
+        );
+    }
+    #[test]
+    fn inspection_refuses_changed_or_unsafe_intent_before_tpm_observation() {
+        let f = Fixture::new("inspect-refuse");
+        let path = f.root.join("parent-intent");
+        let intent = ParentIntent::new(
+            f.proposal.files[3].1.clone(),
+            &f.proposal.deployment,
+            b"public fixture",
+            b"signed fixture",
+        )
+        .unwrap();
+        intent.prepare(&path, &f.pending, &f.final_path).unwrap();
+        fs::write(path.join("parent-intent.json"), b"{}").unwrap();
+        assert!(inspect_at(&path, &f.pending, &f.final_path, |_| panic!(
+            "invalid intent must not reach TPM"
+        ))
+        .is_err());
+        fs::remove_file(path.join("parent-intent.json")).unwrap();
+        std::os::unix::fs::symlink("/tmp/missing", path.join("parent-intent.json")).unwrap();
+        assert!(inspect_at(&path, &f.pending, &f.final_path, |_| panic!(
+            "unsafe intent must not reach TPM"
+        ))
+        .is_err());
     }
     #[test]
     fn publish_only_after_durable_preparation_and_readback() {

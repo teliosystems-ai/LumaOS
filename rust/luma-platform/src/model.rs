@@ -210,18 +210,35 @@ fn admit_cgroup(p: &Profile, limit: u64) -> Result<()> {
     Ok(())
 }
 
-fn admit(p: &Profile, total: u64, available: u64, free: u64, cpus: usize) -> Result<()> {
+fn admit_with_space(
+    p: &Profile,
+    total: u64,
+    available: u64,
+    free: u64,
+    cpus: usize,
+    required_free: u64,
+) -> Result<()> {
     if total < p.minimum_ram_bytes
         || available < p.minimum_available_bytes
         || cpus < 2
-        || free
-            < p.bytes
-                .checked_add(2 * 1024 * 1024 * 1024)
-                .ok_or("space overflow")?
+        || free < required_free
     {
         return Err(format!("{} cannot be admitted: total RAM {total}, available {available}, free storage {free}, CPUs {cpus}; select a smaller profile or manual-only", p.id).into());
     }
     Ok(())
+}
+
+fn admit(p: &Profile, total: u64, available: u64, free: u64, cpus: usize) -> Result<()> {
+    admit_with_space(
+        p,
+        total,
+        available,
+        free,
+        cpus,
+        p.bytes
+            .checked_add(2 * 1024 * 1024 * 1024)
+            .ok_or("space overflow")?,
+    )
 }
 
 fn available_space(at: &Path) -> Result<u64> {
@@ -245,6 +262,19 @@ pub fn check(p: &Profile, free: u64) -> Result<()> {
         memory(&info, "MemAvailable")?,
         free,
         std::thread::available_parallelism()?.get(),
+    )
+}
+
+fn check_cached(p: &Profile, free: u64) -> Result<()> {
+    let info = fs::read_to_string("/proc/meminfo")?;
+    admit_cgroup(p, effective_memory_limit()?)?;
+    admit_with_space(
+        p,
+        memory(&info, "MemTotal")?,
+        memory(&info, "MemAvailable")?,
+        free,
+        std::thread::available_parallelism()?.get(),
+        2 * 1024 * 1024 * 1024,
     )
 }
 
@@ -533,6 +563,36 @@ pub fn provision(var: &Path, p: &Profile) -> Result<()> {
 }
 
 fn provision_locked(var: &Path, p: &Profile) -> Result<()> {
+    prepare_model(var, p)?;
+    activate_cached(var, p)
+}
+
+/// Acquire and verify only image-cataloged data. The selected worker may stay
+/// active while this runs; no credential, environment or selection is changed.
+fn prepare_model(var: &Path, p: &Profile) -> Result<()> {
+    let state = var.join(STATE);
+    activation_absent(&state)?;
+    let models = state.join("models");
+    safe_dir(&models)?;
+    reconcile_downloads(&models, &catalog()?.models)?;
+    platform::ensure_model_identities(var)?;
+    let file = models.join(format!("{}.gguf", p.id));
+    match fs::symlink_metadata(&file) {
+        Ok(_) => {
+            check_cached(p, available_space(&models)?)?;
+            verify_file(&file, p)?;
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            check(p, available_space(&models)?)?;
+            println!("Downloading {} ({} bytes)...", p.id, p.bytes);
+            fetch(&file, p)?;
+        }
+        Err(error) => return Err(error.into()),
+    }
+    Ok(())
+}
+
+fn activate_cached(var: &Path, p: &Profile) -> Result<()> {
     // Excludes a concurrently started/manual worker for the whole activation,
     // including credential/selection writes. Released before systemd restart.
     let _runtime = runtime_lock(var, true)?;
@@ -540,16 +600,8 @@ fn provision_locked(var: &Path, p: &Profile) -> Result<()> {
     activation_absent(&state)?;
     let models = state.join("models");
     safe_dir(&models)?;
-    reconcile_downloads(&models, &catalog()?.models)?;
-    platform::ensure_model_identities(var)?;
-    check(p, available_space(&models)?)?;
-    let file = models.join(format!("{}.gguf", p.id));
-    if file.try_exists()? {
-        verify_file(&file, p)?;
-    } else {
-        println!("Downloading {} ({} bytes)...", p.id, p.bytes);
-        fetch(&file, p)?;
-    }
+    check_cached(p, available_space(&models)?)?;
+    verify_file(&models.join(format!("{}.gguf", p.id)), p)?;
     // All worker-visible activation writes follow a durable pending fence.
     // A crash or failed write preserves it for explicit review.
     let activation = begin_activation(&state, p)?;
@@ -771,6 +823,77 @@ fn activation_snapshot(
         activation_bytes(&state.join(REFERENCE_ENV), 4096)?,
         activation_bytes(&state.join("model-auth/api-key"), 64)?,
     ))
+}
+
+struct PriorRunning {
+    profile: Profile,
+    hashes: (Option<String>, Option<String>, Option<String>),
+}
+
+fn prior_snapshot_at(state: &Path) -> Result<PriorRunning> {
+    activation_absent(state)?;
+    let profile = selected_at(state)?;
+    let (selection, env, key) = activation_snapshot(state)?;
+    let key_bytes = key.as_deref().ok_or("running model credential missing")?;
+    let token = std::str::from_utf8(key_bytes)?;
+    let expected_selection =
+        serde_json::to_vec(&serde_json::json!({"schema_version":1,"id":profile.id}))?;
+    let expected_env = reference_environment(&profile, token);
+    if token.len() != 64
+        || !token.bytes().all(|byte| byte.is_ascii_hexdigit())
+        || selection.as_deref() != Some(expected_selection.as_slice())
+        || env.as_deref() != Some(expected_env.as_slice())
+    {
+        return Err("running model configuration inconsistent; preserve state".into());
+    }
+    Ok(PriorRunning {
+        profile,
+        hashes: (
+            activation_digest(&selection),
+            activation_digest(&env),
+            activation_digest(&key),
+        ),
+    })
+}
+
+fn running_prior(var: &Path) -> Result<Option<PriorRunning>> {
+    let status = Command::new("/usr/bin/systemctl")
+        .args(["is-active", "--quiet", "luma-model.service"])
+        .status()?;
+    if status.success() {
+        Ok(Some(prior_snapshot_at(&var.join(STATE))?))
+    } else {
+        Ok(None)
+    }
+}
+
+fn restore_prior(var: &Path, prior: PriorRunning) -> Result<()> {
+    let state = var.join(STATE);
+    {
+        let _runtime = runtime_lock(var, false)?;
+        activation_absent(&state)?;
+        match fs::symlink_metadata(state.join("model-disabled")) {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => (),
+            Err(error) => return Err(error.into()),
+            Ok(_) => return Err("model recovery disablement is active; preserve state".into()),
+        }
+        let current = prior_snapshot_at(&state)?;
+        if current.profile.id != prior.profile.id || current.hashes != prior.hashes {
+            return Err("prior model configuration changed; preserve state".into());
+        }
+        verify_file(
+            &state
+                .join("models")
+                .join(format!("{}.gguf", prior.profile.id)),
+            &prior.profile,
+        )?;
+    }
+    command(
+        "/usr/bin/systemctl",
+        &["reset-failed", "luma-model.service"],
+    )?;
+    command("/usr/bin/systemctl", &["restart", "luma-model.service"])?;
+    Ok(())
 }
 
 fn begin_activation(state: &Path, p: &Profile) -> Result<Activation> {
@@ -1034,7 +1157,7 @@ pub fn migrate_legacy() -> Result<()> {
 fn preflight_at(
     var: &Path,
     p: &Profile,
-    admit: impl FnOnce(&Profile, u64) -> Result<()>,
+    admit: impl FnOnce(&Profile, u64, bool) -> Result<()>,
 ) -> Result<()> {
     let state = var.join(STATE);
     activation_absent(&state)?;
@@ -1049,18 +1172,52 @@ fn preflight_at(
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => state.as_path(),
         Err(error) => return Err(error.into()),
     };
-    admit(p, available_space(target)?)
+    let cached = match fs::symlink_metadata(models.join(format!("{}.gguf", p.id))) {
+        Ok(_) => {
+            verify_file(&models.join(format!("{}.gguf", p.id)), p)?;
+            true
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
+        Err(error) => return Err(error.into()),
+    };
+    admit(p, available_space(target)?, cached)
 }
 
-fn install_after_preflight(
+fn check_preflight(p: &Profile, free: u64, cached: bool) -> Result<()> {
+    if cached {
+        check_cached(p, free)
+    } else {
+        check(p, free)
+    }
+}
+
+fn install_after_preflight<P>(
     preflight: impl FnOnce() -> Result<()>,
+    prepare: impl FnOnce() -> Result<Option<P>>,
     stop: impl FnOnce() -> Result<()>,
     activate: impl FnOnce() -> Result<()>,
     restart: impl FnOnce() -> Result<()>,
+    recover: impl FnOnce(P) -> Result<()>,
 ) -> Result<()> {
     preflight()?;
+    let prior = prepare()?;
     stop()?;
-    activate()?;
+    if let Err(error) = activate() {
+        return if let Some(prior) = prior {
+            match recover(prior) {
+                Ok(()) => Err(format!(
+                    "{error}; unchanged prior model restart requested after failed activation"
+                )
+                .into()),
+                Err(recovery) => Err(format!(
+                    "{error}; prior model not restarted automatically: {recovery}"
+                )
+                .into()),
+            }
+        } else {
+            Err(error)
+        };
+    }
     restart()
 }
 
@@ -1068,7 +1225,7 @@ pub fn install_check(id: &str) -> Result<()> {
     crate::require_root()?;
     platform::require_installed()?;
     let p = profile(id)?;
-    preflight_at(Path::new(VAR), &p, check)?;
+    preflight_at(Path::new(VAR), &p, check_preflight)?;
     println!(
         "{}",
         serde_json::json!({"schema_version":1,"model":p.id,
@@ -1084,9 +1241,17 @@ pub fn install(id: &str) -> Result<()> {
     let p = profile(id)?;
     let _lock = operation_lock(Path::new(VAR))?;
     install_after_preflight(
-        || preflight_at(Path::new(VAR), &p, check),
+        || preflight_at(Path::new(VAR), &p, check_preflight),
+        || {
+            prepare_model(Path::new(VAR), &p)?;
+            check_cached(
+                &p,
+                available_space(&Path::new(VAR).join(STATE).join("models"))?,
+            )?;
+            running_prior(Path::new(VAR))
+        },
         || command("/usr/bin/systemctl", &["stop", "luma-model.service"]).map(|_| ()),
-        || provision_locked(Path::new(VAR), &p),
+        || activate_cached(Path::new(VAR), &p),
         || {
             command("/usr/bin/systemctl", &["daemon-reload"])?;
             command(
@@ -1095,6 +1260,7 @@ pub fn install(id: &str) -> Result<()> {
             )?;
             Ok(())
         },
+        |prior| restore_prior(Path::new(VAR), prior),
     )
 }
 
@@ -1273,6 +1439,12 @@ mod tests {
     fn admission_rejects_each_missing_resource() {
         let p = profile("qwen3-4b-q4-k-m").unwrap();
         admit(&p, 8_000_000_000, 5_000_000_000, 10_000_000_000, 2).unwrap();
+        let reserve = 2 * 1024 * 1024 * 1024;
+        assert!(admit(&p, 8_000_000_000, 5_000_000_000, reserve, 2).is_err());
+        admit_with_space(&p, 8_000_000_000, 5_000_000_000, reserve, 2, reserve).unwrap();
+        assert!(
+            admit_with_space(&p, 8_000_000_000, 5_000_000_000, reserve - 1, 2, reserve).is_err()
+        );
         for (total, available, disk, cpu) in [
             (1, 5_000_000_000, 10_000_000_000, 2),
             (8_000_000_000, 1, 10_000_000_000, 2),
@@ -1358,27 +1530,40 @@ mod tests {
     }
     #[test]
     fn read_only_install_preflight_refuses_unsafe_cache_without_creating_it() {
-        let (dir, _, p) = runtime_fixture("preflight");
+        let (dir, source, p) = runtime_fixture("preflight");
         let state = dir.join(STATE);
         let models = state.join("models");
-        preflight_at(&dir, &p, |_, free| {
+        preflight_at(&dir, &p, |_, free, cached| {
             assert!(free > 0);
+            assert!(!cached);
             Ok(())
         })
         .unwrap();
         assert!(!models.exists());
         std::os::unix::fs::symlink("missing", &models).unwrap();
-        assert!(preflight_at(&dir, &p, |_, _| panic!("unsafe cache admitted")).is_err());
+        assert!(preflight_at(&dir, &p, |_, _, _| panic!("unsafe cache admitted")).is_err());
         fs::remove_file(&models).unwrap();
         fs::create_dir(&models).unwrap();
         fs::set_permissions(&models, fs::Permissions::from_mode(0o777)).unwrap();
-        assert!(preflight_at(&dir, &p, |_, _| panic!("writable cache admitted")).is_err());
+        assert!(preflight_at(&dir, &p, |_, _, _| panic!("writable cache admitted")).is_err());
         fs::set_permissions(&models, fs::Permissions::from_mode(0o700)).unwrap();
-        preflight_at(&dir, &p, |_, free| {
+        preflight_at(&dir, &p, |_, free, cached| {
             assert!(free > 0);
+            assert!(!cached);
             Ok(())
         })
         .unwrap();
+        let target = models.join(format!("{}.gguf", p.id));
+        fs::copy(&source, &target).unwrap();
+        preflight_at(&dir, &p, |_, free, cached| {
+            assert!(free > 0);
+            assert!(cached);
+            Ok(())
+        })
+        .unwrap();
+        fs::write(&target, b"corrupt cached bytes").unwrap();
+        assert!(preflight_at(&dir, &p, |_, _, _| panic!("corrupt cache admitted")).is_err());
+        fs::remove_file(target).unwrap();
         fs::remove_dir(models).unwrap();
         remove_runtime_fixture(&dir);
     }
@@ -1392,6 +1577,10 @@ mod tests {
                 Err("insufficient capacity".into())
             },
             || {
+                calls.borrow_mut().push("prepare");
+                Ok(None::<&str>)
+            },
+            || {
                 calls.borrow_mut().push("stop");
                 Ok(())
             },
@@ -1403,9 +1592,42 @@ mod tests {
                 calls.borrow_mut().push("restart");
                 Ok(())
             },
+            |_| {
+                calls.borrow_mut().push("recover");
+                Ok(())
+            },
         )
         .is_err());
         assert_eq!(*calls.borrow(), ["preflight"]);
+        calls.borrow_mut().clear();
+        assert!(install_after_preflight(
+            || {
+                calls.borrow_mut().push("preflight");
+                Ok(())
+            },
+            || {
+                calls.borrow_mut().push("prepare");
+                Err::<Option<&str>, _>("download failed".into())
+            },
+            || {
+                calls.borrow_mut().push("stop");
+                Ok(())
+            },
+            || {
+                calls.borrow_mut().push("activate");
+                Ok(())
+            },
+            || {
+                calls.borrow_mut().push("restart");
+                Ok(())
+            },
+            |_| {
+                calls.borrow_mut().push("recover");
+                Ok(())
+            },
+        )
+        .is_err());
+        assert_eq!(*calls.borrow(), ["preflight", "prepare"]);
         calls.borrow_mut().clear();
         install_after_preflight(
             || {
@@ -1413,6 +1635,10 @@ mod tests {
                 Ok(())
             },
             || {
+                calls.borrow_mut().push("prepare");
+                Ok(None::<&str>)
+            },
+            || {
                 calls.borrow_mut().push("stop");
                 Ok(())
             },
@@ -1424,11 +1650,48 @@ mod tests {
                 calls.borrow_mut().push("restart");
                 Ok(())
             },
+            |_| {
+                calls.borrow_mut().push("recover");
+                Ok(())
+            },
         )
         .unwrap();
         assert_eq!(
             *calls.borrow(),
-            ["preflight", "stop", "activate", "restart"]
+            ["preflight", "prepare", "stop", "activate", "restart"]
+        );
+        calls.borrow_mut().clear();
+        assert!(install_after_preflight(
+            || {
+                calls.borrow_mut().push("preflight");
+                Ok(())
+            },
+            || {
+                calls.borrow_mut().push("prepare");
+                Ok(Some("prior"))
+            },
+            || {
+                calls.borrow_mut().push("stop");
+                Ok(())
+            },
+            || {
+                calls.borrow_mut().push("activate");
+                Err("post-stop admission failed".into())
+            },
+            || {
+                calls.borrow_mut().push("restart");
+                Ok(())
+            },
+            |prior| {
+                assert_eq!(prior, "prior");
+                calls.borrow_mut().push("recover");
+                Ok(())
+            },
+        )
+        .is_err());
+        assert_eq!(
+            *calls.borrow(),
+            ["preflight", "prepare", "stop", "activate", "recover"]
         );
     }
     #[test]
@@ -1801,6 +2064,30 @@ print('ISOLATED_MODEL_LOCK_PASSED')
         migrate_legacy_at(&root, &p).unwrap();
         activation_absent(&state).unwrap();
         remove_legacy_reference(&root);
+        remove_activation_fixture(&root, &p);
+    }
+
+    #[test]
+    fn prior_worker_restart_refuses_pending_or_changed_activation() {
+        let (root, p) = activation_fixture("prior-restart");
+        let state = root.join(STATE);
+        write_activation_candidate(&state, &p);
+        let runtime = runtime_lock(&root, true).unwrap();
+        let prior = prior_snapshot_at(&state).unwrap();
+        begin_activation(&state, &p).unwrap();
+        drop(runtime);
+        assert!(restore_prior(&root, prior).is_err());
+        assert!(activation_absent(&state).is_err());
+        let observed = observe_activation(&state, &p, true).unwrap();
+        reviewed_clear_activation(&state, &p, "--abort-unchanged", &observed.review).unwrap();
+        let prior = prior_snapshot_at(&state).unwrap();
+        fs::write(state.join("model-disabled"), b"").unwrap();
+        assert!(restore_prior(&root, prior).is_err());
+        fs::remove_file(state.join("model-disabled")).unwrap();
+        let prior = prior_snapshot_at(&state).unwrap();
+        fs::write(state.join(REFERENCE_ENV), b"changed after stop").unwrap();
+        assert!(restore_prior(&root, prior).is_err());
+        fs::remove_file(state.join("model-runtime.lock")).unwrap();
         remove_activation_fixture(&root, &p);
     }
 

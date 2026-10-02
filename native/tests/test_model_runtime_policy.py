@@ -13,9 +13,9 @@ class ModelRuntimePolicyTests(unittest.TestCase):
 
     def test_activation_and_worker_share_lock_and_keep_verified_descriptor(self):
         source = (ROOT / 'rust/luma-platform/src/model.rs').read_text()
-        provision = source.split('fn provision_locked(')[1].split('fn reconcile_downloads')[0]
-        self.assertIn('runtime_lock(var, true)?', provision)
-        self.assertLess(provision.index('runtime_lock('), provision.index('model-selection.json'))
+        activation = source.split('fn activate_cached(')[1].split('fn reconcile_downloads')[0]
+        self.assertIn('runtime_lock(var, true)?', activation)
+        self.assertLess(activation.index('runtime_lock('), activation.index('model-selection.json'))
         serve = source.split('pub fn serve()')[1].split('#[cfg(test)]')[0]
         self.assertLess(serve.index('runtime_lock('), serve.index('selected()?'))
         self.assertIn('verified_file(&file, &p)?', serve)
@@ -25,7 +25,7 @@ class ModelRuntimePolicyTests(unittest.TestCase):
 
     def test_pending_activation_fences_worker_and_reference_env_is_root_owned(self):
         source = (ROOT / 'rust/luma-platform/src/model.rs').read_text()
-        provision = source.split('fn provision_locked(')[1].split('fn reconcile_downloads')[0]
+        provision = source.split('fn activate_cached(')[1].split('fn reconcile_downloads')[0]
         serve = source.split('pub fn serve()')[1].split('#[cfg(test)]')[0]
         self.assertLess(provision.index('begin_activation(&state, p)?'),
                         provision.index('state.join(REFERENCE_ENV)'))
@@ -41,6 +41,26 @@ class ModelRuntimePolicyTests(unittest.TestCase):
         self.assertIn('/var/lib/luma-os/model-activation.pending r,', model)
         self.assertIn('/sys/fs/cgroup/**/memory.max r,', model)
         self.assertIn('/sys/fs/cgroup/memory.max r,', model)
+
+    def test_verified_acquisition_precedes_managed_worker_stop(self):
+        source = (ROOT / 'rust/luma-platform/src/model.rs').read_text()
+        prepare = source.split('fn prepare_model(')[1].split('fn activate_cached(')[0]
+        activate = source.split('fn activate_cached(')[1].split('fn reconcile_downloads')[0]
+        install = source.split('pub fn install(id: &str)')[1].split('pub fn unit()')[0]
+        self.assertIn('fetch(&file, p)?', prepare)
+        self.assertIn('check_cached(p, available_space(&models)?)?', prepare)
+        self.assertIn('check(p, available_space(&models)?)?', prepare)
+        self.assertNotIn('fetch(', activate)
+        self.assertIn('verify_file(&models.join', activate)
+        self.assertLess(install.index('prepare_model('),
+                        install.index('"stop", "luma-model.service"'))
+        self.assertLess(install.index('"stop", "luma-model.service"'),
+                        install.index('activate_cached('))
+        restore = source.split('fn restore_prior(')[1].split('fn begin_activation(')[0]
+        self.assertLess(restore.index('activation_absent('),
+                        restore.index('"restart", "luma-model.service"'))
+        self.assertLess(restore.index('verify_file('),
+                        restore.index('"restart", "luma-model.service"'))
 
     def test_legacy_migration_is_explicit_and_validates_before_service_stop(self):
         source = (ROOT / 'rust/luma-platform/src/model.rs').read_text()

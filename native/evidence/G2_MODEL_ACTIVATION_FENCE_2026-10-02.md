@@ -79,3 +79,61 @@ fence. No installed service restart, image upgrade, real model, TPM or
 physical machine was exercised. A failed restart after a successful file
 migration still needs operator diagnosis; the command reports a restart
 request, not proven model readiness.
+
+## Verified acquisition before worker stop
+
+Another source increment separates model acquisition from activation.
+`model-install` now downloads and verifies the candidate while the selected
+worker may remain active. A network, size or hash refusal therefore occurs
+before the managed stop request. After acquisition, it checks the remaining
+2 GiB storage reserve; activation rechecks capacity and the cached bytes after
+stopping the worker. The read-only `model-install-check` now verifies an
+existing cataloged cache file and applies the reserve-only disk threshold
+when that file is valid. An invalid existing file is refused before stop,
+including a symlink. Fresh downloads still require their full size plus the
+reserve. The installer also uses the split path, but has no prior worker to
+preserve.
+
+The final targeted snapshot is
+`D:\LumaOS-builds\g2-model-activation-targeted-20261002-10`. Its
+`source/build-inputs.json` SHA-256 is
+`40918d7f576e462221ec05091c4f46db07cc673ec7d88e529b083eeca0ee8d3d`;
+`test.log` SHA-256 is
+`eb3c7a34406f28ef38c98aa495fc7ff46cde157ae51d12883ea725960ec119b8`.
+The bounded offline run passed 26 Rust model tests, five policy checks,
+fifteen VM-harness unit tests, formatting, a warning-clean build and compiled
+CLI help. Unit tests cover pre-stop refusal ordering, cached-file integrity
+and the separate disk thresholds. No real download, running model, installed
+service transition or image qualification was exercised. Activation failures
+after the stop can still leave the previous worker stopped or fenced; resource
+reservation, generation fencing and pressure management remain open.
+The earlier `-09` snapshot passed its tests but retained a cached-model
+preparation check that still demanded space for a second download; `-10`
+aligns preparation with its read-only preflight and passed the same checks.
+
+## Unchanged prior worker restart after failed activation
+
+If a selected model was running before the managed stop, `model-install` now
+records its exact selection, reference environment and credential digests.
+When activation fails, it requests restart of that prior worker only if no
+activation marker exists, the three configuration files are still unchanged,
+the prior catalog-pinned weights verify, and recovery disablement is absent.
+It also requires the runtime lock to be free. A pending marker, changed state,
+invalid weights, conflicting worker or explicit recovery disablement prevents
+automatic restart. The command still returns an error after requesting a
+prior-worker restart; it does not claim service readiness or hide the failed
+candidate activation. If there was no running prior model, no fallback starts.
+
+The final bounded offline source snapshot is
+`D:\LumaOS-builds\g2-model-activation-targeted-20261002-12`. Its
+`source/build-inputs.json` SHA-256 is
+`c41d0ce01ced84d9b153d3f1f32abcd5c416c00603ef2b9569553776c8c4456a`;
+`test.log` SHA-256 is
+`39f12f9904ba4adee4dd03a2b6dcaf8c0f38bf6be15ffc281a7655f981d2d543`.
+Twenty-seven Rust model tests, five policy checks and fifteen VM-harness unit
+tests passed, along with formatting, the warning-clean offline build and
+compiled CLI help. Tests cover the transition order and refusals for a pending
+marker, changed environment and recovery disablement. No installed systemd
+transition, real LLM, image upgrade or physical failure was exercised.
+Partial/conflicting activation still has no automatic repair, and a successful
+systemd restart request is not evidence of a healthy inference service.

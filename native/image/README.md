@@ -200,6 +200,20 @@ only for `unchanged_prior_state`, or `--publish-committed DIGEST` only for
 neither option repairs files or starts the worker. Never delete the marker to
 bypass a refusal. This root-only diagnostic is not a product Admin approval.
 
+For installed reconfiguration, `model-install` now acquires and verifies the
+candidate weights before stopping the managed worker. A failed download or
+hash check leaves the current selection and worker untouched. A verified
+cached model needs the 2 GiB free-space reserve, not another full download
+allocation; `model-install-check` verifies the cache before applying that
+threshold. Admission and bytes are rechecked after the stop, so this is not a
+resource reservation or a guarantee that activation and restart will succeed.
+If activation then fails, a restart of a previously running worker is
+requested only when
+its selection, service settings, credential and pinned weights are unchanged,
+the runtime lock is free, and neither an activation fence nor recovery
+disablement is present. The command still fails; check service health
+separately. Partial activation remains fenced for reviewed handling.
+
 The reference service's model environment now lives in root-owned
 `/var/lib/luma-os/model-reference.env`, outside its writable state directory.
 Binary-only upgrades from an older image do not automatically migrate the

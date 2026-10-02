@@ -45,9 +45,37 @@ and passed.
 This is an interruption fence and narrow reviewed clearance, not a multi-file
 atomic transaction, generation lease, memory reservation, full model lifecycle
 or production Admin workflow. Partial states need a designed repair path.
-Binary-only upgrades of older installations still need controlled migration:
+Binary-only upgrades of older installations still need an explicit migration:
 the old reference environment file is not automatically copied to its new
 root-owned location, and older installations may lack the persistent runtime
 lock. The changed service and policy have not been exercised on a newly built
 image, with a real LLM, or on the separate native Ubuntu machine. G2 remains
 open.
+
+## Controlled legacy model migration
+
+A subsequent source increment adds `luma-platform model-migrate-legacy` for an
+installed-root operator. Before stopping the managed model, it requires an
+unfenced, canonical selection, a safe root-owned credential, an exact legacy
+environment under the service-owned directory, and catalog-pinned weight
+bytes. It rejects conflicting new settings. After stopping the model, it
+creates or acquires the persistent runtime lock, rechecks the legacy state,
+uses the activation fence to publish the root-owned environment, reloads the
+units, resets a possible model start-limit failure, and requests restart of
+the model and reference services. The old environment file is retained for
+older-image rollback; the command never runs automatically at boot.
+
+The final migration source snapshot is
+`D:\LumaOS-builds\g2-model-activation-targeted-20261002-07`. Its
+`source/build-inputs.json` SHA-256 is
+`3ee585793dbb41554842c680f295e9beae665b30908b58de31c96269f3aa0910`;
+`test.log` SHA-256 is
+`0796417be1ab4082ee0145cb8020d2b3c59c868bdad3d339c8f7b32a68240fdf`.
+The same bounded, offline D-backed test setup passed 26 Rust model tests, four
+policy checks, fifteen VM-harness unit tests, formatting, a warning-clean
+build and compiled CLI help. Tests covered wrong legacy content, conflicting
+new settings, symlink rejection, repeated migration and a retained pending
+fence. No installed service restart, image upgrade, real model, TPM or
+physical machine was exercised. A failed restart after a successful file
+migration still needs operator diagnosis; the command reports a restart
+request, not proven model readiness.

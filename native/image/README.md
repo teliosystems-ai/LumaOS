@@ -202,10 +202,18 @@ bypass a refusal. This root-only diagnostic is not a product Admin approval.
 
 The reference service's model environment now lives in root-owned
 `/var/lib/luma-os/model-reference.env`, outside its writable state directory.
-Binary-only upgrades from an older image do not migrate the former
-`reference/model.env`; controlled installed migration remains open. The fence,
-new service wiring and policy have only passed targeted source checks and a
-no-load AppArmor parse, not installed-image qualification. See the
+Binary-only upgrades from an older image do not automatically migrate the
+former `reference/model.env`. On a controlled installed lab system, an
+operator can run `sudo luma-platform model-migrate-legacy` after preserving
+recovery access. It verifies the old selection, credential, environment and
+pinned weights before stopping the model, then creates the missing runtime
+lock, publishes the new root-owned environment under the activation fence,
+and requests a model/reference restart. It retains the old file for
+older-image rollback. If it refuses, preserve state and investigate; never
+remove the lock or activation marker to force startup. This path has passed
+targeted source checks only, not an installed upgrade or rollback test. The
+fence, new service wiring and policy also await installed-image qualification.
+See the
 [activation checkpoint](../evidence/G2_MODEL_ACTIVATION_FENCE_2026-10-02.md).
 
 ## Build on Ubuntu or Ubuntu WSL

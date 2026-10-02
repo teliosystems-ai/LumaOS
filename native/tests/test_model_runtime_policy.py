@@ -42,6 +42,22 @@ class ModelRuntimePolicyTests(unittest.TestCase):
         self.assertIn('/sys/fs/cgroup/**/memory.max r,', model)
         self.assertIn('/sys/fs/cgroup/memory.max r,', model)
 
+    def test_legacy_migration_is_explicit_and_validates_before_service_stop(self):
+        source = (ROOT / 'rust/luma-platform/src/model.rs').read_text()
+        migration = source.split('pub fn migrate_legacy()')[1].split('/// Read-only')[0]
+        self.assertLess(migration.index('legacy_configuration_at('),
+                        migration.index('"stop", "luma-model.service"'))
+        self.assertLess(migration.index('verify_file('),
+                        migration.index('"stop", "luma-model.service"'))
+        self.assertLess(migration.index('migrate_legacy_at('),
+                        migration.index('"restart", "luma-model.service"'))
+        self.assertLess(migration.index('"reset-failed", "luma-model.service"'),
+                        migration.index('"restart", "luma-model.service"'))
+        main = (ROOT / 'rust/luma-platform/src/main.rs').read_text()
+        self.assertIn('Some("model-migrate-legacy") if args.len() == 1', main)
+        unit = (ROOT / 'native/image/overlay/etc/systemd/system/luma-reference.service').read_text()
+        self.assertNotIn('EnvironmentFile=-/var/lib/luma-os/reference/model.env', unit)
+
 
 if __name__ == '__main__':
     unittest.main()

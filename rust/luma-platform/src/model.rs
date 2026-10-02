@@ -580,7 +580,7 @@ fn provision_locked(var: &Path, p: &Profile) -> Result<()> {
         s
     };
     let env = state.join(REFERENCE_ENV);
-    platform::write_atomic(&env, format!("LUMA_MODEL_ENDPOINT=http://127.0.0.1:8081/v1\nLUMA_MODEL_NAME={}\nLUMA_MODEL_API_KEY={token}\n",p.id).as_bytes(), 0o640)?;
+    platform::write_atomic(&env, &reference_environment(p, &token), 0o640)?;
     command(
         "/usr/bin/chown",
         &["0:990", env.to_str().ok_or("invalid environment path")?],
@@ -709,14 +709,14 @@ fn activation_absent(state: &Path) -> Result<()> {
     }
 }
 
-fn activation_bytes(path: &Path, max: u64) -> Result<Option<Vec<u8>>> {
+fn checked_activation_bytes(path: &Path, max: u64, owner: u32) -> Result<Option<Vec<u8>>> {
     let original = match fs::symlink_metadata(path) {
         Ok(metadata) => metadata,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(error) => return Err(error.into()),
     };
     if !original.is_file()
-        || original.uid() != 0
+        || original.uid() != owner
         || original.nlink() != 1
         || original.mode() & 0o022 != 0
         || original.len() > max
@@ -736,6 +736,9 @@ fn activation_bytes(path: &Path, max: u64) -> Result<Option<Vec<u8>>> {
     let after = file.metadata()?;
     if bytes.len() as u64 != original.len()
         || after.len() != original.len()
+        || after.uid() != original.uid()
+        || after.gid() != original.gid()
+        || after.mode() != original.mode()
         || after.mtime() != original.mtime()
         || after.mtime_nsec() != original.mtime_nsec()
         || after.ctime() != original.ctime()
@@ -746,10 +749,18 @@ fn activation_bytes(path: &Path, max: u64) -> Result<Option<Vec<u8>>> {
     Ok(Some(bytes))
 }
 
+fn activation_bytes(path: &Path, max: u64) -> Result<Option<Vec<u8>>> {
+    checked_activation_bytes(path, max, 0)
+}
+
 fn activation_digest(bytes: &Option<Vec<u8>>) -> Option<String> {
     bytes
         .as_ref()
         .map(|value| bundle::hex(&Sha256::digest(value)))
+}
+
+fn reference_environment(p: &Profile, token: &str) -> Vec<u8> {
+    format!("LUMA_MODEL_ENDPOINT=http://127.0.0.1:8081/v1\nLUMA_MODEL_NAME={}\nLUMA_MODEL_API_KEY={token}\n", p.id).into_bytes()
 }
 
 fn activation_snapshot(
@@ -831,16 +842,10 @@ fn observe_activation(
     {
         token.len() == 64
             && token.bytes().all(|b| b.is_ascii_hexdigit())
-            && selection
-                == serde_json::to_vec(&serde_json::json!({"schema_version":1,"id":p.id}))?
-            && env
-                == format!("LUMA_MODEL_ENDPOINT=http://127.0.0.1:8081/v1\nLUMA_MODEL_NAME={}\nLUMA_MODEL_API_KEY={token}\n", p.id).as_bytes()
+            && selection == serde_json::to_vec(&serde_json::json!({"schema_version":1,"id":p.id}))?
+            && env == reference_environment(p, token)
             && (!verify_weight
-                || verify_file(
-                    &state.join("models").join(format!("{}.gguf", p.id)),
-                    p,
-                )
-                .is_ok())
+                || verify_file(&state.join("models").join(format!("{}.gguf", p.id)), p).is_ok())
     } else {
         false
     };
@@ -929,6 +934,98 @@ pub fn activation_reconcile(action: Option<(&str, &str)>) -> Result<()> {
             "clearable":observation.phase != "partial_or_conflicting_state"})
         );
     }
+    Ok(())
+}
+
+fn legacy_configuration_at(state: &Path) -> Result<Profile> {
+    activation_absent(state)?;
+    let p = selected_at(state)?;
+    let selection = activation_bytes(&state.join("model-selection.json"), 4096)?
+        .ok_or("legacy model selection missing")?;
+    if selection != serde_json::to_vec(&serde_json::json!({"schema_version":1,"id":p.id}))? {
+        return Err("legacy model selection is not canonical; preserve state".into());
+    }
+    let key = activation_bytes(&state.join("model-auth/api-key"), 64)?
+        .ok_or("legacy model credential missing")?;
+    let token = std::str::from_utf8(&key)?;
+    if token.len() != 64 || !token.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return Err("invalid legacy model credential; preserve state".into());
+    }
+    let expected = reference_environment(&p, token);
+    let legacy_dir = state.join("reference");
+    let directory = fs::symlink_metadata(&legacy_dir)?;
+    if !directory.is_dir()
+        || directory.uid() != 990
+        || directory.gid() != 990
+        || directory.mode() & 0o7777 != 0o700
+    {
+        return Err("unsafe legacy reference directory; preserve state".into());
+    }
+    let legacy_file = legacy_dir.join("model.env");
+    let legacy = checked_activation_bytes(&legacy_file, 4096, 990)?
+        .ok_or("legacy reference environment missing")?;
+    let metadata = fs::symlink_metadata(&legacy_file)?;
+    if metadata.gid() != 990 || metadata.mode() & 0o7777 != 0o600 || legacy != expected {
+        return Err("legacy reference environment differs; preserve state".into());
+    }
+    if let Some(current) = activation_bytes(&state.join(REFERENCE_ENV), 4096)? {
+        if current != expected {
+            return Err("root-owned reference environment differs; preserve state".into());
+        }
+    }
+    Ok(p)
+}
+
+fn migrate_legacy_at(var: &Path, expected: &Profile) -> Result<()> {
+    let state = var.join(STATE);
+    let current = legacy_configuration_at(&state)?;
+    if current.id != expected.id {
+        return Err("legacy model selection changed; preserve state".into());
+    }
+    let _runtime = runtime_lock(var, true)?;
+    let token = activation_bytes(&state.join("model-auth/api-key"), 64)?
+        .ok_or("legacy model credential missing")?;
+    let token = std::str::from_utf8(&token)?;
+    let activation = begin_activation(&state, expected)?;
+    let env = state.join(REFERENCE_ENV);
+    platform::write_atomic(&env, &reference_environment(expected, token), 0o640)?;
+    command(
+        "/usr/bin/chown",
+        &["0:990", env.to_str().ok_or("invalid environment path")?],
+    )?;
+    finish_activation(&state, expected, &activation)
+}
+
+/// Explicit migration of one legacy installed model; no boot-time fallback to
+/// the worker-writable environment and no automatic clearing of a crash fence.
+pub fn migrate_legacy() -> Result<()> {
+    crate::require_root()?;
+    platform::require_installed()?;
+    let var = Path::new(VAR);
+    let _operation = operation_lock(var)?;
+    let p = legacy_configuration_at(&var.join(STATE))?;
+    verify_file(
+        &var.join(STATE)
+            .join("models")
+            .join(format!("{}.gguf", p.id)),
+        &p,
+    )?;
+    command("/usr/bin/systemctl", &["stop", "luma-model.service"])?;
+    migrate_legacy_at(var, &p)?;
+    command("/usr/bin/systemctl", &["daemon-reload"])?;
+    command(
+        "/usr/bin/systemctl",
+        &["reset-failed", "luma-model.service"],
+    )?;
+    command(
+        "/usr/bin/systemctl",
+        &["restart", "luma-model.service", "luma-reference.service"],
+    )?;
+    println!(
+        "{}",
+        serde_json::json!({"schema_version":1,"legacy_model_migrated":p.id,
+        "legacy_file_removed":false,"worker_restart_requested":true})
+    );
     Ok(())
 }
 
@@ -1628,6 +1725,83 @@ print('ISOLATED_MODEL_LOCK_PASSED')
             serde_json::to_vec(&serde_json::json!({"schema_version":1,"id":p.id})).unwrap(),
         )
         .unwrap();
+    }
+
+    fn write_legacy_reference(state: &Path, p: &Profile) {
+        write_activation_candidate(state, p);
+        let env = fs::read(state.join(REFERENCE_ENV)).unwrap();
+        fs::remove_file(state.join(REFERENCE_ENV)).unwrap();
+        let legacy_dir = state.join("reference");
+        fs::create_dir(&legacy_dir).unwrap();
+        fs::set_permissions(&legacy_dir, fs::Permissions::from_mode(0o700)).unwrap();
+        command("/usr/bin/chown", &["990:990", legacy_dir.to_str().unwrap()]).unwrap();
+        let legacy = legacy_dir.join("model.env");
+        fs::write(&legacy, env).unwrap();
+        fs::set_permissions(&legacy, fs::Permissions::from_mode(0o600)).unwrap();
+        command("/usr/bin/chown", &["990:990", legacy.to_str().unwrap()]).unwrap();
+    }
+
+    fn remove_legacy_reference(root: &Path) {
+        let state = root.join(STATE);
+        fs::remove_file(state.join("reference/model.env")).unwrap();
+        fs::remove_dir(state.join("reference")).unwrap();
+        if state.join("model-runtime.lock").exists() {
+            fs::remove_file(state.join("model-runtime.lock")).unwrap();
+        }
+    }
+
+    #[test]
+    fn legacy_migration_requires_exact_old_state_and_publishes_root_environment() {
+        let (root, p) = activation_fixture("legacy-migration");
+        let state = root.join(STATE);
+        write_legacy_reference(&state, &p);
+        let legacy = state.join("reference/model.env");
+        let expected = fs::read(&legacy).unwrap();
+        fs::write(&legacy, b"untrusted legacy settings").unwrap();
+        assert!(legacy_configuration_at(&state).is_err());
+        assert!(state.join(REFERENCE_ENV).symlink_metadata().is_err());
+        assert!(state.join("model-runtime.lock").symlink_metadata().is_err());
+        fs::write(&legacy, &expected).unwrap();
+        let selected = legacy_configuration_at(&state).unwrap();
+        assert_eq!(selected.id, p.id);
+        migrate_legacy_at(&root, &selected).unwrap();
+        activation_absent(&state).unwrap();
+        let current = state.join(REFERENCE_ENV);
+        assert_eq!(fs::read(&current).unwrap(), expected);
+        let metadata = fs::symlink_metadata(&current).unwrap();
+        assert_eq!(metadata.uid(), 0);
+        assert_eq!(metadata.gid(), 990);
+        assert_eq!(metadata.mode() & 0o777, 0o640);
+        assert!(state.join("model-runtime.lock").exists());
+        assert_eq!(fs::read(&legacy).unwrap(), expected);
+        migrate_legacy_at(&root, &selected).unwrap();
+        assert_eq!(fs::read(&current).unwrap(), expected);
+        fs::write(&current, b"conflicting new settings").unwrap();
+        assert!(legacy_configuration_at(&state).is_err());
+        fs::write(&current, &expected).unwrap();
+        fs::remove_file(&legacy).unwrap();
+        std::os::unix::fs::symlink(&current, &legacy).unwrap();
+        assert!(legacy_configuration_at(&state).is_err());
+        remove_legacy_reference(&root);
+        remove_activation_fixture(&root, &p);
+    }
+
+    #[test]
+    fn pending_legacy_migration_needs_review_before_retry() {
+        let (root, p) = activation_fixture("legacy-pending");
+        let state = root.join(STATE);
+        write_legacy_reference(&state, &p);
+        let _runtime = runtime_lock(&root, true).unwrap();
+        begin_activation(&state, &p).unwrap();
+        assert!(legacy_configuration_at(&state).is_err());
+        let observed = observe_activation(&state, &p, true).unwrap();
+        assert_eq!(observed.phase, "unchanged_prior_state");
+        reviewed_clear_activation(&state, &p, "--abort-unchanged", &observed.review).unwrap();
+        drop(_runtime);
+        migrate_legacy_at(&root, &p).unwrap();
+        activation_absent(&state).unwrap();
+        remove_legacy_reference(&root);
+        remove_activation_fixture(&root, &p);
     }
 
     #[test]

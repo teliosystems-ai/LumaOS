@@ -605,6 +605,13 @@ fn activate_cached(var: &Path, p: &Profile) -> Result<()> {
     // All worker-visible activation writes follow a durable pending fence.
     // A crash or failed write preserves it for explicit review.
     let activation = begin_activation(&state, p)?;
+    write_candidate_config(&state, p)?;
+    finish_activation(&state, p, &activation)?;
+    println!("MODEL INSTALLED AND VERIFIED: {}. Inference activates on installed-system boot; no production certification implied.", p.id);
+    Ok(())
+}
+
+fn write_candidate_config(state: &Path, p: &Profile) -> Result<()> {
     let auth = state.join("model-auth");
     safe_dir(&auth)?;
     fs::set_permissions(&auth, fs::Permissions::from_mode(0o750))?;
@@ -613,37 +620,38 @@ fn activate_cached(var: &Path, p: &Profile) -> Result<()> {
         &["0:989", auth.to_str().ok_or("invalid auth path")?],
     )?;
     let key_path = auth.join("api-key");
-    let token = if key_path.exists() {
-        let mut s = String::new();
-        open_regular(&key_path)?.take(65).read_to_string(&mut s)?;
-        if s.len() != 64 || !s.bytes().all(|b| b.is_ascii_hexdigit()) {
-            return Err("invalid model credential".into());
+    let token = if let Some(bytes) = activation_bytes(&key_path, 64)? {
+        let token = String::from_utf8(bytes)?;
+        if token.len() != 64 || !token.bytes().all(|b| b.is_ascii_hexdigit()) {
+            return Err("invalid model credential; preserve state".into());
         }
-        s
+        token
     } else {
         let mut bytes = [0u8; 32];
         File::open("/dev/urandom")?.read_exact(&mut bytes)?;
         let s = bundle::hex(&bytes);
         platform::write_atomic(&key_path, s.as_bytes(), 0o640)?;
-        command(
-            "/usr/bin/chown",
-            &["0:989", key_path.to_str().ok_or("invalid auth path")?],
-        )?;
         s
     };
+    fs::set_permissions(&key_path, fs::Permissions::from_mode(0o640))?;
+    command(
+        "/usr/bin/chown",
+        &["0:989", key_path.to_str().ok_or("invalid auth path")?],
+    )?;
     let env = state.join(REFERENCE_ENV);
     platform::write_atomic(&env, &reference_environment(p, &token), 0o640)?;
+    fs::set_permissions(&env, fs::Permissions::from_mode(0o640))?;
     command(
         "/usr/bin/chown",
         &["0:990", env.to_str().ok_or("invalid environment path")?],
     )?;
+    let selection = state.join("model-selection.json");
     platform::write_atomic(
-        &state.join("model-selection.json"),
+        &selection,
         &serde_json::to_vec(&serde_json::json!({"schema_version":1,"id":p.id}))?,
         0o644,
     )?;
-    finish_activation(&state, p, &activation)?;
-    println!("MODEL INSTALLED AND VERIFIED: {}. Inference activates on installed-system boot; no production certification implied.", p.id);
+    fs::set_permissions(&selection, fs::Permissions::from_mode(0o644))?;
     Ok(())
 }
 
@@ -1029,6 +1037,21 @@ fn reviewed_clear_activation(state: &Path, p: &Profile, mode: &str, reviewed: &s
     clear_activation(state, &current)
 }
 
+fn reviewed_complete_candidate(state: &Path, p: &Profile, reviewed: &str) -> Result<()> {
+    tpm::decode::<32>(reviewed)?;
+    let observed = observe_activation(state, p, true)?;
+    if observed.phase != "partial_or_conflicting_state" || observed.review != reviewed {
+        return Err("model activation review differs or candidate is not partial".into());
+    }
+    verify_file(&state.join("models").join(format!("{}.gguf", p.id)), p)?;
+    let current = observe_activation(state, p, true)?;
+    if current.phase != observed.phase || current.review != observed.review {
+        return Err("model activation changed after review".into());
+    }
+    write_candidate_config(state, p)?;
+    finish_activation(state, p, &current.record)
+}
+
 pub fn activation_reconcile(action: Option<(&str, &str)>) -> Result<()> {
     crate::require_root()?;
     platform::require_installed()?;
@@ -1041,21 +1064,34 @@ pub fn activation_reconcile(action: Option<(&str, &str)>) -> Result<()> {
     let record: Activation = serde_json::from_slice(&marker)?;
     let p = profile(&record.candidate)?;
     let observation = observe_activation(&state, &p, true)?;
-    if let Some((mode, reviewed)) = action {
-        reviewed_clear_activation(&state, &p, mode, reviewed)?;
-        println!(
-            "{}",
-            serde_json::json!({"schema_version":1,"cleared":true,
-            "phase":observation.phase,"worker_started":false,"reservation":false})
-        );
-    } else {
-        println!(
-            "{}",
-            serde_json::json!({"schema_version":1,"phase":observation.phase,
-            "candidate":p.id,"review_sha256":observation.review,
-            "worker_started":false,"mutation_performed":false,
-            "clearable":observation.phase != "partial_or_conflicting_state"})
-        );
+    match action {
+        Some(("--complete-candidate", reviewed)) => {
+            reviewed_complete_candidate(&state, &p, reviewed)?;
+            println!(
+                "{}",
+                serde_json::json!({"schema_version":1,"cleared":true,
+                "phase":"partial_candidate_completed","worker_started":false,
+                "reservation":false})
+            );
+        }
+        Some((mode, reviewed)) => {
+            reviewed_clear_activation(&state, &p, mode, reviewed)?;
+            println!(
+                "{}",
+                serde_json::json!({"schema_version":1,"cleared":true,
+                "phase":observation.phase,"worker_started":false,"reservation":false})
+            );
+        }
+        None => {
+            println!(
+                "{}",
+                serde_json::json!({"schema_version":1,"phase":observation.phase,
+                "candidate":p.id,"review_sha256":observation.review,
+                "worker_started":false,"mutation_performed":false,
+                "clearable":observation.phase != "partial_or_conflicting_state",
+                "completion_requires_write":observation.phase == "partial_or_conflicting_state"})
+            );
+        }
     }
     Ok(())
 }
@@ -1112,6 +1148,7 @@ fn migrate_legacy_at(var: &Path, expected: &Profile) -> Result<()> {
     let activation = begin_activation(&state, expected)?;
     let env = state.join(REFERENCE_ENV);
     platform::write_atomic(&env, &reference_environment(expected, token), 0o640)?;
+    fs::set_permissions(&env, fs::Permissions::from_mode(0o640))?;
     command(
         "/usr/bin/chown",
         &["0:990", env.to_str().ok_or("invalid environment path")?],
@@ -2139,6 +2176,69 @@ print('ISOLATED_MODEL_LOCK_PASSED')
         write_activation_candidate(&state, &p);
         finish_activation(&state, &p, &record).unwrap();
         activation_absent(&state).unwrap();
+        remove_activation_fixture(&root, &p);
+    }
+
+    #[test]
+    fn reviewed_partial_candidate_completion_writes_consistent_state_without_worker() {
+        let (root, p) = activation_fixture("complete-partial");
+        let state = root.join(STATE);
+        begin_activation(&state, &p).unwrap();
+        fs::write(state.join(REFERENCE_ENV), b"interrupted environment").unwrap();
+        let observed = observe_activation(&state, &p, true).unwrap();
+        assert_eq!(observed.phase, "partial_or_conflicting_state");
+        assert!(reviewed_complete_candidate(&state, &p, &"00".repeat(32)).is_err());
+        fs::write(state.join(REFERENCE_ENV), b"changed after review").unwrap();
+        assert!(reviewed_complete_candidate(&state, &p, &observed.review).is_err());
+        assert!(activation_absent(&state).is_err());
+        let reviewed = observe_activation(&state, &p, true).unwrap();
+        reviewed_complete_candidate(&state, &p, &reviewed.review).unwrap();
+        activation_absent(&state).unwrap();
+        assert_eq!(selected_at(&state).unwrap().id, p.id);
+        let key = fs::read(state.join("model-auth/api-key")).unwrap();
+        let env = fs::read(state.join(REFERENCE_ENV)).unwrap();
+        assert_eq!(
+            env,
+            reference_environment(&p, std::str::from_utf8(&key).unwrap())
+        );
+        let key_meta = fs::symlink_metadata(state.join("model-auth/api-key")).unwrap();
+        let env_meta = fs::symlink_metadata(state.join(REFERENCE_ENV)).unwrap();
+        let selection_meta = fs::symlink_metadata(state.join("model-selection.json")).unwrap();
+        assert_eq!(
+            (key_meta.uid(), key_meta.gid(), key_meta.mode() & 0o777),
+            (0, 989, 0o640)
+        );
+        assert_eq!(
+            (env_meta.uid(), env_meta.gid(), env_meta.mode() & 0o777),
+            (0, 990, 0o640)
+        );
+        assert_eq!(selection_meta.mode() & 0o777, 0o644);
+        remove_activation_fixture(&root, &p);
+    }
+
+    #[test]
+    fn partial_candidate_with_bad_weight_or_credential_keeps_fence() {
+        let (root, p) = activation_fixture("bad-partial");
+        let state = root.join(STATE);
+        begin_activation(&state, &p).unwrap();
+        fs::write(state.join(REFERENCE_ENV), b"partial").unwrap();
+        fs::write(
+            state.join("models").join(format!("{}.gguf", p.id)),
+            b"corrupt weight bytes",
+        )
+        .unwrap();
+        let reviewed = observe_activation(&state, &p, true).unwrap();
+        assert!(reviewed_complete_candidate(&state, &p, &reviewed.review).is_err());
+        assert!(activation_absent(&state).is_err());
+        fs::write(
+            state.join("models").join(format!("{}.gguf", p.id)),
+            b"small GGUF test fixture",
+        )
+        .unwrap();
+        fs::write(state.join("model-auth/api-key"), b"bad key").unwrap();
+        let reviewed = observe_activation(&state, &p, true).unwrap();
+        assert!(reviewed_complete_candidate(&state, &p, &reviewed.review).is_err());
+        assert!(activation_absent(&state).is_err());
         remove_activation_fixture(&root, &p);
     }
 

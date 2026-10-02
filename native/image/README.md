@@ -196,9 +196,15 @@ while it is present. For an interrupted activation on a controlled lab system,
 run `sudo luma-platform model-activation-reconcile` to inspect the phase and
 review digest. After investigating the cause, use `--abort-unchanged DIGEST`
 only for `unchanged_prior_state`, or `--publish-committed DIGEST` only for
-`consistent_candidate_committed`. Partial/conflicting state stays fenced;
-neither option repairs files or starts the worker. Never delete the marker to
-bypass a refusal. This root-only diagnostic is not a product Admin approval.
+`consistent_candidate_committed`. For `partial_or_conflicting_state`, preserve
+diagnostics and decide explicitly whether to roll forward to the named
+candidate. Only after that review, `--complete-candidate DIGEST` verifies its
+catalog-pinned weights and writes consistent candidate settings under the
+fence before clearing it. Invalid weights, credentials or file state leave
+the fence in place. None of these options starts or proves readiness of the
+worker; restarting and checking it is a separate operator action. Never
+delete the marker to bypass a refusal. This root-only laboratory diagnostic
+is not a product Admin approval or signed production custody.
 
 For installed reconfiguration, `model-install` now acquires and verifies the
 candidate weights before stopping the managed worker. A failed download or

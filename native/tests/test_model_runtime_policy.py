@@ -42,6 +42,17 @@ class ModelRuntimePolicyTests(unittest.TestCase):
         self.assertIn('/sys/fs/cgroup/**/memory.max r,', model)
         self.assertIn('/sys/fs/cgroup/memory.max r,', model)
 
+    def test_reviewed_partial_completion_verifies_weights_before_writing(self):
+        source = (ROOT / 'rust/luma-platform/src/model.rs').read_text()
+        complete = source.split('fn reviewed_complete_candidate(')[1].split('pub fn activation_reconcile(')[0]
+        self.assertLess(complete.index('verify_file('),
+                        complete.index('write_candidate_config('))
+        self.assertLess(complete.index('write_candidate_config('),
+                        complete.index('finish_activation('))
+        reconcile = source.split('pub fn activation_reconcile(')[1].split('fn legacy_configuration_at(')[0]
+        self.assertIn('"--complete-candidate"', reconcile)
+        self.assertNotIn('systemctl', reconcile)
+
     def test_verified_acquisition_precedes_managed_worker_stop(self):
         source = (ROOT / 'rust/luma-platform/src/model.rs').read_text()
         prepare = source.split('fn prepare_model(')[1].split('fn activate_cached(')[0]

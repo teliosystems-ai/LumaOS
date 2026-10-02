@@ -14,18 +14,21 @@ explicit `--abort-unchanged REVIEW-SHA256` only when the previous selection,
 environment and credential bytes are unchanged, or `--publish-committed
 REVIEW-SHA256` only when the candidate selection, environment, credential and
 catalog-pinned weight bytes are consistent. The review is recomputed before
-clearing the marker. A partial or conflicting state stays fenced; the command
-does not repair files, start a worker, grant product Admin authority or replace
-signing custody. The digest binds a reviewed observation, not an authorization.
+clearing the marker. At this initial checkpoint a partial or conflicting state
+stayed fenced; the later reviewed completion path is described below. Neither
+clearance starts a worker, grants product Admin authority or replaces signing
+custody. The digest binds a reviewed observation, not an authorization.
 
 For an interrupted installation on a controlled laboratory system, first
 preserve the state and inspect with `sudo luma-platform
 model-activation-reconcile`. Use only the matching explicit command and exact
 reported review digest after investigating the cause. Do not remove
 `/var/lib/luma-os/model-activation.pending` by hand. If the phase is
-`partial_or_conflicting_state`, leave the system fenced for forensic review;
-neither clearance option is available. Any service restart after clearance is
-a separate operator decision and must be checked against the selected model.
+`partial_or_conflicting_state`, preserve it for forensic review; neither of
+these two clearance options is available. The later `--complete-candidate`
+path applies only after an explicit decision to roll forward to the verified
+candidate. Any service restart after clearance is a separate operator decision
+and must be checked against the selected model.
 
 The final bounded offline test snapshot is
 `D:\LumaOS-builds\g2-model-activation-targeted-20261002-04`. Its frozen
@@ -44,7 +47,8 @@ and passed.
 
 This is an interruption fence and narrow reviewed clearance, not a multi-file
 atomic transaction, generation lease, memory reservation, full model lifecycle
-or production Admin workflow. Partial states need a designed repair path.
+or production Admin workflow. This initial checkpoint had no partial-state
+repair; a narrow reviewed roll-forward was added later, as recorded below.
 Binary-only upgrades of older installations still need an explicit migration:
 the old reference environment file is not automatically copied to its new
 root-owned location, and older installations may lack the persistent runtime
@@ -137,3 +141,37 @@ marker, changed environment and recovery disablement. No installed systemd
 transition, real LLM, image upgrade or physical failure was exercised.
 Partial/conflicting activation still has no automatic repair, and a successful
 systemd restart request is not evidence of a healthy inference service.
+
+## Reviewed partial candidate completion
+
+A further source-only increment adds an explicit `--complete-candidate
+REVIEW-SHA256` path for a pending `partial_or_conflicting_state`. It verifies
+the catalog-pinned candidate weight, rechecks the exact reviewed marker and
+file-state digest, then writes a consistent candidate credential, reference
+environment and selection under the existing fence. It clears the marker only
+after those files agree. Invalid weights, malformed credentials, unsafe files,
+or changed review state leave the fence in place. The command does not restart
+or prove readiness of any service and is an installed-root laboratory
+maintenance command, not product Admin approval or signed production custody.
+
+On a controlled test installation, preserve the marker and diagnostics first.
+Inspect with `sudo luma-platform model-activation-reconcile` and investigate
+the cause. Only if rolling forward to the named candidate is approved, run
+`sudo luma-platform model-activation-reconcile --complete-candidate DIGEST`
+with the exact reported digest. Check the resulting selection and service
+configuration before separately deciding whether to restart the worker;
+verify readiness afterward. Do not delete the marker by hand. This path does
+not roll back to the prior model, resolve arbitrary inconsistent state, or
+qualify a post-stop service failure.
+
+The final bounded offline source snapshot is
+`D:\LumaOS-builds\g2-model-activation-targeted-20261002-14`. Its frozen
+`source/build-inputs.json` SHA-256 is
+`c9e8b31220ca77e2a485abe77ac2eff95309004d5a087e5ff3694767dc6d6b84`;
+`test.log` SHA-256 is
+`5b315ddad9e9a9c82c8ef2d4ffe2afefd87349f401afb6280069878f18e4d29c`.
+The D-backed Docker run used no network, VM, host TPM or real LLM load, with
+one CPU/Cargo job, 768 MiB, no extra swap and 128 PIDs. Twenty-nine Rust
+model tests, six model-runtime policy tests, fifteen VM-harness unit tests,
+formatting, a warning-clean offline build and compiled CLI help passed. No
+installed transition, native Ubuntu qualification or full image test was run.

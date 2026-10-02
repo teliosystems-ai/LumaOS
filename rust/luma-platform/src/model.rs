@@ -1,10 +1,10 @@
 //! Pinned image-owned model admission and atomic, bounded HTTPS acquisition.
 //! A model is data, never an executable or an authority to perform OS effects.
-use crate::{bundle, disk::command, platform, Result};
+use crate::{bundle, disk::command, platform, tpm, Result};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::fs::{self, File, OpenOptions};
-use std::io::{Read, Seek, SeekFrom};
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::os::fd::AsRawFd;
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::os::unix::process::CommandExt;
@@ -15,6 +15,8 @@ const CATALOG: &str = include_str!("../../../native/image/model-catalog.json");
 const VAR: &str = "/var";
 const STATE: &str = "lib/luma-os";
 const RUNTIME: &str = "/usr/libexec/luma-os/llama/llama-server";
+const ACTIVATION: &str = "model-activation.pending";
+const REFERENCE_ENV: &str = "model-reference.env";
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -535,6 +537,7 @@ fn provision_locked(var: &Path, p: &Profile) -> Result<()> {
     // including credential/selection writes. Released before systemd restart.
     let _runtime = runtime_lock(var, true)?;
     let state = var.join(STATE);
+    activation_absent(&state)?;
     let models = state.join("models");
     safe_dir(&models)?;
     reconcile_downloads(&models, &catalog()?.models)?;
@@ -547,7 +550,9 @@ fn provision_locked(var: &Path, p: &Profile) -> Result<()> {
         println!("Downloading {} ({} bytes)...", p.id, p.bytes);
         fetch(&file, p)?;
     }
-    // Activation is last. Interrupted acquisition never becomes a selection.
+    // All worker-visible activation writes follow a durable pending fence.
+    // A crash or failed write preserves it for explicit review.
+    let activation = begin_activation(&state, p)?;
     let auth = state.join("model-auth");
     safe_dir(&auth)?;
     fs::set_permissions(&auth, fs::Permissions::from_mode(0o750))?;
@@ -574,17 +579,18 @@ fn provision_locked(var: &Path, p: &Profile) -> Result<()> {
         )?;
         s
     };
-    let env = state.join("reference/model.env");
-    platform::write_atomic(&env, format!("LUMA_MODEL_ENDPOINT=http://127.0.0.1:8081/v1\nLUMA_MODEL_NAME={}\nLUMA_MODEL_API_KEY={token}\n",p.id).as_bytes(), 0o600)?;
+    let env = state.join(REFERENCE_ENV);
+    platform::write_atomic(&env, format!("LUMA_MODEL_ENDPOINT=http://127.0.0.1:8081/v1\nLUMA_MODEL_NAME={}\nLUMA_MODEL_API_KEY={token}\n",p.id).as_bytes(), 0o640)?;
     command(
         "/usr/bin/chown",
-        &["990:990", env.to_str().ok_or("invalid environment path")?],
+        &["0:990", env.to_str().ok_or("invalid environment path")?],
     )?;
     platform::write_atomic(
         &state.join("model-selection.json"),
         &serde_json::to_vec(&serde_json::json!({"schema_version":1,"id":p.id}))?,
         0o644,
     )?;
+    finish_activation(&state, p, &activation)?;
     println!("MODEL INSTALLED AND VERIFIED: {}. Inference activates on installed-system boot; no production certification implied.", p.id);
     Ok(())
 }
@@ -685,6 +691,247 @@ fn selected_at(state: &Path) -> Result<Profile> {
     profile(&s.id)
 }
 
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+struct Activation {
+    schema_version: u32,
+    candidate: String,
+    prior_selection_sha256: Option<String>,
+    prior_env_sha256: Option<String>,
+    prior_key_sha256: Option<String>,
+}
+
+fn activation_absent(state: &Path) -> Result<()> {
+    match fs::symlink_metadata(state.join(ACTIVATION)) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error.into()),
+        Ok(_) => Err("model activation pending; reviewed reconciliation required".into()),
+    }
+}
+
+fn activation_bytes(path: &Path, max: u64) -> Result<Option<Vec<u8>>> {
+    let original = match fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error.into()),
+    };
+    if !original.is_file()
+        || original.uid() != 0
+        || original.nlink() != 1
+        || original.mode() & 0o022 != 0
+        || original.len() > max
+    {
+        return Err("unsafe model activation file; preserve state".into());
+    }
+    let mut file = OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NONBLOCK)
+        .open(path)?;
+    let opened = file.metadata()?;
+    if opened.dev() != original.dev() || opened.ino() != original.ino() {
+        return Err("model activation file changed during open".into());
+    }
+    let mut bytes = Vec::new();
+    (&mut file).take(max + 1).read_to_end(&mut bytes)?;
+    let after = file.metadata()?;
+    if bytes.len() as u64 != original.len()
+        || after.len() != original.len()
+        || after.mtime() != original.mtime()
+        || after.mtime_nsec() != original.mtime_nsec()
+        || after.ctime() != original.ctime()
+        || after.ctime_nsec() != original.ctime_nsec()
+    {
+        return Err("model activation file changed during read".into());
+    }
+    Ok(Some(bytes))
+}
+
+fn activation_digest(bytes: &Option<Vec<u8>>) -> Option<String> {
+    bytes
+        .as_ref()
+        .map(|value| bundle::hex(&Sha256::digest(value)))
+}
+
+fn activation_snapshot(
+    state: &Path,
+) -> Result<(Option<Vec<u8>>, Option<Vec<u8>>, Option<Vec<u8>>)> {
+    Ok((
+        activation_bytes(&state.join("model-selection.json"), 4096)?,
+        activation_bytes(&state.join(REFERENCE_ENV), 4096)?,
+        activation_bytes(&state.join("model-auth/api-key"), 64)?,
+    ))
+}
+
+fn begin_activation(state: &Path, p: &Profile) -> Result<Activation> {
+    activation_absent(state)?;
+    let (selection, env, key) = activation_snapshot(state)?;
+    let record = Activation {
+        schema_version: 1,
+        candidate: p.id.clone(),
+        prior_selection_sha256: activation_digest(&selection),
+        prior_env_sha256: activation_digest(&env),
+        prior_key_sha256: activation_digest(&key),
+    };
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
+        .open(state.join(ACTIVATION))?;
+    file.write_all(&serde_json::to_vec(&record)?)?;
+    file.sync_all()?;
+    File::open(state)?.sync_all()?;
+    Ok(record)
+}
+
+struct ActivationObservation {
+    record: Activation,
+    marker: Vec<u8>,
+    phase: &'static str,
+    candidate_consistent: bool,
+    review: String,
+}
+
+fn observe_activation(
+    state: &Path,
+    p: &Profile,
+    verify_weight: bool,
+) -> Result<ActivationObservation> {
+    let marker =
+        activation_bytes(&state.join(ACTIVATION), 4096)?.ok_or("no pending model activation")?;
+    let record: Activation = serde_json::from_slice(&marker)?;
+    if serde_json::to_vec(&record)? != marker
+        || record.schema_version != 1
+        || record.candidate != p.id
+        || [
+            &record.prior_selection_sha256,
+            &record.prior_env_sha256,
+            &record.prior_key_sha256,
+        ]
+        .into_iter()
+        .flatten()
+        .any(|value| value.len() != 64 || !value.bytes().all(|b| b.is_ascii_hexdigit()))
+    {
+        return Err("invalid retained model activation; preserve state".into());
+    }
+    let (selection, env, key) = activation_snapshot(state)?;
+    let hashes = (
+        activation_digest(&selection),
+        activation_digest(&env),
+        activation_digest(&key),
+    );
+    let unchanged = hashes.0 == record.prior_selection_sha256
+        && hashes.1 == record.prior_env_sha256
+        && hashes.2 == record.prior_key_sha256;
+    let token = key
+        .as_deref()
+        .and_then(|bytes| std::str::from_utf8(bytes).ok());
+    let candidate = if let (Some(selection), Some(env), Some(token)) =
+        (selection.as_deref(), env.as_deref(), token)
+    {
+        token.len() == 64
+            && token.bytes().all(|b| b.is_ascii_hexdigit())
+            && selection
+                == serde_json::to_vec(&serde_json::json!({"schema_version":1,"id":p.id}))?
+            && env
+                == format!("LUMA_MODEL_ENDPOINT=http://127.0.0.1:8081/v1\nLUMA_MODEL_NAME={}\nLUMA_MODEL_API_KEY={token}\n", p.id).as_bytes()
+            && (!verify_weight
+                || verify_file(
+                    &state.join("models").join(format!("{}.gguf", p.id)),
+                    p,
+                )
+                .is_ok())
+    } else {
+        false
+    };
+    let phase = if unchanged {
+        "unchanged_prior_state"
+    } else if candidate {
+        "consistent_candidate_committed"
+    } else {
+        "partial_or_conflicting_state"
+    };
+    let mut digest = Sha256::new();
+    digest.update(b"luma-model-activation-review-v1\0");
+    digest.update(&marker);
+    digest.update(serde_json::to_vec(&hashes)?);
+    digest.update(phase.as_bytes());
+    digest.update(p.sha256.as_bytes());
+    Ok(ActivationObservation {
+        record,
+        marker,
+        phase,
+        candidate_consistent: candidate,
+        review: bundle::hex(&digest.finalize()),
+    })
+}
+
+fn clear_activation(state: &Path, observation: &ActivationObservation) -> Result<()> {
+    if activation_bytes(&state.join(ACTIVATION), 4096)? != Some(observation.marker.clone()) {
+        return Err("model activation marker changed; preserve state".into());
+    }
+    fs::remove_file(state.join(ACTIVATION))?;
+    File::open(state)?.sync_all()?;
+    Ok(())
+}
+
+fn finish_activation(state: &Path, p: &Profile, record: &Activation) -> Result<()> {
+    let observation = observe_activation(state, p, false)?;
+    if observation.record != *record || !observation.candidate_consistent {
+        return Err("model activation files inconsistent; preserve pending marker".into());
+    }
+    clear_activation(state, &observation)
+}
+
+fn reviewed_clear_activation(state: &Path, p: &Profile, mode: &str, reviewed: &str) -> Result<()> {
+    tpm::decode::<32>(reviewed)?;
+    let expected_phase = match mode {
+        "--abort-unchanged" => "unchanged_prior_state",
+        "--publish-committed" => "consistent_candidate_committed",
+        _ => return Err("unsupported model activation reconciliation".into()),
+    };
+    let observed = observe_activation(state, p, true)?;
+    if observed.phase != expected_phase || observed.review != reviewed {
+        return Err("model activation review differs or state is not safely clearable".into());
+    }
+    let current = observe_activation(state, p, true)?;
+    if current.review != observed.review || current.phase != expected_phase {
+        return Err("model activation changed after review".into());
+    }
+    clear_activation(state, &current)
+}
+
+pub fn activation_reconcile(action: Option<(&str, &str)>) -> Result<()> {
+    crate::require_root()?;
+    platform::require_installed()?;
+    let var = Path::new(VAR);
+    let _operation = operation_lock(var)?;
+    let _runtime = runtime_lock(var, false)?;
+    let state = var.join(STATE);
+    let marker =
+        activation_bytes(&state.join(ACTIVATION), 4096)?.ok_or("no pending model activation")?;
+    let record: Activation = serde_json::from_slice(&marker)?;
+    let p = profile(&record.candidate)?;
+    let observation = observe_activation(&state, &p, true)?;
+    if let Some((mode, reviewed)) = action {
+        reviewed_clear_activation(&state, &p, mode, reviewed)?;
+        println!(
+            "{}",
+            serde_json::json!({"schema_version":1,"cleared":true,
+            "phase":observation.phase,"worker_started":false,"reservation":false})
+        );
+    } else {
+        println!(
+            "{}",
+            serde_json::json!({"schema_version":1,"phase":observation.phase,
+            "candidate":p.id,"review_sha256":observation.review,
+            "worker_started":false,"mutation_performed":false,
+            "clearable":observation.phase != "partial_or_conflicting_state"})
+        );
+    }
+    Ok(())
+}
+
 /// Read-only, advisory preflight. Activation repeats admission after stopping
 /// the managed worker; neither observation reserves RAM or storage.
 fn preflight_at(
@@ -693,6 +940,7 @@ fn preflight_at(
     admit: impl FnOnce(&Profile, u64) -> Result<()>,
 ) -> Result<()> {
     let state = var.join(STATE);
+    activation_absent(&state)?;
     let metadata = fs::symlink_metadata(&state)?;
     if !metadata.is_dir() || metadata.uid() != 0 || metadata.mode() & 0o022 != 0 {
         return Err("unsafe model preflight state directory".into());
@@ -769,6 +1017,7 @@ pub fn serve() -> Result<()> {
     }
     platform::require_installed()?;
     let runtime = runtime_lock(Path::new(VAR), false)?;
+    activation_absent(&Path::new(VAR).join(STATE))?;
     let p = selected()?;
     admit_cgroup(&p, effective_memory_limit()?)?;
     let file = Path::new(VAR)
@@ -1328,5 +1577,154 @@ print('ISOLATED_MODEL_LOCK_PASSED')
             assert!(selected_at(&state).is_err());
         }
         remove_runtime_fixture(&dir);
+    }
+
+    fn activation_fixture(label: &str) -> (PathBuf, Profile) {
+        let root = std::env::temp_dir().join(format!(
+            "luma-model-activation-{label}-{}",
+            std::process::id()
+        ));
+        let state = root.join(STATE);
+        fs::create_dir_all(state.join("models")).unwrap();
+        fs::create_dir(state.join("model-auth")).unwrap();
+        let mut p = profile("qwen3-4b-q4-k-m").unwrap();
+        let weights = b"small GGUF test fixture";
+        p.bytes = weights.len() as u64;
+        p.sha256 = bundle::hex(&Sha256::digest(weights));
+        fs::write(state.join("models").join(format!("{}.gguf", p.id)), weights).unwrap();
+        (root, p)
+    }
+
+    fn remove_activation_fixture(root: &Path, p: &Profile) {
+        let state = root.join(STATE);
+        for path in [
+            state.join(ACTIVATION),
+            state.join(REFERENCE_ENV),
+            state.join("model-selection.json"),
+            state.join("model-auth/api-key"),
+            state.join("models").join(format!("{}.gguf", p.id)),
+        ] {
+            if path.symlink_metadata().is_ok() {
+                fs::remove_file(path).unwrap();
+            }
+        }
+        fs::remove_dir(state.join("models")).unwrap();
+        fs::remove_dir(state.join("model-auth")).unwrap();
+        fs::remove_dir(&state).unwrap();
+        fs::remove_dir(state.parent().unwrap()).unwrap();
+        fs::remove_dir(root).unwrap();
+    }
+
+    fn write_activation_candidate(state: &Path, p: &Profile) {
+        let token = "a".repeat(64);
+        fs::write(state.join("model-auth/api-key"), &token).unwrap();
+        fs::write(
+            state.join(REFERENCE_ENV),
+            format!("LUMA_MODEL_ENDPOINT=http://127.0.0.1:8081/v1\nLUMA_MODEL_NAME={}\nLUMA_MODEL_API_KEY={token}\n", p.id),
+        )
+        .unwrap();
+        fs::write(
+            state.join("model-selection.json"),
+            serde_json::to_vec(&serde_json::json!({"schema_version":1,"id":p.id})).unwrap(),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn unchanged_activation_can_be_explicitly_aborted_without_worker_start() {
+        let (root, p) = activation_fixture("unchanged");
+        let state = root.join(STATE);
+        begin_activation(&state, &p).unwrap();
+        assert!(activation_absent(&state).is_err());
+        let observed = observe_activation(&state, &p, true).unwrap();
+        assert_eq!(observed.phase, "unchanged_prior_state");
+        assert!(
+            reviewed_clear_activation(&state, &p, "--publish-committed", &observed.review).is_err()
+        );
+        assert!(
+            reviewed_clear_activation(&state, &p, "--abort-unchanged", &"00".repeat(32)).is_err()
+        );
+        reviewed_clear_activation(&state, &p, "--abort-unchanged", &observed.review).unwrap();
+        activation_absent(&state).unwrap();
+        remove_activation_fixture(&root, &p);
+    }
+
+    #[test]
+    fn committed_candidate_requires_exact_review_and_verified_weights() {
+        let (root, p) = activation_fixture("committed");
+        let state = root.join(STATE);
+        begin_activation(&state, &p).unwrap();
+        write_activation_candidate(&state, &p);
+        let observed = observe_activation(&state, &p, true).unwrap();
+        assert_eq!(observed.phase, "consistent_candidate_committed");
+        assert!(
+            reviewed_clear_activation(&state, &p, "--abort-unchanged", &observed.review).is_err()
+        );
+        reviewed_clear_activation(&state, &p, "--publish-committed", &observed.review).unwrap();
+        activation_absent(&state).unwrap();
+        begin_activation(&state, &p).unwrap();
+        assert!(activation_absent(&state).is_err());
+        let observed = observe_activation(&state, &p, true).unwrap();
+        reviewed_clear_activation(&state, &p, "--abort-unchanged", &observed.review).unwrap();
+        remove_activation_fixture(&root, &p);
+    }
+
+    #[test]
+    fn normal_activation_clears_fence_only_after_matching_selection_and_reference() {
+        let (root, p) = activation_fixture("normal");
+        let state = root.join(STATE);
+        let record = begin_activation(&state, &p).unwrap();
+        assert!(activation_absent(&state).is_err());
+        write_activation_candidate(&state, &p);
+        finish_activation(&state, &p, &record).unwrap();
+        activation_absent(&state).unwrap();
+        remove_activation_fixture(&root, &p);
+    }
+
+    #[test]
+    fn reinstall_of_consistent_selected_model_clears_fence() {
+        let (root, p) = activation_fixture("same-model");
+        let state = root.join(STATE);
+        write_activation_candidate(&state, &p);
+        let record = begin_activation(&state, &p).unwrap();
+        assert_eq!(
+            observe_activation(&state, &p, true).unwrap().phase,
+            "unchanged_prior_state"
+        );
+        finish_activation(&state, &p, &record).unwrap();
+        activation_absent(&state).unwrap();
+        remove_activation_fixture(&root, &p);
+    }
+
+    #[test]
+    fn partial_or_changed_activation_remains_fenced() {
+        let (root, p) = activation_fixture("partial");
+        let state = root.join(STATE);
+        begin_activation(&state, &p).unwrap();
+        fs::write(state.join(REFERENCE_ENV), b"partial environment").unwrap();
+        let observed = observe_activation(&state, &p, true).unwrap();
+        assert_eq!(observed.phase, "partial_or_conflicting_state");
+        for mode in ["--abort-unchanged", "--publish-committed"] {
+            assert!(reviewed_clear_activation(&state, &p, mode, &observed.review).is_err());
+        }
+        assert!(activation_absent(&state).is_err());
+        write_activation_candidate(&state, &p);
+        let observed = observe_activation(&state, &p, true).unwrap();
+        fs::write(state.join(REFERENCE_ENV), b"changed after review").unwrap();
+        assert!(
+            reviewed_clear_activation(&state, &p, "--publish-committed", &observed.review).is_err()
+        );
+        write_activation_candidate(&state, &p);
+        fs::write(
+            state.join("models").join(format!("{}.gguf", p.id)),
+            b"corrupt weight bytes",
+        )
+        .unwrap();
+        assert_eq!(
+            observe_activation(&state, &p, true).unwrap().phase,
+            "partial_or_conflicting_state"
+        );
+        assert!(activation_absent(&state).is_err());
+        remove_activation_fixture(&root, &p);
     }
 }

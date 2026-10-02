@@ -190,6 +190,24 @@ compromised worker deliberately releasing its own descriptors. Cgroup limits
 and runtime confinement remain necessary; pressure/quarantine, stale-worker
 fencing and real model lifecycle evaluation are still open.
 
+New source also writes `model-activation.pending` before changing the model
+credential, reference environment or selection. The worker refuses to start
+while it is present. For an interrupted activation on a controlled lab system,
+run `sudo luma-platform model-activation-reconcile` to inspect the phase and
+review digest. After investigating the cause, use `--abort-unchanged DIGEST`
+only for `unchanged_prior_state`, or `--publish-committed DIGEST` only for
+`consistent_candidate_committed`. Partial/conflicting state stays fenced;
+neither option repairs files or starts the worker. Never delete the marker to
+bypass a refusal. This root-only diagnostic is not a product Admin approval.
+
+The reference service's model environment now lives in root-owned
+`/var/lib/luma-os/model-reference.env`, outside its writable state directory.
+Binary-only upgrades from an older image do not migrate the former
+`reference/model.env`; controlled installed migration remains open. The fence,
+new service wiring and policy have only passed targeted source checks and a
+no-load AppArmor parse, not installed-image qualification. See the
+[activation checkpoint](../evidence/G2_MODEL_ACTIVATION_FENCE_2026-10-02.md).
+
 ## Build on Ubuntu or Ubuntu WSL
 
 Requires Docker, internet access to Ubuntu repositories on the first build,

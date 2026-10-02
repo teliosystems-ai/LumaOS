@@ -13,6 +13,7 @@ profile luma-reference flags=(attach_disconnected) {
   owner /proc/@{pid}/** r,
   owner /var/lib/luma-os/reference/ rw,
   owner /var/lib/luma-os/reference/** rwk,
+  /var/lib/luma-os/model-reference.env r,
   owner /tmp/** rwk,
   /dev/urandom r,
   /dev/random r,

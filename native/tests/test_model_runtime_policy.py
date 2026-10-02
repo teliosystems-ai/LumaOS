@@ -23,6 +23,25 @@ class ModelRuntimePolicyTests(unittest.TestCase):
         self.assertIn('inherit_runtime_files(&mut command, &verified, &runtime)', serve)
         self.assertNotIn('file.to_str()', serve)
 
+    def test_pending_activation_fences_worker_and_reference_env_is_root_owned(self):
+        source = (ROOT / 'rust/luma-platform/src/model.rs').read_text()
+        provision = source.split('fn provision_locked(')[1].split('fn reconcile_downloads')[0]
+        serve = source.split('pub fn serve()')[1].split('#[cfg(test)]')[0]
+        self.assertLess(provision.index('begin_activation(&state, p)?'),
+                        provision.index('state.join(REFERENCE_ENV)'))
+        self.assertLess(provision.index('begin_activation(&state, p)?'),
+                        provision.index('model-selection.json'))
+        self.assertLess(serve.index('activation_absent('), serve.index('selected()?'))
+        self.assertIn('"0:990"', provision)
+        unit = (ROOT / 'native/image/overlay/etc/systemd/system/luma-reference.service').read_text()
+        self.assertIn('EnvironmentFile=-/var/lib/luma-os/model-reference.env', unit)
+        reference = (ROOT / 'native/image/overlay/etc/apparmor.d/luma-reference').read_text()
+        self.assertIn('/var/lib/luma-os/model-reference.env r,', reference)
+        model = (ROOT / 'native/image/overlay/etc/apparmor.d/luma-model').read_text()
+        self.assertIn('/var/lib/luma-os/model-activation.pending r,', model)
+        self.assertIn('/sys/fs/cgroup/**/memory.max r,', model)
+        self.assertIn('/sys/fs/cgroup/memory.max r,', model)
+
 
 if __name__ == '__main__':
     unittest.main()

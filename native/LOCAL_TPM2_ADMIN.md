@@ -174,12 +174,21 @@ but `product_admin_active: false` and `role_grant: false`.
 Any existing final, parent-intent or pending enrollment refuses, including a partial directory
 or dangling symlink. An error after proposal creation leaves it intact even if
 the TPM rejected the write. Do not delete it, rerun with altered credentials,
-undefine the index, or fabricate a final directory. A reviewed recovery command
-for interrupted enrollment remains to be implemented. The read-only
+undefine the index, or fabricate a final directory. Full reviewed recovery of
+all interrupted enrollment states remains to be implemented. The read-only
 `admin-checkpoint-enrollment-inspect` command reports the fixed parent/NV handle
 occupancy, retained intent, recorded parent Name/profile match and presence of
 pending/final directories. Its observation digest is not TPM attestation or
-permission to resume, remove or repeat a write. If final publication
+authorization by itself. Only if it reports `parent_bound_proposal_absent` and
+`bounded_continuation_possible: true` may an operator review that exact state,
+then run `sudo luma-platform admin-checkpoint-enrollment-resume LOGIN REVIEW-SHA256`.
+This requires fresh account and owner authentication, the original principal
+and boot inputs, the same parent Name/profile, and an absent NV index. It does
+not repeat parent allocation; it prepares a new sealed proposal before one NV
+write. A changed digest, unbound parent, pending proposal, occupied NV index or
+any conflict refuses. It has passed a disposable-TPM test, not installed-image
+or physical interruption qualification. Do not use this command to remove or
+repeat an uncertain write. If final publication
 completed but its acknowledgement was lost, use the read-only
 `admin-checkpoint-status` command; that is not permission to repeat provisioning.
 The existing audit reconciliation command below does not recover enrollment.

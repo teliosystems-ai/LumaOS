@@ -74,6 +74,13 @@ def main(enrollment=False):
                 (work / 'owner.hex').write_text('hex:' + owner.hex(), encoding='ascii')
                 command(['tpm2_changeauth', '-T', transport, '-c', 'o',
                          f'file:{work / "owner.hex"}'])
+                if enrollment == 'resume':
+                    subprocess.run(['cargo', 'test', '--offline', '--locked',
+                                    'admin_enrollment::tests::emulator_resume_bound_parent_without_reallocation',
+                                    '--', '--ignored', '--exact', '--nocapture'],
+                                   env=env, check=True, timeout=300)
+                    print('REVIEWED_BOUND_PARENT_CONTINUATION_SOFTWARE_TPM_PASSED', flush=True)
+                    return
                 subprocess.run(['cargo', 'test', '--offline', '--locked',
                                 'admin_enrollment::tests::emulator_existing_owner_seal_refusal',
                                 '--', '--ignored', '--exact', '--nocapture'],

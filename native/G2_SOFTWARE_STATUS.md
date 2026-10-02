@@ -52,12 +52,14 @@ owner authorization; its refusal remains a compatibility regression, not the
 product enrollment path. See [the native enrollment checkpoint](evidence/G2_NATIVE_OWNER_ENROLLMENT_2026-10-02.md),
 [the earlier failed integration](evidence/G2_ENROLLMENT_TRANSACTION_2026-10-02.md),
 and [the operator instructions](LOCAL_TPM2_ADMIN.md#explicit-checkpoint-enrollment).
-Reviewed interrupted-enrollment recovery, full Admin bootstrap/service, independent
-credential recovery, production custody and installed-image evaluation remain
-open. A [fixed-path read-only inspection command](evidence/G2_ENROLLMENT_INSPECTION_2026-10-02.md)
-now reports retained intent and TPM handle occupancy without attempting repair
-or retry; it is not reviewed recovery. Targeted checks do not close those
-requirements.
+Full reviewed interrupted-enrollment recovery, Admin bootstrap/service,
+independent credential recovery, production custody and installed-image
+evaluation remain open. A [fixed-path inspection command](evidence/G2_ENROLLMENT_INSPECTION_2026-10-02.md)
+reports retained intent and TPM handle occupancy. One narrowly reviewed
+[bound-parent continuation](evidence/G2_BOUND_PARENT_CONTINUATION_2026-10-02.md)
+now passes a disposable-TPM test without repeating parent allocation. Unbound
+parent, uncertain NV write and conflict states remain fenced. Targeted checks
+do not close those requirements.
 
 The earlier [disposable TPM feasibility experiment](evidence/G2_OWNER_CREDENTIAL_FEASIBILITY_2026-10-02.md)
 informed the native backend now integrated above. The targeted native tests

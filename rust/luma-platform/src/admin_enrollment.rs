@@ -73,6 +73,38 @@ struct IntentMetadata {
     product_admin_active: bool,
     role_grant: bool,
 }
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct EnrollmentRecord {
+    schema_version: u32,
+    kind: String,
+    principal: serde_json::Value,
+    admission_observation: serde_json::Value,
+    observation_is_attestation: bool,
+    ownership: String,
+    credential_parent_handle: u32,
+    product_admin_active: bool,
+    role_grant: bool,
+}
+
+fn enrollment_identity(record: &[u8]) -> Result<serde_json::Value> {
+    let canonical: serde_json::Value = serde_json::from_slice(record)?;
+    let parsed: EnrollmentRecord = serde_json::from_slice(record)?;
+    if serde_json::to_vec(&canonical)? != record
+        || parsed.schema_version != 1
+        || parsed.kind != "inert-checkpoint-enrollment"
+        || parsed.observation_is_attestation
+        || parsed.ownership != "existing-owner"
+        || parsed.credential_parent_handle != 0x81004c41
+        || parsed.product_admin_active
+        || parsed.role_grant
+        || !parsed.principal.is_object()
+        || !parsed.admission_observation.is_object()
+    {
+        return Err("retained enrollment record is not the native inert profile".into());
+    }
+    Ok(parsed.principal)
+}
 impl ParentIntent {
     fn new(record: Vec<u8>, deployment: &str, public: &[u8], signature: &[u8]) -> Result<Self> {
         if record.is_empty() || record.len() > 16384 || record_deployment(&record) != deployment {
@@ -277,7 +309,36 @@ fn inspect_at(
         "nv_index_occupied":nv_occupied,
         "observation_sha256":bundle::hex(&digest.finalize()),
         "observation_is_attestation":false,"mutation_performed":false,
+        "bounded_continuation_possible":phase == "parent_bound_proposal_absent",
         "reviewed_recovery_available":false}))
+}
+
+/// Only the bound parent with no NV proposal/index can be continued without
+/// repeating an uncertain TPM write. The digest fences stale observations; it
+/// does not itself authenticate a person or authorize continuation.
+fn reviewed_bound_parent_at(
+    parent_path: &Path,
+    pending: &Path,
+    final_path: &Path,
+    reviewed: &str,
+    mut handles: impl FnMut(Option<&[u8; 34]>) -> Result<(bool, bool, bool)>,
+) -> Result<(ParentIntent, [u8; 34])> {
+    tpm::decode::<32>(reviewed)?;
+    let report = inspect_at(parent_path, pending, final_path, |name| handles(name))?;
+    if report["phase"] != "parent_bound_proposal_absent" || report["observation_sha256"] != reviewed
+    {
+        return Err(
+            "review does not match a bound parent with no NV proposal; preserve state".into(),
+        );
+    }
+    let (intent, name) = ParentIntent::read_for_inspection(parent_path)?;
+    let name = name.ok_or("reviewed parent Name missing")?;
+    intent.recheck_bound(parent_path, &name)?;
+    let rechecked = inspect_at(parent_path, pending, final_path, |name| handles(name))?;
+    if rechecked["observation_sha256"] != reviewed {
+        return Err("enrollment state changed after review; preserve state".into());
+    }
+    Ok((intent, name))
 }
 
 /// Read-only inspection of an interrupted checkpoint enrollment. It does not
@@ -293,6 +354,110 @@ pub fn inspect() -> Result<()> {
         tpm::enrollment_handles,
     )?;
     println!("{}", serde_json::to_string(&report)?);
+    Ok(())
+}
+
+/// Explicit continuation after a previously durable parent Name, before any
+/// NV proposal. This never retries the parent write or an uncertain NV write.
+pub fn resume_bound_parent(username: &str, reviewed: &str) -> Result<()> {
+    crate::require_root()?;
+    crate::platform::require_installed()?;
+    let lock = tpm::exclusive_lock(Path::new(LOCK))?;
+    let parent_path = Path::new(PARENT_INTENT);
+    let pending = Path::new(PENDING);
+    let final_path = Path::new(credentials::DIRECTORY);
+    let (intent, parent_name) = reviewed_bound_parent_at(
+        parent_path,
+        pending,
+        final_path,
+        reviewed,
+        tpm::enrollment_handles,
+    )?;
+    let binding = AccountBinding::capture(
+        Path::new(principal::REGISTRY),
+        Path::new(principal::IDENTITY),
+        username,
+    )?;
+    if binding.current_uid()? != 1001 {
+        return Err("checkpoint continuation requires the selected UID 1001 account".into());
+    }
+    let identity = binding.identity()?;
+    if enrollment_identity(&intent.record)? != identity {
+        return Err("retained enrollment principal differs from current account".into());
+    }
+    let deployment = record_deployment(&intent.record);
+    let public_path = Path::new(credentials::PUBLIC_KEY);
+    let signature_path = Path::new(credentials::BOOT_SIGNATURE);
+    let public = credentials::public_input(public_path, 4096)?;
+    let signature = credentials::public_input(signature_path, 16384)?;
+    if ParentIntent::new(intent.record.clone(), &deployment, &public, &signature)?.intent
+        != intent.intent
+    {
+        return Err("retained intent boot inputs differ from installed image".into());
+    }
+    owner_credential::verify_boot(&public, &signature)?;
+    let provisioner = tpm::Provisioner::local()?;
+    eprintln!("Continue only the reviewed bound-parent checkpoint attempt. No parent write will be retried; a sealed NV proposal will be retained before its one-shot TPM write. This does not activate product Admin. Cancel now if not intended.");
+    let owner = authentication::existing_owner()?;
+    let account = authentication::local(username)?;
+    if binding.identity()? != identity || account.identity()? != identity {
+        return Err("continuation principal changed after authentication".into());
+    }
+    if credentials::public_input(public_path, 4096)? != public
+        || credentials::public_input(signature_path, 16384)? != signature
+    {
+        return Err("continuation boot inputs changed after authentication".into());
+    }
+    let (rechecked, rechecked_name) = reviewed_bound_parent_at(
+        parent_path,
+        pending,
+        final_path,
+        reviewed,
+        tpm::enrollment_handles,
+    )?;
+    if rechecked.record != intent.record
+        || rechecked.intent != intent.intent
+        || rechecked_name != parent_name
+    {
+        return Err("retained enrollment changed after review".into());
+    }
+    let secret = Secret::generate()?;
+    let blob = owner_credential::seal(&deployment, &parent_name, &public, &secret)?;
+    let recovered =
+        owner_credential::unseal(&deployment, &parent_name, &public, &blob, &signature)?;
+    if recovered.bytes() != secret.bytes() {
+        return Err("continued sealed enrollment preflight mismatch".into());
+    }
+    drop(recovered);
+    let proposal = Proposal::new(
+        intent.record.clone(),
+        &deployment,
+        &parent_name,
+        &public,
+        blob,
+    )?;
+    let result = commit(
+        &proposal,
+        pending,
+        final_path,
+        || {
+            intent.recheck_bound(parent_path, &parent_name)?;
+            if tpm::enrollment_handles(Some(&parent_name))? != (true, false, true) {
+                return Err("continuation TPM handles changed before NV dispatch".into());
+            }
+            if binding.identity()? != identity || account.identity()? != identity {
+                return Err("continuation principal changed before NV dispatch".into());
+            }
+            if credentials::public_input(public_path, 4096)? != public
+                || credentials::public_input(signature_path, 16384)? != signature
+            {
+                return Err("continuation boot inputs changed before NV dispatch".into());
+            }
+            Ok(())
+        },
+        || provisioner.provision(&owner, &secret, admin_journal::genesis(&deployment)?, lock),
+    )?;
+    println!("{}", serde_json::to_string(&result)?);
     Ok(())
 }
 
@@ -523,6 +688,88 @@ mod tests {
     use std::cell::Cell;
     use std::io::Read;
     use std::path::PathBuf;
+    #[test]
+    #[ignore = "requires fresh isolated existing-owner TPM with signed PCR policy"]
+    fn emulator_resume_bound_parent_without_reallocation() {
+        let root = PathBuf::from(std::env::var("LUMA_TPM_TEST_DIRECTORY").unwrap());
+        let public = credentials::public_input(&root.join("pcr-public.pem"), 4096).unwrap();
+        let signature = credentials::public_input(&root.join("pcr-signature.json"), 16384).unwrap();
+        owner_credential::fixture_verify_boot(&root, &public, &signature).unwrap();
+        let mut owner = sealed_credential::PrivateBuffer::new(32).unwrap();
+        File::open(root.join("owner.binary"))
+            .unwrap()
+            .read_exact(owner.bytes_mut())
+            .unwrap();
+        let mut provisioner = tpm::Provisioner::fixture(&root).unwrap();
+        let principal = serde_json::json!({"installation":"aa","principal":"bb",
+            "generation":1,"login":"human","uid":1001});
+        let record = serde_json::to_vec(&serde_json::json!({"schema_version":1,
+            "kind":"inert-checkpoint-enrollment","principal":principal,
+            "admission_observation":provisioner.observation(),
+            "observation_is_attestation":false,"ownership":"existing-owner",
+            "credential_parent_handle":0x81004c41u32,
+            "product_admin_active":false,"role_grant":false}))
+        .unwrap();
+        assert_eq!(enrollment_identity(&record).unwrap(), principal);
+        let deployment = record_deployment(&record);
+        let intent = ParentIntent::new(record, &deployment, &public, &signature).unwrap();
+        let parent_path = root.join("resume-parent-intent");
+        let pending = root.join("resume-pending");
+        let final_path = root.join("resume-admin");
+        let name = allocate_parent(
+            &intent,
+            &parent_path,
+            &pending,
+            &final_path,
+            || Ok(()),
+            || provisioner.provision_parent(&owner),
+        )
+        .unwrap();
+        let report = inspect_at(&parent_path, &pending, &final_path, |name| {
+            tpm::enrollment_handles_fixture(&root, name)
+        })
+        .unwrap();
+        assert_eq!(report["phase"], "parent_bound_proposal_absent");
+        let reviewed = report["observation_sha256"].as_str().unwrap();
+        let (retained, retained_name) =
+            reviewed_bound_parent_at(&parent_path, &pending, &final_path, reviewed, |name| {
+                tpm::enrollment_handles_fixture(&root, name)
+            })
+            .unwrap();
+        assert_eq!(retained_name, name);
+        assert_eq!(retained.record, intent.record);
+        let secret = Secret::generate().unwrap();
+        let blob =
+            owner_credential::fixture_seal(&root, &deployment, &name, &public, &secret).unwrap();
+        assert_eq!(owner_credential::fixture_unseal(
+            &root, &deployment, &name, &public, &blob, &signature,
+        ).unwrap().bytes(), secret.bytes());
+        let proposal = Proposal::new(retained.record, &deployment, &name, &public, blob).unwrap();
+        let lock = tpm::exclusive_lock(&root.join("resume.lock")).unwrap();
+        let status = commit(
+            &proposal,
+            &pending,
+            &final_path,
+            || intent.recheck_bound(&parent_path, &name),
+            || provisioner.provision(&owner, &secret, admin_journal::genesis(&deployment)?, lock),
+        )
+        .unwrap();
+        assert_eq!(status["checkpoint_enrolled"], true);
+        assert!(
+            reviewed_bound_parent_at(&parent_path, &pending, &final_path, reviewed, |name| {
+                tpm::enrollment_handles_fixture(&root, name)
+            },)
+            .is_err()
+        );
+        let (_, delivered) = credentials::load_at(
+            &final_path,
+            &root.join("pcr-public.pem"),
+            &root.join("pcr-signature.json"),
+            |d, name, p, b, s| owner_credential::fixture_unseal(&root, d, name, p, b, s),
+        )
+        .unwrap();
+        assert_eq!(delivered.bytes(), secret.bytes());
+    }
     #[test]
     #[ignore = "requires fresh isolated existing-owner enrollment TPM fixture"]
     fn emulator_enrollment() {
@@ -876,6 +1123,86 @@ mod tests {
             "unsafe intent must not reach TPM"
         ))
         .is_err());
+    }
+    #[test]
+    fn reviewed_bound_parent_requires_exact_fresh_snapshot_without_nv_proposal() {
+        let f = Fixture::new("review-bound");
+        let path = f.root.join("parent-intent");
+        let intent = ParentIntent::new(
+            f.proposal.files[3].1.clone(),
+            &f.proposal.deployment,
+            b"public fixture",
+            b"signed fixture",
+        )
+        .unwrap();
+        intent.prepare(&path, &f.pending, &f.final_path).unwrap();
+        let name = tpm::decode::<34>(&format!("000b{}", "22".repeat(32))).unwrap();
+        intent.bind_name(&path, &name).unwrap();
+        let observed = inspect_at(&path, &f.pending, &f.final_path, |_| {
+            Ok((true, false, true))
+        })
+        .unwrap();
+        assert_eq!(observed["bounded_continuation_possible"], true);
+        let digest = observed["observation_sha256"].as_str().unwrap();
+        let (recovered, recovered_name) =
+            reviewed_bound_parent_at(&path, &f.pending, &f.final_path, digest, |_| {
+                Ok((true, false, true))
+            })
+            .unwrap();
+        assert_eq!(recovered.record, intent.record);
+        assert_eq!(recovered_name, name);
+        assert!(reviewed_bound_parent_at(
+            &path,
+            &f.pending,
+            &f.final_path,
+            &"00".repeat(32),
+            |_| Ok((true, false, true)),
+        )
+        .is_err());
+        assert!(
+            reviewed_bound_parent_at(&path, &f.pending, &f.final_path, digest, |_| Ok((
+                true, true, true
+            )),)
+            .is_err()
+        );
+        fs::DirBuilder::new()
+            .mode(0o700)
+            .create(&f.pending)
+            .unwrap();
+        assert!(
+            reviewed_bound_parent_at(&path, &f.pending, &f.final_path, digest, |_| Ok((
+                true, false, true
+            )),)
+            .is_err()
+        );
+    }
+    #[test]
+    fn retained_record_for_continuation_is_closed_canonical_and_inert() {
+        let principal = serde_json::json!({"installation":"aa","principal":"bb",
+            "generation":1,"login":"human","uid":1001});
+        let record = serde_json::to_vec(&serde_json::json!({"schema_version":1,
+            "kind":"inert-checkpoint-enrollment","principal":principal,
+            "admission_observation":{"clock":{"milliseconds":1}},
+            "observation_is_attestation":false,"ownership":"existing-owner",
+            "credential_parent_handle":0x81004c41u32,
+            "product_admin_active":false,"role_grant":false}))
+        .unwrap();
+        assert_eq!(enrollment_identity(&record).unwrap(), principal);
+        let mut changed: serde_json::Value = serde_json::from_slice(&record).unwrap();
+        changed["role_grant"] = serde_json::json!(true);
+        assert!(enrollment_identity(&serde_json::to_vec(&changed).unwrap()).is_err());
+        changed["role_grant"] = serde_json::json!(false);
+        changed["credential_parent_handle"] = serde_json::json!(0x81004c42u32);
+        assert!(enrollment_identity(&serde_json::to_vec(&changed).unwrap()).is_err());
+        let noncanonical = String::from_utf8(record.clone())
+            .unwrap()
+            .replace(",\"kind\"", ", \"kind\"");
+        assert!(enrollment_identity(noncanonical.as_bytes()).is_err());
+        let duplicate =
+            String::from_utf8(record)
+                .unwrap()
+                .replacen('{', "{\"schema_version\":1,", 1);
+        assert!(enrollment_identity(duplicate.as_bytes()).is_err());
     }
     #[test]
     fn publish_only_after_durable_preparation_and_readback() {

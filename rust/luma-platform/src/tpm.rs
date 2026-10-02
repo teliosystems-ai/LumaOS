@@ -111,6 +111,17 @@ impl Drop for Context {
     }
 }
 impl Context {
+    fn enrollment_handles(&mut self, parent_name: Option<&[u8; 34]>) -> Result<(bool, bool, bool)> {
+        let parent = self.handle_exists(CREDENTIAL_PARENT)?;
+        let nv = self.handle_exists(INDEX)?;
+        let parent_profile_matches = if let Some(name) = parent_name {
+            parent && self.parent_matches(name).is_ok()
+        } else {
+            false
+        };
+        Ok((parent, nv, parent_profile_matches))
+    }
+
     fn handle_exists(&mut self, handle: u32) -> Result<bool> {
         let mut occupied = 1;
         check(unsafe { luma_tpm_index_exists(self.0, handle, &mut occupied) })?;
@@ -477,14 +488,16 @@ pub(crate) fn enrollment_handles(parent_name: Option<&[u8; 34]>) -> Result<(bool
     crate::require_root()?;
     crate::platform::require_installed()?;
     let mut context = Context::local()?;
-    let parent = context.handle_exists(CREDENTIAL_PARENT)?;
-    let nv = context.handle_exists(INDEX)?;
-    let parent_profile_matches = if let Some(name) = parent_name {
-        parent && context.parent_matches(name).is_ok()
-    } else {
-        false
-    };
-    Ok((parent, nv, parent_profile_matches))
+    context.enrollment_handles(parent_name)
+}
+
+#[cfg(test)]
+pub(crate) fn enrollment_handles_fixture(
+    directory: &Path,
+    parent_name: Option<&[u8; 34]>,
+) -> Result<(bool, bool, bool)> {
+    let mut device = CredentialDevice::fixture(directory)?;
+    device.0.enrollment_handles(parent_name)
 }
 
 /// One-shot, fixed-transport provisioning session. The enrollment transaction

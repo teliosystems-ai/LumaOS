@@ -10,7 +10,7 @@ import tempfile
 import time
 
 
-def main():
+def main(enrollment=False):
     if (not Path('/.dockerenv').is_file() or os.geteuid() != 0
             or any(Path(p).exists() for p in ('/dev/tpm0', '/dev/tpmrm0', '/var/run/docker.sock'))):
         raise SystemExit('fresh tools container without host TPM/socket required')
@@ -65,6 +65,21 @@ def main():
             command(['openssl', 'rsa', '-in', work / 'private.pem', '-RSAPublicKey_out',
                      '-outform', 'DER', '-out', work / 'public.der'])
             approve()
+            if enrollment:
+                check('seal')  # control: this helper and boot policy work with empty owner auth
+                # Existing ownership is initialized ONLY inside this disposable
+                # software TPM. Product enrollment never changes hierarchy auth.
+                owner = os.urandom(32)
+                (work / 'owner.binary').write_bytes(owner)
+                (work / 'owner.hex').write_text('hex:' + owner.hex(), encoding='ascii')
+                command(['tpm2_changeauth', '-T', transport, '-c', 'o',
+                         f'file:{work / "owner.hex"}'])
+                subprocess.run(['cargo', 'test', '--offline', '--locked',
+                                'admin_enrollment::tests::emulator_existing_owner_seal_refusal',
+                                '--', '--ignored', '--exact', '--nocapture'],
+                               env=env, check=True, timeout=300)
+                print('EXISTING_OWNER_CREDENTIAL_INCOMPATIBILITY_CONFIRMED; ENROLLMENT_NOT_PASSED', flush=True)
+                return
             check('seal')
             check('allow')
             command(['tpm2_pcrextend', '-T', transport, '11:sha256=' + '55' * 32])

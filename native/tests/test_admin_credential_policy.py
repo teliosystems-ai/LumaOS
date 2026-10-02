@@ -7,7 +7,7 @@ ROOT = Path(__file__).resolve().parents[2]
 
 class AdminCredentialPolicyTests(unittest.TestCase):
     def test_product_checkpoint_has_no_plaintext_credential_fallback(self):
-        tpm = (ROOT / 'rust/luma-platform/src/tpm.rs').read_text().split('#[cfg(test)]')[0]
+        tpm = (ROOT / 'rust/luma-platform/src/tpm.rs').read_text().split('mod tests {')[0]
         self.assertIn('crate::admin_credentials::load()?', tpm)
         self.assertNotIn('/run/credentials/', tpm)
         self.assertNotIn('secret_array', tpm)

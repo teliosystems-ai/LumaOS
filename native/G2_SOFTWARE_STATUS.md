@@ -26,8 +26,9 @@ with fixed-path TPM unsealing into locked memory. Schema-v2 configuration binds
 the deployment, image PCR key and encrypted blob; missing, unsafe, stale or
 legacy inputs refuse without fallback. Ten selected ordinary Rust tests, seven
 software-TPM delivery invocations, two wiring checks and the native build passed.
-Authenticated enrollment, provisioning integration, hierarchy custody procedures
-and the complete confined Admin service remain open. On 2026-10-02 the owner
+This was a delivery-only checkpoint; subsequent checkpoint-enrollment integration
+is described below. Hierarchy custody procedures and the complete confined Admin
+service remain open. On 2026-10-02 the owner
 selected **existing TPM ownership with custodian-supplied authorization**. Luma
 must not take ownership, change hierarchy authorization or clear the TPM.
 This closes the selection question, not enrollment or hardware qualification.
@@ -37,9 +38,22 @@ the new fixed-index native provisioning boundary. It authenticates the supplied
 existing owner, encrypts the independent NV authorization in a salted session,
 refuses collisions and exposes no clear, undefine or hierarchy-change operation.
 Three ordinary TPM tests, one software-TPM provisioning fixture and the native
-build passed. It is not exposed through the installer or a public enrollment
-command: authenticated bootstrap, durable prepared state and interrupted-write
-reconciliation must be integrated before enabling that path.
+build passed. That checkpoint preceded the explicit enrollment transaction below;
+the installer still does not provision automatically.
+
+The new `admin-checkpoint-enroll LOGIN --existing-owner` source command joins
+principal-bound PAM, masked custodian input, seal/unseal preflight, a synchronized
+pending proposal, one-shot NV provisioning, authenticated readback and no-replace
+publication. It refuses existing or interrupted state and never grants product
+Admin. **Positive integration failed at sealing:** the packaged systemd 255
+credential path does not support nonempty existing owner authorization. A
+separate regression reproduces that refusal without allocating NV; this is not
+passing enrollment. Implement the owner-compatible credential backend first.
+See [the enrollment evidence](evidence/G2_ENROLLMENT_TRANSACTION_2026-10-02.md)
+and [the operator instructions](LOCAL_TPM2_ADMIN.md#explicit-checkpoint-enrollment).
+Reviewed interrupted-enrollment recovery, full Admin bootstrap/service, independent
+credential recovery, production custody and installed-image evaluation remain
+open. Targeted checks do not close those requirements.
 
 The [model-runtime checkpoint](evidence/G2_MODEL_RUNTIME_2026-10-02.md) adds
 single-worker exclusion shared with model activation, inherited lock lifetime,
@@ -57,7 +71,7 @@ when the authenticated TPM proves the exact one-entry successor. It does not
 write the TPM, replay effects, discard uncommitted proposals or grant Admin.
 Thirteen targeted Rust tests, one isolated software-TPM lost-reply/recovery test
 and the native build passed. The command still requires the outstanding
-enrollment/credential-delivery integration; this is not fresh-image operational
+installed enrollment/service qualification; this is not fresh-image operational
 recovery or production effect reconciliation. No heavyweight suite was started.
 
 The [local-principal checkpoint](evidence/G2_LOCAL_PRINCIPALS_2026-10-01.md)

@@ -40,6 +40,10 @@ impl Drop for Terminal {
 }
 
 fn password_from(file: File) -> Result<PrivateBuffer> {
+    hidden_from(file, "Account password (authentication only):")
+}
+
+fn hidden_from(file: File, prompt: &str) -> Result<PrivateBuffer> {
     let mut buffer = PrivateBuffer::new(LIMIT + 1)?;
     let mut saved = unsafe { std::mem::zeroed() };
     if unsafe { libc::tcgetattr(file.as_raw_fd(), &mut saved) } != 0 {
@@ -53,7 +57,7 @@ fn password_from(file: File) -> Result<PrivateBuffer> {
         return Err("cannot suppress password echo".into());
     }
     let mut terminal = Terminal(file, saved);
-    writeln!(terminal.0, "Account password (authentication only):")?;
+    writeln!(terminal.0, "{prompt}")?;
     terminal.0.flush()?;
     let deadline = Instant::now() + Duration::from_secs(120);
     let mut offset = 0;
@@ -119,7 +123,7 @@ impl Drop for Helper {
 
 // This is intentionally not Clone, Serialize or caller-constructible. It is
 // an ephemeral authentication observation, not a capability or persistent role.
-struct AuthenticatedAccount {
+pub(crate) struct AuthenticatedAccount {
     binding: AccountBinding,
     completed: Instant,
 }
@@ -130,6 +134,11 @@ fn fresh(completed: Instant) -> Result<()> {
     Ok(())
 }
 impl AuthenticatedAccount {
+    pub(crate) fn identity(&self) -> Result<serde_json::Value> {
+        self.current_uid()?;
+        self.binding.identity()
+    }
+
     fn current_uid(&self) -> Result<u32> {
         fresh(self.completed)?;
         self.binding.current_uid()
@@ -235,7 +244,7 @@ fn authenticate_at(
     })
 }
 
-pub fn check(username: &str) -> Result<()> {
+pub(crate) fn local(username: &str) -> Result<AuthenticatedAccount> {
     crate::require_root()?;
     crate::platform::require_installed()?;
     login(username)?;
@@ -245,7 +254,50 @@ pub fn check(username: &str) -> Result<()> {
         .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
         .open("/dev/tty")?;
     let password = password_from(terminal)?;
-    let account = authenticate(Path::new(HELPER), username, &password)?;
+    authenticate(Path::new(HELPER), username, &password)
+}
+
+/// Existing owner bytes are entered as hex, never argv, environment or a file.
+pub(crate) fn existing_owner() -> Result<PrivateBuffer> {
+    crate::require_root()?;
+    let terminal = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
+        .open("/dev/tty")?;
+    let encoded = hidden_from(
+        terminal,
+        "Existing TPM owner authorization as hex (hidden; no ownership change):",
+    )?;
+    decode_owner(&encoded)
+}
+
+fn decode_owner(encoded: &PrivateBuffer) -> Result<PrivateBuffer> {
+    let size = encoded
+        .bytes()
+        .iter()
+        .position(|b| *b == 0)
+        .ok_or("unterminated owner authorization")?;
+    if size == 0 || size > 128 || size % 2 != 0 {
+        return Err("existing owner authorization must be 2..128 hex characters".into());
+    }
+    let mut owner = PrivateBuffer::new(size / 2)?;
+    for (i, pair) in encoded.bytes()[..size].chunks_exact(2).enumerate() {
+        let nibble = |b: u8| -> Result<u8> {
+            match b {
+                b'0'..=b'9' => Ok(b - b'0'),
+                b'a'..=b'f' => Ok(b - b'a' + 10),
+                b'A'..=b'F' => Ok(b - b'A' + 10),
+                _ => Err("invalid owner authorization hex".into()),
+            }
+        };
+        owner.bytes_mut()[i] = nibble(pair[0])? * 16 + nibble(pair[1])?;
+    }
+    Ok(owner)
+}
+
+pub fn check(username: &str) -> Result<()> {
+    let account = local(username)?;
     println!(
         "{}",
         serde_json::json!({"authenticated_uid":account.current_uid()?,
@@ -324,6 +376,28 @@ mod tests {
         assert!(fresh(Instant::now() - Duration::from_secs(31)).is_err());
     }
     #[test]
+    fn existing_owner_hex_is_bounded_and_decoded_in_locked_memory() {
+        for (input, expected) in [
+            ("00aBFF", Some(vec![0, 171, 255])),
+            ("", None),
+            ("a", None),
+            ("gg", None),
+            ("aa bb", None),
+        ] {
+            let mut encoded = PrivateBuffer::new(LIMIT + 1).unwrap();
+            encoded.bytes_mut()[..input.len()].copy_from_slice(input.as_bytes());
+            match expected {
+                Some(bytes) => assert_eq!(decode_owner(&encoded).unwrap().bytes(), bytes),
+                None => assert!(decode_owner(&encoded).is_err()),
+            }
+        }
+        let mut encoded = PrivateBuffer::new(LIMIT + 1).unwrap();
+        encoded.bytes_mut()[..128].fill(b'f');
+        assert_eq!(decode_owner(&encoded).unwrap().bytes(), [255; 64]);
+        encoded.bytes_mut()[128..130].fill(b'f');
+        assert!(decode_owner(&encoded).is_err());
+    }
+    #[test]
     #[ignore = "requires isolated real PAM account fixture"]
     fn local_pam_account() {
         assert!(Path::new("/.dockerenv").is_file());
@@ -372,6 +446,11 @@ mod tests {
             );
             password.bytes_mut()[0] ^= 1;
             let bound = observe(&password).unwrap();
+            let identity = bound.identity().unwrap();
+            assert_eq!(identity["uid"], 32001);
+            assert_eq!(identity["login"], "luma-auth-test");
+            assert_eq!(identity["generation"], 1);
+            assert!(identity.get("account_digest").is_none());
             // The ignored fixture is isolated and owns this exact test account.
             // Locking its credential after PAM must revoke the observation.
             assert!(Command::new("/usr/sbin/usermod")
@@ -380,6 +459,7 @@ mod tests {
                 .unwrap()
                 .success());
             assert!(bound.current_uid().is_err());
+            assert!(bound.identity().is_err());
             assert!(Command::new("/usr/sbin/usermod")
                 .args(["--unlock", "luma-auth-test"])
                 .status()

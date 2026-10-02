@@ -67,10 +67,9 @@ impl Drop for Context {
     }
 }
 impl Context {
-    /// Future authenticated enrollment must durably fence a sealed proposal
+    /// Authenticated enrollment must durably fence a sealed proposal
     /// BEFORE entry. No public CLI exposes this low-level write primitive.
     /// Failure is never permission to retry, reset or remove the index.
-    #[cfg_attr(not(test), allow(dead_code))]
     fn provision_existing(
         &mut self,
         owner: &crate::sealed_credential::PrivateBuffer,
@@ -186,6 +185,75 @@ impl Admission {
 pub fn installation_admission() -> Result<Admission> {
     crate::require_root()?;
     Context::local()?.admission()
+}
+
+pub(crate) fn checkpoint_name() -> [u8; 34] {
+    let mut public = Vec::new();
+    public.extend(INDEX.to_be_bytes());
+    public.extend(0x000bu16.to_be_bytes());
+    public.extend(ATTRIBUTES.to_be_bytes());
+    public.extend(0u16.to_be_bytes());
+    public.extend(32u16.to_be_bytes());
+    let mut name = [0u8; 34];
+    name[1] = 0xb;
+    name[2..].copy_from_slice(&Sha256::digest(public));
+    name
+}
+
+/// One-shot, fixed-transport provisioning session. The enrollment transaction
+/// owns durable preparation and must keep the runtime lock through publication.
+pub(crate) struct Provisioner {
+    context: Context,
+    admission: Admission,
+}
+impl Provisioner {
+    #[cfg(test)]
+    pub(crate) fn fixture(directory: &Path) -> Result<Self> {
+        if !Path::new("/.dockerenv").is_file()
+            || Path::new("/dev/tpm0").exists()
+            || Path::new("/dev/tpmrm0").exists()
+            || directory.parent() != Some(Path::new("/tmp"))
+            || !directory
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("")
+                .starts_with("luma-tpm-")
+        {
+            return Err("isolated software TPM fixture required".into());
+        }
+        Self::from_context(Context::open(&format!(
+            "swtpm:path={}/tpm.sock",
+            directory.display()
+        ))?)
+    }
+    pub(crate) fn local() -> Result<Self> {
+        crate::require_root()?;
+        crate::platform::require_installed()?;
+        Self::from_context(Context::local()?)
+    }
+    fn from_context(mut context: Context) -> Result<Self> {
+        let admission = context.admission()?;
+        Ok(Self { context, admission })
+    }
+    pub(crate) fn observation(&self) -> &Admission {
+        &self.admission
+    }
+    pub(crate) fn provision(
+        mut self,
+        owner: &crate::sealed_credential::PrivateBuffer,
+        secret: &crate::sealed_credential::Secret,
+        genesis: [u8; 32],
+        lock: File,
+    ) -> Result<LocalAnchor> {
+        self.admission.compare(&self.context.admission()?)?;
+        self.context.provision_existing(owner, secret, genesis)?;
+        let mut anchor =
+            LocalAnchor::connect(self.context, INDEX, checkpoint_name(), secret.bytes(), lock)?;
+        if anchor.read()? != extend_value([0; 32], genesis) {
+            return Err("enrollment TPM readback mismatch; preserve pending proposal".into());
+        }
+        Ok(anchor)
+    }
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]

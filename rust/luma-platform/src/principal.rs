@@ -230,6 +230,14 @@ pub(crate) struct AccountBinding {
 }
 
 impl AccountBinding {
+    /// Inert identity projection, never proof of authentication or a role grant.
+    pub(crate) fn identity(&self) -> Result<serde_json::Value> {
+        self.current_uid()?;
+        Ok(serde_json::json!({"installation":self.installation,
+            "principal":self.principal.id,"generation":self.principal.generation,
+            "login":self.principal.login,"uid":self.principal.uid}))
+    }
+
     pub fn capture(registry_path: &Path, identity: &Path, name: &str) -> Result<Self> {
         let registry = registry(registry_path)?;
         let principal = registry

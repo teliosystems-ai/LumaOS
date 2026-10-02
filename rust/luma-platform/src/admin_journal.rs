@@ -50,6 +50,22 @@ fn entry_digest(domain: &str, position: usize, entry: &Entry) -> Result<[u8; 32]
     Ok(hash.finalize().into())
 }
 
+pub(crate) fn genesis(deployment: &str) -> Result<[u8; 32]> {
+    let mut hash = Sha256::new();
+    hash.update(b"luma-native-admin-genesis-v1\0");
+    hash.update(tpm::decode::<32>(deployment)?);
+    Ok(hash.finalize().into())
+}
+
+pub(crate) fn initial(deployment: &str) -> Result<Vec<u8>> {
+    genesis(deployment)?;
+    Ok(serde_json::to_vec(&Journal {
+        schema_version: 1,
+        deployment: deployment.into(),
+        entries: vec![],
+    })?)
+}
+
 fn head(journal: &Journal) -> Result<[u8; 32]> {
     if journal.schema_version != 1 || journal.entries.len() > MAX_EVENTS {
         return Err("invalid/oversized Admin journal".into());
@@ -57,10 +73,7 @@ fn head(journal: &Journal) -> Result<[u8; 32]> {
     tpm::decode::<32>(&journal.deployment)?;
     // Provisioning extends exactly this domain-separated installation genesis
     // into a fresh index. A missing journal is never inferred to be empty.
-    let mut genesis = Sha256::new();
-    genesis.update(b"luma-native-admin-genesis-v1\0");
-    genesis.update(tpm::decode::<32>(&journal.deployment)?);
-    let mut value = tpm::extend_value([0; 32], genesis.finalize().into());
+    let mut value = tpm::extend_value([0; 32], genesis(&journal.deployment)?);
     let mut requests = std::collections::BTreeSet::new();
     for (i, entry) in journal.entries.iter().enumerate() {
         if !text_id(&entry.request_id)

@@ -13,9 +13,19 @@ use std::io::Read;
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::path::Path;
 
-const DIRECTORY: &str = "/var/lib/luma-os/admin";
-const PUBLIC_KEY: &str = "/usr/share/luma-os/admin-pcr-public.pem";
-const BOOT_SIGNATURE: &str = "/run/systemd/tpm2-pcr-signature.json";
+pub(crate) const DIRECTORY: &str = "/var/lib/luma-os/admin";
+pub(crate) const PUBLIC_KEY: &str = "/usr/share/luma-os/admin-pcr-public.pem";
+pub(crate) const BOOT_SIGNATURE: &str = "/run/systemd/tpm2-pcr-signature.json";
+
+pub(crate) fn prepared(deployment: &str, public: &[u8], blob: &[u8]) -> Result<Vec<u8>> {
+    let bytes = serde_json::to_vec(&serde_json::json!({"schema_version":2,
+        "profile":tpm::PROFILE,"index":0x01804c41u32,
+        "nv_name":bundle::hex(&tpm::checkpoint_name()),"deployment":deployment,
+        "pcr_public_key_sha256":bundle::hex(&Sha256::digest(public)),
+        "sealed_credential_sha256":bundle::hex(&Sha256::digest(blob))}))?;
+    configuration(&bytes)?;
+    Ok(bytes)
+}
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -47,7 +57,7 @@ fn configuration(bytes: &[u8]) -> Result<Configuration> {
 /// Public inputs are not secrets, but neither may be replaced by a writable
 /// file, symlink, hard link or a caller-selected key. The helper authenticates
 /// the signature; root ownership alone does not make signature bytes valid.
-fn public_input(path: &Path, limit: u64) -> Result<Vec<u8>> {
+pub(crate) fn public_input(path: &Path, limit: u64) -> Result<Vec<u8>> {
     let parent = fs::symlink_metadata(path.parent().ok_or("missing public input parent")?)?;
     if !parent.is_dir() || parent.uid() != 0 || parent.mode() & 0o022 != 0 {
         return Err("unsafe Admin public input directory".into());
@@ -84,7 +94,7 @@ fn public_input(path: &Path, limit: u64) -> Result<Vec<u8>> {
     Ok(bytes)
 }
 
-fn load_at<F>(
+pub(crate) fn load_at<F>(
     directory: &Path,
     public_path: &Path,
     signature_path: &Path,

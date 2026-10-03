@@ -66,6 +66,15 @@ NV, wrong head, unbound parent, other uncertain-write and conflict states
 remain fenced. Neither increment is full reviewed enrollment recovery or an
 installed Admin service; targeted checks do not close those requirements.
 
+The later [retained-record validation checkpoint](evidence/G2_ENROLLMENT_RECORD_2026-10-03.md)
+requires intent creation and read-only inspection to validate the canonical,
+inert existing-owner enrollment record, not merely its matching deployment
+hash. A matching-hash role-grant forgery is rejected before TPM handle
+observation. Sixteen ordinary Rust tests, disposable software-TPM enrollment,
+continuation and pending-state cases, and the offline native build passed.
+Unbound-parent and uncertain-NV recovery, installed operation and product
+Admin activation remain open.
+
 The earlier [disposable TPM feasibility experiment](evidence/G2_OWNER_CREDENTIAL_FEASIBILITY_2026-10-02.md)
 informed the native backend now integrated above. The targeted native tests
 exercise signed PCR 11 renewal, fixed PCR 7 denial, forged-signature refusal,

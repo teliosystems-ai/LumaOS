@@ -107,6 +107,7 @@ fn enrollment_identity(record: &[u8]) -> Result<serde_json::Value> {
 }
 impl ParentIntent {
     fn new(record: Vec<u8>, deployment: &str, public: &[u8], signature: &[u8]) -> Result<Self> {
+        enrollment_identity(&record)?;
         if record.is_empty() || record.len() > 16384 || record_deployment(&record) != deployment {
             return Err("invalid persistent parent intent binding".into());
         }
@@ -172,6 +173,9 @@ impl ParentIntent {
     fn read_for_inspection(path: &Path) -> Result<(Self, Option<[u8; 34]>)> {
         tpm::private_directory(path)?;
         let record = tpm::private_read(&path.join("enrollment.json"), 16384)?;
+        // A matching hash alone does not make an arbitrary retained record an
+        // inert enrollment. Inspection must not advertise recovery for one.
+        enrollment_identity(&record)?;
         let intent = tpm::private_read(&path.join("parent-intent.json"), 4096)?;
         let metadata: IntentMetadata = serde_json::from_slice(&intent)?;
         if metadata.schema_version != 1
@@ -927,6 +931,19 @@ mod tests {
     use std::cell::Cell;
     use std::io::Read;
     use std::path::PathBuf;
+
+    fn fixture_record(admission: impl serde::Serialize) -> Vec<u8> {
+        serde_json::to_vec(&serde_json::json!({
+            "schema_version":1,"kind":"inert-checkpoint-enrollment",
+            "principal":{"installation":"aa","principal":"bb",
+                "generation":1,"login":"human","uid":1001},
+            "admission_observation":admission,"observation_is_attestation":false,
+            "ownership":"existing-owner","credential_parent_handle":0x81004c41u32,
+            "product_admin_active":false,"role_grant":false
+        }))
+        .unwrap()
+    }
+
     #[test]
     #[ignore = "requires fresh isolated existing-owner pending enrollment TPM fixture"]
     fn emulator_pending_enrollment_publication() {
@@ -943,9 +960,7 @@ mod tests {
             .read_exact(owner.bytes_mut())
             .unwrap();
         let mut provisioner = tpm::Provisioner::fixture(&root).unwrap();
-        let record = serde_json::to_vec(&serde_json::json!({"kind":"inert-test-enrollment",
-            "admission":provisioner.observation()}))
-        .unwrap();
+        let record = fixture_record(provisioner.observation());
         let deployment = record_deployment(&record);
         let intent = ParentIntent::new(record.clone(), &deployment, &public, &signature).unwrap();
         let parent_path = root.join("pending-parent-intent");
@@ -1131,9 +1146,7 @@ mod tests {
         let public = credentials::public_input(&root.join("pcr-public.pem"), 4096).unwrap();
         let signature = credentials::public_input(&root.join("pcr-signature.json"), 16384).unwrap();
         let mut provisioner = tpm::Provisioner::fixture(&root).unwrap();
-        let record = serde_json::to_vec(&serde_json::json!({"kind":"inert-test-enrollment",
-            "admission":provisioner.observation()}))
-        .unwrap();
+        let record = fixture_record(provisioner.observation());
         let deployment = record_deployment(&record);
         let mut owner = sealed_credential::PrivateBuffer::new(32).unwrap();
         File::open(root.join("owner.binary"))
@@ -1261,7 +1274,7 @@ mod tests {
             let root =
                 std::env::temp_dir().join(format!("luma-enroll-{label}-{}", std::process::id()));
             fs::DirBuilder::new().mode(0o700).create(&root).unwrap();
-            let record = b"inert fixture record".to_vec();
+            let record = fixture_record(serde_json::json!({"fixture":true}));
             let deployment = record_deployment(&record);
             let proposal = Proposal::new(
                 record,
@@ -1557,6 +1570,48 @@ mod tests {
                 .unwrap()
                 .replacen('{', "{\"schema_version\":1,", 1);
         assert!(enrollment_identity(duplicate.as_bytes()).is_err());
+    }
+    #[test]
+    fn inspection_rejects_role_grant_even_with_matching_retained_intent_hash() {
+        let f = Fixture::new("forged-record");
+        let valid = f.proposal.files[3].1.clone();
+        let original = ParentIntent::new(
+            valid.clone(),
+            &record_deployment(&valid),
+            b"public fixture",
+            b"signed fixture",
+        )
+        .unwrap();
+        let mut record: serde_json::Value = serde_json::from_slice(&valid).unwrap();
+        record["role_grant"] = serde_json::json!(true);
+        let record = serde_json::to_vec(&record).unwrap();
+        let deployment = record_deployment(&record);
+        assert!(ParentIntent::new(
+            record.clone(),
+            &deployment,
+            b"public fixture",
+            b"signed fixture"
+        )
+        .is_err());
+
+        let mut metadata: serde_json::Value = serde_json::from_slice(&original.intent).unwrap();
+        metadata["deployment"] = serde_json::json!(deployment);
+        let path = f.root.join("forged-parent-intent");
+        fs::DirBuilder::new().mode(0o700).create(&path).unwrap();
+        write_new(&path.join("enrollment.json"), &record).unwrap();
+        write_new(
+            &path.join("parent-intent.json"),
+            &serde_json::to_vec(&metadata).unwrap(),
+        )
+        .unwrap();
+        assert!(inspect_at(&path, &f.pending, &f.final_path, |_| panic!(
+            "non-inert retained record must not reach TPM observation"
+        ))
+        .is_err());
+        assert_eq!(
+            tpm::private_read(&path.join("enrollment.json"), 16384).unwrap(),
+            record
+        );
     }
     #[test]
     fn publish_only_after_durable_preparation_and_readback() {

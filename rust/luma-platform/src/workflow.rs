@@ -165,6 +165,14 @@ fn validate(graph: &Graph) -> Result<serde_json::Value> {
     )
 }
 
+pub(crate) fn validate_bytes(bytes: &[u8]) -> Result<serde_json::Value> {
+    if bytes.is_empty() || bytes.len() as u64 > MAX_SPEC_BYTES {
+        return Err("invalid or oversized native workflow bytes".into());
+    }
+    let graph: Graph = serde_json::from_slice(bytes)?;
+    validate(&graph)
+}
+
 pub fn validate_file(path: &Path) -> Result<()> {
     let mut file = OpenOptions::new()
         .read(true)
@@ -181,8 +189,7 @@ pub fn validate_file(path: &Path) -> Result<()> {
     if bytes.len() as u64 != metadata.len() {
         return Err("native workflow file changed during read".into());
     }
-    let graph: Graph = serde_json::from_slice(&bytes)?;
-    println!("{}", validate(&graph)?);
+    println!("{}", validate_bytes(&bytes)?);
     Ok(())
 }
 

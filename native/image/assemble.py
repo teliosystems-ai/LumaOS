@@ -12,6 +12,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+import stat
 import subprocess
 import sys
 
@@ -75,6 +76,44 @@ def stage_payload_member(source: Path, destination: Path) -> None:
         sparse_copy(source, destination)
         if digest(source) != digest(destination):
             raise RuntimeError('payload staging digest mismatch')
+
+
+def package_skill_registry(root: Path, keys: Path) -> None:
+    """Package one inert lab registry under a trust root distinct from release."""
+    skill_key = keys/'skills-lab.key'
+    if skill_key.is_symlink():
+        raise SystemExit('skill signing key must not be a symbolic link')
+    if not skill_key.exists():
+        run('openssl','genpkey','-algorithm','ED25519','-out',skill_key)
+        skill_key.chmod(0o600)
+    key_stat = skill_key.stat()
+    if (not stat.S_ISREG(key_stat.st_mode) or key_stat.st_uid != os.geteuid()
+            or key_stat.st_mode & 0o077):
+        raise SystemExit('skill signing key must be an owned private regular file')
+    skills_dir = root/'usr/share/luma-os/skills'
+    skills_dir.mkdir(mode=0o755, exist_ok=True)
+    skill_pub = skills_dir/'skills.pub'
+    run('openssl','pkey','-in',skill_key,'-pubout','-out',skill_pub)
+    if skill_pub.read_bytes() == (root/'usr/share/luma-os/release.pub').read_bytes():
+        raise SystemExit('skill and release signing keys must be distinct')
+    workflow = root/'usr/share/luma-os/workflows/file-to-artifact-v1.json'
+    if workflow.is_symlink() or not workflow.is_file():
+        raise SystemExit('missing image-owned skill workflow')
+    registry = {
+        'schema_version':1,'environment':'lab','profile':'file-to-artifact-v1',
+        'workflow_sha256':digest(workflow),
+        'skills':[
+            {'id':'file-read','input_types':[],'output_type':'text'},
+            {'id':'deterministic-calculate','input_types':['text'],'output_type':'report'},
+            {'id':'artifact-write','input_types':['report'],'output_type':'artifact'},
+        ],
+    }
+    registry_file = skills_dir/'registry.json'
+    registry_file.write_text(json.dumps(registry,separators=(',',':'))+'\n',encoding='utf-8')
+    registry_file.chmod(0o644)
+    run('openssl','pkeyutl','-sign','-rawin','-inkey',skill_key,
+        '-in',registry_file,'-out',skills_dir/'registry.sig')
+    (skills_dir/'registry.sig').chmod(0o644)
 
 
 def main() -> None:
@@ -167,6 +206,9 @@ def main() -> None:
     run('openssl','pkeyutl','-sign','-rawin','-inkey',KEYS/'release.key',
         '-in',ROOT/'usr/share/luma-os/model-catalog.json',
         '-out',ROOT/'usr/share/luma-os/model-catalog.sig')
+    # Neither laboratory private key enters the source snapshot, image or
+    # published artifacts. Production signing custody remains separate.
+    package_skill_registry(ROOT, KEYS)
     if not (KEYS/'secureboot.key').exists():
         run('openssl','req','-new','-x509','-newkey','rsa:3072','-nodes','-sha256','-days','365',
             '-subj','/CN=Luma Native Laboratory Only/','-keyout',KEYS/'secureboot.key','-out',KEYS/'secureboot.pem',stderr=subprocess.DEVNULL)

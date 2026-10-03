@@ -8,6 +8,7 @@ import subprocess
 import tempfile
 
 from assemble import package_skill_registry
+from test_catalog_cli import exercise_catalog
 
 
 def main():
@@ -40,11 +41,16 @@ def main():
         subprocess.run(['openssl','pkey','-in',str(keys/'release.key'),'-pubout','-out',str(share/'release.pub')],check=True)
         package_skill_registry(Path('/'),keys)
 
-        def run(*args, data=None, success=True, uid=None):
+        def run(*args, data=None, success=True, uid=None, fault=None, exit_code=None):
+            environment = dict(os.environ)
+            if fault is not None:
+                environment['LUMA_ARTIFACT_TEST_FAULT'] = fault
             result = subprocess.run([str(binary),*args],input=data,capture_output=True,
-                                    timeout=30,preexec_fn=(lambda: os.setuid(uid)) if uid is not None else None)
+                                    timeout=30,env=environment,preexec_fn=(lambda: os.setuid(uid)) if uid is not None else None)
             if (result.returncode == 0) != success:
                 raise AssertionError(f'{args[0]} unexpected exit {result.returncode}: {result.stderr.decode()}')
+            if exit_code is not None and result.returncode != exit_code:
+                raise AssertionError(f'{args[0]} did not execute the requested abrupt-exit fixture')
             return result.stdout
 
         run('artifact-store-status',success=False)
@@ -110,6 +116,7 @@ def main():
         report.write_bytes(b'tampered')
         run('artifact-read','request-1',success=False)
         run('artifact-publish-invoice','request-1',data=source,success=False)
+        exercise_catalog(run,state,source,pure)
     print('ARTIFACT_CLI_FIXTURE_PASSED: init, publication, replay, read, reviewed recovery, retained abort, conflicts, denial, tamper')
 
 

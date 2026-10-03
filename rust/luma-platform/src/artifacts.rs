@@ -41,7 +41,7 @@ struct Receipt {
     version: u32,
 }
 
-fn identifier(value: &str) -> bool {
+pub(crate) fn identifier(value: &str) -> bool {
     !value.is_empty()
         && value.len() <= 64
         && value
@@ -49,14 +49,14 @@ fn identifier(value: &str) -> bool {
             .all(|b| b.is_ascii_alphanumeric() || b == b'-')
 }
 
-fn hash(value: &str) -> bool {
+pub(crate) fn hash(value: &str) -> bool {
     value.len() == 64
         && value
             .bytes()
             .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
 }
 
-fn digest(bytes: &[u8]) -> String {
+pub(crate) fn digest(bytes: &[u8]) -> String {
     bundle::hex(&Sha256::digest(bytes))
 }
 
@@ -91,7 +91,7 @@ impl Receipt {
     }
 }
 
-fn private_directory(file: &File) -> Result<()> {
+pub(crate) fn private_directory(file: &File) -> Result<()> {
     let m = file.metadata()?;
     if !m.is_dir() || m.uid() != unsafe { libc::geteuid() } || m.mode() & 0o077 != 0 {
         return Err("unsafe native artifact directory".into());
@@ -99,7 +99,7 @@ fn private_directory(file: &File) -> Result<()> {
     Ok(())
 }
 
-fn open_at(dir: &File, name: &str, flags: i32, mode: u32) -> Result<File> {
+pub(crate) fn open_at(dir: &File, name: &str, flags: i32, mode: u32) -> Result<File> {
     let name = CString::new(name)?;
     let fd = unsafe {
         libc::openat(
@@ -115,13 +115,13 @@ fn open_at(dir: &File, name: &str, flags: i32, mode: u32) -> Result<File> {
     Ok(unsafe { File::from_raw_fd(fd) })
 }
 
-fn child_directory(dir: &File, name: &str) -> Result<File> {
+pub(crate) fn child_directory(dir: &File, name: &str) -> Result<File> {
     let file = open_at(dir, name, libc::O_RDONLY | libc::O_DIRECTORY, 0)?;
     private_directory(&file)?;
     Ok(file)
 }
 
-fn mkdir_at(dir: &File, name: &str) -> Result<File> {
+pub(crate) fn mkdir_at(dir: &File, name: &str) -> Result<File> {
     let name_c = CString::new(name)?;
     if unsafe { libc::mkdirat(dir.as_raw_fd(), name_c.as_ptr(), 0o700) } != 0 {
         return Err(std::io::Error::last_os_error().into());
@@ -130,7 +130,7 @@ fn mkdir_at(dir: &File, name: &str) -> Result<File> {
     child_directory(dir, name)
 }
 
-fn names(dir: &File, max: usize) -> Result<Vec<String>> {
+pub(crate) fn names(dir: &File, max: usize) -> Result<Vec<String>> {
     let mut found = BTreeSet::new();
     for entry in fs::read_dir(format!("/proc/self/fd/{}", dir.as_raw_fd()))? {
         let name = entry?
@@ -145,7 +145,7 @@ fn names(dir: &File, max: usize) -> Result<Vec<String>> {
     Ok(found.into_iter().collect())
 }
 
-fn read_member(dir: &File, name: &str, limit: u64) -> Result<Vec<u8>> {
+pub(crate) fn read_member(dir: &File, name: &str, limit: u64) -> Result<Vec<u8>> {
     let mut file = open_at(dir, name, libc::O_RDONLY, 0)?;
     let before = file.metadata()?;
     if !before.is_file()
@@ -183,7 +183,7 @@ fn read_member(dir: &File, name: &str, limit: u64) -> Result<Vec<u8>> {
     Ok(bytes)
 }
 
-fn write_member(dir: &File, name: &str, bytes: &[u8], mode: u32) -> Result<()> {
+pub(crate) fn write_member(dir: &File, name: &str, bytes: &[u8], mode: u32) -> Result<()> {
     let mut file = open_at(
         dir,
         name,
@@ -585,7 +585,7 @@ impl Store {
     }
 }
 
-fn installation() -> Result<String> {
+pub(crate) fn installation() -> Result<String> {
     crate::require_root()?;
     platform::require_installed()?;
     principal::installation_at(Path::new(principal::REGISTRY))

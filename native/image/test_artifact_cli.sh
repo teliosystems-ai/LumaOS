@@ -10,7 +10,7 @@ test ! -e /usr/share/luma-os
 test -x "${CARGO_TARGET_DIR:?}/debug/luma-platform"
 fixture_directory=$(dirname "$(readlink -f "$0")")
 cd "$fixture_directory"
-cc -Wall -Wextra -Werror -shared -fPIC fixtures/artifact_cmdline.c \
+cc -Wall -Wextra -Werror -shared -fPIC fixtures/artifact_cmdline.c fixtures/catalog_faults.c \
   -o /tmp/luma-artifact-test.so -ldl
 cp fixtures/artifact-test-cmdline.txt /tmp/luma-artifact-cmdline-fixture
 LD_PRELOAD=/tmp/luma-artifact-test.so python3 test_artifact_cli.py

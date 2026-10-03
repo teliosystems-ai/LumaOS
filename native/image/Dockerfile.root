@@ -17,7 +17,7 @@ RUN apt-get update --snapshot=${SNAPSHOT} -o APT::Update::Error-Mode=any && \
       systemd-ukify libpam-systemd dbus sudo bash coreutils util-linux \
       linux-image-generic linux-firmware \
       dracut-core cryptsetup-bin dmsetup e2fsprogs dosfstools gdisk \
-      apparmor apparmor-utils openssl sbsigntool python3 iproute2 \
+      apparmor apparmor-utils openssl sbsigntool python3 libsqlite3-0 iproute2 \
       network-manager rsync zstd less nano kmod pciutils usbutils && \
     if [ "$EDITION" = desktop ]; then \
       apt-get install -y --no-install-recommends --snapshot=${SNAPSHOT} \

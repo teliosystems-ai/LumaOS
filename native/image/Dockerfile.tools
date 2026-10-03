@@ -17,7 +17,7 @@ RUN apt-get update --snapshot=${SNAPSHOT} -o APT::Update::Error-Mode=any && \
       librust-sha2-dev librust-libc-dev \
       openssl sbsigntool systemd-ukify systemd-boot-efi \
       cryptsetup-bin e2fsprogs dosfstools mtools gdisk \
-      qemu-system-x86 qemu-utils ovmf zstd python3 rsync \
+      qemu-system-x86 qemu-utils ovmf zstd python3 libsqlite3-0 rsync \
       dracut-core kmod cpio squashfs-tools xorriso
 WORKDIR /work
 RUN apt-get install -y --no-install-recommends --snapshot=${SNAPSHOT} python3-virt-firmware

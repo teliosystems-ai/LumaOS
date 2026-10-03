@@ -122,6 +122,64 @@ requires production SQLite WAL metadata and immutable content-addressed objects.
 Its root-only report/receipt pairs exercise native publication/recovery
 boundaries, not completion of the production artifact-write skill or G2.
 
+## Native artifact catalog
+
+Current source also includes the separate ADR-0003 catalog at
+`/var/lib/luma-os/artifact-catalog`. It uses the pinned Ubuntu SQLite runtime,
+WAL with full synchronization, immutable SHA-256 objects, logical artifact IDs
+and sequential versions. Fresh installation initializes it; an updated older
+installation requires explicit `sudo luma-platform artifact-catalog-init`.
+Existing state is never reset, and the earlier laboratory pair store is not
+automatically migrated. Previously exported images do not contain this backend.
+
+On an installed candidate containing it:
+
+```sh
+sudo luma-platform artifact-catalog-status
+sudo luma-platform artifact-catalog-publish-invoice request-001 monthly-invoices 0 < invoices.csv
+sudo luma-platform artifact-catalog-read monthly-invoices 1
+sudo luma-platform artifact-catalog-publish-invoice request-002 monthly-invoices 1 < updated-invoices.csv
+```
+
+Expected version `0` creates version `1`; an update must match the current
+version. Each successful publication atomically commits the version, current
+version pointer and append-only receipt after synchronizing the object file
+and directories. Exact retries return the earlier verified outcome, including
+after a lost acknowledgement. Changed requests or stale expected versions are
+refused. Objects deduplicate only within the current `local-root` domain.
+Historical versions remain readable; this interface has no deletion or export.
+
+Status validates the schema, version chain, receipts and every managed object.
+It lists unreferenced objects rather than deleting them. An exact, complete
+temporary object can be resumed after current authorization/version checks;
+partial bytes require inspection. A pending entry exposes
+`retain_review_sha256`; `sudo luma-platform artifact-catalog-retain REQUEST-ID
+RETAIN-REVIEW-SHA256` retains the reviewed bytes unchanged and blocks reuse of
+that request. Use a new request afterward. Other requests are not globally
+blocked by safe pending bytes, but every object/preparation consumes capacity.
+
+The catalog requires private local ext4 storage and canonical protected paths.
+It bounds object/preparation bytes to 64 MiB, files to 2,048 and committed
+versions to 1,024. Metadata is separately limited to 4,096 4 KiB SQLite pages;
+WAL/shared-memory admission is also bounded. Full inventory validation favors
+safety over scale at these development limits. Unknown formats, links,
+corruption and unsupported filesystems are refused without reset. No automatic
+garbage collection, legacy migration or format downgrade is implemented.
+
+The catalog owns its SQLite connection under an exclusive directory lock,
+including reads, recovery and connection close. Do not open a competing SQL
+writer or checkpoint tool. Copying a live database file alone is unsafe; the
+existing offline recovery archive includes all `lib/luma-os` state. A source
+copy test is not installed-image backup/restore qualification.
+
+This storage backend follows the approved object/metadata ordering, but the
+commands remain installed-root laboratory interfaces. Product Admin and
+principal-bound grants, native DAG integration, generic artifact/public-schema
+compatibility, trusted UTC, migration, receipted garbage collection and TPM
+rollback protection are still required. See the
+[catalog checkpoint](../evidence/G2_ARTIFACT_CATALOG_2026-10-03.md) for executed
+scope and dependency qualification limits.
+
 ## Model selection and installation
 
 Run `luma-platform models` for this image's exact options. The installer prompts

@@ -896,6 +896,10 @@ pub fn install(selection: &str, source: &Path, model_id: Option<&str>) -> Result
         &data.at.join("lib/luma-os/artifacts"),
         &crate::principal::installation_at(&data.at.join("lib/luma-os/principals/registry.json"))?,
     )?;
+    crate::artifact_catalog::initialize(
+        &data.at.join("lib/luma-os/artifact-catalog"),
+        &crate::principal::installation_at(&data.at.join("lib/luma-os/principals/registry.json"))?,
+    )?;
     write_atomic(
         &data.at.join("lib/luma-os/admin-install-intent.json"),
         &serde_json::to_vec(&admin_admission.intent(&admin))?,

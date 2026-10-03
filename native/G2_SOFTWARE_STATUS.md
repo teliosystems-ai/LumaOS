@@ -251,6 +251,21 @@ production SQLite/content-addressed storage, provide principal-bound grants,
 activate product Admin or protect state against rollback. Those integrations
 and the native supervisor remain open.
 
+The later [native artifact catalog checkpoint](evidence/G2_ARTIFACT_CATALOG_2026-10-03.md)
+implements ADR-0003 ordering in a separate ext4/SQLite WAL backend: immutable
+domain-local content objects, logical artifact IDs, sequential versions,
+compare-exchange and one transactional metadata/receipt commit. Exact retries,
+orphan inspection and reviewed retention of partial bytes pass native tests.
+Fresh-install initialization and the runtime package dependency are wired in
+source; the earlier lab pair store is not automatically migrated. All 164
+enabled Rust tests, both compiled CLI fixtures, two builder checks and the
+offline build passed; 18 fixture-dependent tests were explicitly skipped.
+The CLI injects abrupt process exits without destructors, not physical power
+loss. The current interface remains installed-root/lab: product principal and
+policy integration, generic/public-schema compatibility, trusted timestamps,
+migration, receipted garbage collection and installed recovery qualification
+are still open. No image was rebuilt for this checkpoint.
+
 The [model-response and WSL-impact checkpoint](evidence/G2_MODEL_REPLY_2026-10-01.md)
 records a native CLI fix: replies must match the selected model and a single
 completed assistant message, with finite integer token accounting within the
@@ -402,7 +417,7 @@ tests passed. This is host-storage acceptance, not a new G2 OS-image pass. See
 | Temporary storage | Locked, bounded snapshot/download reconciliation; sparse-aware admission and exact-file cleanup; Linux boundary tests in `native/tests`; sequence 8 verified successful startup maintenance service execution | Repeated guest-interruption/pressure evaluation; operator-reviewed disposition of legacy snapshots, which cannot safely be assumed inactive |
 | Model lifecycle and resources | Two pinned CPU profiles; hardware and cgroup-v2 limit admission, isolated UID, authenticated loopback runtime, systemd memory/device/process restrictions; source-only pre-stop verified acquisition and exact service-state guard, guarded unchanged-prior restart after failed stop or activation, interrupted-activation fence, reviewed clearance, narrow reviewed partial-candidate roll-forward, bounded post-restart listener check and explicit older-image migration; actual inference and offline reboot passed on an earlier image | Full governed model-pack/catalog lifecycle; rollback and arbitrary partial-state policy, broader post-stop failure policy, installed migration, reconfiguration and roll-forward qualification, atomic resource leases and generations, stale-worker fencing, pressure/quarantine/restart policy; evaluate the changed binary on a new image and run 1,000 **real compact-model** cycles with measured resource return and performance distributions |
 | Admin, policy, and effects | Frozen Python contracts and negative tests; kernel peer authentication; local TPM2 checkpoint/journal and signed-PCR sealing; native PAM with installation-scoped principal/generation and credential revalidation; durable replay fence for two laboratory root-only worker effects | Integrate authenticated enrollment/sealed credential delivery, finite Admin assignment/revocation, governed principal/account lifecycle, effect-time grants, protected production effect receipts and reviewed reconciliation; local identity binding and root/sudo operations are not the product Admin service |
-| Skills and vertical workflow | Isolated reference worker/manual interface; native typed-DAG validation, lab-signed admission, bounded invoice calculation and descriptor-relative reader; root-only laboratory artifact-pair publication, replay, read and reviewed completion/retained abort pass source tests | Product-governed signing/revocation, native supervisor and principal-bound grants, ADR-0003 production artifact storage and effect-time policy, cancellation/checkpoint/restart semantics; distributed-image file-to-artifact journey through those interfaces |
+| Skills and vertical workflow | Reference/manual interface; native typed-DAG validation, lab admission/calculation/scoped reads; lab pair store; separate native ADR-0003 WAL/content-object backend with logical IDs, sequential versions, transactional receipts, compare-exchange/replay and reviewed retention passes source/CLI tests | Product signing/revocation, native supervisor and principal-bound grants, generic artifact/public-schema and trusted-time integration, format/legacy migration, receipted retention/GC and effect-time policy, cancellation/checkpoint/restart; distributed-image journey |
 | Generated-code isolation | General model-generated shell/native execution is denied | Required microVM or separately qualified constrained runtime and adversarial tests before this capability can be available; a deny-only path is not an implemented execution sandbox |
 | Desktop and account lifecycle | Headless console/manual recovery and installer-created distinct accounts; candidate GNOME/Wayland packaging and signed boot-target selection; isolated real compositor/Files/editor/terminal surface smoke passed without a model | Build and boot the desktop image; actual GDM authentication, complete manual file workflow, locking, credential/account lifecycle, migration and model-failure tests; container surface tests do not qualify the installed desktop |
 | Trust and custody integration | Lab release key, signed image bytes, image-owned lab model catalog, reference trust/checkpoint contracts; owner selected local TPM2-backed Admin for current installer | Integrate local TPM2 enrollment, authenticated writer identity, trusted UTC, isolated secrets, key rotation/revocation/recovery and reviewed reconciliation; production signatures require approved real custody; external deployment is a future installer variant |

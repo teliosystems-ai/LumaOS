@@ -214,9 +214,10 @@ open for the consolidated candidate.
 The [laboratory skill registry checkpoint](evidence/G2_SKILL_REGISTRY_2026-10-03.md)
 adds a separate private lab signing key in the image builder, a signed closed
 registry bound to the exact packaged workflow, and fixed-path native
-`skill-registry-status` verification. Two registry tests, four DAG tests, two
-builder tests and an offline build passed on a D-backed source snapshot. No
-image was rebuilt for this checkpoint. Admission remains read-only and assumes
+`skill-registry-status` verification using sealed in-memory inputs. Three
+registry tests, four DAG tests, two builder tests and an offline build passed
+on a D-backed source snapshot. No image was rebuilt for this checkpoint.
+Admission remains read-only and assumes
 the eventual image's verity-protected root; it is not product Admin-governed
 production signing, effect authorization or workflow execution.
 

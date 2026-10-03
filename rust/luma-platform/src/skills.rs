@@ -3,8 +3,10 @@
 use crate::{bundle, workflow, Result};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::fs::OpenOptions;
-use std::io::Read;
+use std::ffi::CString;
+use std::fs::{File, OpenOptions};
+use std::io::{Read, Seek, SeekFrom, Write};
+use std::os::fd::{AsRawFd, FromRawFd};
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::Path;
 use std::process::{Command, Stdio};
@@ -65,6 +67,24 @@ fn read_bounded(path: &Path, limit: u64) -> Result<Vec<u8>> {
     Ok(bytes)
 }
 
+fn sealed_snapshot(name: &str, bytes: &[u8]) -> Result<File> {
+    let name = CString::new(name)?;
+    // No CLOEXEC: OpenSSL reads this same sealed descriptor by /proc/self/fd.
+    // No file is written to persistent storage or an attacker-writable path.
+    let fd = unsafe { libc::memfd_create(name.as_ptr(), libc::MFD_ALLOW_SEALING) };
+    if fd < 0 {
+        return Err(std::io::Error::last_os_error().into());
+    }
+    let mut file = unsafe { File::from_raw_fd(fd) };
+    file.write_all(bytes)?;
+    file.seek(SeekFrom::Start(0))?;
+    let seals = libc::F_SEAL_WRITE | libc::F_SEAL_GROW | libc::F_SEAL_SHRINK | libc::F_SEAL_SEAL;
+    if unsafe { libc::fcntl(file.as_raw_fd(), libc::F_ADD_SEALS, seals) } < 0 {
+        return Err(std::io::Error::last_os_error().into());
+    }
+    Ok(file)
+}
+
 fn validate_registry(bytes: &[u8], graph: &[u8]) -> Result<serde_json::Value> {
     let registry: Registry = serde_json::from_slice(bytes)?;
     let digest = bundle::hex(&Sha256::digest(graph));
@@ -99,19 +119,22 @@ fn verify_files(
     if signature_bytes.len() != 64 {
         return Err("invalid Ed25519 skill signature length".into());
     }
-    // These paths are fixed within the image's verity-protected root. The
-    // bounded, no-follow reads reject malformed members before OpenSSL uses
-    // its own file API; this is not a mutable-directory verification API.
-    let _ = read_bounded(trust, 512)?;
+    // The public key's authority still depends on its fixed location inside
+    // the verity-protected image. Snapshot all three inputs so OpenSSL cannot
+    // reopen a changed pathname after the bounded no-follow reads.
+    let trust_bytes = read_bounded(trust, 512)?;
+    let message_fd = sealed_snapshot("luma-skill-registry", &bytes)?;
+    let signature_fd = sealed_snapshot("luma-skill-signature", &signature_bytes)?;
+    let trust_fd = sealed_snapshot("luma-skill-trust", &trust_bytes)?;
     let status = Command::new("/usr/bin/openssl")
         .env_clear()
         .env("PATH", "/usr/bin")
         .args(["pkeyutl", "-verify", "-pubin", "-inkey"])
-        .arg(trust)
+        .arg(format!("/proc/self/fd/{}", trust_fd.as_raw_fd()))
         .args(["-rawin", "-in"])
-        .arg(registry)
+        .arg(format!("/proc/self/fd/{}", message_fd.as_raw_fd()))
         .arg("-sigfile")
-        .arg(signature)
+        .arg(format!("/proc/self/fd/{}", signature_fd.as_raw_fd()))
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -140,6 +163,15 @@ pub fn status() -> Result<()> {
 mod tests {
     use super::*;
     use std::fs;
+
+    #[test]
+    fn verifier_snapshot_cannot_be_rewritten_after_sealing() {
+        let mut snapshot = sealed_snapshot("luma-test", b"fixed bytes").unwrap();
+        assert!(snapshot.write_all(b"replacement").is_err());
+        let mut contents = Vec::new();
+        snapshot.read_to_end(&mut contents).unwrap();
+        assert_eq!(contents, b"fixed bytes");
+    }
 
     #[test]
     fn closed_registry_requires_bound_graph_and_exact_descriptors() {

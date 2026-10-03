@@ -57,6 +57,15 @@ fn now() -> Result<u64> {
     Ok(SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs())
 }
 
+fn fresh_request_id() -> Result<String> {
+    // PIDs are recycled. An effect receipt must never silently correlate a
+    // fresh CLI invocation with an older completed request from another PID
+    // generation. Failure to obtain randomness is a refusal, not a fallback.
+    let mut random = [0u8; 16];
+    fs::File::open("/dev/urandom")?.read_exact(&mut random)?;
+    Ok(format!("console-{}", crate::bundle::hex(&random)))
+}
+
 fn validate(r: &Request, uid: u32, clock: u64) -> Result<()> {
     if r.schema_version != 1
         || r.caller != uid
@@ -339,7 +348,7 @@ pub fn client(action: &str) -> Result<()> {
     }
     let request = Request {
         schema_version: 1,
-        request_id: format!("console-{}", std::process::id()),
+        request_id: fresh_request_id()?,
         caller: unsafe { libc::geteuid() },
         deadline: now()? + 5,
         action: action.into(),
@@ -352,6 +361,26 @@ pub fn client(action: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cli_request_ids_are_fresh_bounded_and_valid() {
+        let mut seen = std::collections::BTreeSet::new();
+        for _ in 0..64 {
+            let id = fresh_request_id().unwrap();
+            assert_eq!(id.len(), 40);
+            assert!(id.starts_with("console-"));
+            assert!(id[8..].bytes().all(|b| b.is_ascii_hexdigit()));
+            assert!(seen.insert(id.clone()));
+            let request = Request {
+                schema_version: 1,
+                request_id: id,
+                caller: 0,
+                deadline: 110,
+                action: "status".into(),
+            };
+            validate(&request, 0, 100).unwrap();
+        }
+    }
 
     #[test]
     fn worker_wait_is_bounded_reaps_children_and_preserves_failure() {

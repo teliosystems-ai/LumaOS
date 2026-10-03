@@ -116,7 +116,11 @@ impl Store {
     }
 
     fn read(&self) -> Result<Journal> {
-        let journal = serde_json::from_slice(&tpm::private_read(&self.path, MAX_BYTES)?)?;
+        let bytes = tpm::private_read(&self.path, MAX_BYTES)?;
+        let journal: Journal = serde_json::from_slice(&bytes)?;
+        if serde_json::to_vec(&journal)? != bytes {
+            return Err("noncanonical broker effect journal; preserve state".into());
+        }
         validate(&journal)?;
         Ok(journal)
     }
@@ -447,6 +451,27 @@ mod tests {
         )
         .unwrap();
         assert!(Store::open(&fixture.0).is_err());
+    }
+
+    #[test]
+    fn semantically_identical_noncanonical_effect_journal_is_refused() {
+        let fixture = Fixture::new("noncanonical");
+        let path = fixture.0.join("effects.json");
+        let canonical = fs::read(&path).unwrap();
+        let mut whitespace = canonical.clone();
+        whitespace.push(b'\n');
+        assert!(validate(&serde_json::from_slice::<Journal>(&whitespace).unwrap()).is_ok());
+        platform::write_atomic(&path, &whitespace, 0o600).unwrap();
+        assert!(Store::open(&fixture.0).is_err());
+
+        platform::write_atomic(&path, &canonical, 0o600).unwrap();
+        let store = fixture.open();
+        let reordered = br#"{"records":[],"schema_version":1}"#;
+        assert!(validate(&serde_json::from_slice::<Journal>(reordered).unwrap()).is_ok());
+        platform::write_atomic(&path, reordered, 0o600).unwrap();
+        assert!(store.status().is_err());
+        platform::write_atomic(&path, &canonical, 0o600).unwrap();
+        assert_eq!(store.status().unwrap()["reconciliation_required"], false);
     }
 
     #[test]

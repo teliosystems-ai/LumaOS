@@ -194,6 +194,15 @@ It does **not** enroll Admin, protect the ledger against rollback, or provide
 reviewed reconciliation. Its targeted checks and deferred integrated work are
 recorded in [the broker-effects checkpoint](evidence/G2_BROKER_EFFECTS_2026-10-01.md).
 
+The later [broker receipt-boundary checkpoint](evidence/G2_BROKER_RECEIPT_2026-10-03.md)
+requires canonical effects-log bytes and replaces the local CLI's recyclable
+process-ID request identifier with a fresh random one. Nine effects-log tests,
+17 broker/service tests, two packaging checks, an isolated CLI/socket fixture
+and the offline native build passed. The public CLI currently exposes only
+`status`; other socket callers must still supply unique request IDs. This is
+not TPM rollback protection, product Admin authorization or reviewed effect
+reconciliation.
+
 The [model-response and WSL-impact checkpoint](evidence/G2_MODEL_REPLY_2026-10-01.md)
 records a native CLI fix: replies must match the selected model and a single
 completed assistant message, with finite integer token accounting within the

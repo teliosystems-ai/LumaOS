@@ -15,6 +15,7 @@ mod sealed_credential;
 mod service;
 mod staging;
 mod tpm;
+mod workflow;
 
 use std::path::Path;
 
@@ -98,6 +99,9 @@ fn dispatch() -> Result<()> {
             println!("{}", serde_json::to_string_pretty(&verified.manifest)?);
             Ok(())
         }
+        Some("workflow-validate") if args.len() == 2 => {
+            workflow::validate_file(Path::new(&args[1]))
+        }
         Some("install") if args.len() == 3 => {
             platform::install(&args[1], Path::new(&args[2]), None)
         }
@@ -156,6 +160,7 @@ fn dispatch() -> Result<()> {
             println!("Install requires local TPM2 admission before any disk write. admin-install-check is read-only and does not enroll Admin; explicit checkpoint enrollment remains separate from product Admin activation.");
             println!("Maintenance: staging-clean | model-clean (root only; preserves active operations and unknown files).");
             println!("broker-effect-status: root-only installed laboratory worker-effect receipts; uncertain effects are fenced, never automatically replayed. Not product Admin or TPM rollback protection.");
+            println!("workflow-validate GRAPH.json: read-only closed native file-to-artifact DAG check; does not admit signed skills or execute effects.");
             println!("Model operations: models | model-install-check MODEL-ID | model-install MODEL-ID | model-chat [--timeout-seconds 1..1800] [--max-tokens 1..128] (prompt on stdin).\nInstaller accepts --model MODEL-ID or --model manual-only; otherwise prompts.\nA successful read-only preflight is not a reservation; activation rechecks after stopping the worker. Weights are acquired from pinned HTTPS publisher URLs after hardware admission.");
             println!("model-activation-reconcile [--abort-unchanged REVIEW-SHA256 | --publish-committed REVIEW-SHA256 | --complete-candidate REVIEW-SHA256]: inspect, clear an unchanged/committed fence, or explicitly roll a partial activation forward to verified candidate settings. Root-only; does not start the worker.");
             println!("model-migrate-legacy: explicit installed-root migration of one validated older model environment and runtime lock; stops and restarts the managed model/reference services. No automatic boot migration.");

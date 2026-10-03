@@ -203,6 +203,14 @@ and the offline native build passed. The public CLI currently exposes only
 not TPM rollback protection, product Admin authorization or reviewed effect
 reconciliation.
 
+The [native workflow validation checkpoint](evidence/G2_NATIVE_WORKFLOW_VALIDATOR_2026-10-03.md)
+adds a read-only Rust `workflow-validate` command and an image-overlay
+file-to-artifact graph template. Four validator tests, a compiled-CLI template
+check and the offline build passed. It admits only the graph's declared shape;
+it does not verify signed skills, execute nodes, authorize effects, checkpoint
+results or complete the file-to-artifact journey. Those G2 components remain
+open for the consolidated candidate.
+
 The [model-response and WSL-impact checkpoint](evidence/G2_MODEL_REPLY_2026-10-01.md)
 records a native CLI fix: replies must match the selected model and a single
 completed assistant message, with finite integer token accounting within the

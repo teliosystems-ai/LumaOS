@@ -90,6 +90,18 @@ fn head(journal: &Journal) -> Result<[u8; 32]> {
     Ok(value)
 }
 
+fn read_journal(path: &Path) -> Result<(Journal, Vec<u8>)> {
+    let bytes = tpm::private_read(path, MAX_BYTES)?;
+    let journal: Journal = serde_json::from_slice(&bytes)?;
+    // The checkpoint authenticates event content, while recovery also reviews
+    // the exact file bytes. Accept only the representation we ourselves write,
+    // so an equivalent JSON rewrite cannot cross either trust boundary.
+    if serde_json::to_vec(&journal)? != bytes {
+        return Err("noncanonical Admin journal; preserve state".into());
+    }
+    Ok((journal, bytes))
+}
+
 pub struct Store<A: Checkpoint> {
     anchor: A,
     path: PathBuf,
@@ -98,7 +110,7 @@ pub struct Store<A: Checkpoint> {
 
 impl<A: Checkpoint> Store<A> {
     pub fn open(mut anchor: A, path: &Path) -> Result<Self> {
-        let journal: Journal = serde_json::from_slice(&tpm::private_read(path, MAX_BYTES)?)?;
+        let (journal, _) = read_journal(path)?;
         let expected = head(&journal)?;
         if anchor.read()? != expected {
             return Err("Admin disk/TPM mismatch; explicit reconciliation required".into());
@@ -114,7 +126,7 @@ impl<A: Checkpoint> Store<A> {
     }
 
     pub fn status(&mut self) -> Result<serde_json::Value> {
-        let current: Journal = serde_json::from_slice(&tpm::private_read(&self.path, MAX_BYTES)?)?;
+        let (current, _) = read_journal(&self.path)?;
         if head(&current)? != head(&self.journal)?
             || self.anchor.read()? != head(&current)?
             || has_pending(&self.path)?
@@ -220,10 +232,8 @@ pub(crate) struct Recovery<A: Checkpoint> {
 }
 
 fn publication<A: Checkpoint>(anchor: &mut A, path: &Path) -> Result<Publication> {
-    let current_bytes = tpm::private_read(path, MAX_BYTES)?;
-    let pending_bytes = tpm::private_read(&pending(path), MAX_BYTES)?;
-    let current: Journal = serde_json::from_slice(&current_bytes)?;
-    let proposed: Journal = serde_json::from_slice(&pending_bytes)?;
+    let (current, current_bytes) = read_journal(path)?;
+    let (proposed, pending_bytes) = read_journal(&pending(path))?;
     let before = head(&current)?;
     let after = head(&proposed)?;
     if proposed.deployment != current.deployment
@@ -414,6 +424,35 @@ mod tests {
         cleanup(&path);
     }
     #[test]
+    fn noncanonical_current_journal_is_denied_on_open_and_status() {
+        let (path, journal, anchor) = fixture("noncanonical-current");
+        let canonical = fs::read(&path).unwrap();
+        let mut whitespace = canonical.clone();
+        whitespace.push(b'\n');
+        assert_eq!(
+            head(&serde_json::from_slice::<Journal>(&whitespace).unwrap()).unwrap(),
+            anchor.clone().read().unwrap()
+        );
+        platform::write_atomic(&path, &whitespace, 0o600).unwrap();
+        assert!(Store::open(anchor.clone(), &path).is_err());
+
+        platform::write_atomic(&path, &canonical, 0o600).unwrap();
+        let mut store = Store::open(anchor, &path).unwrap();
+        let reordered = format!(
+            r#"{{"entries":[],"deployment":"{}","schema_version":1}}"#,
+            journal.deployment
+        );
+        assert_eq!(
+            head(&serde_json::from_str::<Journal>(&reordered).unwrap()).unwrap(),
+            head(&journal).unwrap()
+        );
+        platform::write_atomic(&path, reordered.as_bytes(), 0o600).unwrap();
+        assert!(store.status().is_err());
+        platform::write_atomic(&path, &canonical, 0o600).unwrap();
+        assert_eq!(store.status().unwrap()["events"], 0);
+        cleanup(&path);
+    }
+    #[test]
     fn lost_tpm_reply_fences_restart_and_never_reapplies() {
         let (path, _, mut anchor) = fixture("ambiguous");
         anchor.1 = true;
@@ -527,6 +566,22 @@ mod tests {
             1
         );
         assert!(Recovery::inspect(anchor, &path).is_err()); // no empty/forced repair
+        cleanup(&path);
+    }
+
+    #[test]
+    fn recovery_refuses_noncanonical_current_or_pending_bytes() {
+        let (path, _, anchor) = prepared("noncanonical-recovery");
+        for target in [&path, &pending(&path)] {
+            let canonical = fs::read(target).unwrap();
+            let mut whitespace = canonical.clone();
+            whitespace.push(b'\n');
+            platform::write_atomic(target, &whitespace, 0o600).unwrap();
+            assert!(Recovery::inspect(anchor.clone(), &path).is_err());
+            assert_eq!(fs::read(target).unwrap(), whitespace);
+            platform::write_atomic(target, &canonical, 0o600).unwrap();
+        }
+        Recovery::inspect(anchor, &path).unwrap();
         cleanup(&path);
     }
 

@@ -45,7 +45,9 @@ def main():
         domain = 'ab' * 32
         genesis = hashlib.sha256(b'luma-native-admin-genesis-v1\0' + bytes.fromhex(domain)).digest()
         (work / 'genesis').write_bytes(genesis)
-        (work / 'journal.json').write_text(json.dumps({'schema_version':1, 'deployment':domain, 'entries':[]}), encoding='utf-8')
+        (work / 'journal.json').write_text(json.dumps(
+            {'schema_version': 1, 'deployment': domain, 'entries': []},
+            separators=(',', ':')), encoding='utf-8')
         transport = f'swtpm:path={work}/tpm.sock'
         environment['LUMA_TPM_TEST_DIRECTORY'] = str(work)
         emulator = None

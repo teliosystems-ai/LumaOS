@@ -159,6 +159,13 @@ and the native build passed. The command still requires the outstanding
 installed enrollment/service qualification; this is not fresh-image operational
 recovery or production effect reconciliation. No heavyweight suite was started.
 
+The subsequent [canonical-byte checkpoint](evidence/G2_ADMIN_JOURNAL_CANONICAL_2026-10-03.md)
+requires the current and pending journal bytes to match the native writer's
+serialization before they can pass a normal read or reviewed publication.
+Twelve targeted Rust tests, one isolated software-TPM recovery invocation and
+the offline native build passed. It preserves noncanonical state for review;
+the installed Admin service and full recovery qualification remain open.
+
 The [local-principal checkpoint](evidence/G2_LOCAL_PRINCIPALS_2026-10-01.md)
 adds fresh-install principal IDs and binds the local PAM observation to the
 installation, principal generation, and current account/credential state.

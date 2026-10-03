@@ -607,7 +607,7 @@ fn activate_cached(var: &Path, p: &Profile) -> Result<()> {
     let activation = begin_activation(&state, p)?;
     write_candidate_config(&state, p)?;
     finish_activation(&state, p, &activation)?;
-    println!("MODEL INSTALLED AND VERIFIED: {}. Inference activates on installed-system boot; no production certification implied.", p.id);
+    println!("MODEL FILES INSTALLED AND VERIFIED: {}. Runtime readiness is checked separately after reconfiguration or at installed-system boot; no production certification implied.", p.id);
     Ok(())
 }
 
@@ -1349,6 +1349,23 @@ pub fn install(id: &str) -> Result<()> {
             command(
                 "/usr/bin/systemctl",
                 &["restart", "luma-model.service", "luma-reference.service"],
+            )?;
+            // A successful systemd job is not listener readiness. Keep the
+            // bounded health check independent of model-generated output.
+            command(
+                "/usr/bin/python3",
+                &["-I", "/usr/libexec/luma-os/model-health.py"],
+            )?;
+            if running_prior(Path::new(VAR))?
+                .as_ref()
+                .map(|current| current.profile.id.as_str())
+                != Some(p.id.as_str())
+            {
+                return Err("model listener responded but selected worker is not running".into());
+            }
+            command(
+                "/usr/bin/systemctl",
+                &["is-active", "--quiet", "luma-reference.service"],
             )?;
             Ok(())
         },

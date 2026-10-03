@@ -73,6 +73,19 @@ class ModelRuntimePolicyTests(unittest.TestCase):
         self.assertLess(restore.index('verify_file('),
                         restore.index('"restart", "luma-model.service"'))
 
+    def test_installed_reconfiguration_checks_listener_after_restart(self):
+        source = (ROOT / 'rust/luma-platform/src/model.rs').read_text()
+        install = source.split('pub fn install(id: &str)')[1].split('pub fn unit()')[0]
+        self.assertLess(install.index('"restart", "luma-model.service"'),
+                        install.index('model-health.py'))
+        self.assertLess(install.index('model-health.py'), install.rindex('running_prior('))
+        self.assertIn('luma-reference.service', install)
+        helper = (ROOT / 'native/image/overlay/usr/libexec/luma-os/model-health.py').read_text()
+        self.assertIn("URL = 'http://127.0.0.1:8081/health'", helper)
+        self.assertIn('urllib.request.ProxyHandler({})', helper)
+        self.assertIn('NoRedirect()', helper)
+        self.assertIn('signal.setitimer(signal.ITIMER_REAL, DEADLINE_SECONDS + 1)', helper)
+
     def test_legacy_migration_is_explicit_and_validates_before_service_stop(self):
         source = (ROOT / 'rust/luma-platform/src/model.rs').read_text()
         migration = source.split('pub fn migrate_legacy()')[1].split('/// Read-only')[0]

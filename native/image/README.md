@@ -214,8 +214,15 @@ allocation; `model-install-check` verifies the cache before applying that
 threshold. Before stopping the worker, installation also requires an exact
 loaded `active/running` or `inactive/dead` unit state; failed, transitioning,
 missing or unavailable status refuses the operation. Admission and bytes are
-rechecked after the stop, so this is not a
-resource reservation or a guarantee that activation and restart will succeed.
+rechecked after the stop, so this is not a resource reservation or a guarantee
+that activation and restart will succeed. After reconfiguration, the command
+waits up to 300 seconds for the fixed local model `/health` endpoint, then
+checks the selected worker and reference service state before returning
+success. A failed health check returns nonzero but does not silently roll back
+the candidate; preserve diagnostics and use the reviewed activation procedure
+if a fence remains. Listener health does not prove real inference or that the
+endpoint is cryptographically bound to the model unit.
+
 If the stop request fails or activation then fails, a restart of a previously
 running worker is requested only when
 its selection, service settings, credential and pinned weights are unchanged,

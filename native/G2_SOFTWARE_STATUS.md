@@ -1,6 +1,6 @@
 # G2 software completion register
 
-Updated 2026-10-02. **G2 software is not complete.** This register separates
+Updated 2026-10-03. **G2 software is not complete.** This register separates
 work that can be executed in the current Windows/Ubuntu WSL/VM environment
 from production deployment decisions and physical qualification. It does not
 change the frozen reference release, governing requirements, or exit criteria.
@@ -118,6 +118,14 @@ requires an exact loaded `active/running` or `inactive/dead` model unit state
 before that stop request; uncertain service status refuses the operation.
 The bounded check passed 31 Rust model tests, six policy tests and fifteen
 VM-harness unit tests. Installed behavior remains unqualified.
+
+The [model reconfiguration readiness checkpoint](evidence/G2_MODEL_READINESS_2026-10-03.md)
+adds a bounded fixed-loopback health probe and post-probe selected-worker and
+reference-unit checks before `model-install` reports success. It prevents a
+successful systemd restart request alone from being treated as listener
+readiness. The D-backed source check passed 31 Rust model tests, seven policy
+tests, four health-helper tests and fifteen VM-harness unit tests. This is
+not a real inference, installed reconfiguration or full failure-policy pass.
 
 The [model activation interruption checkpoint](evidence/G2_MODEL_ACTIVATION_FENCE_2026-10-02.md)
 adds a durable pending fence before model credential, reference environment or
@@ -319,7 +327,7 @@ tests passed. This is host-storage acceptance, not a new G2 OS-image pass. See
 | Installer and media | Real laboratory-signed Ubuntu 24.04 image; explicit disk consent, LUKS2, independent credentials, install-time manual/4B/1.7B choice, pinned download; sequence 8 passed pre-write TPM admission, pending enrollment intent and manual installation on a fresh virtual disk | Sealed Admin enrollment and authenticated bootstrap, governed production catalog/pack and offline distribution, full rejection/interruption matrix; rerun actual model acquisition on the new image |
 | Boot, update, recovery | Signed UKI, A/B verity roots, essential-health acknowledgement, three-attempt fallback, independent export/repair/disable; sequence 9 passed measured phases, public credential continuity through reboot/signed B, unapproved-PCR refusal and verified late shutdown teardown; sequence 10 passed the 14-stage regression including atomic export and bounded IPC | Complete confined service credential delivery and lifecycle; broaden shutdown/recovery faults; complete interruption and migration matrix, including pre-userspace failures; protected production rollback anchors; storage-pressure and recovery-retention cases |
 | Temporary storage | Locked, bounded snapshot/download reconciliation; sparse-aware admission and exact-file cleanup; Linux boundary tests in `native/tests`; sequence 8 verified successful startup maintenance service execution | Repeated guest-interruption/pressure evaluation; operator-reviewed disposition of legacy snapshots, which cannot safely be assumed inactive |
-| Model lifecycle and resources | Two pinned CPU profiles; hardware and cgroup-v2 limit admission, isolated UID, authenticated loopback runtime, systemd memory/device/process restrictions; source-only pre-stop verified acquisition and exact service-state guard, guarded unchanged-prior restart after failed stop or activation, interrupted-activation fence, reviewed clearance, narrow reviewed partial-candidate roll-forward and explicit older-image migration; actual inference and offline reboot passed on an earlier image | Full governed model-pack/catalog lifecycle; rollback and arbitrary partial-state policy, broader post-stop failure policy, installed migration and roll-forward qualification, atomic resource leases and generations, stale-worker fencing, pressure/quarantine/restart policy; evaluate the changed binary on a new image and run 1,000 **real compact-model** cycles with measured resource return and performance distributions |
+| Model lifecycle and resources | Two pinned CPU profiles; hardware and cgroup-v2 limit admission, isolated UID, authenticated loopback runtime, systemd memory/device/process restrictions; source-only pre-stop verified acquisition and exact service-state guard, guarded unchanged-prior restart after failed stop or activation, interrupted-activation fence, reviewed clearance, narrow reviewed partial-candidate roll-forward, bounded post-restart listener check and explicit older-image migration; actual inference and offline reboot passed on an earlier image | Full governed model-pack/catalog lifecycle; rollback and arbitrary partial-state policy, broader post-stop failure policy, installed migration, reconfiguration and roll-forward qualification, atomic resource leases and generations, stale-worker fencing, pressure/quarantine/restart policy; evaluate the changed binary on a new image and run 1,000 **real compact-model** cycles with measured resource return and performance distributions |
 | Admin, policy, and effects | Frozen Python contracts and negative tests; kernel peer authentication; local TPM2 checkpoint/journal and signed-PCR sealing; native PAM with installation-scoped principal/generation and credential revalidation; durable replay fence for two laboratory root-only worker effects | Integrate authenticated enrollment/sealed credential delivery, finite Admin assignment/revocation, governed principal/account lifecycle, effect-time grants, protected production effect receipts and reviewed reconciliation; local identity binding and root/sudo operations are not the product Admin service |
 | Skills and vertical workflow | Isolated reference worker and manual reference interface | Signed skill registry, native typed-DAG validation/supervision, descriptor-scoped file-read and artifact-write skills, deterministic calculation, cancellation/checkpoint/restart semantics; distributed-image file-to-artifact journey through those interfaces |
 | Generated-code isolation | General model-generated shell/native execution is denied | Required microVM or separately qualified constrained runtime and adversarial tests before this capability can be available; a deny-only path is not an implemented execution sandbox |

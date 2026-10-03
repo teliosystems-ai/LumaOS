@@ -1,6 +1,6 @@
 //! Read-only admission of one image-owned, laboratory-signed skill registry.
 //! A valid registry describes a workflow; it grants no effect or execution.
-use crate::{bundle, workflow, Result};
+use crate::{bundle, scoped_read, workflow, Result};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::ffi::CString;
@@ -144,7 +144,18 @@ fn verify_files(
     }
     // The workflow is image-owned; its exact bytes are bound by the signed
     // digest and it must separately pass the closed native DAG validator.
-    let graph = read_bounded(graph, 64 * 1024)?;
+    let directory =
+        scoped_read::open_directory(graph.parent().ok_or("missing workflow directory")?)?;
+    let graph_name = graph
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or("invalid workflow name")?;
+    let graph = scoped_read::read_relative(
+        &directory,
+        scoped_read::identity(&directory)?,
+        graph_name,
+        64 * 1024,
+    )?;
     validate_registry(&bytes, &graph)
 }
 

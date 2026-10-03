@@ -12,6 +12,7 @@ mod owner_credential;
 mod platform;
 mod principal;
 mod recovery_export;
+mod scoped_read;
 mod sealed_credential;
 mod service;
 mod skills;

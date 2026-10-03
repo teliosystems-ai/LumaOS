@@ -149,6 +149,31 @@ after a lost acknowledgement. Changed requests or stale expected versions are
 refused. Objects deduplicate only within the current `local-root` domain.
 Historical versions remain readable; this interface has no deletion or export.
 
+For a committed invoice in the earlier pair store, inspect the proposed copy:
+
+```sh
+sudo luma-platform artifact-catalog-legacy-inspect request-001
+```
+
+Review the returned source receipt and proposed destination, then pass the exact
+`review_sha256` to `sudo luma-platform artifact-catalog-import-legacy request-001
+REVIEW-SHA256`. The source and catalog must already exist on the same private
+filesystem. Both remain locked through the operation; all source records are
+integrity-checked and any unresolved source preparation blocks import. Use the
+separate reviewed legacy recovery/abort commands to resolve preparations first.
+The importer never deletes or edits the source, including retained preparations.
+
+The mapped request/artifact ID is the SHA-256 of the domain prefix
+`luma-artifact-legacy-import-v1` followed by a NUL byte and the complete canonical
+source receipt. The copy preserves report bytes and workflow/source provenance;
+it does not recompute results or sign a new workflow. Import requires the source
+workflow to be currently admitted by the installed signed registry. Source
+state and authority are rechecked before commit and on replay. A retry returns
+the original version-1 receipt without duplicating it or resetting a later
+version. Changed reviews or conflicting destination requests are refused.
+The printed artifact ID can be read with `artifact-catalog-read ARTIFACT-ID 1`.
+This explicit lab-pair copy is not an automatic boot or database-schema migration.
+
 Status validates the schema, version chain, receipts and every managed object.
 It lists unreferenced objects rather than deleting them. An exact, complete
 temporary object can be resumed after current authorization/version checks;
@@ -163,8 +188,8 @@ It bounds object/preparation bytes to 64 MiB, files to 2,048 and committed
 versions to 1,024. Metadata is separately limited to 4,096 4 KiB SQLite pages;
 WAL/shared-memory admission is also bounded. Full inventory validation favors
 safety over scale at these development limits. Unknown formats, links,
-corruption and unsupported filesystems are refused without reset. No automatic
-garbage collection, legacy migration or format downgrade is implemented.
+corruption and unsupported filesystems are refused without reset. Automatic
+garbage collection, automatic legacy migration and format downgrade are not implemented.
 
 The catalog owns its SQLite connection under an exclusive directory lock,
 including reads, recovery and connection close. Do not open a competing SQL
@@ -175,10 +200,13 @@ copy test is not installed-image backup/restore qualification.
 This storage backend follows the approved object/metadata ordering, but the
 commands remain installed-root laboratory interfaces. Product Admin and
 principal-bound grants, native DAG integration, generic artifact/public-schema
-compatibility, trusted UTC, migration, receipted garbage collection and TPM
-rollback protection are still required. See the
+compatibility, trusted UTC, broader schema/reference migration, receipted
+garbage collection and TPM rollback protection are still required. See the
 [catalog checkpoint](../evidence/G2_ARTIFACT_CATALOG_2026-10-03.md) for executed
 scope and dependency qualification limits.
+
+The [reviewed legacy import checkpoint](../evidence/G2_ARTIFACT_IMPORT_2026-10-03.md)
+records source preservation and retry verification for the explicit copy path.
 
 ## Model selection and installation
 

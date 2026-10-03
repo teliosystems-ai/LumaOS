@@ -11,7 +11,7 @@ use std::os::fd::{AsRawFd, FromRawFd};
 use std::os::unix::fs::{DirBuilderExt, MetadataExt};
 use std::path::Path;
 
-const DIRECTORY: &str = "/var/lib/luma-os/artifacts";
+pub(crate) const DIRECTORY: &str = "/var/lib/luma-os/artifacts";
 const MAX_CONTENT: u64 = 2 * 1024 * 1024;
 const MAX_TOTAL: u64 = 64 * 1024 * 1024;
 const MAX_RECORDS: usize = 1024;
@@ -27,18 +27,18 @@ struct Format {
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
-struct Receipt {
-    schema_version: u32,
-    installation: String,
-    request_id: String,
-    authenticated_uid: u32,
-    workflow_sha256: String,
-    source_sha256: String,
-    content_sha256: String,
-    content_bytes: u64,
-    filename: String,
-    media_type: String,
-    version: u32,
+pub(crate) struct Receipt {
+    pub(crate) schema_version: u32,
+    pub(crate) installation: String,
+    pub(crate) request_id: String,
+    pub(crate) authenticated_uid: u32,
+    pub(crate) workflow_sha256: String,
+    pub(crate) source_sha256: String,
+    pub(crate) content_sha256: String,
+    pub(crate) content_bytes: u64,
+    pub(crate) filename: String,
+    pub(crate) media_type: String,
+    pub(crate) version: u32,
 }
 
 pub(crate) fn identifier(value: &str) -> bool {
@@ -61,7 +61,7 @@ pub(crate) fn digest(bytes: &[u8]) -> String {
 }
 
 impl Receipt {
-    fn validate(&self, installation: &str, request: &str) -> Result<()> {
+    pub(crate) fn validate(&self, installation: &str, request: &str) -> Result<()> {
         if self.schema_version != 1
             || self.installation != installation
             || !hash(installation)
@@ -82,7 +82,7 @@ impl Receipt {
         Ok(())
     }
 
-    fn review(&self) -> Result<String> {
+    pub(crate) fn review(&self) -> Result<String> {
         Ok(digest(&serde_json::to_vec(self)?))
     }
 
@@ -231,6 +231,34 @@ struct Store {
     pending: File,
     retained: File,
     installation: String,
+}
+
+/// Keeps the legacy store locked for the complete reviewed import.
+pub(crate) struct LegacySource(Store);
+
+#[derive(Clone, PartialEq, Eq)]
+pub(crate) struct LegacyArtifact {
+    pub(crate) receipt: Receipt,
+    pub(crate) content: Vec<u8>,
+}
+
+impl LegacySource {
+    pub(crate) fn open(path: &Path, installation: &str) -> Result<Self> {
+        Ok(Self(Store::open(path, installation)?))
+    }
+
+    pub(crate) fn device(&self) -> Result<u64> {
+        Ok(self.0.root.metadata()?.dev())
+    }
+
+    pub(crate) fn snapshot(&self, request: &str) -> Result<LegacyArtifact> {
+        let (_, pending, _) = self.0.inventory()?;
+        if !pending.is_empty() {
+            return Err("legacy preparation requires reconciliation before import".into());
+        }
+        let (receipt, content) = self.0.pair(&self.0.committed, request)?;
+        Ok(LegacyArtifact { receipt, content })
+    }
 }
 
 #[derive(Clone, Copy)]

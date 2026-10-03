@@ -200,7 +200,82 @@ enum Phase {
     Committed,
 }
 
+fn legacy_proposal(snapshot: &io::LegacyArtifact, installation: &str) -> Result<Receipt> {
+    let source = &snapshot.receipt;
+    source.validate(installation, &source.request_id)?;
+    let report: serde_json::Value = serde_json::from_slice(&snapshot.content)?;
+    if report["source_sha256"] != source.source_sha256 {
+        return Err("legacy report source provenance mismatch".into());
+    }
+    let mut identity = b"luma-artifact-legacy-import-v1\0".to_vec();
+    identity.extend(serde_json::to_vec(source)?);
+    let mapped = io::digest(&identity);
+    let receipt = Receipt {
+        schema_version: 1,
+        environment: "lab".into(),
+        installation: installation.into(),
+        owner: "local-root".into(),
+        request_id: mapped.clone(),
+        artifact_id: mapped,
+        expected_version: 0,
+        version: 1,
+        workflow_sha256: source.workflow_sha256.clone(),
+        source_sha256: source.source_sha256.clone(),
+        content_sha256: source.content_sha256.clone(),
+        content_bytes: source.content_bytes,
+        filename: source.filename.clone(),
+        media_type: source.media_type.clone(),
+    };
+    receipt.validate(installation)?;
+    Ok(receipt)
+}
+
 impl Catalog {
+    fn import_legacy(
+        &self,
+        source: &io::LegacySource,
+        request: &str,
+        review: &str,
+        authorize: impl FnMut(&Receipt) -> Result<()>,
+    ) -> Result<(Receipt, bool)> {
+        self.import_legacy_with_hook(source, request, review, authorize, |_| Ok(()))
+    }
+
+    fn import_legacy_with_hook(
+        &self,
+        source: &io::LegacySource,
+        request: &str,
+        review: &str,
+        mut authorize: impl FnMut(&Receipt) -> Result<()>,
+        hook: impl FnMut(Phase) -> Result<()>,
+    ) -> Result<(Receipt, bool)> {
+        if !io::identifier(request) || !io::hash(review) {
+            return Err("invalid legacy import review".into());
+        }
+        if source.device()? != self.root.metadata()?.dev() {
+            return Err("legacy source must share the catalog's private filesystem".into());
+        }
+        let snapshot = source.snapshot(request)?;
+        if snapshot.receipt.review()? != review {
+            return Err("legacy artifact changed since import review".into());
+        }
+        let receipt = legacy_proposal(&snapshot, &self.installation)?;
+        let replay = self.publish_with_hook(
+            &receipt,
+            &snapshot.content,
+            |proposal| {
+                if source.snapshot(request)? != snapshot {
+                    return Err(
+                        "legacy source changed during import; retain catalog preparation".into(),
+                    );
+                }
+                authorize(proposal)
+            },
+            hook,
+        )?;
+        Ok((receipt, replay))
+    }
+
     fn open(path: &Path, installation: &str) -> Result<Self> {
         safe_path(path)?;
         let root = scoped_read::open_directory(path)?;
@@ -657,6 +732,38 @@ pub fn retain(request: &str, review: &str) -> Result<()> {
     Ok(())
 }
 
+pub fn legacy_inspect(request: &str) -> Result<()> {
+    let installation = io::installation()?;
+    // Fixed lock order: legacy source, then destination catalog. No initialization.
+    let source = io::LegacySource::open(Path::new(io::DIRECTORY), &installation)?;
+    let catalog = Catalog::open(Path::new(DIRECTORY), &installation)?;
+    if source.device()? != catalog.root.metadata()?.dev() {
+        return Err("legacy source and catalog filesystem mismatch".into());
+    }
+    let snapshot = source.snapshot(request)?;
+    let proposal = legacy_proposal(&snapshot, &installation)?;
+    println!(
+        "{}",
+        serde_json::json!({"source_request_id":request,"review_sha256":snapshot.receipt.review()?,
+        "source_receipt":snapshot.receipt,"catalog_proposal":proposal,"source_preserved":true,
+        "effect_executed":false,"environment":"lab","gate_closing":false})
+    );
+    Ok(())
+}
+
+pub fn import_legacy(request: &str, review: &str) -> Result<()> {
+    let installation = io::installation()?;
+    let source = io::LegacySource::open(Path::new(io::DIRECTORY), &installation)?;
+    let catalog = Catalog::open(Path::new(DIRECTORY), &installation)?;
+    let (receipt, replayed) = catalog.import_legacy(&source, request, review, authorize)?;
+    println!(
+        "{}",
+        serde_json::json!({"source_request_id":request,"source_review_sha256":review,
+        "receipt":receipt,"replayed":replayed,"source_preserved":true,"gate_closing":false})
+    );
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -711,6 +818,210 @@ mod tests {
             },
             bytes,
         )
+    }
+
+    fn legacy_fixture(f: &Fixture, request: &str) -> (std::path::PathBuf, io::Receipt, Vec<u8>) {
+        let path = f.parent.join("legacy");
+        io::initialize(&path, &"a".repeat(64)).unwrap();
+        let (proposal, bytes) = proposal(request, "unused", 0);
+        let receipt = io::Receipt {
+            schema_version: 1,
+            installation: proposal.installation,
+            request_id: request.into(),
+            authenticated_uid: 0,
+            workflow_sha256: proposal.workflow_sha256,
+            source_sha256: proposal.source_sha256,
+            content_sha256: proposal.content_sha256,
+            content_bytes: proposal.content_bytes,
+            filename: proposal.filename,
+            media_type: proposal.media_type,
+            version: 1,
+        };
+        let root = scoped_read::open_directory(&path).unwrap();
+        let committed = io::child_directory(&root, "committed").unwrap();
+        let pair = io::mkdir_at(&committed, request).unwrap();
+        io::write_member(&pair, "report.json", &bytes, 0o400).unwrap();
+        io::write_member(
+            &pair,
+            "receipt.json",
+            &serde_json::to_vec(&receipt).unwrap(),
+            0o400,
+        )
+        .unwrap();
+        pair.sync_all().unwrap();
+        committed.sync_all().unwrap();
+        root.sync_all().unwrap();
+        (path, receipt, bytes)
+    }
+
+    #[test]
+    fn reviewed_legacy_import_preserves_source_and_maps_stable_independent_identity() {
+        let f = Fixture::new("legacy-copy");
+        let (path, legacy, bytes) = legacy_fixture(&f, "request-1");
+        let source = io::LegacySource::open(&path, &"a".repeat(64)).unwrap();
+        let snapshot = source.snapshot("request-1").unwrap();
+        let catalog = f.open();
+        let (receipt, replay) = catalog
+            .import_legacy(&source, "request-1", &legacy.review().unwrap(), |_| Ok(()))
+            .unwrap();
+        assert!(!replay);
+        assert_eq!(receipt.artifact_id, receipt.request_id);
+        assert_ne!(receipt.artifact_id, receipt.content_sha256);
+        assert_ne!(receipt.artifact_id, legacy.request_id);
+        assert_eq!(receipt.source_sha256, legacy.source_sha256);
+        assert_eq!(source.snapshot("request-1").unwrap().content, bytes);
+        assert!(source.snapshot("request-1").unwrap() == snapshot);
+        assert!(
+            catalog
+                .import_legacy(&source, "request-1", &legacy.review().unwrap(), |_| Ok(()))
+                .unwrap()
+                .1
+        );
+        assert_eq!(catalog.inventory().unwrap().0.len(), 1);
+        let (update, updated_bytes) = proposal("update-imported", &receipt.artifact_id, 1);
+        catalog
+            .publish(&update, &updated_bytes, |_| Ok(()))
+            .unwrap();
+        let (repeated, replayed) = catalog
+            .import_legacy(&source, "request-1", &legacy.review().unwrap(), |_| Ok(()))
+            .unwrap();
+        assert!(replayed);
+        assert_eq!(repeated, receipt);
+        assert_eq!(catalog.inventory().unwrap().0.len(), 2);
+        assert_eq!(
+            catalog
+                .db
+                .query(
+                    "SELECT current_version FROM artifacts WHERE artifact_id=?",
+                    &[&receipt.artifact_id],
+                    1
+                )
+                .unwrap(),
+            [vec!["2".to_owned()]]
+        );
+        assert!(io::LegacySource::open(&path, &"a".repeat(64)).is_err());
+    }
+
+    #[test]
+    fn legacy_import_interruption_retries_or_replays_without_duplicate_receipts() {
+        for (label, phase) in [("legacy-object", 0), ("legacy-sql", 1), ("legacy-ack", 2)] {
+            let f = Fixture::new(label);
+            let (path, legacy, _) = legacy_fixture(&f, "request-1");
+            let source = io::LegacySource::open(&path, &"a".repeat(64)).unwrap();
+            assert!(f
+                .open()
+                .import_legacy_with_hook(
+                    &source,
+                    "request-1",
+                    &legacy.review().unwrap(),
+                    |_| Ok(()),
+                    |p| {
+                        if matches!(
+                            (phase, p),
+                            (0, Phase::ObjectSynced)
+                                | (1, Phase::MetadataInserted)
+                                | (2, Phase::Committed)
+                        ) {
+                            Err("interrupted import".into())
+                        } else {
+                            Ok(())
+                        }
+                    }
+                )
+                .is_err());
+            let catalog = f.open();
+            assert_eq!(
+                catalog.inventory().unwrap().0.len(),
+                usize::from(phase == 2)
+            );
+            assert_eq!(
+                catalog
+                    .import_legacy(&source, "request-1", &legacy.review().unwrap(), |_| Ok(()))
+                    .unwrap()
+                    .1,
+                phase == 2
+            );
+            assert_eq!(catalog.inventory().unwrap().0.len(), 1);
+            assert_eq!(source.snapshot("request-1").unwrap().receipt, legacy);
+        }
+    }
+
+    #[test]
+    fn legacy_import_wrong_review_pending_source_revocation_and_conflicts_are_denied() {
+        let f = Fixture::new("legacy-denials");
+        let (path, legacy, bytes) = legacy_fixture(&f, "request-1");
+        let source = io::LegacySource::open(&path, &"a".repeat(64)).unwrap();
+        let catalog = f.open();
+        assert!(catalog
+            .import_legacy(&source, "request-1", &"f".repeat(64), |_| Ok(()))
+            .is_err());
+        assert!(catalog.inventory().unwrap().0.is_empty());
+        let calls = Cell::new(0);
+        assert!(catalog
+            .import_legacy(&source, "request-1", &legacy.review().unwrap(), |_| {
+                calls.set(calls.get() + 1);
+                if calls.get() == 2 {
+                    Err("revoked before import commit".into())
+                } else {
+                    Ok(())
+                }
+            })
+            .is_err());
+        assert_eq!(calls.get(), 2);
+        assert!(catalog.inventory().unwrap().0.is_empty());
+        let root = scoped_read::open_directory(&path).unwrap();
+        let pending = io::child_directory(&root, "pending").unwrap();
+        io::mkdir_at(&pending, "unfinished").unwrap();
+        assert!(source.snapshot("request-1").is_err());
+        assert!(catalog
+            .import_legacy(&source, "request-1", &legacy.review().unwrap(), |_| Ok(()))
+            .is_err());
+        // This is a private fixture, not source-store cleanup by the importer.
+        fs::remove_dir(path.join("pending/unfinished")).unwrap();
+        let mut conflict =
+            legacy_proposal(&source.snapshot("request-1").unwrap(), &"a".repeat(64)).unwrap();
+        conflict.source_sha256 = "c".repeat(64);
+        catalog.publish(&conflict, &bytes, |_| Ok(())).unwrap();
+        assert!(catalog
+            .import_legacy(&source, "request-1", &legacy.review().unwrap(), |_| Ok(()))
+            .is_err());
+    }
+
+    #[test]
+    fn source_changed_during_import_and_false_report_provenance_never_commit() {
+        let f = Fixture::new("legacy-change");
+        let (path, legacy, _) = legacy_fixture(&f, "request-1");
+        let source = io::LegacySource::open(&path, &"a".repeat(64)).unwrap();
+        let catalog = f.open();
+        let report = path.join("committed/request-1/report.json");
+        assert!(catalog
+            .import_legacy_with_hook(
+                &source,
+                "request-1",
+                &legacy.review().unwrap(),
+                |_| Ok(()),
+                |p| {
+                    if matches!(p, Phase::ObjectSynced) {
+                        fs::set_permissions(&report, fs::Permissions::from_mode(0o600)).unwrap();
+                        fs::write(&report, b"tampered").unwrap();
+                    }
+                    Ok(())
+                }
+            )
+            .is_err());
+        assert!(catalog.inventory().unwrap().0.is_empty());
+        assert_eq!(catalog.inventory().unwrap().1, [legacy.content_sha256]);
+        let other = Fixture::new("legacy-provenance");
+        let (path, mut receipt, _) = legacy_fixture(&other, "request-1");
+        receipt.source_sha256 = "c".repeat(64);
+        let file = path.join("committed/request-1/receipt.json");
+        fs::set_permissions(&file, fs::Permissions::from_mode(0o600)).unwrap();
+        fs::write(&file, serde_json::to_vec(&receipt).unwrap()).unwrap();
+        let source = io::LegacySource::open(&path, &"a".repeat(64)).unwrap();
+        assert!(other
+            .open()
+            .import_legacy(&source, "request-1", &receipt.review().unwrap(), |_| Ok(()))
+            .is_err());
     }
 
     #[test]

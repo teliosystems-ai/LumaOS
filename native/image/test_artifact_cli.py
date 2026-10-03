@@ -111,12 +111,12 @@ def main():
         status = json.loads(run('artifact-store-status'))
         assert len(status['records']) == 3 and status['pending'] is None
         assert len(status['retained']) == 1
+        exercise_catalog(run,state,source,pure)
         report = state/'artifacts/committed/request-1/report.json'
         report.chmod(0o600)
         report.write_bytes(b'tampered')
         run('artifact-read','request-1',success=False)
         run('artifact-publish-invoice','request-1',data=source,success=False)
-        exercise_catalog(run,state,source,pure)
     print('ARTIFACT_CLI_FIXTURE_PASSED: init, publication, replay, read, reviewed recovery, retained abort, conflicts, denial, tamper')
 
 

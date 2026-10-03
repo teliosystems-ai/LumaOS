@@ -129,6 +129,12 @@ fn dispatch() -> Result<()> {
         Some("artifact-catalog-retain") if args.len() == 3 => {
             artifact_catalog::retain(&args[1], &args[2])
         }
+        Some("artifact-catalog-legacy-inspect") if args.len() == 2 => {
+            artifact_catalog::legacy_inspect(&args[1])
+        }
+        Some("artifact-catalog-import-legacy") if args.len() == 3 => {
+            artifact_catalog::import_legacy(&args[1], &args[2])
+        }
         Some("install") if args.len() == 3 => {
             platform::install(&args[1], Path::new(&args[2]), None)
         }
@@ -192,6 +198,7 @@ fn dispatch() -> Result<()> {
             println!("invoice-calculate: bounded pure invoice CSV on stdin to deterministic monthly JSON totals; no file grant, workflow execution or artifact write.");
             println!("Managed laboratory invoice artifacts (installed root only): artifact-store-init (explicit older-install setup; refuses existing state) | artifact-store-status | artifact-publish-invoice REQUEST-ID (CSV stdin; signed workflow admission) | artifact-read REQUEST-ID | artifact-reconcile REQUEST-ID REVIEW-SHA256 (publish a complete reviewed preparation) | artifact-abort REQUEST-ID ABORT-REVIEW-SHA256 (retain reviewed partial bytes; never reuse the request). Root-owned storage; product Admin, folder grants and TPM rollback protection remain pending.");
             println!("Native ADR-0003 catalog (installed root only, ext4): artifact-catalog-init | artifact-catalog-status | artifact-catalog-publish-invoice REQUEST-ID ARTIFACT-ID EXPECTED-VERSION (CSV stdin; 0 creates version 1) | artifact-catalog-read ARTIFACT-ID VERSION | artifact-catalog-retain REQUEST-ID RETAIN-REVIEW-SHA256. WAL metadata and append-only receipts commit after synchronized content objects. No automatic migration/deletion, product Admin grants or rollback protection.");
+            println!("Explicit legacy copy import (installed root only): artifact-catalog-legacy-inspect LEGACY-REQUEST-ID | artifact-catalog-import-legacy LEGACY-REQUEST-ID REVIEW-SHA256. Review binds the complete source receipt; fixed source/catalog locks and current signed workflow checks span publication. Stable mapped IDs provide exact replay. Original data/receipts and retained preparations are preserved; no automatic migration or format downgrade.");
             println!("Model operations: models | model-install-check MODEL-ID | model-install MODEL-ID | model-chat [--timeout-seconds 1..1800] [--max-tokens 1..128] (prompt on stdin).\nInstaller accepts --model MODEL-ID or --model manual-only; otherwise prompts.\nA successful read-only preflight is not a reservation; activation rechecks after stopping the worker. Weights are acquired from pinned HTTPS publisher URLs after hardware admission.");
             println!("model-activation-reconcile [--abort-unchanged REVIEW-SHA256 | --publish-committed REVIEW-SHA256 | --complete-candidate REVIEW-SHA256]: inspect, clear an unchanged/committed fence, or explicitly roll a partial activation forward to verified candidate settings. Root-only; does not start the worker.");
             println!("model-migrate-legacy: explicit installed-root migration of one validated older model environment and runtime lock; stops and restarts the managed model/reference services. No automatic boot migration.");

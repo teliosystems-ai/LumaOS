@@ -72,9 +72,68 @@ def exercise_catalog(run,state,source,pure):
             else:
                 raise AssertionError('append-only schema accepted mutation')
         connection.rollback()
+    exercise_legacy_import(run,state,source,pure)
     obj = catalog/'objects'/hashlib.sha256(pure).hexdigest()
     obj.chmod(0o600)
     obj.write_bytes(b'tampered')
     run('artifact-catalog-status',success=False)
     run('artifact-catalog-read','invoices','1',success=False)
     print('CATALOG_CLI_FIXTURE_PASSED: WAL, versions, dedup, CAS, abrupt process exits, replay, retention, append-only, tamper')
+
+
+def exercise_legacy_import(run,state,source,pure):
+    legacy = state/'artifacts'
+    inspect = 'artifact-catalog-legacy-inspect'
+    import_command = 'artifact-catalog-import-legacy'
+    def source_inventory():
+        return {str(file.relative_to(legacy)):hashlib.sha256(file.read_bytes()).hexdigest()
+                for file in legacy.rglob('*') if file.is_file()}
+    before = source_inventory()
+    preview = json.loads(run(inspect,'request-1'))
+    source_receipt = (legacy/'committed/request-1/receipt.json').read_bytes()
+    expected_id = hashlib.sha256(b'luma-artifact-legacy-import-v1\0'+source_receipt).hexdigest()
+    assert preview['catalog_proposal']['artifact_id'] == expected_id
+    assert preview['review_sha256'] == hashlib.sha256(source_receipt).hexdigest()
+    run(import_command,'request-1','f'*64,success=False)
+    run(inspect,'request-1',success=False,uid=990)
+    run(import_command,'request-1',preview['review_sha256'],success=False,uid=990)
+    result = json.loads(run(import_command,'request-1',preview['review_sha256']))
+    assert result['replayed'] is False and result['source_preserved'] is True
+    assert json.loads(run(import_command,'request-1',preview['review_sha256']))['replayed'] is True
+    assert run('artifact-catalog-read',expected_id,'1') == pure
+    assert source_inventory() == before
+    updated = source.replace(b'184.25',b'184.38')
+    run('artifact-catalog-publish-invoice','update-imported',expected_id,'1',data=updated)
+    repeated = json.loads(run(import_command,'request-1',preview['review_sha256']))
+    assert repeated['replayed'] is True and repeated['receipt']['version'] == 1
+    assert run('artifact-catalog-read',expected_id,'1') == pure
+    assert run('artifact-catalog-read',expected_id,'2') == run('invoice-calculate',data=updated).rstrip(b'\n')
+    assert source_inventory() == before
+
+    for index,(fault,code) in enumerate([('after-object',88),('before-commit',86),('after-commit',87)]):
+        request = 'import-crash-'+str(index)
+        changed = source.replace(b'184.25',f'184.{40+index}'.encode())
+        run('artifact-publish-invoice',request,data=changed)
+        preview = json.loads(run(inspect,request))
+        before = source_inventory()
+        count = len(json.loads(run('artifact-catalog-status'))['records'])
+        run(import_command,request,preview['review_sha256'],success=False,fault=fault,exit_code=code)
+        status = json.loads(run('artifact-catalog-status'))
+        assert len(status['records']) == count+int(fault=='after-commit')
+        assert source_inventory() == before
+        result = json.loads(run(import_command,request,preview['review_sha256']))
+        assert result['replayed'] is (fault=='after-commit')
+        status = json.loads(run('artifact-catalog-status'))
+        assert len(status['records']) == count+1 and status['orphans'] == []
+        assert source_inventory() == before
+
+    pending = legacy/'pending/import-unfinished'
+    pending.mkdir(mode=0o700)
+    run(inspect,'request-1',success=False)
+    review = hashlib.sha256(source_receipt).hexdigest()
+    run(import_command,'request-1',review,success=False)
+    assert pending.exists()
+    abort_review = json.loads(run('artifact-store-status'))['pending']['abort_review_sha256']
+    run('artifact-abort','import-unfinished',abort_review)
+    assert json.loads(run(import_command,'request-1',review))['replayed'] is True
+    print('LEGACY_IMPORT_CLI_FIXTURE_PASSED: reviewed copy, stable IDs, source preservation, abrupt exits, exact retry after version advance, pending fence, non-root denial')

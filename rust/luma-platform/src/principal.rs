@@ -112,6 +112,10 @@ fn registry(path: &Path) -> Result<Registry> {
     Ok(result)
 }
 
+pub(crate) fn installation_at(path: &Path) -> Result<String> {
+    Ok(registry(path)?.installation)
+}
+
 fn account_file(path: &Path, shadow: bool) -> Result<PrivateBuffer> {
     let parent = fs::symlink_metadata(path.parent().ok_or("missing identity directory")?)?;
     if !parent.is_dir() || parent.uid() != 0 || parent.mode() & 0o022 != 0 {

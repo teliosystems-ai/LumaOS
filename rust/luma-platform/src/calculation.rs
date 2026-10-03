@@ -237,12 +237,20 @@ pub(crate) fn report_bytes(bytes: &[u8]) -> Result<Vec<u8>> {
     Ok(serde_json::to_vec(&calculate(bytes)?)?)
 }
 
-pub fn calculate_stdin() -> Result<()> {
+pub(crate) fn source_stdin() -> Result<Vec<u8>> {
     let mut bytes = Vec::new();
     std::io::stdin()
         .lock()
         .take(MAX_SOURCE_BYTES + 1)
         .read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > MAX_SOURCE_BYTES {
+        return Err("oversized invoice CSV".into());
+    }
+    Ok(bytes)
+}
+
+pub fn calculate_stdin() -> Result<()> {
+    let bytes = source_stdin()?;
     let mut output = report_bytes(&bytes)?;
     output.push(b'\n');
     std::io::stdout().lock().write_all(&output)?;

@@ -159,14 +159,17 @@ fn verify_files(
     validate_registry(&bytes, &graph)
 }
 
-pub fn status() -> Result<()> {
-    let result = verify_files(
+pub(crate) fn admission() -> Result<serde_json::Value> {
+    verify_files(
         Path::new(REGISTRY),
         Path::new(SIGNATURE),
         Path::new(TRUST),
         Path::new(GRAPH),
-    )?;
-    println!("{result}");
+    )
+}
+
+pub fn status() -> Result<()> {
+    println!("{}", admission()?);
     Ok(())
 }
 

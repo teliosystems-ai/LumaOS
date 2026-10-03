@@ -2,6 +2,7 @@
 mod admin_credentials;
 mod admin_enrollment;
 mod admin_journal;
+mod artifacts;
 mod authentication;
 mod broker_effects;
 mod bundle;
@@ -107,6 +108,12 @@ fn dispatch() -> Result<()> {
         }
         Some("skill-registry-status") if args.len() == 1 => skills::status(),
         Some("invoice-calculate") if args.len() == 1 => calculation::calculate_stdin(),
+        Some("artifact-store-init") if args.len() == 1 => artifacts::initialize_installed(),
+        Some("artifact-store-status") if args.len() == 1 => artifacts::status(),
+        Some("artifact-publish-invoice") if args.len() == 2 => artifacts::publish_invoice(&args[1]),
+        Some("artifact-read") if args.len() == 2 => artifacts::read(&args[1]),
+        Some("artifact-reconcile") if args.len() == 3 => artifacts::reconcile(&args[1], &args[2]),
+        Some("artifact-abort") if args.len() == 3 => artifacts::abort(&args[1], &args[2]),
         Some("install") if args.len() == 3 => {
             platform::install(&args[1], Path::new(&args[2]), None)
         }
@@ -168,6 +175,7 @@ fn dispatch() -> Result<()> {
             println!("workflow-validate GRAPH.json: read-only closed native file-to-artifact DAG check; does not admit signed skills or execute effects.");
             println!("skill-registry-status: verify the fixed image-owned lab skill signature, exact descriptors and bound workflow; read-only admission, no execution or effect grant.");
             println!("invoice-calculate: bounded pure invoice CSV on stdin to deterministic monthly JSON totals; no file grant, workflow execution or artifact write.");
+            println!("Managed laboratory invoice artifacts (installed root only): artifact-store-init (explicit older-install setup; refuses existing state) | artifact-store-status | artifact-publish-invoice REQUEST-ID (CSV stdin; signed workflow admission) | artifact-read REQUEST-ID | artifact-reconcile REQUEST-ID REVIEW-SHA256 (publish a complete reviewed preparation) | artifact-abort REQUEST-ID ABORT-REVIEW-SHA256 (retain reviewed partial bytes; never reuse the request). Root-owned storage; product Admin, folder grants and TPM rollback protection remain pending.");
             println!("Model operations: models | model-install-check MODEL-ID | model-install MODEL-ID | model-chat [--timeout-seconds 1..1800] [--max-tokens 1..128] (prompt on stdin).\nInstaller accepts --model MODEL-ID or --model manual-only; otherwise prompts.\nA successful read-only preflight is not a reservation; activation rechecks after stopping the worker. Weights are acquired from pinned HTTPS publisher URLs after hardware admission.");
             println!("model-activation-reconcile [--abort-unchanged REVIEW-SHA256 | --publish-committed REVIEW-SHA256 | --complete-candidate REVIEW-SHA256]: inspect, clear an unchanged/committed fence, or explicitly roll a partial activation forward to verified candidate settings. Root-only; does not start the worker.");
             println!("model-migrate-legacy: explicit installed-root migration of one validated older model environment and runtime lock; stops and restarts the managed model/reference services. No automatic boot migration.");

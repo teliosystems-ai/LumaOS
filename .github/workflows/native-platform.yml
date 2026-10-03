@@ -27,15 +27,20 @@ jobs:
           docker build
           --build-arg UBUNTU_BASE=ubuntu@sha256:008173c23f95b170204355c12626cb5a965d779a7e1283b09e9cffbb1bf33ca3
           -f native/image/Dockerfile.tools -t luma-native-tools:ci native/image
-      - name: Rust tests without network or host devices
+      - name: Rust tests and laboratory artifact CLI without network or host devices
         run: >-
           docker run --rm --network none
           --mount type=bind,src="$PWD",dst=/repo,readonly
           --env CARGO_TARGET_DIR=/tmp/luma-target
-          --workdir /repo/rust luma-native-tools:ci cargo test --offline --locked
+          --env RUSTFLAGS=-Dwarnings
+          --workdir /repo/rust luma-native-tools:ci
+          bash -euc 'cargo test --offline --locked;
+          cargo build --offline --locked;
+          bash /repo/native/image/test_artifact_cli.sh'
       - name: Builder and harness syntax
         run: |
           bash -n native/image/build.sh
+          bash -n native/image/test_artifact_cli.sh
           sh -n native/image/overlay/usr/lib/systemd/system-generators/luma-boot-generator
           python3 -m py_compile native/image/*.py
           python3 -W error -m unittest discover -s native/tests -v

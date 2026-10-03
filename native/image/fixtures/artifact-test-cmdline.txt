@@ -1,0 +1,1 @@
+luma.mode=installed luma.slot=a luma.fixture=artifact-cli

@@ -69,6 +69,59 @@ clean shutdown and a missing/broken model. A packaged compositor smoke test
 does not establish those properties. Existing sequence-9/10 **headless** images
 do not contain this new desktop implementation.
 
+## Source-only laboratory invoice artifacts
+
+Source after the [artifact checkpoint](../evidence/G2_NATIVE_ARTIFACTS_2026-10-03.md)
+includes an installed-root artifact prototype. It is not present in previously
+exported images; rebuild and test the consolidated candidate before using it
+as installed-image evidence. Fresh installation creates private state under
+encrypted `/var/lib/luma-os/artifacts`, bound to the installation identity.
+For an older installation updated to this binary, `sudo luma-platform
+artifact-store-init` explicitly creates missing state. It refuses existing
+or incomplete state rather than resetting it.
+
+On an installed candidate containing this implementation:
+
+```sh
+sudo luma-platform artifact-store-status
+sudo luma-platform artifact-publish-invoice invoice-001 < invoices.csv
+sudo luma-platform artifact-read invoice-001
+```
+
+The invoking shell supplies CSV bytes; this is not an enrolled folder grant.
+Publication verifies the fixed lab-signed skill registry, calculates bounded
+monthly totals and binds the receipt to the input/report digests, installation,
+workflow, root UID and request ID. Reusing the exact request returns the
+verified receipt; changed inputs are refused. State is bounded to 1,024
+committed/retained records, 64 MiB of report/receipt bytes and one outstanding
+preparation, with a 16 MiB observed filesystem reserve. This is not a disk-space
+reservation. Files are private and reads verify receipt/content integrity.
+
+If publication reports failure, inspect `artifact-store-status` before another
+attempt. A complete `pending` pair reports a `review_sha256`; after reviewing
+its receipt, `sudo luma-platform artifact-reconcile REQUEST-ID REVIEW-SHA256`
+publishes it with current signed-workflow revalidation. An incomplete pair
+cannot be published. A safe, inspectable preparation reports a separate
+`abort_review_sha256`; `sudo luma-platform artifact-abort REQUEST-ID
+ABORT-REVIEW-SHA256` moves its existing bytes intact to `retained`, never deletes
+them, and permanently refuses reuse of that request ID. A new request can then
+proceed. Either recovery command refuses stale reviews; repeating the same
+completed recovery verifies/resynchronizes its existing outcome rather than
+creating another effect. Unsafe/unknown members remain fenced for investigation.
+
+The existing recovery archive includes `lib/luma-os`, so it includes this state
+alongside other sensitive installation data. Retained preparations count
+toward capacity and have no automatic garbage collection. Preserve and protect
+them; do not delete them to bypass a fence. Directory/file synchronization
+errors are uncertain outcomes, not successful receipts.
+
+This lab prototype has no product Admin or principal-bound effect authorization,
+TPM rollback anchor, logical artifact/version lifecycle or native DAG supervisor.
+It does not supersede [ADR-0003](../../docs/adr/0003-artifact-storage.md), which
+requires production SQLite WAL metadata and immutable content-addressed objects.
+Its root-only report/receipt pairs exercise native publication/recovery
+boundaries, not completion of the production artifact-write skill or G2.
+
 ## Model selection and installation
 
 Run `luma-platform models` for this image's exact options. The installer prompts

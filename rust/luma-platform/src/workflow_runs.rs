@@ -687,6 +687,82 @@ impl Store {
         };
         self.transition(plan, applying, &completed, authorize)
     }
+
+    fn reconciliation_input(
+        &self,
+        request: &str,
+    ) -> Result<(Plan, Checkpoint, Checkpoint, Vec<u8>)> {
+        let (plan, current) = self.load(request)?;
+        if !matches!(current.stage, 3 | 4) {
+            return Err(
+                "only applying/completed workflows admit committed-outcome reconciliation".into(),
+            );
+        }
+        let row = self.db.query(
+            "SELECT canonical FROM checkpoints WHERE request_id=? AND stage=3",
+            &[request],
+            1,
+        )?;
+        let applying: Checkpoint =
+            serde_json::from_str(&row.first().ok_or("applying checkpoint missing")?[0])?;
+        let report = self.object(&applying.report_sha256)?;
+        if calculation::report_bytes(&self.object(&plan.source_sha256)?)? != report {
+            return Err("reconciliation report differs from its bound source".into());
+        }
+        Ok((plan, current, applying, report))
+    }
+
+    fn reconciliation_review(
+        plan: &Plan,
+        applying: &Checkpoint,
+        receipt: &serde_json::Value,
+    ) -> Result<String> {
+        let mut bytes = b"luma-native-workflow-acknowledgement-v1\0".to_vec();
+        bytes.extend(serde_json::to_vec(&serde_json::json!({
+            "plan_sha256":digest(plan)?,"applying_sha256":digest(applying)?,"receipt":receipt
+        }))?);
+        Ok(io::digest(&bytes))
+    }
+
+    fn acknowledge_committed(
+        &self,
+        request: &str,
+        review: &str,
+        mut committed_proof: impl FnMut(&Plan, &[u8]) -> Result<serde_json::Value>,
+    ) -> Result<bool> {
+        let (plan, current, applying, report) = self.reconciliation_input(request)?;
+        let receipt = committed_proof(&plan, &report)?;
+        let effect = plan.effect_id()?;
+        if receipt != catalog::invoice_receipt(&plan.commit(&effect), &report)? {
+            return Err("reconciliation proof is not the bound artifact receipt".into());
+        }
+        if !io::hash(review) || Self::reconciliation_review(&plan, &applying, &receipt)? != review {
+            return Err("workflow or committed outcome changed since reconciliation review".into());
+        }
+        if current.stage == 4 {
+            self.check_current(&plan, &current)?;
+            if current.receipt.as_ref() != Some(&committed_proof(&plan, &report)?) {
+                return Err("completed reconciliation proof changed".into());
+            }
+            self.root.sync_all()?;
+            return Ok(true);
+        }
+        let completed = Checkpoint {
+            stage: 4,
+            plan_sha256: applying.plan_sha256.clone(),
+            previous_sha256: digest(&applying)?,
+            report_sha256: applying.report_sha256.clone(),
+            receipt: Some(receipt.clone()),
+        };
+        self.transition(&plan, &current, &completed, |p| {
+            self.check_current(p, &completed)?;
+            if committed_proof(p, &report)? != receipt {
+                return Err("committed artifact proof changed before acknowledgement".into());
+            }
+            Ok(())
+        })?;
+        Ok(false)
+    }
 }
 fn authorize(plan: &Plan) -> Result<()> {
     let admission = skills::admission()?;
@@ -775,6 +851,36 @@ pub fn advance(request: &str, review: &str) -> Result<()> {
         },
     )?;
     println!("{}", store.status(request)?);
+    Ok(())
+}
+
+pub fn reconcile(request: &str, review: Option<&str>) -> Result<()> {
+    let store = Store::open(Path::new(DIRECTORY), &io::installation()?)?;
+    let (plan, current, applying, report) = store.reconciliation_input(request)?;
+    let effect = plan.effect_id()?;
+    // Fixed lock order: coordinator, then catalog. This observer has no publish
+    // method and remains alive through acknowledgement/transaction close.
+    let proof = catalog::committed_invoice(&plan.commit(&effect), &report)?;
+    let receipt = proof.recheck()?;
+    let expected_review = Store::reconciliation_review(&plan, &applying, &receipt)?;
+    let replayed = if let Some(review) = review {
+        Some(store.acknowledge_committed(request, review, |p, _| {
+            if io::installation()? != p.installation {
+                return Err("workflow reconciliation installation changed".into());
+            }
+            proof.recheck()
+        })?)
+    } else {
+        None
+    };
+    println!(
+        "{}",
+        serde_json::json!({"schema_version":1,"environment":"lab","request_id":request,
+        "observation":"verified-committed-receipt","previous_state":state(current.stage),
+        "state":store.status(request)?["state"],"review_sha256":expected_review,
+        "receipt":receipt,"replayed":replayed,"effect_executed":false,
+        "product_admin_active":false,"gate_closing":false})
+    );
     Ok(())
 }
 
@@ -1036,5 +1142,100 @@ mod tests {
             .is_err());
         assert_eq!(review(&s), before);
         assert_eq!(s.load("run-1").unwrap().1.stage, 0);
+    }
+
+    fn applying_fixture(s: &Store) {
+        let (p, b) = plan();
+        s.prepare(&p, &b, |_| Ok(())).unwrap();
+        for _ in 0..2 {
+            s.advance("run-1", &review(s), |_| Ok(()), |_, _, _, _| panic!())
+                .unwrap();
+        }
+        assert!(s
+            .advance(
+                "run-1",
+                &review(s),
+                |_| Ok(()),
+                |_, _, _, check| {
+                    check()?;
+                    Err("committed outcome acknowledgement lost".into())
+                }
+            )
+            .is_err());
+    }
+    fn ack_review(s: &Store) -> String {
+        let (p, _, applying, report) = s.reconciliation_input("run-1").unwrap();
+        Store::reconciliation_review(&p, &applying, &receipt(&p, &report).unwrap()).unwrap()
+    }
+
+    #[test]
+    fn committed_acknowledgement_requires_review_and_replays_without_new_checkpoint() {
+        let f = Fixture::new("acknowledgement");
+        let s = f.open();
+        applying_fixture(&s);
+        assert!(s
+            .acknowledge_committed("run-1", &review(&s), receipt)
+            .is_err());
+        let token = ack_review(&s);
+        assert!(!s.acknowledge_committed("run-1", &token, receipt).unwrap());
+        assert_eq!(s.load("run-1").unwrap().1.stage, 4);
+        assert!(s.acknowledge_committed("run-1", &token, receipt).unwrap());
+        assert_eq!(
+            s.db.query(
+                "SELECT stage FROM checkpoints WHERE request_id='run-1'",
+                &[],
+                5
+            )
+            .unwrap()
+            .len(),
+            5
+        );
+    }
+    #[test]
+    fn absent_unbound_or_changed_commit_proof_cannot_acknowledge_completion() {
+        let f = Fixture::new("ack-denials");
+        let s = f.open();
+        applying_fixture(&s);
+        let token = ack_review(&s);
+        assert!(s
+            .acknowledge_committed("run-1", &token, |_, _| Err("no verified receipt".into()))
+            .is_err());
+        assert!(s
+            .acknowledge_committed("run-1", &token, |_, _| Ok(
+                serde_json::json!({"forged":true})
+            ))
+            .is_err());
+        let calls = Cell::new(0);
+        assert!(s
+            .acknowledge_committed("run-1", &token, |p, b| {
+                calls.set(calls.get() + 1);
+                if calls.get() == 2 {
+                    Err("receipt/object changed before checkpoint commit".into())
+                } else {
+                    receipt(p, b)
+                }
+            })
+            .is_err());
+        assert_eq!(calls.get(), 2);
+        assert_eq!(s.load("run-1").unwrap().1.stage, 3);
+        assert_eq!(ack_review(&s), token);
+    }
+    #[test]
+    fn preparation_and_cancellation_are_not_past_commit_evidence() {
+        let f = Fixture::new("ack-stage");
+        let s = f.open();
+        let (p, b) = plan();
+        s.prepare(&p, &b, |_| Ok(())).unwrap();
+        for _ in 0..2 {
+            assert!(s
+                .acknowledge_committed("run-1", &review(&s), |_, _| panic!(
+                    "proof must not be requested before applying"
+                ))
+                .is_err());
+            s.advance("run-1", &review(&s), |_| Ok(()), |_, _, _, _| panic!())
+                .unwrap();
+        }
+        s.cancel("run-1", &review(&s), |_| Ok(())).unwrap();
+        assert!(s.reconciliation_input("run-1").is_err());
     }
 }

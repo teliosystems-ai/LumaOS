@@ -723,6 +723,44 @@ pub(crate) fn commit_invoice(
     Ok(expected)
 }
 
+/// A verified past outcome, never authority to publish or redispatch. Keep this
+/// guard alive through the coordinator acknowledgement so catalog ownership
+/// spans both the observation and its final recheck.
+pub(crate) struct InvoiceOutcome {
+    catalog: Catalog,
+    expected: Receipt,
+}
+impl InvoiceOutcome {
+    pub(crate) fn recheck(&self) -> Result<serde_json::Value> {
+        if !self
+            .catalog
+            .inventory()?
+            .0
+            .iter()
+            .any(|(_, r)| r == &self.expected)
+        {
+            return Err("no exact committed invoice receipt; outcome remains uncertain".into());
+        }
+        Ok(serde_json::to_value(&self.expected)?)
+    }
+}
+
+pub(crate) fn committed_invoice(
+    commit: &InvoiceCommit<'_>,
+    bytes: &[u8],
+) -> Result<InvoiceOutcome> {
+    if io::installation()? != commit.installation {
+        return Err("invoice reconciliation installation changed".into());
+    }
+    let expected = serde_json::from_value(invoice_receipt(commit, bytes)?)?;
+    let proof = InvoiceOutcome {
+        catalog: Catalog::open(Path::new(DIRECTORY), commit.installation)?,
+        expected,
+    };
+    proof.recheck()?;
+    Ok(proof)
+}
+
 pub fn initialize_installed() -> Result<()> {
     initialize(Path::new(DIRECTORY), &io::installation()?)
 }
@@ -916,6 +954,54 @@ mod tests {
         committed.sync_all().unwrap();
         root.sync_all().unwrap();
         (path, receipt, bytes)
+    }
+
+    #[test]
+    fn committed_outcome_guard_requires_exact_receipt_keeps_ownership_and_rechecks_bytes() {
+        let f = Fixture::new("outcome-guard");
+        let (receipt, bytes) = proposal("outcome-request", "outcome-artifact", 0);
+        {
+            let proof = InvoiceOutcome {
+                catalog: f.open(),
+                expected: receipt.clone(),
+            };
+            assert!(proof.recheck().is_err());
+        }
+        f.open().publish(&receipt, &bytes, |_| Ok(())).unwrap();
+        {
+            let mut wrong = receipt.clone();
+            wrong.artifact_id = "wrong-target".into();
+            let proof = InvoiceOutcome {
+                catalog: f.open(),
+                expected: wrong,
+            };
+            assert!(proof.recheck().is_err());
+        }
+        {
+            let proof = InvoiceOutcome {
+                catalog: f.open(),
+                expected: receipt.clone(),
+            };
+            assert_eq!(
+                proof.recheck().unwrap(),
+                serde_json::to_value(&receipt).unwrap()
+            );
+            assert!(Catalog::open(&f.path, &"a".repeat(64)).is_err());
+        }
+        let (later, bytes) = proposal("outcome-later", "outcome-artifact", 1);
+        f.open().publish(&later, &bytes, |_| Ok(())).unwrap();
+        let proof = InvoiceOutcome {
+            catalog: f.open(),
+            expected: receipt.clone(),
+        };
+        assert_eq!(
+            proof.recheck().unwrap(),
+            serde_json::to_value(&receipt).unwrap()
+        );
+        let object = f.path.join("objects").join(&receipt.content_sha256);
+        fs::set_permissions(&object, fs::Permissions::from_mode(0o600)).unwrap();
+        fs::write(&object, b"tampered after observation").unwrap();
+        assert!(proof.recheck().is_err());
     }
 
     #[test]

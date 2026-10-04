@@ -1,6 +1,6 @@
 # G2 software completion register
 
-Updated 2026-10-03. **G2 software is not complete.** This register separates
+Updated 2026-10-04. **G2 software is not complete.** This register separates
 work that can be executed in the current Windows/Ubuntu WSL/VM environment
 from production deployment decisions and physical qualification. It does not
 change the frozen reference release, governing requirements, or exit criteria.
@@ -293,6 +293,19 @@ Fresh-install initialization is wired in source; no new OS image was built.
 Product Admin and folder/effect grants, generic scheduling, wider reconciliation,
 trusted time and installed-image qualification remain open.
 
+The [committed outcome acknowledgement checkpoint](evidence/G2_WORKFLOW_RECONCILIATION_2026-10-04.md)
+adds explicit inspection and reviewed acknowledgement of an exact already
+committed native catalog receipt. This root-only laboratory audit operation
+can complete the saved Applying checkpoint after skill withdrawal without
+publishing another artifact or restoring execution authority. Coordinator and
+catalog ownership span the acknowledgement transaction; fresh installation
+and catalog integrity are rechecked before commit. Missing, conflicting or
+corrupt evidence remains uncertain. Forty-four focused Rust tests, compiled
+CLI checks including both acknowledgement crash boundaries, two builder checks,
+formatting and the offline build passed on D-backed storage. Broader
+known-not-applied/conflict resolution, product policy and installed-image
+qualification remain open; no new OS image was built.
+
 The [model-response and WSL-impact checkpoint](evidence/G2_MODEL_REPLY_2026-10-01.md)
 records a native CLI fix: replies must match the selected model and a single
 completed assistant message, with finite integer token accounting within the
@@ -444,7 +457,7 @@ tests passed. This is host-storage acceptance, not a new G2 OS-image pass. See
 | Temporary storage | Locked, bounded snapshot/download reconciliation; sparse-aware admission and exact-file cleanup; Linux boundary tests in `native/tests`; sequence 8 verified successful startup maintenance service execution | Repeated guest-interruption/pressure evaluation; operator-reviewed disposition of legacy snapshots, which cannot safely be assumed inactive |
 | Model lifecycle and resources | Two pinned CPU profiles; hardware and cgroup-v2 limit admission, isolated UID, authenticated loopback runtime, systemd memory/device/process restrictions; source-only pre-stop verified acquisition and exact service-state guard, guarded unchanged-prior restart after failed stop or activation, interrupted-activation fence, reviewed clearance, narrow reviewed partial-candidate roll-forward, bounded post-restart listener check and explicit older-image migration; actual inference and offline reboot passed on an earlier image | Full governed model-pack/catalog lifecycle; rollback and arbitrary partial-state policy, broader post-stop failure policy, installed migration, reconfiguration and roll-forward qualification, atomic resource leases and generations, stale-worker fencing, pressure/quarantine/restart policy; evaluate the changed binary on a new image and run 1,000 **real compact-model** cycles with measured resource return and performance distributions |
 | Admin, policy, and effects | Frozen Python contracts and negative tests; kernel peer authentication; local TPM2 checkpoint/journal and signed-PCR sealing; native PAM with installation-scoped principal/generation and credential revalidation; durable replay fence for two laboratory root-only worker effects | Integrate authenticated enrollment/sealed credential delivery, finite Admin assignment/revocation, governed principal/account lifecycle, effect-time grants, protected production effect receipts and reviewed reconciliation; local identity binding and root/sudo operations are not the product Admin service |
-| Skills and vertical workflow | Reference/manual interface; native typed-DAG validation, lab admission/calculation/scoped reads; lab pair store; native ADR-0003 WAL/content-object catalog with versions, transactional receipts, replay/retention and reviewed lab-pair import; native WAL coordinator for the exact invoice graph adds snapshot/checkpoints, pre-effect cancellation and explicit catalog-backed restart/replay | Product signing/revocation, production coordinator and principal-bound folder/effect grants, generic artifact/public-schema and trusted-time integration, broader schema/reference/principal migration, receipted retention/GC and effect-time policy, wider cancellation/reconciliation and scheduling; distributed-image journey |
+| Skills and vertical workflow | Reference/manual interface; native typed-DAG validation, lab admission/calculation/scoped reads; lab pair store; native ADR-0003 WAL/content-object catalog with versions, transactional receipts, replay/retention and reviewed lab-pair import; native WAL coordinator for the exact invoice graph adds snapshot/checkpoints, pre-effect cancellation, explicit catalog-backed restart/replay and reviewed acknowledgement of exact past commits after withdrawal | Product signing/revocation, production coordinator and principal-bound folder/effect grants, generic artifact/public-schema and trusted-time integration, broader schema/reference/principal migration, receipted retention/GC and effect-time policy, wider cancellation/reconciliation and scheduling; distributed-image journey |
 | Generated-code isolation | General model-generated shell/native execution is denied | Required microVM or separately qualified constrained runtime and adversarial tests before this capability can be available; a deny-only path is not an implemented execution sandbox |
 | Desktop and account lifecycle | Headless console/manual recovery and installer-created distinct accounts; candidate GNOME/Wayland packaging and signed boot-target selection; isolated real compositor/Files/editor/terminal surface smoke passed without a model | Build and boot the desktop image; actual GDM authentication, complete manual file workflow, locking, credential/account lifecycle, migration and model-failure tests; container surface tests do not qualify the installed desktop |
 | Trust and custody integration | Lab release key, signed image bytes, image-owned lab model catalog, reference trust/checkpoint contracts; owner selected local TPM2-backed Admin for current installer | Integrate local TPM2 enrollment, authenticated writer identity, trusted UTC, isolated secrets, key rotation/revocation/recovery and reviewed reconciliation; production signatures require approved real custody; external deployment is a future installer variant |

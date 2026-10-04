@@ -121,6 +121,14 @@ fn dispatch() -> Result<()> {
         Some("workflow-invoice-cancel") if args.len() == 3 => {
             workflow_runs::cancel(&args[1], &args[2])
         }
+        Some("workflow-invoice-reconcile") if args.len() == 2 => {
+            workflow_runs::reconcile(&args[1], None)
+        }
+        Some("workflow-invoice-reconcile")
+            if args.len() == 4 && args[2] == "--publish-committed" =>
+        {
+            workflow_runs::reconcile(&args[1], Some(&args[3]))
+        }
         Some("skill-registry-status") if args.len() == 1 => skills::status(),
         Some("invoice-calculate") if args.len() == 1 => calculation::calculate_stdin(),
         Some("artifact-store-init") if args.len() == 1 => artifacts::initialize_installed(),
@@ -208,6 +216,7 @@ fn dispatch() -> Result<()> {
             println!("broker-effect-status: root-only installed laboratory worker-effect receipts; uncertain effects are fenced, never automatically replayed. Not product Admin or TPM rollback protection.");
             println!("workflow-validate GRAPH.json: read-only closed native file-to-artifact DAG check; does not admit signed skills or execute effects.");
             println!("Durable laboratory invoice coordinator (installed root, ext4): workflow-store-init | workflow-store-status | workflow-invoice-prepare REQUEST-ID ARTIFACT-ID EXPECTED-VERSION (CSV stdin snapshot) | workflow-invoice-status REQUEST-ID | workflow-invoice-advance REQUEST-ID REVIEW-SHA256 | workflow-invoice-cancel REQUEST-ID REVIEW-SHA256. Each advance checkpoints the next native step; publication checkpoints Applying before calling the catalog, and exact recovery verifies its idempotent receipt. Cancellation is accepted only before Applying. Not product Admin, folder grants, generic DAG execution or full G2.");
+            println!("workflow-invoice-reconcile REQUEST-ID [--publish-committed REVIEW-SHA256]: inspect and explicitly acknowledge an exact already committed catalog receipt, including after skill withdrawal. Keeps coordinator/catalog ownership through the proof recheck; never publishes an artifact or infers completion from absent evidence. Installed-root lab audit recovery, not a grant or product Admin.");
             println!("skill-registry-status: verify the fixed image-owned lab skill signature, exact descriptors and bound workflow; read-only admission, no execution or effect grant.");
             println!("invoice-calculate: bounded pure invoice CSV on stdin to deterministic monthly JSON totals; no file grant, workflow execution or artifact write.");
             println!("Managed laboratory invoice artifacts (installed root only): artifact-store-init (explicit older-install setup; refuses existing state) | artifact-store-status | artifact-publish-invoice REQUEST-ID (CSV stdin; signed workflow admission) | artifact-read REQUEST-ID | artifact-reconcile REQUEST-ID REVIEW-SHA256 (publish a complete reviewed preparation) | artifact-abort REQUEST-ID ABORT-REVIEW-SHA256 (retain reviewed partial bytes; never reuse the request). Root-owned storage; product Admin, folder grants and TPM rollback protection remain pending.");

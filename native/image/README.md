@@ -242,6 +242,25 @@ provides idempotent recovery. A completed run verifies its existing receipt;
 it does not recreate an absent one after catalog rollback or reset a later
 artifact version. No startup loop automatically resumes work.
 
+If the artifact committed but its workflow acknowledgement was lost, a separate
+reviewed command can record that exact past outcome even after skill withdrawal:
+
+```sh
+sudo luma-platform workflow-invoice-reconcile workflow-001
+sudo luma-platform workflow-invoice-reconcile workflow-001 --publish-committed RECONCILIATION-REVIEW-SHA256
+```
+
+Use the distinct `review_sha256` from reconciliation inspection, not from
+ordinary status/advance. It binds the immutable plan, Applying checkpoint and
+exact native catalog receipt. Inspection is read-only. Publication appends only
+the coordinator's Completed checkpoint; it never publishes an artifact or
+redispatches an effect. Both stores remain exclusively owned through the
+acknowledgement transaction, with catalog integrity and installation rechecked
+before commit. The same review can be retried after a lost acknowledgement.
+Missing, conflicting or corrupt receipts/objects remain fenced: absence is not
+proof that the effect did not occur. This installed-root laboratory audit path
+does not restore withdrawn execution authority or activate product Admin.
+
 Before `applying`, cancellation is an explicit command:
 
 ```sh
@@ -270,7 +289,8 @@ principal-bound folder/effect grants, generic DAG scheduler or complete public
 artifact schema. No shell, generated code, model authority or ambient folder
 access is introduced. Integrated service/account/grant delivery, trusted time,
 broader cancellation/interruption cases and distributed-image qualification
-remain required. See the [workflow checkpoint](../evidence/G2_WORKFLOW_RUNS_2026-10-04.md).
+remain required. See the [workflow checkpoint](../evidence/G2_WORKFLOW_RUNS_2026-10-04.md)
+and [committed outcome acknowledgement](../evidence/G2_WORKFLOW_RECONCILIATION_2026-10-04.md).
 
 ## Model selection and installation
 

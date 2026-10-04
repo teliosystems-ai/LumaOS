@@ -108,7 +108,27 @@ pub struct Store<A: Checkpoint> {
     journal: Journal,
 }
 
+/// Verified checkpoint content for a semantic adapter, never a capability.
+pub(crate) struct Snapshot {
+    pub deployment: String,
+    pub entries: Vec<Entry>,
+    pub head: String,
+    pub clock: Clock,
+}
+
 impl<A: Checkpoint> Store<A> {
+    pub(crate) fn snapshot(&mut self) -> Result<Snapshot> {
+        let status = self.status()?;
+        Ok(Snapshot {
+            deployment: self.journal.deployment.clone(),
+            entries: self.journal.entries.clone(),
+            head: status["head"]
+                .as_str()
+                .ok_or("missing checkpoint head")?
+                .into(),
+            clock: serde_json::from_value(status["clock"].clone())?,
+        })
+    }
     pub fn open(mut anchor: A, path: &Path) -> Result<Self> {
         let (journal, _) = read_journal(path)?;
         let expected = head(&journal)?;
@@ -145,7 +165,6 @@ impl<A: Checkpoint> Store<A> {
     /// before preparation and again at the last TPM-write boundary. This audit
     /// adapter never treats a UID, event payload or successful callback as an
     /// ordinary capability grant; effect policy remains the owning service's job.
-    #[cfg_attr(not(test), allow(dead_code))] // Trusted service integration is pending.
     pub(crate) fn append(
         &mut self,
         entry: Entry,

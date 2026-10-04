@@ -24,6 +24,7 @@ python3 -W error "$snapshot/native/tests/admin_enrollment_integration.py" 2>&1 |
 python3 -W error "$snapshot/native/tests/admin_enrollment_resume_integration.py" 2>&1 | tee "$output/admin-enrollment-resume.txt"
 python3 -W error "$snapshot/native/tests/admin_enrollment_pending_integration.py" 2>&1 | tee "$output/admin-enrollment-publication.txt"
 python3 -W error "$snapshot/native/tests/admin_recovery_integration.py" 2>&1 | tee "$output/admin-journal-recovery.txt"
+python3 -W error "$snapshot/native/tests/admin_bootstrap_integration.py" 2>&1 | tee "$output/admin-bootstrap.txt"
 python3 -W error -m unittest discover -s "$snapshot/native/tests" -v 2>&1 | tee "$output/native-tests.txt"
 cd "$snapshot"
 sha256sum rust/Cargo.toml rust/Cargo.lock rust/.cargo/config.toml \

@@ -24,6 +24,26 @@ class AdminCredentialPolicyTests(unittest.TestCase):
         self.assertEqual([line for line in lines if line and not line.startswith('#')],
                          ['d /run/luma-admin 0700 root root -'])
 
+    def test_bootstrap_has_fixed_paths_and_independent_pam_entry_point(self):
+        source = (ROOT / 'rust/luma-platform/src/admin_governance.rs').read_text().split('#[cfg(test)]')[0]
+        self.assertIn('const DIRECTORY: &str = "/var/lib/luma-os/admin"', source)
+        entry = source.split('pub fn bootstrap(')[1]
+        for required in ('crate::require_root()?', 'platform::require_installed()?',
+                         'authentication::local(login)?', 'tpm::LocalAnchor::installed()?',
+                         'authenticated.identity()'):
+            self.assertIn(required, entry)
+        self.assertNotIn('std::env::', source)
+        self.assertNotIn('existing_owner()', source)
+        self.assertNotIn('provision(', source)
+
+    def test_bootstrap_is_not_automatic_installer_or_broker_authority(self):
+        main = (ROOT / 'rust/luma-platform/src/main.rs').read_text()
+        self.assertIn('Some("admin-bootstrap") if args.len() == 2', main)
+        self.assertIn('args.len() == 4 && args[2] == "--activate"', main)
+        for name in ('platform.rs', 'service.rs'):
+            source = (ROOT / 'rust/luma-platform/src' / name).read_text()
+            self.assertNotIn('admin_governance::bootstrap', source)
+
 
 if __name__ == '__main__':
     unittest.main()

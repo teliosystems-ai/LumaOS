@@ -103,6 +103,13 @@ def main(enrollment=False):
                                 'admin_enrollment::tests::emulator_enrollment',
                                 '--', '--ignored', '--exact', '--nocapture'],
                                env=env, check=True, timeout=300)
+                if enrollment == 'bootstrap':
+                    subprocess.run(['cargo', 'test', '--offline', '--locked',
+                                    'admin_governance::tests::emulator_bootstrap',
+                                    '--', '--ignored', '--exact', '--nocapture'],
+                                   env=env, check=True, timeout=300)
+                    print('ADMIN_BOOTSTRAP_EXISTING_OWNER_SOFTWARE_TPM_PASSED', flush=True)
+                    return
                 def enrolled_delivery(mode):
                     subprocess.run(['cargo', 'test', '--offline', '--locked',
                                     'admin_enrollment::tests::emulator_enrolled_delivery',

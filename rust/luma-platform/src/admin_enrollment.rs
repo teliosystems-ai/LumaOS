@@ -105,6 +105,14 @@ fn enrollment_identity(record: &[u8]) -> Result<serde_json::Value> {
     }
     Ok(parsed.principal)
 }
+
+/// A binding to the already authenticated checkpoint deployment, not a role.
+pub(crate) fn checkpoint_identity(record: &[u8], deployment: &str) -> Result<serde_json::Value> {
+    if record_deployment(record) != deployment {
+        return Err("enrollment record does not bind this checkpoint deployment".into());
+    }
+    enrollment_identity(record)
+}
 impl ParentIntent {
     fn new(record: Vec<u8>, deployment: &str, public: &[u8], signature: &[u8]) -> Result<Self> {
         enrollment_identity(&record)?;
@@ -987,7 +995,7 @@ mod tests {
     fn fixture_record(admission: impl serde::Serialize) -> Vec<u8> {
         serde_json::to_vec(&serde_json::json!({
             "schema_version":1,"kind":"inert-checkpoint-enrollment",
-            "principal":{"installation":"aa","principal":"bb",
+            "principal":{"installation":"aa".repeat(32),"principal":"bb".repeat(32),
                 "generation":1,"login":"human","uid":1001},
             "admission_observation":admission,"observation_is_attestation":false,
             "ownership":"existing-owner","credential_parent_handle":0x81004c41u32,

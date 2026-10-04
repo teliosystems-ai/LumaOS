@@ -89,6 +89,18 @@ storage. The CI runner now invokes these fixtures and hashes their C interposer;
 syntax passed, but the full updated runner/remote CI were not executed here.
 Installed-image and physical qualification remain open.
 
+The [explicit product bootstrap checkpoint](evidence/G2_ADMIN_BOOTSTRAP_2026-10-04.md)
+adds a separately authenticated and reviewed `admin-bootstrap` source command.
+Its private canonical principal/enrollment payload is bound into one TPM-backed
+receipt; restart/replay verifies that semantic payload rather than accepting
+root privilege or the inert enrollment record as Admin. Fifty-eight selected
+ordinary Rust tests, the disposable existing-owner TPM activation/replay fixture,
+four wiring checks, formatting and the offline build passed. This implements
+the narrow initial governance-principal bootstrap, not service confinement,
+finite delegation, principal recovery/lifecycle, scoped effect grants, trusted
+time or signing custody. Installed PAM-to-TPM and candidate-image evaluation
+remain open. G2 software remains incomplete.
+
 The earlier [disposable TPM feasibility experiment](evidence/G2_OWNER_CREDENTIAL_FEASIBILITY_2026-10-02.md)
 informed the native backend now integrated above. The targeted native tests
 exercise signed PCR 11 renewal, fixed PCR 7 denial, forged-signature refusal,

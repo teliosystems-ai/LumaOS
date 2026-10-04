@@ -131,8 +131,9 @@ credential path is exposed. Missing enrollment remains a refusal.
 
 Do not manually fabricate these paths. The checkpoint transaction creates them
 only after explicit authorization on the selected installed system.
-Product Admin bootstrap, service confinement, signing/hierarchy custody,
-rotation and recovery are still open. The helper/TSS libraries' working copies
+Explicit initial product bootstrap is now available in source as described
+below; the confined Admin service, signing/hierarchy custody, rotation and
+recovery are still open. The helper/TSS libraries' working copies
 still need the full service memory/swap review; locking the Rust secret does
 not prove every dependent allocation is locked. Targeted evaluation is recorded
 in [the sealed-delivery checkpoint](evidence/G2_ADMIN_DELIVERY_2026-10-02.md).
@@ -444,6 +445,47 @@ the [authentication checkpoint](evidence/NATIVE_ADMIN_AUTH_2026-09-29.md).
 Physical TPM/bus/firmware/power-loss qualification follows that software work;
 it does not substitute for it. Production custody requires approved public
 trust inputs and operators, not private keys supplied in chat or source.
+
+## Explicit initial product Admin bootstrap
+
+The source command below establishes the initial governance principal only
+after checkpoint enrollment. It is intended for an approved newly installed
+test system, not the Windows/WSL host, and has not been qualified on a rebuilt
+image. The existing distributed image does not automatically contain it.
+
+```text
+sudo luma-platform admin-bootstrap LOGIN
+sudo luma-platform admin-bootstrap LOGIN --activate REVIEW-SHA256
+```
+
+Each invocation prompts for the human account password through the protected
+PAM flow. Use the original installer-selected UID 1001 account. The first
+invocation is read-only and returns the review digest; independently review its
+principal and checkpoint before the explicit activation. The digest binds the
+current head, activation state, complete bootstrap payload and TPM boot epoch.
+It is not an authenticator. Changed state or a reboot requires fresh inspection.
+No owner authorization is requested again; no hierarchy credentials change.
+
+Activation retains a private canonical `bootstrap.json` and appends its digest
+and exact actor/activity/request to the authenticated TPM journal. Both pieces
+must verify before the source command reports `product_admin_active: true`.
+That flag describes the initial governance receipt, not a confined running
+Admin service. No finite delegation, resource effect grant or signing capability
+is enabled. The command returns no reusable authenticated session.
+
+A partial or altered payload, disk/TPM mismatch, pending journal or unsupported
+history refuses. Preserve it for review; do not delete the payload, clear an
+index, restore genesis or fabricate role files. If the TPM committed the exact
+successor but its publication/reply was lost, the existing reviewed committed
+journal publication can make that already authorized receipt readable without
+another TPM write. It cannot clear an uncommitted fence. Once readable, rerun
+inspection and explicitly replay its current review if confirmation is needed;
+replay requires fresh PAM and never repeats activation.
+
+The [bootstrap evidence](evidence/G2_ADMIN_BOOTSTRAP_2026-10-04.md) records the
+targeted source and software-TPM checks. Full installed PAM-to-TPM, confinement,
+finite role/grant lifecycle, trusted time, independent recovery, production
+custody and physical qualification remain required.
 
 ## Future installer variant: external protected service
 

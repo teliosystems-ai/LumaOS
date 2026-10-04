@@ -141,7 +141,11 @@ impl AuthenticatedAccount {
 
     fn current_uid(&self) -> Result<u32> {
         fresh(self.completed)?;
-        self.binding.current_uid()
+        let uid = self.binding.current_uid()?;
+        // Registry/account reads can block. Do not return an observation that
+        // expired while those mandatory identity checks were in progress.
+        fresh(self.completed)?;
+        Ok(uid)
     }
 }
 

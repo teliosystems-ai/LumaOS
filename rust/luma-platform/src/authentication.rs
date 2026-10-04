@@ -16,6 +16,7 @@ use std::time::{Duration, Instant};
 const PROFILE: &[u8] = include_bytes!("../../../native/image/overlay/etc/pam.d/luma-admin");
 const HELPER: &str = "/usr/libexec/luma-os/luma-auth-helper";
 const LIMIT: usize = 1024;
+pub(crate) const PASSWORD_FRAME: usize = LIMIT + 1;
 
 fn login(value: &str) -> Result<()> {
     if value.is_empty()
@@ -259,6 +260,37 @@ pub(crate) fn local(username: &str) -> Result<AuthenticatedAccount> {
         .open("/dev/tty")?;
     let password = password_from(terminal)?;
     authenticate(Path::new(HELPER), username, &password)
+}
+
+pub(crate) fn console_password(username: &str) -> Result<PrivateBuffer> {
+    crate::protect_memory()?;
+    crate::platform::require_installed()?;
+    login(username)?;
+    password_from(
+        OpenOptions::new()
+            .read(true)
+            .write(true)
+            .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
+            .open("/dev/tty")?,
+    )
+}
+
+/// The trusted IPC composition supplies the kernel peer, never request JSON.
+pub(crate) fn peer_account(
+    username: &str,
+    password: &PrivateBuffer,
+    peer: u32,
+) -> Result<AuthenticatedAccount> {
+    crate::require_root()?;
+    crate::platform::require_installed()?;
+    if peer != 1001 {
+        return Err("Admin service requires the selected human peer".into());
+    }
+    let authenticated = authenticate(Path::new(HELPER), username, password)?;
+    if authenticated.current_uid()? != peer {
+        return Err("PAM principal differs from the kernel peer".into());
+    }
+    Ok(authenticated)
 }
 
 /// Existing owner bytes are entered as hex, never argv, environment or a file.

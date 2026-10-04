@@ -1,0 +1,56 @@
+[Unit]
+Description=Luma local authenticated Admin catalog service
+After=apparmor.service systemd-tmpfiles-setup.service local-fs.target
+Requires=apparmor.service
+ConditionKernelCommandLine=luma.mode=installed
+# Presence is only a startup condition. Every request verifies the real
+# bootstrapped principal and complete TPM-backed semantic history.
+ConditionPathExists=/var/lib/luma-os/admin/bootstrap.json
+
+[Service]
+Type=simple
+ExecStart=/usr/libexec/luma-os/luma-platform admin-service
+User=root
+Group=root
+RuntimeDirectory=luma-governance
+RuntimeDirectoryMode=0711
+RuntimeDirectoryPreserve=no
+UMask=0077
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+# A physical TPM is required; never use PrivateDevices to hide it and then
+# substitute a software or external transport.
+PrivateDevices=no
+DevicePolicy=closed
+DeviceAllow=/dev/tpmrm0 rw
+ReadWritePaths=/var/lib/luma-os/admin /run/luma-admin /run/luma-governance
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectProc=invisible
+RestrictAddressFamilies=AF_UNIX
+RestrictNamespaces=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service @memlock memfd_create
+SystemCallFilter=~@mount @raw-io @reboot @swap @obsolete @debug
+CapabilityBoundingSet=CAP_CHOWN
+AppArmorProfile=luma-admin
+LimitCORE=0
+LimitNOFILE=64
+LimitMEMLOCK=262144
+MemoryMax=256M
+MemorySwapMax=0
+TasksMax=16
+CPUQuota=25%
+TimeoutStopSec=5
+KillMode=control-group
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

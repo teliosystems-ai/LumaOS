@@ -25,6 +25,9 @@ python3 -W error "$snapshot/native/tests/admin_enrollment_resume_integration.py"
 python3 -W error "$snapshot/native/tests/admin_enrollment_pending_integration.py" 2>&1 | tee "$output/admin-enrollment-publication.txt"
 python3 -W error "$snapshot/native/tests/admin_recovery_integration.py" 2>&1 | tee "$output/admin-journal-recovery.txt"
 python3 -W error "$snapshot/native/tests/admin_bootstrap_integration.py" 2>&1 | tee "$output/admin-bootstrap.txt"
+# This fixture drops its own client to UID 1001 before connecting. It proves
+# kernel-peer/framing behavior only, not installed PAM/TPM or AppArmor operation.
+timeout 60 cargo test --offline --locked admin_service::tests::kernel_human_connection -- --ignored --exact --nocapture 2>&1 | tee "$output/admin-service-ipc.txt"
 python3 -W error -m unittest discover -s "$snapshot/native/tests" -v 2>&1 | tee "$output/native-tests.txt"
 cd "$snapshot"
 sha256sum rust/Cargo.toml rust/Cargo.lock rust/.cargo/config.toml \
@@ -34,6 +37,8 @@ sha256sum rust/Cargo.toml rust/Cargo.lock rust/.cargo/config.toml \
     native/image/overlay/usr/lib/dracut/modules.d/92luma-pcrphase/module-setup.sh \
     native/image/overlay/usr/lib/dracut/modules.d/91luma/*.sh \
     native/image/overlay/etc/pam.d/luma-admin \
+    native/image/overlay/etc/apparmor.d/luma-admin \
+    native/image/overlay/etc/systemd/system/luma-admin.service \
     native/image/overlay/etc/udev/rules.d/99-luma-tpm.rules \
     native/image/overlay/usr/lib/systemd/system-generators/luma-boot-generator \
     native/image/overlay/etc/systemd/system/media-luma.mount \

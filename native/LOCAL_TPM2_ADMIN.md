@@ -531,9 +531,67 @@ repair for an already TPM-proven successor; uncommitted proposals stay fenced.
 
 A role definition grants nothing to a subject and authorizes no resource effect.
 Trusted UTC, assignments, expiry/revocation, principal and credential recovery,
-signing custody, the confined daemon/API and installed PAM-to-TPM qualification
-remain open. The [catalog evidence](evidence/G2_ADMIN_CATALOG_2026-10-04.md)
+signing custody, the complete confined lifecycle and installed PAM-to-TPM
+qualification remain open. The [catalog evidence](evidence/G2_ADMIN_CATALOG_2026-10-04.md)
 records source and disposable-TPM checks, not G2 completion.
+
+## Local catalog service and human client
+
+The source now packages `luma-admin.service` and its `luma-admin` AppArmor
+profile. It exposes only catalog status, activity registration and role
+definition. This is not the complete assignment, principal, signing or effect
+authorization service. The existing distributed image does not contain this
+increment until the consolidated candidate is rebuilt and qualified.
+
+On an approved installed test candidate, first complete the explicit checkpoint
+enrollment and separately reviewed product bootstrap above. Then start the
+service with the local maintenance authority:
+
+```text
+sudo systemctl start luma-admin.service
+```
+
+The unit is enabled in source, but missing `bootstrap.json` skips startup.
+Presence of that file does not establish authority: every request verifies the
+original principal, enrollment and complete TPM-backed semantic history. The
+service refuses an unconfined/manual launch, complain-mode profile, unexpected
+cgroup, disabled seccomp/no-new-privileges or unsupported memory/swap/task limits.
+Do not bypass a refusal by removing confinement or changing the fixed limits.
+The service is not a boot-health requirement; manual operation stays independent.
+
+From the original UID 1001 human account, use the client **without sudo**:
+
+```text
+luma-platform admin-client LOGIN status
+luma-platform admin-client LOGIN register register-model model.select
+luma-platform admin-client LOGIN register register-model model.select --commit REVIEW-SHA256
+luma-platform admin-client LOGIN define define-operator Operator 0 model.select
+luma-platform admin-client LOGIN define define-operator Operator 0 model.select --commit REVIEW-SHA256
+```
+
+Every invocation prompts through a masked controlling terminal. Independently
+review the inspection's principal, request, command and current state before
+using its `review_sha256`. The digest is not authentication; the commit requires
+fresh PAM again. Preserve the exact request/command on reviewed retry. No
+authenticated session or reusable bearer credential is returned.
+
+The fixed root-owned socket accepts only the kernel-observed UID 1001; root,
+workers and ordinary users are not product Admin peers. PAM must resolve the
+same UID and still-valid installation-scoped principal. Caller/role fields and
+serialized tokens are refused. Password bytes travel in a separate fixed binary
+frame directly into protected buffers, never request JSON, arguments,
+environment variables or error replies. This is a local-only interface, not
+an external Admin variant or model/browser-controlled endpoint.
+
+One request runs in one bounded child process. Timeout or lost reply never
+automatically replays a mutation, clears a fence or reconstructs state. Inspect
+and explicitly review an exact retry; use only the existing narrow committed
+journal publication when its TPM proof permits it. Preserve uncertain proposals.
+
+The [service checkpoint](evidence/G2_ADMIN_SERVICE_2026-10-04.md) separates
+source/kernel-peer checks and policy parsing from still-required installed
+AppArmor/seccomp enforcement, full PAM-to-TPM execution and interruption tests.
+Never treat the protocol fixture as evidence that those installed flows passed.
 
 ## Future installer variant: external protected service
 

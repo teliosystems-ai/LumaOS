@@ -4,6 +4,7 @@ mod admin_enrollment;
 mod admin_governance;
 mod admin_journal;
 mod admin_roles;
+mod admin_service;
 mod artifact_catalog;
 mod artifacts;
 mod authentication;
@@ -34,6 +35,10 @@ fn require_root() -> Result<()> {
     if unsafe { libc::geteuid() } != 0 {
         return Err("this operation requires a local administrator".into());
     }
+    protect_memory()
+}
+
+fn protect_memory() -> Result<()> {
     // Privileged operations may hold passphrases; never permit core dumps.
     let limit = libc::rlimit {
         rlim_cur: 0,
@@ -81,6 +86,9 @@ fn dispatch() -> Result<()> {
         Some("admin-governance-status") if args.len() == 2 => {
             admin_governance::catalog_status(&args[1])
         }
+        Some("admin-service") if args.len() == 1 => admin_service::serve(),
+        Some("admin-service-request") if args.len() == 1 => admin_service::connection(),
+        Some("admin-client") => admin_service::client(&args[1..]),
         Some("admin-activity-register") | Some("admin-role-define") => {
             admin_governance::catalog_command(&args)
         }
@@ -225,6 +233,7 @@ fn dispatch() -> Result<()> {
             println!("admin-auth-check LOGIN: installed-system, controlling-terminal account authentication diagnostic; does not enroll or grant product Admin.");
             println!("admin-bootstrap LOGIN [--activate REVIEW-SHA256]: freshly authenticate the enrolled human, inspect or explicitly commit the installation-bound Admin bootstrap receipt. No role delegation, signing, resource capability or effect execution is enabled by this command.");
             println!("admin-governance-status LOGIN: fresh principal-bound inspection of the TPM-verified finite activity/role definition catalog; no assignment or effect grant.");
+            println!("admin-client LOGIN status | LOGIN register REQUEST ACTIVITY | LOGIN define REQUEST ROLE VERSION ACTIVITY... [--commit REVIEW]: one fresh PAM-authenticated request to the fixed local Admin service, from the selected human account without sudo. No assignments or effect grants.");
             println!("admin-activity-register LOGIN REQUEST ACTIVITY [--commit REVIEW-SHA256]: inspect or explicitly commit one declared finite activity.");
             println!("admin-role-define LOGIN REQUEST ROLE EXPECTED-VERSION ACTIVITY... [--commit REVIEW-SHA256]: finite registered activities only; version 0 creates, the exact current version updates. Defines no assignment or resource grant.");
             println!("Install requires local TPM2 admission before any disk write. admin-install-check is read-only and does not enroll Admin; explicit checkpoint enrollment remains separate from product Admin activation.");

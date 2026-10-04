@@ -564,6 +564,46 @@ pub fn catalog_status(login: &str) -> Result<()> {
     Ok(())
 }
 
+/// Service composition accepts only the in-process PAM observation, not a
+/// serialized role/session token. The original Admin is rechecked per request.
+pub(crate) fn service_request(
+    account: &authentication::AuthenticatedAccount,
+    request: &str,
+    command: Option<&Command>,
+    review: Option<&str>,
+) -> Result<serde_json::Value> {
+    let directory = Path::new(DIRECTORY);
+    let mut store = Store::open(
+        tpm::LocalAnchor::installed()?,
+        &directory.join("journal.json"),
+    )?;
+    if let Some(command) = command {
+        return execute_catalog(
+            &mut store,
+            directory,
+            || account.identity(),
+            request,
+            command,
+            review,
+        );
+    }
+    if review.is_some() {
+        return Err("status cannot approve a mutation".into());
+    }
+    let snapshot = store.snapshot()?;
+    let context = Context::load(directory, &snapshot.deployment)?;
+    if !context.state(&snapshot, None)?.1 {
+        return Err("explicit product Admin bootstrap required".into());
+    }
+    let (catalog, _) = context.events(&snapshot, None)?;
+    context.recheck(&mut || account.identity())?;
+    Ok(
+        serde_json::json!({"schema_version":1,"action":"admin-governance-status",
+        "principal":context.principal,"catalog":catalog,"checkpoint_head":snapshot.head,
+        "product_admin_active":true,"delegation_available":false,"effect_grant":false,"gate_closing":false}),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

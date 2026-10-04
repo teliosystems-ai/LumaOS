@@ -125,6 +125,18 @@ Targeted checks establish protocol behavior, not installed profile enforcement
 or the complete PAM-to-TPM flow; those require the rebuilt consolidated image.
 The full Admin lifecycle and the wider G2 implementation backlog remain open.
 
+The [real PAM composition checkpoint](evidence/G2_ADMIN_PAM_COMPOSITION_2026-10-04.md)
+closes a freshness gap in the authenticated identity projection and adds a
+shared-adapter fixture joining genuine PAM, kernel peer identity, principal
+revalidation, sealed reload and the disposable native TPM catalog. Seventeen
+socket requests cover reviewed commits/replay and denied password, UID,
+principal, review and post-PAM revocation cases. Sixty-five ordinary Rust tests,
+ten wiring checks, formatting and the offline build passed. Alternate fixture
+paths are test-only; production has no new fallback. This is not an executed
+installed systemd/AppArmor service, enrollment/bootstrap acceptance or a
+trusted-time provider. Those integrations and the full Admin lifecycle remain
+open; no candidate image or final sweep ran.
+
 The earlier [disposable TPM feasibility experiment](evidence/G2_OWNER_CREDENTIAL_FEASIBILITY_2026-10-02.md)
 informed the native backend now integrated above. The targeted native tests
 exercise signed PCR 11 renewal, fixed PCR 7 denial, forged-signature refusal,

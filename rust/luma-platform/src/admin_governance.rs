@@ -577,9 +577,20 @@ pub(crate) fn service_request(
         tpm::LocalAnchor::installed()?,
         &directory.join("journal.json"),
     )?;
+    service_request_at(&mut store, directory, account, request, command, review)
+}
+
+fn service_request_at<A: tpm::Checkpoint>(
+    store: &mut Store<A>,
+    directory: &Path,
+    account: &authentication::AuthenticatedAccount,
+    request: &str,
+    command: Option<&Command>,
+    review: Option<&str>,
+) -> Result<serde_json::Value> {
     if let Some(command) = command {
         return execute_catalog(
-            &mut store,
+            store,
             directory,
             || account.identity(),
             request,
@@ -602,6 +613,43 @@ pub(crate) fn service_request(
         "principal":context.principal,"catalog":catalog,"checkpoint_head":snapshot.head,
         "product_admin_active":true,"delegation_available":false,"effect_grant":false,"gate_closing":false}),
     )
+}
+
+#[cfg(test)]
+pub(crate) fn fixture_service_request(
+    root: &Path,
+    account: &authentication::AuthenticatedAccount,
+    request: &str,
+    command: Option<&Command>,
+    review: Option<&str>,
+) -> Result<serde_json::Value> {
+    crate::require_root()?;
+    if !Path::new("/.dockerenv").is_file()
+        || !root.starts_with("/tmp")
+        || !root
+            .file_name()
+            .ok_or("missing fixture directory")?
+            .to_string_lossy()
+            .starts_with("luma-tpm-delivery-")
+        || Path::new("/dev/tpm0").exists()
+        || Path::new("/dev/tpmrm0").exists()
+    {
+        return Err("fresh disposable governance fixture required".into());
+    }
+    let directory = root.join("admin");
+    let (_, secret) = crate::admin_credentials::load_at(
+        &directory,
+        &root.join("pcr-public.pem"),
+        &root.join("pcr-signature.json"),
+        |d, n, p, b, s| crate::owner_credential::fixture_unseal(root, d, n, p, b, s),
+    )?;
+    let anchor = tpm::LocalAnchor::pending_enrollment_fixture(
+        root,
+        &secret,
+        tpm::exclusive_lock(&root.join("bootstrap.lock"))?,
+    )?;
+    let mut store = Store::open(anchor, &directory.join("journal.json"))?;
+    service_request_at(&mut store, &directory, account, request, command, review)
 }
 
 #[cfg(test)]

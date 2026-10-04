@@ -25,6 +25,7 @@ python3 -W error "$snapshot/native/tests/admin_enrollment_resume_integration.py"
 python3 -W error "$snapshot/native/tests/admin_enrollment_pending_integration.py" 2>&1 | tee "$output/admin-enrollment-publication.txt"
 python3 -W error "$snapshot/native/tests/admin_recovery_integration.py" 2>&1 | tee "$output/admin-journal-recovery.txt"
 python3 -W error "$snapshot/native/tests/admin_bootstrap_integration.py" 2>&1 | tee "$output/admin-bootstrap.txt"
+python3 -W error "$snapshot/native/tests/admin_service_pam_integration.py" 2>&1 | tee "$output/admin-service-pam.txt"
 # This fixture drops its own client to UID 1001 before connecting. It proves
 # kernel-peer/framing behavior only, not installed PAM/TPM or AppArmor operation.
 timeout 60 cargo test --offline --locked admin_service::tests::kernel_human_connection -- --ignored --exact --nocapture 2>&1 | tee "$output/admin-service-ipc.txt"

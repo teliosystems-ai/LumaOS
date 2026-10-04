@@ -816,4 +816,298 @@ mod tests {
             }
         }
     }
+
+    fn pam_request(mode: &str, review: Option<String>) -> Request {
+        let operation = if mode.starts_with("register") || mode == "invalid-review" {
+            Operation::Catalog {
+                command: CatalogCommand::RegisterActivity {
+                    activity: "model.reconfigure".into(),
+                },
+                review_sha256: review,
+            }
+        } else if mode.starts_with("define") {
+            Operation::Catalog {
+                command: CatalogCommand::DefineRole {
+                    name: "Operator".into(),
+                    expected_version: 1,
+                    activities: vec!["model.reconfigure".into(), "model.select".into()],
+                },
+                review_sha256: review,
+            }
+        } else {
+            Operation::Status
+        };
+        Request {
+            schema_version: 1,
+            request_id: if mode.starts_with("register") {
+                "service-register"
+            } else if mode.starts_with("define") {
+                "service-define"
+            } else {
+                mode
+            }
+            .into(),
+            login: if mode == "wrong-login" {
+                "otherhuman"
+            } else {
+                "human"
+            }
+            .into(),
+            operation,
+        }
+    }
+
+    #[test]
+    #[ignore = "requires real PAM accounts and enrolled disposable existing-owner TPM"]
+    fn pam_catalog_connection() {
+        crate::require_root().unwrap();
+        assert!(Path::new("/.dockerenv").is_file());
+        assert!(!Path::new("/dev/tpmrm0").exists() && !Path::new("/dev/tpm0").exists());
+        let root = std::path::PathBuf::from(std::env::var("LUMA_TPM_TEST_DIRECTORY").unwrap());
+        assert!(root.starts_with("/tmp"));
+        assert!(root
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .starts_with("luma-tpm-delivery-"));
+        let registry = root.join("registry.json");
+        let original = fs::read(&registry).unwrap();
+        let directory =
+            std::env::temp_dir().join(format!("luma-admin-pam-ipc-{}", std::process::id()));
+        fs::create_dir(&directory).unwrap();
+        fs::set_permissions(&directory, fs::Permissions::from_mode(0o711)).unwrap();
+        let path = directory.join("control.sock");
+        let listener = UnixListener::bind(&path).unwrap();
+        let name = std::ffi::CString::new(path.as_os_str().as_encoded_bytes()).unwrap();
+        assert_eq!(unsafe { libc::chown(name.as_ptr(), 0, HUMAN) }, 0);
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o660)).unwrap();
+        socket(&path).unwrap();
+        let mut password = PrivateBuffer::new(authentication::PASSWORD_FRAME).unwrap();
+        let mut secret = File::open(root.join("account-password")).unwrap();
+        secret.read_exact(&mut password.bytes_mut()[..64]).unwrap();
+        let mut excess = [0];
+        assert_eq!(secret.read(&mut excess).unwrap(), 0);
+        let mut review: Option<String> = None;
+        for mode in [
+            "status",
+            "register-review",
+            "register-commit",
+            "register-replay-review",
+            "register-replay-commit",
+            "define-review",
+            "define-commit",
+            "define-replay-review",
+            "define-replay-commit",
+            "wrong-password",
+            "wrong-login",
+            "invalid-review",
+            "disabled",
+            "changed-generation",
+            "disable-after-pam",
+            "locked",
+            "restored",
+        ] {
+            let denied = matches!(
+                mode,
+                "wrong-password"
+                    | "wrong-login"
+                    | "invalid-review"
+                    | "disabled"
+                    | "changed-generation"
+                    | "disable-after-pam"
+                    | "locked"
+            );
+            if mode == "disabled" || mode == "changed-generation" {
+                let mut changed: serde_json::Value = serde_json::from_slice(&original).unwrap();
+                changed["principals"][0][if mode == "disabled" {
+                    "enabled"
+                } else {
+                    "generation"
+                }] = if mode == "disabled" {
+                    serde_json::json!(false)
+                } else {
+                    serde_json::json!(2)
+                };
+                crate::platform::write_atomic(
+                    &registry,
+                    &serde_json::to_vec(&changed).unwrap(),
+                    0o600,
+                )
+                .unwrap();
+            }
+            if mode == "locked" {
+                assert!(Command::new("/usr/sbin/usermod")
+                    .args(["--lock", "human"])
+                    .status()
+                    .unwrap()
+                    .success());
+            }
+            let before = fs::read(root.join("admin/journal.json")).unwrap();
+            let approval = if mode == "invalid-review" {
+                Some("00".repeat(32))
+            } else if mode.ends_with("commit") {
+                Some(review.clone().expect("separately inspected review"))
+            } else {
+                None
+            };
+            let mut child_command = Command::new(std::env::current_exe().unwrap());
+            child_command
+                .args([
+                    "--ignored",
+                    "--exact",
+                    "admin_service::tests::pam_catalog_child",
+                ])
+                .env("LUMA_ADMIN_PAM_TEST_SOCKET", &path)
+                .env("LUMA_ADMIN_PAM_TEST_MODE", mode)
+                .env(
+                    "LUMA_ADMIN_PAM_TEST_REVIEW",
+                    approval.as_deref().unwrap_or(""),
+                )
+                .stdin(Stdio::from(password.descriptor().unwrap()))
+                .uid(HUMAN)
+                .gid(HUMAN);
+            let mut child = child_command.spawn().unwrap();
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut observed = None;
+            handle(&mut stream, |request, credential, uid| {
+                let account =
+                    authentication::fixture_peer_account(&root, &request.login, credential, uid)?;
+                if mode == "disable-after-pam" {
+                    let mut changed: serde_json::Value = serde_json::from_slice(&original)?;
+                    changed["principals"][0]["enabled"] = serde_json::json!(false);
+                    crate::platform::write_atomic(
+                        &registry,
+                        &serde_json::to_vec(&changed)?,
+                        0o600,
+                    )?;
+                }
+                let result = match &request.operation {
+                    Operation::Status => admin_governance::fixture_service_request(
+                        &root,
+                        &account,
+                        &request.request_id,
+                        None,
+                        None,
+                    ),
+                    Operation::Catalog {
+                        command,
+                        review_sha256,
+                    } => admin_governance::fixture_service_request(
+                        &root,
+                        &account,
+                        &request.request_id,
+                        Some(command),
+                        review_sha256.as_deref(),
+                    ),
+                }?;
+                observed = Some(result.clone());
+                Ok(result)
+            })
+            .unwrap();
+            drop(stream);
+            assert!(child.wait().unwrap().success(), "client case {mode}");
+            let after = fs::read(root.join("admin/journal.json")).unwrap();
+            if denied {
+                assert!(observed.is_none(), "denied case {mode}");
+                assert_eq!(after, before, "denied case changed journal: {mode}");
+            } else {
+                let report = observed.unwrap();
+                if mode.ends_with("review") {
+                    review = Some(report["review_sha256"].as_str().unwrap().into());
+                }
+                if mode == "register-commit" || mode == "define-commit" {
+                    assert_eq!(report["tpm_write_performed"], true);
+                    assert_ne!(after, before);
+                } else {
+                    assert_eq!(after, before, "inspection/replay changed journal: {mode}");
+                }
+                if mode.contains("replay") {
+                    assert_eq!(report["replayed"], true);
+                }
+                if mode == "restored" {
+                    assert_eq!(report["catalog"]["roles"]["Operator"]["version"], 2);
+                    assert_eq!(
+                        report["catalog"]["roles"]["Operator"]["activities"],
+                        serde_json::json!(["model.reconfigure", "model.select"])
+                    );
+                }
+            }
+            // Fixture reset only; there is no product principal mutation/reset API.
+            crate::platform::write_atomic(&registry, &original, 0o600).unwrap();
+            if mode == "locked" {
+                assert!(Command::new("/usr/sbin/usermod")
+                    .args(["--unlock", "human"])
+                    .status()
+                    .unwrap()
+                    .success());
+            }
+        }
+        drop(listener);
+        fs::remove_file(path).unwrap();
+        fs::remove_dir(directory).unwrap();
+    }
+
+    #[test]
+    #[ignore = "unprivileged child of disposable PAM/catalog fixture only"]
+    fn pam_catalog_child() {
+        crate::protect_memory().unwrap();
+        assert_eq!(unsafe { libc::geteuid() }, HUMAN);
+        let path = std::env::var("LUMA_ADMIN_PAM_TEST_SOCKET").unwrap();
+        assert!(path.starts_with("/tmp/luma-admin-pam-ipc-"));
+        let mode = std::env::var("LUMA_ADMIN_PAM_TEST_MODE").unwrap();
+        let review = std::env::var("LUMA_ADMIN_PAM_TEST_REVIEW").unwrap();
+        let request = pam_request(
+            &mode,
+            if review.is_empty() {
+                None
+            } else {
+                Some(review)
+            },
+        );
+        validate(&request).unwrap();
+        let mut credential = PrivateBuffer::new(authentication::PASSWORD_FRAME).unwrap();
+        std::io::stdin().read_exact(credential.bytes_mut()).unwrap();
+        if mode == "wrong-password" {
+            credential.bytes_mut()[0] ^= 1;
+        }
+        let mut stream = UnixStream::connect(path).unwrap();
+        assert_eq!(peer(&stream).unwrap(), 0);
+        let deadline = Instant::now() + FRAME_BUDGET;
+        write_frame(
+            &mut stream,
+            &serde_json::to_vec(&request).unwrap(),
+            REQUEST_LIMIT,
+            deadline,
+        )
+        .unwrap();
+        write_until(&mut stream, credential.bytes(), deadline).unwrap();
+        let bytes = read_frame(
+            &mut stream,
+            RESPONSE_LIMIT,
+            Instant::now() + EXECUTION_BUDGET,
+        )
+        .unwrap();
+        assert!(!bytes
+            .windows(64)
+            .any(|window| window == &credential.bytes()[..64]));
+        drop(credential);
+        let denied = matches!(
+            mode.as_str(),
+            "wrong-password"
+                | "wrong-login"
+                | "invalid-review"
+                | "disabled"
+                | "changed-generation"
+                | "disable-after-pam"
+                | "locked"
+        );
+        if denied {
+            assert!(response(&bytes, &request).is_err());
+            let envelope: Response = serde_json::from_slice(&bytes).unwrap();
+            assert_eq!(envelope.status, "denied");
+            assert!(envelope.result.is_none());
+        } else {
+            response(&bytes, &request).unwrap();
+        }
+    }
 }

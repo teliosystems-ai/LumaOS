@@ -134,19 +134,23 @@ fn fresh(completed: Instant) -> Result<()> {
     }
     Ok(())
 }
+fn fresh_observation<T>(
+    mut current: impl FnMut() -> Result<()>,
+    read: impl FnOnce() -> Result<T>,
+) -> Result<T> {
+    current()?;
+    let result = read()?;
+    // The complete observation, including its identity projection, can block.
+    current()?;
+    Ok(result)
+}
 impl AuthenticatedAccount {
     pub(crate) fn identity(&self) -> Result<serde_json::Value> {
-        self.current_uid()?;
-        self.binding.identity()
+        fresh_observation(|| fresh(self.completed), || self.binding.identity())
     }
 
     fn current_uid(&self) -> Result<u32> {
-        fresh(self.completed)?;
-        let uid = self.binding.current_uid()?;
-        // Registry/account reads can block. Do not return an observation that
-        // expired while those mandatory identity checks were in progress.
-        fresh(self.completed)?;
-        Ok(uid)
+        fresh_observation(|| fresh(self.completed), || self.binding.current_uid())
     }
 }
 
@@ -283,10 +287,17 @@ pub(crate) fn peer_account(
 ) -> Result<AuthenticatedAccount> {
     crate::require_root()?;
     crate::platform::require_installed()?;
+    authenticate_peer(peer, || authenticate(Path::new(HELPER), username, password))
+}
+
+fn authenticate_peer(
+    peer: u32,
+    authenticate: impl FnOnce() -> Result<AuthenticatedAccount>,
+) -> Result<AuthenticatedAccount> {
     if peer != 1001 {
         return Err("Admin service requires the selected human peer".into());
     }
-    let authenticated = authenticate(Path::new(HELPER), username, password)?;
+    let authenticated = authenticate()?;
     if authenticated.current_uid()? != peer {
         return Err("PAM principal differs from the kernel peer".into());
     }
@@ -340,6 +351,37 @@ pub fn check(username: &str) -> Result<()> {
         "product_admin_active":false,"role_grant":false,"gate_closing":false})
     );
     Ok(())
+}
+
+#[cfg(test)]
+pub(crate) fn fixture_peer_account(
+    directory: &Path,
+    username: &str,
+    password: &PrivateBuffer,
+    peer: u32,
+) -> Result<AuthenticatedAccount> {
+    crate::require_root()?;
+    if !Path::new("/.dockerenv").is_file()
+        || !directory.starts_with("/tmp")
+        || !directory
+            .file_name()
+            .ok_or("missing fixture directory")?
+            .to_string_lossy()
+            .starts_with("luma-tpm-delivery-")
+        || Path::new("/dev/tpm0").exists()
+        || Path::new("/dev/tpmrm0").exists()
+    {
+        return Err("fresh disposable PAM fixture required".into());
+    }
+    authenticate_peer(peer, || {
+        authenticate_at(
+            &Path::new(env!("OUT_DIR")).join("luma-auth-helper"),
+            username,
+            password,
+            &directory.join("registry.json"),
+            Path::new("/etc"),
+        )
+    })
 }
 
 #[cfg(test)]
@@ -410,6 +452,34 @@ mod tests {
         login("luma-admin").unwrap();
         fresh(Instant::now()).unwrap();
         assert!(fresh(Instant::now() - Duration::from_secs(31)).is_err());
+    }
+    #[test]
+    fn complete_observation_is_bounded_before_and_after_projection() {
+        use std::cell::Cell;
+        let read_completed = Cell::new(false);
+        let checks = Cell::new(0);
+        let result = fresh_observation(
+            || {
+                checks.set(checks.get() + 1);
+                if read_completed.get() {
+                    return Err("expired during identity read".into());
+                }
+                Ok(())
+            },
+            || {
+                read_completed.set(true);
+                Ok(serde_json::json!({"uid":1001}))
+            },
+        );
+        assert!(result.is_err());
+        assert_eq!(checks.get(), 2);
+        assert!(fresh_observation(
+            || Err("already expired".into()),
+            || -> Result<()> { panic!("expired observation read") }
+        )
+        .is_err());
+        assert!(authenticate_peer(0, || panic!("root peer reached PAM")).is_err());
+        assert!(authenticate_peer(1000, || panic!("ordinary peer reached PAM")).is_err());
     }
     #[test]
     fn existing_owner_hex_is_bounded_and_decoded_in_locked_memory() {

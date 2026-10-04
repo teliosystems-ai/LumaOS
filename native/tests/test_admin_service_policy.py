@@ -33,6 +33,14 @@ class AdminServicePolicyTests(unittest.TestCase):
         self.assertNotIn('password: Vec', source)
         self.assertNotIn('Operation::Bootstrap', source)
         self.assertIn('require_confined()?;', source)
+        for name, fixture in (('authentication.rs', 'fixture_peer_account'),
+                              ('admin_governance.rs', 'fixture_service_request')):
+            implementation = (ROOT / 'rust/luma-platform/src' / name).read_text()
+            self.assertIn('#[cfg(test)]\npub(crate) fn ' + fixture, implementation)
+            self.assertNotIn(fixture, implementation.split('#[cfg(test)]')[0])
+        main = (ROOT / 'rust/luma-platform/src/main.rs').read_text()
+        self.assertNotIn('fixture_peer_account', main)
+        self.assertNotIn('fixture_service_request', main)
 
     def test_profile_does_not_write_enrollment_or_expose_worker_data(self):
         profile = (ROOT / 'native/image/overlay/etc/apparmor.d/luma-admin').read_text()

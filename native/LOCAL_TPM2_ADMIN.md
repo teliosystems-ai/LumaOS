@@ -593,6 +593,13 @@ source/kernel-peer checks and policy parsing from still-required installed
 AppArmor/seccomp enforcement, full PAM-to-TPM execution and interruption tests.
 Never treat the protocol fixture as evidence that those installed flows passed.
 
+The subsequent [real PAM composition checkpoint](evidence/G2_ADMIN_PAM_COMPOSITION_2026-10-04.md)
+adds 17 socket requests through genuine PAM and the disposable native TPM
+catalog adapter. It also bounds the complete authenticated identity projection
+before and after its account reads. These checks improve source-level coverage;
+they do not start the installed confined service, qualify enrollment/bootstrap
+or replace the consolidated image tests above.
+
 ## Future installer variant: external protected service
 
 Deferred TODO: a separate `external-admin` installation variant with authenticated

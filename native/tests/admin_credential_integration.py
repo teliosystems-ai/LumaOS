@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import pwd
 import subprocess
 import tempfile
 import time
@@ -103,12 +104,50 @@ def main(enrollment=False):
                                 'admin_enrollment::tests::emulator_enrollment',
                                 '--', '--ignored', '--exact', '--nocapture'],
                                env=env, check=True, timeout=300)
-                if enrollment == 'bootstrap':
+                if enrollment in ('bootstrap', 'service-pam'):
                     subprocess.run(['cargo', 'test', '--offline', '--locked',
                                     'admin_governance::tests::emulator_bootstrap',
                                     '--', '--ignored', '--exact', '--nocapture'],
                                    env=env, check=True, timeout=300)
                     print('ADMIN_BOOTSTRAP_EXISTING_OWNER_SOFTWARE_TPM_PASSED', flush=True)
+                    if enrollment == 'service-pam':
+                        # Only fresh disposable-container accounts. Never change
+                        # or delete a pre-existing account, host profile or TPM.
+                        for name, uid in (('human', 1001), ('otherhuman', 1002)):
+                            for lookup, value in ((pwd.getpwnam, name), (pwd.getpwuid, uid)):
+                                try:
+                                    lookup(value)
+                                except KeyError:
+                                    continue
+                                raise RuntimeError('refusing pre-existing PAM fixture identity')
+                        profile = Path('/etc/pam.d/luma-admin')
+                        with profile.open('xb') as stream:
+                            stream.write((Path(__file__).resolve().parents[2] /
+                                          'native/image/overlay/etc/pam.d/luma-admin').read_bytes())
+                        profile.chmod(0o644)
+                        password = os.urandom(32).hex().encode('ascii')
+                        with (work / 'account-password').open('xb') as stream:
+                            stream.write(password)
+                        for name, uid in (('human', 1001), ('otherhuman', 1002)):
+                            command(['useradd', '--uid', str(uid), '--no-create-home',
+                                     '--shell', '/bin/bash', name])
+                            subprocess.run(['chpasswd'], input=name.encode('ascii') + b':' + password + b'\n',
+                                           env=env, check=True, timeout=30,
+                                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                        identity = json.loads((work / 'admin/enrollment.json').read_bytes())['principal']
+                        registry = {'schema_version':1, 'installation':identity['installation'], 'principals':[
+                            {'id':identity['principal'], 'generation':identity['generation'],
+                             'login':'human', 'uid':1001, 'enabled':True},
+                            {'id':'cc' * 32, 'generation':1, 'login':'otherhuman', 'uid':1002, 'enabled':True},
+                        ]}
+                        with (work / 'registry.json').open('x', encoding='ascii') as stream:
+                            json.dump(registry, stream)
+                        subprocess.run(['cargo', 'test', '--offline', '--locked',
+                                        'admin_service::tests::pam_catalog_connection',
+                                        '--', '--ignored', '--exact', '--nocapture'],
+                                       env=env, check=True, timeout=300)
+                        print('ADMIN_SERVICE_PAM_KERNEL_PEER_TPM_CATALOG_CASES_PASSED=17 '
+                              'installed_service_tested=false confinement_enforced=false', flush=True)
                     return
                 def enrolled_delivery(mode):
                     subprocess.run(['cargo', 'test', '--offline', '--locked',

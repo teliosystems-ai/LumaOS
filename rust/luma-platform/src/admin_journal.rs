@@ -141,10 +141,16 @@ impl<A: Checkpoint> Store<A> {
         )
     }
 
-    /// Integrating services supply independently authenticated and authorized
-    /// records. This adapter never treats an event payload as an authorization.
+    /// Integrating services must authenticate and authorize this exact entry
+    /// before preparation and again at the last TPM-write boundary. This audit
+    /// adapter never treats a UID, event payload or successful callback as an
+    /// ordinary capability grant; effect policy remains the owning service's job.
     #[cfg_attr(not(test), allow(dead_code))] // Trusted service integration is pending.
-    pub fn append(&mut self, entry: Entry) -> Result<()> {
+    pub(crate) fn append(
+        &mut self,
+        entry: Entry,
+        mut authorize: impl FnMut(&Entry) -> Result<()>,
+    ) -> Result<()> {
         self.status()?;
         if self
             .journal
@@ -160,12 +166,13 @@ impl<A: Checkpoint> Store<A> {
         let before = head(&self.journal)?;
         let digest = entry_digest(&self.journal.deployment, self.journal.entries.len(), &entry)?;
         let mut next = self.journal.clone();
-        next.entries.push(entry);
+        next.entries.push(entry.clone());
         let after = head(&next)?;
         let bytes = serde_json::to_vec(&next)?;
         if bytes.len() as u64 > MAX_BYTES {
             return Err("Admin journal capacity exhausted".into());
         }
+        authorize(&entry)?;
         // Commit the complete proposed bytes first. This persistent fence is
         // retained on an uncertain TPM write; neither startup nor retries
         // redispatch. Publication is audit-only, not an external effect.
@@ -174,6 +181,21 @@ impl<A: Checkpoint> Store<A> {
             return Err("pending Admin checkpoint; reconciliation required".into());
         }
         platform::write_atomic(&at, &bytes, 0o600)?;
+        authorize(&entry)?;
+        // Sync may block long enough for authentication, identity, epoch or
+        // policy to change. Keep the proposal as a fence on any refusal; never
+        // infer that an uncertain write can be redispatched or discarded.
+        let (current, _) = read_journal(&self.path)?;
+        let (_, prepared_bytes) = read_journal(&at)?;
+        if head(&current)? != before || prepared_bytes != bytes || self.anchor.read()? != before {
+            return Err(
+                "Admin append inputs changed before TPM dispatch; preserve proposal".into(),
+            );
+        }
+        self.anchor.clock()?.elapsed_since(entry.clock)?;
+        // Revalidation reads can themselves block. Require the owning service
+        // to renew its exact writer check after them, directly before dispatch.
+        authorize(&entry)?;
         if self.anchor.advance(before, digest)? != after {
             return Err("Admin checkpoint outcome ambiguous; reconciliation required".into());
         }
@@ -412,8 +434,8 @@ mod tests {
     fn append_survives_restart_and_rejects_disk_rollback() {
         let (path, initial, anchor) = fixture("restart");
         let mut store = Store::open(anchor.clone(), &path).unwrap();
-        store.append(entry()).unwrap();
-        assert!(store.append(entry()).is_err());
+        store.append(entry(), |_| Ok(())).unwrap();
+        assert!(store.append(entry(), |_| Ok(())).is_err());
         drop(store);
         Store::open(anchor.clone(), &path)
             .unwrap()
@@ -421,6 +443,133 @@ mod tests {
             .unwrap();
         platform::write_atomic(&path, &serde_json::to_vec(&initial).unwrap(), 0o600).unwrap();
         assert!(Store::open(anchor, &path).is_err());
+        cleanup(&path);
+    }
+    #[test]
+    fn append_requires_exact_writer_authorization_at_both_boundaries() {
+        let (path, _, mut anchor) = fixture("writer-authorization");
+        let initial = anchor.read().unwrap();
+        let mut store = Store::open(anchor.clone(), &path).unwrap();
+        assert!(store
+            .append(entry(), |observed| {
+                assert_eq!(observed, &entry());
+                Err("actor denied".into())
+            })
+            .is_err());
+        assert!(!has_pending(&path).unwrap());
+        assert_eq!(anchor.read().unwrap(), initial);
+        let calls = std::cell::Cell::new(0);
+        store
+            .append(entry(), |observed| {
+                assert_eq!(observed, &entry());
+                calls.set(calls.get() + 1);
+                Ok(())
+            })
+            .unwrap();
+        assert_eq!(calls.get(), 3);
+        assert_eq!(store.status().unwrap()["events"], 1);
+        cleanup(&path);
+    }
+    #[test]
+    fn writer_revocation_after_durable_preparation_fences_without_tpm_dispatch() {
+        let (path, _, mut anchor) = fixture("writer-revoked");
+        let initial = anchor.read().unwrap();
+        let original = fs::read(&path).unwrap();
+        let read_only = ReadOnly {
+            value: anchor.0.clone(),
+            clock: Rc::new(RefCell::new(Clock {
+                milliseconds: 10,
+                reset_count: 0,
+                restart_count: 0,
+            })),
+        };
+        let mut store = Store::open(read_only, &path).unwrap();
+        let calls = std::cell::Cell::new(0);
+        assert!(store
+            .append(entry(), |observed| {
+                assert_eq!(observed, &entry());
+                calls.set(calls.get() + 1);
+                if calls.get() == 2 {
+                    assert!(has_pending(&path)?);
+                    Err("expired/revoked writer".into())
+                } else {
+                    Ok(())
+                }
+            })
+            .is_err());
+        assert_eq!(calls.get(), 2);
+        assert_eq!(anchor.read().unwrap(), initial);
+        assert_eq!(fs::read(&path).unwrap(), original);
+        assert!(has_pending(&path).unwrap());
+        assert!(Store::open(anchor, &path).is_err());
+        assert!(store
+            .append(entry(), |_| panic!("uncertain proposal cannot be retried"))
+            .is_err());
+        cleanup(&path);
+    }
+    #[test]
+    fn changed_append_files_or_tpm_epoch_refuse_before_dispatch() {
+        for mode in ["pending", "current", "epoch"] {
+            let (path, _, mut anchor) = fixture(&format!("writer-change-{mode}"));
+            let initial = anchor.read().unwrap();
+            let clock = Rc::new(RefCell::new(Clock {
+                milliseconds: 10,
+                reset_count: 0,
+                restart_count: 0,
+            }));
+            let read_only = ReadOnly {
+                value: anchor.0.clone(),
+                clock: clock.clone(),
+            };
+            let mut store = Store::open(read_only, &path).unwrap();
+            let calls = std::cell::Cell::new(0);
+            assert!(store
+                .append(entry(), |_| {
+                    calls.set(calls.get() + 1);
+                    if calls.get() == 2 {
+                        match mode {
+                            "pending" => fs::write(pending(&path), b"changed proposal")?,
+                            "current" => fs::write(&path, b"changed original")?,
+                            _ => clock.borrow_mut().restart_count += 1,
+                        }
+                    }
+                    Ok(())
+                })
+                .is_err());
+            assert_eq!(calls.get(), 2);
+            assert_eq!(anchor.read().unwrap(), initial);
+            assert!(has_pending(&path).unwrap());
+            cleanup(&path);
+        }
+    }
+    #[test]
+    fn expired_writer_during_final_revalidation_never_dispatches() {
+        let (path, _, mut anchor) = fixture("writer-final-expiry");
+        let initial = anchor.read().unwrap();
+        let read_only = ReadOnly {
+            value: anchor.0.clone(),
+            clock: Rc::new(RefCell::new(Clock {
+                milliseconds: 10,
+                reset_count: 0,
+                restart_count: 0,
+            })),
+        };
+        let mut store = Store::open(read_only, &path).unwrap();
+        let calls = std::cell::Cell::new(0);
+        assert!(store
+            .append(entry(), |observed| {
+                assert_eq!(observed, &entry());
+                calls.set(calls.get() + 1);
+                if calls.get() == 3 {
+                    Err("authority expired during proof readback".into())
+                } else {
+                    Ok(())
+                }
+            })
+            .is_err());
+        assert_eq!(calls.get(), 3);
+        assert_eq!(anchor.read().unwrap(), initial);
+        assert!(has_pending(&path).unwrap());
         cleanup(&path);
     }
     #[test]
@@ -457,10 +606,10 @@ mod tests {
         let (path, _, mut anchor) = fixture("ambiguous");
         anchor.1 = true;
         let mut store = Store::open(anchor.clone(), &path).unwrap();
-        assert!(store.append(entry()).is_err());
+        assert!(store.append(entry(), |_| Ok(())).is_err());
         let after = anchor.read().unwrap();
         assert!(pending(&path).exists());
-        assert!(store.append(entry()).is_err());
+        assert!(store.append(entry(), |_| Ok(())).is_err());
         assert_eq!(anchor.read().unwrap(), after);
         assert!(Store::open(anchor, &path).is_err());
         cleanup(&path);
@@ -525,7 +674,7 @@ mod tests {
         let (path, mut next, mut anchor) = fixture(label);
         anchor.1 = true;
         let mut store = Store::open(anchor.clone(), &path).unwrap();
-        assert!(store.append(entry()).is_err()); // NV applied; reply lost.
+        assert!(store.append(entry(), |_| Ok(())).is_err()); // NV applied; reply lost.
         next.entries.push(entry());
         let read_only = ReadOnly {
             value: anchor.0,
@@ -663,7 +812,7 @@ mod tests {
     fn recovery_cannot_replace_a_committed_prefix() {
         let (path, mut initial, anchor) = fixture("prefix");
         let mut store = Store::open(anchor.clone(), &path).unwrap();
-        store.append(entry()).unwrap();
+        store.append(entry(), |_| Ok(())).unwrap();
         initial.entries.push(entry());
         let mut second = entry();
         second.request_id = "second".into();

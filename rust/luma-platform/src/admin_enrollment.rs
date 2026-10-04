@@ -616,8 +616,27 @@ fn commit<A: Checkpoint>(
     )
 }
 
-/// Review of an already TPM-committed but unpublished inert enrollment.
-/// This never provisions, extends, clears or repairs an uncommitted proposal.
+/// Return the sole retained proposal location. A final directory is accepted
+/// only as a candidate for full TPM/byte verification, never proof by itself.
+fn committed_location<'a>(pending: &'a Path, final_path: &'a Path) -> Result<(&'a Path, bool)> {
+    let parent = pending.parent().ok_or("missing enrollment parent")?;
+    if Some(parent) != final_path.parent() || pending == final_path {
+        return Err("invalid committed enrollment destinations".into());
+    }
+    let metadata = fs::symlink_metadata(parent)?;
+    if !metadata.is_dir() || metadata.uid() != 0 || metadata.mode() & 0o022 != 0 {
+        return Err("unsafe committed enrollment parent".into());
+    }
+    match (private_presence(pending)?, private_presence(final_path)?) {
+        (true, false) => Ok((pending, false)),
+        (false, true) => Ok((final_path, true)),
+        _ => Err("committed enrollment requires exactly one complete retained directory".into()),
+    }
+}
+
+/// Review of an already TPM-committed inert enrollment. Exact final-state
+/// replay recovers a lost publication acknowledgement without provisioning,
+/// extending, clearing or repairing an uncommitted proposal.
 struct PendingRecovery<A: Checkpoint> {
     anchor: A,
     intent: ParentIntent,
@@ -632,6 +651,7 @@ struct PendingRecovery<A: Checkpoint> {
     signature: Vec<u8>,
     observed: tpm::Clock,
     review: String,
+    already_published: bool,
 }
 impl<A: Checkpoint> PendingRecovery<A> {
     #[allow(clippy::too_many_arguments)]
@@ -648,11 +668,10 @@ impl<A: Checkpoint> PendingRecovery<A> {
         public: Vec<u8>,
         signature: Vec<u8>,
     ) -> Result<Self> {
-        if !private_presence(pending)? || private_presence(final_path)? {
-            return Err("pending enrollment publication requires sole pending directory".into());
-        }
+        let observed = anchor.clock()?;
+        let (directory, already_published) = committed_location(pending, final_path)?;
         intent.recheck_bound(parent_path, &parent_name)?;
-        proposal.recheck(pending)?;
+        proposal.recheck(directory)?;
         if ParentIntent::new(
             intent.record.clone(),
             &proposal.deployment,
@@ -670,7 +689,7 @@ impl<A: Checkpoint> PendingRecovery<A> {
         if anchor.read()? != expected {
             return Err("pending enrollment is not the exact TPM-committed genesis".into());
         }
-        let observed = anchor.clock()?;
+        anchor.clock()?.elapsed_since(observed)?;
         let mut digest = Sha256::new();
         digest.update(b"luma-enrollment-pending-publication-v1\0");
         digest.update(&intent.record);
@@ -701,34 +720,30 @@ impl<A: Checkpoint> PendingRecovery<A> {
             signature,
             observed,
             review: bundle::hex(&digest.finalize()),
+            already_published,
         })
     }
 
     fn report(&self) -> Result<serde_json::Value> {
         Ok(
-            serde_json::json!({"schema_version":1,"phase":"committed_pending_publication",
+            serde_json::json!({"schema_version":1,"phase":if self.already_published {
+                "verified_published_enrollment" } else { "committed_pending_publication" },
             "deployment":self.proposal.deployment,"review_sha256":self.review,
             "expected_head":bundle::hex(&tpm::extend_value([0; 32],
                 admin_journal::genesis(&self.proposal.deployment)?)),
-            "product_admin_active":false,"role_grant":false,"published":false,
+            "product_admin_active":false,"role_grant":false,"published":self.already_published,
             "observation_is_attestation":false,"tpm_write_performed":false}),
         )
     }
 
-    fn publish(
-        mut self,
-        reviewed: &str,
-        authorize: impl FnOnce() -> Result<()>,
-    ) -> Result<serde_json::Value> {
-        tpm::decode::<32>(reviewed)?;
-        if reviewed != self.review {
-            return Err("pending enrollment review digest mismatch".into());
-        }
-        authorize()?;
+    fn recheck(&mut self) -> Result<PathBuf> {
         self.intent
             .recheck_bound(&self.parent_path, &self.parent_name)?;
-        self.proposal.recheck(&self.pending)?;
-        absent(&self.final_path)?;
+        let (directory, already_published) = committed_location(&self.pending, &self.final_path)?;
+        if already_published != self.already_published {
+            return Err("enrollment location changed after review; inspect again".into());
+        }
+        self.proposal.recheck(directory)?;
         if credentials::public_input(&self.public_path, 4096)? != self.public
             || credentials::public_input(&self.signature_path, 16384)? != self.signature
         {
@@ -740,21 +755,60 @@ impl<A: Checkpoint> PendingRecovery<A> {
         if self.anchor.read()? != expected {
             return Err("pending enrollment TPM head changed after review".into());
         }
-        publish(&self.pending, &self.final_path)?;
+        Ok(directory.to_path_buf())
+    }
+
+    fn publish(
+        mut self,
+        reviewed: &str,
+        mut authorize: impl FnMut() -> Result<()>,
+    ) -> Result<serde_json::Value> {
+        tpm::decode::<32>(reviewed)?;
+        if reviewed != self.review {
+            return Err("pending enrollment review digest mismatch".into());
+        }
+        authorize()?;
+        let directory = self.recheck()?;
+        // Sync exact existing bytes before publication/replay, including a
+        // retry after rename succeeded but directory-sync acknowledgement was lost.
+        for (name, _) in &self.proposal.files {
+            OpenOptions::new()
+                .read(true)
+                .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC)
+                .open(directory.join(name))?
+                .sync_all()?;
+        }
+        File::open(&directory)?.sync_all()?;
+        authorize()?;
+        if self.recheck()? != directory {
+            return Err("enrollment location changed before publication".into());
+        }
+        if !self.already_published {
+            publish(&self.pending, &self.final_path)?;
+        } else {
+            File::open(
+                self.final_path
+                    .parent()
+                    .ok_or("missing enrollment parent")?,
+            )?
+            .sync_all()?;
+        }
         self.proposal.recheck(&self.final_path)?;
         let checkpoint =
             admin_journal::Store::open(self.anchor, &self.final_path.join("journal.json"))?
                 .status()?;
         Ok(
             serde_json::json!({"schema_version":1,"checkpoint_enrolled":true,
-            "published":true,"product_admin_active":false,"role_grant":false,
+            "published":true,"replayed":self.already_published,
+            "filesystem_publication_performed":!self.already_published,
+            "tpm_write_performed":false,"product_admin_active":false,"role_grant":false,
             "gate_closing":false,"checkpoint":checkpoint}),
         )
     }
 }
 
-/// Inspect or explicitly publish an already committed pending enrollment.
-/// Inspection does not authenticate a human; publication requires fresh PAM.
+/// Inspect, publish or replay an exact already committed enrollment.
+/// Inspection does not authenticate a human; publication/replay requires fresh PAM.
 /// No branch repeats a TPM write or repairs a vacant/wrong index.
 pub fn reconcile_pending(username: Option<&str>, reviewed: Option<&str>) -> Result<()> {
     crate::require_root()?;
@@ -766,9 +820,7 @@ pub fn reconcile_pending(username: Option<&str>, reviewed: Option<&str>) -> Resu
     let parent_path = Path::new(PARENT_INTENT);
     let pending = Path::new(PENDING);
     let final_path = Path::new(credentials::DIRECTORY);
-    if !private_presence(pending)? || private_presence(final_path)? {
-        return Err("no sole pending enrollment proposal to review".into());
-    }
+    let (directory, _) = committed_location(pending, final_path)?;
     let (intent, name) = ParentIntent::read_for_inspection(parent_path)?;
     let name = name.ok_or("unbound parent intent cannot publish pending enrollment")?;
     if tpm::enrollment_handles(Some(&name))? != (true, true, true) {
@@ -779,9 +831,9 @@ pub fn reconcile_pending(username: Option<&str>, reviewed: Option<&str>) -> Resu
     let public = credentials::public_input(public_path, 4096)?;
     let signature = credentials::public_input(signature_path, 16384)?;
     owner_credential::verify_boot(&public, &signature)?;
-    let proposal = Proposal::from_pending(pending, &intent, &name, &public)?;
+    let proposal = Proposal::from_pending(directory, &intent, &name, &public)?;
     let (config, secret) = credentials::load_at(
-        pending,
+        directory,
         public_path,
         signature_path,
         owner_credential::unseal,
@@ -944,11 +996,58 @@ mod tests {
         .unwrap()
     }
 
+    fn recover_emulator_proposal(root: &Path) -> PendingRecovery<tpm::LocalAnchor> {
+        let parent_path = root.join("pending-parent-intent");
+        let pending = root.join("pending-enrollment");
+        let final_path = root.join("pending-admin");
+        let public_path = root.join("pcr-public.pem");
+        let signature_path = root.join("pcr-signature.json");
+        let public = credentials::public_input(&public_path, 4096).unwrap();
+        let signature = credentials::public_input(&signature_path, 16384).unwrap();
+        owner_credential::fixture_verify_boot(root, &public, &signature).unwrap();
+        let (intent, name) = ParentIntent::read_for_inspection(&parent_path).unwrap();
+        let name = name.unwrap();
+        let (directory, _) = committed_location(&pending, &final_path).unwrap();
+        let proposal = Proposal::from_pending(directory, &intent, &name, &public).unwrap();
+        let (_, secret) =
+            credentials::load_at(directory, &public_path, &signature_path, |d, n, p, b, s| {
+                owner_credential::fixture_unseal(root, d, n, p, b, s)
+            })
+            .unwrap();
+        let anchor = tpm::LocalAnchor::pending_enrollment_fixture(
+            root,
+            &secret,
+            tpm::exclusive_lock(&root.join("recovery.lock")).unwrap(),
+        )
+        .unwrap();
+        drop(secret);
+        PendingRecovery::inspect(
+            anchor,
+            intent,
+            proposal,
+            name,
+            &parent_path,
+            &pending,
+            &final_path,
+            &public_path,
+            &signature_path,
+            public,
+            signature,
+        )
+        .unwrap()
+    }
+
     #[test]
     #[ignore = "requires fresh isolated existing-owner pending enrollment TPM fixture"]
     fn emulator_pending_enrollment_publication() {
         let root = PathBuf::from(std::env::var("LUMA_TPM_TEST_DIRECTORY").unwrap());
         let mode = std::env::var("LUMA_TPM_TEST_PENDING").unwrap();
+        if mode == "publication-child" {
+            let recovery = recover_emulator_proposal(&root);
+            let review = std::env::var("LUMA_TPM_TEST_REVIEW").unwrap();
+            recovery.publish(&review, || Ok(())).unwrap();
+            panic!("publication fault did not interrupt the child");
+        }
         let public_path = root.join("pcr-public.pem");
         let signature_path = root.join("pcr-signature.json");
         let public = credentials::public_input(&public_path, 4096).unwrap();
@@ -1039,15 +1138,46 @@ mod tests {
             assert!(pending.is_dir() && !final_path.exists());
             return;
         }
-        assert_eq!(mode, "committed");
         let recovery = recovery.unwrap();
         let review = recovery.report().unwrap()["review_sha256"]
             .as_str()
             .unwrap()
             .to_owned();
+        let expected_replay = mode == "lost-after-rename";
+        let recovery = if matches!(mode.as_str(), "lost-before-rename" | "lost-after-rename") {
+            drop(recovery); // The child owns the native lock during interruption.
+            let exit = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--ignored",
+                    "--exact",
+                    "admin_enrollment::tests::emulator_pending_enrollment_publication",
+                    "--nocapture",
+                ])
+                .env("LUMA_TPM_TEST_PENDING", "publication-child")
+                .env("LUMA_TPM_TEST_REVIEW", &review)
+                .env("LUMA_TPM_TEST_PUBLICATION_FAULT", &mode)
+                .env("LD_PRELOAD", "/tmp/luma-enrollment-publication-faults.so")
+                .status()
+                .unwrap();
+            assert_eq!(exit.code(), Some(if expected_replay { 95 } else { 94 }));
+            let reopened = recover_emulator_proposal(&root);
+            assert_eq!(reopened.already_published, expected_replay);
+            assert_eq!(reopened.review, review);
+            reopened
+        } else {
+            assert_eq!(mode, "committed");
+            recovery
+        };
         let result = recovery.publish(&review, || Ok(())).unwrap();
         assert_eq!(result["published"], true);
+        assert_eq!(result["replayed"], expected_replay);
         assert!(!pending.exists());
+        let replay = recover_emulator_proposal(&root);
+        assert_eq!(replay.review, review);
+        let replayed = replay.publish(&review, || Ok(())).unwrap();
+        assert_eq!(replayed["replayed"], true);
+        assert_eq!(replayed["filesystem_publication_performed"], false);
+        assert_eq!(replayed["tpm_write_performed"], false);
         let (_, delivered) = credentials::load_at(
             &final_path,
             &public_path,
@@ -1297,6 +1427,52 @@ mod tests {
                 admin_journal::genesis(&self.proposal.deployment).unwrap(),
             ))
         }
+        fn prepare_recovery(&self) {
+            platform::write_atomic(&self.root.join("pcr-public.pem"), b"public fixture", 0o644)
+                .unwrap();
+            platform::write_atomic(
+                &self.root.join("pcr-signature.json"),
+                b"signed fixture",
+                0o644,
+            )
+            .unwrap();
+            let intent = ParentIntent::new(
+                self.proposal.files[3].1.clone(),
+                &self.proposal.deployment,
+                b"public fixture",
+                b"signed fixture",
+            )
+            .unwrap();
+            let parent_path = self.root.join("parent-intent");
+            intent
+                .prepare(&parent_path, &self.pending, &self.final_path)
+                .unwrap();
+            let name = self.proposal.files[4].1.clone().try_into().unwrap();
+            intent.bind_name(&parent_path, &name).unwrap();
+            self.proposal
+                .prepare(&self.pending, &self.final_path)
+                .unwrap();
+        }
+        fn recovery<A: Checkpoint>(&self, anchor: A) -> Result<PendingRecovery<A>> {
+            let parent_path = self.root.join("parent-intent");
+            let (intent, name) = ParentIntent::read_for_inspection(&parent_path)?;
+            let name = name.ok_or("missing fixture parent")?;
+            let (directory, _) = committed_location(&self.pending, &self.final_path)?;
+            let proposal = Proposal::from_pending(directory, &intent, &name, b"public fixture")?;
+            PendingRecovery::inspect(
+                anchor,
+                intent,
+                proposal,
+                name,
+                &parent_path,
+                &self.pending,
+                &self.final_path,
+                &self.root.join("pcr-public.pem"),
+                &self.root.join("pcr-signature.json"),
+                b"public fixture".to_vec(),
+                b"signed fixture".to_vec(),
+            )
+        }
     }
     impl Drop for Fixture {
         fn drop(&mut self) {
@@ -1317,6 +1493,154 @@ mod tests {
         }
         fn advance(&mut self, _: [u8; 32], _: [u8; 32]) -> Result<[u8; 32]> {
             panic!("enrollment must not append/retry")
+        }
+    }
+    #[test]
+    fn published_enrollment_replay_keeps_review_and_requires_fresh_authority() {
+        let f = Fixture::new("published-replay");
+        f.prepare_recovery();
+        let recovery = f.recovery(f.anchor()).unwrap();
+        let review = recovery.review.clone();
+        let result = recovery.publish(&review, || Ok(())).unwrap();
+        assert_eq!(result["replayed"], false);
+        assert_eq!(result["filesystem_publication_performed"], true);
+        let recovery = f.recovery(f.anchor()).unwrap();
+        assert_eq!(
+            recovery.report().unwrap()["phase"],
+            "verified_published_enrollment"
+        );
+        assert_eq!(recovery.review, review);
+        assert!(recovery
+            .publish(&review, || Err("authentication revoked".into()))
+            .is_err());
+        f.proposal.recheck(&f.final_path).unwrap();
+        let calls = Cell::new(0);
+        let result = f
+            .recovery(f.anchor())
+            .unwrap()
+            .publish(&review, || {
+                calls.set(calls.get() + 1);
+                Ok(())
+            })
+            .unwrap();
+        assert_eq!(calls.get(), 2);
+        assert_eq!(result["replayed"], true);
+        assert_eq!(result["filesystem_publication_performed"], false);
+        assert_eq!(result["tpm_write_performed"], false);
+        assert_eq!(result["product_admin_active"], false);
+        f.proposal.recheck(&f.final_path).unwrap();
+        assert!(!f.pending.exists());
+    }
+    #[test]
+    fn publication_and_replay_revalidate_authority_after_storage_sync() {
+        for published in [false, true] {
+            let f = Fixture::new(if published {
+                "replay-revoke"
+            } else {
+                "publish-revoke"
+            });
+            f.prepare_recovery();
+            if published {
+                publish(&f.pending, &f.final_path).unwrap();
+            }
+            let recovery = f.recovery(f.anchor()).unwrap();
+            let review = recovery.review.clone();
+            let calls = Cell::new(0);
+            assert!(recovery
+                .publish(&review, || {
+                    calls.set(calls.get() + 1);
+                    if calls.get() == 2 {
+                        Err("expired while syncing".into())
+                    } else {
+                        Ok(())
+                    }
+                })
+                .is_err());
+            assert_eq!(calls.get(), 2);
+            let (directory, actual) = committed_location(&f.pending, &f.final_path).unwrap();
+            assert_eq!(actual, published);
+            f.proposal.recheck(directory).unwrap();
+        }
+    }
+    #[test]
+    fn published_replay_refuses_changed_bytes_wrong_head_and_competing_pending() {
+        let f = Fixture::new("replay-fences");
+        f.prepare_recovery();
+        publish(&f.pending, &f.final_path).unwrap();
+        assert!(f.recovery(Fake([0; 32])).is_err());
+        let recovery = f.recovery(f.anchor()).unwrap();
+        let review = recovery.review.clone();
+        assert!(recovery
+            .publish(&review, || {
+                fs::write(f.final_path.join("nv-auth.cred"), b"substituted")?;
+                Ok(())
+            })
+            .is_err());
+        fs::write(f.final_path.join("nv-auth.cred"), &f.proposal.files[1].1).unwrap();
+        fs::DirBuilder::new()
+            .mode(0o700)
+            .create(&f.pending)
+            .unwrap();
+        assert!(f.recovery(f.anchor()).is_err());
+        assert!(f.pending.is_dir() && f.final_path.is_dir());
+    }
+    #[test]
+    fn changed_tpm_epoch_after_sync_refuses_publication_or_replay() {
+        struct EpochAnchor {
+            head: [u8; 32],
+            clock: std::rc::Rc<Cell<tpm::Clock>>,
+        }
+        impl Checkpoint for EpochAnchor {
+            fn read(&mut self) -> Result<[u8; 32]> {
+                Ok(self.head)
+            }
+            fn clock(&mut self) -> Result<tpm::Clock> {
+                Ok(self.clock.get())
+            }
+            fn advance(&mut self, _: [u8; 32], _: [u8; 32]) -> Result<[u8; 32]> {
+                panic!("no TPM write")
+            }
+        }
+        for published in [false, true] {
+            let f = Fixture::new(if published {
+                "replay-epoch"
+            } else {
+                "publish-epoch"
+            });
+            f.prepare_recovery();
+            if published {
+                publish(&f.pending, &f.final_path).unwrap();
+            }
+            let clock = std::rc::Rc::new(Cell::new(tpm::Clock {
+                milliseconds: 1,
+                reset_count: 0,
+                restart_count: 0,
+            }));
+            let recovery = f
+                .recovery(EpochAnchor {
+                    head: f.anchor().0,
+                    clock: clock.clone(),
+                })
+                .unwrap();
+            let review = recovery.review.clone();
+            let calls = Cell::new(0);
+            assert!(recovery
+                .publish(&review, || {
+                    calls.set(calls.get() + 1);
+                    if calls.get() == 2 {
+                        clock.set(tpm::Clock {
+                            milliseconds: 2,
+                            reset_count: 0,
+                            restart_count: 1,
+                        });
+                    }
+                    Ok(())
+                })
+                .is_err());
+            assert_eq!(
+                committed_location(&f.pending, &f.final_path).unwrap().1,
+                published
+            );
         }
     }
     #[test]

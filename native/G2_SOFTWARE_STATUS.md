@@ -75,6 +75,20 @@ continuation and pending-state cases, and the offline native build passed.
 Unbound-parent and uncertain-NV recovery, installed operation and product
 Admin activation remain open.
 
+The [publication retry and writer authorization checkpoint](evidence/G2_ENROLLMENT_PUBLICATION_RETRY_2026-10-04.md)
+adds exact enrollment replay after a lost directory-publication acknowledgement.
+Fresh PAM remains mandatory for publication/replay; proof and authority are
+rechecked after storage synchronization. The native inert journal now requires
+the integrating service's authorization of the exact entry before preparation
+and before TPM dispatch, with disk/TPM/epoch checks at that boundary. These
+increments do not activate product Admin or complete the service/policy backlog.
+Forty-seven focused Rust tests, five pending/publication software-TPM cases,
+existing enrollment/continuation/credential and committed-journal recovery,
+two wiring checks, formatting and the offline native build passed on D-backed
+storage. The CI runner now invokes these fixtures and hashes their C interposer;
+syntax passed, but the full updated runner/remote CI were not executed here.
+Installed-image and physical qualification remain open.
+
 The earlier [disposable TPM feasibility experiment](evidence/G2_OWNER_CREDENTIAL_FEASIBILITY_2026-10-02.md)
 informed the native backend now integrated above. The targeted native tests
 exercise signed PCR 11 renewal, fixed PCR 7 denial, forged-signature refusal,

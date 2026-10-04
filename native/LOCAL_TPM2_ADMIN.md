@@ -80,6 +80,13 @@ not authenticate a human, assign roles, authorize an effect, dispatch a skill,
 or make an external side effect atomic with disk and TPM. There is no public
 append CLI. Integrating services must independently authenticate and
 authorize entries; an event containing a UID or role claim grants no authority.
+The native append API requires the trusted integrating service to authorize
+the exact entry before preparation and again immediately before TPM dispatch.
+The adapter rechecks the original journal, exact prepared bytes, TPM head and
+entry epoch at that boundary. Post-preparation refusal retains a fence without
+dispatch. This mandatory callback is not a complete product authenticator or
+role/grant service; see the
+[writer authorization checkpoint](evidence/G2_ENROLLMENT_PUBLICATION_RETRY_2026-10-04.md).
 TPM powered-time is not UTC. Epoch changes/regression invalidate boot-bound
 timing; catalog expiry still needs a reviewed trusted wall-clock design.
 
@@ -198,7 +205,7 @@ The transaction's intended output is an inert checkpoint, not finite Admin roles
 lifecycle, independent credential recovery, production signing custody, secure
 service confinement or resistance to a hostile OS root. Those remain open.
 
-### Exact committed-pending enrollment publication
+### Exact committed enrollment publication and replay
 
 If the five-file pending proposal exists and the final credential directory is
 absent, run `sudo luma-platform admin-checkpoint-enrollment-reconcile` to inspect
@@ -217,14 +224,28 @@ sudo luma-platform admin-checkpoint-enrollment-reconcile --publish-committed LOG
 The selected account must still be the original installation principal. The
 command rechecks the retained files, parent binding, boot inputs and TPM head
 after authentication, then no-replace renames the already committed proposal
-and opens the inert checkpoint. It never provisions, extends, replays or resets
-the TPM; it does not grant product Admin. A vacant NV index, wrong head, changed
-files/boot inputs, unbound or different parent, competing final directory, or
-uncertain TPM outcome remains fenced. Do not use it to retry a TPM write or
+and opens the inert checkpoint. Authority and proof are rechecked again after
+file synchronization, before publication. It never provisions, extends or
+resets the TPM; it does not grant product Admin. A vacant NV index, wrong head,
+changed files/boot inputs, unbound or different parent, simultaneous pending
+and final directories, or uncertain TPM outcome remains fenced. Do not use it to retry a TPM write or
 delete retained state. Targeted disposable-TPM tests cover committed, vacant
-and wrong-head cases; installed-image, real-hardware and interruption
+and wrong-head cases; installed-image, real-hardware and power-loss
 qualification remain pending. See the
 [pending-publication checkpoint](evidence/G2_PENDING_ENROLLMENT_PUBLICATION_2026-10-02.md).
+
+If publication succeeded but its acknowledgement was lost, inspection can also
+verify the sole final directory against the same retained proposal and exact
+authenticated TPM genesis. It reports `verified_published_enrollment`. The
+same review remains valid across directory publication within the same boot
+epoch and unchanged inputs. Explicit retry still requires the original
+principal and fresh PAM; it returns `replayed: true` without another rename or
+TPM write. It synchronizes the verified files/directories again instead of
+reconstructing missing state. The directory's existence alone is not proof.
+An advanced journal, changed boot inputs/epoch, partial or conflicting state
+does not qualify for this exact enrollment replay. This path does not activate
+Admin or implement general checkpoint recovery. See the
+[publication retry checkpoint](evidence/G2_ENROLLMENT_PUBLICATION_RETRY_2026-10-04.md).
 
 ## Explicit committed-audit publication recovery
 

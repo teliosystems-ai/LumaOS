@@ -76,6 +76,10 @@ def main(enrollment=False):
                          f'file:{work / "owner.hex"}'])
                 if isinstance(enrollment, str) and enrollment.startswith('pending-'):
                     mode = enrollment.removeprefix('pending-')
+                    if mode.startswith('lost-'):
+                        command(['cc', '-Wall', '-Wextra', '-Werror', '-shared', '-fPIC',
+                                 Path(__file__).parent / 'fixtures/enrollment_publication_faults.c',
+                                 '-o', '/tmp/luma-enrollment-publication-faults.so', '-ldl'])
                     subprocess.run(['cargo', 'test', '--offline', '--locked',
                                     'admin_enrollment::tests::emulator_pending_enrollment_publication',
                                     '--', '--ignored', '--exact', '--nocapture'],

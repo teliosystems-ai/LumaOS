@@ -18,12 +18,18 @@ cmp -- "$0" "$snapshot/native/tests/run_tpm_boundaries.sh"
 cd "$snapshot/rust"
 cargo fmt --check
 python3 "$snapshot/native/tests/tpm_integration.py" --repository "$snapshot" --output "$output"
+# Each helper guards fresh root tools containers and starts its own disposable
+# software TPM. Logs contain test outcomes, never hierarchy authorization or state.
+python3 -W error "$snapshot/native/tests/admin_enrollment_integration.py" 2>&1 | tee "$output/admin-enrollment.txt"
+python3 -W error "$snapshot/native/tests/admin_enrollment_resume_integration.py" 2>&1 | tee "$output/admin-enrollment-resume.txt"
+python3 -W error "$snapshot/native/tests/admin_enrollment_pending_integration.py" 2>&1 | tee "$output/admin-enrollment-publication.txt"
+python3 -W error "$snapshot/native/tests/admin_recovery_integration.py" 2>&1 | tee "$output/admin-journal-recovery.txt"
 python3 -W error -m unittest discover -s "$snapshot/native/tests" -v 2>&1 | tee "$output/native-tests.txt"
 cd "$snapshot"
 sha256sum rust/Cargo.toml rust/Cargo.lock rust/.cargo/config.toml \
     rust/luma-platform/Cargo.toml rust/luma-platform/build.rs \
     rust/luma-platform/src/*.rs rust/luma-platform/src/*.c \
-    native/tests/run_tpm_boundaries.sh native/tests/*.py native/image/*.py \
+    native/tests/run_tpm_boundaries.sh native/tests/*.py native/tests/fixtures/*.c native/image/*.py \
     native/image/overlay/usr/lib/dracut/modules.d/92luma-pcrphase/module-setup.sh \
     native/image/overlay/usr/lib/dracut/modules.d/91luma/*.sh \
     native/image/overlay/etc/pam.d/luma-admin \

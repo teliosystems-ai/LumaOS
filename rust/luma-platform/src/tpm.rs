@@ -1099,13 +1099,16 @@ mod tests {
         let clock: Clock =
             serde_json::from_value(store.status().unwrap()["clock"].clone()).unwrap();
         assert!(store
-            .append(Entry {
-                request_id: "emulator-recovery".into(),
-                authenticated_uid: 1001,
-                clock,
-                activity: "checkpoint.test".into(),
-                payload_sha256: "77".repeat(32),
-            })
+            .append(
+                Entry {
+                    request_id: "emulator-recovery".into(),
+                    authenticated_uid: 1001,
+                    clock,
+                    activity: "checkpoint.test".into(),
+                    payload_sha256: "77".repeat(32),
+                },
+                |_| Ok(())
+            )
             .is_err());
         drop(store);
         assert_eq!(fs::read(&path).unwrap(), original);
@@ -1197,13 +1200,16 @@ mod tests {
             let at: Clock =
                 serde_json::from_value(store.status().unwrap()["clock"].clone()).unwrap();
             store
-                .append(Entry {
-                    request_id: format!("emulator-{i}"),
-                    authenticated_uid: 1001,
-                    clock: at,
-                    activity: "checkpoint.test".into(),
-                    payload_sha256: format!("{i:064x}"),
-                })
+                .append(
+                    Entry {
+                        request_id: format!("emulator-{i}"),
+                        authenticated_uid: 1001,
+                        clock: at,
+                        activity: "checkpoint.test".into(),
+                        payload_sha256: format!("{i:064x}"),
+                    },
+                    |_| Ok(()),
+                )
                 .unwrap();
         }
         assert_eq!(store.status().unwrap()["events"], 16);

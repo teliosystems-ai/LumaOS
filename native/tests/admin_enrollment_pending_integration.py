@@ -3,5 +3,5 @@
 from admin_credential_integration import main
 
 if __name__ == '__main__':
-    for mode in ('committed', 'vacant', 'wrong-head'):
+    for mode in ('committed', 'vacant', 'wrong-head', 'lost-before-rename', 'lost-after-rename'):
         main(enrollment='pending-' + mode)

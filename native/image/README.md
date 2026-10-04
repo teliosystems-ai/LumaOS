@@ -208,6 +208,70 @@ scope and dependency qualification limits.
 The [reviewed legacy import checkpoint](../evidence/G2_ARTIFACT_IMPORT_2026-10-03.md)
 records source preservation and retry verification for the explicit copy path.
 
+## Durable native invoice workflow
+
+The native coordinator checkpoints the image-owned three-node invoice graph
+in a separate private ext4/SQLite WAL store at `/var/lib/luma-os/workflow-runs`.
+Fresh installation initializes it; an older installation needs explicit
+`sudo luma-platform workflow-store-init`. Existing state is never reset.
+Previously exported images do not yet contain this implementation.
+
+On a candidate containing it:
+
+```sh
+sudo luma-platform workflow-invoice-prepare workflow-001 monthly-invoices 0 < invoices.csv
+sudo luma-platform workflow-invoice-status workflow-001
+sudo luma-platform workflow-invoice-advance workflow-001 REVIEW-SHA256
+```
+
+Use the `review_sha256` from the latest status or outcome for each new advance.
+The normal sequence is `prepared -> source-read -> calculated -> completed`;
+publication first commits an `applying` checkpoint before calling the artifact
+catalog. Each command performs one next step, not arbitrary DAG execution.
+The input is an immutable operator-stdin snapshot; the first node reads that
+private snapshot, not an enrolled external folder. Source/report bytes are
+synchronized before their transactional checkpoints become authoritative.
+
+Repeating an acknowledged step's input review returns its saved outcome without
+advancing another node. Older unrelated reviews are refused. Each advance,
+including replay, requires the original graph to remain admitted by the current
+signed registry. An interruption in `applying` is not successful completion or
+proof of cancellation: inspect status and explicitly advance with the current
+review or retry the original publication review. The catalog's exact receipt
+provides idempotent recovery. A completed run verifies its existing receipt;
+it does not recreate an absent one after catalog rollback or reset a later
+artifact version. No startup loop automatically resumes work.
+
+Before `applying`, cancellation is an explicit command:
+
+```sh
+sudo luma-platform workflow-invoice-cancel workflow-001 REVIEW-SHA256
+```
+
+An accepted cancellation persists and blocks further execution. Retrying its
+original review is idempotent. A withdrawn signed workflow still permits this
+authority-reducing cancellation, but not advancement. Once publication may
+have started, cancellation is refused; it cannot claim to undo an artifact.
+Concurrent ownership is also refused, not reported as an accepted cancellation.
+Lost connections and expired client expectations do not imply rollback.
+
+`workflow-store-status` exposes retained object preparations. Exact complete
+preparations can resume; partial bytes are never overwritten or automatically
+deleted. These and unreferenced objects consume the 64 MiB/512-file bound.
+The coordinator admits at most 256 runs; metadata has a separate 4,096-page
+limit. Unknown layouts/formats, missing objects and invalid checkpoint chains
+fail closed. Retention/GC, general migration and pressure qualification remain
+open; do not delete state to bypass a fence. Keep SQL writers/checkpoint tools
+offline while the native owner holds its exclusive directory lock. Offline
+recovery archives include this store through `lib/luma-os`.
+
+This is an installed-root laboratory workflow, not the product Admin service,
+principal-bound folder/effect grants, generic DAG scheduler or complete public
+artifact schema. No shell, generated code, model authority or ambient folder
+access is introduced. Integrated service/account/grant delivery, trusted time,
+broader cancellation/interruption cases and distributed-image qualification
+remain required. See the [workflow checkpoint](../evidence/G2_WORKFLOW_RUNS_2026-10-04.md).
+
 ## Model selection and installation
 
 Run `luma-platform models` for this image's exact options. The installer prompts

@@ -74,7 +74,7 @@ impl Receipt {
     }
 }
 
-fn ext4(root: &File) -> Result<()> {
+pub(crate) fn ext4(root: &File) -> Result<()> {
     let mut observation: libc::statfs = unsafe { std::mem::zeroed() };
     if unsafe { libc::fstatfs(root.as_raw_fd(), &mut observation) } != 0
         || observation.f_type != 0xef53
@@ -84,7 +84,7 @@ fn ext4(root: &File) -> Result<()> {
     Ok(())
 }
 
-fn safe_path(path: &Path) -> Result<()> {
+pub(crate) fn safe_path(path: &Path) -> Result<()> {
     if !path.is_absolute() || fs::canonicalize(path)? != path {
         return Err("artifact catalog requires a canonical absolute path".into());
     }
@@ -657,6 +657,70 @@ fn authorize(receipt: &Receipt) -> Result<()> {
         return Err("artifact catalog installation or signed workflow changed".into());
     }
     Ok(())
+}
+
+/// Typed in-process artifact boundary for the native laboratory coordinator.
+/// It confers no principal grant and opens no caller-selected catalog path.
+pub(crate) struct InvoiceCommit<'a> {
+    pub installation: &'a str,
+    pub request_id: &'a str,
+    pub artifact_id: &'a str,
+    pub expected_version: u64,
+    pub workflow_sha256: &'a str,
+    pub source_sha256: &'a str,
+}
+
+pub(crate) fn invoice_receipt(
+    commit: &InvoiceCommit<'_>,
+    bytes: &[u8],
+) -> Result<serde_json::Value> {
+    let receipt = Receipt {
+        schema_version: 1,
+        environment: "lab".into(),
+        installation: commit.installation.into(),
+        owner: "local-root".into(),
+        request_id: commit.request_id.into(),
+        artifact_id: commit.artifact_id.into(),
+        expected_version: commit.expected_version,
+        version: commit
+            .expected_version
+            .checked_add(1)
+            .ok_or("workflow version overflow")?,
+        workflow_sha256: commit.workflow_sha256.into(),
+        source_sha256: commit.source_sha256.into(),
+        content_sha256: io::digest(bytes),
+        content_bytes: bytes.len() as u64,
+        filename: "invoice-summary.json".into(),
+        media_type: "application/json".into(),
+    };
+    receipt.validate(commit.installation)?;
+    if serde_json::from_slice::<serde_json::Value>(bytes)?["source_sha256"] != commit.source_sha256
+    {
+        return Err("workflow report provenance differs from its source".into());
+    }
+    Ok(serde_json::to_value(receipt)?)
+}
+
+pub(crate) fn commit_invoice(
+    commit: &InvoiceCommit<'_>,
+    bytes: &[u8],
+    replay_only: bool,
+    mut coordinator_check: impl FnMut() -> Result<()>,
+) -> Result<serde_json::Value> {
+    if io::installation()? != commit.installation {
+        return Err("workflow artifact installation changed".into());
+    }
+    let expected = invoice_receipt(commit, bytes)?;
+    let receipt: Receipt = serde_json::from_value(expected.clone())?;
+    let catalog = Catalog::open(Path::new(DIRECTORY), commit.installation)?;
+    if replay_only && !catalog.inventory()?.0.iter().any(|(_, r)| r == &receipt) {
+        return Err("completed workflow lacks its exact artifact receipt; preserve state".into());
+    }
+    catalog.publish(&receipt, bytes, |proposal| {
+        authorize(proposal)?;
+        coordinator_check()
+    })?;
+    Ok(expected)
 }
 
 pub fn initialize_installed() -> Result<()> {

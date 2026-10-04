@@ -104,7 +104,8 @@ fn validate_registry(bytes: &[u8], graph: &[u8]) -> Result<serde_json::Value> {
         "schema_version":1,"environment":"lab","profile":registry.profile,
         "workflow_sha256":digest,"workflow_fingerprint":workflow["fingerprint"],
         "skills":registry.skills.iter().map(|skill| &skill.id).collect::<Vec<_>>(),
-        "signed_registry_admitted":true,"effect_executed":false,"gate_closing":false
+        "signed_registry_admitted":true,"effect_executed":false,"gate_closing":false,
+        "native_invoice_execution_supported":workflow::invoice_execution_supported(graph)?
     }))
 }
 

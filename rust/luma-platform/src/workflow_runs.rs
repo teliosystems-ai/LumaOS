@@ -1,0 +1,1040 @@
+//! Durable coordinator for the closed, installed-root laboratory invoice DAG.
+//! Snapshot input is not a folder grant; checkpoints are not product authority.
+use crate::{
+    artifact_catalog as catalog, artifacts as io, calculation, scoped_read, skills,
+    sqlite::Connection, Result,
+};
+use serde::{Deserialize, Serialize};
+use std::ffi::CString;
+use std::fs::{self, File};
+use std::os::fd::AsRawFd;
+use std::os::unix::fs::{DirBuilderExt, MetadataExt};
+use std::path::Path;
+
+const DIRECTORY: &str = "/var/lib/luma-os/workflow-runs";
+const MAX_RUNS: usize = 256;
+const MAX_OBJECTS: usize = 512;
+const MAX_BYTES: u64 = 64 * 1024 * 1024;
+const MAX_OBJECT: u64 = 2 * 1024 * 1024;
+const SCHEMA: &[&str] = &[
+    "CREATE TABLE identity (id INTEGER PRIMARY KEY CHECK(id=1), installation TEXT NOT NULL CHECK(length(installation)=64)) STRICT",
+    "CREATE TABLE runs (request_id TEXT PRIMARY KEY, plan TEXT NOT NULL, current_stage INTEGER NOT NULL CHECK(current_stage BETWEEN 0 AND 5)) STRICT",
+    "CREATE TABLE checkpoints (sequence INTEGER PRIMARY KEY CHECK(sequence>0), request_id TEXT NOT NULL REFERENCES runs(request_id), stage INTEGER NOT NULL CHECK(stage BETWEEN 0 AND 5), canonical TEXT NOT NULL, UNIQUE(request_id,stage)) STRICT",
+    "CREATE TRIGGER checkpoint_no_update BEFORE UPDATE ON checkpoints BEGIN SELECT RAISE(ABORT,'immutable checkpoint'); END",
+    "CREATE TRIGGER checkpoint_no_delete BEFORE DELETE ON checkpoints BEGIN SELECT RAISE(ABORT,'retained checkpoint'); END",
+    "CREATE TRIGGER identity_no_update BEFORE UPDATE ON identity BEGIN SELECT RAISE(ABORT,'immutable installation'); END",
+    "CREATE TRIGGER identity_no_delete BEFORE DELETE ON identity BEGIN SELECT RAISE(ABORT,'immutable installation'); END",
+    "CREATE TRIGGER runs_no_delete BEFORE DELETE ON runs BEGIN SELECT RAISE(ABORT,'retained run'); END",
+    "CREATE TRIGGER runs_next BEFORE UPDATE ON runs WHEN NEW.request_id<>OLD.request_id OR NEW.plan<>OLD.plan OR NOT ((OLD.current_stage<4 AND NEW.current_stage=OLD.current_stage+1) OR (OLD.current_stage<3 AND NEW.current_stage=5)) BEGIN SELECT RAISE(ABORT,'invalid workflow transition'); END",
+];
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+struct Plan {
+    schema_version: u32,
+    environment: String,
+    installation: String,
+    request_id: String,
+    artifact_id: String,
+    expected_version: u64,
+    workflow_sha256: String,
+    source_sha256: String,
+    source_bytes: u64,
+}
+impl Plan {
+    fn validate(&self, installation: &str) -> Result<()> {
+        if self.schema_version != 1
+            || self.environment != "lab"
+            || self.installation != installation
+            || !io::hash(installation)
+            || !io::identifier(&self.request_id)
+            || !io::identifier(&self.artifact_id)
+            || self.expected_version >= 1024
+            || !io::hash(&self.workflow_sha256)
+            || !io::hash(&self.source_sha256)
+            || self.source_bytes == 0
+            || self.source_bytes > 1024 * 1024
+        {
+            return Err("invalid native invoice workflow plan".into());
+        }
+        Ok(())
+    }
+    fn effect_id(&self) -> Result<String> {
+        let mut bytes = b"luma-native-workflow-invoice-v1\0".to_vec();
+        bytes.extend(serde_json::to_vec(self)?);
+        Ok(io::digest(&bytes))
+    }
+    fn commit<'a>(&'a self, effect: &'a str) -> catalog::InvoiceCommit<'a> {
+        catalog::InvoiceCommit {
+            installation: &self.installation,
+            request_id: effect,
+            artifact_id: &self.artifact_id,
+            expected_version: self.expected_version,
+            workflow_sha256: &self.workflow_sha256,
+            source_sha256: &self.source_sha256,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+struct Checkpoint {
+    stage: u32,
+    plan_sha256: String,
+    previous_sha256: String,
+    report_sha256: String,
+    receipt: Option<serde_json::Value>,
+}
+fn digest<T: Serialize>(value: &T) -> Result<String> {
+    Ok(io::digest(&serde_json::to_vec(value)?))
+}
+fn state(stage: u32) -> &'static str {
+    match stage {
+        0 => "prepared",
+        1 => "source-read",
+        2 => "calculated",
+        3 => "applying",
+        4 => "completed",
+        5 => "cancelled",
+        _ => "unknown",
+    }
+}
+
+struct Transaction<'a>(&'a Connection, bool);
+impl Drop for Transaction<'_> {
+    fn drop(&mut self) {
+        if !self.1 {
+            let _ = self.0.exec("ROLLBACK;");
+        }
+    }
+}
+impl Transaction<'_> {
+    fn commit(mut self) -> Result<()> {
+        self.0.exec("COMMIT;")?;
+        self.1 = true;
+        Ok(())
+    }
+}
+
+struct Store {
+    // SQLite closes before the exclusive directory lock is released.
+    db: Connection,
+    root: File,
+    objects: File,
+    pending: File,
+    installation: String,
+}
+pub(crate) fn initialize(path: &Path, installation: &str) -> Result<()> {
+    if !io::hash(installation) {
+        return Err("invalid workflow installation".into());
+    }
+    let parent = path.parent().ok_or("missing workflow parent")?;
+    catalog::safe_path(parent)?;
+    let parent_fd = scoped_read::open_directory(parent)?;
+    catalog::ext4(&parent_fd)?;
+    fs::DirBuilder::new().mode(0o700).create(path)?;
+    let root = scoped_read::open_directory(path)?;
+    if unsafe { libc::flock(root.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
+        return Err("workflow initialization busy".into());
+    }
+    io::mkdir_at(&root, "objects")?;
+    io::mkdir_at(&root, "pending")?;
+    io::write_member(&root, "metadata.sqlite3", b"", 0o600)?;
+    let db = Connection::open(&path.join("metadata.sqlite3"))?;
+    if db.query("PRAGMA journal_mode=WAL", &[], 1)? != [vec!["wal".to_owned()]] {
+        return Err("workflow WAL unavailable".into());
+    }
+    db.exec("PRAGMA max_page_count=4096;")?;
+    db.exec("PRAGMA application_id=1280788306;")?;
+    db.exec("PRAGMA user_version=1;")?;
+    db.exec("BEGIN IMMEDIATE;")?;
+    let tx = Transaction(&db, false);
+    for sql in SCHEMA {
+        db.exec(sql)?;
+    }
+    db.query("INSERT INTO identity VALUES(1,?)", &[installation], 0)?;
+    root.sync_all()?;
+    tx.commit()?;
+    drop(db);
+    root.sync_all()?;
+    parent_fd.sync_all()?;
+    drop(root);
+    drop(Store::open(path, installation)?);
+    Ok(())
+}
+impl Store {
+    fn open(path: &Path, installation: &str) -> Result<Self> {
+        catalog::safe_path(path)?;
+        let root = scoped_read::open_directory(path)?;
+        io::private_directory(&root)?;
+        catalog::ext4(&root)?;
+        if unsafe { libc::flock(root.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
+            return Err("workflow coordinator is busy; cancellation was not accepted".into());
+        }
+        let names = io::names(&root, 5)?;
+        if !names.contains(&"metadata.sqlite3".into())
+            || !names.contains(&"objects".into())
+            || !names.contains(&"pending".into())
+        {
+            return Err("incomplete workflow store; preserve state".into());
+        }
+        for name in names {
+            match name.as_str() {
+                "objects" | "pending" => (),
+                "metadata.sqlite3" | "metadata.sqlite3-wal" => {
+                    io::read_member(&root, &name, 16 * 1024 * 1024)?;
+                }
+                "metadata.sqlite3-shm" => {
+                    io::read_member(&root, &name, 65536)?;
+                }
+                _ => return Err("unknown workflow member; preserve state".into()),
+            }
+        }
+        let objects = io::child_directory(&root, "objects")?;
+        let pending = io::child_directory(&root, "pending")?;
+        if objects.metadata()?.dev() != root.metadata()?.dev()
+            || pending.metadata()?.dev() != root.metadata()?.dev()
+        {
+            return Err("workflow objects filesystem mismatch".into());
+        }
+        let db = Connection::open(&path.join("metadata.sqlite3"))?;
+        if db.query("PRAGMA journal_mode", &[], 1)? != [vec!["wal".to_owned()]]
+            || db.query("PRAGMA page_size", &[], 1)? != [vec!["4096".to_owned()]]
+            || db.query("PRAGMA application_id", &[], 1)? != [vec!["1280788306".to_owned()]]
+            || db.query("PRAGMA user_version", &[], 1)? != [vec!["1".to_owned()]]
+            || db.query("SELECT installation FROM identity", &[], 1)?
+                != [vec![installation.to_owned()]]
+        {
+            return Err("workflow store format/installation mismatch".into());
+        }
+        let mut actual = db
+            .query(
+                "SELECT sql FROM sqlite_schema WHERE name NOT LIKE 'sqlite_%'",
+                &[],
+                SCHEMA.len(),
+            )?
+            .into_iter()
+            .map(|r| r[0].clone())
+            .collect::<Vec<_>>();
+        let mut expected = SCHEMA.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        actual.sort();
+        expected.sort();
+        if actual != expected
+            || db.query("PRAGMA quick_check", &[], 1)? != [vec!["ok".to_owned()]]
+            || !db.query("PRAGMA foreign_key_check", &[], 1)?.is_empty()
+        {
+            return Err("workflow schema/integrity mismatch".into());
+        }
+        db.exec("PRAGMA max_page_count=4096;")?;
+        let result = Self {
+            db,
+            root,
+            objects,
+            pending,
+            installation: installation.into(),
+        };
+        result.inventory()?;
+        Ok(result)
+    }
+    fn object(&self, hash: &str) -> Result<Vec<u8>> {
+        if !io::hash(hash) {
+            return Err("invalid workflow object identity".into());
+        }
+        let bytes = io::read_member(&self.objects, hash, MAX_OBJECT)?;
+        if io::digest(&bytes) != hash {
+            return Err("workflow object corruption; preserve state".into());
+        }
+        Ok(bytes)
+    }
+    fn inventory(&self) -> Result<()> {
+        let mut bytes = 0u64;
+        for name in io::names(&self.objects, MAX_OBJECTS)? {
+            bytes += self.object(&name)?.len() as u64;
+            if bytes > MAX_BYTES {
+                return Err("workflow object capacity exhausted".into());
+            }
+        }
+        let objects = io::names(&self.objects, MAX_OBJECTS)?;
+        let pending = io::names(&self.pending, MAX_OBJECTS)?;
+        if objects.len() + pending.len() > MAX_OBJECTS {
+            return Err("workflow file capacity exhausted".into());
+        }
+        for name in pending {
+            if !io::hash(&name) || objects.contains(&name) {
+                return Err("unknown/conflicting workflow preparation; preserve state".into());
+            }
+            bytes += io::read_member(&self.pending, &name, MAX_OBJECT)?.len() as u64;
+            if bytes > MAX_BYTES {
+                return Err("workflow preparation capacity exhausted".into());
+            }
+        }
+        for row in self
+            .db
+            .query("SELECT request_id FROM runs", &[], MAX_RUNS)?
+        {
+            self.load(&row[0])?;
+        }
+        let rows = self.db.query(
+            "SELECT sequence FROM checkpoints ORDER BY sequence",
+            &[],
+            MAX_RUNS * 5,
+        )?;
+        for (index, row) in rows.iter().enumerate() {
+            if row != &[((index + 1) as u64).to_string()] {
+                return Err("workflow checkpoint sequence discontinuity".into());
+            }
+        }
+        Ok(())
+    }
+    fn load(&self, request: &str) -> Result<(Plan, Checkpoint)> {
+        if !io::identifier(request) {
+            return Err("invalid workflow request".into());
+        }
+        let row = self.db.query(
+            "SELECT plan,current_stage FROM runs WHERE request_id=?",
+            &[request],
+            1,
+        )?;
+        let row = row.first().ok_or("workflow run not found")?;
+        let plan: Plan = serde_json::from_str(&row[0])?;
+        plan.validate(&self.installation)?;
+        if serde_json::to_string(&plan)? != row[0]
+            || plan.request_id != request
+            || self.object(&plan.source_sha256)?.len() as u64 != plan.source_bytes
+        {
+            return Err("workflow plan/source mismatch".into());
+        }
+        let checkpoints = self.db.query(
+            "SELECT stage,canonical FROM checkpoints WHERE request_id=? ORDER BY sequence",
+            &[request],
+            5,
+        )?;
+        let mut previous: Option<Checkpoint> = None;
+        for entry in checkpoints {
+            let checkpoint: Checkpoint = serde_json::from_str(&entry[1])?;
+            let valid_stage = match previous.as_ref() {
+                None => checkpoint.stage == 0,
+                Some(p) => {
+                    (p.stage < 4 && checkpoint.stage == p.stage + 1)
+                        || (p.stage < 3 && checkpoint.stage == 5)
+                }
+            };
+            let expected_previous = match previous.as_ref() {
+                Some(p) => digest(p)?,
+                None => digest(&plan)?,
+            };
+            if serde_json::to_string(&checkpoint)? != entry[1]
+                || checkpoint.stage.to_string() != entry[0]
+                || !valid_stage
+                || checkpoint.plan_sha256 != digest(&plan)?
+                || checkpoint.previous_sha256 != expected_previous
+            {
+                return Err("workflow checkpoint chain mismatch".into());
+            }
+            if (2..=4).contains(&checkpoint.stage) {
+                let report = self.object(&checkpoint.report_sha256)?;
+                let effect = plan.effect_id()?;
+                let expected = catalog::invoice_receipt(&plan.commit(&effect), &report)?;
+                if (checkpoint.stage == 4 && checkpoint.receipt.as_ref() != Some(&expected))
+                    || (checkpoint.stage != 4 && checkpoint.receipt.is_some())
+                {
+                    return Err("workflow artifact receipt mismatch".into());
+                }
+                if let Some(p) = previous.as_ref().filter(|p| p.stage >= 2) {
+                    if p.report_sha256 != checkpoint.report_sha256 {
+                        return Err("workflow report changed across checkpoints".into());
+                    }
+                }
+            } else if checkpoint.receipt.is_some()
+                || (checkpoint.stage != 5 && !checkpoint.report_sha256.is_empty())
+                || (checkpoint.stage == 5
+                    && checkpoint.report_sha256
+                        != previous
+                            .as_ref()
+                            .ok_or("missing cancelled predecessor")?
+                            .report_sha256)
+            {
+                return Err("unexpected workflow checkpoint result".into());
+            }
+            previous = Some(checkpoint);
+        }
+        let last = previous.ok_or("workflow checkpoint missing")?;
+        if last.stage.to_string() != row[1] {
+            return Err("workflow current checkpoint differs from history".into());
+        }
+        Ok((plan, last))
+    }
+    fn put_object(&self, content: &[u8]) -> Result<String> {
+        if content.is_empty() || content.len() as u64 > MAX_OBJECT {
+            return Err("workflow object size denied".into());
+        }
+        let hash = io::digest(content);
+        let names = io::names(&self.objects, MAX_OBJECTS)?;
+        if names.contains(&hash) {
+            if self.object(&hash)? != content {
+                return Err("workflow object conflict".into());
+            }
+        } else {
+            let mut total = 0u64;
+            for name in &names {
+                total += self.object(name)?.len() as u64;
+            }
+            let preparations = io::names(&self.pending, MAX_OBJECTS)?;
+            for name in &preparations {
+                total += io::read_member(&self.pending, name, MAX_OBJECT)?.len() as u64;
+            }
+            let mut space: libc::statvfs = unsafe { std::mem::zeroed() };
+            if !preparations.contains(&hash) {
+                if names.len() + preparations.len() >= MAX_OBJECTS
+                    || total + content.len() as u64 > MAX_BYTES
+                    || unsafe { libc::fstatvfs(self.root.as_raw_fd(), &mut space) } != 0
+                    || space
+                        .f_bavail
+                        .checked_mul(space.f_frsize)
+                        .ok_or("workflow capacity overflow")?
+                        < content.len() as u64 + 16 * 1024 * 1024
+                {
+                    return Err("workflow storage capacity/reserve exhausted".into());
+                }
+                io::write_member(&self.pending, &hash, content, 0o400)?;
+                self.pending.sync_all()?;
+            }
+            // Complete exact preparations can resume; partial bytes are fenced.
+            if io::read_member(&self.pending, &hash, MAX_OBJECT)? != content {
+                return Err(
+                    "partial workflow object requires explicit review; preserve bytes".into(),
+                );
+            }
+            io::open_at(&self.pending, &hash, libc::O_RDONLY, 0)?.sync_all()?;
+            self.pending.sync_all()?;
+            let name = CString::new(hash.as_str())?;
+            if unsafe {
+                libc::renameat2(
+                    self.pending.as_raw_fd(),
+                    name.as_ptr(),
+                    self.objects.as_raw_fd(),
+                    name.as_ptr(),
+                    libc::RENAME_NOREPLACE,
+                )
+            } != 0
+            {
+                return Err("workflow object publication uncertain; reinspect".into());
+            }
+            self.objects.sync_all()?;
+            self.pending.sync_all()?;
+        }
+        io::open_at(&self.objects, &hash, libc::O_RDONLY, 0)?.sync_all()?;
+        self.objects.sync_all()?;
+        self.root.sync_all()?;
+        Ok(hash)
+    }
+    fn prepare(
+        &self,
+        plan: &Plan,
+        source: &[u8],
+        mut authorize: impl FnMut(&Plan) -> Result<()>,
+    ) -> Result<bool> {
+        plan.validate(&self.installation)?;
+        if io::digest(source) != plan.source_sha256 || source.len() as u64 != plan.source_bytes {
+            return Err("workflow proposed source mismatch".into());
+        }
+        calculation::report_bytes(source)?;
+        authorize(plan)?;
+        if !self
+            .db
+            .query(
+                "SELECT request_id FROM runs WHERE request_id=?",
+                &[&plan.request_id],
+                1,
+            )?
+            .is_empty()
+        {
+            let (old, _) = self.load(&plan.request_id)?;
+            if old != *plan {
+                return Err("workflow preparation idempotency conflict".into());
+            }
+            authorize(plan)?;
+            self.root.sync_all()?;
+            return Ok(true);
+        }
+        if self
+            .db
+            .query("SELECT request_id FROM runs", &[], MAX_RUNS)?
+            .len()
+            >= MAX_RUNS
+        {
+            return Err("workflow run capacity exhausted".into());
+        }
+        self.put_object(source)?;
+        let checkpoint = Checkpoint {
+            stage: 0,
+            plan_sha256: digest(plan)?,
+            previous_sha256: digest(plan)?,
+            report_sha256: String::new(),
+            receipt: None,
+        };
+        self.db.exec("BEGIN IMMEDIATE;")?;
+        let tx = Transaction(&self.db, false);
+        self.db.query(
+            "INSERT INTO runs VALUES(?,?,0)",
+            &[&plan.request_id, &serde_json::to_string(plan)?],
+            0,
+        )?;
+        self.insert(plan, &checkpoint)?;
+        authorize(plan)?;
+        self.root.sync_all()?;
+        tx.commit()?;
+        self.root.sync_all()?;
+        Ok(false)
+    }
+    fn insert(&self, plan: &Plan, checkpoint: &Checkpoint) -> Result<()> {
+        self.db.query(
+            "INSERT INTO checkpoints(request_id,stage,canonical) VALUES(?,?,?)",
+            &[
+                &plan.request_id,
+                &checkpoint.stage.to_string(),
+                &serde_json::to_string(checkpoint)?,
+            ],
+            0,
+        )?;
+        Ok(())
+    }
+    fn transition(
+        &self,
+        plan: &Plan,
+        previous: &Checkpoint,
+        next: &Checkpoint,
+        mut authorize: impl FnMut(&Plan) -> Result<()>,
+    ) -> Result<()> {
+        if self.load(&plan.request_id)? != (plan.clone(), previous.clone()) {
+            return Err("workflow changed before checkpoint commit".into());
+        }
+        self.db.exec("BEGIN IMMEDIATE;")?;
+        let tx = Transaction(&self.db, false);
+        self.db.query(
+            "UPDATE runs SET current_stage=? WHERE request_id=? AND current_stage=?",
+            &[
+                &next.stage.to_string(),
+                &plan.request_id,
+                &previous.stage.to_string(),
+            ],
+            0,
+        )?;
+        if self.db.query("SELECT changes()", &[], 1)? != [vec!["1".to_owned()]] {
+            return Err("workflow checkpoint compare-exchange conflict".into());
+        }
+        self.insert(plan, next)?;
+        authorize(plan)?;
+        self.root.sync_all()?;
+        tx.commit()?;
+        self.root.sync_all()?;
+        Ok(())
+    }
+    fn status(&self, request: &str) -> Result<serde_json::Value> {
+        let (plan, checkpoint) = self.load(request)?;
+        Ok(
+            serde_json::json!({"schema_version":1,"environment":"lab","request_id":request,
+            "state":state(checkpoint.stage),"plan":plan,"review_sha256":digest(&checkpoint)?,
+            "effect_request_id":plan.effect_id()?,"receipt":checkpoint.receipt,
+            "cancellation_allowed":checkpoint.stage < 3 || checkpoint.stage == 5,
+            "input_kind":"operator-stdin-snapshot","product_admin_active":false,
+            "folder_grant":false,"gate_closing":false}),
+        )
+    }
+    fn cancel(
+        &self,
+        request: &str,
+        review: &str,
+        mut authorize: impl FnMut(&Plan) -> Result<()>,
+    ) -> Result<()> {
+        let (plan, previous) = self.load(request)?;
+        if !io::hash(review)
+            || (digest(&previous)? != review
+                && !(previous.stage == 5 && previous.previous_sha256 == review))
+        {
+            return Err("workflow changed since cancellation review".into());
+        }
+        authorize(&plan)?;
+        if previous.stage == 5 {
+            self.root.sync_all()?;
+            return Ok(());
+        }
+        if previous.stage >= 3 {
+            return Err(
+                "artifact outcome may be committed; cancellation refused, reconcile instead".into(),
+            );
+        }
+        let mut next = previous.clone();
+        next.stage = 5;
+        next.previous_sha256 = digest(&previous)?;
+        self.transition(&plan, &previous, &next, authorize)
+    }
+    fn advance(
+        &self,
+        request: &str,
+        review: &str,
+        mut authorize: impl FnMut(&Plan) -> Result<()>,
+        mut effect: impl FnMut(
+            &Plan,
+            &[u8],
+            bool,
+            &mut dyn FnMut() -> Result<()>,
+        ) -> Result<serde_json::Value>,
+    ) -> Result<()> {
+        let (plan, previous) = self.load(request)?;
+        let current_review = digest(&previous)?;
+        let retry_previous_step =
+            (1..=4).contains(&previous.stage) && previous.previous_sha256 == review;
+        let retry_publication = previous.stage == 4
+            && self
+                .db
+                .query(
+                    "SELECT canonical FROM checkpoints WHERE request_id=? AND stage=3",
+                    &[request],
+                    1,
+                )?
+                .first()
+                .map(|row| serde_json::from_str::<Checkpoint>(&row[0]))
+                .transpose()?
+                .map(|p| p.previous_sha256 == review)
+                .unwrap_or(false);
+        if !io::hash(review)
+            || (current_review != review && !retry_previous_step && !retry_publication)
+        {
+            return Err("workflow changed since checkpoint review".into());
+        }
+        authorize(&plan)?;
+        // Lost checkpoint acknowledgement must not advance an additional node.
+        if current_review != review && previous.stage < 3 {
+            self.root.sync_all()?;
+            return Ok(());
+        }
+        if previous.stage == 5 {
+            return Err("workflow cancelled; use a new authorized request".into());
+        }
+        let mut next = previous.clone();
+        next.stage += 1;
+        next.previous_sha256 = digest(&previous)?;
+        match previous.stage {
+            0 => {
+                self.object(&plan.source_sha256)?;
+                self.transition(&plan, &previous, &next, &mut authorize)?;
+            }
+            1 => {
+                let report = calculation::report_bytes(&self.object(&plan.source_sha256)?)?;
+                next.report_sha256 = self.put_object(&report)?;
+                self.transition(&plan, &previous, &next, &mut authorize)?;
+            }
+            2 => {
+                // Applying is durable BEFORE crossing the artifact boundary.
+                self.transition(&plan, &previous, &next, &mut authorize)?;
+                self.finish(&plan, &next, &mut authorize, &mut effect)?;
+            }
+            3 => {
+                self.finish(&plan, &previous, &mut authorize, &mut effect)?;
+            }
+            4 => {
+                let bytes = self.object(&previous.report_sha256)?;
+                let result = effect(&plan, &bytes, true, &mut || {
+                    self.check_current(&plan, &previous)?;
+                    authorize(&plan)
+                })?;
+                if previous.receipt.as_ref() != Some(&result) {
+                    return Err("workflow replay receipt changed".into());
+                }
+                self.root.sync_all()?;
+            }
+            _ => return Err("unsupported workflow stage".into()),
+        }
+        Ok(())
+    }
+    fn check_current(&self, plan: &Plan, checkpoint: &Checkpoint) -> Result<()> {
+        if self.load(&plan.request_id)? != (plan.clone(), checkpoint.clone()) {
+            return Err("workflow authority/checkpoint changed before effect".into());
+        }
+        Ok(())
+    }
+    fn finish(
+        &self,
+        plan: &Plan,
+        applying: &Checkpoint,
+        authorize: &mut impl FnMut(&Plan) -> Result<()>,
+        effect: &mut impl FnMut(
+            &Plan,
+            &[u8],
+            bool,
+            &mut dyn FnMut() -> Result<()>,
+        ) -> Result<serde_json::Value>,
+    ) -> Result<()> {
+        let bytes = self.object(&applying.report_sha256)?;
+        if calculation::report_bytes(&self.object(&plan.source_sha256)?)? != bytes {
+            return Err("workflow deterministic report differs from source".into());
+        }
+        let result = effect(plan, &bytes, false, &mut || {
+            self.check_current(plan, applying)?;
+            authorize(plan)
+        })?;
+        let effect_id = plan.effect_id()?;
+        if result != catalog::invoice_receipt(&plan.commit(&effect_id), &bytes)? {
+            return Err("artifact boundary returned an unbound receipt".into());
+        }
+        let completed = Checkpoint {
+            stage: 4,
+            plan_sha256: applying.plan_sha256.clone(),
+            previous_sha256: digest(applying)?,
+            report_sha256: applying.report_sha256.clone(),
+            receipt: Some(result),
+        };
+        self.transition(plan, applying, &completed, authorize)
+    }
+}
+fn authorize(plan: &Plan) -> Result<()> {
+    let admission = skills::admission()?;
+    if io::installation()? != plan.installation
+        || admission["workflow_sha256"] != plan.workflow_sha256
+        || admission["native_invoice_execution_supported"] != true
+    {
+        return Err("native workflow installation or current signed graph changed".into());
+    }
+    Ok(())
+}
+pub fn initialize_installed() -> Result<()> {
+    initialize(Path::new(DIRECTORY), &io::installation()?)
+}
+pub fn prepare(request: &str, artifact: &str, expected: &str) -> Result<()> {
+    let installation = io::installation()?;
+    let admission = skills::admission()?;
+    let source = calculation::source_stdin()?;
+    let version = expected.parse::<u64>()?;
+    if version.to_string() != expected {
+        return Err("noncanonical workflow expected version".into());
+    }
+    let plan = Plan {
+        schema_version: 1,
+        environment: "lab".into(),
+        installation: installation.clone(),
+        request_id: request.into(),
+        artifact_id: artifact.into(),
+        expected_version: version,
+        workflow_sha256: admission["workflow_sha256"]
+            .as_str()
+            .ok_or("workflow digest missing")?
+            .into(),
+        source_sha256: io::digest(&source),
+        source_bytes: source.len() as u64,
+    };
+    let store = Store::open(Path::new(DIRECTORY), &installation)?;
+    let replayed = store.prepare(&plan, &source, authorize)?;
+    let mut status = store.status(request)?;
+    status["replayed"] = replayed.into();
+    println!("{status}");
+    Ok(())
+}
+pub fn status(request: &str) -> Result<()> {
+    println!(
+        "{}",
+        Store::open(Path::new(DIRECTORY), &io::installation()?)?.status(request)?
+    );
+    Ok(())
+}
+pub fn store_status() -> Result<()> {
+    let store = Store::open(Path::new(DIRECTORY), &io::installation()?)?;
+    let mut pending = Vec::new();
+    for name in io::names(&store.pending, MAX_OBJECTS)? {
+        let bytes = io::read_member(&store.pending, &name, MAX_OBJECT)?;
+        pending.push(serde_json::json!({"object_sha256":name,"bytes":bytes.len(),"observed_sha256":io::digest(&bytes),"preserved":true}));
+    }
+    println!(
+        "{}",
+        serde_json::json!({"schema_version":1,"environment":"lab","runs":store.db.query("SELECT request_id FROM runs",&[],MAX_RUNS)?.len(),"pending":pending,"gate_closing":false})
+    );
+    Ok(())
+}
+pub fn cancel(request: &str, review: &str) -> Result<()> {
+    let store = Store::open(Path::new(DIRECTORY), &io::installation()?)?;
+    // Cancellation only reduces authority. A withdrawn workflow must not make
+    // it impossible to cancel a prepared run; installation checks still apply.
+    store.cancel(request, review, |plan| {
+        if io::installation()? != plan.installation {
+            return Err("workflow cancellation installation changed".into());
+        }
+        Ok(())
+    })?;
+    println!("{}", store.status(request)?);
+    Ok(())
+}
+pub fn advance(request: &str, review: &str) -> Result<()> {
+    let store = Store::open(Path::new(DIRECTORY), &io::installation()?)?;
+    store.advance(
+        request,
+        review,
+        authorize,
+        |plan, report, replay_only, check| {
+            let effect = plan.effect_id()?;
+            catalog::commit_invoice(&plan.commit(&effect), report, replay_only, check)
+        },
+    )?;
+    println!("{}", store.status(request)?);
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::cell::Cell;
+    use std::os::unix::fs::PermissionsExt;
+    struct Fixture(std::path::PathBuf);
+    impl Fixture {
+        fn new(label: &str) -> Self {
+            let root = std::env::var_os("LUMA_STORAGE_TEST_ROOT")
+                .map(std::path::PathBuf::from)
+                .unwrap_or_else(std::env::temp_dir)
+                .join(format!("luma-workflow-{label}-{}", std::process::id()));
+            fs::DirBuilder::new().mode(0o700).create(&root).unwrap();
+            initialize(&root.join("runs"), &"a".repeat(64)).unwrap();
+            Self(root)
+        }
+        fn open(&self) -> Store {
+            Store::open(&self.0.join("runs"), &"a".repeat(64)).unwrap()
+        }
+    }
+    impl Drop for Fixture {
+        fn drop(&mut self) {
+            fs::remove_dir_all(&self.0).unwrap();
+        }
+    }
+    fn plan() -> (Plan, Vec<u8>) {
+        let source = b"invoice_date,amount,currency\n2026-10-01,3.25,USD\n".to_vec();
+        (
+            Plan {
+                schema_version: 1,
+                environment: "lab".into(),
+                installation: "a".repeat(64),
+                request_id: "run-1".into(),
+                artifact_id: "summary".into(),
+                expected_version: 0,
+                workflow_sha256: "b".repeat(64),
+                source_sha256: io::digest(&source),
+                source_bytes: source.len() as u64,
+            },
+            source,
+        )
+    }
+    fn review(s: &Store) -> String {
+        s.status("run-1").unwrap()["review_sha256"]
+            .as_str()
+            .unwrap()
+            .into()
+    }
+    fn receipt(p: &Plan, bytes: &[u8]) -> Result<serde_json::Value> {
+        let id = p.effect_id()?;
+        catalog::invoice_receipt(&p.commit(&id), bytes)
+    }
+    #[test]
+    fn durable_steps_exact_prepare_replay_and_completed_boundary_verification() {
+        let f = Fixture::new("steps");
+        let (plan, bytes) = plan();
+        assert!(!f.open().prepare(&plan, &bytes, |_| Ok(())).unwrap());
+        assert!(f.open().prepare(&plan, &bytes, |_| Ok(())).unwrap());
+        let effects = Cell::new(0);
+        for expected in [1, 2, 4, 4] {
+            let s = f.open();
+            s.advance(
+                "run-1",
+                &review(&s),
+                |_| Ok(()),
+                |p, b, replay, check| {
+                    check()?;
+                    effects.set(effects.get() + 1);
+                    assert_eq!(replay, expected == 4 && effects.get() == 2);
+                    receipt(p, b)
+                },
+            )
+            .unwrap();
+            assert_eq!(s.load("run-1").unwrap().1.stage, expected);
+        }
+        assert_eq!(effects.get(), 2);
+    }
+    #[test]
+    fn cancellation_stale_reviews_changed_plans_and_ownership_fail_closed() {
+        for steps in 0..3 {
+            let f = Fixture::new(&format!("cancel-{steps}"));
+            let (p, b) = plan();
+            let s = f.open();
+            s.prepare(&p, &b, |_| Ok(())).unwrap();
+            let stale = review(&s);
+            assert!(f.open_error());
+            for _ in 0..steps {
+                s.advance(
+                    "run-1",
+                    &review(&s),
+                    |_| Ok(()),
+                    |_, _, _, _| panic!("effect before calculation"),
+                )
+                .unwrap();
+            }
+            if steps > 0 {
+                assert!(s.cancel("run-1", &stale, |_| Ok(())).is_err());
+            }
+            s.cancel("run-1", &review(&s), |_| Ok(())).unwrap();
+            s.cancel("run-1", &review(&s), |_| Ok(())).unwrap();
+            assert!(s
+                .advance(
+                    "run-1",
+                    &review(&s),
+                    |_| Ok(()),
+                    |_, _, _, _| panic!("cancelled effect")
+                )
+                .is_err());
+            let mut changed = p.clone();
+            changed.artifact_id = "other".into();
+            assert!(s.prepare(&changed, &b, |_| Ok(())).is_err());
+        }
+    }
+    impl Fixture {
+        fn open_error(&self) -> bool {
+            Store::open(&self.0.join("runs"), &"a".repeat(64)).is_err()
+        }
+    }
+    #[test]
+    fn uncertain_effect_or_lost_completion_stays_applying_and_never_accepts_cancel() {
+        let f = Fixture::new("uncertain");
+        let (p, b) = plan();
+        let s = f.open();
+        s.prepare(&p, &b, |_| Ok(())).unwrap();
+        for _ in 0..2 {
+            s.advance("run-1", &review(&s), |_| Ok(()), |_, _, _, _| panic!())
+                .unwrap();
+        }
+        assert!(s
+            .advance(
+                "run-1",
+                &review(&s),
+                |_| Ok(()),
+                |_, _, _, check| {
+                    check()?;
+                    Err("lost artifact acknowledgement".into())
+                }
+            )
+            .is_err());
+        assert_eq!(s.load("run-1").unwrap().1.stage, 3);
+        assert!(s.cancel("run-1", &review(&s), |_| Ok(())).is_err());
+        drop(s);
+        let s = f.open();
+        s.advance(
+            "run-1",
+            &review(&s),
+            |_| Ok(()),
+            |p, b, _, check| {
+                check()?;
+                receipt(p, b)
+            },
+        )
+        .unwrap();
+        assert_eq!(s.load("run-1").unwrap().1.stage, 4);
+    }
+    #[test]
+    fn revocation_wrong_effect_result_and_corrupt_object_never_complete() {
+        let f = Fixture::new("revocation");
+        let (p, b) = plan();
+        let s = f.open();
+        s.prepare(&p, &b, |_| Ok(())).unwrap();
+        assert!(s
+            .advance(
+                "run-1",
+                &review(&s),
+                |_| Err("revoked".into()),
+                |_, _, _, _| panic!()
+            )
+            .is_err());
+        for _ in 0..2 {
+            s.advance("run-1", &review(&s), |_| Ok(()), |_, _, _, _| panic!())
+                .unwrap();
+        }
+        assert!(s
+            .advance(
+                "run-1",
+                &review(&s),
+                |_| Ok(()),
+                |_, _, _, check| {
+                    check()?;
+                    Ok(serde_json::json!({"forged":true}))
+                }
+            )
+            .is_err());
+        assert_eq!(s.load("run-1").unwrap().1.stage, 3);
+        let source = f.0.join("runs/objects").join(&p.source_sha256);
+        fs::set_permissions(&source, fs::Permissions::from_mode(0o600)).unwrap();
+        fs::write(source, b"tampered").unwrap();
+        assert!(s.load("run-1").is_err());
+    }
+    #[test]
+    fn checkpoint_history_and_format_are_not_silently_rewritten() {
+        let f = Fixture::new("schema");
+        let (p, b) = plan();
+        let s = f.open();
+        s.prepare(&p, &b, |_| Ok(())).unwrap();
+        assert!(s.db.exec("DELETE FROM checkpoints;").is_err());
+        assert!(s.db.exec("UPDATE checkpoints SET canonical='{}';").is_err());
+        assert!(s.db.exec("UPDATE runs SET current_stage=4;").is_err());
+        s.db.exec("PRAGMA user_version=2;").unwrap();
+        drop(s);
+        assert!(f.open_error());
+    }
+    #[test]
+    fn lost_step_and_cancel_acknowledgements_replay_without_advancing_extra_nodes() {
+        let f = Fixture::new("step-retry");
+        let (p, b) = plan();
+        let s = f.open();
+        s.prepare(&p, &b, |_| Ok(())).unwrap();
+        for expected in [1, 2, 4] {
+            let prior = review(&s);
+            for _ in 0..2 {
+                s.advance(
+                    "run-1",
+                    &prior,
+                    |_| Ok(()),
+                    |p, b, _, check| {
+                        check()?;
+                        receipt(p, b)
+                    },
+                )
+                .unwrap();
+                assert_eq!(s.load("run-1").unwrap().1.stage, expected);
+            }
+        }
+        let other = Fixture::new("cancel-retry");
+        let s = other.open();
+        s.prepare(&p, &b, |_| Ok(())).unwrap();
+        let before = review(&s);
+        s.cancel("run-1", &before, |_| Ok(())).unwrap();
+        s.cancel("run-1", &before, |_| Ok(())).unwrap();
+        assert_eq!(s.load("run-1").unwrap().1.stage, 5);
+    }
+    #[test]
+    fn commit_time_revocation_rolls_back_a_pure_checkpoint_without_dispatch() {
+        let f = Fixture::new("checkpoint-revocation");
+        let (p, b) = plan();
+        let s = f.open();
+        s.prepare(&p, &b, |_| Ok(())).unwrap();
+        let before = review(&s);
+        let calls = Cell::new(0);
+        assert!(s
+            .advance(
+                "run-1",
+                &before,
+                |_| {
+                    calls.set(calls.get() + 1);
+                    if calls.get() == 2 {
+                        Err("revoked at checkpoint commit".into())
+                    } else {
+                        Ok(())
+                    }
+                },
+                |_, _, _, _| panic!("effect must not execute")
+            )
+            .is_err());
+        assert_eq!(review(&s), before);
+        assert_eq!(s.load("run-1").unwrap().1.stage, 0);
+    }
+}

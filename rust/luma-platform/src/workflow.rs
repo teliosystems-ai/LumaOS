@@ -173,6 +173,15 @@ pub(crate) fn validate_bytes(bytes: &[u8]) -> Result<serde_json::Value> {
     validate(&graph)
 }
 
+pub(crate) fn invoice_execution_supported(bytes: &[u8]) -> Result<bool> {
+    // The initial executor handles only this exact normalized three-node graph.
+    // Other valid DAGs are admission-only, never silently approximated.
+    let expected = include_bytes!(
+        "../../../native/image/overlay/usr/share/luma-os/workflows/file-to-artifact-v1.json"
+    );
+    Ok(validate_bytes(bytes)?["fingerprint"] == validate_bytes(expected)?["fingerprint"])
+}
+
 pub fn validate_file(path: &Path) -> Result<()> {
     let mut file = OpenOptions::new()
         .read(true)
@@ -300,5 +309,19 @@ mod tests {
         fs::remove_file(dir.join("link.json")).unwrap();
         fs::remove_file(path).unwrap();
         fs::remove_dir(dir).unwrap();
+    }
+    #[test]
+    fn valid_dag_admission_does_not_imply_executor_support() {
+        let expected = include_bytes!(
+            "../../../native/image/overlay/usr/share/luma-os/workflows/file-to-artifact-v1.json"
+        );
+        assert!(invoice_execution_supported(expected).unwrap());
+        let mut graph: Graph = serde_json::from_slice(expected).unwrap();
+        graph.nodes.reverse();
+        assert!(invoice_execution_supported(&serde_json::to_vec(&graph).unwrap()).unwrap());
+        graph.graph_id = "different-valid-graph".into();
+        let bytes = serde_json::to_vec(&graph).unwrap();
+        assert!(validate_bytes(&bytes).is_ok());
+        assert!(!invoice_execution_supported(&bytes).unwrap());
     }
 }

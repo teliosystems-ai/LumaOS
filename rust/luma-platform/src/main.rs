@@ -22,6 +22,7 @@ mod sqlite;
 mod staging;
 mod tpm;
 mod workflow;
+mod workflow_runs;
 
 use std::path::Path;
 
@@ -107,6 +108,18 @@ fn dispatch() -> Result<()> {
         }
         Some("workflow-validate") if args.len() == 2 => {
             workflow::validate_file(Path::new(&args[1]))
+        }
+        Some("workflow-store-init") if args.len() == 1 => workflow_runs::initialize_installed(),
+        Some("workflow-store-status") if args.len() == 1 => workflow_runs::store_status(),
+        Some("workflow-invoice-prepare") if args.len() == 4 => {
+            workflow_runs::prepare(&args[1], &args[2], &args[3])
+        }
+        Some("workflow-invoice-status") if args.len() == 2 => workflow_runs::status(&args[1]),
+        Some("workflow-invoice-advance") if args.len() == 3 => {
+            workflow_runs::advance(&args[1], &args[2])
+        }
+        Some("workflow-invoice-cancel") if args.len() == 3 => {
+            workflow_runs::cancel(&args[1], &args[2])
         }
         Some("skill-registry-status") if args.len() == 1 => skills::status(),
         Some("invoice-calculate") if args.len() == 1 => calculation::calculate_stdin(),
@@ -194,6 +207,7 @@ fn dispatch() -> Result<()> {
             println!("Maintenance: staging-clean | model-clean (root only; preserves active operations and unknown files).");
             println!("broker-effect-status: root-only installed laboratory worker-effect receipts; uncertain effects are fenced, never automatically replayed. Not product Admin or TPM rollback protection.");
             println!("workflow-validate GRAPH.json: read-only closed native file-to-artifact DAG check; does not admit signed skills or execute effects.");
+            println!("Durable laboratory invoice coordinator (installed root, ext4): workflow-store-init | workflow-store-status | workflow-invoice-prepare REQUEST-ID ARTIFACT-ID EXPECTED-VERSION (CSV stdin snapshot) | workflow-invoice-status REQUEST-ID | workflow-invoice-advance REQUEST-ID REVIEW-SHA256 | workflow-invoice-cancel REQUEST-ID REVIEW-SHA256. Each advance checkpoints the next native step; publication checkpoints Applying before calling the catalog, and exact recovery verifies its idempotent receipt. Cancellation is accepted only before Applying. Not product Admin, folder grants, generic DAG execution or full G2.");
             println!("skill-registry-status: verify the fixed image-owned lab skill signature, exact descriptors and bound workflow; read-only admission, no execution or effect grant.");
             println!("invoice-calculate: bounded pure invoice CSV on stdin to deterministic monthly JSON totals; no file grant, workflow execution or artifact write.");
             println!("Managed laboratory invoice artifacts (installed root only): artifact-store-init (explicit older-install setup; refuses existing state) | artifact-store-status | artifact-publish-invoice REQUEST-ID (CSV stdin; signed workflow admission) | artifact-read REQUEST-ID | artifact-reconcile REQUEST-ID REVIEW-SHA256 (publish a complete reviewed preparation) | artifact-abort REQUEST-ID ABORT-REVIEW-SHA256 (retain reviewed partial bytes; never reuse the request). Root-owned storage; product Admin, folder grants and TPM rollback protection remain pending.");

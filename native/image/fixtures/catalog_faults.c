@@ -11,9 +11,16 @@ int sqlite3_exec(void *db, const char *sql,
         dlsym(RTLD_NEXT, "sqlite3_exec");
     const char *fault = getenv("LUMA_ARTIFACT_TEST_FAULT");
     int commit = strcmp(sql, "COMMIT;") == 0;
+    static int commits;
+    if (commit) commits++;
+    if (commit && fault && strcmp(fault, "workflow-before-applying") == 0 && commits == 1) _exit(92);
+    if (commit && fault && strcmp(fault, "workflow-before-completion") == 0 && commits == 3) _exit(90);
     if (commit && fault && strcmp(fault, "before-commit") == 0) _exit(86);
     int result = next(db, sql, callback, context, error);
     if (commit && result == 0 && fault && strcmp(fault, "after-commit") == 0) _exit(87);
+    if (commit && result == 0 && fault && strcmp(fault, "workflow-after-applying") == 0 && commits == 1) _exit(93);
+    if (commit && result == 0 && fault && strcmp(fault, "workflow-after-artifact") == 0 && commits == 2) _exit(89);
+    if (commit && result == 0 && fault && strcmp(fault, "workflow-after-completion") == 0 && commits == 3) _exit(91);
     return result;
 }
 

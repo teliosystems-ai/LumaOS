@@ -4,12 +4,14 @@
 use crate::{
     admin_enrollment,
     admin_journal::{self, Entry, Snapshot, Store},
+    admin_roles::{self, Catalog, Command},
     authentication, bundle, platform,
     tpm::{self, Checkpoint},
     Result,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use std::collections::BTreeSet;
 use std::fs::{self, File, OpenOptions};
 use std::io::Write;
 use std::os::unix::fs::OpenOptionsExt;
@@ -61,6 +63,37 @@ struct Bootstrap {
     enrollment_sha256: String,
     principal: Identity,
     previous_head: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+struct CatalogEvent {
+    schema_version: u32,
+    kind: String,
+    deployment: String,
+    enrollment_sha256: String,
+    principal: Identity,
+    request_id: String,
+    sequence: usize,
+    state_version_before: u64,
+    previous_head: String,
+    command: Command,
+}
+
+fn event_name(request: &str) -> String {
+    format!(
+        "event-{}.json",
+        bundle::hex(&Sha256::digest(request.as_bytes()))
+    )
+}
+
+fn read_event(directory: &Path, request: &str) -> Result<(CatalogEvent, Vec<u8>)> {
+    let bytes = tpm::private_read(&directory.join(event_name(request)), 16384)?;
+    let event: CatalogEvent = serde_json::from_slice(&bytes)?;
+    if serde_json::to_vec(&event)? != bytes || event.request_id != request {
+        return Err("noncanonical or substituted Admin catalog payload; preserve state".into());
+    }
+    Ok((event, bytes))
 }
 
 struct Context<'a> {
@@ -151,7 +184,7 @@ impl<'a> Context<'a> {
         Ok(bytes)
     }
 
-    fn state(&self, snapshot: &Snapshot) -> Result<(Bootstrap, bool)> {
+    fn state(&self, snapshot: &Snapshot, candidate: Option<&str>) -> Result<(Bootstrap, bool)> {
         if snapshot.deployment != self.deployment {
             return Err("Admin checkpoint deployment changed".into());
         }
@@ -162,9 +195,10 @@ impl<'a> Context<'a> {
                 if retained.is_some_and(|(old, _)| old != payload) {
                     return Err("retained Admin bootstrap does not bind the current head".into());
                 }
+                self.events(snapshot, candidate)?;
                 Ok((payload, false))
             }
-            [entry] => {
+            [entry, ..] => {
                 let (payload, bytes) =
                     retained.ok_or("anchored Admin bootstrap payload missing")?;
                 let genesis = bundle::hex(&tpm::extend_value(
@@ -179,10 +213,65 @@ impl<'a> Context<'a> {
                 {
                     return Err("checkpoint is not the supported Admin bootstrap history".into());
                 }
+                self.events(snapshot, candidate)?;
                 Ok((payload, true))
             }
-            _ => Err("unsupported Admin semantic history; authorization denied".into()),
         }
+    }
+
+    fn events(
+        &self,
+        snapshot: &Snapshot,
+        candidate: Option<&str>,
+    ) -> Result<(Catalog, Vec<CatalogEvent>)> {
+        let mut catalog = Catalog::initial();
+        let mut events = Vec::new();
+        let mut names = BTreeSet::new();
+        for (position, entry) in snapshot.entries.iter().enumerate().skip(1) {
+            let (event, bytes) = read_event(self.directory, &entry.request_id)?;
+            if !admin_roles::identifier(&entry.request_id)
+                || entry.request_id == REQUEST
+                || event.schema_version != 1
+                || event.kind != "native-admin-catalog-event"
+                || event.deployment != self.deployment
+                || event.principal != self.principal
+                || event.enrollment_sha256 != bundle::hex(&Sha256::digest(&self.enrollment))
+                || event.sequence != position + 1
+                || event.state_version_before != catalog.state_version
+                || snapshot.prefix_heads.get(position) != Some(&event.previous_head)
+                || entry.authenticated_uid != self.principal.uid
+                || entry.activity != event.command.activity()
+                || entry.payload_sha256 != bundle::hex(&Sha256::digest(&bytes))
+            {
+                return Err("Admin catalog event does not bind the authenticated history".into());
+            }
+            if !catalog.apply(&event.command)? {
+                return Err("anchored Admin catalog event is not a mutation".into());
+            }
+            names.insert(event_name(&entry.request_id));
+            events.push(event);
+        }
+        // A payload written before journal preparation is still retained
+        // intent. Only its exact request may review/resume it at the same head.
+        // Unrelated mutations and ordinary status never skip that fence.
+        if let Some(request) = candidate {
+            names.insert(event_name(request));
+        }
+        for (count, item) in fs::read_dir(self.directory)?.enumerate() {
+            if count >= 4104 {
+                return Err("oversized Admin payload inventory".into());
+            }
+            let item = item?;
+            let name = item.file_name();
+            let name = name.to_str().ok_or("non-UTF8 Admin state file")?;
+            if name.starts_with("event-") && !names.contains(name) {
+                return Err(
+                    "unreferenced Admin catalog preparation; preserve and review its request"
+                        .into(),
+                );
+            }
+        }
+        Ok((catalog, events))
     }
 }
 
@@ -207,7 +296,7 @@ fn execute<A: Checkpoint>(
     let snapshot = store.snapshot()?;
     let context = Context::load(directory, &snapshot.deployment)?;
     context.recheck(&mut authenticate)?;
-    let (payload, active) = context.state(&snapshot)?;
+    let (payload, active) = context.state(&snapshot, None)?;
     let digest = review(&snapshot, &payload, active)?;
     let mut replayed = false;
     if let Some(approved) = reviewed {
@@ -238,7 +327,7 @@ fn execute<A: Checkpoint>(
         }
     }
     let final_snapshot = store.snapshot()?;
-    let (_, final_active) = context.state(&final_snapshot)?;
+    let (_, final_active) = context.state(&final_snapshot, None)?;
     // A receipt is not a reusable authenticated session. Recheck freshness and
     // live principal/account state before reporting a successful observation.
     context.recheck(&mut authenticate)?;
@@ -263,6 +352,215 @@ pub fn bootstrap(login: &str, reviewed: Option<&str>) -> Result<()> {
     )?;
     let report = execute(&mut store, directory, || authenticated.identity(), reviewed)?;
     println!("{}", serde_json::to_string(&report)?);
+    Ok(())
+}
+
+fn execute_catalog<A: Checkpoint>(
+    store: &mut Store<A>,
+    directory: &Path,
+    mut authenticate: impl FnMut() -> Result<serde_json::Value>,
+    request: &str,
+    command: &Command,
+    reviewed: Option<&str>,
+) -> Result<serde_json::Value> {
+    if !admin_roles::identifier(request) || request == REQUEST {
+        return Err("invalid or reserved Admin request".into());
+    }
+    command.validate()?;
+    let snapshot = store.snapshot()?;
+    let context = Context::load(directory, &snapshot.deployment)?;
+    if !context.state(&snapshot, Some(request))?.1 {
+        return Err("explicit product Admin bootstrap required".into());
+    }
+    let (catalog, events) = context.events(&snapshot, Some(request))?;
+    context.recheck(&mut authenticate)?;
+    let old = events.iter().find(|event| event.request_id == request);
+    let replayed = old.is_some();
+    let mut predicted = catalog.clone();
+    let (event, changed) = if let Some(old) = old {
+        if &old.command != command {
+            return Err("Admin request already binds a different command".into());
+        }
+        (old.clone(), false)
+    } else {
+        let changed = predicted.apply(command)?;
+        (
+            CatalogEvent {
+                schema_version: 1,
+                kind: "native-admin-catalog-event".into(),
+                deployment: context.deployment.clone(),
+                enrollment_sha256: bundle::hex(&Sha256::digest(&context.enrollment)),
+                principal: context.principal.clone(),
+                request_id: request.into(),
+                sequence: snapshot.entries.len() + 1,
+                state_version_before: catalog.state_version,
+                previous_head: snapshot.head.clone(),
+                command: command.clone(),
+            },
+            changed,
+        )
+    };
+    let bytes = serde_json::to_vec(&event)?;
+    let path = directory.join(event_name(request));
+    let retained = match fs::symlink_metadata(&path) {
+        Ok(_) => Some(read_event(directory, request)?.1),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(error) => return Err(error.into()),
+    };
+    let prepared = retained.is_some();
+    if retained.is_some_and(|retained| retained != bytes) {
+        return Err("retained Admin catalog proposal differs; preserve state".into());
+    }
+    if prepared && !replayed && !changed {
+        return Err("unsupported retained no-op Admin proposal; preserve state".into());
+    }
+    let mut digest = Sha256::new();
+    digest.update(b"luma-native-admin-catalog-review-v1\0");
+    digest.update(serde_json::to_vec(
+        &serde_json::json!({"event":event,"head":snapshot.head,
+        "replayed":replayed,"changed":changed,"reset_count":snapshot.clock.reset_count,
+        "restart_count":snapshot.clock.restart_count}),
+    )?);
+    let digest = bundle::hex(&digest.finalize());
+    let mut written = false;
+    if let Some(approved) = reviewed {
+        tpm::decode::<32>(approved)?;
+        if approved != digest {
+            return Err("Admin catalog review changed; inspect again".into());
+        }
+        if changed {
+            context.recheck(&mut authenticate)?;
+            match fs::symlink_metadata(&path) {
+                Ok(_) => (),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    let mut file = OpenOptions::new()
+                        .write(true)
+                        .create_new(true)
+                        .mode(0o600)
+                        .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
+                        .open(&path)?;
+                    file.write_all(&bytes)?;
+                    file.sync_all()?;
+                }
+                Err(error) => return Err(error.into()),
+            }
+            if read_event(directory, request)?.1 != bytes {
+                return Err("Admin catalog payload changed".into());
+            }
+            OpenOptions::new()
+                .read(true)
+                .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+                .open(&path)?
+                .sync_all()?;
+            File::open(directory)?.sync_all()?;
+            let entry = Entry {
+                request_id: request.into(),
+                authenticated_uid: context.principal.uid,
+                clock: snapshot.clock,
+                activity: command.activity().into(),
+                payload_sha256: bundle::hex(&Sha256::digest(&bytes)),
+            };
+            store.append(entry.clone(), |proposed| {
+                if proposed != &entry
+                    || read_event(directory, request)?.1 != bytes
+                    || !context.state(&snapshot, Some(request))?.1
+                    || context.events(&snapshot, Some(request))?.0 != catalog
+                {
+                    return Err(
+                        "Admin catalog authority or semantic inputs changed before commit".into(),
+                    );
+                }
+                context.recheck(&mut authenticate)
+            })?;
+            written = true;
+        }
+    }
+    let final_snapshot = store.snapshot()?;
+    context.state(&final_snapshot, Some(request))?;
+    let (current, _) = context.events(&final_snapshot, Some(request))?;
+    if written && current != predicted {
+        return Err("committed Admin catalog differs from the proposed state".into());
+    }
+    context.recheck(&mut authenticate)?;
+    Ok(
+        serde_json::json!({"schema_version":1,"action":"admin-catalog-command",
+        "review_sha256":digest,"proposal":event,"catalog":current,
+        "committed":reviewed.is_some() && (written || replayed),"replayed":replayed,
+        "no_change":!changed && !replayed,"tpm_write_performed":written,
+        "product_admin_active":true,"delegation_available":false,"effect_grant":false,
+        "trusted_utc_available":false,"production_custody_verified":false,"gate_closing":false}),
+    )
+}
+
+fn parse_command(args: &[String]) -> Result<(&str, &str, Command, Option<&str>)> {
+    let committed = args.len() >= 2 && args[args.len() - 2] == "--commit";
+    let end = args.len() - if committed { 2 } else { 0 };
+    let review = if committed {
+        Some(args[args.len() - 1].as_str())
+    } else {
+        None
+    };
+    let command = match args.first().map(String::as_str) {
+        Some("admin-activity-register") if end == 4 => Command::RegisterActivity { activity: args[3].clone() },
+        Some("admin-role-define") if (6..=69).contains(&end) => {
+            let mut activities = args[5..end].to_vec();
+            activities.sort();
+            Command::DefineRole { name: args[3].clone(), activities, expected_version: args[4].parse()? }
+        }
+        _ => return Err("use admin-activity-register LOGIN REQUEST ACTIVITY or admin-role-define LOGIN REQUEST ROLE EXPECTED-VERSION ACTIVITY...; optional --commit REVIEW-SHA256".into()),
+    };
+    command.validate()?;
+    if !admin_roles::identifier(&args[2]) || args[2] == REQUEST {
+        return Err("invalid or reserved Admin request".into());
+    }
+    Ok((&args[1], &args[2], command, review))
+}
+
+pub fn catalog_command(args: &[String]) -> Result<()> {
+    let (login, request, command, reviewed) = parse_command(args)?;
+    crate::require_root()?;
+    platform::require_installed()?;
+    let authenticated = authentication::local(login)?;
+    let directory = Path::new(DIRECTORY);
+    let mut store = Store::open(
+        tpm::LocalAnchor::installed()?,
+        &directory.join("journal.json"),
+    )?;
+    let report = execute_catalog(
+        &mut store,
+        directory,
+        || authenticated.identity(),
+        request,
+        &command,
+        reviewed,
+    )?;
+    println!("{}", serde_json::to_string(&report)?);
+    Ok(())
+}
+
+pub fn catalog_status(login: &str) -> Result<()> {
+    crate::require_root()?;
+    platform::require_installed()?;
+    let authenticated = authentication::local(login)?;
+    let directory = Path::new(DIRECTORY);
+    let mut store = Store::open(
+        tpm::LocalAnchor::installed()?,
+        &directory.join("journal.json"),
+    )?;
+    let snapshot = store.snapshot()?;
+    let context = Context::load(directory, &snapshot.deployment)?;
+    if !context.state(&snapshot, None)?.1 {
+        return Err("explicit product Admin bootstrap required".into());
+    }
+    let (catalog, _) = context.events(&snapshot, None)?;
+    context.recheck(&mut || authenticated.identity())?;
+    println!(
+        "{}",
+        serde_json::to_string(&serde_json::json!({"schema_version":1,
+        "action":"admin-governance-status","principal":context.principal,"catalog":catalog,
+        "checkpoint_head":snapshot.head,"product_admin_active":true,
+        "delegation_available":false,"effect_grant":false,"gate_closing":false}))?
+    );
     Ok(())
 }
 
@@ -369,6 +667,28 @@ mod tests {
         }
         fn writes(&self) -> usize {
             self.anchor.0.borrow().2
+        }
+        fn catalog_inspect(&self, request: &str, command: &Command) -> Result<serde_json::Value> {
+            execute_catalog(
+                &mut self.store(),
+                &self.directory,
+                || Ok(self.identity.clone()),
+                request,
+                command,
+                None,
+            )
+        }
+        fn catalog_commit(&self, request: &str, command: &Command) -> serde_json::Value {
+            let inspected = self.catalog_inspect(request, command).unwrap();
+            execute_catalog(
+                &mut self.store(),
+                &self.directory,
+                || Ok(self.identity.clone()),
+                request,
+                command,
+                Some(inspected["review_sha256"].as_str().unwrap()),
+            )
+            .unwrap()
         }
     }
     impl Drop for Fixture {
@@ -631,6 +951,326 @@ mod tests {
         assert_eq!(f.writes(), 1);
     }
 
+    fn register() -> Command {
+        Command::RegisterActivity {
+            activity: "model.select".into(),
+        }
+    }
+    fn definition(version: u64, activities: &[&str]) -> Command {
+        Command::DefineRole {
+            name: "Operator".into(),
+            activities: activities.iter().map(|v| (*v).into()).collect(),
+            expected_version: version,
+        }
+    }
+
+    #[test]
+    fn catalog_requires_bootstrap_and_exact_fresh_admin_principal() {
+        let f = Fixture::new("catalog-auth");
+        assert!(f.catalog_inspect("register", &register()).is_err());
+        assert_eq!(f.writes(), 0);
+        f.activate();
+        let mut other = f.identity.clone();
+        other["principal"] = serde_json::json!("ef".repeat(32));
+        assert!(execute_catalog(
+            &mut f.store(),
+            &f.directory,
+            || Ok(other.clone()),
+            "register",
+            &register(),
+            None
+        )
+        .is_err());
+        assert!(!f.directory.join(event_name("register")).exists());
+        assert_eq!(f.writes(), 1);
+    }
+
+    #[test]
+    fn finite_catalog_survives_restart_updates_and_historical_request_replay() {
+        let f = Fixture::new("catalog-replay");
+        f.activate();
+        let inspected = f.catalog_inspect("register", &register()).unwrap();
+        assert_eq!(inspected["committed"], false);
+        assert!(!f.directory.join(event_name("register")).exists());
+        f.catalog_commit("register", &register());
+        let original = f.catalog_commit("define", &definition(0, &["model.select"]));
+        assert_eq!(original["catalog"]["roles"]["Operator"]["version"], 1);
+        let updated = f.catalog_commit(
+            "update",
+            &definition(1, &["admin.role.define", "model.select"]),
+        );
+        assert_eq!(updated["catalog"]["roles"]["Operator"]["version"], 2);
+        let replay = f.catalog_commit("define", &definition(0, &["model.select"]));
+        assert_eq!(replay["proposal"], original["proposal"]);
+        assert_eq!(replay["catalog"]["roles"]["Operator"]["version"], 2);
+        assert_eq!(replay["replayed"], true);
+        assert_eq!(replay["tpm_write_performed"], false);
+        assert_eq!(replay["effect_grant"], false);
+        assert_eq!(f.inspect()["product_admin_active"], true);
+        assert_eq!(f.writes(), 4);
+    }
+
+    #[test]
+    fn catalog_conflicts_undeclared_activity_and_root_role_never_prepare() {
+        let f = Fixture::new("catalog-deny");
+        f.activate();
+        f.catalog_commit("register", &register());
+        f.catalog_commit("define", &definition(0, &["model.select"]));
+        for (request, command) in [
+            ("register", definition(0, &["model.select"])),
+            ("stale", definition(0, &["model.select"])),
+            ("unknown", definition(1, &["unknown"])),
+            (
+                "root",
+                Command::DefineRole {
+                    name: "Admin".into(),
+                    activities: vec!["model.select".into()],
+                    expected_version: 0,
+                },
+            ),
+            (
+                "wildcard",
+                Command::RegisterActivity {
+                    activity: "model.*".into(),
+                },
+            ),
+        ] {
+            assert!(f.catalog_inspect(request, &command).is_err());
+            if request != "register" {
+                assert!(!f.directory.join(event_name(request)).exists());
+            }
+        }
+        assert_eq!(f.writes(), 3);
+    }
+
+    #[test]
+    fn valid_checkpoint_digest_does_not_excuse_forged_semantic_bindings() {
+        for field in ["previous-head", "principal", "sequence", "state-version"] {
+            let f = Fixture::new(&format!("catalog-forged-{field}"));
+            f.activate();
+            let inspected = f.catalog_inspect("forged", &register()).unwrap();
+            let mut event: CatalogEvent =
+                serde_json::from_value(inspected["proposal"].clone()).unwrap();
+            match field {
+                "previous-head" => event.previous_head = "ef".repeat(32),
+                "principal" => event.principal.generation += 1,
+                "sequence" => event.sequence += 1,
+                "state-version" => event.state_version_before += 1,
+                _ => unreachable!(),
+            }
+            let bytes = serde_json::to_vec(&event).unwrap();
+            platform::write_atomic(&f.directory.join(event_name("forged")), &bytes, 0o600).unwrap();
+            let mut store = f.store();
+            let clock = store.snapshot().unwrap().clock;
+            // Inject into the inert test adapter, not through a product API.
+            // Semantic proof must remain mandatory even when digest/head match.
+            store
+                .append(
+                    Entry {
+                        request_id: "forged".into(),
+                        authenticated_uid: 1001,
+                        clock,
+                        activity: register().activity().into(),
+                        payload_sha256: bundle::hex(&Sha256::digest(&bytes)),
+                    },
+                    |_| Ok(()),
+                )
+                .unwrap();
+            assert!(f.catalog_inspect("next", &register()).is_err());
+            assert!(execute(
+                &mut f.store(),
+                &f.directory,
+                || Ok(f.identity.clone()),
+                None
+            )
+            .is_err());
+            assert_eq!(f.writes(), 2);
+        }
+    }
+
+    #[test]
+    fn catalog_noops_have_no_new_payload_receipt_or_version() {
+        let f = Fixture::new("catalog-noop");
+        f.activate();
+        f.catalog_commit("register", &register());
+        let noop = f.catalog_commit("register-again", &register());
+        assert_eq!(noop["no_change"], true);
+        assert_eq!(noop["committed"], false);
+        assert!(!f.directory.join(event_name("register-again")).exists());
+        f.catalog_commit("define", &definition(0, &["model.select"]));
+        let noop = f.catalog_commit("same-role", &definition(1, &["model.select"]));
+        assert_eq!(noop["catalog"]["state_version"], 3);
+        assert_eq!(noop["catalog"]["roles"]["Operator"]["version"], 1);
+        assert_eq!(f.writes(), 3);
+        let inspected = f.catalog_inspect("unsupported-noop", &register()).unwrap();
+        let event: CatalogEvent = serde_json::from_value(inspected["proposal"].clone()).unwrap();
+        let path = f.directory.join(event_name("unsupported-noop"));
+        platform::write_atomic(&path, &serde_json::to_vec(&event).unwrap(), 0o600).unwrap();
+        assert!(f.catalog_inspect("unsupported-noop", &register()).is_err());
+        assert_eq!(
+            fs::read(&path).unwrap(),
+            serde_json::to_vec(&event).unwrap()
+        );
+        assert_eq!(f.writes(), 3);
+    }
+
+    #[test]
+    fn orphan_preparation_blocks_unrelated_work_but_exact_review_can_resume() {
+        let f = Fixture::new("catalog-orphan");
+        f.activate();
+        let inspected = f.catalog_inspect("register", &register()).unwrap();
+        let event: CatalogEvent = serde_json::from_value(inspected["proposal"].clone()).unwrap();
+        let path = f.directory.join(event_name("register"));
+        platform::write_atomic(&path, &serde_json::to_vec(&event).unwrap(), 0o600).unwrap();
+        assert!(execute(
+            &mut f.store(),
+            &f.directory,
+            || Ok(f.identity.clone()),
+            None
+        )
+        .is_err());
+        assert!(f.catalog_inspect("other", &register()).is_err());
+        assert_eq!(
+            f.catalog_inspect("register", &register()).unwrap()["review_sha256"],
+            inspected["review_sha256"]
+        );
+        assert_eq!(f.catalog_commit("register", &register())["committed"], true);
+        assert_eq!(f.writes(), 2);
+    }
+
+    #[test]
+    fn changed_missing_or_partial_catalog_payload_never_reconstructs_authority() {
+        let f = Fixture::new("catalog-payload");
+        f.activate();
+        f.catalog_commit("register", &register());
+        let path = f.directory.join(event_name("register"));
+        let original = fs::read(&path).unwrap();
+        platform::write_atomic(&path, b"{", 0o600).unwrap();
+        assert!(f
+            .catalog_inspect("define", &definition(0, &["model.select"]))
+            .is_err());
+        fs::remove_file(&path).unwrap();
+        assert!(execute(
+            &mut f.store(),
+            &f.directory,
+            || Ok(f.identity.clone()),
+            None
+        )
+        .is_err());
+        let mut changed: CatalogEvent = serde_json::from_slice(&original).unwrap();
+        changed.command = Command::RegisterActivity {
+            activity: "sign.production".into(),
+        };
+        platform::write_atomic(&path, &serde_json::to_vec(&changed).unwrap(), 0o600).unwrap();
+        assert!(f.catalog_inspect("next", &register()).is_err());
+        assert_eq!(f.writes(), 2);
+    }
+
+    #[test]
+    fn catalog_lost_tpm_reply_requires_reviewed_committed_publication() {
+        let f = Fixture::new("catalog-lost");
+        f.activate();
+        let inspected = f.catalog_inspect("register", &register()).unwrap();
+        f.anchor.0.borrow_mut().3 = true;
+        assert!(execute_catalog(
+            &mut f.store(),
+            &f.directory,
+            || Ok(f.identity.clone()),
+            "register",
+            &register(),
+            Some(inspected["review_sha256"].as_str().unwrap())
+        )
+        .is_err());
+        let path = f.directory.join("journal.json");
+        assert!(Store::open(f.anchor.clone(), &path).is_err());
+        let recovery = admin_journal::Recovery::inspect(f.anchor.clone(), &path).unwrap();
+        let digest = recovery.digest().unwrap();
+        drop(recovery.publish(&digest).unwrap());
+        let replay = f.catalog_commit("register", &register());
+        assert_eq!(replay["replayed"], true);
+        assert_eq!(replay["catalog"]["state_version"], 2);
+        assert_eq!(f.writes(), 2);
+    }
+
+    #[test]
+    fn final_catalog_writer_revocation_fences_without_dispatch() {
+        let f = Fixture::new("catalog-revoked");
+        f.activate();
+        let inspected = f.catalog_inspect("register", &register()).unwrap();
+        let mut calls = 0;
+        assert!(execute_catalog(
+            &mut f.store(),
+            &f.directory,
+            || {
+                calls += 1;
+                if calls >= 5 {
+                    return Err("authentication expired at final writer boundary".into());
+                }
+                Ok(f.identity.clone())
+            },
+            "register",
+            &register(),
+            Some(inspected["review_sha256"].as_str().unwrap())
+        )
+        .is_err());
+        assert_eq!(calls, 5);
+        assert_eq!(f.writes(), 1);
+        assert!(f.directory.join("journal.pending.json").exists());
+        assert!(admin_journal::Recovery::inspect(
+            f.anchor.clone(),
+            &f.directory.join("journal.json")
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn catalog_review_epoch_and_request_syntax_are_closed() {
+        let f = Fixture::new("catalog-review");
+        f.activate();
+        let inspected = f.catalog_inspect("register", &register()).unwrap();
+        f.anchor.0.borrow_mut().1.reset_count += 1;
+        assert!(execute_catalog(
+            &mut f.store(),
+            &f.directory,
+            || Ok(f.identity.clone()),
+            "register",
+            &register(),
+            Some(inspected["review_sha256"].as_str().unwrap())
+        )
+        .is_err());
+        for args in [
+            vec![],
+            vec!["admin-role-define"],
+            vec![
+                "admin-activity-register",
+                "human",
+                "../target",
+                "model.select",
+            ],
+            vec![
+                "admin-role-define",
+                "human",
+                "request",
+                "Operator",
+                "-1",
+                "model.select",
+            ],
+            vec![
+                "admin-role-define",
+                "human",
+                "request",
+                "Operator",
+                "0",
+                "model.select",
+                "model.select",
+            ],
+            vec!["admin-activity-register", "human", REQUEST, "model.select"],
+        ] {
+            assert!(parse_command(&args.iter().map(|v| (*v).into()).collect::<Vec<_>>()).is_err());
+        }
+        assert_eq!(f.writes(), 1);
+    }
+
     #[test]
     #[ignore = "requires already enrolled isolated existing-owner software TPM"]
     fn emulator_bootstrap() {
@@ -681,6 +1321,68 @@ mod tests {
         assert_eq!(replay["product_admin_active"], true);
         assert_eq!(replay["replayed"], true);
         assert_eq!(replay["effect_grant"], false);
+        assert_eq!(restarted.snapshot().unwrap().head, committed);
+        let inspected = execute_catalog(
+            &mut restarted,
+            &directory,
+            || Ok(identity.clone()),
+            "register-model",
+            &register(),
+            None,
+        )
+        .unwrap();
+        execute_catalog(
+            &mut restarted,
+            &directory,
+            || Ok(identity.clone()),
+            "register-model",
+            &register(),
+            Some(inspected["review_sha256"].as_str().unwrap()),
+        )
+        .unwrap();
+        let command = definition(0, &["model.select"]);
+        let inspected = execute_catalog(
+            &mut restarted,
+            &directory,
+            || Ok(identity.clone()),
+            "define-operator",
+            &command,
+            None,
+        )
+        .unwrap();
+        let defined = execute_catalog(
+            &mut restarted,
+            &directory,
+            || Ok(identity.clone()),
+            "define-operator",
+            &command,
+            Some(inspected["review_sha256"].as_str().unwrap()),
+        )
+        .unwrap();
+        assert_eq!(defined["catalog"]["roles"]["Operator"]["version"], 1);
+        let committed = restarted.snapshot().unwrap().head;
+        drop(restarted);
+        let mut restarted = connect().unwrap();
+        let inspected = execute_catalog(
+            &mut restarted,
+            &directory,
+            || Ok(identity.clone()),
+            "define-operator",
+            &command,
+            None,
+        )
+        .unwrap();
+        let replay = execute_catalog(
+            &mut restarted,
+            &directory,
+            || Ok(identity.clone()),
+            "define-operator",
+            &command,
+            Some(inspected["review_sha256"].as_str().unwrap()),
+        )
+        .unwrap();
+        assert_eq!(replay["replayed"], true);
+        assert_eq!(replay["delegation_available"], false);
         assert_eq!(restarted.snapshot().unwrap().head, committed);
     }
 }

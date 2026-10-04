@@ -101,6 +101,19 @@ finite delegation, principal recovery/lifecycle, scoped effect grants, trusted
 time or signing custody. Installed PAM-to-TPM and candidate-image evaluation
 remain open. G2 software remains incomplete.
 
+The [finite activity and role definition checkpoint](evidence/G2_ADMIN_CATALOG_2026-10-04.md)
+adds fresh principal-bound registration and compare-exchange role definitions.
+Canonical semantic events bind the complete actor, enrollment, predecessor
+head, sequence, state version and exact command into the TPM journal. Replay
+rebuilds the finite catalog and verifies historical requests without overwriting
+later revisions. Unreferenced preparations fence unrelated work; partial or
+uncertain state is preserved. Seventy-two ordinary Rust tests, the extended
+disposable-TPM definition/restart/replay fixture, five wiring checks, formatting
+and the offline build passed. Definitions are not assignments, resource grants
+or signing custody. The confined service, trusted-time assignment/revocation,
+effect authorization, principal lifecycle/recovery and installed qualification
+remain open; this does not complete the Admin/trust work package or G2.
+
 The earlier [disposable TPM feasibility experiment](evidence/G2_OWNER_CREDENTIAL_FEASIBILITY_2026-10-02.md)
 informed the native backend now integrated above. The targeted native tests
 exercise signed PCR 11 renewal, fixed PCR 7 denial, forged-signature refusal,

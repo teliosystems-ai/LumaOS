@@ -114,11 +114,21 @@ pub(crate) struct Snapshot {
     pub entries: Vec<Entry>,
     pub head: String,
     pub clock: Clock,
+    pub prefix_heads: Vec<String>,
 }
 
 impl<A: Checkpoint> Store<A> {
     pub(crate) fn snapshot(&mut self) -> Result<Snapshot> {
         let status = self.status()?;
+        let mut prefix = tpm::extend_value([0; 32], genesis(&self.journal.deployment)?);
+        let mut prefix_heads = vec![bundle::hex(&prefix)];
+        for (position, entry) in self.journal.entries.iter().enumerate() {
+            prefix = tpm::extend_value(
+                prefix,
+                entry_digest(&self.journal.deployment, position, entry)?,
+            );
+            prefix_heads.push(bundle::hex(&prefix));
+        }
         Ok(Snapshot {
             deployment: self.journal.deployment.clone(),
             entries: self.journal.entries.clone(),
@@ -127,6 +137,7 @@ impl<A: Checkpoint> Store<A> {
                 .ok_or("missing checkpoint head")?
                 .into(),
             clock: serde_json::from_value(status["clock"].clone())?,
+            prefix_heads,
         })
     }
     pub fn open(mut anchor: A, path: &Path) -> Result<Self> {

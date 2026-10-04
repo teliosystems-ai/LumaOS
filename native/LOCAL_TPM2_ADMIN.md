@@ -487,6 +487,54 @@ targeted source and software-TPM checks. Full installed PAM-to-TPM, confinement,
 finite role/grant lifecycle, trusted time, independent recovery, production
 custody and physical qualification remain required.
 
+## Finite activity registration and role definitions
+
+After explicit bootstrap, the source interfaces below let the original human
+Admin inspect or explicitly commit finite catalog mutations. Each invocation
+requires fresh protected PAM authentication. These commands are for an approved
+installed test system, not the Windows/WSL host, and await inclusion and
+qualification in a rebuilt candidate image.
+
+```text
+sudo luma-platform admin-governance-status LOGIN
+sudo luma-platform admin-activity-register LOGIN register-model model.select
+sudo luma-platform admin-activity-register LOGIN register-model model.select --commit REVIEW-SHA256
+sudo luma-platform admin-role-define LOGIN define-operator Operator 0 model.select
+sudo luma-platform admin-role-define LOGIN define-operator Operator 0 model.select --commit REVIEW-SHA256
+```
+
+Use each inspection's own digest after independently reviewing the principal,
+request, command and current catalog. The review binds current checkpoint head
+and TPM boot epoch; changed state/reboot requires reinspection. Request IDs must
+be distinct for different commands. Keep the same ID and exact command when
+reviewing a committed retry, even if a role has since advanced. Historical replay
+does not replace the current definition or write the TPM again.
+
+Role version zero creates; the exact current version updates. Activities must
+already be registered, finite and unique. CLI lists are sorted; duplicate,
+wildcard, undeclared and bootstrap activities refuse. `Admin` remains the fixed,
+nondelegable bootstrap role. Native identifiers are limited to 64 ASCII
+characters; catalogs are bounded to 128 activities and 128 roles, with at most
+64 activities per definition. Identical registration/definition is a no-op:
+no new payload, receipt or version. The four governance control activity names
+are metadata defaults, not proof that assignment/revocation execution exists.
+
+Each private event payload binds the exact actor, enrollment, sequence,
+predecessor head, previous state version and command into the TPM journal.
+All referenced payloads must verify on every replay. A retained unreferenced
+proposal fences ordinary status and unrelated work; only that same request can
+review/resume its exact complete proposal at the unchanged head. Partial,
+changed, unsupported or uncertain state must be preserved. Never delete event
+files, restore an older catalog/journal, reset genesis or repeat an uncertain
+TPM write. The existing exact committed-journal publication is the only narrow
+repair for an already TPM-proven successor; uncommitted proposals stay fenced.
+
+A role definition grants nothing to a subject and authorizes no resource effect.
+Trusted UTC, assignments, expiry/revocation, principal and credential recovery,
+signing custody, the confined daemon/API and installed PAM-to-TPM qualification
+remain open. The [catalog evidence](evidence/G2_ADMIN_CATALOG_2026-10-04.md)
+records source and disposable-TPM checks, not G2 completion.
+
 ## Future installer variant: external protected service
 
 Deferred TODO: a separate `external-admin` installation variant with authenticated

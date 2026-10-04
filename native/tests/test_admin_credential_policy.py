@@ -44,6 +44,19 @@ class AdminCredentialPolicyTests(unittest.TestCase):
             source = (ROOT / 'rust/luma-platform/src' / name).read_text()
             self.assertNotIn('admin_governance::bootstrap', source)
 
+    def test_catalog_operations_have_independent_pam_and_no_assignment_interface(self):
+        source = (ROOT / 'rust/luma-platform/src/admin_governance.rs').read_text().split('#[cfg(test)]')[0]
+        for name in ('catalog_command', 'catalog_status'):
+            entry = source.split(f'pub fn {name}(')[1].split('\n}\n', 1)[0]
+            for required in ('crate::require_root()?', 'platform::require_installed()?',
+                             'authentication::local(login)?', 'tpm::LocalAnchor::installed()?',
+                             'authenticated.identity()'):
+                self.assertIn(required, entry)
+        roles = (ROOT / 'rust/luma-platform/src/admin_roles.rs').read_text().split('#[cfg(test)]')[0]
+        self.assertIn('RegisterActivity', roles)
+        self.assertIn('DefineRole', roles)
+        self.assertNotIn('AssignRole', roles)
+
 
 if __name__ == '__main__':
     unittest.main()

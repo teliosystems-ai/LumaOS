@@ -3,6 +3,7 @@ mod admin_credentials;
 mod admin_enrollment;
 mod admin_governance;
 mod admin_journal;
+mod admin_roles;
 mod artifact_catalog;
 mod artifacts;
 mod authentication;
@@ -76,6 +77,12 @@ fn dispatch() -> Result<()> {
         Some("admin-bootstrap") if args.len() == 2 => admin_governance::bootstrap(&args[1], None),
         Some("admin-bootstrap") if args.len() == 4 && args[2] == "--activate" => {
             admin_governance::bootstrap(&args[1], Some(&args[3]))
+        }
+        Some("admin-governance-status") if args.len() == 2 => {
+            admin_governance::catalog_status(&args[1])
+        }
+        Some("admin-activity-register") | Some("admin-role-define") => {
+            admin_governance::catalog_command(&args)
         }
         Some("admin-checkpoint-enroll") if args.len() == 3 && args[2] == "--existing-owner" => {
             admin_enrollment::enroll(&args[1])
@@ -217,6 +224,9 @@ fn dispatch() -> Result<()> {
             println!("admin-checkpoint-reconcile [--publish-committed REVIEW-SHA256]: inspect or explicitly publish a TPM-proven pending inert audit commit; never replays effects or resets TPM state. Requires existing enrollment and credential delivery.");
             println!("admin-auth-check LOGIN: installed-system, controlling-terminal account authentication diagnostic; does not enroll or grant product Admin.");
             println!("admin-bootstrap LOGIN [--activate REVIEW-SHA256]: freshly authenticate the enrolled human, inspect or explicitly commit the installation-bound Admin bootstrap receipt. No role delegation, signing, resource capability or effect execution is enabled by this command.");
+            println!("admin-governance-status LOGIN: fresh principal-bound inspection of the TPM-verified finite activity/role definition catalog; no assignment or effect grant.");
+            println!("admin-activity-register LOGIN REQUEST ACTIVITY [--commit REVIEW-SHA256]: inspect or explicitly commit one declared finite activity.");
+            println!("admin-role-define LOGIN REQUEST ROLE EXPECTED-VERSION ACTIVITY... [--commit REVIEW-SHA256]: finite registered activities only; version 0 creates, the exact current version updates. Defines no assignment or resource grant.");
             println!("Install requires local TPM2 admission before any disk write. admin-install-check is read-only and does not enroll Admin; explicit checkpoint enrollment remains separate from product Admin activation.");
             println!("Maintenance: staging-clean | model-clean (root only; preserves active operations and unknown files).");
             println!("broker-effect-status: root-only installed laboratory worker-effect receipts; uncertain effects are fenced, never automatically replayed. Not product Admin or TPM rollback protection.");

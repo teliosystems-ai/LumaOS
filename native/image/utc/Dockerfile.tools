@@ -1,0 +1,6 @@
+# Targeted compiler fixture only; not the production image or dependency choice.
+FROM luma-native-tools:20260927
+ARG SNAPSHOT=20260927T000000Z
+RUN apt-get update --snapshot=${SNAPSHOT} -o APT::Update::Error-Mode=any && \
+    apt-get install -y --no-install-recommends --snapshot=${SNAPSHOT} \
+      make bison pkg-config libgnutls28-dev

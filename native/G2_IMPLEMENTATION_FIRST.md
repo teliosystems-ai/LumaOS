@@ -41,10 +41,12 @@ targeted source checks alone cannot close G2 acceptance.
 
 The [UTC design](TRUSTED_UTC_DESIGN.md) records the owner-approved provider set,
 initial bounds and offline refusal. Checked interval/quorum arithmetic, fixed
-policy and a non-authorizing keeper lifecycle are implemented, but authenticated
-live publication, protected clock/history lifecycle and
+policy, a non-authorizing keeper lifecycle and a pinned chrony good-sample
+publisher/closed frame decoder are implemented in source. The publisher fixture
+is not deployed; protected live reception, clock/history lifecycle and
 time-bound authorization integration remain part of the open Admin/trust work
-package. Do not count the arithmetic checkpoint as a completed time provider.
+package. See [the publisher checkpoint](evidence/G2_UTC_PUBLISHER_2026-10-05.md).
+Do not count source linkage or arithmetic as a completed time provider.
 
 ## External evidence remains separate
 

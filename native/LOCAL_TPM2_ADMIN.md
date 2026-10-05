@@ -609,6 +609,10 @@ bounds and offline refusal on 2026-10-05. Fixed policy and keeper lifecycle code
 remain non-authorizing; no time authority, assignment endpoint
 or time-service configuration is enabled. Do not set the service's trusted-time
 status from an OS synchronization flag or bypass its current refusal.
+The [publisher source checkpoint](evidence/G2_UTC_PUBLISHER_2026-10-05.md)
+adds a pinned chrony hook and bounded measurement codec, not an installed
+trusted-time endpoint. Its producer generations are not keeper recovery
+generations, and decoding a frame does not authenticate it or its history.
 
 ## Future installer variant: external protected service
 

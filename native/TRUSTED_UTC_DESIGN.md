@@ -132,8 +132,10 @@ with a bounded protected publisher at the authenticated good-sample boundary;
 do not synthesize proof from report flags. Audit the eventual exact packaged
 Ubuntu tuple and publisher changes as well. Bound parsing, report size,
 duplicate/alias handling, finite numbers,
-rounding, deadlines and before/after generation checks. This adapter and its
-service confinement are still missing; the arithmetic core is not a substitute.
+rounding, deadlines and before/after generation checks. A pinned good-sample
+publisher source fixture and closed measurement decoder now exist; protected
+live reception, production dependency qualification and service confinement
+are still missing. Source linkage and arithmetic are not substitutes.
 
 ## Bootstrap and offline recovery
 
@@ -203,7 +205,16 @@ clock observations nor the supplied floor are yet bound to an authenticated
 publisher or TPM history. `Bounded` means an arithmetic candidate, not the
 deployed service's `Eligible` state or permission to set trusted UTC available.
 
-Next: implement/audit the authenticated measurement publisher and live adapter,
+The [publisher checkpoint](evidence/G2_UTC_PUBLISHER_2026-10-05.md) adds the
+authenticated good-sample source hook, complete fixed-format rounds and a
+strict C/Rust codec. It does not turn serialized measurements into proof:
+kernel peer/runtime identity, queue deadlines, live clock checks and protected
+history still belong to the integrating service. Producer source-clock
+generation and keeper reacquisition generation are distinct and must be
+mapped explicitly at that boundary. No fixture daemon or time service is
+installed or activated.
+
+Next: complete/audit protected live reception and the production dependency,
 confinement and bootstrap/history lifecycle; integrate finite assignments and
 effect-time checks; package installer/boot/update/recovery paths. Add controlled
 tests for forged/expired/wrong-host certificates, NTS stripping, replay, delayed

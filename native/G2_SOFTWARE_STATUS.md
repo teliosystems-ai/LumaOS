@@ -143,7 +143,9 @@ The source now includes inert quorum/interval arithmetic; it does not implement
 or activate that provider. The owner approved the three providers, initial
 bounds and offline-refusal policy on 2026-10-05. A fixed policy artifact and
 non-authorizing keeper lifecycle now exist in source, with an upstream chrony
-measurement/report audit. Authenticated publication, bootstrap/recovery,
+measurement/report audit. A pinned good-sample publisher hook and closed C/Rust
+measurement codec also exist; they are not an installed or eligible time service.
+Protected live reception, bootstrap/recovery,
 protected history, service confinement and authorization integration
 remain open. Admin still reports no trusted UTC and admits no assignments or
 effect grants. See [the bounded arithmetic checkpoint](evidence/G2_UTC_BOUNDS_2026-10-04.md)
@@ -151,6 +153,18 @@ and [the policy and keeper checkpoint](evidence/G2_UTC_KEEPER_2026-10-05.md).
 The latter passed 101 ordinary Rust tests, ten wiring checks, formatting and
 the offline native build on D:. No live NTS or installed-service qualification
 was performed; source observations/history remain data rather than authority.
+
+The [publisher checkpoint](evidence/G2_UTC_PUBLISHER_2026-10-05.md) adds exact
+source-boundary patch guards, strict operator registration, nonblocking complete
+measurement rounds, preserved sample age/identity, clock/leap/loss invalidation
+and a bounded frame decoder. The fixture is separate from image packaging;
+the exact security-qualified production dependency and controlled NTS attack
+journey remain open. Source linkage does not replace live peer verification,
+protected history or effect-time checks. No final image/sweep or host time-service
+activation is performed by this increment.
+Its final targeted run passed the sanitized C fixture, strict hook compilation,
+patched `+NTS` build, 107 ordinary Rust tests, one C/Rust interoperability test,
+17 Python checks, formatting and the offline native build on D:.
 
 The earlier [disposable TPM feasibility experiment](evidence/G2_OWNER_CREDENTIAL_FEASIBILITY_2026-10-02.md)
 informed the native backend now integrated above. The targeted native tests

@@ -7,6 +7,7 @@ use crate::{
     admin_roles::{self, Catalog, Command},
     authentication, bundle, platform,
     tpm::{self, Checkpoint},
+    utc_history::{self, History, Observation, Record as HistoryRecord, Statement},
     Result,
 };
 use serde::{Deserialize, Serialize};
@@ -23,7 +24,7 @@ const ACTIVITY: &str = "admin.bootstrap";
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
-struct Identity {
+pub(crate) struct Identity {
     installation: String,
     principal: String,
     generation: u64,
@@ -224,10 +225,52 @@ impl<'a> Context<'a> {
         snapshot: &Snapshot,
         candidate: Option<&str>,
     ) -> Result<(Catalog, Vec<CatalogEvent>)> {
+        let (catalog, events, _, _) = self.replay(snapshot, candidate)?;
+        Ok((catalog, events))
+    }
+    fn history(
+        &self,
+        snapshot: &Snapshot,
+        candidate: Option<&str>,
+    ) -> Result<(History, Vec<HistoryRecord>)> {
+        let (_, _, history, records) = self.replay(snapshot, candidate)?;
+        Ok((history, records))
+    }
+    fn replay(
+        &self,
+        snapshot: &Snapshot,
+        candidate: Option<&str>,
+    ) -> Result<(Catalog, Vec<CatalogEvent>, History, Vec<HistoryRecord>)> {
         let mut catalog = Catalog::initial();
         let mut events = Vec::new();
+        let mut history = History::initial();
+        let mut records = Vec::new();
         let mut names = BTreeSet::new();
         for (position, entry) in snapshot.entries.iter().enumerate().skip(1) {
+            if entry.activity == utc_history::ACTIVITY {
+                let (record, bytes) = utc_history::read(
+                    &self.directory.join(event_name(&entry.request_id)),
+                    &entry.request_id,
+                )?;
+                if !admin_roles::identifier(&entry.request_id)
+                    || entry.request_id == REQUEST
+                    || record.deployment != self.deployment
+                    || record.principal != self.principal
+                    || record.enrollment_sha256 != bundle::hex(&Sha256::digest(&self.enrollment))
+                    || record.sequence != position + 1
+                    || snapshot.prefix_heads.get(position) != Some(&record.previous_head)
+                    || entry.authenticated_uid != self.principal.uid
+                    || entry.payload_sha256 != bundle::hex(&Sha256::digest(&bytes))
+                {
+                    return Err(
+                        "UTC history does not bind the authenticated Admin checkpoint".into(),
+                    );
+                }
+                history.apply(&record)?;
+                names.insert(event_name(&entry.request_id));
+                records.push(record);
+                continue;
+            }
             let (event, bytes) = read_event(self.directory, &entry.request_id)?;
             if !admin_roles::identifier(&entry.request_id)
                 || entry.request_id == REQUEST
@@ -271,8 +314,165 @@ impl<'a> Context<'a> {
                 );
             }
         }
-        Ok((catalog, events))
+        Ok((catalog, events, history, records))
     }
+}
+
+// Deliberately private and not wired to any CLI, IPC or installed service.
+// The future approved composition root must supply actual authenticated UTC
+// observations. A caller's Statement, runtime digest or successful fake callback
+// is not source provenance or live authority. This implements the durable
+// semantic transaction/replay boundary while that provider remains unavailable.
+#[cfg_attr(not(test), allow(dead_code))]
+fn execute_history<A: Checkpoint>(
+    store: &mut Store<A>,
+    directory: &Path,
+    mut authenticate: impl FnMut() -> Result<serde_json::Value>,
+    mut observe: impl FnMut() -> Result<Observation>,
+    request: &str,
+    statement: &Statement,
+    reviewed: Option<&str>,
+) -> Result<serde_json::Value> {
+    if !admin_roles::identifier(request) || request == REQUEST {
+        return Err("invalid or reserved UTC history request".into());
+    }
+    statement.validate()?;
+    let snapshot = store.snapshot()?;
+    let context = Context::load(directory, &snapshot.deployment)?;
+    if !context.state(&snapshot, Some(request))?.1 {
+        return Err("explicit product Admin bootstrap required for UTC history".into());
+    }
+    let (history, records) = context.history(&snapshot, Some(request))?;
+    let (catalog, _) = context.events(&snapshot, Some(request))?;
+    context.recheck(&mut authenticate)?;
+    let old = records.iter().find(|record| record.request_id == request);
+    let replayed = old.is_some();
+    let (record, changed) = if let Some(old) = old {
+        if &old.statement != statement {
+            return Err("UTC request already binds a different floor/context".into());
+        }
+        (old.clone(), false)
+    } else {
+        if snapshot
+            .entries
+            .iter()
+            .any(|entry| entry.request_id == request)
+        {
+            return Err("Admin request belongs to another semantic activity".into());
+        }
+        if statement.floor_ms < history.floor_ms {
+            return Err("UTC history floor regression refused".into());
+        }
+        statement.supported_by(&observe()?)?;
+        (
+            HistoryRecord {
+                schema_version: 1,
+                kind: "native-admin-utc-history".into(),
+                deployment: context.deployment.clone(),
+                enrollment_sha256: bundle::hex(&Sha256::digest(&context.enrollment)),
+                principal: context.principal.clone(),
+                request_id: request.into(),
+                sequence: snapshot.entries.len() + 1,
+                previous_head: snapshot.head.clone(),
+                history_version_before: history.version,
+                previous_floor_ms: history.floor_ms,
+                statement: statement.clone(),
+            },
+            statement.floor_ms > history.floor_ms,
+        )
+    };
+    let bytes = serde_json::to_vec(&record)?;
+    let path = directory.join(event_name(request));
+    let retained = match fs::symlink_metadata(&path) {
+        Ok(_) => Some(utc_history::read(&path, request)?.1),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(error) => return Err(error.into()),
+    };
+    if retained.as_ref().is_some_and(|old| old != &bytes) {
+        return Err("different retained UTC history proposal; preserve state".into());
+    }
+    if retained.is_some() && !replayed && !changed {
+        return Err("retained UTC no-op requires reconciliation".into());
+    }
+    let mut digest = Sha256::new();
+    digest.update(b"luma-native-admin-utc-history-review-v1\0");
+    digest.update(serde_json::to_vec(
+        &serde_json::json!({"record":record,"head":snapshot.head,
+        "replayed":replayed,"changed":changed,"reset_count":snapshot.clock.reset_count,
+        "restart_count":snapshot.clock.restart_count}),
+    )?);
+    let digest = bundle::hex(&digest.finalize());
+    let mut written = false;
+    if let Some(approved) = reviewed {
+        tpm::decode::<32>(approved)?;
+        if approved != digest {
+            return Err("UTC history review changed; inspect again".into());
+        }
+        if changed {
+            // Never prepare disk state on the strength of a caller's floor.
+            statement.supported_by(&observe()?)?;
+            context.recheck(&mut authenticate)?;
+            match fs::symlink_metadata(&path) {
+                Ok(_) => (),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    let mut file = OpenOptions::new()
+                        .write(true)
+                        .create_new(true)
+                        .mode(0o600)
+                        .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
+                        .open(&path)?;
+                    file.write_all(&bytes)?;
+                    file.sync_all()?;
+                }
+                Err(error) => return Err(error.into()),
+            }
+            OpenOptions::new()
+                .read(true)
+                .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+                .open(&path)?
+                .sync_all()?;
+            File::open(directory)?.sync_all()?;
+            let entry = Entry {
+                request_id: request.into(),
+                authenticated_uid: context.principal.uid,
+                clock: snapshot.clock,
+                activity: utc_history::ACTIVITY.into(),
+                payload_sha256: bundle::hex(&Sha256::digest(&bytes)),
+            };
+            store.append(entry.clone(), |proposed| {
+                if proposed != &entry {
+                    return Err("UTC history entry changed before commit".into());
+                }
+                // Renew the live observation on every journal writer boundary.
+                // It may block; re-read semantic inputs after it, then renew PAM.
+                statement.supported_by(&observe()?)?;
+                if utc_history::read(&path, request)?.1 != bytes
+                    || !context.state(&snapshot, Some(request))?.1
+                    || context.history(&snapshot, Some(request))?.0 != history
+                    || context.events(&snapshot, Some(request))?.0 != catalog
+                {
+                    return Err("UTC history inputs changed before TPM dispatch".into());
+                }
+                context.recheck(&mut authenticate)
+            })?;
+            written = true;
+        }
+    }
+    let final_snapshot = store.snapshot()?;
+    context.state(&final_snapshot, Some(request))?;
+    let (current, _) = context.history(&final_snapshot, Some(request))?;
+    if written && (current.floor_ms != statement.floor_ms || current.version != history.version + 1)
+    {
+        return Err("committed UTC history differs from proposal".into());
+    }
+    context.recheck(&mut authenticate)?;
+    Ok(
+        serde_json::json!({"schema_version":1,"action":"admin-utc-history-source-transaction",
+        "proposal":record,"review_sha256":digest,"history_floor_ms":current.floor_ms,
+        "history_version":current.version,"committed":reviewed.is_some() && (written || replayed),
+        "replayed":replayed,"no_change":!changed && !replayed,"tpm_write_performed":written,
+        "trusted_utc_available":false,"effect_grant":false,"delegation_available":false,"gate_closing":false}),
+    )
 }
 
 fn review(snapshot: &Snapshot, payload: &Bootstrap, active: bool) -> Result<String> {
@@ -784,6 +984,421 @@ mod tests {
             // Only this test's exact, freshly created directory.
             fs::remove_dir_all(&self.directory).unwrap();
         }
+    }
+
+    fn floor_statement(floor_ms: i64) -> Statement {
+        Statement {
+            floor_ms,
+            policy_sha256: utc_history::policy_digest().unwrap(),
+            boot_id: "12".repeat(16),
+            process_generation: 7,
+            source_clock_generation: 1,
+            keeper_generation: 5,
+            runtime_sha256: "ef".repeat(32),
+        }
+    }
+    fn observation(statement: &Statement) -> Observation {
+        Observation {
+            context: statement.clone(),
+            utc: crate::utc_bounds::Interval::new(statement.floor_ms, statement.floor_ms + 100)
+                .unwrap(),
+        }
+    }
+    fn history_call(
+        f: &Fixture,
+        request: &str,
+        statement: &Statement,
+        review: Option<&str>,
+    ) -> Result<serde_json::Value> {
+        execute_history(
+            &mut f.store(),
+            &f.directory,
+            || Ok(f.identity.clone()),
+            || Ok(observation(statement)),
+            request,
+            statement,
+            review,
+        )
+    }
+    fn history_commit(f: &Fixture, request: &str, statement: &Statement) -> serde_json::Value {
+        let inspected = history_call(f, request, statement, None).unwrap();
+        history_call(
+            f,
+            request,
+            statement,
+            Some(inspected["review_sha256"].as_str().unwrap()),
+        )
+        .unwrap()
+    }
+    #[test]
+    fn utc_history_requires_explicit_bootstrap_and_current_human() {
+        let f = Fixture::new("utc-no-bootstrap");
+        let statement = floor_statement(1000);
+        assert!(history_call(&f, "floor-1", &statement, None).is_err());
+        assert_eq!(f.writes(), 0);
+        f.activate();
+        for uid in [0, 1000, 1002] {
+            let mut wrong = f.identity.clone();
+            wrong["uid"] = uid.into();
+            assert!(execute_history(
+                &mut f.store(),
+                &f.directory,
+                || Ok(wrong.clone()),
+                || panic!("unauthenticated actor cannot observe/write"),
+                "floor-1",
+                &statement,
+                None
+            )
+            .is_err());
+        }
+        assert!(!f.directory.join(event_name("floor-1")).exists());
+        assert_eq!(f.writes(), 1);
+    }
+    #[test]
+    fn utc_history_and_catalog_share_one_restartable_checkpoint() {
+        let f = Fixture::new("utc-shared");
+        f.activate();
+        let first = history_commit(&f, "floor-1", &floor_statement(1000));
+        assert_eq!(first["history_version"], 1);
+        assert_eq!(first["history_floor_ms"], 1000);
+        for field in [
+            "effect_grant",
+            "trusted_utc_available",
+            "delegation_available",
+            "gate_closing",
+        ] {
+            assert_eq!(first[field], false);
+        }
+        let catalog = f.catalog_commit("register-model", &register());
+        assert_eq!(catalog["catalog"]["state_version"], 2);
+        let mut next = floor_statement(1100);
+        next.boot_id = "34".repeat(16);
+        next.keeper_generation = 1;
+        let second = history_commit(&f, "floor-2", &next);
+        assert_eq!(second["history_version"], 2);
+        assert_eq!(second["history_floor_ms"], 1100);
+        let catalog = f.catalog_commit("define-role", &definition(0, &["model.select"]));
+        assert_eq!(catalog["catalog"]["roles"]["Operator"]["version"], 1);
+        assert_eq!(f.store().snapshot().unwrap().entries.len(), 5);
+        assert_eq!(f.inspect()["product_admin_active"], true);
+        assert_eq!(f.writes(), 5);
+    }
+    #[test]
+    fn utc_history_exact_acknowledgement_never_reobserves_or_rewrites_time() {
+        let f = Fixture::new("utc-replay");
+        f.activate();
+        let statement = floor_statement(1000);
+        history_commit(&f, "floor-1", &statement);
+        history_commit(&f, "floor-2", &floor_statement(1100));
+        let inspected = execute_history(
+            &mut f.store(),
+            &f.directory,
+            || Ok(f.identity.clone()),
+            || panic!("historical replay is not acquisition"),
+            "floor-1",
+            &statement,
+            None,
+        )
+        .unwrap();
+        let result = execute_history(
+            &mut f.store(),
+            &f.directory,
+            || Ok(f.identity.clone()),
+            || panic!("historical replay is not acquisition"),
+            "floor-1",
+            &statement,
+            Some(inspected["review_sha256"].as_str().unwrap()),
+        )
+        .unwrap();
+        assert_eq!(result["replayed"], true);
+        assert_eq!(result["history_floor_ms"], 1100);
+        assert_eq!(result["tpm_write_performed"], false);
+        assert_eq!(f.writes(), 3);
+        assert!(history_call(&f, "floor-1", &floor_statement(1001), None).is_err());
+        assert!(f.catalog_inspect("floor-1", &register()).is_err());
+    }
+    #[test]
+    fn utc_history_noops_regression_and_cross_activity_requests_never_append() {
+        let f = Fixture::new("utc-noops");
+        f.activate();
+        history_commit(&f, "floor-1", &floor_statement(1000));
+        let equal = history_commit(&f, "floor-equal", &floor_statement(1000));
+        assert_eq!(equal["no_change"], true);
+        assert_eq!(equal["committed"], false);
+        assert_eq!(f.writes(), 2);
+        assert!(!f.directory.join(event_name("floor-equal")).exists());
+        assert!(history_call(&f, "floor-old", &floor_statement(999), None).is_err());
+        f.catalog_commit("register-model", &register());
+        assert!(history_call(&f, "register-model", &floor_statement(1100), None).is_err());
+        assert_eq!(f.writes(), 3);
+    }
+    #[test]
+    fn utc_history_stale_review_and_changed_tpm_epoch_cannot_prepare() {
+        for variant in 0..3 {
+            let f = Fixture::new(&format!("utc-stale-{variant}"));
+            f.activate();
+            let statement = floor_statement(1000);
+            let inspected = history_call(&f, "floor-1", &statement, None).unwrap();
+            match variant {
+                0 => {
+                    f.catalog_commit("register-model", &register());
+                }
+                1 => f.anchor.0.borrow_mut().1.restart_count += 1,
+                _ => f.anchor.0.borrow_mut().1.reset_count += 1,
+            }
+            let before = f.writes();
+            assert!(history_call(
+                &f,
+                "floor-1",
+                &statement,
+                Some(inspected["review_sha256"].as_str().unwrap())
+            )
+            .is_err());
+            assert_eq!(f.writes(), before);
+            assert!(!f.directory.join(event_name("floor-1")).exists());
+        }
+    }
+    #[test]
+    fn utc_history_final_source_loss_fences_preparation_without_tpm_dispatch() {
+        let f = Fixture::new("utc-source-loss");
+        f.activate();
+        let statement = floor_statement(1000);
+        let inspected = history_call(&f, "floor-1", &statement, None).unwrap();
+        let mut observations = 0;
+        let result = execute_history(
+            &mut f.store(),
+            &f.directory,
+            || Ok(f.identity.clone()),
+            || {
+                observations += 1;
+                if observations == 5 {
+                    return Err("source fenced at final boundary".into());
+                }
+                Ok(observation(&statement))
+            },
+            "floor-1",
+            &statement,
+            Some(inspected["review_sha256"].as_str().unwrap()),
+        );
+        assert!(result.is_err());
+        assert_eq!(observations, 5);
+        assert_eq!(f.writes(), 1);
+        assert!(f.directory.join("journal.pending.json").exists());
+        assert!(f.directory.join(event_name("floor-1")).exists());
+        assert!(Store::open(f.anchor.clone(), &f.directory.join("journal.json")).is_err());
+    }
+    #[test]
+    fn utc_history_final_principal_revocation_fences_without_dispatch() {
+        let f = Fixture::new("utc-revoke");
+        f.activate();
+        let statement = floor_statement(1000);
+        let inspected = history_call(&f, "floor-1", &statement, None).unwrap();
+        let mut authentications = 0;
+        let result = execute_history(
+            &mut f.store(),
+            &f.directory,
+            || {
+                authentications += 1;
+                let mut identity = f.identity.clone();
+                if authentications == 5 {
+                    identity["generation"] = 2.into();
+                }
+                Ok(identity)
+            },
+            || Ok(observation(&statement)),
+            "floor-1",
+            &statement,
+            Some(inspected["review_sha256"].as_str().unwrap()),
+        );
+        assert!(result.is_err());
+        assert_eq!(authentications, 5);
+        assert_eq!(f.writes(), 1);
+        assert!(f.directory.join("journal.pending.json").exists());
+    }
+    #[test]
+    fn utc_history_lost_reply_requires_reviewed_committed_publication_not_retry() {
+        let f = Fixture::new("utc-lost-reply");
+        f.activate();
+        let statement = floor_statement(1000);
+        let inspected = history_call(&f, "floor-1", &statement, None).unwrap();
+        f.anchor.0.borrow_mut().3 = true;
+        assert!(history_call(
+            &f,
+            "floor-1",
+            &statement,
+            Some(inspected["review_sha256"].as_str().unwrap())
+        )
+        .is_err());
+        assert_eq!(f.writes(), 2);
+        let path = f.directory.join("journal.json");
+        assert!(Store::open(f.anchor.clone(), &path).is_err());
+        f.anchor.0.borrow_mut().3 = false;
+        let recovery = admin_journal::Recovery::inspect(f.anchor.clone(), &path).unwrap();
+        let reviewed = recovery.digest().unwrap();
+        let mut recovered = recovery.publish(&reviewed).unwrap();
+        let result = execute_history(
+            &mut recovered,
+            &f.directory,
+            || Ok(f.identity.clone()),
+            || panic!("publication must not redispatch or reacquire"),
+            "floor-1",
+            &statement,
+            None,
+        )
+        .unwrap();
+        assert_eq!(result["history_floor_ms"], 1000);
+        assert_eq!(result["replayed"], true);
+        assert_eq!(f.writes(), 2);
+    }
+    #[test]
+    fn utc_history_substitution_missing_and_noncanonical_payloads_fence_catalog_too() {
+        for variant in 0..4 {
+            let f = Fixture::new(&format!("utc-payload-{variant}"));
+            f.activate();
+            history_commit(&f, "floor-1", &floor_statement(1000));
+            let path = f.directory.join(event_name("floor-1"));
+            let original = fs::read(&path).unwrap();
+            match variant {
+                0 => {
+                    fs::remove_file(&path).unwrap();
+                }
+                1 => {
+                    let mut changed: HistoryRecord = serde_json::from_slice(&original).unwrap();
+                    changed.statement.floor_ms = 999;
+                    platform::write_atomic(&path, &serde_json::to_vec(&changed).unwrap(), 0o600)
+                        .unwrap();
+                }
+                2 => {
+                    let mut changed = original.clone();
+                    changed.push(b'\n');
+                    platform::write_atomic(&path, &changed, 0o600).unwrap();
+                }
+                _ => {
+                    fs::remove_file(&path).unwrap();
+                    symlink("missing", &path).unwrap();
+                }
+            }
+            assert!(f.catalog_inspect("register-model", &register()).is_err());
+            assert!(history_call(&f, "floor-2", &floor_statement(1100), None).is_err());
+            assert_eq!(f.writes(), 2);
+        }
+    }
+    #[test]
+    fn utc_history_orphan_intent_requires_exact_request_and_preserves_bytes() {
+        let f = Fixture::new("utc-orphan");
+        f.activate();
+        let statement = floor_statement(1000);
+        let inspected = history_call(&f, "floor-1", &statement, None).unwrap();
+        // The durable file uses Record field order, not Value map order.
+        let record: HistoryRecord = serde_json::from_value(inspected["proposal"].clone()).unwrap();
+        let bytes = serde_json::to_vec(&record).unwrap();
+        platform::write_atomic(&f.directory.join(event_name("floor-1")), &bytes, 0o600).unwrap();
+        assert!(f.catalog_inspect("register-model", &register()).is_err());
+        assert!(history_call(&f, "floor-2", &floor_statement(1100), None).is_err());
+        let repeated = history_call(&f, "floor-1", &statement, None).unwrap();
+        assert_eq!(inspected["review_sha256"], repeated["review_sha256"]);
+        history_call(
+            &f,
+            "floor-1",
+            &statement,
+            Some(repeated["review_sha256"].as_str().unwrap()),
+        )
+        .unwrap();
+        assert_eq!(f.writes(), 2);
+        assert_eq!(
+            fs::read(f.directory.join(event_name("floor-1"))).unwrap(),
+            bytes
+        );
+    }
+    #[test]
+    fn utc_history_valid_checkpoint_does_not_excuse_forged_semantic_bindings() {
+        for variant in 0..9 {
+            let f = Fixture::new(&format!("utc-forged-{variant}"));
+            f.activate();
+            let statement = floor_statement(1000);
+            let inspected = history_call(&f, "floor-1", &statement, None).unwrap();
+            let mut record: HistoryRecord =
+                serde_json::from_value(inspected["proposal"].clone()).unwrap();
+            match variant {
+                0 => record.deployment = "ab".repeat(32),
+                1 => record.enrollment_sha256 = "ab".repeat(32),
+                2 => record.principal.generation += 1,
+                3 => record.sequence += 1,
+                4 => record.previous_head = "ab".repeat(32),
+                5 => record.previous_floor_ms = 1,
+                6 => record.history_version_before = 1,
+                7 => record.kind = "utc-authority".into(),
+                _ => record.schema_version = 2,
+            }
+            let bytes = serde_json::to_vec(&record).unwrap();
+            platform::write_atomic(&f.directory.join(event_name("floor-1")), &bytes, 0o600)
+                .unwrap();
+            let mut store = f.store();
+            let snapshot = store.snapshot().unwrap();
+            // Fake anchor deliberately accepts a generic audit append. The
+            // semantic reader must reject it despite a matching checkpoint.
+            store
+                .append(
+                    Entry {
+                        request_id: "floor-1".into(),
+                        authenticated_uid: 1001,
+                        clock: snapshot.clock,
+                        activity: utc_history::ACTIVITY.into(),
+                        payload_sha256: bundle::hex(&Sha256::digest(&bytes)),
+                    },
+                    |_| Ok(()),
+                )
+                .unwrap();
+            assert!(
+                f.catalog_inspect("register-model", &register()).is_err(),
+                "variant {variant}"
+            );
+            assert!(history_call(&f, "floor-1", &statement, None).is_err());
+        }
+    }
+    #[test]
+    fn utc_history_full_journal_rollback_is_not_a_fresh_bootstrap() {
+        let f = Fixture::new("utc-disk-rollback");
+        f.activate();
+        let path = f.directory.join("journal.json");
+        let old = fs::read(&path).unwrap();
+        history_commit(&f, "floor-1", &floor_statement(1000));
+        platform::write_atomic(&path, &old, 0o600).unwrap();
+        assert!(Store::open(f.anchor.clone(), &path).is_err());
+        assert_eq!(f.writes(), 2);
+        assert!(f.directory.join(event_name("floor-1")).exists());
+    }
+    #[test]
+    fn utc_history_payload_change_during_final_observation_prevents_dispatch() {
+        let f = Fixture::new("utc-final-payload");
+        f.activate();
+        let statement = floor_statement(1000);
+        let inspected = history_call(&f, "floor-1", &statement, None).unwrap();
+        let mut observations = 0;
+        let path = f.directory.join(event_name("floor-1"));
+        let result = execute_history(
+            &mut f.store(),
+            &f.directory,
+            || Ok(f.identity.clone()),
+            || {
+                observations += 1;
+                if observations == 5 {
+                    let mut record: HistoryRecord =
+                        serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+                    record.statement.floor_ms += 1;
+                    platform::write_atomic(&path, &serde_json::to_vec(&record).unwrap(), 0o600)?;
+                }
+                Ok(observation(&statement))
+            },
+            "floor-1",
+            &statement,
+            Some(inspected["review_sha256"].as_str().unwrap()),
+        );
+        assert!(result.is_err());
+        assert_eq!(observations, 5);
+        assert_eq!(f.writes(), 1);
+        assert!(f.directory.join("journal.pending.json").exists());
+        assert!(path.exists());
     }
 
     #[test]

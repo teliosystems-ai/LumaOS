@@ -90,6 +90,34 @@ class PublisherAssets(unittest.TestCase):
         self.assertIn('sendto(sock, frame, length,', hook)
         self.assertNotIn('LU_Frame(', hook)
 
+    def test_utc_history_shares_admin_checkpoint_without_new_writer_endpoint(self):
+        history = (ROOT / 'rust/luma-platform/src/utc_history.rs').read_text()
+        governance = (ROOT / 'rust/luma-platform/src/admin_governance.rs').read_text().split('#[cfg(test)]')[0]
+        self.assertIn('entry.activity == utc_history::ACTIVITY', governance)
+        self.assertIn('snapshot.prefix_heads.get(position)', governance)
+        self.assertIn('history.apply(&record)?', governance)
+        self.assertIn('store.append(entry.clone()', governance)
+        self.assertIn('fn execute_history<', governance)
+        self.assertNotIn('pub fn execute_history', governance)
+        self.assertNotIn('pub(crate) fn execute_history', governance)
+        self.assertNotIn('LocalAnchor', history)
+        self.assertNotIn('advance(', history)
+        main = (ROOT / 'rust/luma-platform/src/main.rs').read_text()
+        self.assertNotIn('Some("admin-utc-history', main)
+        service = (ROOT / 'rust/luma-platform/src/admin_service.rs').read_text()
+        self.assertNotIn('execute_history', service)
+
+    def test_utc_history_records_do_not_restore_live_estimates(self):
+        history = (ROOT / 'rust/luma-platform/src/utc_history.rs').read_text()
+        governance = (ROOT / 'rust/luma-platform/src/admin_governance.rs').read_text().split('#[cfg(test)]')[0]
+        self.assertIn('record.statement.floor_ms <= self.floor_ms', history)
+        self.assertRegex(history, r'self\s*\.version\s*\.checked_add\(1\)')
+        self.assertIn('self.floor_ms > lower', history)
+        self.assertGreaterEqual(governance.count('statement.supported_by(&observe()?)?'), 3)
+        self.assertIn('context.recheck(&mut authenticate)', governance)
+        for forbidden in ('clock_settime(', 'nocerttimecheck', 'pub fn seed', 'reacquire('):
+            self.assertNotIn(forbidden, history)
+
     def test_receiver_preserves_all_rounds_for_keeper_lifecycle(self):
         receiver = (ROOT / 'rust/luma-platform/src/utc_receiver.rs').read_text().split('#[cfg(test)]')[0]
         self.assertIn('Result<Vec<ProducerRound>>', receiver)

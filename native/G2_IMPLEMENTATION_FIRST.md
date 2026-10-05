@@ -64,6 +64,13 @@ asserted callers to kernel credentials. Endpoint/method deployment review,
 protected provisioning, history and authority composition are still required.
 Do not count source linkage or arithmetic as a completed time provider.
 
+The [UTC history backend](evidence/G2_UTC_HISTORY_2026-10-05.md) now implements
+canonical monotonic floors, shared Admin journal replay and private reviewed
+append/recovery semantics in source. It uses no separate anchor or new NV
+allocation. Its fake observation/anchor tests are not deployed UTC or TPM
+qualification. Complete the approved live writer/provider, current history
+binding in keeper/effect checks and installed recovery before candidate freeze.
+
 ## External evidence remains separate
 
 Production public signing/catalog approvals and actual custody cannot be

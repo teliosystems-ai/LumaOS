@@ -25,6 +25,7 @@ mod sqlite;
 mod staging;
 mod tpm;
 mod utc_bounds;
+mod utc_history;
 mod utc_keeper;
 mod utc_policy;
 mod utc_protocol;

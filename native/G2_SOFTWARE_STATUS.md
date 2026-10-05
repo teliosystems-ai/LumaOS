@@ -255,6 +255,21 @@ patched `+NTS` build, 152 ordinary Rust tests and five explicit fixtures
 without skips, formatting and the offline build. These remain source tests,
 not live NTS, installed-service or Admin/workflow completion evidence.
 
+The [UTC history checkpoint](evidence/G2_UTC_HISTORY_2026-10-05.md) adds canonical
+monotonic floors and independent history versions to the existing Admin
+checkpoint domain. Mixed catalog/history replay checks all payload and prefix
+bindings; a private reviewed append adapter retains orphan/pending state and
+renews source/principal callbacks through final dispatch. Exact historical
+acknowledgement never reacquires time or writes again. No new NV index, history
+reset or product writer endpoint is introduced. The new fault tests use fake
+anchor/observation adapters, not physical TPM or authenticated live UTC evidence.
+The final D-backed batch passed 170 ordinary Rust tests and five explicit
+fixtures (27 kernel cases plus retained binary/JSON C interoperability), 26
+Python checks without skips, formatting and the offline build. Protected writer
+composition, current history binding in keeper/effect checks, certificate
+bootstrap/recovery and installed qualification remain open; `trusted_utc_available`
+is still false and Admin/workflows/G2 are not complete.
+
 The earlier [disposable TPM feasibility experiment](evidence/G2_OWNER_CREDENTIAL_FEASIBILITY_2026-10-02.md)
 informed the native backend now integrated above. The targeted native tests
 exercise signed PCR 11 renewal, fixed PCR 7 denial, forged-signature refusal,

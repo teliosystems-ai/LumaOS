@@ -224,6 +224,17 @@ recovery does not resurrect a revoked assignment or redispatch an uncertain
 effect. History rollback/reconciliation and assignment semantics still require
 implementation under ADR-0010.
 
+The [UTC history source checkpoint](evidence/G2_UTC_HISTORY_2026-10-05.md)
+adds canonical floor/context records to the existing native Admin checkpoint
+domain, with mixed catalog/history replay and a private reviewed transaction
+adapter. Floors and their independent versions advance only monotonically;
+missing/substituted payloads and uncertain writes fence. Historical replay
+acknowledges a past commit without reacquiring time or writing again. No new
+NV index or clock seed is introduced. The live-observation/authentication seams
+are tested with fakes here, not deployed as authenticators. Protected provider
+composition, current floor revalidation in the keeper/effect path and the
+installed recovery ceremony remain open; a stored floor cannot restore UTC.
+
 ## Increment delivered and qualification still needed
 
 `rust/luma-platform/src/utc_bounds.rs` implements inert checked interval math,

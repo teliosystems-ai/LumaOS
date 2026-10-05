@@ -3,8 +3,10 @@
 #ifndef LUMA_UTC_PUBLISHER_H
 #define LUMA_UTC_PUBLISHER_H
 #include <stdint.h>
+#include <stddef.h>
 #include <time.h>
 #define LU_FRAME_SIZE 232
+#define LU_ENVELOPE_SIZE 2048
 typedef struct {
   uint64_t sequence, observed_ms;
   int64_t lower_ms, upper_ms;
@@ -23,4 +25,7 @@ void LU_Lose(LU_Publisher *, unsigned);
 int LU_Observe(LU_Publisher *, unsigned, int, const struct timespec *, double,
                double, double, const struct timespec *, double, uint64_t, uint64_t);
 int LU_Frame(LU_Publisher *, uint64_t, uint64_t, int64_t, unsigned char[LU_FRAME_SIZE]);
+/* Four-byte big-endian length + strict JSON; caller IDs are kernel-checked. */
+int LU_Envelope(LU_Publisher *, uint64_t, uint64_t, int64_t, uint32_t, uint32_t,
+                unsigned char[LU_ENVELOPE_SIZE], size_t *);
 #endif

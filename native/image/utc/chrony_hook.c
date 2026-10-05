@@ -52,7 +52,8 @@ static int read_clocks(uint64_t *boot, uint64_t *mono, int64_t *real)
 
 static void publish(void *unused)
 {
-  unsigned char frame[LU_FRAME_SIZE];
+  unsigned char frame[LU_ENVELOPE_SIZE];
+  size_t length = 0;
   struct sockaddr_un address;
   uint64_t boot, mono;
   int64_t real;
@@ -62,10 +63,10 @@ static void publish(void *unused)
   address.sun_family = AF_UNIX;
   strcpy(address.sun_path, "/run/luma-utc/measurements.sock");
   if (!read_clocks(&boot, &mono, &real) ||
-      !LU_Frame(&publisher, boot, mono, real, frame)) {
+      !LU_Envelope(&publisher, boot, mono, real, (uint32_t)getpid(), (uint32_t)getuid(), frame, &length)) {
     fence();
-  } else if (sock < 0 || sendto(sock, frame, sizeof(frame), MSG_DONTWAIT | MSG_NOSIGNAL,
-                              (struct sockaddr *)&address, sizeof(address)) != (ssize_t)sizeof(frame)) {
+  } else if (sock < 0 || sendto(sock, frame, length, MSG_DONTWAIT | MSG_NOSIGNAL,
+                              (struct sockaddr *)&address, sizeof(address)) != (ssize_t)length) {
     /* A loss is never repaired by retransmitting an old apparently-fresh batch. */
     fence();
   }

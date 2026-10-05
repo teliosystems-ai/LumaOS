@@ -3,6 +3,9 @@
 #include <math.h>
 #include <stddef.h>
 #include <string.h>
+#include <inttypes.h>
+#include <stdarg.h>
+#include <stdio.h>
 
 static void put64(unsigned char *p, uint64_t n)
 {
@@ -24,6 +27,71 @@ int LU_Init(LU_Publisher *p, const unsigned char policy[32],
   p->producer = producer;
   p->clock = 1;
   return 1;
+}
+
+static int append_json(unsigned char *out, size_t *used, const char *format, ...)
+{
+  int n;
+  size_t remaining = LU_ENVELOPE_SIZE - *used;
+  va_list arguments;
+  va_start(arguments, format);
+  n = vsnprintf((char *)out + *used, remaining, format, arguments);
+  va_end(arguments);
+  if (n < 0 || (size_t)n >= remaining) return 0;
+  *used += (size_t)n;
+  return 1;
+}
+
+int LU_Envelope(LU_Publisher *p, uint64_t boot_ms, uint64_t mono_ms, int64_t real_ms,
+                uint32_t pid, uint32_t uid, unsigned char out[LU_ENVELOPE_SIZE], size_t *length)
+{
+  unsigned char legacy[LU_FRAME_SIZE];
+  char policy[65], boot[33];
+  static const char digits[] = "0123456789abcdef";
+  size_t used = 4;
+  unsigned i;
+  *length = 0;
+  memset(out, 0, LU_ENVELOPE_SIZE);
+  if (!pid || pid > INT32_MAX || boot_ms > UINT64_MAX - 999 ||
+      !LU_Frame(p, boot_ms, mono_ms, real_ms, legacy)) return 0;
+  for (i = 0; i < 32; i++) {
+    policy[2*i] = digits[p->policy[i] >> 4]; policy[2*i+1] = digits[p->policy[i] & 15];
+  }
+  policy[64] = 0;
+  for (i = 0; i < 16; i++) {
+    boot[2*i] = digits[p->boot[i] >> 4]; boot[2*i+1] = digits[p->boot[i] & 15];
+  }
+  boot[32] = 0;
+  if (!append_json(out, &used,
+      "{\"schema_version\":1,\"request_id\":\"utc-%s-%" PRIu64 "-%" PRIu64 "-%" PRIu64
+      "\",\"caller\":{\"pid\":%" PRIu32 ",\"uid\":%" PRIu32 "},\"deadline\":%" PRIu64
+      ",\"deadline_clock\":\"boottime\",\"method\":\"utc_measurements\",\"measurements\":{"
+      "\"policy_sha256\":\"%s\",\"boot_id\":\"%s\",\"process_generation\":%" PRIu64
+      ",\"source_clock_generation\":%" PRIu64 ",\"sequence\":%" PRIu64
+      ",\"captured_boottime_ms\":%" PRIu64 ",\"captured_monotonic_ms\":%" PRIu64
+      ",\"captured_realtime_ms\":%" PRId64 ",\"sources\":[",
+      boot, p->producer, p->clock, p->round, pid, uid, boot_ms + 999,
+      policy, boot, p->producer, p->clock, p->round, boot_ms, mono_ms, real_ms)) goto failed;
+  for (i = 0; i < 3; i++) {
+    const LU_Source *s = &p->sources[i];
+    if (!append_json(out, &used,
+        "%s{\"operator\":%u,\"available\":%s,\"sequence\":%" PRIu64
+        ",\"observed_boottime_ms\":%" PRIu64 ",\"lower_ms\":%" PRId64 ",\"upper_ms\":%" PRId64 "}",
+        i ? "," : "", i + 1, s->available ? "true" : "false",
+        s->available ? s->sequence : 0, s->available ? s->observed_ms : 0,
+        s->available ? s->lower_ms : 0, s->available ? s->upper_ms : 0)) goto failed;
+  }
+  if (!append_json(out, &used, "]}}")) goto failed;
+  out[0] = (unsigned char)((used - 4) >> 24);
+  out[1] = (unsigned char)((used - 4) >> 16);
+  out[2] = (unsigned char)((used - 4) >> 8);
+  out[3] = (unsigned char)(used - 4);
+  *length = used;
+  return 1;
+failed:
+  memset(out, 0, LU_ENVELOPE_SIZE);
+  LU_Fence(p);
+  return 0;
 }
 
 void LU_Fence(LU_Publisher *p)

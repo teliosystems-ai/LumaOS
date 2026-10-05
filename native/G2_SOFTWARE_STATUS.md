@@ -204,8 +204,9 @@ not approved time authority. It does not approve a producer's code/confinement,
 restore TPM time history, bind an installed listener or enable assignments.
 Complete the protected supervisor/runtime approval, keeper/history and recovery
 composition, lifecycle notifications and authorization/package integration.
-The experimental binary telemetry also needs the ADR-0002 transport change
-review or adaptation before deployment; no control transport is superseded.
+The subsequent JSON source adaptation removes the binary-format mismatch.
+Endpoint/method deployment review under ADR-0002 is still required; no control
+transport or logical ownership boundary is superseded.
 The final D-backed targeted run passed 131 ordinary Rust tests, two explicitly
 selected fixtures (13 real-kernel cases and retained C-frame interoperability),
 19 Python checks without skips, formatting and the offline native build.
@@ -240,6 +241,19 @@ fixtures (25 kernel cases plus retained C-frame interoperability), 23 Python
 checks without skips, formatting and the offline build. Observer checks inspect
 real timer configuration and expiration; cancellation-result injection is not
 actual clock-step or suspend qualification. No host clock was changed.
+
+The [JSON transport checkpoint](evidence/G2_UTC_JSON_TRANSPORT_2026-10-05.md)
+adapts the source publisher and receiver to ADR-0002's four-byte big-endian
+length and strict UTF-8 JSON envelope. Caller PID/real UID claims must match
+kernel message credentials; fixed request/deadline/epoch fields and the ordered
+inventory refuse substitutions. The receive path has no binary fallback.
+This removes the serialization mismatch, not endpoint/method deployment review
+or protected runtime/history/authority integration. No listener or time service
+is enabled. The final D-backed batch passed a newly sanitized C fixture and
+patched `+NTS` build, 152 ordinary Rust tests and five explicit fixtures
+(27 kernel cases plus binary and JSON C/Rust interoperability), 24 Python checks
+without skips, formatting and the offline build. These remain source tests,
+not live NTS, installed-service or Admin/workflow completion evidence.
 
 The earlier [disposable TPM feasibility experiment](evidence/G2_OWNER_CREDENTIAL_FEASIBILITY_2026-10-02.md)
 informed the native backend now integrated above. The targeted native tests

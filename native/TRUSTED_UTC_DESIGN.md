@@ -143,9 +143,10 @@ bounded queue draining and replay/age/epoch checks in source. It has no product
 bind path or authority interface. Capturing unchanged process fingerprints is
 not approval of that executable, certificate configuration or confinement.
 The protected supervisor and live keeper/history composition remain open.
-The fixture's binary telemetry must receive the transport change/security
-review required by ADR-0002, or be adapted before deployment; the accepted
-control transport is unchanged.
+The later JSON transport source adaptation removes the binary-serialization
+mismatch with ADR-0002. The proposed measurement method, BOOTTIME deadline
+profile, socket type and protected provisioning still need architecture/security
+review before deployment; the accepted control transport is unchanged.
 
 The [stream composition checkpoint](evidence/G2_UTC_STREAM_2026-10-05.md) joins
 receiver-checked rounds to the keeper in queue order, with independent producer
@@ -167,6 +168,14 @@ timers. [Linux timerfd interface](https://man7.org/linux/man-pages/man2/timerfd_
 Actual clock-step delivery, step-and-restore and suspend race behavior on the
 supported kernel/image remain unqualified. The guard does not approve runtime
 provenance, authenticate time history or establish the absolute rate envelope.
+
+The [JSON transport checkpoint](evidence/G2_UTC_JSON_TRANSPORT_2026-10-05.md)
+adapts the C publisher and runtime receiver to the accepted four-byte big-endian
+length and strict UTF-8 JSON envelope, with a 2048-byte datagram bound. Asserted
+PID/real UID must match kernel message credentials; boot-scoped deadlines,
+request identity, epochs and the ordered source inventory are closed fields.
+The receiver accepts no historical binary fallback. This is serialization of
+measurements, never serialization of time authority, and activates no listener.
 
 ## Bootstrap and offline recovery
 

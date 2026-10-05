@@ -58,6 +58,10 @@ The [clock-step watch](evidence/G2_UTC_STEP_WATCH_2026-10-05.md) now supplements
 numeric comparisons with a kernel notification checked around candidate work.
 This is not complete suspend/resume delivery or deployed-clock qualification;
 the remaining protected runtime/history and grant integrations stay open.
+The [JSON transport adaptation](evidence/G2_UTC_JSON_TRANSPORT_2026-10-05.md)
+removes the experimental binary format from the runtime receive path and binds
+asserted callers to kernel credentials. Endpoint/method deployment review,
+protected provisioning, history and authority composition are still required.
 Do not count source linkage or arithmetic as a completed time provider.
 
 ## External evidence remains separate

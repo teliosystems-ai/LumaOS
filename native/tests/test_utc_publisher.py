@@ -71,6 +71,25 @@ class PublisherAssets(unittest.TestCase):
             self.assertIn(boundary, receiver)
         self.assertNotIn('SO_PEERCRED', receiver)
 
+    def test_json_transport_has_no_binary_runtime_fallback(self):
+        protocol = (ROOT / 'rust/luma-platform/src/utc_protocol.rs').read_text()
+        receiver = (ROOT / 'rust/luma-platform/src/utc_receiver.rs').read_text().split('#[cfg(test)]')[0]
+        self.assertIn('utc_protocol::decode_envelope(', receiver)
+        self.assertNotIn('utc_protocol::decode(', receiver)
+        self.assertIn('credentials.pid', receiver)
+        self.assertIn('credentials.uid', receiver)
+        self.assertEqual(protocol.count('#[serde(deny_unknown_fields)]'), 4)
+        for check in ('MAX_ENVELOPE_SIZE: usize = 2048', 'u32::from_be_bytes(',
+                      'envelope.caller.pid != kernel_pid', 'envelope.caller.uid != kernel_uid',
+                      'm.captured_boottime_ms.checked_add(999)', 'envelope.deadline_clock != "boottime"'):
+            self.assertIn(check, protocol)
+        hook = (ASSETS / 'chrony_hook.c').read_text()
+        self.assertIn('LU_Envelope(', hook)
+        self.assertIn('(uint32_t)getpid()', hook)
+        self.assertIn('(uint32_t)getuid()', hook)
+        self.assertIn('sendto(sock, frame, length,', hook)
+        self.assertNotIn('LU_Frame(', hook)
+
     def test_receiver_preserves_all_rounds_for_keeper_lifecycle(self):
         receiver = (ROOT / 'rust/luma-platform/src/utc_receiver.rs').read_text().split('#[cfg(test)]')[0]
         self.assertIn('Result<Vec<ProducerRound>>', receiver)

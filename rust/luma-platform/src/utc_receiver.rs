@@ -14,7 +14,7 @@ use std::os::fd::{AsRawFd, FromRawFd};
 use std::os::unix::fs::MetadataExt;
 use std::os::unix::net::UnixDatagram;
 
-const FRAME_SIZE: usize = 232;
+const MAX_FRAME_SIZE: usize = utc_protocol::MAX_ENVELOPE_SIZE;
 pub(crate) const DRAIN_LIMIT: usize = 8;
 
 fn bounded_text(path: &str) -> Result<String> {
@@ -461,7 +461,7 @@ impl Receiver {
         self.peer.recheck()?;
         let mut rounds = Vec::with_capacity(DRAIN_LIMIT);
         for _ in 0..DRAIN_LIMIT {
-            let mut bytes = [0; FRAME_SIZE];
+            let mut bytes = [0; MAX_FRAME_SIZE];
             let mut control = [0usize; 32];
             let mut vector = libc::iovec {
                 iov_base: bytes.as_mut_ptr().cast(),
@@ -497,10 +497,14 @@ impl Receiver {
             if !self.peer.matches(credentials) {
                 return Err("UTC datagram sender is not the pinned producer".into());
             }
-            if length as usize != FRAME_SIZE {
+            if length <= 0 || length as usize > MAX_FRAME_SIZE {
                 return Err("UTC datagram frame size mismatch".into());
             }
-            let round = utc_protocol::decode(&bytes)?;
+            let round = utc_protocol::decode_envelope(
+                &bytes[..length as usize],
+                credentials.pid,
+                credentials.uid,
+            )?;
             self.peer.recheck()?;
             self.cursor.accept(&round, capture_clocks()?)?;
             if std::time::Instant::now() > deadline {
@@ -769,10 +773,10 @@ mod tests {
         now.real_ms += 10;
         assert!(validate_capture(&r, now).is_err());
     }
-    fn packet(sequence: u64) -> [u8; FRAME_SIZE] {
+    fn fixture_round(sequence: u64) -> ProducerRound {
         // Synthetic fixture intervals, NOT NTS-derived UTC or authorization.
         let now = capture_clocks().unwrap();
-        let mut bytes = [0; FRAME_SIZE];
+        let mut bytes = [0; 232];
         bytes[..8].copy_from_slice(b"LUMAUTC1");
         bytes[8..40].copy_from_slice(&ApprovedPolicy::fixed().unwrap().digest());
         bytes[40..56].copy_from_slice(&kernel_boot().unwrap());
@@ -799,7 +803,14 @@ mod tests {
                 bytes[start + offset..start + offset + 8].copy_from_slice(&value.to_le_bytes());
             }
         }
-        bytes
+        utc_protocol::decode(&bytes).unwrap()
+    }
+    fn packet(sequence: u64) -> Vec<u8> {
+        utc_protocol::fixture_encode(
+            &fixture_round(sequence),
+            unsafe { libc::getpid() },
+            unsafe { libc::getuid() },
+        )
     }
     fn send_rights(socket: &UnixDatagram, bytes: &[u8], count: usize) {
         let file = File::open("/dev/null").unwrap();
@@ -843,7 +854,7 @@ mod tests {
         println!("UTC_SENDER_READY");
         io::stdout().flush().unwrap();
         let mut sequence = 0;
-        let mut saved = [0; FRAME_SIZE];
+        let mut saved = Vec::new();
         for command in io::stdin().lock().lines() {
             let command = command.unwrap();
             if command == "exit" {
@@ -871,28 +882,36 @@ mod tests {
                         std::thread::sleep(std::time::Duration::from_millis(2));
                     }
                     sequence += 1;
-                    let mut bytes = packet(sequence);
+                    let mut round = fixture_round(sequence);
                     if command == "invalidation" && index == 1 {
-                        bytes[64..72].copy_from_slice(&2u64.to_le_bytes());
+                        round.epoch.source_clock_generation = 2;
                     }
                     if (command == "loss-restored" && index == 1) || command == "lost" {
-                        for start in [152, 192] {
-                            bytes[start + 1..start + 40].fill(0);
-                        }
+                        round.sources[1] = SourceData::Unavailable { operator: 2 };
+                        round.sources[2] = SourceData::Unavailable { operator: 3 };
                     }
                     if command == "reage" {
-                        bytes[120..128].copy_from_slice(&(sequence - 1).to_le_bytes());
+                        if let SourceData::Measured {
+                            sequence: ref mut sample,
+                            ..
+                        } = round.sources[0]
+                        {
+                            *sample = sequence - 1;
+                        }
                     }
+                    let pid = unsafe { libc::getpid() } + i32::from(command == "wrong-pid-claim");
+                    let uid = unsafe { libc::getuid() } ^ u32::from(command == "wrong-caller");
+                    let bytes = utc_protocol::fixture_encode(&round, pid, uid);
                     match command.as_str() {
                         "rights" => send_rights(&socket, &bytes, 1),
                         "truncated-rights" => send_rights(&socket, &bytes, 63),
                         "oversize" => {
                             let mut extra = bytes.to_vec();
-                            extra.push(0);
+                            extra.resize(MAX_FRAME_SIZE + 1, 0);
                             socket.send(&extra).unwrap();
                         }
                         "truncated" => {
-                            socket.send(&bytes[..231]).unwrap();
+                            socket.send(&bytes[..bytes.len() - 1]).unwrap();
                         }
                         _ => {
                             socket.send(&bytes).unwrap();
@@ -984,6 +1003,8 @@ mod tests {
             "loss-restored",
             "invalidation",
             "wrong-pid",
+            "wrong-pid-claim",
+            "wrong-caller",
             "dead",
             "exec",
             "replay",
@@ -1081,6 +1102,11 @@ mod tests {
                     assert_eq!(
                         result.unwrap_err().to_string(),
                         "UTC producer process or runtime changed"
+                    );
+                } else if variant == "wrong-pid-claim" || variant == "wrong-caller" {
+                    assert_eq!(
+                        result.unwrap_err().to_string(),
+                        "invalid UTC envelope context or caller"
                     );
                 }
                 assert!(receiver.fenced);

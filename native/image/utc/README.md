@@ -45,31 +45,30 @@ capture math and cooked-clock discipline assumptions still need runtime and
 hardware qualification. Secondary BOOTTIME/MONOTONIC checks cannot prove every
 suspend or small clock step was observed.
 
-## Measurement frame
+## JSON measurement envelope
 
-All integers are little endian. The complete frame is exactly 232 bytes, with
-one fixed magic/version and three ordered source entries. Reserved fields are
-zero; unavailable entries contain no sample payload.
+The source publisher sends ADR-0002's four-byte unsigned big-endian payload
+length followed by UTF-8 JSON. The complete datagram is bounded to 2048 bytes
+before decoding. Its length must match exactly. The receiver accepts no raw
+binary fallback; the former 232-byte `LUMAUTC1` codec remains only an internal
+C snapshot helper and Rust test fixture.
 
-| Offset | Bytes | Meaning |
-| --- | --- | --- |
-| 0 | 8 | `LUMAUTC1` |
-| 8 | 32 | Domain-separated digest of the exact approved policy bytes |
-| 40 | 16 | Kernel boot UUID |
-| 56 | 8 | Random nonzero producer-process generation |
-| 64 | 8 | Producer source-clock invalidation generation |
-| 72 | 8 | Increasing complete-round sequence |
-| 80 | 8 | Capture BOOTTIME milliseconds |
-| 88 | 8 | Capture MONOTONIC milliseconds |
-| 96 | 8 | Signed host REALTIME milliseconds, jump-detection coordinate only |
-| 104 | 8 | Reserved zero |
-| 112, 152, 192 | 40 each | Operator ID, state, six zero bytes, then sample sequence, observed BOOTTIME, signed UTC lower and upper milliseconds |
+| Field | Required meaning |
+| --- | --- |
+| `schema_version`, `method` | Integer 1 and exact `utc_measurements` |
+| `request_id` | `utc-BOOTHEX-PROCESSGEN-CLOCKGEN-ROUNDSEQ`, matching the measurement epoch |
+| `caller` | Positive signed-32-bit PID and unsigned-32-bit real UID, both checked against per-message kernel credentials; the receiver separately pins the kernel GID |
+| `deadline`, `deadline_clock` | Capture BOOTTIME plus exactly 999 milliseconds, with exact `boottime`; overflow refuses |
+| `measurements` | Lowercase fixed-length policy digest and boot UUID; nonzero process/source-clock/round generations; BOOTTIME/MONOTONIC/REALTIME capture coordinates; exactly three ordered sources |
+| Each source | Operator 1, 2 or 3, boolean availability, sample sequence, observed BOOTTIME, signed UTC lower and upper milliseconds; all sample fields zero when unavailable |
 
-State zero is unavailable; state one is a normal-leap accepted sample. Unknown
-states, duplicate/reordered IDs, invalid timestamps, stale/future samples,
-nonzero reserved bytes, changed policy, truncated/extra bytes and negative or
-inverted intervals refuse in `utc_protocol.rs`. Parsing establishes neither
-NTS proof nor freshness at use: those checks belong to the protected receiver.
+BOOTTIME deadlines are boot-scoped acquisition limits, not trusted UTC expiry.
+The existing receiver checks them with fresh kernel clocks before returning
+measurements, including conservative rate-error accounting. Missing, duplicate
+or unknown fields at every object level, wrong numeric types, invalid UTF-8,
+truncated/trailing data, reordered IDs, changed policy, stale/future samples
+and negative/inverted intervals refuse. Parsing establishes neither NTS proof
+nor authority. REALTIME remains a jump-detection coordinate only.
 
 The fixture sends nonblocking datagrams only to
 `/run/luma-utc/measurements.sock`, with a nominal 500-ms heartbeat. There is no
@@ -120,11 +119,11 @@ fingerprint or live PID does not establish those approvals, and polling cannot
 prove an unreported transition never occurred. Re-executing the same image
 also requires generation/lifecycle handling, not inode checks alone.
 
-The fixed binary telemetry is a development fixture, not a supersession of
-ADR-0002's JSON control transport. Its use as a deployed internal boundary needs
-the required transport ADR/security review, or adaptation to the accepted
-transport, before an installed endpoint is enabled. This checkpoint activates
-neither a listener nor time/role authority.
+This source adaptation removes the binary-serialization mismatch with ADR-0002.
+The experimental measurement method, BOOTTIME deadline profile, socket type,
+logical service owner, provisioning and confinement still need deployment
+architecture/security review before an installed endpoint is enabled. It does
+not supersede the ADR or approve a new listener, time service or role authority.
 
 ## Targeted build on Ubuntu
 
@@ -143,12 +142,14 @@ cargo test --offline --locked utc_step_watch:: -- --test-threads=1
 cargo test --offline --locked utc_receiver::tests::kernel_keeper_composition -- --ignored --exact --nocapture --test-threads=1
 LUMA_UTC_C_FRAME=/new/output/c-frame.bin cargo test --offline --locked \
   utc_protocol::tests::c_publisher_cross_language_frame -- --ignored
+LUMA_UTC_C_ENVELOPE=/new/output/c-envelope.bin cargo test --offline --locked \
+  utc_protocol::tests::c_publisher_cross_language_envelope -- --ignored --exact
 ```
 
 The C fixture checks finite-input rejection, interval direction, preserved
 age/identity, loss, leap refusal, exact age boundaries and generation overflow.
 The Rust tests bound all truncations and protocol substitutions and explicitly
-decode the C-produced frame. A compiled `+NTS` daemon proves source linkage,
+decode the C-produced JSON envelope and historical binary fixture. A compiled `+NTS` daemon proves source linkage,
 not an encrypted packet/certificate journey or installed confinement. Controlled
 NTS authentication attacks and service delivery tests remain required.
 

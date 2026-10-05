@@ -20,7 +20,7 @@ python3 "$assets/prepare_chrony.py" \
 gcc -std=c11 -Wall -Wextra -Werror -pedantic -fsanitize=undefined -fno-sanitize-recover=all \
   -I "$output/patched" "$assets/publisher.c" "$assets/test_publisher.c" -lm \
   -o "$output/test-publisher"
-"$output/test-publisher" "$output/c-frame.bin"
+"$output/test-publisher" "$output/c-frame.bin" "$output/c-envelope.bin"
 cd "$output/patched"
 ./configure --disable-readline --without-editline --without-libcap --without-seccomp
 grep -qx '#define FEAT_NTS 1' config.h
@@ -29,5 +29,5 @@ timeout 180 make -j1 chronyd
 ./chronyd -v | tee "$output/chronyd-version.txt"
 grep -q '+NTS' "$output/chronyd-version.txt"
 # Never run this fixture daemon: no host clock, network, TPM or service mutation.
-sha256sum chronyd luma-hook-inputs.json "$output/c-frame.bin"
+sha256sum chronyd luma-hook-inputs.json "$output/c-frame.bin" "$output/c-envelope.bin"
 echo UTC_CHRONY_FIXTURE_PASSED

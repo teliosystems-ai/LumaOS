@@ -429,6 +429,32 @@ worker; restarting and checking it is a separate operator action. Never
 delete the marker to bypass a refusal. This root-only laboratory diagnostic
 is not a product Admin approval or signed production custody.
 
+The 2026-10-05 source adds `model-activation.prior`, a root-private saved copy
+of the prior selection, environment and local model API credential. It is
+synced before a schema-version-2 pending marker or any candidate configuration
+write. An orphaned backup also fences the worker and new activation. Do not
+publish its bytes in diagnostics: offline data-export archives include this
+recovery material and must be protected as plaintext credentials.
+
+After inspecting with `sudo luma-platform model-activation-reconcile`, an
+explicit `--restore-prior DIGEST` can restore the exact saved consistent prior
+configuration, or the previous all-absent manual-only state. The command checks
+the saved bytes against the marker, current review and prior image-catalog
+weight digest. It does not download weights, start a worker, clear recovery
+disablement or imply readiness. Failed/interrupted writes retain the fence;
+inspect again and obtain a new digest before retrying. Legacy/mixed prior
+settings and old schema-version-1 markers without saved bytes cannot use this
+path. Roll-forward or the existing safe clearance may still apply.
+
+For `orphan_prior_backup` without a pending marker, only
+`--discard-orphan-backup DIGEST` is available, and only while the current
+configuration exactly matches the saved prior bytes. It removes that one saved
+copy, not model weights or configuration. A malformed backup or changed state
+is preserved for investigation. Once normal activation or reviewed restoration
+clears its fence, the saved copy is removed; this is not a long-term rollback
+archive after successful activation. See the
+[prior restoration checkpoint](../evidence/G2_MODEL_PRIOR_RESTORE_2026-10-05.md).
+
 For installed reconfiguration, `model-install` now acquires and verifies the
 candidate weights before stopping the managed worker. A failed download or
 hash check leaves the current selection and worker untouched. A verified

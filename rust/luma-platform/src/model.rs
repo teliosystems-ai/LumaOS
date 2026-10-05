@@ -16,6 +16,8 @@ const VAR: &str = "/var";
 const STATE: &str = "lib/luma-os";
 const RUNTIME: &str = "/usr/libexec/luma-os/llama/llama-server";
 const ACTIVATION: &str = "model-activation.pending";
+const PRIOR_BACKUP: &str = "model-activation.prior";
+const MAX_PRIOR_BACKUP: u64 = 40_000;
 const REFERENCE_ENV: &str = "model-reference.env";
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -759,17 +761,96 @@ struct Activation {
     prior_selection_sha256: Option<String>,
     prior_env_sha256: Option<String>,
     prior_key_sha256: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    prior_backup_sha256: Option<String>,
 }
 
-fn activation_absent(state: &Path) -> Result<()> {
-    match fs::symlink_metadata(state.join(ACTIVATION)) {
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+// Contains the local model API credential. Never print or return this record.
+// It is root-private recovery material, not a catalog or Admin grant.
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct PriorBackup {
+    schema_version: u32,
+    candidate: String,
+    selection: Option<Vec<u8>>,
+    environment: Option<Vec<u8>>,
+    key: Option<Vec<u8>>,
+}
+
+fn prior_backup_bytes(state: &Path) -> Result<Option<Vec<u8>>> {
+    match fs::symlink_metadata(state.join(PRIOR_BACKUP)) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(error) => Err(error.into()),
-        Ok(_) => Err("model activation pending; reviewed reconciliation required".into()),
+        Ok(_) => checked_activation_bytes_with_mode(
+            &state.join(PRIOR_BACKUP),
+            MAX_PRIOR_BACKUP,
+            0,
+            0o077,
+        ),
     }
 }
 
+fn decode_prior_backup(bytes: &[u8]) -> Result<PriorBackup> {
+    let backup: PriorBackup = serde_json::from_slice(bytes)?;
+    if serde_json::to_vec(&backup)? != bytes
+        || backup.schema_version != 1
+        || backup.selection.as_ref().is_some_and(|v| v.len() > 4096)
+        || backup.environment.as_ref().is_some_and(|v| v.len() > 4096)
+        || backup.key.as_ref().is_some_and(|v| v.len() > 64)
+    {
+        return Err("invalid model prior backup; preserve state".into());
+    }
+    profile(&backup.candidate)?;
+    Ok(backup)
+}
+
+fn bound_prior_backup(state: &Path, record: &Activation) -> Result<Option<PriorBackup>> {
+    let Some(bytes) = prior_backup_bytes(state)? else {
+        // Cleanup removes the backup before the marker. A crash here retains
+        // the marker; explicit unchanged/candidate publication remains usable,
+        // but restoration is unavailable. Never invent lost prior bytes.
+        return Ok(None);
+    };
+    if record.schema_version != 2
+        || record.prior_backup_sha256.as_deref()
+            != Some(bundle::hex(&Sha256::digest(&bytes)).as_str())
+    {
+        return Err("model prior backup does not bind the pending activation".into());
+    }
+    let backup = decode_prior_backup(&bytes)?;
+    if backup.candidate != record.candidate
+        || activation_digest(&backup.selection) != record.prior_selection_sha256
+        || activation_digest(&backup.environment) != record.prior_env_sha256
+        || activation_digest(&backup.key) != record.prior_key_sha256
+    {
+        return Err("model prior backup does not reproduce retained hashes".into());
+    }
+    Ok(Some(backup))
+}
+
+fn activation_absent(state: &Path) -> Result<()> {
+    for name in [ACTIVATION, PRIOR_BACKUP] {
+        match fs::symlink_metadata(state.join(name)) {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => (),
+            Err(error) => return Err(error.into()),
+            Ok(_) => {
+                return Err("model activation pending; reviewed reconciliation required".into())
+            }
+        }
+    }
+    Ok(())
+}
+
 fn checked_activation_bytes(path: &Path, max: u64, owner: u32) -> Result<Option<Vec<u8>>> {
+    checked_activation_bytes_with_mode(path, max, owner, 0o022)
+}
+
+fn checked_activation_bytes_with_mode(
+    path: &Path,
+    max: u64,
+    owner: u32,
+    forbidden: u32,
+) -> Result<Option<Vec<u8>>> {
     let original = match fs::symlink_metadata(path) {
         Ok(metadata) => metadata,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
@@ -778,7 +859,7 @@ fn checked_activation_bytes(path: &Path, max: u64, owner: u32) -> Result<Option<
     if !original.is_file()
         || original.uid() != owner
         || original.nlink() != 1
-        || original.mode() & 0o022 != 0
+        || original.mode() & forbidden != 0
         || original.len() > max
     {
         return Err("unsafe model activation file; preserve state".into());
@@ -947,12 +1028,42 @@ fn restore_prior(var: &Path, prior: PriorRunning) -> Result<()> {
 fn begin_activation(state: &Path, p: &Profile) -> Result<Activation> {
     activation_absent(state)?;
     let (selection, env, key) = activation_snapshot(state)?;
-    let record = Activation {
+    let backup = PriorBackup {
         schema_version: 1,
+        candidate: p.id.clone(),
+        selection,
+        environment: env,
+        key,
+    };
+    let bytes = serde_json::to_vec(&backup)?;
+    if bytes.len() as u64 > MAX_PRIOR_BACKUP {
+        return Err("oversized prior model backup".into());
+    }
+    // Save and sync before publishing the marker or changing worker-visible
+    // files. A crash/partial write leaves an orphan fence, not a new activation.
+    let mut saved = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
+        .open(state.join(PRIOR_BACKUP))?;
+    saved.write_all(&bytes)?;
+    saved.sync_all()?;
+    File::open(state)?.sync_all()?;
+    if prior_backup_bytes(state)?.as_deref() != Some(bytes.as_slice()) {
+        return Err("model prior backup changed during preparation".into());
+    }
+    let (selection, env, key) = activation_snapshot(state)?;
+    if selection != backup.selection || env != backup.environment || key != backup.key {
+        return Err("prior model changed during backup; preserve orphan state".into());
+    }
+    let record = Activation {
+        schema_version: 2,
         candidate: p.id.clone(),
         prior_selection_sha256: activation_digest(&selection),
         prior_env_sha256: activation_digest(&env),
         prior_key_sha256: activation_digest(&key),
+        prior_backup_sha256: Some(bundle::hex(&Sha256::digest(&bytes))),
     };
     let mut file = OpenOptions::new()
         .write(true)
@@ -972,6 +1083,9 @@ struct ActivationObservation {
     phase: &'static str,
     candidate_consistent: bool,
     review: String,
+    hashes: (Option<String>, Option<String>, Option<String>),
+    backup_digest: Option<String>,
+    restore_available: bool,
 }
 
 fn observe_activation(
@@ -983,12 +1097,16 @@ fn observe_activation(
         activation_bytes(&state.join(ACTIVATION), 4096)?.ok_or("no pending model activation")?;
     let record: Activation = serde_json::from_slice(&marker)?;
     if serde_json::to_vec(&record)? != marker
-        || record.schema_version != 1
+        || !matches!(
+            (record.schema_version, record.prior_backup_sha256.is_some()),
+            (1, false) | (2, true)
+        )
         || record.candidate != p.id
         || [
             &record.prior_selection_sha256,
             &record.prior_env_sha256,
             &record.prior_key_sha256,
+            &record.prior_backup_sha256,
         ]
         .into_iter()
         .flatten()
@@ -996,6 +1114,8 @@ fn observe_activation(
     {
         return Err("invalid retained model activation; preserve state".into());
     }
+    let backup = bound_prior_backup(state, &record)?;
+    let backup_digest = backup.as_ref().and(record.prior_backup_sha256.clone());
     let (selection, env, key) = activation_snapshot(state)?;
     let hashes = (
         activation_digest(&selection),
@@ -1033,18 +1153,43 @@ fn observe_activation(
     digest.update(serde_json::to_vec(&hashes)?);
     digest.update(phase.as_bytes());
     digest.update(p.sha256.as_bytes());
+    if record.schema_version == 2 {
+        // Preserve schema-1 review semantics for existing retained markers.
+        digest.update(serde_json::to_vec(&backup_digest)?);
+    }
     Ok(ActivationObservation {
         record,
         marker,
         phase,
         candidate_consistent: candidate,
         review: bundle::hex(&digest.finalize()),
+        hashes,
+        backup_digest,
+        restore_available: backup.is_some(),
     })
 }
 
 fn clear_activation(state: &Path, observation: &ActivationObservation) -> Result<()> {
+    if activation_digest(&prior_backup_bytes(state)?) != observation.backup_digest {
+        return Err("model prior backup changed before clearance; preserve state".into());
+    }
+    let (selection, env, key) = activation_snapshot(state)?;
+    if (
+        activation_digest(&selection),
+        activation_digest(&env),
+        activation_digest(&key),
+    ) != observation.hashes
+    {
+        return Err("model configuration changed before clearance; preserve state".into());
+    }
     if activation_bytes(&state.join(ACTIVATION), 4096)? != Some(observation.marker.clone()) {
         return Err("model activation marker changed; preserve state".into());
+    }
+    // Delete only the exact validated recovery file. Remove it first so every
+    // interruption still leaves a marker that the existing review can inspect.
+    if observation.backup_digest.is_some() {
+        fs::remove_file(state.join(PRIOR_BACKUP))?;
+        File::open(state)?.sync_all()?;
     }
     fs::remove_file(state.join(ACTIVATION))?;
     File::open(state)?.sync_all()?;
@@ -1092,6 +1237,172 @@ fn reviewed_complete_candidate(state: &Path, p: &Profile, reviewed: &str) -> Res
     finish_activation(state, p, &current.record)
 }
 
+fn prior_restore_profile(
+    backup: &PriorBackup,
+    resolve: impl FnOnce(&str) -> Result<Profile>,
+) -> Result<Option<Profile>> {
+    match (&backup.selection, &backup.environment, &backup.key) {
+        (None, None, None) => Ok(None),
+        (Some(selection), Some(env), Some(key)) => {
+            #[derive(Deserialize)]
+            #[serde(deny_unknown_fields)]
+            struct Selection {
+                schema_version: u32,
+                id: String,
+            }
+            let selected: Selection = serde_json::from_slice(selection)?;
+            let prior = resolve(&selected.id)?;
+            let token = std::str::from_utf8(key)?;
+            if selected.schema_version != 1
+                || prior.id != selected.id
+                || *selection
+                    != serde_json::to_vec(&serde_json::json!({"schema_version":1,"id":prior.id}))?
+                || token.len() != 64
+                || !token.bytes().all(|b| b.is_ascii_hexdigit())
+                || *env != reference_environment(&prior, token)
+            {
+                return Err("prior model configuration is not consistent; preserve state".into());
+            }
+            Ok(Some(prior))
+        }
+        _ => Err("mixed or legacy prior configuration cannot be restored by this path".into()),
+    }
+}
+
+fn restore_config_file(
+    path: &Path,
+    bytes: &Option<Vec<u8>>,
+    mode: u32,
+    group: Option<&str>,
+) -> Result<()> {
+    // Missing means exact removal of one previously inspected file, never a
+    // directory, model weight, disablement marker or recursive cleanup.
+    activation_bytes(path, 4096)?;
+    if let Some(bytes) = bytes {
+        platform::write_atomic(path, bytes, 0o600)?;
+        // Do not let the maintenance process's restrictive umask silently
+        // make restored credentials/environments unreadable by their service.
+        fs::set_permissions(path, fs::Permissions::from_mode(mode))?;
+        if let Some(group) = group {
+            command(
+                "/usr/bin/chown",
+                &[group, path.to_str().ok_or("invalid model path")?],
+            )?;
+        }
+        OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
+            .open(path)?
+            .sync_all()?;
+    } else {
+        match fs::remove_file(path) {
+            Ok(()) => (),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => (),
+            Err(error) => return Err(error.into()),
+        }
+    }
+    File::open(path.parent().ok_or("missing model config parent")?)?.sync_all()?;
+    Ok(())
+}
+
+fn reviewed_restore_configuration(
+    state: &Path,
+    candidate: &Profile,
+    reviewed: &str,
+    resolve: impl FnOnce(&str) -> Result<Profile>,
+) -> Result<()> {
+    tpm::decode::<32>(reviewed)?;
+    let observed = observe_activation(state, candidate, true)?;
+    if observed.review != reviewed {
+        return Err("model restoration review changed; inspect again".into());
+    }
+    let backup = bound_prior_backup(state, &observed.record)?
+        .ok_or("no retained prior model bytes; restoration unavailable")?;
+    let prior = prior_restore_profile(&backup, resolve)?;
+    if let Some(prior) = &prior {
+        verify_file(
+            &state.join("models").join(format!("{}.gguf", prior.id)),
+            prior,
+        )?;
+    }
+    let current = observe_activation(state, candidate, true)?;
+    if current.review != observed.review {
+        return Err("model activation changed before restoration".into());
+    }
+    let auth = state.join("model-auth");
+    let auth_present = match fs::symlink_metadata(&auth) {
+        Ok(_) => true,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
+        Err(error) => return Err(error.into()),
+    };
+    if backup.key.is_some() || auth_present {
+        safe_dir(&auth)?;
+        fs::set_permissions(&auth, fs::Permissions::from_mode(0o750))?;
+        command(
+            "/usr/bin/chown",
+            &["0:989", auth.to_str().ok_or("invalid model auth path")?],
+        )?;
+        restore_config_file(&auth.join("api-key"), &backup.key, 0o640, Some("0:989"))?;
+    }
+    restore_config_file(
+        &state.join(REFERENCE_ENV),
+        &backup.environment,
+        0o640,
+        Some("0:990"),
+    )?;
+    restore_config_file(
+        &state.join("model-selection.json"),
+        &backup.selection,
+        0o644,
+        None,
+    )?;
+    // Retain both records across every failed write. An explicit retry starts
+    // with a NEW review of its partially restored state; no automatic replay.
+    let restored = observe_activation(state, candidate, true)?;
+    if restored.record != observed.record || restored.phase != "unchanged_prior_state" {
+        return Err("prior model restoration did not reproduce the saved hashes".into());
+    }
+    if let Some(prior) = &prior {
+        verify_file(
+            &state.join("models").join(format!("{}.gguf", prior.id)),
+            prior,
+        )?;
+    }
+    clear_activation(state, &restored)
+}
+
+fn observe_orphan_backup(state: &Path) -> Result<(String, bool)> {
+    match fs::symlink_metadata(state.join(ACTIVATION)) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => (),
+        Err(error) => return Err(error.into()),
+        Ok(_) => return Err("pending marker requires activation reconciliation".into()),
+    }
+    let bytes = prior_backup_bytes(state)?.ok_or("no retained model activation state")?;
+    let backup = decode_prior_backup(&bytes)?;
+    let (selection, env, key) = activation_snapshot(state)?;
+    let unchanged = selection == backup.selection && env == backup.environment && key == backup.key;
+    let mut digest = Sha256::new();
+    digest.update(b"luma-model-orphan-prior-review-v1\0");
+    digest.update(&bytes);
+    digest.update(serde_json::to_vec(&(
+        activation_digest(&selection),
+        activation_digest(&env),
+        activation_digest(&key),
+    ))?);
+    Ok((bundle::hex(&digest.finalize()), unchanged))
+}
+
+fn reviewed_discard_orphan_backup(state: &Path, reviewed: &str) -> Result<()> {
+    tpm::decode::<32>(reviewed)?;
+    let before = observe_orphan_backup(state)?;
+    if !before.1 || before.0 != reviewed || observe_orphan_backup(state)? != before {
+        return Err("orphan prior backup differs from unchanged state; preserve bytes".into());
+    }
+    fs::remove_file(state.join(PRIOR_BACKUP))?;
+    File::open(state)?.sync_all()?;
+    Ok(())
+}
+
 pub fn activation_reconcile(action: Option<(&str, &str)>) -> Result<()> {
     crate::require_root()?;
     platform::require_installed()?;
@@ -1099,12 +1410,40 @@ pub fn activation_reconcile(action: Option<(&str, &str)>) -> Result<()> {
     let _operation = operation_lock(var)?;
     let _runtime = runtime_lock(var, false)?;
     let state = var.join(STATE);
+    if activation_bytes(&state.join(ACTIVATION), 4096)?.is_none() {
+        let (review, unchanged) = observe_orphan_backup(&state)?;
+        match action {
+            Some(("--discard-orphan-backup", reviewed)) => {
+                reviewed_discard_orphan_backup(&state, reviewed)?;
+                println!(
+                    "{}",
+                    serde_json::json!({"schema_version":1,"orphan_backup_removed":true,
+                    "configuration_changed":false,"worker_started":false,"reservation":false})
+                );
+            }
+            None => println!(
+                "{}",
+                serde_json::json!({"schema_version":1,"phase":"orphan_prior_backup",
+                "review_sha256":review,"discardable":unchanged,"worker_started":false,"mutation_performed":false})
+            ),
+            _ => return Err("orphan backup permits only reviewed unchanged-state discard".into()),
+        }
+        return Ok(());
+    }
     let marker =
         activation_bytes(&state.join(ACTIVATION), 4096)?.ok_or("no pending model activation")?;
     let record: Activation = serde_json::from_slice(&marker)?;
     let p = profile(&record.candidate)?;
     let observation = observe_activation(&state, &p, true)?;
     match action {
+        Some(("--restore-prior", reviewed)) => {
+            reviewed_restore_configuration(&state, &p, reviewed, profile)?;
+            println!(
+                "{}",
+                serde_json::json!({"schema_version":1,"cleared":true,
+                "phase":"prior_configuration_restored","worker_started":false,"reservation":false})
+            );
+        }
         Some(("--complete-candidate", reviewed)) => {
             reviewed_complete_candidate(&state, &p, reviewed)?;
             println!(
@@ -1127,6 +1466,7 @@ pub fn activation_reconcile(action: Option<(&str, &str)>) -> Result<()> {
                 "{}",
                 serde_json::json!({"schema_version":1,"phase":observation.phase,
                 "candidate":p.id,"review_sha256":observation.review,
+                "prior_backup_available":observation.restore_available,
                 "worker_started":false,"mutation_performed":false,
                 "clearable":observation.phase != "partial_or_conflicting_state",
                 "completion_requires_write":observation.phase == "partial_or_conflicting_state"})
@@ -2175,6 +2515,7 @@ print('ISOLATED_MODEL_LOCK_PASSED')
         let state = root.join(STATE);
         for path in [
             state.join(ACTIVATION),
+            state.join(PRIOR_BACKUP),
             state.join(REFERENCE_ENV),
             state.join("model-selection.json"),
             state.join("model-auth/api-key"),
@@ -2466,6 +2807,430 @@ print('ISOLATED_MODEL_LOCK_PASSED')
             "partial_or_conflicting_state"
         );
         assert!(activation_absent(&state).is_err());
+        remove_activation_fixture(&root, &p);
+    }
+
+    #[test]
+    fn prior_backup_is_private_bound_and_precedes_any_candidate_write() {
+        let (root, p) = activation_fixture("saved-private");
+        let state = root.join(STATE);
+        write_activation_candidate(&state, &p);
+        let before = activation_snapshot(&state).unwrap();
+        let record = begin_activation(&state, &p).unwrap();
+        assert_eq!(record.schema_version, 2);
+        assert_eq!(activation_snapshot(&state).unwrap(), before);
+        let saved = bound_prior_backup(&state, &record).unwrap().unwrap();
+        assert_eq!((saved.selection, saved.environment, saved.key), before);
+        assert_eq!(
+            fs::metadata(state.join(PRIOR_BACKUP)).unwrap().mode() & 0o777,
+            0o600
+        );
+        assert!(begin_activation(&state, &p).is_err());
+        let observation = observe_activation(&state, &p, true).unwrap();
+        assert!(observation.restore_available);
+        // Only hashes/status are projected; secret backup fields stay private.
+        assert!(!observation.review.contains(&"a".repeat(64)));
+        remove_activation_fixture(&root, &p);
+    }
+
+    #[test]
+    fn isolated_worker_cannot_read_or_unlink_the_private_prior_backup() {
+        let (root, p) = activation_fixture("saved-dac");
+        let state = root.join(STATE);
+        for directory in [&root, state.parent().unwrap(), &state] {
+            fs::set_permissions(directory, fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        write_activation_candidate(&state, &p);
+        begin_activation(&state, &p).unwrap();
+        let mut child = Command::new("/usr/bin/python3");
+        child
+            .args([
+                "-I",
+                "-c",
+                r#"
+import os, stat, sys
+assert os.geteuid() == 989 and os.getgroups() == []
+path = sys.argv[1]
+assert stat.S_IMODE(os.stat(path).st_mode) == 0o600
+for action in (lambda: os.open(path, os.O_RDONLY | os.O_NOFOLLOW), lambda: os.unlink(path)):
+    try:
+        action()
+    except PermissionError:
+        pass
+    else:
+        raise RuntimeError('isolated worker accessed private model recovery material')
+print('MODEL_PRIOR_BACKUP_DAC_PASSED')
+"#,
+            ])
+            .arg(state.join(PRIOR_BACKUP));
+        unsafe {
+            child.pre_exec(|| {
+                if libc::setgroups(0, std::ptr::null()) != 0
+                    || libc::setgid(989) != 0
+                    || libc::setuid(989) != 0
+                {
+                    return Err(std::io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
+        let output = child.output().unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(output.stdout, b"MODEL_PRIOR_BACKUP_DAC_PASSED\n");
+        assert!(prior_backup_bytes(&state).unwrap().is_some());
+        remove_activation_fixture(&root, &p);
+    }
+
+    #[test]
+    fn reviewed_prior_restoration_recovers_exact_configuration_from_partial_state() {
+        let (root, p) = activation_fixture("restore-prior");
+        let state = root.join(STATE);
+        write_activation_candidate(&state, &p);
+        let original = activation_snapshot(&state).unwrap();
+        begin_activation(&state, &p).unwrap();
+        fs::write(state.join(REFERENCE_ENV), b"partial new environment").unwrap();
+        fs::write(state.join("model-auth/api-key"), "b".repeat(64)).unwrap();
+        let observed = observe_activation(&state, &p, true).unwrap();
+        assert!(
+            reviewed_restore_configuration(&state, &p, &"00".repeat(32), |_| Ok(p.clone()))
+                .is_err()
+        );
+        reviewed_restore_configuration(&state, &p, &observed.review, |_| Ok(p.clone())).unwrap();
+        activation_absent(&state).unwrap();
+        assert_eq!(activation_snapshot(&state).unwrap(), original);
+        let auth = fs::metadata(state.join("model-auth")).unwrap();
+        assert_eq!(
+            (auth.uid(), auth.gid(), auth.mode() & 0o777),
+            (0, 989, 0o750)
+        );
+        let key = fs::metadata(state.join("model-auth/api-key")).unwrap();
+        assert_eq!((key.uid(), key.gid(), key.mode() & 0o777), (0, 989, 0o640));
+        let env = fs::metadata(state.join(REFERENCE_ENV)).unwrap();
+        assert_eq!((env.uid(), env.gid(), env.mode() & 0o777), (0, 990, 0o640));
+        remove_activation_fixture(&root, &p);
+    }
+
+    #[test]
+    fn restoration_uses_the_prior_profile_and_can_return_to_manual_only() {
+        for manual in [false, true] {
+            let (root, candidate) = activation_fixture(if manual {
+                "restore-manual"
+            } else {
+                "restore-other"
+            });
+            let state = root.join(STATE);
+            let mut prior = candidate.clone();
+            prior.id = "qwen3-1-7b-q4-k-m".into();
+            if !manual {
+                fs::copy(
+                    state.join("models").join(format!("{}.gguf", candidate.id)),
+                    state.join("models").join(format!("{}.gguf", prior.id)),
+                )
+                .unwrap();
+                write_activation_candidate(&state, &prior);
+            }
+            let original = activation_snapshot(&state).unwrap();
+            begin_activation(&state, &candidate).unwrap();
+            write_activation_candidate(&state, &candidate);
+            let observed = observe_activation(&state, &candidate, true).unwrap();
+            // Explicit restore is valid even when the candidate files committed
+            // but their pending marker has not been cleared.
+            reviewed_restore_configuration(&state, &candidate, &observed.review, |id| {
+                assert_eq!(id, prior.id);
+                Ok(prior.clone())
+            })
+            .unwrap();
+            assert_eq!(activation_snapshot(&state).unwrap(), original);
+            activation_absent(&state).unwrap();
+            if !manual {
+                fs::remove_file(state.join("models").join(format!("{}.gguf", prior.id))).unwrap();
+            }
+            remove_activation_fixture(&root, &candidate);
+        }
+    }
+
+    #[test]
+    fn restoration_bad_prior_weights_or_stale_review_never_changes_configuration() {
+        for variant in 0..3 {
+            let (root, p) = activation_fixture(&format!("restore-refused-{variant}"));
+            let state = root.join(STATE);
+            write_activation_candidate(&state, &p);
+            begin_activation(&state, &p).unwrap();
+            fs::write(state.join(REFERENCE_ENV), b"partial").unwrap();
+            let observation = observe_activation(&state, &p, true).unwrap();
+            match variant {
+                0 => fs::write(
+                    state.join("models").join(format!("{}.gguf", p.id)),
+                    b"bad weights",
+                )
+                .unwrap(),
+                1 => fs::write(state.join(REFERENCE_ENV), b"changed after review").unwrap(),
+                _ => {
+                    let path = state.join(PRIOR_BACKUP);
+                    fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
+                }
+            }
+            let before = activation_snapshot(&state).unwrap();
+            assert!(
+                reviewed_restore_configuration(&state, &p, &observation.review, |_| Ok(p.clone()))
+                    .is_err()
+            );
+            assert_eq!(activation_snapshot(&state).unwrap(), before);
+            assert!(activation_absent(&state).is_err());
+            remove_activation_fixture(&root, &p);
+        }
+    }
+
+    #[test]
+    fn missing_or_substituted_backup_does_not_manufacture_prior_state() {
+        for variant in 0..5 {
+            let (root, p) = activation_fixture(&format!("restore-missing-{variant}"));
+            let state = root.join(STATE);
+            write_activation_candidate(&state, &p);
+            begin_activation(&state, &p).unwrap();
+            fs::write(state.join(REFERENCE_ENV), b"partial").unwrap();
+            let observation = observe_activation(&state, &p, true).unwrap();
+            let before = activation_snapshot(&state).unwrap();
+            fs::remove_file(state.join(PRIOR_BACKUP)).unwrap();
+            match variant {
+                0 => (),
+                1 => {
+                    platform::write_atomic(&state.join(PRIOR_BACKUP), b"{}", 0o600).unwrap();
+                }
+                2 => std::os::unix::fs::symlink(
+                    state.join("model-auth/api-key"),
+                    state.join(PRIOR_BACKUP),
+                )
+                .unwrap(),
+                3 => {
+                    fs::set_permissions(
+                        state.join("model-auth/api-key"),
+                        fs::Permissions::from_mode(0o600),
+                    )
+                    .unwrap();
+                    fs::hard_link(state.join("model-auth/api-key"), state.join(PRIOR_BACKUP))
+                        .unwrap();
+                }
+                _ => platform::write_atomic(
+                    &state.join(PRIOR_BACKUP),
+                    &vec![b' '; MAX_PRIOR_BACKUP as usize + 1],
+                    0o600,
+                )
+                .unwrap(),
+            }
+            assert!(
+                reviewed_restore_configuration(&state, &p, &observation.review, |_| Ok(p.clone()))
+                    .is_err()
+            );
+            if variant == 3 {
+                // Snapshot reads must also reject the injected nlink=2 key.
+                // Check preservation, then detach only this fixture's alias.
+                assert_eq!(fs::metadata(state.join(PRIOR_BACKUP)).unwrap().nlink(), 2);
+                fs::remove_file(state.join(PRIOR_BACKUP)).unwrap();
+            }
+            assert_eq!(activation_snapshot(&state).unwrap(), before);
+            assert!(activation_absent(&state).is_err());
+            remove_activation_fixture(&root, &p);
+        }
+    }
+
+    #[test]
+    fn interrupted_prior_restore_requires_new_review_and_keeps_backup_until_clearance() {
+        for restored_files in 1..=3 {
+            let (root, p) = activation_fixture(&format!("restore-retry-{restored_files}"));
+            let state = root.join(STATE);
+            write_activation_candidate(&state, &p);
+            let original = activation_snapshot(&state).unwrap();
+            let record = begin_activation(&state, &p).unwrap();
+            fs::write(state.join("model-auth/api-key"), "b".repeat(64)).unwrap();
+            fs::write(state.join(REFERENCE_ENV), b"partial").unwrap();
+            fs::write(state.join("model-selection.json"), b"{}").unwrap();
+            let old_review = observe_activation(&state, &p, true).unwrap();
+            let backup = bound_prior_backup(&state, &record).unwrap().unwrap();
+            // Materialize the exact writes preceding each simulated crash.
+            restore_config_file(
+                &state.join("model-auth/api-key"),
+                &backup.key,
+                0o640,
+                Some("0:989"),
+            )
+            .unwrap();
+            if restored_files >= 2 {
+                restore_config_file(
+                    &state.join(REFERENCE_ENV),
+                    &backup.environment,
+                    0o640,
+                    Some("0:990"),
+                )
+                .unwrap();
+            }
+            if restored_files >= 3 {
+                restore_config_file(
+                    &state.join("model-selection.json"),
+                    &backup.selection,
+                    0o644,
+                    None,
+                )
+                .unwrap();
+            }
+            assert!(activation_absent(&state).is_err());
+            assert!(bound_prior_backup(&state, &record).unwrap().is_some());
+            assert!(
+                reviewed_restore_configuration(&state, &p, &old_review.review, |_| Ok(p.clone()))
+                    .is_err()
+            );
+            let new_review = observe_activation(&state, &p, true).unwrap();
+            reviewed_restore_configuration(&state, &p, &new_review.review, |_| Ok(p.clone()))
+                .unwrap();
+            activation_absent(&state).unwrap();
+            assert_eq!(activation_snapshot(&state).unwrap(), original);
+            remove_activation_fixture(&root, &p);
+        }
+    }
+
+    #[test]
+    fn orphan_backup_discard_requires_exact_unchanged_state_and_does_not_restore_files() {
+        let (root, p) = activation_fixture("restore-orphan");
+        let state = root.join(STATE);
+        write_activation_candidate(&state, &p);
+        let original = activation_snapshot(&state).unwrap();
+        begin_activation(&state, &p).unwrap();
+        fs::remove_file(state.join(ACTIVATION)).unwrap(); // Pre-marker crash fixture.
+        assert!(activation_absent(&state).is_err());
+        let (review, unchanged) = observe_orphan_backup(&state).unwrap();
+        assert!(unchanged);
+        fs::write(state.join(REFERENCE_ENV), b"different").unwrap();
+        assert!(reviewed_discard_orphan_backup(&state, &review).is_err());
+        fs::write(state.join(REFERENCE_ENV), original.1.as_ref().unwrap()).unwrap();
+        assert!(reviewed_discard_orphan_backup(&state, &"00".repeat(32)).is_err());
+        reviewed_discard_orphan_backup(&state, &review).unwrap();
+        activation_absent(&state).unwrap();
+        assert_eq!(activation_snapshot(&state).unwrap(), original);
+        remove_activation_fixture(&root, &p);
+    }
+
+    #[test]
+    fn backup_cleanup_interruption_and_legacy_markers_allow_only_existing_clearance() {
+        for legacy in [false, true] {
+            let (root, p) = activation_fixture(if legacy {
+                "restore-schema1"
+            } else {
+                "restore-cleanup"
+            });
+            let state = root.join(STATE);
+            let mut record = begin_activation(&state, &p).unwrap();
+            fs::remove_file(state.join(PRIOR_BACKUP)).unwrap();
+            if legacy {
+                record.schema_version = 1;
+                record.prior_backup_sha256 = None;
+                platform::write_atomic(
+                    &state.join(ACTIVATION),
+                    &serde_json::to_vec(&record).unwrap(),
+                    0o600,
+                )
+                .unwrap();
+            }
+            let observed = observe_activation(&state, &p, true).unwrap();
+            assert!(!observed.restore_available);
+            assert!(reviewed_restore_configuration(
+                &state,
+                &p,
+                &observed.review,
+                |_| Ok(p.clone())
+            )
+            .is_err());
+            reviewed_clear_activation(&state, &p, "--abort-unchanged", &observed.review).unwrap();
+            activation_absent(&state).unwrap();
+            remove_activation_fixture(&root, &p);
+        }
+    }
+
+    #[test]
+    fn backup_of_invalid_or_legacy_prior_config_cannot_be_published_as_valid_model() {
+        for variant in 0..2 {
+            let (root, p) = activation_fixture(&format!("restore-invalid-prior-{variant}"));
+            let state = root.join(STATE);
+            write_activation_candidate(&state, &p);
+            if variant == 0 {
+                fs::write(
+                    state.join(REFERENCE_ENV),
+                    b"prior configuration was already inconsistent",
+                )
+                .unwrap();
+            } else {
+                fs::remove_file(state.join(REFERENCE_ENV)).unwrap();
+            }
+            begin_activation(&state, &p).unwrap();
+            write_activation_candidate(&state, &p);
+            let observed = observe_activation(&state, &p, true).unwrap();
+            let before = activation_snapshot(&state).unwrap();
+            assert!(reviewed_restore_configuration(
+                &state,
+                &p,
+                &observed.review,
+                |_| Ok(p.clone())
+            )
+            .is_err());
+            assert_eq!(activation_snapshot(&state).unwrap(), before);
+            assert!(activation_absent(&state).is_err());
+            remove_activation_fixture(&root, &p);
+        }
+    }
+
+    #[test]
+    fn prior_restoration_publishes_service_modes_under_restrictive_umask() {
+        let output = Command::new(std::env::current_exe().unwrap())
+            .args([
+                "model::tests::prior_restore_umask_child",
+                "--ignored",
+                "--exact",
+                "--test-threads=1",
+            ])
+            .env("LUMA_MODEL_OWNED_UMASK_FIXTURE", "1")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(String::from_utf8_lossy(&output.stdout).contains("1 passed"));
+    }
+
+    #[test]
+    #[ignore = "owned child of the restrictive-umask model fixture only"]
+    fn prior_restore_umask_child() {
+        assert_eq!(
+            std::env::var("LUMA_MODEL_OWNED_UMASK_FIXTURE").unwrap(),
+            "1"
+        );
+        assert!(Path::new("/.dockerenv").is_file());
+        unsafe {
+            libc::umask(0o077);
+        }
+        let (root, p) = activation_fixture("restore-umask");
+        let state = root.join(STATE);
+        write_activation_candidate(&state, &p);
+        begin_activation(&state, &p).unwrap();
+        fs::write(state.join(REFERENCE_ENV), b"partial").unwrap();
+        let observation = observe_activation(&state, &p, true).unwrap();
+        reviewed_restore_configuration(&state, &p, &observation.review, |_| Ok(p.clone())).unwrap();
+        for (name, expected) in [
+            ("model-auth/api-key", 0o640),
+            (REFERENCE_ENV, 0o640),
+            ("model-selection.json", 0o644),
+        ] {
+            assert_eq!(
+                fs::metadata(state.join(name)).unwrap().mode() & 0o777,
+                expected
+            );
+        }
+        activation_absent(&state).unwrap();
         remove_activation_fixture(&root, &p);
     }
 }

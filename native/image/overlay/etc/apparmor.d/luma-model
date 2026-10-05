@@ -19,6 +19,8 @@ profile luma-model flags=(attach_disconnected) {
   /sys/fs/cgroup/memory.max r,
   /var/lib/luma-os/model-selection.json r,
   /var/lib/luma-os/model-activation.pending r,
+  # Needed for the orphan fence lookup; root-private DAC prevents content reads.
+  /var/lib/luma-os/model-activation.prior r,
   /var/lib/luma-os/model-runtime.lock rk,
   /var/lib/luma-os/models/*.gguf mr,
   /var/lib/luma-os/model-auth/api-key r,

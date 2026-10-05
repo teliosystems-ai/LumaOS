@@ -102,6 +102,31 @@ class ModelRuntimePolicyTests(unittest.TestCase):
         unit = (ROOT / 'native/image/overlay/etc/systemd/system/luma-reference.service').read_text()
         self.assertNotIn('EnvironmentFile=-/var/lib/luma-os/reference/model.env', unit)
 
+    def test_prior_backup_is_bound_private_and_worker_is_fenced_by_orphans(self):
+        source = (ROOT / 'rust/luma-platform/src/model.rs').read_text()
+        begin = source.split('fn begin_activation(')[1].split('struct ActivationObservation')[0]
+        self.assertLess(begin.index('state.join(PRIOR_BACKUP)'), begin.index('state.join(ACTIVATION)'))
+        self.assertIn('.mode(0o600)', begin)
+        absent = source.split('fn activation_absent(')[1].split('fn checked_activation_bytes(')[0]
+        self.assertIn('[ACTIVATION, PRIOR_BACKUP]', absent)
+        backup = source.split('fn prior_backup_bytes(')[1].split('fn decode_prior_backup(')[0]
+        self.assertIn('0o077', backup)
+        profile = (ROOT / 'native/image/overlay/etc/apparmor.d/luma-model').read_text()
+        self.assertIn('/var/lib/luma-os/model-activation.prior r,', profile)
+
+    def test_reviewed_restore_verifies_prior_before_writes_and_never_restarts(self):
+        source = (ROOT / 'rust/luma-platform/src/model.rs').read_text()
+        restore = source.split('fn reviewed_restore_configuration(')[1].split('fn observe_orphan_backup(')[0]
+        self.assertLess(restore.index('verify_file('), restore.index('restore_config_file('))
+        self.assertLess(restore.index('restore_config_file('), restore.index('clear_activation('))
+        self.assertIn('current.review != observed.review', restore)
+        self.assertNotIn('systemctl', restore)
+        reconcile = source.split('pub fn activation_reconcile(')[1].split('fn legacy_configuration_at(')[0]
+        for flag in ('--restore-prior', '--discard-orphan-backup'):
+            self.assertIn(flag, reconcile)
+        for forbidden in ('"key":', '"environment":', '"backup":', 'systemctl'):
+            self.assertNotIn(forbidden, reconcile)
+
 
 if __name__ == '__main__':
     unittest.main()

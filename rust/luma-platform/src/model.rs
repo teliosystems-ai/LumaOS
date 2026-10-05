@@ -1980,6 +1980,162 @@ fn reviewed_clear_quarantine(
     Ok(())
 }
 
+struct IncompleteQuarantineObservation {
+    bytes: Vec<u8>,
+    identity: (u64, u64, i64, i64),
+    hashes: (Option<String>, Option<String>, Option<String>),
+    current_profile: Option<Profile>,
+    archive: String,
+    review: String,
+}
+
+fn incomplete_quarantine_bytes(state: &Path) -> Result<(Vec<u8>, (u64, u64, i64, i64))> {
+    let before = fs::symlink_metadata(state.join(QUARANTINE))?;
+    let bytes = quarantine_bytes(state)?.ok_or("no retained model quarantine")?;
+    // An interrupted exclusive write can leave empty/truncated JSON. Complete
+    // JSON (including unknown future schemas) and other malformed data require
+    // their own policy; this path must never reinterpret or discard them.
+    match serde_json::from_slice::<serde_json::Value>(&bytes) {
+        Err(error) if error.is_eof() => (),
+        _ => return Err("quarantine is not incomplete JSON; preserve state".into()),
+    }
+    let after = fs::symlink_metadata(state.join(QUARANTINE))?;
+    let identity = |m: &fs::Metadata| (m.dev(), m.ino(), m.ctime(), m.ctime_nsec());
+    if identity(&before) != identity(&after) {
+        return Err("incomplete quarantine changed during inspection".into());
+    }
+    Ok((bytes, identity(&after)))
+}
+
+fn observe_incomplete_quarantine(
+    state: &Path,
+    resolve: &impl Fn(&str) -> Result<Profile>,
+) -> Result<IncompleteQuarantineObservation> {
+    activation_records_absent(state)?;
+    let (bytes, identity) = incomplete_quarantine_bytes(state)?;
+    let (selection, environment, key) = activation_snapshot(state)?;
+    let snapshot = PriorBackup {
+        schema_version: 1,
+        candidate: String::new(),
+        selection,
+        environment,
+        key,
+    };
+    let current_profile = prior_restore_profile(&snapshot, resolve)?;
+    if let Some(p) = &current_profile {
+        verify_file(&state.join("models").join(format!("{}.gguf", p.id)), p)?;
+    }
+    activation_records_absent(state)?;
+    let (selection, environment, key) = activation_snapshot(state)?;
+    if (selection, environment, key)
+        != (
+            snapshot.selection.clone(),
+            snapshot.environment.clone(),
+            snapshot.key.clone(),
+        )
+        || incomplete_quarantine_bytes(state)? != (bytes.clone(), identity)
+    {
+        return Err("incomplete quarantine/configuration changed during inspection".into());
+    }
+    let hashes = (
+        activation_digest(&snapshot.selection),
+        activation_digest(&snapshot.environment),
+        activation_digest(&snapshot.key),
+    );
+    let archive = format!(
+        "model-quarantine.retained.{}",
+        bundle::hex(&Sha256::digest(&bytes))
+    );
+    if let Some(retained) =
+        checked_activation_bytes_with_mode(&state.join(&archive), 4096, 0, 0o077)?
+    {
+        if retained != bytes {
+            return Err("incomplete quarantine retention conflict; preserve state".into());
+        }
+    }
+    let mut digest = Sha256::new();
+    digest.update(b"luma-model-incomplete-quarantine-review-v1\0");
+    digest.update(CATALOG.as_bytes());
+    digest.update(&bytes);
+    digest.update(serde_json::to_vec(&identity)?);
+    digest.update(serde_json::to_vec(&hashes)?);
+    if let Some(p) = &current_profile {
+        digest.update(p.sha256.as_bytes());
+    }
+    Ok(IncompleteQuarantineObservation {
+        bytes,
+        identity,
+        hashes,
+        current_profile,
+        archive,
+        review: bundle::hex(&digest.finalize()),
+    })
+}
+
+fn reviewed_retain_incomplete_quarantine(
+    state: &Path,
+    reviewed: &str,
+    resolve: &impl Fn(&str) -> Result<Profile>,
+) -> Result<String> {
+    tpm::decode::<32>(reviewed)?;
+    let observed = observe_incomplete_quarantine(state, resolve)?;
+    if observed.review != reviewed {
+        return Err("incomplete quarantine review changed; preserve state".into());
+    }
+    let archive = state.join(&observed.archive);
+    match checked_activation_bytes_with_mode(&archive, 4096, 0, 0o077)? {
+        Some(bytes) if bytes == observed.bytes => (),
+        Some(_) => return Err("incomplete quarantine retention conflict; preserve state".into()),
+        None => {
+            let mut file = OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .mode(0o600)
+                .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
+                .open(&archive)?;
+            file.set_permissions(fs::Permissions::from_mode(0o600))?;
+            file.write_all(&observed.bytes)?;
+            file.sync_all()?;
+        }
+    }
+    // Re-sync an existing exact archive too: a retry must not depend on whether
+    // a previous controller reached fsync. Preserve any partial/conflicting
+    // archive and keep the original startup fence on retention errors. A later
+    // directory-sync failure after unlink has an uncertain clearance outcome;
+    // the retained private bytes are never deleted by this path.
+    let retained = OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
+        .open(&archive)?;
+    retained.sync_all()?;
+    File::open(state)?.sync_all()?;
+    if checked_activation_bytes_with_mode(&archive, 4096, 0, 0o077)?.as_deref()
+        != Some(observed.bytes.as_slice())
+    {
+        return Err("incomplete quarantine retention changed; preserve state".into());
+    }
+    let current = observe_incomplete_quarantine(state, resolve)?;
+    if current.review != observed.review {
+        return Err("incomplete quarantine changed after retention; preserve state".into());
+    }
+    activation_records_absent(state)?;
+    let (selection, environment, key) = activation_snapshot(state)?;
+    if (
+        activation_digest(&selection),
+        activation_digest(&environment),
+        activation_digest(&key),
+    ) != current.hashes
+        || incomplete_quarantine_bytes(state)? != (current.bytes, current.identity)
+        || checked_activation_bytes_with_mode(&archive, 4096, 0, 0o077)?.as_deref()
+            != Some(observed.bytes.as_slice())
+    {
+        return Err("incomplete quarantine/configuration changed before clearance".into());
+    }
+    fs::remove_file(state.join(QUARANTINE))?;
+    File::open(state)?.sync_all()?;
+    Ok(observed.archive)
+}
+
 pub fn quarantine_reconcile(action: Option<(&str, &str)>) -> Result<()> {
     crate::require_root()?;
     platform::require_installed()?;
@@ -1988,6 +2144,27 @@ pub fn quarantine_reconcile(action: Option<(&str, &str)>) -> Result<()> {
     let _runtime = runtime_lock(var, false)?;
     let state = var.join(STATE);
     match action {
+        Some(("--inspect-incomplete", "")) => {
+            let observed = observe_incomplete_quarantine(&state, &profile)?;
+            println!(
+                "{}",
+                serde_json::json!({"schema_version":1,
+                "phase":"incomplete_json_quarantine", "review_sha256":observed.review,
+                "retention_file":observed.archive,
+                "current_model":observed.current_profile.as_ref().map(|p| &p.id),
+                "manual_only":observed.current_profile.is_none(),
+                "worker_started":false,"mutation_performed":false})
+            );
+        }
+        Some(("--retain-incomplete", reviewed)) => {
+            let archive = reviewed_retain_incomplete_quarantine(&state, reviewed, &profile)?;
+            println!(
+                "{}",
+                serde_json::json!({"schema_version":1,"quarantine_cleared":true,
+                "retention_file":archive,"worker_started":false,"readiness_proven":false,
+                "reservation":false})
+            );
+        }
         Some(("--clear-consistent", reviewed)) => {
             reviewed_clear_quarantine(&state, reviewed, &profile)?;
             println!(
@@ -4560,6 +4737,369 @@ print('MODEL_COMPLETED_ROLLBACK_DAC_PASSED')
         assert_eq!(quarantine_bytes(&state).unwrap().unwrap(), next.bytes);
         reviewed_clear_quarantine(&state, &next.review, &|_| Ok(p.clone())).unwrap();
         remove_activation_fixture(&root, &p);
+    }
+
+    fn write_incomplete_quarantine(state: &Path, bytes: &[u8]) {
+        fs::write(state.join(QUARANTINE), bytes).unwrap();
+        fs::set_permissions(state.join(QUARANTINE), fs::Permissions::from_mode(0o600)).unwrap();
+    }
+
+    #[test]
+    fn incomplete_quarantine_retains_exact_private_bytes_and_preserves_configuration_and_disablement(
+    ) {
+        for (label, bytes, selected) in [
+            ("empty", &b""[..], true),
+            ("truncated", &b"{\"schema_version\":1,"[..], true),
+            ("manual", &b"{"[..], false),
+        ] {
+            let (root, p) = activation_fixture(&format!("incomplete-{label}"));
+            let state = root.join(STATE);
+            if selected {
+                write_activation_candidate(&state, &p);
+            }
+            write_incomplete_quarantine(&state, bytes);
+            fs::write(state.join("model-disabled"), b"independent recovery").unwrap();
+            let before = activation_snapshot(&state).unwrap();
+            assert!(activation_absent(&state).is_err());
+            assert!(observe_quarantine(&state, &|_| Ok(p.clone())).is_err());
+            let observed = observe_incomplete_quarantine(&state, &|_| Ok(p.clone())).unwrap();
+            assert_eq!(observed.current_profile.is_some(), selected);
+            assert!(!state.join(&observed.archive).exists());
+            let archive =
+                reviewed_retain_incomplete_quarantine(&state, &observed.review, &|_| Ok(p.clone()))
+                    .unwrap();
+            assert_eq!(fs::read(state.join(&archive)).unwrap(), bytes);
+            let metadata = fs::symlink_metadata(state.join(&archive)).unwrap();
+            assert_eq!(
+                (metadata.uid(), metadata.nlink(), metadata.mode() & 0o777),
+                (0, 1, 0o600)
+            );
+            assert!(!state.join(QUARANTINE).exists());
+            assert_eq!(activation_snapshot(&state).unwrap(), before);
+            assert!(state.join("models").join(format!("{}.gguf", p.id)).exists());
+            assert_eq!(
+                fs::read(state.join("model-disabled")).unwrap(),
+                b"independent recovery"
+            );
+            assert!(
+                reviewed_retain_incomplete_quarantine(&state, &observed.review, &|_| Ok(p.clone()))
+                    .is_err()
+            );
+            fs::remove_file(state.join(archive)).unwrap();
+            fs::remove_file(state.join("model-disabled")).unwrap();
+            remove_activation_fixture(&root, &p);
+        }
+    }
+
+    #[test]
+    fn incomplete_quarantine_rejects_complete_future_and_other_malformed_records_without_leaking_bytes(
+    ) {
+        for (index, bytes) in [
+            &b"null"[..],
+            &b"{}"[..],
+            &b"{\"schema_version\":999}"[..],
+            &b"[1]"[..],
+            &b"garbage-secret"[..],
+            &b"{\"secret\":invalid}"[..],
+            &b"\xff"[..],
+        ]
+        .iter()
+        .enumerate()
+        {
+            let (root, p) = activation_fixture(&format!("incomplete-rejected-{index}"));
+            let state = root.join(STATE);
+            write_incomplete_quarantine(&state, bytes);
+            let error = observe_incomplete_quarantine(&state, &|_| Ok(p.clone()))
+                .err()
+                .unwrap()
+                .to_string();
+            assert_eq!(error, "quarantine is not incomplete JSON; preserve state");
+            assert_eq!(quarantine_bytes(&state).unwrap().unwrap(), *bytes);
+            assert!(activation_absent(&state).is_err());
+            remove_activation_fixture(&root, &p);
+        }
+        let (root, p) = activation_fixture("incomplete-valid-record");
+        let state = root.join(STATE);
+        publish_quarantine(&state, &p, RestartStage::Restart).unwrap();
+        assert!(observe_incomplete_quarantine(&state, &|_| Ok(p.clone())).is_err());
+        remove_activation_fixture(&root, &p);
+    }
+
+    #[test]
+    fn incomplete_quarantine_requires_fresh_exact_review_and_verified_consistent_weights() {
+        let (root, p) = activation_fixture("incomplete-review");
+        let state = root.join(STATE);
+        write_activation_candidate(&state, &p);
+        write_incomplete_quarantine(&state, b"{");
+        let observed = observe_incomplete_quarantine(&state, &|_| Ok(p.clone())).unwrap();
+        for digest in ["not-a-digest".to_string(), "00".repeat(32)] {
+            assert!(
+                reviewed_retain_incomplete_quarantine(&state, &digest, &|_| Ok(p.clone())).is_err()
+            );
+        }
+        fs::write(state.join("model-auth/api-key"), "b".repeat(64)).unwrap();
+        assert!(observe_incomplete_quarantine(&state, &|_| Ok(p.clone())).is_err());
+        fs::write(
+            state.join(REFERENCE_ENV),
+            reference_environment(&p, &"b".repeat(64)),
+        )
+        .unwrap();
+        assert!(reviewed_retain_incomplete_quarantine(
+            &state,
+            &observed.review,
+            &|_| Ok(p.clone())
+        )
+        .is_err());
+        let fresh = observe_incomplete_quarantine(&state, &|_| Ok(p.clone())).unwrap();
+        fs::write(
+            state.join("models").join(format!("{}.gguf", p.id)),
+            b"corrupt",
+        )
+        .unwrap();
+        assert!(
+            reviewed_retain_incomplete_quarantine(&state, &fresh.review, &|_| Ok(p.clone()))
+                .is_err()
+        );
+        assert!(!state.join(&observed.archive).exists());
+        assert!(activation_absent(&state).is_err());
+        remove_activation_fixture(&root, &p);
+    }
+
+    #[test]
+    fn incomplete_quarantine_file_replacement_invalidates_review_even_for_identical_bytes() {
+        let (root, p) = activation_fixture("incomplete-replacement");
+        let state = root.join(STATE);
+        write_incomplete_quarantine(&state, b"{");
+        let observed = observe_incomplete_quarantine(&state, &|_| Ok(p.clone())).unwrap();
+        let displaced = state.join("displaced-quarantine");
+        fs::rename(state.join(QUARANTINE), &displaced).unwrap();
+        write_incomplete_quarantine(&state, b"{");
+        let next = observe_incomplete_quarantine(&state, &|_| Ok(p.clone())).unwrap();
+        assert_ne!(observed.identity, next.identity);
+        assert_ne!(observed.review, next.review);
+        assert!(reviewed_retain_incomplete_quarantine(
+            &state,
+            &observed.review,
+            &|_| Ok(p.clone())
+        )
+        .is_err());
+        assert!(!state.join(next.archive).exists());
+        fs::remove_file(displaced).unwrap();
+        remove_activation_fixture(&root, &p);
+    }
+
+    #[test]
+    fn incomplete_quarantine_retries_exact_private_retention_left_before_clearance() {
+        let (root, p) = activation_fixture("incomplete-retry");
+        let state = root.join(STATE);
+        write_incomplete_quarantine(&state, b"{\"schema_version\":");
+        let observed = observe_incomplete_quarantine(&state, &|_| Ok(p.clone())).unwrap();
+        fs::write(state.join(&observed.archive), &observed.bytes).unwrap();
+        fs::set_permissions(
+            state.join(&observed.archive),
+            fs::Permissions::from_mode(0o600),
+        )
+        .unwrap();
+        let again = observe_incomplete_quarantine(&state, &|_| Ok(p.clone())).unwrap();
+        assert_eq!(again.review, observed.review);
+        let archive =
+            reviewed_retain_incomplete_quarantine(&state, &observed.review, &|_| Ok(p.clone()))
+                .unwrap();
+        assert_eq!(fs::read(state.join(&archive)).unwrap(), observed.bytes);
+        assert!(!state.join(QUARANTINE).exists());
+        fs::remove_file(state.join(archive)).unwrap();
+        remove_activation_fixture(&root, &p);
+    }
+
+    #[test]
+    fn isolated_worker_cannot_read_or_remove_retained_incomplete_quarantine_bytes() {
+        let (root, p) = activation_fixture("incomplete-private-dac");
+        let state = root.join(STATE);
+        for directory in [&root, state.parent().unwrap(), &state] {
+            fs::set_permissions(directory, fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        write_incomplete_quarantine(&state, b"{\"opaque_secret\":\"retain-privately");
+        let observed = observe_incomplete_quarantine(&state, &|_| Ok(p.clone())).unwrap();
+        let archive =
+            reviewed_retain_incomplete_quarantine(&state, &observed.review, &|_| Ok(p.clone()))
+                .unwrap();
+        let mut child = Command::new("/usr/bin/python3");
+        child
+            .args([
+                "-I",
+                "-c",
+                r#"
+import os, stat, sys
+assert os.geteuid() == 989 and os.getgroups() == []
+path = sys.argv[1]
+assert stat.S_IMODE(os.stat(path).st_mode) == 0o600
+for action in (lambda: os.open(path, os.O_RDONLY | os.O_NOFOLLOW), lambda: os.unlink(path)):
+    try:
+        action()
+    except PermissionError:
+        pass
+    else:
+        raise RuntimeError('worker accessed or removed private retained bytes')
+print('MODEL_INCOMPLETE_QUARANTINE_DAC_PASSED')
+"#,
+            ])
+            .arg(state.join(&archive));
+        unsafe {
+            child.pre_exec(|| {
+                if libc::setgroups(0, std::ptr::null()) != 0
+                    || libc::setgid(989) != 0
+                    || libc::setuid(989) != 0
+                {
+                    return Err(std::io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
+        let output = child.output().unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(output.stdout, b"MODEL_INCOMPLETE_QUARANTINE_DAC_PASSED\n");
+        assert_eq!(fs::read(state.join(&archive)).unwrap(), observed.bytes);
+        fs::remove_file(state.join(archive)).unwrap();
+        remove_activation_fixture(&root, &p);
+    }
+
+    #[test]
+    fn incomplete_quarantine_retention_conflicts_or_unsafe_archives_keep_fence_and_evidence() {
+        for label in [
+            "conflict",
+            "public",
+            "symlink",
+            "hardlink",
+            "directory",
+            "oversized",
+        ] {
+            let (root, p) = activation_fixture(&format!("incomplete-archive-{label}"));
+            let state = root.join(STATE);
+            write_incomplete_quarantine(&state, b"{");
+            let observed = observe_incomplete_quarantine(&state, &|_| Ok(p.clone())).unwrap();
+            let archive = state.join(&observed.archive);
+            let alias = state.join("archive-alias");
+            match label {
+                "symlink" => std::os::unix::fs::symlink(state.join(QUARANTINE), &archive).unwrap(),
+                "directory" => fs::create_dir(&archive).unwrap(),
+                _ => {
+                    fs::write(
+                        &archive,
+                        if label == "conflict" {
+                            &b"partial retention"[..]
+                        } else {
+                            &observed.bytes
+                        },
+                    )
+                    .unwrap();
+                    fs::set_permissions(
+                        &archive,
+                        fs::Permissions::from_mode(if label == "public" { 0o644 } else { 0o600 }),
+                    )
+                    .unwrap();
+                    if label == "hardlink" {
+                        fs::hard_link(&archive, &alias).unwrap();
+                    }
+                    if label == "oversized" {
+                        fs::write(&archive, vec![b' '; 4097]).unwrap();
+                    }
+                }
+            }
+            assert!(
+                reviewed_retain_incomplete_quarantine(&state, &observed.review, &|_| Ok(p.clone()))
+                    .is_err()
+            );
+            assert_eq!(quarantine_bytes(&state).unwrap().unwrap(), observed.bytes);
+            assert!(fs::symlink_metadata(&archive).is_ok());
+            if alias.exists() {
+                fs::remove_file(alias).unwrap();
+            }
+            if label == "directory" {
+                fs::remove_dir(archive).unwrap();
+            } else {
+                fs::remove_file(archive).unwrap();
+            }
+            remove_activation_fixture(&root, &p);
+        }
+    }
+
+    #[test]
+    fn incomplete_quarantine_rechecks_after_blocking_resolution_and_after_retention() {
+        for after_retention in [false, true] {
+            let (root, p) = activation_fixture(&format!("incomplete-fresh-{after_retention}"));
+            let state = root.join(STATE);
+            write_activation_candidate(&state, &p);
+            write_incomplete_quarantine(&state, b"{");
+            let observed = observe_incomplete_quarantine(&state, &|_| Ok(p.clone())).unwrap();
+            let calls = std::cell::Cell::new(0);
+            let resolve = |_: &str| {
+                calls.set(calls.get() + 1);
+                if calls.get() == if after_retention { 2 } else { 1 } {
+                    write_incomplete_quarantine(&state, b"{\"changed\":");
+                }
+                Ok(p.clone())
+            };
+            assert!(
+                reviewed_retain_incomplete_quarantine(&state, &observed.review, &resolve).is_err()
+            );
+            assert_eq!(quarantine_bytes(&state).unwrap().unwrap(), b"{\"changed\":");
+            assert_eq!(state.join(&observed.archive).exists(), after_retention);
+            assert!(activation_absent(&state).is_err());
+            if after_retention {
+                assert_eq!(
+                    fs::read(state.join(&observed.archive)).unwrap(),
+                    observed.bytes
+                );
+                fs::remove_file(state.join(observed.archive)).unwrap();
+            }
+            remove_activation_fixture(&root, &p);
+        }
+    }
+
+    #[test]
+    fn incomplete_quarantine_refuses_pending_activation_and_unsafe_source_metadata() {
+        for label in [
+            "pending",
+            "backup",
+            "public",
+            "symlink",
+            "hardlink",
+            "oversized",
+            "missing",
+        ] {
+            let (root, p) = activation_fixture(&format!("incomplete-source-{label}"));
+            let state = root.join(STATE);
+            write_incomplete_quarantine(&state, b"{");
+            let alias = state.join("quarantine-alias");
+            match label {
+                "pending" => fs::write(state.join(ACTIVATION), b"uncertain").unwrap(),
+                "backup" => fs::write(state.join(PRIOR_BACKUP), b"uncertain").unwrap(),
+                "public" => {
+                    fs::set_permissions(state.join(QUARANTINE), fs::Permissions::from_mode(0o644))
+                        .unwrap()
+                }
+                "symlink" => {
+                    fs::rename(state.join(QUARANTINE), &alias).unwrap();
+                    std::os::unix::fs::symlink(&alias, state.join(QUARANTINE)).unwrap();
+                }
+                "hardlink" => fs::hard_link(state.join(QUARANTINE), &alias).unwrap(),
+                "oversized" => fs::write(state.join(QUARANTINE), vec![b' '; 4097]).unwrap(),
+                "missing" => fs::remove_file(state.join(QUARANTINE)).unwrap(),
+                _ => unreachable!(),
+            }
+            assert!(observe_incomplete_quarantine(&state, &|_| Ok(p.clone())).is_err());
+            if label != "missing" {
+                assert!(fs::symlink_metadata(state.join(QUARANTINE)).is_ok());
+            }
+            if alias.exists() {
+                fs::remove_file(alias).unwrap();
+            }
+            remove_activation_fixture(&root, &p);
+        }
     }
 
     #[test]

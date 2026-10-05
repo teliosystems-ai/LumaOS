@@ -203,6 +203,11 @@ fn dispatch() -> Result<()> {
             model::rollback_reconcile(Some((&args[1], &args[2])))
         }
         Some("model-quarantine-reconcile") if args.len() == 1 => model::quarantine_reconcile(None),
+        Some("model-quarantine-reconcile")
+            if args.len() == 2 && args[1] == "--inspect-incomplete" =>
+        {
+            model::quarantine_reconcile(Some((&args[1], "")))
+        }
         Some("model-quarantine-reconcile") if args.len() == 3 => {
             model::quarantine_reconcile(Some((&args[1], &args[2])))
         }
@@ -268,6 +273,7 @@ fn dispatch() -> Result<()> {
             println!("model-migrate-legacy: explicit installed-root migration of one validated older model environment and runtime lock; stops and restarts the managed model/reference services. No automatic boot migration.");
             println!("model-rollback-reconcile [--restore-prior REVIEW-SHA256]: inspect or explicitly restore one retained prior configuration after completed activation. Installed-root maintenance; requires an idle runtime lock, does not start services or prove readiness, consumes the rollback record, and preserves a fence on interruption. Not production Admin authorization.");
             println!("model-quarantine-reconcile [--clear-consistent REVIEW-SHA256]: inspect or explicitly clear an observed reconfiguration-failure quarantine for verified current settings or manual-only state. Installed root and idle runtime lock required; no worker start, readiness claim, recovery-disablement removal or product Admin grant.");
+            println!("model-quarantine-reconcile --inspect-incomplete | --retain-incomplete REVIEW-SHA256: review and privately retain only an empty/truncated JSON quarantine before explicit clearance with verified current settings. Complete or otherwise malformed records remain fenced; no worker start or evidence deletion.");
             println!("Luma native platform alpha\n\n  inventory\n  verify BUNDLE\n  install /dev/disk/by-id/EXACT-ID BUNDLE\n  update BUNDLE\n  recover unlock /dev/disk/by-id/EXACT-ID\n  recover export /dev/disk/by-id/EXACT-ID EMPTY-DESTINATION\n  recover repair-a|repair-b /dev/disk/by-id/EXACT-ID BUNDLE\n  recover repair-data /dev/disk/by-id/EXACT-ID\n  recover disable-model /dev/disk/by-id/EXACT-ID\n  status\n\nInstall requires local interactive disk confirmation and new credentials.\nLaboratory image: native acceptance and production custody are outstanding.");
             Ok(())
         }

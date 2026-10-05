@@ -193,5 +193,25 @@ class ModelRuntimePolicyTests(unittest.TestCase):
         self.assertIn('Some("model-quarantine-reconcile") if args.len() == 1', main)
 
 
+    def test_incomplete_quarantine_retention_is_explicit_and_preserves_before_clearance(self):
+        source = (ROOT / 'rust/luma-platform/src/model.rs').read_text()
+        retain = source.split('fn reviewed_retain_incomplete_quarantine(')[1].split('pub fn quarantine_reconcile(')[0]
+        for check in ('tpm::decode::<32>(reviewed)?', '.create_new(true)', 'libc::O_NOFOLLOW',
+                      'file.sync_all()?', 'File::open(state)?.sync_all()?',
+                      'observe_incomplete_quarantine(state, resolve)?', 'current.review != observed.review'):
+            self.assertIn(check, retain)
+        self.assertLess(retain.index('retained.sync_all()?'), retain.index('fs::remove_file(state.join(QUARANTINE))?'))
+        for forbidden in ('systemctl', 'model-disabled', 'remove_dir', 'remove_file(archive'):
+            self.assertNotIn(forbidden, retain)
+        incomplete = source.split('fn incomplete_quarantine_bytes(')[1].split('fn observe_incomplete_quarantine(')[0]
+        self.assertIn('serde_json::Value', incomplete)
+        self.assertIn('error.is_eof()', incomplete)
+        main = (ROOT / 'rust/luma-platform/src/main.rs').read_text()
+        self.assertIn('args.len() == 2 && args[1] == "--inspect-incomplete"', main)
+        reconcile = source.split('pub fn quarantine_reconcile(')[1].split('fn legacy_configuration_at(')[0]
+        for check in ('"--inspect-incomplete"', '"--retain-incomplete"', 'operation_lock(var)?', 'runtime_lock(var, false)?'):
+            self.assertIn(check, reconcile)
+
+
 if __name__ == '__main__':
     unittest.main()

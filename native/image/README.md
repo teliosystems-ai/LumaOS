@@ -543,6 +543,40 @@ open implementation/qualification work. It is not product Admin authorization
 or a TPM-protected incident ledger. See the
 [quarantine checkpoint](../evidence/G2_MODEL_QUARANTINE_2026-10-05.md).
 
+An interrupted exclusive quarantine write can leave empty or truncated JSON.
+Ordinary inspection/clearance refuses it. After investigating the cause,
+stopping the managed worker and reconciling any pending activation/backup,
+explicitly inspect this narrow case:
+
+```sh
+sudo luma-platform model-quarantine-reconcile --inspect-incomplete
+sudo luma-platform model-quarantine-reconcile --retain-incomplete REVIEW-SHA256
+```
+
+Use the digest from the first command; it binds the exact incomplete bytes,
+filesystem identity/change timestamp, current catalog and consistent current
+settings/verified weights, or all-absent manual-only state. Inspection is
+read-only. The second command holds both maintenance locks and saves the exact
+bytes as root-private `model-quarantine.retained.SHA256`, syncing the file and
+directory before freshly checking the review and removing only the quarantine
+fence. An existing exact private archive permits retry; partial, conflicting,
+linked, oversized or public archives stay untouched and block clearance.
+Keep retained files private: opaque input could contain credentials. This path
+never deletes those archives or exports their contents. Retention has no automatic
+expiry or quota; manage capacity through a separately reviewed policy.
+
+Only parser end-of-input errors qualify, including an empty file; this does
+not prove a crash occurred. Complete JSON, unknown schemas, other malformed
+input and unsafe source metadata remain fenced. A replaced file requires fresh
+review. Filesystem identity is not a protected incident ledger or resource
+generation. Clearance preserves settings, weights and recovery disablement,
+starts no services and proves no readiness/resource return. Retention errors
+before clearance keep the fence. A sync failure or crash after removal has an
+uncertain clearance outcome and may leave only the private archive; inspect
+fresh state rather than claiming a successful recovery or deleting evidence.
+This is not controller-death supervision or broader unsupported-state recovery.
+See the [incomplete quarantine checkpoint](../evidence/G2_MODEL_INCOMPLETE_QUARANTINE_2026-10-05.md).
+
 For installed reconfiguration, `model-install` now acquires and verifies the
 candidate weights before stopping the managed worker. A failed download or
 hash check leaves the current selection and worker untouched. A verified

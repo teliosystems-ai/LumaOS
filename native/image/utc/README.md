@@ -3,7 +3,7 @@
 This is the pinned-source chrony good-sample hook and closed measurement codec
 for G2 development. It is **not installed**, not a trusted-time service and not
 an authorization API. Admin's trusted-time status remains false. The production
-dependency, approved confined receiver/supervisor, reviewed bootstrap, protected history and grant
+dependency, approved confined receiver/supervisor, reviewed bootstrap, deployed history and grant
 integration remain open. Do not start the fixture daemon on the host.
 
 ## Source boundary and retained samples
@@ -97,7 +97,7 @@ the last producer heartbeat is within the conservative one-second deadline;
 it does not return a saved interval or restore an unavailable operator. Errors
 and lifecycle notifications fence the session with no automatic recovery.
 The source composition performs a final peer/queue and live-clock check. It
-still lacks independently approved runtime, protected history and lifecycle
+still lacks independently approved runtime, installed history and lifecycle
 notification delivery, and cannot enable assignments or effect authority.
 
 The composition now owns a nonblocking, close-on-exec `CLOCK_REALTIME` timer
@@ -109,6 +109,24 @@ not NTS provenance, rate qualification or complete suspend/resume notification
 delivery. Source checks verify real timer configuration/expiration and injected
 cancellation-result handling without setting any host clock. Actual clock-step,
 step-and-restore and suspend races need separate kernel/image qualification.
+
+`BoundStream` now takes an internal semantic `HistoryReader`, not a numeric
+floor. The reader borrows the Admin owner's existing shared checkpoint store
+and replays all catalog/history payloads around fresh checkpoint checks. Its
+private binding includes the deployment, enrollment, historical writer, exact
+shared head, monotonic floor/version and TPM reset/restart epoch. Each poll
+checks that binding before and after candidate work; any shared-head change,
+unverifiable replay or epoch change fences. After blocking history reads, it
+rechecks the peer/queue, samples fresh clocks, reprojects and checks the kernel
+step watch. A delayed read cannot extend the producer-heartbeat deadline.
+Raw numeric construction is test-only outside private module assembly.
+
+This is a source composition, not a new listener or authority token. It gives
+the keeper no TPM-owner credentials and writes no history per poll. A saved
+floor cannot create an initial estimate, approve the publisher or authenticate
+the current human. The protected runtime, actual history writer, effect-time
+composition, certificate bootstrap and recovery ceremony remain open. See the
+[history binding evidence](../../evidence/G2_UTC_HISTORY_BINDING_2026-10-05.md).
 
 This module accepts an already-provisioned socket descriptor and an observed
 process context. It does not bind a production listener, approve that process's
@@ -140,6 +158,7 @@ cargo test --offline --locked utc_protocol::
 cargo test --offline --locked utc_stream::
 cargo test --offline --locked utc_step_watch:: -- --test-threads=1
 cargo test --offline --locked utc_receiver::tests::kernel_keeper_composition -- --ignored --exact --nocapture --test-threads=1
+cargo test --offline --locked utc_receiver::tests::kernel_shared_history_composition -- --ignored --exact --nocapture --test-threads=1
 LUMA_UTC_C_FRAME=/new/output/c-frame.bin cargo test --offline --locked \
   utc_protocol::tests::c_publisher_cross_language_frame -- --ignored
 LUMA_UTC_C_ENVELOPE=/new/output/c-envelope.bin cargo test --offline --locked \

@@ -186,6 +186,12 @@ impl<'a> Context<'a> {
     }
 
     fn state(&self, snapshot: &Snapshot, candidate: Option<&str>) -> Result<(Bootstrap, bool)> {
+        let state = self.bootstrap_state(snapshot)?;
+        self.events(snapshot, candidate)?;
+        Ok(state)
+    }
+
+    fn bootstrap_state(&self, snapshot: &Snapshot) -> Result<(Bootstrap, bool)> {
         if snapshot.deployment != self.deployment {
             return Err("Admin checkpoint deployment changed".into());
         }
@@ -196,7 +202,6 @@ impl<'a> Context<'a> {
                 if retained.is_some_and(|(old, _)| old != payload) {
                     return Err("retained Admin bootstrap does not bind the current head".into());
                 }
-                self.events(snapshot, candidate)?;
                 Ok((payload, false))
             }
             [entry, ..] => {
@@ -214,7 +219,6 @@ impl<'a> Context<'a> {
                 {
                     return Err("checkpoint is not the supported Admin bootstrap history".into());
                 }
-                self.events(snapshot, candidate)?;
                 Ok((payload, true))
             }
         }
@@ -315,6 +319,117 @@ impl<'a> Context<'a> {
             }
         }
         Ok((catalog, events, history, records))
+    }
+}
+
+/// A replayed floor binding, not a saved estimate or an authority token. Only
+/// the shared Admin semantic reader can construct it; it has no wire form.
+#[cfg_attr(not(test), allow(dead_code))]
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct HistoryBinding {
+    deployment: String,
+    enrollment_sha256: String,
+    principal: Identity,
+    checkpoint_head: String,
+    history_floor_ms: i64,
+    history_version: u64,
+    reset_count: u32,
+    restart_count: u32,
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+impl HistoryBinding {
+    pub(crate) fn floor_ms(&self) -> i64 {
+        self.history_floor_ms
+    }
+
+    pub(crate) fn recheck<A: Checkpoint>(&self, reader: &mut HistoryReader<'_, A>) -> Result<()> {
+        if reader.read()? != *self {
+            return Err("UTC shared history binding changed; reconstruct explicitly".into());
+        }
+        Ok(())
+    }
+}
+
+/// Borrow the Admin owner's existing store. This does not provision another
+/// anchor, export TPM credentials to a keeper daemon, authenticate a human or
+/// approve runtime provenance. The eventual protected composition owns it.
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) struct HistoryReader<'a, A: Checkpoint> {
+    store: &'a mut Store<A>,
+    directory: &'a Path,
+    last_clock: Option<tpm::Clock>,
+    fenced: bool,
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+impl<'a, A: Checkpoint> HistoryReader<'a, A> {
+    pub(crate) fn new(store: &'a mut Store<A>, directory: &'a Path) -> Self {
+        Self {
+            store,
+            directory,
+            last_clock: None,
+            fenced: false,
+        }
+    }
+
+    pub(crate) fn read(&mut self) -> Result<HistoryBinding> {
+        if self.fenced {
+            return Err("UTC history reader is fenced; reconstruct explicitly".into());
+        }
+        let result = (|| {
+            let (before, first_clock) = self.replay()?;
+            if let Some(previous) = self.last_clock {
+                first_clock.elapsed_since(previous)?;
+            }
+            // Re-read ALL semantic payloads after the first potentially blocking
+            // replay. A matching journal head alone cannot authenticate them.
+            let (after, last_clock) = self.replay()?;
+            last_clock.elapsed_since(first_clock)?;
+            if before != after {
+                return Err("UTC history changed during replay".into());
+            }
+            self.last_clock = Some(last_clock);
+            Ok(after)
+        })();
+        if result.is_err() {
+            self.fenced = true;
+        }
+        result
+    }
+
+    fn replay(&mut self) -> Result<(HistoryBinding, tpm::Clock)> {
+        let snapshot = self.store.snapshot()?;
+        let context = Context::load(self.directory, &snapshot.deployment)?;
+        if !context.bootstrap_state(&snapshot)?.1 {
+            return Err("explicit product Admin bootstrap required for UTC history read".into());
+        }
+        let (history, _) = context.history(&snapshot, None)?;
+        // The retained identity identifies the historical writer only. It is
+        // deliberately NOT substituted for current PAM/effect authorization.
+        if tpm::private_read(&self.directory.join("enrollment.json"), 16384)? != context.enrollment
+        {
+            return Err("UTC history enrollment changed during replay".into());
+        }
+        let final_snapshot = self.store.snapshot()?;
+        final_snapshot.clock.elapsed_since(snapshot.clock)?;
+        if final_snapshot.head != snapshot.head || final_snapshot.deployment != snapshot.deployment
+        {
+            return Err("UTC checkpoint changed during semantic replay".into());
+        }
+        Ok((
+            HistoryBinding {
+                deployment: context.deployment,
+                enrollment_sha256: bundle::hex(&Sha256::digest(&context.enrollment)),
+                principal: context.principal,
+                checkpoint_head: snapshot.head,
+                history_floor_ms: history.floor_ms,
+                history_version: history.version,
+                reset_count: final_snapshot.clock.reset_count,
+                restart_count: final_snapshot.clock.restart_count,
+            },
+            final_snapshot.clock,
+        ))
     }
 }
 
@@ -853,6 +968,15 @@ pub(crate) fn fixture_service_request(
 }
 
 #[cfg(test)]
+pub(crate) fn fixture_bound_utc_history(
+    receiver: crate::utc_receiver::Receiver,
+    variant: &str,
+    send: impl FnMut(&str),
+) {
+    tests::bound_utc_history_case(receiver, variant, send);
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::tpm::Clock;
@@ -1029,6 +1153,242 @@ mod tests {
             Some(inspected["review_sha256"].as_str().unwrap()),
         )
         .unwrap()
+    }
+
+    struct ReadHook<'a> {
+        anchor: Fake,
+        count: Rc<std::cell::Cell<usize>>,
+        trigger: Rc<std::cell::Cell<usize>>,
+        hook: Box<dyn FnMut() + 'a>,
+    }
+    impl Checkpoint for ReadHook<'_> {
+        fn read(&mut self) -> Result<[u8; 32]> {
+            let next = self.count.get() + 1;
+            self.count.set(next);
+            if next == self.trigger.get() {
+                (self.hook)();
+            }
+            self.anchor.read()
+        }
+        fn clock(&mut self) -> Result<Clock> {
+            self.anchor.clock()
+        }
+        fn advance(&mut self, _: [u8; 32], _: [u8; 32]) -> Result<[u8; 32]> {
+            panic!("read-only history adapter must never write its anchor")
+        }
+    }
+
+    #[test]
+    fn utc_history_reader_requires_bootstrap_and_reads_monotonic_floor_without_writes() {
+        let f = Fixture::new("utc-reader-basics");
+        assert!(HistoryReader::new(&mut f.store(), &f.directory)
+            .read()
+            .is_err());
+        f.activate();
+        let initial = HistoryReader::new(&mut f.store(), &f.directory)
+            .read()
+            .unwrap();
+        assert_eq!(initial.floor_ms(), 0);
+        assert_eq!(initial.history_version, 0);
+        history_commit(&f, "floor-1", &floor_statement(1000));
+        let mut store = f.store();
+        let mut reader = HistoryReader::new(&mut store, &f.directory);
+        let binding = reader.read().unwrap();
+        assert_eq!(binding.floor_ms(), 1000);
+        assert_eq!(binding.history_version, 1);
+        assert_ne!(binding, initial);
+        f.anchor.0.borrow_mut().1.milliseconds += 1;
+        binding.recheck(&mut reader).unwrap();
+        assert_eq!(reader.read().unwrap(), binding);
+        assert_eq!(f.writes(), 2);
+    }
+
+    #[test]
+    fn utc_history_reader_boot_epoch_and_powered_clock_failure_are_sticky() {
+        for variant in 0..3 {
+            let f = Fixture::new(&format!("utc-reader-clock-{variant}"));
+            f.activate();
+            let mut store = f.store();
+            let mut reader = HistoryReader::new(&mut store, &f.directory);
+            reader.read().unwrap();
+            let previous = f.anchor.0.borrow().1;
+            match variant {
+                0 => f.anchor.0.borrow_mut().1.reset_count += 1,
+                1 => f.anchor.0.borrow_mut().1.restart_count += 1,
+                _ => f.anchor.0.borrow_mut().1.milliseconds -= 1,
+            }
+            assert!(reader.read().is_err());
+            f.anchor.0.borrow_mut().1 = previous;
+            assert!(reader.read().is_err());
+            assert_eq!(f.writes(), 1);
+        }
+    }
+
+    #[test]
+    fn utc_history_binding_fences_any_shared_head_change_not_only_floor_changes() {
+        for variant in 0..2 {
+            let f = Fixture::new(&format!("utc-reader-head-{variant}"));
+            f.activate();
+            let binding = HistoryReader::new(&mut f.store(), &f.directory)
+                .read()
+                .unwrap();
+            if variant == 0 {
+                f.catalog_commit("register-model", &register());
+            } else {
+                history_commit(&f, "floor-1", &floor_statement(1000));
+            }
+            let mut store = f.store();
+            let mut reader = HistoryReader::new(&mut store, &f.directory);
+            assert!(binding.recheck(&mut reader).is_err());
+            let new_binding = reader.read().unwrap();
+            assert_ne!(binding.checkpoint_head, new_binding.checkpoint_head);
+            if variant == 0 {
+                assert_eq!(binding.floor_ms(), new_binding.floor_ms());
+            }
+            assert_eq!(f.writes(), 2);
+        }
+    }
+
+    #[test]
+    fn utc_history_reader_rechecks_semantics_after_a_matching_checkpoint_read() {
+        for variant in 0..4 {
+            let f = Fixture::new(&format!("utc-reader-mid-read-{variant}"));
+            f.activate();
+            history_commit(&f, "floor-1", &floor_statement(1000));
+            let payload = f.directory.join(event_name("floor-1"));
+            let bytes = fs::read(&payload).unwrap();
+            let anchor = ReadHook {
+                anchor: f.anchor.clone(),
+                count: Rc::new(std::cell::Cell::new(0)),
+                // Open reads once; trigger on the final checkpoint read of the
+                // first semantic pass, after its payload reads have completed.
+                trigger: Rc::new(std::cell::Cell::new(3)),
+                hook: Box::new(|| match variant {
+                    0 => platform::write_atomic(&payload, b"{}", 0o600).unwrap(),
+                    1 => platform::write_atomic(&f.directory.join("enrollment.json"), b"{}", 0o600)
+                        .unwrap(),
+                    2 => platform::write_atomic(
+                        &f.directory.join("journal.pending.json"),
+                        b"{}",
+                        0o600,
+                    )
+                    .unwrap(),
+                    _ => platform::write_atomic(
+                        &f.directory.join(event_name("orphan")),
+                        b"{}",
+                        0o600,
+                    )
+                    .unwrap(),
+                }),
+            };
+            let mut store = Store::open(anchor, &f.directory.join("journal.json")).unwrap();
+            let mut reader = HistoryReader::new(&mut store, &f.directory);
+            assert!(reader.read().is_err());
+            // Restoring a payload does not un-fence a failed reader.
+            platform::write_atomic(&payload, &bytes, 0o600).unwrap();
+            assert!(reader.read().is_err());
+            assert_eq!(f.writes(), 2);
+        }
+    }
+
+    pub(super) fn bound_utc_history_case(
+        receiver: crate::utc_receiver::Receiver,
+        variant: &str,
+        send: impl FnMut(&str),
+    ) {
+        use crate::{utc_keeper::State, utc_stream::BoundStream};
+        let f = Fixture::new(&format!("utc-bound-{variant}"));
+        f.activate();
+        history_commit(
+            &f,
+            "floor-1",
+            &floor_statement(if variant == "history-ahead" {
+                4_102_444_799_900
+            } else {
+                1000
+            }),
+        );
+        let send = Rc::new(RefCell::new(send));
+        let count = Rc::new(std::cell::Cell::new(0));
+        let trigger = Rc::new(std::cell::Cell::new(0));
+        let hook_send = send.clone();
+        let anchor = ReadHook {
+            anchor: f.anchor.clone(),
+            count: count.clone(),
+            trigger: trigger.clone(),
+            hook: Box::new(|| match variant {
+                "queued-during-history" => (hook_send.borrow_mut())("two"),
+                "delayed-history" => std::thread::sleep(std::time::Duration::from_millis(1100)),
+                "payload-during-history" => {
+                    platform::write_atomic(&f.directory.join(event_name("floor-1")), b"{}", 0o600)
+                        .unwrap()
+                }
+                _ => unreachable!(),
+            }),
+        };
+        let mut store = Store::open(anchor, &f.directory.join("journal.json")).unwrap();
+        let mut reader = HistoryReader::new(&mut store, &f.directory);
+        let mut stream = BoundStream::attach(receiver, &mut reader, 3).unwrap();
+        assert!(stream.poll(&mut reader).unwrap().is_none());
+        assert_eq!(stream.state(), State::Acquiring); // Saved floor is not UTC.
+        (send.borrow_mut())("single");
+        if variant == "history-ahead" {
+            assert!(stream.poll(&mut reader).is_err());
+            assert_eq!(stream.state(), State::ReconciliationRequired);
+        } else {
+            let first = stream.poll(&mut reader).unwrap().unwrap();
+            assert_eq!(stream.state(), State::Bounded);
+            match variant {
+                "quiet" => {
+                    let later = stream.poll(&mut reader).unwrap().unwrap();
+                    assert!(later.endpoints().1 >= first.endpoints().1);
+                    assert_eq!(f.writes(), 2);
+                    stream.invalidate();
+                }
+                "catalog-change" => {
+                    f.catalog_commit("register-model", &register());
+                }
+                "floor-change" => {
+                    history_commit(&f, "floor-2", &floor_statement(1100));
+                }
+                "pending" => {
+                    platform::write_atomic(&f.directory.join("journal.pending.json"), b"{}", 0o600)
+                        .unwrap()
+                }
+                "enrollment-change" => {
+                    platform::write_atomic(&f.directory.join("enrollment.json"), b"{}", 0o600)
+                        .unwrap()
+                }
+                "missing-payload" => {
+                    fs::remove_file(f.directory.join(event_name("floor-1"))).unwrap()
+                }
+                "tpm-epoch" => f.anchor.0.borrow_mut().1.restart_count += 1,
+                "anchor-unavailable" => f.anchor.0.borrow_mut().0 = [0; 32],
+                "queued-during-history" | "delayed-history" | "payload-during-history" => {
+                    // Four checkpoint reads bracket the pre-poll history replay.
+                    // Fire in the post-poll replay, after sampling the candidate.
+                    trigger.set(count.get() + 5);
+                }
+                _ => unreachable!(),
+            }
+            let error = stream.poll(&mut reader).unwrap_err().to_string();
+            if variant == "delayed-history" {
+                assert_eq!(error, "UTC producer heartbeat is missing or future-dated");
+            } else if variant == "queued-during-history" {
+                assert_eq!(error, "UTC stream changed during candidate evaluation");
+            }
+            assert_eq!(stream.state(), State::Fenced);
+        }
+        (send.borrow_mut())("single");
+        assert!(stream.poll(&mut reader).is_err());
+        assert_eq!(
+            f.writes(),
+            if matches!(variant, "catalog-change" | "floor-change") {
+                3
+            } else {
+                2
+            }
+        );
     }
     #[test]
     fn utc_history_requires_explicit_bootstrap_and_current_human() {

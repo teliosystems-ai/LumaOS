@@ -34,6 +34,8 @@ timeout 60 cargo test --offline --locked admin_service::tests::kernel_human_conn
 timeout 60 cargo test --offline --locked utc_receiver::tests::kernel_datagram_boundary -- --ignored --exact --nocapture --test-threads=1 2>&1 | tee "$output/utc-receiver-kernel.txt"
 timeout 60 cargo test --offline --locked utc_receiver::tests::kernel_keeper_composition -- --ignored --exact --nocapture --test-threads=1 2>&1 | tee "$output/utc-keeper-composition.txt"
 timeout 60 cargo test --offline --locked utc_receiver::tests::kernel_final_queue_recheck -- --ignored --exact --nocapture --test-threads=1 2>&1 | tee "$output/utc-final-queue.txt"
+# Shared-history faults here use a fake anchor, not the disposable TPM above.
+timeout 60 cargo test --offline --locked utc_receiver::tests::kernel_shared_history_composition -- --ignored --exact --nocapture --test-threads=1 2>&1 | tee "$output/utc-shared-history.txt"
 python3 -W error -m unittest discover -s "$snapshot/native/tests" -v 2>&1 | tee "$output/native-tests.txt"
 cd "$snapshot"
 sha256sum rust/Cargo.toml rust/Cargo.lock rust/.cargo/config.toml \

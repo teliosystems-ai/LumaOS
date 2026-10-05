@@ -71,6 +71,15 @@ allocation. Its fake observation/anchor tests are not deployed UTC or TPM
 qualification. Complete the approved live writer/provider, current history
 binding in keeper/effect checks and installed recovery before candidate freeze.
 
+The [current history binding](evidence/G2_UTC_HISTORY_BINDING_2026-10-05.md)
+now connects fresh shared Admin semantic replay to the non-authorizing UTC
+stream in source. Numeric floor construction is test-only outside private
+assembly. Changes to the shared head or TPM epoch and failed reads fence;
+potentially blocking replay is followed by fresh peer/queue/clock/watch checks
+and reprojection. This closes the source floor-input gap, not the deployed
+provider/writer, current effect checks, certificate seed/recovery or runtime
+approval. Those integrations remain required before candidate freeze.
+
 ## External evidence remains separate
 
 Production public signing/catalog approvals and actual custody cannot be

@@ -1,8 +1,10 @@
 //! Receiver/keeper composition for the source fixture, NOT a time authority.
-//! Process approval, qualified clocks/notifications and TPM history are pending.
+//! Shared history is freshly bound in source; runtime approval is still pending.
 //! No listener, CLI, serialized capability, Admin assignment or effect wiring.
 #![cfg_attr(not(test), allow(dead_code))]
 use crate::{
+    admin_governance::{HistoryBinding, HistoryReader},
+    tpm::Checkpoint,
     utc_bounds::{Interval, Measurement},
     utc_keeper::{Clock, Keeper, Round, Source, State},
     utc_policy::ApprovedPolicy,
@@ -29,7 +31,7 @@ impl BatchKeeper {
         }
         // The producer's source-clock generation is pinned independently. It
         // must NOT be substituted for Keeper's reviewed acquisition generation.
-        // The floor is only data until the protected history adapter verifies it.
+        // Only the bound composition supplies floors outside test fixtures.
         let mut keeper = Keeper::new(
             producer.boot_id,
             producer.process_generation,
@@ -132,10 +134,9 @@ pub(crate) struct Stream {
 }
 
 impl Stream {
-    /// Observed process and numeric floor are NOT approval/history evidence.
-    /// A future protected supervisor must construct this only after verifying
-    /// runtime, history and lifecycle inputs; no deployed endpoint uses it yet.
-    pub(crate) fn attach(
+    // Private numeric assembly. Production-source consumers must use BoundStream
+    // and the semantic HistoryReader, never a caller-provided floor.
+    fn assemble(
         receiver: Receiver,
         history_floor_ms: i64,
         suspend_generation: u64,
@@ -189,9 +190,77 @@ impl Stream {
         result
     }
 
+    // History replay may block. Re-read peer/queue/clock/watch AFTER it rather
+    // than returning the candidate sampled before that work.
+    fn candidate_after_history(&mut self) -> Result<Option<Interval>> {
+        self.receiver.recheck_quiet()?;
+        let candidate = self
+            .batch
+            .candidate_at(Receiver::clock(self.suspend_generation)?)?;
+        self.step_watch.check()?;
+        Ok(candidate)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn attach(
+        receiver: Receiver,
+        history_floor_ms: i64,
+        suspend_generation: u64,
+    ) -> Result<Self> {
+        Self::assemble(receiver, history_floor_ms, suspend_generation)
+    }
+
     #[cfg(test)]
     pub(crate) fn expire_watch_fixture(&mut self) {
         self.step_watch = StepWatch::expired_fixture().unwrap();
+    }
+}
+
+/// A non-authorizing source composition. Historical floor verification never
+/// approves the publisher, certifies its clocks or enables an effect grant.
+pub(crate) struct BoundStream {
+    stream: Stream,
+    history: HistoryBinding,
+}
+
+impl BoundStream {
+    pub(crate) fn attach<A: Checkpoint>(
+        receiver: Receiver,
+        reader: &mut HistoryReader<'_, A>,
+        suspend_generation: u64,
+    ) -> Result<Self> {
+        let history = reader.read()?;
+        let mut stream = Stream::assemble(receiver, history.floor_ms(), suspend_generation)?;
+        history.recheck(reader)?;
+        stream.candidate_after_history()?;
+        Ok(Self { stream, history })
+    }
+
+    pub(crate) fn state(&self) -> State {
+        self.stream.state()
+    }
+
+    pub(crate) fn invalidate(&mut self) {
+        self.stream.invalidate();
+    }
+
+    pub(crate) fn poll<A: Checkpoint>(
+        &mut self,
+        reader: &mut HistoryReader<'_, A>,
+    ) -> Result<Option<Interval>> {
+        let result = (|| {
+            if !matches!(self.state(), State::Acquiring | State::Bounded) {
+                return Err("UTC bound stream is fenced".into());
+            }
+            self.history.recheck(reader)?;
+            self.stream.poll()?;
+            self.history.recheck(reader)?;
+            self.stream.candidate_after_history()
+        })();
+        if result.is_err() {
+            self.invalidate();
+        }
+        result
     }
 }
 

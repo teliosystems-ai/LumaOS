@@ -150,7 +150,7 @@ class PublisherAssets(unittest.TestCase):
 
     def test_stream_checks_step_watch_before_and_after_candidate_work(self):
         stream = (ROOT / 'rust/luma-platform/src/utc_stream.rs').read_text()
-        poll = stream.split('pub(crate) fn poll(', 1)[1].split('#[cfg(test)]', 1)[0]
+        poll = stream.split('pub(crate) fn poll(', 1)[1].split('fn candidate_after_history(', 1)[0]
         self.assertEqual(poll.count('self.step_watch.check()?'), 2)
         before, middle, after = poll.split('self.step_watch.check()?')
         self.assertNotIn('self.receiver.poll()', before)
@@ -158,6 +158,32 @@ class PublisherAssets(unittest.TestCase):
         self.assertIn('.candidate_at(', middle)
         self.assertIn('Ok(candidate)', after)
         self.assertIn('self.invalidate()', after)
+
+    def test_bound_stream_requires_semantic_history_and_reprojects_after_blocking_reads(self):
+        stream = (ROOT / 'rust/luma-platform/src/utc_stream.rs').read_text()
+        bound = stream.split('impl BoundStream {', 1)[1].split('#[cfg(test)]', 1)[0]
+        self.assertIn("reader: &mut HistoryReader<'_, A>", bound)
+        self.assertIn('history = reader.read()?', bound)
+        self.assertEqual(bound.count('self.history.recheck(reader)?'), 2)
+        poll = bound.split('pub(crate) fn poll<', 1)[1]
+        self.assertLess(poll.index('self.stream.poll()?'), poll.rindex('self.history.recheck(reader)?'))
+        self.assertLess(poll.rindex('self.history.recheck(reader)?'), poll.index('self.stream.candidate_after_history()'))
+        self.assertIn('self.invalidate()', poll)
+        self.assertNotIn('history_floor_ms: i64', bound)
+        numeric = stream.split('pub(crate) fn attach(', 1)[0]
+        self.assertTrue(numeric.rstrip().endswith('#[cfg(test)]'))
+
+    def test_history_binding_is_not_a_wire_token_or_separate_tpm_owner(self):
+        governance = (ROOT / 'rust/luma-platform/src/admin_governance.rs').read_text()
+        reader = governance.split('pub(crate) struct HistoryBinding', 1)[1].split('// Deliberately private', 1)[0]
+        self.assertIn("store: &'a mut Store<A>", reader)
+        self.assertIn('context.bootstrap_state(&snapshot)?', reader)
+        self.assertIn('context.history(&snapshot, None)?', reader)
+        self.assertIn('self.fenced = true', reader)
+        self.assertIn('last_clock.elapsed_since(first_clock)?', reader)
+        self.assertEqual(reader.count('self.replay()?'), 2)
+        for forbidden in ('Serialize', 'Deserialize', 'advance(', 'LocalAnchor', 'eligible', 'reacquire('):
+            self.assertNotIn(forbidden, reader)
 
     @unittest.skipUnless(os.environ.get('LUMA_CHRONY_UPSTREAM'), 'needs isolated pinned source fixture')
     def test_pinned_hook_follows_actual_authentication_guard(self):

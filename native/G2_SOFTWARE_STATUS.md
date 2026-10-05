@@ -270,6 +270,22 @@ composition, current history binding in keeper/effect checks, certificate
 bootstrap/recovery and installed qualification remain open; `trusted_utc_available`
 is still false and Admin/workflows/G2 are not complete.
 
+The [current UTC history binding](evidence/G2_UTC_HISTORY_BINDING_2026-10-05.md)
+now joins a fresh internal shared-checkpoint semantic reader to the non-authorizing
+stream. Explicit bootstrap, all catalog/history payloads and current anchor
+checks precede a private floor binding. Shared-head or TPM epoch changes and
+failed reads fence; catalog-only changes cannot reuse the older binding. After
+blocking replay the stream repeats peer/queue/clock/watch checks and reprojects,
+so stale or newly queued telemetry cannot escape on a pre-replay candidate.
+Numeric floor construction is test-only outside private assembly, and polling
+writes no checkpoint. The final D-backed batch passed 174 ordinary Rust tests
+and six explicit fixtures (39 kernel cases plus retained C interoperability),
+28 Python checks without skips, formatting and the offline build. New history
+cases use fake anchors/observations, not physical TPM or live NTS qualification.
+Protected deployed provider/writer, certificate bootstrap/recovery, full lifecycle
+delivery and final effect integration remain open. No time authority, assignment
+or workflow completion is enabled, and G2 remains incomplete.
+
 The earlier [disposable TPM feasibility experiment](evidence/G2_OWNER_CREDENTIAL_FEASIBILITY_2026-10-02.md)
 informed the native backend now integrated above. The targeted native tests
 exercise signed PCR 11 renewal, fixed PCR 7 denial, forged-signature refusal,

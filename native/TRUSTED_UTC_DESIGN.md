@@ -155,8 +155,9 @@ if a later round looks usable. Quiet polls reproject the current source inventor
 not a saved interval, with fresh local clocks and a conservative one-second
 producer-heartbeat deadline. Source process/queue errors, observed discontinuities
 and explicit invalidation keep the session fenced; there is no automatic recovery.
-The source module still does not approve code/confinement, authenticate its
-supplied history floor, deliver lifecycle notifications or grant time authority.
+At that checkpoint the source module did not authenticate its supplied history
+floor. The later binding below addresses that source input; code/confinement
+approval, complete lifecycle delivery and time authority remain open.
 
 The subsequent [step-watch checkpoint](evidence/G2_UTC_STEP_WATCH_2026-10-05.md)
 adds a privately owned nonblocking `CLOCK_REALTIME` timer with absolute
@@ -234,6 +235,26 @@ NV index or clock seed is introduced. The live-observation/authentication seams
 are tested with fakes here, not deployed as authenticators. Protected provider
 composition, current floor revalidation in the keeper/effect path and the
 installed recovery ceremony remain open; a stored floor cannot restore UTC.
+
+The [current history binding checkpoint](evidence/G2_UTC_HISTORY_BINDING_2026-10-05.md)
+adds a read-only semantic adapter borrowing the Admin owner's existing store.
+It validates the explicit bootstrap and every mixed catalog/history payload,
+bracketed by fresh shared checkpoint checks, then repeats replay before
+returning a private binding. Deployment, enrollment, historical principal,
+exact shared head, floor/version and TPM reset/restart epoch are pinned; TPM
+powered-time is only a regression/epoch check, never UTC. An initial zero floor
+is available only after verified bootstrap and does not create an estimate.
+
+The non-authorizing bound stream checks the same binding before and after
+candidate work. Any shared-head change, including a catalog-only mutation,
+or failed/uncertain read fences the session with explicit reconstruction
+required. After replay it checks the live peer/queue, samples fresh clocks,
+reprojects and checks the step watch; slow history work cannot extend the
+heartbeat deadline. It does not return the pre-replay candidate or silently
+refresh the bound floor. No TPM credential, wire authority token, new endpoint
+or write-per-poll is introduced. Installed protected composition and final
+effect checks are still missing; historical writer identity is not current
+human authentication and the source remains incapable of granting effects.
 
 ## Increment delivered and qualification still needed
 

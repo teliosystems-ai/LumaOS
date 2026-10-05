@@ -1231,4 +1231,42 @@ mod tests {
         assert!(receiver.recheck_quiet().is_err());
         assert!(receiver.poll().is_err());
     }
+
+    #[test]
+    #[ignore = "isolated Linux shared-history/UTC fixture with fake checkpoint only"]
+    fn kernel_shared_history_composition() {
+        for variant in [
+            "quiet",
+            "history-ahead",
+            "catalog-change",
+            "floor-change",
+            "pending",
+            "enrollment-change",
+            "missing-payload",
+            "tpm-epoch",
+            "anchor-unavailable",
+            "queued-during-history",
+            "delayed-history",
+            "payload-during-history",
+        ] {
+            let directory = SocketDirectory::new();
+            let path = directory.0.join("measurement.sock");
+            let socket = UnixDatagram::bind(&path).unwrap();
+            let mut sender = ChildSender::start(&path);
+            let mut expected = epoch();
+            expected.boot_id = kernel_boot().unwrap();
+            let receiver = Receiver::attach(
+                socket,
+                sender.child.id() as i32,
+                unsafe { libc::getuid() },
+                unsafe { libc::getgid() },
+                expected,
+            )
+            .unwrap();
+            crate::admin_governance::fixture_bound_utc_history(receiver, variant, |command| {
+                sender.command(command)
+            });
+            println!("UTC_SHARED_HISTORY_CASE_PASSED {variant}");
+        }
+    }
 }

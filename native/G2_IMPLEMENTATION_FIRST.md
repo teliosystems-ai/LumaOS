@@ -39,6 +39,13 @@ targeted source checks alone cannot close G2 acceptance.
 | Installer/boot/recovery | Integrate all new services into the installer/image, update/fallback and recovery; interruption/migration/storage-pressure handling and no silent reset of uncertain state. |
 | Consolidated acceptance | Add checks for the new components, freeze/build one candidate on D:, execute the applicable integrated suite and real compact-model cycles, then retain the separate Ubuntu/physical results. |
 
+The [UTC design](TRUSTED_UTC_DESIGN.md) records the owner-approved provider set,
+initial bounds and offline refusal. Checked interval/quorum arithmetic, fixed
+policy and a non-authorizing keeper lifecycle are implemented, but authenticated
+live publication, protected clock/history lifecycle and
+time-bound authorization integration remain part of the open Admin/trust work
+package. Do not count the arithmetic checkpoint as a completed time provider.
+
 ## External evidence remains separate
 
 Production public signing/catalog approvals and actual custody cannot be

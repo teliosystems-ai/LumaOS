@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "approved_on": "2026-10-05",
+  "operators": [
+    {"id": 1, "name": "Cloudflare", "hostname": "time.cloudflare.com"},
+    {"id": 2, "name": "Netnod", "hostname": "nts.netnod.se"},
+    {"id": 3, "name": "PTB", "hostname": "ptbtime1.ptb.de"}
+  ],
+  "minimum_operators": 2,
+  "max_age_ms": 180000,
+  "max_width_ms": 500,
+  "rate_error_ppm": 100,
+  "offline_authorization": "deny",
+  "leap_action": "fence"
+}

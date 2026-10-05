@@ -1,0 +1,215 @@
+# Trusted UTC source design
+
+Status: **provider set, initial bounds and offline-refusal policy approved by
+the owner on 2026-10-05; implementation in progress, not activated**. Originally
+proposed 2026-10-04. This supplements
+ADR-0004, ADR-0007 and ADR-0010; it does not amend their accepted contracts.
+G2 remains open. The current Admin service still reports
+`trusted_utc_available: false` and does not admit assignments or effect grants.
+
+## Approved source policy
+
+Use chrony with NTS-only upstreams and a separate, confined Luma UTC keeper.
+The keeper supplies a fresh uncertainty interval to the protected authorization
+composition root, rather than trusting the system wall clock or a caller's
+timestamp. The owner approved these three separately operated sources:
+
+| Policy identity | Candidate endpoint | Official service documentation |
+| --- | --- | --- |
+| Cloudflare | `time.cloudflare.com` | [Cloudflare NTS](https://developers.cloudflare.com/time-services/nts/) |
+| Netnod | `nts.netnod.se` | [Netnod NTS](https://www.netnod.se/nts/network-time-security) |
+| PTB | `ptbtime1.ptb.de` | [PTB time service](https://www.ptb.de/cms/en/ptb/fachabteilungen/abt9/gruppe-95/ref-952/time-synchronization-of-computers-using-the-network-time-protocol-ntp.html) |
+
+Endpoint documentation was verified, but live handshakes and availability were
+not tested. Multiple addresses or regional servers
+from one operator count as one source. Public-provider and shared-network
+dependencies remain; private authenticated enterprise sources can be a later,
+separately governed policy, not a silent fallback.
+
+The approval fixes the provider set, initial bounds below and refusal of
+time-bound authorization during outages. It permits continuing implementation,
+not altering this host's clock, firmware, TPM ownership or WSL settings.
+The conditional one-fault guarantee remains an explicit assumption. Certificate
+bootstrap and durable history/recovery remain proposed procedures requiring
+implementation and qualification; no custodian clock seed has been supplied
+and no ceremony or physical operation is authorized by this policy approval.
+
+## Trust boundary
+
+```text
+Three NTS operators -> confined chrony -> protected Luma UTC keeper
+                                         -> Admin / effect-time policy checks
+```
+
+NTS authenticates replies and detects replay, but cannot guarantee a server's
+truthfulness or eliminate network-delay attacks. The design therefore depends
+on at most one faulty operator, honest intervals covering actual UTC, and the
+installed kernel/chrony/keeper remaining inside the platform trust boundary.
+Two colluding operators or a compromised privileged platform are outside that
+guarantee. [RFC 8915](https://www.rfc-editor.org/rfc/rfc8915.html)
+
+Chrony handles protocol cryptography and clock discipline; the keeper handles
+Luma's authorization eligibility, bounded estimates and clock generations.
+Only chrony gets the required time-setting privilege and upstream network
+access. The keeper gets protected read-only telemetry, no network or TPM-owner
+credentials. Admin retains its local socket/PAM/TPM boundary and receives no
+NTS secrets. A root-owned policy binds operator identities, TLS hostnames,
+approved CA roots, endpoint/redirect rules and its digest.
+
+Do not replace the current clock service or enable the new source until the
+authenticated publisher and protected service are implemented. The eventual
+image must have one clock
+discipliner, no DHCP/pool/unauthenticated fallback, no local-clock authority and
+no network command listener. Illustrative chrony settings are `nts` on each
+source, `authselectmode require`, `minsources 2` and poll exponents 6 through 7
+(64–128 seconds). Chrony's source count does not prove independent operators;
+the keeper must enforce that mapping. Its root-distance limit should be no
+looser than the reviewed uncertainty budget. [Chrony configuration](https://chrony-project.org/doc/4.5/chrony.conf.html)
+
+## Estimates and conservative quorum
+
+Owner-approved initial policy, subject to network/drift qualification:
+
+| Quantity | Proposed limit |
+| --- | --- |
+| Independent available operators | At least two of the configured three |
+| Age of each contributing authenticated measurement | At most 180 seconds |
+| Width of the final possible-UTC interval | At most 500 ms, including drift and acquisition delay |
+| Total elapsed-clock rate-error envelope | 100 ppm, expanded outward with rounding up |
+| Leap or unclassified discontinuity | Fence authorization until requalified |
+
+Represent UTC as integer milliseconds `[earliest, latest]`, with explicit
+unsmeared leap handling; authorization is fenced across a leap ambiguity.
+Bind every observation to boot identity, provider-process generation, clock
+generation and policy digest. Project it using elapsed `CLOCK_BOOTTIME`, which
+must be sampled by the protected adapter. Include acquisition timing, source
+error bounds, asymmetry and drift; neither integer rounding nor selection may
+artificially narrow uncertainty. The initial rate-error value is an assumption
+to qualify, not a measured property of every target machine. `CLOCK_BOOTTIME`
+includes suspend but is frequency-adjusted like `CLOCK_MONOTONIC`; it is not a
+raw independent oscillator. The freshness deadline must use maximum possible
+real elapsed age; a slow local clock cannot extend it. The adapter must bound
+the combined oscillator error and clock discipline/slew, audit the pinned
+kernel/chrony rate limits,
+and fence if that envelope cannot be established. Do not assume chrony's
+default slew limits fit 100 ppm. Suspend/resume still invalidates the epoch;
+counting suspended time is not permission for offline authority. [Linux clock semantics](https://man7.org/linux/man-pages/man2/clock_gettime.2.html)
+
+For measured elapsed age `a` and rate-error limit `d` ppm, the arithmetic uses
+`e = ceil(a*d / (1000000-d))`. Project an input `[L,U]` to
+`[L+a-e, U+a+e]` and reject if `a+e` exceeds the freshness limit. Acquisition
+and clock-read quantization uncertainty must already be included by the live
+adapter; integer arithmetic cannot establish those input bounds itself.
+
+With three current independent inputs, retain the hull of **all** overlapping
+pair intersections. Choosing the narrowest pair can let one faulty operator
+exclude the true time. With only two inputs, require overlap but retain their
+full union hull: either could be faulty. Reject disagreement or excessive
+width. Include every current admissible operator; do not silently drop an
+outlier to manufacture precision. Unavailable/stale sources and admission
+decisions must be visible in audit/status.
+
+## Protected live adapter requirements
+
+The keeper's fixed local interface is restricted to approved service peers;
+requests cannot supply estimates, provider identities, epochs or a `trusted`
+flag. Observations are short-lived and bound to the active keeper instance.
+The composition root retains the provider and calls it again before every
+authorization-sensitive preparation and final effect dispatch. Audit interval
+records are evidence, never reusable time capabilities.
+
+An implementation must verify fixed configuration provenance, resolved source
+mapping, successful NTS-protected measurements, selection state, error bounds,
+measurement age and consistent report generations. `chronyc selectdata`'s
+`Auth=Y` means authentication is enabled, not standalone proof that a particular
+fresh packet authenticated. `authdata` key/cookie state or a synchronized flag
+also cannot alone admit time. [Chrony reporting](https://chrony-project.org/doc/4.5/chronyc.html)
+
+The [upstream chrony audit](evidence/G2_UTC_KEEPER_2026-10-05.md) confirms that
+stock selection reports retain state from the last selection event and do not
+provide the atomic measurement/generation provenance required here. Continue
+with a bounded protected publisher at the authenticated good-sample boundary;
+do not synthesize proof from report flags. Audit the eventual exact packaged
+Ubuntu tuple and publisher changes as well. Bound parsing, report size,
+duplicate/alias handling, finite numbers,
+rounding, deadlines and before/after generation checks. This adapter and its
+service confinement are still missing; the arithmetic core is not a substitute.
+
+## Bootstrap and offline recovery
+
+Certificate validity introduces a bootstrapping dependency when the clock is
+unknown. Keep chain, hostname and validity checks enabled. An explicitly
+authenticated local Admin/custodian may supply a reviewed approximately
+correct clock seed from an independent trusted clock solely to permit initial
+TLS verification. Record its provenance and uncertainty; it is not role time.
+If no suitable seed exists, remain fenced. Reject a seed below the protected
+history floor. A guessed RTC, Windows/WSL wall clock, image build date or TPM
+powered-time is not a seed authority. Do not enable `nocerttimecheck` or accept
+expired certificates as an automatic recovery path. This stricter choice
+addresses the bootstrap issue described in [RFC 8915, section 8.5](https://www.rfc-editor.org/rfc/rfc8915.html#section-8.5).
+
+Initial local PAM-authenticated enrollment/bootstrap and read-only catalog
+inspection do not acquire UTC authority from this seed. A narrowly reviewed
+seed/policy recovery path must remain usable without an existing time-bound
+delegation, while never granting arbitrary effects or resetting trust history.
+
+State progresses from `Uninitialized` through `Acquiring` to `Eligible` only
+after authenticated quorum and all bounds hold. Restart, suspend/resume,
+clock steps/regression, policy change, unknown leap state, lost quorum or
+unverifiable provider state moves it to `Fenced`. Old observations and pending
+authorizations invalidate; reacquisition is explicit, not replay of old time
+tokens. No configured long offline holdover grants new authority. Ordinary
+intervals between polls are bounded by the age limit; detected loss of quorum
+fences immediately, not only at the eventual age deadline. Manual non-model
+operation and diagnostic inspection remain available.
+
+## Durable history and authorization integration
+
+Store the last accepted lower UTC bound and clock/policy generation in protected,
+TPM-bound semantic history. A persisted floor detects rollback but cannot prove
+current UTC after reboot. It must be reconciled with fresh network evidence;
+never reload a saved estimate as live time. Use governed security transactions
+for persistence, not one TPM write per NTP packet. Define uncertain-write and
+restart behavior before integration. Do not allocate another NV index, change
+ownership, clear the TPM, or pretend its powered-time is UTC.
+
+For a validity window `[notBefore, expires)`, require the whole fresh interval
+inside it: `earliest >= notBefore` and `latest < expires`. Crossing either edge
+denies. Issuance, extension, expiry, revocation and final effect checks must use
+the same live provider plus fresh principal, catalog/assignment, resource and
+lease-generation checks. UTC availability alone never creates a grant. Clock
+recovery does not resurrect a revoked assignment or redispatch an uncertain
+effect. History rollback/reconciliation and assignment semantics still require
+implementation under ADR-0010.
+
+## Increment delivered and qualification still needed
+
+`rust/luma-platform/src/utc_bounds.rs` implements inert checked interval math,
+quorum envelopes, drift projection, epoch mismatch and finite-window checks.
+Its inputs are not authenticated; it has no product entry point, serialization,
+clock reader, service or authority token. No production policy is activated.
+The original test checkpoint is [UTC bounds evidence](evidence/G2_UTC_BOUNDS_2026-10-04.md).
+
+The later [policy and keeper checkpoint](evidence/G2_UTC_KEEPER_2026-10-05.md)
+adds the fixed policy artifact and non-authorizing lifecycle reducer. The
+policy digest is domain-separated; compiled bytes and semantics cannot be
+replaced by a caller-selected provider or looser bounds. Complete observation
+rounds retain all three operator states. Replay, re-aging, invalid epochs,
+lost quorum, leap ambiguity, inconsistent clocks and acquisition failures
+discard estimates and fence. Explicit reacquisition changes the clock
+generation; a candidate wholly behind the supplied history floor requires
+reconciliation with no reset path. These are data-level tests: neither the
+clock observations nor the supplied floor are yet bound to an authenticated
+publisher or TPM history. `Bounded` means an arithmetic candidate, not the
+deployed service's `Eligible` state or permission to set trusted UTC available.
+
+Next: implement/audit the authenticated measurement publisher and live adapter,
+confinement and bootstrap/history lifecycle; integrate finite assignments and
+effect-time checks; package installer/boot/update/recovery paths. Add controlled
+tests for forged/expired/wrong-host certificates, NTS stripping, replay, delayed
+packets, bad operator clocks, duplicate aliases, inconsistent telemetry,
+outages, suspend, steps, leap handling, seed abuse and TPM-history interruption.
+Use isolated fixtures for those attacks. The consolidated image and separate
+native Ubuntu machine must then qualify actual network service behavior,
+hardware clock drift, installed confinement, boot and recovery. Source arithmetic
+tests cannot close trusted-time or G2 production acceptance.

@@ -600,6 +600,16 @@ before and after its account reads. These checks improve source-level coverage;
 they do not start the installed confined service, qualify enrollment/bootstrap
 or replace the consolidated image tests above.
 
+## Trusted UTC integration policy
+
+The [UTC source design](TRUSTED_UTC_DESIGN.md) uses three NTS operators and
+a protected uncertainty-bounded keeper, with explicit certificate bootstrap,
+offline refusal and governed history. The owner approved the providers, initial
+bounds and offline refusal on 2026-10-05. Fixed policy and keeper lifecycle code
+remain non-authorizing; no time authority, assignment endpoint
+or time-service configuration is enabled. Do not set the service's trusted-time
+status from an OS synchronization flag or bypass its current refusal.
+
 ## Future installer variant: external protected service
 
 Deferred TODO: a separate `external-admin` installation variant with authenticated

@@ -1,6 +1,6 @@
 # G2 software completion register
 
-Updated 2026-10-04. **G2 software is not complete.** This register separates
+Updated 2026-10-05. **G2 software is not complete.** This register separates
 work that can be executed in the current Windows/Ubuntu WSL/VM environment
 from production deployment decisions and physical qualification. It does not
 change the frozen reference release, governing requirements, or exit criteria.
@@ -136,6 +136,21 @@ paths are test-only; production has no new fallback. This is not an executed
 installed systemd/AppArmor service, enrollment/bootstrap acceptance or a
 trusted-time provider. Those integrations and the full Admin lifecycle remain
 open; no candidate image or final sweep ran.
+
+The [trusted UTC design](TRUSTED_UTC_DESIGN.md) uses NTS-only time from
+three independent operators and a protected, uncertainty-bounded Luma keeper.
+The source now includes inert quorum/interval arithmetic; it does not implement
+or activate that provider. The owner approved the three providers, initial
+bounds and offline-refusal policy on 2026-10-05. A fixed policy artifact and
+non-authorizing keeper lifecycle now exist in source, with an upstream chrony
+measurement/report audit. Authenticated publication, bootstrap/recovery,
+protected history, service confinement and authorization integration
+remain open. Admin still reports no trusted UTC and admits no assignments or
+effect grants. See [the bounded arithmetic checkpoint](evidence/G2_UTC_BOUNDS_2026-10-04.md)
+and [the policy and keeper checkpoint](evidence/G2_UTC_KEEPER_2026-10-05.md).
+The latter passed 101 ordinary Rust tests, ten wiring checks, formatting and
+the offline native build on D:. No live NTS or installed-service qualification
+was performed; source observations/history remain data rather than authority.
 
 The earlier [disposable TPM feasibility experiment](evidence/G2_OWNER_CREDENTIAL_FEASIBILITY_2026-10-02.md)
 informed the native backend now integrated above. The targeted native tests

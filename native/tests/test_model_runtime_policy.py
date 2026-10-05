@@ -31,7 +31,9 @@ class ModelRuntimePolicyTests(unittest.TestCase):
                         provision.index('state.join(REFERENCE_ENV)'))
         self.assertLess(provision.index('begin_activation(&state, p)?'),
                         provision.index('model-selection.json'))
-        self.assertLess(serve.index('activation_absent('), serve.index('selected()?'))
+        self.assertLess(serve.index('activation_records_absent('), serve.index('selected()?'))
+        self.assertLess(serve.index('quarantine_absent('), serve.index('selected()?'))
+        self.assertLess(serve.index('validation::worker_admission('), serve.index('verified_file('))
         self.assertIn('"0:990"', provision)
         unit = (ROOT / 'native/image/overlay/etc/systemd/system/luma-reference.service').read_text()
         self.assertIn('EnvironmentFile=-/var/lib/luma-os/model-reference.env', unit)
@@ -66,7 +68,7 @@ class ModelRuntimePolicyTests(unittest.TestCase):
         self.assertLess(install.index('prepare_model('),
                         install.index('"stop", "luma-model.service"'))
         self.assertLess(install.index('"stop", "luma-model.service"'),
-                        install.index('activate_cached('))
+                        install.index('activate_cached_with('))
         restore = source.split('fn restore_prior(')[1].split('fn begin_activation(')[0]
         self.assertLess(restore.index('activation_absent('),
                         restore.index('"restart", "luma-model.service"'))
@@ -78,7 +80,7 @@ class ModelRuntimePolicyTests(unittest.TestCase):
         install = source.split('pub fn install(id: &str)')[1].split('pub fn unit()')[0]
         self.assertLess(install.index('"restart", "luma-model.service"'),
                         install.index('model-health.py'))
-        self.assertLess(install.index('model-health.py'), install.rindex('running_prior('))
+        self.assertLess(install.index('model-health.py'), install.index('model_service_running('))
         self.assertIn('luma-reference.service', install)
         helper = (ROOT / 'native/image/overlay/usr/libexec/luma-os/model-health.py').read_text()
         self.assertIn("URL = 'http://127.0.0.1:8081/health'", helper)
@@ -211,6 +213,55 @@ class ModelRuntimePolicyTests(unittest.TestCase):
         reconcile = source.split('pub fn quarantine_reconcile(')[1].split('fn legacy_configuration_at(')[0]
         for check in ('"--inspect-incomplete"', '"--retain-incomplete"', 'operation_lock(var)?', 'runtime_lock(var, false)?'):
             self.assertIn(check, reconcile)
+
+
+    def test_validation_trial_precedes_activation_publication_and_health_completion(self):
+        source = (ROOT / 'rust/luma-platform/src/model.rs').read_text()
+        activate = source.split('fn activate_cached_with<')[1].split('fn write_candidate_config(')[0]
+        self.assertLess(activate.index('begin_activation('), activate.index('before_publication(&state, p)?'))
+        self.assertLess(activate.index('before_publication(&state, p)?'), activate.index('finish_activation('))
+        install = source.split('pub fn install(id: &str)')[1].split('pub fn unit()')[0]
+        self.assertIn('validation::Guard::begin', install)
+        self.assertLess(install.index('model-health.py'), install.index('trial.complete(&p)'))
+        self.assertIn('RestartStage::Validation', install)
+        self.assertIn('trial.check(&p)?', install)
+        self.assertIn('publish_quarantine(', install)
+
+    def test_validation_worker_checks_twice_without_reference_environment_permission(self):
+        source = (ROOT / 'rust/luma-platform/src/model.rs').read_text()
+        serve = source.split('pub fn serve()')[1].split('#[cfg(test)]')[0]
+        self.assertEqual(serve.count('validation::worker_admission('), 2)
+        self.assertLess(serve.index('validation::worker_admission('), serve.index('verified_file('))
+        self.assertLess(serve.index('verified_file('), serve.rindex('validation::worker_admission('))
+        self.assertLess(serve.rindex('validation::worker_admission('), serve.index('command.exec()'))
+        validation = (ROOT / 'rust/luma-platform/src/model/validation.rs').read_text()
+        worker_inputs = validation.split('fn worker_hashes(')[1].split('fn consistent_current(')[0]
+        self.assertNotIn('REFERENCE_ENV', worker_inputs)
+        self.assertIn('model-auth/api-key', worker_inputs)
+        self.assertIn('libc::F_GETLK', validation)
+        self.assertIn('libc::F_SETLK', validation)
+        profile = (ROOT / 'native/image/overlay/etc/apparmor.d/luma-model').read_text()
+        for rule in ('/proc/[0-9]*/stat r,', '/var/lib/luma-os/model-validation.lock rk,',
+                     '/var/lib/luma-os/model-validation.pending r,'):
+            self.assertIn(rule, profile)
+        self.assertNotIn('/var/lib/luma-os/model-reference.env', profile)
+        self.assertNotIn('/var/lib/luma-os/model-validation.retained.', profile)
+
+    def test_validation_recovery_is_explicit_root_locked_retention_without_service_start(self):
+        source = (ROOT / 'rust/luma-platform/src/model.rs').read_text()
+        reconcile = source.split('pub fn validation_reconcile(')[1].split('fn legacy_configuration_at(')[0]
+        for check in ('require_root()?', 'require_installed()?', 'operation_lock(var)?',
+                      'runtime_lock(var, false)?', '"--retain-abandoned"'):
+            self.assertIn(check, reconcile)
+        for forbidden in ('systemctl', 'model-disabled', '"key":', '"environment":'):
+            self.assertNotIn(forbidden, reconcile)
+        validation = (ROOT / 'rust/luma-platform/src/model/validation.rs').read_text()
+        retain = validation.split('pub(super) fn retain_abandoned(')[1].split('#[cfg(test)]')[0]
+        self.assertLess(retain.index('sync_all()?'), retain.index('fs::remove_file(state.join(PENDING))'))
+        self.assertIn('current.review != observed.review', retain)
+        self.assertNotIn('remove_file(archive', retain)
+        main = (ROOT / 'rust/luma-platform/src/main.rs').read_text()
+        self.assertIn('Some("model-validation-reconcile") if args.len() == 1', main)
 
 
 if __name__ == '__main__':

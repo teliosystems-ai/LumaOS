@@ -13,6 +13,8 @@ profile luma-model flags=(attach_disconnected) {
   /proc/cpuinfo r,
   /proc/sys/kernel/random/boot_id r,
   owner /proc/@{pid}/** r,
+  # Read-only controller lifetime binding for an in-progress model trial.
+  /proc/[0-9]*/stat r,
   /sys/devices/system/cpu/** r,
   /sys/devices/system/node/** r,
   /sys/fs/cgroup/**/memory.max r,
@@ -24,6 +26,8 @@ profile luma-model flags=(attach_disconnected) {
   # Quarantine lookup only; root-private DAC prevents reading the record.
   /var/lib/luma-os/model-quarantine.json r,
   /var/lib/luma-os/model-runtime.lock rk,
+  /var/lib/luma-os/model-validation.lock rk,
+  /var/lib/luma-os/model-validation.pending r,
   /var/lib/luma-os/models/*.gguf mr,
   /var/lib/luma-os/model-auth/api-key r,
   owner /tmp/** rwk,

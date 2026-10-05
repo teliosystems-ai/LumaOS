@@ -23,6 +23,8 @@ const MAX_ROLLBACK: u64 = MAX_PRIOR_BACKUP + 4096;
 const QUARANTINE: &str = "model-quarantine.json";
 const REFERENCE_ENV: &str = "model-reference.env";
 
+mod validation;
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Profile {
@@ -598,6 +600,14 @@ fn prepare_model(var: &Path, p: &Profile) -> Result<()> {
 }
 
 fn activate_cached(var: &Path, p: &Profile) -> Result<()> {
+    activate_cached_with(var, p, |_, _| Ok(()))
+}
+
+fn activate_cached_with<T>(
+    var: &Path,
+    p: &Profile,
+    before_publication: impl FnOnce(&Path, &Profile) -> Result<T>,
+) -> Result<T> {
     // Excludes a concurrently started/manual worker for the whole activation,
     // including credential/selection writes. Released before systemd restart.
     let _runtime = runtime_lock(var, true)?;
@@ -611,9 +621,13 @@ fn activate_cached(var: &Path, p: &Profile) -> Result<()> {
     // A crash or failed write preserves it for explicit review.
     let activation = begin_activation(&state, p)?;
     write_candidate_config(&state, p)?;
+    // For installed reconfiguration, publish the durable validation trial
+    // before clearing the activation fence. Other provisioning callers have
+    // no managed restart/readiness sequence and do not manufacture a trial.
+    let trial = before_publication(&state, p)?;
     finish_activation(&state, p, &activation)?;
     println!("MODEL FILES INSTALLED AND VERIFIED: {}. Runtime readiness is checked separately after reconfiguration or at installed-system boot; no production certification implied.", p.id);
-    Ok(())
+    Ok(trial)
 }
 
 fn write_candidate_config(state: &Path, p: &Profile) -> Result<()> {
@@ -834,6 +848,15 @@ fn bound_prior_backup(state: &Path, record: &Activation) -> Result<Option<PriorB
 
 fn activation_absent(state: &Path) -> Result<()> {
     activation_records_absent(state)?;
+    quarantine_absent(state)?;
+    match fs::symlink_metadata(state.join(validation::PENDING)) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error.into()),
+        Ok(_) => Err("model validation pending; reviewed reconciliation required".into()),
+    }
+}
+
+fn quarantine_absent(state: &Path) -> Result<()> {
     match fs::symlink_metadata(state.join(QUARANTINE)) {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
         Err(error) => Err(error.into()),
@@ -993,6 +1016,14 @@ fn model_unit_running(success: bool, output: &[u8]) -> Result<bool> {
 }
 
 fn running_prior(var: &Path) -> Result<Option<PriorRunning>> {
+    if model_service_running()? {
+        Ok(Some(prior_snapshot_at(&var.join(STATE))?))
+    } else {
+        Ok(None)
+    }
+}
+
+fn model_service_running() -> Result<bool> {
     let output = Command::new("/usr/bin/systemctl")
         .args([
             "show",
@@ -1002,11 +1033,7 @@ fn running_prior(var: &Path) -> Result<Option<PriorRunning>> {
             "luma-model.service",
         ])
         .output()?;
-    if model_unit_running(output.status.success(), &output.stdout)? {
-        Ok(Some(prior_snapshot_at(&var.join(STATE))?))
-    } else {
-        Ok(None)
-    }
+    model_unit_running(output.status.success(), &output.stdout)
 }
 
 fn restore_prior(var: &Path, prior: PriorRunning) -> Result<()> {
@@ -1771,6 +1798,7 @@ enum RestartStage {
     Health,
     Worker,
     Reference,
+    Validation,
 }
 
 struct RestartFailure {
@@ -2191,6 +2219,37 @@ pub fn quarantine_reconcile(action: Option<(&str, &str)>) -> Result<()> {
     Ok(())
 }
 
+pub fn validation_reconcile(action: Option<(&str, &str)>) -> Result<()> {
+    crate::require_root()?;
+    platform::require_installed()?;
+    let var = Path::new(VAR);
+    let _operation = operation_lock(var)?;
+    let _runtime = runtime_lock(var, false)?;
+    let state = var.join(STATE);
+    match action {
+        None => {
+            let observed = validation::inspect(&state, &profile)?;
+            println!(
+                "{}",
+                serde_json::json!({"schema_version":1,"phase":"abandoned_validation",
+                "review_sha256":observed.review,"retention_file":observed.archive,
+                "current_model":observed.current.as_ref().map(|p| &p.id),
+                "manual_only":observed.current.is_none(),"worker_started":false,"mutation_performed":false})
+            );
+        }
+        Some(("--retain-abandoned", reviewed)) => {
+            let archive = validation::retain_abandoned(&state, reviewed, &profile)?;
+            println!(
+                "{}",
+                serde_json::json!({"schema_version":1,"validation_cleared":true,
+                "retention_file":archive,"worker_started":false,"readiness_proven":false,"reservation":false})
+            );
+        }
+        _ => return Err("unsupported model validation reconciliation".into()),
+    }
+    Ok(())
+}
+
 fn legacy_configuration_at(state: &Path) -> Result<Profile> {
     activation_absent(state)?;
     let p = selected_at(state)?;
@@ -2388,6 +2447,7 @@ pub fn install(id: &str) -> Result<()> {
     platform::require_installed()?;
     let p = profile(id)?;
     let _lock = operation_lock(Path::new(VAR))?;
+    let trial = std::cell::RefCell::new(None);
     install_after_preflight(
         || preflight_at(Path::new(VAR), &p, check_preflight),
         || {
@@ -2399,8 +2459,16 @@ pub fn install(id: &str) -> Result<()> {
             running_prior(Path::new(VAR))
         },
         || command("/usr/bin/systemctl", &["stop", "luma-model.service"]).map(|_| ()),
-        || activate_cached(Path::new(VAR), &p),
         || {
+            let guard = activate_cached_with(Path::new(VAR), &p, validation::Guard::begin)?;
+            *trial.borrow_mut() = Some(guard);
+            Ok(())
+        },
+        || {
+            let trial = trial
+                .borrow_mut()
+                .take()
+                .ok_or("model validation controller missing")?;
             finish_reconfiguration(
                 || {
                     checked_restart_steps(|stage| match stage {
@@ -2419,11 +2487,8 @@ pub fn install(id: &str) -> Result<()> {
                         )
                         .map(|_| ()),
                         RestartStage::Worker => {
-                            if running_prior(Path::new(VAR))?
-                                .as_ref()
-                                .map(|current| current.profile.id.as_str())
-                                != Some(p.id.as_str())
-                            {
+                            trial.check(&p)?;
+                            if !model_service_running()? {
                                 return Err(
                                     "model listener responded but selected worker is not running"
                                         .into(),
@@ -2436,6 +2501,11 @@ pub fn install(id: &str) -> Result<()> {
                             &["is-active", "--quiet", "luma-reference.service"],
                         )
                         .map(|_| ()),
+                        RestartStage::Validation => Err("unexpected validation step".into()),
+                    })?;
+                    trial.complete(&p).map_err(|error| RestartFailure {
+                        stage: RestartStage::Validation,
+                        error,
                     })
                 },
                 |stage| publish_quarantine(&Path::new(VAR).join(STATE), &p, stage),
@@ -2462,8 +2532,10 @@ pub fn serve() -> Result<()> {
     }
     platform::require_installed()?;
     let runtime = runtime_lock(Path::new(VAR), false)?;
-    activation_absent(&Path::new(VAR).join(STATE))?;
+    activation_records_absent(&Path::new(VAR).join(STATE))?;
+    quarantine_absent(&Path::new(VAR).join(STATE))?;
     let p = selected()?;
+    validation::worker_admission(&Path::new(VAR).join(STATE), &p)?;
     admit_cgroup(&p, effective_memory_limit()?)?;
     let file = Path::new(VAR)
         .join(STATE)
@@ -2482,6 +2554,9 @@ pub fn serve() -> Result<()> {
             "insufficient memory at model activation; manual operation remains available".into(),
         );
     }
+    // Verification/admission may block; recheck the trial controller and all
+    // pending/quarantine fences immediately before crossing the exec boundary.
+    validation::worker_admission(&Path::new(VAR).join(STATE), &p)?;
     let mut command = Command::new(RUNTIME);
     command
         .args([
@@ -4656,6 +4731,46 @@ print('MODEL_COMPLETED_ROLLBACK_DAC_PASSED')
         );
         assert!(activation_absent(&state).is_err());
         assert!(observe_quarantine(&state, &|_| Ok(p.clone())).is_err());
+        remove_activation_fixture(&root, &p);
+    }
+
+    #[test]
+    fn failed_validation_commit_is_quarantined_before_stop_and_retains_trial() {
+        let (root, p) = activation_fixture("validation-commit-failure");
+        let state = root.join(STATE);
+        write_activation_candidate(&state, &p);
+        let trial = validation::Guard::begin(&state, &p).unwrap();
+        fs::write(
+            state.join(REFERENCE_ENV),
+            b"changed before trial completion",
+        )
+        .unwrap();
+        let error = finish_reconfiguration(
+            || {
+                trial.complete(&p).map_err(|error| RestartFailure {
+                    stage: RestartStage::Validation,
+                    error,
+                })
+            },
+            |stage| {
+                assert_eq!(stage, RestartStage::Validation);
+                publish_quarantine(&state, &p, stage)
+            },
+            || {
+                assert!(state.join(validation::PENDING).exists());
+                assert!(quarantine_bytes(&state)?.is_some());
+                Ok(())
+            },
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains("Validation") && error.contains("worker stop requested"));
+        let record: Quarantine =
+            serde_json::from_slice(&quarantine_bytes(&state).unwrap().unwrap()).unwrap();
+        assert_eq!(record.failed_stage, RestartStage::Validation);
+        assert!(activation_absent(&state).is_err());
+        fs::remove_file(state.join(validation::PENDING)).unwrap();
+        fs::remove_file(state.join("model-validation.lock")).unwrap();
         remove_activation_fixture(&root, &p);
     }
 

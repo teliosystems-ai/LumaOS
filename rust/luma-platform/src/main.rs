@@ -211,6 +211,10 @@ fn dispatch() -> Result<()> {
         Some("model-quarantine-reconcile") if args.len() == 3 => {
             model::quarantine_reconcile(Some((&args[1], &args[2])))
         }
+        Some("model-validation-reconcile") if args.len() == 1 => model::validation_reconcile(None),
+        Some("model-validation-reconcile") if args.len() == 3 => {
+            model::validation_reconcile(Some((&args[1], &args[2])))
+        }
         Some("model-clean") if args.len() == 1 => {
             println!(
                 "{}",
@@ -274,6 +278,7 @@ fn dispatch() -> Result<()> {
             println!("model-rollback-reconcile [--restore-prior REVIEW-SHA256]: inspect or explicitly restore one retained prior configuration after completed activation. Installed-root maintenance; requires an idle runtime lock, does not start services or prove readiness, consumes the rollback record, and preserves a fence on interruption. Not production Admin authorization.");
             println!("model-quarantine-reconcile [--clear-consistent REVIEW-SHA256]: inspect or explicitly clear an observed reconfiguration-failure quarantine for verified current settings or manual-only state. Installed root and idle runtime lock required; no worker start, readiness claim, recovery-disablement removal or product Admin grant.");
             println!("model-quarantine-reconcile --inspect-incomplete | --retain-incomplete REVIEW-SHA256: review and privately retain only an empty/truncated JSON quarantine before explicit clearance with verified current settings. Complete or otherwise malformed records remain fenced; no worker start or evidence deletion.");
+            println!("model-validation-reconcile [--retain-abandoned REVIEW-SHA256]: inspect and retain an abandoned installed reconfiguration trial before reviewed clearance. Root, idle runtime and no live controller lock required; does not start services, remove quarantine/disablement or prove resource return.");
             println!("Luma native platform alpha\n\n  inventory\n  verify BUNDLE\n  install /dev/disk/by-id/EXACT-ID BUNDLE\n  update BUNDLE\n  recover unlock /dev/disk/by-id/EXACT-ID\n  recover export /dev/disk/by-id/EXACT-ID EMPTY-DESTINATION\n  recover repair-a|repair-b /dev/disk/by-id/EXACT-ID BUNDLE\n  recover repair-data /dev/disk/by-id/EXACT-ID\n  recover disable-model /dev/disk/by-id/EXACT-ID\n  status\n\nInstall requires local interactive disk confirmation and new credentials.\nLaboratory image: native acceptance and production custody are outstanding.");
             Ok(())
         }

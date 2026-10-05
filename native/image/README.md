@@ -536,10 +536,11 @@ new review even when its model/settings/failure stage match an earlier one.
 Reload generated unit limits, refresh the reference environment and evaluate
 runtime admission/readiness separately before returning a model to use.
 
-This path handles errors actually returned by the installed reconfiguration
-steps. Controller death/power loss before the handler, later boot/migration or
-worker OOM/pressure failures, trusted supervision and resource generations remain
-open implementation/qualification work. It is not product Admin authorization
+This quarantine path handles errors actually returned by the installed
+reconfiguration steps. The validation trial described below adds a separate
+controller-lifetime startup fence. Continuous supervision, later boot/migration
+or worker OOM/pressure failures and resource generations remain open
+implementation/qualification work. It is not product Admin authorization
 or a TPM-protected incident ledger. See the
 [quarantine checkpoint](../evidence/G2_MODEL_QUARANTINE_2026-10-05.md).
 
@@ -576,6 +577,58 @@ uncertain clearance outcome and may leave only the private archive; inspect
 fresh state rather than claiming a successful recovery or deleting evidence.
 This is not controller-death supervision or broader unsupported-state recovery.
 See the [incomplete quarantine checkpoint](../evidence/G2_MODEL_INCOMPLETE_QUARANTINE_2026-10-05.md).
+
+Installed `model-install` now publishes `model-validation.pending` before
+clearing its activation fence. This root-owned, bounded public record contains
+only an incident ID, kernel boot/PID/start identity, persistent lock inode,
+candidate/catalog pins and configuration hashes, never credentials. A private
+controller guard holds a root-only POSIX write lock on `model-validation.lock`
+through the fixed restart/health/worker/reference checks. Normal new activation
+refuses any trial record; a trial worker may start only for matching runtime
+inputs and a freshly observed bound live lock owner. Checks bracket weight/RAM
+admission. The worker gains no reference-environment read permission. Available
+kernel process/boot observations are required; failure does not fall back to
+trusting a stored PID or a path's existence.
+
+Only successful controller checks explicitly clear the trial. Completion errors
+also pass through quarantine-before-stop handling. Returning, exiting or being
+killed closes the controller lock but never automatically deletes trial bytes;
+future worker startup refuses an abandoned or changed trial, including on a new
+boot. This does not stop a worker already running, continuously monitor memory,
+or make the final observation-to-exec interval atomic. A surviving worker must
+be stopped and inspected through the normal maintenance procedure.
+
+After investigating a failure and stopping the managed worker, first reconcile
+pending activation/orphan backup state. Reviewed prior/completed rollback can
+restore settings while preserving the trial. Then use a separate installed-root
+maintenance process to inspect a canonical abandoned record:
+
+```sh
+sudo luma-platform model-validation-reconcile
+sudo luma-platform model-validation-reconcile --retain-abandoned REVIEW-SHA256
+```
+
+The current review binds exact original trial bytes and consistent current
+settings/verified weights or manual-only state. Both maintenance locks and no
+live/uncertain validation-lock holder are required. Exact bytes are retained as
+private `model-validation.retained.CONTENT-SHA256`, synced and freshly reviewed
+before removing only the trial record. Exact private archives permit retry;
+unsafe/conflicting archives, malformed/partial/unknown trial records, changed
+catalogs, substituted locks, bad settings/weights or stale reviews refuse without
+overwriting evidence. Quarantine, recovery disablement, settings and weights
+are preserved. Clear any independent quarantine only with its own new review.
+Retention has no automatic expiry/quota or generic repair of conflicting state.
+A sync failure/crash after unlink has an uncertain clearance outcome: retain
+diagnostics and inspect fresh state, without claiming readiness or resource
+return. Do not unlink/replace the persistent validation-lock inode as cleanup.
+
+This is installed-root source recovery, not finite product Admin/effect grants,
+a resource reservation/generation, protected incident history or full crash
+supervision. Initial provisioning/boot and older-image migration are not silently
+upgraded to this reconfiguration trial. Installed unit/seccomp/AppArmor behavior,
+actual interruption/service control, inference and resource return need the
+consolidated image and separate native Ubuntu evaluation. See the
+[validation checkpoint](../evidence/G2_MODEL_VALIDATION_2026-10-05.md).
 
 For installed reconfiguration, `model-install` now acquires and verifies the
 candidate weights before stopping the managed worker. A failed download or

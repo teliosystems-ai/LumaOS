@@ -18,6 +18,9 @@ const RUNTIME: &str = "/usr/libexec/luma-os/llama/llama-server";
 const ACTIVATION: &str = "model-activation.pending";
 const PRIOR_BACKUP: &str = "model-activation.prior";
 const MAX_PRIOR_BACKUP: u64 = 40_000;
+const ROLLBACK: &str = "model-rollback.json";
+const MAX_ROLLBACK: u64 = MAX_PRIOR_BACKUP + 4096;
+const QUARANTINE: &str = "model-quarantine.json";
 const REFERENCE_ENV: &str = "model-reference.env";
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -791,7 +794,8 @@ fn prior_backup_bytes(state: &Path) -> Result<Option<Vec<u8>>> {
 }
 
 fn decode_prior_backup(bytes: &[u8]) -> Result<PriorBackup> {
-    let backup: PriorBackup = serde_json::from_slice(bytes)?;
+    let backup: PriorBackup = serde_json::from_slice(bytes)
+        .map_err(|_| "invalid private model prior backup; preserve state")?;
     if serde_json::to_vec(&backup)? != bytes
         || backup.schema_version != 1
         || backup.selection.as_ref().is_some_and(|v| v.len() > 4096)
@@ -829,6 +833,15 @@ fn bound_prior_backup(state: &Path, record: &Activation) -> Result<Option<PriorB
 }
 
 fn activation_absent(state: &Path) -> Result<()> {
+    activation_records_absent(state)?;
+    match fs::symlink_metadata(state.join(QUARANTINE)) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error.into()),
+        Ok(_) => Err("model quarantined; reviewed reconciliation required".into()),
+    }
+}
+
+fn activation_records_absent(state: &Path) -> Result<()> {
     for name in [ACTIVATION, PRIOR_BACKUP] {
         match fs::symlink_metadata(state.join(name)) {
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => (),
@@ -1027,6 +1040,15 @@ fn restore_prior(var: &Path, prior: PriorRunning) -> Result<()> {
 
 fn begin_activation(state: &Path, p: &Profile) -> Result<Activation> {
     activation_absent(state)?;
+    begin_activation_records(state, p)
+}
+
+// Normal callers pass activation_absent above. The sole quarantine-tolerant
+// caller is reviewed completed rollback under both locks; this record-writing
+// helper never removes quarantine or permits ordinary startup through it.
+fn begin_activation_records(state: &Path, p: &Profile) -> Result<Activation> {
+    activation_records_absent(state)?;
+    validate_rollback_slot(state)?;
     let (selection, env, key) = activation_snapshot(state)?;
     let backup = PriorBackup {
         schema_version: 1,
@@ -1201,6 +1223,7 @@ fn finish_activation(state: &Path, p: &Profile, record: &Activation) -> Result<(
     if observation.record != *record || !observation.candidate_consistent {
         return Err("model activation files inconsistent; preserve pending marker".into());
     }
+    retain_completed_prior(state, p, &observation)?;
     clear_activation(state, &observation)
 }
 
@@ -1218,6 +1241,9 @@ fn reviewed_clear_activation(state: &Path, p: &Profile, mode: &str, reviewed: &s
     let current = observe_activation(state, p, true)?;
     if current.review != observed.review || current.phase != expected_phase {
         return Err("model activation changed after review".into());
+    }
+    if mode == "--publish-committed" {
+        retain_completed_prior(state, p, &current)?;
     }
     clear_activation(state, &current)
 }
@@ -1250,7 +1276,8 @@ fn prior_restore_profile(
                 schema_version: u32,
                 id: String,
             }
-            let selected: Selection = serde_json::from_slice(selection)?;
+            let selected: Selection = serde_json::from_slice(selection)
+                .map_err(|_| "invalid saved prior model selection; preserve state")?;
             let prior = resolve(&selected.id)?;
             let token = std::str::from_utf8(key)?;
             if selected.schema_version != 1
@@ -1305,30 +1332,7 @@ fn restore_config_file(
     Ok(())
 }
 
-fn reviewed_restore_configuration(
-    state: &Path,
-    candidate: &Profile,
-    reviewed: &str,
-    resolve: impl FnOnce(&str) -> Result<Profile>,
-) -> Result<()> {
-    tpm::decode::<32>(reviewed)?;
-    let observed = observe_activation(state, candidate, true)?;
-    if observed.review != reviewed {
-        return Err("model restoration review changed; inspect again".into());
-    }
-    let backup = bound_prior_backup(state, &observed.record)?
-        .ok_or("no retained prior model bytes; restoration unavailable")?;
-    let prior = prior_restore_profile(&backup, resolve)?;
-    if let Some(prior) = &prior {
-        verify_file(
-            &state.join("models").join(format!("{}.gguf", prior.id)),
-            prior,
-        )?;
-    }
-    let current = observe_activation(state, candidate, true)?;
-    if current.review != observed.review {
-        return Err("model activation changed before restoration".into());
-    }
+fn write_prior_configuration(state: &Path, backup: &PriorBackup) -> Result<()> {
     let auth = state.join("model-auth");
     let auth_present = match fs::symlink_metadata(&auth) {
         Ok(_) => true,
@@ -1355,7 +1359,34 @@ fn reviewed_restore_configuration(
         &backup.selection,
         0o644,
         None,
-    )?;
+    )
+}
+
+fn reviewed_restore_configuration(
+    state: &Path,
+    candidate: &Profile,
+    reviewed: &str,
+    resolve: impl FnOnce(&str) -> Result<Profile>,
+) -> Result<()> {
+    tpm::decode::<32>(reviewed)?;
+    let observed = observe_activation(state, candidate, true)?;
+    if observed.review != reviewed {
+        return Err("model restoration review changed; inspect again".into());
+    }
+    let backup = bound_prior_backup(state, &observed.record)?
+        .ok_or("no retained prior model bytes; restoration unavailable")?;
+    let prior = prior_restore_profile(&backup, resolve)?;
+    if let Some(prior) = &prior {
+        verify_file(
+            &state.join("models").join(format!("{}.gguf", prior.id)),
+            prior,
+        )?;
+    }
+    let current = observe_activation(state, candidate, true)?;
+    if current.review != observed.review {
+        return Err("model activation changed before restoration".into());
+    }
+    write_prior_configuration(state, &backup)?;
     // Retain both records across every failed write. An explicit retry starts
     // with a NEW review of its partially restored state; no automatic replay.
     let restored = observe_activation(state, candidate, true)?;
@@ -1476,6 +1507,513 @@ pub fn activation_reconcile(action: Option<(&str, &str)>) -> Result<()> {
     Ok(())
 }
 
+// One root-private completed-activation undo record. It carries credentials;
+// neither this data nor its hashes are a resource lease, TPM anchor or grant.
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct CompletedRollback {
+    schema_version: u32,
+    catalog_sha256: String,
+    completed_profile: String,
+    completed_weight_sha256: String,
+    completed_marker_sha256: String,
+    completed_hashes: (Option<String>, Option<String>, Option<String>),
+    prior: PriorBackup,
+}
+
+fn rollback_bytes(state: &Path) -> Result<Option<Vec<u8>>> {
+    checked_activation_bytes_with_mode(&state.join(ROLLBACK), MAX_ROLLBACK, 0, 0o077)
+}
+
+fn decode_rollback(bytes: &[u8]) -> Result<CompletedRollback> {
+    let record: CompletedRollback = serde_json::from_slice(bytes)
+        .map_err(|_| "invalid private completed model rollback record; preserve state")?;
+    let hashes = [
+        record.completed_hashes.0.as_ref(),
+        record.completed_hashes.1.as_ref(),
+        record.completed_hashes.2.as_ref(),
+        Some(&record.completed_weight_sha256),
+        Some(&record.completed_marker_sha256),
+        Some(&record.catalog_sha256),
+    ];
+    if serde_json::to_vec(&record)? != bytes
+        || record.schema_version != 1
+        || record.completed_profile != record.prior.candidate
+        || hashes.iter().any(|hash| {
+            hash.map_or(true, |hash| {
+                hash.len() != 64 || !hash.bytes().all(|byte| byte.is_ascii_hexdigit())
+            })
+        })
+    {
+        return Err("invalid completed model rollback record; preserve state".into());
+    }
+    decode_prior_backup(&serde_json::to_vec(&record.prior)?)?;
+    Ok(record)
+}
+
+fn validate_rollback_slot(state: &Path) -> Result<()> {
+    if let Some(bytes) = rollback_bytes(state)? {
+        decode_rollback(&bytes)?;
+    }
+    Ok(())
+}
+
+fn retain_completed_prior(
+    state: &Path,
+    p: &Profile,
+    observed: &ActivationObservation,
+) -> Result<()> {
+    let Some(prior) = bound_prior_backup(state, &observed.record)? else {
+        // Existing markers and interrupted backup cleanup cannot invent bytes.
+        return Ok(());
+    };
+    if !observed.candidate_consistent || observed.record.candidate != p.id {
+        return Err("cannot retain rollback for inconsistent candidate files".into());
+    }
+    if let Some(existing) = rollback_bytes(state)? {
+        // A single bounded slot replaces only inspected safe, canonical data.
+        // Unsafe or unknown state is not overwritten to make activation pass.
+        decode_rollback(&existing)?;
+    }
+    let record = CompletedRollback {
+        schema_version: 1,
+        catalog_sha256: bundle::hex(&Sha256::digest(CATALOG.as_bytes())),
+        completed_profile: p.id.clone(),
+        completed_weight_sha256: p.sha256.clone(),
+        completed_marker_sha256: bundle::hex(&Sha256::digest(&observed.marker)),
+        completed_hashes: observed.hashes.clone(),
+        prior,
+    };
+    let bytes = serde_json::to_vec(&record)?;
+    if bytes.len() as u64 > MAX_ROLLBACK {
+        return Err("oversized completed model rollback record".into());
+    }
+    platform::write_atomic(&state.join(ROLLBACK), &bytes, 0o600)?;
+    if rollback_bytes(state)?.as_deref() != Some(bytes.as_slice())
+        || observe_activation(state, p, false)?.review != observed.review
+    {
+        return Err("model state changed while retaining completed rollback".into());
+    }
+    Ok(())
+}
+
+struct RollbackObservation {
+    record: CompletedRollback,
+    bytes: Vec<u8>,
+    completed: Profile,
+    prior: Option<Profile>,
+    phase: &'static str,
+    review: String,
+    restorable: bool,
+}
+
+fn observe_rollback(
+    state: &Path,
+    resolve: &impl Fn(&str) -> Result<Profile>,
+) -> Result<RollbackObservation> {
+    activation_records_absent(state)?;
+    let bytes = rollback_bytes(state)?.ok_or("no completed model rollback record")?;
+    let record = decode_rollback(&bytes)?;
+    let completed = resolve(&record.completed_profile)?;
+    if record.catalog_sha256 != bundle::hex(&Sha256::digest(CATALOG.as_bytes()))
+        || completed.id != record.completed_profile
+        || completed.sha256 != record.completed_weight_sha256
+    {
+        return Err("completed model catalog pin changed; rollback requires investigation".into());
+    }
+    let (selection, env, key) = activation_snapshot(state)?;
+    let hashes = (
+        activation_digest(&selection),
+        activation_digest(&env),
+        activation_digest(&key),
+    );
+    let prior = prior_restore_profile(&record.prior, resolve);
+    let prior_valid = prior.as_ref().is_ok_and(|prior| {
+        prior.as_ref().map_or(true, |prior| {
+            verify_file(
+                &state.join("models").join(format!("{}.gguf", prior.id)),
+                prior,
+            )
+            .is_ok()
+        })
+    });
+    let phase = if hashes != record.completed_hashes {
+        "completed_configuration_changed"
+    } else if !prior_valid {
+        "prior_configuration_or_weights_unavailable"
+    } else {
+        "completed_configuration_restorable"
+    };
+    let prior = prior.unwrap_or(None);
+    let mut digest = Sha256::new();
+    digest.update(b"luma-model-completed-rollback-review-v1\0");
+    digest.update(&bytes);
+    digest.update(serde_json::to_vec(&hashes)?);
+    digest.update(phase.as_bytes());
+    digest.update(completed.sha256.as_bytes());
+    if let Some(prior) = &prior {
+        digest.update(prior.sha256.as_bytes());
+    }
+    Ok(RollbackObservation {
+        record,
+        bytes,
+        completed,
+        prior,
+        phase,
+        review: bundle::hex(&digest.finalize()),
+        restorable: phase == "completed_configuration_restorable",
+    })
+}
+
+fn reviewed_completed_rollback(
+    state: &Path,
+    reviewed: &str,
+    resolve: &impl Fn(&str) -> Result<Profile>,
+) -> Result<()> {
+    tpm::decode::<32>(reviewed)?;
+    let observed = observe_rollback(state, resolve)?;
+    if observed.review != reviewed || !observed.restorable {
+        return Err("completed model rollback review changed or restoration is unavailable".into());
+    }
+    // Re-observe after possibly blocking weight verification, before any fence
+    // or configuration write. The installed wrapper holds both kernel locks.
+    let current = observe_rollback(state, resolve)?;
+    if current.review != observed.review || !current.restorable {
+        return Err("completed model state changed before rollback".into());
+    }
+    // Retains the PRE-ROLLBACK candidate bytes. If restoration is interrupted,
+    // existing activation reconciliation can explicitly restore this state;
+    // it must never automatically replay or pretend rollback finished.
+    let activation = begin_activation_records(state, &observed.completed)?;
+    if (
+        activation.prior_selection_sha256.clone(),
+        activation.prior_env_sha256.clone(),
+        activation.prior_key_sha256.clone(),
+    ) != observed.record.completed_hashes
+        || rollback_bytes(state)?.as_deref() != Some(observed.bytes.as_slice())
+    {
+        return Err("completed model state changed during fence creation; preserve state".into());
+    }
+    write_prior_configuration(state, &observed.record.prior)?;
+    let (selection, env, key) = activation_snapshot(state)?;
+    if selection != observed.record.prior.selection
+        || env != observed.record.prior.environment
+        || key != observed.record.prior.key
+    {
+        return Err("completed model rollback did not reproduce exact saved settings".into());
+    }
+    if let Some(prior) = &observed.prior {
+        verify_file(
+            &state.join("models").join(format!("{}.gguf", prior.id)),
+            prior,
+        )?;
+    }
+    if rollback_bytes(state)?.as_deref() != Some(observed.bytes.as_slice()) {
+        return Err("completed model rollback changed before consumption; preserve fence".into());
+    }
+    let restored = observe_activation(state, &observed.completed, false)?;
+    if restored.record != activation
+        || restored.hashes
+            != (
+                activation_digest(&observed.record.prior.selection),
+                activation_digest(&observed.record.prior.environment),
+                activation_digest(&observed.record.prior.key),
+            )
+    {
+        return Err("rollback marker or restored configuration changed; preserve state".into());
+    }
+    // Consume this exact one-step record BEFORE releasing the fence. A crash
+    // here still keeps the pre-rollback backup and requires explicit recovery.
+    fs::remove_file(state.join(ROLLBACK))?;
+    File::open(state)?.sync_all()?;
+    clear_activation(state, &restored)
+}
+
+pub fn rollback_reconcile(action: Option<(&str, &str)>) -> Result<()> {
+    crate::require_root()?;
+    platform::require_installed()?;
+    let var = Path::new(VAR);
+    let _operation = operation_lock(var)?;
+    let _runtime = runtime_lock(var, false)?;
+    let state = var.join(STATE);
+    match action {
+        Some(("--restore-prior", reviewed)) => {
+            reviewed_completed_rollback(&state, reviewed, &profile)?;
+            println!(
+                "{}",
+                serde_json::json!({"schema_version":1,
+                "prior_configuration_restored":true,"rollback_record_consumed":true,
+                "worker_started":false,"readiness_proven":false,"reservation":false})
+            );
+        }
+        None => {
+            let observed = observe_rollback(&state, &profile)?;
+            println!(
+                "{}",
+                serde_json::json!({"schema_version":1,
+                "phase":observed.phase,"candidate":observed.completed.id,
+                "prior_model":observed.prior.as_ref().map(|prior| &prior.id),
+                "manual_only_target":observed.restorable && observed.prior.is_none(),
+                "review_sha256":observed.review,"restorable":observed.restorable,
+                "worker_started":false,"mutation_performed":false})
+            );
+        }
+        _ => return Err("unsupported completed model rollback action".into()),
+    }
+    Ok(())
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum RestartStage {
+    Reload,
+    Restart,
+    Health,
+    Worker,
+    Reference,
+}
+
+struct RestartFailure {
+    stage: RestartStage,
+    error: Box<dyn std::error::Error>,
+}
+
+fn checked_restart_steps(
+    mut step: impl FnMut(RestartStage) -> Result<()>,
+) -> std::result::Result<(), RestartFailure> {
+    for stage in [
+        RestartStage::Reload,
+        RestartStage::Restart,
+        RestartStage::Health,
+        RestartStage::Worker,
+        RestartStage::Reference,
+    ] {
+        step(stage).map_err(|error| RestartFailure { stage, error })?;
+    }
+    Ok(())
+}
+
+fn finish_reconfiguration(
+    restart: impl FnOnce() -> std::result::Result<(), RestartFailure>,
+    fence: impl FnOnce(RestartStage) -> Result<()>,
+    stop: impl FnOnce() -> Result<()>,
+) -> Result<()> {
+    let Err(failure) = restart() else {
+        return Ok(());
+    };
+    // Publish before requesting stop, so failure/on-failure restart/next boot
+    // cannot silently start a new worker. Still try stop if publication fails;
+    // neither a stop request nor this local fence proves resources returned.
+    let quarantine = match fence(failure.stage) {
+        Ok(()) => "durable model quarantine published".to_owned(),
+        Err(error) => format!("model quarantine publication failed; preserve state: {error}"),
+    };
+    let stopped = match stop() {
+        Ok(()) => "worker stop requested".to_owned(),
+        Err(error) => format!("worker stop request failed: {error}"),
+    };
+    Err(format!("{}; failed model reconfiguration stage {:?}; {quarantine}; {stopped}; no rollback or readiness claimed",
+        failure.error, failure.stage).into())
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct Quarantine {
+    schema_version: u32,
+    incident_id: String,
+    candidate: String,
+    candidate_sha256: String,
+    catalog_sha256: String,
+    failed_stage: RestartStage,
+}
+
+fn publish_quarantine(state: &Path, candidate: &Profile, failed_stage: RestartStage) -> Result<()> {
+    safe_dir(state)?;
+    let mut incident = [0u8; 16];
+    File::open("/dev/urandom")?.read_exact(&mut incident)?;
+    let record = Quarantine {
+        schema_version: 1,
+        incident_id: bundle::hex(&incident),
+        candidate: candidate.id.clone(),
+        candidate_sha256: candidate.sha256.clone(),
+        catalog_sha256: bundle::hex(&Sha256::digest(CATALOG.as_bytes())),
+        failed_stage,
+    };
+    // Never overwrite unknown or existing state; even a partial record fences
+    // normal activation/startup. Do not persist exception text or credentials.
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
+        .open(state.join(QUARANTINE))?;
+    file.set_permissions(fs::Permissions::from_mode(0o600))?;
+    let bytes = serde_json::to_vec(&record)?;
+    file.write_all(&bytes)?;
+    file.sync_all()?;
+    File::open(state)?.sync_all()?;
+    if quarantine_bytes(state)?.as_deref() != Some(bytes.as_slice()) {
+        return Err("model quarantine changed during publication; preserve state".into());
+    }
+    Ok(())
+}
+
+fn quarantine_bytes(state: &Path) -> Result<Option<Vec<u8>>> {
+    checked_activation_bytes_with_mode(&state.join(QUARANTINE), 4096, 0, 0o077)
+}
+
+struct QuarantineObservation {
+    record: Quarantine,
+    bytes: Vec<u8>,
+    hashes: (Option<String>, Option<String>, Option<String>),
+    current_profile: Option<Profile>,
+    phase: &'static str,
+    review: String,
+    clearable: bool,
+}
+
+fn observe_quarantine(
+    state: &Path,
+    resolve: &impl Fn(&str) -> Result<Profile>,
+) -> Result<QuarantineObservation> {
+    activation_records_absent(state)?;
+    let bytes = quarantine_bytes(state)?.ok_or("no retained model quarantine")?;
+    let record: Quarantine = serde_json::from_slice(&bytes)
+        .map_err(|_| "invalid retained model quarantine; preserve state")?;
+    let candidate = resolve(&record.candidate)?;
+    if serde_json::to_vec(&record)? != bytes
+        || record.schema_version != 1
+        || record.incident_id.len() != 32
+        || !record.incident_id.bytes().all(|b| b.is_ascii_hexdigit())
+        || candidate.id != record.candidate
+        || candidate.sha256 != record.candidate_sha256
+        || record.catalog_sha256 != bundle::hex(&Sha256::digest(CATALOG.as_bytes()))
+    {
+        return Err("model quarantine catalog or canonical record changed; preserve state".into());
+    }
+    let (selection, environment, key) = activation_snapshot(state)?;
+    let snapshot = PriorBackup {
+        schema_version: 1,
+        candidate: record.candidate.clone(),
+        selection,
+        environment,
+        key,
+    };
+    let hashes = (
+        activation_digest(&snapshot.selection),
+        activation_digest(&snapshot.environment),
+        activation_digest(&snapshot.key),
+    );
+    let current = prior_restore_profile(&snapshot, resolve);
+    let valid = current.as_ref().is_ok_and(|current| {
+        current.as_ref().map_or(true, |p| {
+            verify_file(&state.join("models").join(format!("{}.gguf", p.id)), p).is_ok()
+        })
+    });
+    // Weight verification can block. Freshly recheck both pending fences, the
+    // quarantine and exact config before forming a usable review/clearance.
+    activation_records_absent(state)?;
+    let (selection, environment, key) = activation_snapshot(state)?;
+    if selection != snapshot.selection
+        || environment != snapshot.environment
+        || key != snapshot.key
+        || quarantine_bytes(state)?.as_deref() != Some(bytes.as_slice())
+    {
+        return Err("model quarantine or configuration changed during inspection".into());
+    }
+    let current_profile = current.unwrap_or(None);
+    let phase = if !valid {
+        "configuration_or_weights_unavailable"
+    } else if current_profile.is_none() {
+        "manual_only_configuration"
+    } else {
+        "consistent_selected_configuration"
+    };
+    let mut digest = Sha256::new();
+    digest.update(b"luma-model-quarantine-review-v1\0");
+    digest.update(&bytes);
+    digest.update(serde_json::to_vec(&hashes)?);
+    digest.update(phase.as_bytes());
+    if let Some(p) = &current_profile {
+        digest.update(p.sha256.as_bytes());
+    }
+    Ok(QuarantineObservation {
+        record,
+        bytes,
+        hashes,
+        current_profile,
+        phase,
+        review: bundle::hex(&digest.finalize()),
+        clearable: valid,
+    })
+}
+
+fn reviewed_clear_quarantine(
+    state: &Path,
+    reviewed: &str,
+    resolve: &impl Fn(&str) -> Result<Profile>,
+) -> Result<()> {
+    tpm::decode::<32>(reviewed)?;
+    let observed = observe_quarantine(state, resolve)?;
+    if !observed.clearable || observed.review != reviewed {
+        return Err(
+            "model quarantine review changed or current configuration is not clearable".into(),
+        );
+    }
+    let current = observe_quarantine(state, resolve)?;
+    if !current.clearable || current.review != observed.review {
+        return Err("model quarantine changed after review".into());
+    }
+    activation_records_absent(state)?;
+    let (selection, environment, key) = activation_snapshot(state)?;
+    if (
+        activation_digest(&selection),
+        activation_digest(&environment),
+        activation_digest(&key),
+    ) != current.hashes
+        || quarantine_bytes(state)?.as_deref() != Some(current.bytes.as_slice())
+    {
+        return Err("model quarantine/configuration changed before clearance".into());
+    }
+    fs::remove_file(state.join(QUARANTINE))?;
+    File::open(state)?.sync_all()?;
+    Ok(())
+}
+
+pub fn quarantine_reconcile(action: Option<(&str, &str)>) -> Result<()> {
+    crate::require_root()?;
+    platform::require_installed()?;
+    let var = Path::new(VAR);
+    let _operation = operation_lock(var)?;
+    let _runtime = runtime_lock(var, false)?;
+    let state = var.join(STATE);
+    match action {
+        Some(("--clear-consistent", reviewed)) => {
+            reviewed_clear_quarantine(&state, reviewed, &profile)?;
+            println!(
+                "{}",
+                serde_json::json!({"schema_version":1,"quarantine_cleared":true,
+                "worker_started":false,"readiness_proven":false,"reservation":false})
+            );
+        }
+        None => {
+            let observed = observe_quarantine(&state, &profile)?;
+            println!(
+                "{}",
+                serde_json::json!({"schema_version":1,"phase":observed.phase,
+                "failed_stage":observed.record.failed_stage,"candidate":observed.record.candidate,
+                "incident_id":observed.record.incident_id,
+                "current_model":observed.current_profile.as_ref().map(|p| &p.id),
+                "manual_only":observed.clearable && observed.current_profile.is_none(),
+                "review_sha256":observed.review,"clearable":observed.clearable,
+                "worker_started":false,"mutation_performed":false})
+            );
+        }
+        _ => return Err("unsupported model quarantine reconciliation".into()),
+    }
+    Ok(())
+}
+
 fn legacy_configuration_at(state: &Path) -> Result<Profile> {
     activation_absent(state)?;
     let p = selected_at(state)?;
@@ -1578,6 +2116,7 @@ fn preflight_at(
 ) -> Result<()> {
     let state = var.join(STATE);
     activation_absent(&state)?;
+    validate_rollback_slot(&state)?;
     let metadata = fs::symlink_metadata(&state)?;
     if !metadata.is_dir() || metadata.uid() != 0 || metadata.mode() & 0o022 != 0 {
         return Err("unsafe model preflight state directory".into());
@@ -1685,29 +2224,46 @@ pub fn install(id: &str) -> Result<()> {
         || command("/usr/bin/systemctl", &["stop", "luma-model.service"]).map(|_| ()),
         || activate_cached(Path::new(VAR), &p),
         || {
-            command("/usr/bin/systemctl", &["daemon-reload"])?;
-            command(
-                "/usr/bin/systemctl",
-                &["restart", "luma-model.service", "luma-reference.service"],
-            )?;
-            // A successful systemd job is not listener readiness. Keep the
-            // bounded health check independent of model-generated output.
-            command(
-                "/usr/bin/python3",
-                &["-I", "/usr/libexec/luma-os/model-health.py"],
-            )?;
-            if running_prior(Path::new(VAR))?
-                .as_ref()
-                .map(|current| current.profile.id.as_str())
-                != Some(p.id.as_str())
-            {
-                return Err("model listener responded but selected worker is not running".into());
-            }
-            command(
-                "/usr/bin/systemctl",
-                &["is-active", "--quiet", "luma-reference.service"],
-            )?;
-            Ok(())
+            finish_reconfiguration(
+                || {
+                    checked_restart_steps(|stage| match stage {
+                        RestartStage::Reload => {
+                            command("/usr/bin/systemctl", &["daemon-reload"]).map(|_| ())
+                        }
+                        RestartStage::Restart => command(
+                            "/usr/bin/systemctl",
+                            &["restart", "luma-model.service", "luma-reference.service"],
+                        )
+                        .map(|_| ()),
+                        // A successful systemd job is not listener readiness.
+                        RestartStage::Health => command(
+                            "/usr/bin/python3",
+                            &["-I", "/usr/libexec/luma-os/model-health.py"],
+                        )
+                        .map(|_| ()),
+                        RestartStage::Worker => {
+                            if running_prior(Path::new(VAR))?
+                                .as_ref()
+                                .map(|current| current.profile.id.as_str())
+                                != Some(p.id.as_str())
+                            {
+                                return Err(
+                                    "model listener responded but selected worker is not running"
+                                        .into(),
+                                );
+                            }
+                            Ok(())
+                        }
+                        RestartStage::Reference => command(
+                            "/usr/bin/systemctl",
+                            &["is-active", "--quiet", "luma-reference.service"],
+                        )
+                        .map(|_| ()),
+                    })
+                },
+                |stage| publish_quarantine(&Path::new(VAR).join(STATE), &p, stage),
+                || command("/usr/bin/systemctl", &["stop", "luma-model.service"]).map(|_| ()),
+            )
         },
         |prior| restore_prior(Path::new(VAR), prior),
     )
@@ -2516,6 +3072,8 @@ print('ISOLATED_MODEL_LOCK_PASSED')
         for path in [
             state.join(ACTIVATION),
             state.join(PRIOR_BACKUP),
+            state.join(ROLLBACK),
+            state.join(QUARANTINE),
             state.join(REFERENCE_ENV),
             state.join("model-selection.json"),
             state.join("model-auth/api-key"),
@@ -3231,6 +3789,1006 @@ print('MODEL_PRIOR_BACKUP_DAC_PASSED')
             );
         }
         activation_absent(&state).unwrap();
+        remove_activation_fixture(&root, &p);
+    }
+
+    fn completed_rollback_fixture(label: &str) -> (PathBuf, Profile, Profile) {
+        let (root, completed) = activation_fixture(label);
+        let state = root.join(STATE);
+        let mut prior = profile("qwen3-1-7b-q4-k-m").unwrap();
+        let weights = b"different small prior GGUF fixture";
+        prior.bytes = weights.len() as u64;
+        prior.sha256 = bundle::hex(&Sha256::digest(weights));
+        fs::write(
+            state.join("models").join(format!("{}.gguf", prior.id)),
+            weights,
+        )
+        .unwrap();
+        write_activation_candidate(&state, &prior);
+        let activation = begin_activation(&state, &completed).unwrap();
+        write_activation_candidate(&state, &completed);
+        finish_activation(&state, &completed, &activation).unwrap();
+        (root, completed, prior)
+    }
+
+    fn fixture_resolve(id: &str, completed: &Profile, prior: &Profile) -> Result<Profile> {
+        match id {
+            id if id == completed.id => Ok(completed.clone()),
+            id if id == prior.id => Ok(prior.clone()),
+            _ => Err("unknown fixture profile".into()),
+        }
+    }
+
+    fn remove_completed_rollback_fixture(root: &Path, completed: &Profile, prior: &Profile) {
+        fs::remove_file(
+            root.join(STATE)
+                .join("models")
+                .join(format!("{}.gguf", prior.id)),
+        )
+        .unwrap();
+        remove_activation_fixture(root, completed);
+    }
+
+    #[test]
+    fn completed_activation_retains_one_private_bound_rollback_record() {
+        let (root, completed, prior) = completed_rollback_fixture("completed-private");
+        let state = root.join(STATE);
+        activation_absent(&state).unwrap();
+        let bytes = rollback_bytes(&state).unwrap().unwrap();
+        let record = decode_rollback(&bytes).unwrap();
+        assert_eq!(record.completed_profile, completed.id);
+        assert_eq!(record.completed_weight_sha256, completed.sha256);
+        assert_eq!(record.prior.candidate, completed.id);
+        assert_eq!(
+            prior_restore_profile(&record.prior, |_| Ok(prior.clone()))
+                .unwrap()
+                .unwrap()
+                .id,
+            prior.id
+        );
+        let metadata = fs::symlink_metadata(state.join(ROLLBACK)).unwrap();
+        assert_eq!(
+            (metadata.uid(), metadata.nlink(), metadata.mode() & 0o777),
+            (0, 1, 0o600)
+        );
+        assert_eq!(
+            fs::read_dir(&state)
+                .unwrap()
+                .filter_map(|entry| {
+                    let entry = entry.unwrap();
+                    entry
+                        .file_name()
+                        .to_str()
+                        .filter(|name| name.starts_with("model-rollback"))
+                        .map(str::to_owned)
+                })
+                .collect::<Vec<_>>(),
+            [ROLLBACK]
+        );
+        let observed =
+            observe_rollback(&state, &|id| fixture_resolve(id, &completed, &prior)).unwrap();
+        assert!(observed.restorable);
+        remove_completed_rollback_fixture(&root, &completed, &prior);
+    }
+
+    #[test]
+    fn reviewed_completed_rollback_restores_different_profile_and_consumes_record() {
+        let (root, completed, prior) = completed_rollback_fixture("completed-restore");
+        let state = root.join(STATE);
+        fs::write(state.join("model-disabled"), b"recovery remains disabled").unwrap();
+        let resolve = |id: &str| fixture_resolve(id, &completed, &prior);
+        let observed = observe_rollback(&state, &resolve).unwrap();
+        assert!(reviewed_completed_rollback(&state, &"00".repeat(32), &resolve).is_err());
+        activation_absent(&state).unwrap();
+        reviewed_completed_rollback(&state, &observed.review, &resolve).unwrap();
+        activation_absent(&state).unwrap();
+        assert!(rollback_bytes(&state).unwrap().is_none());
+        assert!(reviewed_completed_rollback(&state, &observed.review, &resolve).is_err());
+        assert_eq!(
+            activation_snapshot(&state).unwrap(),
+            (
+                observed.record.prior.selection,
+                observed.record.prior.environment,
+                observed.record.prior.key
+            )
+        );
+        assert_eq!(
+            fs::read(state.join("model-disabled")).unwrap(),
+            b"recovery remains disabled"
+        );
+        for (name, mode, group) in [
+            ("model-auth/api-key", 0o640, 989),
+            (REFERENCE_ENV, 0o640, 990),
+            ("model-selection.json", 0o644, 0),
+        ] {
+            let metadata = fs::metadata(state.join(name)).unwrap();
+            assert_eq!(
+                (metadata.mode() & 0o777, metadata.uid(), metadata.gid()),
+                (mode, 0, group)
+            );
+        }
+        verify_file(
+            &state.join("models").join(format!("{}.gguf", completed.id)),
+            &completed,
+        )
+        .unwrap();
+        verify_file(
+            &state.join("models").join(format!("{}.gguf", prior.id)),
+            &prior,
+        )
+        .unwrap();
+        fs::remove_file(state.join("model-disabled")).unwrap();
+        remove_completed_rollback_fixture(&root, &completed, &prior);
+    }
+
+    #[test]
+    fn reviewed_completed_rollback_restores_manual_only_without_deleting_weights() {
+        let (root, completed) = activation_fixture("completed-manual");
+        let state = root.join(STATE);
+        let activation = begin_activation(&state, &completed).unwrap();
+        write_activation_candidate(&state, &completed);
+        finish_activation(&state, &completed, &activation).unwrap();
+        let resolve = |_: &str| Ok(completed.clone());
+        let observed = observe_rollback(&state, &resolve).unwrap();
+        assert!(observed.restorable && observed.prior.is_none());
+        reviewed_completed_rollback(&state, &observed.review, &resolve).unwrap();
+        assert_eq!(activation_snapshot(&state).unwrap(), (None, None, None));
+        activation_absent(&state).unwrap();
+        verify_file(
+            &state.join("models").join(format!("{}.gguf", completed.id)),
+            &completed,
+        )
+        .unwrap();
+        remove_activation_fixture(&root, &completed);
+    }
+
+    #[test]
+    fn completed_rollback_refuses_stale_configuration_and_bad_prior_weights() {
+        let (root, completed, prior) = completed_rollback_fixture("completed-stale");
+        let state = root.join(STATE);
+        let resolve = |id: &str| fixture_resolve(id, &completed, &prior);
+        let observed = observe_rollback(&state, &resolve).unwrap();
+        let original = activation_snapshot(&state).unwrap();
+        fs::write(state.join(REFERENCE_ENV), b"changed after review").unwrap();
+        let changed = observe_rollback(&state, &resolve).unwrap();
+        assert_eq!(changed.phase, "completed_configuration_changed");
+        assert_ne!(changed.review, observed.review);
+        assert!(reviewed_completed_rollback(&state, &observed.review, &resolve).is_err());
+        activation_absent(&state).unwrap();
+        fs::write(state.join(REFERENCE_ENV), original.1.as_ref().unwrap()).unwrap();
+        let weights = state.join("models").join(format!("{}.gguf", prior.id));
+        let original_weight = fs::read(&weights).unwrap();
+        fs::write(&weights, b"bad prior weights").unwrap();
+        assert_eq!(
+            observe_rollback(&state, &resolve).unwrap().phase,
+            "prior_configuration_or_weights_unavailable"
+        );
+        assert!(reviewed_completed_rollback(&state, &observed.review, &resolve).is_err());
+        activation_absent(&state).unwrap();
+        assert_eq!(activation_snapshot(&state).unwrap(), original);
+        fs::write(&weights, original_weight).unwrap();
+        // A broken current candidate is a reason to undo; only prior weights
+        // must be usable, not the model being replaced.
+        fs::write(
+            state.join("models").join(format!("{}.gguf", completed.id)),
+            b"broken current model",
+        )
+        .unwrap();
+        reviewed_completed_rollback(&state, &observed.review, &resolve).unwrap();
+        activation_absent(&state).unwrap();
+        remove_completed_rollback_fixture(&root, &completed, &prior);
+    }
+
+    #[test]
+    fn completed_rollback_refuses_unsafe_missing_or_substituted_records() {
+        for kind in [
+            "missing",
+            "malformed",
+            "public",
+            "symlink",
+            "hardlink",
+            "oversized",
+            "substituted",
+        ] {
+            let (root, completed, prior) =
+                completed_rollback_fixture(&format!("completed-unsafe-{kind}"));
+            let state = root.join(STATE);
+            let resolve = |id: &str| fixture_resolve(id, &completed, &prior);
+            let observed = observe_rollback(&state, &resolve).unwrap();
+            let original = activation_snapshot(&state).unwrap();
+            let path = state.join(ROLLBACK);
+            match kind {
+                "missing" => fs::remove_file(&path).unwrap(),
+                "malformed" => fs::write(&path, b"{}").unwrap(),
+                "public" => fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap(),
+                "symlink" => {
+                    fs::remove_file(&path).unwrap();
+                    std::os::unix::fs::symlink(state.join("model-auth/api-key"), &path).unwrap();
+                }
+                "hardlink" => {
+                    fs::remove_file(&path).unwrap();
+                    fs::hard_link(state.join("model-auth/api-key"), &path).unwrap();
+                }
+                "oversized" => fs::write(&path, vec![b' '; MAX_ROLLBACK as usize + 1]).unwrap(),
+                "substituted" => {
+                    let mut record = decode_rollback(&observed.bytes).unwrap();
+                    record.completed_marker_sha256 = "bb".repeat(32);
+                    fs::write(&path, serde_json::to_vec(&record).unwrap()).unwrap();
+                }
+                _ => unreachable!(),
+            }
+            assert!(reviewed_completed_rollback(&state, &observed.review, &resolve).is_err());
+            activation_absent(&state).unwrap();
+            if kind == "hardlink" {
+                fs::remove_file(&path).unwrap();
+            }
+            assert_eq!(activation_snapshot(&state).unwrap(), original);
+            remove_completed_rollback_fixture(&root, &completed, &prior);
+        }
+    }
+
+    #[test]
+    fn completed_rollback_publication_failure_retains_activation_and_unknown_archive() {
+        let (root, completed) = activation_fixture("completed-publication-fail");
+        let state = root.join(STATE);
+        let activation = begin_activation(&state, &completed).unwrap();
+        write_activation_candidate(&state, &completed);
+        let path = state.join(ROLLBACK);
+        fs::write(&path, b"unknown retained archive").unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+        assert!(finish_activation(&state, &completed, &activation).is_err());
+        assert!(activation_absent(&state).is_err());
+        assert_eq!(fs::read(&path).unwrap(), b"unknown retained archive");
+        assert!(bound_prior_backup(&state, &activation).unwrap().is_some());
+        remove_activation_fixture(&root, &completed);
+    }
+
+    #[test]
+    fn completed_rollback_publication_is_retryable_before_pending_clearance() {
+        let (root, completed) = activation_fixture("completed-publication-retry");
+        let state = root.join(STATE);
+        let activation = begin_activation(&state, &completed).unwrap();
+        write_activation_candidate(&state, &completed);
+        let observed = observe_activation(&state, &completed, true).unwrap();
+        assert_eq!(observed.record, activation);
+        retain_completed_prior(&state, &completed, &observed).unwrap();
+        let retained = rollback_bytes(&state).unwrap();
+        assert!(activation_absent(&state).is_err());
+        assert!(observe_rollback(&state, &|_| Ok(completed.clone())).is_err());
+        reviewed_clear_activation(&state, &completed, "--publish-committed", &observed.review)
+            .unwrap();
+        activation_absent(&state).unwrap();
+        assert_eq!(rollback_bytes(&state).unwrap(), retained);
+        assert!(
+            observe_rollback(&state, &|_| Ok(completed.clone()))
+                .unwrap()
+                .restorable
+        );
+        remove_activation_fixture(&root, &completed);
+    }
+
+    #[test]
+    fn interrupted_completed_rollback_is_fenced_and_can_restore_pre_rollback_candidate() {
+        for writes in 1..=3 {
+            let (root, completed, prior) =
+                completed_rollback_fixture(&format!("completed-interrupted-{writes}"));
+            let state = root.join(STATE);
+            let resolve = |id: &str| fixture_resolve(id, &completed, &prior);
+            let observed = observe_rollback(&state, &resolve).unwrap();
+            let before = activation_snapshot(&state).unwrap();
+            begin_activation(&state, &completed).unwrap();
+            restore_config_file(
+                &state.join("model-auth/api-key"),
+                &observed.record.prior.key,
+                0o640,
+                Some("0:989"),
+            )
+            .unwrap();
+            if writes >= 2 {
+                restore_config_file(
+                    &state.join(REFERENCE_ENV),
+                    &observed.record.prior.environment,
+                    0o640,
+                    Some("0:990"),
+                )
+                .unwrap();
+            }
+            if writes >= 3 {
+                restore_config_file(
+                    &state.join("model-selection.json"),
+                    &observed.record.prior.selection,
+                    0o644,
+                    None,
+                )
+                .unwrap();
+            }
+            assert!(observe_rollback(&state, &resolve).is_err());
+            assert!(reviewed_completed_rollback(&state, &observed.review, &resolve).is_err());
+            let pending = observe_activation(&state, &completed, true).unwrap();
+            reviewed_restore_configuration(&state, &completed, &pending.review, |_| {
+                Ok(completed.clone())
+            })
+            .unwrap();
+            activation_absent(&state).unwrap();
+            assert_eq!(activation_snapshot(&state).unwrap(), before);
+            let fresh = observe_rollback(&state, &resolve).unwrap();
+            reviewed_completed_rollback(&state, &fresh.review, &resolve).unwrap();
+            remove_completed_rollback_fixture(&root, &completed, &prior);
+        }
+    }
+
+    #[test]
+    fn interrupted_rollback_consumption_keeps_pre_rollback_recovery_bytes() {
+        let (root, completed, prior) = completed_rollback_fixture("completed-consume-interrupted");
+        let state = root.join(STATE);
+        let observed =
+            observe_rollback(&state, &|id| fixture_resolve(id, &completed, &prior)).unwrap();
+        let before = activation_snapshot(&state).unwrap();
+        begin_activation(&state, &completed).unwrap();
+        write_prior_configuration(&state, &observed.record.prior).unwrap();
+        fs::remove_file(state.join(ROLLBACK)).unwrap();
+        assert!(activation_absent(&state).is_err());
+        let pending = observe_activation(&state, &completed, true).unwrap();
+        reviewed_restore_configuration(&state, &completed, &pending.review, |_| {
+            Ok(completed.clone())
+        })
+        .unwrap();
+        assert_eq!(activation_snapshot(&state).unwrap(), before);
+        activation_absent(&state).unwrap();
+        assert!(rollback_bytes(&state).unwrap().is_none());
+        remove_completed_rollback_fixture(&root, &completed, &prior);
+    }
+
+    #[test]
+    fn completed_rollback_retention_is_bounded_to_latest_activation() {
+        let (root, completed, prior) = completed_rollback_fixture("completed-replace");
+        let state = root.join(STATE);
+        let resolve = |id: &str| fixture_resolve(id, &completed, &prior);
+        let old = observe_rollback(&state, &resolve).unwrap();
+        let expected = activation_snapshot(&state).unwrap();
+        let activation = begin_activation(&state, &completed).unwrap();
+        let token = "b".repeat(64);
+        fs::write(state.join("model-auth/api-key"), &token).unwrap();
+        fs::write(
+            state.join(REFERENCE_ENV),
+            reference_environment(&completed, &token),
+        )
+        .unwrap();
+        finish_activation(&state, &completed, &activation).unwrap();
+        assert!(reviewed_completed_rollback(&state, &old.review, &resolve).is_err());
+        let fresh = observe_rollback(&state, &resolve).unwrap();
+        assert_ne!(fresh.bytes, old.bytes);
+        assert_eq!(fresh.prior.as_ref().unwrap().id, completed.id);
+        reviewed_completed_rollback(&state, &fresh.review, &resolve).unwrap();
+        assert_eq!(activation_snapshot(&state).unwrap(), expected);
+        remove_completed_rollback_fixture(&root, &completed, &prior);
+    }
+
+    #[test]
+    fn completed_rollback_refuses_invalid_prior_and_changed_catalog_pin() {
+        let (root, completed, prior) = completed_rollback_fixture("completed-catalog");
+        let state = root.join(STATE);
+        let resolve = |id: &str| fixture_resolve(id, &completed, &prior);
+        let observed = observe_rollback(&state, &resolve).unwrap();
+        let before = activation_snapshot(&state).unwrap();
+        assert!(
+            reviewed_completed_rollback(&state, &observed.review, &|id| {
+                let mut p = resolve(id)?;
+                if id == completed.id {
+                    p.sha256 = "aa".repeat(32);
+                }
+                Ok(p)
+            })
+            .is_err()
+        );
+        let mut record = decode_rollback(&observed.bytes).unwrap();
+        let mut changed_catalog = decode_rollback(&observed.bytes).unwrap();
+        changed_catalog.catalog_sha256 = "aa".repeat(32);
+        fs::write(
+            state.join(ROLLBACK),
+            serde_json::to_vec(&changed_catalog).unwrap(),
+        )
+        .unwrap();
+        assert!(reviewed_completed_rollback(&state, &observed.review, &resolve).is_err());
+        record.prior.environment = None;
+        fs::write(state.join(ROLLBACK), serde_json::to_vec(&record).unwrap()).unwrap();
+        let invalid = observe_rollback(&state, &resolve).unwrap();
+        assert!(!invalid.restorable);
+        assert!(reviewed_completed_rollback(&state, &invalid.review, &resolve).is_err());
+        activation_absent(&state).unwrap();
+        assert_eq!(activation_snapshot(&state).unwrap(), before);
+        remove_completed_rollback_fixture(&root, &completed, &prior);
+    }
+
+    #[test]
+    fn completed_rollback_rechecks_reviewed_configuration_at_fence_creation() {
+        let (root, completed, prior) = completed_rollback_fixture("completed-fence-race");
+        let state = root.join(STATE);
+        let observed =
+            observe_rollback(&state, &|id| fixture_resolve(id, &completed, &prior)).unwrap();
+        let calls = std::cell::Cell::new(0);
+        let result = reviewed_completed_rollback(&state, &observed.review, &|id| {
+            calls.set(calls.get() + 1);
+            if calls.get() == 4 {
+                fs::write(
+                    state.join(REFERENCE_ENV),
+                    b"configuration changed after snapshot",
+                )?;
+            }
+            fixture_resolve(id, &completed, &prior)
+        });
+        assert!(result.is_err());
+        assert!(activation_absent(&state).is_err());
+        assert_eq!(
+            fs::read(state.join(REFERENCE_ENV)).unwrap(),
+            b"configuration changed after snapshot"
+        );
+        assert_eq!(rollback_bytes(&state).unwrap().unwrap(), observed.bytes);
+        let pending = observe_activation(&state, &completed, true).unwrap();
+        assert_eq!(pending.phase, "unchanged_prior_state");
+        remove_completed_rollback_fixture(&root, &completed, &prior);
+    }
+
+    #[test]
+    fn completed_rollback_archive_is_not_readable_or_removable_by_worker_uid() {
+        let (root, completed, prior) = completed_rollback_fixture("completed-private-dac");
+        let state = root.join(STATE);
+        for directory in [&root, state.parent().unwrap(), &state] {
+            fs::set_permissions(directory, fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let mut child = Command::new("/usr/bin/python3");
+        child
+            .args([
+                "-I",
+                "-c",
+                r#"
+import os, stat, sys
+assert os.geteuid() == 989 and os.getgroups() == []
+path = sys.argv[1]
+assert stat.S_IMODE(os.stat(path).st_mode) == 0o600
+for action in (lambda: os.open(path, os.O_RDONLY | os.O_NOFOLLOW), lambda: os.unlink(path)):
+    try:
+        action()
+    except PermissionError:
+        pass
+    else:
+        raise RuntimeError('worker accessed private completed rollback archive')
+print('MODEL_COMPLETED_ROLLBACK_DAC_PASSED')
+"#,
+            ])
+            .arg(state.join(ROLLBACK));
+        unsafe {
+            child.pre_exec(|| {
+                if libc::setgroups(0, std::ptr::null()) != 0
+                    || libc::setgid(989) != 0
+                    || libc::setuid(989) != 0
+                {
+                    return Err(std::io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
+        let output = child.output().unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(output.stdout, b"MODEL_COMPLETED_ROLLBACK_DAC_PASSED\n");
+        assert!(rollback_bytes(&state).unwrap().is_some());
+        remove_completed_rollback_fixture(&root, &completed, &prior);
+    }
+
+    #[test]
+    fn legacy_marker_clearance_does_not_invent_completed_rollback_bytes() {
+        let (root, completed) = activation_fixture("completed-legacy-marker");
+        let state = root.join(STATE);
+        let mut activation = begin_activation(&state, &completed).unwrap();
+        activation.schema_version = 1;
+        activation.prior_backup_sha256 = None;
+        fs::remove_file(state.join(PRIOR_BACKUP)).unwrap();
+        fs::write(
+            state.join(ACTIVATION),
+            serde_json::to_vec(&activation).unwrap(),
+        )
+        .unwrap();
+        write_activation_candidate(&state, &completed);
+        finish_activation(&state, &completed, &activation).unwrap();
+        activation_absent(&state).unwrap();
+        assert!(rollback_bytes(&state).unwrap().is_none());
+        assert!(observe_rollback(&state, &|_| Ok(completed.clone())).is_err());
+        remove_activation_fixture(&root, &completed);
+    }
+
+    #[test]
+    fn unsafe_completed_rollback_slot_refuses_preflight_and_new_fence() {
+        let (root, completed) = activation_fixture("completed-preflight");
+        let state = root.join(STATE);
+        fs::write(state.join(ROLLBACK), b"unknown retained archive").unwrap();
+        fs::set_permissions(state.join(ROLLBACK), fs::Permissions::from_mode(0o600)).unwrap();
+        let admitted = std::cell::Cell::new(false);
+        assert!(preflight_at(&root, &completed, |_, _, _| {
+            admitted.set(true);
+            Ok(())
+        })
+        .is_err());
+        assert!(!admitted.get());
+        assert!(begin_activation(&state, &completed).is_err());
+        activation_absent(&state).unwrap();
+        assert_eq!(
+            fs::read(state.join(ROLLBACK)).unwrap(),
+            b"unknown retained archive"
+        );
+        remove_activation_fixture(&root, &completed);
+    }
+
+    #[test]
+    fn private_recovery_parse_errors_never_echo_supplied_secret_values() {
+        let secret = "private-model-credential-do-not-log";
+        let malformed = format!(r#"{{"schema_version":"{secret}"}}"#);
+        let prior_error = match decode_prior_backup(malformed.as_bytes()) {
+            Err(error) => error.to_string(),
+            Ok(_) => panic!("invalid private backup accepted"),
+        };
+        let rollback_error = match decode_rollback(malformed.as_bytes()) {
+            Err(error) => error.to_string(),
+            Ok(_) => panic!("invalid private rollback accepted"),
+        };
+        let backup = PriorBackup {
+            schema_version: 1,
+            candidate: "qwen3-4b-q4-k-m".into(),
+            selection: Some(malformed.into_bytes()),
+            environment: Some(vec![]),
+            key: Some(vec![]),
+        };
+        let selection_error = prior_restore_profile(&backup, profile)
+            .unwrap_err()
+            .to_string();
+        for error in [prior_error, rollback_error, selection_error] {
+            assert!(!error.contains(secret));
+            assert!(error.contains("preserve state"));
+        }
+    }
+
+    #[test]
+    fn checked_restart_stops_at_each_failed_stage_and_does_not_claim_success() {
+        let stages = [
+            RestartStage::Reload,
+            RestartStage::Restart,
+            RestartStage::Health,
+            RestartStage::Worker,
+            RestartStage::Reference,
+        ];
+        for (index, failed) in stages.into_iter().enumerate() {
+            let mut called = vec![];
+            let error = checked_restart_steps(|stage| {
+                called.push(stage);
+                if stage == failed {
+                    Err("injected restart failure".into())
+                } else {
+                    Ok(())
+                }
+            })
+            .unwrap_err();
+            assert_eq!(error.stage, failed);
+            assert_eq!(called, stages[..=index]);
+        }
+        let fenced = std::cell::Cell::new(false);
+        let stopped = std::cell::Cell::new(false);
+        assert!(finish_reconfiguration(
+            || checked_restart_steps(|_| Ok(())),
+            |_| {
+                fenced.set(true);
+                Ok(())
+            },
+            || {
+                stopped.set(true);
+                Ok(())
+            }
+        )
+        .is_ok());
+        assert!(!fenced.get() && !stopped.get());
+    }
+
+    #[test]
+    fn observed_reconfiguration_failures_publish_quarantine_before_stop() {
+        for failed in [
+            RestartStage::Reload,
+            RestartStage::Restart,
+            RestartStage::Health,
+            RestartStage::Worker,
+            RestartStage::Reference,
+        ] {
+            let (root, completed, prior) =
+                completed_rollback_fixture(&format!("quarantine-{failed:?}"));
+            let state = root.join(STATE);
+            let snapshot = activation_snapshot(&state).unwrap();
+            let rollback = rollback_bytes(&state).unwrap();
+            let calls = std::cell::RefCell::new(vec![]);
+            let error = finish_reconfiguration(
+                || {
+                    checked_restart_steps(|stage| {
+                        if stage == failed {
+                            Err("injected-private-diagnostic-never-persist".into())
+                        } else {
+                            Ok(())
+                        }
+                    })
+                },
+                |stage| {
+                    calls.borrow_mut().push("fence");
+                    publish_quarantine(&state, &completed, stage)
+                },
+                || {
+                    calls.borrow_mut().push("stop");
+                    assert!(activation_absent(&state).is_err());
+                    let observed =
+                        observe_quarantine(&state, &|id| fixture_resolve(id, &completed, &prior))?;
+                    assert_eq!(observed.record.failed_stage, failed);
+                    assert!(!String::from_utf8_lossy(&observed.bytes)
+                        .contains("injected-private-diagnostic"));
+                    Ok(())
+                },
+            )
+            .unwrap_err()
+            .to_string();
+            assert_eq!(*calls.borrow(), ["fence", "stop"]);
+            assert!(error.contains("durable model quarantine published"));
+            assert!(error.contains("no rollback or readiness claimed"));
+            assert_eq!(activation_snapshot(&state).unwrap(), snapshot);
+            assert_eq!(rollback_bytes(&state).unwrap(), rollback);
+            let metadata = fs::metadata(state.join(QUARANTINE)).unwrap();
+            assert_eq!(
+                (metadata.uid(), metadata.nlink(), metadata.mode() & 0o777),
+                (0, 1, 0o600)
+            );
+            assert!(preflight_at(&root, &completed, |_, _, _| Ok(())).is_err());
+            assert!(begin_activation(&state, &completed).is_err());
+            activation_records_absent(&state).unwrap();
+            remove_completed_rollback_fixture(&root, &completed, &prior);
+        }
+    }
+
+    #[test]
+    fn failed_quarantine_publication_still_attempts_stop_without_overwriting_unknown_state() {
+        let (root, p) = activation_fixture("quarantine-publication-fail");
+        let state = root.join(STATE);
+        fs::write(state.join(QUARANTINE), b"unknown prior quarantine").unwrap();
+        fs::set_permissions(state.join(QUARANTINE), fs::Permissions::from_mode(0o600)).unwrap();
+        let stopped = std::cell::Cell::new(false);
+        let error = finish_reconfiguration(
+            || {
+                Err(RestartFailure {
+                    stage: RestartStage::Health,
+                    error: "health failed".into(),
+                })
+            },
+            |stage| publish_quarantine(&state, &p, stage),
+            || {
+                stopped.set(true);
+                Ok(())
+            },
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(stopped.get());
+        assert!(error.contains("quarantine publication failed"));
+        assert_eq!(
+            quarantine_bytes(&state).unwrap().unwrap(),
+            b"unknown prior quarantine"
+        );
+        assert!(activation_absent(&state).is_err());
+        assert!(observe_quarantine(&state, &|_| Ok(p.clone())).is_err());
+        remove_activation_fixture(&root, &p);
+    }
+
+    #[test]
+    fn failed_stop_keeps_durable_quarantine_and_live_runtime_exclusion() {
+        let (root, p) = activation_fixture("quarantine-stop-fail");
+        let state = root.join(STATE);
+        write_activation_candidate(&state, &p);
+        let runtime = runtime_lock(&root, true).unwrap();
+        let error = finish_reconfiguration(
+            || {
+                Err(RestartFailure {
+                    stage: RestartStage::Worker,
+                    error: "worker state failed".into(),
+                })
+            },
+            |stage| publish_quarantine(&state, &p, stage),
+            || Err("worker did not stop".into()),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains("worker stop request failed"));
+        assert!(quarantine_bytes(&state).unwrap().is_some());
+        assert!(activation_absent(&state).is_err());
+        assert!(runtime_lock(&root, false).is_err());
+        drop(runtime);
+        let observed = observe_quarantine(&state, &|_| Ok(p.clone())).unwrap();
+        reviewed_clear_quarantine(&state, &observed.review, &|_| Ok(p.clone())).unwrap();
+        activation_absent(&state).unwrap();
+        fs::remove_file(state.join("model-runtime.lock")).unwrap();
+        remove_activation_fixture(&root, &p);
+    }
+
+    #[test]
+    fn quarantine_review_rejects_stale_configuration_and_preserves_recovery_disablement() {
+        let (root, p) = activation_fixture("quarantine-review");
+        let state = root.join(STATE);
+        write_activation_candidate(&state, &p);
+        fs::write(
+            state.join("model-disabled"),
+            b"operator recovery disablement",
+        )
+        .unwrap();
+        publish_quarantine(&state, &p, RestartStage::Health).unwrap();
+        let observed = observe_quarantine(&state, &|_| Ok(p.clone())).unwrap();
+        assert!(reviewed_clear_quarantine(&state, &"00".repeat(32), &|_| Ok(p.clone())).is_err());
+        let token = "b".repeat(64);
+        fs::write(state.join("model-auth/api-key"), &token).unwrap();
+        fs::write(state.join(REFERENCE_ENV), reference_environment(&p, &token)).unwrap();
+        assert!(reviewed_clear_quarantine(&state, &observed.review, &|_| Ok(p.clone())).is_err());
+        let fresh = observe_quarantine(&state, &|_| Ok(p.clone())).unwrap();
+        assert!(fresh.clearable);
+        assert_ne!(fresh.review, observed.review);
+        let before = activation_snapshot(&state).unwrap();
+        reviewed_clear_quarantine(&state, &fresh.review, &|_| Ok(p.clone())).unwrap();
+        assert_eq!(activation_snapshot(&state).unwrap(), before);
+        assert_eq!(
+            fs::read(state.join("model-disabled")).unwrap(),
+            b"operator recovery disablement"
+        );
+        fs::remove_file(state.join("model-disabled")).unwrap();
+        remove_activation_fixture(&root, &p);
+    }
+
+    #[test]
+    fn quarantine_incident_identity_prevents_old_review_reuse_for_identical_failure() {
+        let (root, p) = activation_fixture("quarantine-incident");
+        let state = root.join(STATE);
+        write_activation_candidate(&state, &p);
+        publish_quarantine(&state, &p, RestartStage::Health).unwrap();
+        let first = observe_quarantine(&state, &|_| Ok(p.clone())).unwrap();
+        reviewed_clear_quarantine(&state, &first.review, &|_| Ok(p.clone())).unwrap();
+        publish_quarantine(&state, &p, RestartStage::Health).unwrap();
+        let next = observe_quarantine(&state, &|_| Ok(p.clone())).unwrap();
+        assert_eq!(first.hashes, next.hashes);
+        assert_ne!(first.record.incident_id, next.record.incident_id);
+        assert_ne!(first.review, next.review);
+        assert!(reviewed_clear_quarantine(&state, &first.review, &|_| Ok(p.clone())).is_err());
+        assert_eq!(quarantine_bytes(&state).unwrap().unwrap(), next.bytes);
+        reviewed_clear_quarantine(&state, &next.review, &|_| Ok(p.clone())).unwrap();
+        remove_activation_fixture(&root, &p);
+    }
+
+    #[test]
+    fn quarantine_does_not_clear_inconsistent_configuration_or_bad_weights() {
+        let (root, p) = activation_fixture("quarantine-invalid-current");
+        let state = root.join(STATE);
+        write_activation_candidate(&state, &p);
+        publish_quarantine(&state, &p, RestartStage::Worker).unwrap();
+        let observed = observe_quarantine(&state, &|_| Ok(p.clone())).unwrap();
+        let weights = state.join("models").join(format!("{}.gguf", p.id));
+        let original = fs::read(&weights).unwrap();
+        fs::write(&weights, b"bad selected weights").unwrap();
+        let bad = observe_quarantine(&state, &|_| Ok(p.clone())).unwrap();
+        assert!(!bad.clearable);
+        assert_eq!(bad.phase, "configuration_or_weights_unavailable");
+        assert!(reviewed_clear_quarantine(&state, &observed.review, &|_| Ok(p.clone())).is_err());
+        fs::write(&weights, original).unwrap();
+        fs::write(state.join(REFERENCE_ENV), b"inconsistent environment").unwrap();
+        let inconsistent = observe_quarantine(&state, &|_| Ok(p.clone())).unwrap();
+        assert!(!inconsistent.clearable);
+        assert!(
+            reviewed_clear_quarantine(&state, &inconsistent.review, &|_| Ok(p.clone())).is_err()
+        );
+        assert!(quarantine_bytes(&state).unwrap().is_some());
+        remove_activation_fixture(&root, &p);
+    }
+
+    #[test]
+    fn manual_only_quarantine_clearance_does_not_materialize_a_model_or_delete_cache() {
+        let (root, p) = activation_fixture("quarantine-manual");
+        let state = root.join(STATE);
+        publish_quarantine(&state, &p, RestartStage::Reload).unwrap();
+        let observed = observe_quarantine(&state, &|_| Ok(p.clone())).unwrap();
+        assert!(observed.clearable && observed.current_profile.is_none());
+        assert_eq!(observed.phase, "manual_only_configuration");
+        reviewed_clear_quarantine(&state, &observed.review, &|_| Ok(p.clone())).unwrap();
+        assert_eq!(activation_snapshot(&state).unwrap(), (None, None, None));
+        verify_file(&state.join("models").join(format!("{}.gguf", p.id)), &p).unwrap();
+        remove_activation_fixture(&root, &p);
+    }
+
+    #[test]
+    fn reviewed_completed_rollback_under_quarantine_preserves_both_independent_fences() {
+        let (root, completed, prior) = completed_rollback_fixture("quarantine-rollback");
+        let state = root.join(STATE);
+        let resolve = |id: &str| fixture_resolve(id, &completed, &prior);
+        publish_quarantine(&state, &completed, RestartStage::Health).unwrap();
+        let quarantine = quarantine_bytes(&state).unwrap();
+        fs::write(state.join("model-disabled"), b"disabled independently").unwrap();
+        let observed = observe_rollback(&state, &resolve).unwrap();
+        reviewed_completed_rollback(&state, &observed.review, &resolve).unwrap();
+        activation_records_absent(&state).unwrap();
+        assert!(activation_absent(&state).is_err());
+        assert_eq!(quarantine_bytes(&state).unwrap(), quarantine);
+        assert_eq!(selected_at(&state).unwrap().id, prior.id);
+        let fresh = observe_quarantine(&state, &resolve).unwrap();
+        assert_eq!(fresh.current_profile.as_ref().unwrap().id, prior.id);
+        reviewed_clear_quarantine(&state, &fresh.review, &resolve).unwrap();
+        activation_absent(&state).unwrap();
+        assert_eq!(
+            fs::read(state.join("model-disabled")).unwrap(),
+            b"disabled independently"
+        );
+        fs::remove_file(state.join("model-disabled")).unwrap();
+        remove_completed_rollback_fixture(&root, &completed, &prior);
+    }
+
+    #[test]
+    fn pending_restoration_under_quarantine_requires_activation_review_before_clearance() {
+        let (root, completed, prior) = completed_rollback_fixture("quarantine-pending");
+        let state = root.join(STATE);
+        let resolve = |id: &str| fixture_resolve(id, &completed, &prior);
+        publish_quarantine(&state, &completed, RestartStage::Restart).unwrap();
+        let quarantine = quarantine_bytes(&state).unwrap();
+        let before = activation_snapshot(&state).unwrap();
+        begin_activation_records(&state, &completed).unwrap();
+        fs::write(state.join(REFERENCE_ENV), b"interrupted rollback write").unwrap();
+        assert!(observe_quarantine(&state, &resolve).is_err());
+        let pending = observe_activation(&state, &completed, true).unwrap();
+        reviewed_restore_configuration(&state, &completed, &pending.review, |_| {
+            Ok(completed.clone())
+        })
+        .unwrap();
+        assert_eq!(activation_snapshot(&state).unwrap(), before);
+        assert_eq!(quarantine_bytes(&state).unwrap(), quarantine);
+        let fresh = observe_quarantine(&state, &resolve).unwrap();
+        reviewed_clear_quarantine(&state, &fresh.review, &resolve).unwrap();
+        remove_completed_rollback_fixture(&root, &completed, &prior);
+    }
+
+    #[test]
+    fn quarantine_refuses_unsafe_substituted_or_unknown_records_without_mutation() {
+        for kind in [
+            "missing",
+            "malformed",
+            "public",
+            "symlink",
+            "hardlink",
+            "oversized",
+            "catalog",
+            "incident",
+            "unknown-stage",
+            "noncanonical",
+        ] {
+            let (root, p) = activation_fixture(&format!("quarantine-unsafe-{kind}"));
+            let state = root.join(STATE);
+            write_activation_candidate(&state, &p);
+            publish_quarantine(&state, &p, RestartStage::Health).unwrap();
+            let observed = observe_quarantine(&state, &|_| Ok(p.clone())).unwrap();
+            let before = activation_snapshot(&state).unwrap();
+            let path = state.join(QUARANTINE);
+            match kind {
+                "missing" => fs::remove_file(&path).unwrap(),
+                "malformed" => fs::write(&path, b"{}").unwrap(),
+                "public" => fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap(),
+                "symlink" => {
+                    fs::remove_file(&path).unwrap();
+                    std::os::unix::fs::symlink(state.join("model-auth/api-key"), &path).unwrap();
+                }
+                "hardlink" => {
+                    fs::remove_file(&path).unwrap();
+                    fs::hard_link(state.join("model-auth/api-key"), &path).unwrap();
+                }
+                "oversized" => fs::write(&path, vec![b' '; 4097]).unwrap(),
+                "catalog" => {
+                    let mut record: Quarantine = serde_json::from_slice(&observed.bytes).unwrap();
+                    record.catalog_sha256 = "aa".repeat(32);
+                    fs::write(&path, serde_json::to_vec(&record).unwrap()).unwrap();
+                }
+                "incident" => {
+                    let mut record: Quarantine = serde_json::from_slice(&observed.bytes).unwrap();
+                    record.incident_id = "b".repeat(32);
+                    fs::write(&path, serde_json::to_vec(&record).unwrap()).unwrap();
+                }
+                "unknown-stage" => {
+                    let mut record: serde_json::Value =
+                        serde_json::from_slice(&observed.bytes).unwrap();
+                    record["failed_stage"] = "not-approved".into();
+                    fs::write(&path, serde_json::to_vec(&record).unwrap()).unwrap();
+                }
+                "noncanonical" => {
+                    let mut bytes = observed.bytes.clone();
+                    bytes.push(b'\n');
+                    fs::write(&path, bytes).unwrap();
+                }
+                _ => unreachable!(),
+            }
+            assert!(
+                reviewed_clear_quarantine(&state, &observed.review, &|_| Ok(p.clone())).is_err()
+            );
+            if kind != "missing" {
+                assert!(activation_absent(&state).is_err());
+            }
+            if kind == "hardlink" {
+                fs::remove_file(&path).unwrap();
+            }
+            assert_eq!(activation_snapshot(&state).unwrap(), before);
+            remove_activation_fixture(&root, &p);
+        }
+    }
+
+    #[test]
+    fn quarantine_inspection_rechecks_after_blocking_configuration_verification() {
+        let (root, p) = activation_fixture("quarantine-inspection-race");
+        let state = root.join(STATE);
+        write_activation_candidate(&state, &p);
+        publish_quarantine(&state, &p, RestartStage::Health).unwrap();
+        let calls = std::cell::Cell::new(0);
+        assert!(observe_quarantine(&state, &|_| {
+            calls.set(calls.get() + 1);
+            if calls.get() == 2 {
+                fs::write(state.join(REFERENCE_ENV), b"changed during verification")?;
+            }
+            Ok(p.clone())
+        })
+        .is_err());
+        assert!(activation_absent(&state).is_err());
+        assert!(quarantine_bytes(&state).unwrap().is_some());
+        remove_activation_fixture(&root, &p);
+    }
+
+    #[test]
+    fn isolated_worker_cannot_read_or_remove_quarantine_record() {
+        let (root, p) = activation_fixture("quarantine-private-dac");
+        let state = root.join(STATE);
+        for directory in [&root, state.parent().unwrap(), &state] {
+            fs::set_permissions(directory, fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        publish_quarantine(&state, &p, RestartStage::Health).unwrap();
+        let mut child = Command::new("/usr/bin/python3");
+        child
+            .args([
+                "-I",
+                "-c",
+                r#"
+import os, stat, sys
+assert os.geteuid() == 989 and os.getgroups() == []
+path = sys.argv[1]
+assert stat.S_IMODE(os.stat(path).st_mode) == 0o600
+for action in (lambda: os.open(path, os.O_RDONLY | os.O_NOFOLLOW), lambda: os.unlink(path)):
+    try:
+        action()
+    except PermissionError:
+        pass
+    else:
+        raise RuntimeError('worker accessed quarantine contents or removed its fence')
+print('MODEL_QUARANTINE_DAC_PASSED')
+"#,
+            ])
+            .arg(state.join(QUARANTINE));
+        unsafe {
+            child.pre_exec(|| {
+                if libc::setgroups(0, std::ptr::null()) != 0
+                    || libc::setgid(989) != 0
+                    || libc::setuid(989) != 0
+                {
+                    return Err(std::io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
+        let output = child.output().unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(output.stdout, b"MODEL_QUARANTINE_DAC_PASSED\n");
+        assert!(quarantine_bytes(&state).unwrap().is_some());
         remove_activation_fixture(&root, &p);
     }
 }

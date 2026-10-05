@@ -117,8 +117,8 @@ class ModelRuntimePolicyTests(unittest.TestCase):
     def test_reviewed_restore_verifies_prior_before_writes_and_never_restarts(self):
         source = (ROOT / 'rust/luma-platform/src/model.rs').read_text()
         restore = source.split('fn reviewed_restore_configuration(')[1].split('fn observe_orphan_backup(')[0]
-        self.assertLess(restore.index('verify_file('), restore.index('restore_config_file('))
-        self.assertLess(restore.index('restore_config_file('), restore.index('clear_activation('))
+        self.assertLess(restore.index('verify_file('), restore.index('write_prior_configuration('))
+        self.assertLess(restore.index('write_prior_configuration('), restore.index('clear_activation('))
         self.assertIn('current.review != observed.review', restore)
         self.assertNotIn('systemctl', restore)
         reconcile = source.split('pub fn activation_reconcile(')[1].split('fn legacy_configuration_at(')[0]
@@ -126,6 +126,71 @@ class ModelRuntimePolicyTests(unittest.TestCase):
             self.assertIn(flag, reconcile)
         for forbidden in ('"key":', '"environment":', '"backup":', 'systemctl'):
             self.assertNotIn(forbidden, reconcile)
+
+    def test_completed_rollback_is_retained_before_clearance_and_root_locked(self):
+        source = (ROOT / 'rust/luma-platform/src/model.rs').read_text()
+        finish = source.split('fn finish_activation(')[1].split('fn reviewed_clear_activation(')[0]
+        self.assertLess(finish.index('retain_completed_prior('), finish.index('clear_activation('))
+        reconcile = source.split('pub fn rollback_reconcile(')[1].split('fn legacy_configuration_at(')[0]
+        for check in ('require_root()?', 'require_installed()?', 'operation_lock(var)?',
+                      'runtime_lock(var, false)?', '"--restore-prior"'):
+            self.assertIn(check, reconcile)
+        for forbidden in ('"key":', '"environment":', '"prior":', 'systemctl'):
+            self.assertNotIn(forbidden, reconcile)
+        profile = (ROOT / 'native/image/overlay/etc/apparmor.d/luma-model').read_text()
+        self.assertNotIn('/var/lib/luma-os/model-rollback', profile)
+
+    def test_completed_rollback_fences_writes_and_consumes_before_clearance(self):
+        source = (ROOT / 'rust/luma-platform/src/model.rs').read_text()
+        restore = source.split('fn reviewed_completed_rollback(')[1].split('pub fn rollback_reconcile(')[0]
+        self.assertLess(restore.index('observe_rollback('), restore.index('begin_activation_records('))
+        self.assertLess(restore.index('begin_activation_records('), restore.index('write_prior_configuration('))
+        self.assertLess(restore.index('write_prior_configuration('), restore.index('verify_file('))
+        self.assertLess(restore.index('fs::remove_file(state.join(ROLLBACK))'),
+                        restore.index('clear_activation('))
+        for forbidden in ('systemctl', 'fetch(', 'remove_dir'):
+            self.assertNotIn(forbidden, restore)
+        main = (ROOT / 'rust/luma-platform/src/main.rs').read_text()
+        self.assertIn('Some("model-rollback-reconcile") if args.len() == 1', main)
+
+    def test_observed_restart_failure_is_fenced_before_managed_worker_stop(self):
+        source = (ROOT / 'rust/luma-platform/src/model.rs').read_text()
+        finish = source.split('fn finish_reconfiguration(')[1].split('struct Quarantine')[0]
+        self.assertLess(finish.index('fence(failure.stage)'), finish.index('stop()'))
+        install = source.split('pub fn install(id: &str)')[1].split('pub fn unit()')[0]
+        self.assertIn('finish_reconfiguration(', install)
+        self.assertIn('checked_restart_steps(', install)
+        self.assertIn('publish_quarantine(', install)
+        self.assertIn('"stop", "luma-model.service"', install)
+        self.assertNotIn('reviewed_clear_quarantine(', install)
+
+    def test_quarantine_fences_worker_and_normal_activation_but_not_reviewed_rollback(self):
+        source = (ROOT / 'rust/luma-platform/src/model.rs').read_text()
+        absent = source.split('fn activation_absent(')[1].split('fn checked_activation_bytes(')[0]
+        self.assertIn('state.join(QUARANTINE)', absent)
+        begin = source.split('fn begin_activation(')[1].split('fn begin_activation_records(')[0]
+        self.assertIn('activation_absent(state)?', begin)
+        rollback = source.split('fn reviewed_completed_rollback(')[1].split('pub fn rollback_reconcile(')[0]
+        self.assertIn('begin_activation_records(', rollback)
+        self.assertNotIn('remove_file(state.join(QUARANTINE))', rollback)
+        unit = (ROOT / 'native/image/overlay/etc/systemd/system/luma-model.service').read_text()
+        self.assertIn('ConditionPathExists=!/var/lib/luma-os/model-quarantine.json', unit)
+        profile = (ROOT / 'native/image/overlay/etc/apparmor.d/luma-model').read_text()
+        self.assertIn('/var/lib/luma-os/model-quarantine.json r,', profile)
+
+    def test_quarantine_clearance_is_explicit_root_locked_and_non_starting(self):
+        source = (ROOT / 'rust/luma-platform/src/model.rs').read_text()
+        reconcile = source.split('pub fn quarantine_reconcile(')[1].split('fn legacy_configuration_at(')[0]
+        for check in ('require_root()?', 'require_installed()?', 'operation_lock(var)?',
+                      'runtime_lock(var, false)?', '"--clear-consistent"'):
+            self.assertIn(check, reconcile)
+        for forbidden in ('"key":', '"environment":', 'systemctl', 'model-disabled'):
+            self.assertNotIn(forbidden, reconcile)
+        publish = source.split('fn publish_quarantine(')[1].split('fn quarantine_bytes(')[0]
+        for check in ('.create_new(true)', 'sync_all()?', '"/dev/urandom"', 'incident_id:'):
+            self.assertIn(check, publish)
+        main = (ROOT / 'rust/luma-platform/src/main.rs').read_text()
+        self.assertIn('Some("model-quarantine-reconcile") if args.len() == 1', main)
 
 
 if __name__ == '__main__':

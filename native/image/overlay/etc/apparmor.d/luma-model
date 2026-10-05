@@ -21,6 +21,8 @@ profile luma-model flags=(attach_disconnected) {
   /var/lib/luma-os/model-activation.pending r,
   # Needed for the orphan fence lookup; root-private DAC prevents content reads.
   /var/lib/luma-os/model-activation.prior r,
+  # Quarantine lookup only; root-private DAC prevents reading the record.
+  /var/lib/luma-os/model-quarantine.json r,
   /var/lib/luma-os/model-runtime.lock rk,
   /var/lib/luma-os/models/*.gguf mr,
   /var/lib/luma-os/model-auth/api-key r,

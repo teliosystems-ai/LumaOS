@@ -5,6 +5,7 @@ Requires=apparmor.service
 ConditionKernelCommandLine=luma.mode=installed
 ConditionPathExists=/var/lib/luma-os/model-selection.json
 ConditionPathExists=!/var/lib/luma-os/model-disabled
+ConditionPathExists=!/var/lib/luma-os/model-quarantine.json
 StartLimitIntervalSec=300
 StartLimitBurst=2
 

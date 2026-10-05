@@ -451,9 +451,97 @@ For `orphan_prior_backup` without a pending marker, only
 configuration exactly matches the saved prior bytes. It removes that one saved
 copy, not model weights or configuration. A malformed backup or changed state
 is preserved for investigation. Once normal activation or reviewed restoration
-clears its fence, the saved copy is removed; this is not a long-term rollback
+clears its fence, the pending saved copy is removed; it is not itself a rollback
 archive after successful activation. See the
 [prior restoration checkpoint](../evidence/G2_MODEL_PRIOR_RESTORE_2026-10-05.md).
+
+Completed activation now retains one separate root-private
+`model-rollback.json` before removing the pending saved copy. This bounded slot
+contains the prior configuration and credential, bound to the completed
+configuration hashes, exact image catalog and completed model pin. The next completed
+activation replaces the inspected slot; this is not a multi-version archive,
+protected release anchor, resource generation or production Admin grant. Treat
+the slot and any interrupted atomic-write partials as plaintext credentials,
+including inside offline recovery exports. No worker AppArmor access to this
+file is added. Unknown or unsafe slot data refuses preflight and new activation
+instead of being silently overwritten.
+
+After a completed activation or a subsequent restart/health failure, preserve
+diagnostics and stop the managed model worker using the normal installed-system
+maintenance procedure. The following installed-root command requires the
+runtime lock to be free; it neither stops nor starts services itself:
+
+```sh
+sudo luma-platform model-rollback-reconcile
+```
+
+Review the cause, the reported phase and current digest. Only a matching
+completed configuration with an available consistent prior configuration and
+verified prior catalog-pinned weights is restorable. If rollback is approved:
+
+```sh
+sudo luma-platform model-rollback-reconcile --restore-prior REVIEW-SHA256
+```
+
+The command restores the exact saved prior settings, or an all-absent
+manual-only state, without downloads, cache deletion or removal of recovery
+disablement. It consumes the slot before clearing its new activation fence.
+If interrupted, use `model-activation-reconcile` to inspect the pending state:
+its backup contains the **pre-rollback candidate**, not the desired rollback
+target. Reviewed `--restore-prior` on that pending marker returns to the
+pre-rollback candidate. If the completed slot was already consumed, the desired
+rollback target can no longer be retried from that slot. Never delete a fence
+or replay a saved digest to force progress. An older marker with no saved bytes
+cannot manufacture a completed rollback record.
+
+Restoration does not prove model readiness, restore a running worker or reserve
+resources. Refresh the reference service's environment and, for a model rather
+than manual-only state, restart and check the worker separately under the
+existing maintenance policy. Installed power-loss, service confinement,
+reconfiguration and rollback qualification remain open. See the
+[completed rollback checkpoint](../evidence/G2_MODEL_COMPLETED_ROLLBACK_2026-10-05.md).
+
+Observed `model-install` failures after completed activation now publish an
+exclusive, root-private `model-quarantine.json` before requesting the managed
+worker stop. The record contains a fresh incident ID, failed restart/check stage
+and fixed catalog/model pins, not credentials or exception text. The command
+still fails. A stop request is not proof that the worker stopped or resources
+returned; if publication or stop fails, preserve diagnostics and investigate.
+An existing or partial/unknown quarantine is not overwritten or auto-cleared.
+Both the worker and packaged unit refuse new startup while it exists, and
+normal install/preflight/activation refuse. The reference service is not stopped
+by this failure handler; that is not proof that the manual UI is healthy.
+
+After investigating the cause and stopping the managed worker, inspect:
+
+```sh
+sudo luma-platform model-quarantine-reconcile
+```
+
+Pending activation/orphan backup state must be reconciled first. Reviewed
+completed-activation rollback remains available while quarantined and preserves
+the quarantine and independent recovery disablement. Reinspect after rollback
+or any other configuration change. To approve removal of this exact incident
+for a consistent current configuration with verified current catalog weights,
+or the all-absent manual-only state, use its fresh digest:
+
+```sh
+sudo luma-platform model-quarantine-reconcile --clear-consistent REVIEW-SHA256
+```
+
+Clearance removes only that validated quarantine. It requires installed root,
+both locks and unchanged reviewed state; it does not start services, prove
+readiness, reserve RAM or remove `model-disabled`. A new incident requires a
+new review even when its model/settings/failure stage match an earlier one.
+Reload generated unit limits, refresh the reference environment and evaluate
+runtime admission/readiness separately before returning a model to use.
+
+This path handles errors actually returned by the installed reconfiguration
+steps. Controller death/power loss before the handler, later boot/migration or
+worker OOM/pressure failures, trusted supervision and resource generations remain
+open implementation/qualification work. It is not product Admin authorization
+or a TPM-protected incident ledger. See the
+[quarantine checkpoint](../evidence/G2_MODEL_QUARANTINE_2026-10-05.md).
 
 For installed reconfiguration, `model-install` now acquires and verifies the
 candidate weights before stopping the managed worker. A failed download or
@@ -469,7 +557,9 @@ waits up to 300 seconds for the fixed local model `/health` endpoint, then
 checks the selected worker and reference service state before returning
 success. A failed health check returns nonzero but does not silently roll back
 the candidate; preserve diagnostics and use the reviewed activation procedure
-if a fence remains. Listener health does not prove real inference or that the
+if a fence remains, or inspect the completed rollback slot after stopping the
+worker if activation has cleared. An observed restart/check failure also leaves
+its separately reviewed quarantine. Listener health does not prove real inference or that the
 endpoint is cryptographically bound to the model unit.
 
 If the stop request fails or activation then fails, a restart of a previously

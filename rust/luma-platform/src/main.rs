@@ -198,6 +198,14 @@ fn dispatch() -> Result<()> {
         Some("model-activation-reconcile") if args.len() == 3 => {
             model::activation_reconcile(Some((&args[1], &args[2])))
         }
+        Some("model-rollback-reconcile") if args.len() == 1 => model::rollback_reconcile(None),
+        Some("model-rollback-reconcile") if args.len() == 3 => {
+            model::rollback_reconcile(Some((&args[1], &args[2])))
+        }
+        Some("model-quarantine-reconcile") if args.len() == 1 => model::quarantine_reconcile(None),
+        Some("model-quarantine-reconcile") if args.len() == 3 => {
+            model::quarantine_reconcile(Some((&args[1], &args[2])))
+        }
         Some("model-clean") if args.len() == 1 => {
             println!(
                 "{}",
@@ -258,6 +266,8 @@ fn dispatch() -> Result<()> {
             println!("Model operations: models | model-install-check MODEL-ID | model-install MODEL-ID | model-chat [--timeout-seconds 1..1800] [--max-tokens 1..128] (prompt on stdin).\nInstaller accepts --model MODEL-ID or --model manual-only; otherwise prompts.\nA successful read-only preflight is not a reservation; activation rechecks after stopping the worker. Weights are acquired from pinned HTTPS publisher URLs after hardware admission.");
             println!("model-activation-reconcile [--abort-unchanged REVIEW-SHA256 | --publish-committed REVIEW-SHA256 | --complete-candidate REVIEW-SHA256 | --restore-prior REVIEW-SHA256 | --discard-orphan-backup REVIEW-SHA256]: inspect, clear a verified fence, roll forward, restore retained prior settings, or discard an unchanged orphan backup. Root-only; does not start the worker. Older pending markers without saved prior bytes cannot be restored.");
             println!("model-migrate-legacy: explicit installed-root migration of one validated older model environment and runtime lock; stops and restarts the managed model/reference services. No automatic boot migration.");
+            println!("model-rollback-reconcile [--restore-prior REVIEW-SHA256]: inspect or explicitly restore one retained prior configuration after completed activation. Installed-root maintenance; requires an idle runtime lock, does not start services or prove readiness, consumes the rollback record, and preserves a fence on interruption. Not production Admin authorization.");
+            println!("model-quarantine-reconcile [--clear-consistent REVIEW-SHA256]: inspect or explicitly clear an observed reconfiguration-failure quarantine for verified current settings or manual-only state. Installed root and idle runtime lock required; no worker start, readiness claim, recovery-disablement removal or product Admin grant.");
             println!("Luma native platform alpha\n\n  inventory\n  verify BUNDLE\n  install /dev/disk/by-id/EXACT-ID BUNDLE\n  update BUNDLE\n  recover unlock /dev/disk/by-id/EXACT-ID\n  recover export /dev/disk/by-id/EXACT-ID EMPTY-DESTINATION\n  recover repair-a|repair-b /dev/disk/by-id/EXACT-ID BUNDLE\n  recover repair-data /dev/disk/by-id/EXACT-ID\n  recover disable-model /dev/disk/by-id/EXACT-ID\n  status\n\nInstall requires local interactive disk confirmation and new credentials.\nLaboratory image: native acceptance and production custody are outstanding.");
             Ok(())
         }

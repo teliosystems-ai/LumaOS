@@ -382,9 +382,40 @@ missing prior bytes. Exact unchanged orphan cleanup and interrupted cleanup
 remain reviewed, not automatic. The final D-backed run passed 42 Rust model
 tests, 28 Python checks, formatting, the offline build, CLI help and no-load
 AppArmor parsing. Small weights and fault states are fixtures, not real-model
-or power-cut qualification. Saved bytes are removed at activation/clearance;
-post-completion rollback, broader failure/resource policy and installed
+or power-cut qualification. The pending saved copy is removed at activation/clearance;
+broader failure/resource policy and installed
 qualification remain open. This is not product Admin approval or G2 closure.
+
+The [completed activation rollback checkpoint](evidence/G2_MODEL_COMPLETED_ROLLBACK_2026-10-05.md)
+now retains one separate root-private prior-configuration slot before pending
+clearance. The exact catalog, completed pin/configuration and current review
+bind restoration; unsupported prior state, unsafe records and bad prior weights
+refuse. Preflight rejects unknown slot data before stopping the managed worker.
+Reviewed restoration saves the pre-rollback candidate under an activation fence,
+restores exact settings or manual-only state, consumes the slot and does not
+start services or clear recovery disablement. Interrupted writes require explicit
+activation reconciliation; consumption/cleanup limitations remain documented.
+Private decode errors suppress supplied credential values. The final D-backed
+source checks passed 58 Rust model tests, 30 Python checks, formatting, the
+offline build and CLI help. This is one-step configuration undo, not running
+worker recovery, resource generations, protected release rollback or installed
+qualification. Broader failure/resource and governed Admin/pack policy remain open.
+
+The [observed reconfiguration quarantine checkpoint](evidence/G2_MODEL_QUARANTINE_2026-10-05.md)
+adds a closed five-stage restart/readiness sequence and an exclusive durable
+incident record before requesting worker stop on failure. Publication or stop
+failure still returns failure and preserves uncertain state. Normal activation,
+preflight and worker startup refuse quarantine; the packaged unit/profile are
+wired in source. Reviewed completed rollback can preserve quarantine and recovery
+disablement while restoring prior settings. Separate installed-root clearance
+requires a fresh incident/configuration review, verified current weights or
+manual-only state and idle runtime exclusion; it does not restart services or
+prove resource return. Fresh incident IDs prevent reuse of an earlier identical
+failure's review. The final D-backed run passed 71 Rust model tests, 33 Python
+checks, formatting, the offline build, CLI help and no-load AppArmor parsing.
+Source checks cover these paths; controller death before the
+handler, later boot/migration/OOM/pressure supervision, resource generations,
+product Admin/effect policy and installed qualification remain open.
 
 The [committed-audit recovery checkpoint](evidence/G2_ADMIN_RECOVERY_2026-10-01.md)
 adds explicit, digest-reviewed publication of an interrupted journal commit only
@@ -682,7 +713,7 @@ tests passed. This is host-storage acceptance, not a new G2 OS-image pass. See
 | Installer and media | Real laboratory-signed Ubuntu 24.04 image; explicit disk consent, LUKS2, independent credentials, install-time manual/4B/1.7B choice, pinned download; sequence 8 passed pre-write TPM admission, pending enrollment intent and manual installation on a fresh virtual disk | Sealed Admin enrollment and authenticated bootstrap, governed production catalog/pack and offline distribution, full rejection/interruption matrix; rerun actual model acquisition on the new image |
 | Boot, update, recovery | Signed UKI, A/B verity roots, essential-health acknowledgement, three-attempt fallback, independent export/repair/disable; sequence 9 passed measured phases, public credential continuity through reboot/signed B, unapproved-PCR refusal and verified late shutdown teardown; sequence 10 passed the 14-stage regression including atomic export and bounded IPC | Complete confined service credential delivery and lifecycle; broaden shutdown/recovery faults; complete interruption and migration matrix, including pre-userspace failures; protected production rollback anchors; storage-pressure and recovery-retention cases |
 | Temporary storage | Locked, bounded snapshot/download reconciliation; sparse-aware admission and exact-file cleanup; Linux boundary tests in `native/tests`; sequence 8 verified successful startup maintenance service execution | Repeated guest-interruption/pressure evaluation; operator-reviewed disposition of legacy snapshots, which cannot safely be assumed inactive |
-| Model lifecycle and resources | Two pinned CPU profiles; hardware and cgroup-v2 limit admission, isolated UID, authenticated loopback runtime, systemd memory/device/process restrictions; source-only pre-stop verified acquisition and exact service-state guard, guarded unchanged-prior restart after failed stop or activation, interrupted-activation fence, reviewed clearance, narrow reviewed partial-candidate roll-forward, private prior-configuration preservation and reviewed restoration while saved bytes remain available, bounded post-restart listener check and explicit older-image migration; actual inference and offline reboot passed on an earlier image | Full governed model-pack/catalog lifecycle; post-completion rollback, unsupported/malformed-state recovery and broader post-stop failure policy, installed migration, reconfiguration and restoration/roll-forward qualification, atomic resource leases and generations, stale-worker fencing, pressure/quarantine/restart policy; evaluate the changed binary on a new image and run 1,000 **real compact-model** cycles with measured resource return and performance distributions |
+| Model lifecycle and resources | Two pinned CPU profiles; hardware and cgroup-v2 limit admission, isolated UID, authenticated loopback runtime, systemd memory/device/process restrictions; source-only pre-stop verified acquisition and exact service-state guard, guarded unchanged-prior restart after failed stop or activation, interrupted-activation fence, reviewed clearance, narrow reviewed partial-candidate roll-forward, private prior preservation/restoration and one-step reviewed completed-activation configuration undo, bounded listener check and observed restart/check-failure quarantine with explicit clearance, packaged quarantine startup refusal and explicit older-image migration; actual inference and offline reboot passed on an earlier image | Full governed model-pack/catalog lifecycle; unsupported/malformed-state recovery and broader crash/boot/migration/post-stop failure policy, installed reconfiguration/restoration/roll-forward/quarantine qualification, atomic resource leases and generations, stale-worker fencing, pressure/OOM supervision, broader quarantine/restart and crash-partial retention policy; evaluate the changed binary on a new image and run 1,000 **real compact-model** cycles with measured resource return and performance distributions |
 | Admin, policy, and effects | Frozen Python contracts and negative tests; local TPM2 checkpoint/journal and signed-PCR sealing; native PAM with installation-scoped principal/generation and credential revalidation; source-only explicit bootstrap, finite catalog definitions and local kernel-peer-bound catalog service/client with packaged confinement; durable replay fence for two laboratory root-only worker effects | Qualify installed enrollment/bootstrap/service enforcement and complete trusted-time finite assignment/revocation, governed principal/account lifecycle, effect-time grants, protected production effect receipts and reviewed reconciliation; the catalog service is not the complete Admin/policy lifecycle |
 | Skills and vertical workflow | Reference/manual interface; native typed-DAG validation, lab admission/calculation/scoped reads; lab pair store; native ADR-0003 WAL/content-object catalog with versions, transactional receipts, replay/retention and reviewed lab-pair import; native WAL coordinator for the exact invoice graph adds snapshot/checkpoints, pre-effect cancellation, explicit catalog-backed restart/replay and reviewed acknowledgement of exact past commits after withdrawal | Product signing/revocation, production coordinator and principal-bound folder/effect grants, generic artifact/public-schema and trusted-time integration, broader schema/reference/principal migration, receipted retention/GC and effect-time policy, wider cancellation/reconciliation and scheduling; distributed-image journey |
 | Generated-code isolation | General model-generated shell/native execution is denied | Required microVM or separately qualified constrained runtime and adversarial tests before this capability can be available; a deny-only path is not an implemented execution sandbox |

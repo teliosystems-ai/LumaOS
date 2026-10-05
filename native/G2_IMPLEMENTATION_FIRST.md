@@ -43,9 +43,12 @@ The [UTC design](TRUSTED_UTC_DESIGN.md) records the owner-approved provider set,
 initial bounds and offline refusal. Checked interval/quorum arithmetic, fixed
 policy, a non-authorizing keeper lifecycle and a pinned chrony good-sample
 publisher/closed frame decoder are implemented in source. The publisher fixture
-is not deployed; protected live reception, clock/history lifecycle and
+is not deployed. A kernel-bound receiver source increment now handles sender
+identity, bounded queues and replay, but protected supervisor/runtime approval,
+keeper/clock/history lifecycle and
 time-bound authorization integration remain part of the open Admin/trust work
 package. See [the publisher checkpoint](evidence/G2_UTC_PUBLISHER_2026-10-05.md).
+See also [the receiver checkpoint](evidence/G2_UTC_RECEIVER_2026-10-05.md).
 Do not count source linkage or arithmetic as a completed time provider.
 
 ## External evidence remains separate

@@ -54,6 +54,23 @@ class PublisherAssets(unittest.TestCase):
         self.assertIn('params->cert_set == 0', script)
         self.assertIn('CNF_GetNoCertTimeCheck() == 0', script)
 
+    def test_receiver_is_not_a_product_listener_or_serialized_authority(self):
+        receiver = (ROOT / 'rust/luma-platform/src/utc_receiver.rs').read_text()
+        production = receiver.split('#[cfg(test)]')[0]
+        self.assertNotIn('UnixDatagram::bind', production)
+        self.assertNotIn('Deserialize', production)
+        self.assertNotIn('Serialize', production)
+        self.assertNotIn('estimate:', production)
+        main = (ROOT / 'rust/luma-platform/src/main.rs').read_text()
+        self.assertNotIn('Some("utc-receiver")', main)
+
+    def test_receiver_uses_per_message_credentials_and_closes_delivered_descriptors(self):
+        receiver = (ROOT / 'rust/luma-platform/src/utc_receiver.rs').read_text().split('#[cfg(test)]')[0]
+        for boundary in ('SO_PASSCRED', 'SCM_CREDENTIALS', 'SYS_pidfd_open',
+                         'MSG_CMSG_CLOEXEC', 'SCM_RIGHTS', 'libc::close(fd)', 'MSG_CTRUNC'):
+            self.assertIn(boundary, receiver)
+        self.assertNotIn('SO_PEERCRED', receiver)
+
     @unittest.skipUnless(os.environ.get('LUMA_CHRONY_UPSTREAM'), 'needs isolated pinned source fixture')
     def test_pinned_hook_follows_actual_authentication_guard(self):
         source = Path(os.environ['LUMA_CHRONY_UPSTREAM'])

@@ -3,7 +3,7 @@
 This is the pinned-source chrony good-sample hook and closed measurement codec
 for G2 development. It is **not installed**, not a trusted-time service and not
 an authorization API. Admin's trusted-time status remains false. The production
-dependency, confined receiver, reviewed bootstrap, protected history and grant
+dependency, approved confined receiver/supervisor, reviewed bootstrap, protected history and grant
 integration remain open. Do not start the fixture daemon on the host.
 
 ## Source boundary and retained samples
@@ -75,10 +75,34 @@ The fixture sends nonblocking datagrams only to
 `/run/luma-utc/measurements.sock`, with a nominal 500-ms heartbeat. There is no
 scraper, caller-selected destination, retransmission of failed batches or
 public time token. A queued previously good datagram can outlive a failure;
-the future receiver must enforce live peer, queue-age/deadline and epoch checks
+the integrating service must enforce live peer, queue-age/deadline and epoch checks
 and invalidate pending authorizations. The producer's source-clock generation
 is separate from the keeper's reviewed reacquisition generation; never treat
 them as automatically identical or silently reset either.
+
+The native `utc_receiver.rs` boundary now receives per-message kernel
+credentials, pins an observed producer with a pidfd and before/after process
+fingerprints, drains at most eight queued rounds under a 100-ms return budget
+and rejects stale/replayed/mismatched epochs and sample identities. Unknown or
+truncated ancillary data and descriptor passing refuse; delivered descriptors
+are closed before denial. A bad later queued frame prevents returning an earlier
+good frame. Failure fences the stream; no cached round is returned when it is
+empty. These are decoded measurements, not clock authority.
+
+This module accepts an already-provisioned socket descriptor and an observed
+process context. It does not bind a production listener, approve that process's
+code/confinement, restore protected history or authorize recovery. The integrating
+supervisor must supply independently approved immutable code/configuration,
+enforcing profiles and current lifecycle/clock notifications. An unchanged
+fingerprint or live PID does not establish those approvals, and polling cannot
+prove an unreported transition never occurred. Re-executing the same image
+also requires generation/lifecycle handling, not inode checks alone.
+
+The fixed binary telemetry is a development fixture, not a supersession of
+ADR-0002's JSON control transport. Its use as a deployed internal boundary needs
+the required transport ADR/security review, or adaptation to the accepted
+transport, before an installed endpoint is enabled. This checkpoint activates
+neither a listener nor time/role authority.
 
 ## Targeted build on Ubuntu
 

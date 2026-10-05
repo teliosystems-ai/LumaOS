@@ -613,6 +613,10 @@ The [publisher source checkpoint](evidence/G2_UTC_PUBLISHER_2026-10-05.md)
 adds a pinned chrony hook and bounded measurement codec, not an installed
 trusted-time endpoint. Its producer generations are not keeper recovery
 generations, and decoding a frame does not authenticate it or its history.
+The [kernel measurement receiver checkpoint](evidence/G2_UTC_RECEIVER_2026-10-05.md)
+adds sender/queue/replay checks in source but does not approve runtime custody,
+restore protected time history or enable an installed time endpoint. Admin
+assignment/revocation and workflow effect grants remain unavailable.
 
 ## Future installer variant: external protected service
 

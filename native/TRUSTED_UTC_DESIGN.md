@@ -137,6 +137,16 @@ publisher source fixture and closed measurement decoder now exist; protected
 live reception, production dependency qualification and service confinement
 are still missing. Source linkage and arithmetic are not substitutes.
 
+The subsequent [receiver checkpoint](evidence/G2_UTC_RECEIVER_2026-10-05.md)
+implements per-message kernel credential checks, observed process pinning,
+bounded queue draining and replay/age/epoch checks in source. It has no product
+bind path or authority interface. Capturing unchanged process fingerprints is
+not approval of that executable, certificate configuration or confinement.
+The protected supervisor and live keeper/history composition remain open.
+The fixture's binary telemetry must receive the transport change/security
+review required by ADR-0002, or be adapted before deployment; the accepted
+control transport is unchanged.
+
 ## Bootstrap and offline recovery
 
 Certificate validity introduces a bootstrapping dependency when the clock is

@@ -13,6 +13,37 @@ requirement.
 
 ## Current software inventory and work still required
 
+### Admin and workflow closure status
+
+Neither work package is closed, and neither is merely waiting for the final
+image/testing. **Both still require software integration.** The source
+checkpoints below do not waive the development plan's production-interface,
+policy and distributed-media workflow requirements.
+
+Admin has existing-owner checkpoint enrollment, explicit reviewed product
+bootstrap, finite activity/role definitions, a local catalog service and genuine
+PAM-to-disposable-TPM composition tests. Remaining code includes trusted-time
+finite assignment/revocation, effect-time resource grants, principal/account and
+bootstrap recovery, reviewed uncertain enrollment states, signing custody
+lifecycle and complete installed service/recovery integration. Root privilege
+and role definitions remain insufficient to grant effects.
+
+Workflows have signed graph validation, the exact native invoice executor,
+SQLite WAL checkpoints, pre-effect cancellation, idempotent artifact publication,
+restart/replay and reviewed acknowledgement of proven committed outcomes.
+They remain installed-root laboratory interfaces, not the complete production
+workflow. Remaining code includes the governed supervisor and service delivery,
+principal-bound source-folder/effect grants, effect-time identity/resource/lease
+checks, trusted timestamps, broader scheduling/cancellation/reconciliation and
+governed public-schema/migration/retention integration. Ordinary node validation
+does not implement generic execution or those policy boundaries.
+
+Complete the shared trust/time and grant dependencies, join them to the native
+workflow/supervisor, then integrate installer/boot/update/recovery. The final
+consolidated image and separate native Ubuntu runs must qualify that integrated
+implementation. Production custody and unavailable hardware evidence remain
+external requirements, separate from these open software items.
+
 **Execution change requested by the owner:** finish the open G2 implementation
 before another memory-heavy VM/model sweep, then evaluate one consolidated
 image and perform full testing on the separate native Ubuntu machine. WSL
@@ -165,6 +196,21 @@ activation is performed by this increment.
 Its final targeted run passed the sanitized C fixture, strict hook compilation,
 patched `+NTS` build, 107 ordinary Rust tests, one C/Rust interoperability test,
 17 Python checks, formatting and the offline native build on D:.
+
+The later [measurement receiver checkpoint](evidence/G2_UTC_RECEIVER_2026-10-05.md)
+adds real per-datagram kernel credential checks, pidfd/process observation,
+bounded queue draining and source replay/epoch validation. It receives data,
+not approved time authority. It does not approve a producer's code/confinement,
+restore TPM time history, bind an installed listener or enable assignments.
+Complete the protected supervisor/runtime approval, keeper/history and recovery
+composition, lifecycle notifications and authorization/package integration.
+The experimental binary telemetry also needs the ADR-0002 transport change
+review or adaptation before deployment; no control transport is superseded.
+The final D-backed targeted run passed 131 ordinary Rust tests, two explicitly
+selected fixtures (13 real-kernel cases and retained C-frame interoperability),
+19 Python checks without skips, formatting and the offline native build.
+These are source-boundary checks, not installed-service or production-authority
+qualification; Admin and workflow closure remains as described above.
 
 The earlier [disposable TPM feasibility experiment](evidence/G2_OWNER_CREDENTIAL_FEASIBILITY_2026-10-02.md)
 informed the native backend now integrated above. The targeted native tests

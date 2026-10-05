@@ -134,7 +134,7 @@ Ubuntu tuple and publisher changes as well. Bound parsing, report size,
 duplicate/alias handling, finite numbers,
 rounding, deadlines and before/after generation checks. A pinned good-sample
 publisher source fixture and closed measurement decoder now exist; protected
-live reception, production dependency qualification and service confinement
+runtime approval, production dependency qualification and installed confinement
 are still missing. Source linkage and arithmetic are not substitutes.
 
 The subsequent [receiver checkpoint](evidence/G2_UTC_RECEIVER_2026-10-05.md)
@@ -146,6 +146,16 @@ The protected supervisor and live keeper/history composition remain open.
 The fixture's binary telemetry must receive the transport change/security
 review required by ADR-0002, or be adapted before deployment; the accepted
 control transport is unchanged.
+
+The [stream composition checkpoint](evidence/G2_UTC_STREAM_2026-10-05.md) joins
+receiver-checked rounds to the keeper in queue order, with independent producer
+and keeper generation mapping. Intermediate quorum loss/disagreement fences even
+if a later round looks usable. Quiet polls reproject the current source inventory,
+not a saved interval, with fresh local clocks and a conservative one-second
+producer-heartbeat deadline. Source process/queue errors, observed discontinuities
+and explicit invalidation keep the session fenced; there is no automatic recovery.
+The source module still does not approve code/confinement, authenticate its
+supplied history floor, deliver lifecycle notifications or grant time authority.
 
 ## Bootstrap and offline recovery
 

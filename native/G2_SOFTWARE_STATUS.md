@@ -212,6 +212,21 @@ selected fixtures (13 real-kernel cases and retained C-frame interoperability),
 These are source-boundary checks, not installed-service or production-authority
 qualification; Admin and workflow closure remains as described above.
 
+The [receiver and keeper composition checkpoint](evidence/G2_UTC_STREAM_2026-10-05.md)
+now preserves every drained round and reduces them in order, so intermediate
+quorum loss or disagreement cannot be hidden by later samples. Source-clock and
+keeper acquisition generations remain distinct. Quiet polls reproject the
+current source inventory at a fresh local-clock boundary only within a bounded
+producer-heartbeat deadline; missing operators are not resurrected and lifecycle
+notifications/errors fence without automatic recovery. This is source fixture
+composition, not an approved runtime, authenticated TPM history or time authority.
+Protected supervisor/history/recovery and final effect integration remain open.
+The final D-backed run passed 142 ordinary Rust tests and four explicit fixtures
+(23 kernel cases plus retained C-frame interoperability), 21 Python checks
+without skips, formatting and the offline build. The three kernel fixtures are
+now wired into the isolated TPM runner; only their targeted executions and runner
+syntax were checked here, not the complete runner or remote CI.
+
 The earlier [disposable TPM feasibility experiment](evidence/G2_OWNER_CREDENTIAL_FEASIBILITY_2026-10-02.md)
 informed the native backend now integrated above. The targeted native tests
 exercise signed PCR 11 renewal, fixed PCR 7 denial, forged-signature refusal,

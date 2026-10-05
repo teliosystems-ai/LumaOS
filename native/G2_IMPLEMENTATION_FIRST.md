@@ -49,6 +49,11 @@ keeper/clock/history lifecycle and
 time-bound authorization integration remain part of the open Admin/trust work
 package. See [the publisher checkpoint](evidence/G2_UTC_PUBLISHER_2026-10-05.md).
 See also [the receiver checkpoint](evidence/G2_UTC_RECEIVER_2026-10-05.md).
+The subsequent [stream composition](evidence/G2_UTC_STREAM_2026-10-05.md) joins
+every receiver round to the keeper without hiding queued quorum loss, and adds
+fresh projection with bounded heartbeat freshness. It remains non-authorizing;
+protected runtime approval, history, lifecycle notification delivery and grant
+composition are still required before candidate freeze.
 Do not count source linkage or arithmetic as a completed time provider.
 
 ## External evidence remains separate

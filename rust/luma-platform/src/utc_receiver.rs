@@ -15,7 +15,7 @@ use std::os::unix::fs::MetadataExt;
 use std::os::unix::net::UnixDatagram;
 
 const FRAME_SIZE: usize = 232;
-const DRAIN_LIMIT: usize = 8;
+pub(crate) const DRAIN_LIMIT: usize = 8;
 
 fn bounded_text(path: &str) -> Result<String> {
     let mut value = String::new();
@@ -370,6 +370,41 @@ pub(crate) struct Receiver {
     fenced: bool,
 }
 impl Receiver {
+    pub(crate) fn epoch(&self) -> ProducerEpoch {
+        self.cursor.epoch
+    }
+
+    pub(crate) fn clock(suspend_generation: u64) -> Result<crate::utc_keeper::Clock> {
+        let now = capture_clocks()?;
+        Ok(crate::utc_keeper::Clock {
+            boottime_ms: now.boot_ms,
+            monotonic_ms: now.mono_ms,
+            realtime_ms: now.real_ms,
+            suspend_generation,
+        })
+    }
+
+    pub(crate) fn recheck_quiet(&mut self) -> Result<()> {
+        let result = (|| {
+            if self.fenced {
+                return Err("UTC measurement stream is fenced".into());
+            }
+            self.peer.recheck()?;
+            let mut pending = libc::pollfd {
+                fd: self.socket.as_raw_fd(),
+                events: libc::POLLIN,
+                revents: 0,
+            };
+            if unsafe { libc::poll(&mut pending, 1, 0) } != 0 || pending.revents != 0 {
+                return Err("UTC stream changed during candidate evaluation".into());
+            }
+            Ok(())
+        })();
+        if result.is_err() {
+            self.fenced = true;
+        }
+        result
+    }
     /// The future protected supervisor must provide/approve the descriptor,
     /// process, deployment and runtime. This constructor does NOT approve them.
     /// There is no production bind path or unconfined fallback endpoint.
@@ -411,7 +446,7 @@ impl Receiver {
             fenced: false,
         })
     }
-    pub(crate) fn poll(&mut self) -> Result<Option<ProducerRound>> {
+    pub(crate) fn poll(&mut self) -> Result<Vec<ProducerRound>> {
         if self.fenced {
             return Err("UTC measurement stream requires reviewed reconstruction".into());
         }
@@ -421,10 +456,10 @@ impl Receiver {
         }
         result
     }
-    fn poll_inner(&mut self) -> Result<Option<ProducerRound>> {
+    fn poll_inner(&mut self) -> Result<Vec<ProducerRound>> {
         let deadline = std::time::Instant::now() + std::time::Duration::from_millis(100);
         self.peer.recheck()?;
-        let mut last = None;
+        let mut rounds = Vec::with_capacity(DRAIN_LIMIT);
         for _ in 0..DRAIN_LIMIT {
             let mut bytes = [0; FRAME_SIZE];
             let mut control = [0usize; 32];
@@ -448,13 +483,13 @@ impl Receiver {
                 let error = io::Error::last_os_error();
                 if error.kind() == io::ErrorKind::WouldBlock {
                     self.peer.recheck()?;
-                    if let Some(round) = &last {
+                    for round in &rounds {
                         validate_capture(round, capture_clocks()?)?;
                     }
                     if std::time::Instant::now() > deadline {
                         return Err("UTC stream drain deadline exceeded".into());
                     }
-                    return Ok(last);
+                    return Ok(rounds);
                 }
                 return Err(error.into());
             }
@@ -471,7 +506,7 @@ impl Receiver {
             if std::time::Instant::now() > deadline {
                 return Err("UTC stream drain deadline exceeded".into());
             }
-            last = Some(round);
+            rounds.push(round);
         }
         let mut pending = libc::pollfd {
             fd: self.socket.as_raw_fd(),
@@ -482,13 +517,13 @@ impl Receiver {
             return Err("UTC stream queued batch exceeded drain bound".into());
         }
         self.peer.recheck()?;
-        if let Some(round) = &last {
+        for round in &rounds {
             validate_capture(round, capture_clocks()?)?;
         }
         if std::time::Instant::now() > deadline {
             return Err("UTC stream drain deadline exceeded".into());
         }
-        Ok(last)
+        Ok(rounds)
     }
 }
 fn validate_capture(round: &ProducerRound, now: Capture) -> Result<()> {
@@ -827,6 +862,7 @@ mod tests {
             } else {
                 let count = match command.as_str() {
                     "two" | "invalidation" => 2,
+                    "loss-restored" => 3,
                     "flood" => 9,
                     _ => 1,
                 };
@@ -838,6 +874,11 @@ mod tests {
                     let mut bytes = packet(sequence);
                     if command == "invalidation" && index == 1 {
                         bytes[64..72].copy_from_slice(&2u64.to_le_bytes());
+                    }
+                    if (command == "loss-restored" && index == 1) || command == "lost" {
+                        for start in [152, 192] {
+                            bytes[start + 1..start + 40].fill(0);
+                        }
                     }
                     if command == "reage" {
                         bytes[120..128].copy_from_slice(&(sequence - 1).to_le_bytes());
@@ -940,6 +981,7 @@ mod tests {
         for variant in [
             "single",
             "two",
+            "loss-restored",
             "invalidation",
             "wrong-pid",
             "dead",
@@ -966,7 +1008,7 @@ mod tests {
                 expected,
             )
             .unwrap();
-            assert!(receiver.poll().unwrap().is_none()); // No cached result or fabricated time.
+            assert!(receiver.poll().unwrap().is_empty()); // No cached result or fabricated time.
             if variant == "wrong-pid" {
                 std::thread::sleep(std::time::Duration::from_millis(2));
                 UnixDatagram::unbound()
@@ -992,7 +1034,10 @@ mod tests {
             }
             if variant == "exec" {
                 sender.command("exec");
-                let deadline = std::time::Instant::now() + std::time::Duration::from_millis(500);
+                // Helper exec includes loader work under the container's CPU
+                // quota. This is a bounded fixture synchronization wait, not
+                // an increase to receiver/heartbeat production deadlines.
+                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
                 while fs::read_link(format!("/proc/{}/exe", sender.child.id())).unwrap()
                     == std::env::current_exe().unwrap()
                 {
@@ -1002,10 +1047,29 @@ mod tests {
             }
             let descriptors = fs::read_dir("/proc/self/fd").unwrap().count();
             let result = receiver.poll();
-            if ["single", "two", "replay", "reage"].contains(&variant) {
-                let measured = result.unwrap().unwrap();
-                assert_eq!(measured.sequence, if variant == "two" { 2 } else { 1 });
-                assert!(receiver.poll().unwrap().is_none());
+            if ["single", "two", "loss-restored", "replay", "reage"].contains(&variant) {
+                let measured = result.unwrap();
+                assert_eq!(
+                    measured.len(),
+                    match variant {
+                        "two" => 2,
+                        "loss-restored" => 3,
+                        _ => 1,
+                    }
+                );
+                assert_eq!(measured[0].sequence, 1);
+                assert_eq!(measured.last().unwrap().sequence, measured.len() as u64);
+                if variant == "loss-restored" {
+                    assert!(matches!(
+                        measured[1].sources[1],
+                        SourceData::Unavailable { operator: 2 }
+                    ));
+                    assert!(matches!(
+                        measured[2].sources[1],
+                        SourceData::Measured { .. }
+                    ));
+                }
+                assert!(receiver.poll().unwrap().is_empty());
                 if variant == "replay" || variant == "reage" {
                     sender.command(variant);
                     assert!(receiver.poll().is_err());
@@ -1013,6 +1077,12 @@ mod tests {
                 }
             } else {
                 assert!(result.is_err(), "unexpected admission for {variant}");
+                if variant == "exec" {
+                    assert_eq!(
+                        result.unwrap_err().to_string(),
+                        "UTC producer process or runtime changed"
+                    );
+                }
                 assert!(receiver.fenced);
                 assert!(receiver.poll().is_err()); // Sticky until explicitly reconstructed.
             }
@@ -1025,5 +1095,105 @@ mod tests {
             }
             println!("UTC_KERNEL_CASE_PASSED {variant}");
         }
+    }
+
+    #[test]
+    #[ignore = "isolated Linux receiver-to-keeper fixture with owned processes"]
+    fn kernel_keeper_composition() {
+        use crate::{utc_keeper::State, utc_stream::Stream};
+        for variant in [
+            "two",
+            "quiet",
+            "loss-restored",
+            "lost",
+            "rights",
+            "dead",
+            "notify",
+            "history",
+        ] {
+            let directory = SocketDirectory::new();
+            let path = directory.0.join("measurement.sock");
+            let socket = UnixDatagram::bind(&path).unwrap();
+            let mut sender = ChildSender::start(&path);
+            let mut expected = epoch();
+            expected.boot_id = kernel_boot().unwrap();
+            let receiver = Receiver::attach(
+                socket,
+                sender.child.id() as i32,
+                unsafe { libc::getuid() },
+                unsafe { libc::getgid() },
+                expected,
+            )
+            .unwrap();
+            let floor = if variant == "history" {
+                4_102_444_800_000
+            } else {
+                0
+            };
+            let mut stream = Stream::attach(receiver, floor, 3).unwrap();
+            assert!(stream.poll().unwrap().is_none());
+            assert_eq!(stream.state(), State::Acquiring);
+            sender.command(match variant {
+                "two" | "loss-restored" | "lost" | "rights" => variant,
+                _ => "single",
+            });
+            if variant == "dead" {
+                sender.command("exit");
+                assert!(sender.child.wait().unwrap().success());
+            }
+            if variant == "notify" {
+                stream.invalidate();
+            }
+            if variant == "two" || variant == "quiet" {
+                let first = stream.poll().unwrap().unwrap();
+                assert_eq!(stream.state(), State::Bounded);
+                if variant == "quiet" {
+                    std::thread::sleep(std::time::Duration::from_millis(3));
+                    let later = stream.poll().unwrap().unwrap();
+                    assert!(later.endpoints().1 > first.endpoints().1);
+                }
+                sender.command("lost");
+                assert!(stream.poll().is_err());
+                assert_eq!(stream.state(), State::Fenced);
+            } else {
+                assert!(stream.poll().is_err(), "unexpected candidate for {variant}");
+                assert_eq!(
+                    stream.state(),
+                    if variant == "history" {
+                        State::ReconciliationRequired
+                    } else {
+                        State::Fenced
+                    }
+                );
+            }
+            if variant != "dead" {
+                sender.command("single");
+            }
+            assert!(stream.poll().is_err());
+            println!("UTC_COMPOSITION_CASE_PASSED {variant}");
+        }
+    }
+
+    #[test]
+    #[ignore = "isolated Linux final-queue recheck fixture"]
+    fn kernel_final_queue_recheck() {
+        let directory = SocketDirectory::new();
+        let path = directory.0.join("measurement.sock");
+        let socket = UnixDatagram::bind(&path).unwrap();
+        let mut sender = ChildSender::start(&path);
+        let mut expected = epoch();
+        expected.boot_id = kernel_boot().unwrap();
+        let mut receiver = Receiver::attach(
+            socket,
+            sender.child.id() as i32,
+            unsafe { libc::getuid() },
+            unsafe { libc::getgid() },
+            expected,
+        )
+        .unwrap();
+        receiver.recheck_quiet().unwrap();
+        sender.command("single");
+        assert!(receiver.recheck_quiet().is_err());
+        assert!(receiver.poll().is_err());
     }
 }

@@ -71,6 +71,25 @@ class PublisherAssets(unittest.TestCase):
             self.assertIn(boundary, receiver)
         self.assertNotIn('SO_PEERCRED', receiver)
 
+    def test_receiver_preserves_all_rounds_for_keeper_lifecycle(self):
+        receiver = (ROOT / 'rust/luma-platform/src/utc_receiver.rs').read_text().split('#[cfg(test)]')[0]
+        self.assertIn('Result<Vec<ProducerRound>>', receiver)
+        self.assertIn('rounds.push(round)', receiver)
+        self.assertNotIn('Result<Option<ProducerRound>>', receiver)
+        stream = (ROOT / 'rust/luma-platform/src/utc_stream.rs').read_text().split('#[cfg(test)]')[0]
+        self.assertIn('for producer in rounds', stream)
+        self.assertIn('self.receiver.recheck_quiet()?', stream)
+        self.assertIn('self.keeper.candidate_at(now)', stream)
+
+    def test_stream_does_not_enable_authority_or_automatic_recovery(self):
+        stream = (ROOT / 'rust/luma-platform/src/utc_stream.rs').read_text().split('#[cfg(test)]')[0]
+        for forbidden in ('Serialize', 'Deserialize', 'UnixDatagram::bind',
+                          'pub(crate) fn reacquire', 'pub(crate) fn assign'):
+            self.assertNotIn(forbidden, stream)
+        self.assertIn('history_floor_ms', stream)
+        self.assertRegex(stream, r'now\s*\.boottime_ms\s*\.checked_sub\(capture\)')
+        self.assertNotIn('Some("utc-stream")', (ROOT / 'rust/luma-platform/src/main.rs').read_text())
+
     @unittest.skipUnless(os.environ.get('LUMA_CHRONY_UPSTREAM'), 'needs isolated pinned source fixture')
     def test_pinned_hook_follows_actual_authentication_guard(self):
         source = Path(os.environ['LUMA_CHRONY_UPSTREAM'])

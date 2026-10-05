@@ -89,6 +89,18 @@ are closed before denial. A bad later queued frame prevents returning an earlier
 good frame. Failure fences the stream; no cached round is returned when it is
 empty. These are decoded measurements, not clock authority.
 
+The receiver preserves every round in its bounded batch. `utc_stream.rs` joins
+that batch to the keeper, so an intermediate loss of quorum/disagreement cannot
+be hidden by a later restored source set. Producer source-clock and keeper
+acquisition generations are mapped explicitly, not treated as identical. A quiet
+poll reprojects the current source inventory using fresh local clocks only while
+the last producer heartbeat is within the conservative one-second deadline;
+it does not return a saved interval or restore an unavailable operator. Errors
+and lifecycle notifications fence the session with no automatic recovery.
+The source composition performs a final peer/queue and live-clock check. It
+still lacks independently approved runtime, protected history and lifecycle
+notification delivery, and cannot enable assignments or effect authority.
+
 This module accepts an already-provisioned socket descriptor and an observed
 process context. It does not bind a production listener, approve that process's
 code/confinement, restore protected history or authorize recovery. The integrating
@@ -116,6 +128,8 @@ tools image; it is not a final OS image.
 bash native/image/utc/test_fixture.sh /path/to/pinned-chrony-source.tar.gz /new/output
 cd rust
 cargo test --offline --locked utc_protocol::
+cargo test --offline --locked utc_stream::
+cargo test --offline --locked utc_receiver::tests::kernel_keeper_composition -- --ignored --exact --nocapture --test-threads=1
 LUMA_UTC_C_FRAME=/new/output/c-frame.bin cargo test --offline --locked \
   utc_protocol::tests::c_publisher_cross_language_frame -- --ignored
 ```

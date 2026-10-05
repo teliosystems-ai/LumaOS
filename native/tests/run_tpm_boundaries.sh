@@ -29,6 +29,11 @@ python3 -W error "$snapshot/native/tests/admin_service_pam_integration.py" 2>&1 
 # This fixture drops its own client to UID 1001 before connecting. It proves
 # kernel-peer/framing behavior only, not installed PAM/TPM or AppArmor operation.
 timeout 60 cargo test --offline --locked admin_service::tests::kernel_human_connection -- --ignored --exact --nocapture 2>&1 | tee "$output/admin-service-ipc.txt"
+# UTC fixtures use only owned child processes, Unix sockets and read-only
+# kernel observations. They do not install a time service or contact providers.
+timeout 60 cargo test --offline --locked utc_receiver::tests::kernel_datagram_boundary -- --ignored --exact --nocapture --test-threads=1 2>&1 | tee "$output/utc-receiver-kernel.txt"
+timeout 60 cargo test --offline --locked utc_receiver::tests::kernel_keeper_composition -- --ignored --exact --nocapture --test-threads=1 2>&1 | tee "$output/utc-keeper-composition.txt"
+timeout 60 cargo test --offline --locked utc_receiver::tests::kernel_final_queue_recheck -- --ignored --exact --nocapture --test-threads=1 2>&1 | tee "$output/utc-final-queue.txt"
 python3 -W error -m unittest discover -s "$snapshot/native/tests" -v 2>&1 | tee "$output/native-tests.txt"
 cd "$snapshot"
 sha256sum rust/Cargo.toml rust/Cargo.lock rust/.cargo/config.toml \

@@ -65,6 +65,7 @@ pub(crate) struct Keeper {
     barrier_ms: u64,
     last_round: u64,
     last_samples: [Option<(u64, Measurement)>; 3],
+    current_sources: Option<[Source; 3]>,
     estimate: Option<Interval>,
 }
 
@@ -89,6 +90,7 @@ impl Keeper {
             barrier_ms: 0,
             last_round: 0,
             last_samples: [None; 3],
+            current_sources: None,
             estimate: None,
         })
     }
@@ -97,6 +99,15 @@ impl Keeper {
     }
     pub(crate) fn state(&self) -> State {
         self.state
+    }
+
+    // Read-only consistency boundary when acquisition has no first sample yet.
+    pub(crate) fn check_boundary(&mut self, now: Clock) -> Result<()> {
+        let result = self.check_clock(now);
+        if result.is_err() {
+            self.fence();
+        }
+        result
     }
 
     /// Explicit arithmetic reacquisition. The future service must separately
@@ -122,6 +133,7 @@ impl Keeper {
             self.barrier_ms = clock.boottime_ms;
             self.last_clock = Some(clock);
             self.estimate = None;
+            self.current_sources = None;
             self.state = State::Acquiring;
             Ok(())
         })();
@@ -134,6 +146,7 @@ impl Keeper {
     /// Immediate outage/provider failure; no retained estimate is returned.
     pub(crate) fn fence(&mut self) {
         self.estimate = None;
+        self.current_sources = None;
         if self.state != State::ReconciliationRequired {
             self.state = State::Fenced;
         }
@@ -141,6 +154,40 @@ impl Keeper {
 
     pub(crate) fn refresh(&mut self, round: &Round, now: Clock) -> Result<Interval> {
         let result = self.refresh_inner(round, now);
+        if result.is_err() {
+            self.fence();
+        }
+        result
+    }
+
+    /// Re-evaluate current observations at a new boundary, never return the
+    /// saved interval. Still arithmetic data, not trusted-clock authority.
+    pub(crate) fn candidate_at(&mut self, now: Clock) -> Result<Interval> {
+        let result = (|| {
+            if self.state != State::Bounded {
+                return Err("UTC lifecycle has no current candidate".into());
+            }
+            self.check_clock(now)?;
+            let sources = self.current_sources.ok_or("missing UTC source inventory")?;
+            let samples: Vec<_> = sources
+                .iter()
+                .filter_map(|source| match source {
+                    Source::Measured { sample, .. } => Some(*sample),
+                    Source::Unavailable { .. } => None,
+                })
+                .collect();
+            let candidate =
+                utc_bounds::consensus(&samples, now.boottime_ms, self.epoch, self.policy.bounds())?;
+            let (lower, upper) = candidate.endpoints();
+            if upper < self.floor_ms {
+                self.state = State::ReconciliationRequired;
+                return Err("UTC candidate is behind protected history".into());
+            }
+            let candidate = Interval::new(lower.max(self.floor_ms), upper)?;
+            self.last_clock = Some(now);
+            self.estimate = Some(candidate);
+            Ok(candidate)
+        })();
         if result.is_err() {
             self.fence();
         }
@@ -213,6 +260,7 @@ impl Keeper {
         }
         let bounded = Interval::new(lower.max(self.floor_ms), upper)?;
         self.last_samples = next_samples;
+        self.current_sources = Some(round.sources);
         self.last_round = round.sequence;
         self.last_clock = Some(now);
         self.estimate = Some(bounded);

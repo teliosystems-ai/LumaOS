@@ -617,6 +617,11 @@ The [kernel measurement receiver checkpoint](evidence/G2_UTC_RECEIVER_2026-10-05
 adds sender/queue/replay checks in source but does not approve runtime custody,
 restore protected time history or enable an installed time endpoint. Admin
 assignment/revocation and workflow effect grants remain unavailable.
+The subsequent [stream composition](evidence/G2_UTC_STREAM_2026-10-05.md)
+processes all receiver rounds through the keeper and reprojects current samples
+at fresh clock boundaries within a bounded heartbeat deadline. It does not
+approve runtime/history inputs, deliver protected lifecycle notifications or
+change Admin's refusal of assignments and effect grants.
 
 ## Future installer variant: external protected service
 

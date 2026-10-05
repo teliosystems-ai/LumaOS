@@ -157,6 +157,17 @@ and explicit invalidation keep the session fenced; there is no automatic recover
 The source module still does not approve code/confinement, authenticate its
 supplied history floor, deliver lifecycle notifications or grant time authority.
 
+The subsequent [step-watch checkpoint](evidence/G2_UTC_STEP_WATCH_2026-10-05.md)
+adds a privately owned nonblocking `CLOCK_REALTIME` timer with absolute
+cancel-on-set semantics. The stream checks it before and after candidate work;
+cancellation, expiration and any unverifiable read fence without rearming or
+automatic recovery. This supplements numeric comparisons rather than replacing
+them. Linux reports discontinuous realtime changes through `ECANCELED` for such
+timers. [Linux timerfd interface](https://man7.org/linux/man-pages/man2/timerfd_create.2.html).
+Actual clock-step delivery, step-and-restore and suspend race behavior on the
+supported kernel/image remain unqualified. The guard does not approve runtime
+provenance, authenticate time history or establish the absolute rate envelope.
+
 ## Bootstrap and offline recovery
 
 Certificate validity introduces a bootstrapping dependency when the clock is

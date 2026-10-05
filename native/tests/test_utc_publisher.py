@@ -90,6 +90,28 @@ class PublisherAssets(unittest.TestCase):
         self.assertRegex(stream, r'now\s*\.boottime_ms\s*\.checked_sub\(capture\)')
         self.assertNotIn('Some("utc-stream")', (ROOT / 'rust/luma-platform/src/main.rs').read_text())
 
+    def test_step_watch_is_owned_read_only_nonblocking_and_fail_closed(self):
+        watch = (ROOT / 'rust/luma-platform/src/utc_step_watch.rs').read_text().split('#[cfg(test)]')[0]
+        for mechanism in ('CLOCK_REALTIME', 'TFD_NONBLOCK', 'TFD_CLOEXEC',
+                          'TFD_TIMER_ABSTIME', 'TFD_TIMER_CANCEL_ON_SET', 'ECANCELED',
+                          'self.fenced = true', 'libc::read('):
+            self.assertIn(mechanism, watch)
+        for forbidden in ('clock_settime(', 'settimeofday(', 'adjtimex(',
+                          'CLOCK_REALTIME_ALARM', 'Serialize', 'Deserialize'):
+            self.assertNotIn(forbidden, watch)
+        self.assertEqual(watch.count('libc::timerfd_settime('), 1)
+
+    def test_stream_checks_step_watch_before_and_after_candidate_work(self):
+        stream = (ROOT / 'rust/luma-platform/src/utc_stream.rs').read_text()
+        poll = stream.split('pub(crate) fn poll(', 1)[1].split('#[cfg(test)]', 1)[0]
+        self.assertEqual(poll.count('self.step_watch.check()?'), 2)
+        before, middle, after = poll.split('self.step_watch.check()?')
+        self.assertNotIn('self.receiver.poll()', before)
+        self.assertIn('self.receiver.poll()', middle)
+        self.assertIn('.candidate_at(', middle)
+        self.assertIn('Ok(candidate)', after)
+        self.assertIn('self.invalidate()', after)
+
     @unittest.skipUnless(os.environ.get('LUMA_CHRONY_UPSTREAM'), 'needs isolated pinned source fixture')
     def test_pinned_hook_follows_actual_authentication_guard(self):
         source = Path(os.environ['LUMA_CHRONY_UPSTREAM'])

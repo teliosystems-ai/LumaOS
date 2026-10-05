@@ -227,6 +227,20 @@ without skips, formatting and the offline build. The three kernel fixtures are
 now wired into the isolated TPM runner; only their targeted executions and runner
 syntax were checked here, not the complete runner or remote CI.
 
+The [kernel clock-step watch checkpoint](evidence/G2_UTC_STEP_WATCH_2026-10-05.md)
+adds an owned cancel-on-set timer checked before and after candidate work.
+Kernel cancellation, timer expiration and unverifiable reads fence the session,
+including quiet polls with a previously bounded candidate. There is no automatic
+rearm or weaker observer fallback. This supplements numeric clock comparisons;
+it does not qualify actual step delivery, all step-and-restore/suspend races or
+the absolute rate envelope. Protected supervisor/history/recovery, complete
+lifecycle delivery and authorization integration remain open.
+The final D-backed batch passed 147 ordinary Rust tests and four explicit
+fixtures (25 kernel cases plus retained C-frame interoperability), 23 Python
+checks without skips, formatting and the offline build. Observer checks inspect
+real timer configuration and expiration; cancellation-result injection is not
+actual clock-step or suspend qualification. No host clock was changed.
+
 The earlier [disposable TPM feasibility experiment](evidence/G2_OWNER_CREDENTIAL_FEASIBILITY_2026-10-02.md)
 informed the native backend now integrated above. The targeted native tests
 exercise signed PCR 11 renewal, fixed PCR 7 denial, forged-signature refusal,

@@ -622,6 +622,9 @@ processes all receiver rounds through the keeper and reprojects current samples
 at fresh clock boundaries within a bounded heartbeat deadline. It does not
 approve runtime/history inputs, deliver protected lifecycle notifications or
 change Admin's refusal of assignments and effect grants.
+The [kernel step watch](evidence/G2_UTC_STEP_WATCH_2026-10-05.md) adds fail-closed
+clock-change notification checks around candidate evaluation, not trusted-time
+authority or TPM-backed history. Admin assignments/effects remain unavailable.
 
 ## Future installer variant: external protected service
 

@@ -8,6 +8,7 @@ use crate::{
     utc_policy::ApprovedPolicy,
     utc_protocol::{ProducerEpoch, ProducerRound, SourceData},
     utc_receiver::{Receiver, DRAIN_LIMIT},
+    utc_step_watch::StepWatch,
     Result,
 };
 
@@ -127,6 +128,7 @@ pub(crate) struct Stream {
     receiver: Receiver,
     batch: BatchKeeper,
     suspend_generation: u64,
+    step_watch: StepWatch,
 }
 
 impl Stream {
@@ -138,6 +140,9 @@ impl Stream {
         history_floor_ms: i64,
         suspend_generation: u64,
     ) -> Result<Self> {
+        // Arm before the initial clock read. A notification/error is a fence,
+        // never a request to reset history or silently reacquire the epoch.
+        let step_watch = StepWatch::arm()?;
         let batch = BatchKeeper::new(
             receiver.epoch(),
             history_floor_ms,
@@ -147,6 +152,7 @@ impl Stream {
             receiver,
             batch,
             suspend_generation,
+            step_watch,
         })
     }
 
@@ -165,18 +171,27 @@ impl Stream {
             if !matches!(self.state(), State::Acquiring | State::Bounded) {
                 return Err("UTC stream is fenced".into());
             }
+            self.step_watch.check()?;
             let rounds = self.receiver.poll()?;
             self.batch
                 .refresh(&rounds, Receiver::clock(self.suspend_generation)?)?;
             // A queued change during reduction is a denial, not silent caching.
             self.receiver.recheck_quiet()?;
-            self.batch
-                .candidate_at(Receiver::clock(self.suspend_generation)?)
+            let candidate = self
+                .batch
+                .candidate_at(Receiver::clock(self.suspend_generation)?)?;
+            self.step_watch.check()?;
+            Ok(candidate)
         })();
         if result.is_err() {
             self.invalidate();
         }
         result
+    }
+
+    #[cfg(test)]
+    pub(crate) fn expire_watch_fixture(&mut self) {
+        self.step_watch = StepWatch::expired_fixture().unwrap();
     }
 }
 

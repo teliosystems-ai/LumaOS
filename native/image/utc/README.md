@@ -101,6 +101,16 @@ The source composition performs a final peer/queue and live-clock check. It
 still lacks independently approved runtime, protected history and lifecycle
 notification delivery, and cannot enable assignments or effect authority.
 
+The composition now owns a nonblocking, close-on-exec `CLOCK_REALTIME` timer
+armed with absolute cancel-on-set semantics. It checks this kernel clock-step
+notification before and after candidate work. Cancellation, expiration, read
+errors or unverifiable outcomes fence the session; consuming the event does not
+rearm the watch or restore time. This supplements numeric clock comparisons,
+not NTS provenance, rate qualification or complete suspend/resume notification
+delivery. Source checks verify real timer configuration/expiration and injected
+cancellation-result handling without setting any host clock. Actual clock-step,
+step-and-restore and suspend races need separate kernel/image qualification.
+
 This module accepts an already-provisioned socket descriptor and an observed
 process context. It does not bind a production listener, approve that process's
 code/confinement, restore protected history or authorize recovery. The integrating
@@ -129,6 +139,7 @@ bash native/image/utc/test_fixture.sh /path/to/pinned-chrony-source.tar.gz /new/
 cd rust
 cargo test --offline --locked utc_protocol::
 cargo test --offline --locked utc_stream::
+cargo test --offline --locked utc_step_watch:: -- --test-threads=1
 cargo test --offline --locked utc_receiver::tests::kernel_keeper_composition -- --ignored --exact --nocapture --test-threads=1
 LUMA_UTC_C_FRAME=/new/output/c-frame.bin cargo test --offline --locked \
   utc_protocol::tests::c_publisher_cross_language_frame -- --ignored

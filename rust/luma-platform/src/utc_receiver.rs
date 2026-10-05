@@ -1110,6 +1110,8 @@ mod tests {
             "dead",
             "notify",
             "history",
+            "expired-watch",
+            "expired-current",
         ] {
             let directory = SocketDirectory::new();
             let path = directory.0.join("measurement.sock");
@@ -1144,7 +1146,10 @@ mod tests {
             if variant == "notify" {
                 stream.invalidate();
             }
-            if variant == "two" || variant == "quiet" {
+            if variant == "expired-watch" {
+                stream.expire_watch_fixture();
+            }
+            if variant == "two" || variant == "quiet" || variant == "expired-current" {
                 let first = stream.poll().unwrap().unwrap();
                 assert_eq!(stream.state(), State::Bounded);
                 if variant == "quiet" {
@@ -1152,7 +1157,11 @@ mod tests {
                     let later = stream.poll().unwrap().unwrap();
                     assert!(later.endpoints().1 > first.endpoints().1);
                 }
-                sender.command("lost");
+                if variant == "expired-current" {
+                    stream.expire_watch_fixture();
+                } else {
+                    sender.command("lost");
+                }
                 assert!(stream.poll().is_err());
                 assert_eq!(stream.state(), State::Fenced);
             } else {

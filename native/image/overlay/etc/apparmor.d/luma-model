@@ -36,6 +36,7 @@ profile luma-model flags=(attach_disconnected) {
   /dev/null rw,
   network inet stream,
   network unix stream,
+  /run/luma-broker/control.sock rw,
   # Supervisor may kill its same-profile owned child; no cross-profile send.
   signal (send, receive) set=(kill) peer=luma-model,
   deny /dev/{mem,kmem,port,kvm,dxg,nvidia*,dri/**} rw,

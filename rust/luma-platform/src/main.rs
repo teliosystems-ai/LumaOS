@@ -17,6 +17,8 @@ mod owner_credential;
 mod platform;
 mod principal;
 mod recovery_export;
+mod resource_manager;
+mod resources;
 mod scoped_read;
 mod sealed_credential;
 mod service;
@@ -250,10 +252,24 @@ fn dispatch() -> Result<()> {
         Some("recover") if args.len() >= 3 => platform::recover(&args[1..]),
         Some("broker") if args.len() == 1 => service::serve(),
         Some("status") if args.len() == 1 => service::client("status"),
+        Some("resource-status") if args.len() == 1 => {
+            resource_manager::client("resource-status", None)
+        }
+        Some("resource-reconcile") if args.len() == 2 => {
+            resource_manager::client("resource-reconcile", Some(&args[1]))
+        }
+        Some("resource-migrate") if args.len() == 1 => resource_manager::migrate(),
+        Some("resource-archive") if args.len() == 2 => {
+            resource_manager::client("resource-archive", Some(&args[1]))
+        }
+        Some("resource-revoke") if args.len() == 4 => {
+            resource_manager::revoke(&args[1], &args[2], &args[3])
+        }
         Some("boot-health") if args.len() == 1 => platform::boot_health(),
         Some("boot-failed") if args.len() == 1 => platform::boot_failed(),
         Some("init-data") if args.len() == 2 => platform::init_data(&args[1]),
         Some("help" | "--help") | None => {
+            println!("Resources: resource-status | resource-reconcile REVIEW-SHA256 | resource-archive REVIEW-SHA256 | resource-revoke LEASE-ID GENERATION MANAGER-EPOCH | resource-migrate. Existing broker authority; installed root maintenance only. Migration initializes only missing state with an idle runtime/cgroup; uncertain state is never reset. Archival requires observed drainage, retains private immutable receipts, and preserves generation floors. Workers require exact generation-fenced leases before launch.");
             println!("Local TPM diagnostics: tpm-probe | admin-checkpoint-status (root only; read-only; neither enrolls nor grants Admin). External Admin deployment is deferred.");
             println!("admin-checkpoint-enroll LOGIN --existing-owner: explicit installed-root checkpoint enrollment with local PAM and hidden custodian owner authorization; retains interrupted attempts; does not grant product Admin.");
             println!("admin-checkpoint-enrollment-inspect: read-only retained-intent and fixed TPM-handle observation; does not repair, retry, delete or grant Admin.");

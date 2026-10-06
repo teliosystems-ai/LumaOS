@@ -1,7 +1,8 @@
 [Unit]
 Description=Luma isolated pinned CPU model runtime
-After=local-fs.target apparmor.service
-Requires=apparmor.service
+After=local-fs.target apparmor.service luma-broker.service
+Requires=apparmor.service luma-broker.service
+BindsTo=luma-broker.service
 ConditionKernelCommandLine=luma.mode=installed
 ConditionPathExists=/var/lib/luma-os/model-selection.json
 ConditionPathExists=!/var/lib/luma-os/model-disabled
@@ -10,6 +11,7 @@ StartLimitIntervalSec=300
 StartLimitBurst=2
 
 [Service]
+Slice=lumamodel.slice
 User=luma-model
 Group=luma-model
 ExecStart=/usr/libexec/luma-os/luma-platform model-serve
@@ -37,6 +39,9 @@ AppArmorProfile=luma-model
 MemoryHigh=2G
 MemoryMax=2560M
 MemorySwapMax=0
+OOMPolicy=kill
+IOReadBandwidthMax=/var 64M
+IOWriteBandwidthMax=/var 64M
 TasksMax=64
 CPUQuota=200%
 LimitMEMLOCK=0

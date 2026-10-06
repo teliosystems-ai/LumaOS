@@ -1,0 +1,13 @@
+[Unit]
+Description=Luma bounded model resource domain
+Before=luma-broker.service luma-model.service
+
+[Slice]
+MemoryAccounting=yes
+CPUAccounting=yes
+IOAccounting=yes
+TasksAccounting=yes
+MemoryMax=4831838208
+MemorySwapMax=0
+TasksMax=64
+CPUQuota=200%

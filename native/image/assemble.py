@@ -281,7 +281,8 @@ def main() -> None:
         'tmpfs /tmp tmpfs mode=1777,nosuid,nodev 0 0\n')
     put('etc/systemd/journald.conf.d/luma.conf','[Journal]\nStorage=persistent\nSystemMaxUse=128M\nRuntimeMaxUse=64M\n')
     put('etc/systemd/system/systemd-bless-boot.service','[Unit]\nDescription=Disabled automatic blessing; luma-boot-health owns acknowledgement\n[Service]\nType=oneshot\nExecStart=/usr/bin/true\n')
-    put('etc/systemd/system/sleep.target.d/luma.conf','[Unit]\nConflicts=luma-reference.service\n')
+    put('etc/systemd/system/sleep.target.d/luma.conf',
+        '[Unit]\nConflicts=luma-reference.service luma-model.service\n')
     put('etc/systemd/system/hibernate.target','[Unit]\nDescription=Hibernation is unqualified and disabled\nRefuseManualStart=yes\n')
     for unit in ('luma-broker.service','luma-reference.service','luma-model.service','luma-staging-clean.service','luma-admin.service'):
         enable(unit)

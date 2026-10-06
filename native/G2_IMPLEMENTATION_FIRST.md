@@ -24,6 +24,12 @@ This supersedes earlier plans to retry sequence-11 desktop/model VMs immediately
 
 ## Dependency-ordered implementation backlog
 
+Current owner-selected order: finish resource leases/generations (Requirement
+#1) before taking another package. Native CPU broker/worker integration now
+exists, but the [resource register](RESOURCE_LEASES.md#still-required-before-requirement-1-closes)
+still lists required software and installed qualification. Do not advance to
+Requirement #2 or count the first increment as 100-percent completion.
+
 Use [G2_SOFTWARE_STATUS.md](G2_SOFTWARE_STATUS.md) for implemented scope and
 evidence. Every row here remains open until its complete implementation exists;
 targeted source checks alone cannot close G2 acceptance.

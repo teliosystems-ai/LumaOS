@@ -12,8 +12,8 @@
       "url": "https://huggingface.co/Qwen/Qwen3-4B-GGUF/resolve/bc640142c66e1fdd12af0bd68f40445458f3869b/Qwen3-4B-Q4_K_M.gguf",
       "bytes": 2497280256,
       "sha256": "7485fe6f11af29433bc51cab58009521f205840f5b4ae3a32fa7f92e8534fdf5",
-      "minimum_ram_bytes": 6000000000,
-      "minimum_available_bytes": 4000000000,
+      "minimum_ram_bytes": 6100000000,
+      "minimum_available_bytes": 4831838208,
       "context_tokens": 2048,
       "memory_max_bytes": 4831838208
     },
@@ -26,8 +26,8 @@
       "url": "https://huggingface.co/Qwen/Qwen3-1.7B-GGUF/resolve/7fb011e9aee6e4dc7adf8430df9ea8de6a466aa3/Qwen3-1.7B-Q4_K_M.gguf",
       "bytes": 1107408544,
       "sha256": "228fb5627f7510b8b3516cdb6435e4b0d2a2bf330fe5b0ab19284a3570a8bb1f",
-      "minimum_ram_bytes": 3000000000,
-      "minimum_available_bytes": 2000000000,
+      "minimum_ram_bytes": 4000000000,
+      "minimum_available_bytes": 2684354560,
       "context_tokens": 2048,
       "memory_max_bytes": 2684354560
     }

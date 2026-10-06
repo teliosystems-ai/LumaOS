@@ -1,9 +1,8 @@
-use crate::{broker_effects, Result};
+use crate::{broker_effects, resource_manager, Result};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::io::{self, Read, Write};
 use std::os::fd::{AsRawFd, FromRawFd};
-use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
@@ -156,7 +155,7 @@ fn write_frame(stream: &mut UnixStream, bytes: &[u8]) -> Result<()> {
     write_frame_until(stream, bytes, Instant::now() + FRAME_TIMEOUT)
 }
 
-fn peer(stream: &UnixStream) -> Result<u32> {
+fn credentials(stream: &UnixStream) -> Result<libc::ucred> {
     let mut credentials: libc::ucred = unsafe { std::mem::zeroed() };
     let mut len = std::mem::size_of::<libc::ucred>() as libc::socklen_t;
     let result = unsafe {
@@ -171,7 +170,11 @@ fn peer(stream: &UnixStream) -> Result<u32> {
     if result != 0 || len as usize != std::mem::size_of::<libc::ucred>() {
         return Err("kernel peer authentication failed".into());
     }
-    Ok(credentials.uid)
+    Ok(credentials)
+}
+
+fn peer(stream: &UnixStream) -> Result<u32> {
+    Ok(credentials(stream)?.uid)
 }
 
 struct WorkerCommand(Child);
@@ -221,9 +224,11 @@ fn worker_command(action: &broker_effects::Action, deadline: Instant) -> Result<
     wait_worker_command(child, deadline)
 }
 
-fn handle(stream: &mut UnixStream) -> Result<serde_json::Value> {
-    let uid = peer(stream)?;
-    let request: Request = serde_json::from_slice(&read_frame(stream)?)?;
+fn handle_request(
+    stream: &mut UnixStream,
+    request: Request,
+    uid: u32,
+) -> Result<serde_json::Value> {
     validate(&request, uid, now()?)?;
     if request.action != "status" {
         crate::platform::require_installed()?;
@@ -275,17 +280,219 @@ pub fn serve() -> Result<()> {
     crate::require_root()?;
     security_check()?;
     // RuntimeDirectory is created and owned by systemd. Never unlink an unknown socket.
+    let mut manager = if crate::platform::require_installed().is_ok() {
+        match resource_manager::Manager::open() {
+            Ok(manager) => Some(manager),
+            Err(_) => {
+                eprintln!("resource manager fenced; inference unavailable; retained state requires review");
+                None
+            }
+        }
+    } else {
+        None
+    };
     let listener = UnixListener::bind(SOCKET)?;
-    fs::set_permissions(SOCKET, fs::Permissions::from_mode(0o660))?;
-    for stream in listener.incoming() {
-        let mut stream = stream?;
-        let response = match handle(&mut stream) {
+    // Connection permission conveys no method authority. Every request retains
+    // kernel peer authentication; UID 989 gets only its bounded resource methods.
+    restrict_socket(Path::new(SOCKET))?;
+    listener.set_nonblocking(true)?;
+    let mut maintenance = Instant::now();
+    loop {
+        if maintenance.elapsed() >= Duration::from_millis(100) {
+            let failed = manager
+                .as_mut()
+                .map_or(false, |manager| manager.maintain().is_err());
+            if failed {
+                // Never recreate an empty ledger or re-enable inference in this
+                // session. Manual/status paths remain available independently.
+                if let Some(prior) = manager.as_ref() {
+                    let _ = prior.fence_on_fault();
+                }
+                manager = None;
+                eprintln!("resource manager fenced; inference unavailable; retained state requires review");
+            }
+            maintenance = Instant::now();
+        }
+        let (mut stream, _) = match listener.accept() {
+            Ok(value) => value,
+            Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                std::thread::sleep(Duration::from_millis(20));
+                continue;
+            }
+            Err(error) => return Err(error.into()),
+        };
+        let handled = (|| -> Result<serde_json::Value> {
+            let peer = credentials(&stream)?;
+            if ![0, 989, 990].contains(&peer.uid) {
+                return Err("broker peer identity denied before frame input".into());
+            }
+            let bytes = read_frame(&mut stream)?;
+            let envelope: serde_json::Value = serde_json::from_slice(&bytes)?;
+            if envelope
+                .get("action")
+                .and_then(|v| v.as_str())
+                .map_or(false, |a| a.starts_with("resource-"))
+            {
+                let request: resource_manager::Request = serde_json::from_slice(&bytes)?;
+                let pinned = if peer.uid == 989 {
+                    Some(peer_pidfd(&stream)?)
+                } else {
+                    None
+                };
+                return Ok(serde_json::to_value(
+                    manager
+                        .as_mut()
+                        .ok_or("resource manager unavailable outside installed mode")?
+                        .handle(&request, peer, pinned)?,
+                )?);
+            }
+            handle_request(&mut stream, serde_json::from_slice(&bytes)?, peer.uid)
+        })();
+        let response = match handled {
             Ok(value) => value,
             Err(_) => serde_json::json!({"schema_version":1,"result":"denied"}),
         };
         let _ = write_frame(&mut stream, &serde_json::to_vec(&response)?);
     }
+}
+
+fn restrict_socket(path: &Path) -> Result<()> {
+    use std::os::unix::ffi::OsStrExt;
+    use std::os::unix::fs::{FileTypeExt, MetadataExt};
+    let metadata = fs::symlink_metadata(path)?;
+    let parent = fs::symlink_metadata(path.parent().ok_or("broker socket has no parent")?)?;
+    if !metadata.file_type().is_socket()
+        || metadata.uid() != 0
+        || metadata.nlink() != 1
+        || !parent.is_dir()
+        || parent.uid() != 0
+        || parent.mode() & 0o022 != 0
+    {
+        return Err("unsafe broker socket or parent".into());
+    }
+    // Linux POSIX ACL v2. Named service-user entries grant only socket access,
+    // never membership of the control group's database or source-folder ACLs.
+    // The owning group has no grant; the mask is not an independent permission.
+    let mut acl = 2u32.to_le_bytes().to_vec();
+    for (tag, permission, id) in [
+        (1u16, 6u16, u32::MAX),
+        (2, 6, 989),
+        (2, 6, 990),
+        (4, 0, u32::MAX),
+        (16, 6, u32::MAX),
+        (32, 0, u32::MAX),
+    ] {
+        acl.extend_from_slice(&tag.to_le_bytes());
+        acl.extend_from_slice(&permission.to_le_bytes());
+        acl.extend_from_slice(&id.to_le_bytes());
+    }
+    let path = std::ffi::CString::new(path.as_os_str().as_bytes())?;
+    let name = std::ffi::CString::new("system.posix_acl_access")?;
+    if unsafe {
+        libc::setxattr(
+            path.as_ptr(),
+            name.as_ptr(),
+            acl.as_ptr().cast(),
+            acl.len(),
+            0,
+        )
+    } != 0
+    {
+        return Err("broker socket service ACL unavailable; no permissive fallback".into());
+    }
+    let mut observed = vec![0u8; acl.len() + 1];
+    let count = unsafe {
+        libc::getxattr(
+            path.as_ptr(),
+            name.as_ptr(),
+            observed.as_mut_ptr().cast(),
+            observed.len(),
+        )
+    };
+    if count < 0 || count as usize != acl.len() || observed[..acl.len()] != acl {
+        return Err("broker socket ACL readback mismatch".into());
+    }
     Ok(())
+}
+
+fn peer_pidfd(stream: &UnixStream) -> Result<fs::File> {
+    // Linux 6.5+ SO_PEERPIDFD pins the actual connection creator, not a PID
+    // potentially recycled after SO_PEERCRED. Unsupported kernels refuse.
+    let mut fd: libc::c_int = -1;
+    let mut size = std::mem::size_of::<libc::c_int>() as libc::socklen_t;
+    if unsafe {
+        libc::getsockopt(
+            stream.as_raw_fd(),
+            libc::SOL_SOCKET,
+            77,
+            &mut fd as *mut _ as *mut libc::c_void,
+            &mut size,
+        )
+    } != 0
+    {
+        return Err("resource peer PID handle unavailable".into());
+    }
+    if fd < 0 {
+        return Err("invalid resource peer PID handle".into());
+    }
+    let file = unsafe { fs::File::from_raw_fd(fd) };
+    if size as usize != std::mem::size_of::<libc::c_int>()
+        || unsafe { libc::fcntl(fd, libc::F_SETFD, libc::FD_CLOEXEC) } != 0
+    {
+        return Err("unsafe resource peer PID handle".into());
+    }
+    Ok(file)
+}
+
+pub(crate) fn resource_exchange(
+    request: &resource_manager::Request,
+) -> Result<resource_manager::Response> {
+    let deadline = Instant::now() + Duration::from_secs(3);
+    let mut socket = connect_local(SOCKET, deadline)?;
+    resource_exchange_on(&mut socket, request, deadline)
+}
+
+fn resource_exchange_on(
+    socket: &mut UnixStream,
+    request: &resource_manager::Request,
+    deadline: Instant,
+) -> Result<resource_manager::Response> {
+    if peer(socket)? != 0 {
+        return Err("resource broker is not root".into());
+    }
+    write_frame_until(socket, &serde_json::to_vec(request)?, deadline)?;
+    let response: resource_manager::Response =
+        serde_json::from_slice(&read_frame_until(socket, deadline)?)
+            .map_err(|_| "resource response denied or malformed")?;
+    if response.schema_version != 1
+        || response.request_id != request.request_id
+        || response.caller != request.caller
+        || response.result != "ok"
+    {
+        return Err("resource response does not match authenticated request".into());
+    }
+    if resource_manager::now()? >= request.deadline {
+        return Err("resource response arrived after its deadline".into());
+    }
+    let shape = match request.action.as_str() {
+        "resource-acquire" => response.lease.is_some() && response.status.is_none(),
+        "resource-renew" => {
+            response.lease == request.lease && response.lease.is_some() && response.status.is_none()
+        }
+        "resource-reconcile" => response.lease.is_none() && response.status.is_none(),
+        "resource-status" | "resource-revoke" | "resource-archive" => {
+            response.lease.is_none()
+                && response
+                    .status
+                    .as_ref()
+                    .map_or(false, |value| value.is_object())
+        }
+        _ => false,
+    };
+    if !shape {
+        return Err("resource acknowledgement has an unexpected method shape".into());
+    }
+    Ok(response)
 }
 
 fn exchange(socket: &mut UnixStream, request: &Request, deadline: Instant) -> Result<Response> {
@@ -361,6 +568,124 @@ pub fn client(action: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn resource_peer_handle_is_kernel_bound_and_closes_on_exec() {
+        let (a, _b) = UnixStream::pair().unwrap();
+        let pin = peer_pidfd(&a).unwrap();
+        assert!(resource_manager::pidfd_alive(&pin).unwrap());
+        assert_ne!(
+            unsafe { libc::fcntl(pin.as_raw_fd(), libc::F_GETFD) } & libc::FD_CLOEXEC,
+            0
+        );
+        // Heartbeats connect from a thread. The credential/PID handle must
+        // identify the process generation, not a short-lived thread's TID.
+        let (thread_socket, _other) = std::thread::spawn(|| UnixStream::pair().unwrap())
+            .join()
+            .unwrap();
+        assert_eq!(
+            credentials(&thread_socket).unwrap().pid,
+            std::process::id() as libc::pid_t
+        );
+        assert!(resource_manager::pidfd_alive(&peer_pidfd(&thread_socket).unwrap()).unwrap());
+    }
+
+    #[test]
+    fn broker_socket_acl_admits_only_root_and_exact_service_users_without_group_privilege() {
+        use std::os::unix::fs::PermissionsExt;
+        use std::os::unix::process::CommandExt;
+        let directory = std::env::temp_dir().join(format!(
+            "luma-broker-acl-{}",
+            crate::resources::random_id().unwrap()
+        ));
+        fs::create_dir(&directory).unwrap();
+        fs::set_permissions(&directory, fs::Permissions::from_mode(0o755)).unwrap();
+        let path = directory.join("control.sock");
+        let listener = UnixListener::bind(&path).unwrap();
+        restrict_socket(&path).unwrap();
+        assert_eq!(
+            fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o660
+        );
+        for uid in [0u32, 989, 990, 988, 1000] {
+            let mut command = Command::new("/usr/bin/python3");
+            command.args(["-c", "import socket,sys\ns=socket.socket(socket.AF_UNIX)\ntry:s.connect(sys.argv[1])\nexcept PermissionError:sys.exit(13)", path.to_str().unwrap()]);
+            unsafe {
+                command.pre_exec(move || {
+                    if libc::setgroups(0, std::ptr::null()) != 0
+                        || libc::setgid(uid) != 0
+                        || libc::setuid(uid) != 0
+                    {
+                        return Err(io::Error::last_os_error());
+                    }
+                    Ok(())
+                });
+            }
+            let output = command.output().unwrap();
+            assert_eq!(
+                output.status.code(),
+                Some(if [0, 989, 990].contains(&uid) { 0 } else { 13 }),
+                "UID {uid}: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+        drop(listener);
+        fs::remove_file(&path).unwrap();
+        fs::remove_dir(&directory).unwrap();
+    }
+
+    #[test]
+    fn resource_socket_exchange_binds_root_peer_correlation_generation_and_method_shape() {
+        for outcome in 0..7 {
+            let (mut client, mut server) = UnixStream::pair().unwrap();
+            let token = crate::resources::Token {
+                lease_id: "a".repeat(32),
+                generation: 1,
+                manager_epoch: "b".repeat(32),
+            };
+            let request = resource_manager::Request {
+                schema_version: 1,
+                request_id: "renew-one".into(),
+                caller: 0,
+                deadline: resource_manager::now().unwrap() + 2000,
+                action: "resource-renew".into(),
+                idempotency_key: None,
+                profile: None,
+                lease: Some(token.clone()),
+                review: None,
+            };
+            let worker = std::thread::spawn(move || {
+                let deadline = Instant::now() + Duration::from_secs(2);
+                let received: resource_manager::Request =
+                    serde_json::from_slice(&read_frame_until(&mut server, deadline).unwrap())
+                        .unwrap();
+                let mut response = serde_json::json!({"schema_version":1,"request_id":received.request_id,
+                    "caller":received.caller,"result":"ok","lease":token,"status":null});
+                match outcome {
+                    1 => response["request_id"] = serde_json::json!("other"),
+                    2 => response["caller"] = serde_json::json!(989),
+                    3 => response["lease"]["generation"] = serde_json::json!("2"),
+                    4 => response["status"] = serde_json::json!({"unexpected":true}),
+                    5 => response["unknown"] = serde_json::json!(true),
+                    6 => response["lease"]["generation"] = serde_json::json!(1),
+                    _ => (),
+                }
+                write_frame_until(
+                    &mut server,
+                    &serde_json::to_vec(&response).unwrap(),
+                    deadline,
+                )
+                .unwrap();
+            });
+            let result = resource_exchange_on(
+                &mut client,
+                &request,
+                Instant::now() + Duration::from_secs(2),
+            );
+            assert_eq!(result.is_ok(), outcome == 0, "outcome {outcome}");
+            worker.join().unwrap();
+        }
+    }
 
     #[test]
     fn cli_request_ids_are_fresh_bounded_and_valid() {

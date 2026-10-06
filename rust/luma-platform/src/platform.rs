@@ -892,6 +892,7 @@ pub fn install(selection: &str, source: &Path, model_id: Option<&str>) -> Result
         &[(&user, 1000), (&admin, 1001)],
     )?;
     crate::broker_effects::initialize(&data.at.join("lib/luma-broker"))?;
+    crate::resources::initialize(&data.at.join("lib/luma-broker/resources"))?;
     crate::artifacts::initialize(
         &data.at.join("lib/luma-os/artifacts"),
         &crate::principal::installation_at(&data.at.join("lib/luma-os/principals/registry.json"))?,

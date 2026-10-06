@@ -13,6 +13,22 @@ requirement.
 
 ## Current software inventory and work still required
 
+### Selected Requirement #1: resource leases/generations
+
+The owner selected this package first and requires it to be fully implemented
+before proceeding to Requirement #2. The native broker now has durable atomic
+lease accounting, kernel-bound worker generations, loading-time heartbeats,
+whole-cgroup drain/retained-cache accounting, pressure/quarantine and reviewed
+receipt archival. Fresh installer initialization, model supervision and unit
+packaging are wired in source. See [RESOURCE_LEASES.md](RESOURCE_LEASES.md) for
+the exact implemented scope, limits, maintenance commands and remaining work.
+
+**Requirement #1 is not closed.** Acquisition/content-worker integration,
+request/KV/cache accounting, wider tenant/device adapters and recovery remain
+software work. Installed enforcement and consolidated-image evidence remain
+qualification work. These source changes do not close those other paths or
+authorize moving to Requirement #2.
+
 ### Admin and workflow closure status
 
 Neither work package is closed, and neither is merely waiting for the final

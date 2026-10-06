@@ -43,6 +43,41 @@ pub struct Profile {
     memory_max_bytes: u64,
 }
 
+impl Profile {
+    pub(crate) fn memory_limit(&self) -> u64 {
+        self.memory_max_bytes
+    }
+    pub(crate) fn resource_binding(&self) -> Result<String> {
+        Ok(bundle::hex(&Sha256::digest(serde_json::to_vec(self)?)))
+    }
+}
+
+pub(crate) fn resource_binding_profile(binding: &str) -> Result<Profile> {
+    for p in catalog()?.models {
+        if p.resource_binding()? == binding {
+            return Ok(p);
+        }
+    }
+    Err("resource lease profile is not in the pinned catalog".into())
+}
+
+pub(crate) fn resource_profile(id: &str) -> Result<Profile> {
+    let p = selected()?;
+    if p.id != id {
+        return Err("resource profile differs from installed selection".into());
+    }
+    let state = Path::new(VAR).join(STATE);
+    recovery_disablement_absent(&state)?;
+    activation_records_absent(&state)?;
+    quarantine_absent(&state)?;
+    validation::worker_admission(&state, &p)?;
+    Ok(p)
+}
+
+pub(crate) fn resource_idle() -> Result<File> {
+    runtime_lock(Path::new(VAR), false)
+}
+
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Catalog {
@@ -158,7 +193,27 @@ fn cgroup_limit_at(root: &Path, path: &str) -> Result<u64> {
             return Err("unsafe cgroup directory".into());
         }
         let file = directory.join("memory.max");
-        if !fs::symlink_metadata(&file)?.is_file() {
+        let metadata = match fs::symlink_metadata(&file) {
+            Ok(m) => m,
+            Err(error) if directory == root && error.kind() == std::io::ErrorKind::NotFound => {
+                // The real initial cgroup-v2 root has no memory.max. Accept
+                // this kernel representation only on a verified cgroup2 fs;
+                // nested missing controls and ordinary fixtures still refuse.
+                let handle = OpenOptions::new()
+                    .read(true)
+                    .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW)
+                    .open(directory)?;
+                let mut stat: libc::statfs = unsafe { std::mem::zeroed() };
+                if unsafe { libc::fstatfs(handle.as_raw_fd(), &mut stat) } != 0
+                    || stat.f_type != 0x63677270
+                {
+                    return Err("missing cgroup root memory limit".into());
+                }
+                return Ok(());
+            }
+            Err(error) => return Err(error.into()),
+        };
+        if !metadata.is_file() {
             return Err("unsafe cgroup memory limit".into());
         }
         let mut value = String::new();
@@ -226,6 +281,7 @@ fn admit_with_space(
     cpus: usize,
     required_free: u64,
 ) -> Result<()> {
+    crate::resource_manager::check_loading(total, available, p.memory_max_bytes, 0)?;
     if total < p.minimum_ram_bytes
         || available < p.minimum_available_bytes
         || cpus < 2
@@ -2564,11 +2620,13 @@ pub fn serve() -> Result<()> {
     let p = selected()?;
     validation::worker_admission(&Path::new(VAR).join(STATE), &p)?;
     admit_cgroup(&p, effective_memory_limit()?)?;
+    let lease = crate::resource_manager::WorkerLease::acquire(&p.id)?;
     let file = Path::new(VAR)
         .join(STATE)
         .join("models")
         .join(format!("{}.gguf", p.id));
     let verified = verified_file(&file, &p)?;
+    lease.check()?;
     // The runtime opens this exact verified inode, not the mutable catalog
     // filename again. This does not defend against a hostile root writing the
     // same inode in place; root is outside this application's trust boundary.
@@ -2620,7 +2678,8 @@ pub fn serve() -> Result<()> {
         .env("LD_LIBRARY_PATH", "/usr/libexec/luma-os/llama");
     inherit_runtime_files(&mut command, &verified, &runtime);
     supervision::run(&mut command, || {
-        fence.check(&Path::new(VAR).join(STATE), &p)
+        fence.check(&Path::new(VAR).join(STATE), &p)?;
+        lease.check()
     })
 }
 

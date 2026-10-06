@@ -15,7 +15,9 @@ credentials. A socket-specific POSIX ACL admits root, UID 989 and UID 990
 without adding the model worker to the control database's group. UID 990 gains
 no resource methods; UID 989 gains only acquisition and renewal of its own
 fixed, selected CPU worker. Root acquisition is accepted only from the fixed,
-enforcing acquisition unit. Unsupported ACL or peer-PID-handle support refuses
+enforcing acquisition unit. Both worker kinds now require their exact enforcing
+AppArmor label, no-new-privileges, seccomp filter mode and current fixed capability
+sets, not merely a matching UID and cgroup. Unsupported ACL or peer-PID-handle support refuses
 without a weaker fallback.
 
 Sixteen bounded transport threads have separate UID quotas: eight root,
@@ -32,6 +34,28 @@ come from the root-owned pinned image catalog. Serving must match the installed
 selection and lifecycle fences; acquisition can prepare another pinned profile
 before a selected worker is stopped. Acquisition additionally binds the physical
 IO-controller device resolved from the trusted target's kernel storage topology.
+
+Current real, effective, saved and filesystem UIDs must all equal the authenticated
+peer UID. Peer observation binds the PID handle's kernel-reported target to the
+connecting PID and rechecks start time, credentials and liveness around reads.
+Resource dispatch, history maintenance/export and inference acknowledgements
+recheck that proof. A live caller that drops any of those UIDs loses request
+authority; periodic request maintenance fences its serving generation just as
+for caller death. Observation failure never substitutes another process or
+revives a stored PID.
+
+Serving owners require zero permitted, effective, bounding, inheritable and
+ambient capabilities. The root acquisition supervisor requires exactly
+`CAP_SETUID`, `CAP_SETGID` and `CAP_KILL` in its permitted/effective/bounding
+sets, with empty inheritable/ambient sets. Both plans require `NoNewPrivs: 1`,
+`Seccomp: 2`, their fixed cgroup and zero soft/hard locked-memory limits across
+repeated bounded observations. An absent, changed, malformed or duplicate
+security field refuses admission/renewal; ongoing enforcement loss uses the
+existing durable revoke and whole-group drain path without returning capacity
+early. Filter-mode observation does not attest the exact seccomp program or
+replace installed AppArmor/cgroup/filter qualification. These are root laboratory
+interfaces, not product Admin authorization or an atomic credential-transition
+claim.
 
 The native ledger implements checked unsigned 64-bit accounting, atomic
 multi-domain admission, loading/serving peak reservation, exact replay,

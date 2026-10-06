@@ -58,10 +58,28 @@ class ResourcePolicyTests(unittest.TestCase):
         for name in ('resources.rs', 'resource_manager.rs', 'acquisition.rs', 'storage_io.rs',
                      'service/ingress.rs', 'model/layout.rs', 'resource_manager/recovery.rs',
                      'resource_manager/requests.rs', 'resource_manager/requests/journal.rs',
-                     'resource_manager/history.rs'):
+                     'resource_manager/history.rs', 'resource_manager/peer.rs'):
             source = (ROOT/'rust/luma-platform/src'/name).read_text()
             for marker in ('todo!', 'unimplemented!', '// TODO', '// FIXME'):
                 self.assertNotIn(marker, source)
+
+    def test_current_credentials_and_both_fixed_worker_confinements_are_rechecked(self):
+        peer = (ROOT/'rust/luma-platform/src/resource_manager/peer.rs').read_text()
+        for marker in ('luma-model (enforce)', 'luma-acquisition (enforce)',
+                       '"NoNewPrivs"', '"Seccomp"', '"CapEff"', '"CapBnd"',
+                       '"CapPrm"', '"CapInh"', '"CapAmb"', 'values.len() != 4'):
+            self.assertIn(marker, peer)
+        manager = (ROOT/'rust/luma-platform/src/resource_manager.rs').read_text()
+        owner = manager.split('fn owner(')[1].split('fn inventory(')[0]
+        self.assertEqual(owner.count('peer::worker_generation('), 2)
+        handle = manager.split('pub(crate) fn handle(')[1].split('fn validate(')[0]
+        self.assertLess(handle.index('peer::live_generation'), handle.index('self.maintain()'))
+        self.assertIn('peer::live_generation(peer, &reply_pin)? != current_peer', handle)
+        requests = (ROOT/'rust/luma-platform/src/resource_manager/requests.rs').read_text()
+        self.assertIn('self.maintain_checked(ledger, time, Caller::live)', requests)
+        self.assertIn('Caller::observe(peer, &reply_pin)? != caller', requests)
+        history = (ROOT/'rust/luma-platform/src/resource_manager/history.rs').read_text()
+        self.assertEqual(history.split('impl Manager {')[1].split('pub(crate) fn export(')[0].count('live_generation('), 2)
 
     def test_operator_admission_uses_exact_tokens_and_preserves_physical_capacity(self):
         helper = (ROOT/'native/image/overlay/usr/libexec/luma-os/model-chat.py').read_text()

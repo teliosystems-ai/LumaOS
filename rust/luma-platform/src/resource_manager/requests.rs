@@ -69,20 +69,33 @@ struct Caller {
 }
 impl Caller {
     fn observe(peer: libc::ucred, pin: &File) -> Result<Self> {
-        if peer.uid != 0 || peer.pid <= 0 || !pidfd_alive(pin)? {
+        if peer.uid != 0 {
             return Err("inference maintenance requires a live installed-root peer".into());
         }
-        let path = format!("/proc/{}/stat", peer.pid);
-        let start = start_ticks(&safe_text(Path::new(&path), 4096)?)?;
-        let boot = boot_identity()?;
-        if !pidfd_alive(pin)? || start_ticks(&safe_text(Path::new(&path), 4096)?)? != start {
-            return Err("inference caller generation changed".into());
-        }
+        let (start, boot) = super::peer::live_generation(peer, pin)?;
         Ok(Self {
             pid: peer.pid as u32,
             start,
             boot,
         })
+    }
+    fn live(&self, pin: &File) -> Result<bool> {
+        if !pidfd_alive(pin)? {
+            return Ok(false);
+        }
+        let identity = super::peer::live_generation(
+            libc::ucred {
+                pid: self.pid.try_into()?,
+                uid: 0,
+                gid: 0,
+            },
+            pin,
+        );
+        // Lost/changed current credentials cannot revive a request. Failed
+        // observations fence that generation; only physical drainage frees it.
+        Ok(identity.map_or(false, |(start, boot)| {
+            start == self.start && boot == self.boot
+        }))
     }
 }
 
@@ -340,13 +353,22 @@ impl Gate {
         Ok(record.receipt())
     }
     pub(super) fn maintain(&mut self, ledger: &resources::Ledger, time: u64) -> Result<Vec<Token>> {
-        self.maintain_with(ledger, time, pidfd_alive)
+        self.maintain_checked(ledger, time, Caller::live)
     }
+    #[cfg(test)]
     fn maintain_with(
         &mut self,
         ledger: &resources::Ledger,
         time: u64,
         alive: impl Fn(&File) -> Result<bool>,
+    ) -> Result<Vec<Token>> {
+        self.maintain_checked(ledger, time, |_, pin| alive(pin))
+    }
+    fn maintain_checked(
+        &mut self,
+        ledger: &resources::Ledger,
+        time: u64,
+        alive: impl Fn(&Caller, &File) -> Result<bool>,
     ) -> Result<Vec<Token>> {
         self.retention.check()?;
         let mut cancellations = Vec::new();
@@ -368,7 +390,7 @@ impl Gate {
                 || lease.state != State::Active
                 || lease.deadline_ms <= time
                 || match &record.pin {
-                    Some(pin) => !alive(pin)?,
+                    Some(pin) => !alive(&record.caller, pin)?,
                     None => true,
                 }
             {
@@ -821,6 +843,78 @@ mod tests {
         assert!(gate.occupied());
         assert_eq!(ledger.charged("host").unwrap(), 5000);
     }
+
+    #[test]
+    fn live_root_credential_revocation_fences_preparing_and_admitted_requests() {
+        use std::io::{BufRead, BufReader};
+        use std::process::{Child, Command, Stdio};
+        struct OwnedCaller(Child);
+        impl Drop for OwnedCaller {
+            fn drop(&mut self) {
+                let _ = self.0.kill();
+                let _ = self.0.wait();
+            }
+        }
+        assert_eq!(
+            unsafe { libc::geteuid() },
+            0,
+            "kernel credential fixture requires disposable root"
+        );
+        for admitted in [false, true] {
+            for mutation in [
+                "os.setresuid(990,0,0)",
+                "os.setresuid(0,0,990)",
+                "os.setresuid(0,990,0)",
+                "os.setresuid(990,990,990)",
+                "import ctypes; assert ctypes.CDLL(None).setfsuid(990)==0",
+            ] {
+                let script = format!("import os,sys\nprint('root',flush=True)\nsys.stdin.buffer.read(1)\nos.setgroups([])\n{mutation}\nprint('changed',flush=True)\nsys.stdin.buffer.read(1)\n");
+                let mut child = OwnedCaller(
+                    Command::new("/usr/bin/python3")
+                        .args(["-I", "-c", &script])
+                        .env_clear()
+                        .stdin(Stdio::piped())
+                        .stdout(Stdio::piped())
+                        .stderr(Stdio::null())
+                        .spawn()
+                        .unwrap(),
+                );
+                let mut output = BufReader::new(child.0.stdout.take().unwrap());
+                let mut line = String::new();
+                output.read_line(&mut line).unwrap();
+                assert_eq!(line, "root\n");
+                let peer = libc::ucred {
+                    pid: child.0.id() as i32,
+                    uid: 0,
+                    gid: 0,
+                };
+                let raw = unsafe { libc::syscall(libc::SYS_pidfd_open, peer.pid, 0) };
+                assert!(raw >= 0);
+                let pin = unsafe { File::from_raw_fd(raw as i32) };
+                let reply_pin = pin.try_clone().unwrap();
+                let caller = Caller::observe(peer, &pin).unwrap();
+                let (mut gate, ledger, worker, _) = fixture();
+                gate.begin(caller.clone(), pin, &begin(&worker, 1), 2048, 2)
+                    .unwrap();
+                if admitted {
+                    gate.admit(&caller, &admit(&worker, 1, 10), 3).unwrap();
+                }
+                child.0.stdin.as_mut().unwrap().write_all(b"x").unwrap();
+                line.clear();
+                output.read_line(&mut line).unwrap();
+                assert_eq!(line, "changed\n", "{mutation}");
+                assert!(pidfd_alive(&reply_pin).unwrap());
+                assert!(Caller::observe(peer, &reply_pin).is_err(), "{mutation}");
+                assert!(!caller.live(&reply_pin).unwrap());
+                assert_eq!(gate.maintain(&ledger, 4).unwrap(), vec![worker.clone()]);
+                assert_eq!(gate.records[0].phase, Phase::Draining);
+                assert!(gate.occupied());
+                assert!(gate.admit(&caller, &admit(&worker, 1, 10), 5).is_err());
+                assert!(gate.finish(&caller, &finish(&worker, 1, 10, 1), 5).is_err());
+                assert_eq!(ledger.charged("host").unwrap(), 5000);
+            }
+        }
+    }
 }
 
 impl Manager {
@@ -853,6 +947,7 @@ impl Manager {
         crate::platform::require_installed()?;
         self.maintain()?;
         let caller = Caller::observe(peer, &pin)?;
+        let reply_pin = pin.try_clone()?;
         let time = now()?;
         validate(request, peer.uid, time)?;
         let status = match &request.payload {
@@ -868,8 +963,13 @@ impl Manager {
                 if &current.id != profile {
                     return Err("inference selected profile differs".into());
                 }
-                self.requests
-                    .begin(caller, pin, &request.payload, current.context_limit(), time)?
+                self.requests.begin(
+                    caller.clone(),
+                    pin,
+                    &request.payload,
+                    current.context_limit(),
+                    time,
+                )?
             }
             Message::Admit { worker, .. } => {
                 self.inference_worker(Some(worker), time)?;
@@ -886,7 +986,7 @@ impl Manager {
             }
         };
         self.requests.persist(&self.store, true)?;
-        if now()? >= request.deadline {
+        if Caller::observe(peer, &reply_pin)? != caller || now()? >= request.deadline {
             return Err("inference acknowledgement expired".into());
         }
         Ok(

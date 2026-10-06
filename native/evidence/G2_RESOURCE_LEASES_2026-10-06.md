@@ -3,7 +3,7 @@
 Date: 2026-10-06. Scope: Requirement #1, resource leases/generations only.
 Status: native CPU-serving, leased root verification, verified KV layout,
 offline exclusion recovery, input-bound operator admission, durable request history
-and transport increments;
+and current-credential/confinement increments;
 **Requirement #1 and G2
 remain open**. No Requirement #2 implementation, final image build, physical
 qualification, production custody change or TPM ownership change is asserted.
@@ -18,6 +18,18 @@ fixed-cgroup controls, kernel owner binding, physical loading checks, idle
 reclaim and worker heartbeats. `service.rs` retains the existing framed Unix
 socket and adds strict resource responses, socket-specific service-user ACLs
 and peer PID handles. No listener or shared writable database was added.
+
+`resource_manager/peer.rs` now binds the process handle's actual kernel target
+to the connecting PID and checks the current real/effective/saved/filesystem
+UIDs, start generation and liveness. Resource dispatch, inference replies and
+history export/recovery recheck that proof; ongoing requests fence a still-live
+caller whose credentials change. Both model and acquisition owners additionally
+require their exact enforcing AppArmor label, fixed capability masks,
+no-new-privileges, seccomp filter mode, cgroup and zero locked-memory limits
+across repeated bounded observations. Missing, changed or ambiguous observations
+cannot authorize an allocation or return physical capacity. Seccomp mode is
+not an attestation of the exact filter program. Installed kernel enforcement
+and the reference gateway/key rotation remain unqualified/open respectively.
 
 The model serving path now acquires before weight verification and renews
 during loading/execution. Installer initialization, the owned slice, model
@@ -133,9 +145,70 @@ weights or qualify loading. Production still requires the full pinned digest.
 Use [the resource register](../RESOURCE_LEASES.md) for the implemented boundary,
 operator instructions, finite limits and remaining software integrations.
 
-## Input binding and compiled operator command execution
+## Current peer and worker confinement execution
 
-Latest evidence directory: `D:\LumaOS-builds\g2-resources-targeted-20261006-36`.
+Latest evidence directory: `D:\LumaOS-builds\g2-resources-targeted-20261006-37`.
+All 205 captured source files and 56 test inputs matched the checkout after
+execution. The immutable runner and complete output are retained; the sweep
+exited zero. It used the existing D-backed tool image/cache, one CPU, 768 MiB,
+no extra swap/network and no `CAP_SYS_ADMIN`. No WSL settings, host services,
+reference credentials or TPM ownership were changed.
+
+| Check | Result |
+| --- | --- |
+| Resource core | 18 passed |
+| Adapter, recovery, request admission, history and current peer checks | 79 passed, including six new credential/confinement checks |
+| Acquisition and storage | 6 passed |
+| Broker transport | 24 passed |
+| Model lifecycle and supervision | 126 passed; two existing owned child entrypoints invoked by parent fixtures, not counted twice |
+| Selected Python policy/helper checks | 98 passed, including current-proof dispatch/maintenance/reply wiring |
+| Compiled native history CLI and framed Unix IPC | 24 cases passed against a synthetic root authority |
+| Compiled native model-chat command and Unix/HTTP protocol | 11 cases passed against synthetic authorities |
+| Formatting, warnings-denied offline locked build, AppArmor syntax and pinned runtime parser controls | Passed; no enforcement or real model qualification |
+| Real systemd graph verification | Exit 1 because the tool image lacks `apparmor.service`; installed qualification remains pending |
+
+Total: **351 passing selected tests**, plus **35 protocol cases**. Seven
+selected tests were added since the preceding checkpoint; protocol cases were
+rerun, not increased. No new Requirement #1 test is skipped. The broader Python
+regression was not rerun or added to this total.
+
+Real owned child processes drop real, saved, effective, all or filesystem UIDs
+while their PID handles remain live. Both preparing and admitted requests then
+enter draining, reject further admission/completion and retain their original
+physical charge in the synthetic ledger. Another kernel test refuses a handle
+for a different live root process. Fixed-worker observations cover both plans,
+enforcing/unconfined/complain/stacked labels, cgroup/start drift, exact privilege
+fields, missing/duplicate/malformed observations and zero locked-memory ceilings.
+Those worker-observation inputs are fixtures, not installed AppArmor/seccomp
+enforcement. The existing CLI fixtures still use only their test-only command-line
+preload and synthetic broker/runtime authorities. No real model or consolidated
+image was exercised.
+
+| Retained file | SHA-256 |
+| --- | --- |
+| `source/build-inputs.json` | `42dbdc83f0b94f5d7bc23010dd15b853daf69ff72509425cf798a1f613cc1a1c` |
+| `test-inputs.sha256` | `4b50ee7b18babf32791085b7b76a085eb149831ccf10a3d609d62a7003cc6942` |
+| `test.log` | `29fed43165ef0b27e1f01d31842d441ae8cd721d6ed130a11a19a8bbd0b48bff` |
+| `checks/targeted-runner.sh` | `cff4e6cc4f72b4802693e47027ae893090e72ce72e3d51c63d59eb496da16102` |
+| `checks/sweep-exit.txt` | `9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa` |
+| `checks/resource-history-cli.txt` | `3568f07a6297fece8954c303f91a1b5b3036b9defb35e32cfca9410be788c226` |
+| `checks/resource-history-artifacts.sha256` | `43d4a262b3d3c955887a1ec6a3aa81f9390ba5c87db093a7bedc95da7a85ddfa` |
+| `checks/unit-verification.txt` | `cc6d6ba4f56881e50612c693db5577418157f96999327fbac956e538602db498` |
+| `checks/unit-verification-exit.txt` | `4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865` |
+| `checks/runtime-options.json` | `d6c5bc021ad939c79d18ba4c18213954e73dee3c4a200d763086f2e0c28c38cb` |
+
+The compiled development binary has SHA-256
+`570ca8d2f520d3c9c69ae6ca3aaae85eb11c478895665ec55d6f151ff281cb5a`.
+The test-only shim remains
+`a0e259b7847aebbd3b1eb46970d83b5e7edc35ed1150a06f69b7a768bc71eb73`.
+These are development artifacts, not a production image or custody record.
+Reference gateway/key rotation, content/workflow integration, wider tenant/device
+adapters and governed retention/recovery remain software work. Requirement #1
+is not closed and Requirement #2 has not been started.
+
+## Input binding and compiled operator command baseline execution
+
+Evidence directory: `D:\LumaOS-builds\g2-resources-targeted-20261006-36`.
 All 204 captured source files and 56 test inputs matched the checkout after
 execution. The immutable runner and full output are retained. The complete
 sweep exited zero, using the same D-backed tool image/cache, one CPU, 768 MiB,

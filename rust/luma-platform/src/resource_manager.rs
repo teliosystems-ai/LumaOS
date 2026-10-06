@@ -23,6 +23,7 @@ const LEASE_MS: u64 = 10_000;
 pub(crate) const ACQUISITION_MEMORY: u64 = 512 * 1024 * 1024;
 
 pub(crate) mod history;
+mod peer;
 pub(crate) mod recovery;
 pub(crate) mod requests;
 pub(crate) use requests::request_migration;
@@ -419,30 +420,17 @@ fn owner(pid: u32, uid: u32, group: &Group) -> Result<Owner> {
         return Err("invalid resource owner".into());
     }
     let path = format!("/proc/{pid}");
-    let before = start_ticks(&safe_text(&Path::new(&path).join("stat"), 4096)?)?;
-    if safe_text(&Path::new(&path).join("cgroup"), 4096)? != format!("0::{}\n", kind.leaf())
-        || fs::metadata(&path)?.uid() != uid
-    {
-        return Err("peer is not in the fixed isolated worker unit".into());
-    }
-    if kind == Kind::Acquisition
-        && safe_text(&Path::new(&path).join("attr/current"), 128)? != "luma-acquisition (enforce)\n"
-    {
-        return Err("acquisition peer confinement is not enforcing".into());
-    }
+    let before = peer::worker_generation(kind, uid, |name, maximum| {
+        safe_text(&Path::new(&path).join(name), maximum)
+    })?;
     let boot = boot_identity()?;
     let (device, inode) = group.identity()?;
-    if start_ticks(&safe_text(&Path::new(&path).join("stat"), 4096)?)? != before {
+    if peer::worker_generation(kind, uid, |name, maximum| {
+        safe_text(&Path::new(&path).join(name), maximum)
+    })? != before
+        || fs::metadata(&path)?.uid() != uid
+    {
         return Err("resource owner changed during observation".into());
-    }
-    let limits = safe_text(&Path::new(&path).join("limits"), 8192)?;
-    let locked = limits
-        .lines()
-        .find(|line| line.starts_with("Max locked memory"))
-        .ok_or("missing pinned-memory ceiling")?;
-    let fields: Vec<_> = locked.split_whitespace().collect();
-    if fields.len() != 6 || fields[3] != "0" || fields[4] != "0" || fields[5] != "bytes" {
-        return Err("CPU worker pinned memory is not disabled".into());
     }
     Ok(Owner {
         uid,
@@ -795,6 +783,12 @@ impl Manager {
         pinned: Option<File>,
     ) -> Result<Response> {
         validate(r, peer.uid, now()?)?;
+        let current_peer = peer::live_generation(
+            peer,
+            pinned
+                .as_ref()
+                .ok_or("missing current resource peer handle")?,
+        )?;
         if matches!(
             r.action.as_str(),
             "resource-request-status"
@@ -811,6 +805,19 @@ impl Manager {
         self.maintain()?;
         let time = now()?;
         validate(r, peer.uid, time)?;
+        if peer::live_generation(
+            peer,
+            pinned
+                .as_ref()
+                .ok_or("missing current resource peer handle")?,
+        )? != current_peer
+        {
+            return Err("resource peer generation changed before dispatch".into());
+        }
+        let reply_pin = pinned
+            .as_ref()
+            .ok_or("missing current resource peer handle")?
+            .try_clone()?;
         let mut token = None;
         let mut status = None;
         match r.action.as_str() {
@@ -1016,7 +1023,7 @@ impl Manager {
                         &self.store,
                         r.review.as_deref().ok_or("missing recovery review")?,
                         || {
-                            if !pidfd_alive(&pin)? || self.group.populated()? || self.acquisition.populated()?
+                            if peer::live_generation(peer, &pin)? != current_peer || self.group.populated()? || self.acquisition.populated()?
                                 || Group::open()?.identity()? != self.group.identity()?
                                 || Group::for_kind(Kind::Acquisition)?.identity()? != self.acquisition.identity()?
                                 || now()? >= r.deadline
@@ -1032,7 +1039,7 @@ impl Manager {
             }
             _ => return Err("unsupported resource operation".into()),
         }
-        if now()? >= r.deadline {
+        if peer::live_generation(peer, &reply_pin)? != current_peer || now()? >= r.deadline {
             return Err("resource response deadline expired".into());
         }
         Ok(Response {

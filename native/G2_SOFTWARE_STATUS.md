@@ -20,7 +20,13 @@ before proceeding to Requirement #2. The native broker now has durable atomic
 lease accounting, kernel-bound worker generations, loading-time heartbeats,
 whole-cgroup drain/retained-cache accounting, pressure/quarantine and reviewed
 receipt archival. Fresh installer initialization, model supervision and unit
-packaging are wired in source. Acquisition preparation now has a separate
+packaging are wired in source. Worker admission, renewal and maintenance now
+recheck both fixed enforcing AppArmor labels, current UID sets, capability
+masks, no-new-privileges and seccomp filter mode. Resource/request/history
+acknowledgements recheck the exact live peer handle and current credentials;
+request maintenance fences live callers whose credentials are dropped, without
+early physical return. The exact installed filters and controller procedure
+still require qualification. Acquisition preparation now has a separate
 512-MiB broker-leased, AppArmor-confined worker, physical storage binding,
 generation drainage handoff and partial-output fences. Local deadline checks
 cover serving/acquisition hashing; bounded transport does not block renewals

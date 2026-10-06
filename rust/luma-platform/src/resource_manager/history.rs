@@ -90,13 +90,11 @@ impl Manager {
     ) -> Result<Response> {
         validate(r, peer.uid, now()?)?;
         crate::platform::require_installed()?;
-        if peer.pid <= 0 || !pidfd_alive(&pin)? {
-            return Err("request export requires live installed root".into());
-        }
+        let identity = super::peer::live_generation(peer, &pin)?;
         self.maintain()?;
         self.requests.persist(&self.store, true)?;
         let chunk = self.requests.export_chunk(&self.store, r)?;
-        if !pidfd_alive(&pin)? || now()? >= r.deadline {
+        if super::peer::live_generation(peer, &pin)? != identity || now()? >= r.deadline {
             return Err("request export peer or deadline expired".into());
         }
         Ok(Response {

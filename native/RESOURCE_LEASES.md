@@ -183,11 +183,46 @@ the exact terminal receipts without replacement, synchronizes the archive,
 then durably cuts the hot inventory. It does not stop a serving worker, change
 its physical lease, return capacity or delete history. Retired nonces are
 reconstructed from the validated archive chain and cannot be admitted again.
-There are at most 64 referenced archives, 128 retained archive/stage files,
+There are at most 64 referenced archives, 128 retained archive/stage/incident files,
 1 MiB per journal/archive, and 512 entries per directory inspection. Limits
 refuse rather than evict. Status reports logical archival eligibility, not a
 guarantee that storage inspection or publication will succeed. Complete orphan archives and interrupted private
 stages remain retained; neither proves that a hot cut completed.
+
+Installed-root `resource-request-export BATCH SHA256` exports only an exact
+referenced immutable request archive. The existing broker socket returns closed
+JSON chunks of at most 2,048 ASCII bytes, with lossless offsets, total length and
+archive identity. Each chunk requires a live authenticated root peer and a
+current deadline. The client limits the complete operation to 30 seconds,
+512 chunks and 1 MiB, checks every correlation/offset/length and verifies the
+complete SHA-256 before writing any archive bytes to stdout. It never exports
+mutable hot history, arbitrary paths or unreferenced publications. Output is
+unsigned laboratory evidence; it does not implement production signing custody,
+tenant disclosure policy or deletion authority.
+
+After an incomplete archive stage causes refusal, preserve the files and restart
+the broker so that it reloads durable authority. Drain and release all physical
+generations using their normal trusted controller paths. With both worker groups
+empty, run `sudo luma-platform resource-request-recovery-status`. Only if it
+reports `recoverable: true`, review the named stage, byte length and digest, then
+run `sudo luma-platform resource-request-recover REVIEW-SHA256`. The review binds
+the physical ledger, current journal, exact candidate name and stage content,
+inode and timestamps. This operation moves only the incomplete stage for the
+current archive candidate, without replacement, to a retained incident name in
+the same private directory and synchronizes the directory. The live peer,
+deadline, empty worker groups and their current cgroup identities are rechecked
+immediately before and after preservation. Its inode and bytes,
+hot receipts, archive references, nonce fences and physical accounting remain
+intact. Complete stages use normal exact archival retry, never this recovery.
+
+Unsafe links/modes, a stale review, changed bytes/inode, outstanding requests or
+physical generations, populated worker groups and uncertain publication refuse.
+A lost preservation acknowledgement poisons the session: restart and inspect
+the durable result rather than deleting or automatically retrying anything.
+Retained incidents count against the same finite file inventory and are checked
+at startup. Recovery does not reclaim a retention slot, start workers or repair
+a damaged hot journal, older unrelated stages or a broken archive chain. Those
+broader recovery and product governance integrations remain open.
 
 These are durable laboratory receipts and reviewed archival, not complete
 product retention governance, export/deletion custody or a tenant gateway.
@@ -264,6 +299,11 @@ sudo luma-platform resource-status
 sudo luma-platform resource-revoke LEASE-ID GENERATION MANAGER-EPOCH
 sudo luma-platform resource-reconcile REVIEW-SHA256
 sudo luma-platform resource-archive REVIEW-SHA256
+sudo luma-platform resource-request-status
+sudo luma-platform resource-request-archive REVIEW-SHA256
+sudo luma-platform resource-request-export BATCH SHA256
+sudo luma-platform resource-request-recovery-status
+sudo luma-platform resource-request-recover REVIEW-SHA256
 ```
 
 Use the exact outstanding token and current review returned by status.
@@ -338,7 +378,8 @@ Admin authorization, and their combined native-image procedure remains unqualifi
 - Extend request-level accepted prompt/output/concurrency accounting to all
   inference consumers, close the reference service's direct-runtime bypass,
   and finish governed request export/deletion, custody and retention recovery.
-  Durable operator receipts and reviewed archival now exist; the operator path
+  Durable operator receipts, reviewed archival, bounded root export and reviewed
+  preservation of a current incomplete archive stage now exist; the operator path
   and verified CPU KV inventory do not close those integrations by themselves.
 - Complete supported multi-worker/tenant and device-domain adapters and
   generation/recovery paths. Current CPU-only, zero-pinned/zero-device profiles

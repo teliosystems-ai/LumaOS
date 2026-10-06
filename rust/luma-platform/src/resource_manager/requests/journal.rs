@@ -101,6 +101,92 @@ fn digest(bytes: &[u8]) -> String {
     bundle::hex(&Sha256::digest(bytes))
 }
 
+#[derive(Serialize, PartialEq, Eq)]
+struct StageIdentity {
+    device: u64,
+    inode: u64,
+    length: u64,
+    modified: i64,
+    modified_ns: i64,
+    changed: i64,
+    changed_ns: i64,
+    sha256: String,
+}
+
+fn stage_identity(path: &Path) -> Result<StageIdentity> {
+    tpm::private_directory(path.parent().ok_or("stage parent missing")?)?;
+    let mut file = OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC)
+        .open(path)?;
+    let before = file.metadata()?;
+    if !before.is_file()
+        || before.uid() != 0
+        || before.mode() & 0o7777 != 0o600
+        || before.nlink() != 1
+        || before.len() > MAX_BYTES
+    {
+        return Err("unsafe request recovery stage".into());
+    }
+    let mut bytes = Vec::new();
+    (&mut file).take(MAX_BYTES + 1).read_to_end(&mut bytes)?;
+    let identity = |m: &fs::Metadata| StageIdentity {
+        device: m.dev(),
+        inode: m.ino(),
+        length: m.len(),
+        modified: m.mtime(),
+        modified_ns: m.mtime_nsec(),
+        changed: m.ctime(),
+        changed_ns: m.ctime_nsec(),
+        sha256: digest(&bytes),
+    };
+    if bytes.len() as u64 != before.len()
+        || identity(&before) != identity(&file.metadata()?)
+        || identity(&before) != identity(&fs::symlink_metadata(path)?)
+    {
+        return Err("request recovery stage changed during inspection".into());
+    }
+    Ok(identity(&before))
+}
+
+fn preserve_stage(
+    directory: &Path,
+    source: &str,
+    destination: &str,
+    identity: &StageIdentity,
+) -> Result<()> {
+    let source_path = directory.join(source);
+    if stage_identity(&source_path)? != *identity {
+        return Err("request recovery stage changed before preservation".into());
+    }
+    File::open(&source_path)?.sync_all()?;
+    let from = CString::new(source_path.as_os_str().as_bytes())?;
+    let to = CString::new(directory.join(destination).as_os_str().as_bytes())?;
+    if unsafe {
+        libc::renameat2(
+            libc::AT_FDCWD,
+            from.as_ptr(),
+            libc::AT_FDCWD,
+            to.as_ptr(),
+            libc::RENAME_NOREPLACE,
+        )
+    } != 0
+    {
+        return Err(std::io::Error::last_os_error().into());
+    }
+    let retained = stage_identity(&directory.join(destination))?;
+    if retained.device != identity.device
+        || retained.inode != identity.inode
+        || retained.length != identity.length
+        || retained.sha256 != identity.sha256
+        || source_path.try_exists()?
+    {
+        return Err("request stage preservation outcome uncertain".into());
+    }
+    File::open(directory)?.sync_all()?;
+    Ok(())
+}
+
 fn validate_records(records: &[Record]) -> Result<BTreeSet<String>> {
     if records.len() > MAX_RECEIPTS {
         return Err("request receipt inventory exhausted".into());
@@ -230,7 +316,21 @@ fn inventory(
         let entry = entry?;
         let name = entry.file_name();
         let name = name.to_str().ok_or("invalid private request filename")?;
-        if name.starts_with(".requests-stage-") {
+        if let Some(suffix) = name.strip_prefix(".requests-retained-") {
+            count += 1;
+            let (hash, review) = suffix
+                .split_once('-')
+                .ok_or("invalid retained request incident name")?;
+            let review = review
+                .strip_suffix(".json")
+                .ok_or("invalid retained request incident suffix")?;
+            if !digest_valid(hash)
+                || !digest_valid(review)
+                || stage_identity(&entry.path())?.sha256 != hash
+            {
+                return Err("retained request incident mismatch".into());
+            }
+        } else if name.starts_with(".requests-stage-") {
             count += 1;
             tpm::private_read(&entry.path(), MAX_BYTES)?;
         } else if let Some(suffix) = name.strip_prefix("requests-archive-") {
@@ -404,6 +504,158 @@ impl Gate {
         self.archive_with(store, review, |gate, store| gate.persist(store, true))
     }
 
+    pub(in crate::resource_manager) fn export_chunk(
+        &self,
+        store: &Store,
+        r: &super::super::history::Request,
+    ) -> Result<super::super::history::Chunk> {
+        self.retention.check()?;
+        let reference = self
+            .retention
+            .archives
+            .iter()
+            .find(|a| a.batch == r.batch && a.sha256 == r.sha256)
+            .ok_or("export requires an exact referenced immutable archive")?;
+        let directory = store.request_directory()?;
+        let bytes = tpm::private_read(&directory.join(reference.name()), MAX_BYTES)?;
+        let snapshot = decode(&bytes)?;
+        if snapshot.origin != self.retention.origin
+            || snapshot.archives != self.retention.archives[..(reference.batch - 1) as usize]
+            || snapshot.records.is_empty()
+            || snapshot
+                .records
+                .iter()
+                .any(|r| !matches!(r.phase, Phase::Completed | Phase::Released))
+        {
+            return Err("request archive export provenance mismatch".into());
+        }
+        // Canonical request identities and digests contain only ASCII. Never
+        // split arbitrary UTF-8 or provide an export of an unvalidated orphan.
+        if digest(&bytes) != reference.sha256
+            || !bytes.is_ascii()
+            || r.offset >= bytes.len() as u64
+            || r.offset % super::super::history::CHUNK_BYTES != 0
+        {
+            return Err("request archive export digest, encoding or offset mismatch".into());
+        }
+        let end = r
+            .offset
+            .checked_add(super::super::history::CHUNK_BYTES)
+            .ok_or("request export offset overflow")?
+            .min(bytes.len() as u64);
+        Ok(super::super::history::Chunk {
+            batch: reference.batch,
+            sha256: reference.sha256.clone(),
+            offset: r.offset,
+            next_offset: end,
+            total_bytes: bytes.len() as u64,
+            data: String::from_utf8(bytes[r.offset as usize..end as usize].to_vec())?,
+            worker_resources_released: false,
+        })
+    }
+
+    fn recovery_candidate(&self, store: &Store) -> Result<Option<(String, StageIdentity, String)>> {
+        let bytes = self.bytes()?;
+        let ledger = store.read()?;
+        if self.occupied() || ledger.leases.iter().any(|l| l.state != State::Released) {
+            return Err("request stage recovery requires terminal requests and released physical generations".into());
+        }
+        let directory = store.request_directory()?;
+        if Some(digest(&tpm::private_read(
+            &directory.join(FILE),
+            MAX_BYTES,
+        )?)) != self.retention.published
+        {
+            return Err("request journal changed before recovery review".into());
+        }
+        inventory(directory, &self.retention.archives, &self.retention.origin)?;
+        if self.records.is_empty() || self.retention.archives.len() >= MAX_ARCHIVES {
+            return Ok(None);
+        }
+        let reference = Archive {
+            batch: self.retention.archives.len() as u64 + 1,
+            sha256: digest(&bytes),
+        };
+        let source = format!(".requests-stage-{}", reference.name());
+        let path = directory.join(&source);
+        match fs::symlink_metadata(&path) {
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(e) => return Err(e.into()),
+            Ok(_) => (),
+        }
+        let identity = stage_identity(&path)?;
+        if identity.sha256 == reference.sha256 && identity.length == bytes.len() as u64 {
+            // A complete stage is eligible for exact archival retry, not repair.
+            return Ok(None);
+        }
+        let review = digest(&serde_json::to_vec(&(
+            "retain-incomplete-request-stage",
+            ledger.review()?,
+            digest(&bytes),
+            &source,
+            &identity,
+        ))?);
+        Ok(Some((source, identity, review)))
+    }
+
+    pub(in crate::resource_manager) fn stage_recovery_status(
+        &self,
+        store: &Store,
+    ) -> Result<serde_json::Value> {
+        Ok(match self.recovery_candidate(store)? {
+            Some((source, identity, review)) => {
+                serde_json::json!({"recoverable":true,"review":review,
+                "stage":source,"stage_sha256":identity.sha256,"stage_bytes":identity.length.to_string(),
+                "worker_resources_released":false,"evidence_deleted":false})
+            }
+            None => serde_json::json!({"recoverable":false,"review":null,
+                "worker_resources_released":false,"evidence_deleted":false}),
+        })
+    }
+
+    pub(in crate::resource_manager) fn recover_stage_checked(
+        &mut self,
+        store: &Store,
+        review: &str,
+        mut observe: impl FnMut() -> Result<()>,
+    ) -> Result<serde_json::Value> {
+        self.recover_stage_with(store, review, |directory, source, destination, identity| {
+            observe()?;
+            preserve_stage(directory, source, destination, identity)?;
+            observe()
+        })
+    }
+
+    #[cfg(test)]
+    fn recover_stage(&mut self, store: &Store, review: &str) -> Result<serde_json::Value> {
+        self.recover_stage_with(store, review, preserve_stage)
+    }
+
+    fn recover_stage_with(
+        &mut self,
+        store: &Store,
+        review: &str,
+        preserve: impl FnOnce(&Path, &str, &str, &StageIdentity) -> Result<()>,
+    ) -> Result<serde_json::Value> {
+        let (source, identity, current) = self
+            .recovery_candidate(store)?
+            .ok_or("no incomplete current request archive stage")?;
+        if current != review {
+            return Err("stale request stage recovery review".into());
+        }
+        let destination = format!(".requests-retained-{}-{}.json", identity.sha256, current);
+        let result = preserve(store.request_directory()?, &source, &destination, &identity);
+        if result.is_err() {
+            self.retention.poisoned = true;
+        }
+        result?;
+        Ok(
+            serde_json::json!({"retained":destination,"sha256":identity.sha256,
+            "retained_bytes":identity.length.to_string(),"worker_resources_released":false,
+            "evidence_deleted":false,"hot_history_preserved":true}),
+        )
+    }
+
     fn archive_with(
         &mut self,
         store: &Store,
@@ -434,7 +686,9 @@ impl Gate {
             let name = name.to_str().ok_or("invalid request filename")?;
             Ok(count
                 + usize::from(
-                    name.starts_with("requests-archive-") || name.starts_with(".requests-stage-"),
+                    name.starts_with("requests-archive-")
+                        || name.starts_with(".requests-stage-")
+                        || name.starts_with(".requests-retained-"),
                 ))
         })?;
         if count >= MAX_FILES && !path.try_exists()? && !stage.try_exists()? {
@@ -1052,6 +1306,301 @@ mod tests {
         );
     }
 
+    fn partial_stage(f: &Fixture, bytes: &[u8]) -> std::path::PathBuf {
+        let current = f.gate.bytes().unwrap();
+        let reference = Archive {
+            batch: f.gate.retention.archives.len() as u64 + 1,
+            sha256: digest(&current),
+        };
+        let path = f
+            .directory
+            .join(format!(".requests-stage-{}", reference.name()));
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&path)
+            .unwrap();
+        file.write_all(bytes).unwrap();
+        file.sync_all().unwrap();
+        path
+    }
+    fn release_worker(f: &mut Fixture) {
+        f.store
+            .transact(|l| {
+                l.revoke(&f.worker, "test")?;
+                l.finish_draining(&f.worker, &BTreeMap::from([("host".into(), 25)]))
+            })
+            .unwrap();
+    }
+    fn recovery_review(f: &Fixture) -> String {
+        f.gate.stage_recovery_status(&f.store).unwrap()["review"]
+            .as_str()
+            .unwrap()
+            .into()
+    }
+
+    #[test]
+    fn referenced_archive_export_is_exact_bounded_and_never_releases_resources() {
+        let mut f = Fixture::new();
+        for nonce in 1..=5 {
+            f.complete(nonce);
+        }
+        let bytes = f.gate.bytes().unwrap();
+        let physical = fs::read(f.directory.join("ledger.json")).unwrap();
+        let archive = f.archive();
+        let hash = archive["archive"]["sha256"].as_str().unwrap();
+        let mut r = super::super::super::history::Request {
+            schema_version: 1,
+            request_id: "export".into(),
+            caller: 0,
+            deadline: 4000,
+            action: "resource-request-export".into(),
+            batch: 1,
+            sha256: hash.into(),
+            offset: 0,
+        };
+        let mut exported = Vec::new();
+        loop {
+            let c = f.gate.export_chunk(&f.store, &r).unwrap();
+            assert!(c.data.len() <= 2048);
+            assert!(!c.worker_resources_released);
+            exported.extend_from_slice(c.data.as_bytes());
+            r.offset = c.next_offset;
+            if r.offset == c.total_bytes {
+                break;
+            }
+        }
+        assert_eq!(exported, bytes);
+        assert!(f.gate.export_chunk(&f.store, &r).is_err());
+        r.offset = 1;
+        assert!(f.gate.export_chunk(&f.store, &r).is_err());
+        r.offset = 0;
+        r.sha256 = "0".repeat(64);
+        assert!(f.gate.export_chunk(&f.store, &r).is_err());
+        r.sha256 = hash.into();
+        r.batch = 2;
+        assert!(f.gate.export_chunk(&f.store, &r).is_err());
+        assert_eq!(fs::read(f.directory.join("ledger.json")).unwrap(), physical);
+    }
+
+    #[test]
+    fn partial_stage_recovery_retains_inode_bytes_hot_history_and_physical_receipts() {
+        let mut f = Fixture::new();
+        f.complete(1);
+        release_worker(&mut f);
+        let stage = partial_stage(&f, b"{");
+        let inode = fs::metadata(&stage).unwrap().ino();
+        let physical = fs::read(f.directory.join("ledger.json")).unwrap();
+        let hot = fs::read(f.directory.join(FILE)).unwrap();
+        let review = recovery_review(&f);
+        let result = f.gate.recover_stage(&f.store, &review).unwrap();
+        let retained = f.directory.join(result["retained"].as_str().unwrap());
+        assert_eq!(fs::read(&retained).unwrap(), b"{");
+        assert_eq!(fs::metadata(&retained).unwrap().ino(), inode);
+        assert!(!stage.exists());
+        assert_eq!(result["evidence_deleted"], false);
+        assert_eq!(fs::read(f.directory.join(FILE)).unwrap(), hot);
+        assert_eq!(fs::read(f.directory.join("ledger.json")).unwrap(), physical);
+        assert!(f.gate.recover_stage(&f.store, &review).is_err());
+        f.gate = Gate::open(&f.store).unwrap();
+        assert!(f.gate.retention.retired.is_empty());
+        f.archive();
+        assert_eq!(f.gate.retention.retired.len(), 1);
+        assert_eq!(fs::read(retained).unwrap(), b"{");
+    }
+
+    #[test]
+    fn stage_recovery_reviews_bind_bytes_inode_and_physical_generation() {
+        for change in 0..3 {
+            let mut f = Fixture::new();
+            f.complete(1);
+            release_worker(&mut f);
+            let stage = partial_stage(&f, b"{");
+            let review = recovery_review(&f);
+            match change {
+                0 => fs::write(&stage, b"changed").unwrap(),
+                1 => {
+                    fs::rename(&stage, f.directory.join("preserved-test-stage")).unwrap();
+                    let mut file = OpenOptions::new()
+                        .write(true)
+                        .create_new(true)
+                        .mode(0o600)
+                        .open(&stage)
+                        .unwrap();
+                    file.write_all(b"{").unwrap();
+                }
+                _ => f
+                    .store
+                    .transact(|l| {
+                        l.manager_epoch = "d".repeat(32);
+                        Ok(())
+                    })
+                    .unwrap(),
+            }
+            assert!(f.gate.recover_stage(&f.store, &review).is_err());
+            assert!(stage.exists());
+            assert!(!f.gate.retention.poisoned);
+        }
+    }
+
+    #[test]
+    fn stage_recovery_never_repairs_a_complete_stage_or_outstanding_worker() {
+        let mut f = Fixture::new();
+        f.complete(1);
+        let bytes = f.gate.bytes().unwrap();
+        let stage = partial_stage(&f, &bytes);
+        assert!(f.gate.stage_recovery_status(&f.store).is_err());
+        release_worker(&mut f);
+        assert_eq!(
+            f.gate.stage_recovery_status(&f.store).unwrap()["recoverable"],
+            false
+        );
+        assert!(f.gate.recover_stage(&f.store, &"0".repeat(64)).is_err());
+        assert_eq!(fs::read(&stage).unwrap(), bytes);
+        f.archive();
+        assert!(!stage.exists());
+    }
+
+    #[test]
+    fn recovery_lost_ack_before_or_after_rename_poison_and_restart_preserves_both_outcomes() {
+        for after in [false, true] {
+            let mut f = Fixture::new();
+            f.complete(1);
+            release_worker(&mut f);
+            let stage = partial_stage(&f, b"{");
+            let review = recovery_review(&f);
+            assert!(f
+                .gate
+                .recover_stage_with(&f.store, &review, |dir, source, destination, identity| {
+                    if after {
+                        preserve_stage(dir, source, destination, identity)?;
+                    }
+                    Err("injected stage preservation lost acknowledgement".into())
+                })
+                .is_err());
+            assert!(f.gate.retention.poisoned);
+            assert!(f.gate.recover_stage(&f.store, &review).is_err());
+            f.gate = Gate::open(&f.store).unwrap();
+            assert_eq!(stage.exists(), !after);
+            assert_eq!(
+                f.gate.stage_recovery_status(&f.store).unwrap()["recoverable"],
+                !after
+            );
+            if !after {
+                f.gate.recover_stage(&f.store, &review).unwrap();
+            }
+            f.archive();
+            assert_eq!(f.gate.retention.retired.len(), 1);
+        }
+    }
+
+    #[test]
+    fn unsafe_recovery_stage_links_and_modes_never_move_or_overwrite_bytes() {
+        let mut f = Fixture::new();
+        f.complete(1);
+        release_worker(&mut f);
+        let stage = partial_stage(&f, b"{");
+        fs::set_permissions(&stage, fs::Permissions::from_mode(0o644)).unwrap();
+        assert!(f.gate.stage_recovery_status(&f.store).is_err());
+        fs::set_permissions(&stage, fs::Permissions::from_mode(0o600)).unwrap();
+        fs::hard_link(&stage, f.directory.join("unsafe-stage-link")).unwrap();
+        assert!(f.gate.stage_recovery_status(&f.store).is_err());
+        fs::remove_file(f.directory.join("unsafe-stage-link")).unwrap();
+        fs::rename(&stage, f.directory.join("original-stage")).unwrap();
+        std::os::unix::fs::symlink("original-stage", &stage).unwrap();
+        assert!(f.gate.stage_recovery_status(&f.store).is_err());
+        assert_eq!(fs::read(f.directory.join("original-stage")).unwrap(), b"{");
+    }
+
+    #[test]
+    fn damaged_retained_incidents_refuse_restart_without_deleting_evidence() {
+        let mut f = Fixture::new();
+        f.complete(1);
+        release_worker(&mut f);
+        partial_stage(&f, b"{");
+        let review = recovery_review(&f);
+        let result = f.gate.recover_stage(&f.store, &review).unwrap();
+        let retained = f.directory.join(result["retained"].as_str().unwrap());
+        fs::write(&retained, b"modified").unwrap();
+        assert!(Gate::open(&f.store).is_err());
+        assert_eq!(fs::read(retained).unwrap(), b"modified");
+    }
+
+    #[test]
+    fn retained_incidents_count_toward_the_archive_limit_without_eviction() {
+        let mut f = Fixture::new();
+        f.complete(1);
+        release_worker(&mut f);
+        for index in 0..MAX_FILES - 1 {
+            let name = format!(".requests-retained-{}-{index:064x}.json", digest(b"{"));
+            let mut file = OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .mode(0o600)
+                .open(f.directory.join(name))
+                .unwrap();
+            file.write_all(b"{").unwrap();
+        }
+        partial_stage(&f, b"{");
+        let review = recovery_review(&f);
+        f.gate.recover_stage(&f.store, &review).unwrap();
+        let hot = fs::read(f.directory.join(FILE)).unwrap();
+        assert!(f.gate.archive_requests(&f.store, &f.review()).is_err());
+        assert_eq!(fs::read(f.directory.join(FILE)).unwrap(), hot);
+        assert_eq!(fs::read_dir(&f.directory).unwrap().count(), MAX_FILES + 3);
+        f.gate = Gate::open(&f.store).unwrap();
+        assert!(f.gate.retention.retired.is_empty());
+    }
+
+    #[test]
+    fn trusted_recovery_observation_failure_before_and_after_move_poison_without_history_loss() {
+        for fail_at in [1, 2] {
+            let mut f = Fixture::new();
+            f.complete(1);
+            release_worker(&mut f);
+            let stage = partial_stage(&f, b"{");
+            let review = recovery_review(&f);
+            let mut calls = 0;
+            let hot = fs::read(f.directory.join(FILE)).unwrap();
+            assert!(f
+                .gate
+                .recover_stage_checked(&f.store, &review, || {
+                    calls += 1;
+                    if calls == fail_at {
+                        return Err("injected trusted empty-group observation failure".into());
+                    }
+                    Ok(())
+                })
+                .is_err());
+            assert_eq!(calls, fail_at);
+            assert!(f.gate.retention.poisoned);
+            assert_eq!(stage.exists(), fail_at == 1);
+            assert_eq!(fs::read(f.directory.join(FILE)).unwrap(), hot);
+            assert_eq!(Gate::open(&f.store).unwrap().records.len(), 1);
+        }
+    }
+
+    #[test]
+    fn stage_preservation_never_replaces_an_existing_destination() {
+        let mut f = Fixture::new();
+        f.complete(1);
+        release_worker(&mut f);
+        let stage = partial_stage(&f, b"{");
+        let identity = stage_identity(&stage).unwrap();
+        let collision = f.directory.join("preserved-collision");
+        fs::write(&collision, b"prior evidence").unwrap();
+        assert!(preserve_stage(
+            &f.directory,
+            stage.file_name().unwrap().to_str().unwrap(),
+            "preserved-collision",
+            &identity
+        )
+        .is_err());
+        assert_eq!(fs::read(stage).unwrap(), b"{");
+        assert_eq!(fs::read(collision).unwrap(), b"prior evidence");
+    }
+
     #[test]
     fn missing_history_migration_denies_outstanding_state_and_retained_artifacts() {
         let mut f = Fixture::new();
@@ -1182,6 +1731,17 @@ mod tests {
         request.caller = 0;
         request.profile = Some("arbitrary".into());
         assert!(super::super::super::validate(&request, 0, time).is_err());
+        request.profile = None;
+        request.action = "resource-request-recover".into();
+        super::super::super::validate(&request, 0, time).unwrap();
+        request.action = "resource-request-recovery-status".into();
+        assert!(super::super::super::validate(&request, 0, time).is_err());
+        request.review = None;
+        super::super::super::validate(&request, 0, time).unwrap();
+        for uid in [989, 990, 1000] {
+            request.caller = uid;
+            assert!(super::super::super::validate(&request, uid, time).is_err());
+        }
     }
 
     #[test]

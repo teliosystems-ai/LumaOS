@@ -42,8 +42,14 @@ the same resource-store exclusion. Reviewed terminal-receipt archival preserves
 retired nonces and physical capacity; lost acknowledgements poison admission.
 Restart never reconstructs caller handles from stored PIDs. Older missing
 history has a reviewed offline migration that preserves physical receipts and
-explicitly records the unavailable pre-upgrade request history. Product export,
-deletion/custody and broader retention recovery remain open, and the reference
+explicitly records the unavailable pre-upgrade request history. Bounded root
+export now verifies a referenced immutable archive completely before stdout
+publication. Reviewed recovery preserves a current incomplete archive stage
+without replacement or deletion, requires released physical generations and
+empty worker groups, and leaves receipts, nonce fences and charges unchanged.
+The native transport now accepts the request-status/archive reply shapes; the
+earlier client omitted them. Product export governance, deletion/custody and
+broader retention recovery remain open, and the reference
 service's direct runtime path is not yet integrated.
 See [RESOURCE_LEASES.md](RESOURCE_LEASES.md) for
 the exact implemented scope, limits, maintenance commands and remaining work.

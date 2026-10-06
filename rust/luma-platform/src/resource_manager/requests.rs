@@ -375,7 +375,7 @@ fn nonce_valid(nonce: &str) -> bool {
             .bytes()
             .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
 }
-fn digest_valid(digest: &str) -> bool {
+pub(super) fn digest_valid(digest: &str) -> bool {
     digest.len() == 64
         && digest
             .bytes()

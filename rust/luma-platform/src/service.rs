@@ -384,6 +384,18 @@ pub fn serve() -> Result<()> {
                                 .ok_or("resource manager unavailable in this session")?
                                 .handle_inference(&request, peer, peer_pidfd(&incoming.stream)?);
                         }
+                        if envelope.get("action").and_then(|v| v.as_str())
+                            == Some("resource-request-export")
+                        {
+                            let request: resource_manager::history::Request =
+                                serde_json::from_slice(&incoming.bytes)?;
+                            return Ok(serde_json::to_value(
+                                manager
+                                    .as_mut()
+                                    .ok_or("resource manager unavailable in this session")?
+                                    .handle_export(&request, peer, peer_pidfd(&incoming.stream)?)?,
+                            )?);
+                        }
                         let request: resource_manager::Request =
                             serde_json::from_slice(&incoming.bytes)?;
                         let pinned = if peer.uid == 989 || peer.uid == 0 {
@@ -539,7 +551,13 @@ fn resource_exchange_on(
             response.lease == request.lease && response.lease.is_some() && response.status.is_none()
         }
         "resource-reconcile" => response.lease.is_none() && response.status.is_none(),
-        "resource-status" | "resource-revoke" | "resource-archive" => {
+        "resource-status"
+        | "resource-revoke"
+        | "resource-archive"
+        | "resource-request-status"
+        | "resource-request-archive"
+        | "resource-request-recovery-status"
+        | "resource-request-recover" => {
             response.lease.is_none()
                 && response
                     .status
@@ -552,6 +570,31 @@ fn resource_exchange_on(
         return Err("resource acknowledgement has an unexpected method shape".into());
     }
     Ok(response)
+}
+
+pub(crate) fn resource_export_exchange(
+    request: &resource_manager::history::Request,
+) -> Result<resource_manager::history::Chunk> {
+    let deadline = Instant::now() + Duration::from_secs(3);
+    let mut socket = connect_local(SOCKET, deadline)?;
+    if peer(&socket)? != 0 {
+        return Err("resource broker is not root".into());
+    }
+    write_frame_until(&mut socket, &serde_json::to_vec(request)?, deadline)?;
+    let response: resource_manager::Response =
+        serde_json::from_slice(&read_frame_until(&mut socket, deadline)?)?;
+    if response.schema_version != 1
+        || response.request_id != request.request_id
+        || response.caller != request.caller
+        || response.result != "ok"
+        || response.lease.is_some()
+        || resource_manager::now()? >= request.deadline
+    {
+        return Err("request export acknowledgement mismatch".into());
+    }
+    let chunk = serde_json::from_value(response.status.ok_or("missing request export chunk")?)?;
+    resource_manager::history::validate_chunk(request, &chunk)?;
+    Ok(chunk)
 }
 
 fn exchange(socket: &mut UnixStream, request: &Request, deadline: Instant) -> Result<Response> {
@@ -764,6 +807,56 @@ mod tests {
                 action: "status".into(),
             };
             validate(&request, 0, 100).unwrap();
+        }
+    }
+
+    #[test]
+    fn request_history_methods_accept_only_correlated_object_status_without_a_lease() {
+        for action in [
+            "resource-request-status",
+            "resource-request-archive",
+            "resource-request-recovery-status",
+            "resource-request-recover",
+        ] {
+            for fault in 0..5 {
+                let (mut client, mut server) = UnixStream::pair().unwrap();
+                let mut request = resource_manager::request(action).unwrap();
+                request.review = matches!(
+                    action,
+                    "resource-request-archive" | "resource-request-recover"
+                )
+                .then(|| "a".repeat(64));
+                let thread = std::thread::spawn(move || {
+                    let until = Instant::now() + Duration::from_secs(2);
+                    let r: resource_manager::Request =
+                        serde_json::from_slice(&read_frame_until(&mut server, until).unwrap())
+                            .unwrap();
+                    let mut reply = serde_json::json!({"schema_version":1,"request_id":r.request_id,
+                        "caller":0,"result":"ok","lease":null,"status":{"preserved":true}});
+                    match fault {
+                        1 => reply["status"] = serde_json::Value::Null,
+                        2 => reply["status"] = serde_json::json!([]),
+                        3 => reply["request_id"] = serde_json::json!("other"),
+                        4 => {
+                            reply["lease"] = serde_json::json!({"lease_id":"a".repeat(32),"generation":"1","manager_epoch":"b".repeat(32)})
+                        }
+                        _ => (),
+                    }
+                    write_frame_until(&mut server, &serde_json::to_vec(&reply).unwrap(), until)
+                        .unwrap();
+                });
+                assert_eq!(
+                    resource_exchange_on(
+                        &mut client,
+                        &request,
+                        Instant::now() + Duration::from_secs(2)
+                    )
+                    .is_ok(),
+                    fault == 0,
+                    "{action} {fault}"
+                );
+                thread.join().unwrap();
+            }
         }
     }
 

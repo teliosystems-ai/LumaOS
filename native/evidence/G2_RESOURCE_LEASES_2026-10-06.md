@@ -109,8 +109,14 @@ Terminal-receipt archival is root-only and reviewed, preserves nonce tombstones,
 and never releases a physical lease. Publication uncertainty poisons request
 admission; restart never reconstructs live caller handles. Missing older history
 requires an explicit offline migration with unchanged physical history and an
-acknowledged historical gap. The reference client's direct runtime path and
-product export/deletion/custody and retention recovery remain open. No real
+acknowledged historical gap. Bounded root archive export and reviewed retention
+of an incomplete current archive stage are implemented in source. The native
+client now recognizes request-status/archive reply shapes, which the previous
+client omitted. Export checks complete identity/length/digest before stdout;
+stage recovery requires released generations and empty worker groups and
+preserves the inode, bytes, hot receipts, fences and physical ledger. The reference
+client's direct runtime path and product export governance, deletion/custody
+and broader retention recovery remain open. No real
 model/tokenizer execution is asserted by protocol fixtures.
 
 A separate read-only publisher check retrieved exactly the first 65,536 bytes
@@ -126,9 +132,78 @@ weights or qualify loading. Production still requires the full pinned digest.
 Use [the resource register](../RESOURCE_LEASES.md) for the implemented boundary,
 operator instructions, finite limits and remaining software integrations.
 
-## Durable request history execution
+## Archive export and interrupted stage recovery execution
 
-Latest evidence directory: `D:\LumaOS-builds\g2-resources-targeted-20261006-32`.
+Latest evidence directory: `D:\LumaOS-builds\g2-resources-targeted-20261006-35`.
+The immutable runner, 204 captured source files and 56 test inputs are retained
+there. Every captured source/test digest matched the checkout after execution.
+The complete sweep exited zero. Execution used the existing D-backed image/cache,
+one CPU, 768 MiB, no extra swap/network or `CAP_SYS_ADMIN`; WSL settings, host
+services and TPM ownership were unchanged.
+
+| Check | Result |
+| --- | --- |
+| Resource core | 18 passed |
+| Adapter, recovery, request admission and history | 67 passed, including 31 journal tests and two export-protocol tests |
+| Acquisition and storage | 6 passed |
+| Broker transport | 24 passed |
+| Model lifecycle and supervision | 126 passed; two existing owned child entrypoints invoked by parent fixtures, not counted twice |
+| Selected Python policy/helper checks | 96 passed |
+| Compiled native history CLI and framed Unix IPC | 24 cases passed against a synthetic root authority |
+| Operator-helper Unix/HTTP protocol | 9 cases passed against synthetic authorities |
+| Formatting, warnings-denied offline locked build, AppArmor syntax and pinned runtime parser controls | Passed; no enforcement or real model qualification |
+| Real systemd graph verification | Exit 1 because the tool image lacks `apparmor.service`; installed qualification remains pending |
+
+Total: **337 passing selected tests**, plus **33 protocol cases**. Fourteen
+selected tests and 24 native CLI/socket cases were added since the prior
+checkpoint. No new Requirement #1 test is skipped. The earlier broader Python
+regression was not rerun or added to this total.
+
+The native CLI fixture uses a separately compiled test-only preload shim to
+supply `luma.slot=a` when that child reads `/proc/cmdline`. It does not mount or
+change proc, add container privileges, alter production checks or package the
+shim. A command without that fixture still refuses the non-installed host;
+UID 989 also refuses before sending a request. These cases prove compiled CLI
+dispatch, actual framing, root peer authentication, reply correlation/shape,
+chunk/digest checks and absence of stdout on invalid or lost replies. They do
+not prove the real installed kernel command line or native cgroup authority.
+
+Filesystem tests preserve stage inode/bytes and hot/physical history, reject
+stale content/inode/ledger reviews, unsafe links/modes and existing destinations,
+exercise lost acknowledgements and failed trusted observations before/after
+preservation, check retained incident damage and enforce finite inventory without
+eviction. Exact complete stages use normal archival retry rather than recovery.
+Source wiring checks cover live peer/deadline and empty cgroup identity rechecks;
+the real installed controller procedure still requires qualification.
+
+| Retained file | SHA-256 |
+| --- | --- |
+| `source/build-inputs.json` | `c7804d0ce3a83d20cbecf36729ee787ffb41da6f108f320c857e520941caefa8` |
+| `test-inputs.sha256` | `e5bb44a17b6accec4637e544e889224d88352f1dfc484356b2c2142f2845079d` |
+| `test.log` | `97b0b29ad5e97e4fb8bf772151af29f4a79784289a802fa6174f57090cd24fe6` |
+| `checks/targeted-runner.sh` | `b07d8c58a8bfe8db698741e01f753471d8269d7d5922288ac46a03762f7af83d` |
+| `checks/sweep-exit.txt` | `9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa` |
+| `checks/resource-history-cli.txt` | `3568f07a6297fece8954c303f91a1b5b3036b9defb35e32cfca9410be788c226` |
+| `checks/resource-history-artifacts.sha256` | `234a406877ab5c13744cf961993f2347d91040595f3a4247cff6e473a2f00ede` |
+| `checks/unit-verification.txt` | `cc6d6ba4f56881e50612c693db5577418157f96999327fbac956e538602db498` |
+| `checks/unit-verification-exit.txt` | `4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865` |
+| `checks/runtime-options.json` | `d6c5bc021ad939c79d18ba4c18213954e73dee3c4a200d763086f2e0c28c38cb` |
+
+The compiled development binary has SHA-256
+`0aac50271cff3d66b20ce2e26738ca74d163994f1a89f26f3f2fbc483b118d18`;
+the test-only shim has SHA-256
+`a0e259b7847aebbd3b1eb46970d83b5e7edc35ed1150a06f69b7a768bc71eb73`.
+They are not a production image or signing/custody record.
+
+Trial 33 failed before test startup because Docker refused the proposed proc
+mount; isolation was not relaxed. Trial 34 passed its selected tests/protocol
+cases but its reporting shell failed after the mutable runner was edited during
+execution. It is not a passing sweep. Trial 35 freezes its runner before execution
+and passed the final snapshot. All failed/prior evidence remains retained.
+
+## Durable request history baseline execution
+
+Evidence directory: `D:\LumaOS-builds\g2-resources-targeted-20261006-32`.
 It uses the same D:-backed tool image/cache and bounded execution configuration
 described below: one CPU, 768 MiB, no extra swap or network, with no WSL settings,
 host services or TPM ownership changed. All 203 captured source digests and

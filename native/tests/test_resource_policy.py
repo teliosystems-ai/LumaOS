@@ -57,7 +57,8 @@ class ResourcePolicyTests(unittest.TestCase):
     def test_resource_implementation_contains_no_unimplemented_paths(self):
         for name in ('resources.rs', 'resource_manager.rs', 'acquisition.rs', 'storage_io.rs',
                      'service/ingress.rs', 'model/layout.rs', 'resource_manager/recovery.rs',
-                     'resource_manager/requests.rs', 'resource_manager/requests/journal.rs'):
+                     'resource_manager/requests.rs', 'resource_manager/requests/journal.rs',
+                     'resource_manager/history.rs'):
             source = (ROOT/'rust/luma-platform/src'/name).read_text()
             for marker in ('todo!', 'unimplemented!', '// TODO', '// FIXME'):
                 self.assertNotIn(marker, source)
@@ -109,6 +110,28 @@ class ResourcePolicyTests(unittest.TestCase):
         self.assertIn('Conflicts=luma-reference.service luma-model.service', assembly)
         resource = (ROOT/'rust/luma-platform/src/resource_manager.rs').read_text()
         self.assertIn('libc::CLOCK_BOOTTIME', resource)
+
+    def test_history_export_and_recovery_keep_existing_transport_and_physical_fences(self):
+        history = (ROOT/'rust/luma-platform/src/resource_manager/history.rs').read_text().split('#[cfg(test)]')[0]
+        for limit in ('CHUNK_BYTES: u64 = 2048', 'EXPORT_BYTES: u64 = 1024 * 1024',
+                      'checked_add(30_000)', 'validate_chunk', 'Sha256::digest(&bytes)'):
+            self.assertIn(limit, history)
+        export = history.split('pub(crate) fn export(')[1].split('fn collect(')[0]
+        self.assertLess(export.index('collect('), export.index('write_all(&bytes)'))
+        journal = (ROOT/'rust/luma-platform/src/resource_manager/requests/journal.rs').read_text().split('#[cfg(test)]')[0]
+        self.assertIn('State::Released', journal)
+        self.assertIn('.requests-retained-', journal)
+        self.assertIn('RENAME_NOREPLACE', journal)
+        self.assertIn('observe()?;', journal)
+        self.assertNotIn('remove_file', journal)
+        manager = (ROOT/'rust/luma-platform/src/resource_manager.rs').read_text()
+        self.assertIn('recover_stage_checked(', manager)
+        service = (ROOT/'rust/luma-platform/src/service.rs').read_text()
+        self.assertIn('resource_export_exchange', service)
+        shape = service.split('let shape = match request.action.as_str()')[1].split('if !shape')[0]
+        for action in ('resource-request-status', 'resource-request-archive',
+                       'resource-request-recovery-status', 'resource-request-recover'):
+            self.assertIn(action, shape)
 
     def test_archival_is_broker_only_reviewed_and_not_a_capacity_release(self):
         source = (ROOT/'rust/luma-platform/src/resource_manager.rs').read_text()

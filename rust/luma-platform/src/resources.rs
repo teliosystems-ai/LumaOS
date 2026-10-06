@@ -185,6 +185,10 @@ pub(crate) struct Ledger {
 }
 
 impl Ledger {
+    #[cfg(test)]
+    pub(crate) fn fresh_for_test() -> Self {
+        Self::empty()
+    }
     fn empty() -> Self {
         Self {
             schema_version: 1,
@@ -641,6 +645,43 @@ impl Ledger {
             &authority,
         )?)))
     }
+
+    pub(crate) fn migrate_inventory(
+        &mut self,
+        review: &str,
+        epoch: String,
+        inventory: BTreeMap<String, Domain>,
+    ) -> Result<()> {
+        self.validate()?;
+        if self.review()? != review
+            || self.leases.iter().any(|l| l.state != State::Released)
+            || inventory.is_empty()
+            || inventory.len() > 16
+            || !identifier(&epoch)
+            || epoch == self.manager_epoch
+            || self.domains.keys().any(|id| !inventory.contains_key(id))
+        {
+            return Err("stale migration review, live allocation or discarded domain".into());
+        }
+        let mut next = self.clone();
+        next.domains = inventory;
+        next.manager_epoch = epoch;
+        for (id, domain) in &mut next.domains {
+            if let Some(old) = self.domains.get(id) {
+                domain.epoch = old
+                    .epoch
+                    .checked_add(1)
+                    .ok_or("migration epoch exhausted")?;
+                domain.retained = old.retained;
+                domain.quarantined = old.quarantined;
+                domain.pressure = old.pressure;
+                domain.observed = old.observed;
+            }
+        }
+        next.validate()?;
+        *self = next;
+        Ok(())
+    }
 }
 
 impl Owner {
@@ -993,6 +1034,59 @@ mod tests {
             )
             .unwrap();
         ledger
+    }
+    #[test]
+    fn reviewed_inventory_migration_preserves_receipts_retained_bytes_and_generation_floor() {
+        let mut l = ledger();
+        let token = l
+            .admit(
+                owner(1),
+                "work".into(),
+                "a".repeat(64),
+                vec![reserve("host", 100)],
+                1,
+                100,
+            )
+            .unwrap();
+        let mut inventory = l.domains.clone();
+        inventory.insert("new-slot".into(), Domain::new(1, 0, 1, 0).unwrap());
+        let before = l.clone();
+        assert!(l
+            .migrate_inventory(&l.review().unwrap(), "epoch-two".into(), inventory.clone())
+            .is_err());
+        assert_eq!(l, before);
+        l.revoke(&token, "operator-revoked").unwrap();
+        l.finish_draining(&token, &BTreeMap::from([("host".into(), 25)]))
+            .unwrap();
+        let before = l.clone();
+        assert!(l
+            .migrate_inventory(&"0".repeat(64), "epoch-two".into(), inventory.clone())
+            .is_err());
+        assert_eq!(l, before);
+        let mut removed = inventory.clone();
+        removed.remove("host");
+        assert!(l
+            .migrate_inventory(&l.review().unwrap(), "epoch-two".into(), removed)
+            .is_err());
+        assert_eq!(l, before);
+        l.migrate_inventory(&l.review().unwrap(), "epoch-two".into(), inventory)
+            .unwrap();
+        assert_eq!(l.generation, before.generation);
+        assert_eq!(l.leases, before.leases);
+        assert_eq!(l.domains["host"].retained, 25);
+        assert_eq!(l.domains["host"].epoch, before.domains["host"].epoch + 1);
+        assert!(l.assert_active(&token, &owner(1), 2).is_err());
+        let next = l
+            .admit(
+                owner(2),
+                "fresh".into(),
+                "a".repeat(64),
+                vec![reserve("host", 100)],
+                2,
+                100,
+            )
+            .unwrap();
+        assert!(next.generation > token.generation);
     }
     fn owner(pid: u32) -> Owner {
         Owner {

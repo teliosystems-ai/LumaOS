@@ -381,6 +381,15 @@ fn open_regular(at: &Path) -> Result<File> {
 }
 
 fn verified_file(at: &Path, p: &Profile) -> Result<File> {
+    verified_file_checked(at, p, || Ok(()))
+}
+
+fn verified_file_checked(
+    at: &Path,
+    p: &Profile,
+    mut check: impl FnMut() -> Result<()>,
+) -> Result<File> {
+    check()?;
     let mut f = open_regular(at)?;
     let before = f.metadata()?;
     if before.len() != p.bytes {
@@ -393,7 +402,9 @@ fn verified_file(at: &Path, p: &Profile) -> Result<File> {
     let mut remaining = p.bytes;
     let mut buffer = vec![0u8; 1024 * 1024];
     while remaining > 0 {
+        check()?;
         let n = f.read(&mut buffer)?;
+        check()?;
         if n == 0 || n as u64 > remaining {
             return Err("model changed during verification".into());
         }
@@ -416,6 +427,7 @@ fn verified_file(at: &Path, p: &Profile) -> Result<File> {
         return Err("model metadata changed during verification".into());
     }
     f.seek(SeekFrom::Start(0))?;
+    check()?;
     Ok(f)
 }
 
@@ -547,7 +559,8 @@ fn confine_acquisition(process: &mut Command, max_bytes: u64) -> Result<()> {
     Ok(())
 }
 
-fn fetch(at: &Path, p: &Profile) -> Result<()> {
+fn fetch(at: &Path, p: &Profile, mut check: impl FnMut() -> Result<()>) -> Result<()> {
+    check()?;
     // Parent is root-only for writing. curl runs without root, supplementary
     // groups, ambient environment, stdin, proxy credentials or configuration.
     let mut random = [0u8; 16];
@@ -607,6 +620,7 @@ fn fetch(at: &Path, p: &Profile) -> Result<()> {
     // credential-changing hook above, pins the exact child, and reaps it before
     // returning on an observation/deadline failure. No saved-PID fallback.
     let result = supervision::run(&mut process, || {
+        check()?;
         let time = crate::resource_manager::now()?;
         if time >= deadline {
             return Err("model acquisition deadline expired".into());
@@ -640,7 +654,8 @@ fn fetch(at: &Path, p: &Profile) -> Result<()> {
     }
     println!("Verifying model bytes and SHA-256...");
     file.sync_all()?;
-    verify_file(&temporary.path, p)?;
+    verified_file_checked(&temporary.path, p, &mut check)?;
+    check()?;
     fs::set_permissions(&temporary.path, fs::Permissions::from_mode(0o444))?;
     fs::rename(&temporary.path, at)?;
     File::open(at.parent().ok_or("missing model directory")?)?.sync_all()?;
@@ -685,6 +700,37 @@ fn provision_locked(var: &Path, p: &Profile) -> Result<()> {
 /// Acquire and verify only image-cataloged data. The selected worker may stay
 /// active while this runs; no credential, environment or selection is changed.
 fn prepare_model(var: &Path, p: &Profile) -> Result<()> {
+    crate::acquisition::run(var, p, "prepare")
+}
+
+pub(crate) fn supervise_acquisition_controller(
+    command: &mut Command,
+    check: impl FnMut() -> Result<()>,
+) -> Result<()> {
+    supervision::run(command, check)
+}
+
+pub(crate) fn verify_acquired_model(
+    var: &Path,
+    p: &Profile,
+    check: impl FnMut() -> Result<()>,
+) -> Result<()> {
+    verified_file_checked(
+        &var.join(STATE)
+            .join("models")
+            .join(format!("{}.gguf", p.id)),
+        p,
+        check,
+    )
+    .map(drop)
+}
+
+pub(crate) fn prepare_model_contents(
+    var: &Path,
+    p: &Profile,
+    mut check: impl FnMut() -> Result<()>,
+) -> Result<()> {
+    check()?;
     let state = var.join(STATE);
     activation_absent(&state)?;
     let models = state.join("models");
@@ -694,17 +740,52 @@ fn prepare_model(var: &Path, p: &Profile) -> Result<()> {
     let file = models.join(format!("{}.gguf", p.id));
     match fs::symlink_metadata(&file) {
         Ok(_) => {
-            check_cached(p, available_space(&models)?)?;
-            verify_file(&file, p)?;
+            check_acquisition(p, available_space(&models)?, true)?;
+            verified_file_checked(&file, p, &mut check)?;
         }
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            check(p, available_space(&models)?)?;
+            check_acquisition(p, available_space(&models)?, false)?;
             println!("Downloading {} ({} bytes)...", p.id, p.bytes);
-            fetch(&file, p)?;
+            fetch(&file, p, &mut check)?;
         }
         Err(error) => return Err(error.into()),
     }
+    check()?;
     Ok(())
+}
+
+fn acquisition_admission(
+    p: &Profile,
+    total: u64,
+    free: u64,
+    cpus: usize,
+    cached: bool,
+) -> Result<()> {
+    // Acquiring bytes is not concurrent admission of another serving model.
+    // The broker reserves the acquisition worker's bounded physical peak;
+    // retain installation feasibility checks without borrowing serving RAM.
+    crate::resource_manager::check_loading(total, total, p.memory_max_bytes, 0)?;
+    let required = (if cached { 0 } else { p.bytes })
+        .checked_add(2 * 1024 * 1024 * 1024)
+        .ok_or("acquisition space overflow")?;
+    if total < p.minimum_ram_bytes || cpus < 2 || free < required {
+        return Err("model acquisition profile or storage does not fit".into());
+    }
+    Ok(())
+}
+
+fn check_acquisition(p: &Profile, free: u64, cached: bool) -> Result<()> {
+    if effective_memory_limit()? < crate::resource_manager::ACQUISITION_MEMORY {
+        return Err("acquisition ancestry is smaller than its admitted worker budget".into());
+    }
+    let info = fs::read_to_string("/proc/meminfo")?;
+    acquisition_admission(
+        p,
+        memory(&info, "MemTotal")?,
+        free,
+        std::thread::available_parallelism()?.get(),
+        cached,
+    )
 }
 
 fn activate_cached(var: &Path, p: &Profile) -> Result<()> {
@@ -2676,7 +2757,7 @@ pub fn serve() -> Result<()> {
         .join(STATE)
         .join("models")
         .join(format!("{}.gguf", p.id));
-    let verified = verified_file(&file, &p)?;
+    let verified = verified_file_checked(&file, &p, || lease.check_local())?;
     lease.check()?;
     // The runtime opens this exact verified inode, not the mutable catalog
     // filename again. This does not defend against a hostile root writing the
@@ -2715,6 +2796,36 @@ pub fn serve() -> Result<()> {
             "2",
             "--n-gpu-layers",
             "0",
+            "--device",
+            "none",
+            "--no-kv-offload",
+            "--no-op-offload",
+            "--cache-type-k",
+            "f16",
+            "--cache-type-v",
+            "f16",
+            "--cache-ram",
+            "0",
+            "--no-cache-prompt",
+            "--no-cache-idle-slots",
+            "--ctx-checkpoints",
+            "0",
+            "--no-repack",
+            "--batch-size",
+            "256",
+            "--ubatch-size",
+            "128",
+            "--threads-http",
+            "2",
+            "--fit",
+            "off",
+            "--load-mode",
+            "mmap",
+            "--lazy-mode",
+            "off",
+            "--no-cont-batching",
+            "--no-kv-unified",
+            "--no-mmproj",
             "--api-key-file",
             "/var/lib/luma-os/model-auth/api-key",
             "--no-webui",
@@ -2923,12 +3034,86 @@ mod tests {
         assert_eq!(fs::read(&partial).unwrap(), b"confined acquisition fixture");
         drop(guard);
         assert!(!partial.exists());
+        let (guard, file) = partial_guard(&partial);
+        let mut command = Command::new(&executable);
+        command
+            .arg("acquisition-hold")
+            .env_clear()
+            .stdin(Stdio::null())
+            .stdout(Stdio::from(file.try_clone().unwrap()));
+        confine_acquisition(&mut command, 128).unwrap();
+        assert!(supervision::run(&mut command, || {
+            if file.metadata()?.len() > 0 {
+                Err("lease lost after confined download started".into())
+            } else {
+                Ok(())
+            }
+        })
+        .is_err());
+        drop(command);
+        drop(file);
+        drop(guard);
+        assert!(
+            !partial.exists(),
+            "UID-988 writer must be terminated before cleanup"
+        );
         fs::remove_file(executable).unwrap();
         fs::remove_dir(dir).unwrap();
 
         let mut invalid = Command::new("/bin/true");
         assert!(confine_acquisition(&mut invalid, 0).is_err());
         assert!(confine_acquisition(&mut invalid, libc::RLIM_INFINITY).is_err());
+    }
+
+    #[test]
+    fn acquisition_feasibility_separates_cache_or_download_from_serving_occupancy() {
+        let p = profile("qwen3-4b-q4-k-m").unwrap();
+        let reserve = 2 * 1024 * 1024 * 1024;
+        acquisition_admission(&p, 8 * 1024 * 1024 * 1024, p.bytes + reserve, 2, false).unwrap();
+        acquisition_admission(&p, 8 * 1024 * 1024 * 1024, reserve, 2, true).unwrap();
+        assert!(acquisition_admission(&p, 8 * 1024 * 1024 * 1024, reserve, 2, false).is_err());
+        assert!(
+            acquisition_admission(&p, 2 * 1024 * 1024 * 1024, p.bytes + reserve, 2, false).is_err()
+        );
+        assert!(
+            acquisition_admission(&p, 8 * 1024 * 1024 * 1024, p.bytes + reserve, 1, false).is_err()
+        );
+        let mut impossible = p.clone();
+        impossible.bytes = u64::MAX;
+        assert!(
+            acquisition_admission(&impossible, 8 * 1024 * 1024 * 1024, u64::MAX, 2, false).is_err()
+        );
+    }
+
+    #[test]
+    fn leased_verification_rechecks_before_and_after_every_read_and_never_returns_after_fence_loss()
+    {
+        let (dir, path, mut profiles) = cleanup_fixture("checked-hash");
+        let mut p = profiles.remove(0);
+        let bytes = vec![17u8; 2 * 1024 * 1024 + 1];
+        fs::write(&path, &bytes).unwrap();
+        p.bytes = bytes.len() as u64;
+        p.sha256 = bundle::hex(&Sha256::digest(&bytes));
+        let mut checks = 0;
+        assert!(verified_file_checked(&path, &p, || {
+            checks += 1;
+            if checks == 3 {
+                Err("lease lost during read".into())
+            } else {
+                Ok(())
+            }
+        })
+        .is_err());
+        assert_eq!(checks, 3);
+        let mut checks = 0;
+        verified_file_checked(&path, &p, || {
+            checks += 1;
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(checks, 8);
+        fs::remove_file(path).unwrap();
+        fs::remove_dir(dir).unwrap();
     }
 
     #[test]

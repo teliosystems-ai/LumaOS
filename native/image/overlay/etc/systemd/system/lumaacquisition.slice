@@ -1,0 +1,13 @@
+[Unit]
+Description=Luma bounded acquisition resource domain
+Before=luma-broker.service
+
+[Slice]
+MemoryAccounting=yes
+CPUAccounting=yes
+IOAccounting=yes
+TasksAccounting=yes
+MemoryMax=512M
+MemorySwapMax=0
+TasksMax=16
+CPUQuota=200%

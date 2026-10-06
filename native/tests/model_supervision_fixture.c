@@ -28,7 +28,8 @@ int main(int argc, char **argv) {
     static const char weights[] = "private tiny validation weight fixture";
     int signal = 0;
     if (argc != 2) return 2;
-    int acquisition = !strcmp(argv[1], "acquisition-success");
+    int acquisition_hold = !strcmp(argv[1], "acquisition-hold");
+    int acquisition = !strcmp(argv[1], "acquisition-success") || acquisition_hold;
     if (!acquisition && strcmp(argv[1], "leaf-hold") && strcmp(argv[1], "leaf-success") && strcmp(argv[1], "leaf-failure")) return 2;
     uid_t uid = acquisition ? 988 : 989;
     if (geteuid() != uid || getegid() != uid || getgroups(0, NULL) != 0) return 3;
@@ -42,7 +43,9 @@ int main(int argc, char **argv) {
             fstat(STDOUT_FILENO, &metadata) || !S_ISREG(metadata.st_mode) || metadata.st_uid != 0 ||
             metadata.st_nlink != 1 || (metadata.st_mode & 07777) != 0600 ||
             flock(STDOUT_FILENO, LOCK_EX | LOCK_NB)) return 12;
-        return write(STDOUT_FILENO, output, sizeof(output) - 1) == (ssize_t)(sizeof(output) - 1) ? 0 : 13;
+        if (write(STDOUT_FILENO, output, sizeof(output) - 1) != (ssize_t)(sizeof(output) - 1)) return 13;
+        if (acquisition_hold) sleep(15);
+        return 0;
     }
     int weight = descriptor("LUMA_VALIDATION_LEAF_WEIGHT_FD");
     int runtime = descriptor("LUMA_VALIDATION_LEAF_RUNTIME_FD");

@@ -12,6 +12,8 @@ const SOCKET: &str = "/run/luma-broker/control.sock";
 const MAX_FRAME: usize = 16384;
 const FRAME_TIMEOUT: Duration = Duration::from_secs(2);
 
+mod ingress;
+
 #[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Request {
@@ -280,10 +282,13 @@ pub fn serve() -> Result<()> {
     crate::require_root()?;
     security_check()?;
     // RuntimeDirectory is created and owned by systemd. Never unlink an unknown socket.
-    let mut manager = if crate::platform::require_installed().is_ok() {
+    let mut manager = if crate::platform::require_installed().is_ok()
+        || crate::platform::require_live().is_ok()
+    {
         match resource_manager::Manager::open() {
             Ok(manager) => Some(manager),
             Err(_) => {
+                let _ = resource_manager::fence_unavailable();
                 eprintln!("resource manager fenced; inference unavailable; retained state requires review");
                 None
             }
@@ -297,6 +302,10 @@ pub fn serve() -> Result<()> {
     restrict_socket(Path::new(SOCKET))?;
     listener.set_nonblocking(true)?;
     let mut maintenance = Instant::now();
+    let mut ingress = ingress::Ingress::new();
+    // Only the independent legacy effect journal can run on this one helper.
+    // The resource manager, its ledger and controller remain on this thread.
+    let mut effect: Option<std::thread::JoinHandle<()>> = None;
     loop {
         if maintenance.elapsed() >= Duration::from_millis(100) {
             let failed = manager
@@ -313,7 +322,77 @@ pub fn serve() -> Result<()> {
             }
             maintenance = Instant::now();
         }
-        let (mut stream, _) = match listener.accept() {
+        if effect.as_ref().map_or(false, |thread| thread.is_finished()) {
+            if let Some(thread) = effect.take() {
+                let _ = thread.join();
+            }
+        }
+        // Ready frames cannot be held behind another client's partial frame,
+        // response backpressure or a systemd job. The queue and reader count
+        // are finite and partitioned by authenticated service UID.
+        for _ in 0..16 {
+            let Some(mut incoming) = ingress.receive() else {
+                break;
+            };
+            let handled = (|| -> Result<Option<Request>> {
+                let peer = credentials(&incoming.stream)?;
+                let envelope: serde_json::Value = serde_json::from_slice(&incoming.bytes)?;
+                if envelope
+                    .get("action")
+                    .and_then(|v| v.as_str())
+                    .map_or(false, |a| a.starts_with("resource-"))
+                {
+                    return Ok(None);
+                }
+                let request: Request = serde_json::from_slice(&incoming.bytes)?;
+                validate(&request, peer.uid, now()?)?;
+                Ok(Some(request))
+            })();
+            match handled {
+                Ok(Some(request)) if request.action != "status" => {
+                    if effect.is_some() {
+                        incoming.respond(Err("legacy effect coordinator busy".into()));
+                    } else {
+                        let uid = request.caller;
+                        effect = Some(
+                            std::thread::Builder::new()
+                                .name("broker-effect".into())
+                                .stack_size(512 * 1024)
+                                .spawn(move || {
+                                    let result = handle_request(&mut incoming.stream, request, uid);
+                                    incoming.respond(result);
+                                })?,
+                        );
+                    }
+                }
+                Ok(Some(request)) => {
+                    let uid = request.caller;
+                    let result = handle_request(&mut incoming.stream, request, uid);
+                    incoming.respond(result);
+                }
+                Ok(None) => {
+                    let result = (|| -> Result<serde_json::Value> {
+                        let peer = credentials(&incoming.stream)?;
+                        let request: resource_manager::Request =
+                            serde_json::from_slice(&incoming.bytes)?;
+                        let pinned = if peer.uid == 989 || peer.uid == 0 {
+                            Some(peer_pidfd(&incoming.stream)?)
+                        } else {
+                            None
+                        };
+                        Ok(serde_json::to_value(
+                            manager
+                                .as_mut()
+                                .ok_or("resource manager unavailable in this session")?
+                                .handle(&request, peer, pinned)?,
+                        )?)
+                    })();
+                    incoming.respond(result);
+                }
+                Err(error) => incoming.respond(Err(error)),
+            }
+        }
+        let (stream, _) = match listener.accept() {
             Ok(value) => value,
             Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
                 std::thread::sleep(Duration::from_millis(20));
@@ -321,38 +400,7 @@ pub fn serve() -> Result<()> {
             }
             Err(error) => return Err(error.into()),
         };
-        let handled = (|| -> Result<serde_json::Value> {
-            let peer = credentials(&stream)?;
-            if ![0, 989, 990].contains(&peer.uid) {
-                return Err("broker peer identity denied before frame input".into());
-            }
-            let bytes = read_frame(&mut stream)?;
-            let envelope: serde_json::Value = serde_json::from_slice(&bytes)?;
-            if envelope
-                .get("action")
-                .and_then(|v| v.as_str())
-                .map_or(false, |a| a.starts_with("resource-"))
-            {
-                let request: resource_manager::Request = serde_json::from_slice(&bytes)?;
-                let pinned = if peer.uid == 989 {
-                    Some(peer_pidfd(&stream)?)
-                } else {
-                    None
-                };
-                return Ok(serde_json::to_value(
-                    manager
-                        .as_mut()
-                        .ok_or("resource manager unavailable outside installed mode")?
-                        .handle(&request, peer, pinned)?,
-                )?);
-            }
-            handle_request(&mut stream, serde_json::from_slice(&bytes)?, peer.uid)
-        })();
-        let response = match handled {
-            Ok(value) => value,
-            Err(_) => serde_json::json!({"schema_version":1,"result":"denied"}),
-        };
-        let _ = write_frame(&mut stream, &serde_json::to_vec(&response)?);
+        let _ = ingress.accept(stream);
     }
 }
 
@@ -653,6 +701,7 @@ mod tests {
                 profile: None,
                 lease: Some(token.clone()),
                 review: None,
+                storage_device: None,
             };
             let worker = std::thread::spawn(move || {
                 let deadline = Instant::now() + Duration::from_secs(2);

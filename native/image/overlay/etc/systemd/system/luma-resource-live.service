@@ -1,0 +1,28 @@
+[Unit]
+Description=Initialize fresh volatile Luma resource state on live media
+ConditionKernelCommandLine=luma.mode=live
+After=local-fs.target lumamodel.slice lumaacquisition.slice
+Requires=lumamodel.slice lumaacquisition.slice
+Before=luma-broker.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/libexec/luma-os/luma-platform resource-live-initialize
+User=root
+Group=root
+StateDirectory=luma-broker
+StateDirectoryMode=0700
+UMask=0077
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=/var/lib/luma-broker
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectControlGroups=yes
+CapabilityBoundingSet=
+MemoryMax=64M
+MemorySwapMax=0
+TasksMax=8
+CPUQuota=25%

@@ -1,4 +1,5 @@
 //! Native Linux platform boundary. No model-provided command or shell execution.
+mod acquisition;
 mod admin_credentials;
 mod admin_enrollment;
 mod admin_governance;
@@ -25,6 +26,7 @@ mod service;
 mod skills;
 mod sqlite;
 mod staging;
+mod storage_io;
 mod tpm;
 mod utc_bounds;
 mod utc_history;
@@ -76,6 +78,14 @@ fn main() {
 fn dispatch() -> Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     match args.first().map(String::as_str) {
+        Some("model-acquisition-worker") if args.len() == 4 => {
+            acquisition::worker(&args[1], &args[2], Path::new(&args[3]))
+        }
+        Some("resource-live-initialize") if args.len() == 1 => resource_manager::initialize_live(),
+        Some("resource-migration-status") if args.len() == 1 => {
+            resource_manager::migration_status()
+        }
+        Some("resource-migrate") if args.len() == 2 => resource_manager::migrate_reviewed(&args[1]),
         Some("inventory") if args.len() == 1 => disk::inventory(),
         Some("tpm-probe") if args.len() == 1 => {
             println!("{}", serde_json::to_string(&tpm::probe()?)?);
@@ -269,7 +279,7 @@ fn dispatch() -> Result<()> {
         Some("boot-failed") if args.len() == 1 => platform::boot_failed(),
         Some("init-data") if args.len() == 2 => platform::init_data(&args[1]),
         Some("help" | "--help") | None => {
-            println!("Resources: resource-status | resource-reconcile REVIEW-SHA256 | resource-archive REVIEW-SHA256 | resource-revoke LEASE-ID GENERATION MANAGER-EPOCH | resource-migrate. Existing broker authority; installed root maintenance only. Migration initializes only missing state with an idle runtime/cgroup; uncertain state is never reset. Archival requires observed drainage, retains private immutable receipts, and preserves generation floors. Workers require exact generation-fenced leases before launch.");
+            println!("Resources: resource-status | resource-reconcile REVIEW-SHA256 | resource-archive REVIEW-SHA256 | resource-revoke LEASE-ID GENERATION MANAGER-EPOCH | resource-migrate | resource-migration-status | resource-migrate REVIEW-SHA256. Existing broker authority; installed root maintenance only. No-argument migration initializes only missing state; reviewed offline migration preserves receipts, epochs and retained charges with both worker slices idle and the broker stopped. Uncertain state is never reset. Workers require exact generation-fenced leases before heavy work.");
             println!("Local TPM diagnostics: tpm-probe | admin-checkpoint-status (root only; read-only; neither enrolls nor grants Admin). External Admin deployment is deferred.");
             println!("admin-checkpoint-enroll LOGIN --existing-owner: explicit installed-root checkpoint enrollment with local PAM and hidden custodian owner authorization; retains interrupted attempts; does not grant product Admin.");
             println!("admin-checkpoint-enrollment-inspect: read-only retained-intent and fixed TPM-handle observation; does not repair, retry, delete or grant Admin.");

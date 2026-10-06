@@ -235,7 +235,7 @@ fn live() -> Result<bool> {
     Ok(cmdline()?.split_whitespace().any(|a| a == "luma.mode=live"))
 }
 
-fn require_live() -> Result<()> {
+pub(crate) fn require_live() -> Result<()> {
     crate::require_root()?;
     if !live()? {
         return Err(

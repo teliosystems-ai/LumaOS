@@ -1,11 +1,12 @@
-//! Resource authority inside the existing broker. Only the fixed CPU worker
-//! cgroup is controllable; callers cannot select a cgroup, PID, device or budget.
+//! Resource authority inside the existing broker. Only the fixed CPU serving
+//! and acquisition groups are controllable; no caller-selected PID or budget.
 use crate::{
     model,
     resources::{self, Domain, Owner, Reservation, State, Store, Token},
     Result,
 };
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::ffi::CString;
 use std::fs::{self, File, OpenOptions};
@@ -19,6 +20,40 @@ const LEAF: &str = "/lumamodel.slice/luma-model.service";
 const HOST: &str = "host-memory";
 const PIDS: &str = "worker-processes";
 const LEASE_MS: u64 = 10_000;
+pub(crate) const ACQUISITION_MEMORY: u64 = 512 * 1024 * 1024;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Kind {
+    Model,
+    Acquisition,
+}
+impl Kind {
+    fn peer(uid: u32) -> Result<Self> {
+        match uid {
+            989 => Ok(Self::Model),
+            0 => Ok(Self::Acquisition),
+            _ => Err("unsupported resource worker identity".into()),
+        }
+    }
+    fn domain(self) -> &'static str {
+        match self {
+            Self::Model => "serving-executions",
+            Self::Acquisition => "acquisition-executions",
+        }
+    }
+    fn tasks(self) -> u64 {
+        match self {
+            Self::Model => 64,
+            Self::Acquisition => 16,
+        }
+    }
+    fn leaf(self) -> &'static str {
+        match self {
+            Self::Model => LEAF,
+            Self::Acquisition => "/lumaacquisition.slice/luma-acquisition.service",
+        }
+    }
+}
 
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -34,6 +69,7 @@ pub(crate) struct Request {
     pub profile: Option<String>,
     pub lease: Option<Token>,
     pub review: Option<String>,
+    pub storage_device: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -127,13 +163,19 @@ fn descriptor(directory: &File, name: &str, write: bool, is_directory: bool) -> 
     Ok(file)
 }
 
-struct Group(File);
+struct Group(File, Kind);
 impl Group {
     fn open() -> Result<Self> {
+        Self::for_kind(Kind::Model)
+    }
+    fn for_kind(kind: Kind) -> Result<Self> {
         let file = OpenOptions::new()
             .read(true)
             .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC)
-            .open(CGROUP)?;
+            .open(match kind {
+                Kind::Model => CGROUP,
+                Kind::Acquisition => "/sys/fs/cgroup/lumaacquisition.slice",
+            })?;
         let mut stat: libc::statfs = unsafe { std::mem::zeroed() };
         let m = file.metadata()?;
         if unsafe { libc::fstatfs(file.as_raw_fd(), &mut stat) } != 0
@@ -143,7 +185,7 @@ impl Group {
         {
             return Err("trusted cgroup v2 worker slice unavailable".into());
         }
-        Ok(Self(file))
+        Ok(Self(file, kind))
     }
     fn identity(&self) -> Result<(u64, u64)> {
         let m = self.0.metadata()?;
@@ -206,20 +248,26 @@ impl Group {
             .ok_or("missing OOM counter")?)
     }
     fn leaf(&self) -> Result<Self> {
-        Ok(Self(descriptor(
-            &self.0,
-            "luma-model.service",
-            false,
-            true,
-        )?))
+        Ok(Self(
+            descriptor(
+                &self.0,
+                match self.1 {
+                    Kind::Model => "luma-model.service",
+                    Kind::Acquisition => "luma-acquisition.service",
+                },
+                false,
+                true,
+            )?,
+            self.1,
+        ))
     }
-    fn verify_limits(&self, memory: u64) -> Result<()> {
+    fn verify_limits(&self, memory: u64, storage: &str) -> Result<()> {
         let limit = number(&self.read("memory.max")?)?;
         let tasks = number(&self.read("pids.max")?)?;
         if limit != memory
             || number(&self.read("memory.swap.max")?)? != 0
             || tasks == 0
-            || tasks > 64
+            || tasks > self.1.tasks()
             || number(&self.read("memory.oom.group")?)? != 1
         {
             return Err("worker resource ceilings not enforced".into());
@@ -236,10 +284,7 @@ impl Group {
         {
             return Err("worker CPU ceiling not enforced".into());
         }
-        let device = fs::metadata("/var")?.dev();
-        // Pure extraction from the kernel-reported dev_t; no pointer access.
-        let identity = unsafe { format!("{}:{}", libc::major(device), libc::minor(device)) };
-        verify_io(&self.read("io.max")?, &identity)?;
+        verify_io(&self.read("io.max")?, storage)?;
         Ok(())
     }
 }
@@ -270,6 +315,55 @@ fn verify_io(text: &str, device: &str) -> Result<()> {
         return Err("model storage IO ceiling unavailable".into());
     }
     Ok(())
+}
+
+pub(crate) fn storage_device(path: &Path) -> Result<String> {
+    crate::storage_io::device_for_path(path)
+}
+
+fn valid_storage(device: &str) -> bool {
+    let Some((major, minor)) = device.split_once(':') else {
+        return false;
+    };
+    let canonical = |value: &str| {
+        value
+            .parse::<u32>()
+            .map_or(false, |n| n.to_string() == value)
+    };
+    canonical(major) && canonical(minor) && major != "0"
+}
+
+fn acquisition_binding(profile: &model::Profile, device: &str) -> Result<String> {
+    if !valid_storage(device) {
+        return Err("invalid acquisition storage identity".into());
+    }
+    Ok(crate::bundle::hex(&Sha256::digest(serde_json::to_vec(&(
+        "acquisition-v1",
+        profile,
+        device,
+    ))?)))
+}
+
+fn reservation_plan(kind: Kind, memory: u64) -> Vec<Reservation> {
+    let mut reservations = vec![
+        Reservation {
+            domain: HOST.into(),
+            loading: memory,
+            serving: memory,
+        },
+        Reservation {
+            domain: PIDS.into(),
+            loading: kind.tasks(),
+            serving: kind.tasks(),
+        },
+        Reservation {
+            domain: kind.domain().into(),
+            loading: 1,
+            serving: 1,
+        },
+    ];
+    reservations.sort_by(|a, b| a.domain.cmp(&b.domain));
+    reservations
 }
 
 fn start_ticks(stat: &str) -> Result<u64> {
@@ -315,15 +409,21 @@ fn drainage_generation(owner: &Owner, boot: &str, identity: (u64, u64)) -> Resul
 }
 
 fn owner(pid: u32, uid: u32, group: &Group) -> Result<Owner> {
-    if pid == 0 || uid != 989 {
+    let kind = Kind::peer(uid)?;
+    if pid == 0 || group.1 != kind {
         return Err("invalid resource owner".into());
     }
     let path = format!("/proc/{pid}");
     let before = start_ticks(&safe_text(&Path::new(&path).join("stat"), 4096)?)?;
-    if safe_text(&Path::new(&path).join("cgroup"), 4096)? != format!("0::{LEAF}\n")
+    if safe_text(&Path::new(&path).join("cgroup"), 4096)? != format!("0::{}\n", kind.leaf())
         || fs::metadata(&path)?.uid() != uid
     {
         return Err("peer is not in the fixed isolated worker unit".into());
+    }
+    if kind == Kind::Acquisition
+        && safe_text(&Path::new(&path).join("attr/current"), 128)? != "luma-acquisition (enforce)\n"
+    {
+        return Err("acquisition peer confinement is not enforcing".into());
     }
     let boot = boot_identity()?;
     let (device, inode) = group.identity()?;
@@ -361,8 +461,37 @@ fn inventory() -> Result<BTreeMap<String, Domain>> {
         .ok_or("insufficient protected RAM")?;
     Ok(BTreeMap::from([
         (HOST.into(), Domain::new(total, reserve, enter, exit)?),
-        (PIDS.into(), Domain::new(64, 0, 64, 48)?),
+        (PIDS.into(), Domain::new(80, 0, 80, 64)?),
+        (Kind::Model.domain().into(), Domain::new(1, 0, 1, 0)?),
+        (Kind::Acquisition.domain().into(), Domain::new(1, 0, 1, 0)?),
     ]))
+}
+
+fn native_outstanding(ledger: &resources::Ledger) -> Result<()> {
+    // A generic, structurally valid ledger is not necessarily implementable by
+    // this native adapter. Never skip an unknown draining owner or underbudget
+    // a restored worker. Released history stays intact for reviewed retention.
+    for lease in ledger.leases.iter().filter(|l| l.state != State::Released) {
+        let kind = Kind::peer(lease.owner.uid)?;
+        let memory = match kind {
+            Kind::Model => model::resource_binding_profile(&lease.binding)?.memory_limit(),
+            Kind::Acquisition => {
+                if lease.binding.len() != 64
+                    || !lease
+                        .binding
+                        .bytes()
+                        .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+                {
+                    return Err("unsupported saved acquisition binding".into());
+                }
+                ACQUISITION_MEMORY
+            }
+        };
+        if lease.reservations != reservation_plan(kind, memory) {
+            return Err("saved resource plan differs from native enforcement policy".into());
+        }
+    }
+    Ok(())
 }
 
 fn protected_reserve(total: u64) -> u64 {
@@ -388,43 +517,88 @@ pub(crate) fn check_loading(total: u64, available: u64, peak: u64, owned: u64) -
 pub(crate) struct Manager {
     store: Store,
     group: Group,
+    acquisition: Group,
     oom: u64,
+    acquisition_oom: u64,
     owners: BTreeMap<String, File>,
+    acquisition_bindings: BTreeMap<String, (model::Profile, String)>,
+}
+
+pub(crate) fn fence_unavailable() -> Result<()> {
+    // Startup failure has no live manager object. Attempt both trusted fixed
+    // groups without resetting state or claiming that any allocation drained.
+    let results: Vec<_> = [Kind::Model, Kind::Acquisition]
+        .into_iter()
+        .map(|kind| {
+            Group::for_kind(kind).and_then(|group| {
+                let freeze = group.write("cgroup.freeze", "1");
+                let kill = group.kill();
+                freeze?;
+                kill
+            })
+        })
+        .collect();
+    for result in results {
+        result?;
+    }
+    Ok(())
 }
 
 impl Manager {
     pub(crate) fn fence_on_fault(&self) -> Result<()> {
         // These controls are opened relative to the already pinned worker slice.
         // Do not discover a replacement or infer that reservations are released.
-        let frozen = self.group.write("cgroup.freeze", "1");
-        let killed = self.group.kill();
-        killed?;
-        frozen
+        let results = [
+            self.group.write("cgroup.freeze", "1"),
+            self.group.kill(),
+            self.acquisition.write("cgroup.freeze", "1"),
+            self.acquisition.kill(),
+        ];
+        for result in results {
+            result?;
+        }
+        Ok(())
     }
 
     pub(crate) fn open() -> Result<Self> {
         let group = Group::open()?;
+        let acquisition = Group::for_kind(Kind::Acquisition)?;
         let mut store = Store::open(Path::new(resources::DIRECTORY))?;
+        native_outstanding(&store.read()?)?;
         store.transact(|l| l.restart(resources::random_id()?, inventory()?))?;
         let oom = group.oom()?;
+        let acquisition_oom = acquisition.oom()?;
         let mut manager = Self {
             store,
             group,
+            acquisition,
             oom,
+            acquisition_oom,
             owners: BTreeMap::new(),
+            acquisition_bindings: BTreeMap::new(),
         };
         manager.maintain()?;
         Ok(manager)
     }
 
     pub(crate) fn maintain(&mut self) -> Result<()> {
-        if Group::open()?.identity()? != self.group.identity()? {
-            self.store
-                .transact(|l| l.quarantine(HOST, "cgroup-replaced"))?;
-            return Err("worker slice identity changed; preserve state".into());
+        for kind in [Kind::Model, Kind::Acquisition] {
+            let group = match kind {
+                Kind::Model => &self.group,
+                Kind::Acquisition => &self.acquisition,
+            };
+            if Group::for_kind(kind)?.identity()? != group.identity()? {
+                self.store
+                    .transact(|l| l.quarantine(kind.domain(), "cgroup-replaced"))?;
+                return Err("worker slice identity changed; preserve state".into());
+            }
         }
-        let current = self.group.current()?;
-        let pids = number(&self.group.read("pids.current")?)?;
+        let ledger = self.store.read()?;
+        native_outstanding(&ledger)?;
+        let retained = self.retained(&ledger, None)?;
+        let pids = number(&self.group.read("pids.current")?)?
+            .checked_add(number(&self.acquisition.read("pids.current")?)?)
+            .ok_or("worker process accounting overflow")?;
         let info = safe_text(Path::new("/proc/meminfo"), 16_384)?;
         let total = model::memory(&info, "MemTotal")?;
         let available = model::memory(&info, "MemAvailable")?;
@@ -432,11 +606,15 @@ impl Manager {
             return Err("invalid host RAM observation".into());
         }
         let oom = self.group.oom()?;
+        let acquisition_oom = self.acquisition.oom()?;
         let time = now()?;
         self.store.observe(|l| {
             l.expire(time);
             if oom != self.oom {
-                l.quarantine(HOST, "worker-oom")?;
+                l.quarantine(Kind::Model.domain(), "worker-oom")?;
+            }
+            if acquisition_oom != self.acquisition_oom {
+                l.quarantine(Kind::Acquisition.domain(), "worker-oom")?;
             }
             if total != l.domains[HOST].capacity {
                 l.quarantine(HOST, "host-capacity-changed")?;
@@ -445,19 +623,20 @@ impl Manager {
             // The physical used observation includes OS usage, so subtract only
             // its configured reserve before the ledger adds that reserve once.
             let used = total - available;
-            let outstanding = l.leases.iter().any(|lease| lease.state != State::Released);
-            l.observe(
-                HOST,
-                used - used.min(reserve),
-                if outstanding { 0 } else { current },
-            )?;
+            l.observe(HOST, used - used.min(reserve), retained)?;
             l.observe(PIDS, pids, 0)?;
+            // These are execution-slot quotas, not additional physical bytes.
+            // The ledger's charge is authoritative; an awaiting-admission
+            // helper is not an already accepted execution slot.
+            l.observe(Kind::Model.domain(), 0, 0)?;
+            l.observe(Kind::Acquisition.domain(), 0, 0)?;
             if available < reserve / 4 {
                 l.quarantine(HOST, "critical-host-pressure")?;
             }
             Ok(())
         })?;
         self.oom = oom;
+        self.acquisition_oom = acquisition_oom;
         let ledger = self.store.read()?;
         let active: Vec<_> = ledger
             .leases
@@ -466,7 +645,12 @@ impl Manager {
             .cloned()
             .collect();
         for lease in active {
-            let live = owner(lease.owner.pid, lease.owner.uid, &self.group);
+            let kind = Kind::peer(lease.owner.uid)?;
+            let group = match kind {
+                Kind::Model => &self.group,
+                Kind::Acquisition => &self.acquisition,
+            };
+            let live = owner(lease.owner.pid, lease.owner.uid, group);
             let pinned = self
                 .owners
                 .get(&lease.token.lease_id)
@@ -475,66 +659,119 @@ impl Manager {
                 self.store
                     .transact(|l| l.revoke(&lease.token, "owner-lost"))?;
             } else {
-                let profile = model::resource_binding_profile(&lease.binding)?;
-                if model::resource_profile(&profile.id).is_err()
-                    || number(&self.group.read("memory.max")?)? != profile.memory_limit()
-                    || self
-                        .group
-                        .leaf()?
-                        .verify_limits(profile.memory_limit())
-                        .is_err()
+                let (memory, storage, valid) = match kind {
+                    Kind::Model => {
+                        let profile = model::resource_binding_profile(&lease.binding)?;
+                        (
+                            profile.memory_limit(),
+                            storage_device(Path::new("/var"))?,
+                            model::resource_profile(&profile.id).is_ok(),
+                        )
+                    }
+                    Kind::Acquisition => {
+                        let (profile, device) = self
+                            .acquisition_bindings
+                            .get(&lease.token.lease_id)
+                            .ok_or("missing acquisition generation binding")?;
+                        (
+                            ACQUISITION_MEMORY,
+                            device.clone(),
+                            acquisition_binding(profile, device)? == lease.binding,
+                        )
+                    }
+                };
+                if !valid
+                    || number(&group.read("memory.max")?)? != memory
+                    || group.leaf()?.verify_limits(memory, &storage).is_err()
                 {
                     self.store
-                        .transact(|l| l.quarantine(HOST, "resource-enforcement-lost"))?;
+                        .transact(|l| l.quarantine(kind.domain(), "resource-enforcement-lost"))?;
                 }
             }
         }
-        let ledger = self.store.read()?;
-        let draining: Vec<_> = ledger
-            .leases
-            .iter()
-            .filter(|l| l.state == State::Draining)
-            .cloned()
-            .collect();
-        let boot = boot_identity()?;
-        let identity = self.group.identity()?;
-        if draining
-            .iter()
-            .any(|l| drainage_generation(&l.owner, &boot, identity).is_err())
-        {
-            self.store
-                .transact(|l| l.quarantine(HOST, "cgroup-generation-lost"))?;
-            return Err("old allocation generation cannot be observed; reboot required".into());
-        }
-        if !draining.is_empty() && self.group.populated()? {
-            self.group.write("cgroup.freeze", "1")?;
-            self.group.kill()?;
-        }
-        if !self.group.populated()? {
-            let remaining = self.group.current()?;
-            // File-cache charges can survive process exit. Keep them explicitly
-            // accounted rather than equating cgroup emptiness with zero bytes.
-            for lease in draining {
-                self.store.transact(|l| {
-                    l.finish_draining(
-                        &lease.token,
-                        &BTreeMap::from([(HOST.into(), remaining), (PIDS.into(), 0)]),
-                    )
-                })?;
-                self.owners.remove(&lease.token.lease_id);
-            }
-            self.group.write("cgroup.freeze", "0")?;
+        for kind in [Kind::Model, Kind::Acquisition] {
             let ledger = self.store.read()?;
-            if ledger.domains[HOST].pressure
-                && ledger.leases.iter().all(|l| l.state == State::Released)
+            let draining: Vec<_> = ledger
+                .leases
+                .iter()
+                .filter(|l| {
+                    l.state == State::Draining && Kind::peer(l.owner.uid).ok() == Some(kind)
+                })
+                .cloned()
+                .collect();
+            let boot = boot_identity()?;
+            let group = match kind {
+                Kind::Model => &self.group,
+                Kind::Acquisition => &self.acquisition,
+            };
+            let identity = group.identity()?;
+            if draining
+                .iter()
+                .any(|l| drainage_generation(&l.owner, &boot, identity).is_err())
             {
-                self.group.reclaim_idle()?;
-                let retained = self.group.current()?;
                 self.store
-                    .observe(|l| l.observe(HOST, l.domains[HOST].observed, retained))?;
+                    .transact(|l| l.quarantine(kind.domain(), "cgroup-generation-lost"))?;
+                return Err("old allocation generation cannot be observed; reboot required".into());
+            }
+            if !draining.is_empty() && group.populated()? {
+                group.write("cgroup.freeze", "1")?;
+                group.kill()?;
+            }
+            if !group.populated()? {
+                let remaining = self.retained(&ledger, Some(kind))?;
+                // File-cache charges can survive process exit. Keep them explicitly
+                // accounted rather than equating cgroup emptiness with zero bytes.
+                for lease in draining {
+                    self.store.transact(|l| {
+                        l.finish_draining(
+                            &lease.token,
+                            &BTreeMap::from([
+                                (HOST.into(), remaining),
+                                (PIDS.into(), 0),
+                                (kind.domain().into(), 0),
+                            ]),
+                        )
+                    })?;
+                    self.owners.remove(&lease.token.lease_id);
+                    self.acquisition_bindings.remove(&lease.token.lease_id);
+                }
+                group.write("cgroup.freeze", "0")?;
+                let ledger = self.store.read()?;
+                if (ledger.domains[HOST].pressure
+                    || ledger.domains[kind.domain()].pressure
+                    || kind == Kind::Acquisition && group.current()? > 0)
+                    && ledger.leases.iter().all(|l| {
+                        l.state == State::Released || Kind::peer(l.owner.uid).ok() != Some(kind)
+                    })
+                {
+                    group.reclaim_idle()?;
+                    let retained = self.retained(&ledger, None)?;
+                    self.store
+                        .observe(|l| l.observe(HOST, l.domains[HOST].observed, retained))?;
+                }
             }
         }
         Ok(())
+    }
+
+    fn retained(&self, ledger: &resources::Ledger, drained: Option<Kind>) -> Result<u64> {
+        let mut total = 0u64;
+        for kind in [Kind::Model, Kind::Acquisition] {
+            if drained == Some(kind)
+                || ledger.leases.iter().all(|l| {
+                    l.state == State::Released || Kind::peer(l.owner.uid).ok() != Some(kind)
+                })
+            {
+                let group = match kind {
+                    Kind::Model => &self.group,
+                    Kind::Acquisition => &self.acquisition,
+                };
+                total = total
+                    .checked_add(group.current()?)
+                    .ok_or("retained cache accounting overflow")?;
+            }
+        }
+        Ok(total)
     }
 
     pub(crate) fn handle(
@@ -555,20 +792,39 @@ impl Manager {
                 if !pidfd_alive(&pin)? {
                     return Err("resource peer has exited".into());
                 }
-                let profile = model::resource_profile(
-                    r.profile.as_deref().ok_or("missing resource profile")?,
-                )?;
-                let owner = owner(peer.pid.try_into()?, peer.uid, &self.group)?;
+                let kind = Kind::peer(peer.uid)?;
+                let group = match kind {
+                    Kind::Model => &self.group,
+                    Kind::Acquisition => &self.acquisition,
+                };
+                let id = r.profile.as_deref().ok_or("missing resource profile")?;
+                let (profile, memory, storage) = match kind {
+                    Kind::Model => {
+                        let profile = model::resource_profile(id)?;
+                        let memory = profile.memory_limit();
+                        (profile, memory, storage_device(Path::new("/var"))?)
+                    }
+                    Kind::Acquisition => (
+                        model::profile(id)?,
+                        ACQUISITION_MEMORY,
+                        r.storage_device
+                            .clone()
+                            .ok_or("missing acquisition storage identity")?,
+                    ),
+                };
+                let binding = match kind {
+                    Kind::Model => profile.resource_binding()?,
+                    Kind::Acquisition => acquisition_binding(&profile, &storage)?,
+                };
+                let owner = owner(peer.pid.try_into()?, peer.uid, group)?;
                 if self.store.owner_retired(&owner)? {
                     return Err("resource owner belongs to a retired allocation generation".into());
                 }
-                self.group.leaf()?.verify_limits(profile.memory_limit())?;
+                group.leaf()?.verify_limits(memory, &storage)?;
                 let ledger = self.store.read()?;
-                if ledger
-                    .leases
-                    .iter()
-                    .any(|l| l.state != State::Released && l.owner != owner)
-                {
+                if ledger.leases.iter().any(|l| {
+                    l.state != State::Released && l.owner != owner && l.owner.uid == peer.uid
+                }) {
                     return Err("worker cgroup has an outstanding allocation".into());
                 }
                 let available = model::memory(
@@ -579,53 +835,41 @@ impl Manager {
                     l.owner == owner && Some(l.request.as_str()) == r.idempotency_key.as_deref()
                 });
                 if !replay {
-                    let processes = self.group.leaf()?.read("cgroup.procs")?;
+                    let processes = group.leaf()?.read("cgroup.procs")?;
                     let listed: Result<Vec<u64>> = processes.lines().map(number).collect();
                     if listed? != vec![u64::from(owner.pid)]
-                        || number(&self.group.read("pids.current")?)? != 1
+                        || number(&group.read("pids.current")?)? != 1
                     {
                         return Err("unleased processes or descendants occupy worker domain".into());
                     }
-                    let current = self.group.current()?;
-                    if current > profile.memory_limit() {
+                    let current = group.current()?;
+                    if current > memory {
                         return Err("retained worker charges exceed selected peak".into());
                     }
                     let total = ledger.domains[HOST].capacity;
-                    check_loading(total, available, profile.memory_limit(), current)?;
+                    check_loading(total, available, memory, current)?;
                     // The parent ceiling includes cache reparented from earlier
                     // worker cgroups. Leaf limits alone would miss those bytes.
-                    self.group
-                        .write("memory.max", &profile.memory_limit().to_string())?;
-                    if number(&self.group.read("memory.max")?)? != profile.memory_limit() {
+                    group.write("memory.max", &memory.to_string())?;
+                    if number(&group.read("memory.max")?)? != memory {
                         return Err("whole worker domain memory ceiling unavailable".into());
                     }
                 }
                 // Both loading and serving are bounded by the enforced full
                 // worker ceiling. No shrink is inferred from reported readiness.
-                let reservations = vec![
-                    Reservation {
-                        domain: HOST.into(),
-                        loading: profile.memory_limit(),
-                        serving: profile.memory_limit(),
-                    },
-                    Reservation {
-                        domain: PIDS.into(),
-                        loading: 64,
-                        serving: 64,
-                    },
-                ];
+                let reservations = reservation_plan(kind, memory);
+                let retained = self.retained(&ledger, None)?;
+                let credit = if replay { 0 } else { group.current()? };
                 token = Some(self.store.transact(|l| {
                     if !replay {
-                        let retained = self.group.current()?;
                         l.observe(HOST, l.domains[HOST].observed, retained)?;
                     }
-                    let credit = l.domains[HOST].retained;
                     l.admit_reusing_retained(
                         owner,
                         r.idempotency_key
                             .clone()
                             .ok_or("missing resource idempotency key")?,
-                        profile.resource_binding()?,
+                        binding,
                         reservations,
                         time,
                         time.checked_add(LEASE_MS)
@@ -635,12 +879,20 @@ impl Manager {
                 })?);
                 let admitted = token.as_ref().ok_or("missing admitted resource token")?;
                 self.owners.insert(admitted.lease_id.clone(), pin);
+                if kind == Kind::Acquisition {
+                    self.acquisition_bindings
+                        .insert(admitted.lease_id.clone(), (profile, storage));
+                }
             }
             "resource-renew" => {
                 if !pidfd_alive(&pinned.ok_or("missing kernel peer process handle")?)? {
                     return Err("resource peer has exited".into());
                 }
-                let owner = owner(peer.pid.try_into()?, peer.uid, &self.group)?;
+                let group = match Kind::peer(peer.uid)? {
+                    Kind::Model => &self.group,
+                    Kind::Acquisition => &self.acquisition,
+                };
+                let owner = owner(peer.pid.try_into()?, peer.uid, group)?;
                 let t = r.lease.as_ref().ok_or("missing lease")?;
                 self.store.transact(|l| {
                     l.renew(
@@ -668,7 +920,7 @@ impl Manager {
                     "cleanup_complete":lease.state==State::Released,"domains":ledger.domains}));
             }
             "resource-reconcile" => {
-                if self.group.populated()? {
+                if self.group.populated()? || self.acquisition.populated()? {
                     return Err("worker descendants not drained".into());
                 }
                 self.store.transact(|l| {
@@ -686,11 +938,16 @@ impl Manager {
                     serde_json::json!({"review":ledger.review()?,"domains":ledger.domains,
                     "generation":ledger.generation.to_string(),"active":ledger.leases.iter().filter(|l|l.state==State::Active).count(),
                     "draining":ledger.leases.iter().filter(|l|l.state==State::Draining).count(),
-                    "receipts":ledger.leases.len(),"archives":ledger.archives,"outstanding":outstanding}),
+                    "receipts":ledger.leases.len(),"archives":ledger.archives,"outstanding":outstanding,
+                    "workers":{"model_populated":self.group.populated()?,"acquisition_populated":self.acquisition.populated()?,
+                        "acquisition_retained_bytes":self.acquisition.current()?.to_string()}}),
                 );
             }
             "resource-archive" => {
-                if self.group.populated()? || !self.owners.is_empty() {
+                if self.group.populated()?
+                    || self.acquisition.populated()?
+                    || !self.owners.is_empty()
+                {
                     return Err("resource archival requires an observed empty worker domain".into());
                 }
                 let reference = self.store.archive(
@@ -744,7 +1001,8 @@ fn validate(r: &Request, uid: u32, time: u64) -> Result<()> {
     }
     let allowed = match r.action.as_str() {
         "resource-acquire" => {
-            uid == 989
+            (uid == 989 && r.storage_device.is_none()
+                || uid == 0 && r.storage_device.as_deref().map_or(false, valid_storage))
                 && r.profile.is_some()
                 && r.lease.is_none()
                 && r.review.is_none()
@@ -755,8 +1013,9 @@ fn validate(r: &Request, uid: u32, time: u64) -> Result<()> {
                 })
         }
         "resource-renew" => {
-            uid == 989
+            (uid == 989 || uid == 0)
                 && r.profile.is_none()
+                && r.storage_device.is_none()
                 && r.lease.is_some()
                 && r.review.is_none()
                 && r.idempotency_key.is_none()
@@ -764,6 +1023,7 @@ fn validate(r: &Request, uid: u32, time: u64) -> Result<()> {
         "resource-revoke" => {
             uid == 0
                 && r.profile.is_none()
+                && r.storage_device.is_none()
                 && r.lease.is_some()
                 && r.review.is_none()
                 && r.idempotency_key.is_none()
@@ -771,6 +1031,7 @@ fn validate(r: &Request, uid: u32, time: u64) -> Result<()> {
         "resource-reconcile" | "resource-archive" => {
             uid == 0
                 && r.profile.is_none()
+                && r.storage_device.is_none()
                 && r.lease.is_none()
                 && r.review.is_some()
                 && r.idempotency_key.is_none()
@@ -778,6 +1039,7 @@ fn validate(r: &Request, uid: u32, time: u64) -> Result<()> {
         "resource-status" => {
             uid == 0
                 && r.profile.is_none()
+                && r.storage_device.is_none()
                 && r.lease.is_none()
                 && r.review.is_none()
                 && r.idempotency_key.is_none()
@@ -799,6 +1061,7 @@ struct Heartbeat {
     failed: std::sync::Arc<std::sync::atomic::AtomicBool>,
     stop: std::sync::Arc<(std::sync::Mutex<bool>, std::sync::Condvar)>,
     thread: Option<std::thread::JoinHandle<()>>,
+    deadline: std::sync::Arc<std::sync::atomic::AtomicU64>,
 }
 
 fn request(action: &str) -> Result<Request> {
@@ -814,12 +1077,20 @@ fn request(action: &str) -> Result<Request> {
         profile: None,
         lease: None,
         review: None,
+        storage_device: None,
     })
 }
 
 impl WorkerLease {
     pub(crate) fn acquire(profile: &str) -> Result<Self> {
+        Self::acquire_with_storage(profile, None)
+    }
+    pub(crate) fn acquire_acquisition(profile: &str, target: &Path) -> Result<Self> {
+        Self::acquire_with_storage(profile, Some(storage_device(target)?))
+    }
+    fn acquire_with_storage(profile: &str, storage: Option<String>) -> Result<Self> {
         let mut r = request("resource-acquire")?;
+        r.storage_device = storage;
         r.profile = Some(profile.into());
         r.idempotency_key = Some(r.request_id.clone());
         let response = crate::service::resource_exchange(&r)?;
@@ -841,26 +1112,52 @@ impl WorkerLease {
             return Err("invalid resource fencing token".into());
         }
         let heartbeat_token = token.clone();
-        let heartbeat = Heartbeat::start(std::time::Duration::from_secs(2), move || {
-            renew_token(&heartbeat_token)
-        })?;
+        let initial_deadline = r
+            .deadline
+            .checked_sub(4000)
+            .and_then(|t| t.checked_add(LEASE_MS))
+            .ok_or("initial resource deadline overflow")?;
+        let heartbeat = Heartbeat::start_with_deadline(
+            std::time::Duration::from_secs(2),
+            initial_deadline,
+            move || renew_token(&heartbeat_token),
+        )?;
         Ok(Self { token, heartbeat })
     }
     pub(crate) fn check(&self) -> Result<()> {
         self.heartbeat.check()?;
         renew_token(&self.token)
     }
+    pub(crate) fn check_local(&self) -> Result<()> {
+        self.heartbeat.check()
+    }
 }
 
 impl Heartbeat {
+    #[cfg(test)]
     fn start(
         cadence: std::time::Duration,
+        renew: impl Fn() -> Result<()> + Send + 'static,
+    ) -> Result<Self> {
+        let deadline = now()?
+            .checked_add(LEASE_MS)
+            .ok_or("heartbeat deadline overflow")?;
+        Self::start_with_deadline(cadence, deadline, renew)
+    }
+    fn start_with_deadline(
+        cadence: std::time::Duration,
+        initial_deadline: u64,
         renew: impl Fn() -> Result<()> + Send + 'static,
     ) -> Result<Self> {
         if cadence.is_zero() || cadence > std::time::Duration::from_millis(LEASE_MS / 2) {
             return Err("invalid resource heartbeat cadence".into());
         }
         let failed = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        if now()? >= initial_deadline {
+            return Err("initial lease already expired".into());
+        }
+        let deadline = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(initial_deadline));
+        let heartbeat_deadline = std::sync::Arc::clone(&deadline);
         let stop = std::sync::Arc::new((std::sync::Mutex::new(false), std::sync::Condvar::new()));
         let heartbeat_failed = std::sync::Arc::clone(&failed);
         let heartbeat_stop = std::sync::Arc::clone(&stop);
@@ -887,24 +1184,44 @@ impl Heartbeat {
                     return;
                 }
                 drop(stopped);
-                if renew().is_err() {
+                if heartbeat_failed.load(std::sync::atomic::Ordering::Acquire) {
+                    return;
+                }
+                let attempt = now().and_then(|t| {
+                    t.checked_add(LEASE_MS)
+                        .ok_or("heartbeat deadline overflow".into())
+                });
+                let until = match attempt {
+                    Ok(until) => until,
+                    Err(_) => {
+                        heartbeat_failed.store(true, std::sync::atomic::Ordering::Release);
+                        return;
+                    }
+                };
+                if renew().is_err() || now().map_or(true, |t| t >= until) {
                     heartbeat_failed.store(true, std::sync::atomic::Ordering::Release);
                     return;
                 }
+                heartbeat_deadline.store(until, std::sync::atomic::Ordering::Release);
             })?;
         Ok(Self {
             failed,
             stop,
             thread: Some(heartbeat),
+            deadline,
         })
     }
     fn check(&self) -> Result<()> {
-        if self.failed.load(std::sync::atomic::Ordering::Acquire)
+        if now().map_or(true, |t| {
+            t >= self.deadline.load(std::sync::atomic::Ordering::Acquire)
+        }) || self.failed.load(std::sync::atomic::Ordering::Acquire)
             || self
                 .thread
                 .as_ref()
                 .map_or(true, |heartbeat| heartbeat.is_finished())
         {
+            self.failed
+                .store(true, std::sync::atomic::Ordering::Release);
             return Err("resource heartbeat failed; execution fenced".into());
         }
         Ok(())
@@ -962,6 +1279,13 @@ pub(crate) fn client(action: &str, argument: Option<&str>) -> Result<()> {
     Ok(())
 }
 
+pub(crate) fn acquisition_status() -> Result<serde_json::Value> {
+    let r = request("resource-status")?;
+    crate::service::resource_exchange(&r)?
+        .status
+        .ok_or_else(|| "missing resource status".into())
+}
+
 pub(crate) fn revoke(id: &str, generation: &str, epoch: &str) -> Result<()> {
     crate::require_root()?;
     crate::platform::require_installed()?;
@@ -992,15 +1316,284 @@ pub(crate) fn migrate() -> Result<()> {
     crate::platform::require_installed()?;
     let _idle = model::resource_idle()?;
     let group = Group::open()?;
-    if group.populated()? {
+    if group.populated()? || Group::for_kind(Kind::Acquisition)?.populated()? {
         return Err("model cgroup not idle; no resource migration".into());
     }
     resources::initialize(Path::new(resources::DIRECTORY))
 }
 
+pub(crate) fn initialize_live() -> Result<()> {
+    crate::platform::require_live()?;
+    let file = File::open("/var")?;
+    let mut stat: libc::statfs = unsafe { std::mem::zeroed() };
+    if unsafe { libc::fstatfs(file.as_raw_fd(), &mut stat) } != 0 || stat.f_type != 0x01021994 {
+        return Err("live resource initialization requires volatile tmpfs /var".into());
+    }
+    if Group::open()?.populated()? || Group::for_kind(Kind::Acquisition)?.populated()? {
+        return Err("live resource domains are already populated".into());
+    }
+    // This explicit, live-only oneshot runs once per volatile filesystem.
+    // initialize refuses an existing directory; broker restart never resets it.
+    resources::initialize(Path::new(resources::DIRECTORY))
+}
+
+fn migration_store() -> Result<Store> {
+    crate::require_root()?;
+    crate::platform::require_installed()?;
+    if Group::open()?.populated()? || Group::for_kind(Kind::Acquisition)?.populated()? {
+        return Err("resource migration requires both worker slices empty".into());
+    }
+    // The lifetime ledger lock also requires the broker stopped. Existing
+    // missing/damaged state is never initialized by the reviewed migration.
+    Store::open(Path::new(resources::DIRECTORY))
+}
+
+pub(crate) fn migration_status() -> Result<()> {
+    let store = migration_store()?;
+    let ledger = store.read()?;
+    println!(
+        "{}",
+        serde_json::json!({"review":ledger.review()?,"generation":ledger.generation.to_string(),
+        "domains":ledger.domains,"proposed":inventory()?})
+    );
+    Ok(())
+}
+
+pub(crate) fn migrate_reviewed(review: &str) -> Result<()> {
+    crate::require_root()?;
+    let _idle = model::resource_idle()?;
+    let mut store = migration_store()?;
+    store.transact(|l| l.migrate_inventory(review, resources::random_id()?, inventory()?))?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn local_deadline_fences_blocked_renewal_and_cannot_be_reenabled_by_late_ack() {
+        let (started, received) = std::sync::mpsc::channel();
+        let (resume, waiting) = std::sync::mpsc::channel();
+        let waiting = std::sync::Mutex::new(waiting);
+        let heartbeat = Heartbeat::start(std::time::Duration::from_millis(5), move || {
+            started.send(()).map_err(|_| "heartbeat fixture closed")?;
+            waiting
+                .lock()
+                .map_err(|_| "heartbeat fixture poisoned")?
+                .recv_timeout(std::time::Duration::from_secs(2))
+                .map_err(|_| "heartbeat fixture timed out")?;
+            Ok(())
+        })
+        .unwrap();
+        received
+            .recv_timeout(std::time::Duration::from_secs(2))
+            .unwrap();
+        heartbeat
+            .deadline
+            .store(0, std::sync::atomic::Ordering::Release);
+        assert!(heartbeat.check().is_err());
+        resume.send(()).unwrap();
+        let until = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        while !heartbeat.thread.as_ref().unwrap().is_finished() {
+            assert!(std::time::Instant::now() < until);
+            std::thread::yield_now();
+        }
+        assert!(
+            heartbeat
+                .deadline
+                .load(std::sync::atomic::Ordering::Acquire)
+                > 0
+        );
+        assert!(heartbeat.check().is_err());
+        drop(heartbeat);
+    }
+    #[test]
+    fn unsupported_saved_owners_plans_and_bindings_refuse_without_mutating_receipts() {
+        let mut l = resources::Ledger::fresh_for_test();
+        let gib = 1024 * 1024 * 1024;
+        l.restart(
+            "first-epoch".into(),
+            BTreeMap::from([
+                (
+                    HOST.into(),
+                    Domain::new(16 * gib, gib, 15 * gib, 14 * gib).unwrap(),
+                ),
+                (PIDS.into(), Domain::new(80, 0, 80, 64).unwrap()),
+                (
+                    Kind::Model.domain().into(),
+                    Domain::new(1, 0, 1, 0).unwrap(),
+                ),
+                (
+                    Kind::Acquisition.domain().into(),
+                    Domain::new(1, 0, 1, 0).unwrap(),
+                ),
+            ]),
+        )
+        .unwrap();
+        let owner = Owner {
+            uid: 0,
+            pid: 1,
+            start_ticks: 1,
+            boot: "boot-one".into(),
+            cgroup_device: 1,
+            cgroup_inode: 1,
+        };
+        l.admit(
+            owner,
+            "acquisition".into(),
+            "a".repeat(64),
+            reservation_plan(Kind::Acquisition, ACQUISITION_MEMORY),
+            1,
+            100,
+        )
+        .unwrap();
+        native_outstanding(&l).unwrap();
+        for draining in [false, true] {
+            let mut changed = l.clone();
+            if draining {
+                changed.leases[0].state = State::Draining;
+            }
+            changed.leases[0].owner.uid = 990;
+            let preserved = changed.clone();
+            assert!(native_outstanding(&changed).is_err());
+            assert_eq!(changed, preserved);
+        }
+        let mut changed = l.clone();
+        changed.leases[0].reservations[0].loading -= 1;
+        assert!(native_outstanding(&changed).is_err());
+        changed = l.clone();
+        changed.leases[0].binding = "A".repeat(64);
+        assert!(native_outstanding(&changed).is_err());
+        let p = model::profile("qwen3-1-7b-q4-k-m").unwrap();
+        changed = l.clone();
+        changed.leases[0].owner.uid = 989;
+        changed.leases[0].binding = p.resource_binding().unwrap();
+        changed.leases[0].reservations = reservation_plan(Kind::Model, p.memory_limit());
+        native_outstanding(&changed).unwrap();
+        changed.leases[0].binding = "b".repeat(64);
+        assert!(native_outstanding(&changed).is_err());
+        // Released receipts are preserved, not reinterpreted as executions.
+        changed.leases[0].state = State::Released;
+        native_outstanding(&changed).unwrap();
+        assert_eq!(changed.leases.len(), 1);
+        assert_eq!(changed.generation, l.generation);
+    }
+
+    #[test]
+    fn acquisition_and_serving_share_physical_bytes_but_not_failure_slots() {
+        let mut l = resources::Ledger::fresh_for_test();
+        l.restart(
+            "first-epoch".into(),
+            BTreeMap::from([
+                (HOST.into(), Domain::new(1000, 100, 950, 800).unwrap()),
+                (PIDS.into(), Domain::new(80, 0, 80, 64).unwrap()),
+                (
+                    Kind::Model.domain().into(),
+                    Domain::new(1, 0, 1, 0).unwrap(),
+                ),
+                (
+                    Kind::Acquisition.domain().into(),
+                    Domain::new(1, 0, 1, 0).unwrap(),
+                ),
+            ]),
+        )
+        .unwrap();
+        let model_owner = Owner {
+            uid: 989,
+            pid: 1,
+            start_ticks: 1,
+            boot: "boot-one".into(),
+            cgroup_device: 1,
+            cgroup_inode: 1,
+        };
+        let acquisition_owner = Owner {
+            uid: 0,
+            pid: 2,
+            cgroup_inode: 2,
+            ..model_owner.clone()
+        };
+        let model = l
+            .admit(
+                model_owner.clone(),
+                "model".into(),
+                "a".repeat(64),
+                reservation_plan(Kind::Model, 600),
+                1,
+                100,
+            )
+            .unwrap();
+        let acquisition = l
+            .admit(
+                acquisition_owner,
+                "acquisition".into(),
+                "b".repeat(64),
+                reservation_plan(Kind::Acquisition, 100),
+                1,
+                100,
+            )
+            .unwrap();
+        assert_eq!(l.charged(HOST).unwrap(), 700);
+        assert_eq!(l.charged(PIDS).unwrap(), 80);
+        let before = l.clone();
+        assert!(l
+            .admit(
+                model_owner.clone(),
+                "extra".into(),
+                "a".repeat(64),
+                reservation_plan(Kind::Model, 1),
+                1,
+                100
+            )
+            .is_err());
+        assert_eq!(l, before);
+        l.quarantine(Kind::Acquisition.domain(), "acquisition-oom")
+            .unwrap();
+        l.assert_active(&model, &model_owner, 2).unwrap();
+        assert_eq!(l.charged(HOST).unwrap(), 700);
+        l.finish_draining(
+            &acquisition,
+            &BTreeMap::from([
+                (HOST.into(), 20),
+                (PIDS.into(), 0),
+                (Kind::Acquisition.domain().into(), 0),
+            ]),
+        )
+        .unwrap();
+        assert_eq!(l.charged(HOST).unwrap(), 620);
+        l.assert_active(&model, &model_owner, 2).unwrap();
+    }
+
+    #[test]
+    fn acquisition_storage_is_canonical_and_cryptographically_bound_to_the_profile() {
+        let p = model::profile("qwen3-4b-q4-k-m").unwrap();
+        let b = acquisition_binding(&p, "253:0").unwrap();
+        assert_ne!(b, acquisition_binding(&p, "253:1").unwrap());
+        assert_ne!(b, p.resource_binding().unwrap());
+        assert_ne!(
+            b,
+            acquisition_binding(&model::profile("qwen3-1-7b-q4-k-m").unwrap(), "253:0").unwrap()
+        );
+        for storage in [
+            "0:1",
+            "0253:0",
+            "253:00",
+            "253:-1",
+            "253:0:1",
+            "4294967296:0",
+            "253:0\n",
+        ] {
+            assert!(acquisition_binding(&p, storage).is_err());
+        }
+        let mut r = request("resource-acquire").unwrap();
+        r.caller = 0;
+        r.profile = Some(p.id);
+        r.idempotency_key = Some("fixed-request".into());
+        assert!(validate(&r, 0, now().unwrap()).is_err());
+        r.storage_device = Some("253:0".into());
+        validate(&r, 0, now().unwrap()).unwrap();
+        r.caller = 989;
+        assert!(validate(&r, 989, now().unwrap()).is_err());
+    }
     #[test]
     fn replacement_group_never_proves_same_boot_drainage_and_reboot_is_explicit() {
         let boot = boot_identity().unwrap();
@@ -1102,6 +1695,7 @@ mod tests {
             profile: Some("qwen3-4b-q4-k-m".into()),
             lease: None,
             review: None,
+            storage_device: None,
         };
         validate(&r, 989, 100).unwrap();
         for uid in [0, 988, 990, 1000] {
@@ -1156,7 +1750,7 @@ mod tests {
             .custom_flags(libc::O_DIRECTORY | libc::O_CLOEXEC)
             .open("/sys/fs/cgroup")
             .unwrap();
-        let group = Group(file);
+        let group = Group(file, Kind::Model);
         let controllers = group.read("cgroup.controllers").unwrap();
         assert!(controllers.len() <= 4096);
         assert!(descriptor(&group.0, "../cgroup.kill", true, false).is_err());

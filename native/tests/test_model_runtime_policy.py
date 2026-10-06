@@ -319,6 +319,37 @@ class ModelRuntimePolicyTests(unittest.TestCase):
         for forbidden in ('systemctl', 'remove_file(', 'fs::write(', 'killpg(', 'Command::new('):
             self.assertNotIn(forbidden, supervision)
 
+    def test_acquisition_uses_owned_supervision_after_credential_change(self):
+        source = (ROOT / 'rust/luma-platform/src/model.rs').read_text()
+        fetch = source.split('fn fetch(')[1].split('fn operation_lock(')[0]
+        confine = source.split('fn confine_acquisition(')[1].split('fn fetch(')[0]
+        for check in ('libc::setgroups(', 'libc::setgid(988)', 'libc::setuid(988)',
+                      'libc::PR_SET_NO_NEW_PRIVS', 'libc::RLIMIT_FSIZE',
+                      'max_bytes == 0 || max_bytes >= libc::RLIM_INFINITY'):
+            self.assertIn(check, confine)
+        for check in ('confine_acquisition(&mut process, p.bytes)?',
+                      'supervision::run(&mut process', 'crate::resource_manager::now()',
+                      'checked_add(3_620_000)', 'metadata.len() > p.bytes',
+                      'temporary.identity', 'libc::O_NOFOLLOW | libc::O_NONBLOCK'):
+            self.assertIn(check, fetch)
+        self.assertLess(fetch.index('confine_acquisition('), fetch.index('supervision::run('))
+        self.assertLess(fetch.index('supervision::run('), fetch.index('verify_file('))
+        for forbidden in ('child.try_wait()', 'process.spawn()', 'libc::SIGTERM',
+                          'libc::kill(', 'child.kill()'):
+            self.assertNotIn(forbidden, fetch)
+
+    def test_partial_cleanup_requires_created_identity_and_independent_writer_fence(self):
+        source = (ROOT / 'rust/luma-platform/src/model.rs').read_text()
+        cleanup = source.split('impl Drop for Temporary')[1].split('fn fetch(')[0]
+        for check in ('self.identity.ok_or(', 'open_regular(&self.path)',
+                      '(metadata.dev(), metadata.ino()) != identity', 'metadata.uid() != 0',
+                      'metadata.nlink() != 1', 'libc::LOCK_EX | libc::LOCK_NB',
+                      'fs::symlink_metadata(&self.path)', '(named.dev(), named.ino()) != identity',
+                      'sync_all()?'):
+            self.assertIn(check, cleanup)
+        self.assertLess(cleanup.index('libc::flock('), cleanup.index('fs::remove_file('))
+        self.assertLess(cleanup.index('fs::symlink_metadata('), cleanup.index('fs::remove_file('))
+
     def test_model_parent_death_registration_and_child_reap_are_explicit(self):
         supervision = (ROOT / 'rust/luma-platform/src/model/supervision.rs').read_text()
         arm = supervision.split('fn arm_parent_death(')[1].split('struct OwnedRuntime')[0]

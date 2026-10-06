@@ -483,11 +483,68 @@ fn inherit_runtime_files(command: &mut Command, model: &File, lock: &File) {
     }
 }
 
-struct Temporary(PathBuf);
+struct Temporary {
+    path: PathBuf,
+    identity: Option<(u64, u64)>,
+}
 impl Drop for Temporary {
     fn drop(&mut self) {
-        let _ = fs::remove_file(&self.0);
+        // The parent descriptor and Command's stdout clone are dropped before
+        // this guard. An independent open description must take the inherited
+        // writer lock before cleanup. PID observation alone cannot prove that
+        // every inherited writer descriptor has gone away.
+        let cleanup = || -> Result<()> {
+            let identity = self.identity.ok_or("partial file was not created")?;
+            let file = open_regular(&self.path)?;
+            let metadata = file.metadata()?;
+            if (metadata.dev(), metadata.ino()) != identity
+                || metadata.uid() != 0
+                || metadata.nlink() != 1
+                || metadata.mode() & 0o022 != 0
+                || unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0
+            {
+                return Err("partial writer or identity uncertain; preserve acquisition".into());
+            }
+            let named = fs::symlink_metadata(&self.path)?;
+            if !named.is_file() || (named.dev(), named.ino()) != identity {
+                return Err("partial path changed; preserve acquisition".into());
+            }
+            fs::remove_file(&self.path)?;
+            File::open(self.path.parent().ok_or("missing partial parent")?)?.sync_all()?;
+            Ok(())
+        };
+        // Uncertain output remains for reviewed, descriptor-fenced orphan
+        // reconciliation. Drop cannot convert a failure into a cleanup receipt.
+        let _ = cleanup();
     }
+}
+
+fn confine_acquisition(process: &mut Command, max_bytes: u64) -> Result<()> {
+    if max_bytes == 0 || max_bytes >= libc::RLIM_INFINITY {
+        return Err("model acquisition requires a finite nonzero byte ceiling".into());
+    }
+    unsafe {
+        process.pre_exec(move || {
+            if libc::setgroups(0, std::ptr::null()) != 0
+                || libc::setgid(988) != 0
+                || libc::setuid(988) != 0
+                || libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0
+            {
+                return Err(std::io::Error::last_os_error());
+            }
+            // Also bound output at the kernel, even for chunked transfer without
+            // a Content-Length and on curl versions predating streaming limits.
+            let limit = libc::rlimit {
+                rlim_cur: max_bytes,
+                rlim_max: max_bytes,
+            };
+            if libc::setrlimit(libc::RLIMIT_FSIZE, &limit) != 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+    Ok(())
 }
 
 fn fetch(at: &Path, p: &Profile) -> Result<()> {
@@ -495,12 +552,18 @@ fn fetch(at: &Path, p: &Profile) -> Result<()> {
     // groups, ambient environment, stdin, proxy credentials or configuration.
     let mut random = [0u8; 16];
     File::open("/dev/urandom")?.read_exact(&mut random)?;
-    let temporary = Temporary(at.with_extension(format!("partial-{}", bundle::hex(&random))));
+    let mut temporary = Temporary {
+        path: at.with_extension(format!("partial-{}", bundle::hex(&random))),
+        identity: None,
+    };
     let file = OpenOptions::new()
         .create_new(true)
         .write(true)
         .mode(0o600)
-        .open(&temporary.0)?;
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+        .open(&temporary.path)?;
+    let metadata = file.metadata()?;
+    temporary.identity = Some((metadata.dev(), metadata.ino()));
     // This open-file-description lock is inherited by curl's stdout. Even if
     // the owner dies before curl handles PDEATHSIG, cleanup cannot race it.
     if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
@@ -534,64 +597,52 @@ fn fetch(at: &Path, p: &Profile) -> Result<()> {
         .stdin(Stdio::null())
         .stdout(Stdio::from(file.try_clone()?))
         .stderr(Stdio::inherit());
-    let max_bytes = p.bytes;
-    let parent_pid = std::process::id();
-    unsafe {
-        process.pre_exec(move || {
-            if libc::setgroups(0, std::ptr::null()) != 0
-                || libc::setgid(988) != 0
-                || libc::setuid(988) != 0
-                || libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0
-            {
-                return Err(std::io::Error::last_os_error());
-            }
-            if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGTERM, 0, 0, 0) != 0
-                || libc::getppid() as u32 != parent_pid
-            {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::Interrupted,
-                    "download owner exited",
-                ));
-            }
-            // Also bound output at the kernel, even for chunked transfer without
-            // a Content-Length and on curl versions predating streaming limits.
-            let limit = libc::rlimit {
-                rlim_cur: max_bytes,
-                rlim_max: max_bytes,
-            };
-            if libc::setrlimit(libc::RLIMIT_FSIZE, &limit) != 0 {
-                return Err(std::io::Error::last_os_error());
-            }
-            Ok(())
-        });
-    }
-    let mut child = process.spawn()?;
-    let started = std::time::Instant::now();
+    confine_acquisition(&mut process, p.bytes)?;
+    let started = crate::resource_manager::now()?;
+    let deadline = started
+        .checked_add(3_620_000)
+        .ok_or("download deadline overflow")?;
     let mut reported = 0;
-    let status = loop {
-        if let Some(status) = child.try_wait()? {
-            break status;
+    // The supervisor appends SIGKILL parent-death registration after the
+    // credential-changing hook above, pins the exact child, and reaps it before
+    // returning on an observation/deadline failure. No saved-PID fallback.
+    let result = supervision::run(&mut process, || {
+        let time = crate::resource_manager::now()?;
+        if time >= deadline {
+            return Err("model acquisition deadline expired".into());
         }
-        let elapsed = started.elapsed().as_secs();
+        let metadata = file.metadata()?;
+        if metadata.len() > p.bytes
+            || Some((metadata.dev(), metadata.ino())) != temporary.identity
+            || metadata.uid() != 0
+            || metadata.nlink() != 1
+            || metadata.mode() & 0o022 != 0
+        {
+            return Err("model acquisition output fence failed".into());
+        }
+        let elapsed = time
+            .checked_sub(started)
+            .ok_or("download clock regressed")?
+            / 1000;
         if elapsed / 15 > reported {
             reported = elapsed / 15;
             println!(
                 "Model download: {} / {} bytes ({}s)",
-                file.metadata()?.len(),
+                metadata.len(),
                 p.bytes,
                 elapsed
             );
         }
-        std::thread::sleep(std::time::Duration::from_secs(1));
-    };
-    if !status.success() {
-        return Err("model download failed; no model was activated; retry model-install".into());
+        Ok(())
+    });
+    if let Err(error) = result {
+        return Err(format!("model download failed: {error}; no model was activated; uncertain partials remain fenced").into());
     }
     println!("Verifying model bytes and SHA-256...");
     file.sync_all()?;
-    verify_file(&temporary.0, p)?;
-    fs::set_permissions(&temporary.0, fs::Permissions::from_mode(0o444))?;
-    fs::rename(&temporary.0, at)?;
+    verify_file(&temporary.path, p)?;
+    fs::set_permissions(&temporary.path, fs::Permissions::from_mode(0o444))?;
+    fs::rename(&temporary.path, at)?;
     File::open(at.parent().ok_or("missing model directory")?)?.sync_all()?;
     Ok(())
 }
@@ -2694,6 +2745,190 @@ mod tests {
         let profiles = catalog().unwrap().models;
         let partial = dir.join(format!("{}.partial-{}", profiles[0].id, "a".repeat(32)));
         (dir, partial, profiles)
+    }
+
+    fn partial_guard(path: &Path) -> (Temporary, File) {
+        let file = OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .mode(0o600)
+            .open(path)
+            .unwrap();
+        let m = file.metadata().unwrap();
+        assert_eq!(
+            unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) },
+            0
+        );
+        (
+            Temporary {
+                path: path.into(),
+                identity: Some((m.dev(), m.ino())),
+            },
+            file,
+        )
+    }
+
+    #[test]
+    fn partial_guard_preserves_a_live_inherited_writer_then_reconciles() {
+        let (dir, partial, profiles) = cleanup_fixture("guard-writer");
+        let (guard, file) = partial_guard(&partial);
+        let mut child = Command::new("/bin/sleep")
+            .arg("30")
+            .stdout(Stdio::from(file.try_clone().unwrap()))
+            .spawn()
+            .unwrap();
+        drop(file);
+        drop(guard);
+        let preserved = partial.exists();
+        child.kill().unwrap();
+        child.wait().unwrap();
+        assert!(preserved);
+        assert_eq!(reconcile_downloads(&dir, &profiles).unwrap(), 1);
+        fs::remove_dir(dir).unwrap();
+    }
+
+    #[test]
+    fn partial_guard_never_unlinks_a_replaced_or_uncreated_identity() {
+        for changed in [true, false] {
+            let (dir, partial, _) = cleanup_fixture(if changed {
+                "guard-replaced"
+            } else {
+                "guard-uncreated"
+            });
+            let guard = if changed {
+                let (guard, file) = partial_guard(&partial);
+                drop(file);
+                fs::rename(&partial, dir.join("owned-original")).unwrap();
+                guard
+            } else {
+                Temporary {
+                    path: partial.clone(),
+                    identity: None,
+                }
+            };
+            fs::write(&partial, b"preserve substituted path").unwrap();
+            drop(guard);
+            assert_eq!(fs::read(&partial).unwrap(), b"preserve substituted path");
+            fs::remove_file(partial).unwrap();
+            if changed {
+                fs::remove_file(dir.join("owned-original")).unwrap();
+            }
+            fs::remove_dir(dir).unwrap();
+        }
+    }
+
+    #[test]
+    fn partial_guard_removes_only_the_created_drained_file() {
+        let (dir, partial, _) = cleanup_fixture("guard-drained");
+        let (guard, file) = partial_guard(&partial);
+        drop(file);
+        drop(guard);
+        assert!(!partial.exists());
+        fs::remove_dir(dir).unwrap();
+    }
+
+    #[test]
+    fn acquisition_supervision_reaps_before_return_or_unwind_and_descriptor_reuse() {
+        for action in [
+            "failure",
+            "panic",
+            "success",
+            "child-failure",
+            "spawn-failure",
+        ] {
+            let (dir, partial, profiles) = cleanup_fixture(&format!("supervised-{action}"));
+            let (guard, file) = partial_guard(&partial);
+            let executable = match action {
+                "success" => "/bin/true",
+                "child-failure" => "/bin/false",
+                "spawn-failure" => "/luma-nonexistent-acquisition-test-executable",
+                _ => "/bin/sleep",
+            };
+            let mut command = Command::new(executable);
+            if matches!(action, "failure" | "panic") {
+                command.arg("30");
+            }
+            command.stdout(Stdio::from(file.try_clone().unwrap()));
+            drop(file);
+            let mut checks = 0;
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                supervision::run(&mut command, || {
+                    checks += 1;
+                    if checks > 1 {
+                        match action {
+                            "failure" => return Err("owned acquisition observation failed".into()),
+                            "panic" => panic!("owned acquisition observation panicked"),
+                            _ => (),
+                        }
+                    }
+                    Ok(())
+                })
+            }));
+            drop(command); // The parent's retained stdout clone is not a child.
+            match (action, result) {
+                ("panic", Err(_)) | ("success", Ok(Ok(()))) => (),
+                ("failure" | "child-failure" | "spawn-failure", Ok(Err(_))) => (),
+                _ => panic!("unexpected acquisition supervision result"),
+            }
+            let independent = open_regular(&partial).unwrap();
+            assert_eq!(
+                unsafe { libc::flock(independent.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) },
+                0,
+                "owned child writer must be gone, including on unwind"
+            );
+            drop(independent);
+            drop(guard);
+            assert!(!partial.exists());
+            assert_eq!(reconcile_downloads(&dir, &profiles).unwrap(), 0);
+            fs::remove_dir(dir).unwrap();
+        }
+    }
+
+    #[test]
+    fn acquisition_exec_retains_death_fence_after_real_uid_drop_and_kernel_byte_limit() {
+        let (dir, partial, _) = cleanup_fixture("confined-acquisition");
+        let executable = dir.join("acquisition-fixture");
+        let mut compiler = Command::new("/usr/bin/cc")
+            .args(["-O2", "-Wall", "-Wextra", "-Werror", "-x", "c", "-", "-o"])
+            .arg(&executable)
+            .env_clear()
+            .env("PATH", "/usr/bin")
+            .env("TMPDIR", std::env::temp_dir())
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .spawn()
+            .unwrap();
+        compiler
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(include_str!("../../../native/tests/model_supervision_fixture.c").as_bytes())
+            .unwrap();
+        assert!(compiler.wait().unwrap().success());
+        fs::set_permissions(&dir, fs::Permissions::from_mode(0o755)).unwrap();
+        fs::set_permissions(&executable, fs::Permissions::from_mode(0o755)).unwrap();
+        let (guard, file) = partial_guard(&partial);
+        let mut command = Command::new(&executable);
+        command
+            .arg("acquisition-success")
+            .env_clear()
+            .stdin(Stdio::null())
+            .stdout(Stdio::from(file.try_clone().unwrap()));
+        // The exact production confinement function, not a test-only UID or
+        // environment override, is followed by production supervisor arming.
+        confine_acquisition(&mut command, 128).unwrap();
+        supervision::run(&mut command, || Ok(())).unwrap();
+        drop(command);
+        drop(file);
+        assert_eq!(fs::read(&partial).unwrap(), b"confined acquisition fixture");
+        drop(guard);
+        assert!(!partial.exists());
+        fs::remove_file(executable).unwrap();
+        fs::remove_dir(dir).unwrap();
+
+        let mut invalid = Command::new("/bin/true");
+        assert!(confine_acquisition(&mut invalid, 0).is_err());
+        assert!(confine_acquisition(&mut invalid, libc::RLIM_INFINITY).is_err());
     }
 
     #[test]

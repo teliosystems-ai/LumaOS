@@ -47,6 +47,19 @@ token before and during runtime execution. Leases last ten seconds using
 `CLOCK_BOOTTIME`, not civil UTC. Renewal failure or thread failure fences
 execution. Dropping the heartbeat stops renewal but sends no release claim.
 
+Model acquisition now uses pinned direct-child supervision rather than a raw
+`try_wait` loop. Credential dropping to UID/GID 988 and the catalog byte ceiling
+precede parent-death `SIGKILL` registration. A checked `CLOCK_BOOTTIME` deadline
+and output metadata fence run during download; observation failures terminate
+and reap through the owned PID handle. There is no saved-PID fallback. Failure
+to obtain a handle remains uncertain, not a cleanup proof. Temporary cleanup
+requires the originally created inode, safe metadata and an independent
+exclusive lock on the inherited writer description. Busy, substituted or
+uncreated paths remain intact for the existing fenced orphan reconciliation.
+This closes an acquisition process/output-generation gap, **not acquisition
+resource admission**: download and root-side hashing still need broker leases
+and contained budgets, including the live installer's private encrypted target.
+
 Cancellation, expiry, lost owners, broker restart and quarantine leave all
 reservations charged until the broker fences the fixed cgroup and observes
 empty descendants. Surviving file-cache charges remain explicit. Verified
@@ -145,3 +158,5 @@ Kernel controller behavior is specified by the
 [cgroup-v2 documentation](https://docs.kernel.org/admin-guide/cgroup-v2.html).
 Systemd 255 resource controls are specified in its
 [versioned resource-control source](https://raw.githubusercontent.com/systemd/systemd/v255/man/systemd.resource-control.xml).
+Credential changes clear the parent-death setting; the final hook ordering
+follows the [Linux parent-death interface](https://man7.org/linux/man-pages/man2/PR_SET_PDEATHSIG.2const.html).

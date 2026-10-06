@@ -20,7 +20,9 @@ before proceeding to Requirement #2. The native broker now has durable atomic
 lease accounting, kernel-bound worker generations, loading-time heartbeats,
 whole-cgroup drain/retained-cache accounting, pressure/quarantine and reviewed
 receipt archival. Fresh installer initialization, model supervision and unit
-packaging are wired in source. See [RESOURCE_LEASES.md](RESOURCE_LEASES.md) for
+packaging are wired in source. Acquisition now has owned direct-child and
+temporary-output generation fences, with no claim of acquisition resource
+leases or contained hashing budgets. See [RESOURCE_LEASES.md](RESOURCE_LEASES.md) for
 the exact implemented scope, limits, maintenance commands and remaining work.
 
 **Requirement #1 is not closed.** Acquisition/content-worker integration,

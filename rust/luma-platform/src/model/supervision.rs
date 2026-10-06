@@ -1,4 +1,4 @@
-//! Polling supervision of the one owned model child. Not a resource lease,
+//! Polling supervision of one owned runtime or acquisition child. Not a resource lease,
 //! protected generation, readiness claim or arbitrary descendant sandbox.
 use super::*;
 use std::os::fd::FromRawFd;
@@ -70,8 +70,10 @@ fn arm_parent_death(command: &mut Command) {
     unsafe {
         command.pre_exec(move || {
             // Only async-signal-safe syscalls run here. The direct child is a
-            // fixed non-setid, capability-free runtime, with no credential
-            // changes after this hook. Forked descendants do not inherit this
+            // fixed non-setid, capability-free executable, with no credential
+            // changes after this final hook. Acquisition drops credentials in
+            // an earlier hook; register afterwards because that clears PDEATHSIG.
+            // Forked descendants do not inherit this
             // kernel setting; the installed unit retains control-group killing.
             if libc::prctl(
                 libc::PR_SET_PDEATHSIG,

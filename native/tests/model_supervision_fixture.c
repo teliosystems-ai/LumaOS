@@ -1,4 +1,4 @@
-/* Disposable owned leaf only: tiny weights, numeric UID 989, no model/runtime
+/* Disposable owned leaf only: tiny weights, numeric UIDs 988/989, no model/runtime
  * authority. Check the exec thread's PDEATHSIG, not a Rust test-harness thread.
  * Test-only environment/paths never enter the production native supervisor. */
 #define _GNU_SOURCE
@@ -9,6 +9,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/prctl.h>
+#include <sys/file.h>
+#include <sys/resource.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
@@ -25,9 +27,23 @@ static int descriptor(const char *name) {
 int main(int argc, char **argv) {
     static const char weights[] = "private tiny validation weight fixture";
     int signal = 0;
-    if (argc != 2 || (strcmp(argv[1], "leaf-hold") && strcmp(argv[1], "leaf-success") && strcmp(argv[1], "leaf-failure"))) return 2;
-    if (geteuid() != 989 || getegid() != 989 || getgroups(0, NULL) != 0) return 3;
+    if (argc != 2) return 2;
+    int acquisition = !strcmp(argv[1], "acquisition-success");
+    if (!acquisition && strcmp(argv[1], "leaf-hold") && strcmp(argv[1], "leaf-success") && strcmp(argv[1], "leaf-failure")) return 2;
+    uid_t uid = acquisition ? 988 : 989;
+    if (geteuid() != uid || getegid() != uid || getgroups(0, NULL) != 0) return 3;
     if (prctl(PR_GET_PDEATHSIG, &signal, 0, 0, 0) || signal != SIGKILL) return 4;
+    if (acquisition) {
+        static const char output[] = "confined acquisition fixture";
+        struct rlimit limit;
+        struct stat metadata;
+        if (prctl(PR_GET_NO_NEW_PRIVS, 0, 0, 0, 0) != 1 ||
+            getrlimit(RLIMIT_FSIZE, &limit) || limit.rlim_cur != 128 || limit.rlim_max != 128 ||
+            fstat(STDOUT_FILENO, &metadata) || !S_ISREG(metadata.st_mode) || metadata.st_uid != 0 ||
+            metadata.st_nlink != 1 || (metadata.st_mode & 07777) != 0600 ||
+            flock(STDOUT_FILENO, LOCK_EX | LOCK_NB)) return 12;
+        return write(STDOUT_FILENO, output, sizeof(output) - 1) == (ssize_t)(sizeof(output) - 1) ? 0 : 13;
+    }
     int weight = descriptor("LUMA_VALIDATION_LEAF_WEIGHT_FD");
     int runtime = descriptor("LUMA_VALIDATION_LEAF_RUNTIME_FD");
     if (weight < 0 || runtime < 0) return 5;

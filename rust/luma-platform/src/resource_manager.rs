@@ -22,6 +22,9 @@ const PIDS: &str = "worker-processes";
 const LEASE_MS: u64 = 10_000;
 pub(crate) const ACQUISITION_MEMORY: u64 = 512 * 1024 * 1024;
 
+pub(crate) mod recovery;
+pub(crate) mod requests;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Kind {
     Model,
@@ -522,6 +525,7 @@ pub(crate) struct Manager {
     acquisition_oom: u64,
     owners: BTreeMap<String, File>,
     acquisition_bindings: BTreeMap<String, (model::Profile, String)>,
+    requests: requests::Gate,
 }
 
 pub(crate) fn fence_unavailable() -> Result<()> {
@@ -576,12 +580,18 @@ impl Manager {
             acquisition_oom,
             owners: BTreeMap::new(),
             acquisition_bindings: BTreeMap::new(),
+            requests: requests::Gate::new(),
         };
         manager.maintain()?;
         Ok(manager)
     }
 
     pub(crate) fn maintain(&mut self) -> Result<()> {
+        let cancellations = self.requests.maintain(&self.store.read()?, now()?)?;
+        for token in cancellations {
+            self.store
+                .transact(|ledger| ledger.revoke(&token, "inference-request-fenced"))?;
+        }
         for kind in [Kind::Model, Kind::Acquisition] {
             let group = match kind {
                 Kind::Model => &self.group,
@@ -947,6 +957,7 @@ impl Manager {
                 if self.group.populated()?
                     || self.acquisition.populated()?
                     || !self.owners.is_empty()
+                    || self.requests.occupied()
                 {
                     return Err("resource archival requires an observed empty worker domain".into());
                 }

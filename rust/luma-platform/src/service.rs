@@ -373,6 +373,17 @@ pub fn serve() -> Result<()> {
                 Ok(None) => {
                     let result = (|| -> Result<serde_json::Value> {
                         let peer = credentials(&incoming.stream)?;
+                        let envelope: serde_json::Value = serde_json::from_slice(&incoming.bytes)?;
+                        if envelope.get("action").and_then(|v| v.as_str())
+                            == Some("resource-inference")
+                        {
+                            let request: resource_manager::requests::Request =
+                                serde_json::from_slice(&incoming.bytes)?;
+                            return manager
+                                .as_mut()
+                                .ok_or("resource manager unavailable in this session")?
+                                .handle_inference(&request, peer, peer_pidfd(&incoming.stream)?);
+                        }
                         let request: resource_manager::Request =
                             serde_json::from_slice(&incoming.bytes)?;
                         let pinned = if peer.uid == 989 || peer.uid == 0 {

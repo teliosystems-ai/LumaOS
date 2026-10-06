@@ -656,7 +656,7 @@ mod tests {
         let mut p = catalog().unwrap().models.remove(0);
         p.bytes = WEIGHTS.len() as u64;
         p.sha256 = bundle::hex(&Sha256::digest(WEIGHTS));
-        p
+        p.with_fixture_verifier()
     }
     fn fixture(label: &str) -> (PathBuf, PathBuf, Profile) {
         let root =

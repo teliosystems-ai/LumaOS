@@ -15,7 +15,17 @@
       "minimum_ram_bytes": 6100000000,
       "minimum_available_bytes": 4831838208,
       "context_tokens": 2048,
-      "memory_max_bytes": 4831838208
+      "memory_max_bytes": 4831838208,
+      "layout": {
+        "architecture": "qwen3",
+        "layers": 36,
+        "embedding": 2560,
+        "attention_heads": 32,
+        "kv_heads": 8,
+        "key_width": 128,
+        "value_width": 128,
+        "training_context": 40960
+      }
     },
     {
       "id": "qwen3-1-7b-q4-k-m",
@@ -29,7 +39,17 @@
       "minimum_ram_bytes": 4000000000,
       "minimum_available_bytes": 2684354560,
       "context_tokens": 2048,
-      "memory_max_bytes": 2684354560
+      "memory_max_bytes": 2684354560,
+      "layout": {
+        "architecture": "qwen3",
+        "layers": 28,
+        "embedding": 2048,
+        "attention_heads": 16,
+        "kv_heads": 8,
+        "key_width": 128,
+        "value_width": 128,
+        "training_context": 40960
+      }
     }
   ]
 }

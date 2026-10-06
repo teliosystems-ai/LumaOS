@@ -25,11 +25,26 @@ packaging are wired in source. Acquisition preparation now has a separate
 generation drainage handoff and partial-output fences. Local deadline checks
 cover serving/acquisition hashing; bounded transport does not block renewals
 behind partial frames or legacy systemd jobs. Cache/copy/batch runtime policies
-are explicit and accepted by the pinned binary's parser. See [RESOURCE_LEASES.md](RESOURCE_LEASES.md) for
+are explicit and accepted by the pinned binary's parser. Root model verification
+now uses that acquisition service, and acquisition/serving validate a bounded
+GGUF attention layout on the same checksum-verified descriptor. The CPU F16 KV
+inventory is included in the existing full worker peak, not charged twice.
+Reviewed offline recovery now creates an absent runtime exclusion inode only
+with loaded idle service masks, a complete visible process/thread census, empty
+worker slices and no outstanding generations. It leaves masks and resource
+history intact; its installed procedure still requires qualification.
+The installed-root operator helper now reserves a broker request slot before
+rendering/tokenization, admits the exact token array plus maximum output, and
+validates completion before releasing only that logical slot. Cancellation,
+expiry and caller death fence the whole serving generation without an early
+physical release. Its bounded session receipts are not durable request audit
+retention, and the reference service's direct runtime path is not yet integrated.
+See [RESOURCE_LEASES.md](RESOURCE_LEASES.md) for
 the exact implemented scope, limits, maintenance commands and remaining work.
 
-**Requirement #1 is not closed.** Other root-side hashing and content/workflow integration,
-request/KV/cache accounting, wider tenant/device adapters and recovery remain
+**Requirement #1 is not closed.** Content/workflow integration,
+remaining inference-consumer admission and bypass closure, governed request
+retention, wider tenant/device adapters and recovery remain
 software work. Installed enforcement and consolidated-image evidence remain
 qualification work. These source changes do not close those other paths or
 authorize moving to Requirement #2.

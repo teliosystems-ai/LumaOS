@@ -1,7 +1,9 @@
 # G2 native resource lease development checkpoint
 
 Date: 2026-10-06. Scope: Requirement #1, resource leases/generations only.
-Status: native CPU-serving, leased acquisition and transport increments; **Requirement #1 and G2
+Status: native CPU-serving, leased root verification, verified KV layout,
+offline exclusion recovery, operator admission and transport increments;
+**Requirement #1 and G2
 remain open**. No Requirement #2 implementation, final image build, physical
 qualification, production custody change or TPM ownership change is asserted.
 
@@ -61,13 +63,68 @@ with only the model identity/descriptor and a private API-key fixture supplied
 for this parser check. A negative unknown-option control refuses. No model was
 loaded and no runtime listener was started by that check.
 
+Root preflight, activation, rollback and recovery hashing now use the same
+fixed acquisition service. Only exact catalog model paths under the supported
+native data mounts are accepted. There is no unleased production fallback;
+tiny unit fixtures explicitly inject a test-only checksum verifier. Preflight
+help and output distinguish the temporary verification lease from future
+serving capacity, which is not reserved by preflight.
+
+The image catalog now binds the actual attention shape. Acquisition and serving
+parse bounded GGUF-v3 metadata from the same fully checksum-verified descriptor,
+with lease checks around every metadata read. Layout mismatch, malformed input,
+duplicates, unsupported attention/sharding, bounds violations and cancellation
+refuse before download publication or runtime execution. CPU F16 KV tensor
+bytes are 301,989,888 for Qwen3-4B and 234,881,024 for Qwen3-1.7B at 2,048 cells.
+The mapping/file-cache charge is counted once, and the remaining combined
+runtime/scratch ceiling completes the existing worker peak. Inventory output
+uses lossless decimal strings. This inventory does not by itself implement
+request admission or measure actual model-loading scratch.
+
+`resource_manager/recovery.rs` adds reviewed offline creation of an absent
+runtime exclusion inode. It requires loaded idle masks for the model,
+acquisition and broker units, no systemd job, empty worker slices, a complete
+visible process/thread census and no outstanding ledger generation. Inspection
+and publication hold the model operation lock and validated store exclusion;
+boot, catalog, mask/cgroup/state identities and ledger review are rechecked
+before exclusive creation and file/directory synchronization. A safe existing
+inode is inspectable but cannot be recreated. All masks and ledger/receipt bytes
+remain intact. The bounded systemd observer uses a kernel output ceiling,
+owned PID-handle supervision and a boot-time deadline. These installed-root
+commands do not provide product Admin authorization or physical drainage
+qualification; the actual combined installed recovery procedure remains pending.
+
+`resource_manager/requests.rs` and the installed operator helper now implement
+one preparing/admitted request slot inside the existing worker peak. The slot
+precedes template/tokenizer work; exact rendered token IDs and maximum output
+are checked against the catalog context before inference. Strict replies bind
+caller, serving generation, nonce, token count/digest and result count/digest.
+Completion returns the logical slot only. Cancellation, expiry or caller death
+durably revokes the serving lease; physical drainage remains controller-owned.
+The helper refuses proxying, redirects, malformed identities, cache reuse,
+truncation and actual output above the admitted budget, and publishes no text
+without an exact completion acknowledgement. Request history is finite,
+session-local and not evicted; broker restart fences prior physical workers.
+The reference client's direct runtime path and governed request retention remain
+open. No real model/tokenizer execution is asserted by protocol fixtures.
+
+A separate read-only publisher check retrieved exactly the first 65,536 bytes
+of each pinned catalog URL, requiring HTTP 206 and an exact Content-Range.
+The observed architecture, layers, embedding, attention/KV heads, K/V widths
+and training context match the catalog. The prefix SHA-256 values were
+`70560094eeed902a6a3aed2815b72fc7a2a8c18b125d463d8fc4a3abb69cde46`
+for Qwen3-4B and
+`0a3b30796a4138c37f2e17d004bf51c5195d90b0a731c044be3e57e2fb630f9e`
+for Qwen3-1.7B. That observation did not verify either whole file, acquire model
+weights or qualify loading. Production still requires the full pinned digest.
+
 Use [the resource register](../RESOURCE_LEASES.md) for the implemented boundary,
 operator instructions, finite limits and remaining software integrations.
 
 ## Current bounded execution
 
 Evidence directory:
-`D:\LumaOS-builds\g2-resources-targeted-20261006-18`.
+`D:\LumaOS-builds\g2-resources-targeted-20261006-28`.
 
 - Docker root: `/mnt/luma-build/docker`, backed by D: storage.
 - Tool image: `luma-utc-targeted-tools:20261005`, image ID
@@ -85,23 +142,31 @@ Evidence directory:
 | Check | Result |
 | --- | --- |
 | Native resource core | 18 passed, zero failures/ignored |
-| Native adapter and heartbeat | 12 passed, zero failures/ignored |
-| Acquisition target/launch/handoff | 3 passed, zero failures/ignored |
+| Native adapter, heartbeat, offline recovery and request admission | 34 passed, zero failures/ignored |
+| Acquisition target/launch/handoff/root verification routing | 4 passed, zero failures/ignored |
 | Storage topology resolver | 2 passed, zero failures/ignored |
 | Existing broker transport plus ingress/resource/ACL checks | 23 passed, zero failures/ignored |
-| Model lifecycle/supervision and acquisition generation regression | 113 passed; two pre-existing owned child entrypoints excluded from top-level discovery |
-| Resource/model/health/VM/broker packaging Python checks | 62 passed |
+| Model lifecycle/supervision, acquisition generations, verified layout and exclusion creation | 126 passed; two pre-existing owned child entrypoints excluded from top-level discovery |
+| Resource/model/health/VM/broker packaging and operator-helper Python checks | 94 passed |
+| Real operator CLI, Unix IPC and HTTP protocol cases | 9 passed; synthetic broker/runtime replies, no real model or installed controller |
+| Broader native Python regression on D:-backed Linux ext4 storage | 222 passed, zero failures; two existing UTC pinned-source-fixture checks skipped |
 | Cargo formatting and offline locked build | Passed |
 | AppArmor no-load/no-cache syntax parse | Passed; not an enforced profile test |
 | Digest-pinned b11100 runtime option parsing | Positive exit 0; unknown-option control exit 1; no model loaded |
 | Real systemd unit graph verification | Exit 1: tool container lacks `apparmor.service`; installed graph qualification remains pending |
 
-Total: **233 passing selected tests**, plus the runtime parser/control checks.
+Total: **301 passing selected tests**, plus nine CLI/Unix/HTTP cases and the
+runtime parser/control checks.
 The two model entrypoints are invoked by
 their parent process-boundary fixtures; they are not counted as extra passes.
-Unrelated Admin tests were not selected. No new resource test is ignored and
+Unrelated Rust Admin tests were not selected. No new resource test is ignored and
 no unimplemented resource code path is hidden behind a successful placeholder.
 The source-level Python checks are wiring guards, not installed enforcement.
+The broader regression includes the 94 selected Python checks, so its 222 passes
+are not added to the targeted total. Its two skipped UTC-source tests are not
+claimed as passing and no new Requirement #1 test is skipped. The extra run
+used 512 MiB with no extra swap, one CPU, an isolated container and the same
+read-only snapshot; temporary data used the existing D:-backed Linux volume.
 
 Core checks include 100 competing clients, all-or-nothing domains, loading
 peaks, shared retained-cache credits, hostile/stale tokens, checked overflow,
@@ -135,21 +200,78 @@ downloads, hostile descendant containment or installed AppArmor/cgroup policy.
 No production executable/UID/environment override was introduced. Two Python
 wiring checks guard hook ordering and descriptor/identity cleanup prerequisites.
 
+The 12 ordinary layout tests cover both exact KV inventories, runtime width
+defaults, every required shape mismatch/type, duplicates/missing fields,
+unsupported layouts, every truncated fixture prefix, bad header counts,
+array/string/type/boolean limits, tokenizer-array scanning, lease cancellation,
+checked overflow and peak exhaustion. Actual-file tests verify that digest and
+layout validation retain one original inode despite pathname replacement, and
+that a matching digest alone does not admit an incompatible attention layout.
+No layout test is ignored and no production fixture override was added.
+
+Ten ordinary adapter recovery tests cover canonical real/effective/saved/fs
+UIDs, changed reviews and every bound identity, malformed/stale/existing-inode
+refusal, observation/publication failure, exact root-owned unit mask paths,
+loaded systemd mask/job states, hidden/subset/malformed proc mount refusal and
+finite census/deadline bounds. One test launches an actual UID-989 child outside
+the model slice in the disposable container: the census refuses until that
+owned child is killed and reaped. Another exercises the observer's real kernel
+file-size ceiling, failed helper and owned deadline teardown. The model test
+creates the actual root-owned lock inode, proves competing flock refusal, and
+preserves existing files/symlinks instead of recreating them. The additional
+Python source guard checks wiring only. No installed unit was masked or stopped
+on the developer machine by these tests.
+
+Twelve ordinary request-admission Rust tests cover atomic preparing-slot
+reservation, exact replay, foreign/stale owners, every finite budget and nonce
+bound, checked context overflow, exact context-edge admission, prompt/result
+drift, logical-only completion, physical charges held through cancellation,
+expiry/restart fencing, uncertain observations and finite receipt exhaustion.
+The schema test found and fixed internally tagged unit-variant acceptance of
+unknown inspection fields; inspection now uses a closed struct variant. Real
+PID handles pin caller generations, and an actual owned root child is killed
+and reaped to prove request-owner exit yields revocation without capacity return.
+
+The 28 helper Python tests include exact-token ordering, bounded fixed-loopback
+transport, non-proxy/redirect behavior, malformed UTF-8/JSON/identities/counts,
+over-context prompts, actual output overruns, cache reuse and truncation,
+substituted receipts, cancellation at each uncertain step and whole-operation
+deadlines. A real Unix socket pair exercises framing and kernel credentials.
+Nine separate disposable-container cases run the isolated helper CLI through
+the actual fixed broker socket and loopback HTTP path. They cover valid output,
+wrong identity, over-budget output, truncation, cache reuse, duplicate/malformed
+JSON, denied admission and a socket reply actually lost after fixture completion.
+Only the exact successful acknowledgement publishes text. These are protocol
+fixtures, not real-model or physical-controller qualification. The native CLI's
+fixed `exec` launch preserves the caller PID generation rather than creating an
+unsupervised helper child; source wiring and the locked build check that launch.
+
 ## Retained evidence integrity
 
-The captured manifest contains 199 source files. All manifest file digests and
+The captured manifest contains 202 source files. All manifest file digests and
 all 53 separately captured native test-input digests were checked against the
 current checkout after execution and matched. Documentation outside the native
 image/source capture is explanatory, not deployment evidence.
 
 | Retained file | SHA-256 |
 | --- | --- |
-| `source/build-inputs.json` | `196493774e01fa6b5edf9ec37d7112097fb08aa31155b7ea5fb39006ace9fd18` |
-| `test-inputs.sha256` | `debd87ab0f6e7030489725176a4ae01b94599053a05db9b8d421a5ebcb6c73c8` |
-| `test.log` | `50b1802e4a209c3d7f2b60d4c3e3e48b507ef176935c5d60cd1d818f5c1a5668` |
+| `source/build-inputs.json` | `e239f22b70b22c65a79294811bc44f8d6fd809d54c856a188c2723eb47fc16d3` |
+| `test-inputs.sha256` | `446364a72091e308535d3b3f5065895efb13764a8d8f6885455716b827e8c1e1` |
+| `test.log` | `5a908668607d55fe9313768d281136ce598cb378a182950828ce2bc9b9b12ffe` |
 | `checks/unit-verification.txt` | `cc6d6ba4f56881e50612c693db5577418157f96999327fbac956e538602db498` |
 | `checks/unit-verification-exit.txt` | `4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865` |
 | `checks/runtime-options.json` | `d6c5bc021ad939c79d18ba4c18213954e73dee3c4a200d763086f2e0c28c38cb` |
+| `native-python-regression-ext4.log` | `0e3454373b4eab543563eea0d56c72afa07e129f668a4aa46ee9cda68b0dc9c9` |
+| `native-python-regression.log` (failed Windows bind temporary storage run) | `ff18f984a2d5bd9bab5371a44a03ddee6462e35eb6c0f80ff48e847ed568728b` |
+
+The first broader Python run used a Windows-backed D: bind directory for
+temporary files. It finished with 23 errors and two existing skips: custody
+mode checks, symlink/hard-link operations and private TPM fixture paths could
+not use the required Linux filesystem semantics there. That failed log is
+retained and not counted as a pass. Repeating all 224 discovered checks with
+the same source/tool image and limits, using the existing D:-backed Linux ext4
+Docker volume, yielded 222 passes and only the two existing UTC source-fixture
+skips. No production custody check was weakened and no host TPM was accessed.
 
 Earlier trials remain retained on D:, not silently overwritten. Trial 02 had
 a compiler error corrected in later source. Trial 03 stopped at the real unit
@@ -174,16 +296,35 @@ Trial 11 passed the prior 213-test acquisition-generation baseline. Trials
 ID in a new test. Trial 15 passed 226 selected tests before the transport/cache
 changes. Trial 17 passed 233 tests but failed the runtime parser check because
 the parser opens its API-key file even with `--help`; it also encountered a
-runner-script edit during execution. Trial 18 uses an explicit private parser
-fixture and pipeline error propagation, passes the checks above, and has its
-captured input hashes verified against the checkout. Earlier trials remain
+runner-script edit during execution. Trial 18 used an explicit private parser
+fixture and pipeline error propagation, passed its 233 selected tests and parser
+checks, and had its captured input hashes verified against that checkout. Earlier trials remain
 retained and are not evidence for the latest bytes.
+
+Trial 19 passed 234 selected tests for the root verification increment before
+layout integration. Trial 20 passed its Rust checks but failed one Python
+source-wiring assertion that expected an equivalent call in a different textual
+form; it is not a passing suite. Trial 21 includes the corrected assertion and
+the additional descriptor/type tests, passed its earlier 248 selected checks,
+and had all captured source/test hashes verified against that checkout.
+Trial 18 remains the earlier 233-test transport/acquisition checkpoint, not
+qualification of this newer catalog or layout implementation.
+
+Trial 22 stopped on the new UID parser's leading-zero rejection test and is not
+a passing suite. Trial 23 passed its 259 selected checks before the final proc
+parser and observer changes. Trial 24 passed the prior 260 checks and its
+201 captured source and 53 test-input digests matched that checkout.
+Trial 25 stopped on the new closed inspection-schema test and is not a passing
+suite. Trial 26 passed its 298 selected checks; trial 27 passed 301 checks and
+nine protocol cases before the final CLI exec and true lost-socket-reply changes.
+Trial 28 passed the current 301 checks and nine cases above, with all 202 source
+and 53 test-input digests verified against the current checkout. Earlier
+directories remain retained and do not qualify changed bytes.
 
 ## Required continuation
 
-Integrate other root-side preflight/activation/recovery hashing and content/workflow
-leases, request-level accepted
-context/concurrency and actual KV/cache accounting, wider tenant/device
+Integrate content/workflow leases and all remaining inference consumers, close
+the direct-runtime bypass, complete governed request retention, wider tenant/device
 adapters, and broader reviewed damaged-state/retention recovery. Then freeze
 the consolidated candidate and exercise installed enforcement, hostile
 descendants, memory pressure/OOM, cancellation/restart, suspend, migration and

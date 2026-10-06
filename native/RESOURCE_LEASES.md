@@ -41,6 +41,13 @@ All 64-bit contract values are canonical decimal JSON strings; numeric JSON,
 overflow and noncanonical strings refuse. Whole-worker peak reservation is
 never reduced because a worker reports readiness or exit.
 
+Root preflight, activation, rollback and recovery verification now dispatch to
+the same contained acquisition service, using only exact catalog paths under
+the installed data mount or the live installer's private target. No unleased
+production hashing fallback remains. A successful preflight still does not
+reserve future serving capacity or change the selected model; cached hashing
+uses a temporary acquisition lease and waits for its observed drainage.
+
 Current native profiles use one CPU worker in `lumamodel.slice`, with a
 `luma-model.service` leaf. The broker verifies cgroup-v2 identity, whole-slice
 and leaf memory limits, zero swap, CPU/IO/PID ceilings, grouped OOM handling
@@ -49,8 +56,9 @@ command explicitly uses CPU-only F16 K/V caches, one non-unified slot,
 memory-mapped weights without repacking, 256-token logical and 128-token physical
 batches, and two HTTP threads. Prompt cache RAM, idle-slot caching, prompt reuse
 and context checkpoints are disabled. These fixed settings eliminate extra
-default cache/copy budgets; they are not yet the required verified model-layout
-inventory or request-level admission.
+default cache/copy budgets. The verified model-layout inventory described below
+now checks the CPU KV allocation. The installed-root operator path has the
+request admission described below; other inference consumers remain open.
 The host reserve is the larger of one GiB and 20 percent of reported RAM;
 physical loading checks supplement, rather than replace, kernel ceilings.
 Qwen3-4B now requires at least 6.1 billion RAM bytes and 4,831,838,208 available
@@ -98,7 +106,8 @@ The broker resolves the supported encrypted ext4/simple-disk chain through
 bounded read-only sysfs observations. Missing, cyclic, multi-slave, non-crypt
 mapper or otherwise unsupported topology refuses. No device access or weaker
 IO limit fallback is introduced. Root activation, preflight and recovery
-rehashing outside the contained preparation worker remain open integration.
+verification use the contained preparation worker in source; the actual installed
+handoff still requires qualification.
 
 Cancellation, expiry, lost owners, broker restart and quarantine leave all
 reservations charged until the broker fences the fixed cgroup and observes
@@ -115,6 +124,58 @@ eligible for bounded idle reclaim. A successful `memory.reclaim` write or
 the retained charge. Critical host pressure or observed worker OOM quarantines
 the domain and drains affected work. Suspend stops the model unit before sleep;
 subsequent model execution must obtain a fresh lease.
+
+## Operator inference admission
+
+The installed `sudo luma-platform model-chat` helper uses the existing broker socket for
+`resource-inference` inspection, begin, admission, completion and cancellation.
+Only a live root peer is accepted. This is a laboratory maintenance path for
+untrusted text, not a product Admin grant or permission to execute model output.
+The broker pins the caller process generation and the exact active serving
+lease. A request cannot select a different worker, enlarge the catalog context,
+or report physical cleanup.
+The native CLI replaces itself with the fixed helper, preserving that process
+generation instead of leaving an unsupervised child after caller cancellation.
+
+One logical slot is reserved before template rendering or tokenization. The
+helper renders the pinned model template without reasoning, tokenizes that exact
+prompt, and checks the actual token count plus the requested maximum output
+against the 2,048-token context. The broker accepts a digest of the exact token
+array; completion receives that array instead of messages or a re-tokenized
+string. Output is limited to 1..128 requested tokens. Counts, result identity,
+stop/truncation state and runtime timing counters are validated before the
+broker acknowledges completion and the helper publishes text. The whole worker
+peak already includes its KV tensors; request admission does not charge those
+physical bytes again.
+
+The helper disables prompt reuse, proxy lookup and redirects. Both broker frames
+and runtime responses have finite byte and whole-operation time bounds. For
+b11100, `tokens_cached` is final slot occupancy, not the reused prompt count;
+the helper checks bounded occupancy and `timings.cache_n == 0`. The pinned
+runtime can exceed `n_predict` slightly when finishing partial UTF-8: an actual
+count above the admitted output budget is refused and cancels the generation,
+not certified as successful bounded output. These contracts follow the pinned
+[completion serializer](https://raw.githubusercontent.com/ggml-org/llama.cpp/7ab4ee7baad2d920464cbacfad4f4b07cf111fd2/tools/server/server-task.cpp),
+[slot accounting](https://raw.githubusercontent.com/ggml-org/llama.cpp/7ab4ee7baad2d920464cbacfad4f4b07cf111fd2/tools/server/server-context.cpp)
+and [runtime API](https://raw.githubusercontent.com/ggml-org/llama.cpp/7ab4ee7baad2d920464cbacfad4f4b07cf111fd2/tools/server/README.md).
+
+Preparing, admitted and uncertain requests retain the slot. Cancellation,
+expiry or caller death durably revokes the physical worker generation; only
+trusted cgroup drainage returns its capacity. A failed cancellation reply is
+not cleanup proof. Exact completion releases only the logical request slot,
+never the worker lease. Nonce, owner, worker, token and result replay drift
+refuse. A lost completion acknowledgement does not publish a success object.
+
+The broker retains at most 256 request receipts and caller PID handles in its
+session, with no eviction or silent nonce reuse. Exhaustion refuses further
+requests. Restarting the broker resets this volatile request inventory only
+after the durable physical manager restart has fenced all older worker leases;
+old worker tokens cannot authorize a new session. This is not durable request
+audit retention, governed export/deletion or a production tenant gateway.
+The reference service still has direct runtime credentials and is not covered
+by this operator admission path. Its integration and closure of that bypass
+remain required before Requirement #1 can close. Real installed model/tokenizer
+execution and cancellation/drainage still require image qualification.
 
 ## Persistence and retention
 
@@ -178,6 +239,12 @@ creates only a missing ledger; an existing or uncertain directory refuses.
 The broker must load that state before a model is started. Never infer that a
 new binary alone upgrades older packaged units, catalog or confinement.
 
+The catalog's added attention-layout fields change profile resource bindings.
+Drain outstanding leases using their matching old broker before upgrading the
+catalog and binary. The new broker refuses unsupported outstanding bindings;
+do not reset the ledger or remove receipts to bypass that refusal. Released
+history remains retained rather than rewritten to the new binding.
+
 An existing valid ledger with the older inventory needs an explicit reviewed
 inventory migration, not missing-state initialization. First drain/release its
 leases under the matching old broker, then stop the broker. With both new slices
@@ -187,17 +254,48 @@ empty and the existing model runtime lock available, run
 preserves retained charges, history, archive references and generation floors,
 adds the fixed execution domains and changes the manager epoch. Outstanding
 leases, a stale review, removed domains or damaged state refuse. Older manual
-installations missing the model runtime lock still need explicit recovery work;
-this migration does not silently manufacture an exclusion proof.
+installations missing the model runtime lock now have the explicit offline
+recovery below. Inventory migration still never manufactures an exclusion proof.
+
+For an older installed system with a genuinely absent runtime lock, first drain
+and release any generations using their matching broker. On that installed
+system, explicitly stop and runtime-mask `luma-model.service`,
+`luma-acquisition.service` and `luma-broker.service`, then reload systemd. Run
+`sudo luma-platform resource-runtime-lock-status` and, only if it reports
+`recoverable: true`, `sudo luma-platform resource-runtime-lock-recover REVIEW-SHA256`.
+Do not execute this procedure on the development host or clear an outstanding
+lease to make recovery proceed.
+
+Recovery requires systemd to have loaded all three exact root-owned `/dev/null`
+masks, no pending job, inactive/failed units, empty worker slices, and no live
+thread carrying UID 989 anywhere in the installed systemd PID namespace. Its
+complete proc census is bounded to 32,768 process/thread entries and five seconds;
+hidden/subset proc mounts, unreadable credentials or an incomplete census refuse.
+The model operation lock and, when present, the validated resource store's lifetime
+lock span inspection and creation. Existing damaged state, outstanding generations,
+changed boot/cgroup/mask/catalog/ledger review or any existing exclusion inode refuse.
+The same proof is collected again immediately before exclusive creation and durable
+file/directory synchronization. The procedure neither resets the ledger nor returns
+retained memory, removes receipts, clears lifecycle fences or starts a worker.
+
+All three masks stay in place on success and failure. Inspect again after an
+uncertain creation acknowledgement; an existing safe idle inode reports
+`recoverable: false` and is never replaced or recreated. Then perform the applicable
+missing-ledger initialization or reviewed inventory migration, separately verify
+all lifecycle fences, and explicitly remove only the three masks after that review.
+Start the broker first; start a selected model only after resource authority has
+loaded successfully. These are installed-root maintenance commands, not product
+Admin authorization, and their combined native-image procedure remains unqualified.
 
 ## Still required before Requirement #1 closes
 
-- Join resource admission to remaining root-side preflight/activation/recovery
-  hashing and content/workflow workers. Contained model preparation is wired;
-  it does not cover those other code paths.
-- Implement and integrate request-level accepted prompt/output/concurrency
-  accounting and the actual KV/cache layout inventory. A whole-worker ceiling
-  does not close those contracts by itself.
+- Join resource admission to content/workflow workers. Root model hashing is
+  routed through the leased service in source; its real installed pipeline
+  still needs qualification.
+- Extend request-level accepted prompt/output/concurrency accounting to all
+  inference consumers, close the reference service's direct-runtime bypass,
+  and implement governed request retention. The operator path above and the
+  verified CPU KV inventory do not close those integrations by themselves.
 - Complete supported multi-worker/tenant and device-domain adapters and
   generation/recovery paths. Current CPU-only, zero-pinned/zero-device profiles
   do not certify GPU, large-model, NUMA or other hardware paths.
@@ -206,6 +304,41 @@ this migration does not silently manufacture an exclusion proof.
 - Qualify the real installed broker-to-worker pipeline, descendant drainage,
   pressure/OOM, suspend, storage/crash/restart and migration on the consolidated
   image. Unit arithmetic and source wiring are not kernel-enforcement evidence.
+
+## Verified CPU allocation inventory
+
+The catalog now includes the selected model's actual attention layout in its
+resource binding. A bounded GGUF-v3 parser reads the same checksum-verified
+descriptor, with lease checks around every metadata read. Metadata is limited
+to 64 MiB, 4,096 unique keys, 512-byte keys, 65,536-byte strings and 1,048,576
+elements per array. Missing, duplicate, malformed, incompatible and unsupported
+sharded or nonstandard attention layouts refuse. These limits are enforced
+without allocating tensor storage or retaining tokenizer arrays.
+
+For the pinned CPU runtime, context rounds to 256 cells, each F16 key/value
+tensor rounds to 32 bytes, and concurrency remains one. At 2,048 cells the
+Qwen3-4B profile reserves 301,989,888 KV tensor bytes; Qwen3-1.7B reserves
+234,881,024. Head widths come from the verified metadata and checked runtime
+defaults, not an assumption that embedding width divided by attention heads
+is the model's actual cache width.
+
+The inventory counts the file mapping and its shared file-cache charge once,
+rounded to the pinned amd64 base page size. KV bytes plus the combined remaining
+runtime/scratch ceiling sum to the full worker peak. Extra prompt, idle and
+checkpoint caches, device memory and locked staging memory remain disabled.
+This is a bounded allocation plan, not a measurement of graph scratch or RSS;
+installed model loading must qualify the combined ceiling. Download publication,
+cached acquisition verification and serving all check the layout before admitting
+the verified descriptor to subsequent use. Inventory diagnostics serialize
+64-bit values as canonical decimal strings and never reduce the broker lease.
+
+The implementation follows the [GGUF specification](https://raw.githubusercontent.com/ggml-org/ggml/master/docs/gguf.md),
+the pinned [KV tensor construction](https://raw.githubusercontent.com/ggml-org/llama.cpp/7ab4ee7baad2d920464cbacfad4f4b07cf111fd2/src/llama-kv-cache.cpp)
+and [context padding](https://raw.githubusercontent.com/ggml-org/llama.cpp/7ab4ee7baad2d920464cbacfad4f4b07cf111fd2/src/llama-context.cpp).
+CPU alignment and tensor-size accounting follow its
+[backend](https://raw.githubusercontent.com/ggml-org/llama.cpp/7ab4ee7baad2d920464cbacfad4f4b07cf111fd2/ggml/src/ggml-backend.cpp),
+[allocator](https://raw.githubusercontent.com/ggml-org/llama.cpp/7ab4ee7baad2d920464cbacfad4f4b07cf111fd2/ggml/src/ggml-alloc.c)
+and [alignment definition](https://raw.githubusercontent.com/ggml-org/llama.cpp/7ab4ee7baad2d920464cbacfad4f4b07cf111fd2/ggml/src/ggml-impl.h).
 
 The [development checkpoint](evidence/G2_RESOURCE_LEASES_2026-10-06.md) separates
 targeted results from those open integrations. The final image and native

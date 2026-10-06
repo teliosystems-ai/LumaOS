@@ -23,6 +23,7 @@ const MAX_ROLLBACK: u64 = MAX_PRIOR_BACKUP + 4096;
 const QUARANTINE: &str = "model-quarantine.json";
 const REFERENCE_ENV: &str = "model-reference.env";
 
+mod layout;
 mod supervision;
 mod validation;
 
@@ -41,11 +42,27 @@ pub struct Profile {
     minimum_available_bytes: u64,
     context_tokens: u32,
     memory_max_bytes: u64,
+    layout: layout::Shape,
+    #[cfg(test)]
+    #[serde(skip)]
+    fixture_verifier: Option<fn(&Path, &Profile) -> Result<()>>,
 }
 
 impl Profile {
+    #[cfg(test)]
+    fn with_fixture_verifier(mut self) -> Self {
+        assert!(
+            self.bytes <= 1024 * 1024,
+            "only tiny unit fixture profiles may inject verification"
+        );
+        self.fixture_verifier = Some(|at, p| verified_file(at, p).map(drop));
+        self
+    }
     pub(crate) fn memory_limit(&self) -> u64 {
         self.memory_max_bytes
+    }
+    pub(crate) fn context_limit(&self) -> u64 {
+        u64::from(self.context_tokens)
     }
     pub(crate) fn resource_binding(&self) -> Result<String> {
         Ok(bundle::hex(&Sha256::digest(serde_json::to_vec(self)?)))
@@ -59,6 +76,11 @@ pub(crate) fn resource_binding_profile(binding: &str) -> Result<Profile> {
         }
     }
     Err("resource lease profile is not in the pinned catalog".into())
+}
+
+pub(crate) fn resource_catalog_binding() -> Result<String> {
+    catalog()?;
+    Ok(bundle::hex(&Sha256::digest(CATALOG.as_bytes())))
 }
 
 pub(crate) fn resource_profile(id: &str) -> Result<Profile> {
@@ -76,6 +98,41 @@ pub(crate) fn resource_profile(id: &str) -> Result<Profile> {
 
 pub(crate) fn resource_idle() -> Result<File> {
     runtime_lock(Path::new(VAR), false)
+}
+
+pub(crate) fn resource_recovery_exclusion() -> Result<File> {
+    operation_lock(Path::new(VAR))
+}
+
+/// Offline recovery creates only an absent exclusion inode. An existing inode,
+/// including a concurrent publication, is never replaced or adopted as success.
+pub(crate) fn recover_missing_runtime_lock() -> Result<File> {
+    create_missing_runtime_lock(Path::new(VAR))
+}
+
+fn create_missing_runtime_lock(var: &Path) -> Result<File> {
+    crate::require_root()?;
+    let state = var.join(STATE);
+    let parent = fs::symlink_metadata(&state)?;
+    if !parent.is_dir() || parent.uid() != 0 || parent.mode() & 0o022 != 0 {
+        return Err("unsafe model runtime lock directory".into());
+    }
+    let created = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create_new(true)
+        .mode(0o644)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NONBLOCK)
+        .open(state.join("model-runtime.lock"))?;
+    // Take the exclusion before publishing its durable acknowledgement. Failure
+    // leaves the inode intact; a new invocation must inspect, never recreate it.
+    if unsafe { libc::flock(created.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
+        return Err("new runtime exclusion is uncertain; preserve inode".into());
+    }
+    created.set_permissions(fs::Permissions::from_mode(0o644))?;
+    created.sync_all()?;
+    File::open(&state)?.sync_all()?;
+    Ok(created)
 }
 
 #[derive(Deserialize)]
@@ -98,6 +155,8 @@ fn catalog() -> Result<Catalog> {
     }
     let mut ids = std::collections::BTreeSet::new();
     for p in &c.models {
+        p.layout.validate()?;
+        layout::Inventory::for_profile(p)?;
         if !ids.insert(&p.id)
             || p.id.is_empty()
             || p.id.len() > 64
@@ -380,6 +439,7 @@ fn open_regular(at: &Path) -> Result<File> {
     Ok(f)
 }
 
+#[cfg(test)]
 fn verified_file(at: &Path, p: &Profile) -> Result<File> {
     verified_file_checked(at, p, || Ok(()))
 }
@@ -431,8 +491,43 @@ fn verified_file_checked(
     Ok(f)
 }
 
+/// Both the digest and layout come from this same pinned descriptor while the
+/// caller's worker lease remains live. No unleased production verifier exists.
+fn verified_runtime_file(
+    at: &Path,
+    p: &Profile,
+    mut check: impl FnMut() -> Result<()>,
+) -> Result<File> {
+    let mut file = verified_file_checked(at, p, &mut check)?;
+    let before = file.metadata()?;
+    let inventory = layout::verify(&mut file, p, &mut check)?;
+    let after = file.metadata()?;
+    if before.len() != after.len()
+        || before.mode() != after.mode()
+        || before.uid() != after.uid()
+        || after.nlink() != 1
+        || before.mtime() != after.mtime()
+        || before.mtime_nsec() != after.mtime_nsec()
+        || before.ctime() != after.ctime()
+        || before.ctime_nsec() != after.ctime_nsec()
+    {
+        return Err("model metadata changed during layout verification".into());
+    }
+    file.seek(SeekFrom::Start(0))?;
+    check()?;
+    eprintln!(
+        "Verified CPU allocation inventory: {}",
+        serde_json::to_string(&inventory)?
+    );
+    Ok(file)
+}
+
 fn verify_file(at: &Path, p: &Profile) -> Result<()> {
-    verified_file(at, p).map(drop)
+    #[cfg(test)]
+    if let Some(verifier) = p.fixture_verifier {
+        return verifier(at, p);
+    }
+    crate::acquisition::verify_path(at, p)
 }
 
 /// Single local worker exclusion, not a resource-manager lease or generation.
@@ -654,7 +749,7 @@ fn fetch(at: &Path, p: &Profile, mut check: impl FnMut() -> Result<()>) -> Resul
     }
     println!("Verifying model bytes and SHA-256...");
     file.sync_all()?;
-    verified_file_checked(&temporary.path, p, &mut check)?;
+    verified_runtime_file(&temporary.path, p, &mut check)?;
     check()?;
     fs::set_permissions(&temporary.path, fs::Permissions::from_mode(0o444))?;
     fs::rename(&temporary.path, at)?;
@@ -703,7 +798,7 @@ fn prepare_model(var: &Path, p: &Profile) -> Result<()> {
     crate::acquisition::run(var, p, "prepare")
 }
 
-pub(crate) fn supervise_acquisition_controller(
+pub(crate) fn supervise_owned_controller(
     command: &mut Command,
     check: impl FnMut() -> Result<()>,
 ) -> Result<()> {
@@ -715,7 +810,15 @@ pub(crate) fn verify_acquired_model(
     p: &Profile,
     check: impl FnMut() -> Result<()>,
 ) -> Result<()> {
-    verified_file_checked(
+    let mut parent = var.to_path_buf();
+    for name in ["lib", "luma-os", "models"] {
+        parent.push(name);
+        let metadata = fs::symlink_metadata(&parent)?;
+        if !metadata.is_dir() || metadata.uid() != 0 || metadata.mode() & 0o022 != 0 {
+            return Err("unsafe contained verification directory".into());
+        }
+    }
+    verified_runtime_file(
         &var.join(STATE)
             .join("models")
             .join(format!("{}.gguf", p.id)),
@@ -741,7 +844,7 @@ pub(crate) fn prepare_model_contents(
     match fs::symlink_metadata(&file) {
         Ok(_) => {
             check_acquisition(p, available_space(&models)?, true)?;
-            verified_file_checked(&file, p, &mut check)?;
+            verified_runtime_file(&file, p, &mut check)?;
         }
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
             check_acquisition(p, available_space(&models)?, false)?;
@@ -2557,8 +2660,8 @@ pub fn migrate_legacy() -> Result<()> {
     Ok(())
 }
 
-/// Read-only, advisory preflight. Activation repeats admission after stopping
-/// the managed worker; neither observation reserves RAM or storage.
+/// Advisory model preflight. Cached-byte verification uses a temporary broker
+/// lease, but reserves no future serving capacity and changes no model settings.
 fn preflight_at(
     var: &Path,
     p: &Profile,
@@ -2651,6 +2754,8 @@ pub fn install_check(id: &str) -> Result<()> {
         "{}",
         serde_json::json!({"schema_version":1,"model":p.id,
         "preflight_admitted":true,"reservation":false,
+        "reservation_scope":"future_serving_capacity",
+        "cached_verification":"temporary_acquisition_lease_if_cached",
         "activation_guaranteed":false,"gate_closing":false})
     );
     Ok(())
@@ -2757,7 +2862,7 @@ pub fn serve() -> Result<()> {
         .join(STATE)
         .join("models")
         .join(format!("{}.gguf", p.id));
-    let verified = verified_file_checked(&file, &p, || lease.check_local())?;
+    let verified = verified_runtime_file(&file, &p, || lease.check_local())?;
     lease.check()?;
     // The runtime opens this exact verified inode, not the mutable catalog
     // filename again. This does not defend against a hostile root writing the
@@ -2848,6 +2953,31 @@ pub fn serve() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn offline_runtime_lock_creation_is_exclusive_and_never_replaces_evidence() {
+        let directory =
+            std::env::temp_dir().join(format!("luma-runtime-recovery-{}", std::process::id()));
+        fs::create_dir_all(directory.join(STATE)).unwrap();
+        let lock = create_missing_runtime_lock(&directory).unwrap();
+        let path = directory.join(STATE).join("model-runtime.lock");
+        let original = fs::metadata(&path).unwrap();
+        assert_eq!(original.mode() & 0o7777, 0o644);
+        assert_eq!(original.len(), 0);
+        assert!(create_missing_runtime_lock(&directory).is_err());
+        assert!(runtime_lock(&directory, false).is_err());
+        assert_eq!(fs::metadata(&path).unwrap().ino(), original.ino());
+        drop(lock);
+        drop(runtime_lock(&directory, false).unwrap());
+        fs::remove_file(&path).unwrap();
+        std::os::unix::fs::symlink("/dev/null", &path).unwrap();
+        assert!(create_missing_runtime_lock(&directory).is_err());
+        assert_eq!(fs::read_link(&path).unwrap(), Path::new("/dev/null"));
+        fs::remove_file(&path).unwrap();
+        fs::write(&path, b"retain uncertain bytes").unwrap();
+        assert!(create_missing_runtime_lock(&directory).is_err());
+        assert_eq!(fs::read(&path).unwrap(), b"retain uncertain bytes");
+        fs::remove_dir_all(directory).unwrap();
+    }
     fn cleanup_fixture(label: &str) -> (PathBuf, PathBuf, Vec<Profile>) {
         let dir =
             std::env::temp_dir().join(format!("luma-download-{label}-{}", std::process::id()));
@@ -3588,6 +3718,7 @@ mod tests {
         let mut p = profile("qwen3-4b-q4-k-m").unwrap();
         p.bytes = 12;
         p.sha256 = bundle::hex(&Sha256::digest(b"GGUF-fixture"));
+        p = p.with_fixture_verifier();
         verify_file(&path, &p).unwrap();
         p.sha256 = "0".repeat(64);
         assert!(verify_file(&path, &p).is_err());
@@ -3615,6 +3746,7 @@ mod tests {
         let mut p = profile("qwen3-4b-q4-k-m").unwrap();
         p.bytes = 14;
         p.sha256 = bundle::hex(&Sha256::digest(b"verified bytes"));
+        p = p.with_fixture_verifier();
         (dir, file, p)
     }
 
@@ -3823,6 +3955,7 @@ print('ISOLATED_MODEL_LOCK_PASSED')
         let weights = b"small GGUF test fixture";
         p.bytes = weights.len() as u64;
         p.sha256 = bundle::hex(&Sha256::digest(weights));
+        p = p.with_fixture_verifier();
         fs::write(state.join("models").join(format!("{}.gguf", p.id)), weights).unwrap();
         (root, p)
     }
@@ -4559,6 +4692,7 @@ print('MODEL_PRIOR_BACKUP_DAC_PASSED')
         let weights = b"different small prior GGUF fixture";
         prior.bytes = weights.len() as u64;
         prior.sha256 = bundle::hex(&Sha256::digest(weights));
+        prior = prior.with_fixture_verifier();
         fs::write(
             state.join("models").join(format!("{}.gguf", prior.id)),
             weights,

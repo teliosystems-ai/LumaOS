@@ -22,7 +22,7 @@ class ResourcePolicyTests(unittest.TestCase):
     def test_lease_precedes_weight_loading_and_runtime_execution(self):
         source = (ROOT/'rust/luma-platform/src/model.rs').read_text()
         serve = source.split('pub fn serve()')[1].split('#[cfg(test)]')[0]
-        self.assertLess(serve.index('WorkerLease::acquire'), serve.index('verified_file_checked('))
+        self.assertLess(serve.index('WorkerLease::acquire'), serve.index('verified_runtime_file('))
         self.assertLess(serve.index('WorkerLease::acquire'), serve.index('supervision::run'))
         self.assertIn('lease.check()', serve)
         self.assertIn('fence.check(', serve)
@@ -56,10 +56,33 @@ class ResourcePolicyTests(unittest.TestCase):
 
     def test_resource_implementation_contains_no_unimplemented_paths(self):
         for name in ('resources.rs', 'resource_manager.rs', 'acquisition.rs', 'storage_io.rs',
-                     'service/ingress.rs'):
+                     'service/ingress.rs', 'model/layout.rs', 'resource_manager/recovery.rs',
+                     'resource_manager/requests.rs'):
             source = (ROOT/'rust/luma-platform/src'/name).read_text()
             for marker in ('todo!', 'unimplemented!', '// TODO', '// FIXME'):
                 self.assertNotIn(marker, source)
+
+    def test_operator_admission_uses_exact_tokens_and_preserves_physical_capacity(self):
+        helper = (ROOT/'native/image/overlay/usr/libexec/luma-os/model-chat.py').read_text()
+        inference = helper.split('def inference(options):')[1].split('def main():')[0]
+        self.assertLess(inference.index("'operation': 'begin'"), inference.index("'/apply-template'"))
+        self.assertLess(inference.index("'operation': 'admit'"), inference.index("'/completion'"))
+        self.assertLess(inference.index("'operation': 'finish'"), inference.index("return {'model'"))
+        self.assertIn("'prompt': tokens", inference)
+        self.assertIn("'cache_prompt': False", inference)
+        self.assertIn("'operation': 'cancel'", inference)
+        self.assertIn("peer.connect('/run/luma-broker/control.sock')", helper)
+        source = (ROOT/'rust/luma-platform/src/resource_manager/requests.rs').read_text().split('#[cfg(test)]')[0]
+        self.assertIn('uid!=0', ''.join(source.split()))
+        self.assertIn('prompt_tokens.checked_add(record.limit)', ''.join(source.split()))
+        self.assertIn('pidfd_alive', source)
+        self.assertIn('worker_resources_released', source)
+        self.assertNotIn('finish_draining', source)
+        main = (ROOT/'rust/luma-platform/src/main.rs').read_text()
+        launch = main.split('Some("model-chat") => {')[1].split('Some(')[0]
+        self.assertIn('CommandExt', launch)
+        self.assertIn('.exec()', launch)
+        self.assertNotIn('.status()', launch)
 
     def test_suspend_stops_model_execution_and_lease_deadlines_include_sleep_time(self):
         assembly = (ROOT/'native/image/assemble.py').read_text()
@@ -157,6 +180,33 @@ class ResourcePolicyTests(unittest.TestCase):
                               ('--parallel','1'), ('--device','none')):
             self.assertIn('"'+option+'","'+value+'"', flat)
 
+    def test_root_verification_has_no_unleased_production_fallback(self):
+        source = (ROOT/'rust/luma-platform/src/model.rs').read_text()
+        verify = source.split('fn verify_file(')[1].split('fn runtime_lock(')[0]
+        self.assertIn('crate::acquisition::verify_path(at, p)', verify)
+        self.assertIn('#[cfg(test)]\n    if let Some(verifier)', verify)
+        self.assertIn('#[cfg(test)]\nfn verified_file(', source)
+        acquisition = (ROOT/'rust/luma-platform/src/acquisition.rs').read_text()
+        routing = acquisition.split('pub(crate) fn verify_path(')[1].split('pub(crate) fn run(')[0]
+        self.assertIn('run(&verification_target(at, &profile.id)?, profile, "verify")', routing)
+
+    def test_verified_layout_precedes_publication_and_execution_under_live_lease(self):
+        source = (ROOT/'rust/luma-platform/src/model.rs').read_text()
+        verify = source.split('fn verified_runtime_file(')[1].split('fn verify_file(')[0]
+        self.assertLess(verify.index('verified_file_checked('), verify.index('layout::verify('))
+        self.assertIn('file.metadata()', verify)
+        self.assertIn('SeekFrom::Start(0)', verify)
+        fetch = source.split('fn fetch(')[1].split('fn operation_lock(')[0]
+        self.assertLess(fetch.index('verified_runtime_file('), fetch.index('fs::rename('))
+        serve = source.split('pub fn serve()')[1].split('#[cfg(test)]')[0]
+        self.assertLess(serve.index('verified_runtime_file('), serve.index('supervision::run('))
+        layout = (ROOT/'rust/luma-platform/src/model/layout.rs').read_text()
+        for boundary in ('MAX_METADATA', 'MAX_KEYS', 'MAX_ARRAY', 'MAX_STRING',
+                         '(self.check)()', 'duplicate GGUF', 'checked_mul', 'checked_sub'):
+            self.assertIn(boundary, layout)
+        self.assertNotIn('Command::new', layout)
+        self.assertNotIn('Store::open', layout)
+
     def test_socket_uses_service_user_acl_without_world_or_shared_database_group(self):
         service = (ROOT/'rust/luma-platform/src/service.rs').read_text()
         self.assertIn('restrict_socket(Path::new(SOCKET))?', service)
@@ -165,6 +215,22 @@ class ResourcePolicyTests(unittest.TestCase):
         self.assertIn('no permissive fallback', service)
         unit = (ROOT/'native/image/overlay/etc/systemd/system/luma-model.service').read_text()
         self.assertNotIn('SupplementaryGroups=luma-control', unit)
+
+    def test_absent_runtime_exclusion_recovery_requires_loaded_masks_and_complete_census(self):
+        recovery = (ROOT/'rust/luma-platform/src/resource_manager/recovery.rs').read_text()
+        production = recovery.split('#[cfg(test)]')[0]
+        for boundary in ('manager_masks()?', 'no_model_tasks(&trusted_proc()?)?',
+                         'visible_proc_mount', 'systemd PID namespace', 'MAX_TASKS',
+                         'model::resource_recovery_exclusion()', 'Store::open',
+                         'State::Released', 'observation()?.review()? != reviewed'):
+            self.assertIn(boundary, production)
+        for operation in ('resources::initialize(', '.transact(', '.revoke(',
+                          'remove_file(', '"unmask"', '"restart"'):
+            self.assertNotIn(operation, production)
+        self.assertIn('"resources_released":false', ''.join(production.split()))
+        main = (ROOT/'rust/luma-platform/src/main.rs').read_text()
+        self.assertIn('Some("resource-runtime-lock-status")', main)
+        self.assertIn('Some("resource-runtime-lock-recover")', main)
 
 
 if __name__ == '__main__':

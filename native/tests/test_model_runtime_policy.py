@@ -18,7 +18,7 @@ class ModelRuntimePolicyTests(unittest.TestCase):
         self.assertLess(activation.index('runtime_lock('), activation.index('model-selection.json'))
         serve = source.split('pub fn serve()')[1].split('#[cfg(test)]')[0]
         self.assertLess(serve.index('runtime_lock('), serve.index('selected()?'))
-        self.assertIn('verified_file_checked(&file, &p, || lease.check_local())?', serve)
+        self.assertIn('verified_runtime_file(&file, &p, || lease.check_local())?', serve)
         self.assertIn('"/proc/self/fd/{}"', serve)
         self.assertIn('inherit_runtime_files(&mut command, &verified, &runtime)', serve)
         self.assertNotIn('file.to_str()', serve)
@@ -33,7 +33,7 @@ class ModelRuntimePolicyTests(unittest.TestCase):
                         provision.index('model-selection.json'))
         self.assertLess(serve.index('activation_records_absent('), serve.index('selected()?'))
         self.assertLess(serve.index('quarantine_absent('), serve.index('selected()?'))
-        self.assertLess(serve.index('validation::worker_admission('), serve.index('verified_file_checked('))
+        self.assertLess(serve.index('validation::worker_admission('), serve.index('verified_runtime_file('))
         self.assertIn('"0:990"', provision)
         unit = (ROOT / 'native/image/overlay/etc/systemd/system/luma-reference.service').read_text()
         self.assertIn('EnvironmentFile=-/var/lib/luma-os/model-reference.env', unit)
@@ -232,8 +232,8 @@ class ModelRuntimePolicyTests(unittest.TestCase):
         source = (ROOT / 'rust/luma-platform/src/model.rs').read_text()
         serve = source.split('pub fn serve()')[1].split('#[cfg(test)]')[0]
         self.assertEqual(serve.count('validation::worker_admission('), 2)
-        self.assertLess(serve.index('validation::worker_admission('), serve.index('verified_file_checked('))
-        self.assertLess(serve.index('verified_file_checked('), serve.rindex('validation::worker_admission('))
+        self.assertLess(serve.index('validation::worker_admission('), serve.index('verified_runtime_file('))
+        self.assertLess(serve.index('verified_runtime_file('), serve.rindex('validation::worker_admission('))
         self.assertLess(serve.rindex('validation::worker_admission('), serve.index('supervision::run('))
         validation = (ROOT / 'rust/luma-platform/src/model/validation.rs').read_text()
         worker_inputs = validation.split('fn worker_hashes(')[1].split('fn consistent_current(')[0]
@@ -309,7 +309,7 @@ class ModelRuntimePolicyTests(unittest.TestCase):
         for check in ('supervision::Fence::capture(', 'inherit_runtime_files(&mut command, &verified, &runtime)',
                       'supervision::run(&mut command', 'fence.check('):
             self.assertIn(check, serve)
-        self.assertLess(serve.index('verified_file_checked('), serve.index('supervision::Fence::capture('))
+        self.assertLess(serve.index('verified_runtime_file('), serve.index('supervision::Fence::capture('))
         self.assertNotIn('command.exec()', serve)
         supervision = (ROOT / 'rust/luma-platform/src/model/supervision.rs').read_text().split('#[cfg(test)]')[0]
         for check in ('Duration::from_millis(500)', 'recovery_disablement_absent(state)?',
@@ -334,7 +334,7 @@ class ModelRuntimePolicyTests(unittest.TestCase):
                       'temporary.identity', 'libc::O_NOFOLLOW | libc::O_NONBLOCK'):
             self.assertIn(check, fetch)
         self.assertLess(fetch.index('confine_acquisition('), fetch.index('supervision::run('))
-        self.assertLess(fetch.index('supervision::run('), fetch.index('verified_file_checked('))
+        self.assertLess(fetch.index('supervision::run('), fetch.index('verified_runtime_file('))
         for forbidden in ('child.try_wait()', 'process.spawn()', 'libc::SIGTERM',
                           'libc::kill(', 'child.kill()'):
             self.assertNotIn(forbidden, fetch)

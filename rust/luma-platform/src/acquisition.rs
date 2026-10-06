@@ -3,11 +3,35 @@
 use crate::{model, platform, resource_manager, Result};
 use std::fs;
 use std::os::unix::fs::MetadataExt;
-use std::path::{Component, Path};
+use std::path::{Component, Path, PathBuf};
 use std::process::{Command, Stdio};
 
 const UNIT: &str = "luma-acquisition.service";
 const LEAF: &str = "0::/lumaacquisition.slice/luma-acquisition.service\n";
+
+fn verification_target(at: &Path, id: &str) -> Result<PathBuf> {
+    if id.is_empty()
+        || !id
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+    {
+        return Err("invalid verification profile identity".into());
+    }
+    let suffix = format!("/lib/luma-os/models/{id}.gguf");
+    let text = at.to_str().ok_or("invalid verification path encoding")?;
+    let parent = text
+        .strip_suffix(&suffix)
+        .ok_or("verification is not the exact catalog model path")?;
+    let target = PathBuf::from(parent);
+    if !target_shape(&target, true) && !target_shape(&target, false) {
+        return Err("verification target is not a supported native data mount".into());
+    }
+    Ok(target)
+}
+
+pub(crate) fn verify_path(at: &Path, profile: &model::Profile) -> Result<()> {
+    run(&verification_target(at, &profile.id)?, profile, "verify")
+}
 
 fn target_shape(target: &Path, installed: bool) -> bool {
     let Some(text) = target.to_str() else {
@@ -216,7 +240,7 @@ pub(crate) fn run(target_path: &Path, profile: &model::Profile, action: &str) ->
     // observation the service/lease can remain live; no automatic name-based
     // stop is sent to a possibly newer invocation. Broker token revocation and
     // the finite service lifetime retain exact-generation control instead.
-    model::supervise_acquisition_controller(&mut command, || {
+    model::supervise_owned_controller(&mut command, || {
         if resource_manager::now()? >= deadline {
             return Err("acquisition controller timed out; service outcome uncertain".into());
         }
@@ -253,6 +277,39 @@ pub(crate) fn worker(action: &str, id: &str, target_path: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn verification_has_no_unleased_or_arbitrary_path_fallback() {
+        let id = "qwen3-4b-q4-k-m";
+        assert_eq!(
+            verification_target(Path::new(&format!("/var/lib/luma-os/models/{id}.gguf")), id)
+                .unwrap(),
+            Path::new("/var")
+        );
+        let live = format!("/var/lib/luma-os/staging/install-{}/data", "a".repeat(32));
+        assert_eq!(
+            verification_target(
+                Path::new(&format!("{live}/lib/luma-os/models/{id}.gguf")),
+                id
+            )
+            .unwrap(),
+            Path::new(&live)
+        );
+        for path in [
+            "/tmp/model.gguf",
+            "/var/lib/luma-os/models/other.gguf",
+            "/var//lib/luma-os/models/qwen3-4b-q4-k-m.gguf",
+            "/var/lib/luma-os/models/../qwen3-4b-q4-k-m.gguf",
+        ] {
+            assert!(verification_target(Path::new(path), id).is_err());
+        }
+        assert!(verification_target(
+            Path::new("/var/lib/luma-os/models/../secret.gguf"),
+            "../secret"
+        )
+        .is_err());
+        let p = model::profile(id).unwrap();
+        assert!(verify_path(Path::new("/tmp/model.gguf"), &p).is_err());
+    }
     #[test]
     fn handoff_requires_kernel_emptiness_retained_bound_and_no_outstanding_generation() {
         let clean = serde_json::json!({"domains":{"host-memory":{"quarantined":false},

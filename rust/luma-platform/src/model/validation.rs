@@ -58,7 +58,7 @@ fn boot_id() -> Result<String> {
     Ok(bundle::hex(&bytes))
 }
 
-fn record_bytes(state: &Path) -> Result<Option<Vec<u8>>> {
+pub(super) fn record_bytes(state: &Path) -> Result<Option<Vec<u8>>> {
     let bytes = activation_bytes(&state.join(PENDING), MAX_RECORD)?;
     if bytes.is_some() && fs::symlink_metadata(state.join(PENDING))?.mode() & 0o7777 != 0o644 {
         return Err("unsafe model validation record mode; preserve state".into());
@@ -174,7 +174,7 @@ fn hashes(state: &Path) -> Result<Hashes> {
     ))
 }
 
-fn worker_hashes(state: &Path) -> Result<(Option<String>, Option<String>)> {
+pub(super) fn worker_hashes(state: &Path) -> Result<(Option<String>, Option<String>)> {
     // The isolated worker must not gain read access to the reference service's
     // private environment. Its own two runtime inputs are sufficient here;
     // the root controller/recovery review verifies the full three-file tuple.
@@ -229,6 +229,13 @@ impl Guard {
             _ => return Err("model validation pending; preserve state".into()),
         }
         let lease = lock_file(state, true)?;
+        // An incomplete record cannot identify a POSIX lock's owning process.
+        // This companion OFD flock excludes recovery for the whole controller
+        // lifetime, including that partial-publication window. It is not a RAM
+        // reservation or a generation, and never replaces the PID-bound lock.
+        if unsafe { libc::flock(lease.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
+            return Err("model validation/recovery lease is already active".into());
+        }
         let mut lock: libc::flock = unsafe { std::mem::zeroed() };
         lock.l_type = libc::F_WRLCK as _;
         lock.l_whence = libc::SEEK_SET as _;
@@ -364,12 +371,19 @@ pub(super) struct Observation {
     pub(super) archive: String,
     bytes: Vec<u8>,
     hashes: Hashes,
+    identity: Option<FileIdentity>,
 }
 
 pub(super) fn inspect(
     state: &Path,
     resolve: &impl Fn(&str) -> Result<Profile>,
 ) -> Result<Observation> {
+    independent_typed_owner(state, resolve)?;
+    let lease = recovery_lock(state)?;
+    inspect_locked(state, resolve, &lease)
+}
+
+fn independent_typed_owner(state: &Path, resolve: &impl Fn(&str) -> Result<Profile>) -> Result<()> {
     activation_records_absent(state)?;
     let bytes = record_bytes(state)?.ok_or("no retained model validation")?;
     let record = decode(&bytes, resolve)?;
@@ -378,19 +392,47 @@ pub(super) fn inspect(
     if record.controller_pid == std::process::id() {
         return Err("validation belongs to this process; preserve state".into());
     }
+    Ok(())
+}
+
+fn recovery_lock(state: &Path) -> Result<File> {
+    // Public maintenance holds independently acquired operation/runtime locks.
+    // Do not create/rebind a missing or unsafe persistent inode as recovery.
     let lease = lock_file(state, false)?;
-    let metadata = lease.metadata()?;
-    if (metadata.dev(), metadata.ino()) != (record.lease_device, record.lease_inode)
-        || query_lock(&lease)?.is_some()
-    {
+    if unsafe { libc::flock(lease.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
+        return Err(
+            "model validation controller/recovery is live or uncertain; preserve state".into(),
+        );
+    }
+    checked_recovery_lock(state, &lease)?;
+    Ok(lease)
+}
+
+fn checked_recovery_lock(state: &Path, lease: &File) -> Result<()> {
+    checked_lock(state, lease)?;
+    if query_lock(lease)?.is_some() {
         return Err("model validation controller/lock is live or uncertain; preserve state".into());
     }
+    Ok(())
+}
+
+fn inspect_locked(
+    state: &Path,
+    resolve: &impl Fn(&str) -> Result<Profile>,
+    lease: &File,
+) -> Result<Observation> {
+    activation_records_absent(state)?;
+    let bytes = record_bytes(state)?.ok_or("no retained model validation")?;
+    let record = decode(&bytes, resolve)?;
+    let metadata = lease.metadata()?;
+    if (metadata.dev(), metadata.ino()) != (record.lease_device, record.lease_inode) {
+        return Err("model validation controller/lock is live or uncertain; preserve state".into());
+    }
+    checked_recovery_lock(state, lease)?;
     let (current_hashes, current) = consistent_current(state, resolve)?;
     activation_records_absent(state)?;
-    checked_lock(state, &lease)?;
-    if query_lock(&lease)?.is_some()
-        || record_bytes(state)?.as_deref() != Some(bytes.as_slice())
-        || hashes(state)? != current_hashes
+    checked_recovery_lock(state, lease)?;
+    if record_bytes(state)?.as_deref() != Some(bytes.as_slice()) || hashes(state)? != current_hashes
     {
         return Err("model validation changed during recovery inspection".into());
     }
@@ -418,6 +460,7 @@ pub(super) fn inspect(
         archive,
         bytes,
         hashes: current_hashes,
+        identity: None,
     })
 }
 
@@ -427,13 +470,38 @@ pub(super) fn retain_abandoned(
     resolve: &impl Fn(&str) -> Result<Profile>,
 ) -> Result<String> {
     tpm::decode::<32>(reviewed)?;
-    let observed = inspect(state, resolve)?;
+    independent_typed_owner(state, resolve)?;
+    let lease = recovery_lock(state)?;
+    let observed = inspect_locked(state, resolve, &lease)?;
     if observed.review != reviewed {
         return Err("model validation review changed; preserve state".into());
     }
-    let archive = state.join(&observed.archive);
+    retain_bytes(state, &observed.archive, &observed.bytes)?;
+    let current = inspect_locked(state, resolve, &lease)?;
+    if current.review != observed.review
+        || current.hashes != observed.hashes
+        || checked_activation_bytes_with_mode(&state.join(&observed.archive), MAX_RECORD, 0, 0o077)?
+            .as_deref()
+            != Some(observed.bytes.as_slice())
+    {
+        return Err("model validation changed after retention; preserve state".into());
+    }
+    checked_recovery_lock(state, &lease)?;
+    activation_records_absent(state)?;
+    if record_bytes(state)?.as_deref() != Some(observed.bytes.as_slice())
+        || hashes(state)? != observed.hashes
+    {
+        return Err("model validation/configuration changed before clearance".into());
+    }
+    fs::remove_file(state.join(PENDING))?;
+    File::open(state)?.sync_all()?;
+    Ok(observed.archive)
+}
+
+fn retain_bytes(state: &Path, name: &str, bytes: &[u8]) -> Result<()> {
+    let archive = state.join(name);
     match checked_activation_bytes_with_mode(&archive, MAX_RECORD, 0, 0o077)? {
-        Some(bytes) if bytes == observed.bytes => (),
+        Some(retained) if retained == bytes => (),
         Some(_) => return Err("model validation retention conflict; preserve state".into()),
         None => {
             let mut file = OpenOptions::new()
@@ -443,7 +511,7 @@ pub(super) fn retain_abandoned(
                 .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
                 .open(&archive)?;
             file.set_permissions(fs::Permissions::from_mode(0o600))?;
-            file.write_all(&observed.bytes)?;
+            file.write_all(bytes)?;
             file.sync_all()?;
         }
     }
@@ -453,13 +521,127 @@ pub(super) fn retain_abandoned(
         .open(&archive)?
         .sync_all()?;
     File::open(state)?.sync_all()?;
-    let current = inspect(state, resolve)?;
+    if checked_activation_bytes_with_mode(&archive, MAX_RECORD, 0, 0o077)?.as_deref() != Some(bytes)
+    {
+        return Err("model validation retention changed; preserve state".into());
+    }
+    Ok(())
+}
+
+type FileIdentity = (u64, u64, i64, i64);
+
+fn file_identity(metadata: &fs::Metadata) -> FileIdentity {
+    (
+        metadata.dev(),
+        metadata.ino(),
+        metadata.ctime(),
+        metadata.ctime_nsec(),
+    )
+}
+
+fn incomplete_bytes(state: &Path) -> Result<(Vec<u8>, FileIdentity)> {
+    let before = fs::symlink_metadata(state.join(PENDING))?;
+    let bytes = record_bytes(state)?.ok_or("no retained model validation")?;
+    match serde_json::from_slice::<serde_json::Value>(&bytes) {
+        Err(error) if error.is_eof() => (),
+        _ => return Err("model validation is not incomplete JSON; preserve state".into()),
+    }
+    let after = fs::symlink_metadata(state.join(PENDING))?;
+    if file_identity(&before) != file_identity(&after) {
+        return Err("incomplete model validation changed during inspection".into());
+    }
+    Ok((bytes, file_identity(&after)))
+}
+
+fn inspect_incomplete_locked(
+    state: &Path,
+    resolve: &impl Fn(&str) -> Result<Profile>,
+    lease: &File,
+) -> Result<Observation> {
+    activation_records_absent(state)?;
+    checked_recovery_lock(state, lease)?;
+    let (bytes, identity) = incomplete_bytes(state)?;
+    let (current_hashes, current) = consistent_current(state, resolve)?;
+    activation_records_absent(state)?;
+    checked_recovery_lock(state, lease)?;
+    if incomplete_bytes(state)? != (bytes.clone(), identity) || hashes(state)? != current_hashes {
+        return Err("incomplete model validation/configuration changed during inspection".into());
+    }
+    let archive = format!(
+        "model-validation.retained.{}",
+        bundle::hex(&Sha256::digest(&bytes))
+    );
+    if let Some(retained) =
+        checked_activation_bytes_with_mode(&state.join(&archive), MAX_RECORD, 0, 0o077)?
+    {
+        if retained != bytes {
+            return Err("model validation retention conflict; preserve state".into());
+        }
+    }
+    let mut digest = Sha256::new();
+    digest.update(b"luma-model-incomplete-validation-review-v1\0");
+    digest.update(CATALOG.as_bytes());
+    digest.update(&bytes);
+    digest.update(serde_json::to_vec(&identity)?);
+    let metadata = lease.metadata()?;
+    digest.update(serde_json::to_vec(&(metadata.dev(), metadata.ino()))?);
+    digest.update(serde_json::to_vec(&current_hashes)?);
+    if let Some(p) = &current {
+        digest.update(p.sha256.as_bytes());
+    }
+    Ok(Observation {
+        review: bundle::hex(&digest.finalize()),
+        current,
+        archive,
+        bytes,
+        hashes: current_hashes,
+        identity: Some(identity),
+    })
+}
+
+pub(super) fn inspect_incomplete(
+    state: &Path,
+    resolve: &impl Fn(&str) -> Result<Profile>,
+) -> Result<Observation> {
+    activation_records_absent(state)?;
+    let lease = recovery_lock(state)?;
+    inspect_incomplete_locked(state, resolve, &lease)
+}
+
+pub(super) fn retain_incomplete(
+    state: &Path,
+    reviewed: &str,
+    resolve: &impl Fn(&str) -> Result<Profile>,
+) -> Result<String> {
+    tpm::decode::<32>(reviewed)?;
+    activation_records_absent(state)?;
+    let lease = recovery_lock(state)?;
+    let observed = inspect_incomplete_locked(state, resolve, &lease)?;
+    if observed.review != reviewed {
+        return Err("incomplete model validation review changed; preserve state".into());
+    }
+    retain_bytes(state, &observed.archive, &observed.bytes)?;
+    let current = inspect_incomplete_locked(state, resolve, &lease)?;
     if current.review != observed.review
         || current.hashes != observed.hashes
-        || checked_activation_bytes_with_mode(&archive, MAX_RECORD, 0, 0o077)?.as_deref()
+        || checked_activation_bytes_with_mode(&state.join(&observed.archive), MAX_RECORD, 0, 0o077)?
+            .as_deref()
             != Some(observed.bytes.as_slice())
     {
-        return Err("model validation changed after retention; preserve state".into());
+        return Err("incomplete model validation changed after retention; preserve state".into());
+    }
+    checked_recovery_lock(state, &lease)?;
+    activation_records_absent(state)?;
+    if incomplete_bytes(state)?
+        != (
+            observed.bytes.clone(),
+            observed
+                .identity
+                .ok_or("incomplete validation identity missing")?,
+        )
+        || hashes(state)? != observed.hashes
+    {
+        return Err("incomplete model validation/configuration changed before clearance".into());
     }
     fs::remove_file(state.join(PENDING))?;
     File::open(state)?.sync_all()?;
@@ -512,6 +694,8 @@ mod tests {
             "model-auth/api-key",
             "alias",
             "displaced.lock",
+            "displaced.pending",
+            "model-runtime.lock",
         ] {
             let path = state.join(name);
             if path.symlink_metadata().is_ok() {
@@ -523,6 +707,25 @@ mod tests {
         fs::remove_dir(state.join("model-auth")).unwrap();
         fs::remove_dir(state).unwrap();
         fs::remove_dir(state.parent().unwrap()).unwrap();
+        let leaf = root.join("leaf-fixture");
+        if leaf.exists() {
+            fs::remove_file(leaf).unwrap();
+        }
+        let worker = root.join("worker-fixture");
+        if worker.exists() {
+            for name in [
+                "leaf.ready",
+                "result",
+                "controller.request",
+                "forbidden.spawn",
+            ] {
+                let path = worker.join(name);
+                if path.exists() {
+                    fs::remove_file(path).unwrap();
+                }
+            }
+            fs::remove_dir(worker).unwrap();
+        }
         fs::remove_dir(root).unwrap();
     }
     struct OwnedChild(std::process::Child);
@@ -560,7 +763,10 @@ mod tests {
         OwnedChild(command.spawn().unwrap())
     }
     fn controller(root: &Path, state: &Path) -> OwnedChild {
-        let mut child = helper(root, "hold", false);
+        holder(root, state, "hold")
+    }
+    fn holder(root: &Path, state: &Path, action: &str) -> OwnedChild {
+        let mut child = helper(root, action, false);
         let until = std::time::Instant::now() + std::time::Duration::from_secs(5);
         while !state.join("child.ready").exists() {
             assert!(
@@ -590,10 +796,26 @@ mod tests {
         let state = root.join(STATE);
         let p = fixture_profile();
         match action.as_str() {
-            "hold" | "exit" => {
+            "hold" | "hold-partial" | "hold-complete" | "hold-exit" | "exit" => {
                 let guard = Guard::begin(&state, &p).unwrap();
+                if action == "hold-partial" {
+                    fs::write(state.join(PENDING), b"{").unwrap();
+                }
                 fs::write(state.join("child.ready"), b"ready").unwrap();
-                if action == "hold" {
+                if action == "hold-complete" || action == "hold-exit" {
+                    let until = std::time::Instant::now() + std::time::Duration::from_secs(5);
+                    while !root.join("worker-fixture/controller.request").exists() {
+                        assert!(
+                            std::time::Instant::now() < until,
+                            "owned controller request timed out"
+                        );
+                        std::thread::sleep(std::time::Duration::from_millis(10));
+                    }
+                    if action == "hold-complete" {
+                        guard.complete(&p).unwrap();
+                        return;
+                    }
+                } else if action != "exit" {
                     std::thread::sleep(std::time::Duration::from_secs(15));
                 }
                 drop(guard);
@@ -609,8 +831,448 @@ mod tests {
                     .is_err());
                 assert_eq!(worker_admission(&state, &p).is_ok(), action == "admit");
             }
+            "legacy-posix" | "unknown-ofd" => {
+                let lease = lock_file(&state, true).unwrap();
+                let mut lock: libc::flock = unsafe { std::mem::zeroed() };
+                lock.l_type = libc::F_WRLCK as _;
+                lock.l_whence = libc::SEEK_SET as _;
+                let command = if action == "legacy-posix" {
+                    libc::F_SETLK
+                } else {
+                    libc::F_OFD_SETLK
+                };
+                assert_eq!(unsafe { libc::fcntl(lease.as_raw_fd(), command, &lock) }, 0);
+                fs::write(state.join("child.ready"), b"ready").unwrap();
+                std::thread::sleep(std::time::Duration::from_secs(15));
+                drop(lease);
+            }
+            "flock-denied" => {
+                let lease = lock_file(&state, false).unwrap();
+                assert_ne!(
+                    unsafe { libc::flock(lease.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) },
+                    0
+                );
+            }
+            "archive-denied" => {
+                assert_eq!(unsafe { libc::geteuid() }, 989);
+                let archive = fs::read_dir(&state)
+                    .unwrap()
+                    .map(|entry| entry.unwrap().path())
+                    .find(|path| {
+                        path.file_name()
+                            .unwrap()
+                            .to_string_lossy()
+                            .starts_with("model-validation.retained.")
+                    })
+                    .unwrap();
+                assert!(File::open(&archive).is_err());
+                assert!(fs::remove_file(&archive).is_err());
+            }
+            "supervise" | "supervise-success" | "supervise-failure" | "supervise-death" => {
+                assert_eq!(unsafe { libc::geteuid() }, 989);
+                assert!(File::open(state.join(REFERENCE_ENV)).is_err());
+                let runtime = runtime_lock(&root, false).unwrap();
+                let verified =
+                    verified_file(&state.join("models").join(format!("{}.gguf", p.id)), &p)
+                        .unwrap();
+                let mut fence = supervision::Fence::capture(&state, &p).unwrap();
+                let leaf_action = match action.as_str() {
+                    "supervise-success" => "leaf-success",
+                    "supervise-failure" => "leaf-failure",
+                    _ => "leaf-hold",
+                };
+                let mut leaf = Command::new(root.join("leaf-fixture"));
+                leaf.arg(leaf_action)
+                    .env("LUMA_VALIDATION_TEST_ROOT", &root)
+                    .env(
+                        "LUMA_VALIDATION_LEAF_WEIGHT_FD",
+                        verified.as_raw_fd().to_string(),
+                    )
+                    .env(
+                        "LUMA_VALIDATION_LEAF_RUNTIME_FD",
+                        runtime.as_raw_fd().to_string(),
+                    )
+                    .stdout(Stdio::null());
+                inherit_runtime_files(&mut leaf, &verified, &runtime);
+                let result = supervision::run(&mut leaf, || fence.check(&state, &p));
+                fs::write(
+                    root.join("worker-fixture/result"),
+                    if result.is_ok() {
+                        &b"success"[..]
+                    } else {
+                        &b"refused"[..]
+                    },
+                )
+                .unwrap();
+                assert_eq!(result.is_ok(), action == "supervise-success");
+            }
+            "wait-ignored" | "wait-no-cldwait" => {
+                let mut setting: libc::sigaction = unsafe { std::mem::zeroed() };
+                setting.sa_sigaction = if action == "wait-ignored" {
+                    libc::SIG_IGN
+                } else {
+                    libc::SIG_DFL
+                };
+                if action == "wait-no-cldwait" {
+                    setting.sa_flags = libc::SA_NOCLDWAIT;
+                }
+                assert_eq!(
+                    unsafe { libc::sigaction(libc::SIGCHLD, &setting, std::ptr::null_mut()) },
+                    0
+                );
+                let marker = std::ffi::CString::new(
+                    root.join("worker-fixture/forbidden.spawn")
+                        .to_str()
+                        .unwrap(),
+                )
+                .unwrap();
+                let mut leaf = Command::new("/bin/true");
+                unsafe {
+                    leaf.pre_exec(move || {
+                        let fd = libc::open(
+                            marker.as_ptr(),
+                            libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL | libc::O_NOFOLLOW,
+                            0o600,
+                        );
+                        if fd < 0 {
+                            return Err(std::io::Error::last_os_error());
+                        }
+                        libc::close(fd);
+                        Ok(())
+                    });
+                }
+                assert!(supervision::run(&mut leaf, || Ok(())).is_err());
+                assert!(!root.join("worker-fixture/forbidden.spawn").exists());
+            }
+            "death-probe" => {
+                assert_eq!(unsafe { libc::geteuid() }, 989);
+                assert_eq!(
+                    unsafe { libc::prctl(libc::PR_SET_CHILD_SUBREAPER, 1, 0, 0, 0) },
+                    0
+                );
+                let worker = supervised(&root, "supervise-death");
+                let leaf: libc::pid_t = fs::read_to_string(root.join("worker-fixture/leaf.ready"))
+                    .unwrap()
+                    .trim()
+                    .parse()
+                    .unwrap();
+                let leaf_start = start_ticks(leaf as u32).unwrap();
+                assert!(leaf > 0 && leaf as u32 != std::process::id());
+                assert!(runtime_lock(&root, false).is_err());
+                drop(worker); // kill/reap only the owned supervisor
+                let until = std::time::Instant::now() + std::time::Duration::from_secs(5);
+                let mut status: libc::c_int = 0;
+                loop {
+                    let reaped = unsafe { libc::waitpid(leaf, &mut status, libc::WNOHANG) };
+                    if reaped == leaf {
+                        break;
+                    }
+                    assert_eq!(reaped, 0, "owned descendant wait failed");
+                    assert_eq!(start_ticks(leaf as u32).unwrap(), leaf_start);
+                    assert!(
+                        std::time::Instant::now() < until,
+                        "owned child parent-death reap timed out"
+                    );
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                }
+                assert!(libc::WIFSIGNALED(status));
+                assert_eq!(libc::WTERMSIG(status), libc::SIGKILL);
+                assert!(!root.join("worker-fixture/result").exists());
+                drop(runtime_lock(&root, false).unwrap());
+            }
             _ => panic!("unknown owned fixture action"),
         }
+    }
+
+    fn supervision_fixture(label: &str) -> (PathBuf, PathBuf, Profile) {
+        let (root, state, p) = fixture(label);
+        let worker = root.join("worker-fixture");
+        fs::create_dir(&worker).unwrap();
+        fs::set_permissions(&worker, fs::Permissions::from_mode(0o700)).unwrap();
+        command("/usr/bin/chown", &["989:989", worker.to_str().unwrap()]).unwrap();
+        // Compile only the captured static C leaf, in this fresh disposable
+        // root. No environment-selected executable or production path override.
+        let leaf = root.join("leaf-fixture");
+        let mut compiler = Command::new("/usr/bin/cc")
+            .args([
+                "-O2",
+                "-Wall",
+                "-Wextra",
+                "-Werror",
+                "-x",
+                "c",
+                "-",
+                "-o",
+                leaf.to_str().unwrap(),
+            ])
+            .env_clear()
+            .env("PATH", "/usr/bin")
+            .env("TMPDIR", std::env::temp_dir())
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .spawn()
+            .unwrap();
+        compiler
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(
+                include_str!("../../../../native/tests/model_supervision_fixture.c").as_bytes(),
+            )
+            .unwrap();
+        assert!(compiler.wait().unwrap().success());
+        fs::set_permissions(&leaf, fs::Permissions::from_mode(0o755)).unwrap();
+        drop(runtime_lock(&root, true).unwrap());
+        (root, state, p)
+    }
+
+    fn supervised(root: &Path, action: &str) -> OwnedChild {
+        let mut child = helper(root, action, unsafe { libc::geteuid() } == 0);
+        let until = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while !fs::read_to_string(root.join("worker-fixture/leaf.ready")).map_or(false, |value| {
+            value.ends_with('\n') && value.trim().parse::<u32>().map_or(false, |pid| pid > 0)
+        }) {
+            assert!(
+                child.0.try_wait().unwrap().is_none(),
+                "owned supervisor exited before leaf readiness"
+            );
+            assert!(
+                std::time::Instant::now() < until,
+                "owned leaf readiness timed out"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        child
+    }
+
+    fn await_supervised_refusal(root: &Path, mut child: OwnedChild) {
+        let until = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            if let Some(status) = child.0.try_wait().unwrap() {
+                assert!(status.success());
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < until,
+                "owned supervisor refusal timed out"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert_eq!(
+            fs::read(root.join("worker-fixture/result")).unwrap(),
+            b"refused"
+        );
+        drop(runtime_lock(root, false).unwrap());
+    }
+
+    #[test]
+    fn supervisor_refuses_non_waitable_child_policy_before_spawning() {
+        for action in ["wait-ignored", "wait-no-cldwait"] {
+            let (root, state, p) = supervision_fixture(action);
+            let mut child = helper(&root, action, true);
+            assert!(child.0.wait().unwrap().success());
+            assert!(!root.join("worker-fixture/forbidden.spawn").exists());
+            cleanup(&root, &state, &p);
+        }
+    }
+
+    #[test]
+    fn supervisor_observes_normal_and_failed_owned_runtime_exit_with_verified_descriptors() {
+        for action in ["supervise-success", "supervise-failure"] {
+            let (root, state, p) = supervision_fixture(action);
+            let mut child = helper(&root, action, true);
+            assert!(child.0.wait().unwrap().success());
+            assert_eq!(
+                fs::read(root.join("worker-fixture/result")).unwrap(),
+                if action == "supervise-success" {
+                    &b"success"[..]
+                } else {
+                    &b"refused"[..]
+                }
+            );
+            drop(runtime_lock(&root, false).unwrap());
+            cleanup(&root, &state, &p);
+        }
+    }
+
+    #[test]
+    fn supervisor_refuses_initial_disablement_uncertain_state_and_wrong_selected_profile() {
+        for label in [
+            "disabled",
+            "quarantine",
+            "activation",
+            "orphan",
+            "partial",
+            "missing-key",
+            "invalid-key",
+            "profile",
+        ] {
+            let (root, state, mut p) = fixture(&format!("supervision-initial-{label}"));
+            match label {
+                "disabled" => fs::write(state.join("model-disabled"), b"independent").unwrap(),
+                "quarantine" => publish_quarantine(&state, &p, RestartStage::Health).unwrap(),
+                "activation" => fs::write(state.join(ACTIVATION), b"uncertain").unwrap(),
+                "orphan" => fs::write(state.join(PRIOR_BACKUP), b"uncertain").unwrap(),
+                "partial" => fs::write(state.join(PENDING), b"{").unwrap(),
+                "missing-key" => fs::remove_file(state.join("model-auth/api-key")).unwrap(),
+                "invalid-key" => {
+                    fs::write(state.join("model-auth/api-key"), b"never-echo").unwrap()
+                }
+                "profile" => p.id = catalog().unwrap().models[1].id.clone(),
+                _ => unreachable!(),
+            }
+            assert!(supervision::Fence::capture(&state, &p).is_err());
+            if label == "profile" {
+                p = fixture_profile();
+            }
+            cleanup(&root, &state, &p);
+        }
+    }
+
+    #[test]
+    fn supervisor_terminates_existing_worker_on_independent_fences_or_runtime_input_change() {
+        for label in [
+            "disabled",
+            "quarantine",
+            "activation",
+            "orphan",
+            "selection",
+            "key",
+            "partial",
+        ] {
+            let (root, state, p) = supervision_fixture(&format!("supervision-change-{label}"));
+            let child = supervised(&root, "supervise");
+            assert!(runtime_lock(&root, false).is_err());
+            let before_weights =
+                fs::read(state.join("models").join(format!("{}.gguf", p.id))).unwrap();
+            match label {
+                "disabled" => fs::write(state.join("model-disabled"), b"independent").unwrap(),
+                "quarantine" => publish_quarantine(&state, &p, RestartStage::Health).unwrap(),
+                "activation" => fs::write(state.join(ACTIVATION), b"uncertain").unwrap(),
+                "orphan" => fs::write(state.join(PRIOR_BACKUP), b"uncertain").unwrap(),
+                "selection" => fs::write(state.join("model-selection.json"), b"changed").unwrap(),
+                "key" => fs::write(state.join("model-auth/api-key"), b"never-echo").unwrap(),
+                "partial" => fs::write(state.join(PENDING), b"{").unwrap(),
+                _ => unreachable!(),
+            }
+            await_supervised_refusal(&root, child);
+            assert_eq!(
+                fs::read(state.join("models").join(format!("{}.gguf", p.id))).unwrap(),
+                before_weights
+            );
+            assert!(supervision::Fence::capture(&state, &p).is_err());
+            cleanup(&root, &state, &p);
+        }
+    }
+
+    #[test]
+    fn supervisor_terminates_existing_trial_worker_after_controller_exit_and_sigkill() {
+        for label in ["normal", "kill"] {
+            let (root, state, p) = supervision_fixture(&format!("supervision-controller-{label}"));
+            let mut controller = holder(
+                &root,
+                &state,
+                if label == "normal" {
+                    "hold-exit"
+                } else {
+                    "hold"
+                },
+            );
+            let child = supervised(&root, "supervise");
+            let original = record_bytes(&state).unwrap().unwrap();
+            if label == "normal" {
+                fs::write(root.join("worker-fixture/controller.request"), b"exit").unwrap();
+                assert!(controller.0.wait().unwrap().success());
+            }
+            drop(controller);
+            await_supervised_refusal(&root, child);
+            assert_eq!(record_bytes(&state).unwrap().unwrap(), original);
+            assert!(!state.join(QUARANTINE).exists()); // worker cannot invent private quarantine
+            cleanup(&root, &state, &p);
+        }
+    }
+
+    #[test]
+    fn supervisor_survives_verified_trial_completion_and_continues_watching_fences() {
+        let (root, state, p) = supervision_fixture("supervision-completion");
+        let mut controller = holder(&root, &state, "hold-complete");
+        let mut child = supervised(&root, "supervise");
+        fs::write(root.join("worker-fixture/controller.request"), b"complete").unwrap();
+        assert!(controller.0.wait().unwrap().success());
+        assert!(record_bytes(&state).unwrap().is_none());
+        std::thread::sleep(std::time::Duration::from_millis(1200));
+        assert!(child.0.try_wait().unwrap().is_none());
+        assert!(!root.join("worker-fixture/result").exists());
+        assert!(runtime_lock(&root, false).is_err());
+        publish_quarantine(&state, &p, RestartStage::Health).unwrap();
+        await_supervised_refusal(&root, child);
+        assert!(state.join(QUARANTINE).exists());
+        cleanup(&root, &state, &p);
+    }
+
+    #[test]
+    fn supervisor_refuses_substituted_valid_trial_and_unexpected_new_trial() {
+        for typed in [true, false] {
+            let (root, state, p) = supervision_fixture(if typed {
+                "supervision-substitute"
+            } else {
+                "supervision-new-trial"
+            });
+            let controller = if typed {
+                Some(controller(&root, &state))
+            } else {
+                None
+            };
+            let child = supervised(&root, "supervise");
+            let guard = if typed {
+                let mut record =
+                    decode(&record_bytes(&state).unwrap().unwrap(), &|_| Ok(p.clone())).unwrap();
+                record.incident_id = "01".repeat(16);
+                fs::write(state.join(PENDING), serde_json::to_vec(&record).unwrap()).unwrap();
+                None
+            } else {
+                Some(Guard::begin(&state, &p).unwrap())
+            };
+            probe(&root, true); // otherwise valid startup, but not this worker's bound trial
+            await_supervised_refusal(&root, child);
+            assert!(state.join(PENDING).exists());
+            drop(guard);
+            drop(controller);
+            cleanup(&root, &state, &p);
+        }
+    }
+
+    #[test]
+    fn supervisor_death_kills_and_reaps_its_owned_direct_child_without_host_pid_search() {
+        let (root, state, p) = supervision_fixture("supervision-parent-death");
+        let mut child = helper(&root, "death-probe", true);
+        assert!(child.0.wait().unwrap().success());
+        cleanup(&root, &state, &p);
+    }
+
+    #[test]
+    fn supervisor_unwind_kills_owned_child_before_releasing_inherited_runtime_lock() {
+        let (root, state, p) = supervision_fixture("supervision-unwind");
+        let runtime = runtime_lock(&root, false).unwrap();
+        let verified =
+            verified_file(&state.join("models").join(format!("{}.gguf", p.id)), &p).unwrap();
+        let mut leaf = Command::new("/bin/sleep");
+        leaf.arg("15").stdout(Stdio::null());
+        inherit_runtime_files(&mut leaf, &verified, &runtime);
+        let calls = std::cell::Cell::new(0);
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            supervision::run(&mut leaf, || {
+                calls.set(calls.get() + 1);
+                if calls.get() > 1 {
+                    panic!("owned supervisor fixture unwind");
+                }
+                Ok(())
+            })
+        }));
+        assert!(result.is_err());
+        drop(runtime);
+        drop(runtime_lock(&root, false).unwrap());
+        cleanup(&root, &state, &p);
     }
 
     #[test]
@@ -766,6 +1428,308 @@ mod tests {
         assert_eq!(fs::read(state.join(archive)).unwrap(), observed.bytes);
         assert_eq!(activation_snapshot(&state).unwrap(), (None, None, None));
         cleanup(&root, &state, &p);
+    }
+
+    #[test]
+    fn incomplete_trial_retention_preserves_private_bytes_settings_and_independent_fences() {
+        for (label, bytes, manual) in [
+            (
+                "incomplete-selected",
+                &b"{\"opaque\":\"never-echo"[..],
+                false,
+            ),
+            ("incomplete-manual", &b"{"[..], true),
+            ("incomplete-empty", &b""[..], false),
+        ] {
+            let (root, state, p) = fixture(label);
+            drop(lock_file(&state, true).unwrap());
+            fs::write(state.join(PENDING), bytes).unwrap();
+            if manual {
+                for name in ["model-selection.json", REFERENCE_ENV, "model-auth/api-key"] {
+                    fs::remove_file(state.join(name)).unwrap();
+                }
+            }
+            let before = activation_snapshot(&state).unwrap();
+            let lease = file_identity(&fs::symlink_metadata(state.join(LEASE)).unwrap());
+            fs::write(state.join("model-disabled"), b"independent disablement").unwrap();
+            publish_quarantine(&state, &p, RestartStage::Health).unwrap();
+            let quarantine = fs::read(state.join(QUARANTINE)).unwrap();
+            let observed = inspect_incomplete(&state, &|_| Ok(p.clone())).unwrap();
+            assert_eq!(observed.current.is_none(), manual);
+            assert!(retain_incomplete(&state, &"00".repeat(32), &|_| Ok(p.clone())).is_err());
+            let archive = retain_incomplete(&state, &observed.review, &|_| Ok(p.clone())).unwrap();
+            assert_eq!(fs::read(state.join(&archive)).unwrap(), bytes);
+            assert_eq!(
+                fs::symlink_metadata(state.join(&archive)).unwrap().mode() & 0o7777,
+                0o600
+            );
+            assert!(record_bytes(&state).unwrap().is_none());
+            assert_eq!(activation_snapshot(&state).unwrap(), before);
+            assert_eq!(
+                file_identity(&fs::symlink_metadata(state.join(LEASE)).unwrap()),
+                lease
+            );
+            assert_eq!(fs::read(state.join(QUARANTINE)).unwrap(), quarantine);
+            assert!(state.join("model-disabled").exists());
+            let mut child = helper(&root, "archive-denied", true);
+            assert!(child.0.wait().unwrap().success());
+            verify_file(&state.join("models").join(format!("{}.gguf", p.id)), &p).unwrap();
+            cleanup(&root, &state, &p);
+        }
+    }
+
+    #[test]
+    fn incomplete_trial_refuses_complete_malformed_unsafe_and_missing_records_without_disclosure() {
+        for label in [
+            "complete",
+            "null",
+            "malformed",
+            "mode",
+            "linked",
+            "symlink",
+            "oversized",
+            "missing",
+        ] {
+            let (root, state, p) = fixture(&format!("incomplete-record-{label}"));
+            drop(lock_file(&state, true).unwrap());
+            fs::write(state.join(PENDING), b"{").unwrap();
+            match label {
+                "complete" => {
+                    fs::write(state.join(PENDING), b"{\"future\":\"never-echo\"}").unwrap()
+                }
+                "null" => fs::write(state.join(PENDING), b"null").unwrap(),
+                "malformed" => fs::write(state.join(PENDING), b"{\"never-echo\":!}").unwrap(),
+                "mode" => {
+                    fs::set_permissions(state.join(PENDING), fs::Permissions::from_mode(0o666))
+                        .unwrap()
+                }
+                "linked" => fs::hard_link(state.join(PENDING), state.join("alias")).unwrap(),
+                "symlink" => {
+                    fs::rename(state.join(PENDING), state.join("alias")).unwrap();
+                    std::os::unix::fs::symlink(state.join("alias"), state.join(PENDING)).unwrap();
+                }
+                "oversized" => fs::write(state.join(PENDING), vec![b' '; 8193]).unwrap(),
+                "missing" => fs::remove_file(state.join(PENDING)).unwrap(),
+                _ => unreachable!(),
+            }
+            let error = inspect_incomplete(&state, &|_| Ok(p.clone()))
+                .err()
+                .unwrap()
+                .to_string();
+            assert!(!error.contains("never-echo"));
+            assert!(retain_incomplete(&state, &"00".repeat(32), &|_| Ok(p.clone())).is_err());
+            assert_eq!(
+                state.join(PENDING).symlink_metadata().is_ok(),
+                label != "missing"
+            );
+            assert!(!fs::read_dir(&state).unwrap().any(|entry| entry
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .starts_with("model-validation.retained.")));
+            cleanup(&root, &state, &p);
+        }
+    }
+
+    #[test]
+    fn incomplete_trial_refuses_missing_or_unsafe_persistent_lease_without_rebinding() {
+        for label in ["missing", "mode", "linked", "symlink", "nonempty"] {
+            let (root, state, p) = fixture(&format!("incomplete-lease-{label}"));
+            drop(lock_file(&state, true).unwrap());
+            fs::write(state.join(PENDING), b"{").unwrap();
+            match label {
+                "missing" => fs::remove_file(state.join(LEASE)).unwrap(),
+                "mode" => fs::set_permissions(state.join(LEASE), fs::Permissions::from_mode(0o666))
+                    .unwrap(),
+                "linked" => fs::hard_link(state.join(LEASE), state.join("alias")).unwrap(),
+                "symlink" => {
+                    fs::rename(state.join(LEASE), state.join("alias")).unwrap();
+                    std::os::unix::fs::symlink(state.join("alias"), state.join(LEASE)).unwrap();
+                }
+                "nonempty" => fs::write(state.join(LEASE), b"uncertain").unwrap(),
+                _ => unreachable!(),
+            }
+            assert!(inspect_incomplete(&state, &|_| Ok(p.clone())).is_err());
+            assert!(retain_incomplete(&state, &"00".repeat(32), &|_| Ok(p.clone())).is_err());
+            assert_eq!(
+                state.join(LEASE).symlink_metadata().is_ok(),
+                label != "missing"
+            );
+            assert_eq!(fs::read(state.join(PENDING)).unwrap(), b"{");
+            cleanup(&root, &state, &p);
+        }
+    }
+
+    #[test]
+    fn incomplete_trial_refuses_live_controller_legacy_posix_and_unknown_ofd_holders() {
+        for action in ["hold-partial", "legacy-posix", "unknown-ofd"] {
+            let (root, state, p) = fixture(&format!("incomplete-holder-{action}"));
+            let child = holder(&root, &state, action);
+            if action != "hold-partial" {
+                fs::write(state.join(PENDING), b"{").unwrap();
+            }
+            assert!(inspect_incomplete(&state, &|_| Ok(p.clone())).is_err());
+            assert!(retain_incomplete(&state, &"00".repeat(32), &|_| Ok(p.clone())).is_err());
+            assert_eq!(fs::read(state.join(PENDING)).unwrap(), b"{");
+            if action == "hold-partial" {
+                probe(&root, false);
+            }
+            drop(child);
+            let observed = inspect_incomplete(&state, &|_| Ok(p.clone())).unwrap();
+            retain_incomplete(&state, &observed.review, &|_| Ok(p.clone())).unwrap();
+            cleanup(&root, &state, &p);
+        }
+    }
+
+    #[test]
+    fn incomplete_trial_review_refuses_changed_settings_weights_record_and_lease_identity() {
+        for label in ["settings", "weights", "record", "lease"] {
+            let (root, state, p) = fixture(&format!("incomplete-stale-{label}"));
+            drop(lock_file(&state, true).unwrap());
+            fs::write(state.join(PENDING), b"{").unwrap();
+            let observed = inspect_incomplete(&state, &|_| Ok(p.clone())).unwrap();
+            match label {
+                "settings" => {
+                    fs::write(state.join("model-auth/api-key"), "b".repeat(64)).unwrap();
+                    fs::write(
+                        state.join(REFERENCE_ENV),
+                        reference_environment(&p, &"b".repeat(64)),
+                    )
+                    .unwrap();
+                }
+                "weights" => fs::write(
+                    state.join("models").join(format!("{}.gguf", p.id)),
+                    b"corrupt",
+                )
+                .unwrap(),
+                "record" => {
+                    fs::rename(state.join(PENDING), state.join("displaced.pending")).unwrap();
+                    fs::write(state.join(PENDING), b"{").unwrap();
+                }
+                "lease" => {
+                    fs::rename(state.join(LEASE), state.join("displaced.lock")).unwrap();
+                    drop(lock_file(&state, true).unwrap());
+                }
+                _ => unreachable!(),
+            }
+            assert!(retain_incomplete(&state, &observed.review, &|_| Ok(p.clone())).is_err());
+            assert!(state.join(PENDING).exists() && !state.join(observed.archive).exists());
+            cleanup(&root, &state, &p);
+        }
+    }
+
+    #[test]
+    fn incomplete_trial_archive_retry_refuses_conflicting_public_linked_and_oversized_copies() {
+        for label in [
+            "exact",
+            "conflict",
+            "public",
+            "linked",
+            "symlink",
+            "oversized",
+        ] {
+            let (root, state, p) = fixture(&format!("incomplete-archive-{label}"));
+            drop(lock_file(&state, true).unwrap());
+            fs::write(state.join(PENDING), b"{").unwrap();
+            let observed = inspect_incomplete(&state, &|_| Ok(p.clone())).unwrap();
+            let archive = state.join(&observed.archive);
+            fs::write(&archive, b"{").unwrap();
+            fs::set_permissions(&archive, fs::Permissions::from_mode(0o600)).unwrap();
+            match label {
+                "exact" => (),
+                "conflict" => fs::write(&archive, b"conflicting evidence").unwrap(),
+                "public" => {
+                    fs::set_permissions(&archive, fs::Permissions::from_mode(0o644)).unwrap()
+                }
+                "linked" => fs::hard_link(&archive, state.join("alias")).unwrap(),
+                "symlink" => {
+                    fs::rename(&archive, state.join("alias")).unwrap();
+                    std::os::unix::fs::symlink(state.join("alias"), &archive).unwrap();
+                }
+                "oversized" => fs::write(&archive, vec![b' '; 8193]).unwrap(),
+                _ => unreachable!(),
+            }
+            let before = fs::read(&archive).unwrap();
+            let result = retain_incomplete(&state, &observed.review, &|_| Ok(p.clone()));
+            assert_eq!(result.is_ok(), label == "exact");
+            assert_eq!(state.join(PENDING).exists(), label != "exact");
+            assert_eq!(fs::read(&archive).unwrap(), before);
+            cleanup(&root, &state, &p);
+        }
+    }
+
+    #[test]
+    fn incomplete_trial_rechecks_identity_and_pending_state_after_private_retention() {
+        for label in ["identity", "activation"] {
+            let (root, state, p) = fixture(&format!("incomplete-after-retention-{label}"));
+            drop(lock_file(&state, true).unwrap());
+            fs::write(state.join(PENDING), b"{").unwrap();
+            let observed = inspect_incomplete(&state, &|_| Ok(p.clone())).unwrap();
+            let changed = std::cell::Cell::new(false);
+            assert!(retain_incomplete(&state, &observed.review, &|_| {
+                if state.join(&observed.archive).exists() && !changed.replace(true) {
+                    if label == "identity" {
+                        fs::rename(state.join(PENDING), state.join("displaced.pending"))?;
+                        fs::write(state.join(PENDING), b"{")?;
+                    } else {
+                        fs::write(state.join(ACTIVATION), b"uncertain")?;
+                    }
+                }
+                Ok(p.clone())
+            })
+            .is_err());
+            assert!(changed.get() && state.join(PENDING).exists());
+            assert_eq!(fs::read(state.join(observed.archive)).unwrap(), b"{");
+            cleanup(&root, &state, &p);
+        }
+    }
+
+    #[test]
+    fn recovery_exclusive_flock_covers_blocking_reviews_and_retention_for_both_record_types() {
+        for typed in [true, false] {
+            let (root, state, p) = fixture(if typed {
+                "exclusive-typed"
+            } else {
+                "exclusive-incomplete"
+            });
+            if typed {
+                drop(controller(&root, &state));
+            } else {
+                drop(lock_file(&state, true).unwrap());
+                fs::write(state.join(PENDING), b"{").unwrap();
+            }
+            let calls = std::cell::Cell::new(0);
+            let resolve = |_: &str| {
+                let count = calls.get();
+                calls.set(count + 1);
+                // Typed maintenance decodes once before opening the possible
+                // owning POSIX inode. Subsequent locked reviews must exclude peers.
+                if !typed || count > 0 {
+                    let mut child = helper(&root, "flock-denied", false);
+                    assert!(child.0.wait().unwrap().success());
+                }
+                Ok(p.clone())
+            };
+            let observed = if typed {
+                inspect(&state, &resolve)
+            } else {
+                inspect_incomplete(&state, &resolve)
+            }
+            .unwrap();
+            calls.set(0);
+            if typed {
+                retain_abandoned(&state, &observed.review, &resolve)
+            } else {
+                retain_incomplete(&state, &observed.review, &resolve)
+            }
+            .unwrap();
+            assert!(calls.get() >= 2);
+            let lease = recovery_lock(&state).unwrap();
+            assert!(Guard::begin(&state, &p).is_err());
+            assert!(!state.join(PENDING).exists());
+            drop(lease);
+            cleanup(&root, &state, &p);
+        }
     }
 
     #[test]

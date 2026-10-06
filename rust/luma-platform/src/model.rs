@@ -23,6 +23,7 @@ const MAX_ROLLBACK: u64 = MAX_PRIOR_BACKUP + 4096;
 const QUARANTINE: &str = "model-quarantine.json";
 const REFERENCE_ENV: &str = "model-reference.env";
 
+mod supervision;
 mod validation;
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -861,6 +862,13 @@ fn quarantine_absent(state: &Path) -> Result<()> {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
         Err(error) => Err(error.into()),
         Ok(_) => Err("model quarantined; reviewed reconciliation required".into()),
+    }
+}
+
+fn recovery_disablement_absent(state: &Path) -> Result<()> {
+    match fs::symlink_metadata(state.join("model-disabled")) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        _ => Err("model recovery disablement is present or uncertain; preserve state".into()),
     }
 }
 
@@ -2227,6 +2235,24 @@ pub fn validation_reconcile(action: Option<(&str, &str)>) -> Result<()> {
     let _runtime = runtime_lock(var, false)?;
     let state = var.join(STATE);
     match action {
+        Some(("--inspect-incomplete", "")) => {
+            let observed = validation::inspect_incomplete(&state, &profile)?;
+            println!(
+                "{}",
+                serde_json::json!({"schema_version":1,"phase":"incomplete_validation_json",
+                "review_sha256":observed.review,"retention_file":observed.archive,
+                "current_model":observed.current.as_ref().map(|p| &p.id),
+                "manual_only":observed.current.is_none(),"worker_started":false,"mutation_performed":false})
+            );
+        }
+        Some(("--retain-incomplete", reviewed)) => {
+            let archive = validation::retain_incomplete(&state, reviewed, &profile)?;
+            println!(
+                "{}",
+                serde_json::json!({"schema_version":1,"validation_cleared":true,
+                "retention_file":archive,"worker_started":false,"readiness_proven":false,"reservation":false})
+            );
+        }
         None => {
             let observed = validation::inspect(&state, &profile)?;
             println!(
@@ -2532,6 +2558,7 @@ pub fn serve() -> Result<()> {
     }
     platform::require_installed()?;
     let runtime = runtime_lock(Path::new(VAR), false)?;
+    recovery_disablement_absent(&Path::new(VAR).join(STATE))?;
     activation_records_absent(&Path::new(VAR).join(STATE))?;
     quarantine_absent(&Path::new(VAR).join(STATE))?;
     let p = selected()?;
@@ -2555,8 +2582,9 @@ pub fn serve() -> Result<()> {
         );
     }
     // Verification/admission may block; recheck the trial controller and all
-    // pending/quarantine fences immediately before crossing the exec boundary.
+    // pending/quarantine fences immediately before spawning the owned runtime.
     validation::worker_admission(&Path::new(VAR).join(STATE), &p)?;
+    let mut fence = supervision::Fence::capture(&Path::new(VAR).join(STATE), &p)?;
     let mut command = Command::new(RUNTIME);
     command
         .args([
@@ -2591,8 +2619,9 @@ pub fn serve() -> Result<()> {
         .env("PATH", "/usr/bin")
         .env("LD_LIBRARY_PATH", "/usr/libexec/luma-os/llama");
     inherit_runtime_files(&mut command, &verified, &runtime);
-    let error = command.exec();
-    Err(error.into())
+    supervision::run(&mut command, || {
+        fence.check(&Path::new(VAR).join(STATE), &p)
+    })
 }
 
 #[cfg(test)]

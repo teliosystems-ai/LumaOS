@@ -35,7 +35,8 @@ python3 -W error -m unittest discover -s "$snapshot/native/tests" -v 2>&1 | tee 
 cd "$snapshot"
 sha256sum rust/Cargo.toml rust/Cargo.lock rust/.cargo/config.toml \
     rust/luma-platform/Cargo.toml rust/luma-platform/build.rs \
-    rust/luma-platform/src/*.rs rust/luma-platform/src/*.c native/tests/*.py native/image/*.py \
+    rust/luma-platform/src/*.rs rust/luma-platform/src/*.c rust/luma-platform/src/model/*.rs \
+    native/tests/model_supervision_fixture.c native/tests/*.py native/image/*.py \
     native/tests/run_storage_boundaries.sh native/image/overlay/etc/systemd/system/luma-staging-clean.service \
     native/image/overlay/usr/lib/systemd/system-generators/luma-boot-generator \
     native/image/overlay/etc/systemd/system/media-luma.mount \

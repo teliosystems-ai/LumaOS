@@ -1,6 +1,6 @@
 # G2 software completion register
 
-Updated 2026-10-05. **G2 software is not complete.** This register separates
+Updated 2026-10-06. **G2 software is not complete.** This register separates
 work that can be executed in the current Windows/Ubuntu WSL/VM environment
 from production deployment decisions and physical qualification. It does not
 change the frozen reference release, governing requirements, or exit criteria.
@@ -447,6 +447,36 @@ gap, not continuous worker cleanup, the final observation-to-exec interval,
 memory leases/generations, initial-boot/migration policy, unsupported partial-trial
 recovery, protected product Admin authority or installed qualification.
 
+The later [incomplete validation recovery checkpoint](evidence/G2_MODEL_VALIDATION_INCOMPLETE_2026-10-05.md)
+adds reviewed exact private retention for empty/truncated trial JSON. Fresh
+review binds record identity, existing lease inode, catalog and consistent
+settings/verified weights or manual-only state; same-byte replacement and stale
+review refuse. Both typed and incomplete recovery now hold an exclusive flock
+through review, retention and clearance, with POSIX ownership checks that also
+refuse live legacy or unknown OFD holders. Recovery does not start services,
+clear independent fences or delete archives. The final D-backed checks passed 96 Rust model
+tests, 39 Python checks, formatting, offline build, CLI help and no-load AppArmor
+parsing; all captured source/test hashes matched. This closes the narrow EOF-only
+trial recovery gap, not arbitrary malformed/future-state repair, retention
+lifecycle, continuous supervision, resource leases/generations, production
+Admin/effect authority or installed qualification. G2 remains incomplete.
+
+The [owned-child supervision checkpoint](evidence/G2_MODEL_SUPERVISION_2026-10-06.md)
+keeps the native isolated supervisor as the service main process and the fixed
+runtime as its owned child. Poll checks bind trial bytes/controller liveness,
+independent activation/quarantine/disablement fences and runtime-input hashes;
+failure kills/reaps only that child through a kernel PID handle. Parent-death
+registration protects the direct child when the supervisor dies. Successful
+trial completion permits continued operation and watching. Recovery state is
+not cleared or invented by the worker. The final D-backed checks passed 106 Rust
+model tests, 44 Python checks, formatting, offline build, CLI help, runner syntax
+and no-load AppArmor parsing; all 190 source and seven supplementary hashes
+matched. This closes a narrow running-child/controller-death gap, not installed
+descendant containment, complete event/pressure/OOM/boot/migration supervision,
+atomic resource leases/generations, protected lifecycle receipts, production
+Admin/effect integration or G2 completion. Evaluate the changed binary/profile
+and actual service teardown on the consolidated image and separate Ubuntu machine.
+
 The [committed-audit recovery checkpoint](evidence/G2_ADMIN_RECOVERY_2026-10-01.md)
 adds explicit, digest-reviewed publication of an interrupted journal commit only
 when the authenticated TPM proves the exact one-entry successor. It does not
@@ -743,7 +773,7 @@ tests passed. This is host-storage acceptance, not a new G2 OS-image pass. See
 | Installer and media | Real laboratory-signed Ubuntu 24.04 image; explicit disk consent, LUKS2, independent credentials, install-time manual/4B/1.7B choice, pinned download; sequence 8 passed pre-write TPM admission, pending enrollment intent and manual installation on a fresh virtual disk | Sealed Admin enrollment and authenticated bootstrap, governed production catalog/pack and offline distribution, full rejection/interruption matrix; rerun actual model acquisition on the new image |
 | Boot, update, recovery | Signed UKI, A/B verity roots, essential-health acknowledgement, three-attempt fallback, independent export/repair/disable; sequence 9 passed measured phases, public credential continuity through reboot/signed B, unapproved-PCR refusal and verified late shutdown teardown; sequence 10 passed the 14-stage regression including atomic export and bounded IPC | Complete confined service credential delivery and lifecycle; broaden shutdown/recovery faults; complete interruption and migration matrix, including pre-userspace failures; protected production rollback anchors; storage-pressure and recovery-retention cases |
 | Temporary storage | Locked, bounded snapshot/download reconciliation; sparse-aware admission and exact-file cleanup; Linux boundary tests in `native/tests`; sequence 8 verified successful startup maintenance service execution | Repeated guest-interruption/pressure evaluation; operator-reviewed disposition of legacy snapshots, which cannot safely be assumed inactive |
-| Model lifecycle and resources | Two pinned CPU profiles; hardware and cgroup-v2 limit admission, isolated UID, authenticated loopback runtime, systemd memory/device/process restrictions; source-only pre-stop verified acquisition and exact service-state guard, guarded unchanged-prior restart after failed stop or activation, interrupted-activation fence, reviewed clearance, narrow reviewed partial-candidate roll-forward, private prior preservation/restoration and one-step reviewed completed-activation configuration undo, bounded listener check and observed restart/check-failure quarantine with explicit clearance and reviewed private retention of incomplete records, packaged quarantine startup refusal, a durable controller-bound validation trial before publication with reviewed abandoned-trial retention and explicit older-image migration; actual inference and offline reboot passed on an earlier image | Full governed model-pack/catalog lifecycle; unsupported/malformed-state recovery and broader crash/boot/migration/post-stop failure policy, installed reconfiguration/restoration/roll-forward/quarantine qualification, atomic resource leases and generations, stale-worker fencing, pressure/OOM supervision, broader quarantine/restart and crash-partial retention policy; evaluate the changed binary on a new image and run 1,000 **real compact-model** cycles with measured resource return and performance distributions |
+| Model lifecycle and resources | Two pinned CPU profiles; hardware and cgroup-v2 limit admission, isolated UID, authenticated loopback runtime, systemd memory/device/process restrictions; source-only pre-stop verified acquisition and exact service-state guard, guarded unchanged-prior restart after failed stop or activation, interrupted-activation fence, reviewed clearance, narrow reviewed partial-candidate roll-forward, private prior preservation/restoration and one-step reviewed completed-activation configuration undo, bounded listener check and observed restart/check-failure quarantine with explicit clearance and reviewed private retention of incomplete records, packaged quarantine startup refusal, a durable controller-bound validation trial before publication with reviewed abandoned/EOF-incomplete trial retention under exclusive recovery locking, owned-child polling supervision with handle-bound teardown/parent-death registration and explicit older-image migration; actual inference and offline reboot passed on an earlier image | Full governed model-pack/catalog lifecycle; unsupported/malformed-state recovery and broader event/crash/boot/migration/post-stop failure policy, installed reconfiguration/restoration/roll-forward/quarantine/trial-recovery/supervision qualification, atomic resource leases and generations, stale or hostile descendant containment, pressure/OOM policy, broader quarantine/restart and governed retention lifecycle; evaluate the changed binary on a new image and run 1,000 **real compact-model** cycles with measured resource return and performance distributions |
 | Admin, policy, and effects | Frozen Python contracts and negative tests; local TPM2 checkpoint/journal and signed-PCR sealing; native PAM with installation-scoped principal/generation and credential revalidation; source-only explicit bootstrap, finite catalog definitions and local kernel-peer-bound catalog service/client with packaged confinement; durable replay fence for two laboratory root-only worker effects | Qualify installed enrollment/bootstrap/service enforcement and complete trusted-time finite assignment/revocation, governed principal/account lifecycle, effect-time grants, protected production effect receipts and reviewed reconciliation; the catalog service is not the complete Admin/policy lifecycle |
 | Skills and vertical workflow | Reference/manual interface; native typed-DAG validation, lab admission/calculation/scoped reads; lab pair store; native ADR-0003 WAL/content-object catalog with versions, transactional receipts, replay/retention and reviewed lab-pair import; native WAL coordinator for the exact invoice graph adds snapshot/checkpoints, pre-effect cancellation, explicit catalog-backed restart/replay and reviewed acknowledgement of exact past commits after withdrawal | Product signing/revocation, production coordinator and principal-bound folder/effect grants, generic artifact/public-schema and trusted-time integration, broader schema/reference/principal migration, receipted retention/GC and effect-time policy, wider cancellation/reconciliation and scheduling; distributed-image journey |
 | Generated-code isolation | General model-generated shell/native execution is denied | Required microVM or separately qualified constrained runtime and adversarial tests before this capability can be available; a deny-only path is not an implemented execution sandbox |

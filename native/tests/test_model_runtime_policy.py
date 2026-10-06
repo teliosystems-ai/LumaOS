@@ -233,7 +233,7 @@ class ModelRuntimePolicyTests(unittest.TestCase):
         self.assertEqual(serve.count('validation::worker_admission('), 2)
         self.assertLess(serve.index('validation::worker_admission('), serve.index('verified_file('))
         self.assertLess(serve.index('verified_file('), serve.rindex('validation::worker_admission('))
-        self.assertLess(serve.rindex('validation::worker_admission('), serve.index('command.exec()'))
+        self.assertLess(serve.rindex('validation::worker_admission('), serve.index('supervision::run('))
         validation = (ROOT / 'rust/luma-platform/src/model/validation.rs').read_text()
         worker_inputs = validation.split('fn worker_hashes(')[1].split('fn consistent_current(')[0]
         self.assertNotIn('REFERENCE_ENV', worker_inputs)
@@ -256,12 +256,114 @@ class ModelRuntimePolicyTests(unittest.TestCase):
         for forbidden in ('systemctl', 'model-disabled', '"key":', '"environment":'):
             self.assertNotIn(forbidden, reconcile)
         validation = (ROOT / 'rust/luma-platform/src/model/validation.rs').read_text()
-        retain = validation.split('pub(super) fn retain_abandoned(')[1].split('#[cfg(test)]')[0]
-        self.assertLess(retain.index('sync_all()?'), retain.index('fs::remove_file(state.join(PENDING))'))
+        retain = validation.split('pub(super) fn retain_abandoned(')[1].split('fn retain_bytes(')[0]
+        self.assertLess(retain.index('retain_bytes('), retain.index('fs::remove_file(state.join(PENDING))'))
         self.assertIn('current.review != observed.review', retain)
         self.assertNotIn('remove_file(archive', retain)
+        archive = validation.split('fn retain_bytes(')[1].split('type FileIdentity')[0]
+        for check in ('.create_new(true)', 'libc::O_NOFOLLOW', '.mode(0o600)',
+                      'sync_all()?', 'File::open(state)?.sync_all()?'):
+            self.assertIn(check, archive)
+        self.assertNotIn('remove_file', archive)
         main = (ROOT / 'rust/luma-platform/src/main.rs').read_text()
         self.assertIn('Some("model-validation-reconcile") if args.len() == 1', main)
+
+    def test_incomplete_validation_recovery_is_eof_only_and_identity_reviewed(self):
+        validation = (ROOT / 'rust/luma-platform/src/model/validation.rs').read_text()
+        incomplete = validation.split('fn incomplete_bytes(')[1].split('fn inspect_incomplete_locked(')[0]
+        for check in ('serde_json::Value', 'error.is_eof()', 'file_identity(&before)',
+                      'file_identity(&after)', 'record_bytes(state)?'):
+            self.assertIn(check, incomplete)
+        retain = validation.split('pub(super) fn retain_incomplete(')[1].split('#[cfg(test)]')[0]
+        for check in ('recovery_lock(state)?', 'current.review != observed.review',
+                      'checked_recovery_lock(state, &lease)?'):
+            self.assertIn(check, retain)
+        self.assertRegex(retain, r'observed\s*\.identity\s*\.ok_or\("incomplete validation identity missing"\)')
+        self.assertLess(retain.index('retain_bytes('), retain.index('fs::remove_file(state.join(PENDING))'))
+        source = (ROOT / 'rust/luma-platform/src/model.rs').read_text()
+        reconcile = source.split('pub fn validation_reconcile(')[1].split('fn legacy_configuration_at(')[0]
+        for flag in ('"--inspect-incomplete"', '"--retain-incomplete"'):
+            self.assertIn(flag, reconcile)
+        for forbidden in ('systemctl', 'fetch(', '"key":', '"environment":'):
+            self.assertNotIn(forbidden, reconcile)
+
+    def test_validation_recovery_holds_exclusive_lock_and_checks_posix_owner(self):
+        validation = (ROOT / 'rust/luma-platform/src/model/validation.rs').read_text()
+        acquire = validation.split('fn recovery_lock(')[1].split('fn inspect_locked(')[0]
+        for check in ('lock_file(state, false)?', 'libc::LOCK_EX | libc::LOCK_NB',
+                      'query_lock(lease)?.is_some()', 'checked_lock(state, lease)?'):
+            self.assertIn(check, acquire)
+        for function, end in (('retain_abandoned', 'fn retain_bytes('),
+                              ('retain_incomplete', '#[cfg(test)]')):
+            retain = validation.split('pub(super) fn ' + function + '(')[1].split(end)[0]
+            self.assertLess(retain.index('let lease = recovery_lock(state)?'), retain.index('retain_bytes('))
+            self.assertLess(retain.rindex('checked_recovery_lock(state, &lease)?'),
+                            retain.index('fs::remove_file(state.join(PENDING))'))
+        guard = validation.split('pub(super) fn begin(')[1].split('pub(super) fn check(')[0]
+        self.assertLess(guard.index('libc::LOCK_EX | libc::LOCK_NB'), guard.index('libc::F_SETLK'))
+
+    def test_model_owned_child_is_supervised_after_verified_admission(self):
+        source = (ROOT / 'rust/luma-platform/src/model.rs').read_text()
+        serve = source.split('pub fn serve()')[1].split('#[cfg(test)]')[0]
+        for check in ('supervision::Fence::capture(', 'inherit_runtime_files(&mut command, &verified, &runtime)',
+                      'supervision::run(&mut command', 'fence.check('):
+            self.assertIn(check, serve)
+        self.assertLess(serve.index('verified_file('), serve.index('supervision::Fence::capture('))
+        self.assertNotIn('command.exec()', serve)
+        supervision = (ROOT / 'rust/luma-platform/src/model/supervision.rs').read_text().split('#[cfg(test)]')[0]
+        for check in ('Duration::from_millis(500)', 'recovery_disablement_absent(state)?',
+                      'validation::worker_admission(state, p)?', 'self.trial = trial',
+                      'validation::worker_hashes(state)? != self.hashes', 'owned.terminate()?'):
+            self.assertIn(check, supervision)
+        self.assertLess(supervision.index('check()?;'), supervision.index('command.spawn()?'))
+        for forbidden in ('systemctl', 'remove_file(', 'fs::write(', 'killpg(', 'Command::new('):
+            self.assertNotIn(forbidden, supervision)
+
+    def test_model_parent_death_registration_and_child_reap_are_explicit(self):
+        supervision = (ROOT / 'rust/luma-platform/src/model/supervision.rs').read_text()
+        arm = supervision.split('fn arm_parent_death(')[1].split('struct OwnedRuntime')[0]
+        for check in ('libc::PR_SET_PDEATHSIG', 'libc::SIGKILL', 'libc::getppid() != parent',
+                      'libc::ECHILD', 'command.pre_exec'):
+            self.assertIn(check, arm)
+        self.assertLess(arm.index('libc::PR_SET_PDEATHSIG'), arm.index('libc::getppid() != parent'))
+        terminate = supervision.split('fn terminate(')[1].split('impl Drop')[0]
+        self.assertLess(terminate.index('libc::SYS_pidfd_send_signal'), terminate.index('self.observe(libc::WEXITED)'))
+        self.assertIn('if self.reaped', terminate)
+        self.assertIn('impl Drop for OwnedRuntime', supervision)
+
+    def test_model_signaling_and_waiting_are_pid_handle_bound_without_pid_fallback(self):
+        supervision = (ROOT / 'rust/luma-platform/src/model/supervision.rs').read_text().split('#[cfg(test)]')[0]
+        for check in ('libc::SYS_pidfd_open', 'libc::SYS_pidfd_send_signal', 'libc::P_PIDFD',
+                      'libc::SA_NOCLDWAIT', 'action.sa_sigaction != libc::SIG_DFL'):
+            self.assertIn(check, supervision)
+        run = supervision.split('pub(super) fn run(')[1].split('fn require_waitable_children(')[0]
+        self.assertLess(run.index('require_waitable_children()?'), run.index('command.spawn()?'))
+        self.assertLess(run.index('OwnedRuntime::pin(&child)?'), run.index('owned.poll()?'))
+        for forbidden in ('child.kill()', 'child.wait()', 'libc::kill(', 'waitpid('):
+            self.assertNotIn(forbidden, supervision)
+
+    def test_model_supervision_keeps_cgroup_teardown_and_narrow_signal_permissions(self):
+        profile = (ROOT / 'native/image/overlay/etc/apparmor.d/luma-model').read_text()
+        self.assertIn('signal (send, receive) set=(kill) peer=luma-model,', profile)
+        self.assertIn('/var/lib/luma-os/model-disabled r,', profile)
+        self.assertNotIn('signal (send) peer=unconfined', profile)
+        self.assertNotIn('/var/lib/luma-os/model-reference.env', profile)
+        unit = (ROOT / 'native/image/overlay/etc/systemd/system/luma-model.service').read_text()
+        for setting in ('KillMode=control-group', 'TimeoutStopSec=15', 'TasksMax=64',
+                        'MemorySwapMax=0', 'Restart=on-failure'):
+            self.assertIn(setting, unit)
+
+    def test_model_supervision_fixture_is_static_test_only_and_in_boundary_evidence(self):
+        validation = (ROOT / 'rust/luma-platform/src/model/validation.rs').read_text()
+        production, tests = validation.split('#[cfg(test)]', 1)
+        self.assertNotIn('model_supervision_fixture.c', production)
+        self.assertIn('include_str!', tests)
+        self.assertIn('../../../../native/tests/model_supervision_fixture.c', tests)
+        self.assertNotIn('LUMA_MODEL_TEST_LEAF', tests)
+        for runner in ('run_storage_boundaries.sh', 'run_recovery_export.sh', 'run_tpm_boundaries.sh'):
+            source = (ROOT / 'native/tests' / runner).read_text()
+            self.assertIn('rust/luma-platform/src/model/*.rs', source)
+            self.assertIn('native/tests/model_supervision_fixture.c', source)
 
 
 if __name__ == '__main__':

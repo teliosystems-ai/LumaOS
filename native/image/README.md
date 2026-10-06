@@ -582,8 +582,9 @@ Installed `model-install` now publishes `model-validation.pending` before
 clearing its activation fence. This root-owned, bounded public record contains
 only an incident ID, kernel boot/PID/start identity, persistent lock inode,
 candidate/catalog pins and configuration hashes, never credentials. A private
-controller guard holds a root-only POSIX write lock on `model-validation.lock`
-through the fixed restart/health/worker/reference checks. Normal new activation
+controller guard holds a root-only POSIX write lock and companion exclusive
+flock on `model-validation.lock` through the fixed restart/health/worker/reference
+checks. Normal new activation
 refuses any trial record; a trial worker may start only for matching runtime
 inputs and a freshly observed bound live lock owner. Checks bracket weight/RAM
 admission. The worker gains no reference-environment read permission. Available
@@ -594,9 +595,50 @@ Only successful controller checks explicitly clear the trial. Completion errors
 also pass through quarantine-before-stop handling. Returning, exiting or being
 killed closes the controller lock but never automatically deletes trial bytes;
 future worker startup refuses an abandoned or changed trial, including on a new
-boot. This does not stop a worker already running, continuously monitor memory,
-or make the final observation-to-exec interval atomic. A surviving worker must
-be stopped and inspected through the normal maintenance procedure.
+boot. The native owned-child supervisor described below now detects those
+trial failures during operation and kills/reaps its direct runtime child. It
+does not make the final observation-to-spawn interval atomic, provide continuous
+memory/pressure policy or prove complete service/resource teardown. Stop and
+inspect any surviving unit through the normal maintenance procedure.
+
+`model-serve` now keeps the isolated native supervisor as the service main
+process. The fixed llama runtime is its one owned child, inheriting the exact
+verified weight and runtime-lock descriptors. Before spawn and repeatedly on
+a 500-ms polling interval, supervision checks pending activation/orphan backup,
+quarantine, recovery disablement, selection/API-key hashes and the live bound
+trial controller. Changed/uncertain observations terminate and reap only that
+owned child and return a nonzero result. Signaling and reaping use its exact
+kernel PID handle, with no stored-PID fallback, process-group kill or host-wide
+search. The supervisor never writes recovery evidence,
+clears fences, downloads weights or restarts services.
+
+The original trial bytes remain bound until root controller completion removes
+them; a different or newly introduced trial refuses. Completion with unchanged
+runtime inputs permits continued operation and fence watching. Trial absence is
+not a protected receipt: root remains trusted, and deletion by a hostile root
+is outside this boundary. Startup requires the selected canonical profile and
+a valid existing API key. The worker still cannot read the reference environment.
+Default waitable-child handling is required before spawn; ignored SIGCHLD,
+automatic reaping or unavailable PID-handle/wait APIs refuse. Handle acquisition
+failure after spawn is an uncertain startup failure requiring parent-death/unit
+teardown, never a cleanup claim. See the [PID handle API](https://man7.org/linux/man-pages/man2/pidfd_open.2.html)
+and [handle-bound signaling](https://man7.org/linux/man-pages/man2/pidfd_send_signal.2.html).
+
+The direct child registers a Linux parent-death SIGKILL before exec and checks
+its parent again after registration. The fixed non-setid, capability-free
+runtime makes no subsequent credential changes. The kernel setting is not
+inherited by forked descendants; installed `KillMode=control-group` remains
+necessary. See the [Linux parent-death API](https://man7.org/linux/man-pages/man2/PR_SET_PDEATHSIG.2const.html)
+and [systemd 255 teardown contract](https://raw.githubusercontent.com/systemd/systemd/v255/man/systemd.kill.xml).
+The profile adds only same-profile kill signaling and disablement lookup, not
+archive/reference-environment or cross-profile send permission.
+
+Polling has observation/scheduling gaps, and kill/reap may block on kernel I/O;
+there is no guaranteed wall-clock cleanup deadline or measured memory-return
+claim. Failed termination/observation does not report successful cleanup. The
+installed service confinement, descendant teardown, real inference and failure
+matrix need the consolidated image and separate Ubuntu evaluation. See the
+[owned-child supervision checkpoint](../evidence/G2_MODEL_SUPERVISION_2026-10-06.md).
 
 After investigating a failure and stopping the managed worker, first reconcile
 pending activation/orphan backup state. Reviewed prior/completed rollback can
@@ -610,10 +652,12 @@ sudo luma-platform model-validation-reconcile --retain-abandoned REVIEW-SHA256
 
 The current review binds exact original trial bytes and consistent current
 settings/verified weights or manual-only state. Both maintenance locks and no
-live/uncertain validation-lock holder are required. Exact bytes are retained as
+live/uncertain validation-lock holder are required. Recovery holds an exclusive
+flock through review, retention and clearance; it also checks POSIX ownership,
+including legacy controllers without the companion flock. Exact bytes are retained as
 private `model-validation.retained.CONTENT-SHA256`, synced and freshly reviewed
 before removing only the trial record. Exact private archives permit retry;
-unsafe/conflicting archives, malformed/partial/unknown trial records, changed
+unsafe/conflicting archives, malformed/unknown trial records, changed
 catalogs, substituted locks, bad settings/weights or stale reviews refuse without
 overwriting evidence. Quarantine, recovery disablement, settings and weights
 are preserved. Clear any independent quarantine only with its own new review.
@@ -621,6 +665,28 @@ Retention has no automatic expiry/quota or generic repair of conflicting state.
 A sync failure/crash after unlink has an uncertain clearance outcome: retain
 diagnostics and inspect fresh state, without claiming readiness or resource
 return. Do not unlink/replace the persistent validation-lock inode as cleanup.
+
+For a bounded, root-owned mode-0644 trial record that fails JSON parsing only
+at end of input, use the separate incomplete-record path:
+
+```sh
+sudo luma-platform model-validation-reconcile --inspect-incomplete
+sudo luma-platform model-validation-reconcile --retain-incomplete REVIEW-SHA256
+```
+
+The review additionally binds the record's device/inode/change identity and the
+existing persistent lock inode, exact bytes, current catalog and consistent
+settings/verified weights or manual-only state. A missing/unsafe lock is never
+recreated by recovery. Live or uncertain POSIX/OFD/flock holders refuse. Private
+retention and fresh identity/configuration checks precede removal of only the
+trial record. Complete JSON (including unknown versions), other malformed
+input, unsafe/oversized records and stale review refuse. Empty/truncated input
+is a classification, not proof of a controller crash; investigate first. Opaque
+bytes are not printed, and archives remain private even if the original record
+contained credentials. No service starts, no independent fence is cleared and
+no archive is deleted. Generic unsupported-state repair and governed retention
+lifecycle remain open. See the
+[incomplete validation checkpoint](../evidence/G2_MODEL_VALIDATION_INCOMPLETE_2026-10-05.md).
 
 This is installed-root source recovery, not finite product Admin/effect grants,
 a resource reservation/generation, protected incident history or full crash

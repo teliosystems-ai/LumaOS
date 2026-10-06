@@ -40,7 +40,8 @@ python3 -W error -m unittest discover -s "$snapshot/native/tests" -v 2>&1 | tee 
 cd "$snapshot"
 sha256sum rust/Cargo.toml rust/Cargo.lock rust/.cargo/config.toml \
     rust/luma-platform/Cargo.toml rust/luma-platform/build.rs \
-    rust/luma-platform/src/*.rs rust/luma-platform/src/*.c \
+    rust/luma-platform/src/*.rs rust/luma-platform/src/*.c rust/luma-platform/src/model/*.rs \
+    native/tests/model_supervision_fixture.c \
     native/tests/run_tpm_boundaries.sh native/tests/*.py native/tests/fixtures/*.c native/image/*.py \
     native/image/overlay/usr/lib/dracut/modules.d/92luma-pcrphase/module-setup.sh \
     native/image/overlay/usr/lib/dracut/modules.d/91luma/*.sh \

@@ -1,0 +1,1204 @@
+//! Private durable request receipts under the existing resource-store lock.
+//! Archive publication precedes the hot cut; uncertain writes poison admission.
+use super::*;
+use crate::{bundle, platform, tpm};
+use std::collections::BTreeSet;
+use std::os::unix::ffi::OsStrExt;
+
+const FILE: &str = "requests.json";
+const MAX_BYTES: u64 = 1024 * 1024;
+const MAX_ARCHIVES: usize = 64;
+const MAX_FILES: usize = 128;
+const MAX_DIRECTORY_ENTRIES: usize = 512;
+
+pub(super) mod optional_decimal {
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+    pub fn serialize<S: Serializer>(v: &Option<u64>, s: S) -> std::result::Result<S::Ok, S::Error> {
+        v.map(|n| n.to_string()).serialize(s)
+    }
+    pub fn deserialize<'de, D: Deserializer<'de>>(
+        d: D,
+    ) -> std::result::Result<Option<u64>, D::Error> {
+        let Some(text) = Option::<String>::deserialize(d)? else {
+            return Ok(None);
+        };
+        let value = text.parse::<u64>().map_err(serde::de::Error::custom)?;
+        if value.to_string() != text {
+            return Err(serde::de::Error::custom(
+                "noncanonical optional request count",
+            ));
+        }
+        Ok(Some(value))
+    }
+}
+
+#[derive(Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+struct Archive {
+    #[serde(with = "resources::decimal")]
+    batch: u64,
+    sha256: String,
+}
+impl Archive {
+    fn name(&self) -> String {
+        format!("requests-archive-{}-{}.json", self.batch, self.sha256)
+    }
+}
+
+#[derive(Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "kebab-case", deny_unknown_fields)]
+enum Origin {
+    FreshResourceState {},
+    ReviewedLegacyMigration {
+        ledger_review: String,
+        manager_epoch: String,
+        #[serde(with = "resources::decimal")]
+        generation: u64,
+    },
+}
+impl Default for Origin {
+    fn default() -> Self {
+        Self::FreshResourceState {}
+    }
+}
+
+#[derive(Default)]
+pub(super) struct Retention {
+    origin: Origin,
+    archives: Vec<Archive>,
+    pub(super) retired: BTreeSet<String>,
+    published: Option<String>,
+    pub(super) poisoned: bool,
+}
+impl Retention {
+    pub(super) fn check(&self) -> Result<()> {
+        if self.poisoned {
+            return Err(
+                "request publication uncertain; preserve state and restart authority".into(),
+            );
+        }
+        Ok(())
+    }
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Snapshot {
+    schema_version: u32,
+    origin: Origin,
+    archives: Vec<Archive>,
+    records: Vec<Record>,
+}
+#[derive(Serialize)]
+struct SnapshotRef<'a> {
+    schema_version: u32,
+    origin: &'a Origin,
+    archives: &'a [Archive],
+    records: &'a [Record],
+}
+
+fn digest(bytes: &[u8]) -> String {
+    bundle::hex(&Sha256::digest(bytes))
+}
+
+fn validate_records(records: &[Record]) -> Result<BTreeSet<String>> {
+    if records.len() > MAX_RECEIPTS {
+        return Err("request receipt inventory exhausted".into());
+    }
+    let mut nonces = BTreeSet::new();
+    let mut outstanding = 0;
+    for record in records {
+        if !nonce_valid(&record.nonce)
+            || !nonces.insert(record.nonce.clone())
+            || !nonce_valid(&record.worker.lease_id)
+            || !nonce_valid(&record.worker.manager_epoch)
+            || record.worker.generation == 0
+            || record.caller.pid == 0
+            || record.caller.start == 0
+            || record.caller.boot.is_empty()
+            || record.caller.boot.len() > 128
+            || !record
+                .caller
+                .boot
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'-')
+            || record.profile.is_empty()
+            || record.profile.len() > 128
+            || !record
+                .profile
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'-')
+            || record.limit == 0
+            || record.limit > MAX_OUTPUT
+            || record.context != 2048
+            || record.until == 0
+        {
+            return Err("invalid durable inference identity or budget; preserve state".into());
+        }
+        let prepared = record.prompt.is_none() && record.token_digest.is_none();
+        let admitted = record.prompt.map_or(false, |p| {
+            p > 0
+                && p.checked_add(record.limit)
+                    .map_or(false, |v| v <= record.context)
+        }) && record.token_digest.as_deref().map_or(false, digest_valid);
+        let no_result = record.output.is_none() && record.result_digest.is_none();
+        let valid = match record.phase {
+            Phase::Preparing => prepared && no_result,
+            Phase::Admitted => admitted && no_result,
+            Phase::Completed => {
+                admitted
+                    && record.output.map_or(false, |n| n > 0 && n <= record.limit)
+                    && record.result_digest.as_deref().map_or(false, digest_valid)
+            }
+            Phase::Draining | Phase::Released => (prepared || admitted) && no_result,
+        };
+        if !valid {
+            return Err("inconsistent durable inference transition; preserve state".into());
+        }
+        outstanding += usize::from(!matches!(record.phase, Phase::Completed | Phase::Released));
+    }
+    if outstanding > 1 {
+        return Err("durable inference slot capacity exceeded".into());
+    }
+    Ok(nonces)
+}
+
+fn decode(bytes: &[u8]) -> Result<Snapshot> {
+    let snapshot: Snapshot = serde_json::from_slice(bytes)?;
+    if snapshot.schema_version != 1
+        || serde_json::to_vec(&snapshot)? != bytes
+        || snapshot.archives.len() > MAX_ARCHIVES
+    {
+        return Err("noncanonical or unsupported inference journal; preserve state".into());
+    }
+    if let Origin::ReviewedLegacyMigration {
+        ledger_review,
+        manager_epoch,
+        generation,
+    } = &snapshot.origin
+    {
+        if !digest_valid(ledger_review)
+            || !(nonce_valid(manager_epoch) || manager_epoch.is_empty() && *generation == 0)
+        {
+            return Err("invalid request journal migration provenance".into());
+        }
+    }
+    for (index, reference) in snapshot.archives.iter().enumerate() {
+        if reference.batch != index as u64 + 1 || !digest_valid(&reference.sha256) {
+            return Err("invalid request archive chain".into());
+        }
+    }
+    validate_records(&snapshot.records)?;
+    Ok(snapshot)
+}
+
+pub(crate) fn initialize(directory: &Path) -> Result<()> {
+    initialize_with_origin(directory, &Origin::default())
+}
+
+fn initialize_with_origin(directory: &Path, origin: &Origin) -> Result<()> {
+    tpm::private_directory(directory)?;
+    // Exclusive creation only. An uncertain prior creation is never overwritten.
+    let bytes = serde_json::to_vec(&SnapshotRef {
+        schema_version: 1,
+        origin,
+        archives: &[],
+        records: &[],
+    })?;
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
+        .open(directory.join(FILE))?;
+    file.write_all(&bytes)?;
+    file.sync_all()?;
+    File::open(directory)?.sync_all()?;
+    Ok(())
+}
+
+fn inventory(
+    directory: &Path,
+    references: &[Archive],
+    origin: &Origin,
+) -> Result<BTreeSet<String>> {
+    let mut count = 0;
+    for (index, entry) in fs::read_dir(directory)?.enumerate() {
+        if index >= MAX_DIRECTORY_ENTRIES {
+            return Err("private request directory inspection limit exceeded".into());
+        }
+        let entry = entry?;
+        let name = entry.file_name();
+        let name = name.to_str().ok_or("invalid private request filename")?;
+        if name.starts_with(".requests-stage-") {
+            count += 1;
+            tpm::private_read(&entry.path(), MAX_BYTES)?;
+        } else if let Some(suffix) = name.strip_prefix("requests-archive-") {
+            count += 1;
+            let (batch, hash) = suffix
+                .split_once('-')
+                .ok_or("invalid request archive filename")?;
+            let reference = Archive {
+                batch: batch.parse()?,
+                sha256: hash
+                    .strip_suffix(".json")
+                    .ok_or("invalid request archive suffix")?
+                    .into(),
+            };
+            if reference.batch == 0 || !digest_valid(&reference.sha256) || reference.name() != name
+            {
+                return Err("noncanonical request archive filename".into());
+            }
+            let bytes = tpm::private_read(&entry.path(), MAX_BYTES)?;
+            let snapshot = decode(&bytes)?;
+            if digest(&bytes) != reference.sha256
+                || snapshot.records.is_empty()
+                || snapshot.archives.len() as u64 + 1 != reference.batch
+                || snapshot
+                    .records
+                    .iter()
+                    .any(|r| !matches!(r.phase, Phase::Completed | Phase::Released))
+            {
+                return Err("request archive has mismatched or outstanding receipts".into());
+            }
+        }
+        if count > MAX_FILES {
+            return Err("retained request file inventory exhausted".into());
+        }
+    }
+    let mut retired = BTreeSet::new();
+    for (index, reference) in references.iter().enumerate() {
+        let bytes = tpm::private_read(&directory.join(reference.name()), MAX_BYTES)?;
+        if digest(&bytes) != reference.sha256 {
+            return Err("request archive digest mismatch".into());
+        }
+        let snapshot = decode(&bytes)?;
+        if snapshot.origin != *origin
+            || snapshot.archives != references[..index]
+            || snapshot.records.is_empty()
+            || snapshot
+                .records
+                .iter()
+                .any(|r| !matches!(r.phase, Phase::Completed | Phase::Released))
+        {
+            return Err("request archive predecessor or terminal state mismatch".into());
+        }
+        for record in snapshot.records {
+            if !retired.insert(record.nonce) {
+                return Err("duplicate retired inference identity".into());
+            }
+        }
+    }
+    Ok(retired)
+}
+
+impl Gate {
+    pub(in crate::resource_manager) fn open(store: &Store) -> Result<Self> {
+        let directory = store.request_directory()?;
+        let bytes = tpm::private_read(&directory.join(FILE), MAX_BYTES)?;
+        let snapshot = decode(&bytes)?;
+        let retired = inventory(directory, &snapshot.archives, &snapshot.origin)?;
+        if snapshot.records.iter().any(|r| retired.contains(&r.nonce)) {
+            return Err("hot inference nonce already retired".into());
+        }
+        Ok(Self {
+            records: snapshot.records,
+            retention: Retention {
+                origin: snapshot.origin,
+                archives: snapshot.archives,
+                retired,
+                published: Some(digest(&bytes)),
+                poisoned: false,
+            },
+        })
+    }
+
+    fn bytes(&self) -> Result<Vec<u8>> {
+        self.retention.check()?;
+        let nonces = validate_records(&self.records)?;
+        if nonces.iter().any(|n| self.retention.retired.contains(n)) {
+            return Err("inference identity collides with retained history".into());
+        }
+        let bytes = serde_json::to_vec(&SnapshotRef {
+            schema_version: 1,
+            origin: &self.retention.origin,
+            archives: &self.retention.archives,
+            records: &self.records,
+        })?;
+        if bytes.len() as u64 > MAX_BYTES {
+            return Err("private inference journal capacity exhausted".into());
+        }
+        Ok(bytes)
+    }
+
+    pub(in crate::resource_manager) fn persist(
+        &mut self,
+        store: &Store,
+        acknowledge: bool,
+    ) -> Result<()> {
+        self.persist_with(store, acknowledge, |path, bytes| {
+            platform::write_atomic(path, bytes, 0o600)
+        })
+    }
+
+    fn persist_with(
+        &mut self,
+        store: &Store,
+        acknowledge: bool,
+        publish: impl FnOnce(&Path, &[u8]) -> Result<()>,
+    ) -> Result<()> {
+        let bytes = self.bytes()?;
+        let next = digest(&bytes);
+        let published = self
+            .retention
+            .published
+            .as_deref()
+            .ok_or("request journal not loaded")?;
+        if next == published && !acknowledge {
+            return Ok(());
+        }
+        let result = (|| -> Result<()> {
+            let directory = store.request_directory()?;
+            let path = directory.join(FILE);
+            if digest(&tpm::private_read(&path, MAX_BYTES)?) != published {
+                return Err("request journal changed outside authority; preserve state".into());
+            }
+            if next == published {
+                File::open(&path)?.sync_all()?;
+                File::open(directory)?.sync_all()?;
+            } else {
+                publish(&path, &bytes)?;
+            }
+            Ok(())
+        })();
+        if result.is_err() {
+            self.retention.poisoned = true;
+        }
+        result?;
+        self.retention.published = Some(next);
+        Ok(())
+    }
+
+    pub(in crate::resource_manager) fn retention_status(
+        &self,
+        store: &Store,
+    ) -> Result<serde_json::Value> {
+        let bytes = self.bytes()?;
+        let epoch = store.read()?.manager_epoch;
+        let review = digest(&serde_json::to_vec(&(epoch, digest(&bytes)))?);
+        Ok(
+            serde_json::json!({"review": review, "hot_receipts": self.records.len(),
+            "origin": self.retention.origin,
+            "hot_limit": MAX_RECEIPTS, "archives": self.retention.archives,
+            "archive_limit": MAX_ARCHIVES, "retired_nonces": self.retention.retired.len(),
+            "archivable": !self.occupied() && !self.records.is_empty() && self.retention.archives.len() < MAX_ARCHIVES,
+            "worker_resources_released": false, "automatic_deletion": false}),
+        )
+    }
+
+    pub(in crate::resource_manager) fn archive_requests(
+        &mut self,
+        store: &Store,
+        review: &str,
+    ) -> Result<serde_json::Value> {
+        self.archive_with(store, review, |gate, store| gate.persist(store, true))
+    }
+
+    fn archive_with(
+        &mut self,
+        store: &Store,
+        review: &str,
+        cut: impl FnOnce(&mut Self, &Store) -> Result<()>,
+    ) -> Result<serde_json::Value> {
+        self.persist(store, true)?;
+        if self.retention_status(store)?["review"].as_str() != Some(review)
+            || self.occupied()
+            || self.records.is_empty()
+            || self.retention.archives.len() >= MAX_ARCHIVES
+        {
+            return Err(
+                "stale request archival review, outstanding requests or exhausted retention".into(),
+            );
+        }
+        let directory = store.request_directory()?;
+        inventory(directory, &self.retention.archives, &self.retention.origin)?;
+        let bytes = self.bytes()?;
+        let reference = Archive {
+            batch: self.retention.archives.len() as u64 + 1,
+            sha256: digest(&bytes),
+        };
+        let path = directory.join(reference.name());
+        let stage = directory.join(format!(".requests-stage-{}", reference.name()));
+        let count = fs::read_dir(directory)?.try_fold(0usize, |count, entry| -> Result<usize> {
+            let name = entry?.file_name();
+            let name = name.to_str().ok_or("invalid request filename")?;
+            Ok(count
+                + usize::from(
+                    name.starts_with("requests-archive-") || name.starts_with(".requests-stage-"),
+                ))
+        })?;
+        if count >= MAX_FILES && !path.try_exists()? && !stage.try_exists()? {
+            return Err("retained request file inventory exhausted".into());
+        }
+        let publication = (|| -> Result<()> {
+            if path.try_exists()? {
+                if tpm::private_read(&path, MAX_BYTES)? != bytes {
+                    return Err("conflicting request archive".into());
+                }
+                File::open(&path)?.sync_all()?;
+            } else {
+                let mut file = match OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .mode(0o600)
+                    .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
+                    .open(&stage)
+                {
+                    Ok(file) => file,
+                    Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                        if tpm::private_read(&stage, MAX_BYTES)? != bytes {
+                            return Err("incomplete request archive stage; preserve bytes".into());
+                        }
+                        OpenOptions::new()
+                            .write(true)
+                            .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
+                            .open(&stage)?
+                    }
+                    Err(e) => return Err(e.into()),
+                };
+                file.write_all(&bytes)?;
+                file.sync_all()?;
+                drop(file);
+                let from = CString::new(stage.as_os_str().as_bytes())?;
+                let to = CString::new(path.as_os_str().as_bytes())?;
+                if unsafe {
+                    libc::renameat2(
+                        libc::AT_FDCWD,
+                        from.as_ptr(),
+                        libc::AT_FDCWD,
+                        to.as_ptr(),
+                        libc::RENAME_NOREPLACE,
+                    )
+                } != 0
+                {
+                    return Err(std::io::Error::last_os_error().into());
+                }
+            }
+            File::open(directory)?.sync_all()?;
+            Ok(())
+        })();
+        if publication.is_err() {
+            self.retention.poisoned = true;
+        }
+        publication?;
+        // A crash before this cut leaves an immutable orphan and all hot receipts.
+        // A crash after the cut reconstructs tombstones only from the cited chain.
+        let nonces = validate_records(&self.records)?;
+        self.retention.archives.push(reference.clone());
+        self.records.clear();
+        let cut_result = cut(self, store);
+        if cut_result.is_err() {
+            self.retention.poisoned = true;
+        }
+        cut_result?;
+        self.retention.retired.extend(nonces);
+        Ok(serde_json::json!({"archive":reference,"hot_receipts":"0",
+            "worker_resources_released":false,"receipts_preserved":true,"nonces_retired":true}))
+    }
+}
+
+fn migration_review(store: &Store) -> Result<String> {
+    let directory = store.request_directory()?;
+    for (index, entry) in fs::read_dir(directory)?.enumerate() {
+        if index >= MAX_DIRECTORY_ENTRIES {
+            return Err("request migration directory inspection limit exceeded".into());
+        }
+        let name = entry?.file_name();
+        let name = name.to_str().ok_or("invalid request migration filename")?;
+        if name.starts_with("requests.")
+            || name.starts_with("requests-")
+            || name.starts_with(".requests-")
+        {
+            return Err(
+                "existing or interrupted request history; no missing-state migration".into(),
+            );
+        }
+    }
+    let ledger = store.read()?;
+    if ledger.leases.iter().any(|l| l.state != State::Released) {
+        return Err("request history migration requires released physical generations".into());
+    }
+    Ok(digest(&serde_json::to_vec(&(
+        "legacy-request-history-unavailable",
+        ledger.review()?,
+    ))?))
+}
+
+pub(crate) fn request_migration(review: Option<&str>) -> Result<()> {
+    crate::require_root()?;
+    crate::platform::require_installed()?;
+    let _operation = model::resource_recovery_exclusion()?;
+    let _idle = model::resource_idle()?;
+    let mut store = super::super::migration_store()?;
+    let observed = migration_review(&store)?;
+    if let Some(expected) = review {
+        if observed != expected {
+            return Err("stale request history migration review".into());
+        }
+        // Recheck empty trusted groups under both model and resource exclusions.
+        if Group::open()?.populated()? || Group::for_kind(Kind::Acquisition)?.populated()? {
+            return Err("worker appeared during request history migration".into());
+        }
+        migrate_store_with(&mut store, expected, initialize_with_origin)?;
+        let gate = Gate::open(&store)?;
+        println!("{}", gate.retention_status(&store)?);
+    } else {
+        println!(
+            "{}",
+            serde_json::json!({"review": observed,
+            "legacy_request_receipts": "unavailable-before-upgrade",
+            "physical_history_preserved": true, "worker_resources_released": false})
+        );
+    }
+    Ok(())
+}
+
+fn migrate_store_with(
+    store: &mut Store,
+    review: &str,
+    initialize_history: impl FnOnce(&Path, &Origin) -> Result<()>,
+) -> Result<()> {
+    if migration_review(store)? != review {
+        return Err("stale request history migration review".into());
+    }
+    let prior = store.read()?;
+    let prior_review = prior.review()?;
+    let origin = Origin::ReviewedLegacyMigration {
+        ledger_review: prior_review.clone(),
+        manager_epoch: prior.manager_epoch,
+        generation: prior.generation,
+    };
+    // Rotate authority only. The lifetime store exclusion spans both publications.
+    // Failure before exclusive history creation leaves a changed review and no
+    // usable request store; failure afterwards leaves provenance, never a reset.
+    store.transact(|ledger| {
+        if ledger.review()? != prior_review
+            || ledger.leases.iter().any(|l| l.state != State::Released)
+        {
+            return Err("request history migration lost physical exclusion".into());
+        }
+        // A never-started empty ledger has no authority epoch to retire. Keep
+        // it uninitialized; normal broker startup alone establishes inventory.
+        if !ledger.manager_epoch.is_empty() {
+            ledger.manager_epoch = resources::random_id()?;
+        }
+        Ok(())
+    })?;
+    initialize_history(store.request_directory()?, &origin)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::tests::{admit, begin, finish, fixture, reserve};
+    use super::*;
+    use std::os::unix::fs::PermissionsExt;
+    use std::path::PathBuf;
+
+    struct Fixture {
+        directory: PathBuf,
+        store: Store,
+        gate: Gate,
+        worker: Token,
+        caller: Caller,
+    }
+    impl Fixture {
+        fn new() -> Self {
+            let directory = std::env::temp_dir().join(format!(
+                "luma-request-journal-{}",
+                resources::random_id().unwrap()
+            ));
+            resources::initialize(&directory).unwrap();
+            let mut store = Store::open(&directory).unwrap();
+            let (_, ledger, worker, caller) = fixture();
+            store
+                .transact(|current| {
+                    *current = ledger;
+                    Ok(())
+                })
+                .unwrap();
+            let gate = Gate::open(&store).unwrap();
+            Self {
+                directory,
+                store,
+                gate,
+                worker,
+                caller,
+            }
+        }
+        fn prepare(&mut self, nonce: u64) {
+            reserve(&mut self.gate, &self.caller, &begin(&self.worker, nonce)).unwrap();
+            self.gate.persist(&self.store, true).unwrap();
+        }
+        fn complete(&mut self, nonce: u64) {
+            self.prepare(nonce);
+            self.gate
+                .admit(&self.caller, &admit(&self.worker, nonce, 10), 3)
+                .unwrap();
+            self.gate.persist(&self.store, true).unwrap();
+            self.gate
+                .finish(&self.caller, &finish(&self.worker, nonce, 10, 1), 4)
+                .unwrap();
+            self.gate.persist(&self.store, true).unwrap();
+        }
+        fn review(&self) -> String {
+            self.gate.retention_status(&self.store).unwrap()["review"]
+                .as_str()
+                .unwrap()
+                .into()
+        }
+        fn archive(&mut self) -> serde_json::Value {
+            self.gate
+                .archive_requests(&self.store, &self.review())
+                .unwrap()
+        }
+    }
+    impl Drop for Fixture {
+        fn drop(&mut self) {
+            fs::remove_dir_all(&self.directory).unwrap();
+        }
+    }
+
+    #[test]
+    fn every_acknowledged_phase_is_canonical_durable_without_text_or_pid_handles() {
+        let mut f = Fixture::new();
+        f.caller.start = u64::MAX;
+        f.prepare(1);
+        let raw = tpm::private_read(&f.directory.join(FILE), MAX_BYTES).unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&raw).unwrap();
+        assert_eq!(value["records"][0]["caller"]["start"], u64::MAX.to_string());
+        assert_eq!(value["records"][0]["limit"], "128");
+        assert!(value["records"][0].get("pin").is_none());
+        assert!(value["records"][0].get("text").is_none());
+        assert!(value["records"][0].get("messages").is_none());
+        let opened = Gate::open(&f.store).unwrap();
+        assert_eq!(opened.records[0].phase, Phase::Preparing);
+        assert!(opened.records[0].pin.is_none());
+        f.gate
+            .admit(&f.caller, &admit(&f.worker, 1, 10), 3)
+            .unwrap();
+        f.gate.persist(&f.store, true).unwrap();
+        assert_eq!(
+            Gate::open(&f.store).unwrap().records[0].phase,
+            Phase::Admitted
+        );
+        f.gate
+            .finish(&f.caller, &finish(&f.worker, 1, 10, 1), 4)
+            .unwrap();
+        assert!(f.gate.records[0].pin.is_none());
+        f.gate.persist(&f.store, true).unwrap();
+        let receipt = f.gate.records[0].receipt();
+        assert_eq!(Gate::open(&f.store).unwrap().records[0].receipt(), receipt);
+        assert_eq!(f.store.read().unwrap().charged("host").unwrap(), 5000);
+    }
+
+    #[test]
+    fn restart_never_rehydrates_a_live_caller_or_releases_reserved_bytes() {
+        let mut f = Fixture::new();
+        f.prepare(1);
+        let mut restored = Gate::open(&f.store).unwrap();
+        let ledger = f.store.read().unwrap();
+        assert_eq!(
+            restored
+                .maintain_with(&ledger, 3, |_| panic!("must not reconstruct PID from disk"))
+                .unwrap(),
+            vec![f.worker.clone()]
+        );
+        restored.persist(&f.store, true).unwrap();
+        assert_eq!(
+            Gate::open(&f.store).unwrap().records[0].phase,
+            Phase::Draining
+        );
+        assert!(restored.occupied());
+        assert_eq!(ledger.charged("host").unwrap(), 5000);
+    }
+
+    #[test]
+    fn publication_failure_before_and_after_commit_poison_all_mutating_paths() {
+        for after in [false, true] {
+            let mut f = Fixture::new();
+            reserve(&mut f.gate, &f.caller, &begin(&f.worker, 1)).unwrap();
+            assert!(f
+                .gate
+                .persist_with(&f.store, true, |path, bytes| {
+                    if after {
+                        platform::write_atomic(path, bytes, 0o600)?;
+                    }
+                    Err("injected lost publication acknowledgement".into())
+                })
+                .is_err());
+            assert!(f.gate.persist(&f.store, true).is_err());
+            assert!(f
+                .gate
+                .maintain_with(&f.store.read().unwrap(), 3, |_| Ok(true))
+                .is_err());
+            assert!(reserve(&mut f.gate, &f.caller, &begin(&f.worker, 2)).is_err());
+            assert!(f.gate.archive_requests(&f.store, &"0".repeat(64)).is_err());
+            assert!(f.gate.occupied());
+            let restored = Gate::open(&f.store).unwrap();
+            assert_eq!(restored.records.len(), usize::from(after));
+            assert_eq!(f.store.read().unwrap().charged("host").unwrap(), 5000);
+        }
+    }
+
+    #[test]
+    fn reviewed_hot_cut_preserves_generation_capacity_receipts_and_retired_nonces() {
+        let mut f = Fixture::new();
+        for nonce in 1..=MAX_RECEIPTS as u64 {
+            f.complete(nonce);
+        }
+        assert!(reserve(&mut f.gate, &f.caller, &begin(&f.worker, 257)).is_err());
+        let physical = fs::read(f.directory.join("ledger.json")).unwrap();
+        let archive = f.archive();
+        assert_eq!(archive["worker_resources_released"], false);
+        assert_eq!(f.gate.retention.retired.len(), MAX_RECEIPTS);
+        assert!(f.gate.records.is_empty());
+        assert_eq!(fs::read(f.directory.join("ledger.json")).unwrap(), physical);
+        assert!(reserve(&mut f.gate, &f.caller, &begin(&f.worker, 1)).is_err());
+        f.gate = Gate::open(&f.store).unwrap();
+        assert!(reserve(&mut f.gate, &f.caller, &begin(&f.worker, 256)).is_err());
+        f.complete(257);
+        f.archive();
+        let restored = Gate::open(&f.store).unwrap();
+        assert_eq!(restored.retention.retired.len(), 257);
+        assert_eq!(restored.retention.archives.len(), 2);
+        assert_eq!(fs::read(f.directory.join("ledger.json")).unwrap(), physical);
+    }
+
+    #[test]
+    fn stale_reviews_active_preparing_and_draining_requests_never_archive() {
+        let mut f = Fixture::new();
+        let empty = f.review();
+        assert!(f.gate.archive_requests(&f.store, &empty).is_err());
+        f.prepare(1);
+        assert!(f.gate.archive_requests(&f.store, &f.review()).is_err());
+        f.gate
+            .admit(&f.caller, &admit(&f.worker, 1, 10), 3)
+            .unwrap();
+        assert!(f.gate.archive_requests(&f.store, &f.review()).is_err());
+        f.gate
+            .cancel(&f.caller, &format!("{:032x}", 1), &f.worker)
+            .unwrap();
+        assert!(f.gate.archive_requests(&f.store, &f.review()).is_err());
+        f.store
+            .transact(|l| {
+                l.revoke(&f.worker, "test")?;
+                l.finish_draining(&f.worker, &BTreeMap::from([("host".into(), 25)]))
+            })
+            .unwrap();
+        f.gate
+            .maintain_with(&f.store.read().unwrap(), 4, |_| Ok(true))
+            .unwrap();
+        f.gate.persist(&f.store, true).unwrap();
+        assert!(f.gate.archive_requests(&f.store, &empty).is_err());
+        let current = f.review();
+        f.store
+            .transact(|l| {
+                l.manager_epoch = "d".repeat(32);
+                Ok(())
+            })
+            .unwrap();
+        assert!(f.gate.archive_requests(&f.store, &current).is_err());
+        f.archive();
+    }
+
+    #[test]
+    fn damaged_missing_or_noncanonical_journals_are_retained_never_initialized() {
+        let mut f = Fixture::new();
+        f.complete(1);
+        let path = f.directory.join(FILE);
+        let original = fs::read(&path).unwrap();
+        for damaged in [
+            b"{".to_vec(),
+            [original.as_slice(), b"\n"].concat(),
+            b"{}".to_vec(),
+        ] {
+            fs::write(&path, &damaged).unwrap();
+            assert!(Gate::open(&f.store).is_err());
+            assert_eq!(fs::read(&path).unwrap(), damaged);
+            assert!(initialize(&f.directory).is_err());
+        }
+        fs::remove_file(&path).unwrap();
+        assert!(Gate::open(&f.store).is_err());
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn malformed_phases_counts_identities_duplicates_and_extra_fields_are_denied() {
+        let mut f = Fixture::new();
+        f.complete(1);
+        let canonical: serde_json::Value =
+            serde_json::from_slice(&f.gate.bytes().unwrap()).unwrap();
+        for (field, invalid) in [
+            ("limit", serde_json::json!("0128")),
+            ("limit", serde_json::json!(128)),
+            ("output", serde_json::json!("129")),
+            ("context", serde_json::json!("2049")),
+            ("phase", serde_json::json!("preparing")),
+            ("result_digest", serde_json::json!("x")),
+            ("extra", serde_json::json!(true)),
+        ] {
+            let mut changed = canonical.clone();
+            changed["records"][0][field] = invalid;
+            if let Ok(snapshot) = serde_json::from_value::<Snapshot>(changed) {
+                assert!(decode(&serde_json::to_vec(&snapshot).unwrap()).is_err());
+            }
+        }
+        let mut injected_handle = canonical.clone();
+        injected_handle["records"][0]["pin"] = serde_json::json!(0);
+        assert!(decode(&serde_json::to_vec(&injected_handle).unwrap()).is_err());
+        let mut changed = canonical;
+        let duplicate = changed["records"][0].clone();
+        changed["records"].as_array_mut().unwrap().push(duplicate);
+        let snapshot = serde_json::from_value::<Snapshot>(changed).unwrap();
+        assert!(decode(&serde_json::to_vec(&snapshot).unwrap()).is_err());
+    }
+
+    #[test]
+    fn unsafe_links_modes_and_oversized_state_refuse_without_replacement() {
+        let f = Fixture::new();
+        let path = f.directory.join(FILE);
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
+        assert!(Gate::open(&f.store).is_err());
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+        fs::hard_link(&path, f.directory.join("unexpected-link")).unwrap();
+        assert!(Gate::open(&f.store).is_err());
+        fs::remove_file(f.directory.join("unexpected-link")).unwrap();
+        fs::rename(&path, f.directory.join("original")).unwrap();
+        std::os::unix::fs::symlink("original", &path).unwrap();
+        assert!(Gate::open(&f.store).is_err());
+        fs::remove_file(&path).unwrap();
+        fs::rename(f.directory.join("original"), &path).unwrap();
+        OpenOptions::new()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_len(MAX_BYTES + 1)
+            .unwrap();
+        assert!(Gate::open(&f.store).is_err());
+        assert_eq!(fs::metadata(&path).unwrap().len(), MAX_BYTES + 1);
+    }
+
+    #[test]
+    fn externally_changed_journal_poisoning_cannot_be_overwritten_by_an_exact_replay() {
+        let mut f = Fixture::new();
+        f.complete(1);
+        fs::write(f.directory.join(FILE), b"{").unwrap();
+        assert!(f.gate.persist(&f.store, true).is_err());
+        assert!(f.gate.retention.poisoned);
+        assert_eq!(fs::read(f.directory.join(FILE)).unwrap(), b"{");
+    }
+
+    #[test]
+    fn orphan_publication_preserves_hot_authority_and_exact_reviewed_retry_is_safe() {
+        let mut f = Fixture::new();
+        f.complete(1);
+        let bytes = f.gate.bytes().unwrap();
+        let reference = Archive {
+            batch: 1,
+            sha256: digest(&bytes),
+        };
+        let path = f.directory.join(reference.name());
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&path)
+            .unwrap();
+        file.write_all(&bytes).unwrap();
+        file.sync_all().unwrap();
+        f.gate = Gate::open(&f.store).unwrap();
+        assert_eq!(f.gate.records.len(), 1);
+        assert!(f.gate.retention.retired.is_empty());
+        f.archive();
+        assert_eq!(fs::read(path).unwrap(), bytes);
+        assert_eq!(Gate::open(&f.store).unwrap().retention.retired.len(), 1);
+    }
+
+    #[test]
+    fn incomplete_archive_stage_refuses_and_never_cuts_hot_receipts() {
+        let mut f = Fixture::new();
+        f.complete(1);
+        let bytes = f.gate.bytes().unwrap();
+        let reference = Archive {
+            batch: 1,
+            sha256: digest(&bytes),
+        };
+        let stage = f
+            .directory
+            .join(format!(".requests-stage-{}", reference.name()));
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&stage)
+            .unwrap();
+        file.write_all(b"{").unwrap();
+        file.sync_all().unwrap();
+        assert!(f.gate.archive_requests(&f.store, &f.review()).is_err());
+        assert!(f.gate.retention.poisoned);
+        let restored = Gate::open(&f.store).unwrap();
+        assert_eq!(restored.records.len(), 1);
+        assert!(restored.retention.archives.is_empty());
+        assert_eq!(fs::read(stage).unwrap(), b"{");
+    }
+
+    #[test]
+    fn lost_hot_cut_acknowledgement_reconstructs_only_the_durable_side_of_the_cut() {
+        for after in [false, true] {
+            let mut f = Fixture::new();
+            f.complete(1);
+            let review = f.review();
+            assert!(f
+                .gate
+                .archive_with(&f.store, &review, |gate, store| {
+                    gate.persist_with(store, true, |path, bytes| {
+                        if after {
+                            platform::write_atomic(path, bytes, 0o600)?;
+                        }
+                        Err("injected uncertain archival cut".into())
+                    })
+                })
+                .is_err());
+            assert!(f.gate.retention.poisoned);
+            assert!(f.gate.occupied());
+            f.gate = Gate::open(&f.store).unwrap();
+            assert_eq!(f.gate.records.len(), usize::from(!after));
+            assert_eq!(f.gate.retention.archives.len(), usize::from(after));
+            assert_eq!(f.gate.retention.retired.len(), usize::from(after));
+            if !after {
+                f.archive();
+            }
+            assert!(reserve(&mut f.gate, &f.caller, &begin(&f.worker, 1)).is_err());
+            assert_eq!(f.store.read().unwrap().charged("host").unwrap(), 5000);
+        }
+    }
+
+    #[test]
+    fn legacy_origin_is_durable_and_does_not_invent_pre_upgrade_request_receipts() {
+        let f = Fixture::new();
+        fs::remove_file(f.directory.join(FILE)).unwrap();
+        let ledger = f.store.read().unwrap();
+        let origin = Origin::ReviewedLegacyMigration {
+            ledger_review: ledger.review().unwrap(),
+            manager_epoch: ledger.manager_epoch.clone(),
+            generation: ledger.generation,
+        };
+        initialize_with_origin(&f.directory, &origin).unwrap();
+        let restored = Gate::open(&f.store).unwrap();
+        assert!(restored.records.is_empty());
+        assert!(restored.retention.archives.is_empty());
+        assert!(restored.retention.origin == origin);
+        assert!(initialize_with_origin(&f.directory, &origin).is_err());
+        assert_eq!(f.store.read().unwrap().generation, ledger.generation);
+        assert_eq!(f.store.read().unwrap().charged("host").unwrap(), 5000);
+    }
+
+    #[test]
+    fn corrupt_missing_or_reordered_archive_chain_refuses() {
+        let mut f = Fixture::new();
+        f.complete(1);
+        f.archive();
+        f.complete(2);
+        f.archive();
+        let path = f.directory.join(f.gate.retention.archives[0].name());
+        let bytes = fs::read(&path).unwrap();
+        fs::write(&path, b"{").unwrap();
+        assert!(Gate::open(&f.store).is_err());
+        fs::remove_file(&path).unwrap();
+        assert!(Gate::open(&f.store).is_err());
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&path)
+            .unwrap();
+        file.write_all(&bytes).unwrap();
+        file.sync_all().unwrap();
+        assert!(Gate::open(&f.store).is_ok());
+        f.gate.retention.archives.swap(0, 1);
+        fs::write(f.directory.join(FILE), f.gate.bytes().unwrap()).unwrap();
+        assert!(Gate::open(&f.store).is_err());
+    }
+
+    #[test]
+    fn bounded_archive_inventory_never_evicts_old_receipts() {
+        let mut f = Fixture::new();
+        for nonce in 1..=MAX_ARCHIVES as u64 {
+            f.complete(nonce);
+            f.archive();
+        }
+        f.complete(MAX_ARCHIVES as u64 + 1);
+        let before = fs::read(f.directory.join(FILE)).unwrap();
+        assert!(f.gate.archive_requests(&f.store, &f.review()).is_err());
+        assert_eq!(fs::read(f.directory.join(FILE)).unwrap(), before);
+        let restored = Gate::open(&f.store).unwrap();
+        assert_eq!(restored.retention.archives.len(), MAX_ARCHIVES);
+        assert_eq!(restored.retention.retired.len(), MAX_ARCHIVES);
+        assert!(
+            serde_json::to_vec(&restored.retention_status(&f.store).unwrap())
+                .unwrap()
+                .len()
+                < 16000
+        );
+    }
+
+    #[test]
+    fn missing_history_migration_denies_outstanding_state_and_retained_artifacts() {
+        let mut f = Fixture::new();
+        assert!(migration_review(&f.store).is_err());
+        fs::remove_file(f.directory.join(FILE)).unwrap();
+        assert!(migration_review(&f.store).is_err());
+        f.store
+            .transact(|l| {
+                l.revoke(&f.worker, "test")?;
+                l.finish_draining(&f.worker, &BTreeMap::from([("host".into(), 25)]))
+            })
+            .unwrap();
+        let review = migration_review(&f.store).unwrap();
+        let stage = f.directory.join(".requests-stage-interrupted");
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&stage)
+            .unwrap();
+        file.write_all(b"{").unwrap();
+        assert!(migration_review(&f.store).is_err());
+        assert_eq!(fs::read(stage).unwrap(), b"{");
+        assert!(!review.is_empty());
+    }
+
+    #[test]
+    fn reviewed_legacy_migration_rotates_only_epoch_and_retains_physical_history() {
+        let mut f = Fixture::new();
+        fs::remove_file(f.directory.join(FILE)).unwrap();
+        let active_bytes = fs::read(f.directory.join("ledger.json")).unwrap();
+        assert!(migrate_store_with(&mut f.store, &"0".repeat(64), initialize_with_origin).is_err());
+        assert_eq!(
+            fs::read(f.directory.join("ledger.json")).unwrap(),
+            active_bytes
+        );
+        f.store
+            .transact(|l| {
+                l.revoke(&f.worker, "test")?;
+                l.finish_draining(&f.worker, &BTreeMap::from([("host".into(), 25)]))
+            })
+            .unwrap();
+        let review = migration_review(&f.store).unwrap();
+        let mut prior = f.store.read().unwrap();
+        assert!(migrate_store_with(&mut f.store, &"0".repeat(64), initialize_with_origin).is_err());
+        migrate_store_with(&mut f.store, &review, initialize_with_origin).unwrap();
+        let current = f.store.read().unwrap();
+        assert_ne!(prior.manager_epoch, current.manager_epoch);
+        prior.manager_epoch = current.manager_epoch.clone();
+        assert_eq!(prior, current);
+        let gate = Gate::open(&f.store).unwrap();
+        assert!(gate.records.is_empty());
+        assert!(matches!(
+            gate.retention.origin,
+            Origin::ReviewedLegacyMigration { .. }
+        ));
+        assert!(migrate_store_with(&mut f.store, &review, initialize_with_origin).is_err());
+    }
+
+    #[test]
+    fn legacy_virgin_ledger_migration_does_not_invent_physical_inventory_or_authority() {
+        let mut f = Fixture::new();
+        fs::remove_file(f.directory.join(FILE)).unwrap();
+        f.store
+            .transact(|ledger| {
+                *ledger = resources::Ledger::fresh_for_test();
+                Ok(())
+            })
+            .unwrap();
+        let physical = fs::read(f.directory.join("ledger.json")).unwrap();
+        let review = migration_review(&f.store).unwrap();
+        migrate_store_with(&mut f.store, &review, initialize_with_origin).unwrap();
+        assert_eq!(fs::read(f.directory.join("ledger.json")).unwrap(), physical);
+        let gate = Gate::open(&f.store).unwrap();
+        assert!(gate.records.is_empty());
+        assert!(matches!(gate.retention.origin,
+            Origin::ReviewedLegacyMigration { generation: 0, ref manager_epoch, .. } if manager_epoch.is_empty()));
+    }
+
+    #[test]
+    fn interrupted_legacy_history_creation_never_silently_resets_or_reuses_the_review() {
+        for after in [false, true] {
+            let mut f = Fixture::new();
+            fs::remove_file(f.directory.join(FILE)).unwrap();
+            f.store
+                .transact(|l| {
+                    l.revoke(&f.worker, "test")?;
+                    l.finish_draining(&f.worker, &BTreeMap::from([("host".into(), 25)]))
+                })
+                .unwrap();
+            let review = migration_review(&f.store).unwrap();
+            assert!(
+                migrate_store_with(&mut f.store, &review, |directory, origin| {
+                    if after {
+                        initialize_with_origin(directory, origin)?;
+                    }
+                    Err("injected history creation acknowledgement loss".into())
+                })
+                .is_err()
+            );
+            assert!(migrate_store_with(&mut f.store, &review, initialize_with_origin).is_err());
+            assert_eq!(f.store.read().unwrap().charged("host").unwrap(), 25);
+            if after {
+                assert!(Gate::open(&f.store).unwrap().records.is_empty());
+                assert!(migration_review(&f.store).is_err());
+            } else {
+                assert!(Gate::open(&f.store).is_err());
+                let fresh = migration_review(&f.store).unwrap();
+                assert_ne!(review, fresh);
+                migrate_store_with(&mut f.store, &fresh, initialize_with_origin).unwrap();
+            }
+        }
+    }
+
+    #[test]
+    fn request_maintenance_envelopes_are_root_only_and_reject_unrelated_fields() {
+        let time = now().unwrap();
+        let mut request = super::super::super::request("resource-request-status").unwrap();
+        super::super::super::validate(&request, 0, time).unwrap();
+        request.action = "resource-request-archive".into();
+        assert!(super::super::super::validate(&request, 0, time).is_err());
+        request.review = Some("a".repeat(64));
+        super::super::super::validate(&request, 0, time).unwrap();
+        for uid in [989, 990] {
+            request.caller = uid;
+            assert!(super::super::super::validate(&request, uid, time).is_err());
+        }
+        request.caller = 0;
+        request.profile = Some("arbitrary".into());
+        assert!(super::super::super::validate(&request, 0, time).is_err());
+    }
+
+    #[test]
+    fn directory_inspection_is_bounded_even_for_unrelated_private_files() {
+        let f = Fixture::new();
+        for index in 0..MAX_DIRECTORY_ENTRIES {
+            OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .mode(0o600)
+                .open(f.directory.join(format!("unrelated-{index}")))
+                .unwrap();
+        }
+        assert!(Gate::open(&f.store).is_err());
+        assert_eq!(
+            fs::read_dir(&f.directory).unwrap().count(),
+            MAX_DIRECTORY_ENTRIES + 3
+        );
+    }
+}

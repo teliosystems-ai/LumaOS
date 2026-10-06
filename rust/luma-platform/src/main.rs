@@ -271,6 +271,18 @@ fn dispatch() -> Result<()> {
         Some("resource-status") if args.len() == 1 => {
             resource_manager::client("resource-status", None)
         }
+        Some("resource-request-status") if args.len() == 1 => {
+            resource_manager::client("resource-request-status", None)
+        }
+        Some("resource-request-archive") if args.len() == 2 => {
+            resource_manager::client("resource-request-archive", Some(&args[1]))
+        }
+        Some("resource-request-migration-status") if args.len() == 1 => {
+            resource_manager::request_migration(None)
+        }
+        Some("resource-request-migrate") if args.len() == 2 => {
+            resource_manager::request_migration(Some(&args[1]))
+        }
         Some("resource-reconcile") if args.len() == 2 => {
             resource_manager::client("resource-reconcile", Some(&args[1]))
         }
@@ -285,6 +297,7 @@ fn dispatch() -> Result<()> {
         Some("boot-failed") if args.len() == 1 => platform::boot_failed(),
         Some("init-data") if args.len() == 2 => platform::init_data(&args[1]),
         Some("help" | "--help") | None => {
+            println!("Request history: resource-request-status | resource-request-archive REVIEW-SHA256. Installed-root reviewed archival preserves receipts and retired nonces; it never releases worker resources or automatically deletes history. Older images: resource-request-migration-status | resource-request-migrate REVIEW-SHA256, with broker stopped, both worker slices drained and the runtime exclusion held. Creates only absent request history, rotates an initialized physical manager epoch and explicitly records that pre-upgrade request receipts were not retained. A virgin ledger stays uninitialized. Never resets uncertain state.");
             println!("resource-runtime-lock-status | resource-runtime-lock-recover REVIEW-SHA256: explicit installed-root offline recovery of an absent model exclusion inode. Requires loaded runtime masks for luma-model, luma-acquisition and luma-broker, empty worker slices, no surviving model-identity task in the installed PID namespace, no outstanding resource generations and exclusive operation/store locks. Preserves masks and all ledger/receipt bytes; does not start services, release resources or grant product Admin.");
             println!("Resources: resource-status | resource-reconcile REVIEW-SHA256 | resource-archive REVIEW-SHA256 | resource-revoke LEASE-ID GENERATION MANAGER-EPOCH | resource-migrate | resource-migration-status | resource-migrate REVIEW-SHA256. Existing broker authority; installed root maintenance only. No-argument migration initializes only missing state; reviewed offline migration preserves receipts, epochs and retained charges with both worker slices idle and the broker stopped. Uncertain state is never reset. Workers require exact generation-fenced leases before heavy work.");
             println!("Local TPM diagnostics: tpm-probe | admin-checkpoint-status (root only; read-only; neither enrolls nor grants Admin). External Admin deployment is deferred.");

@@ -37,15 +37,21 @@ The installed-root operator helper now reserves a broker request slot before
 rendering/tokenization, admits the exact token array plus maximum output, and
 validates completion before releasing only that logical slot. Cancellation,
 expiry and caller death fence the whole serving generation without an early
-physical release. Its bounded session receipts are not durable request audit
-retention, and the reference service's direct runtime path is not yet integrated.
+physical release. Request phases are now synchronized to a private journal under
+the same resource-store exclusion. Reviewed terminal-receipt archival preserves
+retired nonces and physical capacity; lost acknowledgements poison admission.
+Restart never reconstructs caller handles from stored PIDs. Older missing
+history has a reviewed offline migration that preserves physical receipts and
+explicitly records the unavailable pre-upgrade request history. Product export,
+deletion/custody and broader retention recovery remain open, and the reference
+service's direct runtime path is not yet integrated.
 See [RESOURCE_LEASES.md](RESOURCE_LEASES.md) for
 the exact implemented scope, limits, maintenance commands and remaining work.
 
 **Requirement #1 is not closed.** Content/workflow integration,
 remaining inference-consumer admission and bypass closure, governed request
-retention, wider tenant/device adapters and recovery remain
-software work. Installed enforcement and consolidated-image evidence remain
+export/deletion and retention recovery, wider tenant/device adapters and
+recovery remain software work. Installed enforcement and consolidated-image evidence remain
 qualification work. These source changes do not close those other paths or
 authorize moving to Requirement #2.
 

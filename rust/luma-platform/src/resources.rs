@@ -716,12 +716,19 @@ pub(crate) fn initialize(directory: &Path) -> Result<()> {
         .open(directory.join("ledger.json"))?;
     file.write_all(&serde_json::to_vec(&Ledger::empty())?)?;
     file.sync_all()?;
+    crate::resource_manager::requests::initialize(directory)?;
     File::open(directory)?.sync_all()?;
     File::open(directory.parent().ok_or("missing resource parent")?)?.sync_all()?;
     Ok(())
 }
 
 impl Store {
+    // Request receipts share this authority's lifetime exclusion. Workers never
+    // receive this path, a descriptor or an independent writable store.
+    pub(crate) fn request_directory(&self) -> Result<&Path> {
+        self.read()?;
+        Ok(&self.directory)
+    }
     pub(crate) fn open(directory: &Path) -> Result<Self> {
         tpm::private_directory(directory)?;
         let mut store = Self {
@@ -1380,6 +1387,7 @@ mod tests {
         assert_eq!(fs::read(directory.join("ledger.json")).unwrap(), b"{");
         fs::remove_file(directory.join("ledger.json")).unwrap();
         fs::remove_file(directory.join("ledger.lock")).unwrap();
+        fs::remove_file(directory.join("requests.json")).unwrap();
         fs::remove_dir(directory).unwrap();
     }
 
@@ -1417,6 +1425,7 @@ mod tests {
         drop(store);
         fs::remove_file(directory.join("ledger.json")).unwrap();
         fs::remove_file(directory.join("ledger.lock")).unwrap();
+        fs::remove_file(directory.join("requests.json")).unwrap();
         fs::remove_dir(directory).unwrap();
     }
 
@@ -1473,6 +1482,7 @@ mod tests {
         drop(store);
         fs::remove_file(directory.join("ledger.json")).unwrap();
         fs::remove_file(directory.join("ledger.lock")).unwrap();
+        fs::remove_file(directory.join("requests.json")).unwrap();
         fs::remove_dir(directory).unwrap();
     }
 
@@ -1544,6 +1554,7 @@ mod tests {
         for name in [
             "ledger.json".into(),
             "ledger.lock".into(),
+            "requests.json".into(),
             archive.name(),
             second_archive.name(),
         ] {
@@ -1600,7 +1611,12 @@ mod tests {
         );
         assert_eq!(fs::read(directory.join(reference.name())).unwrap(), bytes);
         drop(store);
-        for name in ["ledger.json".into(), "ledger.lock".into(), reference.name()] {
+        for name in [
+            "ledger.json".into(),
+            "ledger.lock".into(),
+            "requests.json".into(),
+            reference.name(),
+        ] {
             fs::remove_file(directory.join(name)).unwrap();
         }
         fs::remove_dir(directory).unwrap();
@@ -1654,6 +1670,7 @@ mod tests {
         for path in [
             directory.join("ledger.json"),
             directory.join("ledger.lock"),
+            directory.join("requests.json"),
             stage,
         ] {
             fs::remove_file(path).unwrap();

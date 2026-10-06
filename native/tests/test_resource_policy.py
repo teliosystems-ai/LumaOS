@@ -57,7 +57,7 @@ class ResourcePolicyTests(unittest.TestCase):
     def test_resource_implementation_contains_no_unimplemented_paths(self):
         for name in ('resources.rs', 'resource_manager.rs', 'acquisition.rs', 'storage_io.rs',
                      'service/ingress.rs', 'model/layout.rs', 'resource_manager/recovery.rs',
-                     'resource_manager/requests.rs'):
+                     'resource_manager/requests.rs', 'resource_manager/requests/journal.rs'):
             source = (ROOT/'rust/luma-platform/src'/name).read_text()
             for marker in ('todo!', 'unimplemented!', '// TODO', '// FIXME'):
                 self.assertNotIn(marker, source)
@@ -72,7 +72,7 @@ class ResourcePolicyTests(unittest.TestCase):
         self.assertIn("'cache_prompt': False", inference)
         self.assertIn("'operation': 'cancel'", inference)
         self.assertIn("peer.connect('/run/luma-broker/control.sock')", helper)
-        source = (ROOT/'rust/luma-platform/src/resource_manager/requests.rs').read_text().split('#[cfg(test)]')[0]
+        source = (ROOT/'rust/luma-platform/src/resource_manager/requests.rs').read_text().split('\n#[cfg(test)]\nmod tests {')[0]
         self.assertIn('uid!=0', ''.join(source.split()))
         self.assertIn('prompt_tokens.checked_add(record.limit)', ''.join(source.split()))
         self.assertIn('pidfd_alive', source)
@@ -83,6 +83,26 @@ class ResourcePolicyTests(unittest.TestCase):
         self.assertIn('CommandExt', launch)
         self.assertIn('.exec()', launch)
         self.assertNotIn('.status()', launch)
+
+    def test_request_history_is_private_durable_reviewed_and_not_a_worker_release(self):
+        manager = (ROOT/'rust/luma-platform/src/resource_manager.rs').read_text()
+        self.assertIn('requests::Gate::open(&store)?', manager)
+        self.assertNotIn('requests: requests::Gate::new()', manager)
+        requests = (ROOT/'rust/luma-platform/src/resource_manager/requests.rs').read_text()
+        dispatch = requests.split('pub(crate) fn handle_inference(')[1]
+        self.assertLess(dispatch.index('self.requests.persist(&self.store, true)?'),
+                        dispatch.index('"result":"ok"'))
+        journal = (ROOT/'rust/luma-platform/src/resource_manager/requests/journal.rs').read_text()
+        for term in ('create_new(true)', 'RENAME_NOREPLACE', 'sync_all()',
+                     'self.retention.poisoned = true', 'retention.retired',
+                     'ReviewedLegacyMigration', 'MAX_ARCHIVES: usize = 64'):
+            self.assertIn(term, journal)
+        production = journal.split('#[cfg(test)]')[0]
+        self.assertNotIn('remove_file', production)
+        self.assertNotIn('finish_draining', production)
+        self.assertNotIn('ledger.leases.clear()', production)
+        unit = (ROOT/'native/image/overlay/etc/systemd/system/luma-broker.service').read_text()
+        self.assertIn('RestrictAddressFamilies=AF_UNIX', unit)
 
     def test_suspend_stops_model_execution_and_lease_deadlines_include_sleep_time(self):
         assembly = (ROOT/'native/image/assemble.py').read_text()

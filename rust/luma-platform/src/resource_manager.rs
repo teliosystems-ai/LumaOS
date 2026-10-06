@@ -24,6 +24,7 @@ pub(crate) const ACQUISITION_MEMORY: u64 = 512 * 1024 * 1024;
 
 pub(crate) mod recovery;
 pub(crate) mod requests;
+pub(crate) use requests::request_migration;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Kind {
@@ -570,6 +571,7 @@ impl Manager {
         let mut store = Store::open(Path::new(resources::DIRECTORY))?;
         native_outstanding(&store.read()?)?;
         store.transact(|l| l.restart(resources::random_id()?, inventory()?))?;
+        let requests = requests::Gate::open(&store)?;
         let oom = group.oom()?;
         let acquisition_oom = acquisition.oom()?;
         let mut manager = Self {
@@ -580,7 +582,7 @@ impl Manager {
             acquisition_oom,
             owners: BTreeMap::new(),
             acquisition_bindings: BTreeMap::new(),
-            requests: requests::Gate::new(),
+            requests,
         };
         manager.maintain()?;
         Ok(manager)
@@ -588,6 +590,7 @@ impl Manager {
 
     pub(crate) fn maintain(&mut self) -> Result<()> {
         let cancellations = self.requests.maintain(&self.store.read()?, now()?)?;
+        self.requests.persist(&self.store, false)?;
         for token in cancellations {
             self.store
                 .transact(|ledger| ledger.revoke(&token, "inference-request-fenced"))?;
@@ -967,6 +970,20 @@ impl Manager {
                 )?;
                 status = Some(serde_json::json!({"archive":reference,"generation_preserved":true}));
             }
+            "resource-request-status" => {
+                self.requests.persist(&self.store, true)?;
+                status = Some(self.requests.retention_status(&self.store)?);
+            }
+            "resource-request-archive" => {
+                status = Some(
+                    self.requests.archive_requests(
+                        &self.store,
+                        r.review
+                            .as_deref()
+                            .ok_or("missing request archive review")?,
+                    )?,
+                );
+            }
             _ => return Err("unsupported resource operation".into()),
         }
         if now()? >= r.deadline {
@@ -1039,7 +1056,7 @@ fn validate(r: &Request, uid: u32, time: u64) -> Result<()> {
                 && r.review.is_none()
                 && r.idempotency_key.is_none()
         }
-        "resource-reconcile" | "resource-archive" => {
+        "resource-reconcile" | "resource-archive" | "resource-request-archive" => {
             uid == 0
                 && r.profile.is_none()
                 && r.storage_device.is_none()
@@ -1047,7 +1064,7 @@ fn validate(r: &Request, uid: u32, time: u64) -> Result<()> {
                 && r.review.is_some()
                 && r.idempotency_key.is_none()
         }
-        "resource-status" => {
+        "resource-status" | "resource-request-status" => {
             uid == 0
                 && r.profile.is_none()
                 && r.storage_device.is_none()
@@ -1277,8 +1294,8 @@ pub(crate) fn client(action: &str, argument: Option<&str>) -> Result<()> {
     crate::platform::require_installed()?;
     let mut r = request(action)?;
     match action {
-        "resource-status" if argument.is_none() => (),
-        "resource-reconcile" | "resource-archive" => {
+        "resource-status" | "resource-request-status" if argument.is_none() => (),
+        "resource-reconcile" | "resource-archive" | "resource-request-archive" => {
             r.review = Some(argument.ok_or("missing review")?.into())
         }
         _ => return Err("unsupported resource maintenance operation".into()),

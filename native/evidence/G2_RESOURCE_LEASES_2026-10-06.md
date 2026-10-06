@@ -2,7 +2,7 @@
 
 Date: 2026-10-06. Scope: Requirement #1, resource leases/generations only.
 Status: native CPU-serving, leased root verification, verified KV layout,
-offline exclusion recovery, operator admission and transport increments;
+offline exclusion recovery, operator admission, durable request history and transport increments;
 **Requirement #1 and G2
 remain open**. No Requirement #2 implementation, final image build, physical
 qualification, production custody change or TPM ownership change is asserted.
@@ -103,10 +103,15 @@ Completion returns the logical slot only. Cancellation, expiry or caller death
 durably revokes the serving lease; physical drainage remains controller-owned.
 The helper refuses proxying, redirects, malformed identities, cache reuse,
 truncation and actual output above the admitted budget, and publishes no text
-without an exact completion acknowledgement. Request history is finite,
-session-local and not evicted; broker restart fences prior physical workers.
-The reference client's direct runtime path and governed request retention remain
-open. No real model/tokenizer execution is asserted by protocol fixtures.
+without an exact completion acknowledgement. The subsequent journal increment
+makes request phases durable under the existing private resource-store lock.
+Terminal-receipt archival is root-only and reviewed, preserves nonce tombstones,
+and never releases a physical lease. Publication uncertainty poisons request
+admission; restart never reconstructs live caller handles. Missing older history
+requires an explicit offline migration with unchanged physical history and an
+acknowledged historical gap. The reference client's direct runtime path and
+product export/deletion/custody and retention recovery remain open. No real
+model/tokenizer execution is asserted by protocol fixtures.
 
 A separate read-only publisher check retrieved exactly the first 65,536 bytes
 of each pinned catalog URL, requiring HTTP 206 and an exact Content-Range.
@@ -121,7 +126,59 @@ weights or qualify loading. Production still requires the full pinned digest.
 Use [the resource register](../RESOURCE_LEASES.md) for the implemented boundary,
 operator instructions, finite limits and remaining software integrations.
 
-## Current bounded execution
+## Durable request history execution
+
+Latest evidence directory: `D:\LumaOS-builds\g2-resources-targeted-20261006-32`.
+It uses the same D:-backed tool image/cache and bounded execution configuration
+described below: one CPU, 768 MiB, no extra swap or network, with no WSL settings,
+host services or TPM ownership changed. All 203 captured source digests and
+53 test-input digests matched the checkout after execution.
+
+| Check | Result |
+| --- | --- |
+| Resource core | 18 passed |
+| Resource manager, recovery, request admission and durable history | 55 passed, including 21 new journal/archival/migration tests |
+| Acquisition and storage | 6 passed |
+| Broker transport | 23 passed |
+| Model lifecycle and supervision | 126 passed; two existing owned fixture entrypoints invoked by their parents, not counted twice |
+| Selected Python policy/helper checks | 95 passed |
+| Real CLI/Unix/HTTP protocol fixtures | 9 passed with synthetic authorities; no real model or installed controller |
+| Formatting, warnings-denied offline locked build, AppArmor syntax and pinned runtime option controls | Passed; syntax/parser checks do not qualify enforcement |
+| Real systemd graph verification | Exit 1 because the tool image lacks `apparmor.service`; unchanged installed qualification gap |
+
+Total: **323 passing selected tests**, plus the nine protocol cases and parser
+controls. No new Requirement #1 check is skipped. The broader 222-pass Python
+regression below belongs to the earlier baseline and was not rerun or added
+to this total.
+
+The journal tests cover phase publication and exact durable receipts, lossless
+counts, dropping completed caller handles, restart without PID resurrection,
+publication failure before/after commit, reviewed archive cuts, nonce retirement,
+partial stages and complete orphans, lost cut acknowledgements, stale reviews,
+archive-chain corruption, finite inventory/directory/frame bounds and private
+file/link/mode checks. Offline migration tests preserve physical receipts and
+charges, deny stale reviews/outstanding generations/existing artifacts, retain
+interrupted creation outcomes, and keep a never-started ledger uninitialized.
+They exercise the core and real filesystem operations in the disposable
+container, not the combined installed systemd/locking procedure.
+
+| Retained file | SHA-256 |
+| --- | --- |
+| `source/build-inputs.json` | `3693025cd4d9b274607cc66c6eeb6b02b33781f5ab82b48d20035510535fb1fd` |
+| `test-inputs.sha256` | `ec1b2d18aeb4374bb980d93b56ed8b60250396d5d1faca81b369b30f500cc737` |
+| `test.log` | `95a4faa5ab4d0773bba82d5756a3b5ff1f2a6bf07137b7039fb6b2364352baf5` |
+| `checks/unit-verification.txt` | `cc6d6ba4f56881e50612c693db5577418157f96999327fbac956e538602db498` |
+| `checks/unit-verification-exit.txt` | `4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865` |
+| `checks/runtime-options.json` | `d6c5bc021ad939c79d18ba4c18213954e73dee3c4a200d763086f2e0c28c38cb` |
+
+Trial 29 stopped on an internal visibility error. Trial 30 passed its Rust
+checks but failed a source-wiring assertion whose test-module boundary had
+changed; it is not a passing suite. Trial 31 passed 322 selected checks and
+nine protocol cases before the additional virgin-ledger migration case. Trial
+32 passed the final 323-check snapshot above. Every earlier directory remains
+retained; its evidence does not qualify subsequent changed bytes.
+
+## Operator admission baseline execution
 
 Evidence directory:
 `D:\LumaOS-builds\g2-resources-targeted-20261006-28`.
@@ -317,14 +374,16 @@ parser and observer changes. Trial 24 passed the prior 260 checks and its
 Trial 25 stopped on the new closed inspection-schema test and is not a passing
 suite. Trial 26 passed its 298 selected checks; trial 27 passed 301 checks and
 nine protocol cases before the final CLI exec and true lost-socket-reply changes.
-Trial 28 passed the current 301 checks and nine cases above, with all 202 source
-and 53 test-input digests verified against the current checkout. Earlier
+Trial 28 passed the 301-check operator-admission baseline and nine cases above,
+with all 202 source and 53 test-input digests verified against that checkout,
+subsequently committed as `a21b5c4`. Earlier
 directories remain retained and do not qualify changed bytes.
 
 ## Required continuation
 
 Integrate content/workflow leases and all remaining inference consumers, close
-the direct-runtime bypass, complete governed request retention, wider tenant/device
+the direct-runtime bypass, complete governed request export/deletion/custody and
+retention recovery, wider tenant/device
 adapters, and broader reviewed damaged-state/retention recovery. Then freeze
 the consolidated candidate and exercise installed enforcement, hostile
 descendants, memory pressure/OOM, cancellation/restart, suspend, migration and

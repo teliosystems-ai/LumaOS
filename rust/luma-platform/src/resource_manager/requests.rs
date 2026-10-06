@@ -2,6 +2,9 @@
 //! peak. No new listener, additional physical RAM charge or caller release of
 //! the serving lease. Other inference consumers still need gateway integration.
 use super::*;
+mod journal;
+pub(crate) use journal::initialize;
+pub(crate) use journal::request_migration;
 
 const MAX_RECEIPTS: usize = 256;
 const MAX_OUTPUT: u64 = 128;
@@ -54,9 +57,11 @@ pub(crate) enum Message {
     },
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct Caller {
     pid: u32,
+    #[serde(with = "resources::decimal")]
     start: u64,
     boot: String,
 }
@@ -79,7 +84,7 @@ impl Caller {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 enum Phase {
     Preparing,
@@ -89,18 +94,26 @@ enum Phase {
     Released,
 }
 
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct Record {
     caller: Caller,
-    pin: File,
+    #[serde(skip)]
+    pin: Option<File>,
     nonce: String,
     worker: Token,
     profile: String,
+    #[serde(with = "resources::decimal")]
     limit: u64,
+    #[serde(with = "resources::decimal")]
     context: u64,
+    #[serde(with = "resources::decimal")]
     until: u64,
     phase: Phase,
+    #[serde(with = "journal::optional_decimal")]
     prompt: Option<u64>,
     token_digest: Option<String>,
+    #[serde(with = "journal::optional_decimal")]
     output: Option<u64>,
     result_digest: Option<String>,
 }
@@ -119,20 +132,24 @@ impl Record {
 
 pub(super) struct Gate {
     records: Vec<Record>,
+    retention: journal::Retention,
 }
 impl Gate {
+    #[cfg(test)]
     pub(super) fn new() -> Self {
         Self {
             records: Vec::new(),
+            retention: journal::Retention::default(),
         }
     }
     pub(super) fn occupied(&self) -> bool {
-        self.records.iter().any(|r| {
-            matches!(
-                r.phase,
-                Phase::Preparing | Phase::Admitted | Phase::Draining
-            )
-        })
+        self.retention.poisoned
+            || self.records.iter().any(|r| {
+                matches!(
+                    r.phase,
+                    Phase::Preparing | Phase::Admitted | Phase::Draining
+                )
+            })
     }
     fn begin(
         &mut self,
@@ -152,6 +169,7 @@ impl Gate {
         else {
             return Err("invalid inference begin shape".into());
         };
+        self.retention.check()?;
         if !nonce_valid(nonce)
             || *max_output_tokens == 0
             || *max_output_tokens > MAX_OUTPUT
@@ -174,12 +192,15 @@ impl Gate {
             }
             return Ok(prior.receipt());
         }
-        if self.occupied() || self.records.len() >= MAX_RECEIPTS {
+        if self.occupied()
+            || self.records.len() >= MAX_RECEIPTS
+            || self.retention.retired.contains(nonce)
+        {
             return Err("inference slot or retained request inventory exhausted".into());
         }
         let record = Record {
             caller,
-            pin,
+            pin: Some(pin),
             nonce: nonce.clone(),
             worker: worker.clone(),
             profile: profile.clone(),
@@ -197,6 +218,7 @@ impl Gate {
         Ok(receipt)
     }
     fn record(&mut self, caller: &Caller, nonce: &str, worker: &Token) -> Result<&mut Record> {
+        self.retention.check()?;
         if !nonce_valid(nonce) {
             return Err("invalid inference request identity".into());
         }
@@ -289,6 +311,7 @@ impl Gate {
         record.output = Some(*output_tokens);
         record.result_digest = Some(result_digest.clone());
         record.phase = Phase::Completed;
+        record.pin = None;
         Ok(record.receipt())
     }
     fn cancel(
@@ -312,6 +335,7 @@ impl Gate {
         time: u64,
         alive: impl Fn(&File) -> Result<bool>,
     ) -> Result<Vec<Token>> {
+        self.retention.check()?;
         let mut cancellations = Vec::new();
         for record in &mut self.records {
             if matches!(record.phase, Phase::Completed | Phase::Released) {
@@ -324,12 +348,16 @@ impl Gate {
                 .ok_or("outstanding inference allocation receipt unavailable")?;
             if lease.state == State::Released {
                 record.phase = Phase::Released;
+                record.pin = None;
                 continue;
             }
             if time >= record.until
                 || lease.state != State::Active
                 || lease.deadline_ms <= time
-                || !alive(&record.pin)?
+                || match &record.pin {
+                    Some(pin) => !alive(pin)?,
+                    None => true,
+                }
             {
                 record.phase = Phase::Draining;
             }
@@ -376,7 +404,7 @@ fn validate(request: &Request, uid: u32, time: u64) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    fn fixture() -> (Gate, resources::Ledger, Token, Caller) {
+    pub(super) fn fixture() -> (Gate, resources::Ledger, Token, Caller) {
         let mut ledger = resources::Ledger::fresh_for_test();
         ledger
             .restart(
@@ -419,7 +447,7 @@ mod tests {
             },
         )
     }
-    fn begin(worker: &Token, nonce: u64) -> Message {
+    pub(super) fn begin(worker: &Token, nonce: u64) -> Message {
         Message::Begin {
             nonce: format!("{nonce:032x}"),
             worker: worker.clone(),
@@ -428,10 +456,14 @@ mod tests {
             request_deadline: 9000,
         }
     }
-    fn reserve(gate: &mut Gate, caller: &Caller, message: &Message) -> Result<serde_json::Value> {
+    pub(super) fn reserve(
+        gate: &mut Gate,
+        caller: &Caller,
+        message: &Message,
+    ) -> Result<serde_json::Value> {
         gate.begin(caller.clone(), File::open("/dev/null")?, message, 2048, 2)
     }
-    fn admit(worker: &Token, nonce: u64, prompt: u64) -> Message {
+    pub(super) fn admit(worker: &Token, nonce: u64, prompt: u64) -> Message {
         Message::Admit {
             nonce: format!("{nonce:032x}"),
             worker: worker.clone(),
@@ -439,7 +471,7 @@ mod tests {
             token_digest: "b".repeat(64),
         }
     }
-    fn finish(worker: &Token, nonce: u64, prompt: u64, output: u64) -> Message {
+    pub(super) fn finish(worker: &Token, nonce: u64, prompt: u64, output: u64) -> Message {
         Message::Finish {
             nonce: format!("{nonce:032x}"),
             worker: worker.clone(),
@@ -781,6 +813,7 @@ impl Manager {
                 self.requests.record(&caller, nonce, worker)?.receipt()
             }
         };
+        self.requests.persist(&self.store, true)?;
         if now()? >= request.deadline {
             return Err("inference acknowledgement expired".into());
         }

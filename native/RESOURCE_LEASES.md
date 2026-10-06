@@ -166,16 +166,59 @@ not cleanup proof. Exact completion releases only the logical request slot,
 never the worker lease. Nonce, owner, worker, token and result replay drift
 refuse. A lost completion acknowledgement does not publish a success object.
 
-The broker retains at most 256 request receipts and caller PID handles in its
-session, with no eviction or silent nonce reuse. Exhaustion refuses further
-requests. Restarting the broker resets this volatile request inventory only
-after the durable physical manager restart has fenced all older worker leases;
-old worker tokens cannot authorize a new session. This is not durable request
-audit retention, governed export/deletion or a production tenant gateway.
+The broker durably retains at most 256 hot request receipts under the same
+private resource-store exclusion. Every successful request acknowledgement
+follows synchronized publication or an exact synchronized retry. Counts use
+canonical decimal strings; history contains identities, phases, counts and
+digests, never prompt or response text. Only outstanding requests retain a
+caller PID handle. Restart loads the receipts but never reconstructs a live
+process handle from a saved PID: an outstanding request stays fenced until its
+physical generation is released. Missing, damaged, noncanonical or externally
+changed history is not reset. An uncertain publication poisons admission.
+
+Installed-root `resource-request-status` reports an archival review bound to
+the current request history and physical manager epoch. With no preparing,
+admitted or draining request, `resource-request-archive REVIEW-SHA256` publishes
+the exact terminal receipts without replacement, synchronizes the archive,
+then durably cuts the hot inventory. It does not stop a serving worker, change
+its physical lease, return capacity or delete history. Retired nonces are
+reconstructed from the validated archive chain and cannot be admitted again.
+There are at most 64 referenced archives, 128 retained archive/stage files,
+1 MiB per journal/archive, and 512 entries per directory inspection. Limits
+refuse rather than evict. Status reports logical archival eligibility, not a
+guarantee that storage inspection or publication will succeed. Complete orphan archives and interrupted private
+stages remain retained; neither proves that a hot cut completed.
+
+These are durable laboratory receipts and reviewed archival, not complete
+product retention governance, export/deletion custody or a tenant gateway.
 The reference service still has direct runtime credentials and is not covered
 by this operator admission path. Its integration and closure of that bypass
 remain required before Requirement #1 can close. Real installed model/tokenizer
 execution and cancellation/drainage still require image qualification.
+
+### Upgrade of older request history
+
+Fresh resource-state initialization creates the private request journal along
+with the physical ledger. For an older image with genuinely absent request
+history, first release all physical generations using its matching old broker,
+then stop the broker and both worker services. The existing runtime exclusion
+inode must be available; if it is genuinely missing, follow its separate
+reviewed recovery procedure first. With the new binary and both worker slices
+empty, run `sudo luma-platform resource-request-migration-status`, review the
+reported historical gap, then `sudo luma-platform resource-request-migrate REVIEW-SHA256`.
+
+The operation holds the model operation/runtime exclusions and the resource
+store's lifetime lock, which requires the broker stopped. It refuses any
+request journal, retained archive, interrupted request publication, outstanding
+physical generation or stale review. It rotates only an initialized physical manager
+epoch and exclusively creates the missing journal with explicit legacy
+provenance. Physical receipts, generation floors, retained charges and fences
+stay intact. Pre-upgrade session receipts were not retained and are reported
+as unavailable, not fabricated. An interrupted creation may leave a changed
+review or an existing journal: inspect again, never overwrite or reset it.
+An older ledger that has never established an inventory stays uninitialized;
+this migration does not invent physical capacity or authority for it.
+This command does not start services, clear quarantine or grant product Admin.
 
 ## Persistence and retention
 
@@ -294,8 +337,9 @@ Admin authorization, and their combined native-image procedure remains unqualifi
   still needs qualification.
 - Extend request-level accepted prompt/output/concurrency accounting to all
   inference consumers, close the reference service's direct-runtime bypass,
-  and implement governed request retention. The operator path above and the
-  verified CPU KV inventory do not close those integrations by themselves.
+  and finish governed request export/deletion, custody and retention recovery.
+  Durable operator receipts and reviewed archival now exist; the operator path
+  and verified CPU KV inventory do not close those integrations by themselves.
 - Complete supported multi-worker/tenant and device-domain adapters and
   generation/recovery paths. Current CPU-only, zero-pinned/zero-device profiles
   do not certify GPU, large-model, NUMA or other hardware paths.

@@ -2,7 +2,8 @@
 
 Date: 2026-10-06. Scope: Requirement #1, resource leases/generations only.
 Status: native CPU-serving, leased root verification, verified KV layout,
-offline exclusion recovery, operator admission, durable request history and transport increments;
+offline exclusion recovery, input-bound operator admission, durable request history
+and transport increments;
 **Requirement #1 and G2
 remain open**. No Requirement #2 implementation, final image build, physical
 qualification, production custody change or TPM ownership change is asserted.
@@ -132,9 +133,72 @@ weights or qualify loading. Production still requires the full pinned digest.
 Use [the resource register](../RESOURCE_LEASES.md) for the implemented boundary,
 operator instructions, finite limits and remaining software integrations.
 
-## Archive export and interrupted stage recovery execution
+## Input binding and compiled operator command execution
 
-Latest evidence directory: `D:\LumaOS-builds\g2-resources-targeted-20261006-35`.
+Latest evidence directory: `D:\LumaOS-builds\g2-resources-targeted-20261006-36`.
+All 204 captured source files and 56 test inputs matched the checkout after
+execution. The immutable runner and full output are retained. The complete
+sweep exited zero, using the same D-backed tool image/cache, one CPU, 768 MiB,
+no extra swap/network and no `CAP_SYS_ADMIN`. WSL settings, host services,
+TPM ownership and installed reference credentials were unchanged.
+
+Version-2 `resource-inference` admission binds the original UTF-8 input bytes
+before template/tokenizer work using domain-separated SHA-256. Preparing and
+admitted nonce replay reject changed input, and the helper checks the binding
+through every acknowledgement. Older omitted-field journal/archive bytes remain
+canonical and readable without rewriting. Unknown input provenance is explicit,
+cannot be fabricated or resumed, and cannot return physical capacity. Other
+resource methods and the durable journal retain their existing version.
+
+| Check | Result |
+| --- | --- |
+| Resource core | 18 passed |
+| Adapter, recovery, request admission and history | 73 passed, including six new input-binding/legacy-history tests |
+| Acquisition and storage | 6 passed |
+| Broker transport | 24 passed |
+| Model lifecycle and supervision | 126 passed; two existing owned child entrypoints invoked by parent fixtures, not counted twice |
+| Selected Python policy/helper checks | 97 passed, including exact raw-input binding and altered receipt rejection |
+| Compiled native history CLI and framed Unix IPC | 24 cases passed against a synthetic root authority |
+| Compiled native model-chat command and Unix/HTTP protocol | 11 cases passed against synthetic authorities, including changed binding and legacy-wire refusal |
+| Formatting, warnings-denied offline locked build, AppArmor syntax and pinned runtime parser controls | Passed; no enforcement or real model qualification |
+| Real systemd graph verification | Exit 1 because the tool image lacks `apparmor.service`; installed qualification remains pending |
+
+Total: **344 passing selected tests**, plus **35 protocol cases**. The broader
+Python regression was not rerun or added to this total. No new Requirement #1
+test is skipped. This trial adds seven selected tests and two protocol cases
+to the preceding checkpoint.
+
+The operator fixture now invokes the compiled native `model-chat` command,
+not the Python helper directly. Its test-only command-line preload supplies
+the installed slot to that native child; production `exec` clears the environment
+before running the fixed helper. No proc mount, production admission relaxation
+or packaged shim was introduced. The fixtures exercise actual framed Unix IPC
+and HTTP against synthetic authorities, not a real model, installed cgroup
+controller or final image. The reference gateway, existing-key rotation and
+other consumer integrations remain software work.
+
+| Retained file | SHA-256 |
+| --- | --- |
+| `source/build-inputs.json` | `bde3a8ae2dccf90c4725e42f35ca1c8e7d93c810b01a947784f91d8bad0b1a48` |
+| `test-inputs.sha256` | `abfca007a3b32f9ead427292f7a556f45e86a45bce9849fc6a3ecfaa13228f06` |
+| `test.log` | `239b52aa571b94b8bddfa2ab615aff75b1e61415e243669baa394e572a3c3461` |
+| `checks/targeted-runner.sh` | `cff4e6cc4f72b4802693e47027ae893090e72ce72e3d51c63d59eb496da16102` |
+| `checks/sweep-exit.txt` | `9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa` |
+| `checks/resource-history-cli.txt` | `3568f07a6297fece8954c303f91a1b5b3036b9defb35e32cfca9410be788c226` |
+| `checks/resource-history-artifacts.sha256` | `2a3f70c8428748e24896a7ef558c958cc74c0b7d1860a3cf82b03bdc6b9bcdc3` |
+| `checks/unit-verification.txt` | `cc6d6ba4f56881e50612c693db5577418157f96999327fbac956e538602db498` |
+| `checks/unit-verification-exit.txt` | `4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865` |
+| `checks/runtime-options.json` | `d6c5bc021ad939c79d18ba4c18213954e73dee3c4a200d763086f2e0c28c38cb` |
+
+The compiled development binary has SHA-256
+`6d1a802625bb365488284feefc7c1fd9dc473976460ae7c2e343838f38fb8d94`;
+the separately compiled test-only shim remains
+`a0e259b7847aebbd3b1eb46970d83b5e7edc35ed1150a06f69b7a768bc71eb73`.
+Neither artifact is a production image or signing/custody record.
+
+## Archive export and interrupted stage recovery baseline execution
+
+Evidence directory: `D:\LumaOS-builds\g2-resources-targeted-20261006-35`.
 The immutable runner, 204 captured source files and 56 test inputs are retained
 there. Every captured source/test digest matched the checkout after execution.
 The complete sweep exited zero. Execution used the existing D-backed image/cache,

@@ -4,6 +4,7 @@
 Both authorities are synthetic fixtures, not native cgroup or model evidence.
 """
 import copy
+import hashlib
 import http.server
 import json
 import os
@@ -11,7 +12,6 @@ from pathlib import Path
 import socket
 import struct
 import subprocess
-import sys
 import threading
 
 from test_model_chat import AdmissionFixture, chat
@@ -28,7 +28,10 @@ def main():
     (root/'model-auth/api-key').write_text(token)
     broker_root = Path('/run/luma-broker')
     broker_root.mkdir(mode=0o700)
-    script = Path(__file__).resolve().parents[1]/'image/overlay/usr/libexec/luma-os/model-chat.py'
+    binary = '/usr/libexec/luma-os/luma-platform'
+    preloader = Path(os.environ['TMPDIR'])/'resource-history-cmdline-fixture.so'
+    assert preloader.is_file()
+    environment = dict(os.environ, LD_PRELOAD=str(preloader))
     fixture = [None]
     payload = [None]
     errors = []
@@ -60,14 +63,16 @@ def main():
                     assert 0 < size <= 16384
                     request = chat.strict_json(exact(peer,size))
                     assert set(request) == {'schema_version','request_id','caller','deadline','action','payload'}
-                    assert request['schema_version'] == 1 and request['caller'] == uid
+                    assert request['schema_version'] == 2 and request['caller'] == uid
                     assert request['action'] == 'resource-inference'
                     assert chat.decimal(request['deadline']) > chat.boot_ms()
                     try:
                         status = fixture[0].exchange(request['payload'])
-                        response = {'schema_version':1,'request_id':request['request_id'],'caller':uid,'result':'ok','status':status}
+                        response = {'schema_version':2,'request_id':request['request_id'],'caller':uid,'result':'ok','status':status}
                     except TimeoutError:
-                        response = {'schema_version':1,'request_id':request['request_id'],'caller':uid,'result':'denied','status':{}}
+                        response = {'schema_version':2,'request_id':request['request_id'],'caller':uid,'result':'denied','status':{}}
+                    if fixture[0].fail_at == 'legacy-wire':
+                        response['schema_version'] = 1
                     if fixture[0].fail_at == 'drop-finish-reply' and request['payload']['operation'] == 'finish':
                         # Complete at the fixture authority, then lose the real
                         # socket acknowledgement before any client publication.
@@ -117,6 +122,8 @@ def main():
         ('duplicate-model',json.dumps(good).replace('"model":','"model":"other", "model":',1).encode(),False,None),
         ('malformed',b'{invalid-private-fixture',False,None),
         ('denied-admission',json.dumps(good).encode(),False,'admit'),
+        ('substituted-input-binding',json.dumps(good).encode(),False,'input-digest'),
+        ('legacy-wire-reply',json.dumps(good).encode(),False,'legacy-wire'),
         ('lost-completion-ack',json.dumps(good).encode(),False,'drop-finish-reply')])
     with socket.socket(socket.AF_UNIX,socket.SOCK_STREAM) as listener, \
             http.server.HTTPServer(('127.0.0.1',8081),Handler) as server:
@@ -131,9 +138,11 @@ def main():
             for label, raw, allowed, fail_at in fixtures:
                 fixture[0] = AdmissionFixture()
                 fixture[0].fail_at = fail_at
+                if fail_at == 'input-digest':
+                    fixture[0].corrupt = ('begin','input_digest','0'*64)
                 payload[0] = raw
-                result = subprocess.run([sys.executable,'-I',str(script),'--timeout-seconds','3','--max-tokens','16'],
-                    input=b'Short greeting.',capture_output=True,timeout=8)
+                result = subprocess.run([binary,'model-chat','--timeout-seconds','3','--max-tokens','16'],
+                    env=environment,input=b'Short greeting.',capture_output=True,timeout=8)
                 assert not errors, errors
                 if allowed:
                     assert result.returncode == 0, (label,result.stderr)
@@ -142,12 +151,20 @@ def main():
                     assert record['usage'] == {'prompt_tokens':8,'completion_tokens':1,'total_tokens':9}
                     assert record['effects_executed'] is False and record['certification_closing'] is False
                     assert record['resource_worker'] == fixture[0].worker
+                    assert record['resource_input_digest'] == hashlib.sha256(
+                        b'luma-native-operator-prompt-v1\x00Short greeting.').hexdigest()
                     assert fixture[0].order == ['inspect','begin','/apply-template','/tokenize','admit','/completion','finish']
                 else:
                     assert result.returncode != 0 and result.stdout == b'', label
                     assert b'local inference response failed validation' in result.stderr, (label,result.stderr)
                     assert b'Traceback' not in result.stderr and b'invalid-private-fixture' not in result.stderr, label
-                    assert fixture[0].order[-1] == 'cancel', (label,fixture[0].order)
+                    if fail_at == 'legacy-wire':
+                        assert fixture[0].order == ['inspect']
+                        assert fixture[0].posts == []
+                    else:
+                        assert fixture[0].order[-1] == 'cancel', (label,fixture[0].order)
+                    if fail_at == 'input-digest':
+                        assert '/apply-template' not in fixture[0].order
                     if fail_at == 'admit':
                         assert '/completion' not in fixture[0].order
                 assert token.encode() not in result.stdout+result.stderr, label
@@ -159,7 +176,8 @@ def main():
             ipc_thread.join(5)
             assert not http_thread.is_alive() and not ipc_thread.is_alive()
     assert len(set(peer_pids)) == len(fixtures)
-    print('MODEL_REPLY_CLI_UNIX_HTTP_PASSED synthetic_authorities=true real_model_tested=false',flush=True)
+    print('MODEL_REPLY_CLI_UNIX_HTTP_PASSED cases='+str(len(fixtures))+
+          ' compiled_native_cli=true test_only_cmdline_preload=true synthetic_authorities=true real_model_tested=false',flush=True)
 
 
 if __name__ == '__main__':

@@ -38,8 +38,15 @@ rendering/tokenization, admits the exact token array plus maximum output, and
 validates completion before releasing only that logical slot. Cancellation,
 expiry and caller death fence the whole serving generation without an early
 physical release. Request phases are now synchronized to a private journal under
-the same resource-store exclusion. Reviewed terminal-receipt archival preserves
-retired nonces and physical capacity; lost acknowledgements poison admission.
+the same resource-store exclusion. Version-2 inference admission now binds the
+exact original input bytes before template/tokenizer work, rejects changed-input
+nonce replay and requires the same digest throughout the helper acknowledgements.
+Older canonical journal/archive bytes remain readable without rewriting; absent
+input provenance is reported explicitly, cannot resume or acquire a fabricated
+binding, and never frees physical capacity. Broker/command/helper must be upgraded
+together; no version-1 inference downgrade is accepted. Reviewed terminal archival
+preserves retired nonces and physical capacity; lost acknowledgements poison
+admission.
 Restart never reconstructs caller handles from stored PIDs. Older missing
 history has a reviewed offline migration that preserves physical receipts and
 explicitly records the unavailable pre-upgrade request history. Bounded root
@@ -49,8 +56,9 @@ without replacement or deletion, requires released physical generations and
 empty worker groups, and leaves receipts, nonce fences and charges unchanged.
 The native transport now accepts the request-status/archive reply shapes; the
 earlier client omitted them. Product export governance, deletion/custody and
-broader retention recovery remain open, and the reference
-service's direct runtime path is not yet integrated.
+broader retention recovery remain open. The reference service's direct runtime
+path is not yet integrated; removing its credential requires reviewed rotation
+of existing runtime keys, not merely changing the reference environment file.
 See [RESOURCE_LEASES.md](RESOURCE_LEASES.md) for
 the exact implemented scope, limits, maintenance commands and remaining work.
 

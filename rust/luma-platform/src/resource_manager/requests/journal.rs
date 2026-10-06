@@ -218,6 +218,10 @@ fn validate_records(records: &[Record]) -> Result<BTreeSet<String>> {
             || record.limit > MAX_OUTPUT
             || record.context != 2048
             || record.until == 0
+            || record
+                .input_digest
+                .as_deref()
+                .map_or(false, |value| !digest_valid(value))
         {
             return Err("invalid durable inference identity or budget; preserve state".into());
         }
@@ -490,6 +494,9 @@ impl Gate {
             serde_json::json!({"review": review, "hot_receipts": self.records.len(),
             "origin": self.retention.origin,
             "hot_limit": MAX_RECEIPTS, "archives": self.retention.archives,
+            "input_binding_required": true,
+            "input_bound_hot_receipts": self.records.iter().filter(|r| r.input_digest.is_some()).count(),
+            "legacy_unbound_hot_receipts": self.records.iter().filter(|r| r.input_digest.is_none()).count(),
             "archive_limit": MAX_ARCHIVES, "retired_nonces": self.retention.retired.len(),
             "archivable": !self.occupied() && !self.records.is_empty() && self.retention.archives.len() < MAX_ARCHIVES,
             "worker_resources_released": false, "automatic_deletion": false}),
@@ -1760,5 +1767,131 @@ mod tests {
             fs::read_dir(&f.directory).unwrap().count(),
             MAX_DIRECTORY_ENTRIES + 3
         );
+    }
+
+    #[test]
+    fn input_binding_is_durable_and_changed_preparing_replay_never_changes_state() {
+        let mut f = Fixture::new();
+        f.prepare(1);
+        let hot = fs::read(f.directory.join(FILE)).unwrap();
+        let physical = fs::read(f.directory.join("ledger.json")).unwrap();
+        let opened = Gate::open(&f.store).unwrap();
+        assert_eq!(
+            opened.records[0].input_digest.as_deref(),
+            Some("e".repeat(64).as_str())
+        );
+        assert_eq!(opened.records[0].receipt()["input_digest"], "e".repeat(64));
+        let mut changed = begin(&f.worker, 1);
+        if let Message::Begin { input_digest, .. } = &mut changed {
+            *input_digest = "f".repeat(64);
+        }
+        assert!(reserve(&mut f.gate, &f.caller, &changed).is_err());
+        f.gate.persist(&f.store, true).unwrap();
+        assert_eq!(fs::read(f.directory.join(FILE)).unwrap(), hot);
+        assert_eq!(fs::read(f.directory.join("ledger.json")).unwrap(), physical);
+    }
+
+    #[test]
+    fn older_unbound_receipts_remain_canonical_fenced_and_cannot_be_blessed_by_replay() {
+        for admitted in [false, true] {
+            let mut f = Fixture::new();
+            f.prepare(1);
+            if admitted {
+                f.gate
+                    .admit(&f.caller, &admit(&f.worker, 1, 10), 3)
+                    .unwrap();
+            }
+            // Construct the actual old canonical wire bytes: the optional new
+            // field is omitted, not represented by a fabricated digest/null.
+            f.gate.records[0].input_digest = None;
+            f.gate.persist(&f.store, true).unwrap();
+            let legacy = fs::read(f.directory.join(FILE)).unwrap();
+            assert!(!String::from_utf8(legacy.clone())
+                .unwrap()
+                .contains("input_digest"));
+            let mut restored = Gate::open(&f.store).unwrap();
+            assert_eq!(restored.bytes().unwrap(), legacy);
+            assert_eq!(
+                restored.records[0].receipt()["input_digest"],
+                serde_json::Value::Null
+            );
+            assert!(reserve(&mut restored, &f.caller, &begin(&f.worker, 1)).is_err());
+            assert!(restored
+                .admit(&f.caller, &admit(&f.worker, 1, 10), 4)
+                .is_err());
+            assert!(restored
+                .finish(&f.caller, &finish(&f.worker, 1, 10, 1), 4)
+                .is_err());
+            assert_eq!(restored.bytes().unwrap(), legacy);
+            let status = restored.retention_status(&f.store).unwrap();
+            assert_eq!(status["legacy_unbound_hot_receipts"], 1);
+            assert_eq!(status["input_bound_hot_receipts"], 0);
+            let ledger = f.store.read().unwrap();
+            assert_eq!(
+                restored
+                    .maintain_with(&ledger, 4, |_| panic!("no saved PID may be revived"))
+                    .unwrap(),
+                vec![f.worker.clone()]
+            );
+            restored.persist(&f.store, true).unwrap();
+            assert_eq!(restored.records[0].phase, Phase::Draining);
+            assert_eq!(f.store.read().unwrap().charged("host").unwrap(), 5000);
+        }
+    }
+
+    #[test]
+    fn older_terminal_archive_bytes_and_retired_nonce_fences_survive_input_upgrade() {
+        let mut f = Fixture::new();
+        f.complete(1);
+        f.gate.records[0].input_digest = None;
+        f.gate.persist(&f.store, true).unwrap();
+        let legacy = f.gate.bytes().unwrap();
+        let physical = fs::read(f.directory.join("ledger.json")).unwrap();
+        let archived = f.archive();
+        let reference = f.gate.retention.archives[0].clone();
+        assert_eq!(
+            fs::read(f.directory.join(reference.name())).unwrap(),
+            legacy
+        );
+        f.gate = Gate::open(&f.store).unwrap();
+        assert!(reserve(&mut f.gate, &f.caller, &begin(&f.worker, 1)).is_err());
+        assert_eq!(fs::read(f.directory.join("ledger.json")).unwrap(), physical);
+        assert_eq!(archived["worker_resources_released"], false);
+    }
+
+    #[test]
+    fn malformed_durable_input_bindings_refuse_without_rewriting_history() {
+        let mut f = Fixture::new();
+        f.complete(1);
+        let baseline: serde_json::Value = serde_json::from_slice(&f.gate.bytes().unwrap()).unwrap();
+        for bad in [
+            serde_json::json!("a"),
+            serde_json::json!("A".repeat(64)),
+            serde_json::json!(7),
+            serde_json::Value::Null,
+        ] {
+            let mut changed = baseline.clone();
+            changed["records"][0]["input_digest"] = bad;
+            let raw = match serde_json::from_value::<Snapshot>(changed.clone()) {
+                Ok(snapshot) => serde_json::to_vec(&snapshot).unwrap(),
+                Err(_) => serde_json::to_vec(&changed).unwrap(),
+            };
+            // An explicitly null field is noncanonical, whereas genuine old
+            // history omits it. Test its raw representation separately.
+            let raw = if changed["records"][0]["input_digest"].is_null() {
+                let bound = String::from_utf8(f.gate.bytes().unwrap()).unwrap();
+                bound
+                    .replace(
+                        &format!("\"input_digest\":\"{}\"", "e".repeat(64)),
+                        "\"input_digest\":null",
+                    )
+                    .into_bytes()
+            } else {
+                raw
+            };
+            fs::write(f.directory.join(FILE), &raw).unwrap();
+            assert!(Gate::open(&f.store).is_err());
+            assert_eq!(fs::read(f.directory.join(FILE)).unwrap(), raw);
+        }
     }
 }

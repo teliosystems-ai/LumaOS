@@ -137,6 +137,28 @@ or report physical cleanup.
 The native CLI replaces itself with the fixed helper, preserving that process
 generation instead of leaving an unsupervised child after caller cancellation.
 
+The `resource-inference` method now uses wire schema version 2. Its preparing
+receipt binds a mandatory lowercase SHA-256 digest of the exact original prompt
+bytes, computed as `SHA256(UTF8("luma-native-operator-prompt-v1") || 0x00 || prompt)`.
+Whitespace and UTF-8 bytes are not normalized. The fixed template transformation
+occurs afterwards. Every subsequent receipt must contain that same input digest,
+in addition to the nonce, caller generation, worker, profile, context, maximum
+output and deadline. Preparing/admitted replay with changed input refuses before
+mutation; the helper cancels on a substituted binding and publishes no result.
+The digest does not grant effects or prove semantic correctness of model text.
+
+Upgrade the broker, native command and packaged helper together. Version-1
+inference requests/replies refuse; there is no downgrade or implicit unbound
+admission. Other resource/transport methods retain their existing version 1.
+The durable journal remains version 1 with an optional input-digest field so that
+genuine older canonical receipts/archive bytes and their SHA-256 references remain
+readable without rewriting. Missing old digests are reported as unavailable,
+not fabricated. They cannot resume via begin/admit/finish or be relabeled by
+replay. Restart fences outstanding old requests without reconstructing their
+caller handles or returning physical capacity. Terminal old receipts can still
+be archived, and their retired nonces remain fenced. Request-history status
+reports separate bound and legacy-unbound hot inventories.
+
 One logical slot is reserved before template rendering or tokenization. The
 helper renders the pinned model template without reasoning, tokenizes that exact
 prompt, and checks the actual token count plus the requested maximum output
@@ -378,6 +400,8 @@ Admin authorization, and their combined native-image procedure remains unqualifi
 - Extend request-level accepted prompt/output/concurrency accounting to all
   inference consumers, close the reference service's direct-runtime bypass,
   and finish governed request export/deletion, custody and retention recovery.
+  Reference integration must also rotate previously exposed runtime keys through
+  the reviewed lifecycle; changing an environment file alone leaves a bypass.
   Durable operator receipts, reviewed archival, bounded root export and reviewed
   preservation of a current incomplete archive stage now exist; the operator path
   and verified CPU KV inventory do not close those integrations by themselves.

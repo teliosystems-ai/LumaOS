@@ -119,7 +119,7 @@ def worker_token(value):
 def broker_exchange(payload):
     started = boot_ms()
     request_id = secrets.token_hex(16)
-    request = {'schema_version': 1, 'request_id': request_id, 'caller': 0,
+    request = {'schema_version': 2, 'request_id': request_id, 'caller': 0,
                'deadline': str(started + 4000), 'action': 'resource-inference', 'payload': payload}
     encoded = json.dumps(request, separators=(',', ':')).encode()
     if not 1 <= len(encoded) <= 16384:
@@ -157,7 +157,7 @@ def broker_exchange(payload):
         response = strict_json(exact(length))
     if (not isinstance(response, dict)
             or set(response) != {'schema_version', 'request_id', 'caller', 'result', 'status'}
-            or type(response['schema_version']) is not int or response['schema_version'] != 1
+            or type(response['schema_version']) is not int or response['schema_version'] != 2
             or type(response['caller']) is not int or response['caller'] != 0
             or response['request_id'] != request_id or response['result'] != 'ok'
             or not isinstance(response['status'], dict)):
@@ -169,12 +169,13 @@ def broker_exchange(payload):
 def permit(status, expected, phase, prompt_tokens=None, token_digest=None,
            output_tokens=None, result_digest=None):
     fields = {'kind', 'nonce', 'worker', 'phase', 'profile', 'max_output_tokens',
+              'input_digest',
               'context_tokens', 'request_deadline', 'prompt_tokens', 'token_digest',
               'output_tokens', 'result_digest', 'slot_released', 'worker_resources_released'}
     if not isinstance(status, dict) or set(status) != fields:
         raise InferenceReplyError('invalid inference reservation response')
     worker_token(status['worker'])
-    for field in ('nonce', 'worker', 'profile', 'max_output_tokens', 'context_tokens', 'request_deadline'):
+    for field in ('nonce', 'worker', 'profile', 'max_output_tokens', 'context_tokens', 'request_deadline', 'input_digest'):
         if status[field] != expected[field]:
             raise InferenceReplyError('inference reservation was substituted')
     if (status['kind'] != 'permit' or status['phase'] != phase
@@ -301,8 +302,12 @@ def inference(options):
         raise InferenceReplyError('selected runtime differs from broker inventory')
     worker = worker_token(info['worker'])
     nonce = secrets.token_hex(16)
+    # Bind the exact original UTF-8 bytes, including whitespace, before any
+    # template/tokenizer work. This digest is neither prompt text nor authority.
+    input_digest = hashlib.sha256(b'luma-native-operator-prompt-v1\x00' + prompt).hexdigest()
     until = started + options.timeout_seconds * 1000
     expected = {'nonce': nonce, 'worker': worker, 'profile': selection['id'],
+                'input_digest': input_digest,
                 'max_output_tokens': str(options.max_tokens), 'context_tokens': info['context_tokens'],
                 'request_deadline': str(until)}
     finished = False
@@ -310,6 +315,7 @@ def inference(options):
         # The preparing slot covers template/tokenization as well as inference.
         # A lost begin acknowledgement is cancelled by the preallocated nonce.
         permit(broker_exchange({'operation': 'begin', 'nonce': nonce, 'worker': worker,
+               'input_digest': input_digest,
                'profile': selection['id'], 'max_output_tokens': str(options.max_tokens),
                'request_deadline': str(until)}), expected, 'preparing')
         opener = local_opener()
@@ -345,7 +351,8 @@ def inference(options):
         finished = True
         return {'model': selection['id'], 'text': text, 'usage': usage,
                 'effects_executed': False, 'certification_closing': False,
-                'resource_worker': worker, 'resource_request': nonce}
+                'resource_worker': worker, 'resource_request': nonce,
+                'resource_input_digest': input_digest}
     finally:
         if not finished:
             try:

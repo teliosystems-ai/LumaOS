@@ -2,6 +2,7 @@
 import importlib.util
 import contextlib
 import copy
+import hashlib
 import http.server
 import io
 import json
@@ -261,7 +262,7 @@ class AdmissionFixture:
             return {'kind':'worker', 'worker':self.worker, 'profile':'fixture-model',
                     'context_tokens':'2048','max_output_tokens':'128','slots':'1'}
         if operation == 'begin':
-            self.expected = {key:payload[key] for key in ('nonce','worker','profile','max_output_tokens','request_deadline')}
+            self.expected = {key:payload[key] for key in ('nonce','worker','profile','max_output_tokens','request_deadline','input_digest')}
             self.expected['context_tokens'] = '2048'
         if operation == self.fail_at:
             raise TimeoutError('private fixture')
@@ -300,6 +301,22 @@ class AdmissionFixture:
 
 
 class NativeAdmissionTests(unittest.TestCase):
+    def test_exact_original_input_bytes_are_bound_before_template_and_checked_through_completion(self):
+        digests=set()
+        for prompt in (b'hello',b' hello',b'hello\n','héllo'.encode(),b'hello /no_think'):
+            fixture=AdmissionFixture()
+            result=fixture.run(prompt)
+            expected=hashlib.sha256(b'luma-native-operator-prompt-v1\x00'+prompt).hexdigest()
+            self.assertEqual(fixture.messages[1]['input_digest'],expected)
+            self.assertEqual(fixture.expected['input_digest'],expected)
+            self.assertEqual(result['resource_input_digest'],expected)
+            self.assertLess(fixture.order.index('begin'),fixture.order.index('/apply-template'))
+            self.assertEqual(fixture.posts[0][1]['messages'][0]['content'],prompt.decode()+' /no_think')
+            self.assertNotIn('messages',fixture.messages[1])
+            self.assertNotIn('content',fixture.messages[1])
+            digests.add(expected)
+        self.assertEqual(len(digests),5)
+
     def test_each_uncertain_step_cancels_same_generation_without_publishing_result(self):
         for step in ('begin','/apply-template','/tokenize','admit','/completion','finish'):
             with self.subTest(step=step):
@@ -345,6 +362,8 @@ class NativeAdmissionTests(unittest.TestCase):
     def test_substituted_or_premature_release_receipts_are_denied(self):
         for operation, key, value in (('begin','worker',{'lease_id':'3'*32,'generation':'2','manager_epoch':'2'*32}),
                                     ('begin','phase','admitted'), ('begin','slot_released',True),
+                                    ('begin','input_digest','0'*64), ('begin','input_digest',None),
+                                    ('admit','input_digest','0'*64), ('finish','input_digest',None),
                                     ('admit','prompt_tokens','9'), ('admit','token_digest','b'*64),
                                     ('finish','output_tokens','2'), ('finish','worker_resources_released',True)):
             with self.subTest(operation=operation,key=key):
@@ -414,7 +433,7 @@ class NativeBrokerExchangeTests(unittest.TestCase):
                     self.assertEqual(request['action'],'resource-inference')
                     self.assertEqual(request['caller'],0)
                     self.assertIsInstance(request['deadline'],str)
-                    response = {'schema_version':1,'request_id':request['request_id'],'caller':0,'result':'ok','status':{'kind':'fixture'}}
+                    response = {'schema_version':2,'request_id':request['request_id'],'caller':0,'result':'ok','status':{'kind':'fixture'}}
                     if mutate:
                         mutate(response)
                     encoded = raw if raw is not None else json.dumps(response).encode()
@@ -471,7 +490,7 @@ class NativeBrokerExchangeTests(unittest.TestCase):
         self.assertLessEqual(delivered[0],5)
 
     def test_closed_reply_identity_and_result_are_required(self):
-        for field,value in (('caller',True), ('schema_version',True), ('request_id','other'),
+        for field,value in (('caller',True), ('schema_version',True), ('schema_version',1), ('request_id','other'),
                             ('result','denied'), ('status',[]), ('extra',1)):
             with self.subTest(field=field), self.assertRaises(chat.InferenceReplyError):
                 self.exchange(mutate=lambda response:response.update({field:value}))

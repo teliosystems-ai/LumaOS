@@ -9,6 +9,7 @@ pub(crate) use journal::request_migration;
 const MAX_RECEIPTS: usize = 256;
 const MAX_OUTPUT: u64 = 128;
 const MAX_REQUEST_MS: u64 = 1_800_000;
+pub(crate) const WIRE_SCHEMA: u32 = 2;
 
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -30,6 +31,7 @@ pub(crate) enum Message {
         nonce: String,
         worker: Token,
         profile: String,
+        input_digest: String,
         #[serde(with = "resources::decimal")]
         max_output_tokens: u64,
         #[serde(with = "resources::decimal")]
@@ -116,6 +118,10 @@ struct Record {
     #[serde(with = "journal::optional_decimal")]
     output: Option<u64>,
     result_digest: Option<String>,
+    // Older canonical journals retain explicit unknown input provenance. They
+    // are not rewritten or permitted to resume as a newly bound request.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    input_digest: Option<String>,
 }
 impl Record {
     fn receipt(&self) -> serde_json::Value {
@@ -123,6 +129,7 @@ impl Record {
             "phase":self.phase, "profile":self.profile,
             "max_output_tokens":self.limit.to_string(), "context_tokens":self.context.to_string(),
             "request_deadline":self.until.to_string(),
+            "input_digest":self.input_digest,
             "prompt_tokens":self.prompt.map(|v|v.to_string()), "token_digest":self.token_digest,
             "output_tokens":self.output.map(|v|v.to_string()), "result_digest":self.result_digest,
             "slot_released":matches!(self.phase,Phase::Completed|Phase::Released),
@@ -163,6 +170,7 @@ impl Gate {
             nonce,
             worker,
             profile,
+            input_digest,
             max_output_tokens,
             request_deadline,
         } = message
@@ -171,6 +179,7 @@ impl Gate {
         };
         self.retention.check()?;
         if !nonce_valid(nonce)
+            || !digest_valid(input_digest)
             || *max_output_tokens == 0
             || *max_output_tokens > MAX_OUTPUT
             || *max_output_tokens >= context
@@ -183,6 +192,7 @@ impl Gate {
             if prior.caller != caller
                 || &prior.worker != worker
                 || &prior.profile != profile
+                || prior.input_digest.as_ref() != Some(input_digest)
                 || prior.limit != *max_output_tokens
                 || prior.until != *request_deadline
                 || prior.context != context
@@ -212,6 +222,7 @@ impl Gate {
             token_digest: None,
             output: None,
             result_digest: None,
+            input_digest: Some(input_digest.clone()),
         };
         let receipt = record.receipt();
         self.records.push(record);
@@ -246,6 +257,7 @@ impl Gate {
         };
         let record = self.record(caller, nonce, worker)?;
         if time >= record.until
+            || record.input_digest.is_none()
             || *prompt_tokens == 0
             || !digest_valid(token_digest)
             || prompt_tokens
@@ -290,6 +302,7 @@ impl Gate {
         };
         let record = self.record(caller, nonce, worker)?;
         if time >= record.until
+            || record.input_digest.is_none()
             || record.prompt != Some(*prompt_tokens)
             || *output_tokens == 0
             || *output_tokens > record.limit
@@ -385,7 +398,7 @@ pub(super) fn digest_valid(digest: &str) -> bool {
 fn validate(request: &Request, uid: u32, time: u64) -> Result<()> {
     if uid != 0
         || request.caller != uid
-        || request.schema_version != 1
+        || request.schema_version != WIRE_SCHEMA
         || request.action != "resource-inference"
         || request.request_id.is_empty()
         || request.request_id.len() > 64
@@ -452,6 +465,7 @@ mod tests {
             nonce: format!("{nonce:032x}"),
             worker: worker.clone(),
             profile: "fixture".into(),
+            input_digest: "e".repeat(64),
             max_output_tokens: 128,
             request_deadline: 9000,
         }
@@ -518,11 +532,66 @@ mod tests {
                 nonce,
                 worker: worker.clone(),
                 profile: "fixture".into(),
+                input_digest: "e".repeat(64),
                 max_output_tokens: limit,
                 request_deadline: until,
             };
             assert!(reserve(&mut gate, &caller, &request).is_err());
             assert!(gate.records.is_empty());
+        }
+    }
+
+    #[test]
+    fn changed_input_never_replays_a_preparing_or_admitted_generation() {
+        for admitted in [false, true] {
+            let (mut gate, ledger, worker, caller) = fixture();
+            let original = begin(&worker, 1);
+            reserve(&mut gate, &caller, &original).unwrap();
+            if admitted {
+                gate.admit(&caller, &admit(&worker, 1, 10), 3).unwrap();
+            }
+            let before = gate.records[0].receipt();
+            assert_eq!(reserve(&mut gate, &caller, &original).unwrap(), before);
+            let mut changed = begin(&worker, 1);
+            if let Message::Begin { input_digest, .. } = &mut changed {
+                *input_digest = "f".repeat(64);
+            }
+            assert!(reserve(&mut gate, &caller, &changed).is_err());
+            assert_eq!(gate.records[0].receipt(), before);
+            assert_eq!(ledger.charged("host").unwrap(), 5000);
+        }
+    }
+
+    #[test]
+    fn absent_invalid_or_noncanonical_input_bindings_never_admit() {
+        let (mut gate, _, worker, caller) = fixture();
+        for digest in [
+            String::new(),
+            "a".repeat(63),
+            "A".repeat(64),
+            "g".repeat(64),
+            "é".repeat(32),
+        ] {
+            let mut message = begin(&worker, 1);
+            if let Message::Begin { input_digest, .. } = &mut message {
+                *input_digest = digest;
+            }
+            assert!(reserve(&mut gate, &caller, &message).is_err());
+            assert!(gate.records.is_empty());
+        }
+        let baseline = serde_json::to_value(begin(&worker, 1)).unwrap();
+        let mut missing = baseline.clone();
+        missing.as_object_mut().unwrap().remove("input_digest");
+        assert!(serde_json::from_value::<Message>(missing).is_err());
+        for value in [
+            serde_json::Value::Null,
+            serde_json::json!(1),
+            serde_json::json!(true),
+            serde_json::json!([]),
+        ] {
+            let mut changed = baseline.clone();
+            changed["input_digest"] = value;
+            assert!(serde_json::from_value::<Message>(changed).is_err());
         }
     }
     #[test]
@@ -674,10 +743,13 @@ mod tests {
     }
     #[test]
     fn inference_envelope_is_closed_lossless_root_only_and_time_bounded() {
-        let value = serde_json::json!({"schema_version":1,"request_id":"fixture","caller":0,
+        let value = serde_json::json!({"schema_version":2,"request_id":"fixture","caller":0,
             "deadline":"100","action":"resource-inference","payload":{"operation":"inspect"}});
         let request: Request = serde_json::from_value(value.clone()).unwrap();
         validate(&request, 0, 1).unwrap();
+        let mut older: Request = serde_json::from_value(value.clone()).unwrap();
+        older.schema_version = 1;
+        assert!(validate(&older, 0, 1).is_err());
         for (uid, time) in [(989, 1), (990, 1), (0, 100), (0, u64::MAX)] {
             assert!(validate(&request, uid, time).is_err());
         }
@@ -818,7 +890,7 @@ impl Manager {
             return Err("inference acknowledgement expired".into());
         }
         Ok(
-            serde_json::json!({"schema_version":1,"request_id":request.request_id,"caller":0,"result":"ok","status":status}),
+            serde_json::json!({"schema_version":WIRE_SCHEMA,"request_id":request.request_id,"caller":0,"result":"ok","status":status}),
         )
     }
 }

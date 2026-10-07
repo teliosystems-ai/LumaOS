@@ -1,0 +1,55 @@
+[Unit]
+Description=Luma read-only current kernel credential observer
+After=apparmor.service systemd-tmpfiles-setup.service local-fs.target
+Requires=apparmor.service
+ConditionKernelCommandLine=luma.mode=installed
+
+[Service]
+Type=simple
+ExecStart=/usr/libexec/luma-os/luma-platform peer-observer
+User=root
+Group=root
+RuntimeDirectory=luma-peer-observer
+RuntimeDirectoryMode=0700
+RuntimeDirectoryPreserve=no
+UMask=0077
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+DevicePolicy=closed
+# A separate proc view makes public task credentials visible without granting
+# ptrace/DAC capabilities to this observer or to the TPM-bearing Admin service.
+ProtectProc=default
+ProcSubset=all
+ReadWritePaths=/run/luma-peer-observer
+InaccessiblePaths=/var/lib/luma-os /run/luma-admin /run/luma-governance /efi /boot
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+RestrictAddressFamilies=AF_UNIX
+RestrictNamespaces=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@mount @raw-io @reboot @swap @obsolete @debug
+AppArmorProfile=luma-peer-observer
+LimitCORE=0
+LimitNOFILE=64
+LimitMEMLOCK=0
+MemoryMax=64M
+MemorySwapMax=0
+TasksMax=4
+CPUQuota=10%
+TimeoutStopSec=5
+KillMode=control-group
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

@@ -29,6 +29,10 @@ python3 -W error "$snapshot/native/tests/admin_service_pam_integration.py" 2>&1 
 # This fixture drops its own client to UID 1001 before connecting. It proves
 # kernel-peer/framing behavior only, not installed PAM/TPM or AppArmor operation.
 timeout 60 cargo test --offline --locked admin_service::tests::kernel_human_connection -- --ignored --exact --nocapture 2>&1 | tee "$output/admin-service-ipc.txt"
+timeout 60 cargo test --offline --locked credential_observer::tests::kernel_credential_change -- --ignored --exact --nocapture 2>&1 | tee "$output/observer-kernel-credentials.txt"
+timeout 60 cargo test --offline --locked credential_observer::tests::kernel_fd_census -- --ignored --exact --nocapture 2>&1 | tee "$output/observer-fd-census.txt"
+timeout 60 cargo test --offline --locked credential_observer::tests::kernel_task_inventory_limit -- --ignored --exact --nocapture 2>&1 | tee "$output/observer-task-limit.txt"
+timeout 60 cargo test --offline --locked admin_service::peer::tests::kernel_fsuid_change_fences_peer_even_after_restore -- --ignored --exact --nocapture 2>&1 | tee "$output/admin-thread-fsuid.txt"
 # UTC fixtures use only owned child processes, Unix sockets and read-only
 # kernel observations. They do not install a time service or contact providers.
 timeout 60 cargo test --offline --locked utc_receiver::tests::kernel_datagram_boundary -- --ignored --exact --nocapture --test-threads=1 2>&1 | tee "$output/utc-receiver-kernel.txt"
@@ -41,13 +45,16 @@ cd "$snapshot"
 sha256sum rust/Cargo.toml rust/Cargo.lock rust/.cargo/config.toml \
     rust/luma-platform/Cargo.toml rust/luma-platform/build.rs \
     rust/luma-platform/src/*.rs rust/luma-platform/src/*.c rust/luma-platform/src/model/*.rs \
+    rust/luma-platform/src/admin_service/peer.rs \
     native/tests/model_supervision_fixture.c \
     native/tests/run_tpm_boundaries.sh native/tests/*.py native/tests/fixtures/*.c native/image/*.py \
     native/image/overlay/usr/lib/dracut/modules.d/92luma-pcrphase/module-setup.sh \
     native/image/overlay/usr/lib/dracut/modules.d/91luma/*.sh \
     native/image/overlay/etc/pam.d/luma-admin \
     native/image/overlay/etc/apparmor.d/luma-admin \
+    native/image/overlay/etc/apparmor.d/luma-peer-observer \
     native/image/overlay/etc/systemd/system/luma-admin.service \
+    native/image/overlay/etc/systemd/system/luma-peer-observer.service \
     native/image/overlay/etc/udev/rules.d/99-luma-tpm.rules \
     native/image/overlay/usr/lib/systemd/system-generators/luma-boot-generator \
     native/image/overlay/etc/systemd/system/media-luma.mount \

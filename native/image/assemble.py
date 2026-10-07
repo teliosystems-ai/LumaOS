@@ -284,7 +284,7 @@ def main() -> None:
     put('etc/systemd/system/sleep.target.d/luma.conf',
         '[Unit]\nConflicts=luma-reference.service luma-model.service\n')
     put('etc/systemd/system/hibernate.target','[Unit]\nDescription=Hibernation is unqualified and disabled\nRefuseManualStart=yes\n')
-    for unit in ('luma-broker.service','luma-reference.service','luma-model.service','luma-staging-clean.service','luma-admin.service'):
+    for unit in ('luma-broker.service','luma-reference.service','luma-model.service','luma-staging-clean.service','luma-peer-observer.service','luma-admin.service'):
         enable(unit)
     # Explicitly activate the packaged measured-UKI userspace phase barriers.
     # They do not activate Admin or make a missing TPM a general boot dependency.

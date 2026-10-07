@@ -12,6 +12,7 @@ mod authentication;
 mod broker_effects;
 mod bundle;
 mod calculation;
+mod credential_observer;
 mod disk;
 mod model;
 mod owner_credential;
@@ -117,6 +118,7 @@ fn dispatch() -> Result<()> {
             admin_governance::catalog_status(&args[1])
         }
         Some("admin-service") if args.len() == 1 => admin_service::serve(),
+        Some("peer-observer") if args.len() == 1 => credential_observer::serve(),
         Some("admin-service-request") if args.len() == 1 => admin_service::connection(),
         Some("admin-client") => admin_service::client(&args[1..]),
         Some("admin-activity-register") | Some("admin-role-define") => {

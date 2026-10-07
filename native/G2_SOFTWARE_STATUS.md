@@ -475,14 +475,15 @@ are CLOEXEC and are never reopened from a stored or caller-supplied PID.
 This reuses the broker's existing
 [Linux socket-derived process-handle primitive](https://raw.githubusercontent.com/torvalds/linux/v6.8/net/core/sock.c);
 unsupported kernels refuse rather than falling back to PID-number lookup.
-No AppArmor permission, service capability or host setting was expanded.
+At that preceding checkpoint, no AppArmor permission, service capability or host
+setting was expanded.
 
-This is live process/connection continuity, not current kernel credentials:
+That checkpoint proved live process/connection continuity, not current credentials:
 SO_PEERCRED retains connection-time UID/GID, and a PIDFD does not prove the
-process's current real/effective/saved/filesystem UID set. A confined human-peer
-credential revalidation adapter, governed principal generations, trusted UTC,
+process's current real/effective/saved/filesystem UID set. The current credential
+adapter is now implemented below. Governed principal generations, trusted UTC,
 finite assignments and current folder/effect grants remain first-subgate software
-work. Neither this checkpoint nor the per-request PAM session closes that subgate.
+work. Neither that checkpoint nor the per-request PAM session closes the subgate.
 
 The final frozen caller-continuity sweep at
 `D:\LumaOS-builds\g2-principal-session-20261007-07` passed (exit 0): 114 ordinary
@@ -512,6 +513,67 @@ Native executable SHA-256:
 `c0c448796cfd49186581cc53403748e3dbb7e3342373e06421904e55270ae181`.
 Full native regression log / frozen runner SHA-256, respectively:
 `e12b7315cead3e0f0b67e856ef423f044491808d96d34afc358bd603a5df7f83` /
+`f3f9bfff462a1275b89052fa06ac0ffdd26b835e2b2ed07b97ede60c68a3bb78`.
+
+Current human-peer credential revalidation now has an installed-source adapter:
+`luma-peer-observer.service` is a separate root process with an empty capability
+set, no secrets/TPM access, a protected local seqpacket socket and fixed resource
+limits. Admin retains its hidden proc view and CAP_CHOWN-only capability boundary.
+It transfers the original socket-derived human PIDFD, not a caller-selected PID,
+and requires a fresh nonce-correlated reply within two seconds. The observer pins
+every original task directory in a stable set of at most 32 threads and checks
+all four UID/GID fields twice. Missing, replaced or changed tasks, credential
+changes, process exit, malformed/truncated descriptor frames and observation
+loss permanently fence the original Admin peer. Restored credentials cannot
+revive it. No serialized role, reusable authentication, assignment or grant is
+created by these observations.
+
+Observer authentication requires the socket's kernel root identity, enforcing
+AppArmor label and original live process handle. Its reply transfers exactly six
+read-only kernel metadata descriptors for current status, cgroup, profile and
+memory/swap/task limits. Admin validates exact descriptor paths, kernel filesystem
+types, current root UID/GID sets, zero capabilities, no-new-privileges, seccomp and
+the fixed cgroup/limits before accepting the observation. Descriptor transfer
+avoids reopening another non-dumpable process through Admin's hidden proc mount;
+there is no broader proc view or ptrace capability fallback. Kernel credential
+fields and proc visibility follow the versioned Linux
+[task status implementation](https://raw.githubusercontent.com/torvalds/linux/v6.8/fs/proc/array.c)
+and [proc permission implementation](https://raw.githubusercontent.com/torvalds/linux/v6.8/fs/proc/base.c).
+The two services and profiles are packaged and enabled together in source only;
+no host service, account, TPM or WSL setting was changed.
+
+The frozen observer sweep at
+`D:\LumaOS-builds\g2-principal-session-20261007-13` passed (exit 0): 122 ordinary
+Rust tests, 45 selected Python checks, six real-PAM modes, kernel-human IPC,
+software-TPM bootstrap and 20 composed Admin/PAM/catalog cases. Additional
+disposable-kernel executions passed actual credential drop/process exit,
+thread-local filesystem-UID change with sticky restoration refusal, a repeated
+descriptor census under a 64-FD ceiling and refusal above the 32-thread bound.
+Those guarded executions run explicitly, not as skipped passes. Ordinary tools
+fixtures use the same kernel observer but an explicit test-only uninstalled peer
+composition; they do not claim the protected service authentication passed.
+Both AppArmor profiles parsed without loading them. Source build/format checks
+passed with warnings denied; all 217 source files and 57 test inputs are frozen
+on D: and match the checkout. Full native Python discovery also passed (exit 0):
+262 of 264 tests, with the same two existing UTC-source fixture skips recorded
+separately. The 45 selected checks are included in that discovery, not extra
+distinct passes. Earlier failed development sweeps `-08` through `-11` remain retained;
+`-12` passed an earlier snapshot, not the final source. Installed observer/proc/
+AppArmor/seccomp enforcement remains separate image qualification. Governed
+account generations, reusable principal/session authority, trusted UTC,
+finite assignments and folder/effect grant integrations remain software work.
+The first subgate and Requirement #1 remain open; Requirement #2 is unstarted.
+
+Source / test input manifest SHA-256, respectively:
+`dd7034b7fbb4913b2c13040ad7b879a3a6fe465b44ae055f3593e0db8ef97583` /
+`92ef9aa7707c9288998eec42ac6d061635bb245b987e95ff717b3edcf6289153`.
+Targeted log / frozen runner SHA-256, respectively:
+`d8cba258eae06a40f4e1aeb361a09c96f944320e6b84da96ac726daf2b53948c` /
+`63d3094ad5a63ad58825ee762412c1d781fa43ea4f1d151aee61de9bbeda4fe8`.
+Native executable SHA-256:
+`7c4930804e4377d32b8cb62019c0901e02c7aa9359455d4b213f8d43e241e95e`.
+Full native regression log / frozen runner SHA-256, respectively:
+`4e9fb23dd3488a84a9657dbc69133b4ef7e4e3844ff3d9d794f7fc0627464d44` /
 `f3f9bfff462a1275b89052fa06ac0ffdd26b835e2b2ed07b97ede60c68a3bb78`.
 
 ### Admin and workflow closure status

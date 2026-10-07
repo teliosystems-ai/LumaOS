@@ -1,4 +1,4 @@
-//! A live connection creator, not a current-credential proof or role grant.
+//! A live connection creator with current kernel credentials, never a role grant.
 use super::*;
 use std::cell::Cell;
 use std::fs::OpenOptions;
@@ -45,6 +45,13 @@ pub(crate) struct Peer {
     pin: File,
     stream: UnixStream,
     fenced: Cell<bool>,
+    observer: Observer,
+}
+
+enum Observer {
+    Installed,
+    #[cfg(test)]
+    KernelFixture,
 }
 
 struct Observation<'a> {
@@ -65,15 +72,25 @@ impl Peer {
         if credentials.uid != HUMAN {
             return Err("Admin service peer denied".into());
         }
-        Self::bind(stream, credentials)
+        Self::bind(stream, credentials, Observer::Installed)
     }
 
-    fn bind(stream: &UnixStream, credentials: libc::ucred) -> Result<Self> {
+    #[cfg(test)]
+    pub(crate) fn capture_fixture(stream: &UnixStream) -> Result<Self> {
+        let credentials = credentials(stream)?;
+        if credentials.uid != HUMAN {
+            return Err("Admin service peer denied".into());
+        }
+        Self::bind(stream, credentials, Observer::KernelFixture)
+    }
+
+    fn bind(stream: &UnixStream, credentials: libc::ucred, observer: Observer) -> Result<Self> {
         let bound = Self {
             credentials,
             pin: crate::service::peer_pidfd(stream)?,
             stream: stream.try_clone()?,
             fenced: Cell::new(false),
+            observer,
         };
         bound.check()?;
         Ok(bound)
@@ -99,6 +116,19 @@ impl Peer {
             return Err("Admin connection creator exited".into());
         }
         inspect(&self.pin, self.credentials.pid)?;
+        match self.observer {
+            Observer::Installed => crate::credential_observer::check(
+                &self.pin,
+                self.credentials.uid,
+                self.credentials.gid,
+            )?,
+            #[cfg(test)]
+            Observer::KernelFixture => crate::credential_observer::kernel_check(
+                &self.pin,
+                self.credentials.uid,
+                self.credentials.gid,
+            )?,
+        }
         let now = credentials(&self.stream)?;
         if (now.pid, now.uid, now.gid)
             != (
@@ -145,7 +175,12 @@ mod tests {
 
     fn bound() -> (Peer, UnixStream) {
         let (server, client) = UnixStream::pair().unwrap();
-        let peer = Peer::bind(&server, credentials(&server).unwrap()).unwrap();
+        let peer = Peer::bind(
+            &server,
+            credentials(&server).unwrap(),
+            Observer::KernelFixture,
+        )
+        .unwrap();
         (peer, client)
     }
 
@@ -205,5 +240,118 @@ mod tests {
         }))
         .is_err());
         assert!(peer.check().is_err());
+    }
+
+    #[test]
+    #[ignore = "requires disposable root container with SETUID/SETGID capabilities"]
+    fn kernel_fsuid_change_fences_peer_even_after_restore() {
+        assert!(Path::new("/.dockerenv").is_file());
+        assert_eq!(unsafe { libc::geteuid() }, 0);
+        let directory =
+            std::env::temp_dir().join(format!("luma-admin-fsuid-{}", std::process::id()));
+        fs::create_dir(&directory).unwrap();
+        fs::set_permissions(&directory, fs::Permissions::from_mode(0o711)).unwrap();
+        let path = directory.join("control.sock");
+        let listener = UnixListener::bind(&path).unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o666)).unwrap();
+        let mut child = Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--ignored",
+                "--exact",
+                "admin_service::peer::tests::kernel_fsuid_child",
+                "--nocapture",
+            ])
+            .env("LUMA_ADMIN_FSUID_SOCKET", &path)
+            .spawn()
+            .unwrap();
+        let (mut socket, _) = listener.accept().unwrap();
+        socket.set_read_timeout(Some(FRAME_BUDGET)).unwrap();
+        socket.set_write_timeout(Some(FRAME_BUDGET)).unwrap();
+        let peer = Peer::capture_fixture(&socket).unwrap();
+        peer.check().unwrap();
+        assert!(peer
+            .observe(|| {
+                socket.write_all(&[1])?;
+                let mut byte = [0];
+                socket.read_exact(&mut byte)?;
+                assert_eq!(byte, [2]);
+                Ok(())
+            })
+            .is_err());
+        socket.write_all(&[3]).unwrap();
+        let mut byte = [0];
+        socket.read_exact(&mut byte).unwrap();
+        assert_eq!(byte, [4]);
+        assert!(peer.check().is_err());
+        // A new observation succeeds only after credentials are restored;
+        // the old fenced object cannot be revived by that restoration.
+        Peer::capture_fixture(&socket).unwrap().check().unwrap();
+        socket.write_all(&[5]).unwrap();
+        assert!(child.wait().unwrap().success());
+        drop(peer);
+        drop(socket);
+        drop(listener);
+        fs::remove_file(path).unwrap();
+        fs::remove_dir(directory).unwrap();
+    }
+
+    #[test]
+    #[ignore = "owned child of kernel_fsuid_change_fences_peer_even_after_restore"]
+    fn kernel_fsuid_child() {
+        assert!(Path::new("/.dockerenv").is_file());
+        assert_eq!(unsafe { libc::geteuid() }, 0);
+        let path = std::env::var("LUMA_ADMIN_FSUID_SOCKET").unwrap();
+        assert!(path.starts_with("/tmp/luma-admin-fsuid-"));
+        #[repr(C)]
+        struct Header {
+            version: u32,
+            pid: i32,
+        }
+        #[repr(C)]
+        struct Data {
+            effective: u32,
+            permitted: u32,
+            inheritable: u32,
+        }
+        unsafe {
+            assert_eq!(libc::prctl(libc::PR_SET_KEEPCAPS, 1, 0, 0, 0), 0);
+            assert_eq!(libc::setgroups(0, std::ptr::null()), 0);
+            assert_eq!(libc::setresgid(HUMAN, HUMAN, HUMAN), 0);
+            assert_eq!(libc::setresuid(HUMAN, HUMAN, HUMAN), 0);
+            let header = Header {
+                version: 0x20080522,
+                pid: 0,
+            };
+            let data = [
+                Data {
+                    effective: 1 << 7,
+                    permitted: 1 << 7,
+                    inheritable: 0,
+                },
+                Data {
+                    effective: 0,
+                    permitted: 0,
+                    inheritable: 0,
+                },
+            ];
+            assert_eq!(libc::syscall(libc::SYS_capset, &header, data.as_ptr()), 0);
+            assert_eq!(libc::prctl(libc::PR_SET_DUMPABLE, 0, 0, 0, 0), 0);
+        }
+        let mut socket = UnixStream::connect(path).unwrap();
+        socket.set_read_timeout(Some(FRAME_BUDGET)).unwrap();
+        socket.set_write_timeout(Some(FRAME_BUDGET)).unwrap();
+        let mut byte = [0];
+        socket.read_exact(&mut byte).unwrap();
+        assert_eq!(byte, [1]);
+        assert_eq!(unsafe { libc::setfsuid(1002) }, HUMAN as i32);
+        assert_eq!(unsafe { libc::setfsuid(u32::MAX) }, 1002);
+        socket.write_all(&[2]).unwrap();
+        socket.read_exact(&mut byte).unwrap();
+        assert_eq!(byte, [3]);
+        assert_eq!(unsafe { libc::setfsuid(HUMAN) }, 1002);
+        assert_eq!(unsafe { libc::setfsuid(u32::MAX) }, HUMAN as i32);
+        socket.write_all(&[4]).unwrap();
+        socket.read_exact(&mut byte).unwrap();
+        assert_eq!(byte, [5]);
     }
 }

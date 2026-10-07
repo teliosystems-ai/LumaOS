@@ -728,8 +728,13 @@ Final-image/native-hardware qualification remains separate.
   changes also require fresh authentication. These live continuity checks are
   not durable anti-rollback generations. Admin IPC now pins the original live
   caller and connection through catalog identity checks, without a PID lookup
-  fallback. Current human-peer kernel credential revalidation and the remaining
-  account, time and grant integrations are still required.
+  fallback. Current human-peer credentials now use a separate read-only,
+  zero-capability observer. It checks all four UID/GID fields for every pinned
+  thread in a stable task set (maximum 32), with sticky peer fencing. A fixed
+  read-only kernel metadata bundle verifies the observer without opening another
+  process through Admin's hidden proc view. Native installed observer enforcement
+  remains unqualified; governed account, time and grant integrations remain
+  required software work.
 - Finish broader content/workflow worker admission. The closed invoice
   coordinator and both direct publishers use leased calculation and effect-time
   result checks, but remain installed-root paths, not generic governed execution.

@@ -537,7 +537,8 @@ records source and disposable-TPM checks, not G2 completion.
 
 ## Local catalog service and human client
 
-The source now packages `luma-admin.service` and its `luma-admin` AppArmor
+The source now packages `luma-admin.service`, its `luma-admin` AppArmor
+profile and the required `luma-peer-observer.service` with its separate enforcing
 profile. It exposes only catalog status, activity registration and role
 definition. This is not the complete assignment, principal, signing or effect
 authorization service. The existing distributed image does not contain this
@@ -558,6 +559,11 @@ service refuses an unconfined/manual launch, complain-mode profile, unexpected
 cgroup, disabled seccomp/no-new-privileges or unsupported memory/swap/task limits.
 Do not bypass a refusal by removing confinement or changing the fixed limits.
 The service is not a boot-health requirement; manual operation stays independent.
+The Admin unit starts its observer dependency automatically. A missing, unconfined
+or unverifiable observer denies requests; do not start a substitute process or
+relax Admin's proc visibility or capabilities. The observer has no capabilities,
+PAM/TPM credential access, model access, network time source or grant authority.
+It accepts one bounded process-handle observation per protected local connection.
 
 From the original UID 1001 human account, use the client **without sudo**:
 
@@ -582,6 +588,18 @@ serialized tokens are refused. Password bytes travel in a separate fixed binary
 frame directly into protected buffers, never request JSON, arguments,
 environment variables or error replies. This is a local-only interface, not
 an external Admin variant or model/browser-controlled endpoint.
+
+The original connected process handle remains live through catalog authority
+checks. Current real/effective/saved/filesystem UID and GID must match the
+connection credentials in every original thread. The supported task set is
+bounded to 32 threads and must stay stable during observation; missing tasks,
+credential changes, disconnect, timeout or unverifiable kernel metadata deny
+the request and permanently fence that peer object. The normal native client is
+single-threaded. Restoring credentials does not revive an already fenced peer.
+Each observer reply binds a fresh nonce and six exact, read-only kernel metadata
+descriptors: its status, cgroup, AppArmor label and three resource limits. Admin
+keeps its existing hidden proc view and CAP_CHOWN-only boundary. These are current
+observations, not durable account-generation rollback protection or effect grants.
 
 One request runs in one bounded child process. Timeout or lost reply never
 automatically replays a mutation, clears a fence or reconstructs state. Inspect

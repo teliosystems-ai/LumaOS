@@ -201,10 +201,18 @@ fn validate(request: &Request) -> Result<()> {
 
 fn handle(
     stream: &mut UnixStream,
-    mut execute: impl FnMut(&Request, &PrivateBuffer, &Peer) -> Result<serde_json::Value>,
+    execute: impl FnMut(&Request, &PrivateBuffer, &Peer) -> Result<serde_json::Value>,
 ) -> Result<()> {
     // Refuse workers, ordinary user and root before accepting any credential.
     let bound = Peer::capture(stream)?;
+    handle_bound(stream, execute, bound)
+}
+
+fn handle_bound(
+    stream: &mut UnixStream,
+    mut execute: impl FnMut(&Request, &PrivateBuffer, &Peer) -> Result<serde_json::Value>,
+    bound: Peer,
+) -> Result<()> {
     let uid = bound.uid();
     let deadline = Instant::now() + FRAME_BUDGET;
     let request: Request = serde_json::from_slice(&read_frame(stream, REQUEST_LIMIT, deadline)?)?;
@@ -514,6 +522,16 @@ pub fn client(args: &[String]) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Explicitly uninstalled disposable-kernel composition. The shipped handle
+    // always requires the confined observer; no environment/JSON fallback exists.
+    fn handle(
+        stream: &mut UnixStream,
+        execute: impl FnMut(&Request, &PrivateBuffer, &Peer) -> Result<serde_json::Value>,
+    ) -> Result<()> {
+        let bound = Peer::capture_fixture(stream)?;
+        super::handle_bound(stream, execute, bound)
+    }
     fn request() -> Request {
         Request {
             schema_version: 1,
@@ -808,7 +826,11 @@ mod tests {
             .unwrap();
             stream.shutdown(std::net::Shutdown::Write).unwrap();
             let mut byte = [0];
-            assert_eq!(stream.read(&mut byte).unwrap(), 0);
+            match stream.read(&mut byte) {
+                Ok(0) => (),
+                Err(error) if error.kind() == io::ErrorKind::ConnectionReset => (),
+                _ => panic!("truncated request received data or was not closed"),
+            }
         } else {
             write_until(&mut stream, password.bytes(), Instant::now() + FRAME_BUDGET).unwrap();
             let bytes =

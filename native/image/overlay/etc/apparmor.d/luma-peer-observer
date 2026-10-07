@@ -1,0 +1,28 @@
+#include <tunables/global>
+profile luma-peer-observer flags=(attach_disconnected) {
+  #include <abstractions/base>
+  /usr/libexec/luma-os/luma-platform mrix,
+  /usr/lib/** mr,
+  /lib/** mr,
+  /lib64/** mr,
+  /proc/cmdline r,
+  /proc/@{pid}/status r,
+  /proc/@{pid}/task/ r,
+  /proc/@{pid}/task/@{pid}/ r,
+  /proc/@{pid}/task/@{pid}/status r,
+  owner /proc/@{pid}/{cgroup,attr/current,fdinfo/*} r,
+  /sys/fs/cgroup/system.slice/luma-peer-observer.service/{memory.max,memory.swap.max,pids.max} r,
+  /run/luma-peer-observer/ rw,
+  /run/luma-peer-observer/credentials.sock rw,
+  /dev/{urandom,random} r,
+  /dev/null rw,
+  network unix seqpacket,
+  signal (receive) peer=unconfined,
+  deny /etc/{shadow,gshadow} r,
+  deny /dev/{tpm*,mem,kmem,port,kvm,dxg,nvidia*,dri/**} rw,
+  deny /var/lib/luma-os/** rwklx,
+  deny /run/luma-admin/** rwklx,
+  deny /run/luma-governance/** rwklx,
+  deny /efi/** rwklx,
+  deny /boot/** rwklx,
+}

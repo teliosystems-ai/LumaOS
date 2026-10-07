@@ -24,7 +24,7 @@ class AdminServicePolicyTests(unittest.TestCase):
     def test_service_has_no_secret_json_or_environment_authentication(self):
         source = (ROOT / 'rust/luma-platform/src/admin_service.rs').read_text().split('#[cfg(test)]')[0]
         self.assertIn('libc::SO_PEERCRED', source)
-        peer = (ROOT / 'rust/luma-platform/src/admin_service/peer.rs').read_text().split('#[cfg(test)]')[0]
+        peer = (ROOT / 'rust/luma-platform/src/admin_service/peer.rs').read_text().split('#[cfg(test)]\nmod tests')[0]
         self.assertIn('if credentials.uid != HUMAN', peer)
         self.assertIn('let bound = Peer::capture(stream)?;', source)
         self.assertIn('authentication::peer_account', source)
@@ -53,7 +53,7 @@ class AdminServicePolicyTests(unittest.TestCase):
         self.assertNotIn('network inet', profile)
 
     def test_live_peer_wraps_identity_at_catalog_authority_boundaries(self):
-        peer = (ROOT / 'rust/luma-platform/src/admin_service/peer.rs').read_text().split('#[cfg(test)]')[0]
+        peer = (ROOT / 'rust/luma-platform/src/admin_service/peer.rs').read_text().split('#[cfg(test)]\nmod tests')[0]
         for marker in ('pin: File', 'stream: UnixStream', 'fenced: Cell<bool>',
                        'crate::service::peer_pidfd(stream)?', 'pidfd_alive(&self.pin)?',
                        'inspect(&self.pin, self.credentials.pid)?;', 'libc::POLLRDHUP',
@@ -69,6 +69,48 @@ class AdminServicePolicyTests(unittest.TestCase):
         unit = (ROOT / 'native/image/overlay/etc/systemd/system/luma-admin.service').read_text()
         self.assertIn('ProtectProc=invisible', unit)
         self.assertIn('CapabilityBoundingSet=CAP_CHOWN', unit)
+
+    def test_current_credentials_use_isolated_zero_capability_observer(self):
+        observer = (ROOT / 'rust/luma-platform/src/credential_observer.rs').read_text().split('#[cfg(test)]')[0]
+        for marker in ('SCM_RIGHTS', 'MSG_CMSG_CLOEXEC', 'MSG_CTRUNC', 'MSG_TRUNC',
+                       'SOCK_SEQPACKET', 'SO_PEERSEC', 'SO_PEERCRED',
+                       'crate::service::peer_pidfd(socket)?', 'luma-peer-observer (enforce)',
+                       'ids(&status, "Uid", uid)?;', 'ids(&status, "Gid", gid)?;',
+                       'descriptors.len() != 1', 'reply != bytes',
+                       'uid != 1001', 'resource_bounds()?;', 'Duration::from_secs(2)',
+                       'verify_proof(endpoint.pid, descriptors)?;', 'descriptors.len() != 6',
+                       'proof_paths(pid)', 'libc::O_RDONLY'):
+            self.assertIn(marker, observer)
+        self.assertNotIn('SYS_pidfd_open', observer)
+        self.assertNotIn('std::env::', observer)
+        self.assertNotIn('Command::', observer)
+        peer = (ROOT / 'rust/luma-platform/src/admin_service/peer.rs').read_text()
+        self.assertIn('crate::credential_observer::check(', peer)
+        self.assertIn('#[cfg(test)]\n    KernelFixture', peer)
+        self.assertIn('Self::bind(stream, credentials, Observer::Installed)', peer)
+        unit = (ROOT / 'native/image/overlay/etc/systemd/system/luma-peer-observer.service').read_text()
+        for line in ('CapabilityBoundingSet=\n', 'AmbientCapabilities=\n',
+                     'ProtectProc=default', 'ProcSubset=all', 'NoNewPrivileges=yes',
+                     'PrivateDevices=yes', 'ProtectSystem=strict', 'ProtectClock=yes',
+                     'RuntimeDirectoryMode=0700', 'MemoryMax=64M', 'TasksMax=4',
+                     'MemorySwapMax=0', 'LimitMEMLOCK=0', 'AppArmorProfile=luma-peer-observer'):
+            self.assertIn(line, unit)
+        self.assertNotIn('DeviceAllow=', unit)
+        profile = (ROOT / 'native/image/overlay/etc/apparmor.d/luma-peer-observer').read_text()
+        self.assertNotIn('capability ', profile)
+        self.assertNotIn('network inet', profile)
+        self.assertIn('deny /var/lib/luma-os/** rwklx', profile)
+        self.assertIn('deny /etc/{shadow,gshadow} r', profile)
+        self.assertIn('deny /dev/{tpm*', profile)
+        self.assertIn('/proc/@{pid}/task/@{pid}/status r,', profile)
+        for marker in ('MAX_THREADS: usize = 32', 'libc::openat(', 'task_inventory(&path)? != inventory',
+                       'named.ino()', 'retained.ino()'):
+            self.assertIn(marker, observer)
+        admin = (ROOT / 'native/image/overlay/etc/systemd/system/luma-admin.service').read_text()
+        self.assertIn('Requires=apparmor.service luma-peer-observer.service', admin)
+        self.assertIn('ProtectProc=invisible', admin)
+        self.assertIn('CapabilityBoundingSet=CAP_CHOWN', admin)
+        self.assertIn("'luma-peer-observer.service'", (ROOT / 'native/image/assemble.py').read_text())
 
 
 if __name__ == '__main__':

@@ -1,7 +1,7 @@
 [Unit]
 Description=Luma local authenticated Admin catalog service
-After=apparmor.service systemd-tmpfiles-setup.service local-fs.target
-Requires=apparmor.service
+After=apparmor.service systemd-tmpfiles-setup.service local-fs.target luma-peer-observer.service
+Requires=apparmor.service luma-peer-observer.service
 ConditionKernelCommandLine=luma.mode=installed
 # Presence is only a startup condition. Every request verifies the real
 # bootstrapped principal and complete TPM-backed semantic history.

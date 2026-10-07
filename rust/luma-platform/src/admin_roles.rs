@@ -33,6 +33,9 @@ pub(crate) enum Command {
         activities: Vec<String>,
         expected_version: u64,
     },
+    AdoptPrincipals {
+        registry: crate::principal::Registry,
+    },
 }
 
 impl Command {
@@ -40,11 +43,13 @@ impl Command {
         match self {
             Self::RegisterActivity { .. } => "admin.activity.register",
             Self::DefineRole { .. } => "admin.role.define",
+            Self::AdoptPrincipals { .. } => "admin.principal.adopt",
         }
     }
     pub(crate) fn validate(&self) -> Result<()> {
         let valid_activity = |v: &str| identifier(v) && v != "admin.bootstrap";
         match self {
+            Self::AdoptPrincipals { registry } => registry.validate(),
             Self::RegisterActivity { activity } if valid_activity(activity) => Ok(()),
             Self::DefineRole {
                 name, activities, ..
@@ -76,6 +81,8 @@ pub(crate) struct Catalog {
     pub state_version: u64,
     pub activities: BTreeSet<String>,
     pub roles: BTreeMap<String, Role>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub principal_registry: Option<crate::principal::Registry>,
 }
 
 impl Catalog {
@@ -84,6 +91,7 @@ impl Catalog {
             state_version: 1,
             activities: CONTROL.iter().map(|v| (*v).into()).collect(),
             roles: BTreeMap::new(),
+            principal_registry: None,
         }
     }
 
@@ -96,6 +104,15 @@ impl Catalog {
             .checked_add(1)
             .ok_or("Admin catalog version exhausted")?;
         match command {
+            Command::AdoptPrincipals { registry } => {
+                if let Some(anchored) = &self.principal_registry {
+                    if anchored == registry {
+                        return Ok(false);
+                    }
+                    return Err("principal authority already adopted; a new snapshot cannot replace governed generations".into());
+                }
+                self.principal_registry = Some(registry.clone());
+            }
             Command::RegisterActivity { activity } => {
                 if self.activities.contains(activity) {
                     return Ok(false);
@@ -167,6 +184,33 @@ mod tests {
         assert_eq!(catalog.roles["Operator"].version, 2);
         assert_eq!(catalog.state_version, 4);
     }
+    #[test]
+    fn principal_adoption_is_explicit_immutable_and_preserves_legacy_serialization() {
+        let mut catalog = Catalog::initial();
+        assert!(serde_json::to_value(&catalog)
+            .unwrap()
+            .get("principal_registry")
+            .is_none());
+        let registry = serde_json::json!({"schema_version":1,"installation":"ab".repeat(32),
+            "principals":[{"id":"cd".repeat(32),"generation":1,"login":"human","uid":1001,"enabled":true}]});
+        let command = Command::AdoptPrincipals {
+            registry: serde_json::from_value(registry.clone()).unwrap(),
+        };
+        assert!(catalog.apply(&command).unwrap());
+        assert_eq!(catalog.state_version, 2);
+        assert!(!catalog.apply(&command).unwrap());
+        let before = catalog.clone();
+        for invalid in [false, true] {
+            let mut changed = registry.clone();
+            changed["principals"][0]["generation"] = serde_json::json!(if invalid { 0 } else { 2 });
+            let command = Command::AdoptPrincipals {
+                registry: serde_json::from_value(changed).unwrap(),
+            };
+            assert!(catalog.apply(&command).is_err());
+            assert_eq!(catalog, before);
+        }
+    }
+
     #[test]
     fn noops_do_not_create_versions() {
         let mut catalog = Catalog::initial();

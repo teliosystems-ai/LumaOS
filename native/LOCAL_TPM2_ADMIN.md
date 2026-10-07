@@ -539,8 +539,10 @@ records source and disposable-TPM checks, not G2 completion.
 
 The source now packages `luma-admin.service`, its `luma-admin` AppArmor
 profile and the required `luma-peer-observer.service` with its separate enforcing
-profile. It exposes only catalog status, activity registration and role
-definition. This is not the complete assignment, principal, signing or effect
+profile. It exposes catalog status, activity registration, role definition and
+explicit adoption of the installed principal registry. Adoption checkpoints a
+snapshot without changing local accounts. This is not the complete assignment,
+principal lifecycle, signing or effect
 authorization service. The existing distributed image does not contain this
 increment until the consolidated candidate is rebuilt and qualified.
 
@@ -569,6 +571,8 @@ From the original UID 1001 human account, use the client **without sudo**:
 
 ```text
 luma-platform admin-client LOGIN status
+luma-platform admin-client LOGIN adopt-principals adopt-installed-principals
+luma-platform admin-client LOGIN adopt-principals adopt-installed-principals --commit REVIEW-SHA256
 luma-platform admin-client LOGIN register register-model model.select
 luma-platform admin-client LOGIN register register-model model.select --commit REVIEW-SHA256
 luma-platform admin-client LOGIN define define-operator Operator 0 model.select
@@ -580,6 +584,36 @@ review the inspection's principal, request, command and current state before
 using its `review_sha256`. The digest is not authentication; the commit requires
 fresh PAM again. Preserve the exact request/command on reviewed retry. No
 authenticated session or reusable bearer credential is returned.
+
+Principal adoption must be explicitly inspected and approved after product Admin
+bootstrap. The service captures only `/var/lib/luma-os/principals/registry.json`;
+the request cannot supply registry contents, a path or a generation. Check every
+principal's installation namespace, identifier, generation, login, UID and enabled
+state in the proposal before approval. The snapshot must include the original
+enabled enrolled Admin. A reviewed commit places its canonical semantic bytes in
+the existing TPM-backed catalog history. It does not checkpoint passwords,
+credential hashes, PAM configuration or the registry file's inode across restarts.
+Maintenance can use `sudo luma-platform admin-principals-adopt LOGIN REQUEST`
+and the same separately reviewed `--commit REVIEW-SHA256`; genuine local PAM,
+installed-mode checks and the existing TPM checkpoint are still required.
+
+After adoption, Admin catalog and shared UTC-history replay require the current
+registry to match the adopted snapshot, including other accounts. Missing or
+changed metadata fences these semantics without resetting the checkpoint.
+Original registry handles are also pinned throughout a live catalog transaction;
+even identical-byte file replacement refuses that transaction. An exact historical
+request can be replayed without a new TPM write, and an identical new adoption is
+a no-op. A different snapshot cannot replace adopted generations. Preserve any
+interrupted intent and use reviewed journal publication only when its TPM proof
+allows it; never repeat an uncertain write automatically.
+
+This is an immutable adoption primitive. There is no authorized account creation,
+disable/re-enable, credential rotation, generation advance or principal recovery
+interface yet. Do not adopt a production registry expecting those operations to be
+available. Existing pre-adoption history remains readable and is not silently
+converted into principal authority. Resource, inference and effect boundaries do
+not yet consume this checkpoint; principal/session and grant integration remains
+open, as does installed confinement and native-hardware qualification.
 
 The fixed root-owned socket accepts only the kernel-observed UID 1001; root,
 workers and ordinary users are not product Admin peers. PAM must resolve the

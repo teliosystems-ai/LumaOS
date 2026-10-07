@@ -15,7 +15,7 @@ pub const IDENTITY: &str = "/var/lib/luma-os/identity";
 const MAX_ACCOUNT_BYTES: usize = 16 * 1024;
 const MAX_REGISTRY_BYTES: u64 = 64 * 1024;
 
-#[derive(Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 struct Principal {
     id: String,
@@ -25,9 +25,9 @@ struct Principal {
     enabled: bool,
 }
 
-#[derive(Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
-struct Registry {
+pub(crate) struct Registry {
     schema_version: u32,
     installation: String,
     principals: Vec<Principal>,
@@ -65,6 +65,30 @@ fn validate(registry: &Registry) -> Result<()> {
         }
     }
     Ok(())
+}
+
+impl Registry {
+    pub(crate) fn validate(&self) -> Result<()> {
+        validate(self)
+    }
+
+    pub(crate) fn binds(
+        &self,
+        installation: &str,
+        principal: &str,
+        generation: u64,
+        name: &str,
+        uid: u32,
+    ) -> bool {
+        self.installation == installation
+            && self.principals.iter().any(|record| {
+                record.id == principal
+                    && record.generation == generation
+                    && record.login == name
+                    && record.uid == uid
+                    && record.enabled
+            })
+    }
 }
 
 fn random_id() -> Result<String> {
@@ -243,6 +267,46 @@ fn registry_observation(path: &Path) -> Result<(Registry, FilePin)> {
 
 fn registry(path: &Path) -> Result<Registry> {
     Ok(registry_observation(path)?.0)
+}
+
+/// A pinned inert registry observation, not authentication or an authority token.
+/// The Admin adapter must independently bind its snapshot into verified TPM
+/// history and recheck the same observation at its final writer boundary.
+pub(crate) struct RegistryBinding {
+    path: PathBuf,
+    snapshot: Registry,
+    pin: FilePin,
+    fenced: Cell<bool>,
+}
+
+impl RegistryBinding {
+    pub(crate) fn capture(path: &Path) -> Result<Self> {
+        let (snapshot, pin) = registry_observation(path)?;
+        Ok(Self {
+            path: path.into(),
+            snapshot,
+            pin,
+            fenced: Cell::new(false),
+        })
+    }
+
+    pub(crate) fn current(&self) -> Result<&Registry> {
+        if self.fenced.get() {
+            return Err("principal registry observation is fenced".into());
+        }
+        let result = (|| {
+            self.pin.recheck()?;
+            if registry(&self.path)? != self.snapshot {
+                return Err("principal registry changed during governance".into());
+            }
+            self.pin.recheck()?;
+            Ok(&self.snapshot)
+        })();
+        if result.is_err() {
+            self.fenced.set(true);
+        }
+        result
+    }
 }
 
 pub(crate) fn installation_at(path: &Path) -> Result<String> {
@@ -455,6 +519,82 @@ mod tests {
             }
             fs::remove_dir(&self.0).unwrap();
         }
+    }
+
+    #[test]
+    fn registry_checkpoint_observation_is_pinned_and_sticky_after_restoration() {
+        let fixture = Fixture::new("registry-checkpoint-pin");
+        let binding = RegistryBinding::capture(&fixture.path()).unwrap();
+        let original = binding.current().unwrap().clone();
+        crate::platform::write_atomic(
+            &fixture.path(),
+            &serde_json::to_vec(&original).unwrap(),
+            0o600,
+        )
+        .unwrap();
+        assert!(binding.current().is_err());
+        assert_eq!(
+            RegistryBinding::capture(&fixture.path())
+                .unwrap()
+                .current()
+                .unwrap(),
+            &original
+        );
+        assert!(binding.current().is_err());
+    }
+
+    #[test]
+    fn registry_binding_requires_exact_enabled_installation_principal_generation_and_account() {
+        let fixture = Fixture::new("registry-exact-identity");
+        let mut registry = registry(&fixture.path()).unwrap();
+        let principal = registry.principals[0].clone();
+        let binds = |registry: &Registry| {
+            registry.binds(
+                &registry.installation,
+                &principal.id,
+                principal.generation,
+                &principal.login,
+                principal.uid,
+            )
+        };
+        assert!(binds(&registry));
+        assert!(!registry.binds(
+            &"ab".repeat(32),
+            &principal.id,
+            principal.generation,
+            &principal.login,
+            principal.uid
+        ));
+        assert!(!registry.binds(
+            &registry.installation,
+            &"ab".repeat(32),
+            principal.generation,
+            &principal.login,
+            principal.uid
+        ));
+        assert!(!registry.binds(
+            &registry.installation,
+            &principal.id,
+            2,
+            &principal.login,
+            principal.uid
+        ));
+        assert!(!registry.binds(
+            &registry.installation,
+            &principal.id,
+            principal.generation,
+            "other",
+            principal.uid
+        ));
+        assert!(!registry.binds(
+            &registry.installation,
+            &principal.id,
+            principal.generation,
+            &principal.login,
+            1002
+        ));
+        registry.principals[0].enabled = false;
+        assert!(!binds(&registry));
     }
 
     #[test]

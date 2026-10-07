@@ -72,6 +72,9 @@ fn require_confined() -> Result<()> {
 #[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
 enum Operation {
     Status,
+    AdoptPrincipals {
+        review_sha256: Option<String>,
+    },
     Catalog {
         command: CatalogCommand,
         review_sha256: Option<String>,
@@ -191,10 +194,19 @@ fn validate(request: &Request) -> Result<()> {
         review_sha256,
     } = &request.operation
     {
+        if matches!(command, CatalogCommand::AdoptPrincipals { .. }) {
+            return Err("principal adoption cannot accept a caller-supplied registry".into());
+        }
         command.validate()?;
         if let Some(review) = review_sha256 {
             tpm::decode::<32>(review)?;
         }
+    }
+    if let Operation::AdoptPrincipals {
+        review_sha256: Some(review),
+    } = &request.operation
+    {
+        tpm::decode::<32>(review)?;
     }
     Ok(())
 }
@@ -284,6 +296,17 @@ pub fn connection() -> Result<()> {
                 Some(command),
                 review_sha256.as_deref(),
             ),
+            Operation::AdoptPrincipals { review_sha256 } => {
+                let command =
+                    admin_governance::adoption_command(Path::new(crate::principal::REGISTRY))?;
+                admin_governance::service_request(
+                    &account,
+                    peer,
+                    &request.request_id,
+                    Some(&command),
+                    review_sha256.as_deref(),
+                )
+            }
         };
         account.logout();
         result
@@ -436,6 +459,39 @@ fn response(bytes: &[u8], request: &Request) -> Result<serde_json::Value> {
             return Err("Admin result does not bind the exact requested catalog command".into());
         }
     }
+    if let Operation::AdoptPrincipals { .. } = &request.operation {
+        if result["proposal"]["request_id"] != request.request_id {
+            return Err("principal adoption response does not bind the request".into());
+        }
+        let command: CatalogCommand = serde_json::from_value(result["proposal"]["command"].clone())
+            .map_err(|_| "invalid principal adoption response")?;
+        command.validate()?;
+        let CatalogCommand::AdoptPrincipals { registry } = &command else {
+            return Err("principal adoption response substitutes another command".into());
+        };
+        let principal = &result["proposal"]["principal"];
+        if !registry.binds(
+            principal["installation"]
+                .as_str()
+                .ok_or("missing adoption installation")?,
+            principal["principal"]
+                .as_str()
+                .ok_or("missing adoption principal")?,
+            principal["generation"]
+                .as_u64()
+                .ok_or("missing adoption generation")?,
+            &request.login,
+            HUMAN,
+        ) || principal["login"] != request.login
+            || principal["uid"] != HUMAN
+            || (result["committed"] == true
+                && result["catalog"]["principal_registry"] != serde_json::to_value(registry)?)
+        {
+            return Err(
+                "principal adoption response does not bind the authenticated registry".into(),
+            );
+        }
+    }
     Ok(result)
 }
 fn client_request(args: &[String]) -> Result<Request> {
@@ -447,8 +503,26 @@ fn client_request(args: &[String]) -> Result<Request> {
             operation: Operation::Status,
         });
     }
+    if (args.len() == 3 || (args.len() == 5 && args[3] == "--commit"))
+        && args[1] == "adopt-principals"
+    {
+        let request = Request {
+            schema_version: 1,
+            request_id: args[2].clone(),
+            login: args[0].clone(),
+            operation: Operation::AdoptPrincipals {
+                review_sha256: if args.len() == 5 {
+                    Some(args[4].clone())
+                } else {
+                    None
+                },
+            },
+        };
+        validate(&request)?;
+        return Ok(request);
+    }
     if args.len() < 4 {
-        return Err("admin-client LOGIN status | LOGIN register REQUEST ACTIVITY | LOGIN define REQUEST ROLE VERSION ACTIVITY...; optional --commit REVIEW".into());
+        return Err("admin-client LOGIN status | LOGIN adopt-principals REQUEST | LOGIN register REQUEST ACTIVITY | LOGIN define REQUEST ROLE VERSION ACTIVITY...; optional --commit REVIEW".into());
     }
     let committed = args.len() >= 2 && args[args.len() - 2] == "--commit";
     let end = args.len() - if committed { 2 } else { 0 };
@@ -554,6 +628,85 @@ mod tests {
         ))
         .is_err());
     }
+    #[test]
+    fn principal_adoption_request_carries_no_caller_registry_or_path() {
+        let args = ["human", "adopt-principals", "adopt"].map(String::from);
+        let request = client_request(&args).unwrap();
+        validate(&request).unwrap();
+        assert!(matches!(
+            request.operation,
+            Operation::AdoptPrincipals {
+                review_sha256: None
+            }
+        ));
+        let value = serde_json::to_value(&request).unwrap();
+        for key in ["registry", "registry_path", "principal", "generation"] {
+            let mut changed = value.clone();
+            changed["operation"][key] = serde_json::json!("caller-value");
+            assert!(serde_json::from_value::<Request>(changed).is_err());
+        }
+        let mut supplied = client_request(&args).unwrap();
+        supplied.operation = Operation::Catalog {
+            command: CatalogCommand::AdoptPrincipals {
+                registry: serde_json::from_value(serde_json::json!({"schema_version":1,
+                "installation":"ab".repeat(32),"principals":[{"id":"cd".repeat(32),
+                "generation":1,"login":"human","uid":1001,"enabled":true}]}))
+                .unwrap(),
+            },
+            review_sha256: None,
+        };
+        assert!(validate(&supplied).is_err());
+        assert!(client_request(
+            &["human", "adopt-principals", "adopt", "--commit", "bad"].map(String::from)
+        )
+        .is_err());
+        assert!(client_request(
+            &["human", "adopt-principals", "adopt", "/caller/path"].map(String::from)
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn principal_adoption_reply_binds_request_admin_and_committed_snapshot() {
+        let request =
+            client_request(&["human", "adopt-principals", "adopt"].map(String::from)).unwrap();
+        let registry = serde_json::json!({"schema_version":1,"installation":"ab".repeat(32),
+            "principals":[{"id":"cd".repeat(32),"generation":1,"login":"human","uid":1001,"enabled":true}]});
+        let mut result = public_result();
+        result["action"] = serde_json::json!("admin-catalog-command");
+        result["committed"] = serde_json::json!(true);
+        result["catalog"] = serde_json::json!({"principal_registry":registry});
+        result["proposal"] = serde_json::json!({"request_id":"adopt",
+            "principal":{"installation":"ab".repeat(32),"principal":"cd".repeat(32),
+                "generation":1,"login":"human","uid":1001},
+            "command":{"action":"adopt_principals","registry":registry}});
+        let value = serde_json::to_value(Response {
+            schema_version: 1,
+            request_id: "adopt".into(),
+            authenticated_uid: HUMAN,
+            status: "ok".into(),
+            result: Some(result),
+            gate_closing: false,
+        })
+        .unwrap();
+        response(&serde_json::to_vec(&value).unwrap(), &request).unwrap();
+        for choice in 0..4 {
+            let mut changed = value.clone();
+            match choice {
+                0 => changed["result"]["proposal"]["request_id"] = serde_json::json!("other"),
+                1 => {
+                    changed["result"]["proposal"]["principal"]["generation"] = serde_json::json!(2)
+                }
+                2 => changed["result"]["catalog"]["principal_registry"] = serde_json::Value::Null,
+                _ => {
+                    changed["result"]["proposal"]["command"] =
+                        serde_json::json!({"action":"register_activity","activity":"model.select"})
+                }
+            }
+            assert!(response(&serde_json::to_vec(&changed).unwrap(), &request).is_err());
+        }
+    }
+
     #[test]
     fn metadata_has_no_caller_role_password_or_assignment_field() {
         let mut value = serde_json::to_value(request()).unwrap();
@@ -847,7 +1000,11 @@ mod tests {
     }
 
     fn pam_request(mode: &str, review: Option<String>) -> Request {
-        let operation = if mode.starts_with("peer-exit") {
+        let operation = if mode.starts_with("adopt-") {
+            Operation::AdoptPrincipals {
+                review_sha256: review,
+            }
+        } else if mode.starts_with("peer-exit") {
             Operation::Catalog {
                 command: CatalogCommand::RegisterActivity {
                     activity: "model.dead-peer".into(),
@@ -875,7 +1032,9 @@ mod tests {
         };
         Request {
             schema_version: 1,
-            request_id: if mode.starts_with("register") {
+            request_id: if mode.starts_with("adopt-") {
+                "service-principal-adoption"
+            } else if mode.starts_with("register") {
                 "service-register"
             } else if mode.starts_with("define") {
                 "service-define"
@@ -947,6 +1106,12 @@ mod tests {
             "peer-exit-restored-commit",
             "locked",
             "restored",
+            "adopt-review",
+            "adopt-commit",
+            "adopt-replay-review",
+            "adopt-replay-commit",
+            "registry-other-generation",
+            "registry-restored",
         ] {
             let denied = matches!(
                 mode,
@@ -958,7 +1123,18 @@ mod tests {
                     | "disable-after-pam"
                     | "peer-exit-commit"
                     | "locked"
+                    | "registry-other-generation"
             );
+            if mode == "registry-other-generation" {
+                let mut changed: serde_json::Value = serde_json::from_slice(&original).unwrap();
+                changed["principals"][1]["generation"] = serde_json::json!(2);
+                crate::platform::write_atomic(
+                    &registry,
+                    &serde_json::to_vec(&changed).unwrap(),
+                    0o600,
+                )
+                .unwrap();
+            }
             if mode == "disabled" || mode == "changed-generation" {
                 let mut changed: serde_json::Value = serde_json::from_slice(&original).unwrap();
                 changed["principals"][0][if mode == "disabled" {
@@ -1032,6 +1208,17 @@ mod tests {
                     )?;
                 }
                 let result = match &request.operation {
+                    Operation::AdoptPrincipals { review_sha256 } => {
+                        let command = admin_governance::adoption_command(&registry)?;
+                        admin_governance::fixture_service_request(
+                            &root,
+                            &account,
+                            peer,
+                            &request.request_id,
+                            Some(&command),
+                            review_sha256.as_deref(),
+                        )
+                    }
                     Operation::Status => admin_governance::fixture_service_request(
                         &root,
                         &account,
@@ -1075,6 +1262,7 @@ mod tests {
                 if mode == "register-commit"
                     || mode == "define-commit"
                     || mode == "peer-exit-restored-commit"
+                    || mode == "adopt-commit"
                 {
                     assert_eq!(report["tpm_write_performed"], true);
                     assert_ne!(after, before);
@@ -1090,6 +1278,13 @@ mod tests {
                         report["catalog"]["roles"]["Operator"]["activities"],
                         serde_json::json!(["model.reconfigure", "model.select"])
                     );
+                }
+                if mode == "adopt-commit" || mode == "registry-restored" {
+                    assert_eq!(
+                        report["catalog"]["principal_registry"],
+                        serde_json::from_slice::<serde_json::Value>(&original).unwrap()
+                    );
+                    assert_eq!(report["catalog"]["roles"]["Operator"]["version"], 2);
                 }
             }
             // Fixture reset only; there is no product principal mutation/reset API.
@@ -1160,6 +1355,7 @@ mod tests {
                 | "changed-generation"
                 | "disable-after-pam"
                 | "locked"
+                | "registry-other-generation"
         );
         if denied {
             assert!(response(&bytes, &request).is_err());

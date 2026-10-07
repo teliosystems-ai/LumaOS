@@ -734,7 +734,12 @@ Final-image/native-hardware qualification remains separate.
   read-only kernel metadata bundle verifies the observer without opening another
   process through Admin's hidden proc view. Native installed observer enforcement
   remains unqualified; governed account, time and grant integrations remain
-  required software work.
+  required software work. Explicit reviewed principal-registry adoption now has a
+  native source path: the existing TPM catalog checkpoints the installed snapshot
+  and rejects changed metadata during Admin/UTC semantic replay. Live catalog
+  mutations pin the original registry through final authentication. This
+  immutable checkpoint is not mutable account lifecycle, credential rollback
+  protection or authority enforcement at resource/inference/effect boundaries.
 - Finish broader content/workflow worker admission. The closed invoice
   coordinator and both direct publishers use leased calculation and effect-time
   result checks, but remain installed-root paths, not generic governed execution.

@@ -576,6 +576,65 @@ Full native regression log / frozen runner SHA-256, respectively:
 `4e9fb23dd3488a84a9657dbc69133b4ef7e4e3844ff3d9d794f7fc0627464d44` /
 `f3f9bfff462a1275b89052fa06ac0ffdd26b835e2b2ed07b97ede60c68a3bb78`.
 
+### Reviewed principal registry adoption
+
+The native Admin source now supports explicit reviewed adoption of the installed
+principal registry through the human client or the local PAM maintenance command.
+Neither accepts registry contents or a source path from the caller. The command
+requires product bootstrap and the original enabled enrolled Admin, checkpoints
+the canonical registry snapshot in the existing TPM-backed semantic catalog, and
+preserves role definitions. Original registry handles remain pinned across live
+catalog authentication and the final writer. Missing or changed registry metadata,
+including another account's generation or enabled state, fences Admin catalog and
+shared UTC-history replay. Exact historical replay does not extend the TPM; an
+identical new adoption is a no-op. A different snapshot cannot replace adopted
+generations. Pre-adoption history remains readable without invented authority.
+
+This is an immutable adoption primitive, not account lifecycle management. It
+does not checkpoint credential hashes/PAM policy or file inodes across restarts,
+and does not add account creation, disable/re-enable, credential rotation,
+generation advance, principal recovery, assignments or effect grants. Resource,
+inference and effect boundaries do not yet consume the checkpoint. Those are
+remaining software integrations in the first subgate, not work waived until
+hardware arrives. Requirement #1 and G2 remain open; Requirement #2 is unstarted.
+Operating commands and the production-use limits are documented in
+[Local TPM2 Admin](LOCAL_TPM2_ADMIN.md#local-catalog-service-and-human-client).
+
+The final frozen source at
+`D:\LumaOS-builds\g2-principal-session-20261007-15` passed (exit 0): 133 targeted
+ordinary Rust tests, 46 selected Python checks, six actual-PAM modes, three
+kernel-human IPC modes and the explicit credential/thread/descriptor kernel
+executions. The fresh software-TPM/PAM composition passed all 26 Admin requests,
+including adoption inspection, commit, historical review/commit replay, changed
+other-principal generation refusal and restored-snapshot status. Unit fault
+coverage includes final-writer identical registry replacement, payload loss or
+substitution, journal rollback and reviewed publication after a lost TPM reply
+without a second write. These fault tests use the injected checkpoint fixture;
+they are not physical TPM interruption qualification.
+
+Build/format checks passed with warnings denied and both AppArmor profiles parsed
+without being loaded. All 217 captured source files, 57 test inputs and the CI
+workflow matched the checkout. Full native Python discovery passed (exit 0):
+263 of 265 tests, with the same two existing UTC-source fixture skips recorded
+separately. The 46 selected checks are included in that discovery. Sweep `-14`
+passed the earlier source before the explicit shared-history/rollback assertions;
+it is retained but is not the final snapshot. Build/test storage stayed on D:.
+Targeted execution used offline, one-CPU, 1 GiB containers; no host account/service, physical TPM or WSL
+memory configuration changed. Installed observer/AppArmor/seccomp enforcement,
+final-image testing and native hardware qualification remain unperformed.
+
+Source / test input manifest SHA-256, respectively:
+`351747acd4f76a2d2b0a6fe26db13347e0be82415515977d2a1e358e2cc9b057` /
+`4b92e34d58853b680bf12b144fcaddc40a58278291f8b4be083c37e365735e92`.
+Targeted log / frozen runner SHA-256, respectively:
+`a1aeabe801ec9197870e3a7f0557c7a6f5140b6afe230cce50f07dbf93d5bb94` /
+`63d3094ad5a63ad58825ee762412c1d781fa43ea4f1d151aee61de9bbeda4fe8`.
+Native executable SHA-256:
+`90e490f7897c4657629514d12653d57a8376c73d443826ed16b7de1aac861cba`.
+Full native regression log / frozen runner SHA-256, respectively:
+`e6752fa01baa37fd3944ec8f785a0df16d94f10b9dc82cc76f2efc8006462680` /
+`f3f9bfff462a1275b89052fa06ac0ffdd26b835e2b2ed07b97ede60c68a3bb78`.
+
 ### Admin and workflow closure status
 
 Neither work package is closed, and neither is merely waiting for the final

@@ -6,6 +6,26 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 class PrincipalPackagingTests(unittest.TestCase):
+    def test_principal_checkpoint_is_explicit_fixed_source_and_semantic_replay_guarded(self):
+        governance = (ROOT / 'rust/luma-platform/src/admin_governance.rs').read_text().split('#[cfg(test)]')[0]
+        for marker in ('pub fn adopt_principals(', 'platform::require_installed()?;',
+                       'adoption_command(Path::new(crate::principal::REGISTRY))?',
+                       'catalog.principal_registry', 'RegistryBinding::capture(self.registry_path)?',
+                       'installed principal registry differs from TPM-backed authority',
+                       'principal adoption must bind the current installed registry and original Admin',
+                       'registry_binding', 'binding.current()?;', 'MAX_CATALOG_EVENT: u64 = 128 * 1024'):
+            self.assertIn(marker, governance)
+        principal = (ROOT / 'rust/luma-platform/src/principal.rs').read_text().split('#[cfg(test)]')[0]
+        binding = principal.split('pub(crate) struct RegistryBinding')[1].split('pub(crate) struct AccountBinding')[0]
+        self.assertIn('pin: FilePin', binding)
+        self.assertIn('self.fenced.set(true)', binding)
+        self.assertNotIn('Serialize', binding)
+        service = (ROOT / 'rust/luma-platform/src/admin_service.rs').read_text().split('#[cfg(test)]')[0]
+        self.assertIn('principal adoption cannot accept a caller-supplied registry', service)
+        self.assertIn('adoption_command(Path::new(crate::principal::REGISTRY))?', service)
+        installer = (ROOT / 'rust/luma-platform/src/platform.rs').read_text()
+        self.assertNotIn('adopt_principals(', installer)
+
     def test_fresh_install_creates_principals_after_account_initialization(self):
         source = (ROOT / 'rust/luma-platform/src/platform.rs').read_text()
         create = source.index('create_identity(&data.at,')

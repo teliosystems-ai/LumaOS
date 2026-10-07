@@ -21,6 +21,7 @@ use std::path::Path;
 const DIRECTORY: &str = "/var/lib/luma-os/admin";
 const REQUEST: &str = "admin-bootstrap-v1";
 const ACTIVITY: &str = "admin.bootstrap";
+const MAX_CATALOG_EVENT: u64 = 128 * 1024;
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
@@ -89,7 +90,7 @@ fn event_name(request: &str) -> String {
 }
 
 fn read_event(directory: &Path, request: &str) -> Result<(CatalogEvent, Vec<u8>)> {
-    let bytes = tpm::private_read(&directory.join(event_name(request)), 16384)?;
+    let bytes = tpm::private_read(&directory.join(event_name(request)), MAX_CATALOG_EVENT)?;
     let event: CatalogEvent = serde_json::from_slice(&bytes)?;
     if serde_json::to_vec(&event)? != bytes || event.request_id != request {
         return Err("noncanonical or substituted Admin catalog payload; preserve state".into());
@@ -102,10 +103,15 @@ struct Context<'a> {
     enrollment: Vec<u8>,
     deployment: String,
     principal: Identity,
+    registry_path: &'a Path,
 }
 
 impl<'a> Context<'a> {
     fn load(directory: &'a Path, deployment: &str) -> Result<Self> {
+        Self::load_at(directory, deployment, Path::new(crate::principal::REGISTRY))
+    }
+
+    fn load_at(directory: &'a Path, deployment: &str, registry_path: &'a Path) -> Result<Self> {
         let enrollment = tpm::private_read(&directory.join("enrollment.json"), 16384)?;
         let principal = Identity::parse(admin_enrollment::checkpoint_identity(
             &enrollment,
@@ -116,6 +122,7 @@ impl<'a> Context<'a> {
             enrollment,
             deployment: deployment.into(),
             principal,
+            registry_path,
         })
     }
 
@@ -295,6 +302,19 @@ impl<'a> Context<'a> {
             if !catalog.apply(&event.command)? {
                 return Err("anchored Admin catalog event is not a mutation".into());
             }
+            if let Command::AdoptPrincipals { registry } = &event.command {
+                if !registry.binds(
+                    &self.principal.installation,
+                    &self.principal.principal,
+                    self.principal.generation,
+                    &self.principal.login,
+                    self.principal.uid,
+                ) {
+                    return Err(
+                        "anchored principal registry does not bind the original Admin".into(),
+                    );
+                }
+            }
             names.insert(event_name(&entry.request_id));
             events.push(event);
         }
@@ -316,6 +336,12 @@ impl<'a> Context<'a> {
                     "unreferenced Admin catalog preparation; preserve and review its request"
                         .into(),
                 );
+            }
+        }
+        if let Some(anchored) = &catalog.principal_registry {
+            let current = crate::principal::RegistryBinding::capture(self.registry_path)?;
+            if current.current()? != anchored {
+                return Err("installed principal registry differs from TPM-backed authority; preserve state".into());
             }
         }
         Ok((catalog, events, history, records))
@@ -674,6 +700,26 @@ pub fn bootstrap(login: &str, reviewed: Option<&str>) -> Result<()> {
 fn execute_catalog<A: Checkpoint>(
     store: &mut Store<A>,
     directory: &Path,
+    authenticate: impl FnMut() -> Result<serde_json::Value>,
+    request: &str,
+    command: &Command,
+    reviewed: Option<&str>,
+) -> Result<serde_json::Value> {
+    execute_catalog_at(
+        store,
+        directory,
+        Path::new(crate::principal::REGISTRY),
+        authenticate,
+        request,
+        command,
+        reviewed,
+    )
+}
+
+fn execute_catalog_at<A: Checkpoint>(
+    store: &mut Store<A>,
+    directory: &Path,
+    registry_path: &Path,
     mut authenticate: impl FnMut() -> Result<serde_json::Value>,
     request: &str,
     command: &Command,
@@ -684,11 +730,48 @@ fn execute_catalog<A: Checkpoint>(
     }
     command.validate()?;
     let snapshot = store.snapshot()?;
-    let context = Context::load(directory, &snapshot.deployment)?;
+    let context = Context::load_at(directory, &snapshot.deployment, registry_path)?;
     if !context.state(&snapshot, Some(request))?.1 {
         return Err("explicit product Admin bootstrap required".into());
     }
     let (catalog, events) = context.events(&snapshot, Some(request))?;
+    let registry_binding = if catalog.principal_registry.is_some()
+        || matches!(command, Command::AdoptPrincipals { .. })
+    {
+        Some(crate::principal::RegistryBinding::capture(registry_path)?)
+    } else {
+        None
+    };
+    if let Command::AdoptPrincipals { registry } = command {
+        if registry_binding
+            .as_ref()
+            .ok_or("missing principal registry observation")?
+            .current()?
+            != registry
+            || !registry.binds(
+                &context.principal.installation,
+                &context.principal.principal,
+                context.principal.generation,
+                &context.principal.login,
+                context.principal.uid,
+            )
+        {
+            return Err(
+                "principal adoption must bind the current installed registry and original Admin"
+                    .into(),
+            );
+        }
+    }
+    let mut authenticate = || {
+        if let Some(binding) = &registry_binding {
+            binding.current()?;
+        }
+        let value = authenticate()?;
+        if let Some(binding) = &registry_binding {
+            binding.current()?;
+        }
+        Ok(value)
+    };
     context.recheck(&mut authenticate)?;
     let old = events.iter().find(|event| event.request_id == request);
     let replayed = old.is_some();
@@ -699,6 +782,13 @@ fn execute_catalog<A: Checkpoint>(
         }
         (old.clone(), false)
     } else {
+        if snapshot
+            .entries
+            .iter()
+            .any(|entry| entry.request_id == request)
+        {
+            return Err("Admin request belongs to another semantic activity".into());
+        }
         let changed = predicted.apply(command)?;
         (
             CatalogEvent {
@@ -717,6 +807,9 @@ fn execute_catalog<A: Checkpoint>(
         )
     };
     let bytes = serde_json::to_vec(&event)?;
+    if bytes.len() as u64 > MAX_CATALOG_EVENT {
+        return Err("principal/catalog payload exceeds the fixed bound".into());
+    }
     let path = directory.join(event_name(request));
     let retained = match fs::symlink_metadata(&path) {
         Ok(_) => Some(read_event(directory, request)?.1),
@@ -855,6 +948,36 @@ pub fn catalog_command(args: &[String]) -> Result<()> {
     Ok(())
 }
 
+pub(crate) fn adoption_command(registry_path: &Path) -> Result<Command> {
+    let binding = crate::principal::RegistryBinding::capture(registry_path)?;
+    Ok(Command::AdoptPrincipals {
+        registry: binding.current()?.clone(),
+    })
+}
+
+pub fn adopt_principals(login: &str, request: &str, reviewed: Option<&str>) -> Result<()> {
+    crate::require_root()?;
+    platform::require_installed()?;
+    let account = authentication::local(login)?;
+    let command = adoption_command(Path::new(crate::principal::REGISTRY))?;
+    let directory = Path::new(DIRECTORY);
+    let mut store = Store::open(
+        tpm::LocalAnchor::installed()?,
+        &directory.join("journal.json"),
+    )?;
+    let result = execute_catalog(
+        &mut store,
+        directory,
+        || account.identity(),
+        request,
+        &command,
+        reviewed,
+    );
+    account.logout();
+    println!("{}", serde_json::to_string(&result?)?);
+    Ok(())
+}
+
 pub fn catalog_status(login: &str) -> Result<()> {
     crate::require_root()?;
     platform::require_installed()?;
@@ -898,13 +1021,21 @@ pub(crate) fn service_request(
         &directory.join("journal.json"),
     )?;
     service_request_at(
-        &mut store, directory, account, peer, request, command, review,
+        &mut store,
+        directory,
+        Path::new(crate::principal::REGISTRY),
+        account,
+        peer,
+        request,
+        command,
+        review,
     )
 }
 
 fn service_request_at<A: tpm::Checkpoint>(
     store: &mut Store<A>,
     directory: &Path,
+    registry_path: &Path,
     account: &authentication::AuthenticatedAccount,
     peer: &crate::admin_service::Peer,
     request: &str,
@@ -913,9 +1044,10 @@ fn service_request_at<A: tpm::Checkpoint>(
 ) -> Result<serde_json::Value> {
     peer.check()?;
     if let Some(command) = command {
-        return execute_catalog(
+        return execute_catalog_at(
             store,
             directory,
+            registry_path,
             || peer.observe(|| account.identity()),
             request,
             command,
@@ -926,7 +1058,7 @@ fn service_request_at<A: tpm::Checkpoint>(
         return Err("status cannot approve a mutation".into());
     }
     let snapshot = store.snapshot()?;
-    let context = Context::load(directory, &snapshot.deployment)?;
+    let context = Context::load_at(directory, &snapshot.deployment, registry_path)?;
     if !context.state(&snapshot, None)?.1 {
         return Err("explicit product Admin bootstrap required".into());
     }
@@ -976,7 +1108,14 @@ pub(crate) fn fixture_service_request(
     )?;
     let mut store = Store::open(anchor, &directory.join("journal.json"))?;
     service_request_at(
-        &mut store, &directory, account, peer, request, command, review,
+        &mut store,
+        &directory,
+        &root.join("registry.json"),
+        account,
+        peer,
+        request,
+        command,
+        review,
     )
 }
 
@@ -1132,6 +1271,249 @@ mod tests {
             source_clock_generation: 1,
             keeper_generation: 5,
             runtime_sha256: "ef".repeat(32),
+        }
+    }
+
+    fn principal_registry(f: &Fixture) -> Command {
+        let value = serde_json::json!({"schema_version":1,"installation":"ab".repeat(32),
+        "principals":[
+            {"id":"cd".repeat(32),"generation":1,"login":"human","uid":1001,"enabled":true},
+            {"id":"ef".repeat(32),"generation":1,"login":"otherhuman","uid":1002,"enabled":true}
+        ]});
+        platform::write_atomic(
+            &f.directory.join("registry.json"),
+            &serde_json::to_vec(&value).unwrap(),
+            0o600,
+        )
+        .unwrap();
+        adoption_command(&f.directory.join("registry.json")).unwrap()
+    }
+    fn principal_call(
+        f: &Fixture,
+        request: &str,
+        command: &Command,
+        review: Option<&str>,
+    ) -> Result<serde_json::Value> {
+        execute_catalog_at(
+            &mut f.store(),
+            &f.directory,
+            &f.directory.join("registry.json"),
+            || Ok(f.identity.clone()),
+            request,
+            command,
+            review,
+        )
+    }
+    fn principal_commit(f: &Fixture, request: &str, command: &Command) -> serde_json::Value {
+        let inspected = principal_call(f, request, command, None).unwrap();
+        principal_call(
+            f,
+            request,
+            command,
+            Some(inspected["review_sha256"].as_str().unwrap()),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn principal_adoption_requires_bootstrap_review_and_survives_restart_without_resetting_roles() {
+        let f = Fixture::new("principal-adoption");
+        let command = principal_registry(&f);
+        assert!(principal_call(&f, "adopt", &command, None).is_err());
+        assert_eq!(f.writes(), 0);
+        f.activate();
+        f.catalog_commit("register-model", &register());
+        f.catalog_commit("define-role", &definition(0, &["model.select"]));
+        let inspected = principal_call(&f, "adopt", &command, None).unwrap();
+        assert!(!f.directory.join(event_name("adopt")).exists());
+        assert_eq!(f.writes(), 3);
+        assert!(principal_call(&f, "adopt", &command, Some(&"00".repeat(32))).is_err());
+        let committed = principal_commit(&f, "adopt", &command);
+        assert_eq!(committed["catalog"]["state_version"], 4);
+        assert_eq!(committed["catalog"]["roles"]["Operator"]["version"], 1);
+        assert_eq!(
+            committed["catalog"]["principal_registry"],
+            inspected["proposal"]["command"]["registry"]
+        );
+        assert_eq!(f.writes(), 4);
+        let replay = principal_commit(&f, "adopt", &command);
+        assert_eq!(replay["replayed"], true);
+        assert_eq!(replay["tpm_write_performed"], false);
+        let noop = principal_commit(&f, "adopt-again", &command);
+        assert_eq!(noop["no_change"], true);
+        assert!(!f.directory.join(event_name("adopt-again")).exists());
+        assert_eq!(f.writes(), 4);
+        assert_eq!(
+            principal_commit(
+                &f,
+                "register-other",
+                &Command::RegisterActivity {
+                    activity: "model.other".into()
+                }
+            )["catalog"]["state_version"],
+            5
+        );
+    }
+
+    #[test]
+    fn principal_adoption_cannot_accept_caller_snapshot_or_different_original_admin() {
+        let f = Fixture::new("principal-wrong-source");
+        let command = principal_registry(&f);
+        f.activate();
+        let value = serde_json::to_value(&command).unwrap();
+        for choice in 0..6 {
+            let mut changed = value.clone();
+            match choice {
+                0 => changed["registry"]["installation"] = serde_json::json!("aa".repeat(32)),
+                1 => {
+                    changed["registry"]["principals"][0]["id"] = serde_json::json!("aa".repeat(32))
+                }
+                2 => changed["registry"]["principals"][0]["generation"] = serde_json::json!(2),
+                3 => changed["registry"]["principals"][0]["enabled"] = serde_json::json!(false),
+                4 => changed["registry"]["principals"][0]["uid"] = serde_json::json!(1003),
+                _ => changed["registry"]["principals"][0]["login"] = serde_json::json!("different"),
+            }
+            let altered: Command = serde_json::from_value(changed.clone()).unwrap();
+            assert!(principal_call(&f, "adopt", &altered, None).is_err());
+            platform::write_atomic(
+                &f.directory.join("registry.json"),
+                &serde_json::to_vec(&changed["registry"]).unwrap(),
+                0o600,
+            )
+            .unwrap();
+            assert!(principal_call(&f, "adopt", &altered, None).is_err());
+            principal_registry(&f);
+            assert_eq!(f.writes(), 1);
+            assert!(!f.directory.join(event_name("adopt")).exists());
+        }
+    }
+
+    #[test]
+    fn principal_checkpoint_detects_other_account_changes_and_missing_registry_without_writes() {
+        let f = Fixture::new("principal-other-account");
+        let command = principal_registry(&f);
+        f.activate();
+        principal_commit(&f, "adopt", &command);
+        let original = fs::read(f.directory.join("registry.json")).unwrap();
+        let journal = fs::read(f.directory.join("journal.json")).unwrap();
+        let snapshot = f.store().snapshot().unwrap();
+        let registry_path = f.directory.join("registry.json");
+        let context = Context::load_at(&f.directory, &snapshot.deployment, &registry_path).unwrap();
+        assert!(context.history(&snapshot, None).is_ok());
+        for choice in 0..3 {
+            let mut changed: serde_json::Value = serde_json::from_slice(&original).unwrap();
+            if choice == 0 {
+                changed["principals"][1]["generation"] = serde_json::json!(2);
+            } else if choice == 1 {
+                changed["principals"][1]["enabled"] = serde_json::json!(false);
+            } else {
+                changed["principals"].as_array_mut().unwrap().pop();
+            }
+            platform::write_atomic(
+                &f.directory.join("registry.json"),
+                &serde_json::to_vec(&changed).unwrap(),
+                0o600,
+            )
+            .unwrap();
+            assert!(principal_call(&f, "next", &register(), None).is_err());
+            assert!(context.history(&snapshot, None).is_err());
+            assert!(principal_call(
+                &f,
+                "replace",
+                &adoption_command(&f.directory.join("registry.json")).unwrap(),
+                None
+            )
+            .is_err());
+            platform::write_atomic(&f.directory.join("registry.json"), &original, 0o600).unwrap();
+            assert!(principal_call(&f, "next", &register(), None).is_ok());
+            assert!(context.history(&snapshot, None).is_ok());
+        }
+        fs::remove_file(f.directory.join("registry.json")).unwrap();
+        assert!(principal_call(&f, "next", &register(), None).is_err());
+        assert_eq!(fs::read(f.directory.join("journal.json")).unwrap(), journal);
+        assert_eq!(f.writes(), 2);
+    }
+
+    #[test]
+    fn principal_registry_replacement_at_final_writer_fences_even_identical_bytes() {
+        let f = Fixture::new("principal-final-writer");
+        let command = principal_registry(&f);
+        f.activate();
+        let inspected = principal_call(&f, "adopt", &command, None).unwrap();
+        let registry = f.directory.join("registry.json");
+        let original = fs::read(&registry).unwrap();
+        let mut calls = 0;
+        assert!(execute_catalog_at(
+            &mut f.store(),
+            &f.directory,
+            &registry,
+            || {
+                calls += 1;
+                if calls == 5 {
+                    platform::write_atomic(&registry, &original, 0o600)?;
+                }
+                Ok(f.identity.clone())
+            },
+            "adopt",
+            &command,
+            Some(inspected["review_sha256"].as_str().unwrap())
+        )
+        .is_err());
+        assert_eq!(calls, 5);
+        assert_eq!(f.writes(), 1);
+        assert!(f.directory.join("journal.pending.json").exists());
+        assert!(f.directory.join(event_name("adopt")).exists());
+    }
+
+    #[test]
+    fn principal_adoption_lost_reply_is_recovered_by_reviewed_publication_not_second_tpm_write() {
+        let f = Fixture::new("principal-lost-reply");
+        let command = principal_registry(&f);
+        f.activate();
+        let inspected = principal_call(&f, "adopt", &command, None).unwrap();
+        f.anchor.0.borrow_mut().3 = true;
+        assert!(principal_call(
+            &f,
+            "adopt",
+            &command,
+            Some(inspected["review_sha256"].as_str().unwrap())
+        )
+        .is_err());
+        let path = f.directory.join("journal.json");
+        assert!(Store::open(f.anchor.clone(), &path).is_err());
+        let recovery = admin_journal::Recovery::inspect(f.anchor.clone(), &path).unwrap();
+        let digest = recovery.digest().unwrap();
+        drop(recovery.publish(&digest).unwrap());
+        let replay = principal_commit(&f, "adopt", &command);
+        assert_eq!(replay["replayed"], true);
+        assert_eq!(replay["catalog"]["state_version"], 2);
+        assert_eq!(f.writes(), 2);
+    }
+
+    #[test]
+    fn principal_checkpoint_payload_loss_or_substitution_never_reconstructs_authority() {
+        for choice in 0..3 {
+            let f = Fixture::new(&format!("principal-payload-{choice}"));
+            let command = principal_registry(&f);
+            f.activate();
+            let before = fs::read(f.directory.join("journal.json")).unwrap();
+            principal_commit(&f, "adopt", &command);
+            let path = f.directory.join(event_name("adopt"));
+            if choice == 0 {
+                fs::remove_file(path).unwrap();
+            } else if choice == 2 {
+                platform::write_atomic(&f.directory.join("journal.json"), &before, 0o600).unwrap();
+                assert!(Store::open(f.anchor.clone(), &f.directory.join("journal.json")).is_err());
+                assert_eq!(f.writes(), 2);
+                continue;
+            } else {
+                let mut event: serde_json::Value =
+                    serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+                event["command"]["registry"]["principals"][1]["generation"] = serde_json::json!(2);
+                platform::write_atomic(&path, &serde_json::to_vec(&event).unwrap(), 0o600).unwrap();
+            }
+            assert!(principal_call(&f, "next", &register(), None).is_err());
+            assert_eq!(f.writes(), 2);
         }
     }
     fn observation(statement: &Statement) -> Observation {

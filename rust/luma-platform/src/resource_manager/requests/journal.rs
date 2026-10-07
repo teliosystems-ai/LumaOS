@@ -88,10 +88,11 @@ pub(super) struct Retention {
     pub(super) retired: BTreeSet<String>,
     published: Option<String>,
     pub(super) poisoned: bool,
+    authority_lost: std::cell::Cell<bool>,
 }
 impl Retention {
     pub(super) fn check(&self) -> Result<()> {
-        if self.poisoned {
+        if self.poisoned || self.authority_lost.get() {
             return Err(
                 "request publication uncertain; preserve state and restart authority".into(),
             );
@@ -441,7 +442,7 @@ impl Gate {
         if snapshot.records.iter().any(|r| retired.contains(&r.nonce)) {
             return Err("hot inference nonce already retired".into());
         }
-        Ok(Self {
+        let gate = Self {
             records: snapshot.records,
             retention: Retention {
                 origin: snapshot.origin,
@@ -449,8 +450,39 @@ impl Gate {
                 retired,
                 published: Some(digest(&bytes)),
                 poisoned: false,
+                authority_lost: std::cell::Cell::new(false),
             },
-        })
+        };
+        gate.verify_loaded(store)?;
+        Ok(gate)
+    }
+
+    // This witness belongs only to the current locked authority. A restored
+    // pathname or journal cannot revive a generation after observed loss.
+    fn verify_durable(&self, store: &Store, expected: &str) -> Result<StageIdentity> {
+        self.retention.check()?;
+        let result = (|| -> Result<StageIdentity> {
+            let directory = store.request_directory()?;
+            let observed = stage_identity(&directory.join(FILE))?;
+            if observed.sha256 != expected {
+                return Err("request journal changed outside authority; preserve state".into());
+            }
+            store.request_directory()?;
+            Ok(observed)
+        })();
+        if result.is_err() {
+            self.retention.authority_lost.set(true);
+        }
+        result
+    }
+
+    fn verify_loaded(&self, store: &Store) -> Result<StageIdentity> {
+        let expected = self
+            .retention
+            .published
+            .as_deref()
+            .ok_or("request journal not loaded")?;
+        self.verify_durable(store, expected)
     }
 
     fn bytes(&self) -> Result<Vec<u8>> {
@@ -494,21 +526,20 @@ impl Gate {
             .published
             .as_deref()
             .ok_or("request journal not loaded")?;
-        if next == published && !acknowledge {
-            return Ok(());
-        }
         let result = (|| -> Result<()> {
+            self.verify_durable(store, published)?;
+            if next == published && !acknowledge {
+                return Ok(());
+            }
             let directory = store.request_directory()?;
             let path = directory.join(FILE);
-            if digest(&tpm::private_read(&path, MAX_BYTES)?) != published {
-                return Err("request journal changed outside authority; preserve state".into());
-            }
             if next == published {
                 File::open(&path)?.sync_all()?;
                 File::open(directory)?.sync_all()?;
             } else {
                 publish(&path, &bytes)?;
             }
+            self.verify_durable(store, &next)?;
             Ok(())
         })();
         if result.is_err() {
@@ -523,6 +554,7 @@ impl Gate {
         &self,
         store: &Store,
     ) -> Result<serde_json::Value> {
+        self.verify_loaded(store)?;
         let bytes = self.bytes()?;
         let epoch = store.read()?.manager_epoch;
         let review = digest(&serde_json::to_vec(&(epoch, digest(&bytes)))?);
@@ -552,26 +584,14 @@ impl Gate {
         store: &Store,
         r: &super::super::history::Request,
     ) -> Result<super::super::history::Chunk> {
-        self.retention.check()?;
+        self.verify_loaded(store)?;
         let reference = self
             .retention
             .archives
             .iter()
             .find(|a| a.batch == r.batch && a.sha256 == r.sha256)
             .ok_or("export requires an exact referenced immutable archive")?;
-        let directory = store.request_directory()?;
-        let bytes = tpm::private_read(&directory.join(reference.name()), MAX_BYTES)?;
-        let snapshot = decode(&bytes)?;
-        if snapshot.origin != self.retention.origin
-            || snapshot.archives != self.retention.archives[..(reference.batch - 1) as usize]
-            || snapshot.records.is_empty()
-            || snapshot
-                .records
-                .iter()
-                .any(|r| !matches!(r.phase, Phase::Completed | Phase::Released))
-        {
-            return Err("request archive export provenance mismatch".into());
-        }
+        let bytes = self.export_bytes(store, reference)?;
         // Canonical request identities and digests contain only ASCII. Never
         // split arbitrary UTF-8 or provide an export of an unvalidated orphan.
         if digest(&bytes) != reference.sha256
@@ -597,15 +617,44 @@ impl Gate {
         })
     }
 
+    fn export_bytes(&self, store: &Store, reference: &Archive) -> Result<Vec<u8>> {
+        let result = (|| -> Result<Vec<u8>> {
+            let directory = store.request_directory()?;
+            let path = directory.join(reference.name());
+            let before = stage_identity(&path)?;
+            let bytes = tpm::private_read(&path, MAX_BYTES)?;
+            let snapshot = decode(&bytes)?;
+            if before.sha256 != reference.sha256
+                || digest(&bytes) != reference.sha256
+                || snapshot.origin != self.retention.origin
+                || snapshot.archives != self.retention.archives[..(reference.batch - 1) as usize]
+                || snapshot.records.is_empty()
+                || snapshot
+                    .records
+                    .iter()
+                    .any(|r| !matches!(r.phase, Phase::Completed | Phase::Released))
+                || stage_identity(&path)? != before
+            {
+                return Err("request archive export provenance mismatch".into());
+            }
+            self.verify_loaded(store)?;
+            Ok(bytes)
+        })();
+        if result.is_err() {
+            self.retention.authority_lost.set(true);
+        }
+        result
+    }
+
     fn recovery_candidate(&self, store: &Store) -> Result<Option<(String, StageIdentity, String)>> {
+        let hot = self.verify_loaded(store)?;
         let bytes = self.bytes()?;
         let ledger = store.read()?;
         if self.occupied() || ledger.leases.iter().any(|l| l.state != State::Released) {
             return Err("request stage recovery requires terminal requests and released physical generations".into());
         }
         let directory = store.request_directory()?;
-        let hot = stage_identity(&directory.join(FILE))?;
-        if Some(&hot.sha256) != self.retention.published.as_ref() || digest(&bytes) != hot.sha256 {
+        if digest(&bytes) != hot.sha256 {
             return Err("request journal changed before recovery review".into());
         }
         inventory(directory, &self.retention.archives, &self.retention.origin)?;
@@ -788,6 +837,10 @@ impl Gate {
                 }
             }
             File::open(directory)?.sync_all()?;
+            if stage_identity(&path)?.sha256 != reference.sha256 {
+                return Err("request archive publication readback differs; preserve state".into());
+            }
+            self.verify_loaded(store)?;
             Ok(())
         })();
         if publication.is_err() {
@@ -1199,6 +1252,234 @@ mod tests {
         assert!(f.gate.persist(&f.store, true).is_err());
         assert!(f.gate.retention.poisoned);
         assert_eq!(fs::read(f.directory.join(FILE)).unwrap(), b"{");
+    }
+
+    fn assert_fenced(f: &mut Fixture) {
+        assert!(f.gate.occupied());
+        assert!(f.gate.retention.check().is_err());
+        assert!(f.gate.retention_status(&f.store).is_err());
+        assert!(f.gate.stage_recovery_status(&f.store).is_err());
+        assert!(f.gate.persist(&f.store, false).is_err());
+        assert!(f.gate.persist(&f.store, true).is_err());
+        assert!(reserve(&mut f.gate, &f.caller, &begin(&f.worker, 2)).is_err());
+        assert_eq!(f.store.read().unwrap().charged("host").unwrap(), 5000);
+    }
+
+    #[test]
+    fn unchanged_maintenance_detects_external_hot_edits_and_restoration_does_not_revive() {
+        for malformed in [false, true] {
+            let mut f = Fixture::new();
+            f.complete(1);
+            let path = f.directory.join(FILE);
+            let original = fs::read(&path).unwrap();
+            let changed = if malformed {
+                b"{".to_vec()
+            } else {
+                let mut snapshot = decode(&original).unwrap();
+                snapshot.records.clear();
+                serde_json::to_vec(&snapshot).unwrap()
+            };
+            platform::write_atomic(&path, &changed, 0o600).unwrap();
+            assert!(f
+                .gate
+                .persist_with(&f.store, false, |_, _| panic!(
+                    "unchanged cycle cannot publish"
+                ))
+                .is_err());
+            assert_eq!(fs::read(&path).unwrap(), changed);
+            platform::write_atomic(&path, &original, 0o600).unwrap();
+            assert_fenced(&mut f);
+            let fresh = Gate::open(&f.store).unwrap();
+            assert_eq!(fresh.records[0].phase, Phase::Completed);
+            assert_eq!(fresh.records.len(), 1);
+        }
+    }
+
+    #[test]
+    fn successful_publication_must_read_back_the_intended_receipts_before_acknowledgement() {
+        for wrong in [false, true] {
+            let mut f = Fixture::new();
+            let original = fs::read(f.directory.join(FILE)).unwrap();
+            reserve(&mut f.gate, &f.caller, &begin(&f.worker, 1)).unwrap();
+            let intended = f.gate.bytes().unwrap();
+            assert!(f
+                .gate
+                .persist_with(&f.store, true, |path, _| {
+                    if wrong {
+                        platform::write_atomic(path, b"{", 0o600)?;
+                    }
+                    Ok(())
+                })
+                .is_err());
+            assert!(f.gate.retention.poisoned);
+            assert_eq!(
+                fs::read(f.directory.join(FILE)).unwrap(),
+                if wrong { b"{".to_vec() } else { original }
+            );
+            // Even a later exact durable repair does not authorize this session.
+            platform::write_atomic(&f.directory.join(FILE), &intended, 0o600).unwrap();
+            assert_fenced(&mut f);
+            let fresh = Gate::open(&f.store).unwrap();
+            assert_eq!(fresh.records[0].phase, Phase::Preparing);
+            assert!(fresh.records[0].pin.is_none());
+        }
+    }
+
+    #[test]
+    fn loaded_hot_custody_checks_modes_links_missing_and_oversized_state_without_overwrite() {
+        for fault in [
+            "mode", "setuid", "hardlink", "symlink", "missing", "size", "fifo",
+        ] {
+            let mut f = Fixture::new();
+            f.complete(1);
+            let path = f.directory.join(FILE);
+            let original = fs::read(&path).unwrap();
+            let saved = f.directory.join("saved-private-request");
+            match fault {
+                "mode" => fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap(),
+                "setuid" => fs::set_permissions(&path, fs::Permissions::from_mode(0o4600)).unwrap(),
+                "hardlink" => fs::hard_link(&path, &saved).unwrap(),
+                "symlink" | "missing" | "fifo" => {
+                    fs::rename(&path, &saved).unwrap();
+                    if fault == "symlink" {
+                        std::os::unix::fs::symlink(&saved, &path).unwrap();
+                    } else if fault == "fifo" {
+                        let name = CString::new(path.as_os_str().as_bytes()).unwrap();
+                        assert_eq!(unsafe { libc::mkfifo(name.as_ptr(), 0o600) }, 0);
+                    }
+                }
+                "size" => OpenOptions::new()
+                    .write(true)
+                    .open(&path)
+                    .unwrap()
+                    .set_len(MAX_BYTES + 1)
+                    .unwrap(),
+                _ => unreachable!(),
+            }
+            assert!(f.gate.retention_status(&f.store).is_err(), "{fault}");
+            assert!(f.gate.retention.authority_lost.get(), "{fault}");
+            assert_eq!(f.gate.records.len(), 1);
+            if matches!(fault, "symlink" | "fifo") {
+                fs::remove_file(&path).unwrap();
+            }
+            if matches!(fault, "symlink" | "missing" | "fifo") {
+                fs::rename(&saved, &path).unwrap();
+            } else if fault == "hardlink" {
+                fs::remove_file(&saved).unwrap();
+            }
+            platform::write_atomic(&path, &original, 0o600).unwrap();
+            assert_fenced(&mut f);
+            assert_eq!(fs::read(&path).unwrap(), original);
+        }
+    }
+
+    #[test]
+    fn unchanged_cycles_validate_shared_exclusion_and_publication_rechecks_it_after_writing() {
+        for during_publication in [false, true] {
+            let mut f = Fixture::new();
+            let lock = f.directory.join("ledger.lock");
+            let saved = f.directory.join("saved-private-lock");
+            if during_publication {
+                reserve(&mut f.gate, &f.caller, &begin(&f.worker, 1)).unwrap();
+                assert!(f
+                    .gate
+                    .persist_with(&f.store, true, |path, bytes| {
+                        platform::write_atomic(path, bytes, 0o600)?;
+                        fs::rename(&lock, &saved)?;
+                        platform::write_atomic(&lock, b"", 0o600)
+                    })
+                    .is_err());
+            } else {
+                fs::rename(&lock, &saved).unwrap();
+                platform::write_atomic(&lock, b"", 0o600).unwrap();
+                assert!(f.gate.persist(&f.store, false).is_err());
+            }
+            assert!(f.gate.retention.poisoned);
+            assert!(f.gate.occupied());
+            fs::remove_file(&lock).unwrap();
+            fs::rename(&saved, &lock).unwrap();
+            assert!(f.gate.persist(&f.store, false).is_err());
+            assert!(f.store.read().is_err());
+            let ledger: resources::Ledger =
+                serde_json::from_slice(&fs::read(f.directory.join("ledger.json")).unwrap())
+                    .unwrap();
+            assert_eq!(ledger.charged("host").unwrap(), 5000);
+        }
+    }
+
+    fn export_request(f: &Fixture) -> super::super::super::history::Request {
+        let reference = &f.gate.retention.archives[0];
+        super::super::super::history::Request {
+            schema_version: 1,
+            request_id: "export".into(),
+            caller: 0,
+            deadline: 4000,
+            action: "resource-request-export".into(),
+            batch: reference.batch,
+            sha256: reference.sha256.clone(),
+            offset: 0,
+        }
+    }
+
+    #[test]
+    fn status_recovery_and_export_observe_hot_damage_and_fence_restored_authority() {
+        for path in ["status", "recovery", "export"] {
+            let mut f = Fixture::new();
+            f.complete(1);
+            f.archive();
+            let request = export_request(&f);
+            let hot = f.directory.join(FILE);
+            let original = fs::read(&hot).unwrap();
+            platform::write_atomic(&hot, b"{", 0o600).unwrap();
+            assert!(match path {
+                "status" => f.gate.retention_status(&f.store).map(|_| ()),
+                "recovery" => f.gate.stage_recovery_status(&f.store).map(|_| ()),
+                "export" => f.gate.export_chunk(&f.store, &request).map(|_| ()),
+                _ => unreachable!(),
+            }
+            .is_err());
+            assert_eq!(fs::read(&hot).unwrap(), b"{");
+            platform::write_atomic(&hot, &original, 0o600).unwrap();
+            assert_fenced(&mut f);
+            assert!(f.gate.export_chunk(&f.store, &request).is_err());
+            assert_eq!(f.gate.retention.retired.len(), 1);
+            assert!(f.gate.records.is_empty());
+        }
+    }
+
+    #[test]
+    fn export_custody_damage_fences_but_invalid_offsets_and_references_do_not() {
+        for fault in ["bytes", "missing", "mode", "hardlink"] {
+            let mut f = Fixture::new();
+            f.complete(1);
+            f.archive();
+            let request = export_request(&f);
+            let path = f.directory.join(f.gate.retention.archives[0].name());
+            let original = fs::read(&path).unwrap();
+            let mut invalid = export_request(&f);
+            invalid.offset = 1;
+            assert!(f.gate.export_chunk(&f.store, &invalid).is_err());
+            invalid.offset = 0;
+            invalid.sha256 = "0".repeat(64);
+            assert!(f.gate.export_chunk(&f.store, &invalid).is_err());
+            assert!(f.gate.retention.check().is_ok());
+            assert!(f.gate.export_chunk(&f.store, &request).is_ok());
+            match fault {
+                "bytes" => fs::write(&path, b"{").unwrap(),
+                "missing" => fs::remove_file(&path).unwrap(),
+                "mode" => fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap(),
+                "hardlink" => {
+                    fs::hard_link(&path, f.directory.join("saved-private-archive")).unwrap()
+                }
+                _ => unreachable!(),
+            }
+            assert!(f.gate.export_chunk(&f.store, &request).is_err());
+            assert!(f.gate.retention.authority_lost.get());
+            platform::write_atomic(&path, &original, 0o600).unwrap();
+            assert!(f.gate.export_chunk(&f.store, &request).is_err());
+            assert_fenced(&mut f);
+            assert_eq!(f.gate.retention.retired.len(), 1);
+        }
     }
 
     #[test]

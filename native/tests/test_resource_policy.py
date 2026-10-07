@@ -322,7 +322,7 @@ class ResourcePolicyTests(unittest.TestCase):
         for guard in ('fs::read_dir(directory)?.enumerate()', 'MAX_DIRECTORY_ENTRIES',
                       'Archive::stage_reference(name)?', 'reference.batch > MAX_ARCHIVES as u64',
                       'self.retention.archives.len() as u64 + 1', 'candidates.into_iter().next()',
-                      'store.recovery_binding()?', 'let hot = stage_identity(',
+                      'store.recovery_binding()?', 'let hot = self.verify_loaded(store)?',
                       'digest(&bytes) != hot.sha256', 'identity.sha256 == reference.sha256',
                       'retain-interrupted-request-stage-v2'):
             self.assertIn(guard, candidate)
@@ -337,6 +337,35 @@ class ResourcePolicyTests(unittest.TestCase):
             'pub(crate) fn recovery_binding(')[1].split('fn recovery_candidate(')[0]
         self.assertIn('ledger.review()?', binding)
         self.assertIn('identity(&self.directory.join("ledger.json"))?', binding)
+
+    def test_request_authority_verifies_unchanged_cycles_publication_and_export_custody(self):
+        source = (ROOT/'rust/luma-platform/src/resource_manager/requests/journal.rs').read_text()
+        durable = source.split('fn verify_durable(')[1].split('fn verify_loaded(')[0]
+        self.assertIn('stage_identity(&directory.join(FILE))?', durable)
+        self.assertIn('observed.sha256 != expected', durable)
+        self.assertEqual(durable.count('store.request_directory()?'), 2)
+        self.assertIn('self.retention.authority_lost.set(true)', durable)
+        self.assertIn('self.poisoned || self.authority_lost.get()', source)
+        persist = source.split('fn persist_with(')[1].split('fn retention_status(')[0]
+        self.assertLess(persist.index('self.verify_durable(store, published)?'),
+                        persist.index('next == published && !acknowledge'))
+        self.assertLess(persist.index('publish(&path, &bytes)?'),
+                        persist.index('self.verify_durable(store, &next)?'))
+        self.assertLess(persist.index('self.verify_durable(store, &next)?'),
+                        persist.index('self.retention.published = Some(next)'))
+        for begin, end in (('fn retention_status(', 'fn archive_requests('),
+                           ('fn export_chunk(', 'fn export_bytes('),
+                           ('fn recovery_candidate(', 'fn stage_recovery_status(')):
+            self.assertIn('self.verify_loaded(store)?', source.split(begin)[1].split(end)[0])
+        export = source.split('fn export_bytes(')[1].split('fn recovery_candidate(')[0]
+        for guard in ('stage_identity(&path)?', 'stage_identity(&path)? != before',
+                      'digest(&bytes) != reference.sha256', 'snapshot.origin != self.retention.origin',
+                      'self.verify_loaded(store)?', 'self.retention.authority_lost.set(true)'):
+            self.assertIn(guard, export)
+        archive = source.split('fn archive_with(')[1].split('fn migration_review(')[0]
+        self.assertLess(archive.index('stage_identity(&path)?.sha256 != reference.sha256'),
+                        archive.index('self.records.clear()'))
+        self.assertIn('self.verify_loaded(store)?', archive)
 
     def test_archival_is_broker_only_reviewed_and_not_a_capacity_release(self):
         source = (ROOT/'rust/luma-platform/src/resource_manager.rs').read_text()

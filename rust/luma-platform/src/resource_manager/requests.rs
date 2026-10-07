@@ -176,7 +176,7 @@ impl Gate {
         }
     }
     pub(super) fn occupied(&self) -> bool {
-        self.retention.poisoned
+        self.retention.check().is_err()
             || self.records.iter().any(|r| {
                 matches!(
                     r.phase,

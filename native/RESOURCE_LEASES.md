@@ -537,6 +537,24 @@ state. Preserve the durable outcome and stop the old broker before a fresh
 locked load. These are active-writer integrity checks, not TPM anti-rollback,
 corrupt-state reconstruction or proof that a copied ledger is safe to deploy.
 
+The request journal now verifies its last loaded or acknowledged digest on
+every maintenance cycle, including unchanged nonpublishing cycles. A bounded
+streaming read checks exact private file custody and stable descriptor/path
+identity; the shared physical-store exclusion is checked before and after.
+Changed request publications require matching durable readback before the
+acknowledged digest advances. Status, preservation review and archive export
+also verify the current hot authority. Export validates the complete referenced
+archive and stable file identity before producing a chunk; damaged archive
+custody fences the request session, while an invalid client reference or offset
+does not. Archive publication is verified before the hot cut.
+
+Observed request-authority loss is sticky even on read-only paths. Restoring
+the original bytes, modes or lock cannot revive that session. Preserve evidence
+and stop the old authority before a fresh locked load; no failure resets history,
+revives retired nonces or frees physical resources. These checks provide active
+request-writer integrity, not product export authorization, signed custody,
+cross-restart rollback protection or damaged-state reconstruction.
+
 Unsupported outstanding native owners, catalog bindings or reservation plans
 refuse before restart/drainage; structurally valid generic ledger data is not
 silently skipped as though supported. Startup failure attempts fencing of both

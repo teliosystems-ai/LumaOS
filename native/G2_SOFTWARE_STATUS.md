@@ -157,6 +157,17 @@ charges are retained; a held obsolete flock, canonical external edit or nominal
 publisher success cannot grant capacity. This is active-writer integrity, not
 TPM rollback protection or reviewed reconstruction of corrupt authority.
 
+The request journal now applies the same active-writer boundary to unchanged
+maintenance and changed publication: it checks bounded stable private-file
+identity, the acknowledged digest and the shared physical-store exclusion.
+Publication readback must match before acknowledgement. Status, stage review
+and export also check hot authority; export checks complete referenced archive
+provenance and stable custody. Archive publication is verified before a hot cut.
+Observed authority loss fences even read-only paths and cannot be cleared by
+restoring bytes or file permissions. Invalid client archive references/offsets
+remain ordinary refusals. No history reset, nonce revival or physical release
+is introduced; governed export/custody and damaged-state recovery remain open.
+
 The preceding combined offline checkpoint records 325 selected Rust and 157 selected
 Python tests passing in `D:\LumaOS-builds\g2-resources-targeted-20261007-19`,
 plus 40 synthetic-authority history/model CLI cases and 56 pinned runtime
@@ -262,7 +273,7 @@ and 88 test inputs matched the checkout at that checkpoint, and the binary
 fixture-isolation control passed. Its retained test log SHA-256 is
 `2d880714f07a7425b073745c47b009ecb81151d1e5c0b24aed26cd607b40cff3`.
 
-The current combined checkpoint passed the complete selected sweep in
+The preceding combined checkpoint passed the complete selected sweep in
 `D:\LumaOS-builds\g2-resources-targeted-20261007-25` (exit 0): 355 Rust and
 165 Python tests passed, plus 39 history and 16 model synthetic-authority CLI
 cases, 56 pinned runtime argument checks and the isolated publication/crash/
@@ -286,11 +297,11 @@ to an installed-enforcement pass. These bounded D:-backed checks loaded no model
 and changed no WSL resource settings, host services or TPM ownership. No new
 placeholder, production fallback or test skip was introduced.
 
-Current source manifest SHA-256:
+Run-25 source manifest SHA-256:
 `85a149907e4460538ece73f530c852cb9287cc1ce6b73cf4014938e33a0049e5`.
-Current test input manifest SHA-256:
+Run-25 test input manifest SHA-256:
 `4ee7cd024ed3b89deb78b24b95ac2941b40899ea9b1fe31a1de544d8e1a80246`.
-Current selected test log SHA-256:
+Run-25 selected test log SHA-256:
 `6787f3c574c143375641ce2f0a415d4d158cfbb45f205214f77cd3e65323341c`.
 Frozen selected runner SHA-256:
 `e7a65953bd3f0f4ba15a892d83e76217c267f2f29d9c85c4ff35d1d48dc2f019`.
@@ -300,6 +311,46 @@ Unit-test executable SHA-256:
 `76543be328e6495bfa364b5aa4d99137904a54d56a3bdec28c1f33c3e1634756`.
 Full native regression log SHA-256:
 `576565b3993a27b2f2f76ad25d4c48185819ede190b51891b79e5889b60b2a74`.
+Frozen full native regression runner SHA-256:
+`784447800879145d1f4d37a554203fc982ac2d7ddb22765facd8f034a5c08322`.
+
+The current request-authority checkpoint passed the complete selected sweep in
+`D:\LumaOS-builds\g2-resources-targeted-20261007-26` (exit 0): 361 Rust and
+166 Python tests passed, plus 39 history and 16 model synthetic-authority CLI
+cases, 56 pinned runtime argument checks and the isolated publication/crash/
+recovery fixtures. Six new Rust tests exercise unchanged-cycle external edits,
+false-success publication, private-file custody failures, shared-lock loss,
+read-only hot-authority checks and damaged archive export. Restoration does
+not revive a fenced session; invalid client offsets/references do not poison
+healthy authority. A new source-policy guard checks the implemented boundaries.
+All 212 captured source files, 88 test inputs and the CI workflow matched the
+checkout. The shipped/test binary fixture-isolation control passed.
+
+Full native Python discovery against the same frozen source passed 258 tests
+(260 discovered). Its two existing UTC publisher tests still require their
+separate pinned-source fixture and are not counted as passes. This broader
+run overlaps the selected suite. The existing selected Windows junction skip
+and parent-invoked Rust child entrypoints are unchanged; no new skip or
+production fallback was added. Model, acquisition and reference AppArmor syntax
+passed without loading profiles. The actual unit verifier's exit 1 remains
+retained for missing `apparmor.service`; installed enforcement is not a pass.
+These D:-backed offline checks used at most one CPU and 1 GiB per container,
+loaded no model, and changed no WSL settings, host services or TPM ownership.
+
+Current source manifest SHA-256:
+`5848edecdaabcc6e3336e8dbb4d9f3a915b7c91a596ce7372f4016ab480639e7`.
+Current test input manifest SHA-256:
+`ade231ae37acf3e46506ae2969d6684e0e8eb326f27f2bb677777d25eefd218f`.
+Current selected test log SHA-256:
+`3b0628d2f9ba6e31339ecdf7d4c1cc5be43494bb3178b92ba99f5718ffb05bd7`.
+Frozen selected runner SHA-256:
+`e7a65953bd3f0f4ba15a892d83e76217c267f2f29d9c85c4ff35d1d48dc2f019`.
+Native executable SHA-256:
+`bd67bfbf5fdfa7633d6224a13b828e68cb8c30beb035c4c8bbff90d4697e3fdf`.
+Unit-test executable SHA-256:
+`ab5ec4be0ec62e0dd4afaa782254f0df6d586df25edde3daa5879e582013b370`.
+Full native regression log SHA-256:
+`93bb07c44889ad6a7a7bc3be384ff0be8b79ac9efe5ed4fdcc0c988b45352716`.
 Frozen full native regression runner SHA-256:
 `784447800879145d1f4d37a554203fc982ac2d7ddb22765facd8f034a5c08322`.
 

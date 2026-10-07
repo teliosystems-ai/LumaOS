@@ -298,6 +298,46 @@ class ResourcePolicyTests(unittest.TestCase):
                        'resource-request-recovery-status', 'resource-request-recover'):
             self.assertIn(action, shape)
 
+    def test_resource_store_rechecks_its_lifetime_exclusion_and_exact_durable_publication(self):
+        exclusion = (ROOT/'rust/luma-platform/src/resources/exclusion.rs').read_text().split('#[cfg(test)]')[0]
+        for guard in ('directory_identity(&self.directory)? != self.directory_identity',
+                      'self._lock.metadata()', 'symlink_metadata(self.directory.join("ledger.lock"))',
+                      'metadata.nlink() != 1', 'authority_lost.store(true',
+                      'Sha256::digest(&bytes)', 'self.published_sha256',
+                      'self.verify_exclusion()?;'):
+            self.assertIn(guard, exclusion)
+        for mutation in ('remove_file', 'rename', 'initialize(', 'write_atomic', 'flock('):
+            self.assertNotIn(mutation, exclusion)
+        resource = (ROOT/'rust/luma-platform/src/resources.rs').read_text().split('#[cfg(test)]\nmod tests')[0]
+        read = resource.split('pub(crate) fn read(')[1].split('pub(crate) fn transact(')[0]
+        self.assertIn('self.durable_bytes()?', read)
+        transaction = resource.split('fn transaction<T>')[1]
+        self.assertIn('resource publication readback differs; preserve state', transaction)
+        self.assertIn('self.published_sha256 = bundle::hex(&Sha256::digest(&bytes))', transaction)
+        self.assertGreaterEqual(transaction.count('self.verify_exclusion()?'), 3)
+
+    def test_request_recovery_includes_older_stages_and_binds_durable_authority(self):
+        journal = (ROOT/'rust/luma-platform/src/resource_manager/requests/journal.rs').read_text().split('#[cfg(test)]\nmod tests')[0]
+        candidate = journal.split('fn recovery_candidate(')[1].split('fn stage_recovery_status(')[0]
+        for guard in ('fs::read_dir(directory)?.enumerate()', 'MAX_DIRECTORY_ENTRIES',
+                      'Archive::stage_reference(name)?', 'reference.batch > MAX_ARCHIVES as u64',
+                      'self.retention.archives.len() as u64 + 1', 'candidates.into_iter().next()',
+                      'store.recovery_binding()?', 'let hot = stage_identity(',
+                      'digest(&bytes) != hot.sha256', 'identity.sha256 == reference.sha256',
+                      'retain-interrupted-request-stage-v2'):
+            self.assertIn(guard, candidate)
+        self.assertNotIn('self.records.is_empty()', candidate)
+        self.assertNotIn('self.retention.archives.len() >= MAX_ARCHIVES', candidate)
+        for mutation in ('remove_file', '.records.clear()', '.retired.extend(', '.transact('):
+            self.assertNotIn(mutation, candidate)
+        identity = journal.split('fn stage_identity(')[1].split('fn preserve_stage(')[0]
+        self.assertIn('let mut buffer = [0u8; 8192]', identity)
+        self.assertIn('length > MAX_BYTES', identity)
+        binding = (ROOT/'rust/luma-platform/src/resources/retention.rs').read_text().split(
+            'pub(crate) fn recovery_binding(')[1].split('fn recovery_candidate(')[0]
+        self.assertIn('ledger.review()?', binding)
+        self.assertIn('identity(&self.directory.join("ledger.json"))?', binding)
+
     def test_archival_is_broker_only_reviewed_and_not_a_capacity_release(self):
         source = (ROOT/'rust/luma-platform/src/resource_manager.rs').read_text()
         archive = source.split('"resource-archive" => {')[1].split('_ => return Err')[0]

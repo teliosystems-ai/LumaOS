@@ -57,7 +57,7 @@ Restart never reconstructs caller handles from stored PIDs. Older missing
 history has a reviewed offline migration that preserves physical receipts and
 explicitly records the unavailable pre-upgrade request history. Bounded root
 export now verifies a referenced immutable archive completely before stdout
-publication. Reviewed recovery preserves a current incomplete archive stage
+publication. Reviewed recovery preserves interrupted archive preparations
 without replacement or deletion, requires released physical generations and
 empty worker groups, and leaves receipts, nonce fences and charges unchanged.
 The native transport now accepts the request-status/archive reply shapes; the
@@ -138,6 +138,25 @@ now requires current kernel confinement as well as UID/PIDFD proof; direct HTTP
 configuration, construction and requests are refused for the reference identity.
 These changes do not provide product-principal/session or effect grants.
 
+Request-stage preservation now also handles older interrupted preparations,
+including after journal advance, restart or a later hot cut, with an empty hot
+journal or exhausted archive chain. Stable bounded selection preserves one
+incident at a time; complete stages remain evidence and unknown/future names
+refuse. Reviews bind both durable authority file identities and reject
+unpublished request changes. The move leaves hot receipts, retired nonces,
+archive references and physical charges unchanged. This closes the older-stage
+preservation gap, not corrupt-authority reconstruction, governed deletion/custody
+or the outstanding product grant integrations.
+
+The physical store now rechecks its original private directory and held/named
+lifetime-lock identities, with a sticky session fence on loss. It binds reads
+to this writer's last acknowledged durable ledger digest and validates exact
+readback before acknowledging changed publications. Restoring an observed lost
+lock/path or edited ledger does not revive the old writer. Existing bytes and
+charges are retained; a held obsolete flock, canonical external edit or nominal
+publisher success cannot grant capacity. This is active-writer integrity, not
+TPM rollback protection or reviewed reconstruction of corrupt authority.
+
 The preceding combined offline checkpoint records 325 selected Rust and 157 selected
 Python tests passing in `D:\LumaOS-builds\g2-resources-targeted-20261007-19`,
 plus 40 synthetic-authority history/model CLI cases and 56 pinned runtime
@@ -189,7 +208,7 @@ Native executable SHA-256:
 Unit-test executable SHA-256:
 `5c75f99c2916015ed699723269abb615814eb4d2608a05feeff12c17a53de5e3`.
 
-The current recovery/confinement checkpoint passed the complete selected sweep
+The preceding recovery/confinement checkpoint passed the complete selected sweep
 in `D:\LumaOS-builds\g2-resources-targeted-20261007-23` (exit 0): 344 Rust
 and 163 Python tests passed, plus 39 synthetic-authority history CLI cases,
 16 synthetic-authority model CLI cases, 56 pinned runtime argument checks and
@@ -222,11 +241,11 @@ log SHA-256 is
 its frozen runner SHA-256 is
 `42c0c95670fd1010cf578a1b097263f1ea52b39b2a4d466e243a63a72d8c2982`.
 
-Current source manifest SHA-256:
+Run-23 source manifest SHA-256:
 `569345e73bf97855289244e0999d8539614aa9d5e8c2d8bd5e0aab9ac7735908`.
-Current test input manifest SHA-256:
+Run-23 test input manifest SHA-256:
 `51911bd0b821058ca4173878be1c084d9d17ada7eeca9a15dfd4a13c9990b839`.
-Current test log SHA-256:
+Run-23 test log SHA-256:
 `8025f7e96da372ba5c4faaccd24494d9e947f5f3c92ab71ad8baec78c07ecfb7`.
 Frozen runner SHA-256:
 `e7a65953bd3f0f4ba15a892d83e76217c267f2f29d9c85c4ff35d1d48dc2f019`.
@@ -234,6 +253,55 @@ Native executable SHA-256:
 `b6e0de56e4fa4a6e5be05adcf27297d04c64f99ab0988de3371244f04f0897f4`.
 Unit-test executable SHA-256:
 `3a6fabaf2fd6ffd8a19125a9a0b4249f317e97daf560a7d93e6342daf8afc5ae`.
+
+The intermediate older-request-stage checkpoint passed in
+`D:\LumaOS-builds\g2-resources-targeted-20261007-24`: 349 selected Rust and
+164 selected Python tests, 55 synthetic-authority CLI cases, 56 pinned runtime
+argument checks and the isolated publication/recovery fixtures. All 211 source
+and 88 test inputs matched the checkout at that checkpoint, and the binary
+fixture-isolation control passed. Its retained test log SHA-256 is
+`2d880714f07a7425b073745c47b009ecb81151d1e5c0b24aed26cd607b40cff3`.
+
+The current combined checkpoint passed the complete selected sweep in
+`D:\LumaOS-builds\g2-resources-targeted-20261007-25` (exit 0): 355 Rust and
+165 Python tests passed, plus 39 history and 16 model synthetic-authority CLI
+cases, 56 pinned runtime argument checks and the isolated publication/crash/
+recovery fixtures. Eleven new Rust tests cover older request stages and
+active-writer integrity, including a full archive chain with empty hot state,
+stale file identities, stable candidate selection, unsupported stage names,
+lock/directory replacement and attempted restoration, external canonical ledger
+edits, false publisher success and exclusion loss during publication/telemetry.
+Two new source-policy guards passed. All 212 captured source files, 88 test
+inputs and the CI workflow matched the checkout. The shipped/test executable
+fixture-isolation control passed.
+
+Full native Python discovery on that same frozen source passed 257 tests
+(259 discovered); the same two UTC publisher tests still require their separate
+pinned-source fixture and are not counted as passes. This run overlaps the
+selected suite, so the counts are not added together. Reference AppArmor syntax
+passed without loading the profile. The selected suite's Windows junction skip
+and two parent-invoked Rust child entrypoints remain unchanged. The actual unit
+verifier's exit 1 remains retained for missing `apparmor.service`, not converted
+to an installed-enforcement pass. These bounded D:-backed checks loaded no model
+and changed no WSL resource settings, host services or TPM ownership. No new
+placeholder, production fallback or test skip was introduced.
+
+Current source manifest SHA-256:
+`85a149907e4460538ece73f530c852cb9287cc1ce6b73cf4014938e33a0049e5`.
+Current test input manifest SHA-256:
+`4ee7cd024ed3b89deb78b24b95ac2941b40899ea9b1fe31a1de544d8e1a80246`.
+Current selected test log SHA-256:
+`6787f3c574c143375641ce2f0a415d4d158cfbb45f205214f77cd3e65323341c`.
+Frozen selected runner SHA-256:
+`e7a65953bd3f0f4ba15a892d83e76217c267f2f29d9c85c4ff35d1d48dc2f019`.
+Native executable SHA-256:
+`0b04b1fa9ffbd93adde87d89cc9328728ad60df8e3c0141b9abc9d3afb348b2c`.
+Unit-test executable SHA-256:
+`76543be328e6495bfa364b5aa4d99137904a54d56a3bdec28c1f33c3e1634756`.
+Full native regression log SHA-256:
+`576565b3993a27b2f2f76ad25d4c48185819ede190b51891b79e5889b60b2a74`.
+Frozen full native regression runner SHA-256:
+`784447800879145d1f4d37a554203fc982ac2d7ddb22765facd8f034a5c08322`.
 
 **Requirement #1 is not closed.** Broader content/workflow integration,
 product principal/session and current folder/effect grants, remaining

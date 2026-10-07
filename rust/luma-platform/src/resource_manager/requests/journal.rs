@@ -43,6 +43,25 @@ impl Archive {
     fn name(&self) -> String {
         format!("requests-archive-{}-{}.json", self.batch, self.sha256)
     }
+
+    fn stage_reference(name: &str) -> Result<Self> {
+        let (batch, hash) = name
+            .strip_prefix(".requests-stage-requests-archive-")
+            .and_then(|s| s.strip_suffix(".json"))
+            .and_then(|s| s.split_once('-'))
+            .ok_or("unknown request archive preparation name; preserve state")?;
+        let reference = Self {
+            batch: batch.parse()?,
+            sha256: hash.into(),
+        };
+        if reference.batch == 0
+            || !digest_valid(hash)
+            || format!(".requests-stage-{}", reference.name()) != name
+        {
+            return Err("noncanonical request archive preparation name".into());
+        }
+        Ok(reference)
+    }
 }
 
 #[derive(Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -128,8 +147,23 @@ fn stage_identity(path: &Path) -> Result<StageIdentity> {
     {
         return Err("unsafe request recovery stage".into());
     }
-    let mut bytes = Vec::new();
-    (&mut file).take(MAX_BYTES + 1).read_to_end(&mut bytes)?;
+    let mut hasher = Sha256::new();
+    let mut length = 0u64;
+    let mut buffer = [0u8; 8192];
+    loop {
+        let count = file.read(&mut buffer)?;
+        if count == 0 {
+            break;
+        }
+        length = length
+            .checked_add(count as u64)
+            .ok_or("request recovery stage length overflow")?;
+        if length > MAX_BYTES {
+            return Err("request recovery stage grew beyond its bound".into());
+        }
+        hasher.update(&buffer[..count]);
+    }
+    let sha256 = bundle::hex(&hasher.finalize());
     let identity = |m: &fs::Metadata| StageIdentity {
         device: m.dev(),
         inode: m.ino(),
@@ -138,9 +172,9 @@ fn stage_identity(path: &Path) -> Result<StageIdentity> {
         modified_ns: m.mtime_nsec(),
         changed: m.ctime(),
         changed_ns: m.ctime_nsec(),
-        sha256: digest(&bytes),
+        sha256: sha256.clone(),
     };
-    if bytes.len() as u64 != before.len()
+    if length != before.len()
         || identity(&before) != identity(&file.metadata()?)
         || identity(&before) != identity(&fs::symlink_metadata(path)?)
     {
@@ -570,37 +604,43 @@ impl Gate {
             return Err("request stage recovery requires terminal requests and released physical generations".into());
         }
         let directory = store.request_directory()?;
-        if Some(digest(&tpm::private_read(
-            &directory.join(FILE),
-            MAX_BYTES,
-        )?)) != self.retention.published
-        {
+        let hot = stage_identity(&directory.join(FILE))?;
+        if Some(&hot.sha256) != self.retention.published.as_ref() || digest(&bytes) != hot.sha256 {
             return Err("request journal changed before recovery review".into());
         }
         inventory(directory, &self.retention.archives, &self.retention.origin)?;
-        if self.records.is_empty() || self.retention.archives.len() >= MAX_ARCHIVES {
-            return Ok(None);
+        let mut candidates = BTreeMap::new();
+        for (index, entry) in fs::read_dir(directory)?.enumerate() {
+            if index >= MAX_DIRECTORY_ENTRIES {
+                return Err("request recovery directory inspection limit exceeded".into());
+            }
+            let entry = entry?;
+            let name = entry.file_name();
+            let name = name.to_str().ok_or("invalid request recovery filename")?;
+            if !name.starts_with(".requests-stage-") {
+                continue;
+            }
+            let reference = Archive::stage_reference(name)?;
+            if reference.batch > self.retention.archives.len() as u64 + 1
+                || reference.batch > MAX_ARCHIVES as u64
+            {
+                return Err("request preparation names an unavailable future batch".into());
+            }
+            let identity = stage_identity(&entry.path())?;
+            if identity.sha256 == reference.sha256 {
+                // A complete stage remains evidence for exact retry or review;
+                // its presence alone never proves a durable hot-journal cut.
+                continue;
+            }
+            candidates.insert(name.to_string(), identity);
         }
-        let reference = Archive {
-            batch: self.retention.archives.len() as u64 + 1,
-            sha256: digest(&bytes),
+        let Some((source, identity)) = candidates.into_iter().next() else {
+            return Ok(None);
         };
-        let source = format!(".requests-stage-{}", reference.name());
-        let path = directory.join(&source);
-        match fs::symlink_metadata(&path) {
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-            Err(e) => return Err(e.into()),
-            Ok(_) => (),
-        }
-        let identity = stage_identity(&path)?;
-        if identity.sha256 == reference.sha256 && identity.length == bytes.len() as u64 {
-            // A complete stage is eligible for exact archival retry, not repair.
-            return Ok(None);
-        }
         let review = digest(&serde_json::to_vec(&(
-            "retain-incomplete-request-stage",
-            ledger.review()?,
-            digest(&bytes),
+            "retain-interrupted-request-stage-v2",
+            store.recovery_binding()?,
+            hot,
             &source,
             &identity,
         ))?);
@@ -648,7 +688,7 @@ impl Gate {
     ) -> Result<serde_json::Value> {
         let (source, identity, current) = self
             .recovery_candidate(store)?
-            .ok_or("no incomplete current request archive stage")?;
+            .ok_or("no interrupted request archive preparation")?;
         if current != review {
             return Err("stale request stage recovery review".into());
         }
@@ -1417,6 +1457,218 @@ mod tests {
         f.archive();
         assert_eq!(f.gate.retention.retired.len(), 1);
         assert_eq!(fs::read(retained).unwrap(), b"{");
+    }
+
+    #[test]
+    fn older_request_stages_survive_journal_advance_hot_cut_and_restart_without_nonce_revival() {
+        for after_cut in [false, true] {
+            let mut f = Fixture::new();
+            f.complete(1);
+            let stage = partial_stage(&f, b"{\"interrupted\":");
+            let original = stage_identity(&stage).unwrap();
+            f.complete(2);
+            if after_cut {
+                f.archive();
+            }
+            release_worker(&mut f);
+            f.gate = Gate::open(&f.store).unwrap();
+            let hot = fs::read(f.directory.join(FILE)).unwrap();
+            let physical = fs::read(f.directory.join("ledger.json")).unwrap();
+            let retired = f.gate.retention.retired.clone();
+            let references = serde_json::to_vec(&f.gate.retention.archives).unwrap();
+            let result = f
+                .gate
+                .recover_stage(&f.store, &recovery_review(&f))
+                .unwrap();
+            let retained = f.directory.join(result["retained"].as_str().unwrap());
+            let observed = stage_identity(&retained).unwrap();
+            assert_eq!(observed.inode, original.inode);
+            assert_eq!(observed.device, original.device);
+            assert_eq!(observed.sha256, original.sha256);
+            assert_eq!(fs::read(retained).unwrap(), b"{\"interrupted\":");
+            assert!(!stage.exists());
+            assert_eq!(result["worker_resources_released"], false);
+            assert_eq!(result["evidence_deleted"], false);
+            assert_eq!(fs::read(f.directory.join(FILE)).unwrap(), hot);
+            assert_eq!(fs::read(f.directory.join("ledger.json")).unwrap(), physical);
+            f.gate = Gate::open(&f.store).unwrap();
+            assert_eq!(f.gate.retention.retired, retired);
+            assert_eq!(
+                serde_json::to_vec(&f.gate.retention.archives).unwrap(),
+                references
+            );
+            assert_eq!(f.store.read().unwrap().charged("host").unwrap(), 25);
+            if after_cut {
+                for nonce in [1, 2] {
+                    assert!(reserve(&mut f.gate, &f.caller, &begin(&f.worker, nonce)).is_err());
+                }
+            } else {
+                assert_eq!(f.gate.records.len(), 2);
+                f.archive();
+                assert_eq!(f.gate.retention.retired.len(), 2);
+            }
+        }
+    }
+
+    #[test]
+    fn exhausted_archive_chain_with_empty_hot_journal_still_preserves_older_evidence() {
+        let mut f = Fixture::new();
+        f.complete(1);
+        let stage = partial_stage(&f, b"{");
+        f.complete(2);
+        f.archive();
+        for nonce in 3..=MAX_ARCHIVES as u64 + 1 {
+            f.complete(nonce);
+            f.archive();
+        }
+        release_worker(&mut f);
+        f.gate = Gate::open(&f.store).unwrap();
+        assert!(f.gate.records.is_empty());
+        assert_eq!(f.gate.retention.archives.len(), MAX_ARCHIVES);
+        assert_eq!(f.gate.retention.retired.len(), MAX_ARCHIVES + 1);
+        let hot = fs::read(f.directory.join(FILE)).unwrap();
+        let physical = fs::read(f.directory.join("ledger.json")).unwrap();
+        let result = f
+            .gate
+            .recover_stage(&f.store, &recovery_review(&f))
+            .unwrap();
+        assert!(!stage.exists());
+        assert_eq!(
+            fs::read(f.directory.join(result["retained"].as_str().unwrap())).unwrap(),
+            b"{"
+        );
+        assert_eq!(fs::read(f.directory.join(FILE)).unwrap(), hot);
+        assert_eq!(fs::read(f.directory.join("ledger.json")).unwrap(), physical);
+        assert_eq!(f.gate.retention.archives.len(), MAX_ARCHIVES);
+        assert_eq!(
+            Gate::open(&f.store).unwrap().retention.retired.len(),
+            MAX_ARCHIVES + 1
+        );
+        assert!(f.gate.archive_requests(&f.store, &f.review()).is_err());
+    }
+
+    #[test]
+    fn request_recovery_reviews_bind_both_durable_authority_inodes_and_unpublished_state() {
+        for file in [FILE, "ledger.json"] {
+            let mut f = Fixture::new();
+            f.complete(1);
+            release_worker(&mut f);
+            let stage = partial_stage(&f, b"{");
+            let review = recovery_review(&f);
+            let path = f.directory.join(file);
+            let before = fs::read(&path).unwrap();
+            let inode = fs::metadata(&path).unwrap().ino();
+            platform::write_atomic(&path, &before, 0o600).unwrap();
+            assert_ne!(fs::metadata(&path).unwrap().ino(), inode);
+            assert!(f.gate.recover_stage(&f.store, &review).is_err());
+            assert!(stage.exists());
+            assert!(!f.gate.retention.poisoned);
+            assert_eq!(fs::read(&path).unwrap(), before);
+            f.gate
+                .recover_stage(&f.store, &recovery_review(&f))
+                .unwrap();
+        }
+        let mut f = Fixture::new();
+        f.complete(1);
+        release_worker(&mut f);
+        let stage = partial_stage(&f, b"{");
+        let review = recovery_review(&f);
+        let original = f.gate.records[0].result_digest.clone();
+        f.gate.records[0].result_digest = Some("e".repeat(64));
+        assert!(f.gate.stage_recovery_status(&f.store).is_err());
+        assert!(f.gate.recover_stage(&f.store, &review).is_err());
+        assert!(stage.exists());
+        assert!(!f.gate.retention.poisoned);
+        f.gate.records[0].result_digest = original;
+        f.gate.recover_stage(&f.store, &review).unwrap();
+    }
+
+    #[test]
+    fn recovery_selects_one_stable_candidate_and_preserves_complete_older_stages() {
+        let mut f = Fixture::new();
+        f.complete(1);
+        let complete = partial_stage(&f, &f.gate.bytes().unwrap());
+        let complete_bytes = fs::read(&complete).unwrap();
+        f.complete(2);
+        let first = partial_stage(&f, b"first");
+        f.complete(3);
+        let second = partial_stage(&f, b"second");
+        release_worker(&mut f);
+        let mut expected = vec![first, second];
+        expected.sort();
+        for (index, source) in expected.iter().enumerate() {
+            let status = f.gate.stage_recovery_status(&f.store).unwrap();
+            assert_eq!(
+                status["stage"],
+                source.file_name().unwrap().to_str().unwrap()
+            );
+            assert_eq!(status, f.gate.stage_recovery_status(&f.store).unwrap());
+            let original = fs::read(source).unwrap();
+            let result = f
+                .gate
+                .recover_stage(&f.store, status["review"].as_str().unwrap())
+                .unwrap();
+            assert_eq!(
+                fs::read(f.directory.join(result["retained"].as_str().unwrap())).unwrap(),
+                original
+            );
+            assert!(!source.exists());
+            if index == 0 {
+                assert!(expected[1].exists());
+            }
+            assert_eq!(fs::read(&complete).unwrap(), complete_bytes);
+        }
+        assert_eq!(
+            f.gate.stage_recovery_status(&f.store).unwrap()["recoverable"],
+            false
+        );
+        assert_eq!(f.gate.records.len(), 3);
+        assert!(f.gate.retention.retired.is_empty());
+    }
+
+    #[test]
+    fn unknown_noncanonical_and_future_request_stage_names_refuse_without_mutation() {
+        for name in [
+            ".requests-stage-unknown".into(),
+            format!(".requests-stage-requests-archive-0-{}.json", "a".repeat(64)),
+            format!(
+                ".requests-stage-requests-archive-01-{}.json",
+                "a".repeat(64)
+            ),
+            format!(".requests-stage-requests-archive-2-{}.json", "a".repeat(64)),
+            format!(".requests-stage-requests-archive-1-{}.json", "A".repeat(64)),
+            format!(
+                ".requests-stage-requests-archive-{}-{}.json",
+                u64::MAX,
+                "a".repeat(64)
+            ),
+        ] {
+            let mut f = Fixture::new();
+            f.complete(1);
+            release_worker(&mut f);
+            let stage = partial_stage(&f, b"{");
+            let review = recovery_review(&f);
+            let unknown = f.directory.join(name);
+            fs::rename(&stage, &unknown).unwrap();
+            let hot = fs::read(f.directory.join(FILE)).unwrap();
+            let physical = fs::read(f.directory.join("ledger.json")).unwrap();
+            assert!(f.gate.stage_recovery_status(&f.store).is_err());
+            assert!(f.gate.recover_stage(&f.store, &review).is_err());
+            assert_eq!(fs::read(unknown).unwrap(), b"{");
+            assert_eq!(fs::read(f.directory.join(FILE)).unwrap(), hot);
+            assert_eq!(fs::read(f.directory.join("ledger.json")).unwrap(), physical);
+            assert!(!f.gate.retention.poisoned);
+        }
+        assert_eq!(
+            Archive::stage_reference(&format!(
+                ".requests-stage-requests-archive-{}-{}.json",
+                u64::MAX,
+                "a".repeat(64)
+            ))
+            .unwrap()
+            .batch,
+            u64::MAX
+        );
     }
 
     #[test]

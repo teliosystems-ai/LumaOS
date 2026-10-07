@@ -15,6 +15,7 @@ const MAX_RECORDS: usize = 4096;
 const MAX_BYTES: u64 = 8 * 1024 * 1024;
 const MAX_ARCHIVES: usize = 64;
 const MAX_ARCHIVE_FILES: usize = 128;
+mod exclusion;
 mod retention;
 
 // Decimal strings preserve all 64 bits across JSON consumers, including JS.
@@ -797,7 +798,10 @@ impl Owner {
 
 pub(crate) struct Store {
     directory: PathBuf,
+    directory_identity: (u64, u64),
     _lock: File,
+    authority_lost: std::sync::atomic::AtomicBool,
+    published_sha256: String,
     poisoned: bool,
     observations: BTreeMap<String, u64>,
     retired_owners: BTreeSet<[u8; 32]>,
@@ -829,9 +833,15 @@ impl Store {
     }
     pub(crate) fn open(directory: &Path) -> Result<Self> {
         tpm::private_directory(directory)?;
+        let directory_identity = exclusion::directory_identity(directory)?;
+        let lock = tpm::exclusive_lock(&directory.join("ledger.lock"))?;
+        let bytes = tpm::private_read(&directory.join("ledger.json"), MAX_BYTES)?;
         let mut store = Self {
             directory: directory.into(),
-            _lock: tpm::exclusive_lock(&directory.join("ledger.lock"))?,
+            directory_identity,
+            _lock: lock,
+            authority_lost: std::sync::atomic::AtomicBool::new(false),
+            published_sha256: bundle::hex(&Sha256::digest(&bytes)),
             poisoned: false,
             observations: BTreeMap::new(),
             retired_owners: BTreeSet::new(),
@@ -845,7 +855,7 @@ impl Store {
         if self.poisoned {
             return Err("resource publication uncertain; manager restart required".into());
         }
-        let bytes = tpm::private_read(&self.directory.join("ledger.json"), MAX_BYTES)?;
+        let bytes = self.durable_bytes()?;
         let mut ledger: Ledger = serde_json::from_slice(&bytes)
             .map_err(|_| "malformed resource ledger; preserve state")?;
         if serde_json::to_vec(&ledger)? != bytes {
@@ -861,6 +871,7 @@ impl Store {
                 .ok_or("telemetry inventory changed")?
                 .observed = *used;
         }
+        self.verify_exclusion()?;
         Ok(ledger)
     }
 
@@ -883,6 +894,7 @@ impl Store {
     }
 
     fn archived(&self, reference: &Archive) -> Result<Ledger> {
+        self.verify_exclusion()?;
         let bytes = tpm::private_read(&self.directory.join(reference.name()), MAX_BYTES)?;
         if bundle::hex(&Sha256::digest(&bytes)) != reference.sha256 {
             return Err("resource archive digest mismatch; preserve state".into());
@@ -898,10 +910,12 @@ impl Store {
         {
             return Err("resource archive contains outstanding or mismatched generations".into());
         }
+        self.verify_exclusion()?;
         Ok(ledger)
     }
 
     fn verify_archives(&self, ledger: &Ledger) -> Result<BTreeSet<[u8; 32]>> {
+        self.verify_exclusion()?;
         let mut count = 0;
         for (index, entry) in fs::read_dir(&self.directory)?.enumerate() {
             if index >= retention::MAX_DIRECTORY_ENTRIES {
@@ -960,6 +974,7 @@ impl Store {
                 retired.insert(Self::owner_digest(&lease.owner)?);
             }
         }
+        self.verify_exclusion()?;
         Ok(retired)
     }
 
@@ -967,6 +982,7 @@ impl Store {
         if self.poisoned {
             return Err("resource publication uncertain; manager restart required".into());
         }
+        self.verify_exclusion()?;
         // Reconstruct only from validated immutable receipts at open; extend
         // only after a durable cut. Admission never rescans historical files.
         Ok(self.retired_owners.contains(&Self::owner_digest(owner)?))
@@ -1013,12 +1029,14 @@ impl Store {
             return Err("retained resource archive inventory exhausted".into());
         }
         let publish = (|| -> Result<()> {
+            self.verify_exclusion()?;
             if path.try_exists()? {
                 if tpm::private_read(&path, MAX_BYTES)? != bytes {
                     return Err("conflicting resource archive publication".into());
                 }
                 File::open(&path)?.sync_all()?;
                 File::open(&self.directory)?.sync_all()?;
+                self.verify_exclusion()?;
                 return Ok(());
             }
             let mut file = match OpenOptions::new()
@@ -1060,6 +1078,7 @@ impl Store {
                 return Err(std::io::Error::last_os_error().into());
             }
             File::open(&self.directory)?.sync_all()?;
+            self.verify_exclusion()?;
             Ok(())
         })();
         if publish.is_err() {
@@ -1100,17 +1119,19 @@ impl Store {
         if unchanged {
             // Exact retries acknowledge durable existing state, never acquire
             // another lease or infer success from an earlier rename alone.
-            if acknowledge {
-                let synchronized = (|| -> Result<()> {
+            let synchronized = (|| -> Result<()> {
+                self.verify_exclusion()?;
+                if acknowledge {
                     File::open(self.directory.join("ledger.json"))?.sync_all()?;
                     File::open(&self.directory)?.sync_all()?;
-                    Ok(())
-                })();
-                if synchronized.is_err() {
-                    self.poisoned = true;
                 }
-                synchronized?;
+                self.durable_bytes()?;
+                Ok(())
+            })();
+            if synchronized.is_err() {
+                self.poisoned = true;
             }
+            synchronized?;
             self.observations = next
                 .domains
                 .iter()
@@ -1118,11 +1139,21 @@ impl Store {
                 .collect();
             return Ok(result);
         }
-        let published = publish(&self.directory.join("ledger.json"), &bytes);
+        let published = (|| -> Result<()> {
+            self.verify_exclusion()?;
+            publish(&self.directory.join("ledger.json"), &bytes)?;
+            self.verify_exclusion()?;
+            if tpm::private_read(&self.directory.join("ledger.json"), MAX_BYTES)? != bytes {
+                return Err("resource publication readback differs; preserve state".into());
+            }
+            self.verify_exclusion()?;
+            Ok(())
+        })();
         if published.is_err() {
             self.poisoned = true;
         }
         published?;
+        self.published_sha256 = bundle::hex(&Sha256::digest(&bytes));
         self.observations = next
             .domains
             .iter()

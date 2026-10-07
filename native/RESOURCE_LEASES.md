@@ -524,6 +524,19 @@ further lease is granted. Ordinary telemetry remains session-local when it
 does not change authority. Pressure, retained charges, expiry, tokens and
 reviewed transitions remain durable.
 
+The store now pins its private root directory's device/inode and continuously
+checks that the held lifetime-lock descriptor still matches the private named
+lock. A replaced, missing, linked, aliased or nonprivate lock/directory fences
+the existing session. Putting the original path back cannot clear an observed
+loss. Reads also require the exact hot-ledger digest loaded or acknowledged by
+this writer; a canonical external edit is not an authorized transition or a
+capacity credit. A changed publication is acknowledged only after exact durable
+readback and renewed exclusion checks. Exact retries and nonpublishing telemetry
+also recheck the boundary before returning. No failed check rewrites or resets
+state. Preserve the durable outcome and stop the old broker before a fresh
+locked load. These are active-writer integrity checks, not TPM anti-rollback,
+corrupt-state reconstruction or proof that a copied ledger is safe to deploy.
+
 Unsupported outstanding native owners, catalog bindings or reservation plans
 refuse before restart/drainage; structurally valid generic ledger data is not
 silently skipped as though supported. Startup failure attempts fencing of both
@@ -572,6 +585,30 @@ of the rename, with no automatic retry. Incidents count toward the unchanged
 Preservation does not reclaim a slot or repair missing/damaged ledger bytes,
 referenced archives or request history. Governed export/deletion and broader
 damaged-state recovery remain open; do not delete records to bypass a fence.
+
+Request-history preservation now covers older interrupted preparations as well
+as the current archive attempt. After draining both worker groups and all
+physical generations, inspect `resource-request-recovery-status` and apply its
+exact review with `resource-request-recover REVIEW-SHA256`. The broker scans the
+bounded private inventory and chooses one stage in stable filename order. The
+stage must have a canonical archive filename and name a nonfuture batch within
+the existing 64-archive limit. Checksum-matching complete stages remain intact
+for exact retry or investigation; they are never treated as evidence of a hot
+cut. Unknown, noncanonical or future stage names refuse preservation without
+changing state. An older incomplete stage can be retained after journal advance,
+restart or a later archive cut, even with no hot receipts or a full archive chain.
+
+The new request-recovery review binds the exact stage, the durable hot request
+journal's bytes/inode/timestamps, and both the physical ledger's current review
+and durable file identity. A byte-identical replacement of either authority file
+invalidates an earlier review. An unpublished request-state change also refuses;
+the recovery command cannot overwrite it or manufacture an acknowledgement.
+Obtain a fresh review after upgrading; earlier request-recovery review digests
+are not reused. Stage hashing uses an 8-KiB buffer within the unchanged one-MiB
+file limit. The existing live-peer, deadline, empty-group and no-replace checks
+still surround the move. Hot receipts, archive references, retired nonces and
+physical charges remain unchanged. Preservation consumes the same retained-file
+slot and does not raise a retention limit or authorize deletion/export.
 
 ## Installed operator commands
 
@@ -671,7 +708,7 @@ Admin authorization, and their combined native-image procedure remains unqualifi
   real installed reference execution, old-key refusal and upgrade/rollback
   qualification remain open.
   Durable operator receipts, reviewed archival, bounded root export and reviewed
-  preservation of a current incomplete archive stage now exist; the operator path
+  preservation of current and older interrupted archive preparations now exist; the operator path
   and verified CPU KV inventory do not close those integrations by themselves.
 - Complete supported multi-worker/tenant and device-domain adapters and
   generation/recovery paths. Current CPU-only, zero-pinned/zero-device profiles

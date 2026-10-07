@@ -140,6 +140,16 @@ fn preserve(directory: &Path, source: &str, expected: &Identity, review: &str) -
 }
 
 impl Store {
+    pub(crate) fn recovery_binding(&self) -> Result<String> {
+        let ledger = self.read()?;
+        let durable = identity(&self.directory.join("ledger.json"))?;
+        Ok(bundle::hex(&Sha256::digest(serde_json::to_vec(&(
+            "resource-recovery-authority-v1",
+            ledger.review()?,
+            durable,
+        ))?)))
+    }
+
     fn recovery_candidate(&self) -> Result<Option<(String, Identity, String)>> {
         let ledger = self.read()?;
         if ledger.leases.iter().any(|l| l.state != State::Released) {

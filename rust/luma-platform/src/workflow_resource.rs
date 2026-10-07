@@ -4,6 +4,7 @@ use crate::{
     acquisition, artifacts as io, calculation, model, resource_manager, resources, Result,
 };
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::ffi::CString;
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom, Write};
@@ -35,6 +36,10 @@ pub(crate) fn committed_receipt(
         .iter()
         .find(|l| &l.token == token)
         .ok_or("computation receipt unavailable; no fabricated provenance")?;
+    let epochs = receipt
+        .output_domain_epochs
+        .as_ref()
+        .ok_or("computation domain provenance unavailable; recompute in a fresh generation")?;
     if receipt.owner.uid != 0
         || receipt.output_sha256.is_none()
         || token.manager_epoch != ledger.manager_epoch
@@ -42,12 +47,16 @@ pub(crate) fn committed_receipt(
             .reservations
             .iter()
             .any(|r| ledger.domains[&r.domain].quarantined)
+        || epochs
+            .iter()
+            .any(|(id, epoch)| ledger.domains[id].epoch != epoch.0)
         || receipt.output_fenced
     {
         return Err("computation receipt belongs to an interrupted or fenced generation".into());
     }
     Ok(
         serde_json::json!({"binding":receipt.binding,"output_sha256":receipt.output_sha256,
+        "output_domain_epochs":epochs,
         "lease":receipt.token,"state":receipt.state,"physical_release_granted":false}),
     )
 }
@@ -166,6 +175,7 @@ fn verify_receipt(output: &Output, expected_binding: &str, value: serde_json::Va
     struct Receipt {
         binding: String,
         output_sha256: String,
+        output_domain_epochs: BTreeMap<String, resources::OutputEpoch>,
         lease: resources::Token,
         state: resources::State,
         physical_release_granted: bool,
@@ -176,6 +186,15 @@ fn verify_receipt(output: &Output, expected_binding: &str, value: serde_json::Va
         || receipt.lease != output.lease
         || receipt.output_sha256 != io::digest(output.report.as_bytes())
         || receipt.physical_release_granted
+        || receipt
+            .output_domain_epochs
+            .keys()
+            .map(String::as_str)
+            .ne(resource_manager::invoice_output_domains())
+        || receipt
+            .output_domain_epochs
+            .values()
+            .any(|epoch| epoch.0 == 0)
     {
         return Err("calculation result has no matching durable generation receipt".into());
     }
@@ -349,6 +368,110 @@ pub(crate) fn worker(profile: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn released_result() -> (resources::Ledger, resources::Token) {
+        use resources::{Domain, Owner, Reservation};
+        let mut ledger = resources::Ledger::fresh_for_test();
+        ledger
+            .restart(
+                "a".repeat(32),
+                BTreeMap::from([("host".into(), Domain::new(1000, 100, 950, 800).unwrap())]),
+            )
+            .unwrap();
+        let owner = Owner {
+            uid: 0,
+            pid: 1,
+            start_ticks: 1,
+            boot: "boot".into(),
+            cgroup_device: 1,
+            cgroup_inode: 1,
+        };
+        let token = ledger
+            .admit(
+                owner.clone(),
+                "invoice".into(),
+                "c".repeat(64),
+                vec![Reservation {
+                    domain: "host".into(),
+                    loading: 40,
+                    serving: 40,
+                }],
+                1,
+                100,
+            )
+            .unwrap();
+        ledger
+            .complete_output(&token, &owner, 2, &"d".repeat(64))
+            .unwrap();
+        ledger.revoke(&token, "owner-lost").unwrap();
+        ledger
+            .finish_draining(&token, &BTreeMap::from([("host".into(), 7)]))
+            .unwrap();
+        (ledger, token)
+    }
+
+    #[test]
+    fn released_result_never_reactivates_after_operator_revocation_or_domain_recovery() {
+        let (ledger, token) = released_result();
+        assert_eq!(
+            committed_receipt(&ledger, &token).unwrap()["output_domain_epochs"],
+            serde_json::json!({"host":"1"})
+        );
+        for mode in 0..3 {
+            let mut changed = ledger.clone();
+            match mode {
+                0 => changed.revoke(&token, "operator-revoked").unwrap(),
+                1 => changed.quarantine("host", "worker-oom").unwrap(),
+                _ => changed
+                    .clear_quarantine(&changed.review().unwrap(), ledger.domains.clone())
+                    .unwrap(),
+            }
+            assert!(committed_receipt(&changed, &token).is_err());
+            let review = changed.review().unwrap();
+            changed
+                .clear_quarantine(&review, ledger.domains.clone())
+                .unwrap();
+            assert!(committed_receipt(&changed, &token).is_err());
+            assert_eq!(changed.charged("host").unwrap(), 7);
+            assert_eq!(changed.leases[0].state, resources::State::Released);
+        }
+    }
+
+    #[test]
+    fn missing_or_stale_domain_provenance_is_not_reconstructed_from_current_inventory() {
+        let (ledger, token) = released_result();
+        let mut legacy = ledger.clone();
+        legacy.leases[0].output_domain_epochs = None;
+        let bytes = serde_json::to_vec(&legacy).unwrap();
+        let restored: resources::Ledger = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(serde_json::to_vec(&restored).unwrap(), bytes);
+        assert!(committed_receipt(&restored, &token).is_err());
+        assert_eq!(restored, legacy);
+        let mut stale = ledger.clone();
+        stale
+            .clear_quarantine(&stale.review().unwrap(), ledger.domains.clone())
+            .unwrap();
+        // Defense against an older serialized result that lacks a sticky fence:
+        // a current domain flag cannot stand in for its original epoch snapshot.
+        stale.leases[0].output_fenced = false;
+        stale.validate().unwrap();
+        assert!(committed_receipt(&stale, &token).is_err());
+        assert_eq!(
+            stale.leases[0].output_domain_epochs,
+            ledger.leases[0].output_domain_epochs
+        );
+    }
+
+    #[test]
+    fn restarting_to_a_previously_used_manager_name_cannot_revive_a_released_result() {
+        let (mut ledger, token) = released_result();
+        let inventory = ledger.domains.clone();
+        ledger.restart("b".repeat(32), inventory.clone()).unwrap();
+        ledger.restart("a".repeat(32), inventory).unwrap();
+        assert!(ledger.leases[0].output_fenced);
+        assert!(committed_receipt(&ledger, &token).is_err());
+        assert_eq!(ledger.charged("host").unwrap(), 7);
+    }
+
     #[test]
     fn retrieval_refuses_revocation_expiry_quarantine_restart_and_missing_output() {
         use resources::{Domain, Owner, Reservation, State};
@@ -504,19 +627,53 @@ mod tests {
         assert!(parse_output(&changed, &output.source_sha256).is_err());
         let binding = "c".repeat(64);
         let receipt = serde_json::json!({"binding":binding,"lease":output.lease,
-            "output_sha256":io::digest(output.report.as_bytes()),"state":"released","physical_release_granted":false});
+            "output_sha256":io::digest(output.report.as_bytes()),
+            "output_domain_epochs":{"acquisition-executions":"1","host-memory":"1","worker-processes":"1"},
+            "state":"released","physical_release_granted":false});
         verify_receipt(&output, &binding, receipt.clone()).unwrap();
+        let mut full_width = receipt.clone();
+        full_width["output_domain_epochs"]["host-memory"] = serde_json::json!(u64::MAX.to_string());
+        verify_receipt(&output, &binding, full_width).unwrap();
         for (key, value) in [
             ("binding", serde_json::json!("d".repeat(64))),
             ("output_sha256", serde_json::json!("e".repeat(64))),
             ("physical_release_granted", serde_json::json!(true)),
             ("authority", serde_json::json!(true)),
+            ("output_domain_epochs", serde_json::json!({})),
+            ("output_domain_epochs", serde_json::json!({"host":"0"})),
+            ("output_domain_epochs", serde_json::json!({"host":1})),
+            ("output_domain_epochs", serde_json::json!({"host":"01"})),
+            ("output_domain_epochs", serde_json::json!({"../host":"1"})),
         ] {
             let mut changed = receipt.clone();
             changed[key] = value;
             assert!(verify_receipt(&output, &binding, changed).is_err());
         }
         let mut changed = receipt;
+        for field in ["acquisition-executions", "host-memory", "worker-processes"] {
+            for invalid in [
+                serde_json::json!("0"),
+                serde_json::json!("01"),
+                serde_json::json!(1),
+                serde_json::json!(true),
+            ] {
+                let mut malformed = changed.clone();
+                malformed["output_domain_epochs"][field] = invalid;
+                assert!(verify_receipt(&output, &binding, malformed).is_err());
+            }
+            let mut partial = changed.clone();
+            partial["output_domain_epochs"]
+                .as_object_mut()
+                .unwrap()
+                .remove(field);
+            assert!(verify_receipt(&output, &binding, partial).is_err());
+        }
+        let mut legacy = changed.clone();
+        legacy
+            .as_object_mut()
+            .unwrap()
+            .remove("output_domain_epochs");
+        assert!(verify_receipt(&output, &binding, legacy).is_err());
         changed["lease"]["generation"] = serde_json::json!("8");
         assert!(verify_receipt(&output, &binding, changed).is_err());
     }

@@ -114,7 +114,16 @@ Successful publication/crash tests in the disposable tools fixture now use a
 separate, explicitly synthetic Rust test executable. The shipped binary refuses
 missing resources and has no fixture dispatch or calculation fallback.
 
-The combined offline checkpoint records 325 selected Rust and 157 selected
+Calculation completion now also records immutable domain-epoch provenance from
+the broker's own inventory. Retrieval and the invoice client's closed reply
+parser require it. Revocation/quarantine fence released outputs; reviewed
+quarantine clearing, restart and inventory migration cannot restore their
+publication authority. Old receipts with missing snapshots remain canonical
+history, but completion retry cannot invent provenance from current inventory.
+Fresh calculation is required before a new effect. These result fences do not
+change physical cleanup, retained charges or principal/grant requirements.
+
+The preceding combined offline checkpoint records 325 selected Rust and 157 selected
 Python tests passing in `D:\LumaOS-builds\g2-resources-targeted-20261007-19`,
 plus 40 synthetic-authority history/model CLI cases and 56 pinned runtime
 argument checks. That run's later publication fixture failed because Cargo was
@@ -128,30 +137,42 @@ the native and unit-test executables remained byte-for-byte identical. A binary
 negative/positive control also verified that the fixture selector is absent
 from the native executable and present only in the unit-test executable.
 
-All 210 final captured source files, 88 test inputs and the separately captured
-CI workflow matched the checkout. The existing Linux-inapplicable Windows
-junction test was skipped; the two existing owned-child test entrypoints were
-exercised through their parent tests, not counted twice. No new test skip was
-introduced. Locked offline build/format passed without loading a model. The
-unchanged AppArmor profiles passed syntax checks in the preceding run 18.
-The actual run-19 unit verifier's exit 1 is retained because the tools image
-lacks `apparmor.service`; installed enforcement is not qualified. Earlier failed
-ext4-fixture, result-fence and source-guard checkpoints also remain retained.
-These capped development checks did not restart WSL, change memory settings,
-alter host services or touch TPM ownership.
+The current domain-epoch checkpoint passed as a complete sweep in
+`D:\LumaOS-builds\g2-resources-targeted-20261007-21` (exit 0): 332 selected Rust
+and 158 selected Python tests passed, alongside the 40 synthetic-authority
+history/model CLI cases, 56 pinned runtime argument checks and isolated
+publication/crash/recovery fixtures. New tests cover released-result revocation,
+quarantine and reviewed recovery, reused manager names, immutable epoch
+snapshots, full-width canonical decimal encoding, missing legacy provenance and
+nonmutating epoch exhaustion. All 210 captured source files, 88 test inputs and
+the separately captured CI workflow matched the checkout. These are selected
+software tests, not an installed-image or real-model qualification.
 
-Final source manifest SHA-256:
-`369db7895d2512a21981bde94be950d1795187b4983d65a29d34e6b480ff10bf`.
-Test input manifest SHA-256:
-`683e6f22d610f0b1a62fd287ed57c6e6e373a03fa71d3e5f04978ac009cd16cf`.
-Run-19 test log SHA-256:
-`15921d886fa28221ed0b429af8bcd82f5b85fd09e67bf9ad0de78f4f2889bd06`.
-Publication component test log SHA-256:
-`5f56412bdee7c9c57da2a2177b407c79c37403bf6693b514a070a112f74612af`.
+The existing Linux-inapplicable Windows junction test was skipped; the two
+existing owned-child test entrypoints were exercised through their parent tests,
+not counted twice. No new test skip was introduced. Locked offline build/format
+and both AppArmor syntax checks passed without loading a model. The binary
+negative/positive control again verified that the publication fixture selector
+is absent from the native executable and present only in the unit-test
+executable. The actual run-21 unit verifier's exit 1 is retained because the
+tools image lacks `apparmor.service`; installed enforcement is not qualified.
+Earlier failed Cargo-discovery, ext4-fixture, result-fence and source-guard
+checkpoints remain retained. These capped checks used at most one CPU and
+1 GiB per container, did not restart WSL, change memory settings, alter host
+services or touch TPM ownership.
+
+Run-21 source manifest SHA-256:
+`11e7997a1e5c06063ab945efeb36bc3937502eb55432703fdc02a665aa4853c3`.
+Run-21 test input manifest SHA-256:
+`2ca2cad016e88772805f97d1077e9f17841e5d2aacf8debbe36fdb87ec96cb80`.
+Run-21 test log SHA-256:
+`b84ca0a3e852fb29b591e6ae73681f68f978cba6daea3e28bf1dd60af60615cc`.
+Frozen runner SHA-256:
+`e7a65953bd3f0f4ba15a892d83e76217c267f2f29d9c85c4ff35d1d48dc2f019`.
 Native executable SHA-256:
-`a342e8730e234895d9238305f59fd2eff689c525109808df645edad04c8b293b`.
+`cb28721231eb2425ad357ab5957e5ee9f41ebdbd17ff5876cbab3be612000194`.
 Unit-test executable SHA-256:
-`578b3d0fa85cc4e41d2201f749161c5e0fb35ecea5a9e626f6ec73f87523206b`.
+`5c75f99c2916015ed699723269abb615814eb4d2608a05feeff12c17a53de5e3`.
 
 **Requirement #1 is not closed.** Broader content/workflow integration,
 remaining inference-consumer admission and bypass closure, governed request

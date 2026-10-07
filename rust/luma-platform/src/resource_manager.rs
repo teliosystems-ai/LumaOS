@@ -61,6 +61,10 @@ impl Kind {
     }
 }
 
+pub(crate) fn invoice_output_domains() -> [&'static str; 3] {
+    [Kind::Acquisition.domain(), HOST, PIDS]
+}
+
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Request {

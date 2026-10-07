@@ -6,6 +6,25 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 class ResourcePolicyTests(unittest.TestCase):
+    def test_completed_results_bind_domain_epochs_and_recovery_cannot_revive_them(self):
+        ledger = (ROOT/'rust/luma-platform/src/resources.rs').read_text().split('#[cfg(test)]\nmod tests')[0]
+        self.assertIn('pub output_domain_epochs: Option<BTreeMap<String, OutputEpoch>>', ledger)
+        completion = ledger.split('pub(crate) fn complete_output(')[1].split('pub(crate) fn revoke(')[0]
+        self.assertIn('OutputEpoch(self.domains[&r.domain].epoch)', completion)
+        self.assertIn('output_domain_epochs.as_ref() != Some(&epochs)', completion)
+        revoke = ledger.split('pub(crate) fn revoke(')[1].split('pub(crate) fn expire(')[0]
+        self.assertNotIn('l.state != State::Released', revoke)
+        quarantine = ledger.split('pub(crate) fn quarantine(')[1].split('pub(crate) fn finish_draining(')[0]
+        self.assertNotIn('l.state != State::Released', quarantine)
+        for start, end in [('pub(crate) fn restart(', 'pub(crate) fn admit('),
+                           ('pub(crate) fn clear_quarantine(', 'pub(crate) fn review('),
+                           ('pub(crate) fn migrate_inventory(', 'fn fence_outputs(')]:
+            self.assertIn('next.fence_outputs()', ledger.split(start)[1].split(end)[0])
+        worker = (ROOT/'rust/luma-platform/src/workflow_resource.rs').read_text().split('#[cfg(test)]')[0]
+        self.assertIn('ledger.domains[id].epoch != epoch.0', worker)
+        self.assertIn('computation domain provenance unavailable', worker)
+        self.assertIn('resource_manager::invoice_output_domains()', worker)
+
     def test_invoice_publishers_never_use_unleased_calculation_or_test_dispatch(self):
         for name in ('artifacts.rs', 'artifact_catalog.rs'):
             source = (ROOT/'rust/luma-platform/src'/name).read_text()

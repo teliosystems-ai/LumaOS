@@ -149,6 +149,10 @@ pub(crate) enum State {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(transparent)]
+pub(crate) struct OutputEpoch(#[serde(with = "decimal")] pub u64);
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Lease {
     pub token: Token,
@@ -164,6 +168,8 @@ pub(crate) struct Lease {
     // Omit absent values to preserve older canonical journals and archives.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub output_sha256: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_domain_epochs: Option<BTreeMap<String, OutputEpoch>>,
     #[serde(default, skip_serializing_if = "is_false")]
     pub output_fenced: bool,
 }
@@ -282,6 +288,20 @@ impl Ledger {
             }
             previous = lease.token.generation;
             self.reservations_valid(&lease.reservations)?;
+            if let Some(epochs) = &lease.output_domain_epochs {
+                if lease.output_sha256.is_none()
+                    || epochs
+                        .keys()
+                        .ne(lease.reservations.iter().map(|r| &r.domain))
+                    || epochs.iter().any(|(id, epoch)| {
+                        epoch.0 == 0
+                            || epoch.0 > self.domains[id].epoch
+                            || (lease.state == State::Active && epoch.0 != self.domains[id].epoch)
+                    })
+                {
+                    return Err("invalid computation domain epoch snapshot".into());
+                }
+            }
             if lease.state == State::Active && lease.token.manager_epoch != self.manager_epoch {
                 return Err("active lease belongs to a stale manager".into());
             }
@@ -363,8 +383,8 @@ impl Ledger {
         for lease in next.leases.iter_mut().filter(|l| l.state == State::Active) {
             lease.state = State::Draining;
             lease.reason = "manager-restart".into();
-            lease.output_fenced = lease.output_sha256.is_some();
         }
+        next.fence_outputs();
         next.validate()?;
         *self = next;
         Ok(())
@@ -437,6 +457,7 @@ impl Ledger {
             state: State::Active,
             reason: "admitted".into(),
             output_sha256: None,
+            output_domain_epochs: None,
             output_fenced: false,
         });
         next.validate()?;
@@ -527,6 +548,7 @@ impl Ledger {
         now: u64,
         digest: &str,
     ) -> Result<()> {
+        self.validate()?;
         self.assert_active(token, owner, now)?;
         if digest.len() != 64
             || !digest
@@ -536,12 +558,20 @@ impl Ledger {
             return Err("invalid computation output digest".into());
         }
         let index = self.index(token, owner)?;
+        let epochs: BTreeMap<_, _> = self.leases[index]
+            .reservations
+            .iter()
+            .map(|r| (r.domain.clone(), OutputEpoch(self.domains[&r.domain].epoch)))
+            .collect();
         if let Some(previous) = &self.leases[index].output_sha256 {
-            if previous != digest {
-                return Err("computation output replay differs".into());
+            if previous != digest
+                || self.leases[index].output_domain_epochs.as_ref() != Some(&epochs)
+            {
+                return Err("computation output replay or domain provenance differs; recompute in a fresh generation".into());
             }
         } else {
             self.leases[index].output_sha256 = Some(digest.into());
+            self.leases[index].output_domain_epochs = Some(epochs);
         }
         // State, deadlines, reservations and domain observations are unchanged.
         Ok(())
@@ -560,7 +590,7 @@ impl Ledger {
             l.state = State::Draining;
             l.reason = reason.into();
         }
-        if l.state != State::Released && reason != "owner-lost" && l.output_sha256.is_some() {
+        if reason != "owner-lost" && l.output_sha256.is_some() {
             l.output_fenced = true;
         }
         Ok(())
@@ -616,7 +646,7 @@ impl Ledger {
         for l in next
             .leases
             .iter_mut()
-            .filter(|l| l.state != State::Released && l.reservations.iter().any(|r| r.domain == id))
+            .filter(|l| l.reservations.iter().any(|r| r.domain == id))
         {
             if l.state == State::Active {
                 l.state = State::Draining;
@@ -684,6 +714,9 @@ impl Ledger {
             domain.retained = old.retained;
             next.domains.insert(id, domain);
         }
+        // A reviewed epoch cut restores admission, never old output authority.
+        // All domains advance, so even already released results are fenced.
+        next.fence_outputs();
         next.validate()?;
         *self = next;
         Ok(())
@@ -733,9 +766,18 @@ impl Ledger {
                 domain.observed = old.observed;
             }
         }
+        next.fence_outputs();
         next.validate()?;
         *self = next;
         Ok(())
+    }
+
+    fn fence_outputs(&mut self) {
+        for lease in &mut self.leases {
+            if lease.output_sha256.is_some() {
+                lease.output_fenced = true;
+            }
+        }
     }
 }
 
@@ -1111,15 +1153,19 @@ mod tests {
             .unwrap();
         store.transact(|l| l.revoke(&token, "owner-lost")).unwrap();
         store
-            .transact(|l| l.revoke(&token, "operator-revoked"))
+            .transact(|l| l.finish_draining(&token, &BTreeMap::from([("host".into(), 0)])))
             .unwrap();
         store
-            .transact(|l| l.finish_draining(&token, &BTreeMap::from([("host".into(), 0)])))
+            .transact(|l| l.revoke(&token, "operator-revoked"))
             .unwrap();
         drop(store);
         let mut store = Store::open(&directory).unwrap();
         let receipt = store.read().unwrap().leases[0].clone();
         assert_eq!(receipt.output_sha256, Some("d".repeat(64)));
+        assert_eq!(
+            receipt.output_domain_epochs,
+            Some(BTreeMap::from([("host".into(), OutputEpoch(1))]))
+        );
         assert!(receipt.output_fenced);
         assert_eq!(receipt.state, State::Released);
         let reference = store
@@ -1132,6 +1178,204 @@ mod tests {
         drop(store);
         fs::remove_dir_all(&directory).unwrap();
     }
+    #[test]
+    fn output_domain_epochs_are_complete_canonical_and_lossless() {
+        let mut ledger = ledger();
+        ledger.domains.get_mut("device").unwrap().epoch = u64::MAX;
+        let token = admit(
+            &mut ledger,
+            81,
+            vec![reserve("device", 20), reserve("host", 40)],
+        )
+        .unwrap();
+        ledger
+            .complete_output(&token, &owner(81), 2, &"d".repeat(64))
+            .unwrap();
+        assert_eq!(
+            ledger.leases[0].output_domain_epochs,
+            Some(BTreeMap::from([
+                ("device".into(), OutputEpoch(u64::MAX)),
+                ("host".into(), OutputEpoch(1))
+            ]))
+        );
+        let value = serde_json::to_value(&ledger).unwrap();
+        assert_eq!(
+            value["leases"][0]["output_domain_epochs"]["device"],
+            u64::MAX.to_string()
+        );
+        assert_eq!(
+            serde_json::from_value::<Ledger>(value.clone()).unwrap(),
+            ledger
+        );
+        for invalid in [
+            serde_json::json!(1),
+            serde_json::json!(true),
+            serde_json::json!("01"),
+            serde_json::json!("+1"),
+            serde_json::json!("-1"),
+            serde_json::json!("18446744073709551616"),
+        ] {
+            let mut changed = value.clone();
+            changed["leases"][0]["output_domain_epochs"]["host"] = invalid;
+            assert!(serde_json::from_value::<Ledger>(changed).is_err());
+        }
+        for mode in 0..5 {
+            let mut changed = ledger.clone();
+            match mode {
+                0 => {
+                    changed.leases[0]
+                        .output_domain_epochs
+                        .as_mut()
+                        .unwrap()
+                        .remove("host");
+                }
+                1 => {
+                    changed.leases[0]
+                        .output_domain_epochs
+                        .as_mut()
+                        .unwrap()
+                        .insert("unknown".into(), OutputEpoch(1));
+                }
+                2 => {
+                    changed.leases[0]
+                        .output_domain_epochs
+                        .as_mut()
+                        .unwrap()
+                        .insert("host".into(), OutputEpoch(0));
+                }
+                3 => {
+                    changed.leases[0]
+                        .output_domain_epochs
+                        .as_mut()
+                        .unwrap()
+                        .insert("host".into(), OutputEpoch(2));
+                }
+                _ => {
+                    changed.leases[0].output_sha256 = None;
+                }
+            }
+            assert!(changed.validate().is_err());
+        }
+    }
+
+    #[test]
+    fn legacy_output_replay_never_stamps_current_epochs_onto_missing_history() {
+        let mut ledger = ledger();
+        let token = admit(&mut ledger, 82, vec![reserve("host", 40)]).unwrap();
+        ledger
+            .complete_output(&token, &owner(82), 2, &"d".repeat(64))
+            .unwrap();
+        ledger.leases[0].output_domain_epochs = None;
+        let bytes = serde_json::to_vec(&ledger).unwrap();
+        assert!(!std::str::from_utf8(&bytes)
+            .unwrap()
+            .contains("output_domain_epochs"));
+        assert_eq!(
+            serde_json::to_vec(&serde_json::from_slice::<Ledger>(&bytes).unwrap()).unwrap(),
+            bytes
+        );
+        ledger.validate().unwrap();
+        let before = ledger.clone();
+        assert!(ledger
+            .complete_output(&token, &owner(82), 2, &"d".repeat(64))
+            .is_err());
+        assert_eq!(ledger, before);
+        assert_eq!(ledger.charged("host").unwrap(), 40);
+    }
+
+    fn released_output() -> (Ledger, Token) {
+        let mut ledger = ledger();
+        let token = admit(
+            &mut ledger,
+            83,
+            vec![reserve("device", 20), reserve("host", 40)],
+        )
+        .unwrap();
+        ledger
+            .complete_output(&token, &owner(83), 2, &"d".repeat(64))
+            .unwrap();
+        ledger.revoke(&token, "owner-lost").unwrap();
+        ledger
+            .finish_draining(
+                &token,
+                &BTreeMap::from([("device".into(), 0), ("host".into(), 7)]),
+            )
+            .unwrap();
+        (ledger, token)
+    }
+
+    #[test]
+    fn released_output_revocation_and_quarantine_are_sticky_without_capacity_changes() {
+        let (ledger, token) = released_output();
+        assert!(!ledger.leases[0].output_fenced);
+        for mode in 0..2 {
+            let mut fenced = ledger.clone();
+            if mode == 0 {
+                fenced.revoke(&token, "operator-revoked").unwrap();
+            } else {
+                fenced.quarantine("host", "worker-oom").unwrap();
+            }
+            assert!(fenced.leases[0].output_fenced);
+            assert_eq!(fenced.leases[0].state, State::Released);
+            assert_eq!(
+                fenced.leases[0].output_domain_epochs,
+                ledger.leases[0].output_domain_epochs
+            );
+            assert_eq!(fenced.leases[0].deadline_ms, ledger.leases[0].deadline_ms);
+            assert_eq!(fenced.generation, ledger.generation);
+            assert_eq!(fenced.charged("host").unwrap(), 7);
+            assert_eq!(fenced.charged("device").unwrap(), 0);
+            fenced.revoke(&token, "owner-lost").unwrap();
+            assert!(fenced.leases[0].output_fenced);
+            let review = fenced.review().unwrap();
+            fenced
+                .clear_quarantine(&review, ledger.domains.clone())
+                .unwrap();
+            assert!(fenced.leases[0].output_fenced);
+            assert_eq!(fenced.charged("host").unwrap(), 7);
+        }
+    }
+
+    #[test]
+    fn epoch_cuts_fence_released_outputs_and_overflow_is_nonmutating() {
+        let (ledger, _) = released_output();
+        for mode in 0..3 {
+            let mut changed = ledger.clone();
+            let review = changed.review().unwrap();
+            match mode {
+                0 => changed
+                    .clear_quarantine(&review, ledger.domains.clone())
+                    .unwrap(),
+                1 => changed
+                    .restart("epoch-two".into(), ledger.domains.clone())
+                    .unwrap(),
+                _ => changed
+                    .migrate_inventory(&review, "epoch-two".into(), ledger.domains.clone())
+                    .unwrap(),
+            }
+            assert!(changed.leases[0].output_fenced);
+            assert_eq!(
+                changed.leases[0].output_domain_epochs,
+                ledger.leases[0].output_domain_epochs
+            );
+            assert_eq!(changed.charged("host").unwrap(), 7);
+            assert_eq!(changed.generation, ledger.generation);
+            assert_eq!(changed.leases[0].state, State::Released);
+        }
+        let mut exhausted = ledger.clone();
+        exhausted.domains.get_mut("host").unwrap().epoch = u64::MAX;
+        let before = exhausted.clone();
+        let review = exhausted.review().unwrap();
+        assert!(exhausted
+            .clear_quarantine(&review, ledger.domains.clone())
+            .is_err());
+        assert_eq!(exhausted, before);
+        assert!(exhausted
+            .migrate_inventory(&review, "epoch-two".into(), ledger.domains.clone())
+            .is_err());
+        assert_eq!(exhausted, before);
+    }
+
     #[test]
     fn committed_output_is_immutable_durable_history_not_a_capacity_return() {
         let mut ledger = ledger();

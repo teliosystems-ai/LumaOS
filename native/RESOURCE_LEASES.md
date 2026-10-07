@@ -158,19 +158,39 @@ uses the same calculation boundary without a production fallback.
 
 `resource-output-complete` accepts only the exact confined, lease-owning root
 invoice helper, with its token and output digest in the `review` field. It
-persists `output_sha256` without changing deadlines, reservations or physical
-state. `resource-output-receipt` is a read-only root method on the same socket.
+persists `output_sha256` and `output_domain_epochs` from the broker's current
+inventory, not worker-supplied epochs. The complete snapshot names exactly every
+reserved domain, uses lossless canonical decimal strings, and is immutable on
+exact completion retry. This changes no deadline, reservation or physical state.
+`resource-output-receipt` is a read-only root method on the same socket.
 It rejects missing, expired, cancelled, quarantined, uncertain-owner or stale
 manager results. A persistent `output_fenced` flag prevents drainage or archive
 from rehabilitating a rejected result. Only a signalled original process
 handle counts as normal owner exit; missing handles and observation errors
 fence the result. `physical_release_granted` is always false in result replies.
-Only the existing cgroup observations can return physical capacity.
+Only the existing cgroup observations can return physical capacity. Result
+retrieval also requires the original domain epochs to match current authority.
+The invoice client accepts exactly the three compiled helper-plan domains and
+refuses missing, unknown, zero, numeric or noncanonical epoch values.
 
-Absent result/token fields remain omitted, preserving canonical older ledgers,
+Revocation and domain quarantine now fence outputs even when physical drainage
+has already marked the lease Released. Reviewed quarantine clearing advances
+all domain epochs and fences existing results; broker restart and inventory
+migration likewise preserve result fences in every physical state. None of
+these operations rewrites the output's original epoch snapshot or restores
+publication authority. Remaining cache charges, generation floors and physical
+cleanup receipts are preserved. Normal owner exit cannot clear an existing
+fence. This does not add principal/effect grants or TPM rollback protection.
+
+Absent result/token/epoch fields remain omitted, preserving canonical older ledgers,
 archives and workflow checkpoint bytes. Older checkpoints do not acquire
 fabricated provenance; current publication/reconciliation revalidates their
-reports through the leased helper. Broker, helper and coordinator require a
+reports through the leased helper. Older completed results with no domain
+snapshot remain readable/reviewable/archiveable history but cannot authorize
+current publication. Completion replay cannot stamp today's epochs onto old
+output: a new worker generation must recompute the source. Already committed
+artifact acknowledgements remain read-only and do not need a revived worker.
+Broker, helper and coordinator require a
 coordinated image upgrade: older strict readers cannot consume the new result
 fields and must refuse rather than reset state or fall back to unleased work.
 Installed service, AppArmor descriptor rules, upgrade and recovery qualification

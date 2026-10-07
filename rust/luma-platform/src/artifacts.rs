@@ -1,6 +1,8 @@
 //! Native laboratory managed invoice artifacts. Publication moves a complete
 //! content/receipt pair atomically; uncertain preparations require review.
-use crate::{bundle, calculation, platform, principal, scoped_read, skills, Result};
+use crate::{
+    bundle, calculation, platform, principal, scoped_read, skills, workflow_resource, Result,
+};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
@@ -39,6 +41,8 @@ pub(crate) struct Receipt {
     pub(crate) filename: String,
     pub(crate) media_type: String,
     pub(crate) version: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) resource_lease: Option<crate::resources::Token>,
 }
 
 pub(crate) fn identifier(value: &str) -> bool {
@@ -76,6 +80,10 @@ impl Receipt {
             || self.filename != "invoice-summary.json"
             || self.media_type != "application/json"
             || self.version != 1
+            || self
+                .resource_lease
+                .as_ref()
+                .is_some_and(|t| !workflow_resource::token_valid(t))
         {
             return Err("invalid native artifact receipt".into());
         }
@@ -641,14 +649,29 @@ pub fn status() -> Result<()> {
 }
 
 pub fn publish_invoice(request: &str) -> Result<()> {
+    let result = invoice_publication(
+        request,
+        workflow_resource::calculate,
+        workflow_resource::Calculation::recheck,
+    )?;
+    println!("{result}");
+    Ok(())
+}
+
+pub(crate) fn invoice_publication(
+    request: &str,
+    calculate: impl FnOnce(&[u8]) -> Result<workflow_resource::Calculation>,
+    mut recheck: impl FnMut(&workflow_resource::Calculation, &[u8], &str) -> Result<()>,
+) -> Result<serde_json::Value> {
     if !identifier(request) {
         return Err("invalid native artifact request".into());
     }
     let installation = installation()?;
     let admission = skills::admission()?;
     let source = calculation::source_stdin()?;
-    let content = calculation::report_bytes(&source)?;
-    let receipt = Receipt {
+    let result = calculate(&source)?;
+    let content = &result.report;
+    let mut receipt = Receipt {
         schema_version: 1,
         installation,
         request_id: request.into(),
@@ -658,19 +681,32 @@ pub fn publish_invoice(request: &str) -> Result<()> {
             .ok_or("missing signed workflow identity")?
             .into(),
         source_sha256: digest(&source),
-        content_sha256: digest(&content),
+        content_sha256: digest(content),
         content_bytes: content.len() as u64,
         filename: "invoice-summary.json".into(),
         media_type: "application/json".into(),
         version: 1,
+        resource_lease: Some(result.lease.clone()),
     };
-    let replay = Store::open(Path::new(DIRECTORY), &receipt.installation)?
-        .publish(&receipt, &content, authorize)?;
-    println!(
-        "{}",
-        serde_json::json!({"receipt":receipt,"replayed":replay,"environment":"lab","gate_closing":false})
-    );
-    Ok(())
+    let store = Store::open(Path::new(DIRECTORY), &receipt.installation)?;
+    if let Some(previous) = store
+        .inventory()?
+        .0
+        .iter()
+        .find(|r| r.request_id == request)
+    {
+        // Preserve immutable historical provenance on exact recomputation retry.
+        // Missing legacy provenance stays missing; never attach a new token to it.
+        receipt.resource_lease = previous.resource_lease.clone();
+    }
+    let replay = store.publish(&receipt, content, |receipt| {
+        authorize(receipt)?;
+        recheck(&result, &source, &receipt.installation)
+    })?;
+    Ok(
+        serde_json::json!({"receipt":receipt,"replayed":replay,"environment":"lab",
+        "calculation_lease":result.lease,"gate_closing":false}),
+    )
 }
 
 pub fn read(request: &str) -> Result<()> {
@@ -681,12 +717,44 @@ pub fn read(request: &str) -> Result<()> {
 }
 
 pub fn reconcile(request: &str, review: &str) -> Result<()> {
-    let store = Store::open(Path::new(DIRECTORY), &installation()?)?;
     println!(
         "{}",
-        serde_json::to_string(&store.reconcile(request, review, authorize)?)?
+        serde_json::to_string(&reconcile_invoice(
+            request,
+            review,
+            workflow_resource::recheck_report
+        )?)?
     );
     Ok(())
+}
+
+pub(crate) fn reconcile_invoice(
+    request: &str,
+    review: &str,
+    mut recheck: impl FnMut(&crate::resources::Token, &str, &[u8], &str) -> Result<()>,
+) -> Result<Receipt> {
+    let store = Store::open(Path::new(DIRECTORY), &installation()?)?;
+    let committed = store.inventory()?.0.iter().any(|r| r.request_id == request);
+    // A committed acknowledgement is read-only. An uncertain preparation still
+    // needs its live broker result receipt; operator review cannot replace it.
+    let prepared = if committed {
+        None
+    } else {
+        Some(store.pair(&store.pending, request)?)
+    };
+    store.reconcile(request, review, |receipt| {
+        authorize(receipt)?;
+        if let Some((expected, report)) = &prepared {
+            if expected != receipt {
+                return Err("prepared resource receipt changed".into());
+            }
+            let token = receipt.resource_lease.as_ref().ok_or(
+                "prepared legacy artifact lacks resource provenance; retain and resubmit source",
+            )?;
+            recheck(token, &receipt.source_sha256, report, &receipt.installation)?;
+        }
+        Ok(())
+    })
 }
 
 pub fn abort(request: &str, review: &str) -> Result<()> {
@@ -751,9 +819,70 @@ mod tests {
                 filename: "invoice-summary.json".into(),
                 media_type: "application/json".into(),
                 version: 1,
+                resource_lease: None,
             },
             content,
         )
+    }
+
+    #[test]
+    fn resource_provenance_is_optional_for_old_bytes_and_validated_for_new_receipts() {
+        let (mut receipt, _) = proposal("request-1");
+        let old = serde_json::to_vec(&receipt).unwrap();
+        assert!(!std::str::from_utf8(&old)
+            .unwrap()
+            .contains("resource_lease"));
+        let decoded: Receipt = serde_json::from_slice(&old).unwrap();
+        assert_eq!(serde_json::to_vec(&decoded).unwrap(), old);
+        receipt.resource_lease = Some(crate::resources::Token {
+            lease_id: "c".repeat(32),
+            manager_epoch: "d".repeat(32),
+            generation: 1,
+        });
+        receipt.validate(&"a".repeat(64), "request-1").unwrap();
+        let encoded = serde_json::to_vec(&receipt).unwrap();
+        assert_eq!(
+            serde_json::from_slice::<Receipt>(&encoded).unwrap(),
+            receipt
+        );
+        receipt.resource_lease.as_mut().unwrap().generation = 0;
+        assert!(receipt.validate(&"a".repeat(64), "request-1").is_err());
+    }
+
+    #[test]
+    fn fenced_publication_retains_complete_generation_bound_preparation() {
+        let f = Fixture::new("resource-fence");
+        let (mut receipt, data) = proposal("request-1");
+        receipt.resource_lease = Some(crate::resources::Token {
+            lease_id: "c".repeat(32),
+            manager_epoch: "d".repeat(32),
+            generation: 1,
+        });
+        let mut checks = 0;
+        assert!(f
+            .open()
+            .publish(&receipt, &data, |_| {
+                checks += 1;
+                if checks == 2 {
+                    Err("broker generation fenced".into())
+                } else {
+                    Ok(())
+                }
+            })
+            .is_err());
+        let store = f.open();
+        assert!(store.inventory().unwrap().0.is_empty());
+        assert_eq!(
+            store.pair(&store.pending, "request-1").unwrap(),
+            (receipt.clone(), data)
+        );
+        assert!(store
+            .reconcile("request-1", &receipt.review().unwrap(), |_| {
+                Err("broker generation still fenced".into())
+            })
+            .is_err());
+        assert!(store.inventory().unwrap().0.is_empty());
+        assert_eq!(store.pair(&store.pending, "request-1").unwrap().0, receipt);
     }
 
     #[test]

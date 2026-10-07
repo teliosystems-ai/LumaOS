@@ -177,6 +177,39 @@ Installed service, AppArmor descriptor rules, upgrade and recovery qualification
 remain required. The tools fixture now verifies missing-resource refusal;
 calculator-injected unit tests do not qualify actual installed containment.
 
+Both direct invoice publisher commands now use that same leased helper, rather
+than in-process calculation. Signed workflow/installation authorization and the
+current broker output receipt are rechecked before the legacy-pair rename or
+catalog WAL commit. The coordinator also checks the calculation generation
+before storing a calculated checkpoint, at the artifact boundary and before its
+completion checkpoint. A fence after artifact commit leaves Applying intact;
+only reviewed proof of the committed outcome can acknowledge it without another
+effect. A saved checkpoint token alone cannot authorize publication.
+
+New direct-publisher receipts retain `resource_lease`. Exact retries recompute
+under a fresh lease but preserve the original receipt's historical token; the
+response's `calculation_lease` describes this invocation, not a mutation of the
+original provenance. Old canonical receipts omit the optional field, remain
+readable and never acquire fabricated history. Reviewed copy import preserves
+any existing source token and does not turn it into live worker authority.
+
+`artifact-reconcile` can acknowledge an already committed pair without a live
+calculation grant. Publishing a pending pair requires its recorded token, bound
+report digest, installation/storage identity and current unfenced broker receipt.
+Missing legacy provenance, an archived/unavailable receipt or a changed manager
+epoch refuses publication even with operator review. Inspect
+`artifact-store-status`, retain the pair using its exact abort review, and
+resubmit the original CSV under a new request with the broker available. The
+retained bytes and original receipts are not deleted or rewritten.
+
+The disposable CLI fixture uses the shipped binary to verify absent-resource
+refusal, reads, retention and legacy-copy recovery. Successful publication and
+abrupt storage-crash tests use an explicitly marked, separate Rust unit-test
+executable with synthetic calculation/checks. That fixture is compiled only
+under `cfg(test)`; there is no test selector or calculator fallback in the
+installed executable. These tests cover storage/effect fencing, not installed
+systemd, AppArmor or real broker-to-worker qualification.
+
 Cancellation, expiry, lost owners, broker restart and quarantine leave all
 reservations charged until the broker fences the fixed cgroup and observes
 empty descendants. Surviving file-cache charges remain explicit. Verified
@@ -555,9 +588,12 @@ Admin authorization, and their combined native-image procedure remains unqualifi
 
 ## Still required before Requirement #1 closes
 
-- Join resource admission to content/workflow workers. Root model hashing is
-  routed through the leased service in source; its real installed pipeline
-  still needs qualification.
+- Finish broader content/workflow worker admission and effect grants. The closed
+  invoice coordinator and both direct publishers now use leased calculation and
+  effect-time result checks, but these installed-root paths do not implement
+  product principals, folder/effect grants or generic execution. Root model
+  hashing is also routed through the leased service in source; the real installed
+  pipelines still need qualification.
 - Extend request-level accepted prompt/output/concurrency accounting to all
   inference consumers, qualify closure of the installed reference bypass,
   and finish governed request export/deletion, custody and retention recovery.

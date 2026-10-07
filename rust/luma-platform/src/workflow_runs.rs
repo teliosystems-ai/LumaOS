@@ -126,6 +126,7 @@ struct Store {
     pending: File,
     installation: String,
     calculator: fn(&[u8]) -> Result<workflow_resource::Calculation>,
+    calculation_check: fn(&workflow_resource::Calculation, &[u8], &str) -> Result<()>,
 }
 pub(crate) fn initialize(path: &Path, installation: &str) -> Result<()> {
     if !io::hash(installation) {
@@ -236,6 +237,7 @@ impl Store {
             pending,
             installation: installation.into(),
             calculator: workflow_resource::calculate,
+            calculation_check: workflow_resource::Calculation::recheck,
         };
         result.inventory()?;
         Ok(result)
@@ -481,8 +483,9 @@ impl Store {
         {
             return Err("workflow run capacity exhausted".into());
         }
-        (self.calculator)(source)?;
+        let validation = (self.calculator)(source)?;
         authorize(plan)?;
+        (self.calculation_check)(&validation, source, &plan.installation)?;
         self.put_object(source)?;
         let checkpoint = Checkpoint {
             stage: 0,
@@ -501,6 +504,7 @@ impl Store {
         )?;
         self.insert(plan, &checkpoint)?;
         authorize(plan)?;
+        (self.calculation_check)(&validation, source, &plan.installation)?;
         self.root.sync_all()?;
         tx.commit()?;
         self.root.sync_all()?;
@@ -643,10 +647,15 @@ impl Store {
                 self.transition(&plan, &previous, &next, &mut authorize)?;
             }
             1 => {
-                let result = (self.calculator)(&self.object(&plan.source_sha256)?)?;
+                let source = self.object(&plan.source_sha256)?;
+                let result = (self.calculator)(&source)?;
+                (self.calculation_check)(&result, &source, &plan.installation)?;
                 next.report_sha256 = self.put_object(&result.report)?;
-                next.resource_lease = Some(result.lease);
-                self.transition(&plan, &previous, &next, &mut authorize)?;
+                next.resource_lease = Some(result.lease.clone());
+                self.transition(&plan, &previous, &next, |plan| {
+                    authorize(plan)?;
+                    (self.calculation_check)(&result, &source, &plan.installation)
+                })?;
             }
             2 => {
                 // Applying is durable BEFORE crossing the artifact boundary.
@@ -690,12 +699,16 @@ impl Store {
         ) -> Result<serde_json::Value>,
     ) -> Result<()> {
         let bytes = self.object(&applying.report_sha256)?;
-        if (self.calculator)(&self.object(&plan.source_sha256)?)?.report != bytes {
+        let source = self.object(&plan.source_sha256)?;
+        let calculation = (self.calculator)(&source)?;
+        if calculation.report != bytes {
             return Err("workflow deterministic report differs from source".into());
         }
+        (self.calculation_check)(&calculation, &source, &plan.installation)?;
         let result = effect(plan, &bytes, false, &mut || {
             self.check_current(plan, applying)?;
-            authorize(plan)
+            authorize(plan)?;
+            (self.calculation_check)(&calculation, &source, &plan.installation)
         })?;
         let effect_id = plan.effect_id()?;
         if result != catalog::invoice_receipt(&plan.commit(&effect_id), &bytes)? {
@@ -709,7 +722,10 @@ impl Store {
             receipt: Some(result),
             resource_lease: applying.resource_lease.clone(),
         };
-        self.transition(plan, applying, &completed, authorize)
+        self.transition(plan, applying, &completed, |plan| {
+            authorize(plan)?;
+            (self.calculation_check)(&calculation, &source, &plan.installation)
+        })
     }
 
     fn reconciliation_input(
@@ -992,6 +1008,15 @@ mod tests {
                     },
                 })
             };
+            store.calculation_check = |result, source, installation| {
+                if installation != "a".repeat(64)
+                    || result.report != calculation::report_bytes(source)?
+                    || !workflow_resource::token_valid(&result.lease)
+                {
+                    return Err("synthetic coordinator computation identity changed".into());
+                }
+                Ok(())
+            };
             store
         }
     }
@@ -1027,6 +1052,104 @@ mod tests {
         let id = p.effect_id()?;
         catalog::invoice_receipt(&p.commit(&id), bytes)
     }
+    #[test]
+    fn resource_fence_during_prepare_or_calculation_creates_no_new_checkpoint_or_report() {
+        let f = Fixture::new("resource-before-checkpoint");
+        let (plan, bytes) = plan();
+        let mut store = f.open();
+        store.calculation_check = |_, _, _| Err("calculation generation fenced".into());
+        assert!(store.prepare(&plan, &bytes, |_| Ok(())).is_err());
+        assert!(store
+            .db
+            .query("SELECT request_id FROM runs", &[], 1)
+            .unwrap()
+            .is_empty());
+        assert!(io::names(&store.objects, 1).unwrap().is_empty());
+        drop(store);
+        let store = f.open();
+        store.prepare(&plan, &bytes, |_| Ok(())).unwrap();
+        store
+            .advance("run-1", &review(&store), |_| Ok(()), |_, _, _, _| panic!())
+            .unwrap();
+        drop(store);
+        let mut store = f.open();
+        store.calculation_check = |_, _, _| Err("calculation generation fenced".into());
+        let before = review(&store);
+        assert!(store
+            .advance(
+                "run-1",
+                &before,
+                |_| Ok(()),
+                |_, _, _, _| { panic!("no effect before a verified calculation checkpoint") }
+            )
+            .is_err());
+        assert_eq!(review(&store), before);
+        assert_eq!(store.load("run-1").unwrap().1.stage, 1);
+        assert_eq!(io::names(&store.objects, 2).unwrap(), [plan.source_sha256]);
+    }
+
+    #[test]
+    fn generation_fences_at_effect_and_after_commit_preserve_applying_for_reconciliation() {
+        thread_local! { static FENCED: Cell<bool> = const { Cell::new(false) }; }
+        let f = Fixture::new("resource-effect-fence");
+        let (plan, bytes) = plan();
+        let mut store = f.open();
+        store.prepare(&plan, &bytes, |_| Ok(())).unwrap();
+        for _ in 0..2 {
+            store
+                .advance("run-1", &review(&store), |_| Ok(()), |_, _, _, _| panic!())
+                .unwrap();
+        }
+        store.calculation_check = |_, _, _| {
+            FENCED.with(|fenced| {
+                if fenced.get() {
+                    Err("broker calculation generation fenced".into())
+                } else {
+                    Ok(())
+                }
+            })
+        };
+        let effects = Cell::new(0);
+        assert!(store
+            .advance(
+                "run-1",
+                &review(&store),
+                |_| Ok(()),
+                |p, report, _, check| {
+                    FENCED.with(|fenced| fenced.set(true));
+                    check()?;
+                    effects.set(effects.get() + 1);
+                    receipt(p, report)
+                }
+            )
+            .is_err());
+        assert_eq!(effects.get(), 0);
+        assert_eq!(store.load("run-1").unwrap().1.stage, 3);
+        FENCED.with(|fenced| fenced.set(false));
+        assert!(store
+            .advance(
+                "run-1",
+                &review(&store),
+                |_| Ok(()),
+                |p, report, _, check| {
+                    check()?;
+                    effects.set(effects.get() + 1);
+                    FENCED.with(|fenced| fenced.set(true));
+                    receipt(p, report)
+                }
+            )
+            .is_err());
+        assert_eq!(effects.get(), 1);
+        assert_eq!(store.load("run-1").unwrap().1.stage, 3);
+        FENCED.with(|fenced| fenced.set(false));
+        let review = ack_review(&store);
+        assert!(!store
+            .acknowledge_committed("run-1", &review, receipt)
+            .unwrap());
+        assert_eq!(effects.get(), 1);
+        assert_eq!(store.load("run-1").unwrap().1.stage, 4);
+    }
+
     #[test]
     fn durable_steps_exact_prepare_replay_and_completed_boundary_verification() {
         let f = Fixture::new("steps");

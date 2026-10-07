@@ -27,7 +27,7 @@ jobs:
           docker build
           --build-arg UBUNTU_BASE=ubuntu@sha256:008173c23f95b170204355c12626cb5a965d779a7e1283b09e9cffbb1bf33ca3
           -f native/image/Dockerfile.tools -t luma-native-tools:ci native/image
-      - name: Rust tests and laboratory artifact CLI without network or host devices
+      - name: Rust tests, native resource refusal and synthetic publication store crashes
         run: >-
           docker run --rm --network none
           --mount type=bind,src="$PWD",dst=/repo,readonly

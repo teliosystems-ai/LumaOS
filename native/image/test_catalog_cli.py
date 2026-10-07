@@ -12,9 +12,16 @@ def exercise_catalog(run,state,source,pure):
     run('artifact-catalog-init',success=False)
     catalog = state/'artifact-catalog'
     publish = 'artifact-catalog-publish-invoice'
+    before = json.loads(run('artifact-catalog-status'))
+    run(publish,'no-resource','no-resource','0',data=source,success=False,native=True)
+    run(publish,'no-admission','no-admission','0',data=source,success=False,resource_fault='calculate')
+    run(publish,'fenced-admission','fenced-admission','0',data=source,success=False,resource_fault='recheck-1')
+    assert json.loads(run('artifact-catalog-status')) == before
     first = json.loads(run(publish,'catalog-1','invoices','0',data=source))
     assert first['receipt']['version'] == 1 and first['replayed'] is False
-    assert json.loads(run(publish,'catalog-1','invoices','0',data=source))['replayed'] is True
+    retry = json.loads(run(publish,'catalog-1','invoices','0',data=source,resource_generation=2))
+    assert retry['replayed'] is True and retry['receipt'] == first['receipt']
+    assert retry['calculation_lease']['generation'] == '2'
     assert run('artifact-catalog-read','invoices','1') == pure
     changed = source.replace(b'184.25',b'184.26')
     run(publish,'catalog-1','invoices','0',data=changed,success=False)
@@ -75,12 +82,22 @@ def exercise_catalog(run,state,source,pure):
         connection.rollback()
     exercise_legacy_import(run,state,source,pure)
     exercise_unavailable_workflow_resources(run,state,source)
+    # A result fenced immediately before WAL COMMIT leaves no version/receipt.
+    before = json.loads(run('artifact-catalog-status'))
+    late_source = source.replace(b'184.25',b'184.99')
+    run(publish,'late-fence','late-fence','0',data=late_source,success=False,
+        resource_fault='recheck-2')
+    fenced = json.loads(run('artifact-catalog-status'))
+    assert fenced['records'] == before['records'] and len(fenced['orphans']) == 1
+    fresh = json.loads(run(publish,'late-fence','late-fence','0',data=late_source,resource_generation=3))
+    assert fresh['receipt']['resource_lease']['generation'] == '3'
+    assert json.loads(run('artifact-catalog-status'))['orphans'] == []
     obj = catalog/'objects'/hashlib.sha256(pure).hexdigest()
     obj.chmod(0o600)
     obj.write_bytes(b'tampered')
     run('artifact-catalog-status',success=False)
     run('artifact-catalog-read','invoices','1',success=False)
-    print('CATALOG_CLI_FIXTURE_PASSED: WAL, versions, dedup, CAS, abrupt process exits, replay, retention, append-only, tamper')
+    print('CATALOG_CLI_FIXTURE_PASSED: native absent-resource refusal, WAL, versions, dedup, CAS, abrupt process exits, replay, retention, append-only, tamper; publication uses explicit synthetic computation fixture')
 
 
 def exercise_legacy_import(run,state,source,pure):

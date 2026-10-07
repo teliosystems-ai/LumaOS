@@ -100,25 +100,58 @@ qualification remains pending. The tools-only workflow CLI fixture now tests
 resource refusal; its former full workflow sequence requires that genuine
 installed boundary rather than an unleased fallback.
 
-The final offline checkpoint is
-`D:\LumaOS-builds\g2-resources-targeted-20261007-17`: 311 selected Rust tests
-and 156 selected Python tests passed, with 40 synthetic-authority history/model
-CLI cases and the isolated artifact/catalog/legacy-import/resource-refusal CLI
-fixture also passing. All 209 captured source files and 88 test inputs matched
-the checkout. The existing Linux-inapplicable Windows junction test was skipped;
-the two existing owned-child test entrypoints were exercised through their
-parent tests, not counted twice. No new test skip was introduced. Locked offline
-build/format, AppArmor syntax and 56 pinned runtime argument checks passed,
-without loading a model. The actual unit verifier's exit 1 is retained because
-the tools image lacks `apparmor.service`; installed enforcement is not qualified.
-Earlier checkpoints retain the missing ext4 fixture setting, result-fence defect
-and obsolete source-guard failures rather than replacing them with passing logs.
-Source manifest SHA-256:
-`53acbc4c0da166dec4b81d84e72c7d33f716813e4d5cb97829985ad6e1b289b5`.
+Both direct invoice publisher commands now use the same broker-leased helper
+and recheck output provenance immediately before publication. New receipts
+retain the calculation token; exact retry preserves its historical provenance
+while validating a fresh computation. Pending legacy-pair reconciliation cannot
+replace missing/fenced broker provenance with operator review. Such preparations
+must be retained and the source resubmitted under a new request. Already committed
+acknowledgements remain read-only. The coordinator now also rechecks result
+generations at calculated/effect/completion checkpoint boundaries; a fence after
+artifact commit preserves Applying for reviewed committed-outcome recovery.
+Canonical older receipts remain readable without invented token history.
+Successful publication/crash tests in the disposable tools fixture now use a
+separate, explicitly synthetic Rust test executable. The shipped binary refuses
+missing resources and has no fixture dispatch or calculation fallback.
+
+The combined offline checkpoint records 325 selected Rust and 157 selected
+Python tests passing in `D:\LumaOS-builds\g2-resources-targeted-20261007-19`,
+plus 40 synthetic-authority history/model CLI cases and 56 pinned runtime
+argument checks. That run's later publication fixture failed because Cargo was
+invoked outside the workspace where its offline vendor configuration is found;
+the original exit 101 and log remain retained. The repaired fixture passed in
+`D:\LumaOS-builds\g2-publication-component-20261007-20`, covering native
+resource refusal, synthetic publication/replay/fencing/crashes, reviewed legacy
+copy, retention and tamper refusal. Only the Cargo-discovery shell script changed
+between these manifests. All Rust, Python and CI inputs stayed identical, and
+the native and unit-test executables remained byte-for-byte identical. A binary
+negative/positive control also verified that the fixture selector is absent
+from the native executable and present only in the unit-test executable.
+
+All 210 final captured source files, 88 test inputs and the separately captured
+CI workflow matched the checkout. The existing Linux-inapplicable Windows
+junction test was skipped; the two existing owned-child test entrypoints were
+exercised through their parent tests, not counted twice. No new test skip was
+introduced. Locked offline build/format passed without loading a model. The
+unchanged AppArmor profiles passed syntax checks in the preceding run 18.
+The actual run-19 unit verifier's exit 1 is retained because the tools image
+lacks `apparmor.service`; installed enforcement is not qualified. Earlier failed
+ext4-fixture, result-fence and source-guard checkpoints also remain retained.
+These capped development checks did not restart WSL, change memory settings,
+alter host services or touch TPM ownership.
+
+Final source manifest SHA-256:
+`369db7895d2512a21981bde94be950d1795187b4983d65a29d34e6b480ff10bf`.
 Test input manifest SHA-256:
-`64971be0182ca25ad34e7ef5954cecbfe1fd59f742bc617c7ce5fa31a4ded123`.
-Final test log SHA-256:
-`5a6da2ab08cbd42ddf444db0e72b0a6c7d3c03f8d1fa9fea5ccdfb670be7f42a`.
+`683e6f22d610f0b1a62fd287ed57c6e6e373a03fa71d3e5f04978ac009cd16cf`.
+Run-19 test log SHA-256:
+`15921d886fa28221ed0b429af8bcd82f5b85fd09e67bf9ad0de78f4f2889bd06`.
+Publication component test log SHA-256:
+`5f56412bdee7c9c57da2a2177b407c79c37403bf6693b514a070a112f74612af`.
+Native executable SHA-256:
+`a342e8730e234895d9238305f59fd2eff689c525109808df645edad04c8b293b`.
+Unit-test executable SHA-256:
+`578b3d0fa85cc4e41d2201f749161c5e0fb35ecea5a9e626f6ec73f87523206b`.
 
 **Requirement #1 is not closed.** Broader content/workflow integration,
 remaining inference-consumer admission and bypass closure, governed request

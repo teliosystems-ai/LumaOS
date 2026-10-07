@@ -1,6 +1,9 @@
 //! Native WAL metadata plus immutable, domain-local content objects (ADR-0003).
 //! Current entry points require installed root; product grants remain separate.
-use crate::{artifacts as io, calculation, scoped_read, skills, sqlite::Connection, Result};
+use crate::{
+    artifacts as io, calculation, scoped_read, skills, sqlite::Connection, workflow_resource,
+    Result,
+};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 use std::ffi::CString;
@@ -47,6 +50,8 @@ struct Receipt {
     content_bytes: u64,
     filename: String,
     media_type: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    resource_lease: Option<crate::resources::Token>,
 }
 
 impl Receipt {
@@ -67,6 +72,10 @@ impl Receipt {
             || self.content_bytes > MAX_CONTENT
             || self.filename != "invoice-summary.json"
             || self.media_type != "application/json"
+            || self
+                .resource_lease
+                .as_ref()
+                .is_some_and(|t| !workflow_resource::token_valid(t))
         {
             return Err("invalid native artifact catalog receipt".into());
         }
@@ -225,6 +234,7 @@ fn legacy_proposal(snapshot: &io::LegacyArtifact, installation: &str) -> Result<
         content_bytes: source.content_bytes,
         filename: source.filename.clone(),
         media_type: source.media_type.clone(),
+        resource_lease: source.resource_lease.clone(),
     };
     receipt.validate(installation)?;
     Ok(receipt)
@@ -692,6 +702,7 @@ pub(crate) fn invoice_receipt(
         content_bytes: bytes.len() as u64,
         filename: "invoice-summary.json".into(),
         media_type: "application/json".into(),
+        resource_lease: None,
     };
     receipt.validate(commit.installation)?;
     if serde_json::from_slice::<serde_json::Value>(bytes)?["source_sha256"] != commit.source_sha256
@@ -772,15 +783,38 @@ pub fn status() -> Result<()> {
     Ok(())
 }
 pub fn publish_invoice(request: &str, artifact: &str, expected: &str) -> Result<()> {
+    let result = invoice_publication(
+        request,
+        artifact,
+        expected,
+        workflow_resource::calculate,
+        workflow_resource::Calculation::recheck,
+    )?;
+    println!("{result}");
+    Ok(())
+}
+
+pub(crate) fn invoice_publication(
+    request: &str,
+    artifact: &str,
+    expected: &str,
+    calculate: impl FnOnce(&[u8]) -> Result<workflow_resource::Calculation>,
+    mut recheck: impl FnMut(&workflow_resource::Calculation, &[u8], &str) -> Result<()>,
+) -> Result<serde_json::Value> {
+    let expected_version = expected.parse::<u64>()?;
+    if !io::identifier(request)
+        || !io::identifier(artifact)
+        || expected_version.to_string() != expected
+        || expected_version >= MAX_RECORDS as u64
+    {
+        return Err("invalid or noncanonical artifact publication identity".into());
+    }
     let installation = io::installation()?;
     let admission = skills::admission()?;
     let source = calculation::source_stdin()?;
-    let bytes = calculation::report_bytes(&source)?;
-    let expected_version = expected.parse::<u64>()?;
-    if expected_version.to_string() != expected {
-        return Err("noncanonical expected artifact version".into());
-    }
-    let receipt = Receipt {
+    let result = calculate(&source)?;
+    let bytes = &result.report;
+    let mut receipt = Receipt {
         schema_version: 1,
         environment: "lab".into(),
         installation,
@@ -796,18 +830,27 @@ pub fn publish_invoice(request: &str, artifact: &str, expected: &str) -> Result<
             .ok_or("missing signed workflow")?
             .into(),
         source_sha256: io::digest(&source),
-        content_sha256: io::digest(&bytes),
+        content_sha256: io::digest(bytes),
         content_bytes: bytes.len() as u64,
         filename: "invoice-summary.json".into(),
         media_type: "application/json".into(),
+        resource_lease: Some(result.lease.clone()),
     };
-    let replayed = Catalog::open(Path::new(DIRECTORY), &receipt.installation)?
-        .publish(&receipt, &bytes, authorize)?;
-    println!(
-        "{}",
-        serde_json::json!({"receipt":receipt,"replayed":replayed,"gate_closing":false})
-    );
-    Ok(())
+    let catalog = Catalog::open(Path::new(DIRECTORY), &receipt.installation)?;
+    if let Some((_, previous)) = catalog
+        .inventory()?
+        .0
+        .iter()
+        .find(|(_, r)| r.request_id == request)
+    {
+        receipt.resource_lease = previous.resource_lease.clone();
+    }
+    let replayed = catalog.publish(&receipt, bytes, |receipt| {
+        authorize(receipt)?;
+        recheck(&result, &source, &receipt.installation)
+    })?;
+    Ok(serde_json::json!({"receipt":receipt,"replayed":replayed,
+        "calculation_lease":result.lease,"gate_closing":false}))
 }
 pub fn read(artifact: &str, version: &str) -> Result<()> {
     let catalog = Catalog::open(Path::new(DIRECTORY), &io::installation()?)?;
@@ -917,6 +960,7 @@ mod tests {
                 content_bytes: bytes.len() as u64,
                 filename: "invoice-summary.json".into(),
                 media_type: "application/json".into(),
+                resource_lease: None,
             },
             bytes,
         )
@@ -938,6 +982,7 @@ mod tests {
             filename: proposal.filename,
             media_type: proposal.media_type,
             version: 1,
+            resource_lease: None,
         };
         let root = scoped_read::open_directory(&path).unwrap();
         let committed = io::child_directory(&root, "committed").unwrap();
@@ -954,6 +999,64 @@ mod tests {
         committed.sync_all().unwrap();
         root.sync_all().unwrap();
         (path, receipt, bytes)
+    }
+
+    #[test]
+    fn resource_provenance_preserves_old_canonical_receipts_and_refuses_bad_tokens() {
+        let (mut receipt, _) = proposal("request-1", "invoices", 0);
+        let old = serde_json::to_vec(&receipt).unwrap();
+        assert!(!std::str::from_utf8(&old)
+            .unwrap()
+            .contains("resource_lease"));
+        let decoded: Receipt = serde_json::from_slice(&old).unwrap();
+        assert_eq!(serde_json::to_vec(&decoded).unwrap(), old);
+        receipt.resource_lease = Some(crate::resources::Token {
+            lease_id: "c".repeat(32),
+            manager_epoch: "d".repeat(32),
+            generation: 1,
+        });
+        receipt.validate(&"a".repeat(64)).unwrap();
+        let encoded = serde_json::to_vec(&receipt).unwrap();
+        assert_eq!(
+            serde_json::from_slice::<Receipt>(&encoded).unwrap(),
+            receipt
+        );
+        receipt.resource_lease.as_mut().unwrap().manager_epoch = "x".repeat(32);
+        assert!(receipt.validate(&"a".repeat(64)).is_err());
+    }
+
+    #[test]
+    fn output_fence_before_commit_rolls_back_receipts_and_versions_but_keeps_object() {
+        let f = Fixture::new("result-fence");
+        let (mut receipt, bytes) = proposal("request-1", "invoices", 0);
+        receipt.resource_lease = Some(crate::resources::Token {
+            lease_id: "c".repeat(32),
+            manager_epoch: "d".repeat(32),
+            generation: 1,
+        });
+        let mut checks = 0;
+        assert!(f
+            .open()
+            .publish(&receipt, &bytes, |_| {
+                checks += 1;
+                if checks == 2 {
+                    Err("broker generation fenced".into())
+                } else {
+                    Ok(())
+                }
+            })
+            .is_err());
+        let catalog = f.open();
+        let (records, orphans, _) = catalog.inventory().unwrap();
+        assert!(records.is_empty());
+        assert_eq!(orphans, [receipt.content_sha256.clone()]);
+        assert!(catalog
+            .db
+            .query("SELECT current_version FROM artifacts", &[], 1)
+            .unwrap()
+            .is_empty());
+        assert!(!catalog.publish(&receipt, &bytes, |_| Ok(())).unwrap());
+        assert_eq!(catalog.inventory().unwrap().0[0].1, receipt);
     }
 
     #[test]

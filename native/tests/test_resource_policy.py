@@ -6,6 +6,28 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 class ResourcePolicyTests(unittest.TestCase):
+    def test_invoice_publishers_never_use_unleased_calculation_or_test_dispatch(self):
+        for name in ('artifacts.rs', 'artifact_catalog.rs'):
+            source = (ROOT/'rust/luma-platform/src'/name).read_text()
+            production = source.split('#[cfg(test)]')[0]
+            self.assertNotIn('calculation::report_bytes(', production)
+            entry = production.split('pub fn publish_invoice(')[1].split('pub(crate) fn invoice_publication(')[0]
+            self.assertIn('workflow_resource::calculate', entry)
+            self.assertIn('workflow_resource::Calculation::recheck', entry)
+            publication = production.split('pub(crate) fn invoice_publication(')[1].split('pub fn read(')[0]
+            self.assertIn('recheck(&result, &source, &receipt.installation)', publication)
+            self.assertIn('resource_lease: Some(result.lease.clone())', publication)
+            self.assertIn('previous.resource_lease.clone()', publication)
+            self.assertNotIn('LUMA_PUBLICATION_TEST', production)
+        artifacts = (ROOT/'rust/luma-platform/src/artifacts.rs').read_text()
+        reconciliation = artifacts.split('pub fn reconcile(')[1].split('pub fn abort(')[0]
+        for boundary in ('workflow_resource::recheck_report', 'receipt.resource_lease.as_ref()',
+                         'prepared legacy artifact lacks resource provenance', 'if let Some((expected, report))'):
+            self.assertIn(boundary, reconciliation)
+        main = (ROOT/'rust/luma-platform/src/main.rs').read_text()
+        self.assertIn('#[cfg(test)]\nmod publication_fixture;', main)
+        self.assertNotIn('publication_fixture::', main)
+
     def test_broker_is_the_only_resource_writer_and_uses_existing_transport(self):
         source = (ROOT/'rust/luma-platform/src/service.rs').read_text()
         self.assertEqual(source.count('UnixListener::bind(SOCKET)'), 1)
@@ -77,7 +99,10 @@ class ResourcePolicyTests(unittest.TestCase):
         workflow = (ROOT/'rust/luma-platform/src/workflow_runs.rs').read_text().split('#[cfg(test)]')[0]
         self.assertIn('calculator: workflow_resource::calculate', workflow)
         self.assertNotIn('calculation::report_bytes', workflow)
-        self.assertIn('next.resource_lease = Some(result.lease)', workflow)
+        self.assertIn('next.resource_lease = Some(result.lease.clone())', workflow)
+        self.assertIn('calculation_check: workflow_resource::Calculation::recheck', workflow)
+        finish = workflow.split('fn finish(')[1].split('fn reconciliation_input(')[0]
+        self.assertGreaterEqual(finish.count('(self.calculation_check)(&calculation, &source, &plan.installation)'), 3)
         launch = (ROOT/'rust/luma-platform/src/acquisition.rs').read_text()
         self.assertIn('"RestrictAddressFamilies=AF_UNIX"', launch)
         self.assertIn('"RuntimeMaxSec=30"', launch)

@@ -193,6 +193,55 @@ pub(crate) struct Calculation {
     pub lease: resources::Token,
 }
 
+impl Calculation {
+    /// Revalidate immutable output at the effect boundary. A saved token is not
+    /// a grant: the current broker epoch, storage and fence state must agree.
+    pub(crate) fn recheck(&self, source: &[u8], installation: &str) -> Result<()> {
+        if source.is_empty() || source.len() > MAX_SOURCE {
+            return Err("calculation source size changed before publication".into());
+        }
+        recheck_report(&self.lease, &io::digest(source), &self.report, installation)
+    }
+}
+
+pub(crate) fn recheck_report(
+    lease: &resources::Token,
+    source_hash: &str,
+    report: &[u8],
+    installation: &str,
+) -> Result<()> {
+    if !io::hash(source_hash)
+        || report.is_empty()
+        || report.len() > 2 * MAX_SOURCE
+        || !token_valid(lease)
+        || io::installation()? != installation
+    {
+        return Err("calculation identity changed before publication".into());
+    }
+    let output = Output {
+        schema_version: 1,
+        source_sha256: source_hash.into(),
+        lease: lease.clone(),
+        report: String::from_utf8(report.to_vec())?,
+    };
+    let output = parse_output(&serde_json::to_vec(&output)?, &source_hash)?;
+    let profile = format!("{PREFIX}{source_hash}");
+    let expected_binding = binding(
+        &profile,
+        &resource_manager::storage_device(Path::new("/var"))?,
+    )?;
+    let mut request = resource_manager::request("resource-output-receipt")?;
+    request.lease = Some(lease.clone());
+    let reply = crate::service::resource_exchange(&request)?;
+    verify_receipt(
+        &output,
+        &expected_binding,
+        reply
+            .status
+            .ok_or("calculation receipt missing before publication")?,
+    )
+}
+
 pub(crate) fn calculate(bytes: &[u8]) -> Result<Calculation> {
     crate::require_root()?;
     crate::platform::require_installed()?;

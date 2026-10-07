@@ -740,6 +740,13 @@ Final-image/native-hardware qualification remains separate.
   mutations pin the original registry through final authentication. This
   immutable checkpoint is not mutable account lifecycle, credential rollback
   protection or authority enforcement at resource/inference/effect boundaries.
+  Reviewed non-Admin disable/re-enable and generation rotation now advance TPM
+  catalog state without changing installation account files. A genuine PAM-bound
+  governed session double-replays that state and permanently fences on generation,
+  shared-head, clock or proof changes. The installed root `principal-check`
+  diagnostic exercises this source composition. Bootstrap Admin rotation, account
+  creation/credential recovery and resource/inference/effect admission integration
+  remain open; this does not qualify those boundaries or close the subgate.
 - Finish broader content/workflow worker admission. The closed invoice
   coordinator and both direct publishers use leased calculation and effect-time
   result checks, but remain installed-root paths, not generic governed execution.

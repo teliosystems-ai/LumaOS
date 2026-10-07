@@ -1,6 +1,6 @@
 # G2 software completion register
 
-Updated 2026-10-07. **G2 software is not complete.** This register separates
+Updated 2026-10-08. **G2 software is not complete.** This register separates
 work that can be executed in the current Windows/Ubuntu WSL/VM environment
 from production deployment decisions and physical qualification. It does not
 change the frozen reference release, governing requirements, or exit criteria.
@@ -590,7 +590,7 @@ shared UTC-history replay. Exact historical replay does not extend the TPM; an
 identical new adoption is a no-op. A different snapshot cannot replace adopted
 generations. Pre-adoption history remains readable without invented authority.
 
-This is an immutable adoption primitive, not account lifecycle management. It
+The 2026-10-07 adoption checkpoint is an immutable primitive, not account lifecycle management. It
 does not checkpoint credential hashes/PAM policy or file inodes across restarts,
 and does not add account creation, disable/re-enable, credential rotation,
 generation advance, principal recovery, assignments or effect grants. Resource,
@@ -634,6 +634,80 @@ Native executable SHA-256:
 Full native regression log / frozen runner SHA-256, respectively:
 `e6752fa01baa37fd3944ec8f785a0df16d94f10b9dc82cc76f2efc8006462680` /
 `f3f9bfff462a1275b89052fa06ac0ffdd26b835e2b2ed07b97ede60c68a3bb78`.
+
+### Governed non Admin generations and PAM bound sessions
+
+The native source now implements reviewed non-Admin principal generation changes
+in the existing TPM-backed catalog. The adopted registry stays immutable and
+read-only; the catalog records effective generation/enabled state separately.
+Each newly committed disable, re-enable or rotation advances the exact current
+generation by one. Stale generations, unknown principals, generation exhaustion,
+bootstrap UID 1001 Admin changes and initially disabled baseline accounts are
+refused without preparing a mutation. Historical request replay never reapplies
+an old disable after a later re-enable/rotation, or writes the TPM again.
+
+The governed session consumes and owns a genuine, non-clonable PAM observation.
+It double-replays the complete semantic history, binds the installation identity,
+effective principal generation, checkpoint head and TPM boot epoch, and checks
+account pins plus the suspend-aware PAM lifetime around the whole projection.
+Missing/changed proofs, clock regression, epoch/head/generation changes, disable,
+expiry, failed projection or unwinding permanently fence the session and its PAM
+observation. Restoring metadata or re-enabling a principal does not revive it.
+The native `principal-check LOGIN` maintenance diagnostic exercises the same
+composition after fresh local PAM; it closes authentication before returning an
+inert identity report, never a reusable session, role or effect grant. Operating
+commands and limits are in [Local TPM2 Admin](LOCAL_TPM2_ADMIN.md#local-catalog-service-and-human-client).
+
+Product disable does not lock Linux accounts or rewrite passwd/shadow/registry
+files. `admin-auth-check` remains a local-only authentication diagnostic. Account
+creation, OS credential rotation/recovery, bootstrap Admin rotation/custody
+recovery, finite trusted-time assignments and folder/effect grants remain open.
+The resource, inference and effect paths still need to consume current governed
+principal/session authority. This increment does not close the first subgate,
+Requirement #1 or G2; Requirement #2 remains unstarted. No final image was rebuilt
+or qualified and no installed observer/AppArmor/seccomp or physical TPM
+qualification is claimed.
+
+The final frozen sweep at
+`D:\LumaOS-builds\g2-principal-session-20261008-03` passed (exit 0): 143 ordinary
+targeted Rust tests, 47 selected Python checks, six actual-PAM modes, three
+kernel-human IPC modes and all explicit credential/thread/descriptor kernel
+executions. Its fresh software-TPM composition passed 38 Admin socket requests.
+The additional lifecycle requests cover disable/replay, stale generation and
+bootstrap Admin refusal, re-enable, same-enabled-state rotation and historical
+disable replay after later updates. Genuine non-Admin PAM sessions also prove
+disable refusal, permanent old-session refusal after re-enable, fresh generation
+binding and refusal after a deliberately caught protected-projection panic.
+Those panic messages are expected fault injection, not successful skipped logic.
+
+Unit fault coverage separately includes final-writer authentication revocation
+with retained intent and no TPM dispatch, lost-reply reviewed publication without
+reapplication, current generation resolution, forged local-generation refusal,
+double semantic replay after a matching anchor read, clock/epoch loss with sticky
+restoration refusal and disk rollback. These use the injected checkpoint fixture,
+not physical TPM interruption evidence. Build/format checks passed with warnings
+denied; both AppArmor profiles parsed without being loaded. All 217 captured
+source files, 57 test inputs and the CI workflow matched the checkout. The tests
+use the D-backed offline one-CPU/1 GiB containers; no host account, service,
+physical TPM or WSL memory setting changed. Sweep `-01` passed an earlier borrowed
+session snapshot; `-02` passed Rust/kernel/PAM checks but failed a source-policy
+assertion that assumed formatter line layout. Both are retained. The final
+`-03` uses owned PAM sessions and the corrected, preflighted policy assertion.
+Full native Python discovery also passed (exit 0): 264 of 266 tests, with the
+same two existing pinned UTC-publisher fixture skips recorded separately. The
+47 selected checks are included in this discovery, not additional distinct passes.
+
+Source / test input manifest SHA-256, respectively:
+`b94f5cd63c9eeeabf83fa8af0273ff5e95fb50e69e535ce3f366dd7dfe0c692c` /
+`a30c44c17d8529465f57a936bac6c724af524982b8edb90d82f61b3629095df1`.
+Targeted log / frozen runner SHA-256, respectively:
+`75e1f27de3e2d2039cf6bd85f631a0c7aaf8aaf5666b2ddd2825757bd095eb58` /
+`ae3f5344f82f951834769d570f7425455001b817873842d59016ba6f35504878`.
+Native executable SHA-256:
+`d637c71ecd6a66137841c352a8178204f9fefeb46782ece10b1a5ec4824bf487`.
+Full native regression log / frozen runner SHA-256, respectively:
+`8991f2bcdbaf4ff2f0005bfae33ab7fa741bd24fc43def348b915cc3a53d2e7f` /
+`4d668cb75815a509af2594b78cdcf51f3e2af904d976c399acdeb03c4fd3a14e`.
 
 ### Admin and workflow closure status
 

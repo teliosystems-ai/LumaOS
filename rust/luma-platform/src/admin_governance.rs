@@ -348,6 +348,192 @@ impl<'a> Context<'a> {
     }
 }
 
+#[derive(Debug, PartialEq, Eq)]
+struct PrincipalBinding {
+    deployment: String,
+    enrollment_sha256: String,
+    checkpoint_head: String,
+    reset_count: u32,
+    restart_count: u32,
+    identity: serde_json::Value,
+}
+
+/// Owned by the protected TPM/PAM composition. No caller-selected path or
+/// identity is accepted by the public reader; every read needs a live account.
+pub(crate) struct PrincipalReader<'a, A: Checkpoint> {
+    store: &'a mut Store<A>,
+    directory: &'a Path,
+    registry_path: &'a Path,
+    last_clock: Option<tpm::Clock>,
+    fenced: bool,
+}
+
+impl<'a, A: Checkpoint> PrincipalReader<'a, A> {
+    fn new(store: &'a mut Store<A>, directory: &'a Path) -> Self {
+        Self::at(store, directory, Path::new(crate::principal::REGISTRY))
+    }
+
+    fn at(store: &'a mut Store<A>, directory: &'a Path, registry_path: &'a Path) -> Self {
+        Self {
+            store,
+            directory,
+            registry_path,
+            last_clock: None,
+            fenced: false,
+        }
+    }
+
+    fn replay(&mut self, local: &serde_json::Value) -> Result<(PrincipalBinding, tpm::Clock)> {
+        let registry = crate::principal::RegistryBinding::capture(self.registry_path)?;
+        let snapshot = self.store.snapshot()?;
+        let context = Context::load_at(self.directory, &snapshot.deployment, self.registry_path)?;
+        if !context.bootstrap_state(&snapshot)?.1 {
+            return Err("explicit product Admin bootstrap required".into());
+        }
+        let (catalog, _) = context.events(&snapshot, None)?;
+        let identity = catalog.resolve_principal(local)?;
+        let final_snapshot = self.store.snapshot()?;
+        final_snapshot.clock.elapsed_since(snapshot.clock)?;
+        if final_snapshot.head != snapshot.head
+            || final_snapshot.deployment != snapshot.deployment
+            || tpm::private_read(&self.directory.join("enrollment.json"), 16384)?
+                != context.enrollment
+        {
+            return Err("principal authority changed during replay".into());
+        }
+        registry.current()?;
+        Ok((
+            PrincipalBinding {
+                deployment: snapshot.deployment,
+                enrollment_sha256: bundle::hex(&Sha256::digest(&context.enrollment)),
+                checkpoint_head: snapshot.head,
+                reset_count: final_snapshot.clock.reset_count,
+                restart_count: final_snapshot.clock.restart_count,
+                identity,
+            },
+            final_snapshot.clock,
+        ))
+    }
+
+    // Inert identity lookup only. Native callers cannot invoke this path with
+    // JSON in place of authentication; the public composition uses real PAM.
+    fn resolve(&mut self, local: &serde_json::Value) -> Result<PrincipalBinding> {
+        if self.fenced {
+            return Err("principal authority reader is fenced".into());
+        }
+        // An error or unwinding cannot reactivate the reader after a lost proof.
+        self.fenced = true;
+        let (before, first_clock) = self.replay(local)?;
+        if let Some(previous) = self.last_clock {
+            first_clock.elapsed_since(previous)?;
+        }
+        let (after, last_clock) = self.replay(local)?;
+        last_clock.elapsed_since(first_clock)?;
+        if before != after {
+            return Err("principal history changed during double replay".into());
+        }
+        self.last_clock = Some(last_clock);
+        self.fenced = false;
+        Ok(after)
+    }
+
+    fn read_account(
+        &mut self,
+        account: &authentication::AuthenticatedAccount,
+    ) -> Result<PrincipalBinding> {
+        let result = account.observe(|local| self.resolve(local));
+        if result.is_err() {
+            self.fenced = true;
+            account.logout();
+        }
+        result
+    }
+}
+
+/// A process-local, nonserializable composition of genuine bounded PAM and a
+/// current TPM principal binding. It conveys no role, custody or effect grant.
+pub(crate) struct PrincipalSession {
+    account: authentication::AuthenticatedAccount,
+    binding: PrincipalBinding,
+    fenced: std::cell::Cell<bool>,
+}
+
+impl PrincipalSession {
+    fn new<A: Checkpoint>(
+        account: authentication::AuthenticatedAccount,
+        reader: &mut PrincipalReader<'_, A>,
+    ) -> Result<Self> {
+        let binding = reader.read_account(&account)?;
+        Ok(Self {
+            account,
+            binding,
+            fenced: std::cell::Cell::new(false),
+        })
+    }
+
+    fn identity<A: Checkpoint>(
+        &self,
+        reader: &mut PrincipalReader<'_, A>,
+    ) -> Result<serde_json::Value> {
+        if self.fenced.get() {
+            return Err("governed principal session is fenced".into());
+        }
+        self.fenced.set(true);
+        let current = self.account.observe(|local| {
+            let current = reader.resolve(local)?;
+            if current != self.binding {
+                return Err(
+                    "governed generation or shared authority changed; authenticate again".into(),
+                );
+            }
+            Ok(current)
+        });
+        let current = match current {
+            Ok(current) => current,
+            Err(error) => {
+                reader.fenced = true;
+                self.close();
+                return Err(error);
+            }
+        };
+        self.fenced.set(false);
+        Ok(current.identity)
+    }
+
+    fn close(&self) {
+        self.fenced.set(true);
+        self.account.logout();
+    }
+}
+
+impl Drop for PrincipalSession {
+    fn drop(&mut self) {
+        self.close();
+    }
+}
+
+pub fn principal_check(login: &str) -> Result<()> {
+    crate::require_root()?;
+    platform::require_installed()?;
+    let account = authentication::local(login)?;
+    let directory = Path::new(DIRECTORY);
+    let mut store = Store::open(
+        tpm::LocalAnchor::installed()?,
+        &directory.join("journal.json"),
+    )?;
+    let mut reader = PrincipalReader::new(&mut store, directory);
+    let session = PrincipalSession::new(account, &mut reader)?;
+    let identity = session.identity(&mut reader)?;
+    session.close();
+    println!(
+        "{}",
+        serde_json::json!({"schema_version":1,"action":"governed-principal-check",
+        "principal":identity,"authentication_current":true,"session_returned":false,
+        "role_grant":false,"effect_grant":false,"gate_closing":false})
+    );
+    Ok(())
+}
+
 /// A replayed floor binding, not a saved estimate or an authority token. Only
 /// the shared Admin semantic reader can construct it; it has no wire form.
 #[cfg_attr(not(test), allow(dead_code))]
@@ -911,12 +1097,15 @@ fn parse_command(args: &[String]) -> Result<(&str, &str, Command, Option<&str>)>
     };
     let command = match args.first().map(String::as_str) {
         Some("admin-activity-register") if end == 4 => Command::RegisterActivity { activity: args[3].clone() },
+        Some("admin-principal-advance") if end == 6 => Command::AdvancePrincipal {
+            principal: args[3].clone(), expected_generation: args[4].parse()?, enabled: principal_enabled(&args[5])?,
+        },
         Some("admin-role-define") if (6..=69).contains(&end) => {
             let mut activities = args[5..end].to_vec();
             activities.sort();
             Command::DefineRole { name: args[3].clone(), activities, expected_version: args[4].parse()? }
         }
-        _ => return Err("use admin-activity-register LOGIN REQUEST ACTIVITY or admin-role-define LOGIN REQUEST ROLE EXPECTED-VERSION ACTIVITY...; optional --commit REVIEW-SHA256".into()),
+        _ => return Err("use admin-activity-register LOGIN REQUEST ACTIVITY, admin-principal-advance LOGIN REQUEST PRINCIPAL-ID EXPECTED-GENERATION enabled|disabled, or admin-role-define LOGIN REQUEST ROLE EXPECTED-VERSION ACTIVITY...; optional --commit REVIEW-SHA256".into()),
     };
     command.validate()?;
     if !admin_roles::identifier(&args[2]) || args[2] == REQUEST {
@@ -946,6 +1135,14 @@ pub fn catalog_command(args: &[String]) -> Result<()> {
     authenticated.logout();
     println!("{}", serde_json::to_string(&report)?);
     Ok(())
+}
+
+pub(crate) fn principal_enabled(value: &str) -> Result<bool> {
+    match value {
+        "enabled" => Ok(true),
+        "disabled" => Ok(false),
+        _ => Err("use exactly enabled or disabled for principal state".into()),
+    }
 }
 
 pub(crate) fn adoption_command(registry_path: &Path) -> Result<Command> {
@@ -1081,6 +1278,22 @@ pub(crate) fn fixture_service_request(
     review: Option<&str>,
 ) -> Result<serde_json::Value> {
     peer.check()?;
+    let directory = root.join("admin");
+    let mut store = fixture_store(root)?;
+    service_request_at(
+        &mut store,
+        &directory,
+        &root.join("registry.json"),
+        account,
+        peer,
+        request,
+        command,
+        review,
+    )
+}
+
+#[cfg(test)]
+fn fixture_store(root: &Path) -> Result<Store<tpm::LocalAnchor>> {
     crate::require_root()?;
     if !Path::new("/.dockerenv").is_file()
         || !root.starts_with("/tmp")
@@ -1106,17 +1319,32 @@ pub(crate) fn fixture_service_request(
         &secret,
         tpm::exclusive_lock(&root.join("bootstrap.lock"))?,
     )?;
-    let mut store = Store::open(anchor, &directory.join("journal.json"))?;
-    service_request_at(
-        &mut store,
-        &directory,
-        &root.join("registry.json"),
+    Store::open(anchor, &directory.join("journal.json"))
+}
+
+#[cfg(test)]
+pub(crate) fn fixture_governed_session(
+    root: &Path,
+    account: authentication::AuthenticatedAccount,
+) -> Result<PrincipalSession> {
+    let mut store = fixture_store(root)?;
+    PrincipalSession::new(
         account,
-        peer,
-        request,
-        command,
-        review,
+        &mut PrincipalReader::at(&mut store, &root.join("admin"), &root.join("registry.json")),
     )
+}
+
+#[cfg(test)]
+pub(crate) fn fixture_governed_identity(
+    root: &Path,
+    session: &PrincipalSession,
+) -> Result<serde_json::Value> {
+    let mut store = fixture_store(root)?;
+    session.identity(&mut PrincipalReader::at(
+        &mut store,
+        &root.join("admin"),
+        &root.join("registry.json"),
+    ))
 }
 
 #[cfg(test)]
@@ -1126,6 +1354,17 @@ pub(crate) fn fixture_bound_utc_history(
     send: impl FnMut(&str),
 ) {
     tests::bound_utc_history_case(receiver, variant, send);
+}
+
+#[cfg(test)]
+pub(crate) fn fixture_governed_projection_interruption(
+    root: &Path,
+    session: &PrincipalSession,
+) -> Result<()> {
+    let _store = fixture_store(root)?;
+    session
+        .account
+        .observe(|_| panic!("fixture protected projection interruption"))
 }
 
 #[cfg(test)]
@@ -1303,6 +1542,219 @@ mod tests {
             command,
             review,
         )
+    }
+    fn other_identity() -> serde_json::Value {
+        serde_json::json!({"installation":"ab".repeat(32),"principal":"ef".repeat(32),
+            "generation":1,"login":"otherhuman","uid":1002})
+    }
+    fn advance(generation: u64, enabled: bool) -> Command {
+        Command::AdvancePrincipal {
+            principal: "ef".repeat(32),
+            expected_generation: generation,
+            enabled,
+        }
+    }
+
+    #[test]
+    fn governed_principal_changes_are_reviewed_restartable_and_preserve_baseline_and_historical_requests(
+    ) {
+        let f = Fixture::new("governed-generation-chain");
+        let adoption = principal_registry(&f);
+        f.activate();
+        assert!(principal_call(&f, "disable", &advance(1, false), None).is_err());
+        principal_commit(&f, "adopt", &adoption);
+        let baseline = fs::read(f.directory.join("registry.json")).unwrap();
+        let inspected = principal_call(&f, "disable", &advance(1, false), None).unwrap();
+        assert_eq!(f.writes(), 2);
+        assert!(!f.directory.join(event_name("disable")).exists());
+        assert!(principal_call(&f, "disable", &advance(1, false), Some(&"00".repeat(32))).is_err());
+        let disabled = principal_call(
+            &f,
+            "disable",
+            &advance(1, false),
+            Some(inspected["review_sha256"].as_str().unwrap()),
+        )
+        .unwrap();
+        assert_eq!(
+            disabled["catalog"]["principal_states"][&"ef".repeat(32)]["generation"],
+            2
+        );
+        assert!(principal_call(&f, "stale", &advance(1, true), None).is_err());
+        assert!(principal_call(&f, "disable", &advance(2, true), None).is_err());
+        principal_commit(&f, "enable", &advance(2, true));
+        principal_commit(&f, "rotate", &advance(3, true));
+        let replay = principal_commit(&f, "disable", &advance(1, false));
+        assert_eq!(replay["replayed"], true);
+        assert_eq!(
+            replay["catalog"]["principal_states"][&"ef".repeat(32)]["generation"],
+            4
+        );
+        assert_eq!(
+            replay["catalog"]["principal_states"][&"ef".repeat(32)]["enabled"],
+            true
+        );
+        assert_eq!(
+            fs::read(f.directory.join("registry.json")).unwrap(),
+            baseline
+        );
+        assert_eq!(f.writes(), 5);
+    }
+
+    #[test]
+    fn governed_generation_final_writer_revocation_retains_intent_without_tpm_dispatch() {
+        let f = Fixture::new("governed-final-writer");
+        let adoption = principal_registry(&f);
+        f.activate();
+        principal_commit(&f, "adopt", &adoption);
+        let inspected = principal_call(&f, "disable", &advance(1, false), None).unwrap();
+        let mut calls = 0;
+        assert!(execute_catalog_at(
+            &mut f.store(),
+            &f.directory,
+            &f.directory.join("registry.json"),
+            || {
+                calls += 1;
+                if calls >= 5 {
+                    return Err("fixture authentication revoked at final writer".into());
+                }
+                Ok(f.identity.clone())
+            },
+            "disable",
+            &advance(1, false),
+            Some(inspected["review_sha256"].as_str().unwrap())
+        )
+        .is_err());
+        assert_eq!(calls, 5);
+        assert_eq!(f.writes(), 2);
+        assert!(f.directory.join("journal.pending.json").exists());
+        assert!(f.directory.join(event_name("disable")).exists());
+    }
+
+    #[test]
+    fn governed_generation_lost_reply_requires_reviewed_publication_not_reapplication() {
+        let f = Fixture::new("governed-lost-reply");
+        let adoption = principal_registry(&f);
+        f.activate();
+        principal_commit(&f, "adopt", &adoption);
+        let inspected = principal_call(&f, "disable", &advance(1, false), None).unwrap();
+        f.anchor.0.borrow_mut().3 = true;
+        assert!(principal_call(
+            &f,
+            "disable",
+            &advance(1, false),
+            Some(inspected["review_sha256"].as_str().unwrap())
+        )
+        .is_err());
+        let path = f.directory.join("journal.json");
+        assert!(Store::open(f.anchor.clone(), &path).is_err());
+        let recovery = admin_journal::Recovery::inspect(f.anchor.clone(), &path).unwrap();
+        let digest = recovery.digest().unwrap();
+        drop(recovery.publish(&digest).unwrap());
+        let replay = principal_commit(&f, "disable", &advance(1, false));
+        assert_eq!(replay["replayed"], true);
+        assert_eq!(
+            replay["catalog"]["principal_states"][&"ef".repeat(32)]["generation"],
+            2
+        );
+        assert_eq!(f.writes(), 3);
+    }
+
+    #[test]
+    fn principal_reader_requires_adoption_matches_baseline_and_never_authenticates_json() {
+        let f = Fixture::new("principal-reader-basics");
+        let adoption = principal_registry(&f);
+        let path = f.directory.join("registry.json");
+        let mut store = f.store();
+        assert!(PrincipalReader::at(&mut store, &f.directory, &path)
+            .resolve(&other_identity())
+            .is_err());
+        drop(store);
+        f.activate();
+        assert!(PrincipalReader::at(&mut f.store(), &f.directory, &path)
+            .resolve(&other_identity())
+            .is_err());
+        principal_commit(&f, "adopt", &adoption);
+        let original = PrincipalReader::at(&mut f.store(), &f.directory, &path)
+            .resolve(&other_identity())
+            .unwrap();
+        assert_eq!(original.identity["generation"], 1);
+        principal_commit(&f, "disable", &advance(1, false));
+        assert!(PrincipalReader::at(&mut f.store(), &f.directory, &path)
+            .resolve(&other_identity())
+            .is_err());
+        principal_commit(&f, "enable", &advance(2, true));
+        let current = PrincipalReader::at(&mut f.store(), &f.directory, &path)
+            .resolve(&other_identity())
+            .unwrap();
+        assert_eq!(current.identity["generation"], 3);
+        assert_ne!(original, current);
+        let mut forged = other_identity();
+        forged["generation"] = serde_json::json!(3);
+        assert!(PrincipalReader::at(&mut f.store(), &f.directory, &path)
+            .resolve(&forged)
+            .is_err());
+        assert_eq!(f.writes(), 4);
+    }
+
+    #[test]
+    fn principal_reader_clock_and_semantic_proof_loss_are_sticky_after_restoration() {
+        for choice in 0..3 {
+            let f = Fixture::new(&format!("principal-reader-fence-{choice}"));
+            let adoption = principal_registry(&f);
+            f.activate();
+            principal_commit(&f, "adopt", &adoption);
+            let path = f.directory.join("registry.json");
+            let payload = f.directory.join(event_name("adopt"));
+            let original = fs::read(&payload).unwrap();
+            let clock = f.anchor.0.borrow().1;
+            let mut store = f.store();
+            let mut reader = PrincipalReader::at(&mut store, &f.directory, &path);
+            reader.resolve(&other_identity()).unwrap();
+            if choice == 0 {
+                f.anchor.0.borrow_mut().1.milliseconds -= 1;
+            } else if choice == 1 {
+                f.anchor.0.borrow_mut().1.restart_count += 1;
+            } else {
+                platform::write_atomic(&payload, b"{}", 0o600).unwrap();
+            }
+            assert!(reader.resolve(&other_identity()).is_err());
+            f.anchor.0.borrow_mut().1 = clock;
+            platform::write_atomic(&payload, &original, 0o600).unwrap();
+            assert!(reader.resolve(&other_identity()).is_err());
+            assert_eq!(f.writes(), 2);
+        }
+    }
+
+    #[test]
+    fn principal_reader_rechecks_payload_after_matching_anchor_read_and_refuses_journal_rollback() {
+        let f = Fixture::new("principal-reader-payload-boundary");
+        let adoption = principal_registry(&f);
+        f.activate();
+        principal_commit(&f, "adopt", &adoption);
+        let old_journal = fs::read(f.directory.join("journal.json")).unwrap();
+        principal_commit(&f, "rotate", &advance(1, true));
+        let count = Rc::new(std::cell::Cell::new(0));
+        let trigger = Rc::new(std::cell::Cell::new(usize::MAX));
+        let payload = f.directory.join(event_name("rotate"));
+        let anchor = ReadHook {
+            anchor: f.anchor.clone(),
+            count: count.clone(),
+            trigger: trigger.clone(),
+            hook: Box::new(|| platform::write_atomic(&payload, b"{}", 0o600).unwrap()),
+        };
+        let mut store = Store::open(anchor, &f.directory.join("journal.json")).unwrap();
+        // The first replay has two checkpoint snapshots. Interrupt the second
+        // replay at its first matching anchor read, without changing the TPM.
+        trigger.set(count.get() + 3);
+        let path = f.directory.join("registry.json");
+        let mut reader = PrincipalReader::at(&mut store, &f.directory, &path);
+        assert!(reader.resolve(&other_identity()).is_err());
+        assert!(count.get() >= trigger.get());
+        drop(reader);
+        drop(store);
+        platform::write_atomic(&f.directory.join("journal.json"), &old_journal, 0o600).unwrap();
+        assert!(Store::open(f.anchor.clone(), &f.directory.join("journal.json")).is_err());
+        assert_eq!(f.writes(), 3);
     }
     fn principal_commit(f: &Fixture, request: &str, command: &Command) -> serde_json::Value {
         let inspected = principal_call(f, request, command, None).unwrap();

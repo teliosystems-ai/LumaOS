@@ -130,6 +130,22 @@ pub(crate) struct AuthenticatedAccount {
     lifetime: session::Lifetime,
 }
 impl AuthenticatedAccount {
+    /// Bind a complete protected projection to the original account pins and
+    /// PAM lifetime. Error, timeout or unwinding fences that PAM observation.
+    pub(crate) fn observe<T>(
+        &self,
+        project: impl FnOnce(&serde_json::Value) -> Result<T>,
+    ) -> Result<T> {
+        self.lifetime.observe(|| {
+            let local = self.binding.identity()?;
+            let result = project(&local)?;
+            if self.binding.identity()? != local {
+                return Err("local PAM identity changed during protected projection".into());
+            }
+            Ok(result)
+        })
+    }
+
     pub(crate) fn identity(&self) -> Result<serde_json::Value> {
         self.lifetime.observe(|| self.binding.identity())
     }
@@ -356,6 +372,17 @@ pub(crate) fn fixture_peer_account(
     password: &PrivateBuffer,
     peer: u32,
 ) -> Result<AuthenticatedAccount> {
+    authenticate_peer(peer, || {
+        fixture_local_account(directory, username, password)
+    })
+}
+
+#[cfg(test)]
+pub(crate) fn fixture_local_account(
+    directory: &Path,
+    username: &str,
+    password: &PrivateBuffer,
+) -> Result<AuthenticatedAccount> {
     crate::require_root()?;
     if !Path::new("/.dockerenv").is_file()
         || !directory.starts_with("/tmp")
@@ -369,15 +396,13 @@ pub(crate) fn fixture_peer_account(
     {
         return Err("fresh disposable PAM fixture required".into());
     }
-    authenticate_peer(peer, || {
-        authenticate_at(
-            &Path::new(env!("OUT_DIR")).join("luma-auth-helper"),
-            username,
-            password,
-            &directory.join("registry.json"),
-            Path::new("/etc"),
-        )
-    })
+    authenticate_at(
+        &Path::new(env!("OUT_DIR")).join("luma-auth-helper"),
+        username,
+        password,
+        &directory.join("registry.json"),
+        Path::new("/etc"),
+    )
 }
 
 #[cfg(test)]
@@ -471,6 +496,82 @@ mod tests {
         assert!(authenticate_peer(0, || panic!("root peer reached PAM")).is_err());
         assert!(authenticate_peer(1000, || panic!("ordinary peer reached PAM")).is_err());
     }
+    #[test]
+    fn protected_projection_rechecks_pins_and_fences_failure_and_unwinding() {
+        use std::os::unix::fs::DirBuilderExt;
+        let root = std::env::temp_dir().join(format!("luma-pam-projection-{}", std::process::id()));
+        std::fs::DirBuilder::new()
+            .mode(0o700)
+            .create(&root)
+            .unwrap();
+        let identity = root.join("identity");
+        std::fs::DirBuilder::new()
+            .mode(0o700)
+            .create(&identity)
+            .unwrap();
+        let passwd = b"human:x:1001:1001:Human:/home/human:/bin/bash\n";
+        for (name, bytes) in [
+            ("passwd", passwd.as_slice()),
+            (
+                "shadow",
+                b"human:$6$public$fixture:20000:0:99999:7:::\n".as_slice(),
+            ),
+        ] {
+            crate::platform::write_atomic(&identity.join(name), bytes, 0o600).unwrap();
+        }
+        principal::initialize(&root.join("principals"), &[("human", 1001)]).unwrap();
+        // Synthetic account/lifetime composition tests pin and unwind behavior,
+        // not PAM success. Genuine PAM is exercised by the guarded integration.
+        let account = || AuthenticatedAccount {
+            binding: AccountBinding::capture(
+                &root.join("principals/registry.json"),
+                &identity,
+                "human",
+            )
+            .unwrap(),
+            lifetime: session::Lifetime::start().unwrap(),
+        };
+        let changed = account();
+        assert!(changed
+            .observe(|_| {
+                crate::platform::write_atomic(&identity.join("passwd"), passwd, 0o600)?;
+                Ok(())
+            })
+            .is_err());
+        assert!(changed.identity().is_err());
+        let failed = account();
+        assert!(failed
+            .observe::<()>(|_| Err("fixture protected projection failure".into()))
+            .is_err());
+        assert!(failed.identity().is_err());
+        let unwound = account();
+        assert!(std::panic::catch_unwind(std::panic::AssertUnwindSafe(
+            || unwound.observe::<()>(|_| panic!("fixture unwind"))
+        ))
+        .is_err());
+        assert!(unwound.identity().is_err());
+        let expired = account();
+        assert!(expired
+            .observe(|_| {
+                expired.logout();
+                Ok(())
+            })
+            .is_err());
+        assert!(expired.identity().is_err());
+        let healthy = account();
+        assert_eq!(
+            healthy.observe(|local| Ok(local["uid"].clone())).unwrap(),
+            1001
+        );
+        for directory in [identity, root.join("principals")] {
+            for entry in std::fs::read_dir(&directory).unwrap() {
+                std::fs::remove_file(entry.unwrap().path()).unwrap();
+            }
+            std::fs::remove_dir(directory).unwrap();
+        }
+        std::fs::remove_dir(root).unwrap();
+    }
+
     #[test]
     fn existing_owner_hex_is_bounded_and_decoded_in_locked_memory() {
         for (input, expected) in [

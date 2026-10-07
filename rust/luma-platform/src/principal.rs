@@ -17,12 +17,12 @@ const MAX_REGISTRY_BYTES: u64 = 64 * 1024;
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
-struct Principal {
-    id: String,
-    generation: u64,
-    login: String,
-    uid: u32,
-    enabled: bool,
+pub(crate) struct Principal {
+    pub id: String,
+    pub generation: u64,
+    pub login: String,
+    pub uid: u32,
+    pub enabled: bool,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -68,6 +68,19 @@ fn validate(registry: &Registry) -> Result<()> {
 }
 
 impl Registry {
+    pub(crate) fn principal(&self, id: &str) -> Option<&Principal> {
+        self.principals.iter().find(|record| record.id == id)
+    }
+
+    pub(crate) fn account(&self, name: &str) -> Option<&Principal> {
+        self.principals.iter().find(|record| record.login == name)
+    }
+
+    pub(crate) fn identity(&self, record: &Principal) -> serde_json::Value {
+        serde_json::json!({"installation":self.installation,"principal":record.id,
+            "generation":record.generation,"login":record.login,"uid":record.uid})
+    }
+
     pub(crate) fn validate(&self) -> Result<()> {
         validate(self)
     }

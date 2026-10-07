@@ -539,8 +539,8 @@ records source and disposable-TPM checks, not G2 completion.
 
 The source now packages `luma-admin.service`, its `luma-admin` AppArmor
 profile and the required `luma-peer-observer.service` with its separate enforcing
-profile. It exposes catalog status, activity registration, role definition and
-explicit adoption of the installed principal registry. Adoption checkpoints a
+profile. It exposes catalog status, activity registration, role definition,
+explicit adoption and reviewed non-Admin principal-generation changes. Adoption checkpoints a
 snapshot without changing local accounts. This is not the complete assignment,
 principal lifecycle, signing or effect
 authorization service. The existing distributed image does not contain this
@@ -607,13 +607,52 @@ a no-op. A different snapshot cannot replace adopted generations. Preserve any
 interrupted intent and use reviewed journal publication only when its TPM proof
 allows it; never repeat an uncertain write automatically.
 
-This is an immutable adoption primitive. There is no authorized account creation,
-disable/re-enable, credential rotation, generation advance or principal recovery
-interface yet. Do not adopt a production registry expecting those operations to be
-available. Existing pre-adoption history remains readable and is not silently
-converted into principal authority. Resource, inference and effect boundaries do
-not yet consume this checkpoint; principal/session and grant integration remains
-open, as does installed confinement and native-hardware qualification.
+The adopted snapshot is an immutable installation baseline. Reviewed changes to
+the governed non-Admin principal generation and enabled state are recorded in
+TPM-backed history, not by editing that baseline. Existing pre-adoption history
+remains readable and is not silently converted into principal authority. Account
+creation, OS credential rotation and principal/custody recovery remain unavailable.
+Resource, inference and effect boundaries do not yet consume the governed session;
+principal/session and grant integration remains open, as does installed
+confinement and native-hardware qualification.
+
+From the original human Admin account, inspect and separately commit a change:
+
+```text
+luma-platform admin-client LOGIN principal-advance disable-user PRINCIPAL-ID CURRENT-GENERATION disabled
+luma-platform admin-client LOGIN principal-advance disable-user PRINCIPAL-ID CURRENT-GENERATION disabled --commit REVIEW-SHA256
+```
+
+The principal ID must already belong to the adopted baseline. The exact current
+generation is required. Every newly committed change advances it by one, even
+when requesting the same enabled state; use `enabled` for a deliberate rotation
+or to re-enable a governed-disabled principal. There is no force, caller-selected
+next generation, wildcard or generation reset. An exact historical request replays
+its receipt without changing the current state or extending the TPM again. The
+bootstrap UID 1001 Admin and initially disabled baseline accounts are refused;
+they require separate custody/account recovery. Maintenance can use
+`sudo luma-platform admin-principal-advance LOGIN REQUEST PRINCIPAL-ID CURRENT-GENERATION enabled|disabled`
+with the same reviewed commit option. Genuine PAM of the original Admin and the
+existing installed TPM checkpoint remain mandatory.
+
+These changes do not lock Linux accounts or rewrite registry/passwd/shadow files.
+Product disable is enforced by the governed session composition, not by ordinary
+PAM alone. `sudo luma-platform principal-check LOGIN` runs a fresh local PAM
+exchange, double-replays the adopted TPM principal history and reports the current
+governed identity. It returns no reusable session, role or effect grant and closes
+its PAM observation before output. `admin-auth-check` remains only a local-account
+authentication diagnostic and must not substitute for this governed check.
+
+The process-local governed session combines the original account pins and
+30-second suspend-aware PAM lifetime with the current principal generation,
+shared checkpoint head and TPM boot epoch. It consumes and owns its non-clonable
+PAM observation rather than borrowing reusable authentication. It revalidates the
+full semantic history at each use. Disable/re-enable, generation advance, any shared-head change,
+clock/proof loss, expiry or failed/unwound projection permanently fences the
+session and its original PAM observation. Fresh genuine PAM is required to bind
+the new state; restoring old metadata or re-enabling the principal cannot revive
+an old session. Installed resource/inference/effect admission still requires the
+separate integration and qualification listed in the completion register.
 
 The fixed root-owned socket accepts only the kernel-observed UID 1001; root,
 workers and ordinary users are not product Admin peers. PAM must resolve the

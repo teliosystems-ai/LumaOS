@@ -532,6 +532,11 @@ fn client_request(args: &[String]) -> Result<Request> {
         None
     };
     let command = match args[1].as_str() {
+        "principal-advance" if end == 6 => CatalogCommand::AdvancePrincipal {
+            principal: args[3].clone(),
+            expected_generation: args[4].parse()?,
+            enabled: admin_governance::principal_enabled(&args[5])?,
+        },
         "register" if end == 4 => CatalogCommand::RegisterActivity {
             activity: args[3].clone(),
         },
@@ -628,6 +633,43 @@ mod tests {
         ))
         .is_err());
     }
+    #[test]
+    fn principal_advance_client_requires_exact_identity_generation_state_and_review() {
+        let id = "ef".repeat(32);
+        let args = [
+            "human",
+            "principal-advance",
+            "disable",
+            &id,
+            "1",
+            "disabled",
+        ]
+        .map(String::from);
+        let request = client_request(&args).unwrap();
+        validate(&request).unwrap();
+        assert!(matches!(
+            request.operation,
+            Operation::Catalog {
+                command: CatalogCommand::AdvancePrincipal {
+                    expected_generation: 1,
+                    enabled: false,
+                    ..
+                },
+                review_sha256: None
+            }
+        ));
+        for (index, value) in [(3, "bad"), (4, "0"), (5, "true"), (5, "*"), (5, "enable")] {
+            let mut malformed = args.clone();
+            malformed[index] = value.into();
+            assert!(client_request(&malformed).is_err());
+        }
+        let mut committed = args.to_vec();
+        committed.extend(["--commit".into(), "ab".repeat(32)]);
+        assert!(client_request(&committed).is_ok());
+        committed[7] = "bad".into();
+        assert!(client_request(&committed).is_err());
+    }
+
     #[test]
     fn principal_adoption_request_carries_no_caller_registry_or_path() {
         let args = ["human", "adopt-principals", "adopt"].map(String::from);
@@ -1000,7 +1042,27 @@ mod tests {
     }
 
     fn pam_request(mode: &str, review: Option<String>) -> Request {
-        let operation = if mode.starts_with("adopt-") {
+        let operation = if mode.starts_with("life-") {
+            let (generation, enabled) = if mode.starts_with("life-enable") || mode == "life-stale" {
+                (2, true)
+            } else if mode.starts_with("life-rotate") {
+                (3, true)
+            } else {
+                (1, false)
+            };
+            Operation::Catalog {
+                command: CatalogCommand::AdvancePrincipal {
+                    principal: if mode == "life-admin" {
+                        std::env::var("LUMA_ADMIN_PAM_TEST_ADMIN_ID").unwrap()
+                    } else {
+                        "cc".repeat(32)
+                    },
+                    expected_generation: if mode == "life-stale" { 1 } else { generation },
+                    enabled,
+                },
+                review_sha256: review,
+            }
+        } else if mode.starts_with("adopt-") {
             Operation::AdoptPrincipals {
                 review_sha256: review,
             }
@@ -1032,7 +1094,14 @@ mod tests {
         };
         Request {
             schema_version: 1,
-            request_id: if mode.starts_with("adopt-") {
+            request_id: if mode.starts_with("life-disable") || mode.starts_with("life-old-disable")
+            {
+                "service-life-disable"
+            } else if mode.starts_with("life-enable") {
+                "service-life-enable"
+            } else if mode.starts_with("life-rotate") {
+                "service-life-rotate"
+            } else if mode.starts_with("adopt-") {
                 "service-principal-adoption"
             } else if mode.starts_with("register") {
                 "service-register"
@@ -1085,6 +1154,8 @@ mod tests {
         let mut excess = [0];
         assert_eq!(secret.read(&mut excess).unwrap(), 0);
         let mut review: Option<String> = None;
+        let governed = std::cell::OnceCell::new();
+        let admin_id: serde_json::Value = serde_json::from_slice(&original).unwrap();
         for mode in [
             "status",
             "register-review",
@@ -1112,7 +1183,34 @@ mod tests {
             "adopt-replay-commit",
             "registry-other-generation",
             "registry-restored",
+            "life-disable-review",
+            "life-disable-commit",
+            "life-disable-replay-review",
+            "life-disable-replay-commit",
+            "life-stale",
+            "life-admin",
+            "life-enable-review",
+            "life-enable-commit",
+            "life-rotate-review",
+            "life-rotate-commit",
+            "life-old-disable-review",
+            "life-old-disable-commit",
         ] {
+            if mode == "life-disable-review" {
+                let other_account =
+                    authentication::fixture_local_account(&root, "otherhuman", &password).unwrap();
+                let session =
+                    admin_governance::fixture_governed_session(&root, other_account).unwrap();
+                assert_eq!(
+                    admin_governance::fixture_governed_identity(&root, &session).unwrap()
+                        ["generation"],
+                    1
+                );
+                governed
+                    .set(session)
+                    .ok()
+                    .expect("one original governed session");
+            }
             let denied = matches!(
                 mode,
                 "wrong-password"
@@ -1124,6 +1222,8 @@ mod tests {
                     | "peer-exit-commit"
                     | "locked"
                     | "registry-other-generation"
+                    | "life-stale"
+                    | "life-admin"
             );
             if mode == "registry-other-generation" {
                 let mut changed: serde_json::Value = serde_json::from_slice(&original).unwrap();
@@ -1177,6 +1277,10 @@ mod tests {
                 ])
                 .env("LUMA_ADMIN_PAM_TEST_SOCKET", &path)
                 .env("LUMA_ADMIN_PAM_TEST_MODE", mode)
+                .env(
+                    "LUMA_ADMIN_PAM_TEST_ADMIN_ID",
+                    admin_id["principals"][0]["id"].as_str().unwrap(),
+                )
                 .env(
                     "LUMA_ADMIN_PAM_TEST_REVIEW",
                     approval.as_deref().unwrap_or(""),
@@ -1263,13 +1367,16 @@ mod tests {
                     || mode == "define-commit"
                     || mode == "peer-exit-restored-commit"
                     || mode == "adopt-commit"
+                    || mode == "life-disable-commit"
+                    || mode == "life-enable-commit"
+                    || mode == "life-rotate-commit"
                 {
                     assert_eq!(report["tpm_write_performed"], true);
                     assert_ne!(after, before);
                 } else {
                     assert_eq!(after, before, "inspection/replay changed journal: {mode}");
                 }
-                if mode.contains("replay") {
+                if mode.contains("replay") || mode.starts_with("life-old-disable") {
                     assert_eq!(report["replayed"], true);
                 }
                 if mode == "restored" {
@@ -1286,9 +1393,60 @@ mod tests {
                     );
                     assert_eq!(report["catalog"]["roles"]["Operator"]["version"], 2);
                 }
+                if mode == "life-disable-commit" {
+                    assert_eq!(
+                        report["catalog"]["principal_states"][&"cc".repeat(32)]["generation"],
+                        2
+                    );
+                    assert!(admin_governance::fixture_governed_identity(
+                        &root,
+                        governed.get().unwrap()
+                    )
+                    .is_err());
+                    let disabled =
+                        authentication::fixture_local_account(&root, "otherhuman", &password)
+                            .unwrap();
+                    assert!(admin_governance::fixture_governed_session(&root, disabled).is_err());
+                }
+                if mode == "life-enable-commit" || mode == "life-rotate-commit" {
+                    assert!(admin_governance::fixture_governed_identity(
+                        &root,
+                        governed.get().unwrap()
+                    )
+                    .is_err());
+                    let fresh =
+                        authentication::fixture_local_account(&root, "otherhuman", &password)
+                            .unwrap();
+                    let session = admin_governance::fixture_governed_session(&root, fresh).unwrap();
+                    assert_eq!(
+                        admin_governance::fixture_governed_identity(&root, &session).unwrap()
+                            ["generation"],
+                        if mode == "life-enable-commit" { 3 } else { 4 }
+                    );
+                    let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        admin_governance::fixture_governed_projection_interruption(&root, &session)
+                    }));
+                    assert!(panic.is_err());
+                    assert!(admin_governance::fixture_governed_identity(&root, &session).is_err());
+                }
+                if mode.starts_with("life-old-disable") {
+                    assert_eq!(
+                        report["catalog"]["principal_states"][&"cc".repeat(32)]["generation"],
+                        4
+                    );
+                    assert_eq!(
+                        report["catalog"]["principal_states"][&"cc".repeat(32)]["enabled"],
+                        true
+                    );
+                }
             }
-            // Fixture reset only; there is no product principal mutation/reset API.
-            crate::platform::write_atomic(&registry, &original, 0o600).unwrap();
+            // Older fixture cases reset installation metadata; governed changes
+            // must leave that baseline untouched and advance only TPM history.
+            if mode.starts_with("life-") {
+                assert_eq!(fs::read(&registry).unwrap(), original);
+            } else {
+                crate::platform::write_atomic(&registry, &original, 0o600).unwrap();
+            }
             if mode == "locked" {
                 assert!(Command::new("/usr/sbin/usermod")
                     .args(["--unlock", "human"])
@@ -1356,6 +1514,8 @@ mod tests {
                 | "disable-after-pam"
                 | "locked"
                 | "registry-other-generation"
+                | "life-stale"
+                | "life-admin"
         );
         if denied {
             assert!(response(&bytes, &request).is_err());

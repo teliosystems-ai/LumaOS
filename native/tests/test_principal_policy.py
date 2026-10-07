@@ -6,6 +6,37 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 class PrincipalPackagingTests(unittest.TestCase):
+    def test_governed_generations_preserve_baseline_and_require_real_bounded_pam_projection(self):
+        roles = (ROOT / 'rust/luma-platform/src/admin_roles.rs').read_text().split('#[cfg(test)]')[0]
+        for marker in ('AdvancePrincipal', 'expected_generation',
+                       'record.uid == 1001 || !record.enabled', 'principal_states',
+                       'explicit principal adoption required', 'governed principal is disabled',
+                       'registry.identity(record) != *local'):
+            self.assertIn(marker, roles)
+        self.assertNotIn('write_atomic', roles)
+        self.assertRegex(roles, r'generation\s*\.checked_add\(1\)')
+        governance = (ROOT / 'rust/luma-platform/src/admin_governance.rs').read_text().split('#[cfg(test)]')[0]
+        for marker in ('struct PrincipalReader', 'struct PrincipalSession', 'fn principal_check(',
+                       'account.observe(|local| self.resolve(local))', 'let (before, first_clock) = self.replay(local)?;',
+                       'let (after, last_clock) = self.replay(local)?;', 'first_clock.elapsed_since(previous)?;',
+                       'principal history changed during double replay', 'self.fenced.set(true)',
+                       'impl Drop for PrincipalSession', 'session_returned', 'authentication::local(login)?',
+                       'account: authentication::AuthenticatedAccount'):
+            self.assertIn(marker, governance)
+        self.assertNotIn('pub(crate) fn resolve(', governance)
+        self.assertNotIn('pub fn resolve(', governance)
+        principal_projection = governance.split('struct PrincipalBinding')[1].split('pub fn principal_check')[0]
+        self.assertNotIn('Serialize', principal_projection)
+        self.assertNotIn('Deserialize', principal_projection)
+        self.assertNotIn('std::env::', principal_projection)
+        authentication = (ROOT / 'rust/luma-platform/src/authentication.rs').read_text().split('#[cfg(test)]')[0]
+        projection = authentication.split('pub(crate) fn observe<T>')[1].split('pub(crate) fn identity')[0]
+        self.assertIn('self.lifetime.observe', projection)
+        self.assertEqual(projection.count('self.binding.identity()?'), 2)
+        profile = (ROOT / 'native/image/overlay/etc/apparmor.d/luma-admin').read_text()
+        self.assertIn('/var/lib/luma-os/principals/registry.json r,', profile)
+        self.assertNotIn('/var/lib/luma-os/principals/registry.json rw', profile)
+
     def test_principal_checkpoint_is_explicit_fixed_source_and_semantic_replay_guarded(self):
         governance = (ROOT / 'rust/luma-platform/src/admin_governance.rs').read_text().split('#[cfg(test)]')[0]
         for marker in ('pub fn adopt_principals(', 'platform::require_installed()?;',

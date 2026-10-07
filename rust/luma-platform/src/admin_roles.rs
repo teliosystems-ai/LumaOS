@@ -36,6 +36,11 @@ pub(crate) enum Command {
     AdoptPrincipals {
         registry: crate::principal::Registry,
     },
+    AdvancePrincipal {
+        principal: String,
+        expected_generation: u64,
+        enabled: bool,
+    },
 }
 
 impl Command {
@@ -44,12 +49,24 @@ impl Command {
             Self::RegisterActivity { .. } => "admin.activity.register",
             Self::DefineRole { .. } => "admin.role.define",
             Self::AdoptPrincipals { .. } => "admin.principal.adopt",
+            Self::AdvancePrincipal { .. } => "admin.principal.advance",
         }
     }
     pub(crate) fn validate(&self) -> Result<()> {
         let valid_activity = |v: &str| identifier(v) && v != "admin.bootstrap";
         match self {
             Self::AdoptPrincipals { registry } => registry.validate(),
+            Self::AdvancePrincipal {
+                principal,
+                expected_generation,
+                ..
+            } => {
+                crate::tpm::decode::<32>(principal)?;
+                if *expected_generation == 0 {
+                    return Err("principal generation must be nonzero".into());
+                }
+                Ok(())
+            }
             Self::RegisterActivity { activity } if valid_activity(activity) => Ok(()),
             Self::DefineRole {
                 name, activities, ..
@@ -83,6 +100,14 @@ pub(crate) struct Catalog {
     pub roles: BTreeMap<String, Role>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub principal_registry: Option<crate::principal::Registry>,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub principal_states: BTreeMap<String, PrincipalState>,
+}
+
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+pub(crate) struct PrincipalState {
+    pub generation: u64,
+    pub enabled: bool,
 }
 
 impl Catalog {
@@ -92,6 +117,7 @@ impl Catalog {
             activities: CONTROL.iter().map(|v| (*v).into()).collect(),
             roles: BTreeMap::new(),
             principal_registry: None,
+            principal_states: BTreeMap::new(),
         }
     }
 
@@ -104,6 +130,38 @@ impl Catalog {
             .checked_add(1)
             .ok_or("Admin catalog version exhausted")?;
         match command {
+            Command::AdvancePrincipal {
+                principal,
+                expected_generation,
+                enabled,
+            } => {
+                let record = self
+                    .principal_registry
+                    .as_ref()
+                    .ok_or("explicit principal adoption required")?
+                    .principal(principal)
+                    .ok_or("unknown adopted principal")?;
+                if record.uid == 1001 || !record.enabled {
+                    return Err("bootstrap Admin or initially disabled account requires separate governed custody recovery".into());
+                }
+                let generation = self
+                    .principal_states
+                    .get(principal)
+                    .map_or(record.generation, |state| state.generation);
+                if generation != *expected_generation {
+                    return Err("governed principal generation conflict".into());
+                }
+                let next = generation
+                    .checked_add(1)
+                    .ok_or("principal generation exhausted")?;
+                self.principal_states.insert(
+                    principal.clone(),
+                    PrincipalState {
+                        generation: next,
+                        enabled: *enabled,
+                    },
+                );
+            }
             Command::AdoptPrincipals { registry } => {
                 if let Some(anchored) = &self.principal_registry {
                     if anchored == registry {
@@ -155,6 +213,31 @@ impl Catalog {
         }
         self.state_version = next_state;
         Ok(true)
+    }
+
+    /// Resolve an inert local identity against adopted history. This is not
+    /// authentication; the owning session separately requires live genuine PAM.
+    pub(crate) fn resolve_principal(&self, local: &serde_json::Value) -> Result<serde_json::Value> {
+        let registry = self
+            .principal_registry
+            .as_ref()
+            .ok_or("explicit principal adoption required")?;
+        let name = local["login"]
+            .as_str()
+            .ok_or("missing local principal login")?;
+        let record = registry.account(name).ok_or("unknown adopted account")?;
+        if !record.enabled || registry.identity(record) != *local {
+            return Err("local identity does not match adopted installation baseline".into());
+        }
+        let mut current = record.clone();
+        if let Some(state) = self.principal_states.get(&record.id) {
+            current.generation = state.generation;
+            current.enabled = state.enabled;
+        }
+        if !current.enabled {
+            return Err("governed principal is disabled".into());
+        }
+        Ok(registry.identity(&current))
     }
 }
 
@@ -209,6 +292,97 @@ mod tests {
             assert!(catalog.apply(&command).is_err());
             assert_eq!(catalog, before);
         }
+    }
+
+    #[test]
+    fn governed_generations_disable_reenable_and_rotate_without_editing_baseline() {
+        let mut catalog = Catalog::initial();
+        let registry = serde_json::json!({"schema_version":1,"installation":"ab".repeat(32),
+            "principals":[{"id":"cd".repeat(32),"generation":1,"login":"human","uid":1001,"enabled":true},
+            {"id":"ef".repeat(32),"generation":1,"login":"other","uid":1002,"enabled":true}]});
+        catalog
+            .apply(&Command::AdoptPrincipals {
+                registry: serde_json::from_value(registry.clone()).unwrap(),
+            })
+            .unwrap();
+        let local = serde_json::json!({"installation":"ab".repeat(32),"principal":"ef".repeat(32),
+            "generation":1,"login":"other","uid":1002});
+        assert_eq!(catalog.resolve_principal(&local).unwrap(), local);
+        for (expected, enabled) in [(1, false), (2, true), (3, true)] {
+            assert!(catalog
+                .apply(&Command::AdvancePrincipal {
+                    principal: "ef".repeat(32),
+                    expected_generation: expected,
+                    enabled
+                })
+                .unwrap());
+            assert_eq!(
+                catalog.principal_states[&"ef".repeat(32)].generation,
+                expected + 1
+            );
+            if enabled {
+                assert_eq!(
+                    catalog.resolve_principal(&local).unwrap()["generation"],
+                    expected + 1
+                );
+            } else {
+                assert!(catalog.resolve_principal(&local).is_err());
+            }
+            assert_eq!(
+                serde_json::to_value(&catalog.principal_registry).unwrap(),
+                registry
+            );
+        }
+        let before = catalog.clone();
+        assert!(catalog
+            .apply(&Command::AdvancePrincipal {
+                principal: "ef".repeat(32),
+                expected_generation: 1,
+                enabled: true
+            })
+            .is_err());
+        assert_eq!(catalog, before);
+        let mut forged = local;
+        forged["generation"] = serde_json::json!(4);
+        assert!(catalog.resolve_principal(&forged).is_err());
+    }
+
+    #[test]
+    fn principal_advance_refuses_unadopted_unknown_admin_malformed_and_exhausted_state_atomically()
+    {
+        let mut catalog = Catalog::initial();
+        let advance = |id: &str, generation| Command::AdvancePrincipal {
+            principal: id.into(),
+            expected_generation: generation,
+            enabled: false,
+        };
+        assert!(catalog.apply(&advance(&"ef".repeat(32), 1)).is_err());
+        let registry = serde_json::json!({"schema_version":1,"installation":"ab".repeat(32),
+            "principals":[{"id":"cd".repeat(32),"generation":1,"login":"human","uid":1001,"enabled":true},
+            {"id":"ef".repeat(32),"generation":u64::MAX,"login":"other","uid":1002,"enabled":true},
+            {"id":"aa".repeat(32),"generation":1,"login":"locked","uid":1003,"enabled":false}]});
+        catalog
+            .apply(&Command::AdoptPrincipals {
+                registry: serde_json::from_value(registry).unwrap(),
+            })
+            .unwrap();
+        let before = catalog.clone();
+        for command in [
+            advance(&"cd".repeat(32), 1),
+            advance(&"bb".repeat(32), 1),
+            advance("bad", 1),
+            advance(&"ef".repeat(32), 0),
+            advance(&"ef".repeat(32), u64::MAX),
+            advance(&"aa".repeat(32), 1),
+        ] {
+            assert!(catalog.apply(&command).is_err());
+            assert_eq!(catalog, before);
+        }
+        assert!(serde_json::from_value::<Command>(
+            serde_json::json!({"action":"advance_principal",
+            "principal":"ef".repeat(32),"expected_generation":1,"enabled":true,"force":true})
+        )
+        .is_err());
     }
 
     #[test]

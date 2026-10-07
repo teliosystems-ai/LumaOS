@@ -146,7 +146,7 @@ def main(enrollment=False):
                                         'admin_service::tests::pam_catalog_connection',
                                         '--', '--ignored', '--exact', '--nocapture'],
                                        env=env, check=True, timeout=300)
-                        print('ADMIN_SERVICE_PAM_KERNEL_PEER_TPM_CATALOG_CASES_PASSED=26 '
+                        print('ADMIN_SERVICE_PAM_KERNEL_PEER_TPM_CATALOG_CASES_PASSED=38 '
                               'installed_service_tested=false confinement_enforced=false', flush=True)
                     return
                 def enrolled_delivery(mode):

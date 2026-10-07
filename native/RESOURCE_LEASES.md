@@ -713,26 +713,41 @@ Admin authorization, and their combined native-image procedure remains unqualifi
 
 ## Still required before Requirement #1 closes
 
-- Finish broader content/workflow worker admission and effect grants. The closed
-  invoice coordinator and both direct publishers now use leased calculation and
-  effect-time result checks, but these installed-root paths do not implement
-  product principals, folder/effect grants or generic execution. Root model
-  hashing is also routed through the leased service in source; the real installed
+The owner selected the following implementation order. Principal/session and
+grant integration is the active subgate; the next starts only after its
+implementation and targeted evaluation pass and the owner reviews completion.
+Final-image/native-hardware qualification remains separate.
+
+- Complete principal/session and grant integration, including governed account
+  generations, authenticated sessions, trusted-time finite Admin assignments,
+  principal-bound folder/effect grants and current authority checks at resource,
+  inference and effect boundaries. The initial native per-request PAM session
+  lifecycle now has suspend-aware expiry, explicit closure and sticky failure
+  fencing. Original registry/account descriptors and directory handles now fence
+  file replacement even when replacement bytes are identical; visible metadata
+  changes also require fresh authentication. These live continuity checks are
+  not durable anti-rollback generations and do not close the remaining account,
+  time or grant integrations.
+- Finish broader content/workflow worker admission. The closed invoice
+  coordinator and both direct publishers use leased calculation and effect-time
+  result checks, but remain installed-root paths, not generic governed execution.
+  Root model hashing also uses the leased service in source; the real installed
   pipelines still need qualification.
 - Extend request-level accepted prompt/output/concurrency accounting to all
-  inference consumers, qualify closure of the installed reference bypass,
-  and finish governed request export/deletion, custody and retention recovery.
+  inference consumers and qualify closure of the installed reference bypass.
   Native gateway defaults and fenced key rotation/migration now exist in source;
   real installed reference execution, old-key refusal and upgrade/rollback
   qualification remain open.
-  Durable operator receipts, reviewed archival, bounded root export and reviewed
-  preservation of current and older interrupted archive preparations now exist; the operator path
-  and verified CPU KV inventory do not close those integrations by themselves.
+- Complete governed request export/deletion, custody and retention lifecycle.
+  Durable operator receipts, reviewed archival, bounded root export and
+  preservation of current and older interrupted archive preparations exist;
+  installed-root maintenance is not product export/deletion authorization.
+- Finish broader reviewed damaged-authority recovery, including ledger/journal
+  and referenced-archive reconstruction. Manual deletion or an empty fallback
+  ledger is not recovery.
 - Complete supported multi-worker/tenant and device-domain adapters and
   generation/recovery paths. Current CPU-only, zero-pinned/zero-device profiles
   do not certify GPU, large-model, NUMA or other hardware paths.
-- Finish broader reviewed damaged-state and governed retention/recovery
-  integration; manual deletion or an empty fallback ledger is not recovery.
 - Qualify the real installed broker-to-worker pipeline, descendant drainage,
   pressure/OOM, suspend, storage/crash/restart and migration on the consolidated
   image. Unit arithmetic and source wiring are not kernel-enforcement evidence.

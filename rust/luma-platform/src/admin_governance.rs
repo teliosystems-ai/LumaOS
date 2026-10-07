@@ -666,6 +666,7 @@ pub fn bootstrap(login: &str, reviewed: Option<&str>) -> Result<()> {
         &directory.join("journal.json"),
     )?;
     let report = execute(&mut store, directory, || authenticated.identity(), reviewed)?;
+    authenticated.logout();
     println!("{}", serde_json::to_string(&report)?);
     Ok(())
 }
@@ -849,6 +850,7 @@ pub fn catalog_command(args: &[String]) -> Result<()> {
         &command,
         reviewed,
     )?;
+    authenticated.logout();
     println!("{}", serde_json::to_string(&report)?);
     Ok(())
 }
@@ -869,6 +871,7 @@ pub fn catalog_status(login: &str) -> Result<()> {
     }
     let (catalog, _) = context.events(&snapshot, None)?;
     context.recheck(&mut || authenticated.identity())?;
+    authenticated.logout();
     println!(
         "{}",
         serde_json::to_string(&serde_json::json!({"schema_version":1,

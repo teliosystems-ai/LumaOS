@@ -364,6 +364,103 @@ consolidated-image evidence remain qualification work. These source changes
 do not close those other paths or
 authorize moving to Requirement #2.
 
+The owner selected sequential completion within Requirement #1: principal/
+session and grant integration first, followed by broader worker/workflow
+admission, remaining inference consumers, governed retention/custody,
+damaged-authority recovery, and wider resource adapters. The active development
+subgate is the first only. Each subgate requires complete implementation,
+end-to-end wiring and passing targeted regressions before advancing; the owner
+reviews its completion before the next begins. Final-image/native-hardware
+qualification remains separately recorded and is not inferred from source tests.
+
+The initial session increment replaces the native PAM observation's elapsed-time
+check with a process-local lifecycle using the kernel boot identity and
+CLOCK_BOOTTIME. Both authentication execution and the resulting session have
+separate, nonextendable 30-second windows that include suspended time. Identity
+projection rechecks expiry before and after the current principal/credential
+read; context loss, clock regression, failed projection and panic permanently
+fence that session. Logout and destruction close it without renewal or saved-token
+restoration. Existing native Admin CLI/service requests use this lifecycle and
+close it at the request boundary. This is per-request PAM session functionality,
+not a reusable product login service, native principal-management lifecycle,
+trusted UTC publisher, finite role assignment or folder/effect grant. Those
+first-subgate integrations remain required; broader worker admission has not
+been started as the next subgate.
+
+This session increment passed the frozen targeted sweep at
+`D:\LumaOS-builds\g2-principal-session-20261007-03` (exit 0): 84 ordinary Rust
+tests across authentication, principal and Admin modules, 42 Python wiring/policy
+checks, six real-PAM fixture modes with logout/expiry checks, the kernel-human
+IPC fixture, existing-owner software-TPM sealing/bootstrap, and 17 composed
+Admin PAM/kernel-peer/catalog cases. The existing ignored emulator/owned-process
+fixture entrypoints were executed explicitly, not counted as ordinary passes.
+Full native Python discovery on the same snapshot passed 259 of 261 tests
+(exit 0); the two existing isolated pinned UTC-source fixture skips remain open.
+All 213 captured source files and 57 captured test inputs, plus the CI workflow,
+were checked against the current checkout after the sweep. Formatting, warning-free
+native compilation and the updated Admin AppArmor syntax passed. The profile was
+not loaded; installed confinement, physical suspend/fork and native-image/TPM
+qualification are not inferred from these fixtures. Builds, temporary container
+accounts/software-TPM state and evidence used D:-backed storage without changing
+host accounts, services, WSL settings or physical TPM ownership. Failed runner
+attempts `-01` and `-02` remain retained: their temporary-directory placement
+violated existing fixture safety guards. Only the runner paths were corrected;
+the guards and production code were not weakened to obtain a pass.
+
+Session source manifest SHA-256:
+`f742af5000329326919f6807cb9d6a15169af7c7bec9a6b15f72ebeae59cfab8`.
+Session test input manifest SHA-256:
+`ba5d3304c3cb35f5228d1324c6a13e0fc0c754c1b71ca74394843b8719195242`.
+Targeted log / frozen runner SHA-256, respectively:
+`44ccc3cbbc162c6ff28272a417a364dd64ae0a72334b155c5acc9dd8606145bb` /
+`645bbf2d00808c1c3cbf0756147afbe1f79a537eba03861a7188ee908ad4e78c`.
+Native executable SHA-256:
+`8943f4f1a5495266a42f8e42c73a82463b686df031a1666f81f3159851efc96f`.
+Full native regression log / frozen runner SHA-256, respectively:
+`49d22ab887691624b0c3add1eab7c1811385c112df5a831cba6c538dc410a4bc` /
+`11d0e19aa5ee2d7be42fdc5f6f5665b7f38eaa30d3f9758f4cd87ba5db4e3d96`.
+
+Principal/session continuity now also retains the original registry, passwd and
+shadow descriptors and their parent-directory handles. Capture and each current
+identity projection check the exact named files against those held handles,
+including inode/device, owner/group, mode, link count, length and visible change
+timestamps. Checks surround reads and complete principal projection. Identical-byte
+atomic replacement, visible in-place changes and parent-directory substitution
+require fresh authentication; returning the old contents after a detected failure
+cannot restore the session. CLOEXEC prevents these descriptors reaching the PAM
+helper. Shadow contents still use locked, nondumpable, wiped buffers and are not
+retained in the account binding. Unrelated directory entries do not invalidate
+an unchanged binding, but replacing either shared account database or the registry
+conservatively invalidates every existing binding to that file, even when a
+different account changed. These are live session-continuity fences, not durable
+principal generations: restart, filesystem rollback or root-level changes that
+leave no observable difference still require the planned governed, anchored
+account lifecycle. There is no new root mutation/recovery endpoint or role grant.
+
+The updated frozen sweep at
+`D:\LumaOS-builds\g2-principal-session-20261007-04` passed (exit 0): 89 ordinary
+Rust tests, 43 selected Python checks, all six real-PAM modes (now also checking
+identical registry replacement), kernel-human IPC, software-TPM
+sealing/enrollment/bootstrap and all 17 composed Admin catalog cases. Full native
+Python discovery passed 260 of 262 tests (exit 0); the same two existing isolated
+UTC-source fixture skips remain open. The 43 selected Python checks are included
+in that discovery, not additional distinct cases. All 213 captured source files,
+57 captured test inputs and the CI workflow matched the checkout. Formatting,
+warning-free offline compilation and Admin AppArmor syntax passed; the profile
+was not loaded. The same D:-backed limits and qualification exclusions apply.
+Source / test input manifest SHA-256, respectively:
+`04e43ecac17c297fbd28cdb6ed4556a5e6266ef2200208cbccd7b8aaacbb5f15` /
+`b31eeb1b6236d6e11dee3867412d5886f5cf4d0b0b15aef263698b4b488b955b`.
+Targeted log SHA-256:
+`256e85ae0c67af0ad3c543851aeab0c15538fd062c95f01d2317bfccd80ed94a`.
+The frozen targeted runner is unchanged from `-03`. Native executable SHA-256:
+`44988a1a835e9c0d490eca723535b2db9051b0d008720db59bf1833d1791d9d3`.
+Full native regression log / frozen runner SHA-256, respectively:
+`8418bcc2f42ff4f32924521ae41036873b2180ed9780e786b67cab72cd9f8230` /
+`f3f9bfff462a1275b89052fa06ac0ffdd26b835e2b2ed07b97ede60c68a3bb78`.
+This closes the specific live file-replacement continuity gap, not the principal/
+session/grant subgate or Requirement #1.
+
 ### Admin and workflow closure status
 
 Neither work package is closed, and neither is merely waiting for the final

@@ -258,7 +258,7 @@ pub fn connection() -> Result<()> {
     let mut stream = unsafe { UnixStream::from_raw_fd(fd) };
     handle(&mut stream, |request, password, uid| {
         let account = authentication::peer_account(&request.login, password, uid)?;
-        match &request.operation {
+        let result = match &request.operation {
             Operation::Status => {
                 admin_governance::service_request(&account, &request.request_id, None, None)
             }
@@ -271,7 +271,9 @@ pub fn connection() -> Result<()> {
                 Some(command),
                 review_sha256.as_deref(),
             ),
-        }
+        };
+        account.logout();
+        result
     })
 }
 

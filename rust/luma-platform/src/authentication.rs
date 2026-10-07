@@ -17,6 +17,7 @@ const PROFILE: &[u8] = include_bytes!("../../../native/image/overlay/etc/pam.d/l
 const HELPER: &str = "/usr/libexec/luma-os/luma-auth-helper";
 const LIMIT: usize = 1024;
 pub(crate) const PASSWORD_FRAME: usize = LIMIT + 1;
+mod session;
 
 fn login(value: &str) -> Result<()> {
     if value.is_empty()
@@ -126,31 +127,25 @@ impl Drop for Helper {
 // an ephemeral authentication observation, not a capability or persistent role.
 pub(crate) struct AuthenticatedAccount {
     binding: AccountBinding,
-    completed: Instant,
-}
-fn fresh(completed: Instant) -> Result<()> {
-    if completed.elapsed() > Duration::from_secs(30) {
-        return Err("account authentication expired".into());
-    }
-    Ok(())
-}
-fn fresh_observation<T>(
-    mut current: impl FnMut() -> Result<()>,
-    read: impl FnOnce() -> Result<T>,
-) -> Result<T> {
-    current()?;
-    let result = read()?;
-    // The complete observation, including its identity projection, can block.
-    current()?;
-    Ok(result)
+    lifetime: session::Lifetime,
 }
 impl AuthenticatedAccount {
     pub(crate) fn identity(&self) -> Result<serde_json::Value> {
-        fresh_observation(|| fresh(self.completed), || self.binding.identity())
+        self.lifetime.observe(|| self.binding.identity())
     }
 
     fn current_uid(&self) -> Result<u32> {
-        fresh_observation(|| fresh(self.completed), || self.binding.current_uid())
+        self.lifetime.observe(|| self.binding.current_uid())
+    }
+
+    pub(crate) fn logout(&self) {
+        self.lifetime.close();
+    }
+}
+
+impl Drop for AuthenticatedAccount {
+    fn drop(&mut self) {
+        self.logout();
     }
 }
 
@@ -180,6 +175,7 @@ fn authenticate_at(
     if password.bytes().len() != LIMIT + 1 {
         return Err("invalid password frame".into());
     }
+    let authentication_budget = session::Lifetime::start()?;
     let binding = AccountBinding::capture(registry, identity, username)?;
     let profile = Path::new("/etc/pam.d/luma-admin");
     let metadata = std::fs::symlink_metadata(profile)?;
@@ -223,17 +219,15 @@ fn authenticate_at(
             Ok(())
         });
     }
+    authentication_budget.check()?;
     let mut child = Helper(command.spawn()?);
-    let deadline = Instant::now() + Duration::from_secs(30);
     loop {
+        authentication_budget.check()?;
         if let Some(status) = child.0.try_wait()? {
             if !status.success() {
                 return Err("local account authentication denied".into());
             }
             break;
-        }
-        if Instant::now() >= deadline {
-            return Err("local account authentication timed out".into());
         }
         std::thread::sleep(Duration::from_millis(10));
     }
@@ -247,10 +241,10 @@ fn authenticate_at(
     if binding.current_uid()? != uid {
         return Err("PAM identity differs from the bound local principal".into());
     }
-    Ok(AuthenticatedAccount {
-        binding,
-        completed: Instant::now(),
-    })
+    authentication_budget.check()?;
+    let lifetime = session::Lifetime::start()?;
+    authentication_budget.check()?;
+    Ok(AuthenticatedAccount { binding, lifetime })
 }
 
 pub(crate) fn local(username: &str) -> Result<AuthenticatedAccount> {
@@ -345,9 +339,11 @@ fn decode_owner(encoded: &PrivateBuffer) -> Result<PrivateBuffer> {
 
 pub fn check(username: &str) -> Result<()> {
     let account = local(username)?;
+    let uid = account.current_uid()?;
+    account.logout();
     println!(
         "{}",
-        serde_json::json!({"authenticated_uid":account.current_uid()?,
+        serde_json::json!({"authenticated_uid":uid,
         "product_admin_active":false,"role_grant":false,"gate_closing":false})
     );
     Ok(())
@@ -450,34 +446,28 @@ mod tests {
             assert!(login(value).is_err());
         }
         login("luma-admin").unwrap();
-        fresh(Instant::now()).unwrap();
-        assert!(fresh(Instant::now() - Duration::from_secs(31)).is_err());
+        session::Lifetime::start().unwrap().check().unwrap();
+        assert!(session::Lifetime::expired_fixture()
+            .unwrap()
+            .check()
+            .is_err());
     }
     #[test]
     fn complete_observation_is_bounded_before_and_after_projection() {
-        use std::cell::Cell;
-        let read_completed = Cell::new(false);
-        let checks = Cell::new(0);
-        let result = fresh_observation(
-            || {
-                checks.set(checks.get() + 1);
-                if read_completed.get() {
-                    return Err("expired during identity read".into());
-                }
-                Ok(())
-            },
-            || {
-                read_completed.set(true);
+        let lifetime = session::Lifetime::start().unwrap();
+        assert!(lifetime
+            .observe(|| {
+                lifetime.close();
                 Ok(serde_json::json!({"uid":1001}))
-            },
-        );
-        assert!(result.is_err());
-        assert_eq!(checks.get(), 2);
-        assert!(fresh_observation(
-            || Err("already expired".into()),
-            || -> Result<()> { panic!("expired observation read") }
-        )
-        .is_err());
+            })
+            .is_err());
+        assert!(lifetime
+            .observe(|| -> Result<()> { panic!("closed session reached identity projection") })
+            .is_err());
+        let expired = session::Lifetime::expired_fixture().unwrap();
+        assert!(expired
+            .observe(|| -> Result<()> { panic!("expired session reached identity projection") })
+            .is_err());
         assert!(authenticate_peer(0, || panic!("root peer reached PAM")).is_err());
         assert!(authenticate_peer(1000, || panic!("ordinary peer reached PAM")).is_err());
     }
@@ -572,9 +562,25 @@ mod tests {
                 .unwrap()
                 .success());
             assert!(bound.current_uid().is_err()); // Unlock cannot revive an invalidated observation.
+            let logged_out = observe(&password).unwrap();
+            assert_eq!(logged_out.current_uid().unwrap(), 32001);
+            logged_out.logout();
+            logged_out.logout();
+            assert!(logged_out.current_uid().is_err());
+            assert!(logged_out.identity().is_err());
+            assert_eq!(observe(&password).unwrap().current_uid().unwrap(), 32001);
             let mut expired = observe(&password).unwrap();
-            expired.completed = Instant::now() - Duration::from_secs(31);
+            expired.lifetime = session::Lifetime::expired_fixture().unwrap();
             assert!(expired.current_uid().is_err());
+            assert!(expired.identity().is_err());
+            let replaced = observe(&password).unwrap();
+            let retained_registry = std::fs::read(&registry).unwrap();
+            crate::platform::write_atomic(&registry, &retained_registry, 0o600).unwrap();
+            assert!(replaced.current_uid().is_err());
+            assert!(replaced.identity().is_err());
+            assert_eq!(observe(&password).unwrap().current_uid().unwrap(), 32001);
+            crate::platform::write_atomic(&registry, &retained_registry, 0o600).unwrap();
+            assert!(replaced.current_uid().is_err());
         } else {
             assert!(result.is_err());
         }

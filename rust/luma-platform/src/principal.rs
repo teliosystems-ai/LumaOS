@@ -106,66 +106,162 @@ pub fn initialize(directory: &Path, accounts: &[(&str, u32)]) -> Result<()> {
     Ok(())
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct FileIdentity {
+    device: u64,
+    inode: u64,
+    length: u64,
+    uid: u32,
+    gid: u32,
+    mode: u32,
+    links: u64,
+    modified: (i64, i64),
+    changed: (i64, i64),
+}
+
+impl FileIdentity {
+    fn of(metadata: &fs::Metadata) -> Self {
+        Self {
+            device: metadata.dev(),
+            inode: metadata.ino(),
+            length: metadata.len(),
+            uid: metadata.uid(),
+            gid: metadata.gid(),
+            mode: metadata.mode(),
+            links: metadata.nlink(),
+            modified: (metadata.mtime(), metadata.mtime_nsec()),
+            changed: (metadata.ctime(), metadata.ctime_nsec()),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct DirectoryIdentity {
+    device: u64,
+    inode: u64,
+    uid: u32,
+    gid: u32,
+    mode: u32,
+}
+
+impl DirectoryIdentity {
+    fn of(metadata: &fs::Metadata) -> Self {
+        Self {
+            device: metadata.dev(),
+            inode: metadata.ino(),
+            uid: metadata.uid(),
+            gid: metadata.gid(),
+            mode: metadata.mode(),
+        }
+    }
+}
+
+// Keep the original descriptors open for the whole observation. Metadata alone
+// cannot prevent an unlinked inode number being reused for replacement state.
+// CLOEXEC prevents the PAM helper from inheriting registry or shadow handles.
+struct FilePin {
+    path: PathBuf,
+    file: File,
+    parent: File,
+    identity: FileIdentity,
+    directory: DirectoryIdentity,
+}
+
+impl FilePin {
+    fn open(path: &Path, limit: u64, private: bool, shadow: bool) -> Result<Self> {
+        let parent_path = path.parent().ok_or("missing local identity directory")?;
+        let parent = OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC)
+            .open(parent_path)?;
+        let directory = parent.metadata()?;
+        if !directory.is_dir()
+            || directory.uid() != 0
+            || directory.mode() & if private { 0o077 } else { 0o022 } != 0
+        {
+            return Err("unsafe local identity directory".into());
+        }
+        let file = OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NONBLOCK)
+            .open(path)?;
+        let metadata = file.metadata()?;
+        if !metadata.is_file()
+            || metadata.uid() != 0
+            || metadata.nlink() != 1
+            || metadata.mode() & if private { 0o077 } else { 0o022 } != 0
+            || (shadow && metadata.mode() & 0o007 != 0)
+            || metadata.len() == 0
+            || metadata.len() > limit
+        {
+            return Err("unsafe or oversized local identity state".into());
+        }
+        let pin = Self {
+            path: path.into(),
+            file,
+            parent,
+            identity: FileIdentity::of(&metadata),
+            directory: DirectoryIdentity::of(&directory),
+        };
+        pin.recheck()?;
+        Ok(pin)
+    }
+
+    fn recheck(&self) -> Result<()> {
+        if FileIdentity::of(&self.file.metadata()?) != self.identity
+            || FileIdentity::of(&fs::symlink_metadata(&self.path)?) != self.identity
+            || DirectoryIdentity::of(&self.parent.metadata()?) != self.directory
+            || DirectoryIdentity::of(&fs::symlink_metadata(
+                self.path
+                    .parent()
+                    .ok_or("missing local identity directory")?,
+            )?) != self.directory
+        {
+            return Err("local identity state replaced or changed; authenticate again".into());
+        }
+        Ok(())
+    }
+
+    fn complete_read(&mut self) -> Result<()> {
+        let mut excess = [0];
+        if self.file.read(&mut excess)? != 0 {
+            return Err("local identity state grew during observation".into());
+        }
+        self.recheck()
+    }
+}
+
+fn registry_observation(path: &Path) -> Result<(Registry, FilePin)> {
+    let mut pin = FilePin::open(path, MAX_REGISTRY_BYTES, true, false)?;
+    let mut bytes = vec![0; pin.identity.length as usize];
+    pin.file.read_exact(&mut bytes)?;
+    pin.complete_read()?;
+    let registry = serde_json::from_slice(&bytes)?;
+    validate(&registry)?;
+    Ok((registry, pin))
+}
+
 fn registry(path: &Path) -> Result<Registry> {
-    let result = serde_json::from_slice(&tpm::private_read(path, MAX_REGISTRY_BYTES)?)?;
-    validate(&result)?;
-    Ok(result)
+    Ok(registry_observation(path)?.0)
 }
 
 pub(crate) fn installation_at(path: &Path) -> Result<String> {
     Ok(registry(path)?.installation)
 }
 
-fn account_file(path: &Path, shadow: bool) -> Result<PrivateBuffer> {
-    let parent = fs::symlink_metadata(path.parent().ok_or("missing identity directory")?)?;
-    if !parent.is_dir() || parent.uid() != 0 || parent.mode() & 0o022 != 0 {
-        return Err("unsafe local identity directory".into());
-    }
-    let mut file = OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NONBLOCK)
-        .open(path)?;
-    let before = file.metadata()?;
-    if !before.is_file()
-        || before.uid() != 0
-        || before.nlink() != 1
-        || before.mode() & 0o022 != 0
-        || (shadow && before.mode() & 0o007 != 0)
-        || before.len() == 0
-        || before.len() > MAX_ACCOUNT_BYTES as u64
-    {
-        return Err("unsafe or oversized local account database".into());
-    }
+fn account_file(path: &Path, shadow: bool) -> Result<(PrivateBuffer, FilePin)> {
+    let mut pin = FilePin::open(path, MAX_ACCOUNT_BYTES as u64, false, shadow)?;
     // Shadow contents never enter a pageable Vec/String or diagnostic. The
     // existing locked, nondumpable buffer wipes itself on every return path.
-    let mut bytes = PrivateBuffer::new(before.len() as usize)?;
-    file.read_exact(bytes.bytes_mut())?;
-    let mut excess = [0];
-    if file.read(&mut excess)? != 0 {
-        return Err("local account database grew during observation".into());
-    }
-    let after = file.metadata()?;
-    if (
-        before.len(),
-        before.mtime(),
-        before.mtime_nsec(),
-        before.ctime(),
-        before.ctime_nsec(),
-    ) != (
-        after.len(),
-        after.mtime(),
-        after.mtime_nsec(),
-        after.ctime(),
-        after.ctime_nsec(),
-    ) {
-        return Err("local account database changed during observation".into());
-    }
-    Ok(bytes)
+    let mut bytes = PrivateBuffer::new(pin.identity.length as usize)?;
+    pin.file.read_exact(bytes.bytes_mut())?;
+    pin.complete_read()?;
+    Ok((bytes, pin))
 }
 
-fn account_digest(identity: &Path, principal: &Principal) -> Result<[u8; 32]> {
-    let passwd = account_file(&identity.join("passwd"), false)?;
-    let shadow = account_file(&identity.join("shadow"), true)?;
+fn account_observation(identity: &Path, principal: &Principal) -> Result<([u8; 32], [FilePin; 2])> {
+    let (passwd, passwd_pin) = account_file(&identity.join("passwd"), false)?;
+    let (shadow, shadow_pin) = account_file(&identity.join("shadow"), true)?;
     let passwd_text =
         std::str::from_utf8(passwd.bytes()).map_err(|_| "invalid local account encoding")?;
     let shadow_text =
@@ -219,7 +315,9 @@ fn account_digest(identity: &Path, principal: &Principal) -> Result<[u8; 32]> {
     digest.update(account.ok_or("missing local account")?.as_bytes());
     digest.update(b"\0");
     digest.update(credential.ok_or("missing local credential")?.as_bytes());
-    Ok(digest.finalize().into())
+    passwd_pin.recheck()?;
+    shadow_pin.recheck()?;
+    Ok((digest.finalize().into(), [passwd_pin, shadow_pin]))
 }
 
 /// Nonserializable account observation. It is NOT evidence of PAM success;
@@ -230,6 +328,7 @@ pub(crate) struct AccountBinding {
     installation: String,
     principal: Principal,
     account_digest: [u8; 32],
+    pins: [FilePin; 3],
     invalidated: Cell<bool>,
 }
 
@@ -243,22 +342,25 @@ impl AccountBinding {
     }
 
     pub fn capture(registry_path: &Path, identity: &Path, name: &str) -> Result<Self> {
-        let registry = registry(registry_path)?;
+        let (registry, registry_pin) = registry_observation(registry_path)?;
         let principal = registry
             .principals
             .iter()
             .find(|p| p.login == name && p.enabled)
             .ok_or("local principal is missing or disabled")?
             .clone();
-        let digest = account_digest(identity, &principal)?;
-        Ok(Self {
+        let (digest, [passwd_pin, shadow_pin]) = account_observation(identity, &principal)?;
+        let binding = Self {
             registry_path: registry_path.into(),
             identity: identity.into(),
             installation: registry.installation,
             principal,
             account_digest: digest,
+            pins: [registry_pin, passwd_pin, shadow_pin],
             invalidated: Cell::new(false),
-        })
+        };
+        binding.recheck_pins()?;
+        Ok(binding)
     }
 
     pub fn current_uid(&self) -> Result<u32> {
@@ -273,23 +375,33 @@ impl AccountBinding {
     }
 
     fn revalidate(&self) -> Result<u32> {
+        self.recheck_pins()?;
         let current = registry(&self.registry_path)?;
         if current.installation != self.installation
             || !current
                 .principals
                 .iter()
                 .any(|p| p == &self.principal && p.enabled)
-            || account_digest(&self.identity, &self.principal)? != self.account_digest
+            || account_observation(&self.identity, &self.principal)?.0 != self.account_digest
         {
             return Err("local principal or credential changed; authenticate again".into());
         }
+        self.recheck_pins()?;
         Ok(self.principal.uid)
+    }
+
+    fn recheck_pins(&self) -> Result<()> {
+        for pin in &self.pins {
+            pin.recheck()?;
+        }
+        Ok(())
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::os::fd::AsRawFd;
     use std::os::unix::fs::{symlink, PermissionsExt};
 
     struct Fixture(PathBuf);
@@ -375,6 +487,131 @@ mod tests {
                 _ => r.installation = "bb".repeat(32),
             });
             assert!(bound.current_uid().is_err());
+        }
+    }
+
+    #[test]
+    fn identical_registry_passwd_and_shadow_replacement_requires_fresh_binding() {
+        let fixture = Fixture::new("identical-replacement");
+        for path in [
+            fixture.path(),
+            fixture.0.join("identity/passwd"),
+            fixture.0.join("identity/shadow"),
+        ] {
+            let binding = fixture.binding();
+            let original = fs::read(&path).unwrap();
+            crate::platform::write_atomic(&path, &original, 0o600).unwrap();
+            assert!(binding.current_uid().is_err());
+            assert!(binding.identity().is_err());
+            assert_eq!(fixture.binding().current_uid().unwrap(), 1001);
+            crate::platform::write_atomic(&path, &original, 0o600).unwrap();
+            assert!(binding.current_uid().is_err());
+        }
+    }
+
+    #[test]
+    fn pinned_metadata_detects_restored_in_place_bytes_and_permissions() {
+        let fixture = Fixture::new("restored-in-place");
+        for path in [
+            fixture.path(),
+            fixture.0.join("identity/passwd"),
+            fixture.0.join("identity/shadow"),
+        ] {
+            let binding = fixture.binding();
+            let original = fs::read(&path).unwrap();
+            let inode = fs::metadata(&path).unwrap().ino();
+            let mut file = OpenOptions::new().write(true).open(&path).unwrap();
+            file.write_all(&vec![b'x'; original.len()]).unwrap();
+            use std::io::{Seek, SeekFrom};
+            file.seek(SeekFrom::Start(0)).unwrap();
+            file.write_all(&original).unwrap();
+            file.sync_all().unwrap();
+            // Force a distinct visible timestamp without relying on the test
+            // filesystem's clock resolution or a scheduling delay.
+            let metadata = file.metadata().unwrap();
+            let times = [
+                libc::timespec {
+                    tv_sec: 0,
+                    tv_nsec: libc::UTIME_OMIT,
+                },
+                libc::timespec {
+                    tv_sec: metadata.mtime() + 1,
+                    tv_nsec: 0,
+                },
+            ];
+            assert_eq!(
+                unsafe { libc::futimens(file.as_raw_fd(), times.as_ptr()) },
+                0
+            );
+            assert_eq!(fs::metadata(&path).unwrap().ino(), inode);
+            assert!(binding.current_uid().is_err());
+            assert_eq!(fixture.binding().current_uid().unwrap(), 1001);
+            let fresh = fixture.binding();
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
+            assert!(fresh.current_uid().is_err());
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+            assert!(fresh.current_uid().is_err());
+        }
+    }
+
+    #[test]
+    fn parent_replacement_cannot_transfer_authority_by_reusing_the_same_files() {
+        let fixture = Fixture::new("parent-replacement");
+        for directory in [fixture.0.join("principals"), fixture.0.join("identity")] {
+            let binding = fixture.binding();
+            let retained = fixture.0.join("retained-directory");
+            fs::rename(&directory, &retained).unwrap();
+            fs::DirBuilder::new()
+                .mode(0o700)
+                .create(&directory)
+                .unwrap();
+            for entry in fs::read_dir(&retained).unwrap() {
+                let entry = entry.unwrap();
+                fs::rename(entry.path(), directory.join(entry.file_name())).unwrap();
+            }
+            assert!(binding.current_uid().is_err());
+            assert_eq!(fixture.binding().current_uid().unwrap(), 1001);
+            fs::remove_dir(&directory).unwrap_err(); // State must still be retained.
+            fs::remove_dir(&retained).unwrap();
+            assert!(binding.current_uid().is_err());
+        }
+    }
+
+    #[test]
+    fn descriptors_are_cloexec_and_rechecks_bind_names_not_just_open_files() {
+        let fixture = Fixture::new("descriptor-pins");
+        let binding = fixture.binding();
+        for pin in &binding.pins {
+            for descriptor in [&pin.file, &pin.parent] {
+                let flags = unsafe { libc::fcntl(descriptor.as_raw_fd(), libc::F_GETFD) };
+                assert!(flags >= 0);
+                assert_ne!(flags & libc::FD_CLOEXEC, 0);
+            }
+            pin.recheck().unwrap();
+        }
+        let path = fixture.0.join("identity/shadow");
+        let (_, pin) = account_file(&path, true).unwrap();
+        let retained = fixture.0.join("identity/retained-shadow");
+        fs::rename(&path, &retained).unwrap();
+        crate::platform::write_atomic(&path, &fs::read(&retained).unwrap(), 0o600).unwrap();
+        assert!(pin.recheck().is_err());
+        assert!(binding.current_uid().is_err());
+        assert_eq!(fixture.binding().current_uid().unwrap(), 1001);
+        fs::remove_file(&path).unwrap();
+        fs::rename(&retained, &path).unwrap();
+        assert!(binding.current_uid().is_err());
+    }
+
+    #[test]
+    fn unrelated_directory_entries_do_not_revoke_an_unchanged_binding() {
+        let fixture = Fixture::new("unrelated-directory-entry");
+        let binding = fixture.binding();
+        for directory in [fixture.0.join("principals"), fixture.0.join("identity")] {
+            let path = directory.join("unrelated");
+            crate::platform::write_atomic(&path, b"not account authority", 0o600).unwrap();
+            assert_eq!(binding.current_uid().unwrap(), 1001);
+            fs::remove_file(path).unwrap();
+            assert_eq!(binding.current_uid().unwrap(), 1001);
         }
     }
 

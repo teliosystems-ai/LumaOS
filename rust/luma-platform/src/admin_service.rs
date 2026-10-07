@@ -25,6 +25,8 @@ const REQUEST_LIMIT: usize = 16384;
 const RESPONSE_LIMIT: usize = 1024 * 1024;
 const FRAME_BUDGET: Duration = Duration::from_secs(2);
 const EXECUTION_BUDGET: Duration = Duration::from_secs(60);
+mod peer;
+pub(crate) use peer::Peer;
 
 fn confined(
     profile: &str,
@@ -94,7 +96,7 @@ struct Response {
     gate_closing: bool,
 }
 
-fn peer(stream: &UnixStream) -> Result<u32> {
+fn credentials(stream: &UnixStream) -> Result<libc::ucred> {
     let mut credentials: libc::ucred = unsafe { std::mem::zeroed() };
     let mut length = std::mem::size_of::<libc::ucred>() as libc::socklen_t;
     if unsafe {
@@ -110,7 +112,10 @@ fn peer(stream: &UnixStream) -> Result<u32> {
     {
         return Err("kernel Admin peer authentication failed".into());
     }
-    Ok(credentials.uid)
+    Ok(credentials)
+}
+fn peer(stream: &UnixStream) -> Result<u32> {
+    Ok(credentials(stream)?.uid)
 }
 fn remaining(deadline: Instant) -> io::Result<Duration> {
     deadline
@@ -196,13 +201,11 @@ fn validate(request: &Request) -> Result<()> {
 
 fn handle(
     stream: &mut UnixStream,
-    mut execute: impl FnMut(&Request, &PrivateBuffer, u32) -> Result<serde_json::Value>,
+    mut execute: impl FnMut(&Request, &PrivateBuffer, &Peer) -> Result<serde_json::Value>,
 ) -> Result<()> {
-    let uid = peer(stream)?;
     // Refuse workers, ordinary user and root before accepting any credential.
-    if uid != HUMAN {
-        return Err("Admin service peer denied".into());
-    }
+    let bound = Peer::capture(stream)?;
+    let uid = bound.uid();
     let deadline = Instant::now() + FRAME_BUDGET;
     let request: Request = serde_json::from_slice(&read_frame(stream, REQUEST_LIMIT, deadline)?)?;
     validate(&request)?;
@@ -216,7 +219,7 @@ fn handle(
     if end == 0 || password.bytes()[end..].iter().any(|v| *v != 0) {
         return Err("invalid private password frame".into());
     }
-    let result = execute(&request, &password, uid);
+    let result = bound.observe(|| execute(&request, &password, &bound));
     drop(password);
     // Never serialize authentication errors or peer-supplied exception text.
     let response = match result {
@@ -237,6 +240,7 @@ fn handle(
             gate_closing: false,
         },
     };
+    bound.check()?;
     write_frame(
         stream,
         &serde_json::to_vec(&response)?,
@@ -256,17 +260,18 @@ pub fn connection() -> Result<()> {
         return Err(io::Error::last_os_error().into());
     }
     let mut stream = unsafe { UnixStream::from_raw_fd(fd) };
-    handle(&mut stream, |request, password, uid| {
-        let account = authentication::peer_account(&request.login, password, uid)?;
+    handle(&mut stream, |request, password, peer| {
+        let account = authentication::peer_account(&request.login, password, peer.uid())?;
         let result = match &request.operation {
             Operation::Status => {
-                admin_governance::service_request(&account, &request.request_id, None, None)
+                admin_governance::service_request(&account, peer, &request.request_id, None, None)
             }
             Operation::Catalog {
                 command,
                 review_sha256,
             } => admin_governance::service_request(
                 &account,
+                peer,
                 &request.request_id,
                 Some(command),
                 review_sha256.as_deref(),
@@ -759,8 +764,8 @@ mod tests {
                 .unwrap();
             let (mut stream, _) = listener.accept().unwrap();
             assert_eq!(peer(&stream).unwrap(), HUMAN);
-            let result = handle(&mut stream, |r, password, uid| {
-                assert_eq!(uid, HUMAN);
+            let result = handle(&mut stream, |r, password, peer| {
+                assert_eq!(peer.uid(), HUMAN);
                 assert_eq!(r.login, "human");
                 assert_eq!(&password.bytes()[..8], b"fixture\0");
                 if mode == "deny" {
@@ -820,7 +825,14 @@ mod tests {
     }
 
     fn pam_request(mode: &str, review: Option<String>) -> Request {
-        let operation = if mode.starts_with("register") || mode == "invalid-review" {
+        let operation = if mode.starts_with("peer-exit") {
+            Operation::Catalog {
+                command: CatalogCommand::RegisterActivity {
+                    activity: "model.dead-peer".into(),
+                },
+                review_sha256: review,
+            }
+        } else if mode.starts_with("register") || mode == "invalid-review" {
             Operation::Catalog {
                 command: CatalogCommand::RegisterActivity {
                     activity: "model.reconfigure".into(),
@@ -845,6 +857,8 @@ mod tests {
                 "service-register"
             } else if mode.starts_with("define") {
                 "service-define"
+            } else if mode.starts_with("peer-exit") {
+                "service-peer-exit"
             } else {
                 mode
             }
@@ -906,6 +920,9 @@ mod tests {
             "disabled",
             "changed-generation",
             "disable-after-pam",
+            "peer-exit-review",
+            "peer-exit-commit",
+            "peer-exit-restored-commit",
             "locked",
             "restored",
         ] {
@@ -917,6 +934,7 @@ mod tests {
                     | "disabled"
                     | "changed-generation"
                     | "disable-after-pam"
+                    | "peer-exit-commit"
                     | "locked"
             );
             if mode == "disabled" || mode == "changed-generation" {
@@ -971,9 +989,17 @@ mod tests {
             let mut child = child_command.spawn().unwrap();
             let (mut stream, _) = listener.accept().unwrap();
             let mut observed = None;
-            handle(&mut stream, |request, credential, uid| {
-                let account =
-                    authentication::fixture_peer_account(&root, &request.login, credential, uid)?;
+            let outcome = handle(&mut stream, |request, credential, peer| {
+                let account = authentication::fixture_peer_account(
+                    &root,
+                    &request.login,
+                    credential,
+                    peer.uid(),
+                )?;
+                if mode == "peer-exit-commit" {
+                    child.kill()?;
+                    child.wait()?;
+                }
                 if mode == "disable-after-pam" {
                     let mut changed: serde_json::Value = serde_json::from_slice(&original)?;
                     changed["principals"][0]["enabled"] = serde_json::json!(false);
@@ -987,6 +1013,7 @@ mod tests {
                     Operation::Status => admin_governance::fixture_service_request(
                         &root,
                         &account,
+                        peer,
                         &request.request_id,
                         None,
                         None,
@@ -997,6 +1024,7 @@ mod tests {
                     } => admin_governance::fixture_service_request(
                         &root,
                         &account,
+                        peer,
                         &request.request_id,
                         Some(command),
                         review_sha256.as_deref(),
@@ -1004,10 +1032,15 @@ mod tests {
                 }?;
                 observed = Some(result.clone());
                 Ok(result)
-            })
-            .unwrap();
+            });
             drop(stream);
-            assert!(child.wait().unwrap().success(), "client case {mode}");
+            if mode == "peer-exit-commit" {
+                assert!(outcome.is_err());
+                assert!(!child.wait().unwrap().success());
+            } else {
+                outcome.unwrap();
+                assert!(child.wait().unwrap().success(), "client case {mode}");
+            }
             let after = fs::read(root.join("admin/journal.json")).unwrap();
             if denied {
                 assert!(observed.is_none(), "denied case {mode}");
@@ -1017,7 +1050,10 @@ mod tests {
                 if mode.ends_with("review") {
                     review = Some(report["review_sha256"].as_str().unwrap().into());
                 }
-                if mode == "register-commit" || mode == "define-commit" {
+                if mode == "register-commit"
+                    || mode == "define-commit"
+                    || mode == "peer-exit-restored-commit"
+                {
                     assert_eq!(report["tpm_write_performed"], true);
                     assert_ne!(after, before);
                 } else {

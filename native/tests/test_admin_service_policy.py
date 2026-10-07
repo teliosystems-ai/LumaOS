@@ -24,7 +24,9 @@ class AdminServicePolicyTests(unittest.TestCase):
     def test_service_has_no_secret_json_or_environment_authentication(self):
         source = (ROOT / 'rust/luma-platform/src/admin_service.rs').read_text().split('#[cfg(test)]')[0]
         self.assertIn('libc::SO_PEERCRED', source)
-        self.assertIn('if uid != HUMAN', source)
+        peer = (ROOT / 'rust/luma-platform/src/admin_service/peer.rs').read_text().split('#[cfg(test)]')[0]
+        self.assertIn('if credentials.uid != HUMAN', peer)
+        self.assertIn('let bound = Peer::capture(stream)?;', source)
         self.assertIn('authentication::peer_account', source)
         self.assertIn('read_until(stream, password.bytes_mut(), deadline)', source)
         self.assertIn('drop(password)', source)
@@ -49,6 +51,24 @@ class AdminServicePolicyTests(unittest.TestCase):
         self.assertIn('deny /var/lib/luma-os/models/**', profile)
         self.assertIn('deny /var/lib/luma-os/artifacts/**', profile)
         self.assertNotIn('network inet', profile)
+
+    def test_live_peer_wraps_identity_at_catalog_authority_boundaries(self):
+        peer = (ROOT / 'rust/luma-platform/src/admin_service/peer.rs').read_text().split('#[cfg(test)]')[0]
+        for marker in ('pin: File', 'stream: UnixStream', 'fenced: Cell<bool>',
+                       'crate::service::peer_pidfd(stream)?', 'pidfd_alive(&self.pin)?',
+                       'inspect(&self.pin, self.credentials.pid)?;', 'libc::POLLRDHUP',
+                       '/proc/self/fdinfo/', 'HANDLE_LIMIT: u64 = 4096',
+                       'self.peer.fenced.set(true)', 'libc::fstatfs'):
+            self.assertIn(marker, peer)
+        self.assertNotIn('SYS_pidfd_open', peer)
+        self.assertNotIn('Serialize', peer)
+        governance = (ROOT / 'rust/luma-platform/src/admin_governance.rs').read_text()
+        native = governance.split('pub(crate) fn service_request(')[1].split('#[cfg(test)]')[0]
+        self.assertEqual(native.count('peer.observe(|| account.identity())'), 2)
+        self.assertEqual(native.count('peer.check()?;'), 2)
+        unit = (ROOT / 'native/image/overlay/etc/systemd/system/luma-admin.service').read_text()
+        self.assertIn('ProtectProc=invisible', unit)
+        self.assertIn('CapabilityBoundingSet=CAP_CHOWN', unit)
 
 
 if __name__ == '__main__':

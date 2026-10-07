@@ -886,31 +886,37 @@ pub fn catalog_status(login: &str) -> Result<()> {
 /// serialized role/session token. The original Admin is rechecked per request.
 pub(crate) fn service_request(
     account: &authentication::AuthenticatedAccount,
+    peer: &crate::admin_service::Peer,
     request: &str,
     command: Option<&Command>,
     review: Option<&str>,
 ) -> Result<serde_json::Value> {
+    peer.check()?;
     let directory = Path::new(DIRECTORY);
     let mut store = Store::open(
         tpm::LocalAnchor::installed()?,
         &directory.join("journal.json"),
     )?;
-    service_request_at(&mut store, directory, account, request, command, review)
+    service_request_at(
+        &mut store, directory, account, peer, request, command, review,
+    )
 }
 
 fn service_request_at<A: tpm::Checkpoint>(
     store: &mut Store<A>,
     directory: &Path,
     account: &authentication::AuthenticatedAccount,
+    peer: &crate::admin_service::Peer,
     request: &str,
     command: Option<&Command>,
     review: Option<&str>,
 ) -> Result<serde_json::Value> {
+    peer.check()?;
     if let Some(command) = command {
         return execute_catalog(
             store,
             directory,
-            || account.identity(),
+            || peer.observe(|| account.identity()),
             request,
             command,
             review,
@@ -925,7 +931,7 @@ fn service_request_at<A: tpm::Checkpoint>(
         return Err("explicit product Admin bootstrap required".into());
     }
     let (catalog, _) = context.events(&snapshot, None)?;
-    context.recheck(&mut || account.identity())?;
+    context.recheck(&mut || peer.observe(|| account.identity()))?;
     Ok(
         serde_json::json!({"schema_version":1,"action":"admin-governance-status",
         "principal":context.principal,"catalog":catalog,"checkpoint_head":snapshot.head,
@@ -937,10 +943,12 @@ fn service_request_at<A: tpm::Checkpoint>(
 pub(crate) fn fixture_service_request(
     root: &Path,
     account: &authentication::AuthenticatedAccount,
+    peer: &crate::admin_service::Peer,
     request: &str,
     command: Option<&Command>,
     review: Option<&str>,
 ) -> Result<serde_json::Value> {
+    peer.check()?;
     crate::require_root()?;
     if !Path::new("/.dockerenv").is_file()
         || !root.starts_with("/tmp")
@@ -967,7 +975,9 @@ pub(crate) fn fixture_service_request(
         tpm::exclusive_lock(&root.join("bootstrap.lock"))?,
     )?;
     let mut store = Store::open(anchor, &directory.join("journal.json"))?;
-    service_request_at(&mut store, &directory, account, request, command, review)
+    service_request_at(
+        &mut store, &directory, account, peer, request, command, review,
+    )
 }
 
 #[cfg(test)]

@@ -461,6 +461,59 @@ Full native regression log / frozen runner SHA-256, respectively:
 This closes the specific live file-replacement continuity gap, not the principal/
 session/grant subgate or Requirement #1.
 
+Native Admin IPC now also holds the connection creator's socket-derived PIDFD
+and the original connected stream. A bounded kernel-procfs FD observation binds
+that handle to the connection PID; liveness and disconnect checks surround
+execution and each service catalog identity projection, including the existing
+final writer revalidation. Caller exit, half-close, changed/unverifiable handle
+metadata or a projection panic permanently fence that peer object. Ordinary
+authentication/policy denial still returns the existing generic denial to a live
+peer; raw errors and passwords are not exposed. Successful responses recheck the
+peer immediately before writing. A lost peer does not undo an already committed
+TPM journal entry or make uncertain effects safe to replay. The original handles
+are CLOEXEC and are never reopened from a stored or caller-supplied PID.
+This reuses the broker's existing
+[Linux socket-derived process-handle primitive](https://raw.githubusercontent.com/torvalds/linux/v6.8/net/core/sock.c);
+unsupported kernels refuse rather than falling back to PID-number lookup.
+No AppArmor permission, service capability or host setting was expanded.
+
+This is live process/connection continuity, not current kernel credentials:
+SO_PEERCRED retains connection-time UID/GID, and a PIDFD does not prove the
+process's current real/effective/saved/filesystem UID set. A confined human-peer
+credential revalidation adapter, governed principal generations, trusted UTC,
+finite assignments and current folder/effect grants remain first-subgate software
+work. Neither this checkpoint nor the per-request PAM session closes that subgate.
+
+The final frozen caller-continuity sweep at
+`D:\LumaOS-builds\g2-principal-session-20261007-07` passed (exit 0): 114 ordinary
+Rust tests, including 22 existing broker transport regressions, 44 selected Python
+checks, six real-PAM modes, kernel-human IPC, software-TPM bootstrap and 20
+composed Admin/PAM/kernel-peer/catalog cases. The exit case authenticates through
+PAM, terminates/reaps its owned caller, then requires refusal with an unchanged
+journal. Its inspection and commit bind the same request and mutation; a fresh
+live caller then commits that exact inspected mutation as the positive control.
+Full native Python discovery passed 261 of 263 tests (exit 0), retaining the two
+existing isolated UTC-source fixture skips. Selected Python checks are included
+in discovery, not additional distinct cases. All 214 source files, 57 test inputs
+and the CI workflow matched the checkout. Formatting, warning-free offline native
+compilation and Admin AppArmor syntax passed; installed confinement was not
+loaded or qualified. All compilation/cache/evidence and disposable fixture state
+remained D:-backed with unchanged WSL settings, host services/accounts and physical
+TPM ownership. Earlier `-05`/`-06` passing snapshots remain retained; their caller
+exit fixtures predate the exact-request positive control and do not replace this
+final evidence. No grant or first-subgate closure is inferred from these passes.
+Source / test input manifest SHA-256, respectively:
+`a1f4b3d01c3457e83a5a18315c033eb031a9cb992172d89cefbcebbf1992caa8` /
+`0fc2b2dd1578c6999639e9482a03b7a360e2670c593d110accdf91591a7a4c17`.
+Targeted log / frozen runner SHA-256, respectively:
+`38dd1feae6e3779f686aee0d54f676dfa696473fdfcfc0df141afa17a92e7589` /
+`43fe35cd1a28d08ff1ae2d0d55421e48b9f917eff0779c46950b1dc16c8a81ee`.
+Native executable SHA-256:
+`c0c448796cfd49186581cc53403748e3dbb7e3342373e06421904e55270ae181`.
+Full native regression log / frozen runner SHA-256, respectively:
+`e12b7315cead3e0f0b67e856ef423f044491808d96d34afc358bd603a5df7f83` /
+`f3f9bfff462a1275b89052fa06ac0ffdd26b835e2b2ed07b97ede60c68a3bb78`.
+
 ### Admin and workflow closure status
 
 Neither work package is closed, and neither is merely waiting for the final

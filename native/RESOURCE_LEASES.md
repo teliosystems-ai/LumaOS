@@ -726,8 +726,10 @@ Final-image/native-hardware qualification remains separate.
   fencing. Original registry/account descriptors and directory handles now fence
   file replacement even when replacement bytes are identical; visible metadata
   changes also require fresh authentication. These live continuity checks are
-  not durable anti-rollback generations and do not close the remaining account,
-  time or grant integrations.
+  not durable anti-rollback generations. Admin IPC now pins the original live
+  caller and connection through catalog identity checks, without a PID lookup
+  fallback. Current human-peer kernel credential revalidation and the remaining
+  account, time and grant integrations are still required.
 - Finish broader content/workflow worker admission. The closed invoice
   coordinator and both direct publishers use leased calculation and effect-time
   result checks, but remain installed-root paths, not generic governed execution.

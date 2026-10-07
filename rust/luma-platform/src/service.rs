@@ -496,7 +496,7 @@ fn restrict_socket(path: &Path) -> Result<()> {
     Ok(())
 }
 
-fn peer_pidfd(stream: &UnixStream) -> Result<fs::File> {
+pub(crate) fn peer_pidfd(stream: &UnixStream) -> Result<fs::File> {
     // Linux 6.5+ SO_PEERPIDFD pins the actual connection creator, not a PID
     // potentially recycled after SO_PEERCRED. Unsupported kernels refuse.
     let mut fd: libc::c_int = -1;

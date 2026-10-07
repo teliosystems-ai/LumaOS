@@ -250,8 +250,12 @@ pub(crate) fn source_stdin() -> Result<Vec<u8>> {
 }
 
 pub fn calculate_stdin() -> Result<()> {
+    crate::require_root()?;
+    crate::platform::require_installed()?;
     let bytes = source_stdin()?;
-    let mut output = report_bytes(&bytes)?;
+    let result = crate::workflow_resource::calculate(&bytes)?;
+    result.recheck(&bytes, &crate::artifacts::installation()?)?;
+    let mut output = result.report;
     output.push(b'\n');
     std::io::stdout().lock().write_all(&output)?;
     Ok(())

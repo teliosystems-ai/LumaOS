@@ -15,6 +15,7 @@ const MAX_RECORDS: usize = 4096;
 const MAX_BYTES: u64 = 8 * 1024 * 1024;
 const MAX_ARCHIVES: usize = 64;
 const MAX_ARCHIVE_FILES: usize = 128;
+mod retention;
 
 // Decimal strings preserve all 64 bits across JSON consumers, including JS.
 pub(crate) mod decimal {
@@ -902,18 +903,25 @@ impl Store {
 
     fn verify_archives(&self, ledger: &Ledger) -> Result<BTreeSet<[u8; 32]>> {
         let mut count = 0;
-        for entry in fs::read_dir(&self.directory)? {
+        for (index, entry) in fs::read_dir(&self.directory)?.enumerate() {
+            if index >= retention::MAX_DIRECTORY_ENTRIES {
+                return Err("private resource directory inspection limit exceeded".into());
+            }
             let entry = entry?;
             let name = entry.file_name();
             let name = name.to_str().ok_or("invalid resource state filename")?;
-            if name.starts_with(".archive-stage-") {
+            if name.starts_with(".archive-stage-") || name.starts_with(".archive-retained-") {
                 count += 1;
                 if count > MAX_ARCHIVE_FILES {
                     return Err("retained resource archive inventory exhausted".into());
                 }
                 // An interrupted private write is evidence, not an archive or
                 // authority. Retain its bounded bytes without interpreting it.
-                tpm::private_read(&entry.path(), MAX_BYTES)?;
+                if let Some(suffix) = name.strip_prefix(".archive-retained-") {
+                    retention::verify_retained(&entry.path(), suffix)?;
+                } else {
+                    tpm::private_read(&entry.path(), MAX_BYTES)?;
+                }
                 continue;
             }
             if let Some(rest) = name.strip_prefix("archive-") {
@@ -993,7 +1001,9 @@ impl Store {
                 let name = name.to_str().ok_or("invalid resource filename")?;
                 Ok(count
                     + usize::from(
-                        name.starts_with("archive-") || name.starts_with(".archive-stage-"),
+                        name.starts_with("archive-")
+                            || name.starts_with(".archive-stage-")
+                            || name.starts_with(".archive-retained-"),
                     ))
             })?;
         let stage = self

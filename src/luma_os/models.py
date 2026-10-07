@@ -7,6 +7,7 @@ interface at ``http://127.0.0.1:11434/v1`` when configured by the user.
 from __future__ import annotations
 
 import json
+import os
 import socket
 from typing import Any
 from urllib import error, request
@@ -14,8 +15,15 @@ from urllib import error, request
 from .errors import ValidationError
 
 
+def require_developer_http() -> None:
+    """The fixed installed reference identity has no direct runtime transport."""
+    if hasattr(os, "geteuid") and os.geteuid() == 990:
+        raise ValidationError("Installed reference inference requires native broker admission")
+
+
 class OpenAICompatibleClient:
     def __init__(self, endpoint: str | None, model: str | None, *, api_key: str | None = None, timeout: float = 2.0) -> None:
+        require_developer_http()
         self.endpoint = endpoint.rstrip("/") if endpoint else None
         self.model = model
         self.api_key = api_key
@@ -44,7 +52,7 @@ class OpenAICompatibleClient:
             model_ids = [item.get("id") for item in response.get("data", []) if isinstance(item, dict)]
             base["available"] = self.model in model_ids if model_ids else True
             base["detail"] = "Local model endpoint responded." if base["available"] else "Endpoint responded but configured model was not listed."
-        except (OSError, ValueError, error.URLError) as exc:
+        except (OSError, ValueError, error.URLError, ValidationError) as exc:
             base["detail"] = f"Local model endpoint unavailable: {type(exc).__name__}"
         return base
 
@@ -96,6 +104,7 @@ class OpenAICompatibleClient:
             raise ValueError("Model endpoint returned an unexpected response") from exc
 
     def _request(self, method: str, path: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+        require_developer_http()
         if not self.endpoint:
             raise ValidationError("No model endpoint is configured")
         # Local-first MVP: refuse a non-loopback model endpoint. Remote model

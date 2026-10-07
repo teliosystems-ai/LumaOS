@@ -156,6 +156,15 @@ retain the token. Preparation replay starts no additional worker. Calculation
 failure leaves the current checkpoint intact; applying/completed reconciliation
 uses the same calculation boundary without a production fallback.
 
+The standalone installed `invoice-calculate` command also uses this boundary.
+It requires installed root before reading bounded stdin, launches the confined
+helper, and rechecks the result generation before writing any report to stdout.
+It has no in-process pure-calculation fallback. The reusable pure function remains
+internal to the leased helper and explicitly synthetic unit/store tests. The
+disposable CLI fixture obtains comparison reports only from its separate Rust
+test executable; native missing-resource and non-root invocations publish no
+bytes. This command still grants no source-folder or artifact-write authority.
+
 `resource-output-complete` accepts only the exact confined, lease-owning root
 invoice helper, with its token and output digest in the `review` field. It
 persists `output_sha256` and `output_domain_epochs` from the broker's current
@@ -384,6 +393,10 @@ gateway. It requires the selected `LUMA_MODEL_NAME` and refuses an HTTP endpoint
 or runtime API key. The installed systemd unit and newly activated model
 environment select this transport by default. Standalone developer configuration
 still defaults to `openai-http`; it is not an installed admission path.
+The fixed installed reference UID cannot select or construct the HTTP client:
+configuration and service composition refuse before creating state. Every
+direct HTTP request also rechecks the current UID, so an object constructed
+before changing to the reference identity cannot bypass native admission.
 Binary-only upgrades never silently migrate old environments.
 The new `resource-gateway` envelope uses schema version 1 independently of
 the root operator's version-2 `resource-inference` envelope. Broker, supervisor
@@ -399,6 +412,16 @@ The eventual claim frame is bounded before reservation; JSON escaping cannot
 produce an unrepresentable queued job. A busy queue, changed nonce replay or
 another caller's receipt refuses. Prompts and results are not durable journal
 content and are not revived after broker restart.
+
+UID 990 alone is insufficient. At each live-peer observation, the broker
+requires the exact `/system.slice/luma-reference.service` cgroup and enforcing
+`luma-reference` AppArmor label, all four current UIDs, zero capability masks,
+no-new-privileges, seccomp filter mode and zero locked-memory limits. Repeated
+kernel snapshots bind these checks to the pinned PID/start/boot generation.
+Request maintenance uses the same proof; a moved, unconfined, re-privileged or
+unobservable caller is fenced without an early physical release. The real
+negative test uses a live UID-990 process outside the installed service. Positive
+installed confinement and the exact filter rules still need image qualification.
 
 Only the exact UID-989 owner of the current physical serving lease can register
 readiness, claim or advance a job. A runtime child sharing the UID and cgroup
@@ -517,13 +540,38 @@ Retired-owner lookup uses a bounded digest index rebuilt from validated
 referenced receipts at broker startup and extended after a durable archive cut;
 the admission path does not repeatedly read historical archive files.
 
-There are at most 64 referenced archives and 128 retained archive/preparation
-files, each bounded to eight MiB. Exhaustion refuses rather than evicting
+There are at most 64 referenced archives and 128 retained archive/preparation/
+incident files, each bounded to eight MiB. Directory inspection is limited to
+512 entries, including unrelated files. Exhaustion refuses rather than evicting
 receipts. Interrupted private preparations and complete unreferenced
 publications remain evidence; neither implies a ledger cut or capacity return.
 Exact complete publications can be retried. Partial/conflicting preparations
-are not overwritten. Governed export/deletion and broader damaged-state
-recovery remain separate open work; do not delete records to bypass a fence.
+are not overwritten.
+
+`resource-recovery-status` and `resource-recover REVIEW-SHA256` provide reviewed
+preservation of interrupted physical-lease archive preparations. After a failed
+archive publication, restart the fenced broker and drain both workers normally.
+With terminal requests, empty worker groups and Released physical generations,
+inspect the reported stage, size and digest before applying its exact review.
+The review binds the current hot ledger's authority, exact durable bytes/inode
+and the selected stage's canonical name, bytes/inode and timestamps. The broker
+rechecks the live root peer, deadline and empty group identities immediately
+before and after a synchronized no-replace rename. The retained incident has
+the same inode and bytes; no ledger/request record, generation floor, owner
+tombstone, result fence or retained charge is changed by preservation.
+
+Candidates may come from an older interrupted archive attempt, including after
+broker restart or a later ledger cut. They must name a known nonfuture generation;
+checksum-matching complete stages are left for exact archival retry/investigation.
+Preservation never infers that any archive cut completed. Selection is stable and
+one stage is retained per reviewed command. Unsafe modes/links, future/unknown
+stage names, stale review, destination collision or observation failure refuse.
+A lost acknowledgement poisons authority; restart and inspect the durable side
+of the rename, with no automatic retry. Incidents count toward the unchanged
+128-file limit and their name/content digest is verified during broker startup.
+Preservation does not reclaim a slot or repair missing/damaged ledger bytes,
+referenced archives or request history. Governed export/deletion and broader
+damaged-state recovery remain open; do not delete records to bypass a fence.
 
 ## Installed operator commands
 
@@ -535,6 +583,8 @@ sudo luma-platform resource-status
 sudo luma-platform resource-revoke LEASE-ID GENERATION MANAGER-EPOCH
 sudo luma-platform resource-reconcile REVIEW-SHA256
 sudo luma-platform resource-archive REVIEW-SHA256
+sudo luma-platform resource-recovery-status
+sudo luma-platform resource-recover REVIEW-SHA256
 sudo luma-platform resource-request-status
 sudo luma-platform resource-request-archive REVIEW-SHA256
 sudo luma-platform resource-request-export BATCH SHA256

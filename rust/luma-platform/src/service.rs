@@ -568,7 +568,9 @@ fn resource_exchange_on(
         | "resource-request-status"
         | "resource-request-archive"
         | "resource-request-recovery-status"
-        | "resource-request-recover" => {
+        | "resource-request-recover"
+        | "resource-recovery-status"
+        | "resource-recover" => {
             response.lease.is_none()
                 && response
                     .status
@@ -895,13 +897,15 @@ mod tests {
             "resource-request-archive",
             "resource-request-recovery-status",
             "resource-request-recover",
+            "resource-recovery-status",
+            "resource-recover",
         ] {
             for fault in 0..5 {
                 let (mut client, mut server) = UnixStream::pair().unwrap();
                 let mut request = resource_manager::request(action).unwrap();
                 request.review = matches!(
                     action,
-                    "resource-request-archive" | "resource-request-recover"
+                    "resource-request-archive" | "resource-request-recover" | "resource-recover"
                 )
                 .then(|| "a".repeat(64));
                 let thread = std::thread::spawn(move || {

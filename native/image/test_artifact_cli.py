@@ -54,7 +54,7 @@ def main():
             if fault is not None:
                 environment['LUMA_ARTIFACT_TEST_FAULT'] = fault
             publication_fixture = (not native and args[0] in
-                ('artifact-publish-invoice','artifact-catalog-publish-invoice','artifact-reconcile'))
+                ('invoice-calculate','artifact-publish-invoice','artifact-catalog-publish-invoice','artifact-reconcile'))
             command = [str(binary),*args]
             if publication_fixture:
                 environment['LUMA_PUBLICATION_TEST_ARGS'] = json.dumps(args,separators=(',',':'))
@@ -75,12 +75,20 @@ def main():
                 assert len(lines) == 1, result.stdout
                 value = json.loads(lines[0])
                 assert value['synthetic_computation_fixture'] is True
+                if args[0] == 'invoice-calculate':
+                    assert value['source_sha256'] == hashlib.sha256(data).hexdigest()
+                    return value['report'].encode('utf-8') + b'\n'
                 return lines[0]
+            if native and args[0] == 'invoice-calculate' and not success:
+                assert result.stdout == b'', 'native refused calculation published bytes'
             return result.stdout
 
         run('artifact-store-status',success=False)
         run('artifact-store-init')
         run('artifact-store-init',success=False)
+        run('invoice-calculate',data=source,success=False,native=True)
+        run('invoice-calculate',data=b'not,csv\n',success=False,native=True)
+        run('invoice-calculate',data=source,success=False,native=True,uid=990)
         pure = run('invoice-calculate',data=source).rstrip(b'\n')
         before = json.loads(run('artifact-store-status'))
         run('artifact-publish-invoice','no-resource',data=source,success=False,native=True)

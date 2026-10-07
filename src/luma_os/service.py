@@ -8,7 +8,7 @@ from .artifacts import ArtifactService, ReceiptService
 from .config import LumaConfig
 from .db import LumaStore
 from .grants import FolderGrantService
-from .models import OpenAICompatibleClient
+from .models import OpenAICompatibleClient, require_developer_http
 from .native_inference import NativeGatewayClient
 from .errors import ValidationError
 from .workflows import InvoiceWorkflowService
@@ -20,6 +20,8 @@ class LumaService:
     def __init__(self, config: LumaConfig) -> None:
         if config.model_transport not in {"native-broker", "openai-http"} or config.model_transport == "native-broker" and (config.model_endpoint or config.model_api_key):
             raise ValidationError("Invalid or credential-bearing native model transport")
+        if config.model_transport == "openai-http":
+            require_developer_http()
         config.ensure_directories()
         self.config = config
         self.store = LumaStore(config.db_path)

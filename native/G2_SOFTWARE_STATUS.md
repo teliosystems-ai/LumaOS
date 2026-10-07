@@ -123,6 +123,21 @@ history, but completion retry cannot invent provenance from current inventory.
 Fresh calculation is required before a new effect. These result fences do not
 change physical cleanup, retained charges or principal/grant requirements.
 
+Physical-lease archive recovery now has fixed installed-root broker commands
+for reviewed preservation of interrupted preparations, including older stages
+after restart or a later hot cut. The exact ledger and stage bytes/inodes are
+bound to review. No-replace retention preserves evidence, charges, generation
+floors and owner/result fences; a lost acknowledgement poisons the session.
+Incident integrity and bounded directory/file inventory are checked on restart.
+This closes the specific inability to retain interrupted physical archive
+preparations, not damaged-ledger reconstruction or product retention governance.
+The standalone `invoice-calculate` command now uses the leased helper and fresh
+result check instead of the former in-process CLI path. Its pure comparison
+fixture is confined to the separate Rust test executable. Reference inference
+now requires current kernel confinement as well as UID/PIDFD proof; direct HTTP
+configuration, construction and requests are refused for the reference identity.
+These changes do not provide product-principal/session or effect grants.
+
 The preceding combined offline checkpoint records 325 selected Rust and 157 selected
 Python tests passing in `D:\LumaOS-builds\g2-resources-targeted-20261007-19`,
 plus 40 synthetic-authority history/model CLI cases and 56 pinned runtime
@@ -137,7 +152,7 @@ the native and unit-test executables remained byte-for-byte identical. A binary
 negative/positive control also verified that the fixture selector is absent
 from the native executable and present only in the unit-test executable.
 
-The current domain-epoch checkpoint passed as a complete sweep in
+The preceding domain-epoch checkpoint passed as a complete sweep in
 `D:\LumaOS-builds\g2-resources-targeted-20261007-21` (exit 0): 332 selected Rust
 and 158 selected Python tests passed, alongside the 40 synthetic-authority
 history/model CLI cases, 56 pinned runtime argument checks and isolated
@@ -174,11 +189,60 @@ Native executable SHA-256:
 Unit-test executable SHA-256:
 `5c75f99c2916015ed699723269abb615814eb4d2608a05feeff12c17a53de5e3`.
 
+The current recovery/confinement checkpoint passed the complete selected sweep
+in `D:\LumaOS-builds\g2-resources-targeted-20261007-23` (exit 0): 344 Rust
+and 163 Python tests passed, plus 39 synthetic-authority history CLI cases,
+16 synthetic-authority model CLI cases, 56 pinned runtime argument checks and
+the isolated publication/crash/recovery fixtures. New tests cover interrupted
+physical archives, stale reviews and file identities, no-replace retention,
+poisoned-session restart, bounded incident inventories, closed maintenance
+envelopes, reference confinement drift and direct-HTTP refusal, and native
+calculation refusal without installed resource authority. All 211 captured
+source files, 88 test inputs and the CI workflow matched the checkout.
+
+The preceding run 22 failed at the maintenance CLI because its client allowlist
+omitted the newly implemented commands. Its failure and log remain retained;
+the corrected client and complete run 23 supersede it. The existing Windows
+junction skip and two parent-invoked owned-child entrypoints are unchanged;
+no new skip or production fallback was added. The native/test binary control
+again passed. The actual unit-graph verifier still returns exit 1 because the
+tools image lacks `apparmor.service`; positive installed confinement is not
+qualified. These checks used D:-backed storage, at most one CPU and 1 GiB per
+container, without loading a model, changing WSL settings or TPM ownership,
+or modifying host services.
+
+An additional full native Python discovery run against the same frozen source
+passed 255 tests (257 discovered). Its two existing UTC publisher tests require
+the separate pinned chrony source fixture and were not executed in this tools
+run; they are not passes. This broader run overlaps the selected suite above
+and is not added to its count. The reference AppArmor profile also parsed
+successfully without being loaded into the kernel. The additional regression
+log SHA-256 is
+`c6c4fad8966735466d70133d31f7ae8d2b42706a0476e65e402f3d060744d5da`;
+its frozen runner SHA-256 is
+`42c0c95670fd1010cf578a1b097263f1ea52b39b2a4d466e243a63a72d8c2982`.
+
+Current source manifest SHA-256:
+`569345e73bf97855289244e0999d8539614aa9d5e8c2d8bd5e0aab9ac7735908`.
+Current test input manifest SHA-256:
+`51911bd0b821058ca4173878be1c084d9d17ada7eeca9a15dfd4a13c9990b839`.
+Current test log SHA-256:
+`8025f7e96da372ba5c4faaccd24494d9e947f5f3c92ab71ad8baec78c07ecfb7`.
+Frozen runner SHA-256:
+`e7a65953bd3f0f4ba15a892d83e76217c267f2f29d9c85c4ff35d1d48dc2f019`.
+Native executable SHA-256:
+`b6e0de56e4fa4a6e5be05adcf27297d04c64f99ab0988de3371244f04f0897f4`.
+Unit-test executable SHA-256:
+`3a6fabaf2fd6ffd8a19125a9a0b4249f317e97daf560a7d93e6342daf8afc5ae`.
+
 **Requirement #1 is not closed.** Broader content/workflow integration,
-remaining inference-consumer admission and bypass closure, governed request
-export/deletion and retention recovery, wider tenant/device adapters and
-recovery remain software work. Installed enforcement and consolidated-image evidence remain
-qualification work. These source changes do not close those other paths or
+product principal/session and current folder/effect grants, remaining
+inference-consumer admission, governed request export/deletion and custody,
+damaged-authoritative-state recovery and wider tenant/device adapters remain
+software work. The fixed reference-service bypass is now refused in source;
+its positive installed execution and the broader installed enforcement and
+consolidated-image evidence remain qualification work. These source changes
+do not close those other paths or
 authorize moving to Requirement #2.
 
 ### Admin and workflow closure status
@@ -709,12 +773,15 @@ the eventual image's verity-protected root; it is not product Admin-governed
 production signing, effect authorization or workflow execution.
 
 The [native invoice calculation checkpoint](evidence/G2_NATIVE_INVOICE_CALCULATION_2026-10-03.md)
-adds a bounded pure `invoice-calculate` stdin-to-JSON path using exact integer
+originally added a bounded pure `invoice-calculate` stdin-to-JSON path using exact integer
 cents and input-byte hashing. Five calculation tests, three signed-registry
 regression tests, compiled-CLI positive and negative checks and an offline
-build passed on a D-backed snapshot. The command is not wired into an
-authorized DAG supervisor, file grant or artifact effect; no new OS image was
+build passed on a D-backed snapshot. At that checkpoint, the command was not
+wired into an authorized DAG supervisor, file grant or artifact effect; no new OS image was
 built for this checkpoint.
+The current command supersedes that historical CLI path with broker-leased
+calculation and a fresh result check; the pure library remains internal to the
+confined worker and explicit unit/store fixtures.
 
 The [descriptor-scoped read checkpoint](evidence/G2_SCOPED_FILE_READ_2026-10-03.md)
 adds a bounded native `openat` reader with no-symlink path traversal and

@@ -9,6 +9,7 @@ import stat
 from typing import Mapping
 
 from .errors import ValidationError
+from .models import require_developer_http
 
 
 def _positive_int(value: str, name: str) -> int:
@@ -65,6 +66,8 @@ class LumaConfig:
         transport = values.get("LUMA_MODEL_TRANSPORT", "openai-http")
         if transport not in {"openai-http", "native-broker"}:
             raise ValidationError("Unsupported model transport")
+        if transport == "openai-http":
+            require_developer_http()
         if transport == "native-broker" and (values.get("LUMA_MODEL_ENDPOINT") or values.get("LUMA_MODEL_API_KEY")):
             raise ValidationError("Native broker transport cannot receive an HTTP endpoint or runtime API key")
         return cls(

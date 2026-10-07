@@ -833,6 +833,8 @@ impl Manager {
                 | "resource-request-archive"
                 | "resource-request-recovery-status"
                 | "resource-request-recover"
+                | "resource-recovery-status"
+                | "resource-recover"
         ) {
             crate::platform::require_installed()?;
             if peer.pid <= 0 || !pidfd_alive(pinned.as_ref().ok_or("missing history peer handle")?)?
@@ -1120,6 +1122,42 @@ impl Manager {
                     self.requests.stage_recovery_status(&self.store)?
                 });
             }
+            "resource-recovery-status" | "resource-recover" => {
+                crate::platform::require_installed()?;
+                let pin = pinned.ok_or("missing resource recovery peer handle")?;
+                if !pidfd_alive(&pin)?
+                    || self.group.populated()?
+                    || self.acquisition.populated()?
+                    || !self.owners.is_empty()
+                    || self.requests.occupied()
+                {
+                    return Err(
+                        "resource recovery requires live root and drained workers/requests".into(),
+                    );
+                }
+                self.requests.persist(&self.store, true)?;
+                let group = &self.group;
+                let acquisition = &self.acquisition;
+                status = Some(if r.action == "resource-recover" {
+                    self.store.recover_stage_checked(
+                        r.review.as_deref().ok_or("missing resource recovery review")?,
+                        || {
+                            if peer::live_generation(peer, &pin)? != current_peer
+                                || group.populated()?
+                                || acquisition.populated()?
+                                || Group::open()?.identity()? != group.identity()?
+                                || Group::for_kind(Kind::Acquisition)?.identity()? != acquisition.identity()?
+                                || now()? >= r.deadline
+                            {
+                                return Err("resource stage recovery lost peer, deadline or empty worker identity".into());
+                            }
+                            Ok(())
+                        },
+                    )?
+                } else {
+                    self.store.stage_recovery_status()?
+                });
+            }
             _ => return Err("unsupported resource operation".into()),
         }
         if peer::live_generation(peer, &reply_pin)? != current_peer || now()? >= r.deadline {
@@ -1211,15 +1249,19 @@ fn validate(r: &Request, uid: u32, time: u64) -> Result<()> {
         "resource-reconcile"
         | "resource-archive"
         | "resource-request-archive"
-        | "resource-request-recover" => {
+        | "resource-request-recover"
+        | "resource-recover" => {
             uid == 0
                 && r.profile.is_none()
                 && r.storage_device.is_none()
                 && r.lease.is_none()
-                && r.review.is_some()
+                && r.review.as_deref().map_or(false, crate::artifacts::hash)
                 && r.idempotency_key.is_none()
         }
-        "resource-status" | "resource-request-status" | "resource-request-recovery-status" => {
+        "resource-status"
+        | "resource-request-status"
+        | "resource-request-recovery-status"
+        | "resource-recovery-status" => {
             uid == 0
                 && r.profile.is_none()
                 && r.storage_device.is_none()
@@ -1463,7 +1505,10 @@ pub(crate) fn client(action: &str, argument: Option<&str>) -> Result<()> {
     crate::platform::require_installed()?;
     let mut r = request(action)?;
     match action {
-        "resource-status" | "resource-request-status" | "resource-request-recovery-status"
+        "resource-status"
+        | "resource-request-status"
+        | "resource-request-recovery-status"
+        | "resource-recovery-status"
             if argument.is_none() =>
         {
             ()
@@ -1471,9 +1516,11 @@ pub(crate) fn client(action: &str, argument: Option<&str>) -> Result<()> {
         "resource-reconcile"
         | "resource-archive"
         | "resource-request-archive"
-        | "resource-request-recover" => r.review = Some(argument.ok_or("missing review")?.into()),
+        | "resource-request-recover"
+        | "resource-recover" => r.review = Some(argument.ok_or("missing review")?.into()),
         _ => return Err("unsupported resource maintenance operation".into()),
     }
+    validate(&r, 0, now()?)?;
     println!(
         "{}",
         serde_json::to_string(&crate::service::resource_exchange(&r)?)?
@@ -1572,6 +1619,30 @@ pub(crate) fn migrate_reviewed(review: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn recovery_envelopes_require_exact_root_review_and_no_unrelated_authority() {
+        let time = now().unwrap();
+        for action in ["resource-recovery-status", "resource-recover"] {
+            let mut r = request(action).unwrap();
+            if action == "resource-recover" {
+                r.review = Some("a".repeat(64));
+            }
+            validate(&r, 0, time).unwrap();
+            for uid in [989, 990, 1001] {
+                r.caller = uid;
+                assert!(validate(&r, uid, time).is_err());
+            }
+            r.caller = 0;
+            r.storage_device = Some("8:1".into());
+            assert!(validate(&r, 0, time).is_err());
+            r.storage_device = None;
+            r.profile = Some("arbitrary".into());
+            assert!(validate(&r, 0, time).is_err());
+            r.profile = None;
+            r.review = Some("review".into());
+            assert!(validate(&r, 0, time).is_err());
+        }
+    }
     #[test]
     fn only_a_signalled_original_handle_is_normal_owner_exit() {
         assert_eq!(owner_loss(Some(Ok(true)), true), None);

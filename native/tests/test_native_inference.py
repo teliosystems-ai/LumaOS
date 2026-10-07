@@ -16,6 +16,7 @@ from luma_os import native_inference as native
 from luma_os.config import LumaConfig
 from luma_os.errors import ValidationError
 from luma_os.service import LumaService
+from luma_os import models as developer_http
 
 TOKEN = {"lease_id": "a"*32, "generation": "1", "manager_epoch": "b"*32}
 MODEL = "qwen3-1-7b-q4-k-m"
@@ -69,6 +70,35 @@ class Protocol(native.NativeGatewayClient):
 
 
 class NativeClientTests(unittest.TestCase):
+    def test_installed_reference_identity_cannot_select_or_construct_direct_http(self):
+        with tempfile.TemporaryDirectory() as directory:
+            absent = Path(directory)/"absent"
+            with patch.object(developer_http.os, "geteuid", return_value=990, create=True):
+                for values in ({}, {"LUMA_MODEL_TRANSPORT": "openai-http"},
+                               {"LUMA_MODEL_TRANSPORT": "openai-http", "LUMA_MODEL_ENDPOINT": "http://127.0.0.1:8081/v1"}):
+                    with self.assertRaises(ValidationError):
+                        LumaConfig.from_env(values, data_dir=absent)
+                    self.assertFalse(absent.exists())
+                with self.assertRaises(ValidationError):
+                    LumaService(LumaConfig(absent, absent/"db", absent/"objects"))
+                self.assertFalse(absent.exists())
+                for endpoint in (None, "http://127.0.0.1:8081/v1"):
+                    with self.assertRaises(ValidationError):
+                        developer_http.OpenAICompatibleClient(endpoint, MODEL, api_key="fixture")
+                config = LumaConfig.from_env({"LUMA_MODEL_TRANSPORT": "native-broker", "LUMA_MODEL_NAME": MODEL}, data_dir=absent)
+                self.assertEqual("native-broker", config.model_transport)
+                self.assertFalse(absent.exists())
+
+    def test_http_transport_rechecks_current_identity_before_any_network_operation(self):
+        with patch.object(developer_http.os, "geteuid", return_value=1000, create=True):
+            client = developer_http.OpenAICompatibleClient("http://127.0.0.1:8081/v1", MODEL)
+        with patch.object(developer_http.os, "geteuid", return_value=990, create=True), patch.object(developer_http.request, "urlopen") as connect:
+            with self.assertRaises(ValidationError): client.chat_completion([{"role": "user", "content": "hello"}])
+            with self.assertRaises(ValidationError): client.complete([{"role": "user", "content": "hello"}])
+            # status is deliberately non-throwing, but must not probe the runtime.
+            self.assertFalse(client.status()["available"])
+            connect.assert_not_called()
+
     def test_exact_result_is_acknowledged_before_publication_without_effect_authority(self):
         client = Protocol(pending=True)
         result = client.chat_completion([{"content": "Hello ✓", "role": "user"}], max_tokens=16)

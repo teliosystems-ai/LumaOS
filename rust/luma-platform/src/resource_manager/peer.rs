@@ -41,17 +41,11 @@ fn capabilities(status: &str, name: &str, expected: u64) -> Result<()> {
     Ok(())
 }
 
-fn worker_status(status: &str, kind: Kind, uid: u32) -> Result<()> {
+fn confined_status(status: &str, uid: u32, mask: u64) -> Result<()> {
     uid_status(status, uid)?;
     if field(status, "NoNewPrivs")? != "1" || field(status, "Seccomp")? != "2" {
         return Err("worker privilege/filter enforcement unavailable".into());
     }
-    // The root acquisition supervisor retains only credential-drop and owned
-    // child termination capabilities; its UID-988 child is a separate process.
-    let mask = match kind {
-        Kind::Model => 0,
-        Kind::Acquisition => (1u64 << 7) | (1u64 << 6) | (1u64 << 5),
-    };
     for name in ["CapPrm", "CapEff", "CapBnd"] {
         capabilities(status, name, mask)?;
     }
@@ -59,6 +53,16 @@ fn worker_status(status: &str, kind: Kind, uid: u32) -> Result<()> {
         capabilities(status, name, 0)?;
     }
     Ok(())
+}
+
+fn worker_status(status: &str, kind: Kind, uid: u32) -> Result<()> {
+    // The root acquisition supervisor retains only credential-drop and owned
+    // child termination capabilities; its UID-988 child is a separate process.
+    let mask = match kind {
+        Kind::Model => 0,
+        Kind::Acquisition => (1u64 << 7) | (1u64 << 6) | (1u64 << 5),
+    };
+    confined_status(status, uid, mask)
 }
 
 fn locked_memory(limits: &str) -> Result<()> {
@@ -106,6 +110,23 @@ pub(super) fn worker_generation(
     Ok(start)
 }
 
+fn reference_generation(mut read: impl FnMut(&str, u64) -> Result<String>) -> Result<u64> {
+    let start = start_ticks(&read("stat", 4096)?)?;
+    for _ in 0..2 {
+        if read("cgroup", 4096)? != "0::/system.slice/luma-reference.service\n"
+            || read("attr/current", 128)? != "luma-reference (enforce)\n"
+        {
+            return Err("reference caller group or enforcing AppArmor generation differs".into());
+        }
+        confined_status(&read("status", STATUS_BYTES)?, 990, 0)?;
+        locked_memory(&read("limits", 8192)?)?;
+        if start_ticks(&read("stat", 4096)?)? != start {
+            return Err("reference caller process generation changed during observation".into());
+        }
+    }
+    Ok(start)
+}
+
 pub(super) fn live_generation(peer: libc::ucred, pin: &File) -> Result<(u64, String)> {
     if peer.pid <= 0 || !pidfd_alive(pin)? {
         return Err("peer process handle is no longer live".into());
@@ -118,7 +139,11 @@ pub(super) fn live_generation(peer: libc::ucred, pin: &File) -> Result<(u64, Str
         return Err("peer process handle does not bind the asserted process".into());
     }
     let path = Path::new("/proc").join(peer.pid.to_string());
-    let start = start_ticks(&safe_text(&path.join("stat"), 4096)?)?;
+    let start = if peer.uid == 990 {
+        reference_generation(|member, maximum| safe_text(&path.join(member), maximum))?
+    } else {
+        start_ticks(&safe_text(&path.join("stat"), 4096)?)?
+    };
     uid_status(&safe_text(&path.join("status"), STATUS_BYTES)?, peer.uid)?;
     let boot = boot_identity()?;
     if !pidfd_alive(pin)?
@@ -128,6 +153,11 @@ pub(super) fn live_generation(peer: libc::ucred, pin: &File) -> Result<(u64, Str
         return Err("peer generation changed during credential observation".into());
     }
     uid_status(&safe_text(&path.join("status"), STATUS_BYTES)?, peer.uid)?;
+    if peer.uid == 990
+        && reference_generation(|member, maximum| safe_text(&path.join(member), maximum))? != start
+    {
+        return Err("reference caller confinement changed before acknowledgement".into());
+    }
     if !pidfd_alive(pin)? {
         return Err("peer exited during credential observation".into());
     }
@@ -174,6 +204,142 @@ mod tests {
             assert!(value.len() as u64 <= maximum);
             Ok(value)
         })
+    }
+
+    fn reference(mut mutate: impl FnMut(&str, usize, &mut String)) -> Result<u64> {
+        let mut counts = BTreeMap::<String, usize>::new();
+        reference_generation(|name, maximum| {
+            let mut value = match name {
+                "stat" => stat(7),
+                "status" => status(Kind::Model, 990),
+                "cgroup" => "0::/system.slice/luma-reference.service\n".into(),
+                "attr/current" => "luma-reference (enforce)\n".into(),
+                "limits" => "Max locked memory 0 0 bytes\n".into(),
+                _ => panic!("unexpected reference observation"),
+            };
+            let count = counts.entry(name.into()).or_default();
+            mutate(name, *count, &mut value);
+            *count += 1;
+            assert!(value.len() as u64 <= maximum);
+            Ok(value)
+        })
+    }
+
+    #[test]
+    fn reference_uid_alone_never_substitutes_for_the_installed_confined_service() {
+        assert_eq!(reference(|_, _, _| ()).unwrap(), 7);
+        for (field, value) in [
+            ("cgroup", "0::/user.slice/reference.service\n"),
+            (
+                "cgroup",
+                "0::/system.slice/luma-reference.service/descendant\n",
+            ),
+            (
+                "cgroup",
+                "0::/system.slice/luma-reference.service\n1:cpu:/other\n",
+            ),
+            ("attr/current", "unconfined\n"),
+            ("attr/current", "luma-reference (complain)\n"),
+            ("attr/current", "luma-reference//&another (enforce)\n"),
+            ("limits", "Max locked memory 0 1 bytes\n"),
+        ] {
+            for round in 0..2 {
+                assert!(
+                    reference(|name, count, observed| {
+                        if name == field && count == round {
+                            *observed = value.into();
+                        }
+                    })
+                    .is_err(),
+                    "{field} round {round}"
+                );
+            }
+        }
+        for field in [
+            "Uid",
+            "NoNewPrivs",
+            "Seccomp",
+            "CapPrm",
+            "CapEff",
+            "CapBnd",
+            "CapInh",
+            "CapAmb",
+        ] {
+            let original = status(Kind::Model, 990);
+            let changed = original
+                .lines()
+                .map(|line| {
+                    if line.starts_with(&format!("{field}:")) {
+                        format!("{field}: unavailable")
+                    } else {
+                        line.into()
+                    }
+                })
+                .collect::<Vec<String>>()
+                .join("\n");
+            for round in 0..2 {
+                assert!(reference(|name, count, observed| {
+                    if name == "status" && count == round {
+                        *observed = changed.clone();
+                    }
+                })
+                .is_err());
+            }
+        }
+        for round in 1..3 {
+            assert!(reference(|name, count, observed| {
+                if name == "stat" && count == round {
+                    *observed = stat(8);
+                }
+            })
+            .is_err());
+        }
+    }
+
+    #[test]
+    fn missing_reference_kernel_observations_never_accept_partial_confinement() {
+        for missing in ["stat", "status", "cgroup", "attr/current", "limits"] {
+            let result = reference_generation(|field, _| {
+                if field == missing {
+                    return Err("trusted kernel observation missing".into());
+                }
+                Ok(match field {
+                    "stat" => stat(7),
+                    "status" => status(Kind::Model, 990),
+                    "cgroup" => "0::/system.slice/luma-reference.service\n".into(),
+                    "attr/current" => "luma-reference (enforce)\n".into(),
+                    "limits" => "Max locked memory 0 0 bytes\n".into(),
+                    _ => panic!("unexpected observation"),
+                })
+            });
+            assert!(result.is_err(), "missing {missing}");
+        }
+    }
+
+    #[test]
+    fn real_live_reference_uid_outside_its_service_is_refused() {
+        use std::os::unix::process::CommandExt;
+        assert_eq!(unsafe { libc::geteuid() }, 0);
+        let mut child = std::process::Command::new("/bin/sleep")
+            .arg("5")
+            .uid(990)
+            .gid(990)
+            .spawn()
+            .unwrap();
+        let raw = unsafe { libc::syscall(libc::SYS_pidfd_open, child.id(), 0) };
+        assert!(raw >= 0);
+        let pin = unsafe { File::from_raw_fd(raw as i32) };
+        let result = live_generation(
+            libc::ucred {
+                pid: child.id() as i32,
+                uid: 990,
+                gid: 990,
+            },
+            &pin,
+        );
+        child.kill().unwrap();
+        child.wait().unwrap();
+        assert!(result.is_err());
     }
 
     #[test]

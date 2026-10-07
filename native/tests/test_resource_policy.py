@@ -6,6 +6,52 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 class ResourcePolicyTests(unittest.TestCase):
+    def test_reference_gateway_requires_current_kernel_confinement_not_just_uid(self):
+        peer = (ROOT/'rust/luma-platform/src/resource_manager/peer.rs').read_text().split('#[cfg(test)]')[0]
+        reference = peer.split('fn reference_generation(')[1].split('pub(super) fn live_generation(')[0]
+        for guard in ('0::/system.slice/luma-reference.service', 'luma-reference (enforce)',
+                      'confined_status(', 'locked_memory(', 'start_ticks('):
+            self.assertIn(guard, reference)
+        live = peer.split('pub(super) fn live_generation(')[1]
+        self.assertGreaterEqual(live.count('reference_generation('), 2)
+        unit = (ROOT/'native/image/overlay/etc/systemd/system/luma-reference.service').read_text()
+        for setting in ('User=luma-control', 'NoNewPrivileges=yes', 'CapabilityBoundingSet=',
+                        'SystemCallFilter=@system-service', 'LimitMEMLOCK=0', 'AppArmorProfile=luma-reference'):
+            self.assertIn(setting, unit.splitlines())
+
+    def test_native_calculation_stdout_has_no_unleased_production_fallback(self):
+        source = (ROOT/'rust/luma-platform/src/calculation.rs').read_text()
+        command = source.split('pub fn calculate_stdin()')[1].split('#[cfg(test)]')[0]
+        self.assertLess(command.index('require_root()'), command.index('source_stdin()'))
+        self.assertLess(command.index('require_installed()'), command.index('source_stdin()'))
+        self.assertIn('workflow_resource::calculate(&bytes)', command)
+        self.assertLess(command.index('result.recheck('), command.index('write_all(&output)'))
+        self.assertNotIn('report_bytes(', command)
+        fixture = (ROOT/'rust/luma-platform/src/publication_fixture.rs').read_text()
+        self.assertIn('Some("invoice-calculate") if args.len() == 1', fixture)
+        main = (ROOT/'rust/luma-platform/src/main.rs').read_text()
+        self.assertIn('#[cfg(test)]\nmod publication_fixture;', main)
+        self.assertNotIn('LUMA_PUBLICATION_TEST_ARGS', main)
+
+    def test_physical_archive_recovery_retains_bytes_and_never_cuts_authority(self):
+        source = (ROOT/'rust/luma-platform/src/resources/retention.rs').read_text().split('#[cfg(test)]')[0]
+        for guard in ('State::Released', 'RENAME_NOREPLACE', 'MAX_DIRECTORY_ENTRIES',
+                      'O_NOFOLLOW', 'O_NONBLOCK', 'before.nlink() != 1', 'ledger.review()?',
+                      'identity(&self.directory.join("ledger.json"))', 'self.poisoned = true',
+                      '.archive-retained-', 'observe()?;'):
+            self.assertIn(guard, source)
+        for mutation in ('remove_file', '.transact(', '.leases.clear()', '.generation =', '.retired_owners.insert('):
+            self.assertNotIn(mutation, source)
+        manager = (ROOT/'rust/luma-platform/src/resource_manager.rs').read_text()
+        boundary = manager.split('"resource-recovery-status" | "resource-recover" => {')[1].split('_ => return Err')[0]
+        for guard in ('self.requests.occupied()', 'self.owners.is_empty()', 'group.populated()',
+                      'peer::live_generation(peer, &pin)', 'now()? >= r.deadline', 'recover_stage_checked('):
+            self.assertIn(guard, boundary)
+        shape = (ROOT/'rust/luma-platform/src/service.rs').read_text().split(
+            'let shape = match request.action.as_str()')[1].split('if !shape')[0]
+        for action in ('resource-recovery-status', 'resource-recover'):
+            self.assertIn(action, shape)
+
     def test_completed_results_bind_domain_epochs_and_recovery_cannot_revive_them(self):
         ledger = (ROOT/'rust/luma-platform/src/resources.rs').read_text().split('#[cfg(test)]\nmod tests')[0]
         self.assertIn('pub output_domain_epochs: Option<BTreeMap<String, OutputEpoch>>', ledger)

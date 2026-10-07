@@ -7,6 +7,7 @@ use std::path::Path;
 fn arguments(value: Option<&str>) -> Result<Vec<String>> {
     let args: Vec<String> = serde_json::from_str(value.ok_or("no publication fixture requested")?)?;
     match args.first().map(String::as_str) {
+        Some("invoice-calculate") if args.len() == 1 => Ok(args),
         Some("artifact-publish-invoice") if args.len() == 2 => Ok(args),
         Some("artifact-catalog-publish-invoice") if args.len() == 4 => Ok(args),
         Some("artifact-reconcile") if args.len() == 3 => Ok(args),
@@ -38,6 +39,15 @@ fn execute(args: &[String]) -> Result<serde_json::Value> {
     let fault = std::env::var("LUMA_PUBLICATION_TEST_RESOURCE_FAULT").unwrap_or_default();
     if !["", "calculate", "recheck-1", "recheck-2", "recheck-3"].contains(&fault.as_str()) {
         return Err("unknown computation fixture fault".into());
+    }
+    if args[0] == "invoice-calculate" {
+        if !fault.is_empty() {
+            return Err("synthetic calculation fixture refused".into());
+        }
+        let source = calculation::source_stdin()?;
+        let report = calculation::report_bytes(&source)?;
+        return Ok(serde_json::json!({"synthetic_computation_fixture":true,
+            "report":String::from_utf8(report)?,"source_sha256":artifacts::digest(&source)}));
     }
     if args[0] == "artifact-reconcile" {
         let receipt = artifacts::reconcile_invoice(

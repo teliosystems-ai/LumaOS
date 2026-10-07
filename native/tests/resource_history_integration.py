@@ -87,12 +87,13 @@ def main():
                             continue
                     else:
                         assert action in {'resource-request-status', 'resource-request-archive',
-                                          'resource-request-recovery-status', 'resource-request-recover'}
+                                          'resource-request-recovery-status', 'resource-request-recover',
+                                          'resource-recovery-status', 'resource-recover'}
                         assert set(request) == {'schema_version', 'request_id', 'caller',
                             'deadline', 'action', 'idempotency_key', 'profile', 'lease',
                             'review', 'storage_device'}
                         assert request['review'] == ('a'*64 if action in {
-                            'resource-request-archive', 'resource-request-recover'} else None)
+                            'resource-request-archive', 'resource-request-recover', 'resource-recover'} else None)
                     response = {'schema_version': 1, 'request_id': request['request_id'],
                         'caller': uid, 'result': 'ok', 'lease': None, 'status': status}
                     if fault[0] == 'correlation':
@@ -115,9 +116,10 @@ def main():
         thread.start()
         try:
             for action in ('resource-request-status', 'resource-request-archive',
-                           'resource-request-recovery-status', 'resource-request-recover'):
+                           'resource-request-recovery-status', 'resource-request-recover',
+                           'resource-recovery-status', 'resource-recover'):
                 args = [binary, action]
-                if action in {'resource-request-archive', 'resource-request-recover'}:
+                if action in {'resource-request-archive', 'resource-request-recover', 'resource-recover'}:
                     args.append('a'*64)
                 for defect in (None, 'correlation', 'shape'):
                     fault[0] = defect
@@ -141,6 +143,13 @@ def main():
                 cases += 1
             fault[0] = None
             before = len(seen)
+            for action in ('resource-recover', 'resource-request-recover', 'resource-archive'):
+                for review in ('', 'A'*64, '../untrusted'):
+                    result = subprocess.run([binary, action, review], env=environment,
+                                            capture_output=True, timeout=6)
+                    assert result.returncode != 0 and result.stdout == b''
+                    assert len(seen) == before, 'invalid review reached the broker'
+                    cases += 1
             for batch in ('01', '0', '65'):
                 result = subprocess.run([binary, 'resource-request-export', batch, digest],
                                         env=environment, capture_output=True, timeout=6)

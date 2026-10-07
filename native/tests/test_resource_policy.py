@@ -58,10 +58,40 @@ class ResourcePolicyTests(unittest.TestCase):
         for name in ('resources.rs', 'resource_manager.rs', 'acquisition.rs', 'storage_io.rs',
                      'service/ingress.rs', 'model/layout.rs', 'resource_manager/recovery.rs',
                      'resource_manager/requests.rs', 'resource_manager/requests/journal.rs',
-                     'resource_manager/history.rs', 'resource_manager/peer.rs'):
+                     'resource_manager/history.rs', 'resource_manager/peer.rs',
+                     'resource_manager/requests/gateway.rs', 'model/gateway.rs'):
             source = (ROOT/'rust/luma-platform/src'/name).read_text()
             for marker in ('todo!', 'unimplemented!', '// TODO', '// FIXME'):
                 self.assertNotIn(marker, source)
+
+    def test_reference_gateway_runs_only_inside_the_existing_leased_supervisor(self):
+        service = (ROOT/'rust/luma-platform/src/service.rs').read_text()
+        self.assertIn('Some("resource-gateway")', service)
+        self.assertIn('.handle_gateway(', service)
+        gateway = (ROOT/'rust/luma-platform/src/resource_manager/requests/gateway.rs').read_text()
+        for marker in ('assert_active(token, &observed, time)', 'owner(peer.pid',
+                       'Caller::observe_supported', 'self.requests.begin(',
+                       'self.requests.admit(', 'self.requests.finish(', 'wire_bound(&planned)',
+                       'self.requests.persist(', 'gateway queue full or replay differs'):
+            self.assertIn(marker, gateway)
+        model = (ROOT/'rust/luma-platform/src/model.rs').read_text()
+        self.assertIn('gateway.tick(', model)
+        driver = (ROOT/'rust/luma-platform/src/model/gateway.rs').read_text()
+        self.assertLess(driver.index('Message::Admit'), driver.index('let completion: Completion = post('))
+        self.assertIn('127.0.0.1:8081', driver)
+        self.assertNotIn('UnixListener', gateway+driver)
+        client = (ROOT/'src/luma_os/native_inference.py').read_text()
+        self.assertIn('socket.SO_PEERCRED', client)
+        self.assertNotIn('model_api_key', client)
+        self.assertNotIn('urllib', client)
+        unit = (ROOT/'native/image/overlay/etc/systemd/system/luma-broker.service').read_text()
+        self.assertIn('RestrictAddressFamilies=AF_UNIX', unit)
+        self.assertIn('self.gateway_serving(expected, now()?)?', gateway)
+        fetch = gateway.split('Message::Fetch { nonce, worker } =>')[1].split('Message::Cancel { nonce, worker } =>')[0]
+        self.assertEqual(fetch.count('self.gateway_serving(Some(worker), time)?'), 2)
+        manager = (ROOT/'rust/luma-platform/src/resource_manager.rs').read_text()
+        maintain = manager.split('pub(crate) fn maintain')[1].split('fn retained')[0]
+        self.assertGreater(maintain.index('self.maintain_gateway(now()?)'), maintain.index('finish_draining('))
 
     def test_current_credentials_and_both_fixed_worker_confinements_are_rechecked(self):
         peer = (ROOT/'rust/luma-platform/src/resource_manager/peer.rs').read_text()

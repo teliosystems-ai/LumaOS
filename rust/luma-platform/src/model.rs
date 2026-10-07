@@ -23,6 +23,7 @@ const MAX_ROLLBACK: u64 = MAX_PRIOR_BACKUP + 4096;
 const QUARANTINE: &str = "model-quarantine.json";
 const REFERENCE_ENV: &str = "model-reference.env";
 
+mod gateway;
 mod layout;
 mod supervision;
 mod validation;
@@ -2944,9 +2945,19 @@ pub fn serve() -> Result<()> {
         .env("PATH", "/usr/bin")
         .env("LD_LIBRARY_PATH", "/usr/libexec/luma-os/llama");
     inherit_runtime_files(&mut command, &verified, &runtime);
+    let mut gateway = gateway::Driver::new(&Path::new(VAR).join(STATE))?;
+    let mut spawned = false;
     supervision::run(&mut command, || {
         fence.check(&Path::new(VAR).join(STATE), &p)?;
-        lease.check()
+        lease.check()?;
+        if spawned {
+            gateway.tick(&p, &lease, || {
+                fence.check(&Path::new(VAR).join(STATE), &p)?;
+                lease.check_local()
+            })?;
+        }
+        spawned = true;
+        Ok(())
     })
 }
 

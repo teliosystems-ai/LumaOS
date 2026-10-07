@@ -2,6 +2,7 @@
 //! peak. No new listener, additional physical RAM charge or caller release of
 //! the serving lease. Other inference consumers still need gateway integration.
 use super::*;
+pub(crate) mod gateway;
 mod journal;
 pub(crate) use journal::initialize;
 pub(crate) use journal::request_migration;
@@ -66,17 +67,29 @@ struct Caller {
     #[serde(with = "resources::decimal")]
     start: u64,
     boot: String,
+    #[serde(default, skip_serializing_if = "root_uid")]
+    uid: u32,
+}
+fn root_uid(uid: &u32) -> bool {
+    *uid == 0
 }
 impl Caller {
     fn observe(peer: libc::ucred, pin: &File) -> Result<Self> {
         if peer.uid != 0 {
             return Err("inference maintenance requires a live installed-root peer".into());
         }
+        Self::observe_supported(peer, pin)
+    }
+    fn observe_supported(peer: libc::ucred, pin: &File) -> Result<Self> {
+        if !matches!(peer.uid, 0 | 990) {
+            return Err("unsupported inference caller".into());
+        }
         let (start, boot) = super::peer::live_generation(peer, pin)?;
         Ok(Self {
             pid: peer.pid as u32,
             start,
             boot,
+            uid: peer.uid,
         })
     }
     fn live(&self, pin: &File) -> Result<bool> {
@@ -86,7 +99,7 @@ impl Caller {
         let identity = super::peer::live_generation(
             libc::ucred {
                 pid: self.pid.try_into()?,
-                uid: 0,
+                uid: self.uid,
                 gid: 0,
             },
             pin,
@@ -479,6 +492,7 @@ mod tests {
                 pid: 2,
                 start: 3,
                 boot: "boot-one".into(),
+                uid: 0,
             },
         )
     }

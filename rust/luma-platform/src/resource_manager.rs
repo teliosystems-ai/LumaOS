@@ -516,6 +516,8 @@ pub(crate) struct Manager {
     owners: BTreeMap<String, File>,
     acquisition_bindings: BTreeMap<String, (model::Profile, String)>,
     requests: requests::Gate,
+    gateway: Option<requests::gateway::Job>,
+    gateway_ready: Option<Token>,
 }
 
 pub(crate) fn fence_unavailable() -> Result<()> {
@@ -572,6 +574,8 @@ impl Manager {
             owners: BTreeMap::new(),
             acquisition_bindings: BTreeMap::new(),
             requests,
+            gateway: None,
+            gateway_ready: None,
         };
         manager.maintain()?;
         Ok(manager)
@@ -753,7 +757,7 @@ impl Manager {
                 }
             }
         }
-        Ok(())
+        self.maintain_gateway(now()?)
     }
 
     fn retained(&self, ledger: &resources::Ledger, drained: Option<Kind>) -> Result<u64> {
@@ -1166,6 +1170,9 @@ pub(super) fn request(action: &str) -> Result<Request> {
 }
 
 impl WorkerLease {
+    pub(crate) fn token(&self) -> &Token {
+        &self.token
+    }
     pub(crate) fn acquire(profile: &str) -> Result<Self> {
         Self::acquire_with_storage(profile, None)
     }

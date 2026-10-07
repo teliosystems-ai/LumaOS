@@ -1,6 +1,6 @@
 # G2 software completion register
 
-Updated 2026-10-06. **G2 software is not complete.** This register separates
+Updated 2026-10-07. **G2 software is not complete.** This register separates
 work that can be executed in the current Windows/Ubuntu WSL/VM environment
 from production deployment decisions and physical qualification. It does not
 change the frozen reference release, governing requirements, or exit criteria.
@@ -62,9 +62,17 @@ without replacement or deletion, requires released physical generations and
 empty worker groups, and leaves receipts, nonce fences and charges unchanged.
 The native transport now accepts the request-status/archive reply shapes; the
 earlier client omitted them. Product export governance, deletion/custody and
-broader retention recovery remain open. The reference service's direct runtime
-path is not yet integrated; removing its credential requires reviewed rotation
-of existing runtime keys, not merely changing the reference environment file.
+broader retention recovery remain open. The reference service now has an
+explicit native broker client and a bounded gateway on the existing socket.
+It reserves before rendering, binds the exact messages/tokens/result to durable
+receipts and executes only inside the exact leased serving supervisor. The
+client receives no runtime key and publishes only after verified acknowledgement.
+The installer default remains the direct-runtime path: reviewed rotation and
+migration of existing keys/environments are still required. This resource
+interface does not implement product principal/session or effect grants.
+The [gateway checkpoint](evidence/G2_RESOURCE_GATEWAY_2026-10-07.md) records
+419 passing selected tests and 35 synthetic-authority CLI cases, with installed
+and real-model qualification explicitly pending.
 See [RESOURCE_LEASES.md](RESOURCE_LEASES.md) for
 the exact implemented scope, limits, maintenance commands and remaining work.
 

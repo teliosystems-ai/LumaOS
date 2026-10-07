@@ -201,6 +201,8 @@ fn validate_records(records: &[Record]) -> Result<BTreeSet<String>> {
             || record.worker.generation == 0
             || record.caller.pid == 0
             || record.caller.start == 0
+            || !matches!(record.caller.uid, 0 | 990)
+            || record.caller.uid == 990 && record.input_digest.is_none()
             || record.caller.boot.is_empty()
             || record.caller.boot.len() > 128
             || !record
@@ -1789,6 +1791,61 @@ mod tests {
         f.gate.persist(&f.store, true).unwrap();
         assert_eq!(fs::read(f.directory.join(FILE)).unwrap(), hot);
         assert_eq!(fs::read(f.directory.join("ledger.json")).unwrap(), physical);
+    }
+
+    #[test]
+    fn reference_uid_is_durable_but_restart_never_reconstructs_its_caller_handle() {
+        let mut f = Fixture::new();
+        f.caller.uid = 990;
+        f.prepare(1);
+        let raw = fs::read(f.directory.join(FILE)).unwrap();
+        let physical = fs::read(f.directory.join("ledger.json")).unwrap();
+        let mut restored = Gate::open(&f.store).unwrap();
+        assert_eq!(restored.bytes().unwrap(), raw);
+        assert_eq!(restored.records[0].caller.uid, 990);
+        assert!(restored.records[0].pin.is_none());
+        let mut root = f.caller.clone();
+        root.uid = 0;
+        assert!(restored.admit(&root, &admit(&f.worker, 1, 10), 3).is_err());
+        assert_eq!(
+            restored
+                .maintain_with(&f.store.read().unwrap(), 3, |_| panic!(
+                    "restart may not recover a PID handle"
+                ))
+                .unwrap(),
+            vec![f.worker.clone()]
+        );
+        restored.persist(&f.store, true).unwrap();
+        assert_eq!(restored.records[0].phase, Phase::Draining);
+        assert_eq!(fs::read(f.directory.join("ledger.json")).unwrap(), physical);
+        assert_eq!(f.store.read().unwrap().charged("host").unwrap(), 5000);
+    }
+
+    #[test]
+    fn unsupported_or_unbound_reference_uid_refuses_without_rewriting_evidence() {
+        let mut f = Fixture::new();
+        f.complete(1);
+        let root_bytes = f.gate.bytes().unwrap();
+        assert!(!String::from_utf8(root_bytes.clone())
+            .unwrap()
+            .contains("\"uid\""));
+        for uid in [989, 988, 1000] {
+            let mut malformed: Snapshot = serde_json::from_slice(&root_bytes).unwrap();
+            malformed.records[0].caller.uid = uid;
+            let malformed = serde_json::to_vec(&malformed).unwrap();
+            fs::write(f.directory.join(FILE), &malformed).unwrap();
+            assert!(Gate::open(&f.store).is_err());
+            assert_eq!(fs::read(f.directory.join(FILE)).unwrap(), malformed);
+        }
+        let mut malformed: Snapshot = serde_json::from_slice(&root_bytes).unwrap();
+        malformed.records[0].caller.uid = 990;
+        malformed.records[0].input_digest = None;
+        let malformed = serde_json::to_vec(&malformed).unwrap();
+        fs::write(f.directory.join(FILE), &malformed).unwrap();
+        assert!(Gate::open(&f.store).is_err());
+        assert_eq!(fs::read(f.directory.join(FILE)).unwrap(), malformed);
+        fs::write(f.directory.join(FILE), &root_bytes).unwrap();
+        assert_eq!(Gate::open(&f.store).unwrap().bytes().unwrap(), root_bytes);
     }
 
     #[test]

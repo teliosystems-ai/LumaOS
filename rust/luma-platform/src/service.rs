@@ -375,6 +375,16 @@ pub fn serve() -> Result<()> {
                         let peer = credentials(&incoming.stream)?;
                         let envelope: serde_json::Value = serde_json::from_slice(&incoming.bytes)?;
                         if envelope.get("action").and_then(|v| v.as_str())
+                            == Some("resource-gateway")
+                        {
+                            let request: resource_manager::requests::gateway::Request =
+                                serde_json::from_slice(&incoming.bytes)?;
+                            return manager
+                                .as_mut()
+                                .ok_or("resource manager unavailable in this session")?
+                                .handle_gateway(&request, peer, peer_pidfd(&incoming.stream)?);
+                        }
+                        if envelope.get("action").and_then(|v| v.as_str())
                             == Some("resource-inference")
                         {
                             let request: resource_manager::requests::Request =
@@ -597,6 +607,29 @@ pub(crate) fn resource_export_exchange(
     Ok(chunk)
 }
 
+pub(crate) fn gateway_exchange(
+    request: &resource_manager::requests::gateway::Request,
+) -> Result<resource_manager::requests::gateway::Status> {
+    let deadline = Instant::now() + Duration::from_secs(3);
+    let mut socket = connect_local(SOCKET, deadline)?;
+    if peer(&socket)? != 0 {
+        return Err("gateway broker is not root".into());
+    }
+    gateway_exchange_on(&mut socket, request, deadline)
+}
+
+fn gateway_exchange_on(
+    socket: &mut UnixStream,
+    request: &resource_manager::requests::gateway::Request,
+    deadline: Instant,
+) -> Result<resource_manager::requests::gateway::Status> {
+    write_frame_until(socket, &serde_json::to_vec(request)?, deadline)?;
+    resource_manager::requests::gateway::validate_response(
+        &read_frame_until(socket, deadline)?,
+        request,
+    )
+}
+
 fn exchange(socket: &mut UnixStream, request: &Request, deadline: Instant) -> Result<Response> {
     // One monotonic budget covers both request output and response input.
     // This private helper assumes the caller has authenticated the socket.
@@ -670,6 +703,48 @@ pub fn client(action: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn gateway_worker_exchange_uses_existing_framing_and_exact_closed_reply() {
+        use resource_manager::requests::gateway::{self as wire, Message, Status};
+        for bad in [false, true] {
+            let request = wire::worker_request(Message::Claim {
+                worker: crate::resources::Token {
+                    lease_id: "a".repeat(32),
+                    generation: 1,
+                    manager_epoch: "b".repeat(32),
+                },
+            })
+            .unwrap();
+            let (mut client, mut broker) = UnixStream::pair().unwrap();
+            let server = std::thread::spawn(move || {
+                let raw =
+                    read_frame_until(&mut broker, Instant::now() + Duration::from_secs(2)).unwrap();
+                let observed: wire::Request = serde_json::from_slice(&raw).unwrap();
+                assert_eq!(observed.caller, 989);
+                assert_eq!(observed.action, "resource-gateway");
+                let response = serde_json::json!({"schema_version":1,"caller":if bad {990}else{989},
+                    "request_id":observed.request_id,"result":"ok","status":{"kind":"idle"}});
+                write_frame_until(
+                    &mut broker,
+                    &serde_json::to_vec(&response).unwrap(),
+                    Instant::now() + Duration::from_secs(2),
+                )
+                .unwrap();
+            });
+            let result = gateway_exchange_on(
+                &mut client,
+                &request,
+                Instant::now() + Duration::from_secs(2),
+            );
+            if bad {
+                assert!(result.is_err());
+            } else {
+                assert!(matches!(result.unwrap(), Status::Idle {}));
+            }
+            server.join().unwrap();
+        }
+    }
 
     #[test]
     fn resource_peer_handle_is_kernel_bound_and_closes_on_exec() {

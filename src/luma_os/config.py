@@ -38,6 +38,7 @@ class LumaConfig:
     model_endpoint: str | None = None
     model_name: str | None = None
     model_api_key: str | None = None
+    model_transport: str = "openai-http"
 
     @classmethod
     def from_env(
@@ -61,6 +62,11 @@ class LumaConfig:
         if port > 65535:
             raise ValidationError("LUMA_PORT must be at most 65535")
         max_bytes = _positive_int(values.get("LUMA_MAX_SOURCE_BYTES", str(10 * 1024 * 1024)), "LUMA_MAX_SOURCE_BYTES")
+        transport = values.get("LUMA_MODEL_TRANSPORT", "openai-http")
+        if transport not in {"openai-http", "native-broker"}:
+            raise ValidationError("Unsupported model transport")
+        if transport == "native-broker" and (values.get("LUMA_MODEL_ENDPOINT") or values.get("LUMA_MODEL_API_KEY")):
+            raise ValidationError("Native broker transport cannot receive an HTTP endpoint or runtime API key")
         return cls(
             data_dir=root,
             db_path=root / "luma.sqlite3",
@@ -71,6 +77,7 @@ class LumaConfig:
             model_endpoint=values.get("LUMA_MODEL_ENDPOINT") or None,
             model_name=values.get("LUMA_MODEL_NAME") or None,
             model_api_key=values.get("LUMA_MODEL_API_KEY") or None,
+            model_transport=transport,
         )
 
     def ensure_directories(self) -> None:

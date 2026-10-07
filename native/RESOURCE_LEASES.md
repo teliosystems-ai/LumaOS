@@ -1,6 +1,6 @@
 # Native resource leases and generations
 
-Updated 2026-10-06. Requirement #1 remains open until its remaining integrations
+Updated 2026-10-07. Requirement #1 remains open until its remaining integrations
 and the applicable installed-image qualification pass. This implementation is
 not a claim that all G2 resources, inference clients or hardware are qualified.
 Requirement #2 has not been started by this work.
@@ -13,8 +13,10 @@ reference worker reads or writes that private directory. The existing
 big-endian framed JSON, strict request/response envelopes and kernel peer
 credentials. A socket-specific POSIX ACL admits root, UID 989 and UID 990
 without adding the model worker to the control database's group. UID 990 gains
-no resource methods; UID 989 gains only acquisition and renewal of its own
-fixed, selected CPU worker. Root acquisition is accepted only from the fixed,
+only the bounded reference gateway methods described below, not physical
+acquisition, renewal, controller or history-maintenance authority. UID 989 gains
+acquisition and renewal of its own fixed, selected CPU worker and gateway
+dispatch restricted to that exact lease-owning supervisor. Root acquisition is accepted only from the fixed,
 enforcing acquisition unit. Both worker kinds now require their exact enforcing
 AppArmor label, no-new-privileges, seccomp filter mode and current fixed capability
 sets, not merely a matching UID and cgroup. Unsupported ACL or peer-PID-handle support refuses
@@ -272,10 +274,66 @@ broader recovery and product governance integrations remain open.
 
 These are durable laboratory receipts and reviewed archival, not complete
 product retention governance, export/deletion custody or a tenant gateway.
-The reference service still has direct runtime credentials and is not covered
-by this operator admission path. Its integration and closure of that bypass
-remain required before Requirement #1 can close. Real installed model/tokenizer
-execution and cancellation/drainage still require image qualification.
+The reference service now has an explicit broker transport, described next.
+The installer still provisions its legacy direct-runtime credentials. Reviewed
+key rotation, migration and closure of that installed bypass remain required
+before Requirement #1 can close. Real installed model/tokenizer execution and
+cancellation/drainage still require image qualification.
+
+### Reference gateway over the existing broker socket
+
+`LUMA_MODEL_TRANSPORT=native-broker` selects the reference client's native
+gateway. It requires the selected `LUMA_MODEL_NAME` and refuses an HTTP endpoint
+or runtime API key. The existing default remains `openai-http`; this change
+does not silently migrate installed environments or revoke exposed keys.
+The new `resource-gateway` envelope uses schema version 1 independently of
+the root operator's version-2 `resource-inference` envelope. Broker, supervisor
+and client must be upgraded together. No listener, writable shared database or
+TCP control transport is added.
+
+The broker authenticates UID 990 and pins its current process generation for
+submission, fetch, acknowledgement and cancellation. It holds at most one
+transient job, with 1..16 role/content messages ending in a user message and
+at most 8,192 UTF-8 content bytes. The exact canonical original messages are
+bound by a domain-separated SHA-256 before a preparing receipt is persisted.
+The eventual claim frame is bounded before reservation; JSON escaping cannot
+produce an unrepresentable queued job. A busy queue, changed nonce replay or
+another caller's receipt refuses. Prompts and results are not durable journal
+content and are not revived after broker restart.
+
+Only the exact UID-989 owner of the current physical serving lease can register
+readiness, claim or advance a job. A runtime child sharing the UID and cgroup
+cannot borrow the supervisor's owner generation. The existing leased supervisor
+calls the pinned runtime at literal loopback port 8081 with its private key;
+the broker itself remains restricted to Unix sockets. Template/tokenizer work
+follows the preparing reservation. The exact token array and maximum output
+must fit the fixed context, and execution follows an exact admitted
+acknowledgement. Rendering disables thinking, concurrency remains one, and
+sampling is explicitly temperature 0.7 without a seed. Unsupported client
+sampling options refuse rather than being ignored.
+
+Runtime requests and responses have fixed authority, byte limits, strict
+framing and one boot-time request deadline. Redirects, duplicate headers,
+alternate encodings, truncation, excessive context/output and mismatched model
+or timing counts refuse. Local lease/fence checks run throughout IO; a pipeline
+failure exits through owned-child supervision and trusted whole-group drainage.
+Completion releases only the logical slot, never the physical worker peak.
+The client checks the exact receipt, output counts and domain-separated result
+digest, then acknowledges before publishing text. Exact completed
+acknowledgements and client cancellations are repeatable from durable receipts
+without clearing a different queued job. Fetch and acknowledgement require a
+current active physical token, the live pinned supervisor and matching readiness;
+gateway maintenance runs after physical revocation/drainage, and non-cancellation
+replies recheck the serving generation after persistence. Retaining a completed
+receipt cannot authorize publication from a revoked or expired worker.
+Expired publication or lost/mismatched
+acknowledgement produces no result and makes no cleanup claim.
+
+This is reference-process resource mediation, not product user/session grants,
+Admin authorization, effect authority or signed production custody. The legacy
+reference environment and previously exposed keys are deliberately unchanged
+until reviewed lifecycle rotation is implemented. The gateway's source and
+protocol checks do not close that bypass or qualify actual installed enforcement.
 
 ### Upgrade of older request history
 
@@ -424,8 +482,9 @@ Admin authorization, and their combined native-image procedure remains unqualifi
 - Extend request-level accepted prompt/output/concurrency accounting to all
   inference consumers, close the reference service's direct-runtime bypass,
   and finish governed request export/deletion, custody and retention recovery.
-  Reference integration must also rotate previously exposed runtime keys through
-  the reviewed lifecycle; changing an environment file alone leaves a bypass.
+  The opt-in native gateway exists; default reference migration must also rotate
+  previously exposed runtime keys through the reviewed lifecycle; changing an
+  environment file alone leaves a bypass.
   Durable operator receipts, reviewed archival, bounded root export and reviewed
   preservation of a current incomplete archive stage now exist; the operator path
   and verified CPU KV inventory do not close those integrations by themselves.
@@ -473,8 +532,10 @@ CPU alignment and tensor-size accounting follow its
 [allocator](https://raw.githubusercontent.com/ggml-org/llama.cpp/7ab4ee7baad2d920464cbacfad4f4b07cf111fd2/ggml/src/ggml-alloc.c)
 and [alignment definition](https://raw.githubusercontent.com/ggml-org/llama.cpp/7ab4ee7baad2d920464cbacfad4f4b07cf111fd2/ggml/src/ggml-impl.h).
 
-The [development checkpoint](evidence/G2_RESOURCE_LEASES_2026-10-06.md) separates
-targeted results from those open integrations. The final image and native
+The [reference gateway checkpoint](evidence/G2_RESOURCE_GATEWAY_2026-10-07.md)
+records the current selected regressions; the
+[earlier resource checkpoint](evidence/G2_RESOURCE_LEASES_2026-10-06.md) retains
+the preceding work. Both separate source results from open integrations. The final image and native
 Ubuntu evaluation remain subsequent work; no WSL memory increase is needed
 for the bounded development checks described there.
 

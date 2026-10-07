@@ -7,6 +7,29 @@ from contextlib import closing
 from pathlib import Path
 
 
+def exercise_unavailable_workflow_resources(run, state, source):
+    """The tools fixture has no installed resource broker or block-backed /var.
+
+    Assert this boundary, rather than injecting an unleased production fallback.
+    Coordinator transitions have explicit calculator fixtures in the Rust tests;
+    exercise_workflow below requires the genuine installed helper boundary.
+    """
+    run('workflow-store-status', success=False)
+    run('workflow-store-init')
+    run('workflow-store-init', success=False)
+    before = json.loads(run('workflow-store-status'))
+    for data in (source, b'not,csv\n'):
+        run('workflow-invoice-prepare', 'unavailable-resource', 'summary', '0', data=data, success=False)
+    after = json.loads(run('workflow-store-status'))
+    assert before == after and after['runs'] == 0 and after['pending'] == []
+    assert list((state/'workflow-runs/objects').iterdir()) == []
+    run('workflow-invoice-status', 'unavailable-resource', success=False)
+    run('workflow-invoice-advance', 'unavailable-resource', 'a'*64, success=False)
+    run('workflow-invoice-cancel', 'unavailable-resource', 'a'*64, success=False)
+    run('workflow-invoice-prepare', 'unavailable-resource', 'summary', '0', data=source, success=False, uid=990)
+    print('WORKFLOW_RESOURCE_REFUSAL_CLI_PASSED: unavailable broker/storage never calculates or checkpoints')
+
+
 def exercise_workflow(run, state, source, pure):
     prepare = 'workflow-invoice-prepare'
     status = 'workflow-invoice-status'

@@ -37,6 +37,7 @@ mod utc_receiver;
 mod utc_step_watch;
 mod utc_stream;
 mod workflow;
+mod workflow_resource;
 mod workflow_runs;
 
 use std::path::Path;
@@ -78,6 +79,7 @@ fn main() {
 fn dispatch() -> Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     match args.first().map(String::as_str) {
+        Some("workflow-resource-worker") if args.len() == 2 => workflow_resource::worker(&args[1]),
         Some("model-acquisition-worker") if args.len() == 4 => {
             acquisition::worker(&args[1], &args[2], Path::new(&args[3]))
         }

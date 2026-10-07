@@ -82,7 +82,45 @@ retains the preceding opt-in implementation evidence.
 See [RESOURCE_LEASES.md](RESOURCE_LEASES.md) for
 the exact implemented scope, limits, maintenance commands and remaining work.
 
-**Requirement #1 is not closed.** Content/workflow integration,
+The closed invoice coordinator now uses a broker-leased calculation helper,
+serialized with model acquisition in the existing fixed helper pool. Admission
+precedes reading a sealed source descriptor. The source, compiled graph,
+installation and physical storage are bound to the generation; the broker
+durably records the output digest before the helper publishes a result.
+New calculated checkpoints retain that exact token. Expiry, revocation,
+quarantine, uncertain owner handles and restart fence results without releasing
+physical capacity. A durable result fence survives drainage and archival;
+normal owner exit requires a signalled original process handle. Legacy
+checkpoint bytes remain canonical and missing provenance stays explicit.
+The coordinator's publication and reconciliation checks use the same bounded
+calculation boundary, with no production pure-calculation fallback. This is
+still the installed-root invoice path, not generic execution, product Admin
+or source-folder/effect grants. Installed helper/descriptor/controller
+qualification remains pending. The tools-only workflow CLI fixture now tests
+resource refusal; its former full workflow sequence requires that genuine
+installed boundary rather than an unleased fallback.
+
+The final offline checkpoint is
+`D:\LumaOS-builds\g2-resources-targeted-20261007-17`: 311 selected Rust tests
+and 156 selected Python tests passed, with 40 synthetic-authority history/model
+CLI cases and the isolated artifact/catalog/legacy-import/resource-refusal CLI
+fixture also passing. All 209 captured source files and 88 test inputs matched
+the checkout. The existing Linux-inapplicable Windows junction test was skipped;
+the two existing owned-child test entrypoints were exercised through their
+parent tests, not counted twice. No new test skip was introduced. Locked offline
+build/format, AppArmor syntax and 56 pinned runtime argument checks passed,
+without loading a model. The actual unit verifier's exit 1 is retained because
+the tools image lacks `apparmor.service`; installed enforcement is not qualified.
+Earlier checkpoints retain the missing ext4 fixture setting, result-fence defect
+and obsolete source-guard failures rather than replacing them with passing logs.
+Source manifest SHA-256:
+`53acbc4c0da166dec4b81d84e72c7d33f716813e4d5cb97829985ad6e1b289b5`.
+Test input manifest SHA-256:
+`64971be0182ca25ad34e7ef5954cecbfe1fd59f742bc617c7ce5fa31a4ded123`.
+Final test log SHA-256:
+`5a6da2ab08cbd42ddf444db0e72b0a6c7d3c03f8d1fa9fea5ccdfb670be7f42a`.
+
+**Requirement #1 is not closed.** Broader content/workflow integration,
 remaining inference-consumer admission and bypass closure, governed request
 export/deletion and retention recovery, wider tenant/device adapters and
 recovery remain software work. Installed enforcement and consolidated-image evidence remain
@@ -105,6 +143,7 @@ lifecycle and complete installed service/recovery integration. Root privilege
 and role definitions remain insufficient to grant effects.
 
 Workflows have signed graph validation, the exact native invoice executor,
+broker-leased bounded invoice calculation and recorded result generations,
 SQLite WAL checkpoints, pre-effect cancellation, idempotent artifact publication,
 restart/replay and reviewed acknowledgement of proven committed outcomes.
 They remain installed-root laboratory interfaces, not the complete production

@@ -32,6 +32,8 @@ profile luma-acquisition flags=(attach_disconnected,mediate_deleted) {
   /sys/devices/** r,
   /sys/dev/block/** r,
   /run/luma-broker/control.sock rw,
+  /memfd:luma-workflow-input r,
+  /memfd:luma-workflow-output rw,
 
   /var/ r,
   /var/lib/ r,

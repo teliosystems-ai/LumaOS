@@ -1,8 +1,8 @@
 //! Durable coordinator for the closed, installed-root laboratory invoice DAG.
 //! Snapshot input is not a folder grant; checkpoints are not product authority.
 use crate::{
-    artifact_catalog as catalog, artifacts as io, calculation, scoped_read, skills,
-    sqlite::Connection, Result,
+    artifact_catalog as catalog, artifacts as io, calculation, resources, scoped_read, skills,
+    sqlite::Connection, workflow_resource, Result,
 };
 use serde::{Deserialize, Serialize};
 use std::ffi::CString;
@@ -84,6 +84,8 @@ struct Checkpoint {
     previous_sha256: String,
     report_sha256: String,
     receipt: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    resource_lease: Option<resources::Token>,
 }
 fn digest<T: Serialize>(value: &T) -> Result<String> {
     Ok(io::digest(&serde_json::to_vec(value)?))
@@ -123,6 +125,7 @@ struct Store {
     objects: File,
     pending: File,
     installation: String,
+    calculator: fn(&[u8]) -> Result<workflow_resource::Calculation>,
 }
 pub(crate) fn initialize(path: &Path, installation: &str) -> Result<()> {
     if !io::hash(installation) {
@@ -232,6 +235,7 @@ impl Store {
             objects,
             pending,
             installation: installation.into(),
+            calculator: workflow_resource::calculate,
         };
         result.inventory()?;
         Ok(result)
@@ -328,6 +332,10 @@ impl Store {
                 || !valid_stage
                 || checkpoint.plan_sha256 != digest(&plan)?
                 || checkpoint.previous_sha256 != expected_previous
+                || checkpoint
+                    .resource_lease
+                    .as_ref()
+                    .map_or(false, |token| !workflow_resource::token_valid(token))
             {
                 return Err("workflow checkpoint chain mismatch".into());
             }
@@ -341,11 +349,14 @@ impl Store {
                     return Err("workflow artifact receipt mismatch".into());
                 }
                 if let Some(p) = previous.as_ref().filter(|p| p.stage >= 2) {
-                    if p.report_sha256 != checkpoint.report_sha256 {
+                    if p.report_sha256 != checkpoint.report_sha256
+                        || p.resource_lease != checkpoint.resource_lease
+                    {
                         return Err("workflow report changed across checkpoints".into());
                     }
                 }
             } else if checkpoint.receipt.is_some()
+                || (checkpoint.stage != 5 && checkpoint.resource_lease.is_some())
                 || (checkpoint.stage != 5 && !checkpoint.report_sha256.is_empty())
                 || (checkpoint.stage == 5
                     && checkpoint.report_sha256
@@ -353,6 +364,12 @@ impl Store {
                             .as_ref()
                             .ok_or("missing cancelled predecessor")?
                             .report_sha256)
+                || (checkpoint.stage == 5
+                    && checkpoint.resource_lease
+                        != previous
+                            .as_ref()
+                            .ok_or("missing cancelled predecessor")?
+                            .resource_lease)
             {
                 return Err("unexpected workflow checkpoint result".into());
             }
@@ -438,7 +455,6 @@ impl Store {
         if io::digest(source) != plan.source_sha256 || source.len() as u64 != plan.source_bytes {
             return Err("workflow proposed source mismatch".into());
         }
-        calculation::report_bytes(source)?;
         authorize(plan)?;
         if !self
             .db
@@ -465,6 +481,8 @@ impl Store {
         {
             return Err("workflow run capacity exhausted".into());
         }
+        (self.calculator)(source)?;
+        authorize(plan)?;
         self.put_object(source)?;
         let checkpoint = Checkpoint {
             stage: 0,
@@ -472,6 +490,7 @@ impl Store {
             previous_sha256: digest(plan)?,
             report_sha256: String::new(),
             receipt: None,
+            resource_lease: None,
         };
         self.db.exec("BEGIN IMMEDIATE;")?;
         let tx = Transaction(&self.db, false);
@@ -535,6 +554,9 @@ impl Store {
         Ok(
             serde_json::json!({"schema_version":1,"environment":"lab","request_id":request,
             "state":state(checkpoint.stage),"plan":plan,"review_sha256":digest(&checkpoint)?,
+            "resource_lease":checkpoint.resource_lease,
+            "resource_provenance":if checkpoint.resource_lease.is_some() { "broker-receipt" }
+                else if checkpoint.report_sha256.is_empty() { "not-calculated" } else { "legacy-unavailable" },
             "effect_request_id":plan.effect_id()?,"receipt":checkpoint.receipt,
             "cancellation_allowed":checkpoint.stage < 3 || checkpoint.stage == 5,
             "input_kind":"operator-stdin-snapshot","product_admin_active":false,
@@ -621,8 +643,9 @@ impl Store {
                 self.transition(&plan, &previous, &next, &mut authorize)?;
             }
             1 => {
-                let report = calculation::report_bytes(&self.object(&plan.source_sha256)?)?;
-                next.report_sha256 = self.put_object(&report)?;
+                let result = (self.calculator)(&self.object(&plan.source_sha256)?)?;
+                next.report_sha256 = self.put_object(&result.report)?;
+                next.resource_lease = Some(result.lease);
                 self.transition(&plan, &previous, &next, &mut authorize)?;
             }
             2 => {
@@ -667,7 +690,7 @@ impl Store {
         ) -> Result<serde_json::Value>,
     ) -> Result<()> {
         let bytes = self.object(&applying.report_sha256)?;
-        if calculation::report_bytes(&self.object(&plan.source_sha256)?)? != bytes {
+        if (self.calculator)(&self.object(&plan.source_sha256)?)?.report != bytes {
             return Err("workflow deterministic report differs from source".into());
         }
         let result = effect(plan, &bytes, false, &mut || {
@@ -684,6 +707,7 @@ impl Store {
             previous_sha256: digest(applying)?,
             report_sha256: applying.report_sha256.clone(),
             receipt: Some(result),
+            resource_lease: applying.resource_lease.clone(),
         };
         self.transition(plan, applying, &completed, authorize)
     }
@@ -706,7 +730,7 @@ impl Store {
         let applying: Checkpoint =
             serde_json::from_str(&row.first().ok_or("applying checkpoint missing")?[0])?;
         let report = self.object(&applying.report_sha256)?;
-        if calculation::report_bytes(&self.object(&plan.source_sha256)?)? != report {
+        if (self.calculator)(&self.object(&plan.source_sha256)?)?.report != report {
             return Err("reconciliation report differs from its bound source".into());
         }
         Ok((plan, current, applying, report))
@@ -753,6 +777,7 @@ impl Store {
             previous_sha256: digest(&applying)?,
             report_sha256: applying.report_sha256.clone(),
             receipt: Some(receipt.clone()),
+            resource_lease: applying.resource_lease.clone(),
         };
         self.transition(&plan, &current, &completed, |p| {
             self.check_current(p, &completed)?;
@@ -889,6 +914,59 @@ mod tests {
     use super::*;
     use std::cell::Cell;
     use std::os::unix::fs::PermissionsExt;
+    #[test]
+    fn failed_resource_calculation_never_advances_or_crosses_the_artifact_boundary() {
+        let f = Fixture::new("resource-failure");
+        let (plan, bytes) = plan();
+        let mut store = f.open();
+        store.prepare(&plan, &bytes, |_| Ok(())).unwrap();
+        store
+            .advance(
+                "run-1",
+                &review(&store),
+                |_| Ok(()),
+                |_, _, _, _| panic!("effect before calculation"),
+            )
+            .unwrap();
+        let before = store.load("run-1").unwrap();
+        store.calculator = |_| Err("resource generation unavailable".into());
+        assert!(store
+            .advance(
+                "run-1",
+                &review(&store),
+                |_| Ok(()),
+                |_, _, _, _| panic!("unleased effect")
+            )
+            .is_err());
+        assert_eq!(store.load("run-1").unwrap(), before);
+        let source_members = io::names(&store.objects, MAX_OBJECTS).unwrap();
+        assert_eq!(source_members, vec![plan.source_sha256]);
+    }
+    #[test]
+    fn exact_prepare_replay_does_not_start_another_worker_and_legacy_bytes_stay_canonical() {
+        let f = Fixture::new("resource-replay");
+        let (plan, bytes) = plan();
+        let mut store = f.open();
+        store.prepare(&plan, &bytes, |_| Ok(())).unwrap();
+        store.calculator = |_| panic!("replay must not allocate another physical generation");
+        assert!(store.prepare(&plan, &bytes, |_| Ok(())).unwrap());
+        let legacy = serde_json::json!({"stage":2,"plan_sha256":"a".repeat(64),
+            "previous_sha256":"b".repeat(64),"report_sha256":"c".repeat(64),"receipt":null});
+        let old: Checkpoint = serde_json::from_value(legacy.clone()).unwrap();
+        assert!(old.resource_lease.is_none());
+        assert_eq!(serde_json::to_value(old).unwrap(), legacy);
+    }
+    #[test]
+    fn failed_preparation_resource_proof_leaves_no_run_or_pending_source() {
+        let f = Fixture::new("resource-prepare-failure");
+        let (plan, bytes) = plan();
+        let mut store = f.open();
+        store.calculator = |_| Err("resource acknowledgement lost".into());
+        assert!(store.prepare(&plan, &bytes, |_| Ok(())).is_err());
+        assert!(store.load("run-1").is_err());
+        assert!(io::names(&store.objects, MAX_OBJECTS).unwrap().is_empty());
+        assert!(io::names(&store.pending, MAX_OBJECTS).unwrap().is_empty());
+    }
     struct Fixture(std::path::PathBuf);
     impl Fixture {
         fn new(label: &str) -> Self {
@@ -901,7 +979,20 @@ mod tests {
             Self(root)
         }
         fn open(&self) -> Store {
-            Store::open(&self.0.join("runs"), &"a".repeat(64)).unwrap()
+            let mut store = Store::open(&self.0.join("runs"), &"a".repeat(64)).unwrap();
+            // This fixture exercises coordinator persistence, not the installed
+            // systemd/lease boundary. The production constructor always uses it.
+            store.calculator = |source| {
+                Ok(workflow_resource::Calculation {
+                    report: calculation::report_bytes(source)?,
+                    lease: resources::Token {
+                        lease_id: "a".repeat(32),
+                        manager_epoch: "b".repeat(32),
+                        generation: 1,
+                    },
+                })
+            };
+            store
         }
     }
     impl Drop for Fixture {

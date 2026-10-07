@@ -31,8 +31,10 @@ is busy. The resource ledger and controller still have one coordinator/writer.
 
 The broker pins the connecting process using `SO_PEERPIDFD`, its boot/start
 generation and the cgroup device/inode. Requests cannot supply a PID, cgroup,
-capacity, allocation credit, arbitrary domain or controller command. Profiles
-come from the root-owned pinned image catalog. Serving must match the installed
+capacity, allocation credit, arbitrary domain or controller command. Model profiles
+come from the root-owned pinned image catalog. The closed invoice calculation
+uses the fixed compiled contract described below, not a caller-supplied budget.
+Serving must match the installed
 selection and lifecycle fences; acquisition can prepare another pinned profile
 before a selected worker is stopped. Acquisition additionally binds the physical
 IO-controller device resolved from the trusted target's kernel storage topology.
@@ -134,6 +136,46 @@ mapper or otherwise unsupported topology refuses. No device access or weaker
 IO limit fallback is introduced. Root activation, preflight and recovery
 verification use the contained preparation worker in source; the actual installed
 handoff still requires qualification.
+
+The closed installed-root invoice coordinator now shares this helper pool with
+model acquisition and verification. Invoice work reserves the same 512-MiB,
+16-process peak and single execution slot; it cannot overlap another helper
+generation or alter the aggregate inventory. Its transient unit has a
+30-second lifetime, a 4-MiB file-output limit, Unix-only address families and
+no model-directory write exception. Artifact publication remains in the
+trusted coordinator, outside this helper. The current root helper does not
+implement product principals, source-folder grants or generic DAG execution.
+
+Invoice admission binds a canonical source digest, the exact compiled graph,
+current installation and physical storage device. The helper acquires its
+lease before reading a sealed anonymous input descriptor and rejects pipes,
+unsealed or changed input. Output is captured in a bounded anonymous descriptor,
+sealed after observed drainage, and accepted only after its exact digest and
+token match a durable broker receipt. New calculated workflow checkpoints
+retain the token. Preparation replay starts no additional worker. Calculation
+failure leaves the current checkpoint intact; applying/completed reconciliation
+uses the same calculation boundary without a production fallback.
+
+`resource-output-complete` accepts only the exact confined, lease-owning root
+invoice helper, with its token and output digest in the `review` field. It
+persists `output_sha256` without changing deadlines, reservations or physical
+state. `resource-output-receipt` is a read-only root method on the same socket.
+It rejects missing, expired, cancelled, quarantined, uncertain-owner or stale
+manager results. A persistent `output_fenced` flag prevents drainage or archive
+from rehabilitating a rejected result. Only a signalled original process
+handle counts as normal owner exit; missing handles and observation errors
+fence the result. `physical_release_granted` is always false in result replies.
+Only the existing cgroup observations can return physical capacity.
+
+Absent result/token fields remain omitted, preserving canonical older ledgers,
+archives and workflow checkpoint bytes. Older checkpoints do not acquire
+fabricated provenance; current publication/reconciliation revalidates their
+reports through the leased helper. Broker, helper and coordinator require a
+coordinated image upgrade: older strict readers cannot consume the new result
+fields and must refuse rather than reset state or fall back to unleased work.
+Installed service, AppArmor descriptor rules, upgrade and recovery qualification
+remain required. The tools fixture now verifies missing-resource refusal;
+calculator-injected unit tests do not qualify actual installed containment.
 
 Cancellation, expiry, lost owners, broker restart and quarantine leave all
 reservations charged until the broker fences the fixed cgroup and observes

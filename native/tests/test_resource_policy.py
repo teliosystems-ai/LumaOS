@@ -37,7 +37,7 @@ class ResourcePolicyTests(unittest.TestCase):
         self.assertIn('group.current()', maintain)
         self.assertLess(maintain.index('group.kill()'), maintain.index('finish_draining('))
         self.assertIn('cgroup.freeze', maintain)
-        self.assertNotIn('"resource-release"', source)
+        self.assertNotIn('"resource-release"', source.split('#[cfg(test)]')[0])
         drop = source.split('impl Drop for Heartbeat')[1].split('pub(crate) fn client')[0]
         self.assertNotIn('resource_exchange', drop)
 
@@ -59,10 +59,34 @@ class ResourcePolicyTests(unittest.TestCase):
                      'service/ingress.rs', 'model/layout.rs', 'resource_manager/recovery.rs',
                      'resource_manager/requests.rs', 'resource_manager/requests/journal.rs',
                      'resource_manager/history.rs', 'resource_manager/peer.rs',
+                     'workflow_resource.rs',
                      'resource_manager/requests/gateway.rs', 'model/gateway.rs'):
             source = (ROOT/'rust/luma-platform/src'/name).read_text()
             for marker in ('todo!', 'unimplemented!', '// TODO', '// FIXME'):
                 self.assertNotIn(marker, source)
+
+    def test_invoice_workflow_uses_leased_closed_calculation_without_a_root_fallback(self):
+        worker = (ROOT/'rust/luma-platform/src/workflow_resource.rs').read_text()
+        compute = worker.split('pub(crate) fn worker(')[1].split('#[cfg(test)]')[0]
+        self.assertLess(compute.index('WorkerLease::acquire_acquisition'), compute.index('sealed_source('))
+        self.assertLess(compute.index('lease.complete_output('), compute.index('stdout().lock().write_all'))
+        self.assertIn('F_GET_SEALS', worker)
+        self.assertIn('resource-output-receipt', worker)
+        self.assertIn('token.manager_epoch != ledger.manager_epoch', worker)
+        self.assertIn('physical_release_granted', worker)
+        workflow = (ROOT/'rust/luma-platform/src/workflow_runs.rs').read_text().split('#[cfg(test)]')[0]
+        self.assertIn('calculator: workflow_resource::calculate', workflow)
+        self.assertNotIn('calculation::report_bytes', workflow)
+        self.assertIn('next.resource_lease = Some(result.lease)', workflow)
+        launch = (ROOT/'rust/luma-platform/src/acquisition.rs').read_text()
+        self.assertIn('"RestrictAddressFamilies=AF_UNIX"', launch)
+        self.assertIn('"RuntimeMaxSec=30"', launch)
+        self.assertIn('"LimitFSIZE=4M"', launch)
+        self.assertIn('if action == "invoice"', launch)
+        ledger = (ROOT/'rust/luma-platform/src/resources.rs').read_text()
+        completion = ledger.split('pub(crate) fn complete_output(')[1].split('pub(crate) fn revoke(')[0]
+        self.assertIn('self.assert_active(token, owner, now)?', completion)
+        self.assertNotIn('finish_draining', completion)
 
     def test_reference_gateway_runs_only_inside_the_existing_leased_supervisor(self):
         service = (ROOT/'rust/luma-platform/src/service.rs').read_text()
@@ -216,7 +240,8 @@ class ResourcePolicyTests(unittest.TestCase):
         self.assertIn('0::/lumaacquisition.slice/luma-acquisition.service', worker)
         self.assertIn('RuntimeMaxSec=3700', worker)
         broker = (ROOT/'rust/luma-platform/src/resource_manager.rs').read_text()
-        self.assertIn('acquisition_binding(&profile, &storage)?', broker)
+        self.assertIn('profile.binding(&storage)?', broker)
+        self.assertIn('Self::Model(profile) => acquisition_binding(profile, device)', broker)
         self.assertIn('reservation_plan(kind, memory)', broker)
         self.assertIn('self.acquisition_bindings.insert', ''.join(broker.split()))
         self.assertNotIn('r.capacity', broker)

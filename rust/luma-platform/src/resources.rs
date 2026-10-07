@@ -40,6 +40,10 @@ fn identifier(value: &str) -> bool {
             .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b':' | b'.'))
 }
 
+fn is_false(value: &bool) -> bool {
+    !*value
+}
+
 pub(crate) fn random_id() -> Result<String> {
     let mut bytes = [0; 16];
     File::open("/dev/urandom")?.read_exact(&mut bytes)?;
@@ -156,6 +160,12 @@ pub(crate) struct Lease {
     pub deadline_ms: u64,
     pub state: State,
     pub reason: String,
+    // An immutable computation receipt is not a physical drainage receipt.
+    // Omit absent values to preserve older canonical journals and archives.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_sha256: Option<String>,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub output_fenced: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -258,6 +268,14 @@ impl Ledger {
                 || lease.binding.len() != 64
                 || !lease.binding.bytes().all(|b| b.is_ascii_hexdigit())
                 || !identifier(&lease.reason)
+                || (lease.output_fenced
+                    && (lease.output_sha256.is_none() || lease.state == State::Active))
+                || lease.output_sha256.as_ref().map_or(false, |digest| {
+                    digest.len() != 64
+                        || !digest
+                            .bytes()
+                            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+                })
                 || !requests.insert((lease.owner.clone_key(), &lease.request))
             {
                 return Err("invalid resource lease or replay inventory".into());
@@ -345,6 +363,7 @@ impl Ledger {
         for lease in next.leases.iter_mut().filter(|l| l.state == State::Active) {
             lease.state = State::Draining;
             lease.reason = "manager-restart".into();
+            lease.output_fenced = lease.output_sha256.is_some();
         }
         next.validate()?;
         *self = next;
@@ -417,6 +436,8 @@ impl Ledger {
             deadline_ms: deadline,
             state: State::Active,
             reason: "admitted".into(),
+            output_sha256: None,
+            output_fenced: false,
         });
         next.validate()?;
         *self = next;
@@ -499,6 +520,33 @@ impl Ledger {
         Ok(())
     }
 
+    pub(crate) fn complete_output(
+        &mut self,
+        token: &Token,
+        owner: &Owner,
+        now: u64,
+        digest: &str,
+    ) -> Result<()> {
+        self.assert_active(token, owner, now)?;
+        if digest.len() != 64
+            || !digest
+                .bytes()
+                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+        {
+            return Err("invalid computation output digest".into());
+        }
+        let index = self.index(token, owner)?;
+        if let Some(previous) = &self.leases[index].output_sha256 {
+            if previous != digest {
+                return Err("computation output replay differs".into());
+            }
+        } else {
+            self.leases[index].output_sha256 = Some(digest.into());
+        }
+        // State, deadlines, reservations and domain observations are unchanged.
+        Ok(())
+    }
+
     pub(crate) fn revoke(&mut self, token: &Token, reason: &str) -> Result<()> {
         if !identifier(reason) {
             return Err("invalid resource revocation reason".into());
@@ -512,6 +560,9 @@ impl Ledger {
             l.state = State::Draining;
             l.reason = reason.into();
         }
+        if l.state != State::Released && reason != "owner-lost" && l.output_sha256.is_some() {
+            l.output_fenced = true;
+        }
         Ok(())
     }
 
@@ -523,6 +574,7 @@ impl Ledger {
         {
             l.state = State::Draining;
             l.reason = "expired".into();
+            l.output_fenced = l.output_sha256.is_some();
         }
     }
 
@@ -564,10 +616,13 @@ impl Ledger {
         for l in next
             .leases
             .iter_mut()
-            .filter(|l| l.state == State::Active && l.reservations.iter().any(|r| r.domain == id))
+            .filter(|l| l.state != State::Released && l.reservations.iter().any(|r| r.domain == id))
         {
-            l.state = State::Draining;
-            l.reason = reason.into();
+            if l.state == State::Active {
+                l.state = State::Draining;
+                l.reason = reason.into();
+            }
+            l.output_fenced = l.output_sha256.is_some();
         }
         next.validate()?;
         *self = next;
@@ -1028,6 +1083,109 @@ impl Store {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn output_fence_survives_physical_release_archive_and_store_restart() {
+        let directory =
+            std::env::temp_dir().join(format!("luma-output-receipt-{}", std::process::id()));
+        initialize(&directory).unwrap();
+        let mut store = Store::open(&directory).unwrap();
+        store
+            .transact(|l| l.restart("a".repeat(32), ledger().domains))
+            .unwrap();
+        let mut who = owner(71);
+        who.uid = 0;
+        let token = store
+            .transact(|l| {
+                l.admit(
+                    who.clone(),
+                    "calculation".into(),
+                    "c".repeat(64),
+                    vec![reserve("host", 40)],
+                    1,
+                    100,
+                )
+            })
+            .unwrap();
+        store
+            .transact(|l| l.complete_output(&token, &who, 2, &"d".repeat(64)))
+            .unwrap();
+        store.transact(|l| l.revoke(&token, "owner-lost")).unwrap();
+        store
+            .transact(|l| l.revoke(&token, "operator-revoked"))
+            .unwrap();
+        store
+            .transact(|l| l.finish_draining(&token, &BTreeMap::from([("host".into(), 0)])))
+            .unwrap();
+        drop(store);
+        let mut store = Store::open(&directory).unwrap();
+        let receipt = store.read().unwrap().leases[0].clone();
+        assert_eq!(receipt.output_sha256, Some("d".repeat(64)));
+        assert!(receipt.output_fenced);
+        assert_eq!(receipt.state, State::Released);
+        let reference = store
+            .archive(&store.read().unwrap().review().unwrap(), "b".repeat(32))
+            .unwrap();
+        assert_eq!(store.archived(&reference).unwrap().leases, vec![receipt]);
+        drop(store);
+        let store = Store::open(&directory).unwrap();
+        assert!(store.archived(&reference).unwrap().leases[0].output_fenced);
+        drop(store);
+        fs::remove_dir_all(&directory).unwrap();
+    }
+    #[test]
+    fn committed_output_is_immutable_durable_history_not_a_capacity_return() {
+        let mut ledger = ledger();
+        let token = admit(&mut ledger, 41, vec![reserve("host", 40)]).unwrap();
+        let who = owner(41);
+        let before = ledger.clone();
+        let old_bytes = serde_json::to_vec(&before).unwrap();
+        assert!(!String::from_utf8(old_bytes.clone())
+            .unwrap()
+            .contains("output_sha256"));
+        assert_eq!(
+            serde_json::from_slice::<Ledger>(&old_bytes).unwrap(),
+            before
+        );
+        for digest in ["short".to_owned(), "A".repeat(64), "0".repeat(65)] {
+            assert!(ledger.complete_output(&token, &who, 2, &digest).is_err());
+            assert_eq!(ledger, before);
+        }
+        assert!(ledger
+            .complete_output(&token, &owner(42), 2, &"a".repeat(64))
+            .is_err());
+        assert_eq!(ledger, before);
+        ledger
+            .complete_output(&token, &who, 2, &"a".repeat(64))
+            .unwrap();
+        assert_eq!(
+            ledger.charged("host").unwrap(),
+            before.charged("host").unwrap()
+        );
+        assert_eq!(ledger.leases[0].state, State::Active);
+        let completed = ledger.clone();
+        ledger
+            .complete_output(&token, &who, 2, &"a".repeat(64))
+            .unwrap();
+        assert_eq!(ledger, completed);
+        assert!(ledger
+            .complete_output(&token, &who, 2, &"b".repeat(64))
+            .is_err());
+        assert_eq!(ledger, completed);
+        let restored: Ledger =
+            serde_json::from_slice(&serde_json::to_vec(&ledger).unwrap()).unwrap();
+        assert_eq!(restored, ledger);
+        ledger.revoke(&token, "cancelled").unwrap();
+        let revoked = ledger.clone();
+        assert!(ledger
+            .complete_output(&token, &who, 2, &"a".repeat(64))
+            .is_err());
+        assert_eq!(ledger, revoked);
+        ledger
+            .finish_draining(&token, &BTreeMap::from([("host".into(), 0)]))
+            .unwrap();
+        assert_eq!(ledger.leases[0].output_sha256, Some("a".repeat(64)));
+        assert_eq!(ledger.charged("host").unwrap(), 0);
+    }
     use std::sync::{Arc, Mutex};
     fn ledger() -> Ledger {
         let mut ledger = Ledger::empty();

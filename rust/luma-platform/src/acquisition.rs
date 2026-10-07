@@ -78,11 +78,11 @@ fn target(target: &Path) -> Result<()> {
     Ok(())
 }
 
-fn arguments(target: &Path, profile: &str, action: &str) -> Result<Vec<String>> {
+pub(crate) fn arguments(target: &Path, profile: &str, action: &str) -> Result<Vec<String>> {
     let text = target
         .to_str()
         .ok_or("invalid acquisition target encoding")?;
-    if !matches!(action, "prepare" | "verify") {
+    if !matches!(action, "prepare" | "verify" | "invoice") {
         return Err("invalid acquisition action".into());
     }
     let mut args = vec![
@@ -110,7 +110,6 @@ fn arguments(target: &Path, profile: &str, action: &str) -> Result<Vec<String>> 
         "ProtectKernelModules=yes",
         "ProtectControlGroups=yes",
         "RestrictNamespaces=yes",
-        "RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6",
         "LockPersonality=yes",
         "MemoryDenyWriteExecute=yes",
         "SystemCallArchitectures=native",
@@ -126,7 +125,6 @@ fn arguments(target: &Path, profile: &str, action: &str) -> Result<Vec<String>> 
         "DevicePolicy=closed",
         "KillMode=control-group",
         "TimeoutStopSec=15",
-        "RuntimeMaxSec=3700",
         "Restart=no",
         "Requires=luma-broker.service",
         "After=luma-broker.service",
@@ -137,12 +135,37 @@ fn arguments(target: &Path, profile: &str, action: &str) -> Result<Vec<String>> 
     ] {
         args.push(format!("--property={property}"));
     }
+    if action == "invoice" {
+        if target != Path::new("/var") {
+            return Err("workflow calculation requires the installed data mount".into());
+        }
+        crate::workflow_resource::source_digest(profile)?;
+        for property in [
+            "RestrictAddressFamilies=AF_UNIX",
+            "RuntimeMaxSec=30",
+            "LimitFSIZE=4M",
+        ] {
+            args.push(format!("--property={property}"));
+        }
+    } else {
+        args.push("--property=RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6".into());
+        args.push("--property=RuntimeMaxSec=3700".into());
+        args.push(format!("--property=ReadWritePaths={text}/lib/luma-os"));
+    }
     for property in [
-        format!("ReadWritePaths={text}/lib/luma-os"),
         format!("IOReadBandwidthMax={text} 64M"),
         format!("IOWriteBandwidthMax={text} 64M"),
     ] {
         args.push(format!("--property={property}"));
+    }
+    if action == "invoice" {
+        args.extend([
+            "--".into(),
+            "/usr/libexec/luma-os/luma-platform".into(),
+            "workflow-resource-worker".into(),
+            profile.into(),
+        ]);
+        return Ok(args);
     }
     args.extend([
         "--".into(),
@@ -196,7 +219,7 @@ fn available(status: &serde_json::Value) -> Result<bool> {
     Ok(!populated && !allocated && !pressure && retained <= 16 * 1024 * 1024)
 }
 
-fn await_drainage() -> Result<()> {
+pub(crate) fn await_drainage() -> Result<()> {
     let deadline = resource_manager::now()?
         .checked_add(30_000)
         .ok_or("drainage deadline overflow")?;

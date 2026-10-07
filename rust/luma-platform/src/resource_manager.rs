@@ -350,6 +350,27 @@ fn acquisition_binding(profile: &model::Profile, device: &str) -> Result<String>
     ))?)))
 }
 
+enum AcquisitionProfile {
+    Model(model::Profile),
+    Invoice(String),
+}
+impl AcquisitionProfile {
+    fn resolve(id: &str) -> Result<Self> {
+        if id.starts_with("invoice-") {
+            crate::workflow_resource::source_digest(id)?;
+            Ok(Self::Invoice(id.into()))
+        } else {
+            Ok(Self::Model(model::profile(id)?))
+        }
+    }
+    fn binding(&self, device: &str) -> Result<String> {
+        match self {
+            Self::Model(profile) => acquisition_binding(profile, device),
+            Self::Invoice(id) => crate::workflow_resource::binding(id, device),
+        }
+    }
+}
+
 fn reservation_plan(kind: Kind, memory: u64) -> Vec<Reservation> {
     let mut reservations = vec![
         Reservation {
@@ -412,6 +433,16 @@ fn drainage_generation(owner: &Owner, boot: &str, identity: (u64, u64)) -> Resul
         return Err("recorded worker cgroup generation is unavailable".into());
     }
     Ok(())
+}
+
+fn owner_loss(handle: Option<Result<bool>>, same_owner: bool) -> Option<&'static str> {
+    match handle {
+        Some(Ok(true)) if same_owner => None,
+        Some(Ok(true)) => Some("owner-generation-changed"),
+        Some(Ok(false)) => Some("owner-lost"),
+        Some(Err(_)) => Some("owner-handle-unverifiable"),
+        None => Some("owner-handle-lost"),
+    }
 }
 
 fn owner(pid: u32, uid: u32, group: &Group) -> Result<Owner> {
@@ -514,7 +545,7 @@ pub(crate) struct Manager {
     oom: u64,
     acquisition_oom: u64,
     owners: BTreeMap<String, File>,
-    acquisition_bindings: BTreeMap<String, (model::Profile, String)>,
+    acquisition_bindings: BTreeMap<String, (AcquisitionProfile, String)>,
     requests: requests::Gate,
     gateway: Option<requests::gateway::Job>,
     gateway_ready: Option<Token>,
@@ -657,13 +688,12 @@ impl Manager {
                 Kind::Acquisition => &self.acquisition,
             };
             let live = owner(lease.owner.pid, lease.owner.uid, group);
-            let pinned = self
-                .owners
-                .get(&lease.token.lease_id)
-                .map_or(false, |fd| pidfd_alive(fd).unwrap_or(false));
-            if !pinned || live.as_ref().map_or(true, |o| o != &lease.owner) {
-                self.store
-                    .transact(|l| l.revoke(&lease.token, "owner-lost"))?;
+            let loss = owner_loss(
+                self.owners.get(&lease.token.lease_id).map(pidfd_alive),
+                live.as_ref().map_or(false, |o| o == &lease.owner),
+            );
+            if let Some(reason) = loss {
+                self.store.transact(|l| l.revoke(&lease.token, reason))?;
             } else {
                 let (memory, storage, valid) = match kind {
                     Kind::Model => {
@@ -682,7 +712,7 @@ impl Manager {
                         (
                             ACQUISITION_MEMORY,
                             device.clone(),
-                            acquisition_binding(profile, device)? == lease.binding,
+                            profile.binding(device)? == lease.binding,
                         )
                     }
                 };
@@ -840,10 +870,14 @@ impl Manager {
                     Kind::Model => {
                         let profile = model::resource_profile(id)?;
                         let memory = profile.memory_limit();
-                        (profile, memory, storage_device(Path::new("/var"))?)
+                        (
+                            AcquisitionProfile::Model(profile),
+                            memory,
+                            storage_device(Path::new("/var"))?,
+                        )
                     }
                     Kind::Acquisition => (
-                        model::profile(id)?,
+                        AcquisitionProfile::resolve(id)?,
                         ACQUISITION_MEMORY,
                         r.storage_device
                             .clone()
@@ -851,8 +885,13 @@ impl Manager {
                     ),
                 };
                 let binding = match kind {
-                    Kind::Model => profile.resource_binding()?,
-                    Kind::Acquisition => acquisition_binding(&profile, &storage)?,
+                    Kind::Model => match &profile {
+                        AcquisitionProfile::Model(profile) => profile.resource_binding()?,
+                        AcquisitionProfile::Invoice(_) => {
+                            return Err("workflow cannot occupy the serving domain".into())
+                        }
+                    },
+                    Kind::Acquisition => profile.binding(&storage)?,
                 };
                 let owner = owner(peer.pid.try_into()?, peer.uid, group)?;
                 if self.store.owner_retired(&owner)? {
@@ -942,6 +981,42 @@ impl Manager {
                     )
                 })?;
                 token = Some(t.clone());
+            }
+            "resource-output-complete" => {
+                let t = r.lease.as_ref().ok_or("missing computation generation")?;
+                let (profile, device) = self
+                    .acquisition_bindings
+                    .get(&t.lease_id)
+                    .ok_or("missing computation generation binding")?;
+                if !matches!(profile, AcquisitionProfile::Invoice(_)) {
+                    return Err("model acquisition cannot publish workflow output".into());
+                }
+                let observed = owner(peer.pid.try_into()?, peer.uid, &self.acquisition)?;
+                let digest = r
+                    .review
+                    .as_deref()
+                    .ok_or("missing computation output digest")?;
+                let binding = profile.binding(device)?;
+                self.store.transact(|ledger| {
+                    if ledger.assert_active(t, &observed, time)?.binding != binding {
+                        return Err("computation input generation changed".into());
+                    }
+                    ledger.complete_output(t, &observed, time, digest)
+                })?;
+                // Lost acknowledgement never permits publication. Recheck the
+                // whole worker domain and exact current owner after durability.
+                self.maintain()?;
+                let observed = owner(peer.pid.try_into()?, peer.uid, &self.acquisition)?;
+                self.store.read()?.assert_active(t, &observed, now()?)?;
+                token = Some(t.clone());
+            }
+            "resource-output-receipt" => {
+                let t = r
+                    .lease
+                    .as_ref()
+                    .ok_or("missing computation receipt generation")?;
+                let ledger = self.store.read()?;
+                status = Some(crate::workflow_resource::committed_receipt(&ledger, t)?);
             }
             "resource-revoke" => {
                 self.store.transact(|l| {
@@ -1105,6 +1180,22 @@ fn validate(r: &Request, uid: u32, time: u64) -> Result<()> {
                 && r.review.is_none()
                 && r.idempotency_key.is_none()
         }
+        "resource-output-complete" => {
+            uid == 0
+                && r.profile.is_none()
+                && r.storage_device.is_none()
+                && r.lease.is_some()
+                && r.idempotency_key.is_none()
+                && r.review.as_deref().map_or(false, crate::artifacts::hash)
+        }
+        "resource-output-receipt" => {
+            uid == 0
+                && r.profile.is_none()
+                && r.storage_device.is_none()
+                && r.lease.is_some()
+                && r.idempotency_key.is_none()
+                && r.review.is_none()
+        }
         "resource-revoke" => {
             uid == 0
                 && r.profile.is_none()
@@ -1221,6 +1312,17 @@ impl WorkerLease {
     }
     pub(crate) fn check_local(&self) -> Result<()> {
         self.heartbeat.check()
+    }
+    pub(crate) fn complete_output(&self, digest: &str) -> Result<()> {
+        self.check()?;
+        let mut r = request("resource-output-complete")?;
+        r.lease = Some(self.token.clone());
+        r.review = Some(digest.into());
+        let reply = crate::service::resource_exchange(&r)?;
+        if reply.lease.as_ref() != Some(&self.token) || reply.status.is_some() {
+            return Err("computation output acknowledgement differs".into());
+        }
+        self.check_local()
     }
 }
 
@@ -1466,6 +1568,59 @@ pub(crate) fn migrate_reviewed(review: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn only_a_signalled_original_handle_is_normal_owner_exit() {
+        assert_eq!(owner_loss(Some(Ok(true)), true), None);
+        assert_eq!(
+            owner_loss(Some(Ok(true)), false),
+            Some("owner-generation-changed")
+        );
+        assert_eq!(owner_loss(Some(Ok(false)), false), Some("owner-lost"));
+        assert_eq!(
+            owner_loss(Some(Err("kernel observation failed".into())), true),
+            Some("owner-handle-unverifiable")
+        );
+        assert_eq!(owner_loss(None, true), Some("owner-handle-lost"));
+    }
+    #[test]
+    fn output_methods_have_closed_peer_and_digest_shapes_and_no_release_action() {
+        let token = Token {
+            lease_id: "a".repeat(32),
+            manager_epoch: "b".repeat(32),
+            generation: 1,
+        };
+        let time = now().unwrap();
+        let mut r = request("resource-output-complete").unwrap();
+        r.caller = 0;
+        r.lease = Some(token.clone());
+        r.review = Some("c".repeat(64));
+        validate(&r, 0, time).unwrap();
+        r.caller = 989;
+        assert!(validate(&r, 989, time).is_err());
+        r.caller = 0;
+        r.storage_device = Some("253:0".into());
+        assert!(validate(&r, 0, time).is_err());
+        r.storage_device = None;
+        r.review = Some("C".repeat(64));
+        assert!(validate(&r, 0, time).is_err());
+        r.review = None;
+        r.action = "resource-output-receipt".into();
+        validate(&r, 0, time).unwrap();
+        r.profile = Some("invoice-v1-a".into());
+        assert!(validate(&r, 0, time).is_err());
+        r.profile = None;
+        r.action = "resource-release".into();
+        assert!(validate(&r, 0, time).is_err());
+        assert!(AcquisitionProfile::resolve("invoice-v1-a").is_err());
+        assert!(matches!(
+            AcquisitionProfile::resolve(&format!("invoice-v1-{}", "a".repeat(64))).unwrap(),
+            AcquisitionProfile::Invoice(_)
+        ));
+        assert!(matches!(
+            AcquisitionProfile::resolve("qwen3-4b-q4-k-m").unwrap(),
+            AcquisitionProfile::Model(_)
+        ));
+    }
     #[test]
     fn local_deadline_fences_blocked_renewal_and_cannot_be_reenabled_by_late_ack() {
         let (started, received) = std::sync::mpsc::channel();

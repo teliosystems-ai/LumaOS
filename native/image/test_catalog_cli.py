@@ -3,7 +3,7 @@ import hashlib
 import json
 import sqlite3
 from contextlib import closing
-from test_workflow_cli import exercise_workflow
+from test_workflow_cli import exercise_unavailable_workflow_resources
 
 
 def exercise_catalog(run,state,source,pure):
@@ -74,7 +74,7 @@ def exercise_catalog(run,state,source,pure):
                 raise AssertionError('append-only schema accepted mutation')
         connection.rollback()
     exercise_legacy_import(run,state,source,pure)
-    exercise_workflow(run,state,source,pure)
+    exercise_unavailable_workflow_resources(run,state,source)
     obj = catalog/'objects'/hashlib.sha256(pure).hexdigest()
     obj.chmod(0o600)
     obj.write_bytes(b'tampered')

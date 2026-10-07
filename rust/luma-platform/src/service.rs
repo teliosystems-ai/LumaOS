@@ -557,11 +557,12 @@ fn resource_exchange_on(
     }
     let shape = match request.action.as_str() {
         "resource-acquire" => response.lease.is_some() && response.status.is_none(),
-        "resource-renew" => {
+        "resource-renew" | "resource-output-complete" => {
             response.lease == request.lease && response.lease.is_some() && response.status.is_none()
         }
         "resource-reconcile" => response.lease.is_none() && response.status.is_none(),
         "resource-status"
+        | "resource-output-receipt"
         | "resource-revoke"
         | "resource-archive"
         | "resource-request-status"
@@ -813,55 +814,57 @@ mod tests {
 
     #[test]
     fn resource_socket_exchange_binds_root_peer_correlation_generation_and_method_shape() {
-        for outcome in 0..7 {
-            let (mut client, mut server) = UnixStream::pair().unwrap();
-            let token = crate::resources::Token {
-                lease_id: "a".repeat(32),
-                generation: 1,
-                manager_epoch: "b".repeat(32),
-            };
-            let request = resource_manager::Request {
-                schema_version: 1,
-                request_id: "renew-one".into(),
-                caller: 0,
-                deadline: resource_manager::now().unwrap() + 2000,
-                action: "resource-renew".into(),
-                idempotency_key: None,
-                profile: None,
-                lease: Some(token.clone()),
-                review: None,
-                storage_device: None,
-            };
-            let worker = std::thread::spawn(move || {
-                let deadline = Instant::now() + Duration::from_secs(2);
-                let received: resource_manager::Request =
-                    serde_json::from_slice(&read_frame_until(&mut server, deadline).unwrap())
-                        .unwrap();
-                let mut response = serde_json::json!({"schema_version":1,"request_id":received.request_id,
+        for action in ["resource-renew", "resource-output-complete"] {
+            for outcome in 0..7 {
+                let (mut client, mut server) = UnixStream::pair().unwrap();
+                let token = crate::resources::Token {
+                    lease_id: "a".repeat(32),
+                    generation: 1,
+                    manager_epoch: "b".repeat(32),
+                };
+                let request = resource_manager::Request {
+                    schema_version: 1,
+                    request_id: "renew-one".into(),
+                    caller: 0,
+                    deadline: resource_manager::now().unwrap() + 2000,
+                    action: action.into(),
+                    idempotency_key: None,
+                    profile: None,
+                    lease: Some(token.clone()),
+                    review: (action == "resource-output-complete").then(|| "c".repeat(64)),
+                    storage_device: None,
+                };
+                let worker = std::thread::spawn(move || {
+                    let deadline = Instant::now() + Duration::from_secs(2);
+                    let received: resource_manager::Request =
+                        serde_json::from_slice(&read_frame_until(&mut server, deadline).unwrap())
+                            .unwrap();
+                    let mut response = serde_json::json!({"schema_version":1,"request_id":received.request_id,
                     "caller":received.caller,"result":"ok","lease":token,"status":null});
-                match outcome {
-                    1 => response["request_id"] = serde_json::json!("other"),
-                    2 => response["caller"] = serde_json::json!(989),
-                    3 => response["lease"]["generation"] = serde_json::json!("2"),
-                    4 => response["status"] = serde_json::json!({"unexpected":true}),
-                    5 => response["unknown"] = serde_json::json!(true),
-                    6 => response["lease"]["generation"] = serde_json::json!(1),
-                    _ => (),
-                }
-                write_frame_until(
-                    &mut server,
-                    &serde_json::to_vec(&response).unwrap(),
-                    deadline,
-                )
-                .unwrap();
-            });
-            let result = resource_exchange_on(
-                &mut client,
-                &request,
-                Instant::now() + Duration::from_secs(2),
-            );
-            assert_eq!(result.is_ok(), outcome == 0, "outcome {outcome}");
-            worker.join().unwrap();
+                    match outcome {
+                        1 => response["request_id"] = serde_json::json!("other"),
+                        2 => response["caller"] = serde_json::json!(989),
+                        3 => response["lease"]["generation"] = serde_json::json!("2"),
+                        4 => response["status"] = serde_json::json!({"unexpected":true}),
+                        5 => response["unknown"] = serde_json::json!(true),
+                        6 => response["lease"]["generation"] = serde_json::json!(1),
+                        _ => (),
+                    }
+                    write_frame_until(
+                        &mut server,
+                        &serde_json::to_vec(&response).unwrap(),
+                        deadline,
+                    )
+                    .unwrap();
+                });
+                let result = resource_exchange_on(
+                    &mut client,
+                    &request,
+                    Instant::now() + Duration::from_secs(2),
+                );
+                assert_eq!(result.is_ok(), outcome == 0, "outcome {outcome}");
+                worker.join().unwrap();
+            }
         }
     }
 

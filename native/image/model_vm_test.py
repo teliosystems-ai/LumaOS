@@ -40,7 +40,7 @@ def verify_selected(vm, model):
     catalog = hashlib.sha256(Path(__file__).with_name('model-catalog.json').read_bytes()).hexdigest()
     vm.run("printf '%s\\n' '" + catalog + "  /usr/share/luma-os/model-catalog.json' | sha256sum -c -")
     probe = ("import json; selection=json.load(open('/var/lib/luma-os/model-selection.json')); "
-             "assert selection == {'schema_version':1,'id':" + repr(model) + "}")
+             "assert selection == {'schema_version':2,'id':" + repr(model) + "}")
     vm.run('python3 -c ' + shlex.quote(probe))
 
 

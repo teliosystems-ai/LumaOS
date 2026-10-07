@@ -105,6 +105,35 @@ class ModelRuntimePolicyTests(unittest.TestCase):
         unit = (ROOT / 'native/image/overlay/etc/systemd/system/luma-reference.service').read_text()
         self.assertNotIn('EnvironmentFile=-/var/lib/luma-os/reference/model.env', unit)
 
+    def test_native_reference_default_and_activation_key_rotation(self):
+        source = (ROOT / 'rust/luma-platform/src/model.rs').read_text()
+        provision = source.split('fn write_candidate_config(')[1].split('fn reconcile_downloads(')[0]
+        self.assertIn('File::open("/dev/urandom")?', provision)
+        self.assertIn('old_key.as_deref() == Some(token.as_bytes())', provision)
+        self.assertLess(provision.index('platform::write_atomic(&key_path'),
+                        provision.index('platform::write_atomic(&env'))
+        self.assertLess(provision.index('platform::write_atomic(&env'),
+                        provision.index('let selection ='))
+        self.assertIn('for path in [&key_path, &env, &selection]', provision)
+        self.assertLess(provision.index('fs::set_permissions(&selection'),
+                        provision.index('for path in [&key_path, &env, &selection]'))
+        self.assertIn('File::open(&auth)?.sync_all()?', provision)
+        self.assertIn('File::open(state)?.sync_all()?', provision)
+        env = source.split('fn reference_environment(')[1].split('fn legacy_reference_environment(')[0]
+        self.assertIn('LUMA_MODEL_TRANSPORT=native-broker', env)
+        self.assertNotIn('LUMA_MODEL_API_KEY', env)
+        self.assertNotIn('LUMA_MODEL_ENDPOINT', env)
+        unit = (ROOT / 'native/image/overlay/etc/systemd/system/luma-reference.service').read_text()
+        self.assertIn('Environment=LUMA_MODEL_TRANSPORT=native-broker', unit.splitlines())
+        migration = source.split('fn migrate_legacy_at(')[1].split('pub fn migrate_legacy()')[0]
+        self.assertLess(migration.index('verify_file('), migration.index('begin_activation('))
+        self.assertLess(migration.index('begin_activation('), migration.index('write_candidate_config('))
+        restore = source.split('fn write_prior_configuration(')[1].split('fn reviewed_restore_configuration(')[0]
+        self.assertLess(restore.index('prior_restore_profile('), restore.index('restore_config_file('))
+        admission = (ROOT / 'rust/luma-platform/src/model/validation.rs').read_text().split(
+            'pub(super) fn worker_admission(')[1].split('pub(super) struct Observation')[0]
+        self.assertLess(admission.index('broker_selection(p)?'), admission.index('return Ok(())'))
+
     def test_prior_backup_is_bound_private_and_worker_is_fenced_by_orphans(self):
         source = (ROOT / 'rust/luma-platform/src/model.rs').read_text()
         begin = source.split('fn begin_activation(')[1].split('struct ActivationObservation')[0]

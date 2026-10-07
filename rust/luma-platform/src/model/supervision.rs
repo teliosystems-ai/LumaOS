@@ -14,7 +14,7 @@ pub(super) struct Fence {
 
 impl Fence {
     pub(super) fn capture(state: &Path, p: &Profile) -> Result<Self> {
-        let selection = serde_json::to_vec(&serde_json::json!({"schema_version":1,"id":p.id}))?;
+        let selection = broker_selection(p)?;
         let key = activation_bytes(&state.join("model-auth/api-key"), 64)?
             .ok_or("model runtime credential missing")?;
         if key.len() != 64 || !key.iter().all(|byte| byte.is_ascii_hexdigit()) {

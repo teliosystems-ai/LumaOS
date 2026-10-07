@@ -286,8 +286,10 @@ def inference(options):
     if len(raw_selection) > 16384:
         raise InferenceReplyError('selection exceeds bound')
     selection = strict_json(raw_selection)
-    if (not isinstance(selection, dict) or not isinstance(selection.get('id'), str)
-            or not 1 <= len(selection['id']) <= 128):
+    if (not isinstance(selection, dict) or set(selection) != {'schema_version', 'id'}
+            or type(selection['schema_version']) is not int or selection['schema_version'] != 2
+            or not isinstance(selection['id'], str) or not 1 <= len(selection['id']) <= 64
+            or any(c not in 'abcdefghijklmnopqrstuvwxyz0123456789-' for c in selection['id'])):
         raise InferenceReplyError('invalid selected model')
     with Path('/var/lib/luma-os/model-auth/api-key').open('rb') as key_file:
         raw_token = key_file.read(129)

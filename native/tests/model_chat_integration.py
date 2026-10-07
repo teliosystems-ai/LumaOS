@@ -23,7 +23,7 @@ def main():
     root = Path('/var/lib/luma-os')
     root.mkdir(mode=0o700)
     (root/'model-auth').mkdir(mode=0o700)
-    (root/'model-selection.json').write_text(json.dumps({'schema_version':1, 'id':'fixture-model'}))
+    (root/'model-selection.json').write_text(json.dumps({'schema_version':2, 'id':'fixture-model'}))
     token = 'a'*64
     (root/'model-auth/api-key').write_text(token)
     broker_root = Path('/run/luma-broker')
@@ -135,6 +135,24 @@ def main():
         ipc_thread.start()
         http_thread.start()
         try:
+            invalid_selections = [
+                {'schema_version':1, 'id':'fixture-model'},
+                {'schema_version':True, 'id':'fixture-model'},
+                {'schema_version':2, 'id':'fixture-model', 'transport':'openai-http'},
+                {'schema_version':2, 'id':'fixture/model'},
+                {'schema_version':2, 'id':'x'*65},
+            ]
+            for selection in invalid_selections:
+                fixture[0] = AdmissionFixture()
+                (root/'model-selection.json').write_text(json.dumps(selection))
+                result = subprocess.run([binary,'model-chat','--timeout-seconds','3','--max-tokens','16'],
+                    env=environment,input=b'Short greeting.',capture_output=True,timeout=8)
+                assert result.returncode != 0 and result.stdout == b''
+                assert b'local inference response failed validation' in result.stderr
+                assert b'Traceback' not in result.stderr and token.encode() not in result.stderr
+                assert fixture[0].order == [] and not errors, (selection, fixture[0].order, errors)
+                print('CLI_SELECTION_REFUSAL_CASE_PASSED',flush=True)
+            (root/'model-selection.json').write_text(json.dumps({'schema_version':2, 'id':'fixture-model'}))
             for label, raw, allowed, fail_at in fixtures:
                 fixture[0] = AdmissionFixture()
                 fixture[0].fail_at = fail_at
@@ -176,7 +194,7 @@ def main():
             ipc_thread.join(5)
             assert not http_thread.is_alive() and not ipc_thread.is_alive()
     assert len(set(peer_pids)) == len(fixtures)
-    print('MODEL_REPLY_CLI_UNIX_HTTP_PASSED cases='+str(len(fixtures))+
+    print('MODEL_REPLY_CLI_UNIX_HTTP_PASSED cases='+str(len(fixtures)+len(invalid_selections))+
           ' compiled_native_cli=true test_only_cmdline_preload=true synthetic_authorities=true real_model_tested=false',flush=True)
 
 

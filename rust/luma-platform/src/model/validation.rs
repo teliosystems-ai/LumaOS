@@ -324,6 +324,9 @@ impl Guard {
 pub(super) fn worker_admission(state: &Path, p: &Profile) -> Result<()> {
     activation_records_absent(state)?;
     quarantine_absent(state)?;
+    if activation_bytes(&state.join("model-selection.json"), 4096)? != Some(broker_selection(p)?) {
+        return Err("model requires explicit broker credential migration; preserve state".into());
+    }
     let Some(bytes) = record_bytes(state)? else {
         return Ok(());
     };
@@ -1386,11 +1389,7 @@ mod tests {
         drop(controller(&root, &state));
         let observed = inspect(&state, &|_| Ok(p.clone())).unwrap();
         fs::write(state.join("model-auth/api-key"), "b".repeat(64)).unwrap();
-        fs::write(
-            state.join(REFERENCE_ENV),
-            reference_environment(&p, &"b".repeat(64)),
-        )
-        .unwrap();
+        fs::write(state.join(REFERENCE_ENV), reference_environment(&p)).unwrap();
         assert!(retain_abandoned(&state, &observed.review, &|_| Ok(p.clone())).is_err());
         let fresh = inspect(&state, &|_| Ok(p.clone())).unwrap();
         fs::write(
@@ -1591,11 +1590,7 @@ mod tests {
             match label {
                 "settings" => {
                     fs::write(state.join("model-auth/api-key"), "b".repeat(64)).unwrap();
-                    fs::write(
-                        state.join(REFERENCE_ENV),
-                        reference_environment(&p, &"b".repeat(64)),
-                    )
-                    .unwrap();
+                    fs::write(state.join(REFERENCE_ENV), reference_environment(&p)).unwrap();
                 }
                 "weights" => fs::write(
                     state.join("models").join(format!("{}.gguf", p.id)),

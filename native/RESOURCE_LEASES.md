@@ -275,17 +275,21 @@ broader recovery and product governance integrations remain open.
 These are durable laboratory receipts and reviewed archival, not complete
 product retention governance, export/deletion custody or a tenant gateway.
 The reference service now has an explicit broker transport, described next.
-The installer still provisions its legacy direct-runtime credentials. Reviewed
-key rotation, migration and closure of that installed bypass remain required
-before Requirement #1 can close. Real installed model/tokenizer execution and
+Fresh activation now rotates its private runtime key and provisions the native
+gateway, without giving the reference service an HTTP endpoint or key. Explicit
+legacy migration and refusal of unsafe rollback are implemented in source;
+their installed qualification is still required before Requirement #1 closes.
+Real installed model/tokenizer execution and
 cancellation/drainage still require image qualification.
 
 ### Reference gateway over the existing broker socket
 
 `LUMA_MODEL_TRANSPORT=native-broker` selects the reference client's native
 gateway. It requires the selected `LUMA_MODEL_NAME` and refuses an HTTP endpoint
-or runtime API key. The existing default remains `openai-http`; this change
-does not silently migrate installed environments or revoke exposed keys.
+or runtime API key. The installed systemd unit and newly activated model
+environment select this transport by default. Standalone developer configuration
+still defaults to `openai-http`; it is not an installed admission path.
+Binary-only upgrades never silently migrate old environments.
 The new `resource-gateway` envelope uses schema version 1 independently of
 the root operator's version-2 `resource-inference` envelope. Broker, supervisor
 and client must be upgraded together. No listener, writable shared database or
@@ -330,10 +334,43 @@ Expired publication or lost/mismatched
 acknowledgement produces no result and makes no cleanup claim.
 
 This is reference-process resource mediation, not product user/session grants,
-Admin authorization, effect authority or signed production custody. The legacy
-reference environment and previously exposed keys are deliberately unchanged
-until reviewed lifecycle rotation is implemented. The gateway's source and
-protocol checks do not close that bypass or qualify actual installed enforcement.
+Admin authorization, effect authority or signed production custody. Actual
+installed enforcement and proof that old keys are rejected remain qualification
+work, not consequences of passing the gateway's source/protocol checks.
+
+### Runtime credential rotation and reference migration
+
+Every activation, including reviewed partial-candidate completion, creates a
+new random 256-bit runtime credential and refuses a collision with the existing
+key. Under the existing operation/runtime exclusions and durable activation
+fence, it publishes the key first, the key-free environment second, and canonical
+version-2 selection last. Final file ownership/modes and both affected directories are
+synchronized before the activation fence can be cleared. A sync failure leaves
+the pending records for review. Worker admission and ongoing supervision require the canonical
+version-2 selection. Version-1 configurations remain readable for explicit migration, but
+cannot serve through the new broker/supervisor. The private key remains readable
+only by root and the model group, not UID 990.
+
+The existing `sudo luma-platform model-migrate-legacy` command accepts either
+the exact old root-owned environment or the exact former `reference/model.env`.
+If both exist they must agree with the selected credential and catalog model.
+It verifies weights before stopping the model and reference services, obtains
+runtime exclusion, verifies again, then performs the fenced activation and
+requests a restart. It does not claim readiness or silently repair conflicting
+files. Apply the broker, supervisor, helper, client, unit and policies together;
+old binaries are not a supported security downgrade.
+Outstanding lifecycle/validation fences are not automatically migrated or
+cleared. Preserve them for review; broader damaged/legacy recovery remains open.
+
+Private recovery files retain exact prior bytes for investigation. Interrupted
+and completed rollback refuse version-1/direct-runtime configurations before
+any restoration write; a legacy migration's undo record is therefore not
+restorable. An environment/selection-only migration retaining the prior exposed
+key cannot be published through activation reconciliation. Review and complete
+that partial candidate to rotate, or preserve state for investigation. Exact
+rollback between consistent private version-2 configurations remains available.
+The obsolete worker-writable legacy file, if present, is retained with its now
+revoked key; it is not a fallback or authority to restart an older image.
 
 ### Upgrade of older request history
 
@@ -480,11 +517,11 @@ Admin authorization, and their combined native-image procedure remains unqualifi
   routed through the leased service in source; its real installed pipeline
   still needs qualification.
 - Extend request-level accepted prompt/output/concurrency accounting to all
-  inference consumers, close the reference service's direct-runtime bypass,
+  inference consumers, qualify closure of the installed reference bypass,
   and finish governed request export/deletion, custody and retention recovery.
-  The opt-in native gateway exists; default reference migration must also rotate
-  previously exposed runtime keys through the reviewed lifecycle; changing an
-  environment file alone leaves a bypass.
+  Native gateway defaults and fenced key rotation/migration now exist in source;
+  real installed reference execution, old-key refusal and upgrade/rollback
+  qualification remain open.
   Durable operator receipts, reviewed archival, bounded root export and reviewed
   preservation of a current incomplete archive stage now exist; the operator path
   and verified CPU KV inventory do not close those integrations by themselves.
@@ -532,11 +569,12 @@ CPU alignment and tensor-size accounting follow its
 [allocator](https://raw.githubusercontent.com/ggml-org/llama.cpp/7ab4ee7baad2d920464cbacfad4f4b07cf111fd2/ggml/src/ggml-alloc.c)
 and [alignment definition](https://raw.githubusercontent.com/ggml-org/llama.cpp/7ab4ee7baad2d920464cbacfad4f4b07cf111fd2/ggml/src/ggml-impl.h).
 
-The [reference gateway checkpoint](evidence/G2_RESOURCE_GATEWAY_2026-10-07.md)
-records the current selected regressions; the
-[earlier resource checkpoint](evidence/G2_RESOURCE_LEASES_2026-10-06.md) retains
-the preceding work. Both separate source results from open integrations. The final image and native
-Ubuntu evaluation remain subsequent work; no WSL memory increase is needed
+The [reference rotation checkpoint](evidence/G2_RESOURCE_KEY_ROTATION_2026-10-07.md)
+records the current selected regressions. The
+[earlier gateway checkpoint](evidence/G2_RESOURCE_GATEWAY_2026-10-07.md) and
+[earlier resource checkpoint](evidence/G2_RESOURCE_LEASES_2026-10-06.md) retain
+the preceding work. These separate source results from open integrations.
+The final image and native Ubuntu evaluation remain subsequent work; no WSL memory increase is needed
 for the bounded development checks described there.
 
 Kernel controller behavior is specified by the

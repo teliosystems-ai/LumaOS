@@ -724,16 +724,23 @@ separately. A stop failure while the old worker still holds its runtime lock
 cannot trigger a duplicate restart. Partial activation remains fenced for
 reviewed handling.
 
-The reference service's model environment now lives in root-owned
-`/var/lib/luma-os/model-reference.env`, outside its writable state directory.
-Binary-only upgrades from an older image do not automatically migrate the
-former `reference/model.env`. On a controlled installed lab system, an
+The reference service uses native broker inference by default. Fresh model
+activation rotates the private runtime key, writes a key-free root-owned
+`/var/lib/luma-os/model-reference.env`, and publishes a version-2 selection last.
+The reference UID receives neither the HTTP endpoint nor the key. Older
+version-1 selections are refused by worker admission and ongoing supervision.
+Binary-only upgrades do not automatically migrate either former environment
+layout. On a controlled installed lab system, an
 operator can run `sudo luma-platform model-migrate-legacy` after preserving
 recovery access. It verifies the old selection, credential, environment and
-pinned weights before stopping the model, then creates the missing runtime
-lock, publishes the new root-owned environment under the activation fence,
-and requests a model/reference restart. It retains the old file for
-older-image rollback. If it refuses, preserve state and investigate; never
+pinned weights before stopping both the model and reference services, then
+obtains runtime exclusion, verifies again, rotates the key and publishes the
+broker configuration under the activation fence. It requests a model/reference
+restart without claiming readiness. If present, the obsolete worker-writable
+file is retained for investigation with its revoked key, not older-image
+rollback. Recovery refuses restoration of exposed version-1 credentials before
+writing; exact rollback between private version-2 configurations remains
+available. If migration refuses, preserve state and investigate; never
 remove the lock or activation marker to force startup. This path has passed
 targeted source checks only, not an installed upgrade or rollback test. The
 fence, new service wiring and policy also await installed-image qualification.

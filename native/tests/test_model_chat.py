@@ -285,10 +285,12 @@ class AdmissionFixture:
             raise TimeoutError('private fixture')
         return self.responses[path]
 
-    def run(self, prompt=b'Reply with a greeting.'):
+    def run(self, prompt=b'Reply with a greeting.', *, selection=b'{"schema_version":2,"id":"fixture-model"}'):
+        self.opened_files = []
         def opened(path, mode):
+            self.opened_files.append(str(path))
             if str(path).endswith('model-selection.json'):
-                return io.BytesIO(b'{"id":"fixture-model"}')
+                return io.BytesIO(selection)
             return io.BytesIO(b'a' * 64)
         with mock.patch.object(chat.os,'geteuid',return_value=0,create=True), \
                 mock.patch.object(chat.sys,'stdin',mock.Mock(buffer=io.BytesIO(prompt))), \
@@ -301,6 +303,21 @@ class AdmissionFixture:
 
 
 class NativeAdmissionTests(unittest.TestCase):
+    def test_legacy_or_malformed_selection_refuses_before_key_read_or_runtime_io(self):
+        for selection in (
+            {'id':'fixture-model'}, {'schema_version':1,'id':'fixture-model'},
+            {'schema_version':True,'id':'fixture-model'},
+            {'schema_version':2,'id':'fixture-model','transport':'openai-http'},
+            {'schema_version':2,'id':'fixture/model'}, {'schema_version':2,'id':'x'*65},
+        ):
+            with self.subTest(selection=selection):
+                fixture = AdmissionFixture()
+                with self.assertRaises(chat.InferenceReplyError):
+                    fixture.run(selection=json.dumps(selection).encode())
+                self.assertEqual(fixture.opened_files, [str(chat.Path('/var/lib/luma-os/model-selection.json'))])
+                self.assertEqual(fixture.order, [])
+                self.assertEqual(fixture.posts, [])
+
     def test_exact_original_input_bytes_are_bound_before_template_and_checked_through_completion(self):
         digests=set()
         for prompt in (b'hello',b' hello',b'hello\n','héllo'.encode(),b'hello /no_think'):

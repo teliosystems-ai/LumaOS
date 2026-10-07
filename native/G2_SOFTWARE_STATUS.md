@@ -67,12 +67,18 @@ explicit native broker client and a bounded gateway on the existing socket.
 It reserves before rendering, binds the exact messages/tokens/result to durable
 receipts and executes only inside the exact leased serving supervisor. The
 client receives no runtime key and publishes only after verified acknowledgement.
-The installer default remains the direct-runtime path: reviewed rotation and
-migration of existing keys/environments are still required. This resource
+Fresh activation now rotates the runtime credential and publishes a key-free
+native-broker environment; the installed reference unit uses that transport by
+default. Version-2 model selections fence older serving configurations. Explicit
+legacy migration covers both prior environment locations, and restoration
+rejects old exposed credentials before writing. Installed upgrade, interruption,
+key-revocation and reference-service qualification remain required. This resource
 interface does not implement product principal/session or effect grants.
-The [gateway checkpoint](evidence/G2_RESOURCE_GATEWAY_2026-10-07.md) records
-419 passing selected tests and 35 synthetic-authority CLI cases, with installed
+The [rotation checkpoint](evidence/G2_RESOURCE_KEY_ROTATION_2026-10-07.md) records
+426 passing selected tests and 40 synthetic-authority CLI cases, with installed
 and real-model qualification explicitly pending.
+The [earlier gateway checkpoint](evidence/G2_RESOURCE_GATEWAY_2026-10-07.md)
+retains the preceding opt-in implementation evidence.
 See [RESOURCE_LEASES.md](RESOURCE_LEASES.md) for
 the exact implemented scope, limits, maintenance commands and remaining work.
 

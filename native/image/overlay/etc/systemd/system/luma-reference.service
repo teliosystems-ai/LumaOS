@@ -10,6 +10,7 @@ Environment=PYTHONPATH=/usr/share/luma-os/reference/src
 Environment=LUMA_HOME=/var/lib/luma-os/reference
 Environment=PYTHONDONTWRITEBYTECODE=1
 Environment=PYTHONWARNINGS=error
+Environment=LUMA_MODEL_TRANSPORT=native-broker
 EnvironmentFile=-/var/lib/luma-os/model-reference.env
 ExecStart=/usr/bin/python3 -m luma_os.cli serve --host 127.0.0.1 --port 8765
 StateDirectory=luma-os/reference

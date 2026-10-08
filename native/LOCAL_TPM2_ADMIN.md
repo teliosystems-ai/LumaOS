@@ -683,8 +683,25 @@ Changed authority, registry replacement (even identical bytes), a different PAM
 account or clock/proof loss refuses issuance and closes the PAM observation.
 Restart the complete login with fresh authentication; neither re-enabling an
 account nor automatically rebinding to a newer head repairs an old attempt.
-This issuance path is not yet the resource/inference/effect admission interface
-or the separate one-shot Admin catalog control path.
+Ordinary catalog/status CLI commands, explicit principal adoption and the human
+socket service now use this issuance path. The catalog scope is not convertible
+to a general-principal session or an effect grant. After explicit bootstrap, the
+original enrolled Admin may inspect/change the finite catalog before adoption;
+general-principal sessions still require explicit adoption. After adoption,
+catalog sessions bind the current governed Admin generation. Bootstrap and
+offline custody recovery retain their separate ceremonies.
+
+Status brackets its complete read with semantic replay and PAM. Mutations consume
+a private one-use continuation bound to the exact command, request, installation
+and prior head. The original registry handles, latest TPM clock floor, actual PAM
+account and original IPC peer are checked through the operation and final result.
+The session closes after inspection, no-op, replay, commit, refusal or unwinding;
+inspect and commit therefore require separate fresh authentication. Journal
+preparation and TPM dispatch retain their exact semantic/live-writer checks.
+Interleaved history invalidates the review and old login; uncertain writes remain
+pending and require reviewed reconciliation, not automatic retry or re-login.
+No production ordinary catalog executor accepts a raw identity callback. This is
+not yet the resource/inference/effect admission interface.
 
 The process-local governed session combines the original account pins and
 30-second suspend-aware PAM lifetime with the current principal generation,

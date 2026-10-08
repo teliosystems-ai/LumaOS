@@ -6,15 +6,39 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 class PrincipalPackagingTests(unittest.TestCase):
+    def test_catalog_proof_is_one_use_and_cannot_replace_general_or_recovery_authority(self):
+        source = (ROOT / 'rust/luma-platform/src/admin_governance.rs').read_text()
+        governance = source.split('\n#[cfg(test)]\nfn execute_catalog', 1)[0]
+        attempt = governance.split("struct CatalogAttempt<'s>")[1].split('impl Drop for CatalogAttempt')[0]
+        for marker in ('PrincipalPurpose::AdminCatalog', 'candidate == request',
+                       'snapshot.head != self.session.binding.checkpoint_head',
+                       'command != &self.command', 'snapshot.deployment != self.session.binding.deployment',
+                       'snapshot.clock.elapsed_since(self.session.clock.get())?',
+                       'self.registry.current()?;', 'CatalogAuthority::Governed(&self)',
+                       'catalog sessions cannot substitute for offline recovery custody'):
+            self.assertIn(marker, attempt)
+        self.assertRegex(attempt, r'fn execute<A: Checkpoint>\(\s*self,')
+        self.assertNotIn('Serialize', attempt)
+        self.assertNotIn('Deserialize', attempt)
+        self.assertIn('self.session.close();', governance.split('impl Drop for CatalogAttempt')[1])
+        self.assertIn('#[cfg(test)]\n    Primitive,', governance)
+        self.assertNotIn('CatalogAuthority::Primitive,', governance)
+        self.assertIn('#[cfg(test)]\nfn execute_catalog_at', source)
+        self.assertNotIn('execute_catalog_at(', governance)
+        reader = governance.split('fn replay(')[2].split('fn resolve(')[0]
+        self.assertIn('Identity::parse(local.clone())? != context.principal', reader)
+        self.assertIn('PrincipalPurpose::General', reader)
+        self.assertIn('catalog.resolve_principal(local)?', reader)
+
     def test_governed_session_brackets_projection_and_fences_all_observations(self):
-        governance = (ROOT / 'rust/luma-platform/src/admin_governance.rs').read_text().split('#[cfg(test)]')[0]
+        governance = (ROOT / 'rust/luma-platform/src/admin_governance.rs').read_text().split('\n#[cfg(test)]\nfn execute_catalog', 1)[0]
         session = governance.split('impl PrincipalSession')[1].split('impl Drop for PrincipalSession')[0]
         identity = session.split('fn identity')[1].split('fn observe')[0]
         self.assertIn('self.observe(reader, |identity| Ok(identity.clone()))', identity)
-        projection = session.split('fn observe')[1].split('fn close')[0]
+        projection = session.split('fn observe_store')[1].split('fn close')[0]
         self.assertEqual(projection.count('.resolve_since(local, Some(self.clock.get()))?'), 2)
-        self.assertLess(projection.index('let before ='), projection.index('project(&before.identity)?'))
-        self.assertLess(projection.index('project(&before.identity)?'), projection.index('let after ='))
+        self.assertLess(projection.index('let before ='), projection.index('project(&before.identity, projection.reader.store)?'))
+        self.assertLess(projection.index('project(&before.identity, projection.reader.store)?'), projection.index('let after ='))
         self.assertIn('before != self.binding', projection)
         self.assertIn('after != before', projection)
         self.assertIn('self.account.observe', projection)
@@ -31,7 +55,7 @@ class PrincipalPackagingTests(unittest.TestCase):
         self.assertNotIn('std::env::', session)
 
     def test_governed_login_brackets_a_new_pam_exchange_without_holding_writer_locks(self):
-        governance = (ROOT / 'rust/luma-platform/src/admin_governance.rs').read_text().split('#[cfg(test)]')[0]
+        governance = (ROOT / 'rust/luma-platform/src/admin_governance.rs').read_text().split('\n#[cfg(test)]\nfn execute_catalog', 1)[0]
         entry = governance.split('pub fn principal_check')[1].split('pub(crate) struct HistoryBinding')[0]
         self.assertLess(entry.index('PrincipalLogin::prepare'), entry.index('authentication::local(login)?'))
         self.assertLess(entry.index('authentication::local(login)?'), entry.index('PrincipalSession::new'))
@@ -52,7 +76,7 @@ class PrincipalPackagingTests(unittest.TestCase):
         self.assertIn('boundary.boundary.require_later(&self.exchange_started)?', authentication)
 
     def test_admin_rotation_uses_prefix_generation_not_current_identity_for_old_history(self):
-        governance = (ROOT / 'rust/luma-platform/src/admin_governance.rs').read_text().split('#[cfg(test)]')[0]
+        governance = (ROOT / 'rust/luma-platform/src/admin_governance.rs').read_text().split('\n#[cfg(test)]\nfn execute_catalog', 1)[0]
         replay = governance.split('fn replay(')[1].split('struct PrincipalBinding')[0]
         self.assertIn('let writer = self.writer(&catalog)?;', replay)
         self.assertIn('event.principal != writer', replay)
@@ -61,8 +85,8 @@ class PrincipalPackagingTests(unittest.TestCase):
         writer = governance.split('fn writer(')[1].split('fn payload(')[0]
         self.assertIn('catalog.resolve_principal', writer)
         self.assertIn('serde_json::to_value(&self.principal)', writer)
-        self.assertIn('Some(RotationAttempt { account })', governance.split('fn service_request_at')[1])
-        self.assertIn('self.account.logout();', governance.split('impl Drop for RotationAttempt')[1])
+        self.assertIn('self.session.close();', governance.split('impl Drop for CatalogAttempt')[1])
+        self.assertIn('CatalogAuthority::Governed(&self)', governance)
         roles = (ROOT / 'rust/luma-platform/src/admin_roles.rs').read_text().split('#[cfg(test)]')[0]
         rotation = roles.split('Command::RotateAdmin')[1].split('Command::AdvancePrincipal')[0]
         for marker in ('bootstrap_admin()', 'record.enabled', 'expected_generation',
@@ -83,7 +107,7 @@ class PrincipalPackagingTests(unittest.TestCase):
             self.assertIn(marker, roles)
         self.assertNotIn('write_atomic', roles)
         self.assertRegex(roles, r'generation\s*\.checked_add\(1\)')
-        governance = (ROOT / 'rust/luma-platform/src/admin_governance.rs').read_text().split('#[cfg(test)]')[0]
+        governance = (ROOT / 'rust/luma-platform/src/admin_governance.rs').read_text().split('\n#[cfg(test)]\nfn execute_catalog', 1)[0]
         for marker in ('struct PrincipalReader', 'struct PrincipalSession', 'fn principal_check(',
                        'account.observe_fresh(&login.exchange', 'let (before, first_clock) = self.replay(local, session_clock)?;',
                        'let (after, last_clock) = self.replay(local, Some(first_clock))?;', 'first_clock.elapsed_since(previous)?;',
@@ -106,7 +130,7 @@ class PrincipalPackagingTests(unittest.TestCase):
         self.assertNotIn('/var/lib/luma-os/principals/registry.json rw', profile)
 
     def test_principal_checkpoint_is_explicit_fixed_source_and_semantic_replay_guarded(self):
-        governance = (ROOT / 'rust/luma-platform/src/admin_governance.rs').read_text().split('#[cfg(test)]')[0]
+        governance = (ROOT / 'rust/luma-platform/src/admin_governance.rs').read_text().split('\n#[cfg(test)]\nfn execute_catalog', 1)[0]
         for marker in ('pub fn adopt_principals(', 'platform::require_installed()?;',
                        'adoption_command(Path::new(crate::principal::REGISTRY))?',
                        'catalog.principal_registry', 'RegistryBinding::capture(self.registry_path)?',
@@ -164,9 +188,9 @@ class PrincipalPackagingTests(unittest.TestCase):
         profile = (ROOT / 'native/image/overlay/etc/apparmor.d/luma-admin').read_text()
         self.assertIn('/proc/sys/kernel/random/boot_id r,', profile)
         governance = (ROOT / 'rust/luma-platform/src/admin_governance.rs').read_text()
-        self.assertEqual(governance.count('authenticated.logout();'), 3)
+        self.assertEqual(governance.count('authenticated.logout();'), 1)
         service = (ROOT / 'rust/luma-platform/src/admin_service.rs').read_text().split('#[cfg(test)]')[0]
-        self.assertIn('account.logout();', service)
+        self.assertRegex(service, r'service_request\(\s*account,\s*login,\s*peer,')
 
     def test_account_bindings_pin_original_files_and_recheck_after_reads(self):
         source = (ROOT / 'rust/luma-platform/src/principal.rs').read_text().split('#[cfg(test)]')[0]

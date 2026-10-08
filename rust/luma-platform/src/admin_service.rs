@@ -286,16 +286,29 @@ pub fn connection() -> Result<()> {
     }
     let mut stream = unsafe { UnixStream::from_raw_fd(fd) };
     handle(&mut stream, |request, password, peer| {
-        let account = authentication::peer_account(&request.login, password, peer.uid())?;
+        let candidate = if matches!(request.operation, Operation::Status) {
+            None
+        } else {
+            Some(request.request_id.as_str())
+        };
+        let login = admin_governance::prepare_service(&request.login, candidate, peer)?;
+        let account =
+            peer.observe(|| authentication::peer_account(&request.login, password, peer.uid()))?;
         let result = match &request.operation {
-            Operation::Status => {
-                admin_governance::service_request(&account, peer, &request.request_id, None, None)
-            }
+            Operation::Status => admin_governance::service_request(
+                account,
+                login,
+                peer,
+                &request.request_id,
+                None,
+                None,
+            ),
             Operation::Catalog {
                 command,
                 review_sha256,
             } => admin_governance::service_request(
-                &account,
+                account,
+                login,
                 peer,
                 &request.request_id,
                 Some(command),
@@ -305,7 +318,8 @@ pub fn connection() -> Result<()> {
                 let command =
                     admin_governance::adoption_command(Path::new(crate::principal::REGISTRY))?;
                 admin_governance::service_request(
-                    &account,
+                    account,
+                    login,
                     peer,
                     &request.request_id,
                     Some(&command),
@@ -313,7 +327,6 @@ pub fn connection() -> Result<()> {
                 )
             }
         };
-        account.logout();
         result
     })
 }
@@ -1413,6 +1426,17 @@ mod tests {
             let (mut stream, _) = listener.accept().unwrap();
             let mut observed = None;
             let outcome = handle(&mut stream, |request, credential, peer| {
+                let candidate = if matches!(request.operation, Operation::Status) {
+                    None
+                } else {
+                    Some(request.request_id.as_str())
+                };
+                let login = admin_governance::fixture_prepare_service(
+                    &root,
+                    &request.login,
+                    candidate,
+                    peer,
+                )?;
                 let account = authentication::fixture_peer_account(
                     &root,
                     &request.login,
@@ -1437,7 +1461,8 @@ mod tests {
                         let command = admin_governance::adoption_command(&registry)?;
                         admin_governance::fixture_service_request(
                             &root,
-                            &account,
+                            account,
+                            login,
                             peer,
                             &request.request_id,
                             Some(&command),
@@ -1446,7 +1471,8 @@ mod tests {
                     }
                     Operation::Status => admin_governance::fixture_service_request(
                         &root,
-                        &account,
+                        account,
+                        login,
                         peer,
                         &request.request_id,
                         None,
@@ -1457,21 +1483,14 @@ mod tests {
                         review_sha256,
                     } => admin_governance::fixture_service_request(
                         &root,
-                        &account,
+                        account,
+                        login,
                         peer,
                         &request.request_id,
                         Some(command),
                         review_sha256.as_deref(),
                     ),
                 };
-                if (mode.starts_with("admin-rotate") && mode.ends_with("commit"))
-                    || mode == "admin-bad-review"
-                {
-                    assert!(
-                        account.identity().is_err(),
-                        "rotation left PAM reusable: {mode}"
-                    );
-                }
                 let result = result?;
                 observed = Some(result.clone());
                 Ok(result)
@@ -1652,6 +1671,7 @@ mod tests {
         admin_governance::fixture_session_issuance(&root, &password);
         admin_governance::fixture_session_projections(&root, &password);
         admin_governance::fixture_custody_recovery(&root, &password);
+        admin_governance::fixture_owned_catalog(&root, &password);
         drop(listener);
         fs::remove_file(path).unwrap();
         fs::remove_dir(directory).unwrap();

@@ -25,7 +25,7 @@ class AdminCredentialPolicyTests(unittest.TestCase):
                          ['d /run/luma-admin 0700 root root -'])
 
     def test_bootstrap_has_fixed_paths_and_independent_pam_entry_point(self):
-        source = (ROOT / 'rust/luma-platform/src/admin_governance.rs').read_text().split('#[cfg(test)]')[0]
+        source = (ROOT / 'rust/luma-platform/src/admin_governance.rs').read_text().split('\n#[cfg(test)]\nfn execute_catalog', 1)[0]
         self.assertIn('const DIRECTORY: &str = "/var/lib/luma-os/admin"', source)
         entry = source.split('pub fn bootstrap(')[1]
         for required in ('crate::require_root()?', 'platform::require_installed()?',
@@ -45,13 +45,15 @@ class AdminCredentialPolicyTests(unittest.TestCase):
             self.assertNotIn('admin_governance::bootstrap', source)
 
     def test_catalog_operations_have_independent_pam_and_no_assignment_interface(self):
-        source = (ROOT / 'rust/luma-platform/src/admin_governance.rs').read_text().split('#[cfg(test)]')[0]
+        source = (ROOT / 'rust/luma-platform/src/admin_governance.rs').read_text().split('\n#[cfg(test)]\nfn execute_catalog', 1)[0]
         for name in ('catalog_command', 'catalog_status'):
             entry = source.split(f'pub fn {name}(')[1].split('\n}\n', 1)[0]
             for required in ('crate::require_root()?', 'platform::require_installed()?',
                              'authentication::local(login)?', 'tpm::LocalAnchor::installed()?',
-                             'authenticated.identity()'):
+                             'prepare_control(login,', 'run_control_at('):
                 self.assertIn(required, entry)
+            self.assertLess(entry.index('prepare_control(login,'), entry.index('authentication::local(login)?'))
+            self.assertNotIn('authenticated.identity()', entry)
         roles = (ROOT / 'rust/luma-platform/src/admin_roles.rs').read_text().split('#[cfg(test)]')[0]
         self.assertIn('RegisterActivity', roles)
         self.assertIn('DefineRole', roles)

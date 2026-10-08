@@ -361,7 +361,14 @@ impl<'a> Context<'a> {
 }
 
 #[derive(Debug, PartialEq, Eq)]
+enum PrincipalPurpose {
+    General,
+    AdminCatalog { candidate: Option<String> },
+}
+
+#[derive(Debug, PartialEq, Eq)]
 struct PrincipalBinding {
+    purpose: PrincipalPurpose,
     deployment: String,
     enrollment_sha256: String,
     checkpoint_head: String,
@@ -413,6 +420,7 @@ pub(crate) struct PrincipalReader<'a, A: Checkpoint> {
     registry_path: &'a Path,
     last_clock: Option<tpm::Clock>,
     fenced: bool,
+    admin_candidate: Option<Option<&'a str>>,
 }
 
 impl<'a, A: Checkpoint> PrincipalReader<'a, A> {
@@ -427,7 +435,19 @@ impl<'a, A: Checkpoint> PrincipalReader<'a, A> {
             registry_path,
             last_clock: None,
             fenced: false,
+            admin_candidate: None,
         }
+    }
+
+    fn admin_at(
+        store: &'a mut Store<A>,
+        directory: &'a Path,
+        registry_path: &'a Path,
+        candidate: Option<&'a str>,
+    ) -> Self {
+        let mut reader = Self::at(store, directory, registry_path);
+        reader.admin_candidate = Some(candidate);
+        reader
     }
 
     fn replay(
@@ -444,8 +464,20 @@ impl<'a, A: Checkpoint> PrincipalReader<'a, A> {
         if !context.bootstrap_state(&snapshot)?.1 {
             return Err("explicit product Admin bootstrap required".into());
         }
-        let (catalog, _) = context.events(&snapshot, None)?;
-        let identity = catalog.resolve_principal(local)?;
+        let (catalog, _) = context.events(&snapshot, self.admin_candidate.flatten())?;
+        let (identity, purpose) = if let Some(candidate) = self.admin_candidate {
+            if Identity::parse(local.clone())? != context.principal {
+                return Err("catalog session requires the original enrolled Admin account".into());
+            }
+            (
+                serde_json::to_value(context.writer(&catalog)?)?,
+                PrincipalPurpose::AdminCatalog {
+                    candidate: candidate.map(str::to_owned),
+                },
+            )
+        } else {
+            (catalog.resolve_principal(local)?, PrincipalPurpose::General)
+        };
         let final_snapshot = self.store.snapshot()?;
         final_snapshot.clock.elapsed_since(snapshot.clock)?;
         if final_snapshot.head != snapshot.head
@@ -458,6 +490,7 @@ impl<'a, A: Checkpoint> PrincipalReader<'a, A> {
         registry.current()?;
         Ok((
             PrincipalBinding {
+                purpose,
                 deployment: snapshot.deployment,
                 enrollment_sha256: bundle::hex(&Sha256::digest(&context.enrollment)),
                 checkpoint_head: snapshot.head,
@@ -590,6 +623,17 @@ impl PrincipalSession {
         reader: &mut PrincipalReader<'_, A>,
         project: impl FnOnce(&serde_json::Value) -> Result<T>,
     ) -> Result<T> {
+        self.observe_store(reader, |identity, _store| project(identity))
+    }
+
+    // Read-only semantic projections may borrow the same protected store while
+    // bracketed. A mutation must instead consume CatalogAttempt: this method's
+    // final replay deliberately refuses a changed head, never rolls back effects.
+    fn observe_store<A: Checkpoint, T>(
+        &self,
+        reader: &mut PrincipalReader<'_, A>,
+        project: impl FnOnce(&serde_json::Value, &mut Store<A>) -> Result<T>,
+    ) -> Result<T> {
         if self.fenced.get() {
             reader.fenced = true;
             self.close();
@@ -610,7 +654,7 @@ impl PrincipalSession {
                     "governed generation or shared authority changed; authenticate again".into(),
                 );
             }
-            let result = project(&before.identity)?;
+            let result = project(&before.identity, projection.reader.store)?;
             let after = projection
                 .reader
                 .resolve_since(local, Some(self.clock.get()))?;
@@ -1049,44 +1093,278 @@ pub fn bootstrap(login: &str, reviewed: Option<&str>) -> Result<()> {
     Ok(())
 }
 
-fn execute_catalog<A: Checkpoint>(
-    store: &mut Store<A>,
-    directory: &Path,
-    authenticate: impl FnMut() -> Result<serde_json::Value>,
-    request: &str,
-    command: &Command,
-    reviewed: Option<&str>,
-) -> Result<serde_json::Value> {
-    execute_catalog_at(
-        store,
+enum CatalogAuthority<'a, 's> {
+    Governed(&'a CatalogAttempt<'s>),
+    Recovery(&'a RecoveryAttempt<'s>),
+    #[cfg(test)]
+    Primitive,
+}
+
+/// The original Admin's catalog-scoped, pre-PAM login. It cannot be supplied
+/// through JSON, reused as a general-principal login or used as an effect grant.
+pub(crate) struct AdminLogin {
+    login: PrincipalLogin,
+    candidate: Option<String>,
+}
+
+impl AdminLogin {
+    fn prepare_at<A: Checkpoint>(
+        store: &mut Store<A>,
+        directory: &Path,
+        registry_path: &Path,
+        name: &str,
+        candidate: Option<&str>,
+    ) -> Result<Self> {
+        if candidate.is_some_and(|request| !admin_roles::identifier(request) || request == REQUEST)
+        {
+            return Err("invalid catalog login request".into());
+        }
+        let login = PrincipalLogin::prepare(
+            &mut PrincipalReader::admin_at(store, directory, registry_path, candidate),
+            name,
+        )?;
+        Ok(Self {
+            login,
+            candidate: candidate.map(str::to_owned),
+        })
+    }
+
+    fn issue<A: Checkpoint>(
+        self,
+        account: authentication::AuthenticatedAccount,
+        store: &mut Store<A>,
+        directory: &Path,
+        registry_path: &Path,
+        candidate: Option<&str>,
+    ) -> Result<PrincipalSession> {
+        if self.candidate.as_deref() != candidate {
+            account.logout();
+            return Err("catalog login cannot switch its requested operation".into());
+        }
+        PrincipalSession::new(
+            account,
+            self.login,
+            &mut PrincipalReader::admin_at(store, directory, registry_path, candidate),
+        )
+    }
+}
+
+fn prepare_control(name: &str, candidate: Option<&str>) -> Result<AdminLogin> {
+    let directory = Path::new(DIRECTORY);
+    let mut store = Store::open(
+        tpm::LocalAnchor::installed()?,
+        &directory.join("journal.json"),
+    )?;
+    AdminLogin::prepare_at(
+        &mut store,
         directory,
         Path::new(crate::principal::REGISTRY),
-        authenticate,
-        request,
-        command,
-        reviewed,
+        name,
+        candidate,
     )
 }
 
-fn execute_catalog_at<A: Checkpoint>(
+pub(crate) fn prepare_service(
+    name: &str,
+    candidate: Option<&str>,
+    peer: &crate::admin_service::Peer,
+) -> Result<AdminLogin> {
+    peer.observe(|| prepare_control(name, candidate))
+}
+
+// A narrowly scoped continuation across a deliberate journal mutation. The
+// session is fully replayed before construction; append independently checks
+// that exact prior journal, semantic payload and live writer at every boundary.
+// Do not use a normal session projection after commit: the old head is stale.
+struct CatalogAttempt<'s> {
+    session: &'s PrincipalSession,
+    registry: crate::principal::RegistryBinding,
+    directory: std::path::PathBuf,
+    registry_path: std::path::PathBuf,
+    request: String,
+    command: Command,
+    peer: Option<&'s crate::admin_service::Peer>,
+}
+
+impl<'s> CatalogAttempt<'s> {
+    fn prepare<A: Checkpoint>(
+        session: &'s PrincipalSession,
+        store: &mut Store<A>,
+        directory: &Path,
+        registry_path: &Path,
+        request: &str,
+        command: &Command,
+        peer: Option<&'s crate::admin_service::Peer>,
+    ) -> Result<Self> {
+        command.validate()?;
+        if matches!(command, Command::RecoverAdmin { .. }) {
+            return Err("catalog sessions cannot substitute for offline recovery custody".into());
+        }
+        match &session.binding.purpose {
+            PrincipalPurpose::AdminCatalog {
+                candidate: Some(candidate),
+            } if candidate == request => (),
+            _ => return Err("catalog continuation requires its exact Admin login scope".into()),
+        }
+        let mut project = || {
+            session.observe_store(
+                &mut PrincipalReader::admin_at(store, directory, registry_path, Some(request)),
+                |identity, store| {
+                    let snapshot = store.snapshot()?;
+                    snapshot.clock.elapsed_since(session.clock.get())?;
+                    session.clock.set(snapshot.clock);
+                    let context = Context::load_at(directory, &snapshot.deployment, registry_path)?;
+                    let catalog = context.events(&snapshot, Some(request))?.0;
+                    if serde_json::to_value(context.writer(&catalog)?)? != *identity {
+                        return Err(
+                            "catalog projection differs from the original governed Admin".into(),
+                        );
+                    }
+                    context.recheck(&mut || session.account.identity())?;
+                    Ok(Self {
+                        session,
+                        registry: crate::principal::RegistryBinding::capture(registry_path)?,
+                        directory: directory.into(),
+                        registry_path: registry_path.into(),
+                        request: request.into(),
+                        command: command.clone(),
+                        peer,
+                    })
+                },
+            )
+        };
+        if let Some(peer) = peer {
+            peer.observe(project)
+        } else {
+            project()
+        }
+    }
+
+    fn authenticate(&self) -> Result<serde_json::Value> {
+        if self.session.fenced.get() {
+            return Err("catalog session has been closed".into());
+        }
+        let project = || {
+            self.session.account.observe(|local| {
+                self.registry.current()?;
+                Ok(local.clone())
+            })
+        };
+        if let Some(peer) = self.peer {
+            peer.observe(project)
+        } else {
+            project()
+        }
+    }
+
+    fn check_boundary(
+        &self,
+        snapshot: &Snapshot,
+        directory: &Path,
+        registry_path: &Path,
+        request: &str,
+        command: &Command,
+    ) -> Result<()> {
+        if directory != self.directory
+            || registry_path != self.registry_path
+            || request != self.request
+            || command != &self.command
+            || snapshot.head != self.session.binding.checkpoint_head
+            || snapshot.deployment != self.session.binding.deployment
+        {
+            return Err(
+                "catalog continuation cannot change request, command, history or installation"
+                    .into(),
+            );
+        }
+        snapshot.clock.elapsed_since(self.session.clock.get())?;
+        self.session.clock.set(snapshot.clock);
+        self.authenticate()?;
+        Ok(())
+    }
+
+    fn execute<A: Checkpoint>(
+        self,
+        store: &mut Store<A>,
+        reviewed: Option<&str>,
+    ) -> Result<serde_json::Value> {
+        let mut project = || {
+            self.session.account.observe(|_| {
+                execute_catalog_authorized_at(
+                    store,
+                    &self.directory,
+                    &self.registry_path,
+                    || self.authenticate(),
+                    &self.request,
+                    &self.command,
+                    reviewed,
+                    CatalogAuthority::Governed(&self),
+                )
+            })
+        };
+        if let Some(peer) = self.peer {
+            peer.observe(project)
+        } else {
+            project()
+        }
+    }
+}
+
+impl Drop for CatalogAttempt<'_> {
+    fn drop(&mut self) {
+        self.session.close();
+    }
+}
+
+fn run_control_at<A: Checkpoint>(
     store: &mut Store<A>,
     directory: &Path,
     registry_path: &Path,
-    authenticate: impl FnMut() -> Result<serde_json::Value>,
+    account: authentication::AuthenticatedAccount,
+    login: AdminLogin,
+    peer: Option<&crate::admin_service::Peer>,
     request: &str,
-    command: &Command,
-    reviewed: Option<&str>,
+    command: Option<&Command>,
+    review: Option<&str>,
 ) -> Result<serde_json::Value> {
-    execute_catalog_authorized_at(
-        store,
-        directory,
-        registry_path,
-        authenticate,
-        request,
-        command,
-        reviewed,
-        None,
-    )
+    let candidate = command.map(|_| request);
+    let session = login.issue(account, store, directory, registry_path, candidate)?;
+    if let Some(command) = command {
+        let attempt = CatalogAttempt::prepare(
+            &session,
+            store,
+            directory,
+            registry_path,
+            request,
+            command,
+            peer,
+        )?;
+        return attempt.execute(store, review);
+    }
+    if review.is_some() {
+        return Err("status cannot approve a mutation".into());
+    }
+    let mut project = || {
+        session.observe_store(&mut PrincipalReader::admin_at(store, directory, registry_path, None),
+        |identity, store| {
+            let snapshot = store.snapshot()?;
+            snapshot.clock.elapsed_since(session.clock.get())?;
+            session.clock.set(snapshot.clock);
+            let context = Context::load_at(directory, &snapshot.deployment, registry_path)?;
+            let catalog = context.events(&snapshot, None)?.0;
+            if serde_json::to_value(context.writer(&catalog)?)? != *identity {
+                return Err("status differs from the exact governed Admin".into());
+            }
+            Ok(serde_json::json!({"schema_version":1,"action":"admin-governance-status",
+                "principal":identity,"catalog":catalog,"checkpoint_head":snapshot.head,
+                "product_admin_active":true,"delegation_available":false,"effect_grant":false,"gate_closing":false}))
+        })
+    };
+    if let Some(peer) = peer {
+        peer.observe(project)
+    } else {
+        project()
+    }
 }
 
 fn execute_catalog_authorized_at<A: Checkpoint>(
@@ -1097,25 +1375,29 @@ fn execute_catalog_authorized_at<A: Checkpoint>(
     request: &str,
     command: &Command,
     reviewed: Option<&str>,
-    recovery: Option<&RecoveryAttempt<'_>>,
+    authority: CatalogAuthority<'_, '_>,
 ) -> Result<serde_json::Value> {
     if !admin_roles::identifier(request) || request == REQUEST {
         return Err("invalid or reserved Admin request".into());
     }
     command.validate()?;
     let snapshot = store.snapshot()?;
-    match (command, recovery) {
-        (Command::RecoverAdmin { .. }, Some(attempt))
+    match (command, &authority) {
+        (Command::RecoverAdmin { .. }, CatalogAuthority::Recovery(attempt))
             if command == &attempt.command && snapshot.head == attempt.head =>
         {
             snapshot.clock.elapsed_since(attempt.clock.get())?;
             attempt.clock.set(snapshot.clock);
             attempt.authenticate()?;
         }
-        (Command::RecoverAdmin { .. }, _) | (_, Some(_)) => {
+        (Command::RecoverAdmin { .. }, _) | (_, CatalogAuthority::Recovery(_)) => {
             return Err("Admin recovery requires its exact live offline-credential proof, not PAM or caller authority".into());
         }
-        _ => (),
+        (_, CatalogAuthority::Governed(attempt)) => {
+            attempt.check_boundary(&snapshot, directory, registry_path, request, command)?;
+        }
+        #[cfg(test)]
+        (_, CatalogAuthority::Primitive) => (),
     }
     let context = Context::load_at(directory, &snapshot.deployment, registry_path)?;
     if !context.state(&snapshot, Some(request))?.1 {
@@ -1123,6 +1405,14 @@ fn execute_catalog_authorized_at<A: Checkpoint>(
     }
     let (catalog, events) = context.events(&snapshot, Some(request))?;
     let writer = context.writer(&catalog)?;
+    if let CatalogAuthority::Governed(attempt) = &authority {
+        if serde_json::to_value(&writer)? != attempt.session.binding.identity
+            || bundle::hex(&Sha256::digest(&context.enrollment))
+                != attempt.session.binding.enrollment_sha256
+        {
+            return Err("catalog writer differs from the exact governed session".into());
+        }
+    }
     let registry_binding = if catalog.principal_registry.is_some()
         || matches!(command, Command::AdoptPrincipals { .. })
     {
@@ -1273,9 +1563,19 @@ fn execute_catalog_authorized_at<A: Checkpoint>(
         }
     }
     let final_snapshot = store.snapshot()?;
-    if let Some(attempt) = recovery {
-        final_snapshot.clock.elapsed_since(attempt.clock.get())?;
-        attempt.clock.set(final_snapshot.clock);
+    match &authority {
+        CatalogAuthority::Recovery(attempt) => {
+            final_snapshot.clock.elapsed_since(attempt.clock.get())?;
+            attempt.clock.set(final_snapshot.clock);
+        }
+        CatalogAuthority::Governed(attempt) => {
+            final_snapshot
+                .clock
+                .elapsed_since(attempt.session.clock.get())?;
+            attempt.session.clock.set(final_snapshot.clock);
+        }
+        #[cfg(test)]
+        CatalogAuthority::Primitive => (),
     }
     context.state(&final_snapshot, Some(request))?;
     let (current, _) = context.events(&final_snapshot, Some(request))?;
@@ -1396,7 +1696,7 @@ impl<'a> RecoveryAttempt<'a> {
                 request,
                 &self.command,
                 reviewed,
-                Some(self),
+                CatalogAuthority::Recovery(self),
             )
         });
         // A dispatched write attempt consumes this in-process proof even if the
@@ -1474,21 +1774,24 @@ pub fn catalog_command(args: &[String]) -> Result<()> {
     let (login, request, command, reviewed) = parse_command(args)?;
     crate::require_root()?;
     platform::require_installed()?;
+    let prepared = prepare_control(login, Some(request))?;
     let authenticated = authentication::local(login)?;
     let directory = Path::new(DIRECTORY);
     let mut store = Store::open(
         tpm::LocalAnchor::installed()?,
         &directory.join("journal.json"),
     )?;
-    let report = execute_catalog(
+    let report = run_control_at(
         &mut store,
         directory,
-        || authenticated.identity(),
+        Path::new(crate::principal::REGISTRY),
+        authenticated,
+        prepared,
+        None,
         request,
-        &command,
+        Some(&command),
         reviewed,
     )?;
-    authenticated.logout();
     println!("{}", serde_json::to_string(&report)?);
     Ok(())
 }
@@ -1511,6 +1814,7 @@ pub(crate) fn adoption_command(registry_path: &Path) -> Result<Command> {
 pub fn adopt_principals(login: &str, request: &str, reviewed: Option<&str>) -> Result<()> {
     crate::require_root()?;
     platform::require_installed()?;
+    let prepared = prepare_control(login, Some(request))?;
     let account = authentication::local(login)?;
     let command = adoption_command(Path::new(crate::principal::REGISTRY))?;
     let directory = Path::new(DIRECTORY);
@@ -1518,15 +1822,17 @@ pub fn adopt_principals(login: &str, request: &str, reviewed: Option<&str>) -> R
         tpm::LocalAnchor::installed()?,
         &directory.join("journal.json"),
     )?;
-    let result = execute_catalog(
+    let result = run_control_at(
         &mut store,
         directory,
-        || account.identity(),
+        Path::new(crate::principal::REGISTRY),
+        account,
+        prepared,
+        None,
         request,
-        &command,
+        Some(&command),
         reviewed,
     );
-    account.logout();
     println!("{}", serde_json::to_string(&result?)?);
     Ok(())
 }
@@ -1534,45 +1840,31 @@ pub fn adopt_principals(login: &str, request: &str, reviewed: Option<&str>) -> R
 pub fn catalog_status(login: &str) -> Result<()> {
     crate::require_root()?;
     platform::require_installed()?;
+    let prepared = prepare_control(login, None)?;
     let authenticated = authentication::local(login)?;
     let directory = Path::new(DIRECTORY);
     let mut store = Store::open(
         tpm::LocalAnchor::installed()?,
         &directory.join("journal.json"),
     )?;
-    let snapshot = store.snapshot()?;
-    let context = Context::load(directory, &snapshot.deployment)?;
-    if !context.state(&snapshot, None)?.1 {
-        return Err("explicit product Admin bootstrap required".into());
-    }
-    let (catalog, _) = context.events(&snapshot, None)?;
-    let principal = context.writer(&catalog)?;
-    context.recheck(&mut || authenticated.identity())?;
-    authenticated.logout();
-    println!(
-        "{}",
-        serde_json::to_string(&serde_json::json!({"schema_version":1,
-        "action":"admin-governance-status","principal":principal,"catalog":catalog,
-        "checkpoint_head":snapshot.head,"product_admin_active":true,
-        "delegation_available":false,"effect_grant":false,"gate_closing":false}))?
-    );
+    let report = run_control_at(
+        &mut store,
+        directory,
+        Path::new(crate::principal::REGISTRY),
+        authenticated,
+        prepared,
+        None,
+        "status",
+        None,
+        None,
+    )?;
+    println!("{}", serde_json::to_string(&report)?);
     Ok(())
 }
 
-/// Service composition accepts only the in-process PAM observation, not a
-/// serialized role/session token. The original Admin is rechecked per request.
-struct RotationAttempt<'a> {
-    account: &'a authentication::AuthenticatedAccount,
-}
-
-impl Drop for RotationAttempt<'_> {
-    fn drop(&mut self) {
-        self.account.logout();
-    }
-}
-
 pub(crate) fn service_request(
-    account: &authentication::AuthenticatedAccount,
+    account: authentication::AuthenticatedAccount,
+    login: AdminLogin,
     peer: &crate::admin_service::Peer,
     request: &str,
     command: Option<&Command>,
@@ -1584,69 +1876,98 @@ pub(crate) fn service_request(
         tpm::LocalAnchor::installed()?,
         &directory.join("journal.json"),
     )?;
-    service_request_at(
+    run_control_at(
         &mut store,
         directory,
         Path::new(crate::principal::REGISTRY),
         account,
-        peer,
+        login,
+        Some(peer),
         request,
         command,
         review,
     )
 }
 
-fn service_request_at<A: tpm::Checkpoint>(
+// Primitive journal tests exercise replay/refusal without creating a genuine
+// session. These adapters are absent from the production executable.
+#[cfg(test)]
+fn execute_catalog<A: Checkpoint>(
+    store: &mut Store<A>,
+    directory: &Path,
+    authenticate: impl FnMut() -> Result<serde_json::Value>,
+    request: &str,
+    command: &Command,
+    reviewed: Option<&str>,
+) -> Result<serde_json::Value> {
+    execute_catalog_at(
+        store,
+        directory,
+        Path::new(crate::principal::REGISTRY),
+        authenticate,
+        request,
+        command,
+        reviewed,
+    )
+}
+
+#[cfg(test)]
+fn execute_catalog_at<A: Checkpoint>(
     store: &mut Store<A>,
     directory: &Path,
     registry_path: &Path,
-    account: &authentication::AuthenticatedAccount,
-    peer: &crate::admin_service::Peer,
+    authenticate: impl FnMut() -> Result<serde_json::Value>,
     request: &str,
-    command: Option<&Command>,
-    review: Option<&str>,
+    command: &Command,
+    reviewed: Option<&str>,
 ) -> Result<serde_json::Value> {
-    peer.check()?;
-    if let Some(command) = command {
-        // Close even on an error or unwinding after uncertain TPM dispatch.
-        // The guard cannot export, renew or restore an authentication proof.
-        let _rotation = if matches!(command, Command::RotateAdmin { .. }) && review.is_some() {
-            Some(RotationAttempt { account })
-        } else {
-            None
-        };
-        return execute_catalog_at(
-            store,
-            directory,
-            registry_path,
-            || peer.observe(|| account.identity()),
-            request,
-            command,
-            review,
-        );
-    }
-    if review.is_some() {
-        return Err("status cannot approve a mutation".into());
-    }
-    let snapshot = store.snapshot()?;
-    let context = Context::load_at(directory, &snapshot.deployment, registry_path)?;
-    if !context.state(&snapshot, None)?.1 {
-        return Err("explicit product Admin bootstrap required".into());
-    }
-    let (catalog, _) = context.events(&snapshot, None)?;
-    let principal = context.writer(&catalog)?;
-    context.recheck(&mut || peer.observe(|| account.identity()))?;
-    Ok(
-        serde_json::json!({"schema_version":1,"action":"admin-governance-status",
-        "principal":principal,"catalog":catalog,"checkpoint_head":snapshot.head,
-        "product_admin_active":true,"delegation_available":false,"effect_grant":false,"gate_closing":false}),
+    execute_catalog_authorized_at(
+        store,
+        directory,
+        registry_path,
+        authenticate,
+        request,
+        command,
+        reviewed,
+        CatalogAuthority::Primitive,
     )
+}
+
+#[cfg(test)]
+struct RotationAttempt<'a> {
+    account: &'a authentication::AuthenticatedAccount,
+}
+
+#[cfg(test)]
+impl Drop for RotationAttempt<'_> {
+    fn drop(&mut self) {
+        self.account.logout();
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn fixture_prepare_service(
+    root: &Path,
+    name: &str,
+    candidate: Option<&str>,
+    peer: &crate::admin_service::Peer,
+) -> Result<AdminLogin> {
+    peer.observe(|| {
+        AdminLogin::prepare_at(
+            &mut fixture_store(root)?,
+            &root.join("admin"),
+            &root.join("registry.json"),
+            name,
+            candidate,
+        )
+    })
 }
 
 #[cfg(test)]
 pub(crate) fn fixture_service_request(
     root: &Path,
-    account: &authentication::AuthenticatedAccount,
+    account: authentication::AuthenticatedAccount,
+    login: AdminLogin,
     peer: &crate::admin_service::Peer,
     request: &str,
     command: Option<&Command>,
@@ -1655,12 +1976,13 @@ pub(crate) fn fixture_service_request(
     peer.check()?;
     let directory = root.join("admin");
     let mut store = fixture_store(root)?;
-    service_request_at(
+    run_control_at(
         &mut store,
         &directory,
         &root.join("registry.json"),
         account,
-        peer,
+        login,
+        Some(peer),
         request,
         command,
         review,
@@ -1939,6 +2261,300 @@ pub(crate) fn fixture_session_issuance(
     assert!(fixture_governed_identity(root, &session).is_err());
     assert_eq!(tpm::private_read(&registry, 64 * 1024).unwrap(), baseline);
     println!("GOVERNED_SESSION_ISSUANCE_CASE=fresh-login-binds-new-generation-and-closes");
+}
+
+#[cfg(test)]
+pub(crate) fn fixture_owned_catalog(
+    root: &Path,
+    password: &crate::sealed_credential::PrivateBuffer,
+) {
+    let directory = root.join("admin");
+    let registry = root.join("registry.json");
+    let baseline = tpm::private_read(&registry, 64 * 1024).unwrap();
+    let prepare = |candidate: Option<&str>| {
+        AdminLogin::prepare_at(
+            &mut fixture_store(root).unwrap(),
+            &directory,
+            &registry,
+            "human",
+            candidate,
+        )
+        .unwrap()
+    };
+    let run = |request: &str, command: Option<&Command>, review: Option<&str>| {
+        let login = prepare(command.map(|_| request));
+        let account = authentication::fixture_local_account(root, "human", password).unwrap();
+        run_control_at(
+            &mut fixture_store(root).unwrap(),
+            &directory,
+            &registry,
+            account,
+            login,
+            None,
+            request,
+            command,
+            review,
+        )
+    };
+    let status = run("owned-status", None, None).unwrap();
+    assert_eq!(status["effect_grant"], false);
+    assert_eq!(
+        status["principal"]["generation"],
+        status["catalog"]["principal_states"][status["principal"]["principal"].as_str().unwrap()]
+            ["generation"]
+    );
+    println!("GOVERNED_CATALOG_CASE=status-current-generation");
+    let command = Command::RegisterActivity {
+        activity: "owned.catalog.test".into(),
+    };
+    let earlier = authentication::fixture_local_account(root, "human", password).unwrap();
+    let login = prepare(Some("owned-earlier"));
+    assert!(run_control_at(
+        &mut fixture_store(root).unwrap(),
+        &directory,
+        &registry,
+        earlier,
+        login,
+        None,
+        "owned-earlier",
+        Some(&command),
+        None
+    )
+    .is_err());
+    println!("GOVERNED_CATALOG_CASE=earlier-pam-refused");
+    let login = prepare(Some("owned-other"));
+    let account = authentication::fixture_local_account(root, "otherhuman", password).unwrap();
+    assert!(run_control_at(
+        &mut fixture_store(root).unwrap(),
+        &directory,
+        &registry,
+        account,
+        login,
+        None,
+        "owned-other",
+        Some(&command),
+        None
+    )
+    .is_err());
+    println!("GOVERNED_CATALOG_CASE=wrong-principal-refused");
+    let login = prepare(Some("owned-original"));
+    let account = authentication::fixture_local_account(root, "human", password).unwrap();
+    assert!(run_control_at(
+        &mut fixture_store(root).unwrap(),
+        &directory,
+        &registry,
+        account,
+        login,
+        None,
+        "owned-switched",
+        Some(&command),
+        None
+    )
+    .is_err());
+    println!("GOVERNED_CATALOG_CASE=request-scope-switch-refused");
+    let login = prepare(Some("owned-replaced"));
+    platform::write_atomic(&registry, &baseline, 0o600).unwrap();
+    let account = authentication::fixture_local_account(root, "human", password).unwrap();
+    assert!(run_control_at(
+        &mut fixture_store(root).unwrap(),
+        &directory,
+        &registry,
+        account,
+        login,
+        None,
+        "owned-replaced",
+        Some(&command),
+        None
+    )
+    .is_err());
+    println!("GOVERNED_CATALOG_CASE=registry-replacement-refused");
+    let stale_login = prepare(Some("owned-stale"));
+    let inspected = run("owned-register", Some(&command), None).unwrap();
+    assert_eq!(inspected["tpm_write_performed"], false);
+    assert_eq!(
+        run("owned-status", None, None).unwrap()["checkpoint_head"],
+        status["checkpoint_head"]
+    );
+    println!("GOVERNED_CATALOG_CASE=inspection-does-not-write");
+    assert!(run("owned-register", Some(&command), Some(&"00".repeat(32))).is_err());
+    assert_eq!(
+        run("owned-status", None, None).unwrap()["checkpoint_head"],
+        status["checkpoint_head"]
+    );
+    println!("GOVERNED_CATALOG_CASE=wrong-review-refused");
+    let committed = run(
+        "owned-register",
+        Some(&command),
+        Some(inspected["review_sha256"].as_str().unwrap()),
+    )
+    .unwrap();
+    assert_eq!(committed["tpm_write_performed"], true);
+    assert_ne!(
+        run("owned-status", None, None).unwrap()["checkpoint_head"],
+        status["checkpoint_head"]
+    );
+    println!("GOVERNED_CATALOG_CASE=reviewed-commit");
+    let account = authentication::fixture_local_account(root, "human", password).unwrap();
+    assert!(run_control_at(
+        &mut fixture_store(root).unwrap(),
+        &directory,
+        &registry,
+        account,
+        stale_login,
+        None,
+        "owned-stale",
+        Some(&command),
+        None
+    )
+    .is_err());
+    println!("GOVERNED_CATALOG_CASE=changed-head-refused");
+    let replay = run("owned-register", Some(&command), None).unwrap();
+    assert_eq!(replay["replayed"], true);
+    let replay = run(
+        "owned-register",
+        Some(&command),
+        Some(replay["review_sha256"].as_str().unwrap()),
+    )
+    .unwrap();
+    assert_eq!(replay["tpm_write_performed"], false);
+    println!("GOVERNED_CATALOG_CASE=replay-does-not-extend");
+    let no_op = run("owned-no-op", Some(&command), None).unwrap();
+    assert_eq!(
+        run(
+            "owned-no-op",
+            Some(&command),
+            Some(no_op["review_sha256"].as_str().unwrap())
+        )
+        .unwrap()["tpm_write_performed"],
+        false
+    );
+    println!("GOVERNED_CATALOG_CASE=no-op-does-not-extend");
+    let login = prepare(Some("owned-consumed"));
+    let account = authentication::fixture_local_account(root, "human", password).unwrap();
+    let mut store = fixture_store(root).unwrap();
+    let session = login
+        .issue(
+            account,
+            &mut store,
+            &directory,
+            &registry,
+            Some("owned-consumed"),
+        )
+        .unwrap();
+    let attempt = CatalogAttempt::prepare(
+        &session,
+        &mut store,
+        &directory,
+        &registry,
+        "owned-consumed",
+        &command,
+        None,
+    )
+    .unwrap();
+    assert!(attempt
+        .check_boundary(
+            &store.snapshot().unwrap(),
+            &directory,
+            &registry,
+            "owned-switched",
+            &command
+        )
+        .is_err());
+    let different = Command::RegisterActivity {
+        activity: "owned.other.test".into(),
+    };
+    assert!(attempt
+        .check_boundary(
+            &store.snapshot().unwrap(),
+            &directory,
+            &registry,
+            "owned-consumed",
+            &different
+        )
+        .is_err());
+    attempt.execute(&mut store, None).unwrap();
+    assert!(session.account.identity().is_err());
+    assert!(session
+        .identity(&mut PrincipalReader::admin_at(
+            &mut store,
+            &directory,
+            &registry,
+            Some("owned-consumed")
+        ))
+        .is_err());
+    println!("GOVERNED_CATALOG_CASE=exact-continuation-consumed");
+    drop(store);
+    for fault in [
+        "wrong-review",
+        "unwind",
+        "registry",
+        "logout",
+        "clock-floor",
+        "epoch",
+    ] {
+        let request = format!("owned-fault-{fault}");
+        let login = prepare(Some(&request));
+        let account = authentication::fixture_local_account(root, "human", password).unwrap();
+        let mut store = fixture_store(root).unwrap();
+        let session = login
+            .issue(account, &mut store, &directory, &registry, Some(&request))
+            .unwrap();
+        let attempt = CatalogAttempt::prepare(
+            &session, &mut store, &directory, &registry, &request, &different, None,
+        )
+        .unwrap();
+        let before = tpm::private_read(&directory.join("journal.json"), 1024 * 1024).unwrap();
+        match fault {
+            "registry" => platform::write_atomic(&registry, &baseline, 0o600).unwrap(),
+            "logout" => session.account.logout(),
+            "clock-floor" => {
+                // Inject a later in-process floor, not a host or TPM clock change.
+                let mut clock = session.clock.get();
+                clock.milliseconds = clock.milliseconds.checked_add(1_000_000).unwrap();
+                session.clock.set(clock);
+            }
+            "epoch" => {
+                let mut clock = session.clock.get();
+                clock.restart_count = clock.restart_count.checked_add(1).unwrap();
+                session.clock.set(clock);
+            }
+            "wrong-review" | "unwind" => (),
+            _ => unreachable!(),
+        }
+        if fault == "unwind" {
+            assert!(
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+                    let _attempt = attempt;
+                    panic!("deliberate catalog continuation unwind fixture");
+                }))
+                .is_err()
+            );
+        } else {
+            assert!(attempt.execute(&mut store, Some(&"00".repeat(32))).is_err());
+        }
+        assert!(session.account.identity().is_err());
+        assert!(session.fenced.get());
+        assert_eq!(
+            tpm::private_read(&directory.join("journal.json"), 1024 * 1024).unwrap(),
+            before
+        );
+        assert!(!directory.join("journal.pending.json").exists());
+        println!("GOVERNED_CATALOG_CASE=continuation-fault-{fault}-closes-without-write");
+    }
+    let general = fixture_governed_session(root, "human", password).unwrap();
+    assert!(CatalogAttempt::prepare(
+        &general,
+        &mut fixture_store(root).unwrap(),
+        &directory,
+        &registry,
+        "owned-general",
+        &command,
+        None
+    )
+    .is_err());
+    general.close();
+    assert_eq!(tpm::private_read(&registry, 64 * 1024).unwrap(), baseline);
+    println!("GOVERNED_CATALOG_CASE=general-session-cannot-be-catalog-authority");
 }
 
 #[cfg(test)]
@@ -3050,6 +3666,69 @@ mod tests {
         assert_eq!(
             replay["catalog"]["principal_states"][&"ef".repeat(32)]["generation"],
             2
+        );
+        assert_eq!(f.writes(), 3);
+    }
+
+    #[test]
+    fn catalog_reader_preserves_explicit_adoption_and_nonconvertible_purpose() {
+        let f = Fixture::new("catalog-reader-purpose");
+        let adoption = principal_registry(&f);
+        let path = f.directory.join("registry.json");
+        assert!(
+            PrincipalReader::admin_at(&mut f.store(), &f.directory, &path, None)
+                .resolve(&f.identity)
+                .is_err()
+        );
+        f.activate();
+        let status = PrincipalReader::admin_at(&mut f.store(), &f.directory, &path, None)
+            .resolve(&f.identity)
+            .unwrap();
+        assert_eq!(
+            status.purpose,
+            PrincipalPurpose::AdminCatalog { candidate: None }
+        );
+        assert!(PrincipalReader::at(&mut f.store(), &f.directory, &path)
+            .resolve(&f.identity)
+            .is_err());
+        assert!(
+            PrincipalReader::admin_at(&mut f.store(), &f.directory, &path, None)
+                .resolve(&other_identity())
+                .is_err()
+        );
+        principal_commit(&f, "adopt", &adoption);
+        let general = PrincipalReader::at(&mut f.store(), &f.directory, &path)
+            .resolve(&f.identity)
+            .unwrap();
+        let candidate =
+            PrincipalReader::admin_at(&mut f.store(), &f.directory, &path, Some("inspect"))
+                .resolve(&f.identity)
+                .unwrap();
+        let other =
+            PrincipalReader::admin_at(&mut f.store(), &f.directory, &path, Some("different"))
+                .resolve(&f.identity)
+                .unwrap();
+        assert_eq!(general.identity, candidate.identity);
+        assert_ne!(general, candidate);
+        assert_ne!(candidate, other);
+        principal_commit(
+            &f,
+            "rotate",
+            &Command::RotateAdmin {
+                expected_generation: 1,
+            },
+        );
+        let current = PrincipalReader::admin_at(&mut f.store(), &f.directory, &path, None)
+            .resolve(&f.identity)
+            .unwrap();
+        assert_eq!(current.identity["generation"], 2);
+        assert_ne!(current.identity, status.identity);
+        let mut forged = f.identity.clone();
+        forged["generation"] = serde_json::json!(2);
+        assert!(
+            PrincipalReader::admin_at(&mut f.store(), &f.directory, &path, None)
+                .resolve(&forged)
+                .is_err()
         );
         assert_eq!(f.writes(), 3);
     }

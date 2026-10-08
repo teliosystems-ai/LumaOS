@@ -64,8 +64,16 @@ class AdminServicePolicyTests(unittest.TestCase):
         self.assertNotIn('Serialize', peer)
         governance = (ROOT / 'rust/luma-platform/src/admin_governance.rs').read_text()
         native = governance.split('pub(crate) fn service_request(')[1].split('#[cfg(test)]')[0]
-        self.assertEqual(native.count('peer.observe(|| account.identity())'), 2)
-        self.assertEqual(native.count('peer.check()?;'), 2)
+        self.assertIn('account: authentication::AuthenticatedAccount', native)
+        self.assertIn('login: AdminLogin', native)
+        self.assertIn('run_control_at(', native)
+        attempt = governance.split("impl<'s> CatalogAttempt<'s>")[1].split('impl Drop for CatalogAttempt')[0]
+        self.assertEqual(attempt.count('peer.observe(project)'), 3)
+        self.assertIn('self.session.account.observe', attempt)
+        self.assertIn('self.registry.current()?;', attempt)
+        self.assertIn('self.authenticate()?', attempt)
+        entry = (ROOT / 'rust/luma-platform/src/admin_service.rs').read_text().split('pub fn connection()')[1].split('struct Session')[0]
+        self.assertLess(entry.index('prepare_service('), entry.index('authentication::peer_account('))
         unit = (ROOT / 'native/image/overlay/etc/systemd/system/luma-admin.service').read_text()
         self.assertIn('ProtectProc=invisible', unit)
         self.assertIn('CapabilityBoundingSet=CAP_CHOWN', unit)

@@ -31,7 +31,8 @@ class OfflineAdminRecoveryTests(unittest.TestCase):
 
     def test_recovery_is_private_live_proof_not_pam_or_wire_command(self):
         governance = (ROOT / 'rust/luma-platform/src/admin_governance.rs').read_text().split('#[cfg(test)]\nmod tests')[0]
-        self.assertIn('recovery: Option<&RecoveryAttempt', governance)
+        self.assertIn('Recovery(&\'a RecoveryAttempt<\'s>)', governance)
+        self.assertIn('CatalogAuthority::Recovery(self)', governance)
         self.assertIn('command == &attempt.command', governance)
         self.assertIn('snapshot.head == attempt.head', governance)
         self.assertIn('snapshot.clock.elapsed_since(attempt.clock.get())?', governance)

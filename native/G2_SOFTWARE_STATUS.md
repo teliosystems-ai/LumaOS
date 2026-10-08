@@ -13,6 +13,36 @@ requirement.
 
 ## Current software inventory and work still required
 
+### Governed Admin catalog control
+
+Ordinary native Admin catalog/status entrypoints now prepare an exact governed
+login before PAM and consume the newly authenticated account into a session.
+CLI maintenance, explicit principal adoption and the human socket service use
+the same control implementation. Catalog scope is distinct from general
+principal authority: the original enrolled Admin can inspect the finite catalog
+after explicit bootstrap and before principal adoption, but this cannot create a
+general session or grant. After adoption it binds the current governed Admin
+generation. Bootstrap and offline custody recovery remain separate ceremonies.
+
+A private one-use continuation binds mutations to the exact command, request,
+installation and original checkpoint head. It retains the session's TPM clock
+floor and original registry handles, brackets execution with actual PAM and,
+for IPC, the original live peer, and closes the session on inspection, commit,
+refusal or unwinding. Journal preparation/append still rechecks the exact
+semantic inputs and live writer; an uncertain TPM result remains pending and
+cannot be automatically retried. Raw catalog executors exist only in test builds.
+
+This is catalog control integration, not Unix account/password lifecycle,
+installed trusted UTC, finite role assignments, folder/effect grants or their
+resource/workflow/inference admission. Those software items and installed-image
+qualification remain open; Requirement #1 and G2 are not complete.
+
+The [catalog control checkpoint](evidence/G2_GOVERNED_CATALOG_CONTROL_2026-10-08.md)
+retains 168 ordinary Rust tests, all 49 governed PAM/kernel-peer/software-TPM
+catalog scenarios, 19 continuation markers and the 272-pass/two-existing-skip
+native Python regression. Source, test inputs and CI matched the frozen D:
+snapshot; enforcing service and final-image qualification remain unexecuted.
+
 ### Approved UTC runtime and offline Admin recovery
 
 The owner approved both designs on 2026-10-08 in

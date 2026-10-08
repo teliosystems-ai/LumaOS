@@ -756,16 +756,26 @@ the subgate and the remaining items below are still open.
   rotation now uses a separate reviewed command, with journal-prefix writer
   validation for catalog and shared UTC history. It preserves enrollment/baseline
   bytes, closes the request's PAM on commit attempts and never rewrites old
-  writers. Admin credential/custody recovery, account creation/credential recovery
-  and resource/inference/effect admission integration
+  writers. Offline Admin custody-generation recovery now has the separate source
+  path described above. Account creation/credential recovery and
+  resource/inference/effect admission integration
   remain open; this does not qualify those boundaries or close the subgate.
   Governed login issuance now brackets a new PAM exchange with the exact pre/post
   TPM-backed state and retained original registry handles. It rejects earlier
   PAM observations, mismatched accounts, registry replacement and authority
   changes during login, without holding writer locks through password entry.
   This source path is exercised by `principal-check` and genuine-PAM/software-TPM
-  fixtures; it does not integrate the remaining catalog control, time, grant or
-  admission paths.
+  fixtures. Ordinary native catalog/status control now uses the same pre-PAM
+  issuance and consumes the authenticated account into an Admin-catalog-scoped
+  session. A separate private one-use mutation continuation binds the exact
+  request, command, installation and prior head; actual PAM and original IPC
+  peer observations bracket execution, and destruction closes the session even
+  after inspection or refusal. Explicit bootstrap permits finite catalog control
+  before principal adoption without creating general-principal or grant authority.
+  After adoption the session binds the current governed Admin generation. Raw
+  catalog execution is test-only. The
+  [catalog control checkpoint](evidence/G2_GOVERNED_CATALOG_CONTROL_2026-10-08.md)
+  records the evaluated scope. Time, grants and admission remain open.
   Session use now brackets the whole protected projection with semantic authority
   replay and the bounded PAM observation. Its drop guard closes reader, session
   and PAM on refusal or unwinding, including a failure in PAM's final checks.

@@ -196,10 +196,12 @@ fn validate(request: &Request) -> Result<()> {
     {
         if matches!(
             command,
-            CatalogCommand::AdoptPrincipals { .. } | CatalogCommand::RecoverAdmin { .. }
+            CatalogCommand::AdoptPrincipals { .. }
+                | CatalogCommand::RecoverAdmin { .. }
+                | CatalogCommand::CheckpointAccounts { .. }
         ) {
             return Err(
-                "principal adoption or recovery cannot accept caller-supplied authority".into(),
+                "principal adoption or recovery cannot accept caller-supplied authority; account checkpoints require protected sources".into(),
             );
         }
         command.validate()?;
@@ -760,6 +762,13 @@ mod tests {
                     2,
                 )
                 .unwrap(),
+            },
+            review_sha256: None,
+        };
+        assert!(validate(&supplied).is_err());
+        supplied.operation = Operation::Catalog {
+            command: CatalogCommand::CheckpointAccounts {
+                commitments: std::collections::BTreeMap::from([("cd".repeat(32), "12".repeat(32))]),
             },
             review_sha256: None,
         };
@@ -1672,6 +1681,7 @@ mod tests {
         admin_governance::fixture_session_projections(&root, &password);
         admin_governance::fixture_custody_recovery(&root, &password);
         admin_governance::fixture_owned_catalog(&root, &password);
+        admin_governance::fixture_account_checkpoint(&root, &password);
         drop(listener);
         fs::remove_file(path).unwrap();
         fs::remove_dir(directory).unwrap();

@@ -92,7 +92,7 @@ class PublisherAssets(unittest.TestCase):
 
     def test_utc_history_shares_admin_checkpoint_without_new_writer_endpoint(self):
         history = (ROOT / 'rust/luma-platform/src/utc_history.rs').read_text()
-        governance = (ROOT / 'rust/luma-platform/src/admin_governance.rs').read_text().split('#[cfg(test)]')[0]
+        governance = (ROOT / 'rust/luma-platform/src/admin_governance.rs').read_text().split('\n#[cfg(test)]\nfn execute_catalog', 1)[0]
         self.assertIn('entry.activity == utc_history::ACTIVITY', governance)
         self.assertIn('snapshot.prefix_heads.get(position)', governance)
         self.assertIn('history.apply(&record)?', governance)
@@ -109,7 +109,7 @@ class PublisherAssets(unittest.TestCase):
 
     def test_utc_history_records_do_not_restore_live_estimates(self):
         history = (ROOT / 'rust/luma-platform/src/utc_history.rs').read_text()
-        governance = (ROOT / 'rust/luma-platform/src/admin_governance.rs').read_text().split('#[cfg(test)]')[0]
+        governance = (ROOT / 'rust/luma-platform/src/admin_governance.rs').read_text().split('\n#[cfg(test)]\nfn execute_catalog', 1)[0]
         self.assertIn('record.statement.floor_ms <= self.floor_ms', history)
         self.assertRegex(history, r'self\s*\.version\s*\.checked_add\(1\)')
         self.assertIn('self.floor_ms > lower', history)

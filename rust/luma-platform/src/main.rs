@@ -131,6 +131,12 @@ fn dispatch() -> Result<()> {
         Some("admin-principals-adopt") if args.len() == 5 && args[3] == "--commit" => {
             admin_governance::adopt_principals(&args[1], &args[2], Some(&args[4]))
         }
+        Some("admin-accounts-checkpoint") if args.len() == 3 => {
+            admin_governance::checkpoint_accounts(&args[1], &args[2], None)
+        }
+        Some("admin-accounts-checkpoint") if args.len() == 5 && args[3] == "--commit" => {
+            admin_governance::checkpoint_accounts(&args[1], &args[2], Some(&args[4]))
+        }
         Some("admin-activity-register")
         | Some("admin-role-define")
         | Some("admin-principal-advance")
@@ -351,6 +357,7 @@ fn dispatch() -> Result<()> {
             println!("admin-client LOGIN rotate-admin REQUEST EXPECTED-GENERATION [--commit REVIEW] | admin-principal-rotate LOGIN REQUEST EXPECTED-GENERATION [--commit REVIEW]: reviewed generation rotation of the original enabled Admin only. Does not disable, transfer custody, change credentials or rewrite historical writers; a fresh authenticated request is needed for subsequent operations.");
             println!("admin-custody-recover REQUEST: installed local-terminal offline credential ceremony. Requires an installer verifier already adopted into intact TPM history, confirms a new offline credential and reviews the exact transaction within a protected 30s proof. Rotates original Admin and recovery generations; no password change, root/owner fallback or effect grant.");
             println!("principal-check LOGIN: installed root maintenance diagnostic with fresh local PAM and current adopted TPM principal history; no session, role or effect grant is returned. This is distinct from the local-only admin-auth-check.");
+            println!("admin-accounts-checkpoint LOGIN REQUEST [--commit REVIEW-SHA256]: reviewed one-time adoption of every installed enabled account's protected credential commitment into intact TPM history. Fixed local sources only; no password/hash input, account mutation, replacement checkpoint, time authority or effect grant. Changed credentials require separate governed lifecycle recovery.");
             println!("admin-role-define LOGIN REQUEST ROLE EXPECTED-VERSION ACTIVITY... [--commit REVIEW-SHA256]: finite registered activities only; version 0 creates, the exact current version updates. Defines no assignment or resource grant.");
             println!("Install requires local TPM2 admission before any disk write. admin-install-check is read-only and does not enroll Admin; explicit checkpoint enrollment remains separate from product Admin activation.");
             println!("Maintenance: staging-clean | model-clean (root only; preserves active operations and unknown files).");

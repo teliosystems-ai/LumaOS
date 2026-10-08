@@ -13,6 +13,46 @@ requirement.
 
 ## Current software inventory and work still required
 
+### Checkpointed account credentials
+
+An explicit local maintenance ceremony now checkpoints domain-separated
+commitments to every enabled installation account's protected passwd/shadow
+records in the existing TPM semantic journal. It requires adoption, fresh
+governed Admin authentication and review. It accepts no source path, password,
+password hash or caller-supplied commitment. All original account handles remain
+pinned through writer authentication and journal preparation/dispatch.
+
+Once adopted, these commitments are checked during governed login and session
+replay, including fresh readers after restart. Valid PAM alone cannot adopt a
+changed credential or account record. An identical request is a replay or no-op;
+a different snapshot cannot replace the checkpoint. Principal generation changes
+leave credential commitments intact. Legacy history retains its canonical bytes
+and reports `account_credentials_checkpointed: false` until explicit adoption.
+This is a durable account-integrity prerequisite, not an account mutation or
+complete account lifecycle. Create/delete, password rotation/reset, Linux lock
+changes and their governed interrupted-transaction recovery remain open.
+
+The [credential checkpoint evidence](evidence/G2_ACCOUNT_CREDENTIAL_CHECKPOINT_2026-10-08.md)
+retains 666 ordinary Rust passes with 38 fixture-dependent ignores, ten new real
+PAM/software-TPM account cases and a 277-pass/two-existing-skip native Python
+regression. The full Rust run and final integration snapshot have identical
+complete build inputs; the record distinguishes their results and retained
+failed attempts. Passing this increment does not close the bundles below.
+
+The requested combined Requirement #1 sweep is not complete. The remaining
+implementation bundles are coupled and cannot be replaced by passing primitive
+tests or enabling an unconditional refusal path:
+
+| Bundle | Remaining software implementation |
+| --- | --- |
+| Account lifecycle | Governed create/delete, password rotation/reset and Linux lock transitions; exact pending-file publication and reconciliation; credential commitment advancement tied to approved mutations. |
+| Protected UTC | Approved executable/configuration admission, confined producer/keeper deployment, reviewed independent seed, authenticated local acquisition/query control, protected history delivery and explicit recovery. |
+| Grants and admission | Finite current-generation role assignments, current UTC checks, principal-bound folder/effect/resource/inference grants and preparation/final-dispatch checks. |
+| Workflow and recovery | Generic governed worker/DAG admission, all inference consumers, export/deletion/retention authorization, damaged-authority reconstruction, multiworker/device adapters and integrated interruption paths. |
+
+Final-image/native-machine security, recovery, clock and hardware qualification
+is additional work; it is not the only remaining work in these bundles.
+
 ### Governed Admin catalog control
 
 Ordinary native Admin catalog/status entrypoints now prepare an exact governed

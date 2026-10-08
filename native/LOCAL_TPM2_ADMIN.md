@@ -703,6 +703,48 @@ pending and require reviewed reconciliation, not automatic retry or re-login.
 No production ordinary catalog executor accepts a raw identity callback. This is
 not yet the resource/inference/effect admission interface.
 
+### Account credential checkpoint
+
+After explicit bootstrap and principal adoption, use a local controlling
+terminal for this separate reviewed maintenance operation:
+
+```text
+sudo luma-platform admin-accounts-checkpoint LOGIN REQUEST
+sudo luma-platform admin-accounts-checkpoint LOGIN REQUEST --commit REVIEW-SHA256
+```
+
+Both calls require fresh governed Admin PAM. Inspection reads only the fixed
+installation registry and protected account records; it does not write an event
+or TPM state. Commit requires the exact current proposal review. It pins every
+enabled installation account's original registry/passwd/shadow handles through
+each writer boundary. Commitments are separated by installation, principal and
+UID; passwords and password hashes are not exposed in command arguments,
+proposals or receipts. This operation has no general socket command accepting
+caller-provided hashes, source paths or credential bytes.
+
+After commit, both Admin catalog scope and general governed sessions require the
+current account records to match TPM-backed commitments. Replacing an account
+file with different rows cannot be legitimized by fresh PAM or a process restart.
+Equal historical requests acknowledge the earlier transaction without another
+extend; an identical new checkpoint is a no-op. Other snapshots refuse and
+require the separate governed lifecycle/recovery implementation, not re-adoption,
+manual journal editing or root/TPM-owner override. Principal generation rotation
+does not alter credential commitments. Lost TPM replies preserve pending state
+and require exact reviewed committed publication, never redispatch.
+
+Legacy records remain byte-compatible and are not automatically migrated.
+Status/identity diagnostics explicitly report `account_credentials_checkpointed`;
+false is not admission evidence for a future product grant. This command does
+not create/delete accounts, rotate/reset passwords, lock/unlock Linux accounts
+or repair changed credentials. Those account transactions, protected UTC,
+grants/admission and their installed qualification remain open Requirement #1
+work. Do not run this development command as host administration.
+
+The [credential checkpoint evidence](evidence/G2_ACCOUNT_CREDENTIAL_CHECKPOINT_2026-10-08.md)
+records isolated evaluation and remaining implementation/qualification limits.
+
+### Governed session continuity
+
 The process-local governed session combines the original account pins and
 30-second suspend-aware PAM lifetime with the current principal generation,
 shared checkpoint head and TPM boot epoch. It consumes and owns its non-clonable

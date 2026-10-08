@@ -36,6 +36,9 @@ pub(crate) enum Command {
     AdoptPrincipals {
         registry: crate::principal::Registry,
     },
+    CheckpointAccounts {
+        commitments: BTreeMap<String, String>,
+    },
     AdvancePrincipal {
         principal: String,
         expected_generation: u64,
@@ -57,6 +60,7 @@ impl Command {
             Self::RegisterActivity { .. } => "admin.activity.register",
             Self::DefineRole { .. } => "admin.role.define",
             Self::AdoptPrincipals { .. } => "admin.principal.adopt",
+            Self::CheckpointAccounts { .. } => "admin.account.checkpoint",
             Self::AdvancePrincipal { .. } => "admin.principal.advance",
             Self::RotateAdmin { .. } => "admin.principal.rotate_admin",
             Self::RecoverAdmin { .. } => "admin.principal.recover",
@@ -65,6 +69,19 @@ impl Command {
     pub(crate) fn validate(&self) -> Result<()> {
         let valid_activity = |v: &str| identifier(v) && v != "admin.bootstrap";
         match self {
+            Self::CheckpointAccounts { commitments } => {
+                if commitments.is_empty() || commitments.len() > 128 {
+                    return Err("account checkpoint requires a finite complete inventory".into());
+                }
+                for (principal, commitment) in commitments {
+                    crate::tpm::decode::<32>(principal)?;
+                    crate::tpm::decode::<32>(commitment)?;
+                    if commitment == &"00".repeat(32) {
+                        return Err("empty credential commitment".into());
+                    }
+                }
+                Ok(())
+            }
             Self::RecoverAdmin {
                 expected_generation,
                 expected_recovery_generation,
@@ -132,6 +149,8 @@ pub(crate) struct Catalog {
     pub principal_registry: Option<crate::principal::Registry>,
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub principal_states: BTreeMap<String, PrincipalState>,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub account_commitments: BTreeMap<String, String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub admin_recovery: Option<crate::admin_recovery::Verifier>,
 }
@@ -150,6 +169,7 @@ impl Catalog {
             roles: BTreeMap::new(),
             principal_registry: None,
             principal_states: BTreeMap::new(),
+            account_commitments: BTreeMap::new(),
             admin_recovery: None,
         }
     }
@@ -163,6 +183,30 @@ impl Catalog {
             .checked_add(1)
             .ok_or("Admin catalog version exhausted")?;
         match command {
+            Command::CheckpointAccounts { commitments } => {
+                let registry = self
+                    .principal_registry
+                    .as_ref()
+                    .ok_or("explicit principal adoption required before account checkpoint")?;
+                let expected: BTreeSet<_> = registry
+                    .principals()
+                    .iter()
+                    .filter(|record| record.enabled)
+                    .map(|record| record.id.clone())
+                    .collect();
+                if commitments.keys().cloned().collect::<BTreeSet<_>>() != expected {
+                    return Err(
+                        "account checkpoint does not bind every installed enabled principal".into(),
+                    );
+                }
+                if !self.account_commitments.is_empty() {
+                    if &self.account_commitments == commitments {
+                        return Ok(false);
+                    }
+                    return Err("credential authority is already checkpointed; lifecycle reconciliation required".into());
+                }
+                self.account_commitments = commitments.clone();
+            }
             Command::RecoverAdmin {
                 expected_generation,
                 expected_recovery_generation,
@@ -432,6 +476,76 @@ mod tests {
             expected_version: version,
         }
     }
+    #[test]
+    fn account_checkpoint_is_complete_immutable_and_preserves_old_canonical_catalogs() {
+        let mut catalog = Catalog::initial();
+        assert!(serde_json::to_value(&catalog)
+            .unwrap()
+            .get("account_commitments")
+            .is_none());
+        let commitments = BTreeMap::from([
+            ("cd".repeat(32), "12".repeat(32)),
+            ("ef".repeat(32), "34".repeat(32)),
+        ]);
+        let command = Command::CheckpointAccounts {
+            commitments: commitments.clone(),
+        };
+        let before = catalog.clone();
+        assert!(catalog.apply(&command).is_err());
+        assert_eq!(catalog, before);
+        catalog.apply(&Command::AdoptPrincipals { registry: serde_json::from_value(
+            serde_json::json!({"schema_version":1,"installation":"ab".repeat(32),"principals":[
+                {"id":"cd".repeat(32),"generation":1,"login":"human","uid":1001,"enabled":true},
+                {"id":"ef".repeat(32),"generation":1,"login":"otherhuman","uid":1002,"enabled":true}
+            ]})).unwrap() }).unwrap();
+        let before = catalog.clone();
+        for invalid in [
+            BTreeMap::new(),
+            BTreeMap::from([("cd".repeat(32), "12".repeat(32))]),
+            BTreeMap::from([
+                ("cd".repeat(32), "00".repeat(32)),
+                ("ef".repeat(32), "34".repeat(32)),
+            ]),
+            BTreeMap::from([
+                ("cd".repeat(32), "12".repeat(32)),
+                ("56".repeat(32), "34".repeat(32)),
+            ]),
+        ] {
+            assert!(catalog
+                .apply(&Command::CheckpointAccounts {
+                    commitments: invalid
+                })
+                .is_err());
+            assert_eq!(catalog, before);
+        }
+        assert!(catalog.apply(&command).unwrap());
+        let enrolled = catalog.clone();
+        assert!(!catalog.apply(&command).unwrap());
+        assert_eq!(catalog, enrolled);
+        let mut changed = commitments;
+        changed.insert("ef".repeat(32), "78".repeat(32));
+        assert!(catalog
+            .apply(&Command::CheckpointAccounts {
+                commitments: changed
+            })
+            .is_err());
+        assert_eq!(catalog, enrolled);
+        catalog
+            .apply(&Command::AdvancePrincipal {
+                principal: "ef".repeat(32),
+                expected_generation: 1,
+                enabled: false,
+            })
+            .unwrap();
+        assert_eq!(catalog.account_commitments, enrolled.account_commitments);
+        catalog
+            .apply(&Command::RotateAdmin {
+                expected_generation: 1,
+            })
+            .unwrap();
+        assert_eq!(catalog.account_commitments, enrolled.account_commitments);
+    }
+
     #[test]
     fn admin_rotation_is_explicit_enabled_only_generation_bound_and_atomic() {
         let mut catalog = Catalog::initial();

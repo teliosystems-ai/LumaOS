@@ -776,6 +776,15 @@ the subgate and the remaining items below are still open.
   catalog execution is test-only. The
   [catalog control checkpoint](evidence/G2_GOVERNED_CATALOG_CONTROL_2026-10-08.md)
   records the evaluated scope. Time, grants and admission remain open.
+  Explicit account credential checkpointing now binds every enabled baseline
+  account's protected record commitments into the same TPM history, pins all
+  account handles through commit, and checks them during fresh governed login
+  and subsequent replay. Fresh PAM cannot silently adopt changed account rows;
+  identical checkpoint requests replay/no-op, while replacement snapshots
+  refuse. Legacy history is not automatically enrolled. This is account-record
+  integrity, not create/delete, password mutation or interrupted account recovery.
+  The [account checkpoint evidence](evidence/G2_ACCOUNT_CREDENTIAL_CHECKPOINT_2026-10-08.md)
+  records the full Rust baseline and source-identical final integration snapshot.
   Session use now brackets the whole protected projection with semantic authority
   replay and the bounded PAM observation. Its drop guard closes reader, session
   and PAM on refusal or unwinding, including a failure in PAM's final checks.

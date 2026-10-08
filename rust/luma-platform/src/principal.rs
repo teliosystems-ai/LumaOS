@@ -92,6 +92,10 @@ impl Registry {
         self.principals.iter().find(|record| record.uid == 1001)
     }
 
+    pub(crate) fn principals(&self) -> &[Principal] {
+        &self.principals
+    }
+
     pub(crate) fn principal(&self, id: &str) -> Option<&Principal> {
         self.principals.iter().find(|record| record.id == id)
     }
@@ -458,6 +462,20 @@ pub(crate) struct AccountBinding {
 }
 
 impl AccountBinding {
+    // A commitment to the protected rows, not a password hash, PAM result or
+    // capability. Installation/principal separation prevents cross-user replay.
+    pub(crate) fn credential_commitment(&self) -> Result<String> {
+        self.current_uid()?;
+        let mut digest = Sha256::new();
+        digest.update(b"luma-account-credential-checkpoint-v1\0");
+        digest.update(crate::tpm::decode::<32>(&self.installation)?);
+        digest.update(crate::tpm::decode::<32>(&self.principal.id)?);
+        digest.update(self.principal.uid.to_be_bytes());
+        digest.update(self.account_digest);
+        self.current_uid()?;
+        Ok(bundle::hex(&digest.finalize()))
+    }
+
     /// Inert identity projection, never proof of authentication or a role grant.
     pub(crate) fn identity(&self) -> Result<serde_json::Value> {
         self.current_uid()?;
@@ -585,6 +603,27 @@ mod tests {
             }
             fs::remove_dir(&self.0).unwrap();
         }
+    }
+
+    #[test]
+    fn credential_commitments_separate_installations_principals_and_exact_rows() {
+        let fixture = Fixture::new("credential-commitment");
+        let binding = fixture.binding();
+        let first = binding.credential_commitment().unwrap();
+        assert_eq!(first.len(), 64);
+        assert!(!first.contains("$6$"));
+        assert_eq!(first, fixture.binding().credential_commitment().unwrap());
+        fixture.change(|registry| registry.installation = "ab".repeat(32));
+        assert!(binding.credential_commitment().is_err());
+        let second = fixture.binding().credential_commitment().unwrap();
+        assert_ne!(first, second);
+        fixture.change(|registry| registry.principals[0].id = "cd".repeat(32));
+        let third = fixture.binding().credential_commitment().unwrap();
+        assert_ne!(second, third);
+        let shadow = fixture.0.join("identity/shadow");
+        crate::platform::write_atomic(&shadow, b"human:$6$public$new:20000:0:99999:7:::\n", 0o600)
+            .unwrap();
+        assert_ne!(third, fixture.binding().credential_commitment().unwrap());
     }
 
     #[test]

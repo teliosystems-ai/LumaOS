@@ -368,6 +368,8 @@ enum PrincipalPurpose {
 
 #[derive(Debug, PartialEq, Eq)]
 struct PrincipalBinding {
+    credential_sha256: Option<String>,
+    identity_path: std::path::PathBuf,
     purpose: PrincipalPurpose,
     deployment: String,
     enrollment_sha256: String,
@@ -418,6 +420,7 @@ pub(crate) struct PrincipalReader<'a, A: Checkpoint> {
     store: &'a mut Store<A>,
     directory: &'a Path,
     registry_path: &'a Path,
+    identity_path: &'a Path,
     last_clock: Option<tpm::Clock>,
     fenced: bool,
     admin_candidate: Option<Option<&'a str>>,
@@ -433,6 +436,7 @@ impl<'a, A: Checkpoint> PrincipalReader<'a, A> {
             store,
             directory,
             registry_path,
+            identity_path: account_identity(registry_path),
             last_clock: None,
             fenced: false,
             admin_candidate: None,
@@ -465,6 +469,29 @@ impl<'a, A: Checkpoint> PrincipalReader<'a, A> {
             return Err("explicit product Admin bootstrap required".into());
         }
         let (catalog, _) = context.events(&snapshot, self.admin_candidate.flatten())?;
+        let credential = if catalog.account_commitments.is_empty() {
+            None
+        } else {
+            let principal = local["principal"]
+                .as_str()
+                .ok_or("missing local account principal")?;
+            let expected = catalog
+                .account_commitments
+                .get(principal)
+                .ok_or("missing checkpointed account credential")?;
+            let name = local["login"]
+                .as_str()
+                .ok_or("missing local account login")?;
+            let account = crate::principal::AccountBinding::capture(
+                self.registry_path,
+                self.identity_path,
+                name,
+            )?;
+            if &account.credential_commitment()? != expected {
+                return Err("local account differs from TPM-checkpointed credentials; governed lifecycle recovery required".into());
+            }
+            Some((expected.clone(), account))
+        };
         let (identity, purpose) = if let Some(candidate) = self.admin_candidate {
             if Identity::parse(local.clone())? != context.principal {
                 return Err("catalog session requires the original enrolled Admin account".into());
@@ -488,8 +515,13 @@ impl<'a, A: Checkpoint> PrincipalReader<'a, A> {
             return Err("principal authority changed during replay".into());
         }
         registry.current()?;
+        if let Some((_, account)) = &credential {
+            account.current_uid()?;
+        }
         Ok((
             PrincipalBinding {
+                credential_sha256: credential.map(|(commitment, _)| commitment),
+                identity_path: self.identity_path.into(),
                 purpose,
                 deployment: snapshot.deployment,
                 enrollment_sha256: bundle::hex(&Sha256::digest(&context.enrollment)),
@@ -708,11 +740,13 @@ pub fn principal_check(login: &str) -> Result<()> {
     let mut reader = PrincipalReader::new(&mut store, directory);
     let session = PrincipalSession::new(account, attempt, &mut reader)?;
     let identity = session.identity(&mut reader)?;
+    let credentials_checkpointed = session.binding.credential_sha256.is_some();
     session.close();
     println!(
         "{}",
         serde_json::json!({"schema_version":1,"action":"governed-principal-check",
         "principal":identity,"authentication_current":true,"session_returned":false,
+        "account_credentials_checkpointed":credentials_checkpointed,
         "role_grant":false,"effect_grant":false,"gate_closing":false})
     );
     Ok(())
@@ -1294,6 +1328,7 @@ impl<'s> CatalogAttempt<'s> {
                     store,
                     &self.directory,
                     &self.registry_path,
+                    &self.session.binding.identity_path,
                     || self.authenticate(),
                     &self.request,
                     &self.command,
@@ -1357,6 +1392,7 @@ fn run_control_at<A: Checkpoint>(
             }
             Ok(serde_json::json!({"schema_version":1,"action":"admin-governance-status",
                 "principal":identity,"catalog":catalog,"checkpoint_head":snapshot.head,
+                "account_credentials_checkpointed":!catalog.account_commitments.is_empty(),
                 "product_admin_active":true,"delegation_available":false,"effect_grant":false,"gate_closing":false}))
         })
     };
@@ -1371,6 +1407,7 @@ fn execute_catalog_authorized_at<A: Checkpoint>(
     store: &mut Store<A>,
     directory: &Path,
     registry_path: &Path,
+    identity_path: &Path,
     mut authenticate: impl FnMut() -> Result<serde_json::Value>,
     request: &str,
     command: &Command,
@@ -1440,11 +1477,26 @@ fn execute_catalog_authorized_at<A: Checkpoint>(
             );
         }
     }
+    let account_pins = if matches!(command, Command::CheckpointAccounts { .. }) {
+        let (observed, pins) = account_checkpoint_at(registry_path, identity_path)?;
+        if &observed != command {
+            return Err("account checkpoint differs from protected local records".into());
+        }
+        pins
+    } else {
+        vec![]
+    };
     let mut authenticate = || {
+        for account in &account_pins {
+            account.current_uid()?;
+        }
         if let Some(binding) = &registry_binding {
             binding.current()?;
         }
         let value = authenticate()?;
+        for account in &account_pins {
+            account.current_uid()?;
+        }
         if let Some(binding) = &registry_binding {
             binding.current()?;
         }
@@ -1692,6 +1744,7 @@ impl<'a> RecoveryAttempt<'a> {
                 store,
                 directory,
                 registry_path,
+                Path::new(crate::principal::IDENTITY),
                 || self.authenticate(),
                 request,
                 &self.command,
@@ -1811,6 +1864,82 @@ pub(crate) fn adoption_command(registry_path: &Path) -> Result<Command> {
     })
 }
 
+fn account_checkpoint_at(
+    registry_path: &Path,
+    identity_path: &Path,
+) -> Result<(Command, Vec<crate::principal::AccountBinding>)> {
+    let registry = crate::principal::RegistryBinding::capture(registry_path)?;
+    let mut commitments = std::collections::BTreeMap::new();
+    let mut pins = Vec::new();
+    for record in registry
+        .current()?
+        .principals()
+        .iter()
+        .filter(|record| record.enabled)
+    {
+        let account =
+            crate::principal::AccountBinding::capture(registry_path, identity_path, &record.login)?;
+        commitments.insert(record.id.clone(), account.credential_commitment()?);
+        pins.push(account);
+    }
+    registry.current()?;
+    for account in &pins {
+        account.current_uid()?;
+    }
+    let command = Command::CheckpointAccounts { commitments };
+    command.validate()?;
+    Ok((command, pins))
+}
+
+pub(crate) fn account_checkpoint_command(registry_path: &Path) -> Result<Command> {
+    Ok(account_checkpoint_at(registry_path, account_identity(registry_path))?.0)
+}
+
+fn account_identity(registry_path: &Path) -> &Path {
+    #[cfg(test)]
+    if Path::new("/.dockerenv").is_file()
+        && !Path::new("/dev/tpm0").exists()
+        && !Path::new("/dev/tpmrm0").exists()
+        && registry_path.parent().is_some_and(|root| {
+            root.starts_with("/tmp")
+                && root
+                    .file_name()
+                    .is_some_and(|name| name.to_string_lossy().starts_with("luma-tpm-delivery-"))
+        })
+    {
+        return Path::new("/etc");
+    }
+    let _ = registry_path;
+    Path::new(crate::principal::IDENTITY)
+}
+
+pub fn checkpoint_accounts(login: &str, request: &str, reviewed: Option<&str>) -> Result<()> {
+    crate::require_root()?;
+    platform::require_installed()?;
+    let prepared = prepare_control(login, Some(request))?;
+    let account = authentication::local(login)?;
+    let registry = Path::new(crate::principal::REGISTRY);
+    let command = account_checkpoint_command(registry)?;
+    let directory = Path::new(DIRECTORY);
+    let mut store = Store::open(
+        tpm::LocalAnchor::installed()?,
+        &directory.join("journal.json"),
+    )?;
+    let report = run_control_at(
+        &mut store,
+        directory,
+        registry,
+        account,
+        prepared,
+        None,
+        request,
+        Some(&command),
+        reviewed,
+    )?;
+    println!("{}", serde_json::to_string(&report)?);
+    Ok(())
+}
+
 pub fn adopt_principals(login: &str, request: &str, reviewed: Option<&str>) -> Result<()> {
     crate::require_root()?;
     platform::require_installed()?;
@@ -1925,6 +2054,7 @@ fn execute_catalog_at<A: Checkpoint>(
         store,
         directory,
         registry_path,
+        Path::new(crate::principal::IDENTITY),
         authenticate,
         request,
         command,
@@ -2555,6 +2685,160 @@ pub(crate) fn fixture_owned_catalog(
     general.close();
     assert_eq!(tpm::private_read(&registry, 64 * 1024).unwrap(), baseline);
     println!("GOVERNED_CATALOG_CASE=general-session-cannot-be-catalog-authority");
+}
+
+#[cfg(test)]
+pub(crate) fn fixture_account_checkpoint(
+    root: &Path,
+    password: &crate::sealed_credential::PrivateBuffer,
+) {
+    // fixture_store verifies the disposable existing-owner/software-TPM boundary
+    // before any account observation or fixture mutation. No host TPM is accepted.
+    drop(fixture_store(root).unwrap());
+    let directory = root.join("admin");
+    let registry = root.join("registry.json");
+    let run = |request: &str, command: &Command, reviewed: Option<&str>| {
+        let login = AdminLogin::prepare_at(
+            &mut fixture_store(root).unwrap(),
+            &directory,
+            &registry,
+            "human",
+            Some(request),
+        )
+        .unwrap();
+        let account = authentication::fixture_local_account(root, "human", password).unwrap();
+        run_control_at(
+            &mut fixture_store(root).unwrap(),
+            &directory,
+            &registry,
+            account,
+            login,
+            None,
+            request,
+            Some(command),
+            reviewed,
+        )
+    };
+    let command = account_checkpoint_command(&registry).unwrap();
+    let inspected = run("account-credentials", &command, None).unwrap();
+    assert_eq!(inspected["tpm_write_performed"], false);
+    let command_json = serde_json::to_string(&command).unwrap();
+    assert!(!command_json.contains('$'));
+    println!("ACCOUNT_CHECKPOINT_CASE=protected-inspection-no-credential-disclosure");
+    let committed = run(
+        "account-credentials",
+        &command,
+        Some(inspected["review_sha256"].as_str().unwrap()),
+    )
+    .unwrap();
+    assert_eq!(committed["tpm_write_performed"], true);
+    assert_eq!(
+        committed["catalog"]["account_commitments"]
+            .as_object()
+            .unwrap()
+            .len(),
+        2
+    );
+    println!("ACCOUNT_CHECKPOINT_CASE=reviewed-complete-checkpoint");
+    let replay = run("account-credentials", &command, None).unwrap();
+    assert_eq!(
+        run(
+            "account-credentials",
+            &command,
+            Some(replay["review_sha256"].as_str().unwrap())
+        )
+        .unwrap()["tpm_write_performed"],
+        false
+    );
+    println!("ACCOUNT_CHECKPOINT_CASE=replay-without-second-extend");
+    let no_op = run("account-same", &command, None).unwrap();
+    assert_eq!(
+        run(
+            "account-same",
+            &command,
+            Some(no_op["review_sha256"].as_str().unwrap())
+        )
+        .unwrap()["tpm_write_performed"],
+        false
+    );
+    println!("ACCOUNT_CHECKPOINT_CASE=identical-new-request-no-op");
+    let prior = fixture_governed_session(root, "otherhuman", password).unwrap();
+    assert!(prior.binding.credential_sha256.is_some());
+    println!("ACCOUNT_CHECKPOINT_CASE=fresh-pam-session-binds-anchored-credential");
+    // Hash/aging rows stay in locked storage, including this private fixture.
+    let mut file = File::open("/etc/shadow").unwrap();
+    let size = usize::try_from(file.metadata().unwrap().len()).unwrap();
+    assert!(size <= 16 * 1024);
+    let mut original = crate::sealed_credential::PrivateBuffer::new(size).unwrap();
+    std::io::Read::read_exact(&mut file, original.bytes_mut()).unwrap();
+    for name in ["otherhuman", "human"] {
+        let mut changed = crate::sealed_credential::PrivateBuffer::new(size).unwrap();
+        changed.bytes_mut().copy_from_slice(original.bytes());
+        let mut offset = 0;
+        let mut position = None;
+        for row in std::str::from_utf8(original.bytes())
+            .unwrap()
+            .split_inclusive('\n')
+        {
+            if row.starts_with(&format!("{name}:")) {
+                let fields: Vec<_> = row.trim_end().split(':').collect();
+                assert_eq!(fields.len(), 9);
+                let days_offset = fields[..4]
+                    .iter()
+                    .map(|field| field.len() + 1)
+                    .sum::<usize>();
+                assert!(!fields[4].is_empty());
+                position = Some(offset + days_offset + fields[4].len() - 1);
+            }
+            offset += row.len();
+        }
+        let position = position.unwrap();
+        changed.bytes_mut()[position] = if changed.bytes()[position] == b'9' {
+            b'8'
+        } else {
+            b'9'
+        };
+        platform::write_atomic(Path::new("/etc/shadow"), changed.bytes(), 0o600).unwrap();
+        let local = authentication::fixture_local_account(root, name, password).unwrap();
+        assert!(local.identity().is_ok());
+        local.logout();
+        assert!(fixture_governed_session(root, name, password).is_err());
+        println!("ACCOUNT_CHECKPOINT_CASE=fresh-pam-cannot-adopt-{name}-credential-drift");
+        if name == "otherhuman" {
+            assert!(fixture_governed_identity(root, &prior).is_err());
+            let changed_command = account_checkpoint_command(&registry).unwrap();
+            assert!(run("account-rebind", &changed_command, None).is_err());
+            assert!(!directory.join(event_name("account-rebind")).exists());
+            println!("ACCOUNT_CHECKPOINT_CASE=ordinary-admin-cannot-silently-rebind-credential");
+        }
+        platform::write_atomic(Path::new("/etc/shadow"), original.bytes(), 0o600).unwrap();
+        let restored = fixture_governed_session(root, name, password).unwrap();
+        assert!(restored.binding.credential_sha256.is_some());
+        restored.close();
+    }
+    assert!(fixture_governed_identity(root, &prior).is_err());
+    println!("ACCOUNT_CHECKPOINT_CASE=restoration-does-not-revive-old-session");
+    let enrollment = account_checkpoint_command(&registry).unwrap();
+    let rotate = Command::RotateAdmin {
+        expected_generation: committed["proposal"]["principal"]["generation"]
+            .as_u64()
+            .unwrap(),
+    };
+    let inspected = run("account-epoch-rotation", &rotate, None).unwrap();
+    assert_eq!(
+        run(
+            "account-epoch-rotation",
+            &rotate,
+            Some(inspected["review_sha256"].as_str().unwrap())
+        )
+        .unwrap()["tpm_write_performed"],
+        true
+    );
+    assert_eq!(account_checkpoint_command(&registry).unwrap(), enrollment);
+    let fresh = fixture_governed_session(root, "human", password).unwrap();
+    assert!(fresh.binding.credential_sha256.is_some());
+    fresh.close();
+    println!("ACCOUNT_CHECKPOINT_CASE=principal-rotation-preserves-credential-checkpoint");
 }
 
 #[cfg(test)]
@@ -3668,6 +3952,168 @@ mod tests {
             2
         );
         assert_eq!(f.writes(), 3);
+    }
+
+    #[test]
+    fn account_checkpoint_pending_revocation_and_lost_reply_never_redispatch() {
+        for fault in ["revocation", "lost-reply"] {
+            let f = Fixture::new(&format!("account-checkpoint-{fault}"));
+            let adoption = principal_registry(&f);
+            let registry = f.directory.join("registry.json");
+            let identity = f.directory.join("identity");
+            fs::DirBuilder::new().mode(0o700).create(&identity).unwrap();
+            platform::write_atomic(&identity.join("passwd"), b"human:x:1001:1001:Human:/home/human:/bin/bash\notherhuman:x:1002:1002:Other:/home/otherhuman:/bin/bash\n", 0o644).unwrap();
+            let shadow = b"human:$6$public$one:20000:0:99999:7:::\notherhuman:$6$public$two:20000:0:99999:7:::\n";
+            platform::write_atomic(&identity.join("shadow"), shadow, 0o600).unwrap();
+            f.activate();
+            principal_commit(&f, "adopt", &adoption);
+            let (command, _) = account_checkpoint_at(&registry, &identity).unwrap();
+            let inspected = execute_catalog_authorized_at(
+                &mut f.store(),
+                &f.directory,
+                &registry,
+                &identity,
+                || Ok(f.identity.clone()),
+                "accounts",
+                &command,
+                None,
+                CatalogAuthority::Primitive,
+            )
+            .unwrap();
+            let pending = f.directory.join("journal.pending.json");
+            if fault == "lost-reply" {
+                f.anchor.0.borrow_mut().3 = true;
+            }
+            let mut revoked = false;
+            assert!(execute_catalog_authorized_at(&mut f.store(), &f.directory, &registry, &identity,
+                || {
+                    if fault == "revocation" && pending.exists() && !revoked {
+                        platform::write_atomic(&identity.join("shadow"), b"human:$6$public$one:20000:0:99999:7:::\notherhuman:!locked:20000:0:99999:7:::\n", 0o600)?;
+                        revoked = true;
+                    }
+                    Ok(f.identity.clone())
+                }, "accounts", &command, Some(inspected["review_sha256"].as_str().unwrap()),
+                CatalogAuthority::Primitive).is_err());
+            assert!(pending.is_file());
+            assert!(f.directory.join(event_name("accounts")).is_file());
+            assert!(Store::open(f.anchor.clone(), &f.directory.join("journal.json")).is_err());
+            if fault == "revocation" {
+                assert!(revoked);
+                assert_eq!(f.writes(), 2);
+                platform::write_atomic(&identity.join("shadow"), shadow, 0o600).unwrap();
+                assert!(Store::open(f.anchor.clone(), &f.directory.join("journal.json")).is_err());
+            } else {
+                assert_eq!(f.writes(), 3);
+                let recovery = admin_journal::Recovery::inspect(
+                    f.anchor.clone(),
+                    &f.directory.join("journal.json"),
+                )
+                .unwrap();
+                let review = recovery.digest().unwrap();
+                drop(recovery.publish(&review).unwrap());
+                let replay = execute_catalog_authorized_at(
+                    &mut f.store(),
+                    &f.directory,
+                    &registry,
+                    &identity,
+                    || Ok(f.identity.clone()),
+                    "accounts",
+                    &command,
+                    None,
+                    CatalogAuthority::Primitive,
+                )
+                .unwrap();
+                assert_eq!(replay["replayed"], true);
+                execute_catalog_authorized_at(
+                    &mut f.store(),
+                    &f.directory,
+                    &registry,
+                    &identity,
+                    || Ok(f.identity.clone()),
+                    "accounts",
+                    &command,
+                    Some(replay["review_sha256"].as_str().unwrap()),
+                    CatalogAuthority::Primitive,
+                )
+                .unwrap();
+                assert_eq!(f.writes(), 3);
+            }
+        }
+    }
+
+    #[test]
+    fn account_checkpoint_guards_fresh_readers_and_refuses_unreviewed_rebinding() {
+        let f = Fixture::new("account-checkpoint-reader");
+        let adoption = principal_registry(&f);
+        let registry = f.directory.join("registry.json");
+        let identity = f.directory.join("identity");
+        fs::DirBuilder::new().mode(0o700).create(&identity).unwrap();
+        platform::write_atomic(&identity.join("passwd"), b"human:x:1001:1001:Human:/home/human:/bin/bash\notherhuman:x:1002:1002:Other:/home/otherhuman:/bin/bash\n", 0o644).unwrap();
+        let shadow = b"human:$6$public$one:20000:0:99999:7:::\notherhuman:$6$public$two:20000:0:99999:7:::\n";
+        platform::write_atomic(&identity.join("shadow"), shadow, 0o600).unwrap();
+        f.activate();
+        principal_commit(&f, "adopt", &adoption);
+        let (command, _) = account_checkpoint_at(&registry, &identity).unwrap();
+        let execute = |request: &str, command: &Command, review: Option<&str>| {
+            execute_catalog_authorized_at(
+                &mut f.store(),
+                &f.directory,
+                &registry,
+                &identity,
+                || Ok(f.identity.clone()),
+                request,
+                command,
+                review,
+                CatalogAuthority::Primitive,
+            )
+        };
+        let inspected = execute("accounts", &command, None).unwrap();
+        assert_eq!(f.writes(), 2);
+        assert!(!f.directory.join(event_name("accounts")).exists());
+        assert!(execute("accounts", &command, Some(&"00".repeat(32))).is_err());
+        execute(
+            "accounts",
+            &command,
+            Some(inspected["review_sha256"].as_str().unwrap()),
+        )
+        .unwrap();
+        assert_eq!(f.writes(), 3);
+        let resolve = |local: &serde_json::Value| {
+            let mut store = f.store();
+            let mut reader = PrincipalReader::at(&mut store, &f.directory, &registry);
+            reader.identity_path = &identity;
+            reader.resolve(local)
+        };
+        assert!(resolve(&f.identity).unwrap().credential_sha256.is_some());
+        assert!(resolve(&other_identity())
+            .unwrap()
+            .credential_sha256
+            .is_some());
+        let replay = execute("accounts", &command, None).unwrap();
+        assert_eq!(replay["replayed"], true);
+        execute(
+            "accounts",
+            &command,
+            Some(replay["review_sha256"].as_str().unwrap()),
+        )
+        .unwrap();
+        assert_eq!(f.writes(), 3);
+        platform::write_atomic(&identity.join("shadow"), b"human:$6$public$one:20000:0:99999:7:::\notherhuman:$6$public$changed:20000:0:99999:7:::\n", 0o600).unwrap();
+        assert!(resolve(&other_identity()).is_err());
+        assert!(resolve(&f.identity).is_ok());
+        let (changed, _) = account_checkpoint_at(&registry, &identity).unwrap();
+        assert!(execute("rebind", &changed, None).is_err());
+        assert_eq!(f.writes(), 3);
+        platform::write_atomic(&identity.join("shadow"), shadow, 0o600).unwrap();
+        assert!(resolve(&other_identity()).is_ok());
+        principal_commit(
+            &f,
+            "rotate",
+            &Command::RotateAdmin {
+                expected_generation: 1,
+            },
+        );
+        assert_eq!(resolve(&f.identity).unwrap().identity["generation"], 2);
     }
 
     #[test]

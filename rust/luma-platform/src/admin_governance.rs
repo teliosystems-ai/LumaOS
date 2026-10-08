@@ -1337,11 +1337,63 @@ impl<'s> CatalogAttempt<'s> {
                 )
             })
         };
-        if let Some(peer) = self.peer {
+        let report = if let Some(peer) = self.peer {
             peer.observe(project)
         } else {
             project()
+        }?;
+        // The ordinary account projection must finish before replacing shadow:
+        // that replacement intentionally invalidates every old account handle.
+        // Keep the owned continuation and live Admin for the final dispatch;
+        // never accept a returned/serialized receipt as publication authority.
+        if let Command::PermitAccountPublication { transaction } = &self.command {
+            if report["committed"] == true {
+                let snapshot = store.snapshot()?;
+                snapshot.clock.elapsed_since(self.session.clock.get())?;
+                self.session.clock.set(snapshot.clock);
+                let context =
+                    Context::load_at(&self.directory, &snapshot.deployment, &self.registry_path)?;
+                let (catalog, events) = context.events(&snapshot, None)?;
+                if !events
+                    .iter()
+                    .any(|event| event.request_id == self.request && event.command == self.command)
+                    || serde_json::to_value(context.writer(&catalog)?)?
+                        != self.session.binding.identity
+                {
+                    return Err("account publication lacks its exact governed continuation".into());
+                }
+                let transition = catalog
+                    .account_transitions
+                    .get(transaction)
+                    .ok_or("missing account transition")?;
+                if transition.phase == crate::account_transition::Phase::PublicationPermitted {
+                    let boundary = account_boundary(
+                        &catalog,
+                        &self.registry_path,
+                        &self.session.binding.identity_path,
+                        &self.command,
+                    )?;
+                    match boundary {
+                        Some(AccountBoundary::Plan(guard)) => guard.publish(|| {
+                            self.authenticate()?;
+                            let current = store.snapshot()?;
+                            current.clock.elapsed_since(self.session.clock.get())?;
+                            self.session.clock.set(current.clock);
+                            if current.head != snapshot.head
+                                || current.deployment != snapshot.deployment
+                                || context.events(&current, None)?.0 != catalog
+                            {
+                                return Err("account authority changed before publication".into());
+                            }
+                            context.recheck(&mut || self.authenticate())
+                        })?,
+                        Some(AccountBoundary::Published(guard)) => guard.recheck()?,
+                        None => return Err("missing protected publication boundary".into()),
+                    }
+                }
+            }
         }
+        Ok(report)
     }
 }
 
@@ -1418,6 +1470,11 @@ fn execute_catalog_authorized_at<A: Checkpoint>(
         return Err("invalid or reserved Admin request".into());
     }
     command.validate()?;
+    if let Command::PrepareAccountLock { intent } = command {
+        if intent.transaction != request {
+            return Err("account preparation must bind its exact request".into());
+        }
+    }
     let snapshot = store.snapshot()?;
     match (command, &authority) {
         (Command::RecoverAdmin { .. }, CatalogAuthority::Recovery(attempt))
@@ -1486,7 +1543,11 @@ fn execute_catalog_authorized_at<A: Checkpoint>(
     } else {
         vec![]
     };
+    let account_boundary = account_boundary(&catalog, registry_path, identity_path, command)?;
     let mut authenticate = || {
+        if let Some(boundary) = &account_boundary {
+            boundary.recheck()?;
+        }
         for account in &account_pins {
             account.current_uid()?;
         }
@@ -1494,6 +1555,9 @@ fn execute_catalog_authorized_at<A: Checkpoint>(
             binding.current()?;
         }
         let value = authenticate()?;
+        if let Some(boundary) = &account_boundary {
+            boundary.recheck()?;
+        }
         for account in &account_pins {
             account.current_uid()?;
         }
@@ -1569,6 +1633,13 @@ fn execute_catalog_authorized_at<A: Checkpoint>(
         }
         if changed {
             context.recheck(&mut authenticate)?;
+            if matches!(command, Command::PrepareAccountLock { .. }) {
+                if let Some(AccountBoundary::Plan(guard)) = &account_boundary {
+                    guard.stage()?;
+                } else {
+                    return Err("account preparation lacks protected source handles".into());
+                }
+            }
             match fs::symlink_metadata(&path) {
                 Ok(_) => (),
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
@@ -1643,6 +1714,83 @@ fn execute_catalog_authorized_at<A: Checkpoint>(
         "product_admin_active":true,"delegation_available":false,"effect_grant":false,
         "trusted_utc_available":false,"production_custody_verified":false,"gate_closing":false}),
     )
+}
+
+enum AccountBoundary {
+    Plan(crate::account_transition::Guard),
+    Published(crate::account_transition::Published),
+}
+
+impl AccountBoundary {
+    fn recheck(&self) -> Result<()> {
+        match self {
+            Self::Plan(guard) => guard.recheck(),
+            Self::Published(guard) => guard.recheck(),
+        }
+    }
+}
+
+fn account_boundary(
+    catalog: &Catalog,
+    registry_path: &Path,
+    identity_path: &Path,
+    command: &Command,
+) -> Result<Option<AccountBoundary>> {
+    use crate::account_transition::{Guard, Phase, Published};
+    let intent = match command {
+        Command::PrepareAccountLock { intent } => {
+            if catalog
+                .account_transitions
+                .contains_key(&intent.transaction)
+            {
+                return Ok(None);
+            }
+            intent
+        }
+        Command::PermitAccountPublication { transaction }
+        | Command::CompleteAccountLock { transaction } => {
+            let transition = catalog
+                .account_transitions
+                .get(transaction)
+                .ok_or("no anchored account transition")?;
+            if transition.phase == Phase::Complete {
+                return Ok(None);
+            }
+            &transition.intent
+        }
+        _ => return Ok(None),
+    };
+    if !matches!(command, Command::PrepareAccountLock { .. }) {
+        // Already-published recovery is an exact read, never a second rename.
+        if let Ok(published) = Published::capture(registry_path, identity_path, intent) {
+            return Ok(Some(AccountBoundary::Published(published)));
+        }
+        if matches!(command, Command::CompleteAccountLock { .. }) {
+            return Err("account completion requires the exact published records".into());
+        }
+    }
+    let registry = crate::principal::RegistryBinding::capture(registry_path)?;
+    let name = &registry
+        .current()?
+        .principal(&intent.principal)
+        .ok_or("unknown account transition principal")?
+        .login;
+    let guard = Guard::prepare(
+        registry_path,
+        identity_path,
+        name,
+        intent.expected_generation,
+        &intent.transaction,
+        intent.locked,
+    )?;
+    if &guard.intent != intent {
+        return Err("account transition differs from protected records".into());
+    }
+    if matches!(command, Command::PermitAccountPublication { .. }) {
+        guard.retain_stage()?;
+    }
+    registry.current()?;
+    Ok(Some(AccountBoundary::Plan(guard)))
 }
 
 // Kept private to this composition. A captured verifier or JSON identity cannot
@@ -1929,6 +2077,97 @@ pub fn checkpoint_accounts(login: &str, request: &str, reviewed: Option<&str>) -
         &mut store,
         directory,
         registry,
+        account,
+        prepared,
+        None,
+        request,
+        Some(&command),
+        reviewed,
+    )?;
+    println!("{}", serde_json::to_string(&report)?);
+    Ok(())
+}
+
+pub fn account_lock_command(args: &[String]) -> Result<()> {
+    crate::require_root()?;
+    platform::require_installed()?;
+    let base = match args.first().map(String::as_str) {
+        Some("admin-account-lock") => 5,
+        Some("admin-account-publish" | "admin-account-complete") => 4,
+        _ => return Err("unknown account lifecycle command".into()),
+    };
+    let reviewed = if args.len() == base {
+        None
+    } else if args.len() == base + 2 && args[base] == "--commit" {
+        tpm::decode::<32>(&args[base + 1])?;
+        Some(args[base + 1].as_str())
+    } else {
+        return Err("invalid account lifecycle command arguments".into());
+    };
+    let login = &args[1];
+    let request = &args[3];
+    if !admin_roles::identifier(request) || request == REQUEST {
+        return Err("invalid or reserved account lifecycle request".into());
+    }
+    let prepared = prepare_control(login, Some(request))?;
+    let account = authentication::local(login)?;
+    let registry_path = Path::new(crate::principal::REGISTRY);
+    let identity_path = Path::new(crate::principal::IDENTITY);
+    let directory = Path::new(DIRECTORY);
+    let mut store = Store::open(
+        tpm::LocalAnchor::installed()?,
+        &directory.join("journal.json"),
+    )?;
+    let snapshot = store.snapshot()?;
+    let context = Context::load_at(directory, &snapshot.deployment, registry_path)?;
+    let catalog = context.events(&snapshot, Some(request))?.0;
+    let command = match args[0].as_str() {
+        "admin-account-lock" => {
+            let locked = match args[4].as_str() {
+                "lock" => true,
+                "unlock" => false,
+                _ => return Err("account transition must be lock or unlock".into()),
+            };
+            let registry = crate::principal::RegistryBinding::capture(registry_path)?;
+            let record = registry
+                .current()?
+                .account(&args[2])
+                .ok_or("unknown installation account")?;
+            let intent = if let Some(transition) = catalog.account_transitions.get(request) {
+                if transition.intent.principal != record.id || transition.intent.locked != locked {
+                    return Err("account request already belongs to another transition".into());
+                }
+                transition.intent.clone()
+            } else {
+                let generation = catalog
+                    .principal_states
+                    .get(&record.id)
+                    .map_or(record.generation, |state| state.generation);
+                let guard = crate::account_transition::Guard::prepare(
+                    registry_path,
+                    identity_path,
+                    &args[2],
+                    generation,
+                    request,
+                    locked,
+                )?;
+                guard.intent.clone()
+            };
+            registry.current()?;
+            Command::PrepareAccountLock { intent }
+        }
+        "admin-account-publish" => Command::PermitAccountPublication {
+            transaction: args[2].clone(),
+        },
+        "admin-account-complete" => Command::CompleteAccountLock {
+            transaction: args[2].clone(),
+        },
+        _ => unreachable!("validated account command"),
+    };
+    let report = run_control_at(
+        &mut store,
+        directory,
+        registry_path,
         account,
         prepared,
         None,
@@ -2839,6 +3078,152 @@ pub(crate) fn fixture_account_checkpoint(
     assert!(fresh.binding.credential_sha256.is_some());
     fresh.close();
     println!("ACCOUNT_CHECKPOINT_CASE=principal-rotation-preserves-credential-checkpoint");
+    fixture_account_lock(root, password);
+}
+
+#[cfg(test)]
+fn fixture_account_lock(root: &Path, password: &crate::sealed_credential::PrivateBuffer) {
+    use std::os::unix::fs::MetadataExt;
+    drop(fixture_store(root).unwrap());
+    let directory = root.join("admin");
+    let registry = root.join("registry.json");
+    let run = |request: &str, command: &Command, review: Option<&str>| {
+        let login = AdminLogin::prepare_at(
+            &mut fixture_store(root).unwrap(),
+            &directory,
+            &registry,
+            "human",
+            Some(request),
+        )
+        .unwrap();
+        let account = authentication::fixture_local_account(root, "human", password).unwrap();
+        run_control_at(
+            &mut fixture_store(root).unwrap(),
+            &directory,
+            &registry,
+            account,
+            login,
+            None,
+            request,
+            Some(command),
+            review,
+        )
+    };
+    let commit = |request: &str, command: &Command| {
+        let inspected = run(request, command, None).unwrap();
+        run(
+            request,
+            command,
+            Some(inspected["review_sha256"].as_str().unwrap()),
+        )
+        .unwrap()
+    };
+    let original = crate::principal::account_file(Path::new("/etc/shadow"), true)
+        .unwrap()
+        .0;
+    let prior = fixture_governed_session(root, "otherhuman", password).unwrap();
+    for (transaction, locked) in [
+        ("account-lock-transaction", true),
+        ("account-unlock-transaction", false),
+    ] {
+        let mut store = fixture_store(root).unwrap();
+        let snapshot = store.snapshot().unwrap();
+        let catalog = Context::load_at(&directory, &snapshot.deployment, &registry)
+            .unwrap()
+            .events(&snapshot, None)
+            .unwrap()
+            .0;
+        drop(store);
+        let baseline = crate::principal::RegistryBinding::capture(&registry).unwrap();
+        let principal = baseline.current().unwrap().account("otherhuman").unwrap();
+        let generation = catalog
+            .principal_states
+            .get(&principal.id)
+            .map_or(principal.generation, |state| state.generation);
+        let guard = crate::account_transition::Guard::prepare(
+            &registry,
+            Path::new("/etc"),
+            "otherhuman",
+            generation,
+            transaction,
+            locked,
+        )
+        .unwrap();
+        let prepare = Command::PrepareAccountLock {
+            intent: guard.intent.clone(),
+        };
+        drop(guard);
+        let inode = fs::symlink_metadata("/etc/shadow").unwrap().ino();
+        let inspected = run(transaction, &prepare, None).unwrap();
+        assert!(!Path::new("/etc")
+            .join(format!("account-transition-{transaction}"))
+            .exists());
+        assert_eq!(fs::symlink_metadata("/etc/shadow").unwrap().ino(), inode);
+        assert!(run(transaction, &prepare, Some(&"00".repeat(32))).is_err());
+        println!("ACCOUNT_LOCK_CASE={transaction}-inspection-and-wrong-review-do-not-stage");
+        let prepared = run(
+            transaction,
+            &prepare,
+            Some(inspected["review_sha256"].as_str().unwrap()),
+        )
+        .unwrap();
+        assert_eq!(
+            prepared["catalog"]["principal_states"][&principal.id]["enabled"],
+            false
+        );
+        assert_eq!(
+            prepared["catalog"]["principal_states"][&principal.id]["generation"],
+            generation + 1
+        );
+        assert_eq!(fs::symlink_metadata("/etc/shadow").unwrap().ino(), inode);
+        assert!(fixture_governed_session(root, "otherhuman", password).is_err());
+        println!("ACCOUNT_LOCK_CASE={transaction}-prepared-generation-fenced-before-publication");
+        let complete = Command::CompleteAccountLock {
+            transaction: transaction.into(),
+        };
+        assert!(run(&format!("{transaction}-early-complete"), &complete, None).is_err());
+        println!("ACCOUNT_LOCK_CASE={transaction}-early-completion-refused");
+        let publish = Command::PermitAccountPublication {
+            transaction: transaction.into(),
+        };
+        let publish_request = format!("{transaction}-publish");
+        commit(&publish_request, &publish);
+        let published_inode = fs::symlink_metadata("/etc/shadow").unwrap().ino();
+        assert_ne!(published_inode, inode);
+        assert!(fixture_governed_session(root, "otherhuman", password).is_err());
+        println!("ACCOUNT_LOCK_CASE={transaction}-real-shadow-publication-retains-fence");
+        let replay = commit(&publish_request, &publish);
+        assert_eq!(replay["replayed"], true);
+        assert_eq!(replay["tpm_write_performed"], false);
+        assert_eq!(
+            fs::symlink_metadata("/etc/shadow").unwrap().ino(),
+            published_inode
+        );
+        println!("ACCOUNT_LOCK_CASE={transaction}-already-published-recovery-no-second-rename");
+        let completed = commit(&format!("{transaction}-complete"), &complete);
+        assert_eq!(
+            completed["catalog"]["principal_states"][&principal.id]["enabled"],
+            !locked
+        );
+        assert_eq!(
+            completed["catalog"]["principal_states"][&principal.id]["generation"],
+            generation + 1
+        );
+        assert_eq!(
+            fixture_governed_session(root, "otherhuman", password).is_ok(),
+            !locked
+        );
+        println!("ACCOUNT_LOCK_CASE={transaction}-completion-checks-new-records-and-lock-state");
+    }
+    assert_eq!(
+        crate::principal::account_file(Path::new("/etc/shadow"), true)
+            .unwrap()
+            .0
+            .bytes(),
+        original.bytes()
+    );
+    assert!(fixture_governed_identity(root, &prior).is_err());
+    println!("ACCOUNT_LOCK_CASE=restored-password-does-not-revive-old-session");
 }
 
 #[cfg(test)]
@@ -3952,6 +4337,203 @@ mod tests {
             2
         );
         assert_eq!(f.writes(), 3);
+    }
+
+    #[test]
+    fn account_lock_uncertain_tpm_reply_fences_target_without_filesystem_dispatch() {
+        for phase in ["prepare", "permit", "complete"] {
+            let f = Fixture::new(&format!("account-lock-lost-{phase}"));
+            let adoption = principal_registry(&f);
+            let registry = f.directory.join("registry.json");
+            let identity = f.directory.join("identity");
+            fs::DirBuilder::new().mode(0o700).create(&identity).unwrap();
+            platform::write_atomic(&identity.join("passwd"),b"human:x:1001:1001:Human:/home/human:/bin/bash\notherhuman:x:1002:1002:Other:/home/otherhuman:/bin/bash\n",0o600).unwrap();
+            let original=b"human:$6$fixture$one:20000:0:99999:7:::\notherhuman:$6$fixture$two:20000:0:99999:7:::\n";
+            platform::write_atomic(&identity.join("shadow"), original, 0o600).unwrap();
+            f.activate();
+            principal_commit(&f, "adopt", &adoption);
+            let execute = |request: &str, command: &Command, review: Option<&str>| {
+                execute_catalog_authorized_at(
+                    &mut f.store(),
+                    &f.directory,
+                    &registry,
+                    &identity,
+                    || Ok(f.identity.clone()),
+                    request,
+                    command,
+                    review,
+                    CatalogAuthority::Primitive,
+                )
+            };
+            let commit = |request: &str, command: &Command| {
+                let inspected = execute(request, command, None).unwrap();
+                execute(
+                    request,
+                    command,
+                    Some(inspected["review_sha256"].as_str().unwrap()),
+                )
+                .unwrap()
+            };
+            let (checkpoint, _) = account_checkpoint_at(&registry, &identity).unwrap();
+            commit("accounts", &checkpoint);
+            let guard = crate::account_transition::Guard::prepare(
+                &registry,
+                &identity,
+                "otherhuman",
+                1,
+                "lock",
+                true,
+            )
+            .unwrap();
+            let intent = guard.intent.clone();
+            drop(guard);
+            let prepare = Command::PrepareAccountLock {
+                intent: intent.clone(),
+            };
+            let permit = Command::PermitAccountPublication {
+                transaction: "lock".into(),
+            };
+            let complete = Command::CompleteAccountLock {
+                transaction: "lock".into(),
+            };
+            let mut target = ("lock", &prepare);
+            if phase != "prepare" {
+                commit("lock", &prepare);
+                let mut store = f.store();
+                let mut reader = PrincipalReader::at(&mut store, &f.directory, &registry);
+                reader.identity_path = &identity;
+                assert!(reader.resolve(&other_identity()).is_err());
+                assert!(execute("early-complete", &complete, None).is_err());
+                target = ("permit", &permit);
+                if phase == "complete" {
+                    commit("permit", &permit);
+                    // A private FakeTPM fixture dispatch, not production authority.
+                    let guard = crate::account_transition::Guard::prepare(
+                        &registry,
+                        &identity,
+                        "otherhuman",
+                        1,
+                        "lock",
+                        true,
+                    )
+                    .unwrap();
+                    guard.publish(|| Ok(())).unwrap();
+                    drop(guard);
+                    target = ("complete", &complete);
+                }
+            }
+            let inspected = execute(target.0, target.1, None).unwrap();
+            let before = fs::read(identity.join("shadow")).unwrap();
+            let writes = f.writes();
+            f.anchor.0.borrow_mut().3 = true;
+            assert!(execute(
+                target.0,
+                target.1,
+                Some(inspected["review_sha256"].as_str().unwrap())
+            )
+            .is_err());
+            assert_eq!(f.writes(), writes + 1);
+            assert_eq!(fs::read(identity.join("shadow")).unwrap(), before);
+            assert!(Store::open(f.anchor.clone(), &f.directory.join("journal.json")).is_err());
+            let recovery = admin_journal::Recovery::inspect(
+                f.anchor.clone(),
+                &f.directory.join("journal.json"),
+            )
+            .unwrap();
+            let review = recovery.digest().unwrap();
+            drop(recovery.publish(&review).unwrap());
+            let replay = commit(target.0, target.1);
+            assert_eq!(replay["replayed"], true);
+            assert_eq!(replay["tpm_write_performed"], false);
+            assert_eq!(f.writes(), writes + 1);
+            assert_eq!(fs::read(identity.join("shadow")).unwrap(), before);
+            assert_ne!(
+                replay["catalog"]["account_transitions"]["lock"]["phase"],
+                serde_json::Value::Null
+            );
+        }
+    }
+
+    #[test]
+    fn account_lock_staged_replacement_before_tpm_commit_is_not_dispatched() {
+        let f = Fixture::new("account-lock-staged-replaced");
+        let adoption = principal_registry(&f);
+        let registry = f.directory.join("registry.json");
+        let identity = f.directory.join("identity");
+        fs::DirBuilder::new().mode(0o700).create(&identity).unwrap();
+        platform::write_atomic(&identity.join("passwd"),b"human:x:1001:1001:Human:/home/human:/bin/bash\notherhuman:x:1002:1002:Other:/home/otherhuman:/bin/bash\n",0o600).unwrap();
+        let original=b"human:$6$fixture$one:20000:0:99999:7:::\notherhuman:$6$fixture$two:20000:0:99999:7:::\n";
+        platform::write_atomic(&identity.join("shadow"), original, 0o600).unwrap();
+        f.activate();
+        principal_commit(&f, "adopt", &adoption);
+        let execute = |request: &str, command: &Command, review: Option<&str>| {
+            execute_catalog_authorized_at(
+                &mut f.store(),
+                &f.directory,
+                &registry,
+                &identity,
+                || Ok(f.identity.clone()),
+                request,
+                command,
+                review,
+                CatalogAuthority::Primitive,
+            )
+        };
+        let commit = |request: &str, command: &Command| {
+            let inspected = execute(request, command, None).unwrap();
+            execute(
+                request,
+                command,
+                Some(inspected["review_sha256"].as_str().unwrap()),
+            )
+            .unwrap()
+        };
+        let (checkpoint, _) = account_checkpoint_at(&registry, &identity).unwrap();
+        commit("accounts", &checkpoint);
+        let guard = crate::account_transition::Guard::prepare(
+            &registry,
+            &identity,
+            "otherhuman",
+            1,
+            "lock",
+            true,
+        )
+        .unwrap();
+        let prepare = Command::PrepareAccountLock {
+            intent: guard.intent.clone(),
+        };
+        drop(guard);
+        commit("lock", &prepare);
+        let permit = Command::PermitAccountPublication {
+            transaction: "lock".into(),
+        };
+        let inspected = execute("permit", &permit, None).unwrap();
+        let mut changed = false;
+        let writes = f.writes();
+        assert!(execute_catalog_authorized_at(
+            &mut f.store(),
+            &f.directory,
+            &registry,
+            &identity,
+            || {
+                if f.directory.join("journal.pending.json").exists() && !changed {
+                    let path = identity.join("account-transition-lock/shadow.new");
+                    let retained = crate::principal::account_file(&path, true)?.0;
+                    platform::write_atomic(&path, retained.bytes(), 0o600)?;
+                    changed = true;
+                }
+                Ok(f.identity.clone())
+            },
+            "permit",
+            &permit,
+            Some(inspected["review_sha256"].as_str().unwrap()),
+            CatalogAuthority::Primitive
+        )
+        .is_err());
+        assert!(changed);
+        assert_eq!(f.writes(), writes);
+        assert_eq!(fs::read(identity.join("shadow")).unwrap(), original);
+        assert!(Store::open(f.anchor.clone(), &f.directory.join("journal.json")).is_err());
     }
 
     #[test]

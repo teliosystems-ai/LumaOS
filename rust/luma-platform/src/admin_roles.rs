@@ -39,6 +39,15 @@ pub(crate) enum Command {
     CheckpointAccounts {
         commitments: BTreeMap<String, String>,
     },
+    PrepareAccountLock {
+        intent: crate::account_transition::Intent,
+    },
+    PermitAccountPublication {
+        transaction: String,
+    },
+    CompleteAccountLock {
+        transaction: String,
+    },
     AdvancePrincipal {
         principal: String,
         expected_generation: u64,
@@ -61,6 +70,9 @@ impl Command {
             Self::DefineRole { .. } => "admin.role.define",
             Self::AdoptPrincipals { .. } => "admin.principal.adopt",
             Self::CheckpointAccounts { .. } => "admin.account.checkpoint",
+            Self::PrepareAccountLock { .. } => "admin.account.lock_prepare",
+            Self::PermitAccountPublication { .. } => "admin.account.lock_publish",
+            Self::CompleteAccountLock { .. } => "admin.account.lock_complete",
             Self::AdvancePrincipal { .. } => "admin.principal.advance",
             Self::RotateAdmin { .. } => "admin.principal.rotate_admin",
             Self::RecoverAdmin { .. } => "admin.principal.recover",
@@ -69,6 +81,14 @@ impl Command {
     pub(crate) fn validate(&self) -> Result<()> {
         let valid_activity = |v: &str| identifier(v) && v != "admin.bootstrap";
         match self {
+            Self::PrepareAccountLock { intent } => intent.validate(),
+            Self::PermitAccountPublication { transaction }
+            | Self::CompleteAccountLock { transaction } => {
+                if !identifier(transaction) || transaction == "admin-bootstrap-v1" {
+                    return Err("invalid account transition identifier".into());
+                }
+                Ok(())
+            }
             Self::CheckpointAccounts { commitments } => {
                 if commitments.is_empty() || commitments.len() > 128 {
                     return Err("account checkpoint requires a finite complete inventory".into());
@@ -151,6 +171,8 @@ pub(crate) struct Catalog {
     pub principal_states: BTreeMap<String, PrincipalState>,
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub account_commitments: BTreeMap<String, String>,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub account_transitions: BTreeMap<String, crate::account_transition::Transition>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub admin_recovery: Option<crate::admin_recovery::Verifier>,
 }
@@ -170,6 +192,7 @@ impl Catalog {
             principal_registry: None,
             principal_states: BTreeMap::new(),
             account_commitments: BTreeMap::new(),
+            account_transitions: BTreeMap::new(),
             admin_recovery: None,
         }
     }
@@ -183,6 +206,94 @@ impl Catalog {
             .checked_add(1)
             .ok_or("Admin catalog version exhausted")?;
         match command {
+            Command::PrepareAccountLock { intent } => {
+                use crate::account_transition::{Phase, Transition};
+                let registry = self
+                    .principal_registry
+                    .as_ref()
+                    .ok_or("explicit principal adoption required")?;
+                let principal = registry
+                    .principal(&intent.principal)
+                    .filter(|record| record.enabled && record.uid != 1001)
+                    .ok_or("account lock changes cannot mutate the original Admin")?;
+                let generation = self
+                    .principal_states
+                    .get(&intent.principal)
+                    .map_or(principal.generation, |state| state.generation);
+                if registry.installation() != intent.installation
+                    || generation != intent.expected_generation
+                    || self.account_commitments.get(&intent.principal)
+                        != Some(&intent.credential_before)
+                    || self.account_transitions.contains_key(&intent.transaction)
+                    || self.account_transitions.len() >= 128
+                    || self
+                        .account_transitions
+                        .values()
+                        .any(|v| v.phase != Phase::Complete)
+                {
+                    return Err("account transition conflicts with current credential, generation or pending publication".into());
+                }
+                let generation = generation
+                    .checked_add(1)
+                    .ok_or("principal generation exhausted")?;
+                self.principal_states.insert(
+                    intent.principal.clone(),
+                    PrincipalState {
+                        generation,
+                        enabled: false,
+                    },
+                );
+                self.account_transitions.insert(
+                    intent.transaction.clone(),
+                    Transition {
+                        intent: intent.clone(),
+                        phase: Phase::Prepared,
+                    },
+                );
+            }
+            Command::PermitAccountPublication { transaction } => {
+                use crate::account_transition::Phase;
+                let current = self
+                    .account_transitions
+                    .get_mut(transaction)
+                    .ok_or("no anchored account transition")?;
+                if current.phase != Phase::Prepared {
+                    return Err("account publication requires its exact prepared phase".into());
+                }
+                current.phase = Phase::PublicationPermitted;
+            }
+            Command::CompleteAccountLock { transaction } => {
+                use crate::account_transition::Phase;
+                let current = self
+                    .account_transitions
+                    .get_mut(transaction)
+                    .ok_or("no anchored account transition")?;
+                if current.phase != Phase::PublicationPermitted
+                    || self.account_commitments.get(&current.intent.principal)
+                        != Some(&current.intent.credential_before)
+                    || self.principal_states.get(&current.intent.principal)
+                        != Some(&PrincipalState {
+                            generation: current.intent.expected_generation + 1,
+                            enabled: false,
+                        })
+                {
+                    return Err(
+                        "account completion requires its exact permitted fenced generation".into(),
+                    );
+                }
+                self.account_commitments.insert(
+                    current.intent.principal.clone(),
+                    current.intent.credential_after.clone(),
+                );
+                self.principal_states.insert(
+                    current.intent.principal.clone(),
+                    PrincipalState {
+                        generation: current.intent.expected_generation + 1,
+                        enabled: !current.intent.locked,
+                    },
+                );
+                current.phase = Phase::Complete;
+            }
             Command::CheckpointAccounts { commitments } => {
                 let registry = self
                     .principal_registry
@@ -282,6 +393,12 @@ impl Catalog {
                 expected_generation,
                 enabled,
             } => {
+                if self.account_transitions.values().any(|transition| {
+                    transition.intent.principal == *principal
+                        && transition.phase != crate::account_transition::Phase::Complete
+                }) {
+                    return Err("pending account transaction fences principal changes".into());
+                }
                 let record = self
                     .principal_registry
                     .as_ref()
@@ -400,6 +517,153 @@ impl Catalog {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn account_lock_phases_fence_generations_and_never_advance_credentials_early() {
+        use crate::account_transition::{Intent, Phase};
+        let mut catalog = Catalog::initial();
+        let registry = serde_json::from_value(serde_json::json!({"schema_version":1,
+            "installation":"ab".repeat(32),"principals":[
+                {"id":"cd".repeat(32),"generation":1,"login":"human","uid":1001,"enabled":true},
+                {"id":"ef".repeat(32),"generation":1,"login":"otherhuman","uid":1002,"enabled":true}]})).unwrap();
+        catalog
+            .apply(&Command::AdoptPrincipals { registry })
+            .unwrap();
+        catalog
+            .apply(&Command::CheckpointAccounts {
+                commitments: BTreeMap::from([
+                    ("cd".repeat(32), "12".repeat(32)),
+                    ("ef".repeat(32), "34".repeat(32)),
+                ]),
+            })
+            .unwrap();
+        let intent = Intent {
+            transaction: "lock-one".into(),
+            installation: "ab".repeat(32),
+            principal: "ef".repeat(32),
+            expected_generation: 1,
+            locked: true,
+            passwd_sha256: "56".repeat(32),
+            shadow_before_sha256: "78".repeat(32),
+            shadow_after_sha256: "90".repeat(32),
+            credential_before: "34".repeat(32),
+            credential_after: "ab".repeat(32),
+        };
+        let prepare = Command::PrepareAccountLock {
+            intent: intent.clone(),
+        };
+        let permit = Command::PermitAccountPublication {
+            transaction: intent.transaction.clone(),
+        };
+        let complete = Command::CompleteAccountLock {
+            transaction: intent.transaction.clone(),
+        };
+        let baseline = catalog.clone();
+        assert!(catalog.apply(&permit).is_err());
+        assert!(catalog.apply(&complete).is_err());
+        for edit in [
+            "installation",
+            "principal",
+            "credential",
+            "generation",
+            "overflow",
+        ] {
+            let mut wrong = intent.clone();
+            match edit {
+                "installation" => wrong.installation = "11".repeat(32),
+                "principal" => wrong.principal = "cd".repeat(32),
+                "credential" => wrong.credential_before = "22".repeat(32),
+                "generation" => wrong.expected_generation = 2,
+                "overflow" => wrong.expected_generation = u64::MAX,
+                _ => unreachable!(),
+            }
+            assert!(catalog
+                .apply(&Command::PrepareAccountLock { intent: wrong })
+                .is_err());
+            assert_eq!(catalog, baseline);
+        }
+        assert!(catalog.apply(&prepare).unwrap());
+        assert_eq!(
+            catalog.principal_states[&intent.principal],
+            PrincipalState {
+                generation: 2,
+                enabled: false
+            }
+        );
+        assert_eq!(
+            catalog.account_commitments[&intent.principal],
+            intent.credential_before
+        );
+        assert_eq!(
+            catalog.account_transitions[&intent.transaction].phase,
+            Phase::Prepared
+        );
+        let fenced = catalog.clone();
+        assert!(catalog.apply(&complete).is_err());
+        assert!(catalog.apply(&prepare).is_err());
+        let mut second = intent.clone();
+        second.transaction = "lock-two".into();
+        second.expected_generation = 2;
+        assert!(catalog
+            .apply(&Command::PrepareAccountLock { intent: second })
+            .is_err());
+        assert!(catalog
+            .apply(&Command::AdvancePrincipal {
+                principal: intent.principal.clone(),
+                expected_generation: 2,
+                enabled: true
+            })
+            .is_err());
+        assert_eq!(catalog, fenced);
+        assert!(catalog.apply(&permit).unwrap());
+        assert_eq!(
+            catalog.account_commitments[&intent.principal],
+            intent.credential_before
+        );
+        assert!(!catalog.principal_states[&intent.principal].enabled);
+        assert!(catalog.apply(&permit).is_err());
+        assert!(catalog.apply(&complete).unwrap());
+        assert_eq!(
+            catalog.account_commitments[&intent.principal],
+            intent.credential_after
+        );
+        assert!(!catalog.principal_states[&intent.principal].enabled);
+        let mut unlock = intent.clone();
+        unlock.transaction = "unlock-one".into();
+        unlock.expected_generation = 2;
+        unlock.locked = false;
+        unlock.credential_before = intent.credential_after;
+        unlock.credential_after = intent.credential_before;
+        std::mem::swap(
+            &mut unlock.shadow_before_sha256,
+            &mut unlock.shadow_after_sha256,
+        );
+        catalog
+            .apply(&Command::PrepareAccountLock {
+                intent: unlock.clone(),
+            })
+            .unwrap();
+        catalog
+            .apply(&Command::PermitAccountPublication {
+                transaction: unlock.transaction.clone(),
+            })
+            .unwrap();
+        catalog
+            .apply(&Command::CompleteAccountLock {
+                transaction: unlock.transaction.clone(),
+            })
+            .unwrap();
+        assert_eq!(
+            catalog.principal_states[&unlock.principal],
+            PrincipalState {
+                generation: 3,
+                enabled: true
+            }
+        );
+        assert_eq!(
+            catalog.account_commitments[&unlock.principal],
+            unlock.credential_after
+        );
+    }
     #[test]
     fn offline_recovery_requires_adoption_rotates_both_generations_and_preserves_baseline() {
         use crate::admin_recovery::{Credential, Verifier};

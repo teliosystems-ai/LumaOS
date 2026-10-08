@@ -1,6 +1,6 @@
 # Native resource leases and generations
 
-Updated 2026-10-08. Requirement #1 remains open until its remaining integrations
+Updated 2026-10-09. Requirement #1 remains open until its remaining integrations
 and the applicable installed-image qualification pass. This implementation is
 not a claim that all G2 resources, inference clients or hardware are qualified.
 Requirement #2 has not been started by this work.
@@ -748,6 +748,16 @@ the subgate and the remaining items below are still open.
   mutations pin the original registry through final authentication. This
   immutable checkpoint is not mutable account lifecycle, credential rollback
   protection or authority enforcement at resource/inference/effect boundaries.
+  Existing non-Admin Linux lock/unlock now has reviewed preparation, separately
+  checkpointed publication permission and exact published-record completion.
+  Preparation advances and fences the target generation; only completion adopts
+  the new credential commitment and enables an unlocked target. Uncertain TPM
+  replies do not publish shadow, and explicit already-published continuation does
+  not rename again. Create/delete, password changes, original Admin account
+  recovery and installed account-transaction qualification remain open.
+  The [account lock evidence](evidence/G2_ACCOUNT_LOCK_TRANSACTIONS_2026-10-09.md)
+  records the exact-source isolated sweep; this does not close the broader
+  principal/time/grant subgate.
   Reviewed non-Admin disable/re-enable and generation rotation now advance TPM
   catalog state without changing installation account files. A genuine PAM-bound
   governed session double-replays that state and permanently fences on generation,

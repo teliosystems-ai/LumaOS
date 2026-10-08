@@ -743,6 +743,64 @@ work. Do not run this development command as host administration.
 The [credential checkpoint evidence](evidence/G2_ACCOUNT_CREDENTIAL_CHECKPOINT_2026-10-08.md)
 records isolated evaluation and remaining implementation/qualification limits.
 
+### Existing account lock transactions
+
+Use these commands only on a disposable installed Luma test environment with
+intact enrolled TPM history, explicit principal adoption and the complete
+credential checkpoint. Do not run them as host administration. `LOGIN` is the
+original Admin; `TARGET` is an existing non-Admin installation account. Each
+inspection and commit authenticates fresh governed Admin PAM. Inspection creates
+or takes the operational migration lock but does not stage shadow, publish an
+account file or extend TPM history.
+
+```text
+sudo luma-platform admin-account-lock LOGIN TARGET TRANSACTION lock
+sudo luma-platform admin-account-lock LOGIN TARGET TRANSACTION lock --commit REVIEW-SHA256
+sudo luma-platform admin-account-publish LOGIN TRANSACTION PUBLISH-REQUEST
+sudo luma-platform admin-account-publish LOGIN TRANSACTION PUBLISH-REQUEST --commit REVIEW-SHA256
+sudo luma-platform admin-account-complete LOGIN TRANSACTION COMPLETE-REQUEST
+sudo luma-platform admin-account-complete LOGIN TRANSACTION COMPLETE-REQUEST --commit REVIEW-SHA256
+```
+
+Use `unlock` instead of `lock` for the inverse transaction. Give publication and
+completion distinct request IDs, and use the review digest from that specific
+phase's latest inspection. No source paths, password hashes or credential bytes
+are accepted. Preparation pins the registry, directory, migration lock, passwd
+and shadow. It anchors the exact mutation, advances the target generation and
+fences its principal before any account-file replacement. A partial staging file
+can only be completed under fresh review if it is an exact prefix of the approved
+bytes; conflicting bytes are retained and refused, never truncated.
+
+Publication permission is separately checkpointed. The owned continuation then
+rechecks fresh TPM history and live Admin immediately before the descriptor-bound
+shadow rename and synchronizes both directories. A committed permission is not
+completion: the target stays disabled, with its old credential commitment, until
+the third reviewed phase validates the new whole-file digest and target rows.
+Completion adopts the approved credential commitment. A locked account remains
+disabled; an unlocked account is enabled only at its new generation. Replacing
+shadow invalidates all original account descriptors, so later phases need fresh
+authentication. Restoring the old password cannot restore an old session.
+
+An uncertain TPM reply must first use the existing exact reviewed journal
+reconciliation, without redispatch. Then inspect and commit the same phase/request
+again. If publication permission committed but shadow was not replaced, this
+explicit continuation checks the old files and exact private staging before
+publishing. If shadow already matches the new digest, it verifies publication
+without a second rename or TPM extend. Other files, credentials or history refuse;
+there is no automatic retry, rollback, journal reset or TPM-owner bypass.
+
+Only one incomplete account transaction may exist at a time. Up to 128 retained
+transactions are permitted; exhaustion refuses rather than silently discarding
+history. No general Admin socket accepts these operations. Its strict read-only
+identity mount is unchanged; local maintenance has narrowly enumerated AppArmor
+file rules. Installed confinement, native interruption and physical TPM behavior
+are unqualified. This source path does not create/delete users, change passwords,
+lock the original Admin, bypass broken authority or close Requirement #1.
+
+The [account transaction evidence](evidence/G2_ACCOUNT_LOCK_TRANSACTIONS_2026-10-09.md)
+retains the final isolated sweep, all thirteen real PAM/software-TPM account cases,
+prior failed attempts and explicit qualification limits.
+
 ### Governed session continuity
 
 The process-local governed session combines the original account pins and

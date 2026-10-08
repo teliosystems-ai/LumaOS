@@ -199,6 +199,9 @@ fn validate(request: &Request) -> Result<()> {
             CatalogCommand::AdoptPrincipals { .. }
                 | CatalogCommand::RecoverAdmin { .. }
                 | CatalogCommand::CheckpointAccounts { .. }
+                | CatalogCommand::PrepareAccountLock { .. }
+                | CatalogCommand::PermitAccountPublication { .. }
+                | CatalogCommand::CompleteAccountLock { .. }
         ) {
             return Err(
                 "principal adoption or recovery cannot accept caller-supplied authority; account checkpoints require protected sources".into(),
@@ -773,6 +776,37 @@ mod tests {
             review_sha256: None,
         };
         assert!(validate(&supplied).is_err());
+        for command in [
+            CatalogCommand::PrepareAccountLock {
+                intent: crate::account_transition::Intent {
+                    transaction: "lock-one".into(),
+                    installation: "ab".repeat(32),
+                    principal: "ef".repeat(32),
+                    expected_generation: 1,
+                    locked: true,
+                    passwd_sha256: "12".repeat(32),
+                    shadow_before_sha256: "34".repeat(32),
+                    shadow_after_sha256: "56".repeat(32),
+                    credential_before: "78".repeat(32),
+                    credential_after: "90".repeat(32),
+                },
+            },
+            CatalogCommand::PermitAccountPublication {
+                transaction: "lock-one".into(),
+            },
+            CatalogCommand::CompleteAccountLock {
+                transaction: "lock-one".into(),
+            },
+        ] {
+            command.validate().unwrap();
+            supplied.operation = Operation::Catalog {
+                command,
+                review_sha256: Some("ab".repeat(32)),
+            };
+            let wire = serde_json::to_vec(&supplied).unwrap();
+            let decoded: Request = serde_json::from_slice(&wire).unwrap();
+            assert!(validate(&decoded).is_err());
+        }
         assert!(client_request(
             &["human", "adopt-principals", "adopt", "--commit", "bad"].map(String::from)
         )

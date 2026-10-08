@@ -1,6 +1,6 @@
 # G2 software completion register
 
-Updated 2026-10-08. **G2 software is not complete.** This register separates
+Updated 2026-10-09. **G2 software is not complete.** This register separates
 work that can be executed in the current Windows/Ubuntu WSL/VM environment
 from production deployment decisions and physical qualification. It does not
 change the frozen reference release, governing requirements, or exit criteria.
@@ -12,6 +12,31 @@ unit test, default-deny placeholder, or smaller model cannot close a different
 requirement.
 
 ## Current software inventory and work still required
+
+### Governed account lock transactions
+
+Reviewed local maintenance now prepares, publishes and completes lock/unlock
+changes for existing non-Admin installation accounts. Preparation anchors the
+exact protected file and credential commitments in the shared TPM history,
+advances the target generation and disables its governed principal. Publication
+requires a separately reviewed permission event and the original live governed
+Admin continuation; the shadow replacement preserves ownership and permissions.
+Completion rechecks the exact published file before advancing the credential
+commitment and enabling only an unlocked account. Password hashes remain in
+locked memory and private shadow-equivalent staging, not proposals or receipts.
+
+Each phase is explicit. Uncertain TPM outcomes retain the journal fence without
+filesystem dispatch; exact published recovery does not rename a second time.
+Staging conflicts and changed original handles refuse. The general socket
+service rejects all three operations and retains a read-only identity mount.
+The local ceremony is described in [the Admin implementation note](LOCAL_TPM2_ADMIN.md).
+This does not implement creation/deletion, password rotation/reset, Admin
+password/lock recovery, damaged-authority reconstruction or their qualification.
+
+The [lock transaction evidence](evidence/G2_ACCOUNT_LOCK_TRANSACTIONS_2026-10-09.md)
+retains the passing targeted Rust suites, 282 native Python passes with two
+existing skips and thirteen real PAM/software-TPM lock/unlock markers. It also
+records the failed attempts, exact-source comparison and unexecuted qualification.
 
 ### Checkpointed account credentials
 
@@ -29,8 +54,10 @@ a different snapshot cannot replace the checkpoint. Principal generation changes
 leave credential commitments intact. Legacy history retains its canonical bytes
 and reports `account_credentials_checkpointed: false` until explicit adoption.
 This is a durable account-integrity prerequisite, not an account mutation or
-complete account lifecycle. Create/delete, password rotation/reset, Linux lock
-changes and their governed interrupted-transaction recovery remain open.
+complete account lifecycle. The existing non-Admin lock/unlock composition above
+now provides approved commitment advancement for that narrow transaction.
+Create/delete, password rotation/reset and original Admin account recovery remain
+open.
 
 The [credential checkpoint evidence](evidence/G2_ACCOUNT_CREDENTIAL_CHECKPOINT_2026-10-08.md)
 retains 666 ordinary Rust passes with 38 fixture-dependent ignores, ten new real
@@ -45,7 +72,7 @@ tests or enabling an unconditional refusal path:
 
 | Bundle | Remaining software implementation |
 | --- | --- |
-| Account lifecycle | Governed create/delete, password rotation/reset and Linux lock transitions; exact pending-file publication and reconciliation; credential commitment advancement tied to approved mutations. |
+| Account lifecycle | Governed create/delete and password rotation/reset; original Admin password/lock recovery; multi-file publication and reconciliation. Existing non-Admin lock/unlock has a three-phase native source path; its installed security and interruption qualification remains required. |
 | Protected UTC | Approved executable/configuration admission, confined producer/keeper deployment, reviewed independent seed, authenticated local acquisition/query control, protected history delivery and explicit recovery. |
 | Grants and admission | Finite current-generation role assignments, current UTC checks, principal-bound folder/effect/resource/inference grants and preparation/final-dispatch checks. |
 | Workflow and recovery | Generic governed worker/DAG admission, all inference consumers, export/deletion/retention authorization, damaged-authority reconstruction, multiworker/device adapters and integrated interruption paths. |

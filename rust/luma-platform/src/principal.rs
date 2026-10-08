@@ -248,7 +248,7 @@ impl DirectoryIdentity {
 // Keep the original descriptors open for the whole observation. Metadata alone
 // cannot prevent an unlinked inode number being reused for replacement state.
 // CLOEXEC prevents the PAM helper from inheriting registry or shadow handles.
-struct FilePin {
+pub(crate) struct FilePin {
     path: PathBuf,
     file: File,
     parent: File,
@@ -257,6 +257,10 @@ struct FilePin {
 }
 
 impl FilePin {
+    pub(crate) fn descriptor(&self) -> Result<File> {
+        self.recheck()?;
+        Ok(self.file.try_clone()?)
+    }
     fn open(path: &Path, limit: u64, private: bool, shadow: bool) -> Result<Self> {
         let parent_path = path.parent().ok_or("missing local identity directory")?;
         let parent = OpenOptions::new()
@@ -296,7 +300,7 @@ impl FilePin {
         Ok(pin)
     }
 
-    fn recheck(&self) -> Result<()> {
+    pub(crate) fn recheck(&self) -> Result<()> {
         if FileIdentity::of(&self.file.metadata()?) != self.identity
             || FileIdentity::of(&fs::symlink_metadata(&self.path)?) != self.identity
             || DirectoryIdentity::of(&self.parent.metadata()?) != self.directory
@@ -378,7 +382,7 @@ pub(crate) fn installation_at(path: &Path) -> Result<String> {
     Ok(registry(path)?.installation)
 }
 
-fn account_file(path: &Path, shadow: bool) -> Result<(PrivateBuffer, FilePin)> {
+pub(crate) fn account_file(path: &Path, shadow: bool) -> Result<(PrivateBuffer, FilePin)> {
     let mut pin = FilePin::open(path, MAX_ACCOUNT_BYTES as u64, false, shadow)?;
     // Shadow contents never enter a pageable Vec/String or diagnostic. The
     // existing locked, nondumpable buffer wipes itself on every return path.
@@ -391,10 +395,20 @@ fn account_file(path: &Path, shadow: bool) -> Result<(PrivateBuffer, FilePin)> {
 fn account_observation(identity: &Path, principal: &Principal) -> Result<([u8; 32], [FilePin; 2])> {
     let (passwd, passwd_pin) = account_file(&identity.join("passwd"), false)?;
     let (shadow, shadow_pin) = account_file(&identity.join("shadow"), true)?;
-    let passwd_text =
-        std::str::from_utf8(passwd.bytes()).map_err(|_| "invalid local account encoding")?;
-    let shadow_text =
-        std::str::from_utf8(shadow.bytes()).map_err(|_| "invalid local account encoding")?;
+    let digest = account_rows_digest(passwd.bytes(), shadow.bytes(), principal, false)?;
+    passwd_pin.recheck()?;
+    shadow_pin.recheck()?;
+    Ok((digest, [passwd_pin, shadow_pin]))
+}
+
+pub(crate) fn account_rows_digest(
+    passwd: &[u8],
+    shadow: &[u8],
+    principal: &Principal,
+    allow_locked: bool,
+) -> Result<[u8; 32]> {
+    let passwd_text = std::str::from_utf8(passwd).map_err(|_| "invalid local account encoding")?;
+    let shadow_text = std::str::from_utf8(shadow).map_err(|_| "invalid local account encoding")?;
     let mut account = None;
     let mut matching_uid = 0;
     for row in passwd_text.lines() {
@@ -431,7 +445,7 @@ fn account_observation(identity: &Path, principal: &Principal) -> Result<([u8; 3
         if fields[0] == principal.login {
             if credential.is_some()
                 || fields[1].is_empty()
-                || fields[1].starts_with('!')
+                || (!allow_locked && fields[1].starts_with('!'))
                 || fields[1].starts_with('*')
             {
                 return Err("missing, locked or ambiguous local credential".into());
@@ -444,9 +458,21 @@ fn account_observation(identity: &Path, principal: &Principal) -> Result<([u8; 3
     digest.update(account.ok_or("missing local account")?.as_bytes());
     digest.update(b"\0");
     digest.update(credential.ok_or("missing local credential")?.as_bytes());
-    passwd_pin.recheck()?;
-    shadow_pin.recheck()?;
-    Ok((digest.finalize().into(), [passwd_pin, shadow_pin]))
+    Ok(digest.finalize().into())
+}
+
+pub(crate) fn rows_commitment(
+    installation: &str,
+    principal: &Principal,
+    digest: [u8; 32],
+) -> Result<String> {
+    let mut hash = Sha256::new();
+    hash.update(b"luma-account-credential-checkpoint-v1\0");
+    hash.update(crate::tpm::decode::<32>(installation)?);
+    hash.update(crate::tpm::decode::<32>(&principal.id)?);
+    hash.update(principal.uid.to_be_bytes());
+    hash.update(digest);
+    Ok(bundle::hex(&hash.finalize()))
 }
 
 /// Nonserializable account observation. It is NOT evidence of PAM success;
@@ -466,14 +492,9 @@ impl AccountBinding {
     // capability. Installation/principal separation prevents cross-user replay.
     pub(crate) fn credential_commitment(&self) -> Result<String> {
         self.current_uid()?;
-        let mut digest = Sha256::new();
-        digest.update(b"luma-account-credential-checkpoint-v1\0");
-        digest.update(crate::tpm::decode::<32>(&self.installation)?);
-        digest.update(crate::tpm::decode::<32>(&self.principal.id)?);
-        digest.update(self.principal.uid.to_be_bytes());
-        digest.update(self.account_digest);
+        let commitment = rows_commitment(&self.installation, &self.principal, self.account_digest)?;
         self.current_uid()?;
-        Ok(bundle::hex(&digest.finalize()))
+        Ok(commitment)
     }
 
     /// Inert identity projection, never proof of authentication or a role grant.

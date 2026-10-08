@@ -26,9 +26,13 @@ class AccountCheckpointPolicyTests(unittest.TestCase):
         self.assertIn('PrivateBuffer::new', observation)
         commitment = source.split('fn credential_commitment(')[1].split('fn identity(')[0]
         self.assertEqual(commitment.count('self.current_uid()?;'), 2)
-        self.assertIn('luma-account-credential-checkpoint-v1', commitment)
-        for marker in ('self.installation', 'self.principal.id', 'self.principal.uid', 'self.account_digest'):
+        self.assertIn('rows_commitment(&self.installation, &self.principal, self.account_digest)', commitment)
+        for marker in ('self.installation', 'self.principal', 'self.account_digest'):
             self.assertIn(marker, commitment)
+        rows = source.split('fn rows_commitment(')[1].split('struct AccountBinding')[0]
+        for marker in ('luma-account-credential-checkpoint-v1', 'decode::<32>(installation)',
+                       'decode::<32>(&principal.id)', 'principal.uid.to_be_bytes()', 'hash.update(digest)'):
+            self.assertIn(marker, rows)
         for forbidden in ('println!', 'Serialize', 'Deserialize', 'fs::write'):
             self.assertNotIn(forbidden, commitment)
 

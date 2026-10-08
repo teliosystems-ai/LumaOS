@@ -667,11 +667,24 @@ remain separate open implementations.
 
 These changes do not lock Linux accounts or rewrite registry/passwd/shadow files.
 Product disable is enforced by the governed session composition, not by ordinary
-PAM alone. `sudo luma-platform principal-check LOGIN` runs a fresh local PAM
-exchange, double-replays the adopted TPM principal history and reports the current
-governed identity. It returns no reusable session, role or effect grant and closes
+PAM alone. `sudo luma-platform principal-check LOGIN` double-replays the adopted
+TPM principal history before starting a fresh local PAM exchange, then requires
+that same governed state afterward. It reports the current governed identity,
+returns no reusable session, role or effect grant and closes
 its PAM observation before output. `admin-auth-check` remains only a local-account
 authentication diagnostic and must not substitute for this governed check.
+
+Login issuance retains the original registry handles and exact pre-PAM identity,
+generation, enrollment, checkpoint head and TPM epoch. A private kernel-clock
+boundary requires the PAM exchange to start after that precheck in the same
+protected process and boot; an older genuine PAM observation is insufficient.
+Journal and TPM writer locks are released while the human enters a password.
+Changed authority, registry replacement (even identical bytes), a different PAM
+account or clock/proof loss refuses issuance and closes the PAM observation.
+Restart the complete login with fresh authentication; neither re-enabling an
+account nor automatically rebinding to a newer head repairs an old attempt.
+This issuance path is not yet the resource/inference/effect admission interface
+or the separate one-shot Admin catalog control path.
 
 The process-local governed session combines the original account pins and
 30-second suspend-aware PAM lifetime with the current principal generation,

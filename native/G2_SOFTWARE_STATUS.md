@@ -773,6 +773,58 @@ Full native regression log / frozen runner SHA-256, respectively:
 `02be9985f17109b8ea0e9844b82f975fbb1ddf7146f7082aa5fb275c1a54f991` /
 `4d668cb75815a509af2594b78cdcf51f3e2af904d976c399acdeb03c4fd3a14e`.
 
+### Governed pre/post-PAM login issuance
+
+The governed session factory now requires a pre-PAM principal-history proof,
+retains its original registry handles and consumes a new PAM exchange started
+after that proof. The ordering boundary comes from the protected process's
+kernel boot/process/UID and suspend-aware clock, not caller metadata or UTC.
+Post-PAM double replay must match the original principal, generation, enrollment,
+checkpoint head and TPM epoch. An earlier genuine PAM observation, a different
+account, identical-byte registry replacement or changed authority refuses
+issuance and permanently closes that PAM observation. A new login must start
+from a fresh precheck; restoring metadata or re-enabling the account cannot
+revive an old attempt. Journal and TPM writer locks are released during password
+entry, rather than excluding legitimate catalog changes for the human's wait.
+
+`principal-check` uses this issuance path and still returns only an inert
+diagnostic. The separate one-shot Admin catalog control and maintenance flows
+have not been converted into governed session/grant consumers. Account and
+credential lifecycle, deployed trusted UTC, finite assignments, folder/effect
+grants and admission integration remain open. This increment does not close the
+active principal/session and grant subgate, Requirement #1 or G2.
+
+The frozen run at `D:\LumaOS-builds\g2-principal-session-20261008-07` passed
+(exit 0): 156 ordinary targeted Rust tests, 49 selected Python checks, six actual
+PAM modes, three kernel-human IPC modes and the explicit credential/thread/FD
+fixtures. The software-TPM composition retained all 49 Admin socket requests and
+added seven session-issuance cases: earlier PAM refusal, wrong-principal refusal,
+identical registry replacement, shared-head change, disable during login,
+non-revival after re-enable and fresh-generation issuance with explicit closure.
+These seven cases are not additional Admin socket requests. Injected-anchor
+unit tests also cover precheck refusal before bootstrap/adoption, unknown or
+disabled accounts, retained generations and released writer locks.
+
+Formatting and the offline native build passed with warnings denied; both
+AppArmor profiles parsed without loading. All 217 captured source files, 57 test
+inputs and the CI workflow matched the checkout. Full native Python discovery
+passed (exit 0): 266 of 268 tests, with the same two existing pinned UTC-publisher
+fixture skips. The selected 49 checks are included in that discovery, not extra
+distinct passes. No host account/service, physical TPM, clock, WSL memory setting,
+model or final image changed; installed and hardware qualification remain pending.
+
+Source / test input manifest SHA-256, respectively:
+`0c02bfadff3effc8ddd44da16256f04772f08c9f5e618b7dfc1d2387e47be53c` /
+`ba5f21db8b0d1c2528131acd89cbf4e34690a5806e419f48c2b24d4070e6812a`.
+Targeted log / frozen runner SHA-256, respectively:
+`011957644b19f153e3ebffeb3b5dac9102e5faf8b1a1c02ca1ec6c9d22f11ed5` /
+`ae3f5344f82f951834769d570f7425455001b817873842d59016ba6f35504878`.
+Native executable SHA-256:
+`7caae5a5dd3fba7e60e0c9ef10dde8e0b2f6c069472abe5d4e01b3c0a36882b0`.
+Full native regression log / frozen runner SHA-256, respectively:
+`9719b09422975caadd68de58ab59f801a073cc8879ca04248617913e50052488` /
+`4d668cb75815a509af2594b78cdcf51f3e2af904d976c399acdeb03c4fd3a14e`.
+
 ### Admin and workflow closure status
 
 Neither work package is closed, and neither is merely waiting for the final

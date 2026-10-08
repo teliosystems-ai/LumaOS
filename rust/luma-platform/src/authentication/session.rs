@@ -103,6 +103,36 @@ enum Phase {
     Fenced,
 }
 
+// An ordering boundary, not authentication or a transferable capability. Both
+// endpoints are captured inside the same protected process from kernel clocks.
+pub(super) struct Boundary {
+    clock: Clock,
+}
+
+impl Boundary {
+    pub(super) fn capture() -> Result<Self> {
+        Self::at(Clock::read()?)
+    }
+
+    fn at(clock: Clock) -> Result<Self> {
+        if clock.boot == [0; 16] || clock.process == 0 || clock.uid != 0 {
+            return Err("authentication ordering requires its protected process".into());
+        }
+        Ok(Self { clock })
+    }
+
+    pub(super) fn require_later(&self, exchange: &Self) -> Result<()> {
+        if exchange.clock.boot != self.clock.boot
+            || exchange.clock.process != self.clock.process
+            || exchange.clock.uid != self.clock.uid
+            || exchange.clock.boottime_ns <= self.clock.boottime_ns
+        {
+            return Err("fresh PAM exchange must start after the governed login boundary".into());
+        }
+        Ok(())
+    }
+}
+
 // There is deliberately no Clone, Deserialize, renewal or restoration method.
 // Authentication owns construction; each native request obtains fresh PAM.
 pub(super) struct Lifetime {
@@ -127,6 +157,10 @@ impl Drop for Observation<'_> {
 impl Lifetime {
     pub(super) fn start() -> Result<Self> {
         Self::at(Clock::read()?)
+    }
+
+    pub(super) fn boundary(&self) -> Boundary {
+        Boundary { clock: self.issued }
     }
 
     fn at(issued: Clock) -> Result<Self> {
@@ -232,6 +266,47 @@ mod tests {
             uid: 0,
             boottime_ns: ns,
         }
+    }
+
+    #[test]
+    fn exchange_ordering_is_strict_and_bound_to_the_original_boot_process_and_uid() {
+        let before = Boundary::at(clock(100)).unwrap();
+        before
+            .require_later(&Boundary::at(clock(101)).unwrap())
+            .unwrap();
+        for ns in [0, 99, 100] {
+            assert!(before
+                .require_later(&Boundary::at(clock(ns)).unwrap())
+                .is_err());
+        }
+        for fault in ["boot", "process", "uid"] {
+            let mut changed = clock(101);
+            match fault {
+                "boot" => changed.boot = [2; 16],
+                "process" => changed.process += 1,
+                "uid" => changed.uid = 1001,
+                _ => unreachable!(),
+            }
+            assert!(before.require_later(&Boundary { clock: changed }).is_err());
+        }
+    }
+
+    #[test]
+    fn ordering_capture_refuses_uninitialized_and_unprotected_contexts() {
+        for fault in ["boot", "process", "uid"] {
+            let mut changed = clock(100);
+            match fault {
+                "boot" => changed.boot = [0; 16],
+                "process" => changed.process = 0,
+                "uid" => changed.uid = 1001,
+                _ => unreachable!(),
+            }
+            assert!(Boundary::at(changed).is_err());
+        }
+        let before = Boundary::capture().unwrap();
+        let budget = Lifetime::start().unwrap();
+        before.require_later(&budget.boundary()).unwrap();
+        budget.check().unwrap();
     }
 
     #[test]

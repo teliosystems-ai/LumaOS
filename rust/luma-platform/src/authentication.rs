@@ -128,8 +128,35 @@ impl Drop for Helper {
 pub(crate) struct AuthenticatedAccount {
     binding: AccountBinding,
     lifetime: session::Lifetime,
+    exchange_started: session::Boundary,
 }
+
+// Root-owned ordering metadata has no JSON form and supplies no PAM authority.
+pub(crate) struct ExchangeBoundary {
+    boundary: session::Boundary,
+}
+
+impl ExchangeBoundary {
+    pub(crate) fn capture() -> Result<Self> {
+        crate::require_root()?;
+        Ok(Self {
+            boundary: session::Boundary::capture()?,
+        })
+    }
+}
+
 impl AuthenticatedAccount {
+    pub(crate) fn observe_fresh<T>(
+        &self,
+        boundary: &ExchangeBoundary,
+        project: impl FnOnce(&serde_json::Value) -> Result<T>,
+    ) -> Result<T> {
+        self.observe(|local| {
+            boundary.boundary.require_later(&self.exchange_started)?;
+            project(local)
+        })
+    }
+
     /// Bind a complete protected projection to the original account pins and
     /// PAM lifetime. Error, timeout or unwinding fences that PAM observation.
     pub(crate) fn observe<T>(
@@ -192,6 +219,7 @@ fn authenticate_at(
         return Err("invalid password frame".into());
     }
     let authentication_budget = session::Lifetime::start()?;
+    let exchange_started = authentication_budget.boundary();
     let binding = AccountBinding::capture(registry, identity, username)?;
     let profile = Path::new("/etc/pam.d/luma-admin");
     let metadata = std::fs::symlink_metadata(profile)?;
@@ -260,7 +288,11 @@ fn authenticate_at(
     authentication_budget.check()?;
     let lifetime = session::Lifetime::start()?;
     authentication_budget.check()?;
-    Ok(AuthenticatedAccount { binding, lifetime })
+    Ok(AuthenticatedAccount {
+        binding,
+        lifetime,
+        exchange_started,
+    })
 }
 
 pub(crate) fn local(username: &str) -> Result<AuthenticatedAccount> {
@@ -530,6 +562,7 @@ mod tests {
             )
             .unwrap(),
             lifetime: session::Lifetime::start().unwrap(),
+            exchange_started: session::Boundary::capture().unwrap(),
         };
         let changed = account();
         assert!(changed
@@ -563,6 +596,24 @@ mod tests {
             healthy.observe(|local| Ok(local["uid"].clone())).unwrap(),
             1001
         );
+        let older = account();
+        let boundary = ExchangeBoundary::capture().unwrap();
+        assert!(older.observe_fresh(&boundary, |_| Ok(())).is_err());
+        assert!(older.identity().is_err());
+        let fresh = account();
+        assert_eq!(
+            fresh
+                .observe_fresh(&boundary, |local| Ok(local["uid"].clone()))
+                .unwrap(),
+            1001
+        );
+        let interrupted = account();
+        assert!(std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            interrupted
+                .observe_fresh::<()>(&boundary, |_| panic!("fixture fresh projection unwind"))
+        }))
+        .is_err());
+        assert!(interrupted.identity().is_err());
         for directory in [identity, root.join("principals")] {
             for entry in std::fs::read_dir(&directory).unwrap() {
                 std::fs::remove_file(entry.unwrap().path()).unwrap();

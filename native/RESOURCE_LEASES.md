@@ -751,6 +751,13 @@ Final-image/native-hardware qualification remains separate.
   writers. Admin credential/custody recovery, account creation/credential recovery
   and resource/inference/effect admission integration
   remain open; this does not qualify those boundaries or close the subgate.
+  Governed login issuance now brackets a new PAM exchange with the exact pre/post
+  TPM-backed state and retained original registry handles. It rejects earlier
+  PAM observations, mismatched accounts, registry replacement and authority
+  changes during login, without holding writer locks through password entry.
+  This source path is exercised by `principal-check` and genuine-PAM/software-TPM
+  fixtures; it does not integrate the remaining catalog control, time, grant or
+  admission paths.
 - Finish broader content/workflow worker admission. The closed invoice
   coordinator and both direct publishers use leased calculation and effect-time
   result checks, but remain installed-root paths, not generic governed execution.

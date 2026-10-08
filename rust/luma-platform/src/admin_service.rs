@@ -1271,9 +1271,8 @@ mod tests {
             "admin-bad-review",
         ] {
             if mode == "admin-rotate-review" {
-                let account =
-                    authentication::fixture_local_account(&root, "human", &password).unwrap();
-                let session = admin_governance::fixture_governed_session(&root, account).unwrap();
+                let session =
+                    admin_governance::fixture_governed_session(&root, "human", &password).unwrap();
                 assert_eq!(
                     admin_governance::fixture_governed_identity(&root, &session).unwrap()
                         ["generation"],
@@ -1285,9 +1284,8 @@ mod tests {
                     .expect("one original Admin session");
             }
             if mode == "admin-rotate-new-review" {
-                let account =
-                    authentication::fixture_local_account(&root, "human", &password).unwrap();
-                let session = admin_governance::fixture_governed_session(&root, account).unwrap();
+                let session =
+                    admin_governance::fixture_governed_session(&root, "human", &password).unwrap();
                 assert_eq!(
                     admin_governance::fixture_governed_identity(&root, &session).unwrap()
                         ["generation"],
@@ -1299,10 +1297,9 @@ mod tests {
                     .expect("one second-generation Admin session");
             }
             if mode == "life-disable-review" {
-                let other_account =
-                    authentication::fixture_local_account(&root, "otherhuman", &password).unwrap();
                 let session =
-                    admin_governance::fixture_governed_session(&root, other_account).unwrap();
+                    admin_governance::fixture_governed_session(&root, "otherhuman", &password)
+                        .unwrap();
                 assert_eq!(
                     admin_governance::fixture_governed_identity(&root, &session).unwrap()
                         ["generation"],
@@ -1522,7 +1519,14 @@ mod tests {
                     let disabled =
                         authentication::fixture_local_account(&root, "otherhuman", &password)
                             .unwrap();
-                    assert!(admin_governance::fixture_governed_session(&root, disabled).is_err());
+                    assert!(disabled.identity().is_ok());
+                    disabled.logout();
+                    assert!(admin_governance::fixture_governed_session(
+                        &root,
+                        "otherhuman",
+                        &password
+                    )
+                    .is_err());
                 }
                 if mode == "life-enable-commit" || mode == "life-rotate-commit" {
                     assert!(admin_governance::fixture_governed_identity(
@@ -1530,10 +1534,9 @@ mod tests {
                         governed.get().unwrap()
                     )
                     .is_err());
-                    let fresh =
-                        authentication::fixture_local_account(&root, "otherhuman", &password)
+                    let session =
+                        admin_governance::fixture_governed_session(&root, "otherhuman", &password)
                             .unwrap();
-                    let session = admin_governance::fixture_governed_session(&root, fresh).unwrap();
                     assert_eq!(
                         admin_governance::fixture_governed_identity(&root, &session).unwrap()
                             ["generation"],
@@ -1585,11 +1588,9 @@ mod tests {
                         assert_eq!(report["proposal"]["principal"]["generation"], 1);
                     }
                     if mode == "admin-rotate-commit" || mode == "admin-rotate-new-commit" {
-                        let account =
-                            authentication::fixture_local_account(&root, "human", &password)
-                                .unwrap();
                         let session =
-                            admin_governance::fixture_governed_session(&root, account).unwrap();
+                            admin_governance::fixture_governed_session(&root, "human", &password)
+                                .unwrap();
                         assert_eq!(
                             admin_governance::fixture_governed_identity(&root, &session).unwrap()
                                 ["generation"],
@@ -1628,6 +1629,7 @@ mod tests {
                     .success());
             }
         }
+        admin_governance::fixture_session_issuance(&root, &password);
         drop(listener);
         fs::remove_file(path).unwrap();
         fs::remove_dir(directory).unwrap();

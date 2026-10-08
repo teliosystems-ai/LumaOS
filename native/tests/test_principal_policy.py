@@ -6,6 +6,26 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 class PrincipalPackagingTests(unittest.TestCase):
+    def test_governed_login_brackets_a_new_pam_exchange_without_holding_writer_locks(self):
+        governance = (ROOT / 'rust/luma-platform/src/admin_governance.rs').read_text().split('#[cfg(test)]')[0]
+        entry = governance.split('pub fn principal_check')[1].split('pub(crate) struct HistoryBinding')[0]
+        self.assertLess(entry.index('PrincipalLogin::prepare'), entry.index('authentication::local(login)?'))
+        self.assertLess(entry.index('authentication::local(login)?'), entry.index('PrincipalSession::new'))
+        self.assertEqual(entry.count('Store::open('), 2)
+        binding = governance.split('fn read_account(')[1].split('struct PrincipalSession')[0]
+        for marker in ('observe_fresh(&login.exchange', 'local != &login.local',
+                       'current != login.binding', 'elapsed_since(login.clock)', 'account.logout();'):
+            self.assertIn(marker, binding)
+        self.assertEqual(binding.count('login.registry.current()?;'), 2)
+        attempt = governance.split('struct PrincipalLogin')[1].split('struct PrincipalReader')[0]
+        self.assertIn('registry: crate::principal::RegistryBinding', attempt)
+        self.assertNotIn('Serialize', attempt)
+        self.assertNotIn('Deserialize', attempt)
+        authentication = (ROOT / 'rust/luma-platform/src/authentication.rs').read_text().split('#[cfg(test)]')[0]
+        self.assertLess(authentication.index('let exchange_started = authentication_budget.boundary();'),
+                        authentication.index('command.spawn()?'))
+        self.assertIn('boundary.boundary.require_later(&self.exchange_started)?', authentication)
+
     def test_admin_rotation_uses_prefix_generation_not_current_identity_for_old_history(self):
         governance = (ROOT / 'rust/luma-platform/src/admin_governance.rs').read_text().split('#[cfg(test)]')[0]
         replay = governance.split('fn replay(')[1].split('struct PrincipalBinding')[0]
@@ -40,7 +60,7 @@ class PrincipalPackagingTests(unittest.TestCase):
         self.assertRegex(roles, r'generation\s*\.checked_add\(1\)')
         governance = (ROOT / 'rust/luma-platform/src/admin_governance.rs').read_text().split('#[cfg(test)]')[0]
         for marker in ('struct PrincipalReader', 'struct PrincipalSession', 'fn principal_check(',
-                       'account.observe(|local| self.resolve(local))', 'let (before, first_clock) = self.replay(local)?;',
+                       'account.observe_fresh(&login.exchange', 'let (before, first_clock) = self.replay(local)?;',
                        'let (after, last_clock) = self.replay(local)?;', 'first_clock.elapsed_since(previous)?;',
                        'principal history changed during double replay', 'self.fenced.set(true)',
                        'impl Drop for PrincipalSession', 'session_returned', 'authentication::local(login)?',

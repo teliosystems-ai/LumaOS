@@ -369,6 +369,41 @@ struct PrincipalBinding {
     identity: serde_json::Value,
 }
 
+// Retains original registry handles and the exact pre-PAM authority. It cannot
+// be cloned, deserialized, exported or used as authentication on its own.
+struct PrincipalLogin {
+    registry: crate::principal::RegistryBinding,
+    local: serde_json::Value,
+    binding: PrincipalBinding,
+    clock: tpm::Clock,
+    exchange: authentication::ExchangeBoundary,
+}
+
+impl PrincipalLogin {
+    fn prepare<A: Checkpoint>(reader: &mut PrincipalReader<'_, A>, login: &str) -> Result<Self> {
+        let registry = crate::principal::RegistryBinding::capture(reader.registry_path)?;
+        let current = registry.current()?;
+        let record = current
+            .account(login)
+            .filter(|record| record.enabled)
+            .ok_or("missing enabled installed principal for governed login")?;
+        let local = current.identity(record);
+        let binding = reader.resolve(&local)?;
+        let clock = reader
+            .last_clock
+            .ok_or("missing governed login checkpoint clock")?;
+        registry.current()?;
+        let exchange = authentication::ExchangeBoundary::capture()?;
+        Ok(Self {
+            registry,
+            local,
+            binding,
+            clock,
+            exchange,
+        })
+    }
+}
+
 /// Owned by the protected TPM/PAM composition. No caller-selected path or
 /// identity is accepted by the public reader; every read needs a live account.
 pub(crate) struct PrincipalReader<'a, A: Checkpoint> {
@@ -451,8 +486,23 @@ impl<'a, A: Checkpoint> PrincipalReader<'a, A> {
     fn read_account(
         &mut self,
         account: &authentication::AuthenticatedAccount,
+        login: &PrincipalLogin,
     ) -> Result<PrincipalBinding> {
-        let result = account.observe(|local| self.resolve(local));
+        let result = account.observe_fresh(&login.exchange, |local| {
+            login.registry.current()?;
+            if local != &login.local {
+                return Err("PAM account differs from the governed login principal".into());
+            }
+            let current = self.resolve(local)?;
+            self.last_clock
+                .ok_or("missing post-PAM checkpoint clock")?
+                .elapsed_since(login.clock)?;
+            login.registry.current()?;
+            if current != login.binding {
+                return Err("governed authority changed during PAM; restart login".into());
+            }
+            Ok(current)
+        });
         if result.is_err() {
             self.fenced = true;
             account.logout();
@@ -472,9 +522,10 @@ pub(crate) struct PrincipalSession {
 impl PrincipalSession {
     fn new<A: Checkpoint>(
         account: authentication::AuthenticatedAccount,
+        login: PrincipalLogin,
         reader: &mut PrincipalReader<'_, A>,
     ) -> Result<Self> {
-        let binding = reader.read_account(&account)?;
+        let binding = reader.read_account(&account, &login)?;
         Ok(Self {
             account,
             binding,
@@ -526,14 +577,23 @@ impl Drop for PrincipalSession {
 pub fn principal_check(login: &str) -> Result<()> {
     crate::require_root()?;
     platform::require_installed()?;
-    let account = authentication::local(login)?;
     let directory = Path::new(DIRECTORY);
+    // Do not hold the journal/TPM writer locks while a human enters a password.
+    // The retained binding is checked again, never refreshed to a newer head.
+    let attempt = {
+        let mut store = Store::open(
+            tpm::LocalAnchor::installed()?,
+            &directory.join("journal.json"),
+        )?;
+        PrincipalLogin::prepare(&mut PrincipalReader::new(&mut store, directory), login)?
+    };
+    let account = authentication::local(login)?;
     let mut store = Store::open(
         tpm::LocalAnchor::installed()?,
         &directory.join("journal.json"),
     )?;
     let mut reader = PrincipalReader::new(&mut store, directory);
-    let session = PrincipalSession::new(account, &mut reader)?;
+    let session = PrincipalSession::new(account, attempt, &mut reader)?;
     let identity = session.identity(&mut reader)?;
     session.close();
     println!(
@@ -1389,13 +1449,147 @@ pub(crate) fn fixture_rotation_interruption(account: &authentication::Authentica
 }
 
 #[cfg(test)]
+pub(crate) fn fixture_session_issuance(
+    root: &Path,
+    password: &crate::sealed_credential::PrivateBuffer,
+) {
+    let directory = root.join("admin");
+    let registry = root.join("registry.json");
+    let prepare = |login| {
+        let mut store = fixture_store(root).unwrap();
+        PrincipalLogin::prepare(
+            &mut PrincipalReader::at(&mut store, &directory, &registry),
+            login,
+        )
+        .unwrap()
+    };
+    let read = |account: &authentication::AuthenticatedAccount, login: &PrincipalLogin| {
+        let mut store = fixture_store(root).unwrap();
+        PrincipalReader::at(&mut store, &directory, &registry).read_account(account, login)
+    };
+    let commit = |account: &authentication::AuthenticatedAccount, request, command: &Command| {
+        let mut store = fixture_store(root).unwrap();
+        let inspected = execute_catalog_at(
+            &mut store,
+            &directory,
+            &registry,
+            || account.identity(),
+            request,
+            command,
+            None,
+        )
+        .unwrap();
+        execute_catalog_at(
+            &mut store,
+            &directory,
+            &registry,
+            || account.identity(),
+            request,
+            command,
+            Some(inspected["review_sha256"].as_str().unwrap()),
+        )
+        .unwrap()
+    };
+
+    let earlier = authentication::fixture_local_account(root, "human", password).unwrap();
+    let login = prepare("human");
+    assert!(read(&earlier, &login).is_err());
+    assert!(earlier.identity().is_err());
+    println!("GOVERNED_SESSION_ISSUANCE_CASE=earlier-pam-refused");
+
+    let login = prepare("human");
+    let other = authentication::fixture_local_account(root, "otherhuman", password).unwrap();
+    assert!(read(&other, &login).is_err());
+    assert!(other.identity().is_err());
+    println!("GOVERNED_SESSION_ISSUANCE_CASE=wrong-principal-refused");
+
+    let login = prepare("human");
+    let baseline = tpm::private_read(&registry, 64 * 1024).unwrap();
+    platform::write_atomic(&registry, &baseline, 0o600).unwrap();
+    let replaced = authentication::fixture_local_account(root, "human", password).unwrap();
+    assert!(read(&replaced, &login).is_err());
+    assert!(replaced.identity().is_err());
+    println!("GOVERNED_SESSION_ISSUANCE_CASE=identical-registry-replacement-refused");
+
+    let login = prepare("human");
+    let account = authentication::fixture_local_account(root, "human", password).unwrap();
+    commit(
+        &account,
+        "login-head-change",
+        &Command::RegisterActivity {
+            activity: "session.issue.test".into(),
+        },
+    );
+    assert!(read(&account, &login).is_err());
+    assert!(account.identity().is_err());
+    println!("GOVERNED_SESSION_ISSUANCE_CASE=catalog-head-change-refused");
+
+    let login = prepare("otherhuman");
+    let account = authentication::fixture_local_account(root, "otherhuman", password).unwrap();
+    let admin = authentication::fixture_local_account(root, "human", password).unwrap();
+    let principal = login.binding.identity["principal"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let generation = login.binding.identity["generation"].as_u64().unwrap();
+    let disabled = commit(
+        &admin,
+        "login-disable",
+        &Command::AdvancePrincipal {
+            principal: principal.clone(),
+            expected_generation: generation,
+            enabled: false,
+        },
+    );
+    assert!(read(&account, &login).is_err());
+    assert!(account.identity().is_err());
+    println!("GOVERNED_SESSION_ISSUANCE_CASE=disable-during-login-refused");
+
+    let generation = disabled["catalog"]["principal_states"][&principal]["generation"]
+        .as_u64()
+        .unwrap();
+    let enabled = commit(
+        &admin,
+        "login-enable",
+        &Command::AdvancePrincipal {
+            principal: principal.clone(),
+            expected_generation: generation,
+            enabled: true,
+        },
+    );
+    admin.logout();
+    assert!(read(&account, &login).is_err());
+    println!("GOVERNED_SESSION_ISSUANCE_CASE=reenabling-does-not-revive-login");
+
+    let session = fixture_governed_session(root, "otherhuman", password).unwrap();
+    assert_eq!(
+        fixture_governed_identity(root, &session).unwrap()["generation"],
+        enabled["catalog"]["principal_states"][&principal]["generation"]
+    );
+    session.close();
+    assert!(fixture_governed_identity(root, &session).is_err());
+    assert_eq!(tpm::private_read(&registry, 64 * 1024).unwrap(), baseline);
+    println!("GOVERNED_SESSION_ISSUANCE_CASE=fresh-login-binds-new-generation-and-closes");
+}
+
+#[cfg(test)]
 pub(crate) fn fixture_governed_session(
     root: &Path,
-    account: authentication::AuthenticatedAccount,
+    login: &str,
+    password: &crate::sealed_credential::PrivateBuffer,
 ) -> Result<PrincipalSession> {
+    let attempt = {
+        let mut store = fixture_store(root)?;
+        PrincipalLogin::prepare(
+            &mut PrincipalReader::at(&mut store, &root.join("admin"), &root.join("registry.json")),
+            login,
+        )?
+    };
+    let account = authentication::fixture_local_account(root, login, password)?;
     let mut store = fixture_store(root)?;
     PrincipalSession::new(
         account,
+        attempt,
         &mut PrincipalReader::at(&mut store, &root.join("admin"), &root.join("registry.json")),
     )
 }
@@ -1619,6 +1813,95 @@ mod tests {
             expected_generation: generation,
             enabled,
         }
+    }
+
+    #[test]
+    fn governed_login_preparation_requires_bootstrap_adoption_and_enabled_known_account() {
+        let f = Fixture::new("login-preparation-refusals");
+        let adoption = principal_registry(&f);
+        let path = f.directory.join("registry.json");
+        let prepare = |name| {
+            PrincipalLogin::prepare(
+                &mut PrincipalReader::at(&mut f.store(), &f.directory, &path),
+                name,
+            )
+        };
+        assert!(prepare("human").is_err());
+        f.activate();
+        assert!(prepare("human").is_err());
+        principal_commit(&f, "adopt", &adoption);
+        for name in ["", "unknown", "root", "../human", "human\0"] {
+            assert!(prepare(name).is_err());
+        }
+        let attempt = prepare("human").unwrap();
+        assert_eq!(attempt.local, f.identity);
+        assert_eq!(attempt.binding.identity["generation"], 1);
+        principal_commit(&f, "disable", &advance(1, false));
+        assert!(prepare("otherhuman").is_err());
+        assert_eq!(f.writes(), 3);
+    }
+
+    #[test]
+    fn governed_login_retains_original_generation_without_holding_the_writer_lock() {
+        let f = Fixture::new("login-lock-and-generation");
+        let adoption = principal_registry(&f);
+        f.activate();
+        principal_commit(&f, "adopt", &adoption);
+        let path = f.directory.join("registry.json");
+        let original = {
+            let mut store = f.store();
+            PrincipalLogin::prepare(
+                &mut PrincipalReader::at(&mut store, &f.directory, &path),
+                "human",
+            )
+            .unwrap()
+        };
+        // The login retains descriptors, not either writer's lifetime lock.
+        principal_commit(
+            &f,
+            "rotate",
+            &Command::RotateAdmin {
+                expected_generation: 1,
+            },
+        );
+        let current = PrincipalLogin::prepare(
+            &mut PrincipalReader::at(&mut f.store(), &f.directory, &path),
+            "human",
+        )
+        .unwrap();
+        assert_eq!(original.binding.identity["generation"], 1);
+        assert_eq!(current.binding.identity["generation"], 2);
+        assert_ne!(original.binding, current.binding);
+        assert_eq!(original.local, current.local);
+        original.registry.current().unwrap();
+        current.clock.elapsed_since(original.clock).unwrap();
+        assert_eq!(f.writes(), 3);
+    }
+
+    #[test]
+    fn governed_login_preparation_keeps_original_registry_pin_until_issuance() {
+        let f = Fixture::new("login-original-registry");
+        let adoption = principal_registry(&f);
+        f.activate();
+        principal_commit(&f, "adopt", &adoption);
+        let path = f.directory.join("registry.json");
+        let baseline = fs::read(&path).unwrap();
+        let original = PrincipalLogin::prepare(
+            &mut PrincipalReader::at(&mut f.store(), &f.directory, &path),
+            "human",
+        )
+        .unwrap();
+        platform::write_atomic(&path, &baseline, 0o600).unwrap();
+        assert!(original.registry.current().is_err());
+        let fresh = PrincipalLogin::prepare(
+            &mut PrincipalReader::at(&mut f.store(), &f.directory, &path),
+            "human",
+        )
+        .unwrap();
+        fresh.registry.current().unwrap();
+        assert!(original.registry.current().is_err());
+        assert_eq!(fresh.binding, original.binding);
+        assert_eq!(f.writes(), 2);
     }
 
     #[test]

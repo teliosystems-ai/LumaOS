@@ -66,8 +66,11 @@ This is not complete suspend/resume delivery or deployed-clock qualification;
 the remaining protected runtime/history and grant integrations stay open.
 The [JSON transport adaptation](evidence/G2_UTC_JSON_TRANSPORT_2026-10-05.md)
 removes the experimental binary format from the runtime receive path and binds
-asserted callers to kernel credentials. Endpoint/method deployment review,
-protected provisioning, history and authority composition are still required.
+asserted callers to kernel credentials. The owner approved fixed local
+peer-authenticated endpoints and the confined keeper design on 2026-10-08 in
+[ADR-0011](../docs/adr/0011-local-utc-runtime-and-offline-admin-recovery.md).
+Protected executable/configuration provisioning, installed lifecycle, history
+and authority composition are still required.
 Do not count source linkage or arithmetic as a completed time provider.
 
 The [UTC history backend](evidence/G2_UTC_HISTORY_2026-10-05.md) now implements

@@ -194,8 +194,13 @@ fn validate(request: &Request) -> Result<()> {
         review_sha256,
     } = &request.operation
     {
-        if matches!(command, CatalogCommand::AdoptPrincipals { .. }) {
-            return Err("principal adoption cannot accept a caller-supplied registry".into());
+        if matches!(
+            command,
+            CatalogCommand::AdoptPrincipals { .. } | CatalogCommand::RecoverAdmin { .. }
+        ) {
+            return Err(
+                "principal adoption or recovery cannot accept caller-supplied authority".into(),
+            );
         }
         command.validate()?;
         if let Some(review) = review_sha256 {
@@ -726,6 +731,21 @@ mod tests {
                 registry: serde_json::from_value(serde_json::json!({"schema_version":1,
                 "installation":"ab".repeat(32),"principals":[{"id":"cd".repeat(32),
                 "generation":1,"login":"human","uid":1001,"enabled":true}]}))
+                .unwrap(),
+            },
+            review_sha256: None,
+        };
+        assert!(validate(&supplied).is_err());
+        supplied.operation = Operation::Catalog {
+            command: CatalogCommand::RecoverAdmin {
+                expected_generation: 1,
+                expected_recovery_generation: 1,
+                replacement: crate::admin_recovery::Verifier::create(
+                    &crate::admin_recovery::Credential::fixture(0x42),
+                    &"ab".repeat(32),
+                    &"cd".repeat(32),
+                    2,
+                )
                 .unwrap(),
             },
             review_sha256: None,
@@ -1631,6 +1651,7 @@ mod tests {
         }
         admin_governance::fixture_session_issuance(&root, &password);
         admin_governance::fixture_session_projections(&root, &password);
+        admin_governance::fixture_custody_recovery(&root, &password);
         drop(listener);
         fs::remove_file(path).unwrap();
         fs::remove_dir(directory).unwrap();

@@ -140,6 +140,20 @@ def main(enrollment=False):
                              'login':'human', 'uid':1001, 'enabled':True},
                             {'id':'cc' * 32, 'generation':1, 'login':'otherhuman', 'uid':1002, 'enabled':True},
                         ]}
+                        # PUBLIC test credential only, never production custody.
+                        # Independent hashlib encoding checks the Rust/OpenSSL
+                        # commitment inside the disposable software-TPM path.
+                        recovery_salt = bytes.fromhex('55' * 32)
+                        preimage = (b'luma-offline-admin-recovery-v1\0'
+                                    + bytes.fromhex(identity['installation'])
+                                    + bytes.fromhex(identity['principal'])
+                                    + (1001).to_bytes(4, 'big') + (1).to_bytes(8, 'big')
+                                    + recovery_salt + bytes.fromhex('42' * 32))
+                        registry['admin_recovery'] = {
+                            'schema_version':1, 'installation':identity['installation'],
+                            'principal':identity['principal'], 'uid':1001, 'generation':1,
+                            'salt':recovery_salt.hex(), 'commitment_sha256':hashlib.sha256(preimage).hexdigest(),
+                        }
                         with (work / 'registry.json').open('x', encoding='ascii') as stream:
                             json.dump(registry, stream)
                         subprocess.run(['cargo', 'test', '--offline', '--locked',

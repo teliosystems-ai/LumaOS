@@ -120,7 +120,8 @@ class PrincipalPackagingTests(unittest.TestCase):
         self.assertIn('self.fenced.set(true)', binding)
         self.assertNotIn('Serialize', binding)
         service = (ROOT / 'rust/luma-platform/src/admin_service.rs').read_text().split('#[cfg(test)]')[0]
-        self.assertIn('principal adoption cannot accept a caller-supplied registry', service)
+        self.assertIn('CatalogCommand::RecoverAdmin', service)
+        self.assertIn('principal adoption or recovery cannot accept caller-supplied authority', service)
         self.assertIn('adoption_command(Path::new(crate::principal::REGISTRY))?', service)
         installer = (ROOT / 'rust/luma-platform/src/platform.rs').read_text()
         self.assertNotIn('adopt_principals(', installer)
@@ -128,7 +129,7 @@ class PrincipalPackagingTests(unittest.TestCase):
     def test_fresh_install_creates_principals_after_account_initialization(self):
         source = (ROOT / 'rust/luma-platform/src/platform.rs').read_text()
         create = source.index('create_identity(&data.at,')
-        principals = source.index('crate::principal::initialize(')
+        principals = source.index('crate::principal::initialize_with_recovery(')
         self.assertLess(create, principals)
         self.assertLess(principals, source.index('INSTALLATION COMPLETE:'))
         self.assertIn('&[(&user, 1000), (&admin, 1001)]', source)

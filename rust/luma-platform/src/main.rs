@@ -4,6 +4,7 @@ mod admin_credentials;
 mod admin_enrollment;
 mod admin_governance;
 mod admin_journal;
+mod admin_recovery;
 mod admin_roles;
 mod admin_service;
 mod artifact_catalog;
@@ -110,6 +111,9 @@ fn dispatch() -> Result<()> {
             Ok(())
         }
         Some("admin-checkpoint-status") if args.len() == 1 => admin_journal::status(),
+        Some("admin-custody-recover") if args.len() == 2 => {
+            admin_governance::recover_admin(&args[1])
+        }
         Some("admin-bootstrap") if args.len() == 2 => admin_governance::bootstrap(&args[1], None),
         Some("admin-bootstrap") if args.len() == 4 && args[2] == "--activate" => {
             admin_governance::bootstrap(&args[1], Some(&args[3]))
@@ -345,6 +349,7 @@ fn dispatch() -> Result<()> {
             println!("admin-activity-register LOGIN REQUEST ACTIVITY [--commit REVIEW-SHA256]: inspect or explicitly commit one declared finite activity.");
             println!("admin-client LOGIN principal-advance REQUEST PRINCIPAL-ID EXPECTED-GENERATION enabled|disabled [--commit REVIEW] | admin-principal-advance LOGIN REQUEST PRINCIPAL-ID EXPECTED-GENERATION enabled|disabled [--commit REVIEW]: reviewed non-Admin generation advance in TPM history; disable/re-enable or rotate without editing installation account files. Bootstrap Admin and initially disabled accounts require separate custody recovery.");
             println!("admin-client LOGIN rotate-admin REQUEST EXPECTED-GENERATION [--commit REVIEW] | admin-principal-rotate LOGIN REQUEST EXPECTED-GENERATION [--commit REVIEW]: reviewed generation rotation of the original enabled Admin only. Does not disable, transfer custody, change credentials or rewrite historical writers; a fresh authenticated request is needed for subsequent operations.");
+            println!("admin-custody-recover REQUEST: installed local-terminal offline credential ceremony. Requires an installer verifier already adopted into intact TPM history, confirms a new offline credential and reviews the exact transaction within a protected 30s proof. Rotates original Admin and recovery generations; no password change, root/owner fallback or effect grant.");
             println!("principal-check LOGIN: installed root maintenance diagnostic with fresh local PAM and current adopted TPM principal history; no session, role or effect grant is returned. This is distinct from the local-only admin-auth-check.");
             println!("admin-role-define LOGIN REQUEST ROLE EXPECTED-VERSION ACTIVITY... [--commit REVIEW-SHA256]: finite registered activities only; version 0 creates, the exact current version updates. Defines no assignment or resource grant.");
             println!("Install requires local TPM2 admission before any disk write. admin-install-check is read-only and does not enroll Admin; explicit checkpoint enrollment remains separate from product Admin activation.");

@@ -13,6 +13,34 @@ requirement.
 
 ## Current software inventory and work still required
 
+### Approved UTC runtime and offline Admin recovery
+
+The owner approved both designs on 2026-10-08 in
+[ADR-0011](../docs/adr/0011-local-utc-runtime-and-offline-admin-recovery.md):
+fixed peer-authenticated local UTC endpoints with a confined keeper, and an
+installer-enrolled high-entropy offline Admin recovery credential. This is design
+approval, not permission to activate this host or a completed G2 qualification.
+
+The installer recovery credential and installation/principal-bound verifier now
+have a native source path. Explicit principal adoption anchors the verifier in
+the shared TPM history; a separate reviewed local-terminal custody command
+rotates the original Admin and recovery credential generations together. It
+accepts no root/TPM-owner bypass, generic PAM proof or caller-supplied recovery
+verifier. The proof retains its latest observed TPM clock across review/commit,
+has a protected suspend-aware lifetime and is consumed by a reviewed write
+attempt. Legacy installations without enrolled custody refuse recovery.
+
+This closes neither the full account lifecycle nor the UTC implementation. Unix
+password/account mutation, damaged-authority reconciliation, installed custody
+and confinement qualification, the protected UTC producer/keeper runtime,
+trusted-time assignments, principal-bound effect/folder grants and admission
+consumers remain software or qualification work. No assignment/effect endpoint
+was enabled and Requirement #1 remains open.
+The [offline recovery checkpoint](evidence/G2_OFFLINE_ADMIN_RECOVERY_2026-10-08.md)
+retains 167 ordinary Rust tests, five native software-TPM recovery cases and the
+271-pass/two-existing-skip native regression. It does not qualify the installer
+ceremony, production custody, enforcing service or final image.
+
 ### Selected Requirement #1: resource leases/generations
 
 The owner selected this package first and requires it to be fully implemented

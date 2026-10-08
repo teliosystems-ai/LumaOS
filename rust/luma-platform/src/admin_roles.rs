@@ -44,6 +44,11 @@ pub(crate) enum Command {
     RotateAdmin {
         expected_generation: u64,
     },
+    RecoverAdmin {
+        expected_generation: u64,
+        expected_recovery_generation: u64,
+        replacement: crate::admin_recovery::Verifier,
+    },
 }
 
 impl Command {
@@ -54,11 +59,24 @@ impl Command {
             Self::AdoptPrincipals { .. } => "admin.principal.adopt",
             Self::AdvancePrincipal { .. } => "admin.principal.advance",
             Self::RotateAdmin { .. } => "admin.principal.rotate_admin",
+            Self::RecoverAdmin { .. } => "admin.principal.recover",
         }
     }
     pub(crate) fn validate(&self) -> Result<()> {
         let valid_activity = |v: &str| identifier(v) && v != "admin.bootstrap";
         match self {
+            Self::RecoverAdmin {
+                expected_generation,
+                expected_recovery_generation,
+                ..
+            } => {
+                if *expected_generation == 0 || *expected_recovery_generation == 0 {
+                    return Err(
+                        "recovery requires nonzero principal and credential generations".into(),
+                    );
+                }
+                Ok(())
+            }
             Self::AdoptPrincipals { registry } => registry.validate(),
             Self::RotateAdmin {
                 expected_generation,
@@ -114,6 +132,8 @@ pub(crate) struct Catalog {
     pub principal_registry: Option<crate::principal::Registry>,
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub principal_states: BTreeMap<String, PrincipalState>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub admin_recovery: Option<crate::admin_recovery::Verifier>,
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
@@ -130,6 +150,7 @@ impl Catalog {
             roles: BTreeMap::new(),
             principal_registry: None,
             principal_states: BTreeMap::new(),
+            admin_recovery: None,
         }
     }
 
@@ -142,6 +163,47 @@ impl Catalog {
             .checked_add(1)
             .ok_or("Admin catalog version exhausted")?;
         match command {
+            Command::RecoverAdmin {
+                expected_generation,
+                expected_recovery_generation,
+                replacement,
+            } => {
+                let registry = self
+                    .principal_registry
+                    .as_ref()
+                    .ok_or("explicit principal adoption required")?;
+                let admin = registry
+                    .bootstrap_admin()
+                    .filter(|record| record.enabled)
+                    .ok_or("missing enabled original Admin")?;
+                let verifier = self.recovery_verifier()?;
+                if verifier.generation != *expected_recovery_generation {
+                    return Err("recovery credential generation conflict".into());
+                }
+                verifier.successor(replacement)?;
+                replacement.validate(registry.installation(), &admin.id)?;
+                let current = self.principal_states.get(&admin.id);
+                if current.is_some_and(|state| !state.enabled) {
+                    return Err(
+                        "disabled Admin requires separate account-lifecycle recovery".into(),
+                    );
+                }
+                let generation = current.map_or(admin.generation, |state| state.generation);
+                if generation != *expected_generation {
+                    return Err("recovery Admin generation conflict".into());
+                }
+                let next = generation
+                    .checked_add(1)
+                    .ok_or("Admin generation exhausted")?;
+                self.principal_states.insert(
+                    admin.id.clone(),
+                    PrincipalState {
+                        generation: next,
+                        enabled: true,
+                    },
+                );
+                self.admin_recovery = Some(replacement.clone());
+            }
             Command::RotateAdmin {
                 expected_generation,
             } => {
@@ -280,11 +342,86 @@ impl Catalog {
         }
         Ok(registry.identity(&current))
     }
+
+    pub(crate) fn recovery_verifier(&self) -> Result<&crate::admin_recovery::Verifier> {
+        let registry = self
+            .principal_registry
+            .as_ref()
+            .ok_or("explicit principal adoption required")?;
+        self.admin_recovery.as_ref().or_else(|| registry.recovery_verifier())
+            .ok_or_else(|| "no installer-enrolled offline Admin recovery credential; no root or TPM-owner fallback".into())
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn offline_recovery_requires_adoption_rotates_both_generations_and_preserves_baseline() {
+        use crate::admin_recovery::{Credential, Verifier};
+        let old = Credential::fixture(0x42);
+        let new = Credential::fixture(0x43);
+        let first = Verifier::create(&old, &"ab".repeat(32), &"cd".repeat(32), 1).unwrap();
+        let second = Verifier::create(&new, &"ab".repeat(32), &"cd".repeat(32), 2).unwrap();
+        let recovery = Command::RecoverAdmin {
+            expected_generation: 2,
+            expected_recovery_generation: 1,
+            replacement: second,
+        };
+        let mut catalog = Catalog::initial();
+        let initial = catalog.clone();
+        assert!(catalog.apply(&recovery).is_err());
+        assert_eq!(catalog, initial);
+        let registry = serde_json::from_value(serde_json::json!({"schema_version":1,
+            "installation":"ab".repeat(32),"principals":[{"id":"cd".repeat(32),
+            "generation":1,"login":"human","uid":1001,"enabled":true}],"admin_recovery":first}))
+        .unwrap();
+        catalog
+            .apply(&Command::AdoptPrincipals { registry })
+            .unwrap();
+        let baseline = catalog.principal_registry.clone();
+        catalog
+            .apply(&Command::RotateAdmin {
+                expected_generation: 1,
+            })
+            .unwrap();
+        catalog.recovery_verifier().unwrap().verify(&old).unwrap();
+        assert!(catalog.apply(&recovery).unwrap());
+        assert_eq!(catalog.principal_states[&"cd".repeat(32)].generation, 3);
+        assert_eq!(catalog.recovery_verifier().unwrap().generation, 2);
+        catalog.recovery_verifier().unwrap().verify(&new).unwrap();
+        assert!(catalog.recovery_verifier().unwrap().verify(&old).is_err());
+        assert_eq!(catalog.principal_registry, baseline);
+        let before = catalog.clone();
+        assert!(catalog.apply(&recovery).is_err());
+        assert_eq!(catalog, before);
+        for (principal_generation, credential_generation, installation, principal, next_epoch) in [
+            (2, 2, "ab", "cd", 3),
+            (3, 1, "ab", "cd", 3),
+            (3, 2, "ef", "cd", 3),
+            (3, 2, "ab", "ef", 3),
+            (3, 2, "ab", "cd", 2),
+            (3, 2, "ab", "cd", 4),
+        ] {
+            let command = Command::RecoverAdmin {
+                expected_generation: principal_generation,
+                expected_recovery_generation: credential_generation,
+                replacement: Verifier::create(
+                    &old,
+                    &installation.repeat(32),
+                    &principal.repeat(32),
+                    next_epoch,
+                )
+                .unwrap(),
+            };
+            assert!(catalog.apply(&command).is_err());
+            assert_eq!(catalog, before);
+        }
+        catalog.state_version = u64::MAX;
+        let before = catalog.clone();
+        assert!(catalog.apply(&recovery).is_err());
+        assert_eq!(catalog, before);
+    }
     fn register(v: &str) -> Command {
         Command::RegisterActivity { activity: v.into() }
     }

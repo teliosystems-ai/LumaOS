@@ -1,6 +1,7 @@
 //! Explicit product Admin bootstrap atop the inert TPM checkpoint adapter.
 //! The receipt establishes one governance principal, never an effect grant.
-//! No implicit root role, automatic enrollment, transfer, reset or recovery.
+//! No implicit root role, automatic enrollment, transfer or authority reset.
+//! Explicit offline custody recovery is separate from ordinary PAM commands.
 use crate::{
     admin_enrollment,
     admin_journal::{self, Entry, Snapshot, Store},
@@ -1071,16 +1072,51 @@ fn execute_catalog_at<A: Checkpoint>(
     store: &mut Store<A>,
     directory: &Path,
     registry_path: &Path,
+    authenticate: impl FnMut() -> Result<serde_json::Value>,
+    request: &str,
+    command: &Command,
+    reviewed: Option<&str>,
+) -> Result<serde_json::Value> {
+    execute_catalog_authorized_at(
+        store,
+        directory,
+        registry_path,
+        authenticate,
+        request,
+        command,
+        reviewed,
+        None,
+    )
+}
+
+fn execute_catalog_authorized_at<A: Checkpoint>(
+    store: &mut Store<A>,
+    directory: &Path,
+    registry_path: &Path,
     mut authenticate: impl FnMut() -> Result<serde_json::Value>,
     request: &str,
     command: &Command,
     reviewed: Option<&str>,
+    recovery: Option<&RecoveryAttempt<'_>>,
 ) -> Result<serde_json::Value> {
     if !admin_roles::identifier(request) || request == REQUEST {
         return Err("invalid or reserved Admin request".into());
     }
     command.validate()?;
     let snapshot = store.snapshot()?;
+    match (command, recovery) {
+        (Command::RecoverAdmin { .. }, Some(attempt))
+            if command == &attempt.command && snapshot.head == attempt.head =>
+        {
+            snapshot.clock.elapsed_since(attempt.clock.get())?;
+            attempt.clock.set(snapshot.clock);
+            attempt.authenticate()?;
+        }
+        (Command::RecoverAdmin { .. }, _) | (_, Some(_)) => {
+            return Err("Admin recovery requires its exact live offline-credential proof, not PAM or caller authority".into());
+        }
+        _ => (),
+    }
     let context = Context::load_at(directory, &snapshot.deployment, registry_path)?;
     if !context.state(&snapshot, Some(request))?.1 {
         return Err("explicit product Admin bootstrap required".into());
@@ -1237,6 +1273,10 @@ fn execute_catalog_at<A: Checkpoint>(
         }
     }
     let final_snapshot = store.snapshot()?;
+    if let Some(attempt) = recovery {
+        final_snapshot.clock.elapsed_since(attempt.clock.get())?;
+        attempt.clock.set(final_snapshot.clock);
+    }
     context.state(&final_snapshot, Some(request))?;
     let (current, _) = context.events(&final_snapshot, Some(request))?;
     if written && current != predicted {
@@ -1251,6 +1291,153 @@ fn execute_catalog_at<A: Checkpoint>(
         "product_admin_active":true,"delegation_available":false,"effect_grant":false,
         "trusted_utc_available":false,"production_custody_verified":false,"gate_closing":false}),
     )
+}
+
+// Kept private to this composition. A captured verifier or JSON identity cannot
+// construct, serialize, renew or transfer this proof to any ordinary command.
+struct RecoveryAttempt<'a> {
+    credential: &'a crate::admin_recovery::Credential,
+    verifier: crate::admin_recovery::Verifier,
+    registry: crate::principal::RegistryBinding,
+    baseline: serde_json::Value,
+    head: String,
+    clock: std::cell::Cell<tpm::Clock>,
+    command: Command,
+    lifetime: authentication::ProtectedOperation,
+}
+
+impl<'a> RecoveryAttempt<'a> {
+    fn prepare<A: Checkpoint>(
+        store: &mut Store<A>,
+        directory: &Path,
+        registry_path: &Path,
+        credential: &'a crate::admin_recovery::Credential,
+        replacement: &crate::admin_recovery::Credential,
+    ) -> Result<Self> {
+        let registry = crate::principal::RegistryBinding::capture(registry_path)?;
+        let snapshot = store.snapshot()?;
+        let context = Context::load_at(directory, &snapshot.deployment, registry_path)?;
+        if !context.state(&snapshot, None)?.1 {
+            return Err("explicit product Admin bootstrap required for recovery".into());
+        }
+        let catalog = context.events(&snapshot, None)?.0;
+        if catalog.principal_registry.as_ref() != Some(registry.current()?) {
+            return Err("recovery requires unchanged explicitly adopted installer registry".into());
+        }
+        let writer = context.writer(&catalog)?;
+        let verifier = catalog.recovery_verifier()?.clone();
+        verifier.validate(&writer.installation, &writer.principal)?;
+        verifier.verify(credential)?;
+        if verifier.verify(replacement).is_ok() {
+            return Err(
+                "replacement recovery credential must differ from the current credential".into(),
+            );
+        }
+        let replacement = crate::admin_recovery::Verifier::create(
+            replacement,
+            &writer.installation,
+            &writer.principal,
+            verifier
+                .generation
+                .checked_add(1)
+                .ok_or("recovery generation exhausted")?,
+        )?;
+        let command = Command::RecoverAdmin {
+            expected_generation: writer.generation,
+            expected_recovery_generation: verifier.generation,
+            replacement,
+        };
+        let mut predicted = catalog.clone();
+        predicted.apply(&command)?;
+        let final_snapshot = store.snapshot()?;
+        final_snapshot.clock.elapsed_since(snapshot.clock)?;
+        if final_snapshot.head != snapshot.head
+            || final_snapshot.deployment != snapshot.deployment
+            || context.events(&final_snapshot, None)?.0 != catalog
+        {
+            return Err("Admin recovery authority changed during credential verification".into());
+        }
+        registry.current()?;
+        Ok(Self {
+            credential,
+            verifier,
+            registry,
+            baseline: serde_json::to_value(context.principal)?,
+            head: snapshot.head,
+            clock: std::cell::Cell::new(final_snapshot.clock),
+            command,
+            lifetime: authentication::ProtectedOperation::start()?,
+        })
+    }
+
+    fn authenticate(&self) -> Result<serde_json::Value> {
+        self.lifetime.within(|| {
+            self.registry.current()?;
+            self.verifier.verify(self.credential)?;
+            self.registry.current()?;
+            Ok(self.baseline.clone())
+        })
+    }
+
+    fn execute<A: Checkpoint>(
+        &self,
+        store: &mut Store<A>,
+        directory: &Path,
+        registry_path: &Path,
+        request: &str,
+        reviewed: Option<&str>,
+    ) -> Result<serde_json::Value> {
+        let result = self.lifetime.within(|| {
+            execute_catalog_authorized_at(
+                store,
+                directory,
+                registry_path,
+                || self.authenticate(),
+                request,
+                &self.command,
+                reviewed,
+                Some(self),
+            )
+        });
+        // A dispatched write attempt consumes this in-process proof even if the
+        // TPM outcome is uncertain. Only exact journal reconciliation can follow.
+        if reviewed.is_some() {
+            self.lifetime.close();
+        }
+        result
+    }
+}
+
+pub fn recover_admin(request: &str) -> Result<()> {
+    crate::require_root()?;
+    platform::require_installed()?;
+    if !admin_roles::identifier(request) || request == REQUEST {
+        return Err("invalid or reserved Admin recovery request".into());
+    }
+    let credential = crate::admin_recovery::Credential::read()?;
+    let replacement = crate::admin_recovery::Credential::generate_confirmed()?;
+    let directory = Path::new(DIRECTORY);
+    let registry = Path::new(crate::principal::REGISTRY);
+    let mut store = Store::open(
+        tpm::LocalAnchor::installed()?,
+        &directory.join("journal.json"),
+    )?;
+    let attempt =
+        RecoveryAttempt::prepare(&mut store, directory, registry, &credential, &replacement)?;
+    let inspected = attempt.execute(&mut store, directory, registry, request, None)?;
+    println!("{}", serde_json::to_string(&inspected)?);
+    let digest = inspected["review_sha256"]
+        .as_str()
+        .ok_or("missing recovery review digest")?;
+    crate::admin_recovery::review(digest)?;
+    let committed = attempt.execute(&mut store, directory, registry, request, Some(digest))?;
+    println!(
+        "{}",
+        serde_json::to_string(&serde_json::json!({
+        "schema_version":1,"action":"admin-custody-recovery","receipt":committed,
+        "unix_password_changed":false,"effect_grant":false,"gate_closing":false}))?
+    );
+    Ok(())
 }
 
 fn parse_command(args: &[String]) -> Result<(&str, &str, Command, Option<&str>)> {
@@ -1514,6 +1701,120 @@ fn fixture_store(root: &Path) -> Result<Store<tpm::LocalAnchor>> {
 pub(crate) fn fixture_rotation_interruption(account: &authentication::AuthenticatedAccount) {
     let _rotation = RotationAttempt { account };
     panic!("deliberate rotation-attempt unwind fixture");
+}
+
+#[cfg(test)]
+pub(crate) fn fixture_custody_recovery(
+    root: &Path,
+    password: &crate::sealed_credential::PrivateBuffer,
+) {
+    use crate::admin_recovery::Credential;
+    // fixture_store proves the disposable-container boundary and rejects host
+    // devices before any TPM operation. These are PUBLIC fixture credentials.
+    let first = Credential::fixture(0x42);
+    let second = Credential::fixture(0x43);
+    let third = Credential::fixture(0x44);
+    let directory = root.join("admin");
+    let registry = root.join("registry.json");
+    let login = {
+        let mut store = fixture_store(root).unwrap();
+        PrincipalLogin::prepare(
+            &mut PrincipalReader::at(&mut store, &directory, &registry),
+            "human",
+        )
+        .unwrap()
+    };
+    let account = authentication::fixture_local_account(root, "human", password).unwrap();
+    let mut store = fixture_store(root).unwrap();
+    let session = PrincipalSession::new(
+        account,
+        login,
+        &mut PrincipalReader::at(&mut store, &directory, &registry),
+    )
+    .unwrap();
+    let before = session
+        .identity(&mut PrincipalReader::at(&mut store, &directory, &registry))
+        .unwrap();
+    let baseline = fs::read(&registry).unwrap();
+    assert!(RecoveryAttempt::prepare(
+        &mut store,
+        &directory,
+        &registry,
+        &Credential::fixture(0x45),
+        &second
+    )
+    .is_err());
+    assert!(RecoveryAttempt::prepare(&mut store, &directory, &registry, &first, &first).is_err());
+    println!("OFFLINE_RECOVERY_TPM_CASE=wrong-and-reused-credential-refused");
+    let attempt =
+        RecoveryAttempt::prepare(&mut store, &directory, &registry, &first, &second).unwrap();
+    assert!(execute_catalog_at(
+        &mut store,
+        &directory,
+        &registry,
+        || session.account.identity(),
+        "fixture-recover-pam",
+        &attempt.command,
+        None
+    )
+    .is_err());
+    println!("OFFLINE_RECOVERY_TPM_CASE=genuine-pam-not-recovery-proof");
+    let inspected = attempt
+        .execute(
+            &mut store,
+            &directory,
+            &registry,
+            "fixture-offline-recover",
+            None,
+        )
+        .unwrap();
+    let committed = attempt
+        .execute(
+            &mut store,
+            &directory,
+            &registry,
+            "fixture-offline-recover",
+            Some(inspected["review_sha256"].as_str().unwrap()),
+        )
+        .unwrap();
+    assert_eq!(committed["committed"], true);
+    assert_eq!(committed["catalog"]["admin_recovery"]["generation"], 2);
+    assert_eq!(
+        committed["catalog"]["principal_states"][before["principal"].as_str().unwrap()]
+            ["generation"],
+        before["generation"].as_u64().unwrap() + 1
+    );
+    println!("OFFLINE_RECOVERY_TPM_CASE=checkpointed-two-generation-rotation");
+    assert!(attempt.authenticate().is_err());
+    assert!(session
+        .identity(&mut PrincipalReader::at(&mut store, &directory, &registry))
+        .is_err());
+    assert!(session.account.identity().is_err());
+    println!("OFFLINE_RECOVERY_TPM_CASE=old-live-session-and-proof-closed");
+    assert!(RecoveryAttempt::prepare(&mut store, &directory, &registry, &first, &third).is_err());
+    let next =
+        RecoveryAttempt::prepare(&mut store, &directory, &registry, &second, &third).unwrap();
+    let inspected = next
+        .execute(
+            &mut store,
+            &directory,
+            &registry,
+            "fixture-offline-recover-next",
+            None,
+        )
+        .unwrap();
+    next.execute(
+        &mut store,
+        &directory,
+        &registry,
+        "fixture-offline-recover-next",
+        Some(inspected["review_sha256"].as_str().unwrap()),
+    )
+    .unwrap();
+    assert!(RecoveryAttempt::prepare(&mut store, &directory, &registry, &second, &first).is_err());
+    assert!(RecoveryAttempt::prepare(&mut store, &directory, &registry, &third, &second).is_ok());
+    assert_eq!(fs::read(&registry).unwrap(), baseline);
+    println!("OFFLINE_RECOVERY_TPM_CASE=old-credentials-consumed-and-baseline-preserved");
 }
 
 #[cfg(test)]
@@ -2034,6 +2335,240 @@ mod tests {
         )
         .unwrap();
         adoption_command(&f.directory.join("registry.json")).unwrap()
+    }
+
+    fn recovery_fixture(label: &str, credential: &crate::admin_recovery::Credential) -> Fixture {
+        let f = Fixture::new(label);
+        let Command::AdoptPrincipals { registry } = principal_registry(&f) else {
+            panic!("adoption fixture");
+        };
+        let mut value = serde_json::to_value(registry).unwrap();
+        value["admin_recovery"] = serde_json::to_value(
+            crate::admin_recovery::Verifier::create(
+                credential,
+                &"ab".repeat(32),
+                &"cd".repeat(32),
+                1,
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        platform::write_atomic(
+            &f.directory.join("registry.json"),
+            &serde_json::to_vec(&value).unwrap(),
+            0o600,
+        )
+        .unwrap();
+        f.activate();
+        principal_commit(
+            &f,
+            "adopt",
+            &adoption_command(&f.directory.join("registry.json")).unwrap(),
+        );
+        f
+    }
+
+    #[test]
+    fn offline_recovery_checkpoint_rotates_and_cannot_be_called_with_pam_or_reused() {
+        use crate::admin_recovery::Credential;
+        let first = Credential::fixture(0x42);
+        let second = Credential::fixture(0x43);
+        let third = Credential::fixture(0x44);
+        let f = recovery_fixture("offline-recovery", &first);
+        let registry = f.directory.join("registry.json");
+        let baseline = fs::read(&registry).unwrap();
+        let mut store = f.store();
+        let attempt =
+            RecoveryAttempt::prepare(&mut store, &f.directory, &registry, &first, &second).unwrap();
+        let writes = f.writes();
+        assert!(execute_catalog_at(
+            &mut store,
+            &f.directory,
+            &registry,
+            || Ok(f.identity.clone()),
+            "recover",
+            &attempt.command,
+            None
+        )
+        .is_err());
+        assert_eq!(f.writes(), writes);
+        let report = attempt
+            .execute(&mut store, &f.directory, &registry, "recover", None)
+            .unwrap();
+        let committed = attempt
+            .execute(
+                &mut store,
+                &f.directory,
+                &registry,
+                "recover",
+                Some(report["review_sha256"].as_str().unwrap()),
+            )
+            .unwrap();
+        assert_eq!(committed["committed"], true);
+        assert_eq!(f.writes(), writes + 1);
+        assert_eq!(committed["proposal"]["principal"]["generation"], 1);
+        assert_eq!(
+            committed["catalog"]["principal_states"][&"cd".repeat(32)]["generation"],
+            2
+        );
+        assert_eq!(committed["catalog"]["admin_recovery"]["generation"], 2);
+        assert_eq!(committed["effect_grant"], false);
+        assert!(attempt
+            .execute(&mut store, &f.directory, &registry, "recover-again", None)
+            .is_err());
+        assert!(
+            RecoveryAttempt::prepare(&mut store, &f.directory, &registry, &first, &third).is_err()
+        );
+        assert!(
+            RecoveryAttempt::prepare(&mut store, &f.directory, &registry, &second, &second)
+                .is_err()
+        );
+        let next =
+            RecoveryAttempt::prepare(&mut store, &f.directory, &registry, &second, &third).unwrap();
+        let report = next
+            .execute(&mut store, &f.directory, &registry, "recover-next", None)
+            .unwrap();
+        let committed = next
+            .execute(
+                &mut store,
+                &f.directory,
+                &registry,
+                "recover-next",
+                Some(report["review_sha256"].as_str().unwrap()),
+            )
+            .unwrap();
+        assert_eq!(committed["proposal"]["principal"]["generation"], 2);
+        assert_eq!(
+            committed["catalog"]["principal_states"][&"cd".repeat(32)]["generation"],
+            3
+        );
+        assert_eq!(committed["catalog"]["admin_recovery"]["generation"], 3);
+        assert_eq!(fs::read(&registry).unwrap(), baseline);
+        assert_eq!(f.writes(), writes + 2);
+    }
+
+    #[test]
+    fn recovery_proof_fences_on_wrong_review_registry_replacement_head_and_clock_changes() {
+        use crate::admin_recovery::Credential;
+        for fault in [
+            "review",
+            "registry",
+            "head",
+            "reset",
+            "restart",
+            "regression",
+            "expired",
+            "observed-floor",
+        ] {
+            let first = Credential::fixture(0x42);
+            let second = Credential::fixture(0x43);
+            let f = recovery_fixture(&format!("recovery-{fault}"), &first);
+            let registry = f.directory.join("registry.json");
+            let mut store = f.store();
+            let mut attempt =
+                RecoveryAttempt::prepare(&mut store, &f.directory, &registry, &first, &second)
+                    .unwrap();
+            let report = attempt
+                .execute(&mut store, &f.directory, &registry, "recover", None)
+                .unwrap();
+            let mut digest = report["review_sha256"].as_str().unwrap().to_string();
+            match fault {
+                "review" => digest = "00".repeat(32),
+                "registry" => {
+                    let bytes = fs::read(&registry).unwrap();
+                    platform::write_atomic(&registry, &bytes, 0o600).unwrap();
+                }
+                "head" => {
+                    let command = Command::RegisterActivity {
+                        activity: "recovery.interleave".into(),
+                    };
+                    let inspected = execute_catalog_at(
+                        &mut store,
+                        &f.directory,
+                        &registry,
+                        || Ok(f.identity.clone()),
+                        "interleave",
+                        &command,
+                        None,
+                    )
+                    .unwrap();
+                    execute_catalog_at(
+                        &mut store,
+                        &f.directory,
+                        &registry,
+                        || Ok(f.identity.clone()),
+                        "interleave",
+                        &command,
+                        Some(inspected["review_sha256"].as_str().unwrap()),
+                    )
+                    .unwrap();
+                }
+                "reset" => f.anchor.0.borrow_mut().1.reset_count += 1,
+                "restart" => f.anchor.0.borrow_mut().1.restart_count += 1,
+                "regression" => f.anchor.0.borrow_mut().1.milliseconds -= 1,
+                "expired" => {
+                    attempt.lifetime =
+                        authentication::ProtectedOperation::expired_fixture().unwrap()
+                }
+                "observed-floor" => {
+                    let mut clock = attempt.clock.get();
+                    clock.milliseconds += 10;
+                    attempt.clock.set(clock);
+                }
+                _ => unreachable!(),
+            }
+            let writes = f.writes();
+            assert!(
+                attempt
+                    .execute(
+                        &mut store,
+                        &f.directory,
+                        &registry,
+                        "recover",
+                        Some(&digest)
+                    )
+                    .is_err(),
+                "{fault}"
+            );
+            assert!(attempt.authenticate().is_err(), "{fault}");
+            assert_eq!(f.writes(), writes, "{fault}");
+            assert!(!f.directory.join(event_name("recover")).exists(), "{fault}");
+        }
+    }
+
+    #[test]
+    fn recovery_uncertain_commit_retains_pending_and_never_retries_or_resets() {
+        use crate::admin_recovery::Credential;
+        let first = Credential::fixture(0x42);
+        let second = Credential::fixture(0x43);
+        let f = recovery_fixture("recovery-uncertain", &first);
+        let registry = f.directory.join("registry.json");
+        let mut store = f.store();
+        let attempt =
+            RecoveryAttempt::prepare(&mut store, &f.directory, &registry, &first, &second).unwrap();
+        let inspected = attempt
+            .execute(&mut store, &f.directory, &registry, "recover", None)
+            .unwrap();
+        let writes = f.writes();
+        f.anchor.0.borrow_mut().3 = true;
+        assert!(attempt
+            .execute(
+                &mut store,
+                &f.directory,
+                &registry,
+                "recover",
+                Some(inspected["review_sha256"].as_str().unwrap())
+            )
+            .is_err());
+        assert_eq!(f.writes(), writes + 1);
+        assert!(f.directory.join("journal.pending.json").exists());
+        assert!(f.directory.join(event_name("recover")).exists());
+        assert!(store.snapshot().is_err());
+        assert!(attempt.authenticate().is_err());
+        assert!(
+            RecoveryAttempt::prepare(&mut store, &f.directory, &registry, &first, &second).is_err()
+        );
+        assert_eq!(f.writes(), writes + 1);
     }
     fn principal_call(
         f: &Fixture,

@@ -772,6 +772,7 @@ pub fn install(selection: &str, source: &Path, model_id: Option<&str>) -> Result
     if recovery == data_secret {
         return Err("recovery credential must be independent".into());
     }
+    let admin_recovery = crate::admin_recovery::Credential::generate_confirmed()?;
     admin_admission.recheck()?;
     disk.recheck()?;
     let size_a = format!("2:0:+{roots_mib}M");
@@ -887,10 +888,12 @@ pub fn install(selection: &str, source: &Path, model_id: Option<&str>) -> Result
         ],
     )?;
     create_identity(&data.at, &user, &admin, &user_password, &admin_password)?;
-    crate::principal::initialize(
+    crate::principal::initialize_with_recovery(
         &data.at.join("lib/luma-os/principals"),
         &[(&user, 1000), (&admin, 1001)],
+        &admin_recovery,
     )?;
+    drop(admin_recovery);
     crate::broker_effects::initialize(&data.at.join("lib/luma-broker"))?;
     crate::resources::initialize(&data.at.join("lib/luma-broker/resources"))?;
     crate::artifacts::initialize(
@@ -935,6 +938,7 @@ pub fn install(selection: &str, source: &Path, model_id: Option<&str>) -> Result
         }
     }
     println!("ADMIN ENROLLMENT REQUIRED: local TPM2 hardware admission passed, but sealed product Admin enrollment is not implemented in this laboratory installer. The separate Unix administrator is not product Admin.");
+    println!("Offline Admin recovery verifier installed but NOT recovery authority until explicit TPM checkpoint enrollment, product bootstrap and principal adoption commit. Retain the confirmed Admin recovery credential separately from the disk recovery passphrase.");
     println!("INSTALLATION COMPLETE: remove recovery media and boot the selected disk. Secure Boot requires the laboratory certificate to be enrolled by the operator. Keep the independent recovery passphrase offline.");
     Ok(())
 }

@@ -31,6 +31,8 @@ pub(crate) struct Registry {
     schema_version: u32,
     installation: String,
     principals: Vec<Principal>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    admin_recovery: Option<crate::admin_recovery::Verifier>,
 }
 
 fn login(value: &str) -> bool {
@@ -64,10 +66,28 @@ fn validate(registry: &Registry) -> Result<()> {
             return Err("invalid or duplicate local principal".into());
         }
     }
+    if let Some(verifier) = &registry.admin_recovery {
+        let admin = registry
+            .bootstrap_admin()
+            .filter(|record| record.enabled)
+            .ok_or("recovery verifier requires an enabled original Admin")?;
+        verifier.validate(&registry.installation, &admin.id)?;
+        if verifier.generation != 1 {
+            return Err("installer recovery verifier must start at generation one".into());
+        }
+    }
     Ok(())
 }
 
 impl Registry {
+    pub(crate) fn recovery_verifier(&self) -> Option<&crate::admin_recovery::Verifier> {
+        self.admin_recovery.as_ref()
+    }
+
+    pub(crate) fn installation(&self) -> &str {
+        &self.installation
+    }
+
     pub(crate) fn bootstrap_admin(&self) -> Option<&Principal> {
         self.principals.iter().find(|record| record.uid == 1001)
     }
@@ -115,12 +135,25 @@ fn random_id() -> Result<String> {
 }
 
 /// Fresh installation only; never reset a missing registry during runtime.
-pub fn initialize(directory: &Path, accounts: &[(&str, u32)]) -> Result<()> {
+pub(crate) fn initialize_with_recovery(
+    directory: &Path,
+    accounts: &[(&str, u32)],
+    credential: &crate::admin_recovery::Credential,
+) -> Result<()> {
+    initialize_at(directory, accounts, Some(credential))
+}
+
+fn initialize_at(
+    directory: &Path,
+    accounts: &[(&str, u32)],
+    credential: Option<&crate::admin_recovery::Credential>,
+) -> Result<()> {
     crate::require_root()?;
     let mut registry = Registry {
         schema_version: 1,
         installation: random_id()?,
         principals: vec![],
+        admin_recovery: None,
     };
     for &(name, uid) in accounts {
         registry.principals.push(Principal {
@@ -130,6 +163,17 @@ pub fn initialize(directory: &Path, accounts: &[(&str, u32)]) -> Result<()> {
             uid,
             enabled: true,
         });
+    }
+    if let Some(credential) = credential {
+        let admin = registry
+            .bootstrap_admin()
+            .ok_or("installer recovery requires original Admin")?;
+        registry.admin_recovery = Some(crate::admin_recovery::Verifier::create(
+            credential,
+            &registry.installation,
+            &admin.id,
+            1,
+        )?);
     }
     validate(&registry)?;
     fs::DirBuilder::new().mode(0o700).create(directory)?;
@@ -480,6 +524,11 @@ impl AccountBinding {
 }
 
 #[cfg(test)]
+pub fn initialize(directory: &Path, accounts: &[(&str, u32)]) -> Result<()> {
+    initialize_at(directory, accounts, None)
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use std::os::fd::AsRawFd;
@@ -628,6 +677,49 @@ mod tests {
         fs::remove_file(a.path()).unwrap();
         assert!(AccountBinding::capture(&a.path(), &a.0.join("identity"), "human").is_err());
         assert!(!a.path().exists());
+    }
+
+    #[test]
+    fn fresh_installer_verifier_is_bound_and_legacy_installations_have_no_recovery_fallback() {
+        let fixture = Fixture::new("installer-recovery");
+        let legacy = registry(&fixture.path()).unwrap();
+        assert!(legacy.recovery_verifier().is_none());
+        assert!(serde_json::to_value(&legacy)
+            .unwrap()
+            .get("admin_recovery")
+            .is_none());
+        let credential = crate::admin_recovery::Credential::fixture(0x42);
+        let directory = fixture.0.join("recovery-principals");
+        initialize_with_recovery(&directory, &[("user", 1000), ("human", 1001)], &credential)
+            .unwrap();
+        let installed = registry(&directory.join("registry.json")).unwrap();
+        let verifier = installed.recovery_verifier().unwrap();
+        verifier
+            .validate(
+                installed.installation(),
+                &installed.bootstrap_admin().unwrap().id,
+            )
+            .unwrap();
+        verifier.verify(&credential).unwrap();
+        assert_eq!(verifier.generation, 1);
+        assert!(initialize_with_recovery(&directory, &[("human", 1001)], &credential).is_err());
+        let mut wrong = installed.clone();
+        wrong.principals[1].id = "cd".repeat(32);
+        assert!(wrong.validate().is_err());
+        let mut wrong = installed.clone();
+        wrong.principals[1].enabled = false;
+        assert!(wrong.validate().is_err());
+        let mut wrong = serde_json::to_value(&installed).unwrap();
+        wrong["admin_recovery"]["generation"] = serde_json::json!(2);
+        assert!(serde_json::from_value::<Registry>(wrong)
+            .unwrap()
+            .validate()
+            .is_err());
+        assert!(!fs::read_to_string(directory.join("registry.json"))
+            .unwrap()
+            .contains(&"42".repeat(32)));
+        fs::remove_file(directory.join("registry.json")).unwrap();
+        fs::remove_dir(directory).unwrap();
     }
 
     #[test]

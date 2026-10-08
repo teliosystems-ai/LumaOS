@@ -1,9 +1,11 @@
 # Trusted UTC source design
 
 Status: **provider set, initial bounds and offline-refusal policy approved by
-the owner on 2026-10-05; implementation in progress, not activated**. Originally
+the owner on 2026-10-05; fixed local endpoints and confined keeper design approved
+on 2026-10-08; implementation in progress, not activated**. Originally
 proposed 2026-10-04. This supplements
-ADR-0004, ADR-0007 and ADR-0010; it does not amend their accepted contracts.
+ADR-0004, ADR-0007 and ADR-0010. [ADR-0011](../docs/adr/0011-local-utc-runtime-and-offline-admin-recovery.md)
+records the narrow extension of the local transport and recovery design.
 G2 remains open. The current Admin service still reports
 `trusted_utc_available: false` and does not admit assignments or effect grants.
 
@@ -134,7 +136,7 @@ Ubuntu tuple and publisher changes as well. Bound parsing, report size,
 duplicate/alias handling, finite numbers,
 rounding, deadlines and before/after generation checks. A pinned good-sample
 publisher source fixture and closed measurement decoder now exist; protected
-runtime approval, production dependency qualification and installed confinement
+production dependency qualification and installed confinement
 are still missing. Source linkage and arithmetic are not substitutes.
 
 The subsequent [receiver checkpoint](evidence/G2_UTC_RECEIVER_2026-10-05.md)
@@ -144,9 +146,11 @@ bind path or authority interface. Capturing unchanged process fingerprints is
 not approval of that executable, certificate configuration or confinement.
 The protected supervisor and live keeper/history composition remain open.
 The later JSON transport source adaptation removes the binary-serialization
-mismatch with ADR-0002. The proposed measurement method, BOOTTIME deadline
-profile, socket type and protected provisioning still need architecture/security
-review before deployment; the accepted control transport is unchanged.
+mismatch with ADR-0002. ADR-0011 now approves the fixed peer-authenticated local
+endpoint/confined-keeper design. Executable/configuration admission, the
+measurement/deadline/socket implementation, protected provisioning and deployed
+lifecycle qualification remain open; the approval enables that work, not a
+working or qualified endpoint.
 
 The [stream composition checkpoint](evidence/G2_UTC_STREAM_2026-10-05.md) joins
 receiver-checked rounds to the keeper in queue order, with independent producer

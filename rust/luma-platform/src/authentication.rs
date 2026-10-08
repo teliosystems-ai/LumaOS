@@ -45,7 +45,7 @@ fn password_from(file: File) -> Result<PrivateBuffer> {
     hidden_from(file, "Account password (authentication only):")
 }
 
-fn hidden_from(file: File, prompt: &str) -> Result<PrivateBuffer> {
+pub(crate) fn hidden_from(file: File, prompt: &str) -> Result<PrivateBuffer> {
     let mut buffer = PrivateBuffer::new(LIMIT + 1)?;
     let mut saved = unsafe { std::mem::zeroed() };
     if unsafe { libc::tcgetattr(file.as_raw_fd(), &mut saved) } != 0 {
@@ -134,6 +134,28 @@ pub(crate) struct AuthenticatedAccount {
 // Root-owned ordering metadata has no JSON form and supplies no PAM authority.
 pub(crate) struct ExchangeBoundary {
     boundary: session::Boundary,
+}
+
+/// Protected-process lifetime only: no PAM, principal, role or authority.
+/// Recovery uses the same boot/process/root pins and suspend-aware 30s bound.
+pub(crate) struct ProtectedOperation(session::Lifetime);
+
+impl ProtectedOperation {
+    pub(crate) fn start() -> Result<Self> {
+        Ok(Self(session::Lifetime::start()?))
+    }
+    pub(crate) fn within<T>(&self, operation: impl FnOnce() -> Result<T>) -> Result<T> {
+        self.0.observe(operation)
+    }
+    pub(crate) fn close(&self) {
+        self.0.close();
+    }
+}
+
+impl Drop for ProtectedOperation {
+    fn drop(&mut self) {
+        self.close();
+    }
 }
 
 impl ExchangeBoundary {
@@ -395,6 +417,13 @@ pub fn check(username: &str) -> Result<()> {
         "product_admin_active":false,"role_grant":false,"gate_closing":false})
     );
     Ok(())
+}
+
+#[cfg(test)]
+impl ProtectedOperation {
+    pub(crate) fn expired_fixture() -> Result<Self> {
+        Ok(Self(session::Lifetime::expired_fixture()?))
+    }
 }
 
 #[cfg(test)]

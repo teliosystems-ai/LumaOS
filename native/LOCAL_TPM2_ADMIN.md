@@ -765,6 +765,49 @@ The [kernel measurement receiver checkpoint](evidence/G2_UTC_RECEIVER_2026-10-05
 adds sender/queue/replay checks in source but does not approve runtime custody,
 restore protected time history or enable an installed time endpoint. Admin
 assignment/revocation and workflow effect grants remain unavailable.
+
+## Offline Admin custody recovery
+
+The owner approved installer-enrolled offline recovery custody on 2026-10-08;
+[ADR-0011](../docs/adr/0011-local-utc-runtime-and-offline-admin-recovery.md)
+records it alongside the fixed local UTC runtime design. The installer now
+generates a separate random 256-bit Admin recovery credential, displays it only
+on the controlling terminal and requires hidden re-entry before partitioning.
+It is distinct from the account password, disk recovery passphrase and TPM owner
+authorization. Store it outside the machine; Luma persists no plaintext copy.
+
+The principal registry contains only a domain-separated, salted verifier bound
+to the installation, original Admin principal, UID 1001 and recovery credential
+generation one. Explicit TPM checkpoint enrollment, product bootstrap and
+principal adoption must commit before that verifier can authorize recovery.
+The installer does not silently perform those ceremonies. Existing registries
+without a verifier preserve their original serialization and refuse recovery;
+neither missing state nor root access creates a replacement credential.
+
+On the installed system, `sudo luma-platform admin-custody-recover REQUEST`
+uses a separate local-terminal ceremony. Enter the current offline credential;
+record and confirm a newly generated credential; inspect the exact proposal;
+and re-enter its review SHA256. The native proof is boot/process/root-bound and
+expires after 30 suspend-aware seconds, starting after preparation. It does
+not renew on use. No credential, verifier or proof is accepted through the
+general Admin service as a recovery command.
+
+The shared TPM transaction advances the original Admin's product generation
+and the recovery credential generation together. The replacement verifier is
+checkpointed; the immutable installer registry and historical writer prefixes
+are not rewritten. Governed `PrincipalSession` objects fence on their next protected observation and
+old credentials cannot authorize another recovery after commit. An error,
+unwind, changed original registry/head/TPM epoch or expired proof refuses; a
+reviewed write attempt consumes the in-process proof even after an uncertain
+outcome. Retained pending/event files must be preserved for exact reconciliation.
+Do not retry a TPM write, reset history, or substitute TPM-owner authorization.
+
+This is product custody-generation recovery, not Unix password reset, an
+Admin-principal transfer, signing-key recovery, reconstruction of damaged
+authority, an effect grant, or stage closure. Those account-lifecycle and
+integrated installed-image paths remain separate open work. Installed terminal
+custody, confinement, crash/reboot publication and physical TPM qualification
+still need retained evidence.
 The subsequent [stream composition](evidence/G2_UTC_STREAM_2026-10-05.md)
 processes all receiver rounds through the keeper and reprojects current samples
 at fresh clock boundaries within a bounded heartbeat deadline. It does not

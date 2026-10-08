@@ -718,6 +718,14 @@ grant integration is the active subgate; the next starts only after its
 implementation and targeted evaluation pass and the owner reviews completion.
 Final-image/native-hardware qualification remains separate.
 
+The owner approved the UTC runtime and offline Admin recovery designs in
+[ADR-0011](../docs/adr/0011-local-utc-runtime-and-offline-admin-recovery.md)
+on 2026-10-08. The installer now enrolls a public recovery verifier for explicit
+TPM adoption, and a separate custody transaction rotates Admin/recovery
+generations. This is not Unix account/password lifecycle, damaged-authority
+recovery, installed UTC authority or integration of grants into lease consumers;
+the subgate and the remaining items below are still open.
+
 - Complete principal/session and grant integration, including governed account
   generations, authenticated sessions, trusted-time finite Admin assignments,
   principal-bound folder/effect grants and current authority checks at resource,

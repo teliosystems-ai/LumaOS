@@ -758,6 +758,13 @@ Final-image/native-hardware qualification remains separate.
   This source path is exercised by `principal-check` and genuine-PAM/software-TPM
   fixtures; it does not integrate the remaining catalog control, time, grant or
   admission paths.
+  Session use now brackets the whole protected projection with semantic authority
+  replay and the bounded PAM observation. Its drop guard closes reader, session
+  and PAM on refusal or unwinding, including a failure in PAM's final checks.
+  Its retained TPM clock/epoch floor also constrains fresh readers from their
+  first snapshot. Identity diagnostics use this same path. This primitive does
+  not authorize effects, roll back completed operations or integrate the remaining
+  admission consumers.
 - Finish broader content/workflow worker admission. The closed invoice
   coordinator and both direct publishers use leased calculation and effect-time
   result checks, but remain installed-root paths, not generic governed execution.

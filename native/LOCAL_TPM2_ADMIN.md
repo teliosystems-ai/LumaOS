@@ -690,12 +690,26 @@ The process-local governed session combines the original account pins and
 30-second suspend-aware PAM lifetime with the current principal generation,
 shared checkpoint head and TPM boot epoch. It consumes and owns its non-clonable
 PAM observation rather than borrowing reusable authentication. It revalidates the
-full semantic history at each use. Disable/re-enable, generation advance, any shared-head change,
-clock/proof loss, expiry or failed/unwound projection permanently fences the
-session and its original PAM observation. Fresh genuine PAM is required to bind
-the new state; restoring old metadata or re-enabling the principal cannot revive
+full semantic history before and after each protected projection, including the
+identity diagnostic. The result is released only after both proofs match the
+issued binding and PAM's final account-pin and lifetime checks pass. Failed or
+unwound projections close the participating reader, session and PAM observation;
+even a restored proof cannot reactivate them. Already closed or stale sessions
+refuse before invoking the projection. Disable/re-enable, generation advance,
+any shared-head change, clock/proof loss and expiry also permanently fence them.
+The session retains its last fully verified TPM clock. Both replays must respect
+that clock and epoch even when the protected composition uses a fresh reader;
+changing readers cannot discard the monotonicity check. Login issuance likewise
+checks its retained pre-PAM clock from the first post-PAM replay.
+Fresh genuine PAM is required to bind the new state; restoring old metadata or
+re-enabling the principal cannot revive
 an old session. Installed resource/inference/effect admission still requires the
 separate integration and qualification listed in the completion register.
+
+This process-local projection is an identity-continuity primitive, not an effect
+transaction. It neither grants authority nor reverses an operation that already
+occurred. Actual effects still require their own role, folder, resource and
+effect-time checks before dispatch, with governed outcome and recovery handling.
 
 The fixed root-owned socket accepts only the kernel-observed UID 1001; root,
 workers and ordinary users are not product Admin peers. PAM must resolve the

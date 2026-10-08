@@ -825,6 +825,67 @@ Full native regression log / frozen runner SHA-256, respectively:
 `9719b09422975caadd68de58ab59f801a073cc8879ca04248617913e50052488` /
 `4d668cb75815a509af2594b78cdcf51f3e2af904d976c399acdeb03c4fd3a14e`.
 
+### Governed session projection continuity
+
+The governed session now brackets each protected projection with two complete
+semantic authority checks under its owned PAM observation. Identity diagnostics
+use the same path. A result is released only after the post-projection history
+matches the issued principal/generation/head/enrollment/epoch binding and PAM's
+final account-pin and lifetime checks pass. A drop guard closes reader, session
+and PAM on an error or unwinding; previously closed or stale sessions do not
+invoke the projection. Restoring metadata cannot reactivate these observations.
+
+The session owns its last fully verified TPM clock independently of the reader.
+A fresh reader must honor that floor from its first checkpoint snapshot;
+changing readers cannot reset the clock/epoch continuity requirement. Successful
+projections advance the retained clock only after PAM's final checks. Login issuance also
+requires the first post-PAM replay to respect the retained pre-PAM clock.
+These are powered-time/epoch checks, not trusted UTC or finite role expiry.
+
+This is a process-local identity-continuity primitive, not a granted effect,
+rollback mechanism or transaction for irreversible operations. Native catalog
+control, account/credential lifecycle, trusted UTC, finite assignments,
+folder/effect grants and admission integrations remain open. The active
+principal/session and grant subgate, Requirement #1 and G2 are not closed.
+
+The final frozen run at
+`D:\LumaOS-builds\g2-principal-session-20261008-10` passed (exit 0): 159 ordinary
+targeted Rust tests, 50 selected Python policy checks, six actual-PAM modes,
+three kernel-human IPC modes and the explicit credential/thread/FD fixtures.
+Its existing-owner software-TPM composition retained all 49 Admin socket requests
+and seven session-issuance cases, then verified 12 projection cases. Nine cover
+successful repeated use, callback refusal/unwind, enrollment or event-payload
+changes, identical-byte registry replacement, already closed authentication,
+changed checkpoint head and PAM closure during projection. Each refusal proves
+sticky reader/session/PAM closure, suppression of subsequent callbacks and the
+need for genuinely fresh authentication. Three additional cases inject session
+clock floors to exercise regression/reset/restart refusal with real PAM and the
+software TPM; these are not actual physical TPM clock/reset/restart evidence.
+Unit faults separately verify transferring a verified clock to a fresh reader
+and refusing a regressed first snapshot before a later restoration can hide it.
+
+Formatting and the offline native build passed with warnings denied; both
+AppArmor profiles parsed without loading. All 217 source files, 57 test inputs
+and the CI workflow matched the checkout. Full native Python discovery passed
+(exit 0): 267 of 269 tests, with the same two existing pinned UTC-publisher fixture
+skips. The selected 50 checks are included in that discovery, not additional
+distinct passes. Runs `-08` and `-09` passed intermediate projection/clock paths;
+`-10` also includes the first-snapshot floor check and matches the final source.
+No host account/service, physical TPM, clock, WSL memory setting, model or final
+image changed. Installed-image and native-hardware qualification remain pending.
+
+Source / test input manifest SHA-256, respectively:
+`9d3699311d984e03680d8891a16f95da59c2d85c37de10ff4e52f7f1e7790b17` /
+`d15f8b1f9f5762519c57396910930080cf26a2268dc49416af256ddf792ffeba`.
+Targeted log / frozen runner SHA-256, respectively:
+`228f595f9635f781fdb0b4a49df7b4e09a686418bbfb0e85b7595b43b458b678` /
+`ae3f5344f82f951834769d570f7425455001b817873842d59016ba6f35504878`.
+Native executable SHA-256:
+`edd80e467c66c7a8687289f4359355d4ad9b4ab81ce8649c1fec8f3080e05af9`.
+Full native regression log / frozen runner SHA-256, respectively:
+`53eaa57f3e19dee0a538294ec6173b0de6e04043953089f94405fa7e74280d59` /
+`4d668cb75815a509af2594b78cdcf51f3e2af904d976c399acdeb03c4fd3a14e`.
+
 ### Admin and workflow closure status
 
 Neither work package is closed, and neither is merely waiting for the final

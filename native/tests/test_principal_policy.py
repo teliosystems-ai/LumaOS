@@ -6,6 +6,30 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 class PrincipalPackagingTests(unittest.TestCase):
+    def test_governed_session_brackets_projection_and_fences_all_observations(self):
+        governance = (ROOT / 'rust/luma-platform/src/admin_governance.rs').read_text().split('#[cfg(test)]')[0]
+        session = governance.split('impl PrincipalSession')[1].split('impl Drop for PrincipalSession')[0]
+        identity = session.split('fn identity')[1].split('fn observe')[0]
+        self.assertIn('self.observe(reader, |identity| Ok(identity.clone()))', identity)
+        projection = session.split('fn observe')[1].split('fn close')[0]
+        self.assertEqual(projection.count('.resolve_since(local, Some(self.clock.get()))?'), 2)
+        self.assertLess(projection.index('let before ='), projection.index('project(&before.identity)?'))
+        self.assertLess(projection.index('project(&before.identity)?'), projection.index('let after ='))
+        self.assertIn('before != self.binding', projection)
+        self.assertIn('after != before', projection)
+        self.assertIn('self.account.observe', projection)
+        self.assertLess(projection.index('let result = result?;'), projection.index('projection.completed = true;'))
+        self.assertLess(projection.index('let result = result?;'), projection.index('self.clock.set('))
+        reader = governance.split('fn resolve_since')[1].split('fn read_account')[0]
+        self.assertIn('first_clock.elapsed_since(issued)?;', reader)
+        principal_replay = governance.split('impl<\'a, A: Checkpoint> PrincipalReader')[1].split('fn resolve(')[0]
+        self.assertIn('[session_clock, self.last_clock].into_iter().flatten()', principal_replay)
+        self.assertIn('snapshot.clock.elapsed_since(previous)?;', principal_replay)
+        guard = governance.split('impl<A: Checkpoint> Drop for PrincipalProjection')[1].split('impl PrincipalSession')[0]
+        for marker in ('if !self.completed', 'self.reader.fenced = true', 'self.session.close()'):
+            self.assertIn(marker, guard)
+        self.assertNotIn('std::env::', session)
+
     def test_governed_login_brackets_a_new_pam_exchange_without_holding_writer_locks(self):
         governance = (ROOT / 'rust/luma-platform/src/admin_governance.rs').read_text().split('#[cfg(test)]')[0]
         entry = governance.split('pub fn principal_check')[1].split('pub(crate) struct HistoryBinding')[0]
@@ -14,7 +38,8 @@ class PrincipalPackagingTests(unittest.TestCase):
         self.assertEqual(entry.count('Store::open('), 2)
         binding = governance.split('fn read_account(')[1].split('struct PrincipalSession')[0]
         for marker in ('observe_fresh(&login.exchange', 'local != &login.local',
-                       'current != login.binding', 'elapsed_since(login.clock)', 'account.logout();'):
+                       'current != login.binding', 'resolve_since(local, Some(login.clock))?',
+                       'elapsed_since(login.clock)', 'account.logout();'):
             self.assertIn(marker, binding)
         self.assertEqual(binding.count('login.registry.current()?;'), 2)
         attempt = governance.split('struct PrincipalLogin')[1].split('struct PrincipalReader')[0]
@@ -60,8 +85,8 @@ class PrincipalPackagingTests(unittest.TestCase):
         self.assertRegex(roles, r'generation\s*\.checked_add\(1\)')
         governance = (ROOT / 'rust/luma-platform/src/admin_governance.rs').read_text().split('#[cfg(test)]')[0]
         for marker in ('struct PrincipalReader', 'struct PrincipalSession', 'fn principal_check(',
-                       'account.observe_fresh(&login.exchange', 'let (before, first_clock) = self.replay(local)?;',
-                       'let (after, last_clock) = self.replay(local)?;', 'first_clock.elapsed_since(previous)?;',
+                       'account.observe_fresh(&login.exchange', 'let (before, first_clock) = self.replay(local, session_clock)?;',
+                       'let (after, last_clock) = self.replay(local, Some(first_clock))?;', 'first_clock.elapsed_since(previous)?;',
                        'principal history changed during double replay', 'self.fenced.set(true)',
                        'impl Drop for PrincipalSession', 'session_returned', 'authentication::local(login)?',
                        'account: authentication::AuthenticatedAccount'):

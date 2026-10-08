@@ -429,9 +429,16 @@ impl<'a, A: Checkpoint> PrincipalReader<'a, A> {
         }
     }
 
-    fn replay(&mut self, local: &serde_json::Value) -> Result<(PrincipalBinding, tpm::Clock)> {
+    fn replay(
+        &mut self,
+        local: &serde_json::Value,
+        session_clock: Option<tpm::Clock>,
+    ) -> Result<(PrincipalBinding, tpm::Clock)> {
         let registry = crate::principal::RegistryBinding::capture(self.registry_path)?;
         let snapshot = self.store.snapshot()?;
+        for previous in [session_clock, self.last_clock].into_iter().flatten() {
+            snapshot.clock.elapsed_since(previous)?;
+        }
         let context = Context::load_at(self.directory, &snapshot.deployment, self.registry_path)?;
         if !context.bootstrap_state(&snapshot)?.1 {
             return Err("explicit product Admin bootstrap required".into());
@@ -464,16 +471,27 @@ impl<'a, A: Checkpoint> PrincipalReader<'a, A> {
     // Inert identity lookup only. Native callers cannot invoke this path with
     // JSON in place of authentication; the public composition uses real PAM.
     fn resolve(&mut self, local: &serde_json::Value) -> Result<PrincipalBinding> {
+        self.resolve_since(local, None)
+    }
+
+    fn resolve_since(
+        &mut self,
+        local: &serde_json::Value,
+        session_clock: Option<tpm::Clock>,
+    ) -> Result<PrincipalBinding> {
         if self.fenced {
             return Err("principal authority reader is fenced".into());
         }
         // An error or unwinding cannot reactivate the reader after a lost proof.
         self.fenced = true;
-        let (before, first_clock) = self.replay(local)?;
+        let (before, first_clock) = self.replay(local, session_clock)?;
+        if let Some(issued) = session_clock {
+            first_clock.elapsed_since(issued)?;
+        }
         if let Some(previous) = self.last_clock {
             first_clock.elapsed_since(previous)?;
         }
-        let (after, last_clock) = self.replay(local)?;
+        let (after, last_clock) = self.replay(local, Some(first_clock))?;
         last_clock.elapsed_since(first_clock)?;
         if before != after {
             return Err("principal history changed during double replay".into());
@@ -493,7 +511,7 @@ impl<'a, A: Checkpoint> PrincipalReader<'a, A> {
             if local != &login.local {
                 return Err("PAM account differs from the governed login principal".into());
             }
-            let current = self.resolve(local)?;
+            let current = self.resolve_since(local, Some(login.clock))?;
             self.last_clock
                 .ok_or("missing post-PAM checkpoint clock")?
                 .elapsed_since(login.clock)?;
@@ -516,7 +534,26 @@ impl<'a, A: Checkpoint> PrincipalReader<'a, A> {
 pub(crate) struct PrincipalSession {
     account: authentication::AuthenticatedAccount,
     binding: PrincipalBinding,
+    clock: std::cell::Cell<tpm::Clock>,
     fenced: std::cell::Cell<bool>,
+}
+
+// A failed or unwound projection closes every participating live observation.
+// Completion occurs only after both semantic replays and PAM's final pin/expiry
+// check; there is no result, retry, renewal or recovery capability in this guard.
+struct PrincipalProjection<'r, 's, A: Checkpoint> {
+    session: &'r PrincipalSession,
+    reader: &'r mut PrincipalReader<'s, A>,
+    completed: bool,
+}
+
+impl<A: Checkpoint> Drop for PrincipalProjection<'_, '_, A> {
+    fn drop(&mut self) {
+        if !self.completed {
+            self.reader.fenced = true;
+            self.session.close();
+        }
+    }
 }
 
 impl PrincipalSession {
@@ -526,9 +563,13 @@ impl PrincipalSession {
         reader: &mut PrincipalReader<'_, A>,
     ) -> Result<Self> {
         let binding = reader.read_account(&account, &login)?;
+        let clock = reader
+            .last_clock
+            .ok_or("missing governed session issuance clock")?;
         Ok(Self {
             account,
             binding,
+            clock: std::cell::Cell::new(clock),
             fenced: std::cell::Cell::new(false),
         })
     }
@@ -537,29 +578,56 @@ impl PrincipalSession {
         &self,
         reader: &mut PrincipalReader<'_, A>,
     ) -> Result<serde_json::Value> {
+        self.observe(reader, |identity| Ok(identity.clone()))
+    }
+
+    // Bracket a protected projection, not just a preliminary identity lookup.
+    // This authenticates its principal throughout; separate role, folder,
+    // resource and effect policies must still authorize any actual operation.
+    fn observe<A: Checkpoint, T>(
+        &self,
+        reader: &mut PrincipalReader<'_, A>,
+        project: impl FnOnce(&serde_json::Value) -> Result<T>,
+    ) -> Result<T> {
         if self.fenced.get() {
+            reader.fenced = true;
+            self.close();
             return Err("governed principal session is fenced".into());
         }
         self.fenced.set(true);
-        let current = self.account.observe(|local| {
-            let current = reader.resolve(local)?;
-            if current != self.binding {
+        let mut projection = PrincipalProjection {
+            session: self,
+            reader,
+            completed: false,
+        };
+        let result = self.account.observe(|local| {
+            let before = projection
+                .reader
+                .resolve_since(local, Some(self.clock.get()))?;
+            if before != self.binding {
                 return Err(
                     "governed generation or shared authority changed; authenticate again".into(),
                 );
             }
-            Ok(current)
-        });
-        let current = match current {
-            Ok(current) => current,
-            Err(error) => {
-                reader.fenced = true;
-                self.close();
-                return Err(error);
+            let result = project(&before.identity)?;
+            let after = projection
+                .reader
+                .resolve_since(local, Some(self.clock.get()))?;
+            if after != before {
+                return Err("governed authority changed during protected projection".into());
             }
-        };
+            Ok(result)
+        });
+        let result = result?;
+        self.clock.set(
+            projection
+                .reader
+                .last_clock
+                .ok_or("missing governed projection completion clock")?,
+        );
+        projection.completed = true;
         self.fenced.set(false);
-        Ok(current.identity)
+        Ok(result)
     }
 
     fn close(&self) {
@@ -1573,6 +1641,185 @@ pub(crate) fn fixture_session_issuance(
 }
 
 #[cfg(test)]
+pub(crate) fn fixture_session_projections(
+    root: &Path,
+    password: &crate::sealed_credential::PrivateBuffer,
+) {
+    let directory = root.join("admin");
+    let registry = root.join("registry.json");
+    for mode in [
+        "success",
+        "callback-error",
+        "callback-unwind",
+        "enrollment-change",
+        "payload-change",
+        "registry-replacement",
+        "already-closed",
+        "head-change",
+        "pam-close-in-projection",
+        "injected-session-clock-regression",
+        "injected-session-clock-reset",
+        "injected-session-clock-restart",
+    ] {
+        let session = fixture_governed_session(root, "human", password).unwrap();
+        let original_clock = session.clock.get();
+        // Synthetic floors exercise a real PAM/TPM session's refusal path;
+        // these are not physical TPM regression/reset/restart observations.
+        let mut floor = original_clock;
+        match mode {
+            "injected-session-clock-regression" => {
+                floor.milliseconds = floor.milliseconds.checked_add(3_600_000).unwrap();
+            }
+            "injected-session-clock-reset" => {
+                floor.reset_count = floor.reset_count.checked_add(1).unwrap();
+            }
+            "injected-session-clock-restart" => {
+                floor.restart_count = floor.restart_count.checked_add(1).unwrap();
+            }
+            _ => (),
+        }
+        session.clock.set(floor);
+        if mode == "already-closed" {
+            session.close();
+        }
+        if mode == "head-change" {
+            let account = authentication::fixture_local_account(root, "human", password).unwrap();
+            let command = Command::RegisterActivity {
+                activity: "session.projection.test".into(),
+            };
+            let mut store = fixture_store(root).unwrap();
+            let inspected = execute_catalog_at(
+                &mut store,
+                &directory,
+                &registry,
+                || account.identity(),
+                "projection-head-change",
+                &command,
+                None,
+            )
+            .unwrap();
+            execute_catalog_at(
+                &mut store,
+                &directory,
+                &registry,
+                || account.identity(),
+                "projection-head-change",
+                &command,
+                Some(inspected["review_sha256"].as_str().unwrap()),
+            )
+            .unwrap();
+            account.logout();
+        }
+        let changed = match mode {
+            "enrollment-change" => Some(directory.join("enrollment.json")),
+            "payload-change" => Some(directory.join(event_name("login-head-change"))),
+            "registry-replacement" => Some(registry.clone()),
+            _ => None,
+        };
+        let original = changed
+            .as_ref()
+            .map(|path| tpm::private_read(path, MAX_CATALOG_EVENT).unwrap());
+        let mut store = fixture_store(root).unwrap();
+        let mut reader = PrincipalReader::at(&mut store, &directory, &registry);
+        let calls = std::cell::Cell::new(0);
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            session.observe(&mut reader, |identity| {
+                calls.set(calls.get() + 1);
+                assert_eq!(identity, &session.binding.identity);
+                if mode == "callback-error" {
+                    return Err("deliberate protected projection refusal".into());
+                }
+                if mode == "callback-unwind" {
+                    panic!("deliberate governed projection unwind");
+                }
+                if let (Some(path), Some(bytes)) = (&changed, &original) {
+                    let mut replacement = bytes.clone();
+                    if mode != "registry-replacement" {
+                        replacement.push(b' ');
+                    }
+                    platform::write_atomic(path, &replacement, 0o600).unwrap();
+                }
+                if mode == "pam-close-in-projection" {
+                    session.account.logout();
+                }
+                // A bounded inert result, not an actual effect or authority token.
+                Ok(identity["generation"].as_u64().unwrap())
+            })
+        }));
+        if let (Some(path), Some(bytes)) = (&changed, &original) {
+            platform::write_atomic(path, bytes, 0o600).unwrap();
+        }
+        if mode.starts_with("injected-session-clock-") {
+            session.clock.set(original_clock);
+        }
+        if mode == "success" {
+            assert_eq!(
+                result.unwrap().unwrap(),
+                session.binding.identity["generation"].as_u64().unwrap()
+            );
+            assert_eq!(calls.get(), 1);
+            assert!(!reader.fenced);
+            assert!(!session.fenced.get());
+            assert_eq!(reader.last_clock, Some(session.clock.get()));
+            session.clock.get().elapsed_since(original_clock).unwrap();
+            assert!(session.account.identity().is_ok());
+            session
+                .observe(&mut reader, |_| {
+                    calls.set(calls.get() + 1);
+                    Ok(())
+                })
+                .unwrap();
+            assert_eq!(calls.get(), 2);
+            assert_eq!(reader.last_clock, Some(session.clock.get()));
+            session.close();
+        } else {
+            if mode == "callback-unwind" {
+                assert!(result.is_err());
+            } else {
+                assert!(result.unwrap().is_err());
+            }
+            assert!(reader.fenced);
+            assert!(session.fenced.get());
+            assert!(session.account.identity().is_err());
+            assert_eq!(
+                calls.get(),
+                usize::from(
+                    !matches!(mode, "already-closed" | "head-change")
+                        && !mode.starts_with("injected-session-clock-")
+                )
+            );
+            // Restoration cannot reactivate the same reader, PAM or session.
+            assert!(reader.resolve(&session.binding.identity).is_err());
+        }
+        assert!(session
+            .observe(&mut reader, |_| {
+                calls.set(calls.get() + 1);
+                Ok(())
+            })
+            .is_err());
+        assert!(reader.fenced);
+        assert_eq!(
+            calls.get(),
+            if mode == "success" {
+                2
+            } else {
+                usize::from(
+                    !matches!(mode, "already-closed" | "head-change")
+                        && !mode.starts_with("injected-session-clock-"),
+                )
+            }
+        );
+        drop(reader);
+        drop(store);
+        assert!(fixture_governed_identity(root, &session).is_err());
+        let fresh = fixture_governed_session(root, "human", password).unwrap();
+        assert!(fixture_governed_identity(root, &fresh).is_ok());
+        fresh.close();
+        println!("GOVERNED_SESSION_PROJECTION_CASE={mode}");
+    }
+}
+
+#[cfg(test)]
 pub(crate) fn fixture_governed_session(
     root: &Path,
     login: &str,
@@ -1621,10 +1868,11 @@ pub(crate) fn fixture_governed_projection_interruption(
     root: &Path,
     session: &PrincipalSession,
 ) -> Result<()> {
-    let _store = fixture_store(root)?;
-    session
-        .account
-        .observe(|_| panic!("fixture protected projection interruption"))
+    let mut store = fixture_store(root)?;
+    session.observe(
+        &mut PrincipalReader::at(&mut store, &root.join("admin"), &root.join("registry.json")),
+        |_| panic!("fixture protected projection interruption"),
+    )
 }
 
 #[cfg(test)]
@@ -2306,6 +2554,105 @@ mod tests {
             .resolve(&forged)
             .is_err());
         assert_eq!(f.writes(), 4);
+    }
+
+    #[test]
+    fn fresh_principal_reader_requires_the_owned_session_clock_floor_and_epoch() {
+        for fault in ["regression", "reset", "restart"] {
+            let f = Fixture::new(&format!("principal-session-floor-{fault}"));
+            let adoption = principal_registry(&f);
+            f.activate();
+            principal_commit(&f, "adopt", &adoption);
+            let path = f.directory.join("registry.json");
+            let clock = f.anchor.0.borrow().1;
+            let mut floor = clock;
+            match fault {
+                "regression" => floor.milliseconds += 1,
+                "reset" => floor.reset_count += 1,
+                "restart" => floor.restart_count += 1,
+                _ => unreachable!(),
+            }
+            let mut store = f.store();
+            let mut reader = PrincipalReader::at(&mut store, &f.directory, &path);
+            assert!(reader.last_clock.is_none());
+            assert!(reader
+                .resolve_since(&other_identity(), Some(floor))
+                .is_err());
+            assert!(reader.fenced);
+            assert!(reader
+                .resolve_since(&other_identity(), Some(clock))
+                .is_err());
+            assert_eq!(f.writes(), 2);
+        }
+    }
+
+    #[test]
+    fn transferring_a_verified_clock_floor_to_another_reader_preserves_monotonicity() {
+        let f = Fixture::new("principal-session-clock-transfer");
+        let adoption = principal_registry(&f);
+        f.activate();
+        principal_commit(&f, "adopt", &adoption);
+        let path = f.directory.join("registry.json");
+        let clock = f.anchor.0.borrow().1;
+        let advanced = {
+            let mut store = f.store();
+            let mut reader = PrincipalReader::at(&mut store, &f.directory, &path);
+            f.anchor.0.borrow_mut().1.milliseconds += 10;
+            reader
+                .resolve_since(&other_identity(), Some(clock))
+                .unwrap();
+            reader.last_clock.unwrap()
+        };
+        assert_eq!(advanced.milliseconds, clock.milliseconds + 10);
+        f.anchor.0.borrow_mut().1.milliseconds = advanced.milliseconds - 1;
+        let mut store = f.store();
+        let mut reader = PrincipalReader::at(&mut store, &f.directory, &path);
+        assert!(reader
+            .resolve_since(&other_identity(), Some(advanced))
+            .is_err());
+        f.anchor.0.borrow_mut().1 = advanced;
+        assert!(reader
+            .resolve_since(&other_identity(), Some(advanced))
+            .is_err());
+        assert_eq!(f.writes(), 2);
+    }
+
+    #[test]
+    fn first_replay_snapshot_cannot_hide_clock_regression_with_later_restoration() {
+        for existing_reader in [false, true] {
+            let f = Fixture::new(&format!("principal-first-snapshot-floor-{existing_reader}"));
+            let adoption = principal_registry(&f);
+            f.activate();
+            principal_commit(&f, "adopt", &adoption);
+            let clock = f.anchor.0.borrow().1;
+            let count = Rc::new(std::cell::Cell::new(0));
+            let trigger = Rc::new(std::cell::Cell::new(usize::MAX));
+            let anchor = ReadHook {
+                anchor: f.anchor.clone(),
+                count: count.clone(),
+                trigger: trigger.clone(),
+                hook: Box::new(|| f.anchor.0.borrow_mut().1 = clock),
+            };
+            let mut store = Store::open(anchor, &f.directory.join("journal.json")).unwrap();
+            let path = f.directory.join("registry.json");
+            let mut reader = PrincipalReader::at(&mut store, &f.directory, &path);
+            if existing_reader {
+                reader.resolve(&other_identity()).unwrap();
+            }
+            f.anchor.0.borrow_mut().1.milliseconds -= 1;
+            // Restoring the clock at the next snapshot must not excuse the
+            // first snapshot's violation of either retained observation.
+            trigger.set(count.get() + 2);
+            assert!(reader
+                .resolve_since(&other_identity(), (!existing_reader).then_some(clock))
+                .is_err());
+            assert!(count.get() < trigger.get());
+            f.anchor.0.borrow_mut().1 = clock;
+            assert!(reader
+                .resolve_since(&other_identity(), Some(clock))
+                .is_err());
+            assert_eq!(f.writes(), 2);
+        }
     }
 
     #[test]

@@ -1630,6 +1630,7 @@ mod tests {
             }
         }
         admin_governance::fixture_session_issuance(&root, &password);
+        admin_governance::fixture_session_projections(&root, &password);
         drop(listener);
         fs::remove_file(path).unwrap();
         fs::remove_dir(directory).unwrap();

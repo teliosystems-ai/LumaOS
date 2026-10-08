@@ -608,7 +608,8 @@ interrupted intent and use reviewed journal publication only when its TPM proof
 allows it; never repeat an uncertain write automatically.
 
 The adopted snapshot is an immutable installation baseline. Reviewed changes to
-the governed non-Admin principal generation and enabled state are recorded in
+the governed non-Admin principal generation and enabled state, and rotation of
+the original enabled Admin's generation, are recorded in
 TPM-backed history, not by editing that baseline. Existing pre-adoption history
 remains readable and is not silently converted into principal authority. Account
 creation, OS credential rotation and principal/custody recovery remain unavailable.
@@ -629,11 +630,40 @@ when requesting the same enabled state; use `enabled` for a deliberate rotation
 or to re-enable a governed-disabled principal. There is no force, caller-selected
 next generation, wildcard or generation reset. An exact historical request replays
 its receipt without changing the current state or extending the TPM again. The
-bootstrap UID 1001 Admin and initially disabled baseline accounts are refused;
-they require separate custody/account recovery. Maintenance can use
+bootstrap UID 1001 Admin is refused by this non-Admin command; use the separate
+rotation command below. Initially disabled baseline accounts still require
+separate account recovery. Maintenance can use
 `sudo luma-platform admin-principal-advance LOGIN REQUEST PRINCIPAL-ID CURRENT-GENERATION enabled|disabled`
 with the same reviewed commit option. Genuine PAM of the original Admin and the
 existing installed TPM checkpoint remain mandatory.
+
+After explicit principal adoption, the original Admin can inspect and separately
+commit its own generation rotation:
+
+```text
+luma-platform admin-client LOGIN rotate-admin rotate-admin-generation CURRENT-GENERATION
+luma-platform admin-client LOGIN rotate-admin rotate-admin-generation CURRENT-GENERATION --commit REVIEW-SHA256
+```
+
+Maintenance uses `sudo luma-platform admin-principal-rotate LOGIN REQUEST CURRENT-GENERATION`
+with the same optional reviewed commit. This operation advances the original,
+enabled UID 1001 principal exactly once. It accepts no target account, disabled
+state, force flag, next generation or custody-transfer instruction. Zero, stale
+and exhausted generations refuse without preparing a mutation. It does not
+rotate passwords or TPM owner credentials, create another Admin, replace the
+installation registry, or change the original enrollment/bootstrap payloads.
+
+Each catalog or shared UTC-history event is checked against the Admin generation
+that was current immediately before that event. Older events keep their original
+writer identity; new writes use the current governed generation. Exact historical
+request acknowledgement does not rotate again. Review digests bind the proposal,
+current checkpoint and TPM epoch, so inspect again after any intervening change.
+Existing governed sessions are fenced by the changed generation/head. A service
+rotation commit attempt closes that request's PAM observation even on failure or
+a lost reply; use fresh authentication for a subsequent request. Lost TPM replies
+still require the existing reviewed publication of a proven committed journal,
+never an automatic second write. Credential/custody transfer and account recovery
+remain separate open implementations.
 
 These changes do not lock Linux accounts or rewrite registry/passwd/shadow files.
 Product disable is enforced by the governed session composition, not by ordinary

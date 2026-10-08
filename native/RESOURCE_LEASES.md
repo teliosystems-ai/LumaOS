@@ -1,6 +1,6 @@
 # Native resource leases and generations
 
-Updated 2026-10-07. Requirement #1 remains open until its remaining integrations
+Updated 2026-10-08. Requirement #1 remains open until its remaining integrations
 and the applicable installed-image qualification pass. This implementation is
 not a claim that all G2 resources, inference clients or hardware are qualified.
 Requirement #2 has not been started by this work.
@@ -744,8 +744,12 @@ Final-image/native-hardware qualification remains separate.
   catalog state without changing installation account files. A genuine PAM-bound
   governed session double-replays that state and permanently fences on generation,
   shared-head, clock or proof changes. The installed root `principal-check`
-  diagnostic exercises this source composition. Bootstrap Admin rotation, account
-  creation/credential recovery and resource/inference/effect admission integration
+  diagnostic exercises this source composition. Original enabled Admin generation
+  rotation now uses a separate reviewed command, with journal-prefix writer
+  validation for catalog and shared UTC history. It preserves enrollment/baseline
+  bytes, closes the request's PAM on commit attempts and never rewrites old
+  writers. Admin credential/custody recovery, account creation/credential recovery
+  and resource/inference/effect admission integration
   remain open; this does not qualify those boundaries or close the subgate.
 - Finish broader content/workflow worker admission. The closed invoice
   coordinator and both direct publishers use leased calculation and effect-time

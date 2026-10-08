@@ -68,6 +68,10 @@ fn validate(registry: &Registry) -> Result<()> {
 }
 
 impl Registry {
+    pub(crate) fn bootstrap_admin(&self) -> Option<&Principal> {
+        self.principals.iter().find(|record| record.uid == 1001)
+    }
+
     pub(crate) fn principal(&self, id: &str) -> Option<&Principal> {
         self.principals.iter().find(|record| record.id == id)
     }

@@ -139,6 +139,16 @@ impl<'a> Context<'a> {
         Ok(())
     }
 
+    // PAM identifies the immutable installation account. Product writer
+    // generations come only from the catalog at the exact journal prefix;
+    // neither a caller's generation nor today's state can authorize old bytes.
+    fn writer(&self, catalog: &Catalog) -> Result<Identity> {
+        if catalog.principal_registry.is_none() {
+            return Ok(self.principal.clone());
+        }
+        Identity::parse(catalog.resolve_principal(&serde_json::to_value(&self.principal)?)?)
+    }
+
     fn payload(&self, previous_head: &str) -> Bootstrap {
         Bootstrap {
             schema_version: 1,
@@ -258,6 +268,7 @@ impl<'a> Context<'a> {
         let mut records = Vec::new();
         let mut names = BTreeSet::new();
         for (position, entry) in snapshot.entries.iter().enumerate().skip(1) {
+            let writer = self.writer(&catalog)?;
             if entry.activity == utc_history::ACTIVITY {
                 let (record, bytes) = utc_history::read(
                     &self.directory.join(event_name(&entry.request_id)),
@@ -266,7 +277,7 @@ impl<'a> Context<'a> {
                 if !admin_roles::identifier(&entry.request_id)
                     || entry.request_id == REQUEST
                     || record.deployment != self.deployment
-                    || record.principal != self.principal
+                    || record.principal != writer
                     || record.enrollment_sha256 != bundle::hex(&Sha256::digest(&self.enrollment))
                     || record.sequence != position + 1
                     || snapshot.prefix_heads.get(position) != Some(&record.previous_head)
@@ -288,7 +299,7 @@ impl<'a> Context<'a> {
                 || event.schema_version != 1
                 || event.kind != "native-admin-catalog-event"
                 || event.deployment != self.deployment
-                || event.principal != self.principal
+                || event.principal != writer
                 || event.enrollment_sha256 != bundle::hex(&Sha256::digest(&self.enrollment))
                 || event.sequence != position + 1
                 || event.state_version_before != catalog.state_version
@@ -654,6 +665,29 @@ impl<'a, A: Checkpoint> HistoryReader<'a, A> {
 fn execute_history<A: Checkpoint>(
     store: &mut Store<A>,
     directory: &Path,
+    authenticate: impl FnMut() -> Result<serde_json::Value>,
+    observe: impl FnMut() -> Result<Observation>,
+    request: &str,
+    statement: &Statement,
+    reviewed: Option<&str>,
+) -> Result<serde_json::Value> {
+    execute_history_at(
+        store,
+        directory,
+        Path::new(crate::principal::REGISTRY),
+        authenticate,
+        observe,
+        request,
+        statement,
+        reviewed,
+    )
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+fn execute_history_at<A: Checkpoint>(
+    store: &mut Store<A>,
+    directory: &Path,
+    registry_path: &Path,
     mut authenticate: impl FnMut() -> Result<serde_json::Value>,
     mut observe: impl FnMut() -> Result<Observation>,
     request: &str,
@@ -665,12 +699,13 @@ fn execute_history<A: Checkpoint>(
     }
     statement.validate()?;
     let snapshot = store.snapshot()?;
-    let context = Context::load(directory, &snapshot.deployment)?;
+    let context = Context::load_at(directory, &snapshot.deployment, registry_path)?;
     if !context.state(&snapshot, Some(request))?.1 {
         return Err("explicit product Admin bootstrap required for UTC history".into());
     }
     let (history, records) = context.history(&snapshot, Some(request))?;
     let (catalog, _) = context.events(&snapshot, Some(request))?;
+    let writer = context.writer(&catalog)?;
     context.recheck(&mut authenticate)?;
     let old = records.iter().find(|record| record.request_id == request);
     let replayed = old.is_some();
@@ -697,7 +732,7 @@ fn execute_history<A: Checkpoint>(
                 kind: "native-admin-utc-history".into(),
                 deployment: context.deployment.clone(),
                 enrollment_sha256: bundle::hex(&Sha256::digest(&context.enrollment)),
-                principal: context.principal.clone(),
+                principal: writer,
                 request_id: request.into(),
                 sequence: snapshot.entries.len() + 1,
                 previous_head: snapshot.head.clone(),
@@ -855,12 +890,14 @@ fn execute<A: Checkpoint>(
     }
     let final_snapshot = store.snapshot()?;
     let (_, final_active) = context.state(&final_snapshot, None)?;
+    let (catalog, _) = context.events(&final_snapshot, None)?;
+    let principal = context.writer(&catalog)?;
     // A receipt is not a reusable authenticated session. Recheck freshness and
     // live principal/account state before reporting a successful observation.
     context.recheck(&mut authenticate)?;
     Ok(
         serde_json::json!({"schema_version":1,"action":"admin-bootstrap",
-        "principal":context.principal,"review_sha256":digest,
+        "principal":principal,"review_sha256":digest,
         "product_admin_active":final_active,"replayed":replayed,
         "tpm_write_performed":reviewed.is_some() && !active,
         "checkpoint_head":final_snapshot.head,"delegation_available":false,
@@ -921,6 +958,7 @@ fn execute_catalog_at<A: Checkpoint>(
         return Err("explicit product Admin bootstrap required".into());
     }
     let (catalog, events) = context.events(&snapshot, Some(request))?;
+    let writer = context.writer(&catalog)?;
     let registry_binding = if catalog.principal_registry.is_some()
         || matches!(command, Command::AdoptPrincipals { .. })
     {
@@ -982,7 +1020,7 @@ fn execute_catalog_at<A: Checkpoint>(
                 kind: "native-admin-catalog-event".into(),
                 deployment: context.deployment.clone(),
                 enrollment_sha256: bundle::hex(&Sha256::digest(&context.enrollment)),
-                principal: context.principal.clone(),
+                principal: writer,
                 request_id: request.into(),
                 sequence: snapshot.entries.len() + 1,
                 state_version_before: catalog.state_version,
@@ -1100,12 +1138,15 @@ fn parse_command(args: &[String]) -> Result<(&str, &str, Command, Option<&str>)>
         Some("admin-principal-advance") if end == 6 => Command::AdvancePrincipal {
             principal: args[3].clone(), expected_generation: args[4].parse()?, enabled: principal_enabled(&args[5])?,
         },
+        Some("admin-principal-rotate") if end == 4 => Command::RotateAdmin {
+            expected_generation: args[3].parse()?,
+        },
         Some("admin-role-define") if (6..=69).contains(&end) => {
             let mut activities = args[5..end].to_vec();
             activities.sort();
             Command::DefineRole { name: args[3].clone(), activities, expected_version: args[4].parse()? }
         }
-        _ => return Err("use admin-activity-register LOGIN REQUEST ACTIVITY, admin-principal-advance LOGIN REQUEST PRINCIPAL-ID EXPECTED-GENERATION enabled|disabled, or admin-role-define LOGIN REQUEST ROLE EXPECTED-VERSION ACTIVITY...; optional --commit REVIEW-SHA256".into()),
+        _ => return Err("use admin-activity-register LOGIN REQUEST ACTIVITY, admin-principal-advance LOGIN REQUEST PRINCIPAL-ID EXPECTED-GENERATION enabled|disabled, admin-principal-rotate LOGIN REQUEST EXPECTED-GENERATION, or admin-role-define LOGIN REQUEST ROLE EXPECTED-VERSION ACTIVITY...; optional --commit REVIEW-SHA256".into()),
     };
     command.validate()?;
     if !admin_roles::identifier(&args[2]) || args[2] == REQUEST {
@@ -1190,12 +1231,13 @@ pub fn catalog_status(login: &str) -> Result<()> {
         return Err("explicit product Admin bootstrap required".into());
     }
     let (catalog, _) = context.events(&snapshot, None)?;
+    let principal = context.writer(&catalog)?;
     context.recheck(&mut || authenticated.identity())?;
     authenticated.logout();
     println!(
         "{}",
         serde_json::to_string(&serde_json::json!({"schema_version":1,
-        "action":"admin-governance-status","principal":context.principal,"catalog":catalog,
+        "action":"admin-governance-status","principal":principal,"catalog":catalog,
         "checkpoint_head":snapshot.head,"product_admin_active":true,
         "delegation_available":false,"effect_grant":false,"gate_closing":false}))?
     );
@@ -1204,6 +1246,16 @@ pub fn catalog_status(login: &str) -> Result<()> {
 
 /// Service composition accepts only the in-process PAM observation, not a
 /// serialized role/session token. The original Admin is rechecked per request.
+struct RotationAttempt<'a> {
+    account: &'a authentication::AuthenticatedAccount,
+}
+
+impl Drop for RotationAttempt<'_> {
+    fn drop(&mut self) {
+        self.account.logout();
+    }
+}
+
 pub(crate) fn service_request(
     account: &authentication::AuthenticatedAccount,
     peer: &crate::admin_service::Peer,
@@ -1241,6 +1293,13 @@ fn service_request_at<A: tpm::Checkpoint>(
 ) -> Result<serde_json::Value> {
     peer.check()?;
     if let Some(command) = command {
+        // Close even on an error or unwinding after uncertain TPM dispatch.
+        // The guard cannot export, renew or restore an authentication proof.
+        let _rotation = if matches!(command, Command::RotateAdmin { .. }) && review.is_some() {
+            Some(RotationAttempt { account })
+        } else {
+            None
+        };
         return execute_catalog_at(
             store,
             directory,
@@ -1260,10 +1319,11 @@ fn service_request_at<A: tpm::Checkpoint>(
         return Err("explicit product Admin bootstrap required".into());
     }
     let (catalog, _) = context.events(&snapshot, None)?;
+    let principal = context.writer(&catalog)?;
     context.recheck(&mut || peer.observe(|| account.identity()))?;
     Ok(
         serde_json::json!({"schema_version":1,"action":"admin-governance-status",
-        "principal":context.principal,"catalog":catalog,"checkpoint_head":snapshot.head,
+        "principal":principal,"catalog":catalog,"checkpoint_head":snapshot.head,
         "product_admin_active":true,"delegation_available":false,"effect_grant":false,"gate_closing":false}),
     )
 }
@@ -1320,6 +1380,12 @@ fn fixture_store(root: &Path) -> Result<Store<tpm::LocalAnchor>> {
         tpm::exclusive_lock(&root.join("bootstrap.lock"))?,
     )?;
     Store::open(anchor, &directory.join("journal.json"))
+}
+
+#[cfg(test)]
+pub(crate) fn fixture_rotation_interruption(account: &authentication::AuthenticatedAccount) {
+    let _rotation = RotationAttempt { account };
+    panic!("deliberate rotation-attempt unwind fixture");
 }
 
 #[cfg(test)]
@@ -1553,6 +1619,269 @@ mod tests {
             expected_generation: generation,
             enabled,
         }
+    }
+
+    #[test]
+    fn admin_rotation_binds_prefix_writers_and_historical_replay_without_reenrollment() {
+        let f = Fixture::new("admin-rotation-writers");
+        let adoption = principal_registry(&f);
+        f.activate();
+        assert!(principal_call(
+            &f,
+            "rotate",
+            &Command::RotateAdmin {
+                expected_generation: 1
+            },
+            None
+        )
+        .is_err());
+        principal_commit(&f, "adopt", &adoption);
+        let baseline = fs::read(f.directory.join("registry.json")).unwrap();
+        let enrollment = fs::read(f.directory.join("enrollment.json")).unwrap();
+        let bootstrap = fs::read(f.directory.join("bootstrap.json")).unwrap();
+        principal_commit(&f, "old-register", &register());
+        let rotation = Command::RotateAdmin {
+            expected_generation: 1,
+        };
+        let inspected = principal_call(&f, "rotate", &rotation, None).unwrap();
+        assert_eq!(inspected["proposal"]["principal"]["generation"], 1);
+        assert!(!f.directory.join(event_name("rotate")).exists());
+        assert!(principal_call(&f, "rotate", &rotation, Some(&"00".repeat(32))).is_err());
+        let report = principal_commit(&f, "rotate", &rotation);
+        assert_eq!(report["proposal"]["principal"]["generation"], 1);
+        assert_eq!(
+            report["catalog"]["principal_states"][&"cd".repeat(32)]["generation"],
+            2
+        );
+        let stale = Command::RotateAdmin {
+            expected_generation: 1,
+        };
+        assert!(principal_call(&f, "stale-rotate", &stale, None).is_err());
+        assert!(!f.directory.join(event_name("stale-rotate")).exists());
+        let next = principal_commit(&f, "define", &definition(0, &["model.select"]));
+        assert_eq!(next["proposal"]["principal"]["generation"], 2);
+        let second = principal_commit(
+            &f,
+            "second-rotate",
+            &Command::RotateAdmin {
+                expected_generation: 2,
+            },
+        );
+        assert_eq!(second["proposal"]["principal"]["generation"], 2);
+        let before = f.writes();
+        let replay = principal_commit(&f, "rotate", &rotation);
+        assert_eq!(replay["replayed"], true);
+        assert_eq!(replay["proposal"]["principal"]["generation"], 1);
+        assert_eq!(
+            replay["catalog"]["principal_states"][&"cd".repeat(32)]["generation"],
+            3
+        );
+        assert_eq!(f.writes(), before);
+        let path = f.directory.join("registry.json");
+        let current = PrincipalReader::at(&mut f.store(), &f.directory, &path)
+            .resolve(&f.identity)
+            .unwrap();
+        assert_eq!(current.identity["generation"], 3);
+        for (name, bytes) in [
+            ("registry.json", baseline),
+            ("enrollment.json", enrollment),
+            ("bootstrap.json", bootstrap),
+        ] {
+            assert_eq!(fs::read(f.directory.join(name)).unwrap(), bytes);
+        }
+    }
+
+    #[test]
+    fn replay_refuses_stale_and_future_writers_even_with_matching_checkpoint_payload_hash() {
+        for generation in [1, 3] {
+            let f = Fixture::new(&format!("admin-prefix-writer-{generation}"));
+            let adoption = principal_registry(&f);
+            f.activate();
+            principal_commit(&f, "adopt", &adoption);
+            principal_commit(
+                &f,
+                "rotate",
+                &Command::RotateAdmin {
+                    expected_generation: 1,
+                },
+            );
+            let mut store = f.store();
+            let snapshot = store.snapshot().unwrap();
+            let registry_path = f.directory.join("registry.json");
+            let context =
+                Context::load_at(&f.directory, &snapshot.deployment, &registry_path).unwrap();
+            let (catalog, _) = context.events(&snapshot, None).unwrap();
+            let mut writer = context.writer(&catalog).unwrap();
+            writer.generation = generation;
+            let command = Command::RegisterActivity {
+                activity: "after.rotate".into(),
+            };
+            let event = CatalogEvent {
+                schema_version: 1,
+                kind: "native-admin-catalog-event".into(),
+                deployment: snapshot.deployment.clone(),
+                enrollment_sha256: bundle::hex(&Sha256::digest(&context.enrollment)),
+                principal: writer,
+                request_id: "forged-writer".into(),
+                sequence: snapshot.entries.len() + 1,
+                state_version_before: catalog.state_version,
+                previous_head: snapshot.head.clone(),
+                command,
+            };
+            let bytes = serde_json::to_vec(&event).unwrap();
+            platform::write_atomic(
+                &f.directory.join(event_name("forged-writer")),
+                &bytes,
+                0o600,
+            )
+            .unwrap();
+            store
+                .append(
+                    Entry {
+                        request_id: event.request_id,
+                        authenticated_uid: 1001,
+                        clock: snapshot.clock,
+                        activity: event.command.activity().into(),
+                        payload_sha256: bundle::hex(&Sha256::digest(bytes)),
+                    },
+                    |_| Ok(()),
+                )
+                .unwrap();
+            let anchored = store.snapshot().unwrap();
+            assert!(context.state(&anchored, None).is_err());
+        }
+    }
+
+    #[test]
+    fn mixed_utc_history_uses_writer_generation_at_each_catalog_prefix() {
+        let f = Fixture::new("admin-rotation-mixed-time");
+        let adoption = principal_registry(&f);
+        f.activate();
+        principal_commit(&f, "adopt", &adoption);
+        let call = |request, statement: &Statement, reviewed: Option<&str>| {
+            execute_history_at(
+                &mut f.store(),
+                &f.directory,
+                &f.directory.join("registry.json"),
+                || Ok(f.identity.clone()),
+                || Ok(observation(statement)),
+                request,
+                statement,
+                reviewed,
+            )
+        };
+        let old = floor_statement(1000);
+        let reviewed = call("first-floor", &old, None).unwrap();
+        let committed = call(
+            "first-floor",
+            &old,
+            Some(reviewed["review_sha256"].as_str().unwrap()),
+        )
+        .unwrap();
+        assert_eq!(committed["proposal"]["principal"]["generation"], 1);
+        principal_commit(
+            &f,
+            "rotate",
+            &Command::RotateAdmin {
+                expected_generation: 1,
+            },
+        );
+        let new = floor_statement(2000);
+        let reviewed = call("second-floor", &new, None).unwrap();
+        let committed = call(
+            "second-floor",
+            &new,
+            Some(reviewed["review_sha256"].as_str().unwrap()),
+        )
+        .unwrap();
+        assert_eq!(committed["proposal"]["principal"]["generation"], 2);
+        principal_commit(
+            &f,
+            "second-rotate",
+            &Command::RotateAdmin {
+                expected_generation: 2,
+            },
+        );
+        let before = f.writes();
+        let replay = call("first-floor", &old, None).unwrap();
+        let replay = call(
+            "first-floor",
+            &old,
+            Some(replay["review_sha256"].as_str().unwrap()),
+        )
+        .unwrap();
+        assert_eq!(replay["replayed"], true);
+        assert_eq!(replay["proposal"]["principal"]["generation"], 1);
+        assert_eq!(replay["history_floor_ms"], 2000);
+        assert_eq!(f.writes(), before);
+        let current = principal_commit(&f, "register", &register());
+        assert_eq!(current["proposal"]["principal"]["generation"], 3);
+    }
+
+    #[test]
+    fn admin_rotation_lost_reply_is_recovered_once_without_rotating_twice() {
+        let f = Fixture::new("admin-rotation-lost-reply");
+        let adoption = principal_registry(&f);
+        f.activate();
+        principal_commit(&f, "adopt", &adoption);
+        let command = Command::RotateAdmin {
+            expected_generation: 1,
+        };
+        let inspected = principal_call(&f, "rotate", &command, None).unwrap();
+        f.anchor.0.borrow_mut().3 = true;
+        assert!(principal_call(
+            &f,
+            "rotate",
+            &command,
+            Some(inspected["review_sha256"].as_str().unwrap())
+        )
+        .is_err());
+        let path = f.directory.join("journal.json");
+        assert!(Store::open(f.anchor.clone(), &path).is_err());
+        let recovery = admin_journal::Recovery::inspect(f.anchor.clone(), &path).unwrap();
+        let digest = recovery.digest().unwrap();
+        drop(recovery.publish(&digest).unwrap());
+        let replay = principal_commit(&f, "rotate", &command);
+        assert_eq!(replay["replayed"], true);
+        assert_eq!(
+            replay["catalog"]["principal_states"][&"cd".repeat(32)]["generation"],
+            2
+        );
+        assert_eq!(f.writes(), 3);
+    }
+
+    #[test]
+    fn admin_rotation_final_authentication_loss_retains_intent_and_old_generation() {
+        let f = Fixture::new("admin-rotation-auth-loss");
+        let adoption = principal_registry(&f);
+        f.activate();
+        principal_commit(&f, "adopt", &adoption);
+        let command = Command::RotateAdmin {
+            expected_generation: 1,
+        };
+        let inspected = principal_call(&f, "rotate", &command, None).unwrap();
+        let mut calls = 0;
+        assert!(execute_catalog_at(
+            &mut f.store(),
+            &f.directory,
+            &f.directory.join("registry.json"),
+            || {
+                calls += 1;
+                if calls >= 5 {
+                    return Err("fixture PAM proof lost before dispatch".into());
+                }
+                Ok(f.identity.clone())
+            },
+            "rotate",
+            &command,
+            Some(inspected["review_sha256"].as_str().unwrap())
+        )
+        .is_err());
+        assert_eq!(calls, 5);
+        assert_eq!(f.writes(), 2);
+        assert!(f.directory.join("journal.pending.json").exists());
+        assert!(f.directory.join(event_name("rotate")).exists());
+        assert!(Store::open(f.anchor.clone(), &f.directory.join("journal.json")).is_err());
     }
 
     #[test]

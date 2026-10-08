@@ -6,6 +6,29 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 class PrincipalPackagingTests(unittest.TestCase):
+    def test_admin_rotation_uses_prefix_generation_not_current_identity_for_old_history(self):
+        governance = (ROOT / 'rust/luma-platform/src/admin_governance.rs').read_text().split('#[cfg(test)]')[0]
+        replay = governance.split('fn replay(')[1].split('struct PrincipalBinding')[0]
+        self.assertIn('let writer = self.writer(&catalog)?;', replay)
+        self.assertIn('event.principal != writer', replay)
+        self.assertIn('record.principal != writer', replay)
+        self.assertNotIn('event.principal != self.principal', replay)
+        writer = governance.split('fn writer(')[1].split('fn payload(')[0]
+        self.assertIn('catalog.resolve_principal', writer)
+        self.assertIn('serde_json::to_value(&self.principal)', writer)
+        self.assertIn('Some(RotationAttempt { account })', governance.split('fn service_request_at')[1])
+        self.assertIn('self.account.logout();', governance.split('impl Drop for RotationAttempt')[1])
+        roles = (ROOT / 'rust/luma-platform/src/admin_roles.rs').read_text().split('#[cfg(test)]')[0]
+        rotation = roles.split('Command::RotateAdmin')[1].split('Command::AdvancePrincipal')[0]
+        for marker in ('bootstrap_admin()', 'record.enabled', 'expected_generation',
+                       'enabled: true', 'state.enabled', 'checked_add(1)'):
+            self.assertIn(marker, rotation)
+        self.assertNotIn('write_atomic', rotation)
+        main = (ROOT / 'rust/luma-platform/src/main.rs').read_text()
+        self.assertIn('Some("admin-principal-rotate")', main)
+        service = (ROOT / 'rust/luma-platform/src/admin_service.rs').read_text().split('#[cfg(test)]')[0]
+        self.assertIn('"rotate-admin" if end == 4', service)
+
     def test_governed_generations_preserve_baseline_and_require_real_bounded_pam_projection(self):
         roles = (ROOT / 'rust/luma-platform/src/admin_roles.rs').read_text().split('#[cfg(test)]')[0]
         for marker in ('AdvancePrincipal', 'expected_generation',

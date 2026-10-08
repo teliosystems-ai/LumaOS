@@ -642,7 +642,7 @@ in the existing TPM-backed catalog. The adopted registry stays immutable and
 read-only; the catalog records effective generation/enabled state separately.
 Each newly committed disable, re-enable or rotation advances the exact current
 generation by one. Stale generations, unknown principals, generation exhaustion,
-bootstrap UID 1001 Admin changes and initially disabled baseline accounts are
+bootstrap UID 1001 changes through the non-Admin command and initially disabled baseline accounts are
 refused without preparing a mutation. Historical request replay never reapplies
 an old disable after a later re-enable/rotation, or writes the TPM again.
 
@@ -660,7 +660,7 @@ commands and limits are in [Local TPM2 Admin](LOCAL_TPM2_ADMIN.md#local-catalog-
 
 Product disable does not lock Linux accounts or rewrite passwd/shadow/registry
 files. `admin-auth-check` remains a local-only authentication diagnostic. Account
-creation, OS credential rotation/recovery, bootstrap Admin rotation/custody
+creation, OS credential rotation/recovery, bootstrap Admin credential/custody
 recovery, finite trusted-time assignments and folder/effect grants remain open.
 The resource, inference and effect paths still need to consume current governed
 principal/session authority. This increment does not close the first subgate,
@@ -707,6 +707,70 @@ Native executable SHA-256:
 `d637c71ecd6a66137841c352a8178204f9fefeb46782ece10b1a5ec4824bf487`.
 Full native regression log / frozen runner SHA-256, respectively:
 `8991f2bcdbaf4ff2f0005bfae33ab7fa741bd24fc43def348b915cc3a53d2e7f` /
+`4d668cb75815a509af2594b78cdcf51f3e2af904d976c399acdeb03c4fd3a14e`.
+
+### Original Admin generation rotation
+
+The original enabled Admin now has a separate reviewed generation-rotation
+command through the local client and maintenance CLI. It requires explicit
+principal adoption and the exact current generation, advances by one with checked
+arithmetic, and cannot disable or replace Admin, target another account, transfer
+custody or change OS credentials. Installation registry, enrollment and bootstrap
+bytes remain unchanged. The existing non-Admin command still rejects UID 1001.
+
+Catalog and shared UTC-history replay now validate the writer at each journal
+prefix, before applying that event. Events authorized at older generations keep
+their original identity; subsequent writes use the current governed generation.
+A matching payload hash alone cannot authorize a stale or future writer.
+Historical rotation acknowledgement preserves current state without another TPM
+write. Current status reports the effective generation. Existing governed PAM
+sessions remain fenced after generation/head changes and need fresh
+authentication; a service rotation commit attempt closes its PAM observation on
+success, failure, lost reply or unwinding through an owned drop guard.
+
+This completes the source path for rotation of the enabled original Admin's
+generation, not Admin credential/custody transfer or recovery. Account creation,
+credential lifecycle, protected deployed UTC, finite assignments and folder/effect
+grants, and their resource/inference/workflow admission remain open software work.
+The active principal/session and grant subgate, Requirement #1 and G2 are not
+closed. No installed-image or physical qualification is inferred from these
+component tests.
+
+The final frozen run at
+`D:\LumaOS-builds\g2-principal-session-20261008-06` passed (exit 0): 151 ordinary
+targeted Rust tests, 48 selected Python checks, six actual-PAM modes, three
+kernel-human IPC modes and the explicit credential/thread/descriptor fixtures.
+Its fresh existing-owner software-TPM composition verified 49 Admin socket
+requests, including both reviewed Admin rotations, current status, stale
+generation refusal, second-generation catalog writes, old rotation replay and
+invalid review refusal. Genuine PAM checks prove old governed-session fencing,
+fresh second/third-generation binding, commit-attempt closure and closure after
+a deliberately caught rotation-guard panic. Unit faults separately cover mixed
+catalog/UTC generations, stale/future writers with matching checkpoint hashes,
+final authentication loss and lost-reply recovery without another rotation.
+These injected-anchor faults are not physical interruption evidence.
+
+Formatting and the offline native build passed with warnings denied; both
+AppArmor profiles parsed without loading. All 217 captured source files, 57 test
+inputs and the CI workflow matched the checkout. Full native Python discovery
+also passed (exit 0): 265 of 267 tests, with the same two existing pinned
+UTC-publisher fixture skips. The selected 48 are included in that discovery,
+not additional distinct passes. Run `-04` retained a formatter-sensitive policy
+assertion failure after successful Rust/kernel/PAM tests. Run `-05` passed the
+rotation code but still printed an obsolete fixed case count; `-06` removes that
+label and verifies all 49 executions. No host account/service, physical TPM,
+clock, WSL memory setting, model or final image changed in this work.
+
+Source / test input manifest SHA-256, respectively:
+`d170376a62ed3a6b96690662606858c0d98cd213ad9d348f635d21438a08bde6` /
+`abd6552857d6455ea1bfc5b926839a398914ced536d775e439b5d7929d593c0c`.
+Targeted log / frozen runner SHA-256, respectively:
+`57c0c306c2fd744ec9062e61ba7c59454c8d28cec50bf2eabcbd1ebad38bac11` /
+`ae3f5344f82f951834769d570f7425455001b817873842d59016ba6f35504878`.
+Native executable SHA-256:
+`e88cf3aab697a8630a3205ac6723faee604cec4ffd935b1ab532610e65da7d89`.
+Full native regression log / frozen runner SHA-256, respectively:
+`02be9985f17109b8ea0e9844b82f975fbb1ddf7146f7082aa5fb275c1a54f991` /
 `4d668cb75815a509af2594b78cdcf51f3e2af904d976c399acdeb03c4fd3a14e`.
 
 ### Admin and workflow closure status

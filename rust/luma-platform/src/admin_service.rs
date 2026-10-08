@@ -532,6 +532,9 @@ fn client_request(args: &[String]) -> Result<Request> {
         None
     };
     let command = match args[1].as_str() {
+        "rotate-admin" if end == 4 => CatalogCommand::RotateAdmin {
+            expected_generation: args[3].parse()?,
+        },
         "principal-advance" if end == 6 => CatalogCommand::AdvancePrincipal {
             principal: args[3].clone(),
             expected_generation: args[4].parse()?,
@@ -633,6 +636,36 @@ mod tests {
         ))
         .is_err());
     }
+    #[test]
+    fn admin_rotation_client_has_no_target_disable_force_or_implicit_review() {
+        let args = ["human", "rotate-admin", "rotate", "1"].map(String::from);
+        let request = client_request(&args).unwrap();
+        assert!(matches!(
+            request.operation,
+            Operation::Catalog {
+                command: CatalogCommand::RotateAdmin {
+                    expected_generation: 1
+                },
+                review_sha256: None,
+            }
+        ));
+        for generation in ["0", "-1", "18446744073709551616", "*"] {
+            let mut changed = args.clone();
+            changed[3] = generation.into();
+            assert!(client_request(&changed).is_err());
+        }
+        let mut commit = args.to_vec();
+        commit.extend(["--commit".into(), "ab".repeat(32)]);
+        assert!(client_request(&commit).is_ok());
+        for extra in ["disabled", "--force", "admin"] {
+            let mut changed = args.to_vec();
+            changed.push(extra.into());
+            assert!(client_request(&changed).is_err());
+        }
+        commit[5] = "bad".into();
+        assert!(client_request(&commit).is_err());
+    }
+
     #[test]
     fn principal_advance_client_requires_exact_identity_generation_state_and_review() {
         let id = "ef".repeat(32);
@@ -1042,7 +1075,30 @@ mod tests {
     }
 
     fn pam_request(mode: &str, review: Option<String>) -> Request {
-        let operation = if mode.starts_with("life-") {
+        let operation = if mode.starts_with("admin-rotate")
+            || mode == "admin-stale"
+            || mode == "admin-bad-review"
+        {
+            Operation::Catalog {
+                command: CatalogCommand::RotateAdmin {
+                    expected_generation: if mode == "admin-bad-review" {
+                        3
+                    } else if mode.starts_with("admin-rotate-new") {
+                        2
+                    } else {
+                        1
+                    },
+                },
+                review_sha256: review,
+            }
+        } else if mode.starts_with("admin-next") {
+            Operation::Catalog {
+                command: CatalogCommand::RegisterActivity {
+                    activity: "model.after-rotation".into(),
+                },
+                review_sha256: review,
+            }
+        } else if mode.starts_with("life-") {
             let (generation, enabled) = if mode.starts_with("life-enable") || mode == "life-stale" {
                 (2, true)
             } else if mode.starts_with("life-rotate") {
@@ -1094,8 +1150,13 @@ mod tests {
         };
         Request {
             schema_version: 1,
-            request_id: if mode.starts_with("life-disable") || mode.starts_with("life-old-disable")
-            {
+            request_id: if mode.starts_with("admin-rotate-new") {
+                "service-admin-rotate-new"
+            } else if mode.starts_with("admin-rotate") {
+                "service-admin-rotate"
+            } else if mode.starts_with("admin-next") {
+                "service-admin-next"
+            } else if mode.starts_with("life-disable") || mode.starts_with("life-old-disable") {
                 "service-life-disable"
             } else if mode.starts_with("life-enable") {
                 "service-life-enable"
@@ -1155,6 +1216,8 @@ mod tests {
         assert_eq!(secret.read(&mut excess).unwrap(), 0);
         let mut review: Option<String> = None;
         let governed = std::cell::OnceCell::new();
+        let original_admin = std::cell::OnceCell::new();
+        let rotated_admin = std::cell::OnceCell::new();
         let admin_id: serde_json::Value = serde_json::from_slice(&original).unwrap();
         for mode in [
             "status",
@@ -1195,7 +1258,46 @@ mod tests {
             "life-rotate-commit",
             "life-old-disable-review",
             "life-old-disable-commit",
+            "admin-rotate-review",
+            "admin-rotate-commit",
+            "admin-status",
+            "admin-stale",
+            "admin-next-review",
+            "admin-next-commit",
+            "admin-rotate-replay-review",
+            "admin-rotate-replay-commit",
+            "admin-rotate-new-review",
+            "admin-rotate-new-commit",
+            "admin-bad-review",
         ] {
+            if mode == "admin-rotate-review" {
+                let account =
+                    authentication::fixture_local_account(&root, "human", &password).unwrap();
+                let session = admin_governance::fixture_governed_session(&root, account).unwrap();
+                assert_eq!(
+                    admin_governance::fixture_governed_identity(&root, &session).unwrap()
+                        ["generation"],
+                    1
+                );
+                original_admin
+                    .set(session)
+                    .ok()
+                    .expect("one original Admin session");
+            }
+            if mode == "admin-rotate-new-review" {
+                let account =
+                    authentication::fixture_local_account(&root, "human", &password).unwrap();
+                let session = admin_governance::fixture_governed_session(&root, account).unwrap();
+                assert_eq!(
+                    admin_governance::fixture_governed_identity(&root, &session).unwrap()
+                        ["generation"],
+                    2
+                );
+                rotated_admin
+                    .set(session)
+                    .ok()
+                    .expect("one second-generation Admin session");
+            }
             if mode == "life-disable-review" {
                 let other_account =
                     authentication::fixture_local_account(&root, "otherhuman", &password).unwrap();
@@ -1224,6 +1326,8 @@ mod tests {
                     | "registry-other-generation"
                     | "life-stale"
                     | "life-admin"
+                    | "admin-stale"
+                    | "admin-bad-review"
             );
             if mode == "registry-other-generation" {
                 let mut changed: serde_json::Value = serde_json::from_slice(&original).unwrap();
@@ -1261,7 +1365,7 @@ mod tests {
                     .success());
             }
             let before = fs::read(root.join("admin/journal.json")).unwrap();
-            let approval = if mode == "invalid-review" {
+            let approval = if mode == "invalid-review" || mode == "admin-bad-review" {
                 Some("00".repeat(32))
             } else if mode.ends_with("commit") {
                 Some(review.clone().expect("separately inspected review"))
@@ -1342,7 +1446,16 @@ mod tests {
                         Some(command),
                         review_sha256.as_deref(),
                     ),
-                }?;
+                };
+                if (mode.starts_with("admin-rotate") && mode.ends_with("commit"))
+                    || mode == "admin-bad-review"
+                {
+                    assert!(
+                        account.identity().is_err(),
+                        "rotation left PAM reusable: {mode}"
+                    );
+                }
+                let result = result?;
                 observed = Some(result.clone());
                 Ok(result)
             });
@@ -1370,6 +1483,9 @@ mod tests {
                     || mode == "life-disable-commit"
                     || mode == "life-enable-commit"
                     || mode == "life-rotate-commit"
+                    || mode == "admin-rotate-commit"
+                    || mode == "admin-rotate-new-commit"
+                    || mode == "admin-next-commit"
                 {
                     assert_eq!(report["tpm_write_performed"], true);
                     assert_ne!(after, before);
@@ -1439,10 +1555,67 @@ mod tests {
                         true
                     );
                 }
+                if mode.starts_with("admin-") {
+                    let id = admin_id["principals"][0]["id"].as_str().unwrap();
+                    let expected = if mode == "admin-rotate-review" {
+                        1
+                    } else if mode == "admin-rotate-new-commit" {
+                        3
+                    } else {
+                        2
+                    };
+                    if expected > 1 {
+                        assert_eq!(
+                            report["catalog"]["principal_states"][id]["generation"],
+                            expected
+                        );
+                        assert_eq!(report["catalog"]["principal_states"][id]["enabled"], true);
+                        assert!(admin_governance::fixture_governed_identity(
+                            &root,
+                            original_admin.get().unwrap()
+                        )
+                        .is_err());
+                    }
+                    if mode == "admin-status" {
+                        assert_eq!(report["principal"]["generation"], 2);
+                    }
+                    if mode.starts_with("admin-next") || mode.starts_with("admin-rotate-new") {
+                        assert_eq!(report["proposal"]["principal"]["generation"], 2);
+                    } else if mode.starts_with("admin-rotate") {
+                        assert_eq!(report["proposal"]["principal"]["generation"], 1);
+                    }
+                    if mode == "admin-rotate-commit" || mode == "admin-rotate-new-commit" {
+                        let account =
+                            authentication::fixture_local_account(&root, "human", &password)
+                                .unwrap();
+                        let session =
+                            admin_governance::fixture_governed_session(&root, account).unwrap();
+                        assert_eq!(
+                            admin_governance::fixture_governed_identity(&root, &session).unwrap()
+                                ["generation"],
+                            expected
+                        );
+                    }
+                    if mode == "admin-rotate-new-commit" {
+                        assert!(admin_governance::fixture_governed_identity(
+                            &root,
+                            rotated_admin.get().unwrap()
+                        )
+                        .is_err());
+                        let account =
+                            authentication::fixture_local_account(&root, "human", &password)
+                                .unwrap();
+                        let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                            admin_governance::fixture_rotation_interruption(&account)
+                        }));
+                        assert!(panic.is_err());
+                        assert!(account.identity().is_err());
+                    }
+                }
             }
             // Older fixture cases reset installation metadata; governed changes
             // must leave that baseline untouched and advance only TPM history.
-            if mode.starts_with("life-") {
+            if mode.starts_with("life-") || mode.starts_with("admin-") {
                 assert_eq!(fs::read(&registry).unwrap(), original);
             } else {
                 crate::platform::write_atomic(&registry, &original, 0o600).unwrap();
@@ -1516,6 +1689,8 @@ mod tests {
                 | "registry-other-generation"
                 | "life-stale"
                 | "life-admin"
+                | "admin-stale"
+                | "admin-bad-review"
         );
         if denied {
             assert!(response(&bytes, &request).is_err());

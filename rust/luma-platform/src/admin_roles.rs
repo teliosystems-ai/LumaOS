@@ -41,6 +41,9 @@ pub(crate) enum Command {
         expected_generation: u64,
         enabled: bool,
     },
+    RotateAdmin {
+        expected_generation: u64,
+    },
 }
 
 impl Command {
@@ -50,12 +53,21 @@ impl Command {
             Self::DefineRole { .. } => "admin.role.define",
             Self::AdoptPrincipals { .. } => "admin.principal.adopt",
             Self::AdvancePrincipal { .. } => "admin.principal.advance",
+            Self::RotateAdmin { .. } => "admin.principal.rotate_admin",
         }
     }
     pub(crate) fn validate(&self) -> Result<()> {
         let valid_activity = |v: &str| identifier(v) && v != "admin.bootstrap";
         match self {
             Self::AdoptPrincipals { registry } => registry.validate(),
+            Self::RotateAdmin {
+                expected_generation,
+            } => {
+                if *expected_generation == 0 {
+                    return Err("Admin generation must be nonzero".into());
+                }
+                Ok(())
+            }
             Self::AdvancePrincipal {
                 principal,
                 expected_generation,
@@ -130,6 +142,35 @@ impl Catalog {
             .checked_add(1)
             .ok_or("Admin catalog version exhausted")?;
         match command {
+            Command::RotateAdmin {
+                expected_generation,
+            } => {
+                let record = self
+                    .principal_registry
+                    .as_ref()
+                    .ok_or("explicit principal adoption required")?
+                    .bootstrap_admin()
+                    .filter(|record| record.enabled)
+                    .ok_or("missing enabled adopted bootstrap Admin")?;
+                let current = self.principal_states.get(&record.id);
+                if current.is_some_and(|state| !state.enabled) {
+                    return Err("disabled Admin requires separate governed custody recovery".into());
+                }
+                let generation = current.map_or(record.generation, |state| state.generation);
+                if generation != *expected_generation {
+                    return Err("governed Admin generation conflict".into());
+                }
+                let next = generation
+                    .checked_add(1)
+                    .ok_or("Admin generation exhausted")?;
+                self.principal_states.insert(
+                    record.id.clone(),
+                    PrincipalState {
+                        generation: next,
+                        enabled: true,
+                    },
+                );
+            }
             Command::AdvancePrincipal {
                 principal,
                 expected_generation,
@@ -254,6 +295,109 @@ mod tests {
             expected_version: version,
         }
     }
+    #[test]
+    fn admin_rotation_is_explicit_enabled_only_generation_bound_and_atomic() {
+        let mut catalog = Catalog::initial();
+        let rotate = |expected_generation| Command::RotateAdmin {
+            expected_generation,
+        };
+        assert!(catalog.apply(&rotate(1)).is_err());
+        let registry = serde_json::json!({"schema_version":1,"installation":"ab".repeat(32),
+            "principals":[{"id":"cd".repeat(32),"generation":1,"login":"human","uid":1001,"enabled":true}]});
+        catalog
+            .apply(&Command::AdoptPrincipals {
+                registry: serde_json::from_value(registry.clone()).unwrap(),
+            })
+            .unwrap();
+        let baseline = catalog.principal_registry.clone();
+        for expected in [1, 2] {
+            assert!(catalog.apply(&rotate(expected)).unwrap());
+            assert_eq!(
+                catalog.principal_states[&"cd".repeat(32)],
+                PrincipalState {
+                    generation: expected + 1,
+                    enabled: true,
+                }
+            );
+            assert_eq!(catalog.principal_registry, baseline);
+        }
+        let before = catalog.clone();
+        for command in [
+            rotate(0),
+            rotate(1),
+            rotate(4),
+            Command::AdvancePrincipal {
+                principal: "cd".repeat(32),
+                expected_generation: 3,
+                enabled: false,
+            },
+        ] {
+            assert!(catalog.apply(&command).is_err());
+            assert_eq!(catalog, before);
+        }
+        for field in ["enabled", "principal", "force"] {
+            let mut value = serde_json::json!({"action":"rotate_admin","expected_generation":3});
+            value[field] = serde_json::json!(true);
+            assert!(serde_json::from_value::<Command>(value).is_err());
+        }
+    }
+
+    #[test]
+    fn admin_rotation_refuses_missing_disabled_and_exhausted_admin_without_mutation() {
+        for (uid, enabled, generation) in
+            [(1002, true, 1), (1001, false, 1), (1001, true, u64::MAX)]
+        {
+            let mut catalog = Catalog::initial();
+            catalog
+                .apply(&Command::AdoptPrincipals {
+                    registry: serde_json::from_value(serde_json::json!({"schema_version":1,
+                    "installation":"ab".repeat(32),"principals":[{"id":"cd".repeat(32),
+                    "generation":generation,"login":"human","uid":uid,"enabled":enabled}]}))
+                    .unwrap(),
+                })
+                .unwrap();
+            let before = catalog.clone();
+            assert!(catalog
+                .apply(&Command::RotateAdmin {
+                    expected_generation: generation
+                })
+                .is_err());
+            assert_eq!(catalog, before);
+        }
+        let mut catalog = Catalog::initial();
+        catalog
+            .apply(&Command::AdoptPrincipals {
+                registry: serde_json::from_value(serde_json::json!({"schema_version":1,
+                "installation":"ab".repeat(32),"principals":[{"id":"cd".repeat(32),
+                "generation":1,"login":"human","uid":1001,"enabled":true}]}))
+                .unwrap(),
+            })
+            .unwrap();
+        catalog.principal_states.insert(
+            "cd".repeat(32),
+            PrincipalState {
+                generation: 2,
+                enabled: false,
+            },
+        );
+        let before = catalog.clone();
+        assert!(catalog
+            .apply(&Command::RotateAdmin {
+                expected_generation: 2
+            })
+            .is_err());
+        assert_eq!(catalog, before);
+        catalog.principal_states.clear();
+        catalog.state_version = u64::MAX;
+        let before = catalog.clone();
+        assert!(catalog
+            .apply(&Command::RotateAdmin {
+                expected_generation: 1
+            })
+            .is_err());
+        assert_eq!(catalog, before);
+    }
+
     #[test]
     fn versioned_role_snapshot_and_explicit_compare_exchange() {
         let mut catalog = Catalog::initial();

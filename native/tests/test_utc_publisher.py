@@ -56,7 +56,7 @@ class PublisherAssets(unittest.TestCase):
 
     def test_receiver_is_not_a_product_listener_or_serialized_authority(self):
         receiver = (ROOT / 'rust/luma-platform/src/utc_receiver.rs').read_text()
-        production = receiver.split('#[cfg(test)]')[0]
+        production = receiver.rsplit('\n#[cfg(test)]\nmod tests {', 1)[0]
         self.assertNotIn('UnixDatagram::bind', production)
         self.assertNotIn('Deserialize', production)
         self.assertNotIn('Serialize', production)
@@ -65,7 +65,7 @@ class PublisherAssets(unittest.TestCase):
         self.assertNotIn('Some("utc-receiver")', main)
 
     def test_receiver_uses_per_message_credentials_and_closes_delivered_descriptors(self):
-        receiver = (ROOT / 'rust/luma-platform/src/utc_receiver.rs').read_text().split('#[cfg(test)]')[0]
+        receiver = (ROOT / 'rust/luma-platform/src/utc_receiver.rs').read_text().rsplit('\n#[cfg(test)]\nmod tests {', 1)[0]
         for boundary in ('SO_PASSCRED', 'SCM_CREDENTIALS', 'SYS_pidfd_open',
                          'MSG_CMSG_CLOEXEC', 'SCM_RIGHTS', 'libc::close(fd)', 'MSG_CTRUNC'):
             self.assertIn(boundary, receiver)
@@ -73,7 +73,7 @@ class PublisherAssets(unittest.TestCase):
 
     def test_json_transport_has_no_binary_runtime_fallback(self):
         protocol = (ROOT / 'rust/luma-platform/src/utc_protocol.rs').read_text()
-        receiver = (ROOT / 'rust/luma-platform/src/utc_receiver.rs').read_text().split('#[cfg(test)]')[0]
+        receiver = (ROOT / 'rust/luma-platform/src/utc_receiver.rs').read_text().rsplit('\n#[cfg(test)]\nmod tests {', 1)[0]
         self.assertIn('utc_protocol::decode_envelope(', receiver)
         self.assertNotIn('utc_protocol::decode(', receiver)
         self.assertIn('credentials.pid', receiver)
@@ -119,7 +119,7 @@ class PublisherAssets(unittest.TestCase):
             self.assertNotIn(forbidden, history)
 
     def test_receiver_preserves_all_rounds_for_keeper_lifecycle(self):
-        receiver = (ROOT / 'rust/luma-platform/src/utc_receiver.rs').read_text().split('#[cfg(test)]')[0]
+        receiver = (ROOT / 'rust/luma-platform/src/utc_receiver.rs').read_text().rsplit('\n#[cfg(test)]\nmod tests {', 1)[0]
         self.assertIn('Result<Vec<ProducerRound>>', receiver)
         self.assertIn('rounds.push(round)', receiver)
         self.assertNotIn('Result<Option<ProducerRound>>', receiver)

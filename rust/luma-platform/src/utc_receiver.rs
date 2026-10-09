@@ -1,6 +1,6 @@
-//! Linux measurement-stream boundary, NOT a trusted UTC service or grant API.
-//! Pins an observed process, not an approved production executable/confinement.
-//! No product listener, CLI, serialization, history restoration or effect wiring.
+//! Linux measurement-stream boundary, NOT a grant API.
+//! Non-fixture construction requires the immutable-runtime endpoint admission.
+//! History, source qualification and human acquisition remain separate checks.
 #![cfg_attr(not(test), allow(dead_code))]
 use crate::{
     utc_policy::ApprovedPolicy,
@@ -363,13 +363,144 @@ fn ancillary(message: &libc::msghdr) -> Result<libc::ucred> {
     credentials.ok_or_else(|| "missing kernel UTC sender credentials".into())
 }
 
+pub(crate) fn configure(socket: &UnixDatagram) -> Result<()> {
+    let flag: i32 = 1;
+    if unsafe {
+        libc::setsockopt(
+            socket.as_raw_fd(),
+            libc::SOL_SOCKET,
+            libc::SO_PASSCRED,
+            (&flag as *const i32).cast(),
+            size_of::<i32>() as libc::socklen_t,
+        )
+    } != 0
+    {
+        return Err(io::Error::last_os_error().into());
+    }
+    socket.set_nonblocking(true)?;
+    Ok(())
+}
+
+pub(crate) fn receive(socket: &UnixDatagram) -> Result<Option<(ProducerRound, libc::ucred)>> {
+    let mut bytes = [0; MAX_FRAME_SIZE];
+    let mut control = [0usize; 32];
+    let mut vector = libc::iovec {
+        iov_base: bytes.as_mut_ptr().cast(),
+        iov_len: bytes.len(),
+    };
+    let mut message: libc::msghdr = unsafe { zeroed() };
+    message.msg_iov = &mut vector;
+    message.msg_iovlen = 1;
+    message.msg_control = control.as_mut_ptr().cast();
+    message.msg_controllen = size_of_val(&control);
+    let length = unsafe {
+        libc::recvmsg(
+            socket.as_raw_fd(),
+            &mut message,
+            libc::MSG_DONTWAIT | libc::MSG_CMSG_CLOEXEC,
+        )
+    };
+    if length < 0 {
+        let error = io::Error::last_os_error();
+        if error.kind() == io::ErrorKind::WouldBlock {
+            return Ok(None);
+        }
+        return Err(error.into());
+    }
+    let credentials = ancillary(&message)?;
+    if length <= 0 || length as usize > MAX_FRAME_SIZE {
+        return Err("UTC datagram frame size mismatch".into());
+    }
+    let round =
+        utc_protocol::decode_envelope(&bytes[..length as usize], credentials.pid, credentials.uid)?;
+    validate_capture(&round, capture_clocks()?)?;
+    Ok(Some((round, credentials)))
+}
+
 pub(crate) struct Receiver {
     socket: UnixDatagram,
     peer: PinnedProcess,
     cursor: Cursor,
     fenced: bool,
+    admission: Option<crate::utc_runtime::Admission>,
+    initial: Option<ProducerRound>,
+    boundary: Option<crate::utc_runtime::Boundary>,
 }
 impl Receiver {
+    pub(crate) fn acquisition_boundary(
+        &mut self,
+        suspend_generation: u64,
+    ) -> Result<(crate::utc_step_watch::StepWatch, crate::utc_keeper::Clock)> {
+        if self.fenced {
+            return Err("UTC acquisition is fenced".into());
+        }
+        if let Some(mut boundary) = self.boundary.take() {
+            self.recheck_peer()?;
+            boundary.watch.check()?;
+            boundary.clock.suspend_generation = suspend_generation;
+            return Ok((boundary.watch, boundary.clock));
+        }
+        #[cfg(test)]
+        if self.admission.is_none() {
+            return Ok((
+                crate::utc_step_watch::StepWatch::arm()?,
+                Self::clock(suspend_generation)?,
+            ));
+        }
+        self.fenced = true;
+        Err("UTC acquisition boundary absent or already consumed".into())
+    }
+    fn recheck_peer(&self) -> Result<()> {
+        self.peer.recheck()?;
+        if let Some(admission) = &self.admission {
+            admission.recheck(self.peer.pid)?;
+        }
+        self.peer.recheck()
+    }
+
+    pub(crate) fn runtime_digest(&mut self) -> Result<&str> {
+        if self.fenced {
+            return Err("UTC runtime admission is fenced".into());
+        }
+        if let Err(error) = self.recheck_peer() {
+            self.fenced = true;
+            return Err(error);
+        }
+        self.admission
+            .as_ref()
+            .map(|admission| admission.digest())
+            .ok_or_else(|| "UTC fixture has no production runtime admission".into())
+    }
+
+    pub(crate) fn admitted(
+        socket: UnixDatagram,
+        credentials: libc::ucred,
+        round: ProducerRound,
+        barrier_ms: u64,
+        admission: crate::utc_runtime::Admission,
+        mut boundary: crate::utc_runtime::Boundary,
+    ) -> Result<Self> {
+        let peer = PinnedProcess::capture(credentials.pid, credentials.uid, credentials.gid)?;
+        if round.epoch.boot_id != kernel_boot()? {
+            return Err("UTC receiver boot mismatch".into());
+        }
+        let mut cursor = Cursor::new(round.epoch, barrier_ms)?;
+        admission.recheck(peer.pid)?;
+        boundary.watch.check()?;
+        cursor.accept(&round, capture_clocks()?)?;
+        let receiver = Self {
+            socket,
+            peer,
+            cursor,
+            fenced: false,
+            admission: Some(admission),
+            initial: Some(round),
+            boundary: Some(boundary),
+        };
+        receiver.recheck_peer()?;
+        validate_capture(receiver.initial.as_ref().unwrap(), capture_clocks()?)?;
+        Ok(receiver)
+    }
     pub(crate) fn epoch(&self) -> ProducerEpoch {
         self.cursor.epoch
     }
@@ -389,7 +520,7 @@ impl Receiver {
             if self.fenced {
                 return Err("UTC measurement stream is fenced".into());
             }
-            self.peer.recheck()?;
+            self.recheck_peer()?;
             let mut pending = libc::pollfd {
                 fd: self.socket.as_raw_fd(),
                 events: libc::POLLIN,
@@ -405,9 +536,8 @@ impl Receiver {
         }
         result
     }
-    /// The future protected supervisor must provide/approve the descriptor,
-    /// process, deployment and runtime. This constructor does NOT approve them.
-    /// There is no production bind path or unconfined fallback endpoint.
+    /// Raw numeric attachment exists only in isolated source fixtures.
+    #[cfg(test)]
     pub(crate) fn attach(
         socket: UnixDatagram,
         pid: i32,
@@ -419,20 +549,7 @@ impl Receiver {
         if epoch.boot_id != kernel_boot()? {
             return Err("UTC receiver boot mismatch".into());
         }
-        let flag: i32 = 1;
-        if unsafe {
-            libc::setsockopt(
-                socket.as_raw_fd(),
-                libc::SOL_SOCKET,
-                libc::SO_PASSCRED,
-                (&flag as *const i32).cast(),
-                size_of::<i32>() as libc::socklen_t,
-            )
-        } != 0
-        {
-            return Err(io::Error::last_os_error().into());
-        }
-        socket.set_nonblocking(true)?;
+        configure(&socket)?;
         let barrier = capture_clocks()?
             .boot_ms
             .checked_add(1)
@@ -444,6 +561,9 @@ impl Receiver {
             peer,
             cursor,
             fenced: false,
+            admission: None,
+            initial: None,
+            boundary: None,
         })
     }
     pub(crate) fn poll(&mut self) -> Result<Vec<ProducerRound>> {
@@ -458,54 +578,26 @@ impl Receiver {
     }
     fn poll_inner(&mut self) -> Result<Vec<ProducerRound>> {
         let deadline = std::time::Instant::now() + std::time::Duration::from_millis(100);
-        self.peer.recheck()?;
+        self.recheck_peer()?;
         let mut rounds = Vec::with_capacity(DRAIN_LIMIT);
-        for _ in 0..DRAIN_LIMIT {
-            let mut bytes = [0; MAX_FRAME_SIZE];
-            let mut control = [0usize; 32];
-            let mut vector = libc::iovec {
-                iov_base: bytes.as_mut_ptr().cast(),
-                iov_len: bytes.len(),
-            };
-            let mut message: libc::msghdr = unsafe { zeroed() };
-            message.msg_iov = &mut vector;
-            message.msg_iovlen = 1;
-            message.msg_control = control.as_mut_ptr().cast();
-            message.msg_controllen = size_of_val(&control);
-            let length = unsafe {
-                libc::recvmsg(
-                    self.socket.as_raw_fd(),
-                    &mut message,
-                    libc::MSG_DONTWAIT | libc::MSG_CMSG_CLOEXEC,
-                )
-            };
-            if length < 0 {
-                let error = io::Error::last_os_error();
-                if error.kind() == io::ErrorKind::WouldBlock {
-                    self.peer.recheck()?;
-                    for round in &rounds {
-                        validate_capture(round, capture_clocks()?)?;
-                    }
-                    if std::time::Instant::now() > deadline {
-                        return Err("UTC stream drain deadline exceeded".into());
-                    }
-                    return Ok(rounds);
+        if let Some(first) = self.initial.take() {
+            rounds.push(first);
+        }
+        for _ in rounds.len()..DRAIN_LIMIT {
+            let Some((round, credentials)) = receive(&self.socket)? else {
+                self.recheck_peer()?;
+                for round in &rounds {
+                    validate_capture(round, capture_clocks()?)?;
                 }
-                return Err(error.into());
-            }
-            let credentials = ancillary(&message)?;
+                if std::time::Instant::now() > deadline {
+                    return Err("UTC stream drain deadline exceeded".into());
+                }
+                return Ok(rounds);
+            };
             if !self.peer.matches(credentials) {
                 return Err("UTC datagram sender is not the pinned producer".into());
             }
-            if length <= 0 || length as usize > MAX_FRAME_SIZE {
-                return Err("UTC datagram frame size mismatch".into());
-            }
-            let round = utc_protocol::decode_envelope(
-                &bytes[..length as usize],
-                credentials.pid,
-                credentials.uid,
-            )?;
-            self.peer.recheck()?;
+            self.recheck_peer()?;
             self.cursor.accept(&round, capture_clocks()?)?;
             if std::time::Instant::now() > deadline {
                 return Err("UTC stream drain deadline exceeded".into());
@@ -520,7 +612,7 @@ impl Receiver {
         if unsafe { libc::poll(&mut pending, 1, 0) } != 0 || pending.revents != 0 {
             return Err("UTC stream queued batch exceeded drain bound".into());
         }
-        self.peer.recheck()?;
+        self.recheck_peer()?;
         for round in &rounds {
             validate_capture(round, capture_clocks()?)?;
         }
@@ -559,6 +651,24 @@ fn validate_capture(round: &ProducerRound, now: Capture) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn observed_fixture_never_reports_an_admitted_runtime_digest() {
+        let (socket, _) = UnixDatagram::pair().unwrap();
+        let mut expected = epoch();
+        expected.boot_id = kernel_boot().unwrap();
+        let mut receiver = Receiver::attach(
+            socket,
+            std::process::id() as i32,
+            unsafe { libc::getuid() },
+            unsafe { libc::getgid() },
+            expected,
+        )
+        .unwrap();
+        assert!(receiver.runtime_digest().is_err());
+        receiver.fenced = true;
+        assert!(receiver.runtime_digest().is_err());
+        assert!(receiver.acquisition_boundary(0).is_err());
+    }
     fn epoch() -> ProducerEpoch {
         ProducerEpoch {
             boot_id: [1; 16],
@@ -890,6 +1000,10 @@ mod tests {
                         round.sources[1] = SourceData::Unavailable { operator: 2 };
                         round.sources[2] = SourceData::Unavailable { operator: 3 };
                     }
+                    if command == "empty" {
+                        round.sources =
+                            [1, 2, 3].map(|operator| SourceData::Unavailable { operator });
+                    }
                     if command == "reage" {
                         if let SourceData::Measured {
                             sequence: ref mut sample,
@@ -1132,6 +1246,7 @@ mod tests {
             "quiet",
             "loss-restored",
             "lost",
+            "startup-empty",
             "rights",
             "dead",
             "notify",
@@ -1163,6 +1278,7 @@ mod tests {
             assert_eq!(stream.state(), State::Acquiring);
             sender.command(match variant {
                 "two" | "loss-restored" | "lost" | "rights" => variant,
+                "startup-empty" => "empty",
                 _ => "single",
             });
             if variant == "dead" {
@@ -1175,7 +1291,16 @@ mod tests {
             if variant == "expired-watch" {
                 stream.expire_watch_fixture();
             }
-            if variant == "two" || variant == "quiet" || variant == "expired-current" {
+            if variant == "lost" || variant == "startup-empty" {
+                assert!(stream.poll().unwrap().is_none());
+                assert_eq!(stream.state(), State::Acquiring);
+                sender.command("single");
+                assert!(stream.poll().unwrap().is_some());
+                assert_eq!(stream.state(), State::Bounded);
+                sender.command("lost");
+                assert!(stream.poll().is_err());
+                assert_eq!(stream.state(), State::Fenced);
+            } else if variant == "two" || variant == "quiet" || variant == "expired-current" {
                 let first = stream.poll().unwrap().unwrap();
                 assert_eq!(stream.state(), State::Bounded);
                 if variant == "quiet" {

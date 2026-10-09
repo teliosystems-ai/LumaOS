@@ -13,6 +13,39 @@ requirement.
 
 ## Current software inventory and work still required
 
+### UTC runtime admission and measurement endpoint
+
+The native source now admits a UTC producer against a closed release inventory,
+not merely an unchanged process fingerprint. The inventory and its original
+file descriptors must reside on read-only filesystems, with exact bounded
+digests, protected parent directories and no links, writable or special-mode
+artifacts. The compiled policy and NTS-only configuration must match exactly.
+Required files include the producer executable, CA roots, unit and enforcing
+profile; mapped executable/library objects must match retained release objects.
+The live process must retain the fixed credentials, command line, filesystem
+view, cgroup, enforced AppArmor label, limited capabilities, no-new-privileges,
+seccomp mode and task inventory. Loader and TLS environment overrides refuse.
+
+The fixed measurement endpoint has descriptor-relative creation, kernel message
+credentials, a bounded acquisition deadline and retained socket identity. It
+does not accept a caller's PID or runtime digest. Existing or replaced endpoints
+refuse without unlinking them. Raw numeric receiver attachment is fixture-only;
+normal construction retains the runtime admission and repeats its checks.
+The initial clock-step watch and acquisition clock are armed before binding and
+carried into the keeper, rather than accepting a first round under a later
+startup boundary. Initial zero/one-source heartbeats remain Acquiring without an
+estimate; after the first quorum, any quorum loss still fences without revival.
+
+This is source integration, **not protected UTC deployment completion**. The
+image does not yet provision producer UID/GID 987, the approved producer and
+keeper units/profiles, release runtime inventory or qualified dependency tuple.
+No service or CLI activates the endpoint, and no seed or time capability is
+returned. Authenticated human seed/acquisition/query control, production history
+delivery, explicit recovery, installed lifecycle and clock-envelope qualification
+remain required. Usable-account activation, original Admin credential recovery,
+finite grants and broader workflows/retention have not been closed by this work.
+See [the runtime admission evidence](evidence/G2_UTC_RUNTIME_ADMISSION_2026-10-09.md).
+
 ### Governed locked account creation
 
 Local maintenance now retains an exact new-account proposal under an owned
@@ -158,7 +191,7 @@ tests or enabling an unconditional refusal path:
 | Bundle | Remaining software implementation |
 | --- | --- |
 | Account lifecycle | Protected password-aging establishment and activation for newly created locked accounts; original Admin password/lock recovery; generic registry lifecycle and identity reconciliation; password-aging renewal. Existing non-Admin lock/unlock, password replacement, four-file deletion and five-file locked creation have native source paths. Deletion retains home data and does not terminate existing Unix processes; governed retirement, installed security and interruption qualification remain required. |
-| Protected UTC | Approved executable/configuration admission, confined producer/keeper deployment, reviewed independent seed, authenticated local acquisition/query control, protected history delivery and explicit recovery. |
+| Protected UTC | Source runtime admission and fixed measurement reception now exist. Complete production dependency/provenance and image inventory, confined producer/keeper deployment, reviewed independent seed, authenticated human acquisition/query control, protected history delivery and explicit recovery. |
 | Grants and admission | Finite current-generation role assignments, current UTC checks, principal-bound folder/effect/resource/inference grants and preparation/final-dispatch checks. |
 | Workflow and recovery | Generic governed worker/DAG admission, all inference consumers, export/deletion/retention authorization, damaged-authority reconstruction, multiworker/device adapters and integrated interruption paths. |
 

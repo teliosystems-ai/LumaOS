@@ -98,7 +98,11 @@ impl BatchKeeper {
                 realtime_ms: producer.captured_realtime_ms,
                 suspend_generation: now.suspend_generation,
             };
-            self.keeper.refresh(&round, captured)?;
+            if self.keeper.state() == State::Acquiring {
+                self.keeper.acquire_round(&round, captured)?;
+            } else {
+                self.keeper.refresh(&round, captured)?;
+            }
             self.last_capture_ms = Some(producer.captured_boottime_ms);
         }
         self.candidate_at(now)
@@ -122,7 +126,12 @@ impl BatchKeeper {
         if u128::from(age) + (u128::from(age) * 100).div_ceil(999_900) > 1_000 {
             return Err("UTC heartbeat may exceed its real-age deadline".into());
         }
-        self.keeper.candidate_at(now).map(Some)
+        if self.keeper.state() == State::Acquiring {
+            self.keeper.check_boundary(now)?;
+            Ok(None)
+        } else {
+            self.keeper.candidate_at(now).map(Some)
+        }
     }
 }
 
@@ -137,18 +146,14 @@ impl Stream {
     // Private numeric assembly. Production-source consumers must use BoundStream
     // and the semantic HistoryReader, never a caller-provided floor.
     fn assemble(
-        receiver: Receiver,
+        mut receiver: Receiver,
         history_floor_ms: i64,
         suspend_generation: u64,
     ) -> Result<Self> {
         // Arm before the initial clock read. A notification/error is a fence,
         // never a request to reset history or silently reacquire the epoch.
-        let step_watch = StepWatch::arm()?;
-        let batch = BatchKeeper::new(
-            receiver.epoch(),
-            history_floor_ms,
-            Receiver::clock(suspend_generation)?,
-        )?;
+        let (step_watch, initial) = receiver.acquisition_boundary(suspend_generation)?;
+        let batch = BatchKeeper::new(receiver.epoch(), history_floor_ms, initial)?;
         Ok(Self {
             receiver,
             batch,
@@ -315,15 +320,82 @@ mod tests {
         );
     }
     #[test]
-    fn every_queued_round_is_reduced_without_hiding_quorum_loss() {
+    fn initial_wait_does_not_hide_any_quorum_loss_after_first_candidate() {
         for lost_position in 0..3 {
             let mut b = batch(0);
             let mut rounds = [round(1, 1_001), round(2, 1_002), round(3, 1_003)];
             rounds[lost_position].sources[1] = SourceData::Unavailable { operator: 2 };
             rounds[lost_position].sources[2] = SourceData::Unavailable { operator: 3 };
-            assert!(b.refresh(&rounds, clock(1_004)).is_err());
+            if lost_position == 0 {
+                assert!(b.refresh(&rounds, clock(1_004)).unwrap().is_some());
+                assert_eq!(b.keeper.state(), State::Bounded);
+            } else {
+                assert!(b.refresh(&rounds, clock(1_004)).is_err());
+                assert_eq!(b.keeper.state(), State::Fenced);
+                assert!(b.refresh(&[round(4, 1_005)], clock(1_005)).is_err());
+            }
+        }
+    }
+    #[test]
+    fn startup_heartbeats_and_one_operator_wait_without_manufacturing_time() {
+        let mut b = batch(0);
+        let mut initial = round(1, 1_001);
+        initial.sources = [1, 2, 3].map(|operator| SourceData::Unavailable { operator });
+        assert!(b.refresh(&[initial], clock(1_002)).unwrap().is_none());
+        assert!(b.refresh(&[], clock(1_003)).unwrap().is_none());
+        let mut one = round(2, 1_004);
+        one.sources[1] = SourceData::Unavailable { operator: 2 };
+        one.sources[2] = SourceData::Unavailable { operator: 3 };
+        assert!(b.refresh(&[one], clock(1_005)).unwrap().is_none());
+        assert_eq!(b.keeper.state(), State::Acquiring);
+        assert!(b
+            .refresh(&[round(3, 1_006)], clock(1_007))
+            .unwrap()
+            .is_some());
+        let mut lost = round(4, 1_008);
+        lost.sources[1] = SourceData::Unavailable { operator: 2 };
+        lost.sources[2] = SourceData::Unavailable { operator: 3 };
+        assert!(b.refresh(&[lost, round(5, 1_009)], clock(1_010)).is_err());
+        assert_eq!(b.keeper.state(), State::Fenced);
+    }
+
+    #[test]
+    fn startup_wait_still_fences_replay_heartbeat_loss_and_invalid_partial_samples() {
+        for variant in 0..4 {
+            let mut b = batch(0);
+            let mut one = round(1, 1_001);
+            one.sources[1] = SourceData::Unavailable { operator: 2 };
+            one.sources[2] = SourceData::Unavailable { operator: 3 };
+            assert!(b
+                .refresh(std::slice::from_ref(&one), clock(1_002))
+                .unwrap()
+                .is_none());
+            let result = match variant {
+                0 => b.refresh(&[one], clock(1_003)),
+                1 => b.refresh(&[], clock(2_001)),
+                2 => {
+                    let mut bad = round(2, 1_003);
+                    bad.epoch.process_generation += 1;
+                    b.refresh(&[bad], clock(1_004))
+                }
+                3 => {
+                    let mut invalid = round(2, 1_004);
+                    invalid.sources[1] = SourceData::Unavailable { operator: 2 };
+                    invalid.sources[2] = SourceData::Unavailable { operator: 3 };
+                    if let SourceData::Measured {
+                        observed_boottime_ms,
+                        ..
+                    } = &mut invalid.sources[0]
+                    {
+                        *observed_boottime_ms = 999;
+                    }
+                    b.refresh(&[invalid], clock(1_005))
+                }
+                _ => unreachable!(),
+            };
+            assert!(result.is_err());
             assert_eq!(b.keeper.state(), State::Fenced);
-            assert!(b.refresh(&[round(4, 1_005)], clock(1_005)).is_err());
+            assert!(b.refresh(&[round(3, 2_002)], clock(2_003)).is_err());
         }
     }
     #[test]

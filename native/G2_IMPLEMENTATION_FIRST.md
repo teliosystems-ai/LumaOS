@@ -73,6 +73,16 @@ Protected executable/configuration provisioning, installed lifecycle, history
 and authority composition are still required.
 Do not count source linkage or arithmetic as a completed time provider.
 
+The [runtime admission checkpoint](evidence/G2_UTC_RUNTIME_ADMISSION_2026-10-09.md)
+now adds a fixed measurement endpoint and closed immutable release inventory,
+live producer code/namespace/confinement checks and one-use acquisition-boundary
+handoff. Initial zero/one-source acquisition returns no time; quorum loss after
+a candidate remains a fence. Raw receiver attachment is fixture-only. This does
+not install or qualify the producer/keeper, deliver a reviewed clock seed,
+authenticate human control/query, implement history delivery, activate grants
+or close usable-account activation. Those software integrations remain part of
+the same package before candidate freeze.
+
 The [UTC history backend](evidence/G2_UTC_HISTORY_2026-10-05.md) now implements
 canonical monotonic floors, shared Admin journal replay and private reviewed
 append/recovery semantics in source. It uses no separate anchor or new NV

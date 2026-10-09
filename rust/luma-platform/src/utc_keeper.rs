@@ -153,7 +153,23 @@ impl Keeper {
     }
 
     pub(crate) fn refresh(&mut self, round: &Round, now: Clock) -> Result<Interval> {
-        let result = self.refresh_inner(round, now);
+        let result = self
+            .refresh_inner(round, now, false)
+            .and_then(|candidate| candidate.ok_or_else(|| "UTC round has no quorum".into()));
+        if result.is_err() {
+            self.fence();
+        }
+        result
+    }
+
+    /// Before the first quorum, validated heartbeats may remain Acquiring.
+    /// This never supplies a one-source estimate and cannot revive a fence.
+    pub(crate) fn acquire_round(&mut self, round: &Round, now: Clock) -> Result<Option<Interval>> {
+        let result = if self.state == State::Acquiring {
+            self.refresh_inner(round, now, true)
+        } else {
+            Err("UTC initial acquisition is no longer active".into())
+        };
         if result.is_err() {
             self.fence();
         }
@@ -194,7 +210,12 @@ impl Keeper {
         result
     }
 
-    fn refresh_inner(&mut self, round: &Round, now: Clock) -> Result<Interval> {
+    fn refresh_inner(
+        &mut self,
+        round: &Round,
+        now: Clock,
+        acquiring: bool,
+    ) -> Result<Option<Interval>> {
         if !matches!(self.state, State::Acquiring | State::Bounded) {
             return Err("UTC lifecycle is not acquiring or bounded".into());
         }
@@ -251,6 +272,17 @@ impl Keeper {
                 samples.push(*sample);
             }
         }
+        if acquiring && self.state == State::Acquiring && samples.len() < 2 {
+            for sample in &samples {
+                utc_bounds::project(*sample, now.boottime_ms, self.epoch, self.policy.bounds())?;
+            }
+            self.last_samples = next_samples;
+            self.current_sources = Some(round.sources);
+            self.last_round = round.sequence;
+            self.last_clock = Some(now);
+            self.estimate = None;
+            return Ok(None);
+        }
         let interval =
             utc_bounds::consensus(&samples, now.boottime_ms, self.epoch, self.policy.bounds())?;
         let (lower, upper) = interval.endpoints();
@@ -265,7 +297,7 @@ impl Keeper {
         self.last_clock = Some(now);
         self.estimate = Some(bounded);
         self.state = State::Bounded;
-        Ok(bounded)
+        Ok(Some(bounded))
     }
 
     // A clock consistency check supplements, but does not replace, protected

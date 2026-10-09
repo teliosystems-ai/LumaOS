@@ -149,8 +149,38 @@ The later JSON transport source adaptation removes the binary-serialization
 mismatch with ADR-0002. ADR-0011 now approves the fixed peer-authenticated local
 endpoint/confined-keeper design. Executable/configuration admission, the
 measurement/deadline/socket implementation, protected provisioning and deployed
-lifecycle qualification remain open; the approval enables that work, not a
-working or qualified endpoint.
+lifecycle qualification remain open; the approval enabled that work, not an
+activated or qualified endpoint.
+
+The subsequent [runtime admission checkpoint](evidence/G2_UTC_RUNTIME_ADMISSION_2026-10-09.md)
+adds the fixed measurement bind/acquisition source path and immutable release
+inventory checks. Raw numeric receiver construction is now fixture-only. The
+admitted receiver retains executable/configuration/library descriptors and
+checks the live producer's actual namespace view, arguments, environment,
+credentials, mapped code and enforcing controls. Socket replacement or source
+mutation refuses; an existing socket is never silently unlinked. The original
+clock-step watch and clock capture precede binding and survive keeper attachment.
+No endpoint is activated by a product command, installer or service yet.
+
+Cold-start zero/one-source rounds remain Acquiring and return no estimate. Their
+sequence, sample age, epoch, clocks and heartbeat still undergo validation.
+Once a quorum candidate exists, lost quorum or a failed boundary fences and
+cannot be repaired by a later good round. This is initial acquisition, not
+offline holdover or automatic recovery.
+
+The fixed configuration uses only the three approved NTS operators and explicit
+CA roots, with no report/control listener or unauthenticated source fallback.
+Configured drift and slew limits are each 25 ppm; these settings do not prove
+the approved total 100-ppm physical/kernel envelope. That envelope and the exact
+dependency tuple still require qualification. The directives limit configured
+frequency correction and slew; they do not measure the oscillator's true error.
+[Chrony configuration](https://chrony-project.org/doc/4.5/chrony.conf.html)
+
+The production image still needs its approved dependency, runtime inventory,
+producer/keeper identities and enforcing units/profiles, independently reviewed
+seed delivery, authenticated human control/query and history delivery, and
+explicit lifecycle/recovery integration. Read-only descriptors and process
+checks alone are not a deployed clock or time authority.
 
 The [stream composition checkpoint](evidence/G2_UTC_STREAM_2026-10-05.md) joins
 receiver-checked rounds to the keeper in queue order, with independent producer

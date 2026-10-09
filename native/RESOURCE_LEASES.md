@@ -24,6 +24,14 @@ original Admin password recovery, generic registry/identity lifecycle,
 protected UTC delivery, finite grants or broader worker/workflow
 admission and damaged-authority recovery.
 
+The [UTC runtime admission increment](evidence/G2_UTC_RUNTIME_ADMISSION_2026-10-09.md)
+now retains an immutable producer inventory and the fixed measurement socket's
+kernel/process/confinement checks in source. It preserves the initial acquisition
+clock/watch into the keeper and allows pre-quorum startup without inventing time.
+It neither deploys protected UTC nor supplies a grant to a resource consumer;
+the activation, Admin credential recovery, grants and workflow/retention bundles
+above remain open.
+
 ## Implemented native boundary
 
 The existing root broker owns `/var/lib/luma-broker/resources`. No model or

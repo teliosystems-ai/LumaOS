@@ -100,7 +100,14 @@ pub(crate) struct Measurement {
     pub(crate) epoch: Epoch,
 }
 
-fn project(sample: Measurement, now_ms: u64, epoch: Epoch, policy: Policy) -> Result<Interval> {
+pub(crate) fn project(
+    sample: Measurement,
+    now_ms: u64,
+    epoch: Epoch,
+    policy: Policy,
+) -> Result<Interval> {
+    epoch.validate()?;
+    policy.validate()?;
     if sample.epoch != epoch || !(1..=3).contains(&sample.operator) {
         return Err("UTC source or epoch mismatch".into());
     }

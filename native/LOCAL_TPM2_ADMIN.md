@@ -853,11 +853,71 @@ lock/unlock; already-published continuation does not rename again.
 The general socket rejects password intents and cannot write the identity mount.
 The image declares libcrypt build/runtime dependencies and narrowly enumerated
 local maintenance AppArmor paths; this is not enforced-image qualification.
-Original Admin password/lock recovery, create/delete, multi-file registry/group
+Original Admin password/lock recovery, creation, general multi-file registry/group
 publication, password-aging renewal, governed proposal retirement and damaged
 authority reconstruction remain separate implementations. Requirement #1 is
 still open. See the [password evidence](evidence/G2_ACCOUNT_PASSWORD_TRANSACTIONS_2026-10-09.md)
 for the frozen source, executed checks and limits.
+
+### Existing non Admin account deletion
+
+Use this ceremony only on a disposable installed Luma test environment with
+intact enrolled TPM history, explicit principal adoption and checkpointed account
+credentials. It is not host account administration. `LOGIN` is the original
+Admin. `TARGET` is an existing non-Admin installation account with its own
+unshared primary group; shared or ambiguous groups refuse rather than deleting
+another account's authority. It accepts no file paths, secret or supplied hash.
+
+```text
+sudo luma-platform admin-account-delete LOGIN TARGET TRANSACTION
+sudo luma-platform admin-account-delete LOGIN TARGET TRANSACTION --commit REVIEW-SHA256
+sudo luma-platform admin-account-delete-permit LOGIN TRANSACTION PERMIT-REQUEST
+sudo luma-platform admin-account-delete-permit LOGIN TRANSACTION PERMIT-REQUEST --commit REVIEW-SHA256
+sudo luma-platform admin-account-delete-file LOGIN TRANSACTION shadow
+sudo luma-platform admin-account-delete-file LOGIN TRANSACTION gshadow
+sudo luma-platform admin-account-delete-file LOGIN TRANSACTION group
+sudo luma-platform admin-account-delete-file LOGIN TRANSACTION passwd
+sudo luma-platform admin-account-delete-complete LOGIN TRANSACTION COMPLETE-REQUEST
+sudo luma-platform admin-account-delete-complete LOGIN TRANSACTION COMPLETE-REQUEST --commit REVIEW-SHA256
+```
+
+Every invocation needs fresh governed Admin authentication. Use the latest
+review digest for each checkpointed phase and distinct permission/completion
+request IDs. Preparation reserves a bounded private transaction containing the
+exact four before/after files and their ownership/permission commitments, then
+anchors its intent and advances/disables the target principal. Permission is a
+separate reviewed TPM event and performs no file publication. The explicit file
+commands consume fresh process-local Admin continuations bound to that exact
+transaction and current history; the committed permission covers only its four
+manifest files in shadow-first order. A JSON receipt, root UID or generic PAM
+session is not a dispatch capability.
+
+Each file rename preserves its original mode and group and synchronizes both
+directories. Unrelated account and group records, including group passwords,
+remain unchanged; the target's memberships and private group are removed.
+Partial publication keeps the principal disabled. After a restart, continue the
+next file explicitly. Repeating an already published file verifies exact state
+without another rename. An empty or exact-prefix private dispatch file may be
+finished under the new owned continuation. Conflicting or out-of-order bytes
+refuse and remain evidence; no implicit rollback or truncation is available.
+
+Uncertain TPM results require exact reviewed journal reconciliation before any
+continuation, not another TPM extend or automatic retry. Completion requires all
+four published files and leaves the principal disabled permanently. Its original
+registry entry and credential commitment remain historical evidence; the governed
+tombstone reserves its ID, login and UID against ordinary re-enablement. Home
+data is retained and existing Unix processes are not forcibly terminated. This
+is neither home-data erasure nor generic worker/resource-drain integration.
+
+Only one incomplete credential/deletion transaction is admitted globally, with
+128 retained catalog transactions across both types. Deletion staging additionally
+counts complete and interrupted proposal directories against a 128-entry ceiling;
+exhaustion refuses without removing evidence. The general socket rejects all
+deletion phases and retains its read-only identity mount. AppArmor source
+enumerates only the fixed local file and staging paths; enforcement is unqualified.
+Account creation, original Admin credential recovery, general registry mutation,
+governed retirement and damaged-authority reconstruction remain open. See the
+[deletion evidence](evidence/G2_ACCOUNT_DELETION_TRANSACTIONS_2026-10-09.md).
 
 ### Governed session continuity
 

@@ -1475,6 +1475,11 @@ fn execute_catalog_authorized_at<A: Checkpoint>(
             return Err("account preparation must bind its exact request".into());
         }
     }
+    if let Command::PrepareAccountDeletion { intent } = command {
+        if intent.transaction != request {
+            return Err("deletion preparation must bind its exact request".into());
+        }
+    }
     let snapshot = store.snapshot()?;
     match (command, &authority) {
         (Command::RecoverAdmin { .. }, CatalogAuthority::Recovery(attempt))
@@ -1544,7 +1549,11 @@ fn execute_catalog_authorized_at<A: Checkpoint>(
         vec![]
     };
     let account_boundary = account_boundary(&catalog, registry_path, identity_path, command)?;
+    let deletion_boundary = deletion_boundary(&catalog, registry_path, identity_path, command)?;
     let mut authenticate = || {
+        if let Some(boundary) = &deletion_boundary {
+            boundary.recheck()?;
+        }
         if let Some(boundary) = &account_boundary {
             boundary.recheck()?;
         }
@@ -1555,6 +1564,9 @@ fn execute_catalog_authorized_at<A: Checkpoint>(
             binding.current()?;
         }
         let value = authenticate()?;
+        if let Some(boundary) = &deletion_boundary {
+            boundary.recheck()?;
+        }
         if let Some(boundary) = &account_boundary {
             boundary.recheck()?;
         }
@@ -1633,6 +1645,12 @@ fn execute_catalog_authorized_at<A: Checkpoint>(
         }
         if changed {
             context.recheck(&mut authenticate)?;
+            if matches!(command, Command::PrepareAccountDeletion { .. }) {
+                deletion_boundary
+                    .as_ref()
+                    .ok_or("deletion preparation lacks protected sources")?
+                    .stage()?;
+            }
             if matches!(command, Command::PrepareAccountLock { .. }) {
                 if let Some(AccountBoundary::Plan(guard)) = &account_boundary {
                     guard.stage()?;
@@ -1719,6 +1737,60 @@ fn execute_catalog_authorized_at<A: Checkpoint>(
 enum AccountBoundary {
     Plan(crate::account_transition::Guard),
     Published(crate::account_transition::Published),
+}
+
+fn deletion_boundary(
+    catalog: &Catalog,
+    registry_path: &Path,
+    identity_path: &Path,
+    command: &Command,
+) -> Result<Option<crate::account_deletion::Guard>> {
+    let intent = match command {
+        Command::PrepareAccountDeletion { intent } => {
+            if catalog.account_deletions.contains_key(&intent.transaction) {
+                return Ok(None);
+            }
+            intent
+        }
+        Command::PermitAccountDeletion { transaction }
+        | Command::CompleteAccountDeletion { transaction } => {
+            let transition = catalog
+                .account_deletions
+                .get(transaction)
+                .ok_or("no anchored account deletion")?;
+            if transition.phase == crate::account_transition::Phase::Complete {
+                return Ok(None);
+            }
+            &transition.intent
+        }
+        _ => return Ok(None),
+    };
+    let guard = if matches!(command, Command::PrepareAccountDeletion { .. }) {
+        let registry = crate::principal::RegistryBinding::capture(registry_path)?;
+        let name = &registry
+            .current()?
+            .principal(&intent.principal)
+            .ok_or("unknown deletion principal")?
+            .login;
+        let guard = crate::account_deletion::Guard::prepare(
+            registry_path,
+            identity_path,
+            name,
+            intent.expected_generation,
+            &intent.transaction,
+        )?;
+        registry.current()?;
+        if guard.intent != *intent {
+            return Err("deletion differs from protected installed records".into());
+        }
+        guard
+    } else {
+        crate::account_deletion::Guard::retained(registry_path, identity_path, intent)?
+    };
+    if matches!(command, Command::CompleteAccountDeletion { .. }) {
+        guard.complete()?;
+    }
+    Ok(Some(guard))
 }
 
 impl AccountBoundary {
@@ -2314,6 +2386,213 @@ pub fn account_lock_command(args: &[String]) -> Result<()> {
             transaction: args[2].clone(),
         },
         _ => unreachable!("validated account command"),
+    };
+    let report = run_control_at(
+        &mut store,
+        directory,
+        registry_path,
+        account,
+        prepared,
+        None,
+        request,
+        Some(&command),
+        reviewed,
+    )?;
+    println!("{}", serde_json::to_string(&report)?);
+    Ok(())
+}
+
+// Own the live session through dispatch. JSON, filesystem custody and even a
+// valid PAM session with a different purpose cannot construct this continuation.
+struct DeletionAttempt<'s> {
+    session: &'s PrincipalSession,
+    directory: std::path::PathBuf,
+    registry_path: std::path::PathBuf,
+    guard: crate::account_deletion::Guard,
+    catalog: Catalog,
+    snapshot: Snapshot,
+}
+
+impl<'s> DeletionAttempt<'s> {
+    fn prepare<A: Checkpoint>(
+        session: &'s PrincipalSession,
+        store: &mut Store<A>,
+        directory: &Path,
+        registry_path: &Path,
+        transaction: &str,
+    ) -> Result<Self> {
+        match &session.binding.purpose {
+            PrincipalPurpose::AdminCatalog {
+                candidate: Some(candidate),
+            } if candidate == transaction => (),
+            _ => {
+                return Err(
+                    "deletion publication requires its exact owned Admin login scope".into(),
+                )
+            }
+        }
+        session.observe_store(
+            &mut PrincipalReader::admin_at(store, directory, registry_path, Some(transaction)),
+            |identity, store| {
+                let snapshot = store.snapshot()?;
+                let context = Context::load_at(directory, &snapshot.deployment, registry_path)?;
+                let (catalog, events) = context.events(&snapshot, None)?;
+                let transition = catalog
+                    .account_deletions
+                    .get(transaction)
+                    .ok_or("no anchored account deletion")?;
+                if transition.phase == crate::account_transition::Phase::Prepared
+                    || !events.iter().any(|event| {
+                        event.command
+                            == Command::PermitAccountDeletion {
+                                transaction: transaction.into(),
+                            }
+                    })
+                    || serde_json::to_value(context.writer(&catalog)?)? != *identity
+                {
+                    return Err(
+                        "deletion file publication lacks its exact committed governed permission"
+                            .into(),
+                    );
+                }
+                let guard = crate::account_deletion::Guard::retained(
+                    registry_path,
+                    &session.binding.identity_path,
+                    &transition.intent,
+                )?;
+                if transition.phase == crate::account_transition::Phase::Complete {
+                    guard.complete()?;
+                }
+                context.recheck(&mut || session.account.identity())?;
+                Ok(Self {
+                    session,
+                    directory: directory.into(),
+                    registry_path: registry_path.into(),
+                    guard,
+                    catalog,
+                    snapshot,
+                })
+            },
+        )
+    }
+
+    fn execute<A: Checkpoint>(self, store: &mut Store<A>, file: &str) -> Result<serde_json::Value> {
+        let context = Context::load_at(
+            &self.directory,
+            &self.snapshot.deployment,
+            &self.registry_path,
+        )?;
+        let written = self.guard.publish(file, || {
+            if self.session.fenced.get() {
+                return Err("deletion continuation is fenced".into());
+            }
+            self.session.account.identity()?;
+            let current = store.snapshot()?;
+            current.clock.elapsed_since(self.session.clock.get())?;
+            self.session.clock.set(current.clock);
+            if current.head != self.snapshot.head
+                || current.deployment != self.snapshot.deployment
+                || context.events(&current, None)?.0 != self.catalog
+                || serde_json::to_value(context.writer(&self.catalog)?)?
+                    != self.session.binding.identity
+            {
+                return Err("deletion authority changed before file dispatch".into());
+            }
+            context.recheck(&mut || self.session.account.identity())
+        })?;
+        Ok(
+            serde_json::json!({"schema_version":1,"action":"admin-account-delete-file",
+            "transaction":self.guard.intent.transaction,"file":file,"file_published":true,
+            "rename_performed":written,"replayed":!written,"home_data_removed":false,
+            "principal_enabled":false,"gate_closing":false}),
+        )
+    }
+}
+
+impl Drop for DeletionAttempt<'_> {
+    fn drop(&mut self) {
+        self.session.close();
+    }
+}
+
+pub fn account_deletion_command(args: &[String]) -> Result<()> {
+    crate::require_root()?;
+    platform::require_installed()?;
+    let base = 4;
+    let file_dispatch = args.first().map(String::as_str) == Some("admin-account-delete-file");
+    let reviewed = if args.len() == base {
+        None
+    } else if !file_dispatch && args.len() == base + 2 && args[base] == "--commit" {
+        tpm::decode::<32>(&args[base + 1])?;
+        Some(args[base + 1].as_str())
+    } else {
+        return Err("invalid account deletion arguments".into());
+    };
+    let request = if file_dispatch { &args[2] } else { &args[3] };
+    if !admin_roles::identifier(request)
+        || request == REQUEST
+        || (file_dispatch && !crate::account_deletion::FILES.contains(&args[3].as_str()))
+    {
+        return Err("invalid deletion request or publication file".into());
+    }
+    let prepared = prepare_control(&args[1], Some(request))?;
+    let account = authentication::local(&args[1])?;
+    let directory = Path::new(DIRECTORY);
+    let registry_path = Path::new(crate::principal::REGISTRY);
+    let identity_path = Path::new(crate::principal::IDENTITY);
+    let mut store = Store::open(
+        tpm::LocalAnchor::installed()?,
+        &directory.join("journal.json"),
+    )?;
+    if file_dispatch {
+        let session =
+            prepared.issue(account, &mut store, directory, registry_path, Some(request))?;
+        let report =
+            DeletionAttempt::prepare(&session, &mut store, directory, registry_path, request)?
+                .execute(&mut store, &args[3])?;
+        println!("{}", serde_json::to_string(&report)?);
+        return Ok(());
+    }
+    let snapshot = store.snapshot()?;
+    let context = Context::load_at(directory, &snapshot.deployment, registry_path)?;
+    let catalog = context.events(&snapshot, Some(request))?.0;
+    let command = match args[0].as_str() {
+        "admin-account-delete" => {
+            let registry = crate::principal::RegistryBinding::capture(registry_path)?;
+            let record = registry
+                .current()?
+                .account(&args[2])
+                .ok_or("unknown installation account")?;
+            let intent = if let Some(transition) = catalog.account_deletions.get(request) {
+                if transition.intent.principal != record.id {
+                    return Err("deletion request belongs to another account".into());
+                }
+                transition.intent.clone()
+            } else {
+                let generation = catalog
+                    .principal_states
+                    .get(&record.id)
+                    .map_or(record.generation, |state| state.generation);
+                crate::account_deletion::Guard::prepare(
+                    registry_path,
+                    identity_path,
+                    &record.login,
+                    generation,
+                    request,
+                )?
+                .intent
+                .clone()
+            };
+            registry.current()?;
+            Command::PrepareAccountDeletion { intent }
+        }
+        "admin-account-delete-permit" => Command::PermitAccountDeletion {
+            transaction: args[2].clone(),
+        },
+        "admin-account-delete-complete" => Command::CompleteAccountDeletion {
+            transaction: args[2].clone(),
+        },
+        _ => return Err("unknown account deletion command".into()),
     };
     let report = run_control_at(
         &mut store,
@@ -3231,6 +3510,253 @@ pub(crate) fn fixture_account_checkpoint(
     println!("ACCOUNT_CHECKPOINT_CASE=principal-rotation-preserves-credential-checkpoint");
     fixture_account_lock(root, password);
     fixture_account_password(root, password);
+    fixture_account_deletion(root, password);
+}
+
+#[cfg(test)]
+fn fixture_account_deletion(root: &Path, password: &crate::sealed_credential::PrivateBuffer) {
+    use std::os::unix::fs::MetadataExt;
+    // This final fixture removes only the otherhuman account that its parent
+    // created inside the disposable container, after verifying the software TPM.
+    drop(fixture_store(root).unwrap());
+    let directory = root.join("admin");
+    let registry_path = root.join("registry.json");
+    let registry = crate::principal::RegistryBinding::capture(&registry_path).unwrap();
+    let record = registry.current().unwrap().account("otherhuman").unwrap();
+    let baseline = tpm::private_read(&registry_path, 65536).unwrap();
+    let mut store = fixture_store(root).unwrap();
+    let snapshot = store.snapshot().unwrap();
+    let context = Context::load_at(&directory, &snapshot.deployment, &registry_path).unwrap();
+    let catalog = context.events(&snapshot, None).unwrap().0;
+    drop(store);
+    let generation = catalog
+        .principal_states
+        .get(&record.id)
+        .map_or(record.generation, |state| state.generation);
+    let prior = fixture_governed_session(root, "otherhuman", password).unwrap();
+    let guard = crate::account_deletion::Guard::prepare(
+        &registry_path,
+        Path::new("/etc"),
+        "otherhuman",
+        generation,
+        "delete-other",
+    )
+    .unwrap();
+    let intent = guard.intent.clone();
+    drop(guard);
+    let run = |request: &str, command: &Command, review: Option<&str>| {
+        let mut store = fixture_store(root).unwrap();
+        let login = AdminLogin::prepare_at(
+            &mut store,
+            &directory,
+            &registry_path,
+            "human",
+            Some(request),
+        )?;
+        let account = authentication::fixture_local_account(root, "human", password)?;
+        run_control_at(
+            &mut store,
+            &directory,
+            &registry_path,
+            account,
+            login,
+            None,
+            request,
+            Some(command),
+            review,
+        )
+    };
+    let commit = |request: &str, command: &Command| {
+        let proposal = run(request, command, None).unwrap();
+        run(
+            request,
+            command,
+            Some(proposal["review_sha256"].as_str().unwrap()),
+        )
+        .unwrap()
+    };
+    let publish = |name: &str| {
+        let mut store = fixture_store(root).unwrap();
+        let login = AdminLogin::prepare_at(
+            &mut store,
+            &directory,
+            &registry_path,
+            "human",
+            Some("delete-other"),
+        )?;
+        let account = authentication::fixture_local_account(root, "human", password)?;
+        let session = login.issue(
+            account,
+            &mut store,
+            &directory,
+            &registry_path,
+            Some("delete-other"),
+        )?;
+        let attempt = DeletionAttempt::prepare(
+            &session,
+            &mut store,
+            &directory,
+            &registry_path,
+            "delete-other",
+        )?;
+        attempt.execute(&mut store, name)
+    };
+    let prepare = Command::PrepareAccountDeletion {
+        intent: intent.clone(),
+    };
+    let permit = Command::PermitAccountDeletion {
+        transaction: intent.transaction.clone(),
+    };
+    let complete = Command::CompleteAccountDeletion {
+        transaction: intent.transaction.clone(),
+    };
+    let proposal = run("delete-other", &prepare, None).unwrap();
+    assert!(!Path::new("/etc/account-deletion-delete-other").exists());
+    assert!(run("delete-other", &prepare, Some(&"00".repeat(32))).is_err());
+    assert!(publish("shadow").is_err());
+    println!("ACCOUNT_DELETION_CASE=inspection-wrong-review-and-unprepared-dispatch-no-write");
+    let prepared = run(
+        "delete-other",
+        &prepare,
+        Some(proposal["review_sha256"].as_str().unwrap()),
+    )
+    .unwrap();
+    assert_eq!(
+        prepared["catalog"]["principal_states"][&intent.principal]["generation"],
+        generation + 1
+    );
+    assert_eq!(
+        prepared["catalog"]["principal_states"][&intent.principal]["enabled"],
+        false
+    );
+    assert!(fixture_governed_identity(root, &prior).is_err());
+    assert!(authentication::fixture_local_account(root, "otherhuman", password).is_ok());
+    assert!(fixture_governed_session(root, "otherhuman", password).is_err());
+    assert!(publish("shadow").is_err());
+    assert!(run("early-delete-complete", &complete, None).is_err());
+    println!(
+        "ACCOUNT_DELETION_CASE=prepare-fences-old-and-new-sessions-before-identity-publication"
+    );
+    commit("delete-permit", &permit);
+    assert!(publish("passwd").is_err());
+    assert!(run("early-delete-complete", &complete, None).is_err());
+    println!("ACCOUNT_DELETION_CASE=committed-permission-does-not-publish-or-complete-files");
+    let general = fixture_governed_session(root, "human", password).unwrap();
+    assert!(DeletionAttempt::prepare(
+        &general,
+        &mut fixture_store(root).unwrap(),
+        &directory,
+        &registry_path,
+        "delete-other"
+    )
+    .is_err());
+    general.close();
+    println!("ACCOUNT_DELETION_CASE=general-pam-session-is-not-deletion-dispatch-authority");
+    for fault in ["closed", "expired", "epoch", "changed-head"] {
+        let mut store = fixture_store(root).unwrap();
+        let login = AdminLogin::prepare_at(
+            &mut store,
+            &directory,
+            &registry_path,
+            "human",
+            Some("delete-other"),
+        )
+        .unwrap();
+        let account = authentication::fixture_local_account(root, "human", password).unwrap();
+        let session = login
+            .issue(
+                account,
+                &mut store,
+                &directory,
+                &registry_path,
+                Some("delete-other"),
+            )
+            .unwrap();
+        let attempt = DeletionAttempt::prepare(
+            &session,
+            &mut store,
+            &directory,
+            &registry_path,
+            "delete-other",
+        )
+        .unwrap();
+        match fault {
+            "closed" => session.close(),
+            "expired" => {
+                let mut clock = session.clock.get();
+                clock.milliseconds += 1_000_000;
+                session.clock.set(clock);
+            }
+            "epoch" => {
+                let mut clock = session.clock.get();
+                clock.restart_count += 1;
+                session.clock.set(clock);
+            }
+            "changed-head" => {
+                drop(store);
+                commit(
+                    "delete-head-change",
+                    &Command::RegisterActivity {
+                        activity: "account.delete.fault".into(),
+                    },
+                );
+                store = fixture_store(root).unwrap();
+            }
+            _ => unreachable!(),
+        }
+        let before = fs::symlink_metadata("/etc/shadow").unwrap().ino();
+        assert!(attempt.execute(&mut store, "shadow").is_err());
+        assert!(session.fenced.get());
+        assert!(session.account.identity().is_err());
+        assert_eq!(fs::symlink_metadata("/etc/shadow").unwrap().ino(), before);
+        assert!(!Path::new("/etc/account-deletion-delete-other/shadow.next").exists());
+        println!("ACCOUNT_DELETION_CASE={fault}-continuation-closes-without-dispatch");
+    }
+    for (index, name) in crate::account_deletion::FILES.into_iter().enumerate() {
+        let report = publish(name).unwrap();
+        assert_eq!(report["rename_performed"], true);
+        let inode = fs::symlink_metadata(Path::new("/etc").join(name))
+            .unwrap()
+            .ino();
+        let replay = publish(name).unwrap();
+        assert_eq!(replay["rename_performed"], false);
+        assert_eq!(
+            fs::symlink_metadata(Path::new("/etc").join(name))
+                .unwrap()
+                .ino(),
+            inode
+        );
+        assert!(authentication::fixture_local_account(root, "otherhuman", password).is_err());
+        assert!(fixture_governed_session(root, "otherhuman", password).is_err());
+        if index < 3 {
+            assert!(run("early-delete-complete", &complete, None).is_err());
+        }
+        assert!(fixture_governed_session(root, "human", password).is_ok());
+        assert_eq!(tpm::private_read(&registry_path, 65536).unwrap(), baseline);
+        println!(
+            "ACCOUNT_DELETION_CASE={name}-fresh-owned-pam-publication-and-replay-no-second-rename"
+        );
+    }
+    let completed = commit("delete-complete", &complete);
+    assert_eq!(
+        completed["catalog"]["principal_states"][&intent.principal]["enabled"],
+        false
+    );
+    assert!(completed["catalog"]["deleted_principals"]
+        .as_array()
+        .unwrap()
+        .contains(&serde_json::json!(intent.principal)));
+    let advance = Command::AdvancePrincipal {
+        principal: intent.principal.clone(),
+        expected_generation: generation + 1,
+        enabled: true,
+    };
+    assert!(run("revive-deleted", &advance, None).is_err());
+    assert_eq!(commit("delete-complete", &complete)["replayed"], true);
+    assert_eq!(publish("passwd").unwrap()["rename_performed"], false);
+    assert!(fixture_governed_identity(root, &prior).is_err());
+    assert_eq!(tpm::private_read(&registry_path, 65536).unwrap(), baseline);
+    println!("ACCOUNT_DELETION_CASE=completed-tombstone-reserves-identity-and-never-reenables");
 }
 
 #[cfg(test)]
@@ -4797,6 +5323,128 @@ mod tests {
                     serde_json::Value::Null
                 );
             }
+        }
+    }
+
+    #[test]
+    fn account_deletion_uncertain_tpm_reply_retains_each_phase_without_dispatch() {
+        for phase in ["prepare", "permit", "complete"] {
+            let f = Fixture::new(&format!("account-delete-lost-{phase}"));
+            let adoption = principal_registry(&f);
+            let registry = f.directory.join("registry.json");
+            let identity = f.directory.join("identity");
+            fs::DirBuilder::new().mode(0o700).create(&identity).unwrap();
+            for (name, bytes) in [
+                ("passwd", "human:x:1001:1001:Human:/home/human:/bin/bash\notherhuman:x:1002:1002:Other:/home/otherhuman:/bin/bash\n"),
+                ("shadow", "human:$6$fixture$one:20000:0:99999:7:::\notherhuman:$6$fixture$two:20000:0:99999:7:::\n"),
+                ("group", "human:x:1001:\notherhuman:x:1002:\n"),
+                ("gshadow", "human:!::\notherhuman:!::\n"),
+            ] { platform::write_atomic(&identity.join(name), bytes.as_bytes(), 0o600).unwrap(); }
+            f.activate();
+            principal_commit(&f, "adopt", &adoption);
+            let execute = |request: &str, command: &Command, review: Option<&str>| {
+                execute_catalog_authorized_at(
+                    &mut f.store(),
+                    &f.directory,
+                    &registry,
+                    &identity,
+                    || Ok(f.identity.clone()),
+                    request,
+                    command,
+                    review,
+                    CatalogAuthority::Primitive,
+                )
+            };
+            let commit = |request: &str, command: &Command| {
+                let proposal = execute(request, command, None).unwrap();
+                execute(
+                    request,
+                    command,
+                    Some(proposal["review_sha256"].as_str().unwrap()),
+                )
+                .unwrap()
+            };
+            commit(
+                "accounts",
+                &account_checkpoint_at(&registry, &identity).unwrap().0,
+            );
+            let guard = crate::account_deletion::Guard::prepare(
+                &registry,
+                &identity,
+                "otherhuman",
+                1,
+                "delete-one",
+            )
+            .unwrap();
+            let intent = guard.intent.clone();
+            drop(guard);
+            let prepare = Command::PrepareAccountDeletion {
+                intent: intent.clone(),
+            };
+            let permit = Command::PermitAccountDeletion {
+                transaction: intent.transaction.clone(),
+            };
+            let complete = Command::CompleteAccountDeletion {
+                transaction: intent.transaction.clone(),
+            };
+            let target = match phase {
+                "prepare" => ("delete-one", &prepare),
+                "permit" => {
+                    commit("delete-one", &prepare);
+                    ("permit", &permit)
+                }
+                "complete" => {
+                    commit("delete-one", &prepare);
+                    commit("permit", &permit);
+                    // Private FakeTPM fixture dispatch, not production authority.
+                    for file in crate::account_deletion::FILES {
+                        let guard =
+                            crate::account_deletion::Guard::retained(&registry, &identity, &intent)
+                                .unwrap();
+                        assert!(guard.publish(file, || Ok(())).unwrap());
+                    }
+                    ("complete", &complete)
+                }
+                _ => unreachable!(),
+            };
+            let hashes = || {
+                crate::account_deletion::FILES
+                    .into_iter()
+                    .map(|name| {
+                        let (bytes, _) = crate::principal::account_file(
+                            &identity.join(name),
+                            name.ends_with("shadow"),
+                        )
+                        .unwrap();
+                        bundle::hex(&Sha256::digest(bytes.bytes()))
+                    })
+                    .collect::<Vec<_>>()
+            };
+            let before = hashes();
+            let proposal = execute(target.0, target.1, None).unwrap();
+            let writes = f.writes();
+            f.anchor.0.borrow_mut().3 = true;
+            assert!(execute(
+                target.0,
+                target.1,
+                Some(proposal["review_sha256"].as_str().unwrap())
+            )
+            .is_err());
+            assert_eq!(f.writes(), writes + 1);
+            assert_eq!(hashes(), before);
+            assert!(Store::open(f.anchor.clone(), &f.directory.join("journal.json")).is_err());
+            let recovery = admin_journal::Recovery::inspect(
+                f.anchor.clone(),
+                &f.directory.join("journal.json"),
+            )
+            .unwrap();
+            let review = recovery.digest().unwrap();
+            drop(recovery.publish(&review).unwrap());
+            let replay = commit(target.0, target.1);
+            assert_eq!(replay["replayed"], true);
+            assert_eq!(replay["tpm_write_performed"], false);
+            assert_eq!(f.writes(), writes + 1);
+            assert_eq!(hashes(), before);
         }
     }
 

@@ -13,6 +13,31 @@ requirement.
 
 ## Current software inventory and work still required
 
+### Governed non Admin account deletion
+
+Local maintenance now has a reviewed deletion path for existing installed
+non-Admin accounts with an unshared account-owned primary group. Preparation
+anchors a four-file manifest and the current credential commitment, advances
+the target generation and disables it before identity publication. A separate
+reviewed permission does not itself modify identity files. Each ordered file
+publication requires a fresh owned governed Admin continuation: shadow,
+gshadow, group, then passwd. Completion requires all four exact published files.
+
+The private transaction retains complete before/after evidence. Exact partial
+publication and empty or matching-prefix dispatch files can resume without
+resetting history, truncating conflicts or renaming an already published file.
+Uncertain TPM replies fence continuation until explicit journal reconciliation.
+Deleted principal IDs, logins and UIDs remain reserved in the unchanged installer
+registry and governed tombstones; ordinary principal advancement or credential
+transitions cannot revive them. Home data is retained, not erased. General socket
+requests still cannot transport identity mutations or write the identity mount.
+
+This does not implement account creation, original Admin credential recovery,
+general registry publication, data erasure, process termination or damaged
+authority reconstruction. Installed and physical qualification remain open.
+The [deletion evidence](evidence/G2_ACCOUNT_DELETION_TRANSACTIONS_2026-10-09.md)
+records the isolated evaluation and its limits.
+
 ### Governed existing-account password changes
 
 Local maintenance now supports password replacement for an existing non-Admin
@@ -84,7 +109,7 @@ and reports `account_credentials_checkpointed: false` until explicit adoption.
 This is a durable account-integrity prerequisite, not an account mutation or
 complete account lifecycle. The existing non-Admin lock/unlock composition above
 now provides approved commitment advancement for that narrow transaction.
-Create/delete, original Admin account recovery and broader identity transactions
+Creation, original Admin account recovery and broader identity transactions
 remain open. Existing non-Admin password replacement uses the same checkpointed
 commitment boundary through its distinct reviewed transaction.
 
@@ -101,7 +126,7 @@ tests or enabling an unconditional refusal path:
 
 | Bundle | Remaining software implementation |
 | --- | --- |
-| Account lifecycle | Governed create/delete; original Admin password/lock recovery; multi-file publication and reconciliation; protected password-aging renewal. Existing non-Admin lock/unlock and password replacement have three-phase native source paths; installed security and interruption qualification remains required. |
+| Account lifecycle | Governed creation; original Admin password/lock recovery; general registry and multi-file identity publication/reconciliation; protected password-aging renewal. Existing non-Admin lock/unlock, password replacement and four-file deletion have native source paths. Deletion retains home data and does not terminate existing Unix processes; governed retirement, installed security and interruption qualification remain required. |
 | Protected UTC | Approved executable/configuration admission, confined producer/keeper deployment, reviewed independent seed, authenticated local acquisition/query control, protected history delivery and explicit recovery. |
 | Grants and admission | Finite current-generation role assignments, current UTC checks, principal-bound folder/effect/resource/inference grants and preparation/final-dispatch checks. |
 | Workflow and recovery | Generic governed worker/DAG admission, all inference consumers, export/deletion/retention authorization, damaged-authority reconstruction, multiworker/device adapters and integrated interruption paths. |

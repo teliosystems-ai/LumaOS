@@ -200,6 +200,9 @@ fn validate(request: &Request) -> Result<()> {
                 | CatalogCommand::RecoverAdmin { .. }
                 | CatalogCommand::CheckpointAccounts { .. }
                 | CatalogCommand::PrepareAccountLock { .. }
+                | CatalogCommand::PrepareAccountDeletion { .. }
+                | CatalogCommand::PermitAccountDeletion { .. }
+                | CatalogCommand::CompleteAccountDeletion { .. }
                 | CatalogCommand::PermitAccountPublication { .. }
                 | CatalogCommand::CompleteAccountLock { .. }
         ) {
@@ -777,6 +780,35 @@ mod tests {
         };
         assert!(validate(&supplied).is_err());
         for command in [
+            CatalogCommand::PrepareAccountDeletion {
+                intent: crate::account_deletion::Intent {
+                    transaction: "delete-one".into(),
+                    installation: "ab".repeat(32),
+                    principal: "ef".repeat(32),
+                    expected_generation: 1,
+                    credential_before: "12".repeat(32),
+                    files: crate::account_deletion::FILES
+                        .into_iter()
+                        .map(|name| {
+                            (
+                                name.into(),
+                                crate::account_deletion::Change {
+                                    before: "34".repeat(32),
+                                    after: "56".repeat(32),
+                                    mode: 0o600,
+                                    gid: 0,
+                                },
+                            )
+                        })
+                        .collect(),
+                },
+            },
+            CatalogCommand::PermitAccountDeletion {
+                transaction: "delete-one".into(),
+            },
+            CatalogCommand::CompleteAccountDeletion {
+                transaction: "delete-one".into(),
+            },
             CatalogCommand::PrepareAccountLock {
                 intent: crate::account_transition::Intent {
                     kind: None,

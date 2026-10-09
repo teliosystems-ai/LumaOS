@@ -8,7 +8,7 @@ ROOT = Path(__file__).resolve().parents[2]
 class AccountLockPolicyTests(unittest.TestCase):
     def test_fixed_local_ceremony_prepares_before_pam_and_accepts_no_secret(self):
         source = (ROOT / 'rust/luma-platform/src/admin_governance.rs').read_text()
-        entry = source.split('pub fn account_lock_command(')[1].split('pub fn adopt_principals(')[0]
+        entry = source.split('pub fn account_lock_command(')[1].split('// Own the live session through dispatch.')[0]
         for marker in ('crate::require_root()?', 'platform::require_installed()?',
                        'Path::new(crate::principal::REGISTRY)', 'Path::new(crate::principal::IDENTITY)',
                        'run_control_at(', 'Guard::prepare('):
@@ -47,7 +47,8 @@ class AccountLockPolicyTests(unittest.TestCase):
             self.assertIn(marker, publication)
         engine = source.split('fn execute_catalog_authorized_at<')[1].split('enum AccountBoundary')[0]
         self.assertIn('intent.transaction != request', engine)
-        self.assertEqual(engine.count('boundary.recheck()?'), 2)
+        self.assertEqual(engine.count('boundary.recheck()?'), 4)
+        self.assertEqual(engine.count('if let Some(boundary) = &deletion_boundary'), 2)
         self.assertLess(engine.index('approved != digest'), engine.index('guard.stage()?'))
 
     def test_pending_transition_is_not_credential_or_principal_enable_authority(self):

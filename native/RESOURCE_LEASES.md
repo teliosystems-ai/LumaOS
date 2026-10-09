@@ -10,9 +10,13 @@ replacement path alongside lock/unlock. Both advance and fence the target
 generation before shadow publication, and update its checkpointed credential
 commitment only after exact completion. The [Admin ceremony](LOCAL_TPM2_ADMIN.md)
 and [password evidence](evidence/G2_ACCOUNT_PASSWORD_TRANSACTIONS_2026-10-09.md)
-describe the narrow implemented boundary. This does not close Unix account
-creation/deletion, original Admin password recovery, multi-file identity
-transactions, protected UTC delivery, finite grants or broader worker/workflow
+describe the narrow implemented boundary. Governed deletion now fences an
+existing non-Admin installation principal before publishing its four identity
+files through separately owned fresh Admin continuations. Exact partial
+publication is resumable; its identity remains reserved and disabled. See the
+[deletion evidence](evidence/G2_ACCOUNT_DELETION_TRANSACTIONS_2026-10-09.md).
+This does not close account creation, original Admin password recovery, general
+registry/multi-file identity transactions, protected UTC delivery, finite grants or broader worker/workflow
 admission and damaged-authority recovery.
 
 ## Implemented native boundary

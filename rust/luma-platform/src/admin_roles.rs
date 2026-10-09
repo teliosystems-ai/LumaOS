@@ -42,6 +42,15 @@ pub(crate) enum Command {
     PrepareAccountLock {
         intent: crate::account_transition::Intent,
     },
+    PrepareAccountDeletion {
+        intent: crate::account_deletion::Intent,
+    },
+    PermitAccountDeletion {
+        transaction: String,
+    },
+    CompleteAccountDeletion {
+        transaction: String,
+    },
     PermitAccountPublication {
         transaction: String,
     },
@@ -76,6 +85,9 @@ impl Command {
                 "admin.account.password_prepare"
             }
             Self::PrepareAccountLock { .. } => "admin.account.lock_prepare",
+            Self::PrepareAccountDeletion { .. } => "admin.account.delete_prepare",
+            Self::PermitAccountDeletion { .. } => "admin.account.delete_permit",
+            Self::CompleteAccountDeletion { .. } => "admin.account.delete_complete",
             Self::PermitAccountPublication { .. } => "admin.account.lock_publish",
             Self::CompleteAccountLock { .. } => "admin.account.lock_complete",
             Self::AdvancePrincipal { .. } => "admin.principal.advance",
@@ -87,8 +99,11 @@ impl Command {
         let valid_activity = |v: &str| identifier(v) && v != "admin.bootstrap";
         match self {
             Self::PrepareAccountLock { intent } => intent.validate(),
+            Self::PrepareAccountDeletion { intent } => intent.validate(),
             Self::PermitAccountPublication { transaction }
-            | Self::CompleteAccountLock { transaction } => {
+            | Self::CompleteAccountLock { transaction }
+            | Self::PermitAccountDeletion { transaction }
+            | Self::CompleteAccountDeletion { transaction } => {
                 if !identifier(transaction) || transaction == "admin-bootstrap-v1" {
                     return Err("invalid account transition identifier".into());
                 }
@@ -178,6 +193,10 @@ pub(crate) struct Catalog {
     pub account_commitments: BTreeMap<String, String>,
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub account_transitions: BTreeMap<String, crate::account_transition::Transition>,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub account_deletions: BTreeMap<String, crate::account_deletion::Transition>,
+    #[serde(skip_serializing_if = "BTreeSet::is_empty")]
+    pub deleted_principals: BTreeSet<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub admin_recovery: Option<crate::admin_recovery::Verifier>,
 }
@@ -198,6 +217,8 @@ impl Catalog {
             principal_states: BTreeMap::new(),
             account_commitments: BTreeMap::new(),
             account_transitions: BTreeMap::new(),
+            account_deletions: BTreeMap::new(),
+            deleted_principals: BTreeSet::new(),
             admin_recovery: None,
         }
     }
@@ -211,6 +232,86 @@ impl Catalog {
             .checked_add(1)
             .ok_or("Admin catalog version exhausted")?;
         match command {
+            Command::PrepareAccountDeletion { intent } => {
+                use crate::account_transition::Phase;
+                let registry = self
+                    .principal_registry
+                    .as_ref()
+                    .ok_or("explicit principal adoption required")?;
+                let record = registry
+                    .principal(&intent.principal)
+                    .filter(|record| record.enabled && record.uid != 1001)
+                    .ok_or("deletion cannot remove the original Admin")?;
+                let generation = self
+                    .principal_states
+                    .get(&intent.principal)
+                    .map_or(record.generation, |state| state.generation);
+                if self.deleted_principals.contains(&intent.principal)
+                    || intent.installation != registry.installation()
+                    || intent.expected_generation != generation
+                    || self.account_commitments.get(&intent.principal)
+                        != Some(&intent.credential_before)
+                    || self.account_deletions.contains_key(&intent.transaction)
+                    || self.account_transitions.contains_key(&intent.transaction)
+                    || self.account_deletions.len() + self.account_transitions.len() >= 128
+                    || self
+                        .account_transitions
+                        .values()
+                        .any(|v| v.phase != Phase::Complete)
+                    || self
+                        .account_deletions
+                        .values()
+                        .any(|v| v.phase != Phase::Complete)
+                {
+                    return Err("deletion conflicts with installed credentials, generation or pending publication".into());
+                }
+                self.principal_states.insert(
+                    intent.principal.clone(),
+                    PrincipalState {
+                        generation: generation + 1,
+                        enabled: false,
+                    },
+                );
+                self.account_deletions.insert(
+                    intent.transaction.clone(),
+                    crate::account_deletion::Transition {
+                        intent: intent.clone(),
+                        phase: Phase::Prepared,
+                    },
+                );
+            }
+            Command::PermitAccountDeletion { transaction } => {
+                let current = self
+                    .account_deletions
+                    .get_mut(transaction)
+                    .ok_or("no anchored account deletion")?;
+                if current.phase != crate::account_transition::Phase::Prepared {
+                    return Err("deletion permission requires its exact prepared phase".into());
+                }
+                current.phase = crate::account_transition::Phase::PublicationPermitted;
+            }
+            Command::CompleteAccountDeletion { transaction } => {
+                let current = self
+                    .account_deletions
+                    .get_mut(transaction)
+                    .ok_or("no anchored account deletion")?;
+                if current.phase != crate::account_transition::Phase::PublicationPermitted
+                    || self.account_commitments.get(&current.intent.principal)
+                        != Some(&current.intent.credential_before)
+                    || self.principal_states.get(&current.intent.principal)
+                        != Some(&PrincipalState {
+                            generation: current.intent.expected_generation + 1,
+                            enabled: false,
+                        })
+                {
+                    return Err(
+                        "deletion completion requires its exact permitted fenced generation".into(),
+                    );
+                }
+                self.deleted_principals
+                    .insert(current.intent.principal.clone());
+                current.phase = crate::account_transition::Phase::Complete;
+            }
             Command::PrepareAccountLock { intent } => {
                 use crate::account_transition::{Phase, Transition};
                 let registry = self
@@ -235,11 +336,17 @@ impl Catalog {
                     return Err("password changes cannot implicitly enable a disabled principal; use governed lock/unlock".into());
                 }
                 if registry.installation() != intent.installation
+                    || self.deleted_principals.contains(&intent.principal)
                     || generation != intent.expected_generation
                     || self.account_commitments.get(&intent.principal)
                         != Some(&intent.credential_before)
                     || self.account_transitions.contains_key(&intent.transaction)
-                    || self.account_transitions.len() >= 128
+                    || self.account_deletions.contains_key(&intent.transaction)
+                    || self.account_transitions.len() + self.account_deletions.len() >= 128
+                    || self
+                        .account_deletions
+                        .values()
+                        .any(|v| v.phase != Phase::Complete)
                     || self
                         .account_transitions
                         .values()
@@ -407,10 +514,16 @@ impl Catalog {
                 expected_generation,
                 enabled,
             } => {
-                if self.account_transitions.values().any(|transition| {
-                    transition.intent.principal == *principal
-                        && transition.phase != crate::account_transition::Phase::Complete
-                }) {
+                if self.deleted_principals.contains(principal)
+                    || self.account_deletions.values().any(|transition| {
+                        transition.intent.principal == *principal
+                            && transition.phase != crate::account_transition::Phase::Complete
+                    })
+                    || self.account_transitions.values().any(|transition| {
+                        transition.intent.principal == *principal
+                            && transition.phase != crate::account_transition::Phase::Complete
+                    })
+                {
                     return Err("pending account transaction fences principal changes".into());
                 }
                 let record = self
@@ -531,6 +644,138 @@ impl Catalog {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn deletion_fences_immediately_and_completed_tombstones_cannot_be_reenabled() {
+        use crate::account_transition::Phase;
+        let mut catalog = Catalog::initial();
+        let registry = serde_json::from_value(serde_json::json!({"schema_version":1,
+            "installation":"ab".repeat(32),"principals":[
+                {"id":"cd".repeat(32),"generation":1,"login":"human","uid":1001,"enabled":true},
+                {"id":"ef".repeat(32),"generation":1,"login":"otherhuman","uid":1002,"enabled":true}]})).unwrap();
+        catalog
+            .apply(&Command::AdoptPrincipals { registry })
+            .unwrap();
+        catalog
+            .apply(&Command::CheckpointAccounts {
+                commitments: BTreeMap::from([
+                    ("cd".repeat(32), "12".repeat(32)),
+                    ("ef".repeat(32), "34".repeat(32)),
+                ]),
+            })
+            .unwrap();
+        let baseline = catalog.principal_registry.clone();
+        let intent = crate::account_deletion::Intent {
+            transaction: "delete-one".into(),
+            installation: "ab".repeat(32),
+            principal: "ef".repeat(32),
+            expected_generation: 1,
+            credential_before: "34".repeat(32),
+            files: crate::account_deletion::FILES
+                .into_iter()
+                .map(|name| {
+                    (
+                        name.into(),
+                        crate::account_deletion::Change {
+                            before: "56".repeat(32),
+                            after: "78".repeat(32),
+                            mode: 0o600,
+                            gid: 0,
+                        },
+                    )
+                })
+                .collect(),
+        };
+        let prepare = Command::PrepareAccountDeletion {
+            intent: intent.clone(),
+        };
+        let complete = Command::CompleteAccountDeletion {
+            transaction: "delete-one".into(),
+        };
+        let permit = Command::PermitAccountDeletion {
+            transaction: "delete-one".into(),
+        };
+        let old = catalog.clone();
+        for field in ["admin", "installation", "generation", "credential"] {
+            let mut changed = intent.clone();
+            match field {
+                "admin" => changed.principal = "cd".repeat(32),
+                "installation" => changed.installation = "fe".repeat(32),
+                "generation" => changed.expected_generation = 2,
+                "credential" => changed.credential_before = "fe".repeat(32),
+                _ => unreachable!(),
+            }
+            assert!(catalog
+                .apply(&Command::PrepareAccountDeletion { intent: changed })
+                .is_err());
+            assert_eq!(catalog, old);
+        }
+        assert!(catalog.apply(&complete).is_err());
+        catalog.apply(&prepare).unwrap();
+        assert_eq!(
+            catalog.principal_states[&intent.principal],
+            PrincipalState {
+                generation: 2,
+                enabled: false
+            }
+        );
+        assert!(catalog.deleted_principals.is_empty());
+        assert_eq!(
+            catalog.account_deletions["delete-one"].phase,
+            Phase::Prepared
+        );
+        let advance = Command::AdvancePrincipal {
+            principal: intent.principal.clone(),
+            expected_generation: 2,
+            enabled: true,
+        };
+        assert!(catalog.apply(&advance).is_err());
+        assert!(catalog.apply(&prepare).is_err());
+        assert!(catalog.apply(&complete).is_err());
+        catalog.apply(&permit).unwrap();
+        assert!(catalog.apply(&permit).is_err());
+        catalog.apply(&complete).unwrap();
+        assert_eq!(
+            catalog.account_deletions["delete-one"].phase,
+            Phase::Complete
+        );
+        assert!(catalog.deleted_principals.contains(&intent.principal));
+        assert_eq!(catalog.principal_registry, baseline);
+        assert_eq!(
+            catalog.account_commitments[&intent.principal],
+            intent.credential_before
+        );
+        assert!(catalog.apply(&advance).is_err());
+        let local = baseline.as_ref().unwrap().identity(
+            baseline
+                .as_ref()
+                .unwrap()
+                .principal(&intent.principal)
+                .unwrap(),
+        );
+        assert!(catalog.resolve_principal(&local).is_err());
+        let mut another = intent.clone();
+        another.transaction = "delete-again".into();
+        another.expected_generation = 2;
+        assert!(catalog
+            .apply(&Command::PrepareAccountDeletion { intent: another })
+            .is_err());
+        let lock = crate::account_transition::Intent {
+            kind: None,
+            transaction: "revive".into(),
+            installation: intent.installation,
+            principal: intent.principal,
+            expected_generation: 2,
+            locked: false,
+            passwd_sha256: "12".repeat(32),
+            shadow_before_sha256: "34".repeat(32),
+            shadow_after_sha256: "56".repeat(32),
+            credential_before: "34".repeat(32),
+            credential_after: "78".repeat(32),
+        };
+        assert!(catalog
+            .apply(&Command::PrepareAccountLock { intent: lock })
+            .is_err());
+    }
     #[test]
     fn account_lock_phases_fence_generations_and_never_advance_credentials_early() {
         use crate::account_transition::{Intent, Phase};

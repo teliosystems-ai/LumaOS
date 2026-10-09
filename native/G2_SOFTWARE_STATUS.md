@@ -13,6 +13,35 @@ requirement.
 
 ## Current software inventory and work still required
 
+### Governed locked account creation
+
+Local maintenance now retains an exact new-account proposal under an owned
+governed Admin session, using hidden confirmed password entry and the verified
+distribution yescrypt adapter. The proposal reserves a fresh installation
+principal and a vacant private UID/GID without reusing historical names or UIDs.
+It preserves every original registry record and the installer recovery verifier.
+
+Reviewed preparation anchors the five-file manifest and disables the new
+principal. Separately reviewed permission performs no filesystem publication.
+Fresh transaction-scoped Admin continuations publish the private home first,
+then gshadow, group, shadow, passwd and the exact appended registry. Completion
+requires every approved publication and records the new credential commitment.
+The original installer registry remains historical authority; only the approved
+extension becomes current. Exact ordered prefixes and matching interrupted
+dispatch files can resume without overwriting conflicting evidence.
+
+Creation deliberately leaves the new account locked and governed-disabled, with
+password aging unset at day zero. The catalog records a mandatory aging fence;
+ordinary enable/unlock commands cannot bypass it. Protected UTC establishment
+and subsequent governed activation are still required for a usable account.
+This is not complete account lifecycle, original Admin credential recovery,
+generic registry replacement, home-data retirement or installed qualification.
+The [creation evidence](evidence/G2_ACCOUNT_CREATION_TRANSACTIONS_2026-10-09.md)
+records 134 targeted Rust passes, the 295-pass/two-existing-skip native regression
+and fourteen new real-PAM/software-TPM creation cases against the final frozen
+source. It also records interruption/retention and permission hardening, earlier
+attempts and the unexecuted qualification.
+
 ### Governed non Admin account deletion
 
 Local maintenance now has a reviewed deletion path for existing installed
@@ -32,9 +61,11 @@ registry and governed tombstones; ordinary principal advancement or credential
 transitions cannot revive them. Home data is retained, not erased. General socket
 requests still cannot transport identity mutations or write the identity mount.
 
-This does not implement account creation, original Admin credential recovery,
-general registry publication, data erasure, process termination or damaged
-authority reconstruction. Installed and physical qualification remain open.
+This deletion path does not implement creation; the separate locked-creation
+composition above publishes an exact approved registry extension. Original Admin
+credential recovery, generic registry publication, data erasure, process
+termination and damaged-authority reconstruction remain open, alongside installed
+and physical qualification.
 The [deletion evidence](evidence/G2_ACCOUNT_DELETION_TRANSACTIONS_2026-10-09.md)
 records the isolated evaluation and its limits.
 
@@ -109,7 +140,7 @@ and reports `account_credentials_checkpointed: false` until explicit adoption.
 This is a durable account-integrity prerequisite, not an account mutation or
 complete account lifecycle. The existing non-Admin lock/unlock composition above
 now provides approved commitment advancement for that narrow transaction.
-Creation, original Admin account recovery and broader identity transactions
+Usable new-account activation, original Admin account recovery and broader identity transactions
 remain open. Existing non-Admin password replacement uses the same checkpointed
 commitment boundary through its distinct reviewed transaction.
 
@@ -126,7 +157,7 @@ tests or enabling an unconditional refusal path:
 
 | Bundle | Remaining software implementation |
 | --- | --- |
-| Account lifecycle | Governed creation; original Admin password/lock recovery; general registry and multi-file identity publication/reconciliation; protected password-aging renewal. Existing non-Admin lock/unlock, password replacement and four-file deletion have native source paths. Deletion retains home data and does not terminate existing Unix processes; governed retirement, installed security and interruption qualification remain required. |
+| Account lifecycle | Protected password-aging establishment and activation for newly created locked accounts; original Admin password/lock recovery; generic registry lifecycle and identity reconciliation; password-aging renewal. Existing non-Admin lock/unlock, password replacement, four-file deletion and five-file locked creation have native source paths. Deletion retains home data and does not terminate existing Unix processes; governed retirement, installed security and interruption qualification remain required. |
 | Protected UTC | Approved executable/configuration admission, confined producer/keeper deployment, reviewed independent seed, authenticated local acquisition/query control, protected history delivery and explicit recovery. |
 | Grants and admission | Finite current-generation role assignments, current UTC checks, principal-bound folder/effect/resource/inference grants and preparation/final-dispatch checks. |
 | Workflow and recovery | Generic governed worker/DAG admission, all inference consumers, export/deletion/retention authorization, damaged-authority reconstruction, multiworker/device adapters and integrated interruption paths. |

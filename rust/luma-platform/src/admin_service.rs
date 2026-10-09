@@ -201,6 +201,9 @@ fn validate(request: &Request) -> Result<()> {
                 | CatalogCommand::CheckpointAccounts { .. }
                 | CatalogCommand::PrepareAccountLock { .. }
                 | CatalogCommand::PrepareAccountDeletion { .. }
+                | CatalogCommand::PrepareAccountCreation { .. }
+                | CatalogCommand::PermitAccountCreation { .. }
+                | CatalogCommand::CompleteAccountCreation { .. }
                 | CatalogCommand::PermitAccountDeletion { .. }
                 | CatalogCommand::CompleteAccountDeletion { .. }
                 | CatalogCommand::PermitAccountPublication { .. }
@@ -780,6 +783,48 @@ mod tests {
         };
         assert!(validate(&supplied).is_err());
         for command in [
+            CatalogCommand::PrepareAccountCreation {
+                intent: {
+                    let registry: crate::principal::Registry=serde_json::from_value(serde_json::json!({
+                        "schema_version":1,"installation":"ab".repeat(32),"principals":[{
+                        "id":"cd".repeat(32),"generation":1,"login":"human","uid":1001,"enabled":true}]})).unwrap();
+                    let principal = crate::principal::Principal {
+                        id: "ef".repeat(32),
+                        generation: 1,
+                        login: "newhuman".into(),
+                        uid: 1000,
+                        enabled: true,
+                    };
+                    crate::account_creation::Intent {
+                        transaction: "create-one".into(),
+                        registry_after: registry.append_account(&principal).unwrap(),
+                        registry_before: registry,
+                        principal,
+                        home_nonce: "12".repeat(32),
+                        credential_after: "34".repeat(32),
+                        files: crate::account_creation::FILES
+                            .into_iter()
+                            .map(|name| {
+                                (
+                                    name.into(),
+                                    crate::account_deletion::Change {
+                                        before: "56".repeat(32),
+                                        after: "78".repeat(32),
+                                        mode: 0o600,
+                                        gid: 0,
+                                    },
+                                )
+                            })
+                            .collect(),
+                    }
+                },
+            },
+            CatalogCommand::PermitAccountCreation {
+                transaction: "create-one".into(),
+            },
+            CatalogCommand::CompleteAccountCreation {
+                transaction: "create-one".into(),
+            },
             CatalogCommand::PrepareAccountDeletion {
                 intent: crate::account_deletion::Intent {
                     transaction: "delete-one".into(),

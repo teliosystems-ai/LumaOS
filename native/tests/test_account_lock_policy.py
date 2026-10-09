@@ -47,8 +47,10 @@ class AccountLockPolicyTests(unittest.TestCase):
             self.assertIn(marker, publication)
         engine = source.split('fn execute_catalog_authorized_at<')[1].split('enum AccountBoundary')[0]
         self.assertIn('intent.transaction != request', engine)
-        self.assertEqual(engine.count('boundary.recheck()?'), 4)
+        self.assertEqual(engine.count('boundary.recheck()?'), 6)
+        self.assertEqual(engine.count('if let Some(boundary) = &account_boundary'), 2)
         self.assertEqual(engine.count('if let Some(boundary) = &deletion_boundary'), 2)
+        self.assertEqual(engine.count('if let Some(boundary) = &creation_boundary'), 2)
         self.assertLess(engine.index('approved != digest'), engine.index('guard.stage()?'))
 
     def test_pending_transition_is_not_credential_or_principal_enable_authority(self):

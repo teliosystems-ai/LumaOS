@@ -853,8 +853,8 @@ lock/unlock; already-published continuation does not rename again.
 The general socket rejects password intents and cannot write the identity mount.
 The image declares libcrypt build/runtime dependencies and narrowly enumerated
 local maintenance AppArmor paths; this is not enforced-image qualification.
-Original Admin password/lock recovery, creation, general multi-file registry/group
-publication, password-aging renewal, governed proposal retirement and damaged
+Original Admin password/lock recovery, usable new-account activation, generic
+multi-file registry/group lifecycle, password-aging renewal, governed proposal retirement and damaged
 authority reconstruction remain separate implementations. Requirement #1 is
 still open. See the [password evidence](evidence/G2_ACCOUNT_PASSWORD_TRANSACTIONS_2026-10-09.md)
 for the frozen source, executed checks and limits.
@@ -909,15 +909,79 @@ tombstone reserves its ID, login and UID against ordinary re-enablement. Home
 data is retained and existing Unix processes are not forcibly terminated. This
 is neither home-data erasure nor generic worker/resource-drain integration.
 
-Only one incomplete credential/deletion transaction is admitted globally, with
-128 retained catalog transactions across both types. Deletion staging additionally
+Only one incomplete credential/deletion/creation transaction is admitted globally,
+with 128 retained catalog transactions across all three types. Deletion staging additionally
 counts complete and interrupted proposal directories against a 128-entry ceiling;
 exhaustion refuses without removing evidence. The general socket rejects all
 deletion phases and retains its read-only identity mount. AppArmor source
 enumerates only the fixed local file and staging paths; enforcement is unqualified.
-Account creation, original Admin credential recovery, general registry mutation,
+Usable new-account activation, original Admin credential recovery, generic registry mutation,
 governed retirement and damaged-authority reconstruction remain open. See the
 [deletion evidence](evidence/G2_ACCOUNT_DELETION_TRANSACTIONS_2026-10-09.md).
+
+### New locked account creation
+
+Use this only on a disposable installed Luma environment with intact enrolled
+TPM history, principal adoption and checkpointed account credentials. `LOGIN`
+is the original Admin. `NAME` is a new non-Admin account name. This path accepts
+no caller-supplied UID, registry, home path, password hash or trusted timestamp.
+
+```text
+sudo luma-platform admin-account-create LOGIN NAME TRANSACTION
+sudo luma-platform admin-account-create LOGIN NAME TRANSACTION --commit REVIEW-SHA256
+sudo luma-platform admin-account-create-permit LOGIN TRANSACTION PERMIT-REQUEST
+sudo luma-platform admin-account-create-permit LOGIN TRANSACTION PERMIT-REQUEST --commit REVIEW-SHA256
+sudo luma-platform admin-account-create-file LOGIN TRANSACTION home
+sudo luma-platform admin-account-create-file LOGIN TRANSACTION gshadow
+sudo luma-platform admin-account-create-file LOGIN TRANSACTION group
+sudo luma-platform admin-account-create-file LOGIN TRANSACTION shadow
+sudo luma-platform admin-account-create-file LOGIN TRANSACTION passwd
+sudo luma-platform admin-account-create-file LOGIN TRANSACTION registry
+sudo luma-platform admin-account-create-complete LOGIN TRANSACTION COMPLETE-REQUEST
+sudo luma-platform admin-account-create-complete LOGIN TRANSACTION COMPLETE-REQUEST --commit REVIEW-SHA256
+```
+
+First inspection asks for a hidden confirmed password, then authenticates the
+governed Admin and retains the exact salt, private before/after evidence and home
+marker. It does not create a visible home, publish account files or extend TPM
+history. Later review and commit reuse that proposal rather than hashing again.
+Passwords and hashes never enter arguments, the environment or returned JSON.
+
+Preparation anchors the intent and fences the new installation principal at
+generation one. Permission is separately reviewed and does not publish anything.
+Each file command consumes a fresh owned Admin continuation scoped to this
+transaction and current history. The empty mode-0700 home is published without
+replacement before group/credential files; the registry is published last. The
+new account has its own vacant UID/GID and no privileged group memberships.
+Existing registry identities and their names/UIDs, including deleted accounts,
+cannot be reassigned. Completion advances only the exact approved registry
+extension and credential commitment, preserving the original installer snapshot.
+
+All original sources, private evidence, directories and migration-lock handles
+remain pinned through dispatch. Exact ordered publication and matching-prefix
+dispatch files can resume explicitly after a restart. Conflicting files, replaced
+handles, unsafe permissions and out-of-order changes refuse without truncation
+or cleanup. An uncertain TPM reply requires exact reviewed journal reconciliation
+before continuation. One incomplete transaction and the combined 128-transaction
+catalog ceiling cover creation, deletion and existing credential changes.
+Creation proposal and interrupted staging directories additionally share their
+own 128-entry ceiling; evidence is preserved on exhaustion.
+
+The new shadow credential remains locked with password age zero. Completion
+keeps the governed principal disabled and records `needs_password_aging`.
+Ordinary principal enablement, password replacement and lock/unlock cannot bypass
+this fence. Protected UTC password-aging establishment and explicit governed
+activation remain required; this transaction alone does not deliver a usable
+account. The host clock is not treated as trusted UTC.
+
+The general socket rejects all creation phases. Its strict read-only system
+mount has no writable identity, principal-registry or home exception. AppArmor
+source lists fixed local creation paths; enforcing installed-image qualification
+is still required. Original Admin password/lock recovery, governed home-data
+retirement and damaged-authority reconstruction remain open Requirement #1 work.
+The [creation evaluation](evidence/G2_ACCOUNT_CREATION_TRANSACTIONS_2026-10-09.md)
+records the frozen-source tests, real PAM/software-TPM cases, retained attempts
+and qualification limits.
 
 ### Governed session continuity
 

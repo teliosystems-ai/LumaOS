@@ -80,6 +80,26 @@ fn validate(registry: &Registry) -> Result<()> {
 }
 
 impl Registry {
+    pub(crate) fn append_account(&self, record: &Principal) -> Result<Self> {
+        if record.generation != 1
+            || !record.enabled
+            || record.uid == 1001
+            || crate::tpm::decode::<32>(&record.id)? == [0; 32]
+        {
+            return Err(
+                "new accounts require a fresh enabled installation identity at generation one"
+                    .into(),
+            );
+        }
+        let mut next = self.clone();
+        next.principals.push(record.clone());
+        next.validate()?;
+        if serde_json::to_vec(&next)?.len() > MAX_REGISTRY_BYTES as usize {
+            return Err("principal registry capacity exhausted".into());
+        }
+        Ok(next)
+    }
+
     pub(crate) fn recovery_verifier(&self) -> Option<&crate::admin_recovery::Verifier> {
         self.admin_recovery.as_ref()
     }
@@ -336,6 +356,21 @@ fn registry_observation(path: &Path) -> Result<(Registry, FilePin)> {
 
 fn registry(path: &Path) -> Result<Registry> {
     Ok(registry_observation(path)?.0)
+}
+
+pub(crate) fn registry_file(path: &Path) -> Result<(Vec<u8>, FilePin)> {
+    let (bytes, pin) = private_document(path, MAX_REGISTRY_BYTES)?;
+    let registry: Registry = serde_json::from_slice(&bytes)?;
+    registry.validate()?;
+    Ok((bytes, pin))
+}
+
+pub(crate) fn private_document(path: &Path, limit: u64) -> Result<(Vec<u8>, FilePin)> {
+    let mut pin = FilePin::open(path, limit, true, false)?;
+    let mut bytes = vec![0; pin.identity.length as usize];
+    pin.file.read_exact(&mut bytes)?;
+    pin.complete_read()?;
+    Ok((bytes, pin))
 }
 
 /// A pinned inert registry observation, not authentication or an authority token.

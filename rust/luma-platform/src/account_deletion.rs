@@ -670,7 +670,8 @@ impl Guard {
             || original.uid() != 0
             || original.nlink() != 1
             || original.len() > self.after[name].bytes().len() as u64
-            || !matches!(original.mode() & 0o777, 0o600 | 0o640 | 0o644)
+            || (original.mode() & 0o7777 != 0o600
+                && (original.mode() & 0o7777 != change.mode || original.gid() != change.gid))
             || (name.ends_with("shadow") && original.mode() & 0o007 != 0)
             || !same_file(&original, &fs::symlink_metadata(&next_path)?)
         {
@@ -813,6 +814,28 @@ mod tests {
         fn drop(&mut self) {
             fs::remove_dir_all(&self.0).unwrap();
         }
+    }
+
+    #[test]
+    fn interrupted_shadow_with_an_unapproved_reading_group_remains_untouched() {
+        let f = Fixture::new();
+        let guard = f.plan();
+        guard.stage().unwrap();
+        let prefix = &guard.after["shadow"].bytes()[..24];
+        let path = guard.path().join("shadow.next");
+        write_new(&path, prefix).unwrap();
+        let file = File::open(&path).unwrap();
+        assert_eq!(unsafe { libc::fchown(file.as_raw_fd(), 0, 77) }, 0);
+        file.set_permissions(fs::Permissions::from_mode(0o640))
+            .unwrap();
+        let metadata = file.metadata().unwrap();
+        assert!(guard.publish("shadow", || Ok(())).is_err());
+        assert!(same_file(&metadata, &file.metadata().unwrap()));
+        assert_eq!(
+            principal::account_file(&path, true).unwrap().0.bytes(),
+            prefix
+        );
+        guard.recheck().unwrap();
     }
 
     #[test]

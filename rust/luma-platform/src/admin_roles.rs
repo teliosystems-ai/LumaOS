@@ -45,6 +45,15 @@ pub(crate) enum Command {
     PrepareAccountDeletion {
         intent: crate::account_deletion::Intent,
     },
+    PrepareAccountCreation {
+        intent: crate::account_creation::Intent,
+    },
+    PermitAccountCreation {
+        transaction: String,
+    },
+    CompleteAccountCreation {
+        transaction: String,
+    },
     PermitAccountDeletion {
         transaction: String,
     },
@@ -86,6 +95,9 @@ impl Command {
             }
             Self::PrepareAccountLock { .. } => "admin.account.lock_prepare",
             Self::PrepareAccountDeletion { .. } => "admin.account.delete_prepare",
+            Self::PrepareAccountCreation { .. } => "admin.account.create_prepare",
+            Self::PermitAccountCreation { .. } => "admin.account.create_permit",
+            Self::CompleteAccountCreation { .. } => "admin.account.create_complete",
             Self::PermitAccountDeletion { .. } => "admin.account.delete_permit",
             Self::CompleteAccountDeletion { .. } => "admin.account.delete_complete",
             Self::PermitAccountPublication { .. } => "admin.account.lock_publish",
@@ -100,12 +112,20 @@ impl Command {
         match self {
             Self::PrepareAccountLock { intent } => intent.validate(),
             Self::PrepareAccountDeletion { intent } => intent.validate(),
+            Self::PrepareAccountCreation { intent } => intent.validate(),
             Self::PermitAccountPublication { transaction }
             | Self::CompleteAccountLock { transaction }
             | Self::PermitAccountDeletion { transaction }
             | Self::CompleteAccountDeletion { transaction } => {
                 if !identifier(transaction) || transaction == "admin-bootstrap-v1" {
                     return Err("invalid account transition identifier".into());
+                }
+                Ok(())
+            }
+            Self::PermitAccountCreation { transaction }
+            | Self::CompleteAccountCreation { transaction } => {
+                if !identifier(transaction) || transaction == "admin-bootstrap-v1" {
+                    return Err("invalid account creation identifier".into());
                 }
                 Ok(())
             }
@@ -187,6 +207,12 @@ pub(crate) struct Catalog {
     pub roles: BTreeMap<String, Role>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub principal_registry: Option<crate::principal::Registry>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub current_registry: Option<crate::principal::Registry>,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub account_creations: BTreeMap<String, crate::account_creation::Transition>,
+    #[serde(skip_serializing_if = "BTreeSet::is_empty")]
+    pub needs_password_aging: BTreeSet<String>,
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub principal_states: BTreeMap<String, PrincipalState>,
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
@@ -214,6 +240,9 @@ impl Catalog {
             activities: CONTROL.iter().map(|v| (*v).into()).collect(),
             roles: BTreeMap::new(),
             principal_registry: None,
+            current_registry: None,
+            account_creations: BTreeMap::new(),
+            needs_password_aging: BTreeSet::new(),
             principal_states: BTreeMap::new(),
             account_commitments: BTreeMap::new(),
             account_transitions: BTreeMap::new(),
@@ -221,6 +250,31 @@ impl Catalog {
             deleted_principals: BTreeSet::new(),
             admin_recovery: None,
         }
+    }
+
+    pub(crate) fn registry(&self) -> Result<&crate::principal::Registry> {
+        self.current_registry
+            .as_ref()
+            .or(self.principal_registry.as_ref())
+            .ok_or_else(|| "explicit principal adoption required".into())
+    }
+
+    pub(crate) fn accepts_registry(&self, registry: &crate::principal::Registry) -> Result<bool> {
+        Ok(self.registry()? == registry
+            || self.account_creations.values().any(|creation| {
+                creation.phase == crate::account_transition::Phase::PublicationPermitted
+                    && &creation.intent.registry_after == registry
+            }))
+    }
+
+    fn creation_pending(&self) -> bool {
+        self.account_creations
+            .values()
+            .any(|v| v.phase != crate::account_transition::Phase::Complete)
+    }
+
+    fn transaction_capacity(&self) -> usize {
+        self.account_creations.len() + self.account_deletions.len() + self.account_transitions.len()
     }
 
     /// The owning adapter must independently authenticate Admin, bind the
@@ -232,12 +286,84 @@ impl Catalog {
             .checked_add(1)
             .ok_or("Admin catalog version exhausted")?;
         match command {
+            Command::PrepareAccountCreation { intent } => {
+                use crate::account_transition::Phase;
+                if self.registry()? != &intent.registry_before
+                    || self.account_commitments.is_empty()
+                    || self.principal_states.contains_key(&intent.principal.id)
+                    || self.account_commitments.contains_key(&intent.principal.id)
+                    || self.account_creations.contains_key(&intent.transaction)
+                    || self.account_deletions.contains_key(&intent.transaction)
+                    || self.account_transitions.contains_key(&intent.transaction)
+                    || self.transaction_capacity() >= 128
+                    || self.creation_pending()
+                    || self
+                        .account_deletions
+                        .values()
+                        .any(|v| v.phase != Phase::Complete)
+                    || self
+                        .account_transitions
+                        .values()
+                        .any(|v| v.phase != Phase::Complete)
+                {
+                    return Err("creation conflicts with checkpointed history or pending account publication".into());
+                }
+                self.principal_states.insert(
+                    intent.principal.id.clone(),
+                    PrincipalState {
+                        generation: 1,
+                        enabled: false,
+                    },
+                );
+                self.account_creations.insert(
+                    intent.transaction.clone(),
+                    crate::account_creation::Transition {
+                        intent: intent.clone(),
+                        phase: Phase::Prepared,
+                    },
+                );
+            }
+            Command::PermitAccountCreation { transaction } => {
+                let creation = self
+                    .account_creations
+                    .get_mut(transaction)
+                    .ok_or("no anchored creation")?;
+                if creation.phase != crate::account_transition::Phase::Prepared {
+                    return Err("creation permission requires its exact prepared phase".into());
+                }
+                creation.phase = crate::account_transition::Phase::PublicationPermitted;
+            }
+            Command::CompleteAccountCreation { transaction } => {
+                use crate::account_transition::Phase;
+                let creation = self
+                    .account_creations
+                    .get(transaction)
+                    .ok_or("no anchored creation")?;
+                if creation.phase != Phase::PublicationPermitted
+                    || self.registry()? != &creation.intent.registry_before
+                    || self.principal_states.get(&creation.intent.principal.id)
+                        != Some(&PrincipalState {
+                            generation: 1,
+                            enabled: false,
+                        })
+                {
+                    return Err(
+                        "creation completion requires its exact permitted fenced generation".into(),
+                    );
+                }
+                let intent = creation.intent.clone();
+                self.current_registry = Some(intent.registry_after);
+                self.account_commitments
+                    .insert(intent.principal.id.clone(), intent.credential_after);
+                self.needs_password_aging.insert(intent.principal.id);
+                self.account_creations
+                    .get_mut(transaction)
+                    .ok_or("creation disappeared")?
+                    .phase = Phase::Complete;
+            }
             Command::PrepareAccountDeletion { intent } => {
                 use crate::account_transition::Phase;
-                let registry = self
-                    .principal_registry
-                    .as_ref()
-                    .ok_or("explicit principal adoption required")?;
+                let registry = self.registry()?;
                 let record = registry
                     .principal(&intent.principal)
                     .filter(|record| record.enabled && record.uid != 1001)
@@ -253,7 +379,9 @@ impl Catalog {
                         != Some(&intent.credential_before)
                     || self.account_deletions.contains_key(&intent.transaction)
                     || self.account_transitions.contains_key(&intent.transaction)
-                    || self.account_deletions.len() + self.account_transitions.len() >= 128
+                    || self.transaction_capacity() >= 128
+                    || self.creation_pending()
+                    || self.account_creations.contains_key(&intent.transaction)
                     || self
                         .account_transitions
                         .values()
@@ -314,10 +442,7 @@ impl Catalog {
             }
             Command::PrepareAccountLock { intent } => {
                 use crate::account_transition::{Phase, Transition};
-                let registry = self
-                    .principal_registry
-                    .as_ref()
-                    .ok_or("explicit principal adoption required")?;
+                let registry = self.registry()?;
                 let principal = registry
                     .principal(&intent.principal)
                     .filter(|record| record.enabled && record.uid != 1001)
@@ -336,13 +461,16 @@ impl Catalog {
                     return Err("password changes cannot implicitly enable a disabled principal; use governed lock/unlock".into());
                 }
                 if registry.installation() != intent.installation
+                    || (!intent.locked && self.needs_password_aging.contains(&intent.principal))
                     || self.deleted_principals.contains(&intent.principal)
                     || generation != intent.expected_generation
                     || self.account_commitments.get(&intent.principal)
                         != Some(&intent.credential_before)
                     || self.account_transitions.contains_key(&intent.transaction)
                     || self.account_deletions.contains_key(&intent.transaction)
-                    || self.account_transitions.len() + self.account_deletions.len() >= 128
+                    || self.transaction_capacity() >= 128
+                    || self.creation_pending()
+                    || self.account_creations.contains_key(&intent.transaction)
                     || self
                         .account_deletions
                         .values()
@@ -416,10 +544,7 @@ impl Catalog {
                 current.phase = Phase::Complete;
             }
             Command::CheckpointAccounts { commitments } => {
-                let registry = self
-                    .principal_registry
-                    .as_ref()
-                    .ok_or("explicit principal adoption required before account checkpoint")?;
+                let registry = self.registry()?;
                 let expected: BTreeSet<_> = registry
                     .principals()
                     .iter()
@@ -515,6 +640,11 @@ impl Catalog {
                 enabled,
             } => {
                 if self.deleted_principals.contains(principal)
+                    || (*enabled && self.needs_password_aging.contains(principal))
+                    || self.account_creations.values().any(|transition| {
+                        transition.intent.principal.id == *principal
+                            && transition.phase != crate::account_transition::Phase::Complete
+                    })
                     || self.account_deletions.values().any(|transition| {
                         transition.intent.principal == *principal
                             && transition.phase != crate::account_transition::Phase::Complete
@@ -527,9 +657,7 @@ impl Catalog {
                     return Err("pending account transaction fences principal changes".into());
                 }
                 let record = self
-                    .principal_registry
-                    .as_ref()
-                    .ok_or("explicit principal adoption required")?
+                    .registry()?
                     .principal(principal)
                     .ok_or("unknown adopted principal")?;
                 if record.uid == 1001 || !record.enabled {
@@ -609,10 +737,7 @@ impl Catalog {
     /// Resolve an inert local identity against adopted history. This is not
     /// authentication; the owning session separately requires live genuine PAM.
     pub(crate) fn resolve_principal(&self, local: &serde_json::Value) -> Result<serde_json::Value> {
-        let registry = self
-            .principal_registry
-            .as_ref()
-            .ok_or("explicit principal adoption required")?;
+        let registry = self.registry()?;
         let name = local["login"]
             .as_str()
             .ok_or("missing local principal login")?;

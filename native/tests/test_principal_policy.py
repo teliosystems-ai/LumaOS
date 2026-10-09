@@ -126,8 +126,12 @@ class PrincipalPackagingTests(unittest.TestCase):
         self.assertIn('self.lifetime.observe', projection)
         self.assertEqual(projection.count('self.binding.identity()?'), 2)
         profile = (ROOT / 'native/image/overlay/etc/apparmor.d/luma-admin').read_text()
-        self.assertIn('/var/lib/luma-os/principals/registry.json r,', profile)
-        self.assertNotIn('/var/lib/luma-os/principals/registry.json rw', profile)
+        self.assertIn('/var/lib/luma-os/principals/registry.json rw,', profile)
+        service_unit = (ROOT / 'native/image/overlay/etc/systemd/system/luma-admin.service').read_text()
+        self.assertIn('ProtectSystem=strict', service_unit)
+        writable = service_unit.split('ReadWritePaths=', 1)[1].split('\n', 1)[0]
+        self.assertNotIn('/var/lib/luma-os/principals', writable)
+        self.assertNotIn('/var/lib/luma-os/identity', writable)
 
     def test_principal_checkpoint_is_explicit_fixed_source_and_semantic_replay_guarded(self):
         governance = (ROOT / 'rust/luma-platform/src/admin_governance.rs').read_text().split('\n#[cfg(test)]\nfn execute_catalog', 1)[0]

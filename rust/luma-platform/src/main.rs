@@ -1,4 +1,5 @@
 //! Native Linux platform boundary. No model-provided command or shell execution.
+mod account_creation;
 mod account_deletion;
 mod account_password;
 mod account_transition;
@@ -141,6 +142,12 @@ fn dispatch() -> Result<()> {
             admin_governance::checkpoint_accounts(&args[1], &args[2], Some(&args[4]))
         }
         Some("admin-account-password") => admin_governance::account_password_command(&args),
+        Some(
+            "admin-account-create"
+            | "admin-account-create-permit"
+            | "admin-account-create-file"
+            | "admin-account-create-complete",
+        ) => admin_governance::account_creation_command(&args),
         Some(
             "admin-account-delete"
             | "admin-account-delete-permit"
@@ -374,6 +381,7 @@ fn dispatch() -> Result<()> {
             println!("admin-account-lock LOGIN TARGET TRANSACTION lock|unlock [--commit REVIEW-SHA256]: prepare a reviewed existing non-Admin account lock transition, advancing and fencing its generation. Follow with separately reviewed admin-account-publish LOGIN TRANSACTION REQUEST and admin-account-complete LOGIN TRANSACTION REQUEST; both accept [--commit REVIEW-SHA256]. Interrupted phases require exact explicit continuation; no root bypass, password/hash input, reset or automatic retry.");
             println!("admin-account-password LOGIN TARGET TRANSACTION [--commit REVIEW-SHA256]: locally enter and confirm a new non-Admin password without echo; authenticate the governed Admin to retain a private yescrypt proposal. Commit the exact review digest, then use separately reviewed admin-account-publish and admin-account-complete. Existing lock and aging fields are preserved; no secret/hash arguments, Admin password reset, implicit unlock or automatic recovery.");
             println!("admin-account-delete LOGIN TARGET TRANSACTION [--commit REVIEW-SHA256]: prepare a reviewed non-Admin deletion and fence its generation. Review and commit admin-account-delete-permit LOGIN TRANSACTION REQUEST. Then authenticate afresh for each admin-account-delete-file LOGIN TRANSACTION FILE in order shadow, gshadow, group, passwd. Review and commit admin-account-delete-complete LOGIN TRANSACTION REQUEST. Exact partial publication can resume; IDs/UIDs and private evidence remain reserved, home data is not removed, no root bypass or automatic rollback.");
+            println!("admin-account-create LOGIN NAME TRANSACTION [--commit REVIEW-SHA256]: enter and confirm a hidden password to retain an exact locked-account proposal. Review and commit admin-account-create-permit LOGIN TRANSACTION REQUEST. Authenticate afresh for each admin-account-create-file LOGIN TRANSACTION FILE in order home, gshadow, group, shadow, passwd, registry. Review and commit admin-account-create-complete LOGIN TRANSACTION REQUEST. Installation history is preserved; protected password aging is required before activation. No password/hash argument or automatic enablement.");
             println!("admin-role-define LOGIN REQUEST ROLE EXPECTED-VERSION ACTIVITY... [--commit REVIEW-SHA256]: finite registered activities only; version 0 creates, the exact current version updates. Defines no assignment or resource grant.");
             println!("Install requires local TPM2 admission before any disk write. admin-install-check is read-only and does not enroll Admin; explicit checkpoint enrollment remains separate from product Admin activation.");
             println!("Maintenance: staging-clean | model-clean (root only; preserves active operations and unknown files).");

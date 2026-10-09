@@ -15,8 +15,13 @@ existing non-Admin installation principal before publishing its four identity
 files through separately owned fresh Admin continuations. Exact partial
 publication is resumable; its identity remains reserved and disabled. See the
 [deletion evidence](evidence/G2_ACCOUNT_DELETION_TRANSACTIONS_2026-10-09.md).
-This does not close account creation, original Admin password recovery, general
-registry/multi-file identity transactions, protected UTC delivery, finite grants or broader worker/workflow
+Locked account creation now has a separate owned Admin composition for home and
+five-file publication. It preserves original installation history, reserves
+historical names and UIDs, and cannot enable the new principal before protected
+password-aging establishment. The [creation evaluation](evidence/G2_ACCOUNT_CREATION_TRANSACTIONS_2026-10-09.md)
+records the final isolated checks and their limits. This does not close usable-account activation,
+original Admin password recovery, generic registry/identity lifecycle,
+protected UTC delivery, finite grants or broader worker/workflow
 admission and damaged-authority recovery.
 
 ## Implemented native boundary

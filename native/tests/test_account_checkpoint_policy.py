@@ -60,7 +60,10 @@ class AccountCheckpointPolicyTests(unittest.TestCase):
         source = (ROOT / 'rust/luma-platform/src/admin_roles.rs').read_text()
         self.assertIn('#[serde(skip_serializing_if = "BTreeMap::is_empty")]\n    pub account_commitments', source)
         checkpoint = source.split('Command::CheckpointAccounts { commitments } =>')[1].split('Command::RecoverAdmin')[0]
-        self.assertIn('explicit principal adoption required', checkpoint)
+        self.assertIn('let registry = self.registry()?;', checkpoint)
+        registry = source.split('pub(crate) fn registry(')[1].split('pub(crate) fn accepts_registry(')[0]
+        self.assertIn('self.principal_registry.as_ref()', registry)
+        self.assertIn('explicit principal adoption required', registry)
         self.assertIn('if &self.account_commitments == commitments', checkpoint)
         self.assertIn('lifecycle reconciliation required', checkpoint)
         self.assertNotIn('write_atomic', checkpoint)

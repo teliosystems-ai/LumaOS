@@ -350,9 +350,9 @@ impl<'a> Context<'a> {
                 );
             }
         }
-        if let Some(anchored) = &catalog.principal_registry {
+        if catalog.principal_registry.is_some() {
             let current = crate::principal::RegistryBinding::capture(self.registry_path)?;
-            if current.current()? != anchored {
+            if !catalog.accepts_registry(current.current()?)? {
                 return Err("installed principal registry differs from TPM-backed authority; preserve state".into());
             }
         }
@@ -1480,6 +1480,11 @@ fn execute_catalog_authorized_at<A: Checkpoint>(
             return Err("deletion preparation must bind its exact request".into());
         }
     }
+    if let Command::PrepareAccountCreation { intent } = command {
+        if intent.transaction != request {
+            return Err("creation preparation must bind its exact request".into());
+        }
+    }
     let snapshot = store.snapshot()?;
     match (command, &authority) {
         (Command::RecoverAdmin { .. }, CatalogAuthority::Recovery(attempt))
@@ -1550,7 +1555,11 @@ fn execute_catalog_authorized_at<A: Checkpoint>(
     };
     let account_boundary = account_boundary(&catalog, registry_path, identity_path, command)?;
     let deletion_boundary = deletion_boundary(&catalog, registry_path, identity_path, command)?;
+    let creation_boundary = creation_boundary(&catalog, registry_path, identity_path, command)?;
     let mut authenticate = || {
+        if let Some(boundary) = &creation_boundary {
+            boundary.recheck()?;
+        }
         if let Some(boundary) = &deletion_boundary {
             boundary.recheck()?;
         }
@@ -1564,6 +1573,9 @@ fn execute_catalog_authorized_at<A: Checkpoint>(
             binding.current()?;
         }
         let value = authenticate()?;
+        if let Some(boundary) = &creation_boundary {
+            boundary.recheck()?;
+        }
         if let Some(boundary) = &deletion_boundary {
             boundary.recheck()?;
         }
@@ -1739,6 +1751,58 @@ enum AccountBoundary {
     Published(crate::account_transition::Published),
 }
 
+fn creation_homes(identity_path: &Path) -> std::path::PathBuf {
+    #[cfg(test)]
+    if identity_path != Path::new(crate::principal::IDENTITY) {
+        return identity_path.join("creation-homes");
+    }
+    let _ = identity_path;
+    crate::account_creation::HOME.into()
+}
+
+fn creation_boundary(
+    catalog: &Catalog,
+    registry_path: &Path,
+    identity_path: &Path,
+    command: &Command,
+) -> Result<Option<crate::account_creation::Guard>> {
+    let intent = match command {
+        Command::PrepareAccountCreation { intent } => {
+            if catalog.account_creations.contains_key(&intent.transaction) {
+                return Ok(None);
+            }
+            intent
+        }
+        Command::PermitAccountCreation { transaction }
+        | Command::CompleteAccountCreation { transaction } => {
+            let creation = catalog
+                .account_creations
+                .get(transaction)
+                .ok_or("no anchored creation")?;
+            if creation.phase == crate::account_transition::Phase::Complete {
+                return Ok(None);
+            }
+            &creation.intent
+        }
+        _ => return Ok(None),
+    };
+    let guard = crate::account_creation::Guard::retained(
+        registry_path,
+        identity_path,
+        &creation_homes(identity_path),
+        intent,
+    )?;
+    if matches!(command, Command::PrepareAccountCreation { .. })
+        || matches!(command,Command::PermitAccountCreation {transaction} if catalog.account_creations[transaction].phase==crate::account_transition::Phase::Prepared)
+    {
+        guard.unpublished()?;
+    }
+    if matches!(command, Command::CompleteAccountCreation { .. }) {
+        guard.complete()?;
+    }
+    Ok(Some(guard))
+}
+
 fn deletion_boundary(
     catalog: &Catalog,
     registry_path: &Path,
@@ -1897,7 +1961,7 @@ impl<'a> RecoveryAttempt<'a> {
             return Err("explicit product Admin bootstrap required for recovery".into());
         }
         let catalog = context.events(&snapshot, None)?.0;
-        if catalog.principal_registry.as_ref() != Some(registry.current()?) {
+        if catalog.registry()? != registry.current()? {
             return Err("recovery requires unchanged explicitly adopted installer registry".into());
         }
         let writer = context.writer(&catalog)?;
@@ -2243,6 +2307,279 @@ fn password_proposal<A: Checkpoint>(
             Ok(Command::PrepareAccountLock { intent })
         },
     )
+}
+
+fn creation_proposal<A: Checkpoint>(
+    session: &PrincipalSession,
+    store: &mut Store<A>,
+    directory: &Path,
+    registry_path: &Path,
+    identity_path: &Path,
+    name: &str,
+    request: &str,
+    password: Option<&crate::account_password::Password>,
+) -> Result<Command> {
+    session.observe_store(
+        &mut PrincipalReader::admin_at(store, directory, registry_path, Some(request)),
+        |identity, store| {
+            let snapshot = store.snapshot()?;
+            let context = Context::load_at(directory, &snapshot.deployment, registry_path)?;
+            let catalog = context.events(&snapshot, Some(request))?.0;
+            if serde_json::to_value(context.writer(&catalog)?)? != *identity {
+                return Err("creation proposal differs from the governed Admin".into());
+            }
+            let homes = creation_homes(identity_path);
+            let intent = if let Some(creation) = catalog.account_creations.get(request) {
+                creation.intent.clone()
+            } else if let Some(intent) =
+                crate::account_creation::retained_intent(identity_path, request)?
+            {
+                crate::account_creation::Guard::retained(
+                    registry_path,
+                    identity_path,
+                    &homes,
+                    &intent,
+                )?
+                .unpublished()?;
+                let mut projected = catalog.clone();
+                projected.apply(&Command::PrepareAccountCreation {
+                    intent: intent.clone(),
+                })?;
+                intent
+            } else {
+                let hash = password
+                    .ok_or("new account creation requires local secret entry")?
+                    .hash()?;
+                let guard = crate::account_creation::Guard::new(
+                    registry_path,
+                    identity_path,
+                    &homes,
+                    name,
+                    request,
+                    &hash,
+                )?;
+                let mut projected = catalog.clone();
+                projected.apply(&Command::PrepareAccountCreation {
+                    intent: guard.intent.clone(),
+                })?;
+                guard.stage(|| {
+                    context.recheck(&mut || session.account.identity())?;
+                    let current = store.snapshot()?;
+                    if current.head != snapshot.head || current.deployment != snapshot.deployment {
+                        return Err("creation proposal authority changed before retention".into());
+                    }
+                    Ok(())
+                })?;
+                let intent = guard.intent.clone();
+                drop(guard);
+                crate::account_creation::Guard::retained(
+                    registry_path,
+                    identity_path,
+                    &homes,
+                    &intent,
+                )?
+                .unpublished()?;
+                intent
+            };
+            if intent.principal.login != name {
+                return Err("creation request belongs to another login".into());
+            }
+            context.recheck(&mut || session.account.identity())?;
+            Ok(Command::PrepareAccountCreation { intent })
+        },
+    )
+}
+
+struct CreationAttempt<'s> {
+    session: &'s PrincipalSession,
+    directory: std::path::PathBuf,
+    registry_path: std::path::PathBuf,
+    guard: crate::account_creation::Guard,
+    catalog: Catalog,
+    snapshot: Snapshot,
+}
+impl<'s> CreationAttempt<'s> {
+    fn prepare<A: Checkpoint>(
+        session: &'s PrincipalSession,
+        store: &mut Store<A>,
+        directory: &Path,
+        registry_path: &Path,
+        transaction: &str,
+    ) -> Result<Self> {
+        match &session.binding.purpose {
+            PrincipalPurpose::AdminCatalog {
+                candidate: Some(candidate),
+            } if candidate == transaction => (),
+            _ => {
+                return Err(
+                    "creation publication requires its exact owned Admin login scope".into(),
+                )
+            }
+        }
+        session.observe_store(
+            &mut PrincipalReader::admin_at(store, directory, registry_path, Some(transaction)),
+            |identity, store| {
+                let snapshot = store.snapshot()?;
+                let context = Context::load_at(directory, &snapshot.deployment, registry_path)?;
+                let (catalog, events) = context.events(&snapshot, None)?;
+                let creation = catalog
+                    .account_creations
+                    .get(transaction)
+                    .ok_or("no anchored creation")?;
+                if creation.phase == crate::account_transition::Phase::Prepared
+                    || !events.iter().any(|event| {
+                        event.command
+                            == Command::PermitAccountCreation {
+                                transaction: transaction.into(),
+                            }
+                    })
+                    || serde_json::to_value(context.writer(&catalog)?)? != *identity
+                {
+                    return Err(
+                        "creation publication lacks its exact committed governed permission".into(),
+                    );
+                }
+                let identity_path = &session.binding.identity_path;
+                let guard = crate::account_creation::Guard::retained(
+                    registry_path,
+                    identity_path,
+                    &creation_homes(identity_path),
+                    &creation.intent,
+                )?;
+                if creation.phase == crate::account_transition::Phase::Complete {
+                    guard.complete()?;
+                }
+                context.recheck(&mut || session.account.identity())?;
+                Ok(Self {
+                    session,
+                    directory: directory.into(),
+                    registry_path: registry_path.into(),
+                    guard,
+                    catalog,
+                    snapshot,
+                })
+            },
+        )
+    }
+    fn execute<A: Checkpoint>(self, store: &mut Store<A>, file: &str) -> Result<serde_json::Value> {
+        let context = Context::load_at(
+            &self.directory,
+            &self.snapshot.deployment,
+            &self.registry_path,
+        )?;
+        let written = self.guard.publish(file, || {
+            if self.session.fenced.get() {
+                return Err("creation continuation is fenced".into());
+            }
+            self.session.account.identity()?;
+            let current = store.snapshot()?;
+            current.clock.elapsed_since(self.session.clock.get())?;
+            self.session.clock.set(current.clock);
+            if current.head != self.snapshot.head
+                || current.deployment != self.snapshot.deployment
+                || context.events(&current, None)?.0 != self.catalog
+                || serde_json::to_value(context.writer(&self.catalog)?)?
+                    != self.session.binding.identity
+            {
+                return Err("creation authority changed before dispatch".into());
+            }
+            context.recheck(&mut || self.session.account.identity())
+        })?;
+        Ok(
+            serde_json::json!({"schema_version":1,"action":"admin-account-create-file",
+            "transaction":self.guard.intent.transaction,"file":file,"file_published":true,
+            "rename_performed":written,"replayed":!written,"principal_enabled":false,"gate_closing":false}),
+        )
+    }
+}
+impl Drop for CreationAttempt<'_> {
+    fn drop(&mut self) {
+        self.session.close();
+    }
+}
+
+pub fn account_creation_command(args: &[String]) -> Result<()> {
+    crate::require_root()?;
+    platform::require_installed()?;
+    let file_dispatch = args.first().map(String::as_str) == Some("admin-account-create-file");
+    let reviewed = if args.len() == 4 {
+        None
+    } else if !file_dispatch && args.len() == 6 && args[4] == "--commit" {
+        tpm::decode::<32>(&args[5])?;
+        Some(args[5].as_str())
+    } else {
+        return Err("invalid account creation arguments".into());
+    };
+    let request = if file_dispatch { &args[2] } else { &args[3] };
+    if !admin_roles::identifier(request)
+        || request == REQUEST
+        || (file_dispatch
+            && args[3] != "home"
+            && !crate::account_creation::FILES.contains(&args[3].as_str()))
+    {
+        return Err("invalid creation request or publication file".into());
+    }
+    let directory = Path::new(DIRECTORY);
+    let registry_path = Path::new(crate::principal::REGISTRY);
+    let identity_path = Path::new(crate::principal::IDENTITY);
+    let password = if args[0] == "admin-account-create" {
+        let retained = crate::account_creation::retained_intent(identity_path, request)?;
+        if reviewed.is_some() && retained.is_none() {
+            return Err("creation commit requires its retained inspected proposal".into());
+        }
+        if retained.is_none() {
+            Some(crate::account_password::Password::local_confirmed()?)
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+    let prepared = prepare_control(&args[1], Some(request))?;
+    let account = authentication::local(&args[1])?;
+    let mut store = Store::open(
+        tpm::LocalAnchor::installed()?,
+        &directory.join("journal.json"),
+    )?;
+    let session = prepared.issue(account, &mut store, directory, registry_path, Some(request))?;
+    if file_dispatch {
+        let report =
+            CreationAttempt::prepare(&session, &mut store, directory, registry_path, request)?
+                .execute(&mut store, &args[3])?;
+        println!("{}", serde_json::to_string(&report)?);
+        return Ok(());
+    }
+    let command = match args[0].as_str() {
+        "admin-account-create" => creation_proposal(
+            &session,
+            &mut store,
+            directory,
+            registry_path,
+            identity_path,
+            &args[2],
+            request,
+            password.as_ref(),
+        )?,
+        "admin-account-create-permit" => Command::PermitAccountCreation {
+            transaction: args[2].clone(),
+        },
+        "admin-account-create-complete" => Command::CompleteAccountCreation {
+            transaction: args[2].clone(),
+        },
+        _ => return Err("unknown creation command".into()),
+    };
+    let report = CatalogAttempt::prepare(
+        &session,
+        &mut store,
+        directory,
+        registry_path,
+        request,
+        &command,
+        None,
+    )?
+    .execute(&mut store, reviewed)?;
+    println!("{}", serde_json::to_string(&report)?);
+    Ok(())
 }
 
 pub fn account_password_command(args: &[String]) -> Result<()> {
@@ -3511,6 +3848,273 @@ pub(crate) fn fixture_account_checkpoint(
     fixture_account_lock(root, password);
     fixture_account_password(root, password);
     fixture_account_deletion(root, password);
+    fixture_account_creation(root, password);
+}
+
+#[cfg(test)]
+fn fixture_account_creation(root: &Path, password: &crate::sealed_credential::PrivateBuffer) {
+    use std::os::unix::fs::{DirBuilderExt, MetadataExt};
+    drop(fixture_store(root).unwrap());
+    let directory = root.join("admin");
+    let registry = root.join("registry.json");
+    let identity = Path::new("/etc");
+    let homes = creation_homes(identity);
+    fs::DirBuilder::new().mode(0o700).create(&homes).unwrap();
+    let baseline = crate::principal::RegistryBinding::capture(&registry)
+        .unwrap()
+        .current()
+        .unwrap()
+        .clone();
+    let old_admin = fixture_governed_session(root, "human", password).unwrap();
+    let secret = crate::account_password::Password::fixture(password).unwrap();
+    let propose = |typed: Option<&crate::account_password::Password>, review: Option<&str>| {
+        let mut store = fixture_store(root)?;
+        let login = AdminLogin::prepare_at(
+            &mut store,
+            &directory,
+            &registry,
+            "human",
+            Some("create-new"),
+        )?;
+        let account = authentication::fixture_local_account(root, "human", password)?;
+        let session = login.issue(
+            account,
+            &mut store,
+            &directory,
+            &registry,
+            Some("create-new"),
+        )?;
+        let command = creation_proposal(
+            &session,
+            &mut store,
+            &directory,
+            &registry,
+            identity,
+            "newhuman",
+            "create-new",
+            typed,
+        )?;
+        let report = CatalogAttempt::prepare(
+            &session,
+            &mut store,
+            &directory,
+            &registry,
+            "create-new",
+            &command,
+            None,
+        )?
+        .execute(&mut store, review);
+        report
+    };
+    let proposal = propose(Some(&secret), None).unwrap();
+    let intent = crate::account_creation::retained_intent(identity, "create-new")
+        .unwrap()
+        .unwrap();
+    assert_eq!(proposal["tpm_write_performed"], false);
+    assert!(!serde_json::to_string(&proposal).unwrap().contains('$'));
+    assert!(!homes.join("newhuman").exists());
+    assert!(propose(None, Some(&"00".repeat(32))).is_err());
+    println!("ACCOUNT_CREATION_CASE=owned-pam-retains-exact-private-proposal-without-disclosure-or-publication");
+    let run = |request: &str, command: &Command, review: Option<&str>| {
+        let mut store = fixture_store(root)?;
+        let login =
+            AdminLogin::prepare_at(&mut store, &directory, &registry, "human", Some(request))?;
+        let account = authentication::fixture_local_account(root, "human", password)?;
+        run_control_at(
+            &mut store,
+            &directory,
+            &registry,
+            account,
+            login,
+            None,
+            request,
+            Some(command),
+            review,
+        )
+    };
+    let commit = |request: &str, command: &Command| {
+        let proposal = run(request, command, None).unwrap();
+        run(
+            request,
+            command,
+            Some(proposal["review_sha256"].as_str().unwrap()),
+        )
+        .unwrap()
+    };
+    let publish = |file: &str| {
+        let mut store = fixture_store(root)?;
+        let login = AdminLogin::prepare_at(
+            &mut store,
+            &directory,
+            &registry,
+            "human",
+            Some("create-new"),
+        )?;
+        let account = authentication::fixture_local_account(root, "human", password)?;
+        let session = login.issue(
+            account,
+            &mut store,
+            &directory,
+            &registry,
+            Some("create-new"),
+        )?;
+        let result =
+            CreationAttempt::prepare(&session, &mut store, &directory, &registry, "create-new")?
+                .execute(&mut store, file);
+        assert!(session.fenced.get());
+        assert!(session.account.identity().is_err());
+        result
+    };
+    assert!(publish("home").is_err());
+    let prepared = propose(None, Some(proposal["review_sha256"].as_str().unwrap())).unwrap();
+    assert_eq!(
+        prepared["catalog"]["principal_states"][&intent.principal.id]["enabled"],
+        false
+    );
+    assert!(publish("home").is_err());
+    let complete = Command::CompleteAccountCreation {
+        transaction: "create-new".into(),
+    };
+    assert!(run("create-early-complete", &complete, None).is_err());
+    commit(
+        "create-permit",
+        &Command::PermitAccountCreation {
+            transaction: "create-new".into(),
+        },
+    );
+    assert!(publish("registry").is_err());
+    println!("ACCOUNT_CREATION_CASE=committed-preparation-and-permission-fence-before-home-and-identity-dispatch");
+    let general = fixture_governed_session(root, "human", password).unwrap();
+    assert!(CreationAttempt::prepare(
+        &general,
+        &mut fixture_store(root).unwrap(),
+        &directory,
+        &registry,
+        "create-new"
+    )
+    .is_err());
+    general.close();
+    println!("ACCOUNT_CREATION_CASE=general-pam-session-cannot-dispatch-creation");
+    for fault in ["closed", "clock-floor", "epoch", "head"] {
+        let mut store = fixture_store(root).unwrap();
+        let login = AdminLogin::prepare_at(
+            &mut store,
+            &directory,
+            &registry,
+            "human",
+            Some("create-new"),
+        )
+        .unwrap();
+        let account = authentication::fixture_local_account(root, "human", password).unwrap();
+        let session = login
+            .issue(
+                account,
+                &mut store,
+                &directory,
+                &registry,
+                Some("create-new"),
+            )
+            .unwrap();
+        let attempt =
+            CreationAttempt::prepare(&session, &mut store, &directory, &registry, "create-new")
+                .unwrap();
+        match fault {
+            "closed" => session.close(),
+            "clock-floor" => {
+                let mut clock = session.clock.get();
+                clock.milliseconds += 1_000_000;
+                session.clock.set(clock);
+            }
+            "epoch" => {
+                let mut clock = session.clock.get();
+                clock.restart_count += 1;
+                session.clock.set(clock);
+            }
+            "head" => {
+                drop(store);
+                commit(
+                    "create-head-change",
+                    &Command::RegisterActivity {
+                        activity: "account.create.fixture".into(),
+                    },
+                );
+                store = fixture_store(root).unwrap();
+            }
+            _ => unreachable!(),
+        }
+        assert!(attempt.execute(&mut store, "home").is_err());
+        assert!(session.fenced.get());
+        assert!(!homes.join("newhuman").exists());
+        println!("ACCOUNT_CREATION_CASE={fault}-continuation-closes-without-dispatch");
+    }
+    for (index, file) in ["home"]
+        .into_iter()
+        .chain(crate::account_creation::FILES)
+        .enumerate()
+    {
+        assert_eq!(publish(file).unwrap()["rename_performed"], true);
+        let path = if file == "home" {
+            homes.join("newhuman")
+        } else if file == "registry" {
+            registry.clone()
+        } else {
+            identity.join(file)
+        };
+        let inode = fs::symlink_metadata(&path).unwrap().ino();
+        assert_eq!(publish(file).unwrap()["rename_performed"], false);
+        assert_eq!(fs::symlink_metadata(&path).unwrap().ino(), inode);
+        assert!(authentication::fixture_local_account(root, "newhuman", password).is_err());
+        assert!(fixture_governed_session(root, "newhuman", password).is_err());
+        assert!(fixture_governed_session(root, "human", password).is_ok());
+        if index < 5 {
+            assert!(run("create-early-complete", &complete, None).is_err());
+        }
+        println!("ACCOUNT_CREATION_CASE={file}-fresh-owned-pam-publication-and-replay-without-second-rename");
+    }
+    assert!(fixture_governed_identity(root, &old_admin).is_err());
+    let completed = commit("create-complete", &complete);
+    assert_eq!(
+        completed["catalog"]["principal_registry"],
+        serde_json::to_value(&baseline).unwrap()
+    );
+    assert_eq!(
+        completed["catalog"]["current_registry"],
+        serde_json::to_value(&intent.registry_after).unwrap()
+    );
+    assert_eq!(
+        completed["catalog"]["principal_states"][&intent.principal.id]["enabled"],
+        false
+    );
+    assert!(run(
+        "create-enable-bypass",
+        &Command::AdvancePrincipal {
+            principal: intent.principal.id.clone(),
+            expected_generation: 1,
+            enabled: true
+        },
+        None
+    )
+    .is_err());
+    let unlock = crate::account_transition::Guard::prepare(
+        &registry,
+        identity,
+        "newhuman",
+        1,
+        "create-unlock-bypass",
+        false,
+    )
+    .unwrap()
+    .intent
+    .clone();
+    assert!(run(
+        "create-unlock-bypass",
+        &Command::PrepareAccountLock { intent: unlock },
+        None
+    )
+    .is_err());
+    assert_eq!(commit("create-complete", &complete)["replayed"], true);
+    assert_eq!(publish("registry").unwrap()["rename_performed"], false);
+    println!("ACCOUNT_CREATION_CASE=completed-exact-registry-extension-remains-locked-and-refuses-aging-bypass");
 }
 
 #[cfg(test)]
@@ -5428,6 +6032,150 @@ mod tests {
                 target.0,
                 target.1,
                 Some(proposal["review_sha256"].as_str().unwrap())
+            )
+            .is_err());
+            assert_eq!(f.writes(), writes + 1);
+            assert_eq!(hashes(), before);
+            assert!(Store::open(f.anchor.clone(), &f.directory.join("journal.json")).is_err());
+            let recovery = admin_journal::Recovery::inspect(
+                f.anchor.clone(),
+                &f.directory.join("journal.json"),
+            )
+            .unwrap();
+            let review = recovery.digest().unwrap();
+            drop(recovery.publish(&review).unwrap());
+            let replay = commit(target.0, target.1);
+            assert_eq!(replay["replayed"], true);
+            assert_eq!(replay["tpm_write_performed"], false);
+            assert_eq!(f.writes(), writes + 1);
+            assert_eq!(hashes(), before);
+        }
+    }
+
+    #[test]
+    fn account_creation_uncertain_tpm_reply_reconciles_exact_phases_without_dispatch() {
+        for phase in ["prepare", "permit", "complete"] {
+            let f = Fixture::new(&format!("account-create-lost-{phase}"));
+            let adoption = principal_registry(&f);
+            let registry = f.directory.join("registry.json");
+            let identity = f.directory.join("identity");
+            fs::DirBuilder::new().mode(0o700).create(&identity).unwrap();
+            let homes = creation_homes(&identity);
+            fs::DirBuilder::new().mode(0o700).create(&homes).unwrap();
+            for (name,bytes) in [
+                ("passwd","human:x:1001:1001:Human:/home/human:/bin/bash\notherhuman:x:1002:1002:Other:/home/otherhuman:/bin/bash\n"),
+                ("shadow","human:$6$fixture$one:20000:0:99999:7:::\notherhuman:$6$fixture$two:20000:0:99999:7:::\n"),
+                ("group","human:x:1001:\notherhuman:x:1002:\n"),
+                ("gshadow","human:!::\notherhuman:!::\n"),
+            ] {platform::write_atomic(&identity.join(name),bytes.as_bytes(),0o600).unwrap();}
+            f.activate();
+            principal_commit(&f, "adopt", &adoption);
+            let execute = |request: &str, command: &Command, review: Option<&str>| {
+                execute_catalog_authorized_at(
+                    &mut f.store(),
+                    &f.directory,
+                    &registry,
+                    &identity,
+                    || Ok(f.identity.clone()),
+                    request,
+                    command,
+                    review,
+                    CatalogAuthority::Primitive,
+                )
+            };
+            let commit = |request: &str, command: &Command| {
+                let proposal = execute(request, command, None).unwrap();
+                execute(
+                    request,
+                    command,
+                    Some(proposal["review_sha256"].as_str().unwrap()),
+                )
+                .unwrap()
+            };
+            commit(
+                "accounts",
+                &account_checkpoint_at(&registry, &identity).unwrap().0,
+            );
+            let mut secret = crate::sealed_credential::PrivateBuffer::new(1025).unwrap();
+            let value = b"Strong account creation lost reply fixture 2026";
+            secret.bytes_mut()[..value.len()].copy_from_slice(value);
+            let hash = crate::account_password::Password::fixture(&secret)
+                .unwrap()
+                .hash()
+                .unwrap();
+            let guard = crate::account_creation::Guard::new(
+                &registry,
+                &identity,
+                &homes,
+                "newhuman",
+                "create-new",
+                &hash,
+            )
+            .unwrap();
+            // This private FakeTPM fixture exercises the reducer, not production admission.
+            guard.stage(|| Ok(())).unwrap();
+            let intent = guard.intent.clone();
+            drop(guard);
+            let prepare = Command::PrepareAccountCreation {
+                intent: intent.clone(),
+            };
+            let permit = Command::PermitAccountCreation {
+                transaction: "create-new".into(),
+            };
+            let complete = Command::CompleteAccountCreation {
+                transaction: "create-new".into(),
+            };
+            let target = match phase {
+                "prepare" => ("create-new", &prepare),
+                "permit" => {
+                    commit("create-new", &prepare);
+                    ("permit", &permit)
+                }
+                "complete" => {
+                    commit("create-new", &prepare);
+                    commit("permit", &permit);
+                    for file in ["home"].into_iter().chain(crate::account_creation::FILES) {
+                        assert!(crate::account_creation::Guard::retained(
+                            &registry, &identity, &homes, &intent
+                        )
+                        .unwrap()
+                        .publish(file, || Ok(()))
+                        .unwrap());
+                    }
+                    ("complete", &complete)
+                }
+                _ => unreachable!(),
+            };
+            let hashes = || {
+                crate::account_creation::FILES
+                    .into_iter()
+                    .map(|name| {
+                        if name == "registry" {
+                            bundle::hex(&Sha256::digest(
+                                crate::principal::registry_file(&registry).unwrap().0,
+                            ))
+                        } else {
+                            bundle::hex(&Sha256::digest(
+                                crate::principal::account_file(
+                                    &identity.join(name),
+                                    name.ends_with("shadow"),
+                                )
+                                .unwrap()
+                                .0
+                                .bytes(),
+                            ))
+                        }
+                    })
+                    .collect::<Vec<_>>()
+            };
+            let before = hashes();
+            let inspected = execute(target.0, target.1, None).unwrap();
+            let writes = f.writes();
+            f.anchor.0.borrow_mut().3 = true;
+            assert!(execute(
+                target.0,
+                target.1,
+                Some(inspected["review_sha256"].as_str().unwrap())
             )
             .is_err());
             assert_eq!(f.writes(), writes + 1);

@@ -29,7 +29,13 @@ impl PrivateBuffer {
         Ok(file)
     }
     pub(crate) fn new(capacity: usize) -> Result<Self> {
-        if capacity == 0 || capacity > MAX_BLOB {
+        Self::allocate(capacity, MAX_BLOB)
+    }
+    pub(crate) fn password_context(capacity: usize) -> Result<Self> {
+        Self::allocate(capacity, 64 * 1024)
+    }
+    fn allocate(capacity: usize, limit: usize) -> Result<Self> {
+        if capacity == 0 || capacity > limit {
             return Err("credential buffer outside bound".into());
         }
         let name = b"luma-private-credential\0";

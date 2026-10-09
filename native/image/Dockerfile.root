@@ -14,7 +14,7 @@ RUN printf '%s\n' 'deb [signed-by=/usr/share/keyrings/ubuntu-archive-keyring.gpg
 RUN apt-get update --snapshot=${SNAPSHOT} -o APT::Update::Error-Mode=any && \
     apt-get install -y --no-install-recommends --snapshot=${SNAPSHOT} \
       systemd systemd-sysv systemd-resolved systemd-timesyncd systemd-boot-efi \
-      systemd-ukify libpam-systemd dbus sudo bash coreutils util-linux \
+      systemd-ukify libpam-systemd libcrypt1 dbus sudo bash coreutils util-linux \
       linux-image-generic linux-firmware \
       dracut-core cryptsetup-bin dmsetup e2fsprogs dosfstools gdisk \
       apparmor apparmor-utils openssl sbsigntool python3 libsqlite3-0 iproute2 \

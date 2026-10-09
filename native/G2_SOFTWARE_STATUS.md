@@ -13,6 +13,31 @@ requirement.
 
 ## Current software inventory and work still required
 
+### Governed existing-account password changes
+
+Local maintenance now supports password replacement for an existing non-Admin
+account with a usable crypt credential. Hidden terminal entry and confirmation
+use locked, nondumpable buffers. The distribution libxcrypt adapter generates
+and verifies a fresh yescrypt hash; unsupported profiles refuse without a
+fallback. A fresh governed Admin session retains a private proposal atomically,
+so a later reviewed commit uses the exact original salt and bytes. Passwords
+and hashes are never command arguments or returned JSON.
+
+The existing TPM-backed preparation, publication-permission and completion
+phases fence the target generation before replacing shadow, and adopt the new
+credential commitment only after exact publication checks. Lock state, all
+aging fields and unrelated records are preserved. Ordinary disabled-but-unlocked
+principals cannot be implicitly re-enabled by changing a password. General
+socket requests cannot transport this operation; their identity mount stays
+read-only. Private interrupted proposals are retained with bounded refusal,
+not silently erased or selected as complete proposals.
+
+This is not original Admin password recovery, account creation/deletion,
+password-expiry renewal, full multi-file identity transactions or governed
+retention/reconstruction. Installed confinement and physical qualification
+remain outstanding. The exact isolated evaluation is recorded in the
+[password transaction evidence](evidence/G2_ACCOUNT_PASSWORD_TRANSACTIONS_2026-10-09.md).
+
 ### Governed account lock transactions
 
 Reviewed local maintenance now prepares, publishes and completes lock/unlock
@@ -23,15 +48,18 @@ requires a separately reviewed permission event and the original live governed
 Admin continuation; the shadow replacement preserves ownership and permissions.
 Completion rechecks the exact published file before advancing the credential
 commitment and enabling only an unlocked account. Password hashes remain in
-locked memory and private shadow-equivalent staging, not proposals or receipts.
+locked memory and private shadow-equivalent staging, not returned proposals or
+receipts.
 
 Each phase is explicit. Uncertain TPM outcomes retain the journal fence without
 filesystem dispatch; exact published recovery does not rename a second time.
 Staging conflicts and changed original handles refuse. The general socket
 service rejects all three operations and retains a read-only identity mount.
 The local ceremony is described in [the Admin implementation note](LOCAL_TPM2_ADMIN.md).
-This does not implement creation/deletion, password rotation/reset, Admin
-password/lock recovery, damaged-authority reconstruction or their qualification.
+This lock path does not implement creation/deletion or password changes; the
+separate password composition above covers existing non-Admin replacement. Admin
+password/lock recovery, damaged-authority reconstruction and their qualification
+remain open.
 
 The [lock transaction evidence](evidence/G2_ACCOUNT_LOCK_TRANSACTIONS_2026-10-09.md)
 retains the passing targeted Rust suites, 282 native Python passes with two
@@ -56,8 +84,9 @@ and reports `account_credentials_checkpointed: false` until explicit adoption.
 This is a durable account-integrity prerequisite, not an account mutation or
 complete account lifecycle. The existing non-Admin lock/unlock composition above
 now provides approved commitment advancement for that narrow transaction.
-Create/delete, password rotation/reset and original Admin account recovery remain
-open.
+Create/delete, original Admin account recovery and broader identity transactions
+remain open. Existing non-Admin password replacement uses the same checkpointed
+commitment boundary through its distinct reviewed transaction.
 
 The [credential checkpoint evidence](evidence/G2_ACCOUNT_CREDENTIAL_CHECKPOINT_2026-10-08.md)
 retains 666 ordinary Rust passes with 38 fixture-dependent ignores, ten new real
@@ -72,7 +101,7 @@ tests or enabling an unconditional refusal path:
 
 | Bundle | Remaining software implementation |
 | --- | --- |
-| Account lifecycle | Governed create/delete and password rotation/reset; original Admin password/lock recovery; multi-file publication and reconciliation. Existing non-Admin lock/unlock has a three-phase native source path; its installed security and interruption qualification remains required. |
+| Account lifecycle | Governed create/delete; original Admin password/lock recovery; multi-file publication and reconciliation; protected password-aging renewal. Existing non-Admin lock/unlock and password replacement have three-phase native source paths; installed security and interruption qualification remains required. |
 | Protected UTC | Approved executable/configuration admission, confined producer/keeper deployment, reviewed independent seed, authenticated local acquisition/query control, protected history delivery and explicit recovery. |
 | Grants and admission | Finite current-generation role assignments, current UTC checks, principal-bound folder/effect/resource/inference grants and preparation/final-dispatch checks. |
 | Workflow and recovery | Generic governed worker/DAG admission, all inference consumers, export/deletion/retention authorization, damaged-authority reconstruction, multiworker/device adapters and integrated interruption paths. |

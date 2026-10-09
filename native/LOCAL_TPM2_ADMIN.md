@@ -794,12 +794,70 @@ transactions are permitted; exhaustion refuses rather than silently discarding
 history. No general Admin socket accepts these operations. Its strict read-only
 identity mount is unchanged; local maintenance has narrowly enumerated AppArmor
 file rules. Installed confinement, native interruption and physical TPM behavior
-are unqualified. This source path does not create/delete users, change passwords,
-lock the original Admin, bypass broken authority or close Requirement #1.
+are unqualified. This lock source path does not create/delete users, lock the
+original Admin, bypass broken authority or close Requirement #1. Existing
+non-Admin password replacement has its separate ceremony below.
 
 The [account transaction evidence](evidence/G2_ACCOUNT_LOCK_TRANSACTIONS_2026-10-09.md)
 retains the final isolated sweep, all thirteen real PAM/software-TPM account cases,
 prior failed attempts and explicit qualification limits.
+
+### Existing account password replacement
+
+This ceremony requires the same intact installed TPM history, adopted registry
+and complete credential checkpoint as lock/unlock. Do not execute it as host
+account administration. `LOGIN` is the original Admin and `TARGET` is an existing
+non-Admin account with a usable crypt credential.
+
+```text
+sudo luma-platform admin-account-password LOGIN TARGET TRANSACTION
+sudo luma-platform admin-account-password LOGIN TARGET TRANSACTION --commit REVIEW-SHA256
+sudo luma-platform admin-account-publish LOGIN TRANSACTION PUBLISH-REQUEST
+sudo luma-platform admin-account-publish LOGIN TRANSACTION PUBLISH-REQUEST --commit REVIEW-SHA256
+sudo luma-platform admin-account-complete LOGIN TRANSACTION COMPLETE-REQUEST
+sudo luma-platform admin-account-complete LOGIN TRANSACTION COMPLETE-REQUEST --commit REVIEW-SHA256
+```
+
+On the first inspection, enter and confirm the new password at the controlling
+terminal without echo: at least twelve printable characters and no more than
+256 UTF-8 bytes. This occurs before preparing and authenticating the Admin, so
+secret entry does not consume the short governed PAM operation lifetime. The
+proposal cannot be retained until fresh governed Admin authentication succeeds.
+Do not put a password or hash in arguments, environment variables or JSON.
+
+Unlike lock inspection, first password inspection deliberately writes a private
+proposal, but does not replace shadow or extend TPM history. The distribution
+libxcrypt adapter generates a fresh yescrypt salt and verifies its result in
+locked external buffers. An atomic no-replacement directory rename publishes the
+complete private intent/shadow proposal for later review. Interrupted temporary
+directories remain private evidence, never reusable reviewed proposals. Up to
+128 proposal/transition directories and 128 interrupted temporary directories
+are admitted; exhaustion refuses without deleting anything.
+
+Subsequent inspection and commit reuse the exact retained intent and salt and
+require fresh governed Admin authentication. A commit without its retained
+inspected proposal refuses. Each publication/completion phase needs its own
+latest review digest and distinct request ID. Existing lock and aging fields,
+passwd and all unrelated shadow records remain unchanged. This does not use
+the host clock to renew password age or expiry. A disabled-but-unlocked governed
+principal cannot be enabled by password replacement; use the separate reviewed
+lock/unlock transition for an explicit enablement.
+
+Preparation disables and advances the target generation. Publication preserves
+the fence until completion adopts the exact new credential commitment. Old
+passwords and sessions cannot regain access by restoring earlier bytes or by
+changing the password back at a later generation. Uncertain TPM outcomes use
+the same explicit exact journal reconciliation and phase continuation as
+lock/unlock; already-published continuation does not rename again.
+
+The general socket rejects password intents and cannot write the identity mount.
+The image declares libcrypt build/runtime dependencies and narrowly enumerated
+local maintenance AppArmor paths; this is not enforced-image qualification.
+Original Admin password/lock recovery, create/delete, multi-file registry/group
+publication, password-aging renewal, governed proposal retirement and damaged
+authority reconstruction remain separate implementations. Requirement #1 is
+still open. See the [password evidence](evidence/G2_ACCOUNT_PASSWORD_TRANSACTIONS_2026-10-09.md)
+for the frozen source, executed checks and limits.
 
 ### Governed session continuity
 

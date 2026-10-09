@@ -1775,14 +1775,18 @@ fn account_boundary(
         .principal(&intent.principal)
         .ok_or("unknown account transition principal")?
         .login;
-    let guard = Guard::prepare(
-        registry_path,
-        identity_path,
-        name,
-        intent.expected_generation,
-        &intent.transaction,
-        intent.locked,
-    )?;
+    let guard = if intent.kind == Some(crate::account_transition::Kind::Password) {
+        Guard::retained_password(registry_path, identity_path, intent)?
+    } else {
+        Guard::prepare(
+            registry_path,
+            identity_path,
+            name,
+            intent.expected_generation,
+            &intent.transaction,
+            intent.locked,
+        )?
+    };
     if &guard.intent != intent {
         return Err("account transition differs from protected records".into());
     }
@@ -2088,6 +2092,150 @@ pub fn checkpoint_accounts(login: &str, request: &str, reviewed: Option<&str>) -
     Ok(())
 }
 
+fn password_proposal<A: Checkpoint>(
+    session: &PrincipalSession,
+    store: &mut Store<A>,
+    directory: &Path,
+    registry_path: &Path,
+    identity_path: &Path,
+    target: &str,
+    request: &str,
+    password: Option<&crate::account_password::Password>,
+) -> Result<Command> {
+    session.observe_store(
+        &mut PrincipalReader::admin_at(store, directory, registry_path, Some(request)),
+        |identity, store| {
+            let snapshot = store.snapshot()?;
+            let context = Context::load_at(directory, &snapshot.deployment, registry_path)?;
+            let catalog = context.events(&snapshot, Some(request))?.0;
+            if serde_json::to_value(context.writer(&catalog)?)? != *identity {
+                return Err("password proposal differs from the governed Admin".into());
+            }
+            let registry = crate::principal::RegistryBinding::capture(registry_path)?;
+            let record = registry
+                .current()?
+                .account(target)
+                .ok_or("unknown installation account")?;
+            let intent = if let Some(transition) = catalog.account_transitions.get(request) {
+                transition.intent.clone()
+            } else if let Some(intent) =
+                crate::account_transition::retained_intent(identity_path, request)?
+            {
+                // Retain the exact reviewed salt and bytes, never regenerate on commit.
+                crate::account_transition::Guard::retained_password(
+                    registry_path,
+                    identity_path,
+                    &intent,
+                )?;
+                intent
+            } else {
+                let hash = password
+                    .ok_or("new password proposal requires local secret entry")?
+                    .hash()?;
+                let generation = catalog
+                    .principal_states
+                    .get(&record.id)
+                    .map_or(record.generation, |state| state.generation);
+                let guard = crate::account_transition::Guard::prepare_password(
+                    registry_path,
+                    identity_path,
+                    target,
+                    generation,
+                    request,
+                    &hash,
+                )?;
+                let command = Command::PrepareAccountLock {
+                    intent: guard.intent.clone(),
+                };
+                // Validate the reducer before creating even a private proposal.
+                let mut projected = catalog.clone();
+                projected.apply(&command)?;
+                guard.stage_password_proposal(|| {
+                    context.recheck(&mut || session.account.identity())?;
+                    let current = store.snapshot()?;
+                    if current.head != snapshot.head || current.deployment != snapshot.deployment {
+                        return Err("password proposal authority changed before retention".into());
+                    }
+                    registry.current()?;
+                    Ok(())
+                })?;
+                guard.intent.clone()
+            };
+            if intent.kind != Some(crate::account_transition::Kind::Password)
+                || intent.principal != record.id
+            {
+                return Err("password request belongs to another account transition".into());
+            }
+            registry.current()?;
+            context.recheck(&mut || session.account.identity())?;
+            Ok(Command::PrepareAccountLock { intent })
+        },
+    )
+}
+
+pub fn account_password_command(args: &[String]) -> Result<()> {
+    crate::require_root()?;
+    platform::require_installed()?;
+    let reviewed = if args.len() == 4 {
+        None
+    } else if args.len() == 6 && args[4] == "--commit" {
+        tpm::decode::<32>(&args[5])?;
+        Some(args[5].as_str())
+    } else {
+        return Err(
+            "expected admin-account-password LOGIN TARGET TRANSACTION [--commit REVIEW-SHA256]"
+                .into(),
+        );
+    };
+    let request = &args[3];
+    if !admin_roles::identifier(request) || request == REQUEST {
+        return Err("invalid or reserved password request".into());
+    }
+    let directory = Path::new(DIRECTORY);
+    let registry_path = Path::new(crate::principal::REGISTRY);
+    let identity_path = Path::new(crate::principal::IDENTITY);
+    // This read decides whether to prompt, not whether an operation is permitted.
+    // All proposal bytes and permissions are checked again inside the owned session.
+    let retained = crate::account_transition::retained_intent(identity_path, request)?;
+    if reviewed.is_some() && retained.is_none() {
+        return Err("password commit requires its retained inspected proposal".into());
+    }
+    let password = if retained.is_none() {
+        Some(crate::account_password::Password::local_confirmed()?)
+    } else {
+        None
+    };
+    let prepared = prepare_control(&args[1], Some(request))?;
+    let account = authentication::local(&args[1])?;
+    let mut store = Store::open(
+        tpm::LocalAnchor::installed()?,
+        &directory.join("journal.json"),
+    )?;
+    let session = prepared.issue(account, &mut store, directory, registry_path, Some(request))?;
+    let command = password_proposal(
+        &session,
+        &mut store,
+        directory,
+        registry_path,
+        identity_path,
+        &args[2],
+        request,
+        password.as_ref(),
+    )?;
+    let report = CatalogAttempt::prepare(
+        &session,
+        &mut store,
+        directory,
+        registry_path,
+        request,
+        &command,
+        None,
+    )?
+    .execute(&mut store, reviewed)?;
+    println!("{}", serde_json::to_string(&report)?);
+    Ok(())
+}
+
 pub fn account_lock_command(args: &[String]) -> Result<()> {
     crate::require_root()?;
     platform::require_installed()?;
@@ -2134,7 +2282,10 @@ pub fn account_lock_command(args: &[String]) -> Result<()> {
                 .account(&args[2])
                 .ok_or("unknown installation account")?;
             let intent = if let Some(transition) = catalog.account_transitions.get(request) {
-                if transition.intent.principal != record.id || transition.intent.locked != locked {
+                if transition.intent.kind.is_some()
+                    || transition.intent.principal != record.id
+                    || transition.intent.locked != locked
+                {
                     return Err("account request already belongs to another transition".into());
                 }
                 transition.intent.clone()
@@ -3079,6 +3230,170 @@ pub(crate) fn fixture_account_checkpoint(
     fresh.close();
     println!("ACCOUNT_CHECKPOINT_CASE=principal-rotation-preserves-credential-checkpoint");
     fixture_account_lock(root, password);
+    fixture_account_password(root, password);
+}
+
+#[cfg(test)]
+fn fixture_account_password(root: &Path, admin_password: &crate::sealed_credential::PrivateBuffer) {
+    use crate::{account_password::Password, sealed_credential::PrivateBuffer};
+    use std::os::unix::fs::MetadataExt;
+    drop(fixture_store(root).unwrap());
+    let directory = root.join("admin");
+    let registry = root.join("registry.json");
+    let mut replacement = PrivateBuffer::new(1025).unwrap();
+    let value = b"Strong replacement fixture account password 2026";
+    replacement.bytes_mut()[..value.len()].copy_from_slice(value);
+    let prior = fixture_governed_session(root, "otherhuman", admin_password).unwrap();
+    let propose = |transaction: &str, password: Option<&Password>, review: Option<&str>| {
+        let login = AdminLogin::prepare_at(
+            &mut fixture_store(root).unwrap(),
+            &directory,
+            &registry,
+            "human",
+            Some(transaction),
+        )?;
+        let account = authentication::fixture_local_account(root, "human", admin_password)?;
+        let mut store = fixture_store(root)?;
+        let session = login.issue(
+            account,
+            &mut store,
+            &directory,
+            &registry,
+            Some(transaction),
+        )?;
+        let command = password_proposal(
+            &session,
+            &mut store,
+            &directory,
+            &registry,
+            Path::new("/etc"),
+            "otherhuman",
+            transaction,
+            password,
+        )?;
+        let attempt = CatalogAttempt::prepare(
+            &session,
+            &mut store,
+            &directory,
+            &registry,
+            transaction,
+            &command,
+            None,
+        )?;
+        attempt.execute(&mut store, review)
+    };
+    let run = |request: &str, command: &Command, review: Option<&str>| {
+        let login = AdminLogin::prepare_at(
+            &mut fixture_store(root).unwrap(),
+            &directory,
+            &registry,
+            "human",
+            Some(request),
+        )?;
+        let account = authentication::fixture_local_account(root, "human", admin_password)?;
+        run_control_at(
+            &mut fixture_store(root)?,
+            &directory,
+            &registry,
+            account,
+            login,
+            None,
+            request,
+            Some(command),
+            review,
+        )
+    };
+    let commit = |request: &str, command: &Command| {
+        let inspected = run(request, command, None).unwrap();
+        run(
+            request,
+            command,
+            Some(inspected["review_sha256"].as_str().unwrap()),
+        )
+        .unwrap()
+    };
+    for (transaction, new_password, old_password) in [
+        ("account-password-replace", &replacement, admin_password),
+        ("account-password-restore", admin_password, &replacement),
+    ] {
+        let secret = Password::fixture(new_password).unwrap();
+        let inode = fs::symlink_metadata("/etc/shadow").unwrap().ino();
+        let original = crate::principal::account_file(Path::new("/etc/shadow"), true)
+            .unwrap()
+            .0;
+        let inspected = propose(transaction, Some(&secret), None).unwrap();
+        assert_eq!(inspected["tpm_write_performed"], false);
+        assert_eq!(fs::symlink_metadata("/etc/shadow").unwrap().ino(), inode);
+        assert_eq!(
+            crate::principal::account_file(Path::new("/etc/shadow"), true)
+                .unwrap()
+                .0
+                .bytes(),
+            original.bytes()
+        );
+        let intent = crate::account_transition::retained_intent(Path::new("/etc"), transaction)
+            .unwrap()
+            .unwrap();
+        assert_eq!(intent.kind, Some(crate::account_transition::Kind::Password));
+        assert!(!serde_json::to_string(&inspected).unwrap().contains("$y$"));
+        let repeated = propose(transaction, None, None).unwrap();
+        assert_eq!(inspected["review_sha256"], repeated["review_sha256"]);
+        assert!(propose(transaction, None, Some(&"00".repeat(32))).is_err());
+        assert_eq!(fs::symlink_metadata("/etc/shadow").unwrap().ino(), inode);
+        println!(
+            "ACCOUNT_PASSWORD_CASE={transaction}-private-stable-proposal-no-password-publication"
+        );
+        let prepared = propose(
+            transaction,
+            None,
+            Some(inspected["review_sha256"].as_str().unwrap()),
+        )
+        .unwrap();
+        assert_eq!(
+            prepared["catalog"]["principal_states"][&intent.principal]["enabled"],
+            false
+        );
+        assert!(fixture_governed_session(root, "otherhuman", old_password).is_err());
+        assert!(fixture_governed_session(root, "otherhuman", new_password).is_err());
+        println!("ACCOUNT_PASSWORD_CASE={transaction}-prepare-fences-both-passwords");
+        let complete = Command::CompleteAccountLock {
+            transaction: transaction.into(),
+        };
+        assert!(run(&format!("{transaction}-early"), &complete, None).is_err());
+        let publish = Command::PermitAccountPublication {
+            transaction: transaction.into(),
+        };
+        let publication = format!("{transaction}-publish");
+        commit(&publication, &publish);
+        let published_inode = fs::symlink_metadata("/etc/shadow").unwrap().ino();
+        assert_ne!(published_inode, inode);
+        assert!(fixture_governed_session(root, "otherhuman", new_password).is_err());
+        let replay = commit(&publication, &publish);
+        assert_eq!(replay["tpm_write_performed"], false);
+        assert_eq!(
+            fs::symlink_metadata("/etc/shadow").unwrap().ino(),
+            published_inode
+        );
+        println!(
+            "ACCOUNT_PASSWORD_CASE={transaction}-publication-fenced-and-replay-no-second-rename"
+        );
+        let completed = commit(&format!("{transaction}-complete"), &complete);
+        assert_eq!(
+            completed["catalog"]["principal_states"][&intent.principal]["enabled"],
+            true
+        );
+        assert_eq!(
+            completed["catalog"]["principal_states"][&intent.principal]["generation"],
+            intent.expected_generation + 1
+        );
+        assert!(authentication::fixture_local_account(root, "otherhuman", old_password).is_err());
+        let fresh = fixture_governed_session(root, "otherhuman", new_password).unwrap();
+        fresh.close();
+        assert!(fixture_governed_identity(root, &prior).is_err());
+        println!("ACCOUNT_PASSWORD_CASE={transaction}-new-password-pam-and-governed-generation-old-password-refused");
+    }
+    assert!(fixture_governed_identity(root, &prior).is_err());
+    println!("ACCOUNT_PASSWORD_CASE=restoring-password-does-not-revive-old-session");
 }
 
 #[cfg(test)]
@@ -4341,74 +4656,64 @@ mod tests {
 
     #[test]
     fn account_lock_uncertain_tpm_reply_fences_target_without_filesystem_dispatch() {
-        for phase in ["prepare", "permit", "complete"] {
-            let f = Fixture::new(&format!("account-lock-lost-{phase}"));
-            let adoption = principal_registry(&f);
-            let registry = f.directory.join("registry.json");
-            let identity = f.directory.join("identity");
-            fs::DirBuilder::new().mode(0o700).create(&identity).unwrap();
-            platform::write_atomic(&identity.join("passwd"),b"human:x:1001:1001:Human:/home/human:/bin/bash\notherhuman:x:1002:1002:Other:/home/otherhuman:/bin/bash\n",0o600).unwrap();
-            let original=b"human:$6$fixture$one:20000:0:99999:7:::\notherhuman:$6$fixture$two:20000:0:99999:7:::\n";
-            platform::write_atomic(&identity.join("shadow"), original, 0o600).unwrap();
-            f.activate();
-            principal_commit(&f, "adopt", &adoption);
-            let execute = |request: &str, command: &Command, review: Option<&str>| {
-                execute_catalog_authorized_at(
-                    &mut f.store(),
-                    &f.directory,
-                    &registry,
-                    &identity,
-                    || Ok(f.identity.clone()),
-                    request,
-                    command,
-                    review,
-                    CatalogAuthority::Primitive,
-                )
-            };
-            let commit = |request: &str, command: &Command| {
-                let inspected = execute(request, command, None).unwrap();
-                execute(
-                    request,
-                    command,
-                    Some(inspected["review_sha256"].as_str().unwrap()),
-                )
-                .unwrap()
-            };
-            let (checkpoint, _) = account_checkpoint_at(&registry, &identity).unwrap();
-            commit("accounts", &checkpoint);
-            let guard = crate::account_transition::Guard::prepare(
-                &registry,
-                &identity,
-                "otherhuman",
-                1,
-                "lock",
-                true,
-            )
-            .unwrap();
-            let intent = guard.intent.clone();
-            drop(guard);
-            let prepare = Command::PrepareAccountLock {
-                intent: intent.clone(),
-            };
-            let permit = Command::PermitAccountPublication {
-                transaction: "lock".into(),
-            };
-            let complete = Command::CompleteAccountLock {
-                transaction: "lock".into(),
-            };
-            let mut target = ("lock", &prepare);
-            if phase != "prepare" {
-                commit("lock", &prepare);
-                let mut store = f.store();
-                let mut reader = PrincipalReader::at(&mut store, &f.directory, &registry);
-                reader.identity_path = &identity;
-                assert!(reader.resolve(&other_identity()).is_err());
-                assert!(execute("early-complete", &complete, None).is_err());
-                target = ("permit", &permit);
-                if phase == "complete" {
-                    commit("permit", &permit);
-                    // A private FakeTPM fixture dispatch, not production authority.
-                    let guard = crate::account_transition::Guard::prepare(
+        for password_change in [false, true] {
+            for phase in ["prepare", "permit", "complete"] {
+                let f = Fixture::new(&format!("account-lock-lost-{password_change}-{phase}"));
+                let adoption = principal_registry(&f);
+                let registry = f.directory.join("registry.json");
+                let identity = f.directory.join("identity");
+                fs::DirBuilder::new().mode(0o700).create(&identity).unwrap();
+                platform::write_atomic(&identity.join("passwd"),b"human:x:1001:1001:Human:/home/human:/bin/bash\notherhuman:x:1002:1002:Other:/home/otherhuman:/bin/bash\n",0o600).unwrap();
+                let original=b"human:$6$fixture$one:20000:0:99999:7:::\notherhuman:$6$fixture$two:20000:0:99999:7:::\n";
+                platform::write_atomic(&identity.join("shadow"), original, 0o600).unwrap();
+                f.activate();
+                principal_commit(&f, "adopt", &adoption);
+                let execute = |request: &str, command: &Command, review: Option<&str>| {
+                    execute_catalog_authorized_at(
+                        &mut f.store(),
+                        &f.directory,
+                        &registry,
+                        &identity,
+                        || Ok(f.identity.clone()),
+                        request,
+                        command,
+                        review,
+                        CatalogAuthority::Primitive,
+                    )
+                };
+                let commit = |request: &str, command: &Command| {
+                    let inspected = execute(request, command, None).unwrap();
+                    execute(
+                        request,
+                        command,
+                        Some(inspected["review_sha256"].as_str().unwrap()),
+                    )
+                    .unwrap()
+                };
+                let (checkpoint, _) = account_checkpoint_at(&registry, &identity).unwrap();
+                commit("accounts", &checkpoint);
+                let guard = if password_change {
+                    let mut secret = crate::sealed_credential::PrivateBuffer::new(1025).unwrap();
+                    let value = b"Strong account lost reply fixture secret 2026";
+                    secret.bytes_mut()[..value.len()].copy_from_slice(value);
+                    let hash = crate::account_password::Password::fixture(&secret)
+                        .unwrap()
+                        .hash()
+                        .unwrap();
+                    let guard = crate::account_transition::Guard::prepare_password(
+                        &registry,
+                        &identity,
+                        "otherhuman",
+                        1,
+                        "lock",
+                        &hash,
+                    )
+                    .unwrap();
+                    // Test-only FakeTPM fixture authority, never a production path.
+                    guard.stage_password_proposal(|| Ok(())).unwrap();
+                    guard
+                } else {
+                    crate::account_transition::Guard::prepare(
                         &registry,
                         &identity,
                         "otherhuman",
@@ -4416,41 +4721,82 @@ mod tests {
                         "lock",
                         true,
                     )
-                    .unwrap();
-                    guard.publish(|| Ok(())).unwrap();
-                    drop(guard);
-                    target = ("complete", &complete);
+                    .unwrap()
+                };
+                let intent = guard.intent.clone();
+                drop(guard);
+                let prepare = Command::PrepareAccountLock {
+                    intent: intent.clone(),
+                };
+                let permit = Command::PermitAccountPublication {
+                    transaction: "lock".into(),
+                };
+                let complete = Command::CompleteAccountLock {
+                    transaction: "lock".into(),
+                };
+                let mut target = ("lock", &prepare);
+                if phase != "prepare" {
+                    commit("lock", &prepare);
+                    let mut store = f.store();
+                    let mut reader = PrincipalReader::at(&mut store, &f.directory, &registry);
+                    reader.identity_path = &identity;
+                    assert!(reader.resolve(&other_identity()).is_err());
+                    assert!(execute("early-complete", &complete, None).is_err());
+                    target = ("permit", &permit);
+                    if phase == "complete" {
+                        commit("permit", &permit);
+                        // A private FakeTPM fixture dispatch, not production authority.
+                        let guard = if password_change {
+                            crate::account_transition::Guard::retained_password(
+                                &registry, &identity, &intent,
+                            )
+                            .unwrap()
+                        } else {
+                            crate::account_transition::Guard::prepare(
+                                &registry,
+                                &identity,
+                                "otherhuman",
+                                1,
+                                "lock",
+                                true,
+                            )
+                            .unwrap()
+                        };
+                        guard.publish(|| Ok(())).unwrap();
+                        drop(guard);
+                        target = ("complete", &complete);
+                    }
                 }
+                let inspected = execute(target.0, target.1, None).unwrap();
+                let before = fs::read(identity.join("shadow")).unwrap();
+                let writes = f.writes();
+                f.anchor.0.borrow_mut().3 = true;
+                assert!(execute(
+                    target.0,
+                    target.1,
+                    Some(inspected["review_sha256"].as_str().unwrap())
+                )
+                .is_err());
+                assert_eq!(f.writes(), writes + 1);
+                assert_eq!(fs::read(identity.join("shadow")).unwrap(), before);
+                assert!(Store::open(f.anchor.clone(), &f.directory.join("journal.json")).is_err());
+                let recovery = admin_journal::Recovery::inspect(
+                    f.anchor.clone(),
+                    &f.directory.join("journal.json"),
+                )
+                .unwrap();
+                let review = recovery.digest().unwrap();
+                drop(recovery.publish(&review).unwrap());
+                let replay = commit(target.0, target.1);
+                assert_eq!(replay["replayed"], true);
+                assert_eq!(replay["tpm_write_performed"], false);
+                assert_eq!(f.writes(), writes + 1);
+                assert_eq!(fs::read(identity.join("shadow")).unwrap(), before);
+                assert_ne!(
+                    replay["catalog"]["account_transitions"]["lock"]["phase"],
+                    serde_json::Value::Null
+                );
             }
-            let inspected = execute(target.0, target.1, None).unwrap();
-            let before = fs::read(identity.join("shadow")).unwrap();
-            let writes = f.writes();
-            f.anchor.0.borrow_mut().3 = true;
-            assert!(execute(
-                target.0,
-                target.1,
-                Some(inspected["review_sha256"].as_str().unwrap())
-            )
-            .is_err());
-            assert_eq!(f.writes(), writes + 1);
-            assert_eq!(fs::read(identity.join("shadow")).unwrap(), before);
-            assert!(Store::open(f.anchor.clone(), &f.directory.join("journal.json")).is_err());
-            let recovery = admin_journal::Recovery::inspect(
-                f.anchor.clone(),
-                &f.directory.join("journal.json"),
-            )
-            .unwrap();
-            let review = recovery.digest().unwrap();
-            drop(recovery.publish(&review).unwrap());
-            let replay = commit(target.0, target.1);
-            assert_eq!(replay["replayed"], true);
-            assert_eq!(replay["tpm_write_performed"], false);
-            assert_eq!(f.writes(), writes + 1);
-            assert_eq!(fs::read(identity.join("shadow")).unwrap(), before);
-            assert_ne!(
-                replay["catalog"]["account_transitions"]["lock"]["phase"],
-                serde_json::Value::Null
-            );
         }
     }
 

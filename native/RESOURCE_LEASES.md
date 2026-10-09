@@ -5,6 +5,16 @@ and the applicable installed-image qualification pass. This implementation is
 not a claim that all G2 resources, inference clients or hardware are qualified.
 Requirement #2 has not been started by this work.
 
+Existing non-Admin credential changes now include a reviewed native password
+replacement path alongside lock/unlock. Both advance and fence the target
+generation before shadow publication, and update its checkpointed credential
+commitment only after exact completion. The [Admin ceremony](LOCAL_TPM2_ADMIN.md)
+and [password evidence](evidence/G2_ACCOUNT_PASSWORD_TRANSACTIONS_2026-10-09.md)
+describe the narrow implemented boundary. This does not close Unix account
+creation/deletion, original Admin password recovery, multi-file identity
+transactions, protected UTC delivery, finite grants or broader worker/workflow
+admission and damaged-authority recovery.
+
 ## Implemented native boundary
 
 The existing root broker owns `/var/lib/luma-broker/resources`. No model or

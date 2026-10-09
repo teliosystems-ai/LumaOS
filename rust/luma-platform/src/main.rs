@@ -1,4 +1,5 @@
 //! Native Linux platform boundary. No model-provided command or shell execution.
+mod account_password;
 mod account_transition;
 mod acquisition;
 mod admin_credentials;
@@ -138,6 +139,7 @@ fn dispatch() -> Result<()> {
         Some("admin-accounts-checkpoint") if args.len() == 5 && args[3] == "--commit" => {
             admin_governance::checkpoint_accounts(&args[1], &args[2], Some(&args[4]))
         }
+        Some("admin-account-password") => admin_governance::account_password_command(&args),
         Some("admin-account-lock")
         | Some("admin-account-publish")
         | Some("admin-account-complete") => admin_governance::account_lock_command(&args),
@@ -363,6 +365,7 @@ fn dispatch() -> Result<()> {
             println!("principal-check LOGIN: installed root maintenance diagnostic with fresh local PAM and current adopted TPM principal history; no session, role or effect grant is returned. This is distinct from the local-only admin-auth-check.");
             println!("admin-accounts-checkpoint LOGIN REQUEST [--commit REVIEW-SHA256]: reviewed one-time adoption of every installed enabled account's protected credential commitment into intact TPM history. Fixed local sources only; no password/hash input, account mutation, replacement checkpoint, time authority or effect grant. Changed credentials require separate governed lifecycle recovery.");
             println!("admin-account-lock LOGIN TARGET TRANSACTION lock|unlock [--commit REVIEW-SHA256]: prepare a reviewed existing non-Admin account lock transition, advancing and fencing its generation. Follow with separately reviewed admin-account-publish LOGIN TRANSACTION REQUEST and admin-account-complete LOGIN TRANSACTION REQUEST; both accept [--commit REVIEW-SHA256]. Interrupted phases require exact explicit continuation; no root bypass, password/hash input, reset or automatic retry.");
+            println!("admin-account-password LOGIN TARGET TRANSACTION [--commit REVIEW-SHA256]: locally enter and confirm a new non-Admin password without echo; authenticate the governed Admin to retain a private yescrypt proposal. Commit the exact review digest, then use separately reviewed admin-account-publish and admin-account-complete. Existing lock and aging fields are preserved; no secret/hash arguments, Admin password reset, implicit unlock or automatic recovery.");
             println!("admin-role-define LOGIN REQUEST ROLE EXPECTED-VERSION ACTIVITY... [--commit REVIEW-SHA256]: finite registered activities only; version 0 creates, the exact current version updates. Defines no assignment or resource grant.");
             println!("Install requires local TPM2 admission before any disk write. admin-install-check is read-only and does not enroll Admin; explicit checkpoint enrollment remains separate from product Admin activation.");
             println!("Maintenance: staging-clean | model-clean (root only; preserves active operations and unknown files).");

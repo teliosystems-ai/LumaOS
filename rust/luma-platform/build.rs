@@ -25,6 +25,32 @@ fn main() {
     println!("cargo:rustc-link-lib=tss2-mu");
     println!("cargo:rustc-link-lib=tss2-tctildr");
     println!("cargo:rustc-link-lib=crypto");
+    println!("cargo:rerun-if-changed=src/password_crypt.c");
+    assert!(Command::new("cc")
+        .args([
+            "-std=c11",
+            "-O2",
+            "-Wall",
+            "-Wextra",
+            "-Werror",
+            "-fPIC",
+            "-c",
+            "src/password_crypt.c",
+            "-o"
+        ])
+        .arg(out.join("password_crypt.o"))
+        .status()
+        .expect("password adapter compiler")
+        .success());
+    assert!(Command::new("ar")
+        .arg("crs")
+        .arg(out.join("libluma_password.a"))
+        .arg(out.join("password_crypt.o"))
+        .status()
+        .expect("password adapter archiver")
+        .success());
+    println!("cargo:rustc-link-lib=static=luma_password");
+    println!("cargo:rustc-link-lib=crypt");
     println!("cargo:rerun-if-changed=src/auth_pam.c");
     assert!(Command::new("cc")
         .args([

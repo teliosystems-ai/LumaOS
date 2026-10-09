@@ -779,6 +779,7 @@ mod tests {
         for command in [
             CatalogCommand::PrepareAccountLock {
                 intent: crate::account_transition::Intent {
+                    kind: None,
                     transaction: "lock-one".into(),
                     installation: "ab".repeat(32),
                     principal: "ef".repeat(32),
@@ -799,6 +800,17 @@ mod tests {
             },
         ] {
             command.validate().unwrap();
+            if let CatalogCommand::PrepareAccountLock { intent } = &command {
+                let mut password = intent.clone();
+                password.kind = Some(crate::account_transition::Kind::Password);
+                supplied.operation = Operation::Catalog {
+                    command: CatalogCommand::PrepareAccountLock { intent: password },
+                    review_sha256: Some("ab".repeat(32)),
+                };
+                let wire = serde_json::to_vec(&supplied).unwrap();
+                let decoded: Request = serde_json::from_slice(&wire).unwrap();
+                assert!(validate(&decoded).is_err());
+            }
             supplied.operation = Operation::Catalog {
                 command,
                 review_sha256: Some("ab".repeat(32)),

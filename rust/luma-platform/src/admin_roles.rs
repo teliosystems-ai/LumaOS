@@ -70,6 +70,11 @@ impl Command {
             Self::DefineRole { .. } => "admin.role.define",
             Self::AdoptPrincipals { .. } => "admin.principal.adopt",
             Self::CheckpointAccounts { .. } => "admin.account.checkpoint",
+            Self::PrepareAccountLock { intent }
+                if intent.kind == Some(crate::account_transition::Kind::Password) =>
+            {
+                "admin.account.password_prepare"
+            }
             Self::PrepareAccountLock { .. } => "admin.account.lock_prepare",
             Self::PermitAccountPublication { .. } => "admin.account.lock_publish",
             Self::CompleteAccountLock { .. } => "admin.account.lock_complete",
@@ -220,6 +225,15 @@ impl Catalog {
                     .principal_states
                     .get(&intent.principal)
                     .map_or(principal.generation, |state| state.generation);
+                if intent.kind == Some(crate::account_transition::Kind::Password)
+                    && !intent.locked
+                    && self
+                        .principal_states
+                        .get(&intent.principal)
+                        .is_some_and(|state| !state.enabled)
+                {
+                    return Err("password changes cannot implicitly enable a disabled principal; use governed lock/unlock".into());
+                }
                 if registry.installation() != intent.installation
                     || generation != intent.expected_generation
                     || self.account_commitments.get(&intent.principal)
@@ -537,6 +551,7 @@ mod tests {
             })
             .unwrap();
         let intent = Intent {
+            kind: None,
             transaction: "lock-one".into(),
             installation: "ab".repeat(32),
             principal: "ef".repeat(32),
@@ -558,6 +573,34 @@ mod tests {
             transaction: intent.transaction.clone(),
         };
         let baseline = catalog.clone();
+        let mut password = intent.clone();
+        password.kind = Some(crate::account_transition::Kind::Password);
+        password.locked = false;
+        let password_command = Command::PrepareAccountLock {
+            intent: password.clone(),
+        };
+        assert_eq!(
+            password_command.activity(),
+            "admin.account.password_prepare"
+        );
+        let mut enabled = baseline.clone();
+        enabled.apply(&password_command).unwrap();
+        assert!(!enabled.principal_states[&password.principal].enabled);
+        let mut disabled = baseline.clone();
+        disabled.principal_states.insert(
+            password.principal.clone(),
+            PrincipalState {
+                generation: 1,
+                enabled: false,
+            },
+        );
+        let disabled_before = disabled.clone();
+        assert!(disabled.apply(&password_command).is_err());
+        assert_eq!(disabled, disabled_before);
+        password.locked = true;
+        disabled
+            .apply(&Command::PrepareAccountLock { intent: password })
+            .unwrap();
         assert!(catalog.apply(&permit).is_err());
         assert!(catalog.apply(&complete).is_err());
         for edit in [

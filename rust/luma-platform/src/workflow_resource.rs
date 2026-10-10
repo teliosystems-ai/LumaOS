@@ -15,6 +15,7 @@ use std::process::{Command, Stdio};
 const MAX_SOURCE: usize = 1024 * 1024;
 const MAX_OUTPUT: u64 = 4 * 1024 * 1024;
 const PREFIX: &str = "invoice-v1-";
+const BATCH_PREFIX: &str = "invoice-batch-v1-";
 const SEALS: i32 = libc::F_SEAL_WRITE | libc::F_SEAL_GROW | libc::F_SEAL_SHRINK | libc::F_SEAL_SEAL;
 
 pub(crate) fn token_valid(token: &resources::Token) -> bool {
@@ -64,11 +65,150 @@ pub(crate) fn committed_receipt(
 pub(crate) fn source_digest(profile: &str) -> Result<&str> {
     let digest = profile
         .strip_prefix(PREFIX)
+        .or_else(|| profile.strip_prefix(BATCH_PREFIX))
         .ok_or("unknown calculation profile")?;
     if !io::hash(digest) {
         return Err("invalid calculation source identity".into());
     }
     Ok(digest)
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct Batch {
+    schema_version: u32,
+    sources: BTreeMap<String, String>,
+}
+
+pub(crate) fn batch_bytes(sources: &BTreeMap<String, Vec<u8>>) -> Result<Vec<u8>> {
+    if sources.is_empty() || sources.len() > 16 {
+        return Err("calculation needs one to sixteen exact text dependencies".into());
+    }
+    let mut texts = BTreeMap::new();
+    for (id, bytes) in sources {
+        if id.is_empty()
+            || id.len() > 64
+            || !id
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b"-_.".contains(&b))
+            || bytes.is_empty()
+            || bytes.len() > MAX_SOURCE
+        {
+            return Err("invalid calculation dependency identity or size".into());
+        }
+        texts.insert(id.clone(), String::from_utf8(bytes.clone())?);
+    }
+    let encoded = serde_json::to_vec(&Batch {
+        schema_version: 1,
+        sources: texts,
+    })?;
+    if encoded.len() > MAX_SOURCE {
+        return Err("combined calculation dependencies exceed fixed worker input bound".into());
+    }
+    Ok(encoded)
+}
+
+/// Only the already admitted worker calls this deterministic aggregation. The
+/// batch bytes bind each dependency identity and ordering into its lease.
+fn batch_report(bytes: &[u8]) -> Result<Vec<u8>> {
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Group {
+        month: String,
+        currency: String,
+        invoice_count: u32,
+        total: String,
+    }
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Report {
+        schema_version: u32,
+        report_type: String,
+        source_sha256: String,
+        record_count: u32,
+        groups: Vec<Group>,
+    }
+    let batch: Batch = serde_json::from_slice(bytes)?;
+    if batch.schema_version != 1 || serde_json::to_vec(&batch)? != bytes {
+        return Err("calculation batch is not canonical".into());
+    }
+    let sources = batch
+        .sources
+        .iter()
+        .map(|(id, text)| (id.clone(), text.as_bytes().to_vec()))
+        .collect();
+    if batch_bytes(&sources)? != bytes {
+        return Err("calculation batch bounds differ".into());
+    }
+    let mut records = 0u32;
+    let mut totals: BTreeMap<(String, String), (u32, i128)> = BTreeMap::new();
+    for source in batch.sources.values() {
+        let report: Report =
+            serde_json::from_slice(&calculation::report_bytes(source.as_bytes())?)?;
+        if report.schema_version != 1
+            || report.report_type != "invoice-summary-v1"
+            || report.source_sha256 != io::digest(source.as_bytes())
+        {
+            return Err("calculation dependency provenance differs".into());
+        }
+        records = records
+            .checked_add(report.record_count)
+            .ok_or("batch record count overflow")?;
+        for group in report.groups {
+            let (negative, unsigned) = group
+                .total
+                .strip_prefix('-')
+                .map_or((false, group.total.as_str()), |value| (true, value));
+            let (whole, cents) = unsigned
+                .split_once('.')
+                .ok_or("calculation total is not an exact decimal")?;
+            if whole.is_empty()
+                || cents.len() != 2
+                || !whole
+                    .bytes()
+                    .chain(cents.bytes())
+                    .all(|b| b.is_ascii_digit())
+            {
+                return Err("calculation total encoding differs".into());
+            }
+            let amount = whole
+                .parse::<i128>()?
+                .checked_mul(100)
+                .and_then(|value| value.checked_add(cents.parse::<i128>().ok()?))
+                .ok_or("batch total overflow")?;
+            let amount = if negative {
+                amount.checked_neg().ok_or("batch total overflow")?
+            } else {
+                amount
+            };
+            let entry = totals
+                .entry((group.month, group.currency))
+                .or_insert((0, 0));
+            entry.0 = entry
+                .0
+                .checked_add(group.invoice_count)
+                .ok_or("batch group count overflow")?;
+            entry.1 = entry.1.checked_add(amount).ok_or("batch total overflow")?;
+        }
+    }
+    let mut groups = Vec::new();
+    for ((month, currency), (invoice_count, total)) in totals {
+        let absolute = total.checked_abs().ok_or("batch total overflow")?;
+        let sign = if total < 0 { "-" } else { "" };
+        groups.push(
+            serde_json::json!({"month":month,"currency":currency,"invoice_count":invoice_count,
+            "total":format!("{sign}{}.{:02}",absolute/100,absolute%100)}),
+        );
+    }
+    Ok(serde_json::to_vec(
+        &serde_json::json!({"schema_version":1,"report_type":"invoice-summary-v1",
+        "source_sha256":io::digest(bytes),"record_count":records,"groups":groups}),
+    )?)
+}
+
+#[cfg(test)]
+pub(crate) fn fixture_batch_report(bytes: &[u8]) -> Result<Vec<u8>> {
+    batch_report(bytes)
 }
 
 fn binding_for(profile: &str, device: &str, installation: &str) -> Result<String> {
@@ -229,6 +369,25 @@ pub(crate) fn recheck_report(
     report: &[u8],
     installation: &str,
 ) -> Result<()> {
+    recheck_profile_report(lease, source_hash, report, installation, PREFIX)
+}
+
+pub(crate) fn recheck_batch_report(
+    lease: &resources::Token,
+    source_hash: &str,
+    report: &[u8],
+    installation: &str,
+) -> Result<()> {
+    recheck_profile_report(lease, source_hash, report, installation, BATCH_PREFIX)
+}
+
+fn recheck_profile_report(
+    lease: &resources::Token,
+    source_hash: &str,
+    report: &[u8],
+    installation: &str,
+    prefix: &str,
+) -> Result<()> {
     if !io::hash(source_hash)
         || report.is_empty()
         || report.len() > 2 * MAX_SOURCE
@@ -244,7 +403,7 @@ pub(crate) fn recheck_report(
         report: String::from_utf8(report.to_vec())?,
     };
     let output = parse_output(&serde_json::to_vec(&output)?, &source_hash)?;
-    let profile = format!("{PREFIX}{source_hash}");
+    let profile = format!("{prefix}{source_hash}");
     let expected_binding = binding(
         &profile,
         &resource_manager::storage_device(Path::new("/var"))?,
@@ -269,6 +428,21 @@ pub(crate) fn calculate_checked(
     bytes: &[u8],
     check: &mut dyn FnMut() -> Result<()>,
 ) -> Result<Calculation> {
+    calculate_profile_checked(bytes, check, PREFIX)
+}
+
+pub(crate) fn calculate_batch_checked(
+    bytes: &[u8],
+    check: &mut dyn FnMut() -> Result<()>,
+) -> Result<Calculation> {
+    calculate_profile_checked(bytes, check, BATCH_PREFIX)
+}
+
+fn calculate_profile_checked(
+    bytes: &[u8],
+    check: &mut dyn FnMut() -> Result<()>,
+    prefix: &str,
+) -> Result<Calculation> {
     crate::require_root()?;
     crate::platform::require_installed()?;
     check()?;
@@ -276,7 +450,7 @@ pub(crate) fn calculate_checked(
         return Err("calculation source size denied before launch".into());
     }
     let source_hash = io::digest(bytes);
-    let profile = format!("{PREFIX}{source_hash}");
+    let profile = format!("{prefix}{source_hash}");
     let device = resource_manager::storage_device(Path::new("/var"))?;
     let expected_binding = binding(&profile, &device)?;
     acquisition::await_drainage()?;
@@ -358,7 +532,11 @@ pub(crate) fn worker(profile: &str) -> Result<()> {
     }
     let bytes = sealed_source(unsafe { File::from_raw_fd(fd) }, expected)?;
     lease.check_local()?;
-    let report = calculation::report_bytes(&bytes)?;
+    let report = if profile.starts_with(BATCH_PREFIX) {
+        batch_report(&bytes)?
+    } else {
+        calculation::report_bytes(&bytes)?
+    };
     lease.check()?;
     lease.complete_output(&io::digest(&report))?;
     let output = Output {
@@ -379,6 +557,73 @@ pub(crate) fn worker(profile: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn leased_batch_operation_preserves_dependency_identity_and_exact_signed_totals() {
+        let sources = BTreeMap::from([
+            (
+                "first".into(),
+                b"invoice_date,amount,currency\n2026-10-01,1.25,USD\n2026-10-02,-0.05,USD\n"
+                    .to_vec(),
+            ),
+            (
+                "second".into(),
+                b"invoice_date,amount,currency\n2026-10-03,3.10,USD\n2026-11-01,2.00,EUR\n"
+                    .to_vec(),
+            ),
+        ]);
+        let encoded = batch_bytes(&sources).unwrap();
+        let report: serde_json::Value =
+            serde_json::from_slice(&batch_report(&encoded).unwrap()).unwrap();
+        assert_eq!(report["source_sha256"], io::digest(&encoded));
+        assert_eq!(report["record_count"], 4);
+        assert_eq!(
+            report["groups"],
+            serde_json::json!([
+                {"month":"2026-10","currency":"USD","invoice_count":3,"total":"4.30"},
+                {"month":"2026-11","currency":"EUR","invoice_count":1,"total":"2.00"},
+            ])
+        );
+        let profile = format!("{BATCH_PREFIX}{}", io::digest(&encoded));
+        assert_eq!(source_digest(&profile).unwrap(), io::digest(&encoded));
+        assert_ne!(
+            binding_for(&profile, "253:0", &"a".repeat(64)).unwrap(),
+            binding_for(
+                &format!("{PREFIX}{}", io::digest(&encoded)),
+                "253:0",
+                &"a".repeat(64)
+            )
+            .unwrap()
+        );
+        let mut changed = sources.clone();
+        let first = changed.remove("first").unwrap();
+        changed.insert("third".into(), first);
+        assert_ne!(batch_bytes(&changed).unwrap(), encoded);
+    }
+    #[test]
+    fn batch_worker_refuses_unknown_fields_noncanonical_input_and_combined_bounds() {
+        assert!(batch_bytes(&BTreeMap::new()).is_err());
+        let sources = BTreeMap::from([(
+            "source".into(),
+            b"invoice_date,amount,currency\n2026-10-01,1.00,USD\n".to_vec(),
+        )]);
+        let mut encoded = batch_bytes(&sources).unwrap();
+        encoded.push(b'\n');
+        assert!(batch_report(&encoded).is_err());
+        let unknown =
+            serde_json::json!({"schema_version":1,"sources":{"source":"x"},"authority":true});
+        assert!(batch_report(&serde_json::to_vec(&unknown).unwrap()).is_err());
+        assert!(batch_bytes(&BTreeMap::from([("source".into(), vec![b'a'; MAX_SOURCE])])).is_err());
+        assert!(batch_bytes(
+            &(0..17)
+                .map(|index| (format!("input{index}"), b"x".to_vec()))
+                .collect()
+        )
+        .is_err());
+        assert!(batch_report(
+            &batch_bytes(&BTreeMap::from([("source".into(), b"not,csv\n".to_vec())])).unwrap()
+        )
+        .is_err());
+    }
     fn released_result() -> (resources::Ledger, resources::Token) {
         use resources::{Domain, Owner, Reservation};
         let mut ledger = resources::Ledger::fresh_for_test();

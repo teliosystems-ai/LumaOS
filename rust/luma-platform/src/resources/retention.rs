@@ -1,11 +1,11 @@
-//! Reviewed preservation of interrupted physical-lease archive preparations.
-//! It never repairs a ledger, retires owners, returns capacity or deletes bytes.
+//! Reviewed preservation and explicit governed deletion of unreferenced archive
+//! evidence. Referenced authority, owner tombstones and accounting remain intact.
 use super::*;
 use std::os::unix::fs::MetadataExt;
 
 pub(super) const MAX_DIRECTORY_ENTRIES: usize = 512;
 
-#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 struct Identity {
     device: u64,
     inode: u64,
@@ -140,6 +140,244 @@ fn preserve(directory: &Path, source: &str, expected: &Identity, review: &str) -
 }
 
 impl Store {
+    fn deletion_plan(&self, names: &[String]) -> Result<DeletionPlan> {
+        if names.is_empty() || names.len() > 16 {
+            return Err("resource retention requires one to sixteen exact evidence names".into());
+        }
+        let ledger = self.read()?;
+        if ledger.generation == 0
+            || ledger
+                .leases
+                .iter()
+                .any(|lease| lease.state != State::Released)
+        {
+            return Err(
+                "resource retention requires an initialized, physically released ledger".into(),
+            );
+        }
+        self.verify_archives(&ledger)?;
+        crate::resource_manager::requests::retention_idle(self)?;
+        let requests = identity(&self.directory.join("requests.json"))?;
+        let mut files = BTreeMap::new();
+        for name in names {
+            if files.contains_key(name) {
+                return Err("duplicate resource retention target".into());
+            }
+            if let Some(suffix) = name.strip_prefix(".archive-retained-") {
+                verify_retained(&self.directory.join(name), suffix)?;
+            } else if name.starts_with(".archive-stage-") {
+                let archive = reference(name)?;
+                if archive.through_generation > ledger.generation {
+                    return Err("future resource archive preparation cannot be deleted".into());
+                }
+            } else if let Some(suffix) = name.strip_prefix("archive-") {
+                let archive = reference(&format!(".archive-stage-archive-{suffix}"))?;
+                if ledger.archives.contains(&archive) {
+                    return Err(
+                        "referenced resource receipts and owner tombstones cannot be deleted"
+                            .into(),
+                    );
+                }
+                self.archived(&archive)?;
+            } else if name.starts_with(".requests-") || name.starts_with("requests-archive-") {
+                crate::resource_manager::requests::retention_evidence(self, name)?;
+            } else {
+                return Err(
+                    "resource retention accepts only exact unreferenced archive evidence".into(),
+                );
+            }
+            files.insert(name.clone(), identity(&self.directory.join(name))?);
+        }
+        let ledger_identity = identity(&self.directory.join("ledger.json"))?;
+        self.verify_exclusion()?;
+        Ok(DeletionPlan {
+            schema_version: 1,
+            generation: ledger.generation,
+            directory: self.directory_identity,
+            ledger: ledger_identity,
+            requests,
+            files,
+        })
+    }
+
+    pub(crate) fn retention_proposal(&self, names: &[String]) -> Result<serde_json::Value> {
+        let plan = self.deletion_plan(names)?;
+        Ok(
+            serde_json::json!({"schema_version":1,"review_sha256":plan.review()?,
+            "usage":plan.usage()?,"files":plan.files,"authority_chain_preserved":true,
+            "worker_resources_released":false,"deletion_performed":false}),
+        )
+    }
+
+    pub(crate) fn retention_usage(
+        &self,
+        names: &[String],
+        reviewed: &str,
+    ) -> Result<crate::finite_grants::Use> {
+        let plan = self.deletion_plan(names)?;
+        if plan.review()? != reviewed {
+            return Err("resource retention review changed".into());
+        }
+        plan.usage()
+    }
+
+    pub(crate) fn retention_outcomes(&self) -> Result<serde_json::Value> {
+        self.read()?;
+        let mut outcomes = BTreeMap::new();
+        for (index, entry) in fs::read_dir(&self.directory)?.enumerate() {
+            if index >= MAX_DIRECTORY_ENTRIES {
+                return Err("resource retention audit inspection bound exceeded".into());
+            }
+            let entry = entry?;
+            let name = entry.file_name();
+            let name = name
+                .to_str()
+                .ok_or("invalid resource retention evidence name")?;
+            let Some(reviewed) = name
+                .strip_prefix(".retention-")
+                .and_then(|s| s.strip_suffix(".intent.json"))
+            else {
+                continue;
+            };
+            if !hash(reviewed) || outcomes.len() >= 64 {
+                return Err("resource retention audit inventory invalid or exhausted".into());
+            }
+            let bytes = tpm::private_read(&entry.path(), MAX_BYTES)?;
+            let plan: DeletionPlan = serde_json::from_slice(&bytes)?;
+            if plan.schema_version != 1
+                || plan.generation == 0
+                || plan.files.is_empty()
+                || plan.files.len() > 16
+                || plan.review()? != reviewed
+                || serde_json::to_vec(&plan)? != bytes
+            {
+                return Err("resource retention intent damaged; retain evidence".into());
+            }
+            plan.usage()?;
+            let receipt_path = self
+                .directory
+                .join(format!(".retention-{reviewed}.receipt.json"));
+            let confirmed = match fs::symlink_metadata(&receipt_path) {
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
+                Err(error) => return Err(error.into()),
+                Ok(_) => {
+                    let receipt = tpm::private_read(&receipt_path, MAX_BYTES)?;
+                    let expected = serde_json::json!({"schema_version":1,"review_sha256":reviewed,
+                        "deleted":plan.files,"authority_chain_preserved":true,
+                        "generation_preserved":true,"worker_resources_released":false});
+                    if serde_json::to_vec(&expected)? != receipt {
+                        return Err("resource retention receipt damaged; retain evidence".into());
+                    }
+                    true
+                }
+            };
+            outcomes.insert(reviewed.to_string(), serde_json::json!({"targets":plan.files,
+                "outcome":if confirmed { "confirmed-local-deletion" } else { "uncertain-inspect-no-automatic-retry" },
+                "receipt_authority":false,"worker_resources_released":false}));
+        }
+        self.verify_exclusion()?;
+        Ok(
+            serde_json::json!({"schema_version":1,"outcomes":outcomes,"records_are_authority":false}),
+        )
+    }
+
+    /// The caller supplies a live typed product boundary and retained physical
+    /// shutdown proof. A receipt or the review digest is never authorization.
+    pub(crate) fn delete_retained_checked(
+        &mut self,
+        names: &[String],
+        reviewed: &str,
+        mut check: impl FnMut() -> Result<()>,
+    ) -> Result<serde_json::Value> {
+        let plan = self.deletion_plan(names)?;
+        if plan.review()? != reviewed {
+            return Err("resource retention review changed".into());
+        }
+        check()?;
+        if self.deletion_plan(names)? != plan {
+            return Err("resource retention target drifted after authorization".into());
+        }
+        let directory = OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC)
+            .open(&self.directory)?;
+        use std::os::fd::AsRawFd;
+        let pinned = directory.metadata()?;
+        if (pinned.dev(), pinned.ino()) != plan.directory {
+            return Err("resource retention directory changed".into());
+        }
+        let result = (|| -> Result<serde_json::Value> {
+            let intent_name = format!(".retention-{reviewed}.intent.json");
+            let receipt_name = format!(".retention-{reviewed}.receipt.json");
+            if self.retention_outcomes()?["outcomes"]
+                .as_object()
+                .ok_or("invalid retention outcome inventory")?
+                .len()
+                >= 64
+            {
+                return Err(
+                    "resource retention outcome inventory exhausted; no automatic audit eviction"
+                        .into(),
+                );
+            }
+            let count = fs::read_dir(&self.directory)?.try_fold(
+                0usize,
+                |count, entry| -> Result<usize> {
+                    entry?;
+                    Ok(count + 1)
+                },
+            )?;
+            if count >= MAX_DIRECTORY_ENTRIES - 2 {
+                return Err(
+                    "resource retention audit inventory exhausted; preserve prior outcomes".into(),
+                );
+            }
+            // These records are historical data only. Their presence never
+            // authorizes a retry, an accounting reset or an inferred success.
+            publish_evidence(&directory, &intent_name, &serde_json::to_vec(&plan)?)?;
+            for (name, expected) in &plan.files {
+                check()?;
+                self.verify_exclusion()?;
+                if identity(&self.directory.join("ledger.json"))? != plan.ledger
+                    || identity(&self.directory.join("requests.json"))? != plan.requests
+                    || identity(&self.directory.join(name))? != *expected
+                {
+                    return Err(
+                        "resource retention authority or evidence changed before deletion".into(),
+                    );
+                }
+                // Bind the unlink to the held authority directory, never a
+                // caller-selected parent or a subsequently substituted path.
+                let member = std::ffi::CString::new(name.as_bytes())?;
+                if unsafe { libc::unlinkat(directory.as_raw_fd(), member.as_ptr(), 0) } != 0 {
+                    return Err(std::io::Error::last_os_error().into());
+                }
+                directory.sync_all()?;
+                match fs::symlink_metadata(self.directory.join(name)) {
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => (),
+                    _ => return Err("resource evidence deletion outcome is uncertain".into()),
+                }
+                self.verify_exclusion()?;
+                if identity(&self.directory.join("ledger.json"))? != plan.ledger
+                    || identity(&self.directory.join("requests.json"))? != plan.requests
+                {
+                    return Err("resource ledger changed during evidence deletion".into());
+                }
+            }
+            self.verify_archives(&self.read()?)?;
+            crate::resource_manager::requests::retention_idle(self)?;
+            let receipt = serde_json::json!({"schema_version":1,"review_sha256":reviewed,
+                "deleted":plan.files,"authority_chain_preserved":true,
+                "generation_preserved":true,"worker_resources_released":false});
+            publish_evidence(&directory, &receipt_name, &serde_json::to_vec(&receipt)?)?;
+            Ok(receipt)
+        })();
+        if result.is_err() {
+            self.poisoned = true;
+        }
+        result
+    }
+
     pub(crate) fn recovery_binding(&self) -> Result<String> {
         let ledger = self.read()?;
         let durable = identity(&self.directory.join("ledger.json"))?;
@@ -238,6 +476,66 @@ impl Store {
             "retained_bytes":observed.length.to_string(),"worker_resources_released":false,
             "evidence_deleted":false,"hot_history_preserved":true}),
         )
+    }
+}
+
+fn publish_evidence(directory: &File, name: &str, bytes: &[u8]) -> Result<()> {
+    use std::os::fd::{AsRawFd, FromRawFd};
+    let member = std::ffi::CString::new(name)?;
+    let fd = unsafe {
+        libc::openat(
+            directory.as_raw_fd(),
+            member.as_ptr(),
+            libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+            0o600,
+        )
+    };
+    if fd < 0 {
+        return Err(std::io::Error::last_os_error().into());
+    }
+    let mut file = unsafe { File::from_raw_fd(fd) };
+    file.write_all(bytes)?;
+    file.sync_all()?;
+    directory.sync_all()?;
+    Ok(())
+}
+
+#[derive(Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+struct DeletionPlan {
+    schema_version: u32,
+    #[serde(with = "decimal")]
+    generation: u64,
+    directory: (u64, u64),
+    ledger: Identity,
+    requests: Identity,
+    files: BTreeMap<String, Identity>,
+}
+impl DeletionPlan {
+    fn review(&self) -> Result<String> {
+        let mut hash = Sha256::new();
+        hash.update(b"luma-resource-unreferenced-evidence-deletion-v1\0");
+        hash.update(serde_json::to_vec(self)?);
+        Ok(bundle::hex(&hash.finalize()))
+    }
+    fn usage(&self) -> Result<crate::finite_grants::Use> {
+        let usage = crate::finite_grants::Use {
+            action: crate::finite_grants::Action::Retain,
+            selector: crate::finite_grants::Selector {
+                kind: crate::finite_grants::Kind::Resource,
+                id: "resource-retention".into(),
+                generation: self.generation,
+                digest: self.review()?,
+            },
+            input_bytes: self.files.values().try_fold(0u64, |sum, file| {
+                sum.checked_add(file.length)
+                    .ok_or("resource evidence size overflow")
+            })?,
+            output_bytes: 0,
+            units: self.files.len() as u64,
+        };
+        usage.validate()?;
+        Ok(usage)
     }
 }
 
@@ -658,5 +956,193 @@ mod tests {
             ))
             .is_err());
         }
+    }
+
+    #[test]
+    fn governed_evidence_deletion_preserves_all_authority_and_records_exact_outcome() {
+        let mut fixture = Fixture::new();
+        let bytes = b"incomplete archived preparation";
+        let name = format!(
+            ".archive-retained-{}-{}.json",
+            bundle::hex(&Sha256::digest(bytes)),
+            "a".repeat(64)
+        );
+        fixture.write(&name, bytes);
+        let names = vec![name.clone()];
+        let ledger = fs::read(fixture.directory.join("ledger.json")).unwrap();
+        let requests = fs::read(fixture.directory.join("requests.json")).unwrap();
+        let proposal = fixture.store.retention_proposal(&names).unwrap();
+        let review = proposal["review_sha256"].as_str().unwrap();
+        let usage = fixture.store.retention_usage(&names, review).unwrap();
+        assert_eq!(usage.action, crate::finite_grants::Action::Retain);
+        assert_eq!(usage.selector.kind, crate::finite_grants::Kind::Resource);
+        assert_eq!(usage.selector.digest, review);
+        assert_eq!(usage.input_bytes, bytes.len() as u64);
+        let mut checks = 0;
+        let result = fixture
+            .store
+            .delete_retained_checked(&names, review, || {
+                checks += 1;
+                Ok(())
+            })
+            .unwrap();
+        assert_eq!(checks, 2);
+        assert!(!fixture.directory.join(name).exists());
+        assert_eq!(result["worker_resources_released"], false);
+        assert_eq!(
+            fs::read(fixture.directory.join("ledger.json")).unwrap(),
+            ledger
+        );
+        assert_eq!(
+            fs::read(fixture.directory.join("requests.json")).unwrap(),
+            requests
+        );
+        assert_eq!(fixture.store.read().unwrap().charged("host").unwrap(), 7);
+        let outcomes = fixture.store.retention_outcomes().unwrap();
+        assert_eq!(
+            outcomes["outcomes"][review]["outcome"],
+            "confirmed-local-deletion"
+        );
+        assert_eq!(outcomes["outcomes"][review]["receipt_authority"], false);
+        assert!(fixture
+            .store
+            .delete_retained_checked(&names, review, || panic!("receipt cannot authorize replay"))
+            .is_err());
+    }
+
+    #[test]
+    fn retention_never_deletes_referenced_receipts_or_accepts_ambiguous_names() {
+        let mut fixture = Fixture::new();
+        let archived = fixture
+            .store
+            .archive(
+                &fixture.store.read().unwrap().review().unwrap(),
+                "b".repeat(32),
+            )
+            .unwrap();
+        let original = fs::read(fixture.directory.join(archived.name())).unwrap();
+        for names in [
+            vec![],
+            vec![archived.name()],
+            vec!["ledger.json".into()],
+            vec!["../ledger.json".into()],
+            vec![".archive-stage-archive-01-unknown.json".into()],
+        ] {
+            assert!(fixture.store.retention_proposal(&names).is_err());
+        }
+        let name = format!(
+            ".archive-retained-{}-{}.json",
+            bundle::hex(&Sha256::digest(b"evidence")),
+            "c".repeat(64)
+        );
+        fixture.write(&name, b"evidence");
+        assert!(fixture
+            .store
+            .retention_proposal(&vec![name.clone(), name])
+            .is_err());
+        assert_eq!(
+            fs::read(fixture.directory.join(archived.name())).unwrap(),
+            original
+        );
+        assert!(fixture.store.owner_retired(&fixture.owner).unwrap());
+    }
+
+    #[test]
+    fn partial_retention_batch_is_durable_uncertain_and_never_frees_accounting() {
+        let mut fixture = Fixture::new();
+        let digest = bundle::hex(&Sha256::digest(b"evidence"));
+        let names: Vec<_> = (0..2)
+            .map(|n| format!(".archive-retained-{digest}-{n:064x}.json"))
+            .collect();
+        for name in &names {
+            fixture.write(name, b"evidence");
+        }
+        let proposal = fixture.store.retention_proposal(&names).unwrap();
+        let review = proposal["review_sha256"].as_str().unwrap();
+        let ledger = fs::read(fixture.directory.join("ledger.json")).unwrap();
+        let mut checks = 0;
+        assert!(fixture
+            .store
+            .delete_retained_checked(&names, review, || {
+                checks += 1;
+                if checks == 3 {
+                    Err("live grant or shutdown generation lost".into())
+                } else {
+                    Ok(())
+                }
+            })
+            .is_err());
+        assert!(!fixture.directory.join(&names[0]).exists());
+        assert!(fixture.directory.join(&names[1]).exists());
+        assert!(fixture.store.read().is_err());
+        assert_eq!(
+            fs::read(fixture.directory.join("ledger.json")).unwrap(),
+            ledger
+        );
+        let replacement = OpenOptions::new().read(true).open("/dev/null").unwrap();
+        drop(std::mem::replace(&mut fixture.store._lock, replacement));
+        let fresh = Store::open(&fixture.directory).unwrap();
+        assert_eq!(fresh.read().unwrap().charged("host").unwrap(), 7);
+        assert_eq!(
+            fresh.retention_outcomes().unwrap()["outcomes"][review]["outcome"],
+            "uncertain-inspect-no-automatic-retry"
+        );
+    }
+
+    #[test]
+    fn changed_retention_bytes_stale_review_and_refused_authentication_have_no_effect() {
+        let mut fixture = Fixture::new();
+        let names = vec![format!(".archive-stage-archive-1-{}.json", "d".repeat(64))];
+        fixture.write(&names[0], b"{");
+        let proposal = fixture.store.retention_proposal(&names).unwrap();
+        let review = proposal["review_sha256"].as_str().unwrap();
+        assert!(fixture
+            .store
+            .delete_retained_checked(&names, review, || Err(
+                "current governed boundary refused".into()
+            ))
+            .is_err());
+        assert!(fixture.store.read().is_ok());
+        assert!(!fixture
+            .directory
+            .join(format!(".retention-{review}.intent.json"))
+            .exists());
+        fs::write(fixture.directory.join(&names[0]), b"different").unwrap();
+        assert!(fixture.store.retention_usage(&names, review).is_err());
+        assert!(fixture
+            .store
+            .delete_retained_checked(&names, review, || panic!("stale review before auth"))
+            .is_err());
+        assert_eq!(
+            fs::read(fixture.directory.join(&names[0])).unwrap(),
+            b"different"
+        );
+    }
+
+    #[test]
+    fn request_incident_retention_preserves_exact_hot_journal_and_refuses_damage() {
+        let mut fixture = Fixture::new();
+        let name = format!(
+            ".requests-retained-{}-{}.json",
+            bundle::hex(&Sha256::digest(b"partial request evidence")),
+            "e".repeat(64)
+        );
+        fixture.write(&name, b"partial request evidence");
+        let names = vec![name.clone()];
+        let requests = fs::read(fixture.directory.join("requests.json")).unwrap();
+        let proposal = fixture.store.retention_proposal(&names).unwrap();
+        let review = proposal["review_sha256"].as_str().unwrap();
+        fixture
+            .store
+            .delete_retained_checked(&names, review, || Ok(()))
+            .unwrap();
+        assert_eq!(
+            fs::read(fixture.directory.join("requests.json")).unwrap(),
+            requests
+        );
+        fixture.write(&name, b"partial request evidence");
+        fs::write(fixture.directory.join("requests.json"), b"{").unwrap();
+        assert!(fixture.store.retention_proposal(&names).is_err());
+        assert!(fixture.directory.join(name).exists());
     }
 }

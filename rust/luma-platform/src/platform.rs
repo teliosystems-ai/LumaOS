@@ -6,7 +6,7 @@ use crate::{
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
 use std::os::fd::{AsRawFd, FromRawFd};
-use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
@@ -515,7 +515,6 @@ fn create_identity(
 }
 
 fn copy_network_profiles(source: &Path, destination: &Path) -> Result<()> {
-    use std::os::unix::fs::MetadataExt;
     if !source.exists() {
         return Ok(());
     }
@@ -908,6 +907,31 @@ pub fn install(selection: &str, source: &Path, model_id: Option<&str>) -> Result
         &data.at.join("lib/luma-os/workflow-runs"),
         &crate::principal::installation_at(&data.at.join("lib/luma-os/principals/registry.json"))?,
     )?;
+    // The encrypted filesystem is freshly formatted and populated only from
+    // the verified image template. Provision fixed empty owner-domain roots;
+    // never create these as a fallback while loading an established authority.
+    let state = crate::scoped_read::open_directory(&data.at.join("lib/luma-os"))?;
+    for name in [
+        "artifact-catalog-domains",
+        "workflow-invoice-domains",
+        "workflow-dags",
+    ] {
+        crate::artifacts::mkdir_at(&state, name)?.sync_all()?;
+    }
+    for (name, mode) in [("policy-decisions", 0o700), ("workflow-inputs", 0o711)] {
+        let directory =
+            crate::artifacts::open_at(&state, name, libc::O_RDONLY | libc::O_DIRECTORY, 0)?;
+        let metadata = directory.metadata()?;
+        if metadata.uid() != 0
+            || metadata.gid() != 0
+            || metadata.mode() & 0o7777 != mode
+            || metadata.dev() != state.metadata()?.dev()
+        {
+            return Err("invalid product namespace in the verified installation template".into());
+        }
+        directory.sync_all()?;
+    }
+    state.sync_all()?;
     write_atomic(
         &data.at.join("lib/luma-os/admin-install-intent.json"),
         &serde_json::to_vec(&admin_admission.intent(&admin))?,

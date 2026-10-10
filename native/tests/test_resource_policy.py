@@ -40,8 +40,9 @@ class ResourcePolicyTests(unittest.TestCase):
                       'identity(&self.directory.join("ledger.json"))', 'self.poisoned = true',
                       '.archive-retained-', 'observe()?;'):
             self.assertIn(guard, source)
-        for mutation in ('remove_file', '.transact(', '.leases.clear()', '.generation =', '.retired_owners.insert('):
+        for mutation in ('remove_file', '.transact(', '.leases.clear()', '.retired_owners.insert('):
             self.assertNotIn(mutation, source)
+        self.assertNotRegex(source, r'\.generation\s*=(?!=)')
         manager = (ROOT/'rust/luma-platform/src/resource_manager.rs').read_text()
         boundary = manager.split('"resource-recovery-status" | "resource-recover" => {')[1].split('_ => return Err')[0]
         for guard in ('self.requests.occupied()', 'self.owners.is_empty()', 'group.populated()',
@@ -66,7 +67,7 @@ class ResourcePolicyTests(unittest.TestCase):
                            ('pub(crate) fn clear_quarantine(', 'pub(crate) fn review('),
                            ('pub(crate) fn migrate_inventory(', 'fn fence_outputs(')]:
             self.assertIn('next.fence_outputs()', ledger.split(start)[1].split(end)[0])
-        worker = (ROOT/'rust/luma-platform/src/workflow_resource.rs').read_text().split('#[cfg(test)]')[0]
+        worker = (ROOT/'rust/luma-platform/src/workflow_resource.rs').read_text().split('#[cfg(test)]\nmod tests')[0]
         self.assertIn('ledger.domains[id].epoch != epoch.0', worker)
         self.assertIn('computation domain provenance unavailable', worker)
         self.assertIn('resource_manager::invoice_output_domains()', worker)

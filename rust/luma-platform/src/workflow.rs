@@ -1,5 +1,5 @@
-//! Read-only native admission for a closed file-to-artifact DAG profile.
-//! No node is executed, no skill is trusted, and no grant is conferred here.
+//! Closed, typed file-to-artifact DAG admission. The executor consumes this
+//! validated topology only after signed installation and live grant checks.
 use crate::{bundle, Result};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -15,7 +15,7 @@ const MAX_INPUTS: usize = 16;
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
-enum Kind {
+pub(crate) enum Kind {
     FileRead,
     DeterministicCalculate,
     ArtifactWrite,
@@ -23,29 +23,75 @@ enum Kind {
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
-enum ValueType {
+pub(crate) enum ValueType {
     Text,
     Report,
     Artifact,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
-struct Node {
-    id: String,
-    kind: Kind,
-    dependencies: Vec<String>,
-    input_types: Vec<ValueType>,
-    output_type: ValueType,
+pub(crate) struct Node {
+    pub id: String,
+    pub kind: Kind,
+    pub dependencies: Vec<String>,
+    pub input_types: Vec<ValueType>,
+    pub output_type: ValueType,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
-struct Graph {
-    schema_version: u32,
-    profile: String,
-    graph_id: String,
-    nodes: Vec<Node>,
+pub(crate) struct Graph {
+    pub schema_version: u32,
+    pub profile: String,
+    pub graph_id: String,
+    pub nodes: Vec<Node>,
+}
+
+pub(crate) struct Executable {
+    pub graph: Graph,
+    pub order: Vec<String>,
+    pub sha256: String,
+}
+impl Executable {
+    pub(crate) fn from_bytes(bytes: &[u8]) -> Result<Self> {
+        let validation = validate_bytes(bytes)?;
+        Ok(Self {
+            graph: serde_json::from_slice(bytes)?,
+            order: serde_json::from_value(validation["order"].clone())?,
+            sha256: bundle::hex(&Sha256::digest(bytes)),
+        })
+    }
+    pub(crate) fn installed() -> Result<Self> {
+        let admitted = crate::skills::admission()?;
+        let directory =
+            crate::scoped_read::open_directory(Path::new("/usr/share/luma-os/workflows"))?;
+        let bytes = crate::scoped_read::read_relative(
+            &directory,
+            crate::scoped_read::identity(&directory)?,
+            "file-to-artifact-v1.json",
+            MAX_SPEC_BYTES,
+        )?;
+        let result = Self::from_bytes(&bytes)?;
+        if admitted["workflow_sha256"] != result.sha256 {
+            return Err("signed workflow changed before executable admission".into());
+        }
+        result.recheck()?;
+        Ok(result)
+    }
+    pub(crate) fn recheck(&self) -> Result<()> {
+        if crate::skills::admission()?["workflow_sha256"] != self.sha256 {
+            return Err("installed signed DAG changed".into());
+        }
+        Ok(())
+    }
+    pub(crate) fn node(&self, id: &str) -> Result<&Node> {
+        self.graph
+            .nodes
+            .iter()
+            .find(|node| node.id == id)
+            .ok_or_else(|| "unknown DAG node".into())
+    }
 }
 
 fn identifier(value: &str) -> bool {
@@ -174,8 +220,11 @@ pub(crate) fn validate_bytes(bytes: &[u8]) -> Result<serde_json::Value> {
 }
 
 pub(crate) fn invoice_execution_supported(bytes: &[u8]) -> Result<bool> {
-    // The initial executor handles only this exact normalized three-node graph.
-    // Other valid DAGs are admission-only, never silently approximated.
+    validate_bytes(bytes)?;
+    Ok(true)
+}
+
+pub(crate) fn legacy_invoice_execution_supported(bytes: &[u8]) -> Result<bool> {
     let expected = include_bytes!(
         "../../../native/image/overlay/usr/share/luma-os/workflows/file-to-artifact-v1.json"
     );
@@ -311,7 +360,7 @@ mod tests {
         fs::remove_dir(dir).unwrap();
     }
     #[test]
-    fn valid_dag_admission_does_not_imply_executor_support() {
+    fn valid_closed_dag_shapes_have_executor_support_without_conferring_authority() {
         let expected = include_bytes!(
             "../../../native/image/overlay/usr/share/luma-os/workflows/file-to-artifact-v1.json"
         );
@@ -322,6 +371,6 @@ mod tests {
         graph.graph_id = "different-valid-graph".into();
         let bytes = serde_json::to_vec(&graph).unwrap();
         assert!(validate_bytes(&bytes).is_ok());
-        assert!(!invoice_execution_supported(&bytes).unwrap());
+        assert!(invoice_execution_supported(&bytes).unwrap());
     }
 }

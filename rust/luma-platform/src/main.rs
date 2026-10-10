@@ -23,6 +23,7 @@ mod finite_grants;
 mod model;
 mod owner_credential;
 mod platform;
+mod policy_decisions;
 mod principal;
 #[cfg(test)]
 mod publication_fixture;
@@ -48,6 +49,7 @@ mod utc_step_watch;
 mod utc_stream;
 pub(crate) use utc_stream::provider as utc_provider;
 mod workflow;
+mod workflow_inputs;
 mod workflow_resource;
 mod workflow_runs;
 
@@ -145,6 +147,29 @@ fn dispatch() -> Result<()> {
                     | "artifact-governed-export-review"
                     | "artifact-governed-export"
                     | "artifact-governed-retain"
+                    | "workflow-dag-review"
+                    | "workflow-dag-prepare"
+                    | "workflow-dag-status"
+                    | "workflow-dag-advance"
+                    | "workflow-dag-cancel"
+                    | "workflow-dag-reconcile"
+                    | "resource-retention"
+                    | "workflow-inputs-review"
+                    | "workflow-inputs-init"
+                    | "policy-evidence-review"
+                    | "policy-evidence-retain"
+                    | "policy-evidence-pending-review"
+                    | "policy-evidence-pending-retain"
+                    | "artifact-gc-inspection-review"
+                    | "artifact-gc-proposal"
+                    | "artifact-gc-mark"
+                    | "artifact-gc-delete-proposal"
+                    | "artifact-gc-delete"
+                    | "artifact-gc-outcomes"
+                    | "artifact-owned-export-review"
+                    | "artifact-owned-export"
+                    | "artifact-owned-retain-proposal"
+                    | "artifact-owned-retain"
             )
         )
     {
@@ -179,6 +204,47 @@ fn dispatch() -> Result<()> {
     }
     match args.first().map(String::as_str) {
         Some("granted-run") => service::granted_gateway::launch(&args[1..]),
+        Some(
+            "artifact-owned-export-review"
+            | "artifact-owned-export"
+            | "artifact-owned-retain-proposal"
+            | "artifact-owned-retain",
+        ) => artifact_catalog::owned_effects_command(&args),
+        Some(
+            "artifact-gc-inspection-review"
+            | "artifact-gc-proposal"
+            | "artifact-gc-mark"
+            | "artifact-gc-delete-proposal"
+            | "artifact-gc-delete"
+            | "artifact-gc-outcomes",
+        ) => artifact_catalog::gc_command(&args),
+        Some("workflow-source-review") if args.len() == 3 => {
+            workflow_runs::dag::source_review(&args[1], &args[2])
+        }
+        Some("workflow-dag-store-init") if args.len() == 1 => {
+            require_root()?;
+            platform::require_installed()?;
+            workflow_runs::dag::initialize_installed()
+        }
+        Some("workflow-dag-review") if args.len() == 2 => workflow_runs::dag::review(&args[1]),
+        Some("workflow-dag-prepare") => workflow_runs::dag::prepare(&args),
+        Some("workflow-dag-status") => workflow_runs::dag::status(&args),
+        Some("workflow-dag-advance") => workflow_runs::dag::advance(&args),
+        Some("workflow-dag-cancel") => workflow_runs::dag::cancel(&args),
+        Some("workflow-dag-reconcile") => workflow_runs::dag::reconcile(&args),
+        Some("workflow-inputs-review") if args.len() == 2 => workflow_inputs::review(&args[1]),
+        Some("workflow-inputs-init") => workflow_inputs::initialize(&args),
+        Some("policy-evidence-review") if args.len() == 2 => policy_decisions::review(&args[1]),
+        Some("policy-evidence-retain") => policy_decisions::retain(&args),
+        Some("policy-evidence-pending-review") if args.len() == 2 => {
+            policy_decisions::pending_review(&args[1])
+        }
+        Some("policy-evidence-pending-retain") => policy_decisions::pending_retain(&args),
+        Some("resource-retention") => {
+            require_root()?;
+            platform::require_installed()?;
+            resource_manager::recovery::retention_command(&args[1..])
+        }
         Some("granted-infer") if args.len() == 5 => {
             let max_tokens = args[4].parse::<u64>()?;
             if max_tokens.to_string() != args[4] {
@@ -502,7 +568,10 @@ fn dispatch() -> Result<()> {
             println!("Resources: resource-status | resource-reconcile REVIEW-SHA256 | resource-archive REVIEW-SHA256 | resource-revoke LEASE-ID GENERATION MANAGER-EPOCH | resource-migrate | resource-migration-status | resource-migrate REVIEW-SHA256. Existing broker authority; installed root maintenance only. No-argument migration initializes only missing state; reviewed offline migration preserves receipts, epochs and retained charges with both worker slices idle and the broker stopped. Uncertain state is never reset. Workers require exact generation-fenced leases before heavy work.");
             println!("Local TPM diagnostics: tpm-probe | admin-checkpoint-status (root only; read-only; neither enrolls nor grants Admin). External Admin deployment is deferred.");
             println!("Integrated governed controls (software qualification pending): sudo luma-admin-control utc-seed/utc-seed-recovery/utc-query/utc-history, admin-account-activate/renew and admin-account-recover/-publish/-complete. Use /run/luma-admin for inert reviewed seed/statement files. Original PAM or offline custody, not sudo, authorizes control.");
-            println!("Confined granted operations: sudo luma-platform granted-run granted-infer-review MESSAGES-JSON MAX-TOKENS | granted-infer LOGIN GRANT MESSAGES-JSON MAX-TOKENS; workflow-governed-review/prepare/advance/cancel/reconcile; artifact-governed-export-review/export/retain. Exact finite scopes, current PAM/TPM/UTC and fresh resource generations are required. Unscoped laboratory effects refuse after product bootstrap. Generic DAG execution and damaged-authority restoration remain open.");
+            println!("Confined granted operations: sudo luma-platform granted-run granted-infer-review MESSAGES-JSON MAX-TOKENS | granted-infer LOGIN GRANT MESSAGES-JSON MAX-TOKENS; workflow-governed-review/prepare/advance/cancel/reconcile; artifact-governed-export-review/export/retain. Exact finite scopes, current PAM/TPM/UTC and fresh resource generations are required. Unscoped laboratory effects refuse after product bootstrap; damaged-authority restoration still requires an independently protected checkpoint.");
+            println!("Supported file-to-artifact DAGs: workflow-dag-store-init (explicit installed-root namespace initialization); workflow-source-review ROOT RELATIVE (human owner, no sudo); granted-run workflow-dag-review SPEC-JSON | workflow-dag-prepare LOGIN SPEC-JSON | workflow-dag-status LOGIN GRANTS-JSON REQUEST | workflow-dag-advance/cancel LOGIN GRANTS-JSON REQUEST REVIEW-SHA256 | workflow-dag-reconcile LOGIN GRANTS-JSON REQUEST [--publish-committed REVIEW-SHA256]. Bounded FileRead, DeterministicCalculate and ArtifactWrite topology only; calculation runs in a leased worker, outputs and checkpoints are owner-isolated, and uncertain publication needs exact outcome reconciliation.");
+            println!("Governed input folders: granted-run workflow-inputs-review LOGIN | workflow-inputs-init LOGIN EXECUTE-GRANT REVIEW-SHA256. The exact workflow.execute grant provisions only the current human's protected input namespace and root read-only child ACLs; no arbitrary folder delegation or DAC bypass. New files must remain human-owned and bounded, and source review grants no access.");
+            println!("Governed evidence retention: granted-run resource-retention --proposal NAME... | --outcomes | LOGIN GRANT REVIEW-SHA256 NAME... (offline masks and real worker drainage required); policy-evidence-review OPERATION | policy-evidence-retain LOGIN GRANT OPERATION REVIEW-SHA256; policy-evidence-pending-review MEMBER | policy-evidence-pending-retain LOGIN GRANT MEMBER REVIEW-SHA256. Referenced authority history is preserved; archived policy records cannot grant access or restore authority.");
             println!("admin-checkpoint-enroll LOGIN --existing-owner: explicit installed-root checkpoint enrollment with local PAM and hidden custodian owner authorization; retains interrupted attempts; does not grant product Admin.");
             println!("admin-checkpoint-enrollment-inspect: read-only retained-intent and fixed TPM-handle observation; does not repair, retry, delete or grant Admin.");
             println!("admin-checkpoint-enrollment-resume LOGIN REVIEW-SHA256: explicit fresh-auth continuation only from a reviewed, bound parent with no NV proposal or index; never retries parent allocation.");

@@ -903,6 +903,63 @@ fn migration_review(store: &Store) -> Result<String> {
     ))?))
 }
 
+/// Fresh semantic selection of redundant request evidence. This binds the
+/// current hot journal, never supplies authority or retires a nonce. Actual
+/// deletion separately holds the resource and physical-worker exclusions.
+pub(crate) fn retention_evidence(store: &Store, name: &str) -> Result<String> {
+    let gate = Gate::open(store)?;
+    if gate.occupied() {
+        return Err("request evidence retention requires terminal hot receipts".into());
+    }
+    let directory = store.request_directory()?;
+    let before = gate.verify_loaded(store)?;
+    let target = stage_identity(&directory.join(name))?;
+    if let Some(suffix) = name.strip_prefix(".requests-retained-") {
+        let (sha256, review) = suffix
+            .strip_suffix(".json")
+            .and_then(|s| s.split_once('-'))
+            .ok_or("invalid retained request evidence name")?;
+        if !digest_valid(sha256) || !digest_valid(review) || target.sha256 != sha256 {
+            return Err("retained request evidence digest differs".into());
+        }
+    } else if name.starts_with(".requests-stage-") {
+        let archive = Archive::stage_reference(name)?;
+        if archive.batch > gate.retention.archives.len() as u64 + 1 {
+            return Err("future request preparation cannot be deleted".into());
+        }
+    } else if let Some(suffix) = name.strip_prefix("requests-archive-") {
+        let archive =
+            Archive::stage_reference(&format!(".requests-stage-requests-archive-{suffix}"))?;
+        if gate.retention.archives.contains(&archive) {
+            return Err(
+                "referenced request receipts and retired nonce tombstones cannot be deleted".into(),
+            );
+        }
+        // Gate::open validates every orphan's digest, canonical complete bytes
+        // and terminal phases. Selection never treats those records as grants.
+    } else {
+        return Err("unsupported request retention evidence name".into());
+    }
+    if gate.verify_loaded(store)? != before {
+        return Err("request retention journal changed".into());
+    }
+    Ok(digest(&serde_json::to_vec(&(
+        "request-unreferenced-evidence-v1",
+        before,
+        name,
+        target,
+    ))?))
+}
+
+pub(crate) fn retention_idle(store: &Store) -> Result<()> {
+    let gate = Gate::open(store)?;
+    if gate.occupied() {
+        return Err("resource retention requires terminal request authority".into());
+    }
+    gate.verify_loaded(store)?;
+    Ok(())
+}
+
 pub(crate) fn request_migration(review: Option<&str>) -> Result<()> {
     crate::require_root()?;
     crate::platform::require_installed()?;
@@ -1035,6 +1092,25 @@ mod tests {
         fn drop(&mut self) {
             fs::remove_dir_all(&self.directory).unwrap();
         }
+    }
+
+    #[test]
+    fn governed_retention_selection_preserves_referenced_nonce_tombstones() {
+        let mut fixture = Fixture::new();
+        fixture.complete(1);
+        fixture.archive();
+        let reference = fixture.gate.retention.archives[0].name();
+        let retired = fixture.gate.retention.retired.clone();
+        let bytes = fs::read(fixture.directory.join(&reference)).unwrap();
+        assert!(retention_evidence(&fixture.store, &reference).is_err());
+        assert_eq!(fs::read(fixture.directory.join(reference)).unwrap(), bytes);
+        assert_eq!(
+            Gate::open(&fixture.store).unwrap().retention.retired,
+            retired
+        );
+        fixture.prepare(2);
+        assert!(retention_idle(&fixture.store).is_err());
+        assert!(retention_evidence(&fixture.store, "requests.json").is_err());
     }
 
     #[test]

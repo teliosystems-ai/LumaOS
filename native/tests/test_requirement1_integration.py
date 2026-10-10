@@ -28,7 +28,8 @@ class RequirementOneIntegration(unittest.TestCase):
         self.assertLess(guard, terminal)
         self.assertLess(terminal, dispatch)
         allowed = source[guard:terminal]
-        for verb in ('granted-infer', 'workflow-governed-advance', 'artifact-governed-export'):
+        for verb in ('granted-infer', 'workflow-governed-advance', 'artifact-governed-export',
+                     'artifact-owned-export', 'artifact-owned-retain'):
             self.assertIn('"' + verb + '"', allowed)
         for verb in ('admin-service', 'utc-keeper', 'admin-catalog', 'granted-run'):
             self.assertNotIn('"' + verb + '"', allowed)
@@ -59,9 +60,40 @@ class RequirementOneIntegration(unittest.TestCase):
                       'fstatfs', '0x01021994'):
             self.assertIn(check, launcher)
         for check in ('before.nlink() != 1', 'before.mode() & 0o7777 != 0o400',
-                      'operator_snapshot(&args[7])?', 'owned launcher snapshot'):
+                      'operator_snapshot(&args[9])?', 'owned launcher snapshot'):
             self.assertIn(check, workflow)
         self.assertIn('SystemCallFilter=@system-service @memlock', launcher)
+
+    def test_product_namespaces_are_installed_and_inputs_stay_read_only_during_execution(self):
+        assembly = (IMAGE / 'assemble.py').read_text()
+        installer = (RUST / 'platform.rs').read_text()
+        launcher = (RUST / 'service/granted_gateway.rs').read_text()
+        profile = (IMAGE / 'overlay/etc/apparmor.d/luma-granted-client').read_text()
+        for namespace in ('policy-decisions', 'workflow-inputs'):
+            self.assertIn(namespace, assembly)
+            self.assertIn(namespace, installer)
+        for namespace in ('workflow-dags', 'workflow-invoice-domains', 'artifact-catalog-domains'):
+            self.assertIn(namespace, installer)
+            self.assertIn('/var/lib/luma-os/' + namespace, launcher)
+            self.assertIn('/var/lib/luma-os/' + namespace + '/** rwk,', profile)
+        self.assertIn('arguments[0] == "workflow-inputs-init"', launcher)
+        self.assertIn('/var/lib/luma-os/workflow-inputs/** r,', profile)
+        self.assertNotIn('capability dac_override', profile)
+        self.assertIn('system.posix_acl_default', (RUST / 'workflow_inputs.rs').read_text())
+
+    def test_policy_and_retention_records_are_evidence_not_restoration_authority(self):
+        policy = (RUST / 'policy_decisions.rs').read_text()
+        for token in ('OperationOutcome', 'PendingEffect', 'AuthenticationUnavailable',
+                      'GrantRevoked', 'CredentialsExpired', 'Archive', 'RENAME_NOREPLACE'):
+            self.assertIn(token, policy)
+        gc = (RUST / 'artifact_catalog/gc.rs').read_text()
+        for token in ('MIN_GRACE_SECONDS', 'MAX_GRACE_SECONDS', 'not_before_ms',
+                      'receipt_head', 'catalog_directory', 'unlinkat', 'uncertain-inspect-no-automatic-retry'):
+            self.assertIn(token, gc)
+        retention = (RUST / 'resource_manager/recovery.rs').read_text()
+        self.assertIn('let guard = shutdown_guard()?;', retention)
+        self.assertIn('EffectKind::Retention', retention)
+        self.assertIn('boundary.effect_begin(', retention)
 
     def test_assembly_packages_candidate_and_only_enables_seed_gated_units(self):
         """Run the actual packaging function with fake compiler and image links.
@@ -154,7 +186,11 @@ class RequirementOneIntegration(unittest.TestCase):
         self.assertIn('self.root.sync_all()?;\n        authorize(receipt)?;\n        transaction.commit()?;', artifact)
         grants = source.split("impl GrantBoundary<'_>", 1)[1].split('pub(crate) fn with_grant', 1)[0]
         final = grants.split('let final_observation = client.recheck', 1)[1]
-        self.assertLess(final.index('password_window('), final.index('self.fenced = false'))
+        self.assertLess(final.index('password_window('), final.index('Ok(GrantCapture {'))
+        boundary_check = grants.split('pub(crate) fn check(', 1)[1].split('fn capture(', 1)[0]
+        self.assertLess(boundary_check.index('let final_capture = match self.capture()'),
+                        boundary_check.index('self.fenced = false'))
+        self.assertIn('self.decisions(&final_capture)?', boundary_check)
         self.assertIn('original protected password epoch', final)
 
 

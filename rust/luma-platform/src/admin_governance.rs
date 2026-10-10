@@ -795,6 +795,85 @@ impl Drop for PrincipalSession {
     }
 }
 
+/// Current read-only projection of the real adopted account and TPM catalog.
+/// This is not authentication or admission; callers still require genuine PAM.
+pub(crate) fn current_principal(
+    login: &str,
+) -> Result<(
+    crate::principal::RegistryBinding,
+    crate::principal::Principal,
+    String,
+)> {
+    crate::require_root()?;
+    crate::platform::require_installed()?;
+    let registry =
+        crate::principal::RegistryBinding::capture(Path::new(crate::principal::REGISTRY))?;
+    let installation = registry.current()?.installation().to_owned();
+    let baseline = registry
+        .current()?
+        .account(login)
+        .filter(|p| p.enabled)
+        .ok_or("enabled installed principal unavailable")?
+        .clone();
+    let local = registry.current()?.identity(&baseline);
+    let mut store = Store::open(
+        tpm::LocalAnchor::installed()?,
+        &Path::new(DIRECTORY).join("journal.json"),
+    )?;
+    let binding = PrincipalReader::new(&mut store, Path::new(DIRECTORY)).resolve(&local)?;
+    let current = current_projection(&baseline, &binding.identity)?;
+    let snapshot = store.snapshot()?;
+    if snapshot.head != binding.checkpoint_head || snapshot.deployment != binding.deployment {
+        return Err("current principal projection changed before delivery".into());
+    }
+    let context = Context::load_at(
+        Path::new(DIRECTORY),
+        &snapshot.deployment,
+        Path::new(crate::principal::REGISTRY),
+    )?;
+    let (catalog, _) = context.events(&snapshot, None)?;
+    projection_available(&catalog, &current.id)?;
+    let final_snapshot = store.snapshot()?;
+    final_snapshot.clock.elapsed_since(snapshot.clock)?;
+    if final_snapshot.head != snapshot.head || final_snapshot.deployment != snapshot.deployment {
+        return Err("current principal catalog changed before delivery".into());
+    }
+    registry.current()?;
+    Ok((registry, current, installation))
+}
+
+fn current_projection(
+    baseline: &crate::principal::Principal,
+    identity: &serde_json::Value,
+) -> Result<crate::principal::Principal> {
+    let mut current = baseline.clone();
+    if identity["principal"].as_str() != Some(baseline.id.as_str())
+        || identity["login"].as_str() != Some(baseline.login.as_str())
+        || identity["uid"].as_u64() != Some(u64::from(baseline.uid))
+    {
+        return Err("current catalog principal does not match installed account".into());
+    }
+    current.generation = identity["generation"]
+        .as_u64()
+        .filter(|n| *n >= baseline.generation)
+        .ok_or("invalid current principal generation")?;
+    current.enabled = true;
+    Ok(current)
+}
+
+fn projection_available(catalog: &Catalog, principal: &str) -> Result<()> {
+    if catalog.deleted_principals.contains(principal)
+        || catalog.needs_password_aging.contains(principal)
+        || catalog
+            .principal_states
+            .get(principal)
+            .is_some_and(|state| !state.enabled)
+    {
+        return Err("current principal is deleted, disabled or awaiting activation".into());
+    }
+    Ok(())
+}
+
 /// An owned operation's live human, catalog and UTC boundary. The grant record
 /// itself is never returned, and neither this object nor its PAM session has a
 /// serialized form. The catalog writer lock is held only for each check, never
@@ -805,7 +884,19 @@ pub(crate) struct GrantBoundary<'a> {
     registry_path: &'a Path,
     client: crate::utc_provider::Client,
     uses: Vec<(String, crate::finite_grants::Use)>,
+    operation: crate::policy_decisions::Operation,
+    decision_ids: Vec<String>,
+    observation: Option<crate::utc_stream::Observation>,
+    capture_reason: crate::policy_decisions::Reason,
     fenced: bool,
+}
+
+struct GrantCapture {
+    catalog: Catalog,
+    identity: serde_json::Value,
+    head: String,
+    observation: crate::utc_stream::Observation,
+    credential_refusal: Option<crate::policy_decisions::Reason>,
 }
 
 impl GrantBoundary<'_> {
@@ -819,6 +910,7 @@ impl GrantBoundary<'_> {
             grant_id: self.uses[0].0.clone(),
             grant_version: 1,
             checkpoint_head: self.session.binding.checkpoint_head.clone(),
+            operation_id: Some(self.operation.id().into()),
             usage: self.uses[0].1.clone(),
         };
         record.validate()?;
@@ -836,36 +928,145 @@ impl GrantBoundary<'_> {
             .filter(|v| *v > 0)
             .ok_or_else(|| "missing governed subject generation".into())
     }
+    pub(crate) fn subject_uid(&self) -> Result<u32> {
+        self.session.binding.identity["uid"]
+            .as_u64()
+            .and_then(|v| u32::try_from(v).ok())
+            .filter(|v| *v > 0)
+            .ok_or_else(|| "missing actual governed human UID".into())
+    }
+
+    pub(crate) fn operation_id(&self) -> &str {
+        self.operation.id()
+    }
+
+    pub(crate) fn observation(&mut self) -> Result<crate::utc_stream::Observation> {
+        self.check()?;
+        self.observation
+            .take()
+            .ok_or_else(|| "missing actual protected policy observation".into())
+    }
+
+    pub(crate) fn effect_begin(
+        &mut self,
+        effect_id: &str,
+        kind: crate::policy_decisions::EffectKind,
+    ) -> Result<crate::policy_decisions::PendingEffect> {
+        self.check()?;
+        let pending = self
+            .operation
+            .effect_begin(effect_id, kind, &self.decision_ids)?;
+        self.check()?;
+        Ok(pending)
+    }
+
+    pub(crate) fn effect_complete(
+        &mut self,
+        pending: crate::policy_decisions::PendingEffect,
+        receipt_sha256: &str,
+    ) -> Result<()> {
+        pending.complete(self.operation.id(), receipt_sha256)?;
+        // A confirmed outcome is retained even when this final live check
+        // refuses. No denial can erase or re-dispatch an already committed effect.
+        self.check()
+    }
+
+    fn unavailable(&self, reason: crate::policy_decisions::Reason) -> Result<()> {
+        self.operation.decisions(
+            self.uses
+                .iter()
+                .map(|(grant, usage)| {
+                    crate::policy_decisions::Decision::unavailable(grant, usage, reason)
+                })
+                .collect::<Result<Vec<_>>>()?,
+        )?;
+        Ok(())
+    }
+
+    fn decisions(&self, capture: &GrantCapture) -> Result<Vec<crate::policy_decisions::Decision>> {
+        self.uses
+            .iter()
+            .map(|(grant, usage)| {
+                crate::policy_decisions::Decision::evaluate(
+                    &capture.catalog,
+                    &capture.identity,
+                    &capture.head,
+                    &capture.observation,
+                    grant,
+                    usage,
+                    capture.credential_refusal,
+                )
+            })
+            .collect()
+    }
 
     pub(crate) fn check(&mut self) -> Result<()> {
         if self.fenced {
             return Err("finite grant operation is permanently fenced".into());
         }
         self.fenced = true;
+        self.observation = None;
+        let captured = match self.capture() {
+            Ok(value) => value,
+            Err(error) => {
+                self.unavailable(self.capture_reason)?;
+                return Err(error);
+            }
+        };
+        let decisions = self.decisions(&captured)?;
+        let allowed = decisions
+            .iter()
+            .all(|v| v.outcome == crate::policy_decisions::DecisionOutcome::Allow);
+        self.decision_ids = self.operation.decisions(decisions)?;
+        if !allowed {
+            return Err("current finite policy denied the owned effect scopes".into());
+        }
+        // Evidence persistence can block and must never cache effect authority.
+        // Reopen the actual catalog/PAM/UTC projection AFTER that I/O, allowing
+        // a revocation writer to commit while the inert audit lock is held.
+        let final_capture = match self.capture() {
+            Ok(value) => value,
+            Err(error) => {
+                self.unavailable(self.capture_reason)?;
+                return Err(error);
+            }
+        };
+        let decisions = self.decisions(&final_capture)?;
+        if decisions
+            .iter()
+            .any(|v| v.outcome != crate::policy_decisions::DecisionOutcome::Allow)
+        {
+            self.operation.decisions(decisions)?;
+            return Err("finite policy changed after its durable decision".into());
+        }
+        self.observation = Some(final_capture.observation);
+        self.fenced = false;
+        Ok(())
+    }
+
+    fn capture(&mut self) -> Result<GrantCapture> {
+        self.capture_reason = crate::policy_decisions::Reason::CatalogUnavailable;
         let client = &mut self.client;
-        let uses = &self.uses;
+        let stage = &mut self.capture_reason;
         let directory = self.directory;
         let registry_path = self.registry_path;
         let mut store = Store::open(
             tpm::LocalAnchor::installed()?,
             &directory.join("journal.json"),
         )?;
+        *stage = crate::policy_decisions::Reason::PrincipalUnavailable;
         let (catalog, identity, history, observation) = self.session.observe_store(
             &mut PrincipalReader::at(&mut store, directory, registry_path),
             |identity, store| {
+                *stage = crate::policy_decisions::Reason::CatalogUnavailable;
                 let snapshot = store.snapshot()?;
                 let context = Context::load_at(directory, &snapshot.deployment, registry_path)?;
                 let catalog = context.events(&snapshot, None)?.0;
                 let history = HistoryReader::new(store, directory).read()?;
+                *stage = crate::policy_decisions::Reason::UtcUnavailable;
                 let current = client.current(&history)?;
+                *stage = crate::policy_decisions::Reason::AuthorityChanged;
                 history.recheck(&mut HistoryReader::new(store, directory))?;
-                for (grant_id, usage) in uses {
-                    catalog
-                        .grants
-                        .get(grant_id)
-                        .ok_or("no checkpointed exact grant")?
-                        .authorize(&catalog, identity, current.interval(), usage)?;
-                }
                 let final_snapshot = store.snapshot()?;
                 final_snapshot.clock.elapsed_since(snapshot.clock)?;
                 if final_snapshot.head != snapshot.head
@@ -881,12 +1082,14 @@ impl GrantBoundary<'_> {
         // Full catalog/PAM/history reads may block. Project from the SAME live
         // producer/keeper generation again after those reads, not from the
         // interval returned before semantic replay completed.
+        *stage = crate::policy_decisions::Reason::UtcUnavailable;
         let final_observation = client.recheck(&history, &observation)?;
+        *stage = crate::policy_decisions::Reason::CredentialsExpired;
         let principal = identity["principal"]
             .as_str()
             .ok_or("finite grant subject is missing")?;
-        if let Some(day) = catalog.password_day(principal) {
-            password_window(
+        let credential_refusal = if let Some(day) = catalog.password_day(principal) {
+            if password_window(
                 day,
                 self.session
                     .binding
@@ -894,19 +1097,25 @@ impl GrantBoundary<'_> {
                     .as_ref()
                     .ok_or("finite grant actor lacks its original protected password epoch")?,
                 &final_observation,
-            )?;
+            )
+            .is_err()
+            {
+                Some(crate::policy_decisions::Reason::CredentialsExpired)
+            } else {
+                None
+            }
         } else if self.session.binding.password_epoch.is_some() {
-            return Err("finite grant actor aging authority disappeared".into());
-        }
-        for (grant_id, usage) in uses {
-            catalog
-                .grants
-                .get(grant_id)
-                .ok_or("no checkpointed exact grant")?
-                .authorize(&catalog, &identity, final_observation.interval(), usage)?;
-        }
-        self.fenced = false;
-        Ok(())
+            Some(crate::policy_decisions::Reason::CredentialsExpired)
+        } else {
+            None
+        };
+        Ok(GrantCapture {
+            catalog,
+            identity,
+            head: self.session.binding.checkpoint_head.clone(),
+            observation: final_observation,
+            credential_refusal,
+        })
     }
 }
 
@@ -940,36 +1149,122 @@ pub(crate) fn with_grants<T>(
     }
     let directory = Path::new(DIRECTORY);
     let registry_path = Path::new(crate::principal::REGISTRY);
-    let attempt = {
+    let mut operation = crate::policy_decisions::Operation::begin(
+        crate::policy_decisions::Store::installed()?,
+        uses,
+    )?;
+    let prepared = (|| {
+        let attempt = {
+            let mut store = Store::open(
+                tpm::LocalAnchor::installed()?,
+                &directory.join("journal.json"),
+            )?;
+            PrincipalLogin::prepare(&mut PrincipalReader::new(&mut store, directory), login)?
+        };
+        let account = match authentication::local(login) {
+            Ok(value) => value,
+            Err(error) => {
+                operation.decisions(
+                    uses.iter()
+                        .map(|(grant, usage)| {
+                            crate::policy_decisions::Decision::unavailable(
+                                grant,
+                                usage,
+                                crate::policy_decisions::Reason::AuthenticationUnavailable,
+                            )
+                        })
+                        .collect::<Result<Vec<_>>>()?,
+                )?;
+                return Err(error);
+            }
+        };
         let mut store = Store::open(
             tpm::LocalAnchor::installed()?,
             &directory.join("journal.json"),
         )?;
-        PrincipalLogin::prepare(&mut PrincipalReader::new(&mut store, directory), login)?
+        let session = PrincipalSession::new(
+            account,
+            attempt,
+            &mut PrincipalReader::new(&mut store, directory),
+        )?;
+        drop(store);
+        Ok(session)
+    })();
+    let session = match prepared {
+        Ok(value) => value,
+        Err(error) => {
+            operation.decisions(
+                uses.iter()
+                    .map(|(grant, usage)| {
+                        crate::policy_decisions::Decision::unavailable(
+                            grant,
+                            usage,
+                            crate::policy_decisions::Reason::PrincipalUnavailable,
+                        )
+                    })
+                    .collect::<Result<Vec<_>>>()?,
+            )?;
+            operation.finish(crate::policy_decisions::OperationOutcome::Denied)?;
+            return Err(error);
+        }
     };
-    let account = authentication::local(login)?;
-    let mut store = Store::open(
-        tpm::LocalAnchor::installed()?,
-        &directory.join("journal.json"),
-    )?;
-    let session = PrincipalSession::new(
-        account,
-        attempt,
-        &mut PrincipalReader::new(&mut store, directory),
-    )?;
-    drop(store);
+    let client = match crate::utc_provider::Client::installed() {
+        Ok(value) => value,
+        Err(error) => {
+            operation.decisions(
+                uses.iter()
+                    .map(|(grant, usage)| {
+                        crate::policy_decisions::Decision::unavailable(
+                            grant,
+                            usage,
+                            crate::policy_decisions::Reason::UtcUnavailable,
+                        )
+                    })
+                    .collect::<Result<Vec<_>>>()?,
+            )?;
+            operation.finish(crate::policy_decisions::OperationOutcome::Denied)?;
+            return Err(error);
+        }
+    };
     let mut boundary = GrantBoundary {
         session: &session,
         directory,
         registry_path,
-        client: crate::utc_provider::Client::installed()?,
+        client,
         uses: uses.to_vec(),
+        operation,
+        decision_ids: Vec::new(),
+        observation: None,
+        capture_reason: crate::policy_decisions::Reason::PrincipalUnavailable,
         fenced: false,
     };
-    boundary.check()?;
-    let result = effect(&mut boundary)?;
-    boundary.check()?;
-    Ok(result)
+    if let Err(error) = boundary.check() {
+        boundary
+            .operation
+            .finish(crate::policy_decisions::OperationOutcome::Denied)?;
+        return Err(error);
+    }
+    let result = effect(&mut boundary);
+    match result {
+        Ok(value) => {
+            if let Err(error) = boundary.check() {
+                boundary
+                    .operation
+                    .finish(crate::policy_decisions::OperationOutcome::Uncertain)?;
+                return Err(error);
+            }
+            boundary
+                .operation
+                .finish(crate::policy_decisions::OperationOutcome::Completed)?;
+            Ok(value)
+        }
+        Err(error) => {
+            boundary
+                .operation
+                .finish(crate::policy_decisions::OperationOutcome::Uncertain)?;
+            Err(error)
+        }
+    }
 }
 
 /// Legacy qualification entrypoints are not alternate product effect routes.
@@ -10086,5 +10381,56 @@ mod tests {
         assert_eq!(replay["replayed"], true);
         assert_eq!(replay["delegation_available"], false);
         assert_eq!(restarted.snapshot().unwrap().head, committed);
+    }
+}
+
+#[cfg(test)]
+mod current_principal_projection_tests {
+    use super::*;
+    #[test]
+    fn projected_current_generation_is_catalog_bound_and_disabled_deleted_activation_refuse() {
+        let principal = "cd".repeat(32);
+        let registry:crate::principal::Registry=serde_json::from_value(serde_json::json!({"schema_version":1,
+            "installation":"ab".repeat(32),"principals":[{"id":principal,"generation":1,"login":"human","uid":1001,"enabled":true}]})).unwrap();
+        let baseline = registry.account("human").unwrap().clone();
+        let local = registry.identity(&baseline);
+        let mut catalog = Catalog::initial();
+        catalog
+            .apply(&Command::AdoptPrincipals { registry })
+            .unwrap();
+        catalog.principal_states.insert(
+            principal.clone(),
+            admin_roles::PrincipalState {
+                generation: 7,
+                enabled: true,
+            },
+        );
+        let identity = catalog.resolve_principal(&local).unwrap();
+        assert_eq!(
+            current_projection(&baseline, &identity).unwrap().generation,
+            7
+        );
+        assert_eq!(baseline.generation, 1);
+        projection_available(&catalog, &principal).unwrap();
+        catalog
+            .principal_states
+            .get_mut(&principal)
+            .unwrap()
+            .enabled = false;
+        assert!(catalog.resolve_principal(&local).is_err());
+        assert!(projection_available(&catalog, &principal).is_err());
+        catalog
+            .principal_states
+            .get_mut(&principal)
+            .unwrap()
+            .enabled = true;
+        catalog.deleted_principals.insert(principal.clone());
+        assert!(projection_available(&catalog, &principal).is_err());
+        catalog.deleted_principals.clear();
+        catalog.needs_password_aging.insert(principal.clone());
+        assert!(projection_available(&catalog, &principal).is_err());
+        let mut counterfeit = identity;
+        counterfeit["uid"] = 1002.into();
+        assert!(current_projection(&baseline, &counterfeit).is_err());
     }
 }

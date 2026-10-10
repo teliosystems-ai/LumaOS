@@ -1,9 +1,9 @@
 # Requirement #1 integrated source candidate — 2026-10-10
 
-Status: **implementation increment, not Requirement #1 completion or production qualification**.
+Status: **integrated source candidate, not Requirement #1 completion or production qualification**.
 The owner authorized parallel implementation and requested a single integrated
 deliverable. Source remains on C:; build inputs, tool downloads, temporary test
-fixtures and eventual images remain on D:. No commit, service restart, host
+fixtures and eventual images remain on D:. No host service restart, host
 clock adjustment, host account mutation or TPM ownership/NV mutation was made
 for the source increment. On 2026-10-10 the owner separately approved restarting
 Ubuntu WSL, followed by full WSL shutdown after the narrower restart failed.
@@ -12,12 +12,14 @@ Ubuntu WSL, followed by full WSL shutdown after the narrower restart failed.
 
 | Component | Implemented candidate boundary | Qualification still required |
 | --- | --- | --- |
-| Account activation/renewal | Explicit protected-UTC day, exact retained shadow transaction, principal-generation fencing, reviewed permission/publication/completion, finite aging window | Rust compilation; real PAM/TPM lifecycle; expiry, interrupted publication and restart |
+| Account activation/renewal | Explicit protected-UTC day, exact retained shadow transaction, principal-generation fencing, reviewed permission/publication/completion, approved 90-day aging window | Real PAM/TPM lifecycle; expiry, interrupted publication and restart |
 | Original Admin OS password/lock recovery | Separate offline-custody actor, prior checkpointed credential, verifier rotation and principal fencing before publication; exact prepare/publish/complete | Native positive/negative custody, OS-lock/password drift and interrupted recovery |
-| Protected UTC | Fixed keeper/producer units and profiles; admitted query peer, private live observation, authenticated seed/history; explicit reviewed fixed-unit reacquisition | Linux Rust/C build; systemd/AppArmor startup; NTS, clock/rate/suspend envelopes |
+| Protected UTC | Fixed keeper/producer units and profiles; admitted query peer, private live observation, authenticated seed/history; explicit reviewed fixed-unit reacquisition | Installed systemd/AppArmor startup; NTS, clock/rate/suspend envelopes |
 | Finite grants | Shared TPM catalog assignments/grants/revocation, exact typed selector and subject generation, finite validity and input/output/unit ceilings; fresh PAM/catalog/live UTC checks | Native issuance/revocation/admission, expiry and concurrency qualification |
 | Inference | Live original-client challenge at submit/claim/admit/finish/delivery, exact physical lease binding, durable inert grant attribution, fixed confined launcher | Real installed client/broker/model route, malicious/stale peer and revocation checks |
-| Workflow/artifacts | Principal-bound closed invoice plan, fresh batch grants at worker/effect/checkpoint boundaries, original calculation provenance on retry; reviewed historical acknowledgement without redispatch; exact version export and preserving retention | Native journal/catalog/worker flows, failures at every boundary; wider workflows and retention are not implemented by this path |
+| Policy evidence | Typed durable decisions with normalized scopes, actual PAM/catalog/grant/role evidence, protected UTC, stable denial reasons and pending/confirmed/uncertain effects; exact archive-before-unlink | Installed positive/adversarial flows; approved long-term archive lifecycle beyond bounded local capacity |
+| Workflows/artifacts | Signed closed typed DAGs with branched reads, leased bounded batch calculations and artifact writes; principal-isolated journals/catalogs; exact replay/cancellation/committed recovery; historical invoice route retains original provenance | Installed journal/catalog/worker flows, failures at every boundary; migration of old global laboratory state is not automatic |
+| Sources and cleanup | Principal input-folder ACL provisioning, retained source descriptors, separate inspection/Retain/Delete grants, protected-UTC artifact grace, explicit offline resource evidence deletion | Effective installed DAC/AppArmor/worker and recovery enforcement; protected damaged-authority reconstruction remains open |
 
 Protected UTC bootstrap does not require inventing a live time capability:
 seed-only principal/custody actors can submit an independently reviewed bound.
@@ -73,6 +75,80 @@ exact canonical receipt and each bounded output block. Already returned bytes
 cannot be retracted after revocation; uncertainty must preserve the destination.
 Retaining a preparation preserves its bytes—it is not artifact deletion.
 
+## Typed workflow and cleanup interfaces
+
+The fixed launcher now also accepts `workflow-dag-review`, `workflow-dag-prepare`,
+`workflow-dag-status`, `workflow-dag-advance`, `workflow-dag-cancel` and
+`workflow-dag-reconcile`. Review/prepare take bounded JSON proposal **files**;
+status/advance/cancel/reconcile take bounded JSON grant-map files. The launcher
+captures files into its root-private read-only `/run` snapshots before PAM.
+Supported nodes are FileRead, DeterministicCalculate and ArtifactWrite, not
+arbitrary shell or model-generated code. Calculation combines at most sixteen
+dependencies into a canonical input of at most 1 MiB under a fresh worker lease.
+
+Before use, `workflow-inputs-review LOGIN` returns the exact provisioning scope.
+`workflow-inputs-init LOGIN EXECUTE-GRANT REVIEW` performs the separately granted
+creation through `granted-run`. Sources belong under the returned fixed
+`/var/lib/luma-os/workflow-inputs/<principal-domain>` path. The human can create
+files there; the runtime obtains only descriptor-scoped read access. Restrictive
+permissions can still refuse a read. No private home access or DAC override is
+added. `workflow-source-review ROOT RELATIVE` runs as the ordinary human, not
+through sudo, and returns an inert identity for the exact source.
+
+New governed DAG and historical invoice stores and artifact catalogs are
+partitioned by the installation principal. Owned catalog identity is schema
+version 2; old laboratory catalogs keep their original schema and bytes. Missing,
+partial or foreign state is not silently adopted, relabeled or reset.
+
+Owned artifacts use `artifact-owned-export-review LOGIN READ-GRANT ARTIFACT VERSION`
+and `artifact-owned-export LOGIN READ-GRANT EXPORT-GRANT ARTIFACT VERSION` through
+the fixed launcher. Each output block rechecks both independently authenticated
+scopes. Preservation uses `artifact-owned-retain-proposal LOGIN READ-GRANT REQUEST`
+then `artifact-owned-retain LOGIN READ-GRANT RETAIN-GRANT REQUEST REVIEW`. These
+routes open only the current principal's catalog, not the older global laboratory
+catalog. Export emits exact content bytes on stdout; do not treat a partial
+destination as a confirmed export.
+
+Artifact cleanup commands, through `granted-run`, are:
+
+- `artifact-gc-inspection-review LOGIN`
+- `artifact-gc-proposal LOGIN READ-GRANT object|retained NAME GRACE-SECONDS`
+- `artifact-gc-mark LOGIN READ-GRANT RETAIN-GRANT AREA NAME GRACE-SECONDS REVIEW`
+- `artifact-gc-delete-proposal LOGIN READ-GRANT MARK-SHA256`
+- `artifact-gc-delete LOGIN READ-GRANT DELETE-GRANT MARK-SHA256 REVIEW`
+- `artifact-gc-outcomes LOGIN READ-GRANT`
+
+Read inspection and the exact mutation are independently authenticated and may
+prompt twice. Grace is explicitly selected between 3,600 and 2,592,000 seconds;
+protected UTC must establish its expiry. Referenced committed-version bytes are
+never deletion targets. Exact mark/intent/outcome records preserve ambiguous
+results for investigation; missing bytes are not evidence of successful deletion.
+
+`policy-evidence-review OPERATION-ID` and
+`policy-evidence-retain LOGIN RETAIN-GRANT OPERATION-ID REVIEW` archive exact
+closed operations before removing their originals. Pending evidence has separate
+`policy-evidence-pending-review MEMBER` and
+`policy-evidence-pending-retain LOGIN RETAIN-GRANT MEMBER REVIEW` paths.
+Archives and retained partial bytes remain evidence, not restoration authority.
+Local evidence quotas refuse safely when exhausted; indefinite external archive
+export/deletion has not been implemented.
+Active canonical evidence is bounded to 16 MiB, with 4 MiB reserved for terminal
+and maintenance records; each archive is at most 8 MiB and all archives together
+at most 512 MiB. Interrupted archive sweeps compare exact surviving originals
+without expanding all historical graphs into admission memory. Physical residuals
+continue to count against actual disk quotas.
+
+`resource-retention --proposal NAME...` returns an exact evidence-deletion scope;
+`resource-retention LOGIN RETAIN-GRANT REVIEW NAME...` requires proved offline
+drainage and exclusion. It cannot delete referenced history, leases, generations,
+retired-owner records or request tombstones. `--outcomes` reports durable results.
+The supported native Linux initial PID namespace is verified through the caller's
+nsfs descriptor, namespace-type ioctl and kernel initial namespace inode. This
+avoids ptrace access to non-dumpable systemd and adds no capabilities. The kernel
+contract is pinned to [Linux proc namespace definitions](https://github.com/torvalds/linux/blob/v6.8/include/linux/proc_ns.h)
+and [namespace access checks](https://github.com/torvalds/linux/blob/v6.8/fs/proc/namespaces.c);
+unsupported or nested layouts refuse.
+
 ## Candidate image composition
 
 Selected producer input: official chrony **4.9**, independently pinned archive
@@ -95,7 +171,64 @@ is not setuid, checks the real enforcing kernel peer and live PIDFD, and has
 bounded parent/child supervision. Restart requires explicit authenticated review,
 invalidates the old generation and returns to independent seed acquisition.
 
-## Verification and unavailable evidence
+## Integrated development test results
+
+The frozen functional candidate passed the coordinated offline Linux sweep:
+**782 Rust tests passed, zero failed, 38 fixture-only tests were not directly
+selected; 320 native source/packaging tests passed, with two external chrony
+fixture checks unavailable.** The 38 Rust fixture entries are not 38 additional
+passes; some are child entry points exercised by their ordinary parent tests.
+No ignored fixture was reclassified as a passing test.
+
+Source manifest SHA-256:
+`6392c479dbd4b4979746ea56b2b3b2090b4db6e821494cb2dfde840bd3dc0dad`.
+Evidence is under `/mnt/luma-build/work/r1-integrated-evidence-20261010-final2/sweep`
+on the D-backed ext4 store. The actual runner recorded successful exit codes for
+both lanes; total elapsed time was 837.307 seconds. Its immutable input closure
+includes native C fixtures and the ADR source embedded in the policy digest.
+
+This follows a 724-pass baseline with eighteen failures: seventeen came from a
+private temporary ancestor blocking isolated worker UIDs, and one exposed a
+call-count-dependent fault injection after a new freshness check. Storage tests
+now use a separate private ext4 root while unprivileged fixtures use `/tmp` mode
+1777. The fault injection now targets the actual metadata phase; production
+permission and freshness checks were not relaxed. An earlier integrated attempt
+failed compilation because its snapshot omitted the embedded ADR file. Normal
+build snapshots now include `docs/adr`, and that failure remains a failed attempt.
+
+The full sweep used the pinned tools image, one CPU, a 2 GiB memory limit and no
+network or attached host TPM. Source was mounted read-only. The disposable
+container root was writable for the container-only dracut/udev packaging fixture;
+no host system directory was mounted writable. Subsequent changes remove five
+unused mutable callback bindings and extend only the test runner's explicit
+targeted/PAM modes. Their warning-denied regression result is recorded separately.
+
+The final post-cleanup verification passed with `RUSTFLAGS=-Dwarnings`:
+all Rust production and test targets type-checked, **21 workflow regression tests
+passed**, the native suite again passed **320 of 322 tests** with the same two
+unavailable chrony checks, and **all six real PAM fixture cases passed**. PAM
+covered acceptance, lock, account expiry, password aging, nologin and profile
+tampering in disposable container accounts; no product Admin was enrolled.
+This targeted verification is not a second full 782-test sweep.
+
+Final source manifest SHA-256:
+`06d397d24c9249b7a2272867752c357ffef5e877194e2181b9646b03bedc583e`.
+Runner SHA-256:
+`ffa3f538c57c2d39a3ee43f079ce70033e9d6252ad23a33eef49166368a52d89`.
+The four successful lanes took 217.555 seconds in total. Their transcript hashes
+and exit codes are preserved in
+`/mnt/luma-build/work/r1-integrated-evidence-20261010-final4/sweep/result.json`.
+An intermediate warnings-denied attempt failed on two remaining unused mutable
+forwarding bindings; its compile and dependent PAM failure remain recorded under
+the `final3` evidence directory. Removing those bindings changed no execution
+logic. All five forwarding-binding warnings are absent in the final check.
+
+The granted-client profile also parsed with Ubuntu WSL's AppArmor
+5.0.0~beta1 parser using `--skip-kernel-load --skip-cache --config-file /dev/null`.
+No profile was loaded or cached. This is syntax checking on the host parser,
+not enforcement evidence or qualification of the Ubuntu 24.04 image tuple.
+
+## Earlier verification and recovery of the build environment
 
 - Windows targeted integration/account/package/UTC source checks: **37 passed**,
   no skips in that invocation. Assembly tests mock compiler/chroot/link creation;
@@ -159,22 +292,24 @@ effective confinement, clock qualification or physical certification is claimed.
 
 ## Still open before Requirement #1 closes
 
-1. Complete durable ADR-0004 policy decision/outcome records, including normalized
-   subject/resource, policy version/digest, stable denial codes, evaluated limits
-   and genuine timestamp evidence. Current grant attribution is not that journal.
-2. Broader generic DAG, folder-scoped file, worker/resource and multi-consumer
-   integration. A governed fixed invoice graph does not implement every graph
-   admitted by the schema or all declared grant action kinds.
-3. Governed destructive retention/deletion with exact durable outcomes, retention
-   quotas and interruption/replay. Preserving rename/export does not close it.
-4. Authenticated damaged-authority/ledger/referenced-archive reconstruction from
+1. Authenticated damaged-authority/ledger/referenced-archive reconstruction from
    exact protected history, after proved drainage. The new shutdown guard is an
    isolation proof, not restoration. Never delete a ledger or substitute an empty
-   one to make recovery appear successful.
-5. Compile and repair every new Rust/C path in the restored D-backed Linux build
-   environment; execute targeted positive/adversarial tests. Then freeze the
-   fully implemented candidate, build once on D:, and perform the consolidated
-   image/model sweep followed by separate native Ubuntu/physical qualification.
+   one to make recovery appear successful. A separate TPM2-backed checkpoint
+   authority is proposed and awaits the owner's custody decision. Reusing the
+   shared Admin journal for each lease heartbeat would conflict with its writer
+   and custody boundaries; unanchored backups cannot become authority.
+2. Complete the approved long-term evidence/workflow history retention lifecycle,
+   including archive capacity, closed-run and deleted-principal disposition, and
+   explicit export/disposition rather than treating quota refusal as indefinite
+   operation. Historical records are preserved, not automatically purged.
+3. Qualify the actual account/UTC/grant/worker/retention paths together under
+   installed confinement. The development failures described above are repaired;
+   passing unit and disposable-container tests cannot establish installed
+   qualification.
+4. Freeze the fully implemented candidate, build once on D:, and perform the
+   consolidated image/model sweep followed by separate native Ubuntu/physical
+   qualification.
 
 Requirement #2 has not been started. Neither Requirement #1 nor G2 is marked
-complete; unavailable compilation does not explain away the remaining software.
+complete; the passing development sweep does not eliminate the remaining software.

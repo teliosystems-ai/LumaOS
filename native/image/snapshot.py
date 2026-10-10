@@ -11,7 +11,7 @@ import os
 from pathlib import Path
 import stat
 
-FOLDERS = ('rust', 'native/image', 'src', 'web', 'schemas', 'examples')
+FOLDERS = ('rust', 'native/image', 'src', 'web', 'schemas', 'examples', 'docs/adr')
 EXCLUDED = {'target', '__pycache__', '.git'}
 MAX_FILE = 16*1024*1024
 MAX_TOTAL = 64*1024*1024
@@ -23,7 +23,7 @@ def identity(metadata):
             metadata.st_mtime_ns, metadata.st_ctime_ns)
 
 
-def inventory(repository):
+def inventory(repository, include_tests=False):
     files = {}
     def visit(path):
         relative = path.relative_to(repository).as_posix()
@@ -40,7 +40,8 @@ def inventory(repository):
             files[relative] = identity(metadata)
         else:
             raise ValueError('source snapshot refuses links and special files: '+relative)
-    for name in FOLDERS:
+    folders = FOLDERS + (('native/tests',) if include_tests else ())
+    for name in folders:
         path = repository/name
         for parent in (path, *path.parents):
             if parent == repository:
@@ -54,15 +55,16 @@ def inventory(repository):
     return files
 
 
-def capture(repository, output):
+def capture(repository, output, include_tests=False):
     repository = repository.resolve(strict=True)
     if output.is_symlink() or output.exists():
         raise ValueError('source snapshot destination must be new')
     output = output.resolve()
-    for name in FOLDERS:
+    folders = FOLDERS + (('native/tests',) if include_tests else ())
+    for name in folders:
         if output.is_relative_to(repository/name):
             raise ValueError('snapshot output cannot be inside a captured source tree')
-    before = inventory(repository)
+    before = inventory(repository, include_tests=include_tests)
     output.mkdir(parents=True, mode=0o700)
     records = []
     for relative, expected in sorted(before.items()):
@@ -87,7 +89,7 @@ def capture(repository, output):
         # executable bit, not writable or special permission bits.
         target.chmod(0o555 if expected[2] & 0o111 else 0o444)
         records.append({'path':relative, 'bytes':total, 'sha256':digest.hexdigest()})
-    if inventory(repository) != before:
+    if inventory(repository, include_tests=include_tests) != before:
         raise ValueError('source inventory changed during capture')
     manifest = {'schema_version':1, 'files':records}
     with (output/'build-inputs.json').open('x') as stream:
@@ -101,8 +103,10 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--repository', type=Path, required=True)
     parser.add_argument('--output', type=Path, required=True)
+    parser.add_argument('--include-tests', action='store_true',
+                        help='capture native fixtures and the offline development sweep')
     args = parser.parse_args()
-    manifest = capture(args.repository, args.output)
+    manifest = capture(args.repository, args.output, include_tests=args.include_tests)
     print(f"Captured {len(manifest['files'])} source files at {args.output}", flush=True)
 
 

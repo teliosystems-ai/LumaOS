@@ -1,0 +1,60 @@
+{
+  "schema_version": 1,
+  "requirement": 1,
+  "date": "2026-10-10",
+  "status": "integrated-source-candidate",
+  "gate_closing": false,
+  "installed_image_tested": false,
+  "physical_tpm_tested": false,
+  "production_authorization_qualified": false,
+  "functional_sweep": {
+    "evidence_directory": "/mnt/luma-build/work/r1-integrated-evidence-20261010-final2/sweep",
+    "source_manifest_sha256": "6392c479dbd4b4979746ea56b2b3b2090b4db6e821494cb2dfde840bd3dc0dad",
+    "runner_sha256": "d82c1f3b4bccffe83e5eb8f8e88724242a413a05acde955d46b3c01b68a519e8",
+    "result": "passed",
+    "elapsed_seconds": 837.307,
+    "rust": {
+      "passed": 782,
+      "failed": 0,
+      "ignored": 38,
+      "transcript_sha256": "0b51c89e827d34faaf64619b1b414ea14df9ae67a21693ca2fcbb7a42841891a"
+    },
+    "native_source": {
+      "discovered": 322,
+      "passed": 320,
+      "failed": 0,
+      "skipped": 2,
+      "transcript_sha256": "443e17c7eda3f8250410692e1c54a18af13cd88986b83e351fb7bf1d780f10ec"
+    }
+  },
+  "post_cleanup_verification": {
+    "evidence_directory": "/mnt/luma-build/work/r1-integrated-evidence-20261010-final4/sweep",
+    "source_manifest_sha256": "06d397d24c9249b7a2272867752c357ffef5e877194e2181b9646b03bedc583e",
+    "runner_sha256": "ffa3f538c57c2d39a3ee43f079ce70033e9d6252ad23a33eef49166368a52d89",
+    "result": "passed",
+    "elapsed_seconds": 217.555,
+    "warnings_denied": true,
+    "all_targets_check_exit_code": 0,
+    "all_targets_transcript_sha256": "7d861a6345b1a44bb813b1d5591226fe55d1c29fdc40004bb80b91d7be541607",
+    "rust_filter": "workflow_runs::tests",
+    "rust_passed": 21,
+    "rust_failed": 0,
+    "rust_filtered_out": 799,
+    "rust_transcript_sha256": "3de6e7fd73b9b41a089f8c570ee5ab01f263daa864430fed0850935a0c531334",
+    "native_source_passed": 320,
+    "native_source_skipped": 2,
+    "native_source_transcript_sha256": "fd5ee5b18251a210df426ae5c777cd8989d7e8685cc6bd9ddd0f72ecc38e71f9",
+    "real_pam_cases_passed": 6,
+    "real_pam_transcript_sha256": "2776b9f3a77d0cdbc50ff7bef5ca3784923464ca4c3be823a9df1a693e823d5b",
+    "product_admin_enrolled": false
+  },
+  "remaining_software": [
+    "Independently protected resource checkpoint authority and damaged-authority reconstruction; custody approval pending",
+    "Long-term evidence/workflow history export and disposition, including closed runs and deleted principals"
+  ],
+  "remaining_qualification": [
+    "Installed account, UTC, grant, worker, retention and confinement integration",
+    "Final D-drive image build and consolidated image/model sweep",
+    "Separate native Ubuntu and physical security/recovery qualification"
+  ]
+}

@@ -28,17 +28,39 @@ See [the integrated deliverable and qualification limits](evidence/G2_REQUIREMEN
 Ubuntu WSL relaunched successfully after the owner-approved full WSL shutdown
 on 2026-10-10. The dedicated Docker daemon/cache remains on the D-backed ext4
 mount; Docker Desktop's distribution is stopped. The earlier WSL startup blocker
-is resolved. A bounded offline Linux `cargo check --tests` now passes, including
-the C helper build, with three unused shutdown-guard warnings. This type-check
+is resolved. A bounded offline Linux `cargo check --tests` passed, including
+the C helper build. Its unused shutdown guard is now consumed by offline cleanup. This type-check
 does not run tests or link/qualify the final release image; native positive flows
 and recovery integration remain open. The owner approved the 90-day
 password-aging duration on 2026-10-10; it is an explicit implementation policy,
 not a number specified by the original governing documents.
 
-Requirement #1 remains open: complete typed policy-decision/outcome evidence,
-generic DAG/folder/worker consumers, governed destructive retention/deletion,
-and protected damaged-authority reconstruction are still required, alongside
-the integrated/native qualification. Do not advance to Requirement #2.
+The subsequent integrated source adds typed durable policy decisions and effect
+outcomes, signed supported typed DAG execution, descriptor-bound source reads,
+separately granted input-folder ACL provisioning, principal-isolated workflow and
+artifact stores, and governed orphan/preparation cleanup with protected-UTC grace.
+Offline resource cleanup proves drainage before exact unreferenced evidence
+deletion. No broader client capability or host mutation was added.
+
+Requirement #1 remains open for independently anchored damaged-authority
+reconstruction, long-term evidence/workflow history disposition, and integrated
+installed qualification. The proposed separate TPM2 checkpoint authority awaits
+the owner's custody decision; a backup checksum is not rollback protection.
+The current source has not been built into a final image. Do not advance to
+Requirement #2.
+
+The expanded functional source passed its D-backed offline sweep: **782 Rust
+tests passed with zero failures and 38 fixture-only entries not directly selected;
+320 Linux source/packaging tests passed, with two external chrony checks
+unavailable.** This is unit/development evidence, not installed PAM/TPM/AppArmor,
+real-model, image or physical qualification. See the integrated evidence linked
+above for the frozen input hash and post-sweep verification scope.
+
+Post-cleanup verification also passed with Rust warnings denied: all production
+and test targets type-checked, 21 workflow regression tests passed, the native
+suite repeated its 320 passes/two unavailable checks, and six real PAM cases
+passed in disposable accounts. These targeted tests do not add another full
+782-test sweep or qualify an installed product Admin/TPM/confinement path.
 
 ### UTC runtime admission and measurement endpoint
 

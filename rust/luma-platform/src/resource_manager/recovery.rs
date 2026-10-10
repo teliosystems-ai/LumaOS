@@ -11,6 +11,12 @@ const UNITS: [&str; 3] = [
 ];
 const MAX_TASKS: usize = 32_768;
 const MAX_STATUS: u64 = 65_536;
+// Supported native Linux namespace ABI, reviewed against Linux v6.8
+// include/linux/proc_ns.h and fs/nsfs.c. Unknown kernel namespace layouts refuse
+// recovery; a namespace name, ancestor-access error or caller PID is not proof.
+const PROC_PID_INIT_INO: u64 = 0xEFFFFFFC;
+const NSFS_MAGIC: libc::c_long = 0x6e736673;
+const NS_GET_NSTYPE: libc::c_ulong = 0xb703;
 
 #[derive(Clone, Serialize)]
 struct Observation {
@@ -290,6 +296,31 @@ fn no_model_tasks(proc: &File) -> Result<()> {
     Ok(())
 }
 
+fn initial_pid_identity(filesystem: libc::c_long, namespace_type: i32, inode: u64) -> Result<()> {
+    if filesystem != NSFS_MAGIC
+        || namespace_type != libc::CLONE_NEWPID
+        || inode != PROC_PID_INIT_INO
+    {
+        return Err("offline recovery requires the supported kernel initial PID namespace".into());
+    }
+    Ok(())
+}
+
+fn initial_pid_namespace(namespace: &File) -> Result<()> {
+    let mut info: libc::statfs = unsafe { std::mem::zeroed() };
+    if unsafe { libc::fstatfs(namespace.as_raw_fd(), &mut info) } != 0 {
+        return Err(std::io::Error::last_os_error().into());
+    }
+    if info.f_type != NSFS_MAGIC {
+        return Err("offline recovery namespace descriptor is not kernel nsfs".into());
+    }
+    let kind = unsafe { libc::ioctl(namespace.as_raw_fd(), NS_GET_NSTYPE) };
+    if kind < 0 {
+        return Err(std::io::Error::last_os_error().into());
+    }
+    initial_pid_identity(info.f_type, kind, namespace.metadata()?.ino())
+}
+
 fn trusted_proc() -> Result<File> {
     let proc = OpenOptions::new()
         .read(true)
@@ -298,12 +329,27 @@ fn trusted_proc() -> Result<File> {
     let mut info: libc::statfs = unsafe { std::mem::zeroed() };
     if unsafe { libc::fstatfs(proc.as_raw_fd(), &mut info) } != 0
         || info.f_type != 0x9fa0
-        || fs::read_link("/proc/self/ns/pid")? != fs::read_link("/proc/1/ns/pid")?
         || safe_text(Path::new("/proc/1/comm"), 64)?.trim() != "systemd"
     {
         return Err("offline recovery requires the installed systemd PID namespace".into());
     }
     visible_proc_mount(&safe_text(Path::new("/proc/self/mountinfo"), 1024 * 1024)?)?;
+    // Follow only our own procfs kernel namespace link. Reading PID1's namespace
+    // is ptrace-gated when systemd is non-dumpable; it must not require granting
+    // the client CAP_SYS_PTRACE. The actual nsfs descriptor and fixed initial
+    // kernel inode reject nested systemd containers without ancestor assertions.
+    let member = CString::new("self/ns/pid")?;
+    let fd = unsafe {
+        libc::openat(
+            proc.as_raw_fd(),
+            member.as_ptr(),
+            libc::O_RDONLY | libc::O_CLOEXEC,
+        )
+    };
+    if fd < 0 {
+        return Err(std::io::Error::last_os_error().into());
+    }
+    initial_pid_namespace(&unsafe { File::from_raw_fd(fd) })?;
     Ok(proc)
 }
 
@@ -487,6 +533,51 @@ pub(crate) fn shutdown_guard() -> Result<ShutdownGuard> {
     Ok(guard)
 }
 
+/// Governed destructive retention is offline and narrowly scoped to redundant,
+/// unreferenced archive evidence. Runtime masks, complete task drainage and
+/// lifetime exclusions stay held through PAM and every actual unlink boundary.
+/// Referenced archive receipts and resource accounting are never rewritten.
+pub(crate) fn retention_command(args: &[String]) -> Result<()> {
+    let guard = shutdown_guard()?;
+    let directory = Path::new(resources::DIRECTORY);
+    // Diagnostic or product retention must not create a missing exclusion in
+    // damaged authority. Only the existing private lock can be consumed here.
+    crate::tpm::private_read(&directory.join("ledger.lock"), 0)?;
+    let mut store = Store::open(directory)?;
+    let result = match args {
+        [mode] if mode == "--outcomes" => {
+            guard.check()?;
+            let outcomes = store.retention_outcomes()?;
+            guard.check()?;
+            outcomes
+        }
+        [mode, names @ ..] if mode == "--proposal" => {
+            guard.check()?;
+            let proposal = store.retention_proposal(names)?;
+            guard.check()?;
+            proposal
+        }
+        [login, grant, reviewed, names @ ..] if !names.is_empty() => {
+            let usage = store.retention_usage(names, reviewed)?;
+            guard.check()?;
+            crate::admin_governance::with_grant(login, grant, &usage, |boundary| {
+                guard.check()?;
+                let pending = boundary.effect_begin(reviewed, crate::policy_decisions::EffectKind::Retention)?;
+                let receipt = store.delete_retained_checked(names, reviewed, || {
+                    boundary.check()?;
+                    guard.check()
+                })?;
+                let digest = crate::bundle::hex(&Sha256::digest(serde_json::to_vec(&receipt)?));
+                boundary.effect_complete(pending, &digest)?;
+                Ok(receipt)
+            })?
+        }
+        _ => return Err("expected resource-retention --proposal NAME... | --outcomes | LOGIN GRANT REVIEW-SHA256 NAME...".into()),
+    };
+    println!("{}", serde_json::to_string(&result)?);
+    Ok(())
+}
+
 pub(crate) fn status() -> Result<()> {
     crate::require_root()?;
     crate::platform::require_installed()?;
@@ -661,6 +752,30 @@ mod tests {
         assert!(visible_proc_mount(&valid.replace("/ /proc", "/123 /proc")).is_err());
         assert!(visible_proc_mount(&valid.replace("- proc", "- tmpfs")).is_err());
         assert!(visible_proc_mount("a - proc / /proc").is_err());
+    }
+    #[test]
+    fn namespace_identity_refuses_nested_forged_or_unfamiliar_layouts() {
+        initial_pid_identity(NSFS_MAGIC, libc::CLONE_NEWPID, PROC_PID_INIT_INO).unwrap();
+        for (filesystem, kind, inode) in [
+            (NSFS_MAGIC, libc::CLONE_NEWPID, PROC_PID_INIT_INO + 1),
+            (NSFS_MAGIC, libc::CLONE_NEWPID, 0),
+            (NSFS_MAGIC, libc::CLONE_NEWUSER, PROC_PID_INIT_INO),
+            (0x9fa0, libc::CLONE_NEWPID, PROC_PID_INIT_INO),
+            (0x01021994, libc::CLONE_NEWPID, PROC_PID_INIT_INO),
+        ] {
+            assert!(initial_pid_identity(filesystem, kind, inode).is_err());
+        }
+    }
+    #[test]
+    fn actual_namespace_fd_requires_kernel_pid_type_and_initial_inode() {
+        assert!(initial_pid_namespace(&File::open("/dev/null").unwrap()).is_err());
+        assert!(initial_pid_namespace(&File::open("/proc").unwrap()).is_err());
+        assert!(initial_pid_namespace(&File::open("/proc/self/ns/mnt").unwrap()).is_err());
+        let pid = File::open("/proc/self/ns/pid").unwrap();
+        assert_eq!(
+            initial_pid_namespace(&pid).is_ok(),
+            pid.metadata().unwrap().ino() == PROC_PID_INIT_INO
+        );
     }
     #[test]
     fn review_binds_each_exclusion_and_does_not_publish_after_any_drift() {

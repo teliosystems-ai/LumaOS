@@ -67,14 +67,29 @@ class SnapshotTests(unittest.TestCase):
 
     def test_mutation_during_capture_cannot_publish_completion_manifest(self):
         real_inventory = snapshot.inventory
-        def changed(repository):
+        def changed(repository, include_tests=False):
             if self.output.exists():
                 (repository/'src/new-file').write_text('concurrent edit')
-            return real_inventory(repository)
+            return real_inventory(repository, include_tests=include_tests)
         with mock.patch.object(snapshot, 'inventory', side_effect=changed):
             with self.assertRaisesRegex(ValueError, 'inventory changed'):
                 snapshot.capture(self.repository, self.output)
         self.assertFalse((self.output/'build-inputs.json').exists())
+
+    def test_test_lane_captures_and_bounds_native_fixtures(self):
+        tests = self.repository/'native/tests'
+        tests.mkdir()
+        fixture = tests/'pam_account_driver.c'
+        fixture.write_text('fixture source\n')
+        self.assertNotIn('native/tests/pam_account_driver.c',
+                         snapshot.inventory(self.repository))
+        record = snapshot.capture(self.repository, self.output, include_tests=True)
+        self.assertIn('native/tests/pam_account_driver.c',
+                      {item['path'] for item in record['files']})
+        self.assertEqual((self.output/'native/tests/pam_account_driver.c').read_text(),
+                         'fixture source\n')
+        with self.assertRaises(ValueError):
+            snapshot.capture(self.repository, tests/'recursive', include_tests=True)
 
     def test_file_count_size_and_total_bounds(self):
         for bound, limit in (('MAX_FILE', 1), ('MAX_TOTAL', 1), ('MAX_FILES', 1)):

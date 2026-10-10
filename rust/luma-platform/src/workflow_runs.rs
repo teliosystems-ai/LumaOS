@@ -12,6 +12,9 @@ use std::os::unix::fs::{DirBuilderExt, MetadataExt};
 use std::path::Path;
 
 const DIRECTORY: &str = "/var/lib/luma-os/workflow-runs";
+const GOVERNED_DIRECTORY: &str = "/var/lib/luma-os/workflow-invoice-domains";
+#[path = "workflow_dag.rs"]
+pub(crate) mod dag;
 const MAX_RUNS: usize = 256;
 const MAX_OBJECTS: usize = 512;
 const MAX_BYTES: u64 = 64 * 1024 * 1024;
@@ -105,6 +108,50 @@ impl Plan {
             source_sha256: &self.source_sha256,
         }
     }
+    fn receipt(&self, effect: &str, bytes: &[u8]) -> Result<serde_json::Value> {
+        if let Some(owner) = &self.authority {
+            catalog::owned_invoice_receipt(
+                &self.commit(effect),
+                &owner.principal,
+                owner.generation,
+                bytes,
+            )
+        } else {
+            catalog::invoice_receipt(&self.commit(effect), bytes)
+        }
+    }
+    fn committed(&self, effect: &str, bytes: &[u8]) -> Result<catalog::InvoiceOutcome> {
+        if let Some(owner) = &self.authority {
+            catalog::committed_owned_invoice(
+                &self.commit(effect),
+                &owner.principal,
+                owner.generation,
+                bytes,
+            )
+        } else {
+            catalog::committed_invoice(&self.commit(effect), bytes)
+        }
+    }
+    fn publish(
+        &self,
+        effect: &str,
+        bytes: &[u8],
+        replay: bool,
+        check: &mut dyn FnMut() -> Result<()>,
+    ) -> Result<serde_json::Value> {
+        if let Some(owner) = &self.authority {
+            catalog::commit_owned_invoice(
+                &self.commit(effect),
+                &owner.principal,
+                owner.generation,
+                bytes,
+                replay,
+                check,
+            )
+        } else {
+            catalog::commit_invoice(&self.commit(effect), bytes, replay, check)
+        }
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -117,6 +164,65 @@ struct Checkpoint {
     receipt: Option<serde_json::Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     resource_lease: Option<resources::Token>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    policy_operation_id: Option<String>,
+}
+enum TraceEvent {
+    Begin {
+        id: String,
+        kind: crate::policy_decisions::EffectKind,
+    },
+    Complete {
+        id: String,
+        receipt: String,
+    },
+}
+fn trace_begin(
+    trace: &mut impl FnMut(TraceEvent) -> Result<()>,
+    id: &str,
+    kind: crate::policy_decisions::EffectKind,
+) -> Result<()> {
+    trace(TraceEvent::Begin {
+        id: id.into(),
+        kind,
+    })
+}
+fn trace_complete(
+    trace: &mut impl FnMut(TraceEvent) -> Result<()>,
+    id: &str,
+    receipt: &str,
+) -> Result<()> {
+    trace(TraceEvent::Complete {
+        id: id.into(),
+        receipt: receipt.into(),
+    })
+}
+fn calculation_begin(
+    trace: &mut impl FnMut(TraceEvent) -> Result<()>,
+    request: &str,
+    stage: &str,
+) -> Result<()> {
+    use crate::policy_decisions::EffectKind;
+    for (suffix, kind) in [
+        ("worker", EffectKind::WorkerAdmission),
+        ("resource", EffectKind::ResourceAdmission),
+        ("calculate", EffectKind::Calculation),
+    ] {
+        trace_begin(trace, &format!("{request}.{stage}.{suffix}"), kind)?;
+    }
+    Ok(())
+}
+fn calculation_complete(
+    trace: &mut impl FnMut(TraceEvent) -> Result<()>,
+    request: &str,
+    stage: &str,
+    result: &workflow_resource::Calculation,
+) -> Result<()> {
+    let receipt = digest(&(&result.lease, io::digest(&result.report)))?;
+    for suffix in ["resource", "worker", "calculate"] {
+        trace_complete(trace, &format!("{request}.{stage}.{suffix}"), &receipt)?;
+    }
+    Ok(())
 }
 fn digest<T: Serialize>(value: &T) -> Result<String> {
     Ok(io::digest(&serde_json::to_vec(value)?))
@@ -369,13 +475,19 @@ impl Store {
                     .resource_lease
                     .as_ref()
                     .map_or(false, |token| !workflow_resource::token_valid(token))
+                || checkpoint.policy_operation_id.as_ref().is_some_and(|id| {
+                    id.len() != 32
+                        || !id
+                            .bytes()
+                            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+                })
             {
                 return Err("workflow checkpoint chain mismatch".into());
             }
             if (2..=4).contains(&checkpoint.stage) {
                 let report = self.object(&checkpoint.report_sha256)?;
                 let effect = plan.effect_id()?;
-                let expected = catalog::invoice_receipt(&plan.commit(&effect), &report)?;
+                let expected = plan.receipt(&effect, &report)?;
                 if (checkpoint.stage == 4 && checkpoint.receipt.as_ref() != Some(&expected))
                     || (checkpoint.stage != 4 && checkpoint.receipt.is_some())
                 {
@@ -486,9 +598,25 @@ impl Store {
         &self,
         plan: &Plan,
         source: &[u8],
+        authorize: impl FnMut(&Plan) -> Result<()>,
+    ) -> Result<bool> {
+        self.prepare_traced(plan, source, authorize, None, &mut |_| Ok(()))
+    }
+    fn prepare_traced(
+        &self,
+        plan: &Plan,
+        source: &[u8],
         mut authorize: impl FnMut(&Plan) -> Result<()>,
+        operation: Option<&str>,
+        trace: &mut impl FnMut(TraceEvent) -> Result<()>,
     ) -> Result<bool> {
         plan.validate(&self.installation)?;
+        if plan.authority.is_some() && operation.is_none() {
+            return Err(
+                "governed workflow requires its live audited operation, not laboratory callbacks"
+                    .into(),
+            );
+        }
         if io::digest(source) != plan.source_sha256 || source.len() as u64 != plan.source_bytes {
             return Err("workflow proposed source mismatch".into());
         }
@@ -520,11 +648,24 @@ impl Store {
             return Err("workflow run capacity exhausted".into());
         }
         authorize(plan)?;
+        calculation_begin(trace, &plan.request_id, "prepare")?;
         let validation = (self.calculator)(source, &mut || authorize(plan))?;
         authorize(plan)?;
         (self.calculation_check)(&validation, source, &plan.installation)?;
         authorize(plan)?;
+        calculation_complete(trace, &plan.request_id, "prepare", &validation)?;
+        let snapshot_id = format!("{}.snapshot", plan.request_id);
+        trace_begin(
+            trace,
+            &snapshot_id,
+            crate::policy_decisions::EffectKind::Snapshot,
+        )?;
         self.put_object(source, || authorize(plan))?;
+        trace_complete(
+            trace,
+            &snapshot_id,
+            &digest(&(plan.source_sha256.as_str(), plan.source_bytes))?,
+        )?;
         let checkpoint = Checkpoint {
             stage: 0,
             plan_sha256: digest(plan)?,
@@ -532,7 +673,14 @@ impl Store {
             report_sha256: String::new(),
             receipt: None,
             resource_lease: None,
+            policy_operation_id: operation.map(str::to_owned),
         };
+        let checkpoint_id = format!("{}.prepare.checkpoint", plan.request_id);
+        trace_begin(
+            trace,
+            &checkpoint_id,
+            crate::policy_decisions::EffectKind::Checkpoint,
+        )?;
         self.db.exec("BEGIN IMMEDIATE;")?;
         let tx = Transaction(&self.db, false);
         self.db.query(
@@ -548,6 +696,7 @@ impl Store {
         tx.commit()?;
         self.root.sync_all()?;
         authorize(plan)?;
+        trace_complete(trace, &checkpoint_id, &digest(&checkpoint)?)?;
         Ok(false)
     }
     fn insert(&self, plan: &Plan, checkpoint: &Checkpoint) -> Result<()> {
@@ -614,9 +763,21 @@ impl Store {
         &self,
         request: &str,
         review: &str,
+        authorize: impl FnMut(&Plan) -> Result<()>,
+    ) -> Result<()> {
+        self.cancel_traced(request, review, authorize, None)
+    }
+    fn cancel_traced(
+        &self,
+        request: &str,
+        review: &str,
         mut authorize: impl FnMut(&Plan) -> Result<()>,
+        operation: Option<&str>,
     ) -> Result<()> {
         let (plan, previous) = self.load(request)?;
+        if plan.authority.is_some() && operation.is_none() {
+            return Err("governed cancellation requires its live audited operation".into());
+        }
         if !io::hash(review)
             || (digest(&previous)? != review
                 && !(previous.stage == 5 && previous.previous_sha256 == review))
@@ -636,9 +797,24 @@ impl Store {
         let mut next = previous.clone();
         next.stage = 5;
         next.previous_sha256 = digest(&previous)?;
+        next.policy_operation_id = operation.map(str::to_owned);
         self.transition(&plan, &previous, &next, authorize)
     }
     fn advance(
+        &self,
+        request: &str,
+        review: &str,
+        authorize: impl FnMut(&Plan) -> Result<()>,
+        effect: impl FnMut(
+            &Plan,
+            &[u8],
+            bool,
+            &mut dyn FnMut() -> Result<()>,
+        ) -> Result<serde_json::Value>,
+    ) -> Result<()> {
+        self.advance_traced(request, review, authorize, effect, None, &mut |_| Ok(()))
+    }
+    fn advance_traced(
         &self,
         request: &str,
         review: &str,
@@ -649,8 +825,13 @@ impl Store {
             bool,
             &mut dyn FnMut() -> Result<()>,
         ) -> Result<serde_json::Value>,
+        operation: Option<&str>,
+        trace: &mut impl FnMut(TraceEvent) -> Result<()>,
     ) -> Result<()> {
         let (plan, previous) = self.load(request)?;
+        if plan.authority.is_some() && operation.is_none() {
+            return Err("governed continuation requires its live audited operation".into());
+        }
         let current_review = digest(&previous)?;
         let retry_previous_step =
             (1..=4).contains(&previous.stage) && previous.previous_sha256 == review;
@@ -684,31 +865,50 @@ impl Store {
         let mut next = previous.clone();
         next.stage += 1;
         next.previous_sha256 = digest(&previous)?;
+        next.policy_operation_id = operation.map(str::to_owned);
         match previous.stage {
             0 => {
+                let id = format!("{request}.source.checkpoint");
+                trace_begin(trace, &id, crate::policy_decisions::EffectKind::Checkpoint)?;
                 self.object(&plan.source_sha256)?;
                 self.transition(&plan, &previous, &next, &mut authorize)?;
+                trace_complete(trace, &id, &digest(&next)?)?;
             }
             1 => {
                 let source = self.object(&plan.source_sha256)?;
                 authorize(&plan)?;
+                calculation_begin(trace, request, "run")?;
                 let result = (self.calculator)(&source, &mut || authorize(&plan))?;
                 authorize(&plan)?;
                 (self.calculation_check)(&result, &source, &plan.installation)?;
+                calculation_complete(trace, request, "run", &result)?;
                 next.report_sha256 = self.put_object(&result.report, || authorize(&plan))?;
                 next.resource_lease = Some(result.lease.clone());
+                let id = format!("{request}.calculated.checkpoint");
+                trace_begin(trace, &id, crate::policy_decisions::EffectKind::Checkpoint)?;
                 self.transition(&plan, &previous, &next, |plan| {
                     authorize(plan)?;
                     (self.calculation_check)(&result, &source, &plan.installation)
                 })?;
+                trace_complete(trace, &id, &digest(&next)?)?;
             }
             2 => {
                 // Applying is durable BEFORE crossing the artifact boundary.
+                let id = format!("{request}.applying.checkpoint");
+                trace_begin(trace, &id, crate::policy_decisions::EffectKind::Checkpoint)?;
                 self.transition(&plan, &previous, &next, &mut authorize)?;
-                self.finish(&plan, &next, &mut authorize, &mut effect)?;
+                trace_complete(trace, &id, &digest(&next)?)?;
+                self.finish(&plan, &next, &mut authorize, &mut effect, operation, trace)?;
             }
             3 => {
-                self.finish(&plan, &previous, &mut authorize, &mut effect)?;
+                self.finish(
+                    &plan,
+                    &previous,
+                    &mut authorize,
+                    &mut effect,
+                    operation,
+                    trace,
+                )?;
             }
             4 => {
                 let bytes = self.object(&previous.report_sha256)?;
@@ -742,6 +942,8 @@ impl Store {
             bool,
             &mut dyn FnMut() -> Result<()>,
         ) -> Result<serde_json::Value>,
+        operation: Option<&str>,
+        trace: &mut impl FnMut(TraceEvent) -> Result<()>,
     ) -> Result<()> {
         let bytes = self.object(&applying.report_sha256)?;
         let source = self.object(&plan.source_sha256)?;
@@ -760,7 +962,7 @@ impl Store {
             (self.calculation_check)(&calculation, &source, &plan.installation)
         })?;
         let effect_id = plan.effect_id()?;
-        if result != catalog::invoice_receipt(&plan.commit(&effect_id), &bytes)? {
+        if result != plan.receipt(&effect_id, &bytes)? {
             return Err("artifact boundary returned an unbound receipt".into());
         }
         let completed = Checkpoint {
@@ -770,11 +972,15 @@ impl Store {
             report_sha256: applying.report_sha256.clone(),
             receipt: Some(result),
             resource_lease: applying.resource_lease.clone(),
+            policy_operation_id: operation.map(str::to_owned),
         };
+        let id = format!("{}.completed.checkpoint", plan.request_id);
+        trace_begin(trace, &id, crate::policy_decisions::EffectKind::Checkpoint)?;
         self.transition(plan, applying, &completed, |plan| {
             authorize(plan)?;
             (self.calculation_check)(&calculation, &source, &plan.installation)
-        })
+        })?;
+        trace_complete(trace, &id, &digest(&completed)?)
     }
 
     fn reconciliation_input(
@@ -799,7 +1005,7 @@ impl Store {
         // historical outcome. Verification does not rerun the calculator or
         // manufacture a replacement resource lease after withdrawal/recovery.
         let effect = plan.effect_id()?;
-        catalog::invoice_receipt(&plan.commit(&effect), &report)?;
+        plan.receipt(&effect, &report)?;
         Ok((plan, current, applying, report))
     }
 
@@ -819,12 +1025,24 @@ impl Store {
         &self,
         request: &str,
         review: &str,
+        committed_proof: impl FnMut(&Plan, &[u8]) -> Result<serde_json::Value>,
+    ) -> Result<bool> {
+        self.acknowledge_traced(request, review, committed_proof, None)
+    }
+    fn acknowledge_traced(
+        &self,
+        request: &str,
+        review: &str,
         mut committed_proof: impl FnMut(&Plan, &[u8]) -> Result<serde_json::Value>,
+        operation: Option<&str>,
     ) -> Result<bool> {
         let (plan, current, applying, report) = self.reconciliation_input(request)?;
+        if plan.authority.is_some() && operation.is_none() {
+            return Err("governed acknowledgement requires its live audited operation".into());
+        }
         let receipt = committed_proof(&plan, &report)?;
         let effect = plan.effect_id()?;
-        if receipt != catalog::invoice_receipt(&plan.commit(&effect), &report)? {
+        if receipt != plan.receipt(&effect, &report)? {
             return Err("reconciliation proof is not the bound artifact receipt".into());
         }
         if !io::hash(review) || Self::reconciliation_review(&plan, &applying, &receipt)? != review {
@@ -845,6 +1063,7 @@ impl Store {
             report_sha256: applying.report_sha256.clone(),
             receipt: Some(receipt.clone()),
             resource_lease: applying.resource_lease.clone(),
+            policy_operation_id: operation.map(str::to_owned),
         };
         self.transition(&plan, &current, &completed, |p| {
             self.check_current(p, &completed)?;
@@ -858,16 +1077,24 @@ impl Store {
 }
 fn authorize(plan: &Plan) -> Result<()> {
     let admission = skills::admission()?;
+    let installed = crate::workflow::Executable::installed()?;
     if io::installation()? != plan.installation
         || admission["workflow_sha256"] != plan.workflow_sha256
         || admission["native_invoice_execution_supported"] != true
+        || !crate::workflow::legacy_invoice_execution_supported(&serde_json::to_vec(
+            &installed.graph,
+        )?)?
     {
         return Err("native workflow installation or current signed graph changed".into());
     }
     Ok(())
 }
 pub fn initialize_installed() -> Result<()> {
-    initialize(Path::new(DIRECTORY), &io::installation()?)
+    initialize(Path::new(DIRECTORY), &io::installation()?)?;
+    let parent = scoped_read::open_directory(Path::new("/var/lib/luma-os"))?;
+    io::mkdir_at(&parent, "workflow-invoice-domains")?.sync_all()?;
+    parent.sync_all()?;
+    Ok(())
 }
 pub fn prepare(request: &str, artifact: &str, expected: &str) -> Result<()> {
     let installation = io::installation()?;
@@ -1009,6 +1236,29 @@ fn governed_use(
             MAX_OBJECT,
             MAX_OBJECT,
         ),
+        Action::StartWorker | Action::AcquireResource => (
+            if action == Action::StartWorker {
+                Kind::Worker
+            } else {
+                Kind::Resource
+            },
+            if action == Action::StartWorker {
+                "invoice-helper".into()
+            } else {
+                "invoice-helper-pool".into()
+            },
+            1,
+            digest(&(
+                plan.scope_digest()?,
+                "invoice-v1",
+                crate::resource_manager::storage_device(Path::new("/var"))?,
+                512u64 * 1024 * 1024,
+                16u32,
+                30u32,
+            ))?,
+            plan.source_bytes,
+            MAX_OBJECT,
+        ),
         _ => return Err("unsupported workflow effect scope".into()),
     };
     let usage = Use {
@@ -1124,6 +1374,8 @@ pub(crate) fn governed_review(
         serde_json::json!({"plan":plan,"input_kind":"operator-stdin-snapshot",
         "execute":governed_use(&plan,crate::finite_grants::Action::Execute)?,
         "calculate":governed_use(&plan,crate::finite_grants::Action::Calculate)?,
+        "worker":governed_use(&plan,crate::finite_grants::Action::StartWorker)?,
+        "resource":governed_use(&plan,crate::finite_grants::Action::AcquireResource)?,
         "write":governed_use(&plan,crate::finite_grants::Action::Write)?,
         "resume":governed_use(&plan,crate::finite_grants::Action::Resume)?,
         "cancel":governed_use(&plan,crate::finite_grants::Action::Cancel)?,
@@ -1132,12 +1384,96 @@ pub(crate) fn governed_review(
     Ok(())
 }
 
-pub(crate) fn governed_prepare(args: &[String]) -> Result<()> {
-    if args.len() != 8 {
-        return Err("expected owned workflow-governed-prepare LOGIN EXECUTE-GRANT CALCULATE-GRANT REQUEST ARTIFACT EXPECTED-VERSION SNAPSHOT (use granted-run with CSV stdin)".into());
+struct GovernedTrace<'b, 's> {
+    boundary: std::cell::RefCell<&'b mut crate::admin_governance::GrantBoundary<'s>>,
+    pending: std::cell::RefCell<
+        std::collections::BTreeMap<String, crate::policy_decisions::PendingEffect>,
+    >,
+}
+impl GovernedTrace<'_, '_> {
+    fn check(&self, plan: &Plan) -> Result<()> {
+        plan.check_owner(&mut self.boundary.borrow_mut())?;
+        authorize(plan)
     }
-    let source = operator_snapshot(&args[7])?;
-    let mut plan = proposed_plan(&args[4], &args[5], &args[6], &source)?;
+    fn event(&self, event: TraceEvent) -> Result<()> {
+        match event {
+            TraceEvent::Begin { id, kind } => {
+                if self.pending.borrow().contains_key(&id) {
+                    return Err("duplicate live workflow effect admission".into());
+                }
+                let pending = self.boundary.borrow_mut().effect_begin(&id, kind)?;
+                self.pending.borrow_mut().insert(id, pending);
+                Ok(())
+            }
+            TraceEvent::Complete { id, receipt } => {
+                let pending = self
+                    .pending
+                    .borrow_mut()
+                    .remove(&id)
+                    .ok_or("workflow outcome lacks its actual pending effect")?;
+                self.boundary
+                    .borrow_mut()
+                    .effect_complete(pending, &receipt)
+            }
+        }
+    }
+}
+fn governed_path(principal: &str) -> Result<std::path::PathBuf> {
+    if crate::tpm::decode::<32>(principal)? == [0; 32] {
+        return Err("invalid governed workflow domain".into());
+    }
+    catalog::safe_path(Path::new(GOVERNED_DIRECTORY))?;
+    Ok(Path::new(GOVERNED_DIRECTORY).join(io::digest(principal.as_bytes())))
+}
+fn governed_login_store(login: &str) -> Result<Store> {
+    let registry =
+        crate::principal::RegistryBinding::capture(Path::new(crate::principal::REGISTRY))?;
+    let principal = registry
+        .current()?
+        .account(login)
+        .ok_or("unknown governed workflow principal")?
+        .id
+        .clone();
+    Store::open(&governed_path(&principal)?, &io::installation()?)
+}
+fn governed_owned_store(plan: &Plan, trace: &GovernedTrace<'_, '_>) -> Result<Store> {
+    trace.check(plan)?;
+    let owner = plan
+        .authority
+        .as_ref()
+        .ok_or("governed workflow owner is missing")?;
+    let path = governed_path(&owner.principal)?;
+    let parent = scoped_read::open_directory(Path::new(GOVERNED_DIRECTORY))?;
+    io::private_directory(&parent)?;
+    catalog::ext4(&parent)?;
+    if unsafe { libc::flock(parent.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
+        return Err("governed workflow domain initialization busy".into());
+    }
+    let names = io::names(&parent, MAX_RUNS)?;
+    if names.iter().any(|name| !io::hash(name)) {
+        return Err("damaged governed workflow domain namespace; preserve state".into());
+    }
+    match fs::symlink_metadata(&path) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            if names.len() >= MAX_RUNS {
+                return Err("governed workflow domain capacity exhausted".into());
+            }
+            trace.check(plan)?;
+            initialize(&path, &plan.installation)?;
+            trace.check(plan)?;
+        }
+        Err(error) => return Err(error.into()),
+        Ok(_) => (),
+    }
+    Store::open(&path, &plan.installation)
+}
+
+pub(crate) fn governed_prepare(args: &[String]) -> Result<()> {
+    if args.len() != 10 {
+        return Err("expected owned workflow-governed-prepare LOGIN EXECUTE-GRANT CALCULATE-GRANT WORKER-GRANT RESOURCE-GRANT REQUEST ARTIFACT EXPECTED-VERSION SNAPSHOT (use granted-run with CSV stdin)".into());
+    }
+    let source = operator_snapshot(&args[9])?;
+    let mut plan = proposed_plan(&args[6], &args[7], &args[8], &source)?;
     let uses = vec![
         (
             args[2].clone(),
@@ -1147,17 +1483,42 @@ pub(crate) fn governed_prepare(args: &[String]) -> Result<()> {
             args[3].clone(),
             governed_use(&plan, crate::finite_grants::Action::Calculate)?,
         ),
+        (
+            args[4].clone(),
+            governed_use(&plan, crate::finite_grants::Action::StartWorker)?,
+        ),
+        (
+            args[5].clone(),
+            governed_use(&plan, crate::finite_grants::Action::AcquireResource)?,
+        ),
     ];
     let result = crate::admin_governance::with_grants(&args[1], &uses, |boundary| {
         plan.authority = Some(PrincipalOwner {
             principal: boundary.subject()?.into(),
             generation: boundary.subject_generation()?,
         });
-        let store = Store::open(Path::new(DIRECTORY), &plan.installation)?;
-        let replayed = store.prepare(&plan, &source, |plan| {
-            plan.check_owner(boundary)?;
-            authorize(plan)
+        let operation = boundary.operation_id().to_owned();
+        let trace = GovernedTrace {
+            boundary: std::cell::RefCell::new(boundary),
+            pending: std::cell::RefCell::new(std::collections::BTreeMap::new()),
+        };
+        let domain_id = format!("{}.domain", plan.request_id);
+        trace.event(TraceEvent::Begin {
+            id: domain_id.clone(),
+            kind: crate::policy_decisions::EffectKind::Checkpoint,
         })?;
+        let store = governed_owned_store(&plan, &trace)?;
+        trace.event(TraceEvent::Complete {
+            id: domain_id,
+            receipt: digest(&(&plan.installation, &plan.authority))?,
+        })?;
+        let replayed = store.prepare_traced(
+            &plan,
+            &source,
+            |plan| trace.check(plan),
+            Some(&operation),
+            &mut |event| trace.event(event),
+        )?;
         let mut status = store.status(&plan.request_id)?;
         status["replayed"] = replayed.into();
         Ok(status)
@@ -1167,11 +1528,11 @@ pub(crate) fn governed_prepare(args: &[String]) -> Result<()> {
 }
 
 pub(crate) fn governed_advance(args: &[String]) -> Result<()> {
-    if args.len() != 7 {
-        return Err("expected workflow-governed-advance LOGIN RESUME-GRANT CALCULATE-GRANT WRITE-GRANT REQUEST REVIEW-SHA256".into());
+    if args.len() != 9 {
+        return Err("expected workflow-governed-advance LOGIN RESUME-GRANT CALCULATE-GRANT WORKER-GRANT RESOURCE-GRANT WRITE-GRANT REQUEST REVIEW-SHA256".into());
     }
-    let store = Store::open(Path::new(DIRECTORY), &io::installation()?)?;
-    let (plan, checkpoint) = store.load(&args[5])?;
+    let store = governed_login_store(&args[1])?;
+    let (plan, checkpoint) = store.load(&args[7])?;
     let mut uses = vec![(
         args[2].clone(),
         governed_use(&plan, crate::finite_grants::Action::Resume)?,
@@ -1183,28 +1544,56 @@ pub(crate) fn governed_advance(args: &[String]) -> Result<()> {
             args[3].clone(),
             governed_use(&plan, crate::finite_grants::Action::Calculate)?,
         ));
+        uses.push((
+            args[5].clone(),
+            governed_use(&plan, crate::finite_grants::Action::AcquireResource)?,
+        ));
+    }
+    if checkpoint.stage == 1 {
+        uses.push((
+            args[4].clone(),
+            governed_use(&plan, crate::finite_grants::Action::StartWorker)?,
+        ));
     }
     if matches!(checkpoint.stage, 2 | 3 | 4) {
         uses.push((
-            args[4].clone(),
+            args[6].clone(),
             governed_use(&plan, crate::finite_grants::Action::Write)?,
         ));
     }
     let result = crate::admin_governance::with_grants(&args[1], &uses, |boundary| {
         plan.check_owner(boundary)?;
-        store.advance(
-            &args[5],
-            &args[6],
-            |plan| {
-                plan.check_owner(boundary)?;
-                authorize(plan)
-            },
+        let operation = boundary.operation_id().to_owned();
+        let trace = GovernedTrace {
+            boundary: std::cell::RefCell::new(boundary),
+            pending: std::cell::RefCell::new(std::collections::BTreeMap::new()),
+        };
+        store.advance_traced(
+            &args[7],
+            &args[8],
+            |plan| trace.check(plan),
             |plan, report, replay_only, check| {
                 let effect = plan.effect_id()?;
-                catalog::commit_invoice(&plan.commit(&effect), report, replay_only, check)
+                let id = format!("{}.artifact", plan.request_id);
+                trace.event(TraceEvent::Begin {
+                    id: id.clone(),
+                    kind: if replay_only {
+                        crate::policy_decisions::EffectKind::Recovery
+                    } else {
+                        crate::policy_decisions::EffectKind::ArtifactPublication
+                    },
+                })?;
+                let receipt = plan.publish(&effect, report, replay_only, check)?;
+                trace.event(TraceEvent::Complete {
+                    id,
+                    receipt: digest(&receipt)?,
+                })?;
+                Ok(receipt)
             },
+            Some(&operation),
+            &mut |event| trace.event(event),
         )?;
-        store.status(&args[5])
+        store.status(&args[7])
     })?;
     println!("{result}");
     Ok(())
@@ -1216,11 +1605,22 @@ pub(crate) fn governed_cancel(args: &[String]) -> Result<()> {
             "expected workflow-governed-cancel LOGIN CANCEL-GRANT REQUEST REVIEW-SHA256".into(),
         );
     }
-    let store = Store::open(Path::new(DIRECTORY), &io::installation()?)?;
+    let store = governed_login_store(&args[1])?;
     let (plan, _) = store.load(&args[3])?;
     let usage = governed_use(&plan, crate::finite_grants::Action::Cancel)?;
     let result = crate::admin_governance::with_grant(&args[1], &args[2], &usage, |boundary| {
-        store.cancel(&args[3], &args[4], |plan| plan.check_owner(boundary))?;
+        let operation = boundary.operation_id().to_owned();
+        let pending = boundary.effect_begin(
+            &format!("{}.cancel", args[3]),
+            crate::policy_decisions::EffectKind::Checkpoint,
+        )?;
+        store.cancel_traced(
+            &args[3],
+            &args[4],
+            |plan| plan.check_owner(boundary),
+            Some(&operation),
+        )?;
+        boundary.effect_complete(pending, &digest(&store.load(&args[3])?.1)?)?;
         store.status(&args[3])
     })?;
     println!("{result}");
@@ -1235,22 +1635,34 @@ pub(crate) fn governed_reconcile(args: &[String]) -> Result<()> {
     } else {
         return Err("expected workflow-governed-reconcile LOGIN RESUME-GRANT REQUEST [--publish-committed REVIEW-SHA256]".into());
     };
-    let store = Store::open(Path::new(DIRECTORY), &io::installation()?)?;
+    let store = governed_login_store(&args[1])?;
     let (plan, _) = store.load(&args[3])?;
     let usage = governed_use(&plan, crate::finite_grants::Action::Resume)?;
     let result = crate::admin_governance::with_grant(&args[1], &args[2], &usage, |boundary| {
         plan.check_owner(boundary)?;
         let (plan, _, applying, report) = store.reconciliation_input(&args[3])?;
         let effect = plan.effect_id()?;
-        let proof = catalog::committed_invoice(&plan.commit(&effect), &report)?;
+        let proof = plan.committed(&effect, &report)?;
         let receipt = proof.recheck()?;
         let review = Store::reconciliation_review(&plan, &applying, &receipt)?;
         let replayed = reviewed
-            .map(|review| {
-                store.acknowledge_committed(&args[3], review, |plan, _| {
-                    plan.check_owner(boundary)?;
-                    proof.recheck()
-                })
+            .map(|review| -> Result<bool> {
+                let operation = boundary.operation_id().to_owned();
+                let pending = boundary.effect_begin(
+                    &format!("{}.recover", args[3]),
+                    crate::policy_decisions::EffectKind::Recovery,
+                )?;
+                let replayed = store.acknowledge_traced(
+                    &args[3],
+                    review,
+                    |plan, _| {
+                        plan.check_owner(boundary)?;
+                        proof.recheck()
+                    },
+                    Some(&operation),
+                )?;
+                boundary.effect_complete(pending, &digest(&store.load(&args[3])?.1)?)?;
+                Ok(replayed)
             })
             .transpose()?;
         plan.check_owner(boundary)?;
@@ -1269,6 +1681,97 @@ mod tests {
     use super::*;
     use std::cell::Cell;
     use std::os::unix::fs::PermissionsExt;
+    #[test]
+    fn governed_trace_is_issued_before_real_calculation_and_links_checkpoint_without_legacy_rewrite(
+    ) {
+        let fixture = Fixture::new("trace");
+        let store = fixture.open();
+        let (plan, source) = plan();
+        let seen = std::cell::RefCell::new(Vec::new());
+        let mut trace = |event| {
+            seen.borrow_mut().push(match event {
+                TraceEvent::Begin { id, kind } => format!("begin:{id}:{kind:?}"),
+                TraceEvent::Complete { id, receipt } => {
+                    assert!(io::hash(&receipt));
+                    format!("complete:{id}")
+                }
+            });
+            Ok(())
+        };
+        store
+            .prepare_traced(
+                &plan,
+                &source,
+                |_| Ok(()),
+                Some(&"c".repeat(32)),
+                &mut trace,
+            )
+            .unwrap();
+        assert_eq!(
+            store.load("run-1").unwrap().1.policy_operation_id,
+            Some("c".repeat(32))
+        );
+        let seen = seen.borrow();
+        assert!(seen[0].contains("prepare.worker"));
+        assert!(seen[1].contains("prepare.resource"));
+        assert!(seen[2].contains("prepare.calculate"));
+        assert!(seen.iter().any(|event| event == "complete:run-1.snapshot"));
+        assert!(seen
+            .last()
+            .unwrap()
+            .contains("complete:run-1.prepare.checkpoint"));
+        drop(seen);
+        let prior = store.status("run-1").unwrap();
+        store
+            .prepare_traced(
+                &plan,
+                &source,
+                |_| Ok(()),
+                Some(&"d".repeat(32)),
+                &mut |_| panic!("exact prepare replay must admit no worker or mutate checkpoint"),
+            )
+            .unwrap();
+        assert_eq!(store.status("run-1").unwrap(), prior);
+    }
+    #[test]
+    fn denied_effect_audit_before_worker_never_launches_or_stages_and_lost_ack_retains_checkpoint()
+    {
+        let fixture = Fixture::new("trace-denied");
+        let mut store = fixture.open();
+        let (plan, source) = plan();
+        store.calculator = |_, _| panic!("worker cannot launch before its durable admission");
+        assert!(store
+            .prepare_traced(
+                &plan,
+                &source,
+                |_| Ok(()),
+                Some(&"c".repeat(32)),
+                &mut |_| Err("policy evidence unavailable".into())
+            )
+            .is_err());
+        assert!(store.load("run-1").is_err());
+        assert!(io::names(&store.objects, 1).unwrap().is_empty());
+        assert!(io::names(&store.pending, 1).unwrap().is_empty());
+        drop(store);
+        let store = fixture.open();
+        assert!(store
+            .prepare_traced(
+                &plan,
+                &source,
+                |_| Ok(()),
+                Some(&"c".repeat(32)),
+                &mut |event| {
+                    if matches!(event,TraceEvent::Complete{id,..} if id=="run-1.prepare.checkpoint")
+                    {
+                        Err("checkpoint outcome acknowledgement lost".into())
+                    } else {
+                        Ok(())
+                    }
+                }
+            )
+            .is_err());
+        assert_eq!(store.load("run-1").unwrap().1.stage, 0);
+    }
     #[test]
     fn original_calculation_receipt_is_required_and_retry_never_launches_a_worker() {
         let f = Fixture::new("original-calculation");

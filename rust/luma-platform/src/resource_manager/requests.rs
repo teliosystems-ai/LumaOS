@@ -6,6 +6,8 @@ pub(crate) mod gateway;
 mod journal;
 pub(crate) use journal::initialize;
 pub(crate) use journal::request_migration;
+pub(crate) use journal::retention_evidence;
+pub(crate) use journal::retention_idle;
 
 const MAX_RECEIPTS: usize = 256;
 const MAX_OUTPUT: u64 = 128;

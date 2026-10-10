@@ -328,6 +328,12 @@ def main() -> None:
     for path in ('var/home','var/root','var/lib/luma-os/reference','efi','media/luma'):
         (ROOT/path).mkdir(parents=True,exist_ok=True)
     (ROOT/'var/root').chmod(0o700)
+    # Durable admission evidence is not an authority source. Runtime writers
+    # refuse a missing namespace rather than silently initializing one.
+    (ROOT/'var/lib/luma-os/policy-decisions').mkdir()
+    (ROOT/'var/lib/luma-os/policy-decisions').chmod(0o700)
+    (ROOT/'var/lib/luma-os/workflow-inputs').mkdir()
+    (ROOT/'var/lib/luma-os/workflow-inputs').chmod(0o711)
     connections=ROOT/'var/lib/NetworkManager/system-connections'
     connections.mkdir(parents=True,exist_ok=True)
     connections.chmod(0o700)

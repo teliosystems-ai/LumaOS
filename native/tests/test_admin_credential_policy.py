@@ -44,7 +44,7 @@ class AdminCredentialPolicyTests(unittest.TestCase):
             source = (ROOT / 'rust/luma-platform/src' / name).read_text()
             self.assertNotIn('admin_governance::bootstrap', source)
 
-    def test_catalog_operations_have_independent_pam_and_no_assignment_interface(self):
+    def test_catalog_operations_have_independent_pam_and_finite_assignment_validation(self):
         source = (ROOT / 'rust/luma-platform/src/admin_governance.rs').read_text().split('\n#[cfg(test)]\nfn execute_catalog', 1)[0]
         for name in ('catalog_command', 'catalog_status'):
             entry = source.split(f'pub fn {name}(')[1].split('\n}\n', 1)[0]
@@ -57,7 +57,12 @@ class AdminCredentialPolicyTests(unittest.TestCase):
         roles = (ROOT / 'rust/luma-platform/src/admin_roles.rs').read_text().split('#[cfg(test)]')[0]
         self.assertIn('RegisterActivity', roles)
         self.assertIn('DefineRole', roles)
-        self.assertNotIn('AssignRole', roles)
+        for required in ('AssignRole', 'assignment.validate()', 'grant.issue(self)?',
+                         'role.version != assignment.role_version',
+                         '!= assignment.subject_generation',
+                         'self.needs_password_aging.contains(&assignment.subject)',
+                         'record.revoked = true'):
+            self.assertIn(required, roles)
 
 
 if __name__ == '__main__':

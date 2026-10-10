@@ -14,6 +14,13 @@ use std::os::unix::fs::{DirBuilderExt, MetadataExt};
 use std::path::Path;
 
 const DIRECTORY: &str = "/var/lib/luma-os/artifact-catalog";
+mod domains;
+mod gc;
+mod gc_cli;
+mod owned_effects;
+pub(crate) use domains::{commit_owned_invoice, committed_owned_invoice, owned_invoice_receipt};
+pub(crate) use gc_cli::command as gc_command;
+pub(crate) use owned_effects::command as owned_effects_command;
 const MAX_CONTENT: u64 = 2 * 1024 * 1024;
 const MAX_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_RECORDS: usize = 1024;
@@ -40,6 +47,8 @@ struct Receipt {
     environment: String,
     installation: String,
     owner: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    owner_generation: Option<u64>,
     request_id: String,
     artifact_id: String,
     expected_version: u64,
@@ -56,9 +65,25 @@ struct Receipt {
 
 impl Receipt {
     fn validate(&self, installation: &str) -> Result<()> {
+        self.validate_owner(installation, "local-root")
+    }
+
+    fn validate_owner(&self, installation: &str, owner: &str) -> Result<()> {
         if self.schema_version != 1
-            || self.environment != "lab"
-            || self.owner != "local-root"
+            || self.environment
+                != if owner == "local-root" {
+                    "lab"
+                } else {
+                    "installed"
+                }
+            || self.owner != owner
+            || if owner == "local-root" {
+                self.owner_generation.is_some()
+            } else {
+                !io::hash(owner)
+                    || owner == "0".repeat(64)
+                    || self.owner_generation.map_or(true, |g| g == 0)
+            }
             || self.installation != installation
             || !io::hash(installation)
             || !io::identifier(&self.request_id)
@@ -110,7 +135,7 @@ pub(crate) fn safe_path(path: &Path) -> Result<()> {
 }
 
 fn layout(root: &File) -> Result<()> {
-    let names = io::names(root, 6)?;
+    let names = io::names(root, 7)?;
     for required in ["metadata.sqlite3", "objects", "pending", "retained"] {
         if !names.iter().any(|n| n == required) {
             return Err("incomplete artifact catalog; preserve state".into());
@@ -119,6 +144,13 @@ fn layout(root: &File) -> Result<()> {
     for name in names {
         match name.as_str() {
             "objects" | "pending" | "retained" => {}
+            "gc" => {
+                let directory = io::child_directory(root, "gc")?;
+                if directory.metadata()?.dev() != root.metadata()?.dev() {
+                    return Err("artifact GC must share the catalog filesystem".into());
+                }
+                gc::validate_sidecar(&directory)?;
+            }
             "metadata.sqlite3" | "metadata.sqlite3-wal" => {
                 io::read_member(root, &name, 16 * 1024 * 1024)?;
             }
@@ -132,6 +164,24 @@ fn layout(root: &File) -> Result<()> {
 }
 
 pub(crate) fn initialize(path: &Path, installation: &str) -> Result<()> {
+    initialize_domain(path, installation, "local-root")
+}
+
+fn domain_schema(owner: &str) -> Vec<String> {
+    SCHEMA
+        .iter()
+        .map(|s| {
+            if owner == "local-root" {
+                s.to_string()
+            } else {
+                s.replace("CHECK(schema_version=1)", "CHECK(schema_version=2)")
+                    .replace("CHECK(domain='local-root')", "CHECK(length(domain)=64)")
+            }
+        })
+        .collect()
+}
+
+fn initialize_domain(path: &Path, installation: &str, owner: &str) -> Result<()> {
     if !io::hash(installation) {
         return Err("invalid artifact catalog installation".into());
     }
@@ -144,7 +194,7 @@ pub(crate) fn initialize(path: &Path, installation: &str) -> Result<()> {
     if unsafe { libc::flock(root.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
         return Err("artifact catalog initialization is busy".into());
     }
-    for name in ["objects", "pending", "retained"] {
+    for name in ["objects", "pending", "retained", "gc"] {
         io::mkdir_at(&root, name)?;
     }
     io::write_member(&root, "metadata.sqlite3", b"", 0o600)?;
@@ -154,14 +204,24 @@ pub(crate) fn initialize(path: &Path, installation: &str) -> Result<()> {
     }
     db.exec("PRAGMA max_page_count=4096;")?;
     db.exec("PRAGMA application_id=1280658753;")?;
-    db.exec("PRAGMA user_version=1;")?;
+    db.exec(if owner == "local-root" {
+        "PRAGMA user_version=1;"
+    } else {
+        "PRAGMA user_version=2;"
+    })?;
     db.exec("BEGIN IMMEDIATE;")?;
-    for statement in SCHEMA {
-        db.exec(statement)?;
+    for statement in domain_schema(owner) {
+        db.exec(&statement)?;
     }
+    let version = if owner == "local-root" { "1" } else { "2" };
+    let domain = if owner == "local-root" {
+        owner.to_owned()
+    } else {
+        io::digest(owner.as_bytes())
+    };
     db.query(
-        "INSERT INTO identity VALUES(1,1,?,'local-root')",
-        &[installation],
+        "INSERT INTO identity VALUES(1,?,?,?)",
+        &[version, installation, &domain],
         0,
     )?;
     root.sync_all()?;
@@ -171,7 +231,7 @@ pub(crate) fn initialize(path: &Path, installation: &str) -> Result<()> {
     parent_fd.sync_all()?;
     drop(root);
     // The same admission checks apply to newly created and restored catalogs.
-    drop(Catalog::open(path, installation)?);
+    drop(Catalog::open_domain(path, installation, owner)?);
     Ok(())
 }
 
@@ -183,6 +243,7 @@ struct Catalog {
     pending: File,
     retained: File,
     installation: String,
+    owner: String,
 }
 
 struct Transaction<'a>(&'a Connection, bool);
@@ -224,6 +285,7 @@ fn legacy_proposal(snapshot: &io::LegacyArtifact, installation: &str) -> Result<
         environment: "lab".into(),
         installation: installation.into(),
         owner: "local-root".into(),
+        owner_generation: None,
         request_id: mapped.clone(),
         artifact_id: mapped,
         expected_version: 0,
@@ -287,6 +349,10 @@ impl Catalog {
     }
 
     fn open(path: &Path, installation: &str) -> Result<Self> {
+        Self::open_domain(path, installation, "local-root")
+    }
+
+    fn open_domain(path: &Path, installation: &str, owner: &str) -> Result<Self> {
         safe_path(path)?;
         let root = scoped_read::open_directory(path)?;
         io::private_directory(&root)?;
@@ -307,20 +373,33 @@ impl Catalog {
         if db.query("PRAGMA journal_mode", &[], 1)? != [vec!["wal".to_owned()]]
             || db.query("PRAGMA page_size", &[], 1)? != [vec!["4096".to_owned()]]
             || db.query("PRAGMA application_id", &[], 1)? != [vec!["1280658753".to_owned()]]
-            || db.query("PRAGMA user_version", &[], 1)? != [vec!["1".to_owned()]]
+            || db.query("PRAGMA user_version", &[], 1)?
+                != [vec![if owner == "local-root" {
+                    "1".to_owned()
+                } else {
+                    "2".to_owned()
+                }]]
             || db.query(
                 "SELECT schema_version,installation,domain FROM identity",
                 &[],
                 1,
             )? != [vec![
-                "1".to_owned(),
+                if owner == "local-root" {
+                    "1".to_owned()
+                } else {
+                    "2".to_owned()
+                },
                 installation.to_owned(),
-                "local-root".to_owned(),
+                if owner == "local-root" {
+                    owner.to_owned()
+                } else {
+                    io::digest(owner.as_bytes())
+                },
             ]]
         {
             return Err("unsupported artifact catalog format or installation".into());
         }
-        let mut expected = SCHEMA.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        let mut expected = domain_schema(owner);
         expected.sort();
         let mut actual = db
             .query(
@@ -346,6 +425,7 @@ impl Catalog {
             pending,
             retained,
             installation: installation.into(),
+            owner: owner.into(),
         };
         result.inventory()?;
         Ok(result)
@@ -356,7 +436,7 @@ impl Catalog {
         let mut receipts = Vec::new();
         for row in rows {
             let receipt: Receipt = serde_json::from_str(&row[4])?;
-            receipt.validate(&self.installation)?;
+            receipt.validate_owner(&self.installation, &self.owner)?;
             if serde_json::to_string(&receipt)? != row[4]
                 || receipt.request_id != row[1]
                 || receipt.artifact_id != row[2]
@@ -482,7 +562,7 @@ impl Catalog {
         mut authorize: impl FnMut(&Receipt) -> Result<()>,
         mut hook: impl FnMut(Phase) -> Result<()>,
     ) -> Result<bool> {
-        receipt.validate(&self.installation)?;
+        receipt.validate_owner(&self.installation, &self.owner)?;
         if receipt.content_bytes != bytes.len() as u64
             || receipt.content_sha256 != io::digest(bytes)
         {
@@ -658,7 +738,7 @@ impl Catalog {
 
     fn review(&self, request: &str, bytes: &[u8]) -> Result<String> {
         Ok(io::digest(&serde_json::to_vec(
-            &serde_json::json!({"installation":self.installation,"domain":"local-root","request_id":request,"bytes":bytes.len(),"sha256":io::digest(bytes)}),
+            &serde_json::json!({"installation":self.installation,"domain":self.owner,"request_id":request,"bytes":bytes.len(),"sha256":io::digest(bytes)}),
         )?))
     }
 
@@ -704,6 +784,7 @@ pub(crate) fn invoice_receipt(
         environment: "lab".into(),
         installation: commit.installation.into(),
         owner: "local-root".into(),
+        owner_generation: None,
         request_id: commit.request_id.into(),
         artifact_id: commit.artifact_id.into(),
         expected_version: commit.expected_version,
@@ -788,7 +869,8 @@ pub(crate) fn committed_invoice(
 }
 
 pub fn initialize_installed() -> Result<()> {
-    initialize(Path::new(DIRECTORY), &io::installation()?)
+    initialize(Path::new(DIRECTORY), &io::installation()?)?;
+    domains::initialize_base()
 }
 pub fn status() -> Result<()> {
     println!(
@@ -834,6 +916,7 @@ pub(crate) fn invoice_publication(
         environment: "lab".into(),
         installation,
         owner: "local-root".into(),
+        owner_generation: None,
         request_id: request.into(),
         artifact_id: artifact.into(),
         expected_version,
@@ -941,7 +1024,10 @@ pub(crate) fn governed_export(args: &[String]) -> Result<()> {
         .clone();
     let usage = export_usage(&receipt)?;
     crate::admin_governance::with_grant(&args[1], &args[2], &usage, |boundary| {
-        boundary.check()?;
+        let pending = boundary.effect_begin(
+            &receipt.request_id,
+            crate::policy_decisions::EffectKind::ArtifactExport,
+        )?;
         let bytes = io::read_member(&catalog.objects, &receipt.content_sha256, MAX_CONTENT)?;
         if bytes.len() as u64 != receipt.content_bytes
             || io::digest(&bytes) != receipt.content_sha256
@@ -958,6 +1044,7 @@ pub(crate) fn governed_export(args: &[String]) -> Result<()> {
         if !catalog.inventory()?.0.iter().any(|(_, r)| r == &receipt) {
             return Err("artifact export outcome uncertain; preserve destination bytes".into());
         }
+        boundary.effect_complete(pending, &io::digest(&serde_json::to_vec(&receipt)?))?;
         Ok(())
     })
 }
@@ -999,13 +1086,16 @@ pub(crate) fn governed_retain(args: &[String]) -> Result<()> {
         units: 1,
     };
     crate::admin_governance::with_grant(&args[1], &args[2], &usage, |boundary| {
+        let pending =
+            boundary.effect_begin(&args[3], crate::policy_decisions::EffectKind::Retention)?;
         catalog.retain_checked(&args[3], &review, || {
             boundary.check()?;
             if io::installation()? != installation {
                 return Err("retention installation changed".into());
             }
             Ok(())
-        })
+        })?;
+        boundary.effect_complete(pending, &review)
     })?;
     println!(
         "{}",
@@ -1054,12 +1144,12 @@ mod tests {
     use std::os::unix::fs::{symlink, PermissionsExt};
     use std::path::PathBuf;
 
-    struct Fixture {
-        path: PathBuf,
+    pub(super) struct Fixture {
+        pub(super) path: PathBuf,
         parent: PathBuf,
     }
     impl Fixture {
-        fn new(label: &str) -> Self {
+        pub(super) fn new(label: &str) -> Self {
             let root = std::env::var("LUMA_STORAGE_TEST_ROOT").expect(
                 "catalog tests require a private ext4 container volume via LUMA_STORAGE_TEST_ROOT",
             );
@@ -1088,6 +1178,7 @@ mod tests {
                 environment: "lab".into(),
                 installation: "a".repeat(64),
                 owner: "local-root".into(),
+                owner_generation: None,
                 request_id: request.into(),
                 artifact_id: artifact.into(),
                 expected_version: expected,
@@ -1172,17 +1263,26 @@ mod tests {
             manager_epoch: "d".repeat(32),
             generation: 1,
         });
-        let mut checks = 0;
+        let fenced = Cell::new(false);
         assert!(f
             .open()
-            .publish(&receipt, &bytes, |_| {
-                checks += 1;
-                if checks == 2 {
-                    Err("broker generation fenced".into())
-                } else {
+            .publish_with_hook(
+                &receipt,
+                &bytes,
+                |_| {
+                    if fenced.get() {
+                        Err("broker generation fenced".into())
+                    } else {
+                        Ok(())
+                    }
+                },
+                |phase| {
+                    if matches!(phase, Phase::MetadataInserted) {
+                        fenced.set(true);
+                    }
                     Ok(())
                 }
-            })
+            )
             .is_err());
         let catalog = f.open();
         let (records, orphans, _) = catalog.inventory().unwrap();

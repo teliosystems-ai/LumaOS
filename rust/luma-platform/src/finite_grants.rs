@@ -334,6 +334,8 @@ pub(crate) struct Audit {
     pub grant_id: String,
     pub grant_version: u64,
     pub checkpoint_head: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub operation_id: Option<String>,
     pub usage: Use,
 }
 impl Audit {
@@ -344,6 +346,12 @@ impl Audit {
             || self.subject_generation == 0
             || self.grant_version != 1
             || !crate::admin_roles::identifier(&self.grant_id)
+            || self.operation_id.as_ref().is_some_and(|v| {
+                v.len() != 32
+                    || !v
+                        .bytes()
+                        .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+            })
         {
             return Err("invalid finite grant attribution record".into());
         }

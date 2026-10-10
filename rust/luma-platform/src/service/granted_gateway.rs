@@ -445,7 +445,9 @@ pub(crate) fn infer(
     };
     let usage = infer_usage(&worker, &profile, &messages, max_tokens)?;
     let digest = crate::resource_manager::requests::gateway::input_digest(&messages)?;
-    let result = crate::admin_governance::with_grant(login, grant, &usage, |boundary| {
+    crate::admin_governance::with_grant(login, grant, &usage, |boundary| {
+        let pending =
+            boundary.effect_begin(&job, crate::policy_decisions::EffectKind::Inference)?;
         let mut socket = connect_local(SOCKET, Instant::now() + Duration::from_secs(3))?;
         if peer(&socket)? != 0 {
             return Err("granted inference broker peer denied".into());
@@ -465,7 +467,6 @@ pub(crate) fn infer(
                 request_deadline: crate::resource_manager::now()? + 25_000,
             },
         };
-        boundary.check()?;
         write_frame_until(
             &mut socket,
             &serde_json::to_vec(&request)?,
@@ -518,7 +519,6 @@ pub(crate) fn infer(
                 {
                     return Err("granted inference result exceeds admitted constraints".into());
                 }
-                boundary.check()?;
                 if delivery.receipt.nonce != job
                     || delivery.receipt.worker != worker
                     || delivery.receipt.profile != profile
@@ -537,9 +537,25 @@ pub(crate) fn infer(
                 {
                     return Err("granted completion receipt differs from the exact admitted subject/task/result".into());
                 }
-                return Ok(
-                    serde_json::json!({"schema_version":1,"result":"ok","output":output,"receipt":delivery.receipt,"gate_closing":false}),
-                );
+                let receipt_sha256 =
+                    crate::artifacts::digest(&serde_json::to_vec(&delivery.receipt)?);
+                // Preserve the confirmed broker result even if the grant is
+                // revoked before output delivery. Completion data never admits
+                // a new effect and cannot stand in for the final live boundary.
+                boundary.effect_complete(pending, &receipt_sha256)?;
+                let result = serde_json::json!({"schema_version":1,"result":"ok","output":output,"receipt":delivery.receipt,"gate_closing":false});
+                let bytes = serde_json::to_vec(&result)?;
+                let delivery = boundary.effect_begin(
+                    &format!("{job}-delivery"),
+                    crate::policy_decisions::EffectKind::Inference,
+                )?;
+                boundary.check()?;
+                let mut output = std::io::stdout().lock();
+                output.write_all(&bytes)?;
+                output.write_all(b"\n")?;
+                output.flush()?;
+                boundary.effect_complete(delivery, &crate::artifacts::digest(&bytes))?;
+                return Ok(());
             } else {
                 let receipt = match crate::resource_manager::requests::gateway::validate_response(
                     &raw, &request,
@@ -566,9 +582,7 @@ pub(crate) fn infer(
                 accepted = true;
             }
         }
-    })?;
-    println!("{result}");
-    Ok(())
+    })
 }
 
 pub(crate) fn infer_review(messages: Vec<ChatMessage>, max_tokens: u64) -> Result<()> {
@@ -622,6 +636,39 @@ struct InputStage {
     path: std::path::PathBuf,
     file: fs::File,
     directory: fs::File,
+}
+fn bounded_json_input(path: &str) -> Result<Vec<u8>> {
+    let mut file = fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC)
+        .open(path)?;
+    let initial = file.metadata()?;
+    if !initial.is_file() || initial.len() == 0 || initial.len() > 131_072 {
+        return Err("DAG input requires bounded regular inert JSON".into());
+    }
+    let key = |m: &fs::Metadata| {
+        (
+            m.dev(),
+            m.ino(),
+            m.len(),
+            m.mtime(),
+            m.mtime_nsec(),
+            m.ctime(),
+            m.ctime_nsec(),
+        )
+    };
+    let mut bytes = Vec::new();
+    (&mut file).take(131_073).read_to_end(&mut bytes)?;
+    let named = fs::symlink_metadata(path)?;
+    if !named.is_file()
+        || bytes.len() as u64 != initial.len()
+        || key(&file.metadata()?) != key(&initial)
+        || key(&named) != key(&initial)
+    {
+        return Err("DAG input changed while captured".into());
+    }
+    let _: serde_json::Value = serde_json::from_slice(&bytes)?;
+    Ok(bytes)
 }
 impl InputStage {
     fn capture(bytes: &[u8], leaf: &str) -> Result<Self> {
@@ -745,12 +792,69 @@ pub(crate) fn launch(arguments: &[String]) -> Result<()> {
                 | "artifact-governed-export-review"
                 | "artifact-governed-export"
                 | "artifact-governed-retain"
+                | "workflow-dag-review"
+                | "workflow-dag-prepare"
+                | "workflow-dag-status"
+                | "workflow-dag-advance"
+                | "workflow-dag-cancel"
+                | "workflow-dag-reconcile"
+                | "workflow-inputs-review"
+                | "workflow-inputs-init"
+                | "resource-retention"
+                | "artifact-gc-inspection-review"
+                | "artifact-gc-proposal"
+                | "artifact-gc-mark"
+                | "artifact-gc-delete-proposal"
+                | "artifact-gc-delete"
+                | "artifact-gc-outcomes"
+                | "artifact-owned-export-review"
+                | "artifact-owned-export"
+                | "artifact-owned-retain-proposal"
+                | "artifact-owned-retain"
+                | "policy-evidence-review"
+                | "policy-evidence-retain"
+                | "policy-evidence-pending-review"
+                | "policy-evidence-pending-retain"
         )
     {
         return Err("granted client launcher accepts only fixed protected product commands".into());
     }
     let mut owned = arguments.to_vec();
     let stage = match arguments[0].as_str() {
+        "workflow-dag-review"
+        | "workflow-dag-prepare"
+        | "workflow-dag-status"
+        | "workflow-dag-advance"
+        | "workflow-dag-cancel"
+        | "workflow-dag-reconcile" => {
+            let index = if arguments[0] == "workflow-dag-review" {
+                1
+            } else {
+                2
+            };
+            let valid = match arguments[0].as_str() {
+                "workflow-dag-review" => arguments.len() == 2,
+                "workflow-dag-prepare" => arguments.len() == 3,
+                "workflow-dag-status" => arguments.len() == 4,
+                "workflow-dag-advance" | "workflow-dag-cancel" => arguments.len() == 5,
+                "workflow-dag-reconcile" => {
+                    arguments.len() == 4
+                        || (arguments.len() == 6 && arguments[4] == "--publish-committed")
+                }
+                _ => false,
+            };
+            if !valid {
+                return Err("DAG launcher argument shape differs".into());
+            }
+            let bytes = bounded_json_input(&arguments[index])?;
+            let stage = InputStage::capture(&bytes, "input.json")?;
+            owned[index] = stage
+                .path
+                .to_str()
+                .ok_or("invalid private DAG input path")?
+                .into();
+            Some(stage)
+        }
         "granted-infer" | "granted-infer-review" => {
             let (count, index) = if arguments[0] == "granted-infer" {
                 (5, 3)
@@ -777,7 +881,7 @@ pub(crate) fn launch(arguments: &[String]) -> Result<()> {
             let count = if arguments[0] == "workflow-governed-review" {
                 4
             } else {
-                7
+                9
             };
             if arguments.len() != count {
                 return Err("governed workflow argument shape differs".into());
@@ -815,22 +919,57 @@ pub(crate) fn launch(arguments: &[String]) -> Result<()> {
         return Err("product authentication requires an actual controlling terminal".into());
     }
     let unit = format!("luma-granted-client-{}", crate::resources::random_id()?);
+    let mut writable = "--property=ReadWritePaths=/var/lib/luma-os/workflow-runs /var/lib/luma-os/workflow-dags /var/lib/luma-os/workflow-invoice-domains /var/lib/luma-os/artifacts /var/lib/luma-os/artifact-catalog /var/lib/luma-os/artifact-catalog-domains /var/lib/luma-os/policy-decisions /var/lib/luma-broker/resources /run/luma-admin -/var/lib/luma-os/model.lock".to_owned();
+    if arguments[0] == "workflow-inputs-init" {
+        writable.push_str(" /var/lib/luma-os/workflow-inputs");
+    }
     let mut command = Command::new("/usr/bin/systemd-run");
-    command.args(["--pty","--wait","--collect","--quiet","--service-type=exec","--unit",&unit,
-        "--property=User=root","--property=Group=root","--property=AppArmorProfile=luma-granted-client",
-        "--property=NoNewPrivileges=yes","--property=CapabilityBoundingSet=CAP_CHOWN",
-        "--property=AmbientCapabilities=","--property=UMask=0077","--property=ProtectSystem=strict",
-        "--property=ProtectHome=yes","--property=PrivateTmp=yes","--property=PrivateDevices=no",
-        "--property=ProtectKernelTunables=yes","--property=ProtectKernelModules=yes",
-        "--property=ProtectControlGroups=yes","--property=RestrictAddressFamilies=AF_UNIX",
-        "--property=RestrictNamespaces=yes","--property=LockPersonality=yes",
-        "--property=MemoryDenyWriteExecute=yes","--property=SystemCallArchitectures=native",
-        "--property=SystemCallFilter=@system-service @memlock","--property=SystemCallFilter=~@mount @raw-io @reboot @swap @obsolete @debug",
-        "--property=LimitCORE=0","--property=LimitNOFILE=128","--property=LimitMEMLOCK=524288",
-        "--property=MemoryMax=268435456","--property=MemorySwapMax=0","--property=TasksMax=16",
-        "--property=CPUQuota=50%","--property=RuntimeMaxSec=60","--property=TimeoutStopSec=5",
-        "--property=KillMode=control-group","--property=ReadWritePaths=/var/lib/luma-os/workflow-runs /var/lib/luma-os/artifacts /var/lib/luma-os/artifact-catalog /run/luma-admin",
-        "--setenv=PATH=/usr/bin","--setenv=LANG=C","--setenv=LC_ALL=C","--setenv=TZ=UTC",IMAGE_EXE]);
+    command.args([
+        "--pty",
+        "--wait",
+        "--collect",
+        "--quiet",
+        "--service-type=exec",
+        "--unit",
+        &unit,
+        "--property=User=root",
+        "--property=Group=root",
+        "--property=AppArmorProfile=luma-granted-client",
+        "--property=NoNewPrivileges=yes",
+        "--property=CapabilityBoundingSet=CAP_CHOWN",
+        "--property=AmbientCapabilities=",
+        "--property=UMask=0077",
+        "--property=ProtectSystem=strict",
+        "--property=ProtectHome=yes",
+        "--property=PrivateTmp=yes",
+        "--property=PrivateDevices=no",
+        "--property=ProtectKernelTunables=yes",
+        "--property=ProtectKernelModules=yes",
+        "--property=ProtectControlGroups=yes",
+        "--property=RestrictAddressFamilies=AF_UNIX",
+        "--property=RestrictNamespaces=yes",
+        "--property=LockPersonality=yes",
+        "--property=MemoryDenyWriteExecute=yes",
+        "--property=SystemCallArchitectures=native",
+        "--property=SystemCallFilter=@system-service @memlock",
+        "--property=SystemCallFilter=~@mount @raw-io @reboot @swap @obsolete @debug",
+        "--property=LimitCORE=0",
+        "--property=LimitNOFILE=128",
+        "--property=LimitMEMLOCK=524288",
+        "--property=MemoryMax=268435456",
+        "--property=MemorySwapMax=0",
+        "--property=TasksMax=16",
+        "--property=CPUQuota=50%",
+        "--property=RuntimeMaxSec=60",
+        "--property=TimeoutStopSec=5",
+        "--property=KillMode=control-group",
+        writable.as_str(),
+        "--setenv=PATH=/usr/bin",
+        "--setenv=LANG=C",
+        "--setenv=LC_ALL=C",
+        "--setenv=TZ=UTC",
+        IMAGE_EXE,
+    ]);
     command
         .args(&owned)
         .stdin(std::process::Stdio::from(tty))
@@ -918,6 +1057,7 @@ mod tests {
             grant_id: "infer-one".into(),
             grant_version: 1,
             checkpoint_head: "34".repeat(32),
+            operation_id: None,
             usage,
         };
         audit.validate().unwrap();

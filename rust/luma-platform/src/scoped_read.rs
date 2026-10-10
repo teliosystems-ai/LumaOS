@@ -1,6 +1,7 @@
 //! Descriptor-relative, no-symlink file reads for a previously admitted root.
 //! The caller must authorize the current principal and grant before each use.
 use crate::Result;
+use serde::{Deserialize, Serialize};
 use std::ffi::CString;
 use std::fs::{File, OpenOptions};
 use std::io::Read;
@@ -13,10 +14,204 @@ const MAX_COMPONENTS: usize = 32;
 const MAX_COMPONENT_BYTES: usize = 255;
 const MAX_READ_BYTES: u64 = 10 * 1024 * 1024;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct RootIdentity {
     pub device: u64,
     pub inode: u64,
+}
+
+/// Exact externally enrolled source identity. This is inert review data, not a
+/// grant. The live source retains every directory and file descriptor and must
+/// be checked against this identity after current principal authorization.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct SourceIdentity {
+    pub root: String,
+    pub relative: String,
+    pub root_identity: RootIdentity,
+    pub device: u64,
+    pub inode: u64,
+    pub bytes: u64,
+    pub modified_seconds: i64,
+    pub modified_nanos: i64,
+    pub changed_seconds: i64,
+    pub changed_nanos: i64,
+    pub uid: u32,
+    pub gid: u32,
+    pub mode: u32,
+    pub sha256: String,
+}
+
+pub(crate) struct Source {
+    ancestry: Vec<(File, CString, RootIdentity)>,
+    root: File,
+    directories: Vec<(File, CString, RootIdentity)>,
+    parent: File,
+    leaf: CString,
+    file: File,
+    expected: SourceIdentity,
+    limit: u64,
+}
+
+fn same_file(metadata: &std::fs::Metadata, expected: &SourceIdentity) -> bool {
+    metadata.is_file()
+        && metadata.nlink() == 1
+        && metadata.dev() == expected.device
+        && metadata.ino() == expected.inode
+        && metadata.len() == expected.bytes
+        && metadata.mtime() == expected.modified_seconds
+        && metadata.mtime_nsec() == expected.modified_nanos
+        && metadata.ctime() == expected.changed_seconds
+        && metadata.ctime_nsec() == expected.changed_nanos
+        && metadata.uid() == expected.uid
+        && metadata.gid() == expected.gid
+        && metadata.mode() == expected.mode
+}
+
+fn source_directory(parent: Option<&File>, name: &CString) -> Result<File> {
+    let flags = libc::O_PATH | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC;
+    let fd = unsafe {
+        match parent {
+            Some(parent) => libc::openat(parent.as_raw_fd(), name.as_ptr(), flags),
+            None => libc::open(name.as_ptr(), flags),
+        }
+    };
+    if fd < 0 {
+        return Err(std::io::Error::last_os_error().into());
+    }
+    let file = unsafe { File::from_raw_fd(fd) };
+    if !file.metadata()?.is_dir() {
+        return Err("scoped source directory is invalid".into());
+    }
+    Ok(file)
+}
+
+impl Source {
+    pub(crate) fn open(root: &Path, relative: &str, limit: u64) -> Result<Self> {
+        let mut source = Self::open_metadata(root, relative, limit)?;
+        let bytes = source.read()?;
+        source.expected.sha256 = crate::artifacts::digest(&bytes);
+        source.recheck()?;
+        Ok(source)
+    }
+
+    pub(crate) fn bind(expected: &SourceIdentity, limit: u64) -> Result<Self> {
+        if !crate::artifacts::hash(&expected.sha256) {
+            return Err("invalid enrolled source digest".into());
+        }
+        let mut source = Self::open_metadata(Path::new(&expected.root), &expected.relative, limit)?;
+        source.expected.sha256 = expected.sha256.clone();
+        if &source.expected != expected {
+            return Err("enrolled source metadata changed".into());
+        }
+        source.recheck()?;
+        Ok(source)
+    }
+
+    fn open_metadata(root: &Path, relative: &str, limit: u64) -> Result<Self> {
+        if limit == 0 || limit > MAX_READ_BYTES {
+            return Err("scoped source bound is invalid".into());
+        }
+        let root_name = root.to_str().ok_or("scoped root encoding is invalid")?;
+        if !root_name.starts_with('/') || root_name == "/" || root_name.ends_with('/') {
+            return Err("scoped source requires a finite absolute folder".into());
+        }
+        let mut directory = source_directory(None, &CString::new("/")?)?;
+        let mut ancestry = Vec::new();
+        for part in components(&root_name[1..])? {
+            let child = source_directory(Some(&directory), &part)?;
+            ancestry.push((directory, part, identity(&child)?));
+            directory = child;
+        }
+        let root = directory;
+        let root_identity = identity(&root)?;
+        let parts = components(relative)?;
+        let mut directory = root.try_clone()?;
+        let mut directories = Vec::new();
+        for part in &parts[..parts.len() - 1] {
+            let child = source_directory(Some(&directory), part)?;
+            directories.push((directory, part.clone(), identity(&child)?));
+            directory = child;
+        }
+        let leaf = parts.last().ok_or("empty scoped source")?.clone();
+        let file = open_at(&directory, &leaf, false)?;
+        let metadata = file.metadata()?;
+        if !metadata.is_file()
+            || metadata.nlink() != 1
+            || metadata.len() == 0
+            || metadata.len() > limit
+        {
+            return Err("scoped source is not a bounded independent regular file".into());
+        }
+        let expected = SourceIdentity {
+            root: root_name.into(),
+            relative: relative.into(),
+            root_identity,
+            device: metadata.dev(),
+            inode: metadata.ino(),
+            bytes: metadata.len(),
+            modified_seconds: metadata.mtime(),
+            modified_nanos: metadata.mtime_nsec(),
+            changed_seconds: metadata.ctime(),
+            changed_nanos: metadata.ctime_nsec(),
+            uid: metadata.uid(),
+            gid: metadata.gid(),
+            mode: metadata.mode(),
+            sha256: String::new(),
+        };
+        let source = Self {
+            ancestry,
+            root,
+            directories,
+            parent: directory,
+            leaf,
+            file,
+            expected,
+            limit,
+        };
+        source.recheck()?;
+        Ok(source)
+    }
+
+    pub(crate) fn identity(&self) -> &SourceIdentity {
+        &self.expected
+    }
+
+    pub(crate) fn recheck(&self) -> Result<()> {
+        for (parent, name, expected) in self.ancestry.iter().chain(self.directories.iter()) {
+            if identity(&source_directory(Some(parent), name)?)? != *expected {
+                return Err("scoped source folder was replaced".into());
+            }
+        }
+        if identity(&self.root)? != self.expected.root_identity
+            || !same_file(&self.file.metadata()?, &self.expected)
+            || !same_file(
+                &open_at(&self.parent, &self.leaf, false)?.metadata()?,
+                &self.expected,
+            )
+        {
+            return Err("scoped source target changed".into());
+        }
+        Ok(())
+    }
+
+    pub(crate) fn read(&self) -> Result<Vec<u8>> {
+        use std::io::{Seek, SeekFrom};
+        self.recheck()?;
+        let mut file = self.file.try_clone()?;
+        file.seek(SeekFrom::Start(0))?;
+        let mut bytes = Vec::new();
+        file.take(self.limit + 1).read_to_end(&mut bytes)?;
+        self.recheck()?;
+        if bytes.len() as u64 != self.expected.bytes
+            || (!self.expected.sha256.is_empty()
+                && crate::artifacts::digest(&bytes) != self.expected.sha256)
+        {
+            return Err("scoped source content changed".into());
+        }
+        Ok(bytes)
+    }
 }
 
 pub(crate) fn open_directory(path: &Path) -> Result<File> {
@@ -122,6 +317,67 @@ pub(crate) fn read_relative(
 mod tests {
     use super::*;
     use std::fs;
+
+    #[test]
+    fn enrolled_source_fences_identical_leaf_folder_and_content_replacement() {
+        for mode in 0..4 {
+            let base = std::env::temp_dir().join(format!(
+                "luma-enrolled-source-{mode}-{}",
+                std::process::id()
+            ));
+            fs::create_dir(&base).unwrap();
+            fs::create_dir(base.join("folder")).unwrap();
+            fs::create_dir(base.join("folder/nested")).unwrap();
+            fs::write(base.join("folder/nested/source.csv"), b"private fixture").unwrap();
+            let source = Source::open(&base.join("folder"), "nested/source.csv", 64).unwrap();
+            let enrolled = source.identity().clone();
+            assert_eq!(
+                Source::bind(&enrolled, 64).unwrap().read().unwrap(),
+                b"private fixture"
+            );
+            match mode {
+                0 => {
+                    fs::rename(base.join("folder/nested/source.csv"), base.join("old.csv"))
+                        .unwrap();
+                    fs::write(base.join("folder/nested/source.csv"), b"private fixture").unwrap();
+                }
+                1 => {
+                    fs::rename(base.join("folder/nested"), base.join("old-nested")).unwrap();
+                    fs::create_dir(base.join("folder/nested")).unwrap();
+                    fs::write(base.join("folder/nested/source.csv"), b"private fixture").unwrap();
+                }
+                2 => {
+                    fs::rename(base.join("folder"), base.join("old-folder")).unwrap();
+                    fs::create_dir(base.join("folder")).unwrap();
+                    fs::create_dir(base.join("folder/nested")).unwrap();
+                    fs::write(base.join("folder/nested/source.csv"), b"private fixture").unwrap();
+                }
+                3 => {
+                    fs::write(base.join("folder/nested/source.csv"), b"changed fixture").unwrap();
+                }
+                _ => unreachable!(),
+            }
+            assert!(source.recheck().is_err());
+            assert!(source.read().is_err());
+            assert!(Source::bind(&enrolled, 64).is_err());
+            fs::remove_dir_all(base).unwrap();
+        }
+    }
+    #[test]
+    fn source_binding_never_reads_before_enrolled_content_authorization() {
+        let base = std::env::temp_dir().join(format!("luma-enrolled-bind-{}", std::process::id()));
+        fs::create_dir(&base).unwrap();
+        fs::write(base.join("source.csv"), b"fixture").unwrap();
+        let source = Source::open(&base, "source.csv", 64).unwrap();
+        let mut enrolled = source.identity().clone();
+        enrolled.sha256 = "a".repeat(64);
+        let bound = Source::bind(&enrolled, 64).unwrap();
+        assert!(bound.read().is_err());
+        fs::hard_link(base.join("source.csv"), base.join("alias.csv")).unwrap();
+        assert!(Source::open(&base, "alias.csv", 64).is_err());
+        assert!(source.recheck().is_err());
+        fs::remove_dir_all(base).unwrap();
+    }
 
     #[test]
     fn nested_descriptor_read_rejects_escape_links_and_changed_root_identity() {

@@ -1,4 +1,5 @@
 //! Process-local PAM session lifetime. Never a role, wire token or UTC grant.
+use super::SessionPurpose;
 use crate::Result;
 use std::cell::Cell;
 use std::fs::OpenOptions;
@@ -7,6 +8,15 @@ use std::os::fd::AsRawFd;
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 
 const WINDOW_NS: u64 = 30_000_000_000;
+const EXPORT_WINDOW_NS: u64 = 1_800_000_000_000;
+impl SessionPurpose {
+    fn window_ns(self) -> u64 {
+        match self {
+            Self::Standard => WINDOW_NS,
+            Self::Export => EXPORT_WINDOW_NS,
+        }
+    }
+}
 const BOOT_ID: &str = "/proc/sys/kernel/random/boot_id";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -136,6 +146,7 @@ impl Boundary {
 // There is deliberately no Clone, Deserialize, renewal or restoration method.
 // Authentication owns construction; each native request obtains fresh PAM.
 pub(super) struct Lifetime {
+    purpose: SessionPurpose,
     issued: Clock,
     deadline_ns: u64,
     last_ns: Cell<u64>,
@@ -158,20 +169,30 @@ impl Lifetime {
     pub(super) fn start() -> Result<Self> {
         Self::at(Clock::read()?)
     }
+    pub(super) fn start_purpose(purpose: SessionPurpose) -> Result<Self> {
+        Self::at_purpose(Clock::read()?, purpose)
+    }
+    pub(super) fn purpose(&self) -> SessionPurpose {
+        self.purpose
+    }
 
     pub(super) fn boundary(&self) -> Boundary {
         Boundary { clock: self.issued }
     }
 
     fn at(issued: Clock) -> Result<Self> {
+        Self::at_purpose(issued, SessionPurpose::Standard)
+    }
+    fn at_purpose(issued: Clock, purpose: SessionPurpose) -> Result<Self> {
         if issued.boot == [0; 16] || issued.process == 0 || issued.uid != 0 {
             return Err("local session requires its protected authentication process".into());
         }
         let deadline_ns = issued
             .boottime_ns
-            .checked_add(WINDOW_NS)
+            .checked_add(purpose.window_ns())
             .ok_or("local session expiry overflow")?;
         Ok(Self {
+            purpose,
             issued,
             deadline_ns,
             last_ns: Cell::new(issued.boottime_ns),
@@ -207,6 +228,21 @@ impl Lifetime {
 
     pub(super) fn check(&self) -> Result<()> {
         self.check_at(Clock::read())
+    }
+
+    /// Finish at the provider's exact final kernel-clock coordinate. No new
+    /// clock, credential read or IPC may move delivery beyond this check.
+    pub(super) fn check_projection(
+        &self,
+        clock: &crate::utc_provider::ProjectionClock,
+    ) -> Result<()> {
+        self.check_at(Ok(Clock {
+            // This process and its issued lifetime cannot survive a reboot.
+            boot: self.issued.boot,
+            process: clock.process(),
+            uid: clock.euid(),
+            boottime_ns: clock.boottime_ns(),
+        }))
     }
 
     fn fence(&self) {
@@ -269,6 +305,50 @@ mod tests {
     }
 
     #[test]
+    fn opaque_final_projection_enforces_both_original_nanosecond_deadlines_and_sticky_context() {
+        use crate::utc_provider::ProjectionClock;
+        for purpose in [SessionPurpose::Standard, SessionPurpose::Export] {
+            let lifetime = Lifetime::at_purpose(clock(7), purpose).unwrap();
+            let deadline = 7 + purpose.window_ns();
+            lifetime
+                .check_projection(&ProjectionClock::fixture(deadline - 1, 100, 0))
+                .unwrap();
+            assert_eq!(lifetime.deadline_ns, deadline);
+            assert!(lifetime
+                .check_projection(&ProjectionClock::fixture(deadline, 100, 0))
+                .is_err());
+            assert_eq!(lifetime.phase.get(), Phase::Expired);
+            assert!(lifetime
+                .check_projection(&ProjectionClock::fixture(7, 100, 0))
+                .is_err());
+            for (ns, process, uid) in [(6, 100, 0), (8, 101, 0), (8, 100, 1001)] {
+                let lifetime = Lifetime::at_purpose(clock(7), purpose).unwrap();
+                assert!(lifetime
+                    .check_projection(&ProjectionClock::fixture(ns, process, uid))
+                    .is_err());
+                assert_eq!(lifetime.phase.get(), Phase::Fenced);
+                assert!(lifetime
+                    .check_projection(&ProjectionClock::fixture(9, 100, 0))
+                    .is_err());
+            }
+            let revoked = Lifetime::at_purpose(clock(7), purpose).unwrap();
+            revoked.close();
+            assert!(revoked
+                .check_projection(&ProjectionClock::fixture(8, 100, 0))
+                .is_err());
+            assert_eq!(revoked.phase.get(), Phase::Closed);
+            let near_overflow =
+                Lifetime::at_purpose(clock(u64::MAX - purpose.window_ns()), purpose).unwrap();
+            near_overflow
+                .check_projection(&ProjectionClock::fixture(u64::MAX - 1, 100, 0))
+                .unwrap();
+            assert!(near_overflow
+                .check_projection(&ProjectionClock::fixture(u64::MAX, 100, 0))
+                .is_err());
+        }
+    }
+
+    #[test]
     fn exchange_ordering_is_strict_and_bound_to_the_original_boot_process_and_uid() {
         let before = Boundary::at(clock(100)).unwrap();
         before
@@ -321,6 +401,125 @@ mod tests {
         assert_eq!(lifetime.phase.get(), Phase::Expired);
         let sleeping = Lifetime::at(clock(10)).unwrap();
         assert!(sleeping.check_at(Ok(clock(10 + WINDOW_NS * 4))).is_err());
+    }
+    #[test]
+    fn export_purpose_has_fixed_thirty_minutes_without_extending_standard_or_pam_budgets() {
+        let standard = Lifetime::at(clock(7)).unwrap();
+        assert_eq!(standard.purpose(), SessionPurpose::Standard);
+        let export = Lifetime::at_purpose(clock(7), SessionPurpose::Export).unwrap();
+        assert_eq!(export.purpose(), SessionPurpose::Export);
+        export.check_at(Ok(clock(7 + WINDOW_NS))).unwrap();
+        assert!(standard.check_at(Ok(clock(7 + WINDOW_NS))).is_err());
+        for offset in [WINDOW_NS + 1, EXPORT_WINDOW_NS / 2, EXPORT_WINDOW_NS - 1] {
+            export.check_at(Ok(clock(7 + offset))).unwrap();
+            assert_eq!(export.deadline_ns, 7 + EXPORT_WINDOW_NS);
+        }
+        assert!(export.check_at(Ok(clock(7 + EXPORT_WINDOW_NS))).is_err());
+        assert_eq!(export.phase.get(), Phase::Expired);
+        assert!(export.check_at(Ok(clock(7))).is_err());
+        let pam_execution = Lifetime::at(clock(7)).unwrap();
+        assert_eq!(pam_execution.purpose(), SessionPurpose::Standard);
+        assert!(pam_execution.check_at(Ok(clock(7 + WINDOW_NS))).is_err());
+        let fresh_export =
+            Lifetime::at_purpose(clock(7 + WINDOW_NS), SessionPurpose::Export).unwrap();
+        fresh_export.check_at(Ok(clock(7 + WINDOW_NS))).unwrap();
+        assert!(pam_execution.check_at(Ok(clock(7))).is_err());
+        assert!(export.check_at(Ok(clock(7 + WINDOW_NS))).is_err());
+    }
+    #[test]
+    fn both_purposes_fence_fork_context_clock_failure_suspension_and_revocation_without_revival() {
+        for purpose in [SessionPurpose::Standard, SessionPurpose::Export] {
+            for fault in ["missing", "regression", "boot", "fork", "uid"] {
+                let lifetime = Lifetime::at_purpose(clock(100), purpose).unwrap();
+                lifetime.check_at(Ok(clock(101))).unwrap();
+                let mut now = clock(102);
+                match fault {
+                    "regression" => now.boottime_ns = 100,
+                    "boot" => now.boot = [2; 16],
+                    "fork" => now.process += 1,
+                    "uid" => now.uid = 1001,
+                    "missing" => (),
+                    _ => unreachable!(),
+                }
+                let observation = if fault == "missing" {
+                    Err("kernel clock unavailable".into())
+                } else {
+                    Ok(now)
+                };
+                assert!(
+                    lifetime.check_at(observation).is_err(),
+                    "{purpose:?}/{fault}"
+                );
+                assert_eq!(lifetime.phase.get(), Phase::Fenced);
+                assert!(lifetime.check_at(Ok(clock(103))).is_err());
+                assert_eq!(lifetime.purpose(), purpose);
+            }
+            let suspended = Lifetime::at_purpose(clock(100), purpose).unwrap();
+            assert!(suspended
+                .check_at(Ok(clock(100 + purpose.window_ns() + 1)))
+                .is_err());
+            assert!(suspended.check_at(Ok(clock(101))).is_err());
+            let revoked = Lifetime::at_purpose(clock(100), purpose).unwrap();
+            assert!(revoked
+                .observe_with(
+                    || revoked.check_at(Ok(clock(101))),
+                    || -> Result<()> { Err("current principal/catalog/grant revoked".into()) }
+                )
+                .is_err());
+            assert_eq!(revoked.phase.get(), Phase::Fenced);
+            assert!(revoked.check_at(Ok(clock(102))).is_err());
+            let closed = Lifetime::at_purpose(clock(100), purpose).unwrap();
+            closed.close();
+            closed.close();
+            assert_eq!(closed.phase.get(), Phase::Closed);
+            assert!(closed.check_at(Ok(clock(101))).is_err());
+        }
+    }
+    #[test]
+    fn both_purposes_expire_during_projection_and_refuse_overflow_without_renewal() {
+        for purpose in [SessionPurpose::Standard, SessionPurpose::Export] {
+            let lifetime = Lifetime::at_purpose(clock(1), purpose).unwrap();
+            let checks = Cell::new(0);
+            assert!(lifetime
+                .observe_with(
+                    || {
+                        checks.set(checks.get() + 1);
+                        lifetime.check_at(Ok(clock(if checks.get() == 1 {
+                            1
+                        } else {
+                            1 + purpose.window_ns()
+                        })))
+                    },
+                    || Ok(())
+                )
+                .is_err());
+            assert_eq!(lifetime.phase.get(), Phase::Expired);
+            assert_eq!(checks.get(), 2);
+            assert!(lifetime.check_at(Ok(clock(1))).is_err());
+            assert!(
+                Lifetime::at_purpose(clock(u64::MAX - purpose.window_ns() + 1), purpose).is_err()
+            );
+            let last =
+                Lifetime::at_purpose(clock(u64::MAX - purpose.window_ns()), purpose).unwrap();
+            last.check_at(Ok(clock(u64::MAX - 1))).unwrap();
+            assert!(last.check_at(Ok(clock(u64::MAX))).is_err());
+            for bad in [
+                Clock {
+                    boot: [0; 16],
+                    ..clock(1)
+                },
+                Clock {
+                    process: 0,
+                    ..clock(1)
+                },
+                Clock {
+                    uid: 1001,
+                    ..clock(1)
+                },
+            ] {
+                assert!(Lifetime::at_purpose(bad, purpose).is_err());
+            }
+        }
     }
 
     #[test]

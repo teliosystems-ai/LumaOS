@@ -17,7 +17,7 @@ Ubuntu WSL, followed by full WSL shutdown after the narrower restart failed.
 | Protected UTC | Fixed keeper/producer units and profiles; admitted query peer, private live observation, authenticated seed/history; explicit reviewed fixed-unit reacquisition | Installed systemd/AppArmor startup; NTS, clock/rate/suspend envelopes |
 | Finite grants | Shared TPM catalog assignments/grants/revocation, exact typed selector and subject generation, finite validity and input/output/unit ceilings; fresh PAM/catalog/live UTC checks | Native issuance/revocation/admission, expiry and concurrency qualification |
 | Inference | Live original-client challenge at submit/claim/admit/finish/delivery, exact physical lease binding, durable inert grant attribution, fixed confined launcher | Real installed client/broker/model route, malicious/stale peer and revocation checks |
-| Policy evidence | Typed durable decisions with normalized scopes, actual PAM/catalog/grant/role evidence, protected UTC, stable denial reasons and pending/confirmed/uncertain effects; exact archive-before-unlink and separately granted export/custody/grace/disposition | Installed positive/adversarial flows, full-quota throughput and long-running export admission |
+| Policy evidence | Typed durable decisions with normalized scopes, actual PAM/catalog/grant/role evidence, protected UTC, stable denial reasons and pending/confirmed/uncertain effects; exact archive-before-unlink and separately granted export/custody/grace/disposition; fixed export-only 30-minute authentication | Installed positive/adversarial flows, full-quota throughput and long-running export qualification |
 | Workflows/artifacts | Signed closed typed DAGs with branched reads, leased bounded batch calculations and artifact writes; principal-isolated journals/catalogs; exact replay/cancellation/committed recovery; historical invoice route retains original provenance | Installed journal/catalog/worker flows, failures at every boundary; migration of old global laboratory state is not automatic |
 | Sources and cleanup | Principal input-folder ACL provisioning, retained source descriptors, separate inspection/Retain/Delete grants, protected-UTC artifact grace, explicit offline resource evidence deletion and independent NV-selected pair reconstruction | Effective installed DAC/AppArmor/worker, provisioning and damaged-authority recovery enforcement |
 
@@ -126,13 +126,48 @@ Successful unchanged checks within an already durably admitted export do not
 append repeated Allow records; initial admission, denials and final outcomes stay
 durable. This bounds audit growth for large archives without caching authority.
 
-Exports have a fixed 1,800-second unit runtime ceiling and 256MiB payload ceiling;
-ordinary commands retain 60 seconds. Socket idle waits are capped at 60 seconds
-and the remaining overall deadline. Current PAM sessions independently expire
-after 30 seconds; the transport ceiling does not extend authentication. A narrow
-export-only lifetime change requires the owner's pending decision. Grant validity
-is never extended. Native
-maximum-quota throughput and memory measurements remain qualification work.
+The owner approved fixed **export-only 30-minute authenticated sessions** on
+2026-10-10. Only `artifact-governed-export`, `artifact-owned-export`,
+`policy-archive-export` and `workflow-history-export` select this purpose. Their
+independently authenticated companion Read boundaries use the same purpose;
+reviews, retention, deletion, Admin mutation and workflow/resource/inference
+admission retain the ordinary 30-second session. PAM execution itself remains
+bounded to 30 seconds. No caller-selected duration, purpose conversion, renewal,
+serialized session or restored bearer authority exists.
+
+The fixed authenticated deadline starts after successful PAM, uses kernel
+`CLOCK_BOOTTIME` (including suspend), and refuses at the exact deadline. Each
+bounded content block rechecks original credential pins, current principal
+generation, exact catalog checkpoint, finite grants/roles/ceilings, protected UTC
+and export ownership. The last blocking keeper query and password-aging
+projection are bracketed by the **same original** account observation, including
+its final local-pin and lifetime check. Revocation, expiry, clock failure or
+authority substitution permanently fences that boundary; restoration cannot
+revive it. Partial destinations and uncertain outcomes remain evidence, not
+authorization to resume or delete.
+
+After those blocking account reads, the client reprojects only its private
+admitted original query sample, retaining the original 250ms total-age/deadline,
+500ms interval-width and 100ppm rate bounds. There is no extra IPC, credential
+read, caller timestamp or freshness-budget renewal in that completion step.
+UTC validity and both original PAM deadlines use one opaque full-nanosecond
+kernel dispatch coordinate. Compound exports evaluate Read and Export against
+the same latest catalog/interval, require identical original credential pins
+and principal/checkpoint/password-epoch bindings, and fence both boundaries on
+failure. Final acknowledgement checks repeat both scopes after audit I/O.
+
+Source/namespace reads precede the final delivery check. Workflow-history JSON
+and base64 records are split into at most 32KiB transport writes, with fresh
+checks before and after each write; a blocking acknowledgement cannot carry
+authority forward to the next encoded block. Canonical archive bytes and digests
+are unchanged. Successful unchanged stream Allows remain coalesced, not cached.
+
+Exports retain their independent 1,800-second unit runtime and 256MiB payload
+ceilings; ordinary commands retain 60 seconds. Socket idle waits are capped at
+60 seconds and the remaining overall deadline. Transport limits do not extend
+authentication or finite grant validity; an earlier grant expiry still refuses.
+Native maximum-quota throughput and memory measurements remain qualification
+work.
 The confined launcher retains a fixed 8,192-descriptor ceiling because nested
 inspection/export can retain three independent 1,024-entry policy archive caches.
 This changes no capabilities or writable namespaces. The schema-2 workflow
@@ -218,8 +253,9 @@ closed operations before removing their originals. Pending evidence has separate
 `policy-evidence-pending-review MEMBER` and
 `policy-evidence-pending-retain LOGIN RETAIN-GRANT MEMBER REVIEW` paths.
 Archives and retained partial bytes remain evidence, not restoration authority.
-Local evidence quotas refuse safely when exhausted; indefinite external archive
-export/deletion has not been implemented.
+Local evidence quotas refuse safely when exhausted. Closed archives have the
+explicit bounded export/custody/grace/disposition lifecycle above, not automatic
+external archival, indefinite capacity or authority restored from archive bytes.
 Active canonical evidence is bounded to 16 MiB, with 4 MiB reserved for terminal
 and maintenance records; each archive is at most 8 MiB and all archives together
 at most 512 MiB. Interrupted archive sweeps compare exact surviving originals
@@ -421,18 +457,54 @@ Existing 2026-10-09 passing evidence remains evidence for those older bytes;
 it does not qualify this increment. No final image, native PAM/TPM control flow,
 effective confinement, clock qualification or physical certification is claimed.
 
+## Export-session verification, 2026-10-10
+
+The first export source snapshot passed the complete Rust suite: 841 passed,
+zero failed and 42 fixture-only entries ignored by that invocation. Its native
+suite passed 333 tests with no skips. Six real PAM cases, four independent
+software-TPM resource cases and the existing-owner Admin software-TPM driver
+also passed. This baseline predates the final shared-coordinate, joint-scope
+and encoded-output review fixes; it is not a full-suite pass for those fixes.
+
+The final source review also repaired image assembly's second source-copy
+closure: it now includes `docs/adr`, required by the production compiler's
+embedded policy contract. Build and assembly containers are bounded to 4 GiB,
+no additional swap and two CPUs, with one Cargo job and warnings denied.
+Release optimization/LTO remains unchanged. All work stays on D: and executes
+after the source sweep; these limits do not enlarge or restart WSL.
+
+Failed attempts remain in the machine-readable evidence. Snapshot C failed
+test compilation because a new test lacked its `BTreeMap` import; dependent
+Rust/PAM/TPM tests did not execute. Snapshot D passed its selected executed
+Rust, native and disposable-fixture lanes but correctly failed overall because
+`workflow_history::` selected zero tests. The actual module is
+`workflow_runs::history::`; no verification guard was weakened to accept an
+empty invocation. Snapshot E selected the right tests but lacked the explicit
+`LUMA_STORAGE_TEST_ROOT=/storage` environment setting; its ext4-dependent
+tests refused rather than silently using an unsuitable filesystem. The final
+sweep corrects the container configuration and uses the same immutable D
+snapshot. Neither failed harness attempt is a passing qualification result.
+
+The corrected final sweep passed in 179.02 seconds: 214 selected Rust tests,
+zero failures and two fixture-only ignored entries; 334 native source tests
+passed with no skips. All Rust targets checked with warnings denied. Six real
+PAM cases, four resource software-TPM cases and the existing-owner Admin
+software-TPM driver also passed. This is targeted verification, not another
+full-suite pass. The frozen manifest SHA-256 is
+`fac24bef0f7c2dd4689e9accd64c198e521130cfff5f3752d9de9aad923dd340`;
+logs remain at `/mnt/luma-build/work/r1-export-evidence-20261010-f/sweep`.
+The current implementation, image tooling and native tests match that snapshot.
+The container used 2 GiB, no additional swap, one CPU, one Cargo job, no network
+and no physical TPM devices. Exact per-lane transcript hashes, failed attempts
+and scope limits are in [the machine-readable record](requirement1_2026-10-10.json).
+
 ## Still open before Requirement #1 closes
 
-1. Finish large-export admission: choose an explicitly approved export-only
-   30-minute authenticated session or retain the 30-second session and implement
-   reviewed resumable transfers. Transport timeouts alone do not extend PAM
-   authentication. Write/Admin mutation sessions must not silently gain a longer
-   lifetime. This is remaining software work, not just performance qualification.
-2. Qualify the actual account/UTC/grant/worker/retention paths together under
+1. Qualify the actual account/UTC/grant/worker/retention paths together under
    installed confinement. The development failures described above are repaired;
    passing unit and disposable-container tests cannot establish installed
    qualification.
-3. Freeze the fully implemented candidate, build once on D:, and perform the
+2. Freeze the fully implemented candidate, build once on D:, and perform the
    consolidated image/model sweep followed by separate native Ubuntu/physical
    qualification.
 
@@ -444,5 +516,28 @@ History publication binds the exact staged inode, incarnation and bytes across
 authority I/O; absent-domain retirement retains the marked parent through
 tombstone publication. Historical records are never automatically purged.
 
+### Installed large-export acceptance
+
+Use the exact new image and enrolled disposable test installation, not an older
+image or the development container. Capture image/source hashes, enforcing unit
+and AppArmor properties, actual byte counts/digests, protected UTC observations,
+grant/checkpoint generations and durable decision/effect outcomes. Exercise all
+four payload routes and both companion scopes where present.
+
+| Scenario | Required observation |
+| --- | --- |
+| Healthy transfer exceeds 30 seconds | Completes within all ceilings with exact saved bytes; ordinary mutation sessions still expire after 30 seconds |
+| Fixed 30-minute expiry, including suspend | No next content block is admitted at/after the deadline; a new command requires new PAM, not renewal |
+| Account lock/password or principal-generation change | Original session refuses at the next authorization check and remains fenced after restoration |
+| Either grant/role revoked, expires or changes checkpoint | Export refuses without extending grant validity or accepting the other still-valid scope alone |
+| Keeper loss, stale observation or changed UTC generation | No cached time authority permits continued admission; final blocking query cannot outlive the account check |
+| Interrupted/slow receiver, payload ceiling, source change | Bounded refusal and preserved partial bytes/uncertain evidence; no successful custody acknowledgement or automatic deletion |
+
+Already delivered bytes cannot be retracted. A relay acknowledgement establishes
+delivered/flushed bytes, not remote durable storage. Verify the saved archive and
+complete its separate custody/grace ceremony before requesting deletion. Fault
+injection that changes clocks, accounts, grants or services belongs only on the
+approved disposable installation, never the development host.
+
 Requirement #2 has not been started. Neither Requirement #1 nor G2 is marked
-complete; the passing development sweep does not eliminate the remaining software.
+complete; source verification cannot replace final image and native qualification.

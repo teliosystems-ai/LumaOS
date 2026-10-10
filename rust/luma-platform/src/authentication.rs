@@ -18,6 +18,11 @@ const HELPER: &str = "/usr/libexec/luma-os/luma-auth-helper";
 const LIMIT: usize = 1024;
 pub(crate) const PASSWORD_FRAME: usize = LIMIT + 1;
 mod session;
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SessionPurpose {
+    Standard,
+    Export,
+}
 
 fn login(value: &str) -> Result<()> {
     if value.is_empty()
@@ -168,6 +173,20 @@ impl ExchangeBoundary {
 }
 
 impl AuthenticatedAccount {
+    pub(crate) fn check_projection(
+        &self,
+        clock: &crate::utc_provider::ProjectionClock,
+    ) -> Result<()> {
+        self.lifetime.check_projection(clock)
+    }
+
+    pub(crate) fn same_pins(&self, other: &Self) -> bool {
+        self.binding.same_pins(&other.binding)
+    }
+
+    pub(crate) fn purpose(&self) -> SessionPurpose {
+        self.lifetime.purpose()
+    }
     pub(crate) fn observe_fresh<T>(
         &self,
         boundary: &ExchangeBoundary,
@@ -234,6 +253,23 @@ fn authenticate_at(
     password: &PrivateBuffer,
     registry: &Path,
     identity: &Path,
+) -> Result<AuthenticatedAccount> {
+    authenticate_at_purpose(
+        helper,
+        username,
+        password,
+        registry,
+        identity,
+        SessionPurpose::Standard,
+    )
+}
+fn authenticate_at_purpose(
+    helper: &Path,
+    username: &str,
+    password: &PrivateBuffer,
+    registry: &Path,
+    identity: &Path,
+    purpose: SessionPurpose,
 ) -> Result<AuthenticatedAccount> {
     crate::require_root()?;
     login(username)?;
@@ -308,7 +344,7 @@ fn authenticate_at(
         return Err("PAM identity differs from the bound local principal".into());
     }
     authentication_budget.check()?;
-    let lifetime = session::Lifetime::start()?;
+    let lifetime = session::Lifetime::start_purpose(purpose)?;
     authentication_budget.check()?;
     Ok(AuthenticatedAccount {
         binding,
@@ -318,6 +354,12 @@ fn authenticate_at(
 }
 
 pub(crate) fn local(username: &str) -> Result<AuthenticatedAccount> {
+    local_purpose(username, SessionPurpose::Standard)
+}
+pub(crate) fn local_export(username: &str) -> Result<AuthenticatedAccount> {
+    local_purpose(username, SessionPurpose::Export)
+}
+fn local_purpose(username: &str, purpose: SessionPurpose) -> Result<AuthenticatedAccount> {
     crate::require_root()?;
     crate::platform::require_installed()?;
     login(username)?;
@@ -327,7 +369,14 @@ pub(crate) fn local(username: &str) -> Result<AuthenticatedAccount> {
         .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
         .open("/dev/tty")?;
     let password = password_from(terminal)?;
-    authenticate(Path::new(HELPER), username, &password)
+    authenticate_at_purpose(
+        Path::new(HELPER),
+        username,
+        &password,
+        Path::new(principal::REGISTRY),
+        Path::new(principal::IDENTITY),
+        purpose,
+    )
 }
 
 pub(crate) fn console_password(username: &str) -> Result<PrivateBuffer> {
@@ -583,66 +632,96 @@ mod tests {
         principal::initialize(&root.join("principals"), &[("human", 1001)]).unwrap();
         // Synthetic account/lifetime composition tests pin and unwind behavior,
         // not PAM success. Genuine PAM is exercised by the guarded integration.
-        let account = || AuthenticatedAccount {
-            binding: AccountBinding::capture(
-                &root.join("principals/registry.json"),
-                &identity,
-                "human",
-            )
-            .unwrap(),
-            lifetime: session::Lifetime::start().unwrap(),
-            exchange_started: session::Boundary::capture().unwrap(),
-        };
-        let changed = account();
-        assert!(changed
-            .observe(|_| {
-                crate::platform::write_atomic(&identity.join("passwd"), passwd, 0o600)?;
-                Ok(())
-            })
-            .is_err());
-        assert!(changed.identity().is_err());
-        let failed = account();
-        assert!(failed
-            .observe::<()>(|_| Err("fixture protected projection failure".into()))
-            .is_err());
-        assert!(failed.identity().is_err());
-        let unwound = account();
-        assert!(std::panic::catch_unwind(std::panic::AssertUnwindSafe(
-            || unwound.observe::<()>(|_| panic!("fixture unwind"))
-        ))
-        .is_err());
-        assert!(unwound.identity().is_err());
-        let expired = account();
-        assert!(expired
-            .observe(|_| {
-                expired.logout();
-                Ok(())
-            })
-            .is_err());
-        assert!(expired.identity().is_err());
-        let healthy = account();
-        assert_eq!(
-            healthy.observe(|local| Ok(local["uid"].clone())).unwrap(),
-            1001
-        );
-        let older = account();
-        let boundary = ExchangeBoundary::capture().unwrap();
-        assert!(older.observe_fresh(&boundary, |_| Ok(())).is_err());
-        assert!(older.identity().is_err());
-        let fresh = account();
-        assert_eq!(
-            fresh
-                .observe_fresh(&boundary, |local| Ok(local["uid"].clone()))
+        for purpose in [SessionPurpose::Standard, SessionPurpose::Export] {
+            let account = || AuthenticatedAccount {
+                binding: AccountBinding::capture(
+                    &root.join("principals/registry.json"),
+                    &identity,
+                    "human",
+                )
                 .unwrap(),
-            1001
-        );
-        let interrupted = account();
-        assert!(std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            interrupted
-                .observe_fresh::<()>(&boundary, |_| panic!("fixture fresh projection unwind"))
-        }))
-        .is_err());
-        assert!(interrupted.identity().is_err());
+                lifetime: session::Lifetime::start_purpose(purpose).unwrap(),
+                exchange_started: session::Boundary::capture().unwrap(),
+            };
+            let changed = account();
+            let companion = account();
+            assert!(changed.same_pins(&companion));
+            assert_eq!(changed.purpose(), purpose);
+            let (begin, entered) = std::sync::mpsc::sync_channel(0);
+            let (completed, completion) = std::sync::mpsc::sync_channel(0);
+            let watched = identity.join("passwd");
+            let replacing = std::thread::spawn(move || {
+                entered.recv_timeout(Duration::from_secs(5)).unwrap();
+                crate::platform::write_atomic(&watched, passwd, 0o600).unwrap();
+                completed.send(()).unwrap();
+            });
+            assert!(changed
+                .observe(|local| {
+                    begin.send(())?;
+                    completion.recv_timeout(Duration::from_secs(5))?;
+                    Ok(local.clone())
+                })
+                .is_err());
+            replacing.join().unwrap();
+            assert!(changed.identity().is_err());
+            assert!(!changed.same_pins(&companion));
+            assert!(!companion.same_pins(&changed));
+            assert!(changed
+                .check_projection(&crate::utc_provider::ProjectionClock::fixture(
+                    0,
+                    std::process::id(),
+                    0,
+                ))
+                .is_err());
+            crate::platform::write_atomic(&identity.join("passwd"), passwd, 0o600).unwrap();
+            assert!(changed
+                .observe::<()>(|_| panic!(
+                    "replaced account pins must not deliver after restoration"
+                ))
+                .is_err());
+            let failed = account();
+            assert!(failed
+                .observe::<()>(|_| Err("fixture protected projection failure".into()))
+                .is_err());
+            assert!(failed.identity().is_err());
+            let unwound = account();
+            assert!(std::panic::catch_unwind(std::panic::AssertUnwindSafe(
+                || unwound.observe::<()>(|_| panic!("fixture unwind"))
+            ))
+            .is_err());
+            assert!(unwound.identity().is_err());
+            let expired = account();
+            assert!(expired
+                .observe(|_| {
+                    expired.logout();
+                    Ok(())
+                })
+                .is_err());
+            assert!(expired.identity().is_err());
+            let healthy = account();
+            assert_eq!(
+                healthy.observe(|local| Ok(local["uid"].clone())).unwrap(),
+                1001
+            );
+            let older = account();
+            let boundary = ExchangeBoundary::capture().unwrap();
+            assert!(older.observe_fresh(&boundary, |_| Ok(())).is_err());
+            assert!(older.identity().is_err());
+            let fresh = account();
+            assert_eq!(
+                fresh
+                    .observe_fresh(&boundary, |local| Ok(local["uid"].clone()))
+                    .unwrap(),
+                1001
+            );
+            let interrupted = account();
+            assert!(std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                interrupted
+                    .observe_fresh::<()>(&boundary, |_| panic!("fixture fresh projection unwind"))
+            }))
+            .is_err());
+            assert!(interrupted.identity().is_err());
+        }
         for directory in [identity, root.join("principals")] {
             for entry in std::fs::read_dir(&directory).unwrap() {
                 std::fs::remove_file(entry.unwrap().path()).unwrap();
@@ -704,10 +783,27 @@ mod tests {
         };
         let mode = std::env::var("LUMA_PAM_TEST_MODE").unwrap();
         let result = observe(&password);
+        let observe_export = |password: &PrivateBuffer| {
+            authenticate_at_purpose(
+                &helper,
+                "luma-auth-test",
+                password,
+                &registry,
+                Path::new("/etc"),
+                SessionPurpose::Export,
+            )
+        };
+        let exported = observe_export(&password);
         if mode == "allow" {
-            assert_eq!(result.unwrap().current_uid().unwrap(), 32001);
+            let standard = result.unwrap();
+            assert_eq!(standard.purpose(), SessionPurpose::Standard);
+            assert_eq!(standard.current_uid().unwrap(), 32001);
+            let exported = exported.unwrap();
+            assert_eq!(exported.purpose(), SessionPurpose::Export);
+            assert_eq!(exported.current_uid().unwrap(), 32001);
             let empty = PrivateBuffer::new(LIMIT + 1).unwrap();
             assert!(observe(&empty).is_err());
+            assert!(observe_export(&empty).is_err());
             assert!(authenticate_at(
                 &helper,
                 "luma-absent",
@@ -718,6 +814,7 @@ mod tests {
             .is_err());
             password.bytes_mut()[0] ^= 1;
             assert!(observe(&password).is_err());
+            assert!(observe_export(&password).is_err());
             assert!(
                 authenticate_at(&helper, "root", &password, &registry, Path::new("/etc")).is_err()
             );
@@ -737,12 +834,15 @@ mod tests {
                 .success());
             assert!(bound.current_uid().is_err());
             assert!(bound.identity().is_err());
+            assert!(exported.current_uid().is_err());
+            assert!(exported.identity().is_err());
             assert!(Command::new("/usr/sbin/usermod")
                 .args(["--unlock", "luma-auth-test"])
                 .status()
                 .unwrap()
                 .success());
             assert!(bound.current_uid().is_err()); // Unlock cannot revive an invalidated observation.
+            assert!(exported.current_uid().is_err());
             let logged_out = observe(&password).unwrap();
             assert_eq!(logged_out.current_uid().unwrap(), 32001);
             logged_out.logout();
@@ -764,6 +864,7 @@ mod tests {
             assert!(replaced.current_uid().is_err());
         } else {
             assert!(result.is_err());
+            assert!(exported.is_err());
         }
     }
 }

@@ -92,9 +92,19 @@ if '/repo/native/image/assemble.py' in sys.argv:
                 self.assertEqual(len(builds), 2)
                 for args in builds:
                     self.assertTrue(args[args.index('-f')+1].startswith(source+'/native/image/'))
+                    self.assertEqual(args[args.index('--memory')+1], '4g')
+                    self.assertEqual(args[args.index('--memory-swap')+1], '4g')
+                    self.assertEqual(args[args.index('--cpu-quota')+1], '200000')
+                    self.assertEqual(args[args.index('--cpu-period')+1], '100000')
                 for helper in ('assemble.py', 'export.py'):
                     args = next(args for args in docker if '/repo/native/image/'+helper in args)
                     self.assertIn('type=bind,src='+source+',dst=/repo,readonly', args)
+                    self.assertEqual(args[args.index('--memory')+1], '4g')
+                    self.assertEqual(args[args.index('--memory-swap')+1], '4g')
+                    self.assertEqual(args[args.index('--cpus')+1], '2')
+                assembly = next(args for args in docker if '/repo/native/image/assemble.py' in args)
+                self.assertIn('CARGO_BUILD_JOBS=1', assembly)
+                self.assertIn('RUSTFLAGS=-Dwarnings', assembly)
             finally:
                 if process.poll() is None:
                     process.kill()

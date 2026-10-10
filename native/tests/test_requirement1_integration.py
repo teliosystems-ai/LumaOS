@@ -187,12 +187,18 @@ class RequirementOneIntegration(unittest.TestCase):
         self.assertIn('self.root.sync_all()?;\n        authorize(receipt)?;\n        transaction.commit()?;', artifact)
         grants = source.split("impl GrantBoundary<'_>", 1)[1].split('pub(crate) fn with_grant', 1)[0]
         final = grants.split('let final_observation = client.recheck', 1)[1]
-        self.assertLess(final.index('password_window('), final.index('Ok(GrantCapture {'))
+        self.assertLess(final.index('capture_credential_refusal('), final.index('Ok(GrantCapture {'))
+        projected = final.split('client.project_after_checks(', 1)[1]
+        self.assertIn('self.session.account.check_projection(clock)?', projected)
+        self.assertIn('r.session.account.check_projection(clock)?', projected)
+        self.assertLess(projected.index('capture_credential_refusal('), projected.index('Ok(captured)'))
         boundary_check = grants.split('pub(crate) fn check(', 1)[1].split('fn capture(', 1)[0]
         self.assertLess(boundary_check.index('let final_capture = match self.capture()'),
                         boundary_check.index('self.fenced = false'))
         self.assertIn('self.decisions(&final_capture)?', boundary_check)
-        self.assertIn('original protected password epoch', final)
+        aging = source.split('fn capture_credential_refusal(', 1)[1].split('fn password_epoch(', 1)[0]
+        self.assertIn('original protected password epoch', aging)
+        self.assertIn('password_window(day, epoch, observation)', aging)
 
     def test_independent_checkpoint_has_closed_custody_and_no_client_write_access(self):
         checkpoint = (RUST / 'resource_checkpoint.rs').read_text()
@@ -228,8 +234,9 @@ class RequirementOneIntegration(unittest.TestCase):
                       'output.flush()?', 'LimitNOFILE=8192', 'socket_identity'):
             self.assertIn(value, launcher)
         self.assertIn('command.stdout(Stdio::from(tty.try_clone()?))', launcher.replace('\n', '').replace('            ', ''))
-        for file in ('artifact_catalog/owned_effects.rs', 'artifact_catalog.rs'):
-            self.assertIn('stream_check(&pending)?', (RUST / file).read_text())
+        owned = (RUST / 'artifact_catalog/owned_effects.rs').read_text()
+        self.assertIn('stream_check_with_reader(reader, &pending)?', owned)
+        self.assertIn('stream_check(&pending)?', (RUST / 'artifact_catalog.rs').read_text())
 
     def test_export_descriptor_budget_covers_nested_pinned_stores(self):
         launcher = (RUST / 'service/granted_gateway.rs').read_text()

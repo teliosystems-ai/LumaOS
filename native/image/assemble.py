@@ -195,7 +195,7 @@ def main() -> None:
     inputs=[]
     snapshot=WORK/'source'
     snapshot.mkdir()
-    for folder in ('rust','native/image','src','web','schemas','examples'):
+    for folder in ('rust','native/image','src','web','schemas','examples','docs/adr'):
         for source in sorted((REPO/folder).rglob('*')):
             if source.is_file() and not any(p in ('target','__pycache__') for p in source.relative_to(REPO).parts):
                 if source.is_symlink():raise SystemExit('source snapshot refuses symbolic links')

@@ -763,6 +763,13 @@ Run from this repository:
 bash native/image/build.sh headless NEXT_SEQUENCE
 ```
 
+Build containers are limited to 4 GiB RAM, no additional swap and two CPUs.
+Assembly uses one Cargo compiler job with warnings denied; release LTO and
+optimization remain unchanged. Run the source sweep before the image build,
+not concurrently with compilation, a qualification VM or a loaded model. These
+bounds do not reserve host memory or change WSL settings. An out-of-memory build
+is a failed build to diagnose, not permission to weaken the release profile.
+
 The builder downloads the pinned llama.cpp CPU archive and verifies its official
 digest. An existing archive can be supplied with
 `LUMA_RUNTIME_ARCHIVE=/absolute/path/llama-b11100-bin-ubuntu-x64.tar.gz`;

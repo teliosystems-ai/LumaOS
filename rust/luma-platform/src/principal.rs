@@ -277,6 +277,12 @@ pub(crate) struct FilePin {
 }
 
 impl FilePin {
+    fn same_pins(&self, other: &Self) -> bool {
+        self.path == other.path
+            && self.identity == other.identity
+            && self.directory == other.directory
+    }
+
     pub(crate) fn descriptor(&self) -> Result<File> {
         self.recheck()?;
         Ok(self.file.try_clone()?)
@@ -544,6 +550,24 @@ pub(crate) struct AccountBinding {
 }
 
 impl AccountBinding {
+    /// Compare already captured observations only; this does not revalidate
+    /// files or manufacture authentication. The caller must first complete
+    /// its live observation of the shared credential state.
+    pub(crate) fn same_pins(&self, other: &Self) -> bool {
+        !self.invalidated.get()
+            && !other.invalidated.get()
+            && self.registry_path == other.registry_path
+            && self.identity == other.identity
+            && self.installation == other.installation
+            && self.principal == other.principal
+            && self.account_digest == other.account_digest
+            && self
+                .pins
+                .iter()
+                .zip(&other.pins)
+                .all(|(left, right)| left.same_pins(right))
+    }
+
     // A commitment to the protected rows, not a password hash, PAM result or
     // capability. Installation/principal separation prevents cross-user replay.
     pub(crate) fn credential_commitment(&self) -> Result<String> {
@@ -679,6 +703,64 @@ mod tests {
                 fs::remove_dir(directory).unwrap();
             }
             fs::remove_dir(&self.0).unwrap();
+        }
+    }
+
+    #[test]
+    fn shared_account_pins_compare_every_captured_identity_without_reopening_files() {
+        let fixture = Fixture::new("shared-account-pins");
+        let left = fixture.binding();
+        let right = fixture.binding();
+        assert!(left.same_pins(&right));
+        assert!(right.same_pins(&left));
+        for fault in 0..14 {
+            let mut different = fixture.binding();
+            match fault {
+                0 => different.installation = "ab".repeat(32),
+                1 => different.principal.id = "cd".repeat(32),
+                2 => different.principal.generation += 1,
+                3 => different.principal.login = "other".into(),
+                4 => different.principal.uid += 1,
+                5 => different.principal.enabled = false,
+                6 => different.account_digest[0] ^= 1,
+                7 => different.registry_path = fixture.0.join("other-registry"),
+                8 => different.identity = fixture.0.join("other-identity"),
+                9 => different.pins[0].path = fixture.0.join("other-pin"),
+                10 => different.pins[0].identity.inode += 1,
+                11 => different.pins[1].identity.changed.1 += 1,
+                12 => different.pins[2].directory.inode += 1,
+                13 => different.invalidated.set(true),
+                _ => unreachable!(),
+            }
+            assert!(!left.same_pins(&different), "fault {fault}");
+            assert!(!different.same_pins(&left), "fault {fault}");
+        }
+        // Captured comparison is deliberately not a live-file authority check.
+        // The observing session must separately detect and fence substitutions.
+        let path = fixture.0.join("identity/shadow");
+        let bytes = fs::read(&path).unwrap();
+        crate::platform::write_atomic(&path, &bytes, 0o600).unwrap();
+        assert!(left.same_pins(&right));
+        assert!(!left.same_pins(&fixture.binding()));
+        assert!(left.current_uid().is_err());
+        assert!(!left.same_pins(&right));
+        assert!(!right.same_pins(&left));
+    }
+
+    #[test]
+    fn shared_account_pins_refuse_each_replaced_credential_descriptor() {
+        let fixture = Fixture::new("shared-replaced-pins");
+        for path in [
+            fixture.path(),
+            fixture.0.join("identity/passwd"),
+            fixture.0.join("identity/shadow"),
+        ] {
+            let original = fixture.binding();
+            let bytes = fs::read(&path).unwrap();
+            crate::platform::write_atomic(&path, &bytes, 0o600).unwrap();
+            let replacement = fixture.binding();
+            assert!(!original.same_pins(&replacement));
+            assert!(!replacement.same_pins(&original));
         }
     }
 

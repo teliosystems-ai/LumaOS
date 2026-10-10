@@ -54,10 +54,22 @@ four independent disposable-TPM cases and the existing-owner Admin TPM driver**.
 All Rust targets checked with warnings denied. The preceding full Rust sweep
 had 829 passes and two fixture failures; both fixtures were corrected and passed
 the targeted reruns. This is not another full-suite pass. Exact hashes and failed
-attempts are retained in the linked evidence. Large exports still require an
-authenticated-lifetime decision and implementation; the 1,800-second transport
-limit does not extend the current 30-second PAM session. Requirement #1 and G2
-remain open for that software work and installed qualification.
+attempts are retained in the linked evidence. The owner subsequently approved
+fixed export-only 30-minute authenticated sessions. The four actual export
+routes and their companion Read scopes now use that immutable purpose; ordinary
+mutation/Admin sessions and PAM execution retain 30 seconds. Each output block
+and final acknowledgement rechecks both scopes against one fresh catalog/UTC
+projection and both original session deadlines. The private UTC sample retains
+its original 250ms age budget; no caller duration, serialized session or renewal
+was added. The baseline full source sweep passed **841 Rust tests, 333 native
+tests with no skips, and all selected real PAM/disposable-TPM fixtures** before
+the final review fixes. The final reviewed-source sweep then passed **214
+selected Rust tests, 334 native tests with no skips, six real PAM cases, four
+independent disposable-TPM cases and the existing-owner Admin TPM driver**.
+All Rust targets checked with warnings denied. This is targeted post-review
+verification, not a second full-suite pass; failed harness attempts and exact
+source/transcript hashes are retained separately.
+Requirement #1 and G2 remain open for final image and installed qualification.
 No final image has been built from these bytes.
 Do not advance to Requirement #2.
 

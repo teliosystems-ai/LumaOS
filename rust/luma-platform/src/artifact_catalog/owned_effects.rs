@@ -72,7 +72,7 @@ pub(crate) fn command(args: &[String]) -> Result<()> {
     }
     let (binding, account, installation) = gc_cli::subject(&args[1])?;
     let read = gc_cli::inspection(&installation, &account)?;
-    crate::admin_governance::with_grant(&args[1], &args[2], &read, |reader| {
+    let operation = |reader: &mut crate::admin_governance::GrantBoundary<'_>| {
         gc_cli::check_owner(&binding, &account, reader)?;
         let catalog = gc_cli::catalog(&installation, &account)?;
         match args[0].as_str() {
@@ -91,7 +91,7 @@ pub(crate) fn command(args: &[String]) -> Result<()> {
                 let exact = receipt(&catalog, &args[4], &args[5])?;
                 let usage = export_usage(&exact)?;
                 gc_cli::check_owner(&binding, &account, reader)?;
-                crate::admin_governance::with_grant(&args[1], &args[3], &usage, |boundary| {
+                crate::admin_governance::with_export_grant(&args[1], &args[3], &usage, |boundary| {
                     gc_cli::check_owner(&binding, &account, reader)?;
                     gc_cli::check_owner(&binding, &account, boundary)?;
                     if receipt(&catalog, &args[4], &args[5])? != exact {
@@ -108,8 +108,6 @@ pub(crate) fn command(args: &[String]) -> Result<()> {
                     }
                     let mut output = crate::service::granted_gateway::export_writer()?;
                     for block in bytes.chunks(32 * 1024) {
-                        reader.stream_check(&pending)?;
-                        boundary.stream_check(&pending)?;
                         binding.current()?;
                         if reader.subject()? != account.id
                             || boundary.subject()? != account.id
@@ -120,6 +118,7 @@ pub(crate) fn command(args: &[String]) -> Result<()> {
                         {
                             return Err("owned export subject changed during delivery".into());
                         }
+                        boundary.stream_check_with_reader(reader, &pending)?;
                         output.write_all(block)?;
                     }
                     output.flush()?;
@@ -130,6 +129,7 @@ pub(crate) fn command(args: &[String]) -> Result<()> {
                     }
                     gc_cli::check_owner(&binding, &account, reader)?;
                     gc_cli::check_owner(&binding, &account, boundary)?;
+                    boundary.check_with_reader(reader)?;
                     boundary.effect_complete(pending, &io::digest(&serde_json::to_vec(&exact)?))
                 })
             }
@@ -168,7 +168,12 @@ pub(crate) fn command(args: &[String]) -> Result<()> {
             }
             _ => Err("closed owned artifact command unavailable".into()),
         }
-    })
+    };
+    if args[0] == "artifact-owned-export" {
+        crate::admin_governance::with_export_grant(&args[1], &args[2], &read, operation)
+    } else {
+        crate::admin_governance::with_grant(&args[1], &args[2], &read, operation)
+    }
 }
 
 #[cfg(test)]

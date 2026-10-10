@@ -1023,7 +1023,7 @@ pub(crate) fn governed_export(args: &[String]) -> Result<()> {
         .1
         .clone();
     let usage = export_usage(&receipt)?;
-    crate::admin_governance::with_grant(&args[1], &args[2], &usage, |boundary| {
+    crate::admin_governance::with_export_grant(&args[1], &args[2], &usage, |boundary| {
         let pending = boundary.effect_begin(
             &receipt.request_id,
             crate::policy_decisions::EffectKind::ArtifactExport,

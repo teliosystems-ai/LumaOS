@@ -287,6 +287,242 @@ fn binding_digest(binding: &HistoryBinding) -> String {
     bundle::hex(&hash.finalize())
 }
 
+/// A single kernel dispatch coordinate shared by the UTC projection and the
+/// original authenticated accounts. Only this client can capture it in
+/// production. It carries no clock setter, PAM proof, restoration or wire form.
+pub(crate) struct ProjectionClock {
+    boottime_ns: u64,
+    monotonic_ms: u64,
+    process: u32,
+    euid: u32,
+    sampled_instant: Instant,
+}
+impl ProjectionClock {
+    pub(crate) fn boottime_ns(&self) -> u64 {
+        self.boottime_ns
+    }
+    pub(crate) fn process(&self) -> u32 {
+        self.process
+    }
+    pub(crate) fn euid(&self) -> u32 {
+        self.euid
+    }
+    fn kernel_ns(clock: libc::clockid_t) -> Result<u64> {
+        let mut value: libc::timespec = unsafe { zeroed() };
+        if unsafe { libc::clock_gettime(clock, &mut value) } != 0 {
+            return Err(std::io::Error::last_os_error().into());
+        }
+        u64::try_from(value.tv_sec)?
+            .checked_mul(1_000_000_000)
+            .and_then(|ns| {
+                u64::try_from(value.tv_nsec)
+                    .ok()
+                    .filter(|ns| *ns < 1_000_000_000)
+                    .and_then(|fraction| ns.checked_add(fraction))
+            })
+            .ok_or_else(|| "UTC dispatch kernel clock is invalid or overflowed".into())
+    }
+    fn capture() -> Result<Self> {
+        let before = Self::kernel_ns(libc::CLOCK_BOOTTIME)?;
+        let monotonic_ns = Self::kernel_ns(libc::CLOCK_MONOTONIC)?;
+        let process = std::process::id();
+        let euid = unsafe { libc::geteuid() };
+        let sampled_instant = Instant::now();
+        let boottime_ns = Self::kernel_ns(libc::CLOCK_BOOTTIME)?;
+        if boottime_ns < before || boottime_ns - before > 2_000_000 || boottime_ns < monotonic_ns {
+            return Err("UTC dispatch kernel clock bracket was delayed or inconsistent".into());
+        }
+        Ok(Self {
+            boottime_ns,
+            monotonic_ms: monotonic_ns / 1_000_000,
+            process,
+            euid,
+            sampled_instant,
+        })
+    }
+    fn coordinate(&self) -> crate::utc_keeper::Clock {
+        crate::utc_keeper::Clock {
+            boottime_ms: self.boottime_ns / 1_000_000,
+            monotonic_ms: self.monotonic_ms,
+            realtime_ms: 0,
+            suspend_generation: 0,
+        }
+    }
+    #[cfg(test)]
+    pub(crate) fn fixture(boottime_ns: u64, process: u32, euid: u32) -> Self {
+        Self {
+            boottime_ns,
+            monotonic_ms: boottime_ns / 1_000_000,
+            process,
+            euid,
+            sampled_instant: Instant::now(),
+        }
+    }
+}
+
+// This is owned only by the admitted live client, never restored from a wire
+// observation. Every local projection keeps the ORIGINAL query capture and
+// deadline; checking a sample again cannot restart its freshness budget.
+struct DeliverySample {
+    history: String,
+    instance: String,
+    sequence: u64,
+    context: Statement,
+    raw: Interval,
+    captured_boottime_ms: u64,
+    captured_monotonic_ms: u64,
+    last_clock: crate::utc_keeper::Clock,
+    last_projection_ns: Option<u64>,
+    delivered_context: Statement,
+    delivered_utc: Interval,
+    deadline: Instant,
+}
+impl DeliverySample {
+    fn require_deadline(&self, now: Instant) -> Result<()> {
+        if now >= self.deadline {
+            return Err("UTC local projection exhausted its original query deadline".into());
+        }
+        Ok(())
+    }
+    fn require_binding(
+        &self,
+        history: &str,
+        generation: Option<&(String, Statement)>,
+        sequence: u64,
+        previous: &Observation,
+    ) -> Result<()> {
+        let mut expected = self.context.clone();
+        expected.floor_ms = 0;
+        if self.history != history
+            || self.sequence == 0
+            || self.sequence != sequence
+            || generation.map(|(instance, context)| (instance.as_str(), context))
+                != Some((self.instance.as_str(), &expected))
+            || previous.context() != &self.delivered_context
+            || previous.interval() != self.delivered_utc
+        {
+            return Err("UTC local projection does not match its last admitted delivery".into());
+        }
+        Ok(())
+    }
+    fn project(
+        &self,
+        initial: crate::utc_keeper::Clock,
+        now: crate::utc_keeper::Clock,
+        floor_ms: i64,
+    ) -> Result<Observation> {
+        self.context.validate()?;
+        if self.context.floor_ms != self.raw.endpoints().0
+            || now.boottime_ms < self.last_clock.boottime_ms
+            || now.monotonic_ms < self.last_clock.monotonic_ms
+            || now.suspend_generation != initial.suspend_generation
+            || self.last_clock.suspend_generation != initial.suspend_generation
+        {
+            return Err("UTC local projection crossed its admitted clock state".into());
+        }
+        for (boot, mono) in [
+            (initial.boottime_ms, initial.monotonic_ms),
+            (self.captured_boottime_ms, self.captured_monotonic_ms),
+            (self.last_clock.boottime_ms, self.last_clock.monotonic_ms),
+        ] {
+            let boot_elapsed = now
+                .boottime_ms
+                .checked_sub(boot)
+                .ok_or("UTC local projection boot clock regressed")?;
+            let mono_elapsed = now
+                .monotonic_ms
+                .checked_sub(mono)
+                .ok_or("UTC local projection monotonic clock regressed")?;
+            if boot_elapsed.abs_diff(mono_elapsed) > 2 {
+                return Err("UTC local projection crossed suspend or a clock discontinuity".into());
+            }
+        }
+        let epoch = crate::utc_bounds::Epoch {
+            boot_id: crate::tpm::decode::<16>(&self.context.boot_id)?,
+            provider_generation: self.context.process_generation,
+            clock_generation: self.context.source_clock_generation,
+            policy_digest: crate::tpm::decode::<32>(&self.context.policy_sha256)?,
+        };
+        let utc = crate::utc_bounds::project(
+            crate::utc_bounds::Measurement {
+                operator: 1,
+                utc: self.raw,
+                observed_boottime_ms: self.captured_boottime_ms,
+                epoch,
+            },
+            now.boottime_ms,
+            epoch,
+            crate::utc_bounds::Policy {
+                max_age_ms: 250,
+                max_width_ms: 500,
+                drift_ppm: 100,
+            },
+        )?;
+        if utc.endpoints().0 < floor_ms || utc.endpoints().1 - utc.endpoints().0 > 500 {
+            return Err("UTC local projection exceeded its protected floor or width".into());
+        }
+        let mut context = self.context.clone();
+        context.floor_ms = utc.endpoints().0;
+        Ok(Observation { context, utc })
+    }
+    fn finish_projection(
+        &mut self,
+        initial: crate::utc_keeper::Clock,
+        floor_ms: i64,
+        coordinate: &ProjectionClock,
+        finish: impl FnOnce(&ProjectionClock) -> Result<()>,
+    ) -> Result<Observation> {
+        // Instant was captured BEFORE the final BOOTTIME read in a bracket no
+        // longer than 2ms. Apply that full outward margin to the original query
+        // deadline rather than reading another clock after the shared point.
+        self.require_deadline(
+            coordinate
+                .sampled_instant
+                .checked_add(Duration::from_millis(2))
+                .ok_or("UTC dispatch query deadline coordinate overflowed")?,
+        )?;
+        if self
+            .last_projection_ns
+            .is_some_and(|previous| coordinate.boottime_ns() < previous)
+        {
+            return Err("UTC dispatch nanosecond coordinate regressed".into());
+        }
+        let now = coordinate.coordinate();
+        let mut result = self.project(initial, now, floor_ms)?;
+        // Integer-millisecond projection already rounds drift outwards. Include
+        // the shared coordinate's fractional millisecond too, using the ORIGINAL
+        // capture: neither a validity check nor total freshness may round down.
+        let age_ms = now
+            .boottime_ms
+            .checked_sub(self.captured_boottime_ms)
+            .ok_or("UTC dispatch predates its original capture")?;
+        let age_ns =
+            u128::from(age_ms) * 1_000_000 + u128::from(coordinate.boottime_ns() % 1_000_000);
+        let real_upper_ns = age_ns + (age_ns * 100).div_ceil(999_900);
+        if real_upper_ns > 250_000_000 {
+            return Err("UTC dispatch exhausted its original full-nanosecond sample age".into());
+        }
+        let upper = self
+            .raw
+            .endpoints()
+            .1
+            .checked_add(i64::try_from(real_upper_ns.div_ceil(1_000_000))?)
+            .ok_or("UTC dispatch outward projection overflowed")?
+            .max(result.interval().endpoints().1);
+        let lower = result.interval().endpoints().0;
+        if upper - lower > 500 {
+            return Err("UTC dispatch fractional projection exceeded its approved width".into());
+        }
+        result.utc = Interval::new(lower, upper)?;
+        finish(coordinate)?;
+        self.last_clock = now;
+        self.last_projection_ns = Some(coordinate.boottime_ns());
+        self.delivered_context = result.context().clone();
+        self.delivered_utc = result.interval();
+        Ok(result)
+    }
+}
+
 /// A live protected transport, deliberately not Clone/Serialize. The caller
 /// brackets each use with semantic HistoryReader checks and current principal
 /// checks; neither a saved response nor a caller timestamp can build this.
@@ -297,6 +533,8 @@ pub(crate) struct Client {
     history: Option<String>,
     generation: Option<(String, Statement)>,
     last_sequence: u64,
+    sample: Option<DeliverySample>,
+    process: u32,
     watch: crate::utc_step_watch::StepWatch,
     initial: crate::utc_keeper::Clock,
     fenced: bool,
@@ -313,6 +551,8 @@ impl Client {
             history: None,
             generation: None,
             last_sequence: 0,
+            sample: None,
+            process: std::process::id(),
             watch,
             initial,
             fenced: false,
@@ -439,11 +679,26 @@ impl Client {
         {
             return Err("UTC delivery exceeded protected floor, width or deadline".into());
         }
-        self.history = Some(history);
-        self.generation = Some((reply.instance, generation));
+        self.history = Some(history.clone());
+        self.generation = Some((reply.instance.clone(), generation));
         self.last_sequence = reply.sequence;
-        let mut context = reply.context;
+        let raw = Interval::new(reply.earliest_ms, reply.latest_ms)?;
+        let mut context = reply.context.clone();
         context.floor_ms = utc.endpoints().0;
+        self.sample = Some(DeliverySample {
+            history,
+            instance: reply.instance,
+            sequence: reply.sequence,
+            context: reply.context,
+            raw,
+            captured_boottime_ms: reply.captured_boottime_ms,
+            captured_monotonic_ms: reply.captured_monotonic_ms,
+            last_clock: final_clock,
+            last_projection_ns: None,
+            delivered_context: context.clone(),
+            delivered_utc: utc,
+            deadline,
+        });
         Ok(Observation { context, utc })
     }
     pub(crate) fn recheck(
@@ -459,6 +714,86 @@ impl Client {
             return Err("UTC observation crossed a protected generation boundary".into());
         }
         Ok(current)
+    }
+
+    /// Finish account/catalog checks with a projection of the SAME private
+    /// query sample. No IPC, pathname reads, caller clock, re-acquisition or
+    /// renewed age is involved. The caller must still own current history and
+    /// evaluate every finite validity/aging constraint against this result.
+    /// Its completion callback validates original PAM deadlines at the SAME
+    /// sealed nanosecond coordinate without another file, clock or IPC read.
+    pub(crate) fn project_after_checks(
+        &mut self,
+        binding: &HistoryBinding,
+        previous: &Observation,
+        finish: impl FnOnce(&ProjectionClock) -> Result<()>,
+    ) -> Result<Observation> {
+        if self.fenced {
+            return Err("UTC client is fenced; explicit reconstruction required".into());
+        }
+        let result = self.project_after_checks_inner(binding, previous, finish);
+        if result.is_err() {
+            self.fenced = true;
+            self.sample = None;
+        }
+        result
+    }
+    fn project_after_checks_inner(
+        &mut self,
+        binding: &HistoryBinding,
+        previous: &Observation,
+        finish: impl FnOnce(&ProjectionClock) -> Result<()>,
+    ) -> Result<Observation> {
+        if std::process::id() != self.process || unsafe { libc::geteuid() } != 0 {
+            return Err("UTC local projection left its original protected process".into());
+        }
+        let sample = self
+            .sample
+            .as_ref()
+            .ok_or("UTC client has no admitted query sample")?;
+        let history = binding_digest(binding);
+        if self.history.as_deref() != Some(history.as_str()) {
+            return Err("UTC local projection changed its shared history".into());
+        }
+        sample.require_binding(
+            &history,
+            self.generation.as_ref(),
+            self.last_sequence,
+            previous,
+        )?;
+        sample.require_deadline(Instant::now())?;
+        self.watch.check()?;
+        let peer = &self
+            .peer
+            .as_ref()
+            .ok_or("UTC local projection lacks its admitted peer")?
+            .1;
+        if !crate::resource_manager::pidfd_alive(peer)? {
+            return Err("UTC local projection keeper exited".into());
+        }
+        // Receiver::clock performs only kernel clock_gettime calls, not file
+        // reads. Its bounded bracket rejects scheduling delay and uses realtime
+        // solely as a discontinuity coordinate, never as UTC or a seed.
+        let first = Receiver::clock(0)?;
+        sample.project(self.initial, first, binding.floor_ms())?;
+        self.watch.check()?;
+        if !crate::resource_manager::pidfd_alive(peer)? {
+            return Err("UTC local projection keeper exited during observation".into());
+        }
+        let coordinate = ProjectionClock::capture()?;
+        let now = coordinate.coordinate();
+        if now.boottime_ms < first.boottime_ms
+            || now.monotonic_ms < first.monotonic_ms
+            || coordinate.process() != self.process
+            || coordinate.euid() != 0
+        {
+            return Err("UTC local projection expired or changed context during dispatch".into());
+        }
+        let sample = self
+            .sample
+            .as_mut()
+            .ok_or("UTC admitted sample disappeared")?;
+        sample.finish_projection(self.initial, binding.floor_ms(), &coordinate, finish)
     }
 }
 
@@ -979,6 +1314,333 @@ fn seed_transport(
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn projection_clock(boot: u64, mono: u64) -> crate::utc_keeper::Clock {
+        crate::utc_keeper::Clock {
+            boottime_ms: boot,
+            monotonic_ms: mono,
+            realtime_ms: 0,
+            suspend_generation: 0,
+        }
+    }
+    fn projection_sample(lower: i64, upper: i64) -> DeliverySample {
+        let raw = Interval::new(lower, upper).unwrap();
+        let context = Statement {
+            floor_ms: lower,
+            policy_sha256: bundle::hex(
+                &crate::utc_policy::ApprovedPolicy::fixed().unwrap().digest(),
+            ),
+            boot_id: "ab".repeat(16),
+            process_generation: 3,
+            source_clock_generation: 4,
+            keeper_generation: 5,
+            runtime_sha256: "cd".repeat(32),
+        };
+        DeliverySample {
+            history: "ef".repeat(32),
+            instance: "12".repeat(32),
+            sequence: 7,
+            context: context.clone(),
+            raw,
+            captured_boottime_ms: 1_000,
+            captured_monotonic_ms: 900,
+            last_clock: projection_clock(1_000, 900),
+            last_projection_ns: None,
+            delivered_context: context,
+            delivered_utc: raw,
+            deadline: Instant::now() + BUDGET,
+        }
+    }
+    fn delivered(sample: &DeliverySample) -> Observation {
+        Observation {
+            context: sample.delivered_context.clone(),
+            utc: sample.delivered_utc,
+        }
+    }
+    fn generation(sample: &DeliverySample) -> (String, Statement) {
+        let mut context = sample.context.clone();
+        context.floor_ms = 0;
+        (sample.instance.clone(), context)
+    }
+    #[test]
+    fn projection_and_authentication_completion_share_the_exact_nanosecond_coordinate() {
+        let mut sample = projection_sample(200_000, 200_010);
+        let mut coordinate = ProjectionClock::fixture(1_020_000_007, 123, 0);
+        coordinate.monotonic_ms = 920;
+        let called = std::cell::Cell::new(false);
+        let observed = sample
+            .finish_projection(projection_clock(900, 800), 199_000, &coordinate, |actual| {
+                assert!(std::ptr::eq(actual, &coordinate));
+                assert_eq!(actual.boottime_ns(), 1_020_000_007);
+                assert_eq!(actual.process(), 123);
+                assert_eq!(actual.euid(), 0);
+                called.set(true);
+                Ok(())
+            })
+            .unwrap();
+        assert!(called.get());
+        assert_eq!(observed.interval().endpoints(), (200_019, 200_031));
+        assert_eq!(sample.last_clock.boottime_ms, 1_020);
+        assert_eq!(sample.last_clock.monotonic_ms, 920);
+        assert_eq!(sample.delivered_utc, observed.interval());
+        assert_eq!(sample.delivered_context, *observed.context());
+        assert_eq!(sample.captured_boottime_ms, 1_000);
+    }
+    #[test]
+    fn failed_exact_pam_deadline_completion_cannot_publish_or_advance_the_projection() {
+        let mut sample = projection_sample(200_000, 200_010);
+        let previous = delivered(&sample);
+        let mut coordinate = ProjectionClock::fixture(1_020_000_007, 123, 0);
+        coordinate.monotonic_ms = 920;
+        let deadline_ns = coordinate.boottime_ns();
+        assert!(sample
+            .finish_projection(projection_clock(900, 800), 199_000, &coordinate, |actual| {
+                if actual.boottime_ns() >= deadline_ns {
+                    return Err("original PAM fixed deadline reached".into());
+                }
+                Ok(())
+            },)
+            .is_err());
+        assert_eq!(sample.last_clock.boottime_ms, 1_000);
+        assert_eq!(sample.delivered_context, *previous.context());
+        assert_eq!(sample.delivered_utc, previous.interval());
+        // Full nanoseconds, not a rounded millisecond, distinguish the final
+        // valid coordinate from exact expiry in the completion callback.
+        coordinate.boottime_ns -= 1;
+        sample
+            .finish_projection(projection_clock(900, 800), 199_000, &coordinate, |actual| {
+                if actual.boottime_ns() >= deadline_ns {
+                    return Err("original PAM fixed deadline reached".into());
+                }
+                Ok(())
+            })
+            .unwrap();
+    }
+    #[test]
+    fn shared_coordinate_completion_preserves_outward_query_deadline_and_utc_age() {
+        let mut sample = projection_sample(200_000, 200_010);
+        let mut coordinate = ProjectionClock::fixture(1_020_000_007, 123, 0);
+        coordinate.monotonic_ms = 920;
+        coordinate.sampled_instant = sample.deadline - Duration::from_millis(2);
+        let called = std::cell::Cell::new(false);
+        assert!(sample
+            .finish_projection(projection_clock(900, 800), 199_000, &coordinate, |_| {
+                called.set(true);
+                Ok(())
+            },)
+            .is_err());
+        assert!(!called.get());
+        assert_eq!(sample.delivered_utc.endpoints(), (200_000, 200_010));
+        coordinate.sampled_instant -= Duration::from_nanos(1);
+        sample
+            .finish_projection(projection_clock(900, 800), 199_000, &coordinate, |_| Ok(()))
+            .unwrap();
+        coordinate.boottime_ns = 1_250_000_000;
+        coordinate.monotonic_ms = 1_150;
+        assert!(sample
+            .finish_projection(projection_clock(900, 800), 199_000, &coordinate, |_| {
+                called.set(true);
+                Ok(())
+            },)
+            .is_err());
+        assert!(!called.get());
+    }
+    #[test]
+    fn fractional_dispatch_coordinate_rounds_outwards_and_never_hides_expiry_or_total_age() {
+        let mut sample = projection_sample(200_000, 200_010);
+        let mut coordinate = ProjectionClock::fixture(1_020_999_999, 123, 0);
+        coordinate.monotonic_ms = 920;
+        let observed = sample
+            .finish_projection(projection_clock(900, 800), 199_000, &coordinate, |_| Ok(()))
+            .unwrap();
+        assert_eq!(observed.interval().endpoints(), (200_019, 200_032));
+        assert!(!observed.interval().within(199_000, 200_032).unwrap());
+        // Regressing within the same integer millisecond is not concealed by
+        // the protocol's millisecond timestamp representation.
+        coordinate.boottime_ns -= 1;
+        assert!(sample
+            .finish_projection(projection_clock(900, 800), 199_000, &coordinate, |_| Ok(()),)
+            .is_err());
+        let mut sample = projection_sample(200_000, 200_010);
+        coordinate.boottime_ns = 1_249_980_000;
+        coordinate.monotonic_ms = 1_149;
+        assert!(sample
+            .project(projection_clock(900, 800), coordinate.coordinate(), 199_000,)
+            .is_ok());
+        assert!(sample
+            .finish_projection(projection_clock(900, 800), 199_000, &coordinate, |_| Ok(()),)
+            .is_err());
+    }
+    #[test]
+    fn local_projection_shifts_grant_expiry_after_final_account_reads() {
+        let sample = projection_sample(200_000, 200_010);
+        let previous = delivered(&sample);
+        assert!(previous.interval().within(199_000, 200_020).unwrap());
+        let current = sample
+            .project(
+                projection_clock(900, 800),
+                projection_clock(1_020, 920),
+                199_000,
+            )
+            .unwrap();
+        assert_eq!(current.interval().endpoints(), (200_019, 200_031));
+        assert_eq!(current.context().floor_ms, 200_019);
+        assert!(!current.interval().within(199_000, 200_020).unwrap());
+        assert!(current.interval().within(199_000, 200_032).unwrap());
+    }
+    #[test]
+    fn repeated_local_projection_never_restarts_sample_age_or_query_deadline() {
+        let mut sample = projection_sample(200_000, 200_010);
+        let deadline = sample.deadline;
+        let first = sample
+            .project(
+                projection_clock(900, 800),
+                projection_clock(1_200, 1_100),
+                199_000,
+            )
+            .unwrap();
+        sample.last_clock = projection_clock(1_200, 1_100);
+        sample.delivered_context = first.context().clone();
+        sample.delivered_utc = first.interval();
+        let second = sample
+            .project(
+                projection_clock(900, 800),
+                projection_clock(1_249, 1_149),
+                199_000,
+            )
+            .unwrap();
+        assert_eq!(second.interval().endpoints(), (200_248, 200_260));
+        assert_eq!(sample.captured_boottime_ms, 1_000);
+        assert_eq!(sample.captured_monotonic_ms, 900);
+        assert_eq!(sample.raw.endpoints(), (200_000, 200_010));
+        assert_eq!(sample.deadline, deadline);
+        assert!(sample
+            .project(
+                projection_clock(900, 800),
+                projection_clock(1_250, 1_150),
+                199_000
+            )
+            .is_err());
+        assert!(sample
+            .project(
+                projection_clock(900, 800),
+                projection_clock(1_400, 1_300),
+                199_000
+            )
+            .is_err());
+        sample
+            .require_deadline(deadline - Duration::from_nanos(1))
+            .unwrap();
+        assert!(sample.require_deadline(deadline).is_err());
+        assert!(sample
+            .require_deadline(deadline + Duration::from_nanos(1))
+            .is_err());
+    }
+    #[test]
+    fn local_projection_requires_exact_history_generation_sequence_and_last_result() {
+        let sample = projection_sample(200_000, 200_010);
+        let previous = delivered(&sample);
+        let original = generation(&sample);
+        sample
+            .require_binding(&sample.history, Some(&original), sample.sequence, &previous)
+            .unwrap();
+        assert!(sample
+            .require_binding(
+                &"aa".repeat(32),
+                Some(&original),
+                sample.sequence,
+                &previous
+            )
+            .is_err());
+        assert!(sample
+            .require_binding(&sample.history, None, sample.sequence, &previous)
+            .is_err());
+        for sequence in [0, sample.sequence - 1, sample.sequence + 1] {
+            assert!(sample
+                .require_binding(&sample.history, Some(&original), sequence, &previous)
+                .is_err());
+        }
+        for component in 0..8 {
+            let mut changed = generation(&sample);
+            match component {
+                0 => changed.0 = "34".repeat(32),
+                1 => changed.1.floor_ms = 1,
+                2 => changed.1.policy_sha256 = "56".repeat(32),
+                3 => changed.1.boot_id = "78".repeat(16),
+                4 => changed.1.process_generation += 1,
+                5 => changed.1.source_clock_generation += 1,
+                6 => changed.1.keeper_generation += 1,
+                7 => changed.1.runtime_sha256 = "90".repeat(32),
+                _ => unreachable!(),
+            }
+            assert!(sample
+                .require_binding(&sample.history, Some(&changed), sample.sequence, &previous)
+                .is_err());
+        }
+        let changed = Observation {
+            context: sample.delivered_context.clone(),
+            utc: Interval::new(200_000, 200_011).unwrap(),
+        };
+        assert!(sample
+            .require_binding(&sample.history, Some(&original), sample.sequence, &changed)
+            .is_err());
+        let mut changed = delivered(&sample);
+        changed.context.keeper_generation += 1;
+        assert!(sample
+            .require_binding(&sample.history, Some(&original), sample.sequence, &changed)
+            .is_err());
+    }
+    #[test]
+    fn local_projection_rejects_suspend_regression_and_changed_clock_generation() {
+        let sample = projection_sample(200_000, 200_010);
+        let initial = projection_clock(900, 800);
+        for now in [
+            projection_clock(999, 900),
+            projection_clock(1_000, 899),
+            projection_clock(1_050, 920),
+            projection_clock(1_020, 950),
+        ] {
+            assert!(sample.project(initial, now, 199_000).is_err());
+        }
+        let mut now = projection_clock(1_020, 920);
+        now.suspend_generation = 1;
+        assert!(sample.project(initial, now, 199_000).is_err());
+        let mut sample = projection_sample(200_000, 200_010);
+        sample.last_clock = projection_clock(1_100, 1_000);
+        assert!(sample
+            .project(initial, projection_clock(1_099, 999), 199_000)
+            .is_err());
+        // A discontinuity before the latest sample still contradicts the
+        // client's original acquisition coordinate, even when sample-local
+        // elapsed boot and monotonic clocks now agree.
+        assert!(sample
+            .project(
+                projection_clock(800, 800),
+                projection_clock(1_101, 1_001),
+                199_000
+            )
+            .is_err());
+    }
+    #[test]
+    fn local_projection_rejects_width_floor_overflow_and_invalid_original_context() {
+        let initial = projection_clock(900, 800);
+        let now = projection_clock(1_020, 920);
+        let sample = projection_sample(200_000, 200_500);
+        assert!(sample.project(initial, now, 199_000).is_err());
+        let sample = projection_sample(200_000, 200_010);
+        assert!(sample.project(initial, now, 200_020).is_err());
+        let mut sample = projection_sample(200_000, 200_010);
+        sample.raw = Interval::new(200_000, i64::MAX).unwrap();
+        assert!(sample.project(initial, now, 199_000).is_err());
+        let mut sample = projection_sample(200_000, 200_010);
+        sample.context.floor_ms += 1;
+        assert!(sample.project(initial, now, 199_000).is_err());
+        let mut sample = projection_sample(200_000, 200_010);
+        sample.context.process_generation = 0;
+        assert!(sample.project(initial, now, 199_000).is_err());
+        let mut sample = projection_sample(200_000, 200_010);
+        sample.captured_monotonic_ms = u64::MAX;
+        assert!(sample.project(initial, now, 199_000).is_err());
+    }
     #[test]
     fn seeds_require_independent_review_bounds_and_floor() {
         let seed = Seed {

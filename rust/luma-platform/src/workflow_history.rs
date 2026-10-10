@@ -1435,11 +1435,31 @@ fn decode_chunk(encoded: &str) -> Result<Vec<u8>> {
     }
     Ok(bytes)
 }
-fn write_record(writer: &mut impl Write, digest: &mut Sha256, record: &Record) -> Result<()> {
+fn write_checked(
+    writer: &mut impl Write,
+    bytes: &[u8],
+    check: &mut impl FnMut() -> Result<()>,
+) -> Result<()> {
+    // Encoded JSON can exceed a content chunk (base64 expands it). Never let
+    // Write::write_all emit its next transport block after a blocking relay
+    // acknowledgement without another actual authorization check.
+    for block in bytes.chunks(32 * 1024) {
+        check()?;
+        writer.write_all(block)?;
+        check()?;
+    }
+    Ok(())
+}
+fn write_record(
+    writer: &mut impl Write,
+    digest: &mut Sha256,
+    record: &Record,
+    check: &mut impl FnMut() -> Result<()>,
+) -> Result<()> {
     let bytes = serde_json::to_vec(record)?;
-    writer.write_all(PREFIX.as_bytes())?;
-    writer.write_all(&bytes)?;
-    writer.write_all(b"\n")?;
+    write_checked(writer, PREFIX.as_bytes(), check)?;
+    write_checked(writer, &bytes, check)?;
+    write_checked(writer, b"\n", check)?;
     digest.update(PREFIX.as_bytes());
     digest.update(&bytes);
     digest.update(b"\n");
@@ -1452,23 +1472,27 @@ fn export(
 ) -> Result<String> {
     tree.recheck(false)?;
     let mut digest = Sha256::new();
+    let mut check = || {
+        tree.recheck_namespace(false)?;
+        check()
+    };
     check()?;
-    tree.recheck_namespace(false)?;
     write_record(
         writer,
         &mut digest,
         &Record::Begin {
             manifest: tree.manifest.clone(),
         },
+        &mut check,
     )?;
     for (index, member) in tree.manifest.members.iter().enumerate() {
-        check()?;
         tree.recheck_namespace(false)?;
         let bytes = tree.bytes(member)?;
-        write_record(writer, &mut digest, &Record::Member { index })?;
+        check()?;
+        write_record(writer, &mut digest, &Record::Member { index }, &mut check)?;
         for (chunk_index, chunk) in bytes.chunks(CHUNK).enumerate() {
-            check()?;
             tree.recheck_namespace(false)?;
+            check()?;
             write_record(
                 writer,
                 &mut digest,
@@ -1477,22 +1501,32 @@ fn export(
                     offset: (chunk_index * CHUNK) as u64,
                     base64: encode_chunk(chunk),
                 },
+                &mut check,
             )?;
             writer.flush()?;
-            check()?;
             tree.recheck_namespace(false)?;
+            check()?;
         }
-        write_record(writer, &mut digest, &Record::EndMember { index })?;
+        write_record(
+            writer,
+            &mut digest,
+            &Record::EndMember { index },
+            &mut check,
+        )?;
     }
     tree.recheck(false)?;
-    check()?;
     tree.recheck_namespace(false)?;
+    check()?;
     let archive = crate::bundle::hex(&digest.finalize());
-    writer.write_all(PREFIX.as_bytes())?;
-    writer.write_all(&serde_json::to_vec(&Record::Complete {
-        archive_sha256: archive.clone(),
-    })?)?;
-    writer.write_all(b"\n")?;
+    write_checked(writer, PREFIX.as_bytes(), &mut check)?;
+    write_checked(
+        writer,
+        &serde_json::to_vec(&Record::Complete {
+            archive_sha256: archive.clone(),
+        })?,
+        &mut check,
+    )?;
+    write_checked(writer, b"\n", &mut check)?;
     writer.flush()?;
     check()?;
     Ok(archive)
@@ -1580,7 +1614,7 @@ pub(crate) fn command(args: &[String]) -> Result<()> {
         );
         return Ok(());
     }
-    let result = crate::admin_governance::with_grant(&args[1], &args[2], &read, |reader| {
+    let operation = |reader: &mut crate::admin_governance::GrantBoundary<'_>| {
         check(reader, principal, generation)?;
         let mut ledger = Ledger::open(domain, principal)?;
         if !matches!(
@@ -1658,7 +1692,7 @@ pub(crate) fn command(args: &[String]) -> Result<()> {
                     return Err("history export review changed".into());
                 }
                 let usage = tree.manifest.usage(Action::Export)?;
-                crate::admin_governance::with_grant(&args[1], &args[3], &usage, |boundary| {
+                crate::admin_governance::with_export_grant(&args[1], &args[3], &usage, |boundary| {
                     check(reader, principal, generation)?;
                     check(boundary, principal, generation)?;
                     let pending = boundary.effect_begin(
@@ -1667,9 +1701,10 @@ pub(crate) fn command(args: &[String]) -> Result<()> {
                     )?;
                     let mut writer = crate::service::granted_gateway::export_writer()?;
                     let archive = export(&tree, &mut writer, || {
-                        reader.stream_history_owner(&pending, principal, generation)?;
-                        boundary.stream_history_owner(&pending, principal, generation)?;
-                        ledger.recheck()
+                        ledger.recheck()?;
+                        boundary.stream_history_owner_with_reader(
+                            reader, &pending, principal, generation,
+                        )
                     })?;
                     let exported = Export {
                         manifest_sha256: hash(&tree.manifest)?,
@@ -1681,7 +1716,8 @@ pub(crate) fn command(args: &[String]) -> Result<()> {
                     ledger.save(next, || {
                         check(reader, principal, generation)?;
                         tree.recheck(false)?;
-                        check(boundary, principal, generation)
+                        check(boundary, principal, generation)?;
+                        boundary.check_with_reader(reader)
                     })?;
                     boundary.effect_complete(pending, &hash(&exported)?)?;
                     Ok(
@@ -1865,7 +1901,12 @@ pub(crate) fn command(args: &[String]) -> Result<()> {
             }
             _ => Err("invalid typed history action argument shape".into()),
         }
-    })?;
+    };
+    let result = if args[0] == "workflow-history-export" {
+        crate::admin_governance::with_export_grant(&args[1], &args[2], &read, operation)
+    } else {
+        crate::admin_governance::with_grant(&args[1], &args[2], &read, operation)
+    }?;
     if args[0] == "workflow-history-export" {
         eprintln!("{}", serde_json::to_string(&result)?);
     } else {
@@ -2018,6 +2059,56 @@ fn verify(reader: &mut impl BufRead) -> Result<String> {
 mod tests {
     use super::*;
     use std::cell::Cell;
+    #[test]
+    fn encoded_record_checks_each_transport_block_and_refuses_after_blocking_delivery() {
+        struct Writer<'a> {
+            delivered: &'a Cell<usize>,
+            bytes: Vec<u8>,
+        }
+        impl Write for Writer<'_> {
+            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                assert!(bytes.len() <= 32 * 1024);
+                self.bytes.extend_from_slice(bytes);
+                self.delivered.set(self.bytes.len());
+                Ok(bytes.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        let record = Record::Chunk {
+            index: 0,
+            offset: 0,
+            base64: encode_chunk(&vec![7; CHUNK]),
+        };
+        let encoded = serde_json::to_vec(&record).unwrap();
+        assert!(encoded.len() > 32 * 1024);
+        let delivered = Cell::new(0);
+        let mut refused = Writer {
+            delivered: &delivered,
+            bytes: Vec::new(),
+        };
+        let limit = PREFIX.len() + 32 * 1024;
+        let mut guard = || {
+            if delivered.get() >= limit {
+                Err("original authorization revoked during relay acknowledgment".into())
+            } else {
+                Ok(())
+            }
+        };
+        assert!(write_record(&mut refused, &mut Sha256::new(), &record, &mut guard).is_err());
+        assert_eq!(refused.bytes.len(), limit);
+        assert_eq!(&refused.bytes[PREFIX.len()..], &encoded[..32 * 1024]);
+        let mut complete = Writer {
+            delivered: &delivered,
+            bytes: Vec::new(),
+        };
+        let mut digest = Sha256::new();
+        write_record(&mut complete, &mut digest, &record, &mut || Ok(())).unwrap();
+        let exact = [PREFIX.as_bytes(), &encoded, b"\n"].concat();
+        assert_eq!(complete.bytes, exact);
+        assert_eq!(digest.finalize()[..], Sha256::digest(&exact)[..]);
+    }
     struct Fixture {
         parent: PathBuf,
         path: PathBuf,

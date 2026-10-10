@@ -702,12 +702,12 @@ fn export_checked(
         return Err("archive export bytes differ from reviewed snapshot".into());
     }
     for block in bytes.chunks(32768) {
-        check()?;
         recheck(&store.archives, &snapshot.name, &snapshot.identity)?;
+        check()?;
         output.write_all(block)?;
     }
-    check()?;
     recheck(&store.archives, &snapshot.name, &snapshot.identity)?;
+    check()?;
     output.flush()?;
     check()?;
     Ok(())
@@ -1116,23 +1116,23 @@ pub(crate) fn command(args: &[String]) -> Result<()> {
         return Ok(());
     }
     let store = Store::installed()?;
-    let result = crate::admin_governance::with_grant(&args[1], &args[2], &read_use, |reader| {
+    let operation = |reader: &mut crate::admin_governance::GrantBoundary<'_>| {
         reader.check()?;
         match verb {
             "policy-archive-export-proposal" if args.len()==4=>{let(snapshot,_,_)=target(&store,op)?;reader.check()?;Ok(Some(serde_json::json!({"review_sha256":digest(&snapshot)?,"usage":snapshot.scope(Action::Export)?,"snapshot":snapshot,"remote_storage_attested":false})))},
             "policy-archive-export" if args.len()==6=>{
                 let(snapshot,bytes,_)=target(&store,op)?;let usage=snapshot.scope(Action::Export)?;if args[5]!=digest(&snapshot)?{return Err("archive export review changed".into());}
-                crate::admin_governance::with_grant(&args[1],&args[4],&usage,|boundary|{
+                crate::admin_governance::with_export_grant(&args[1],&args[4],&usage,|boundary|{
                     reader.check()?;let audit=guard_scope(boundary,&usage)?;let pending=boundary.effect_begin(&args[5],EffectKind::ArtifactExport)?;
                     let history=History::open(&store,op,true)?;
                     if history.has("intent.json")? || history.has("mark.json")? {return Err("archive already has a disposition intent; inspect preserved state".into());}
-                    let mut output=crate::service::granted_gateway::export_writer()?;export_checked(&store,&snapshot,&bytes,&mut output,||{reader.stream_check(&pending)?;boundary.stream_check(&pending)})?;
+                    let mut output=crate::service::granted_gateway::export_writer()?;export_checked(&store,&snapshot,&bytes,&mut output,||boundary.stream_check_with_reader(reader,&pending))?;
                     let ack=ExportAck {schema_version:1,snapshot:snapshot.clone(),audit,observed:Timestamp::observed(&boundary.observation()?)?,stdout_delivery_complete:true,remote_storage_attested:false};ack.validate()?;
                     finish(boundary,pending,Evidence::Export {ack:ack.clone()})?;
                     // Only a confirmed delivery may create the local ack. An
                     // older exact ack is retained rather than rewritten.
-                    if history.has("ack.json")? {if history.ack()?.0.snapshot!=snapshot{return Err("existing archive acknowledgment names different bytes".into());}}else{reader.check()?;boundary.check()?;history.publish("ack.json",&ack)?;}
-                    boundary.check()?;Ok(())
+                    if history.has("ack.json")? {if history.ack()?.0.snapshot!=snapshot{return Err("existing archive acknowledgment names different bytes".into());}}else{boundary.check_with_reader(reader)?;history.publish("ack.json",&ack)?;}
+                    boundary.check_with_reader(reader)?;Ok(())
                 })?;Ok(None)
             },
             "policy-archive-dispose-proposal" if args.len()==6=>{
@@ -1159,7 +1159,12 @@ pub(crate) fn command(args: &[String]) -> Result<()> {
             "policy-archive-outcomes" if args.len()==4=>{let history=History::open(&store,op,false)?;let result=outcomes(&history)?;reader.check()?;Ok(Some(result))},
             _=>Err("expected closed policy-archive review/export-proposal/export/dispose-proposal/dispose-mark/delete-proposal/delete/cleanup-proposal/cleanup/outcomes command".into())
         }
-    })?;
+    };
+    let result = if verb == "policy-archive-export" {
+        crate::admin_governance::with_export_grant(&args[1], &args[2], &read_use, operation)
+    } else {
+        crate::admin_governance::with_grant(&args[1], &args[2], &read_use, operation)
+    }?;
     if let Some(result) = result {
         println!("{result}");
     }

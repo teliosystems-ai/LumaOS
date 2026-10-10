@@ -1,7 +1,9 @@
 """Native source capture tests; no Docker, network, signing or disk images."""
+import ast
 import hashlib
 import os
 from pathlib import Path
+import re
 import sys
 import tempfile
 import unittest
@@ -9,6 +11,35 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]/'image'))
 import snapshot
+
+
+class AssemblySourceClosureTests(unittest.TestCase):
+    def test_inner_assembly_capture_retains_the_complete_outer_source_closure(self):
+        image = Path(__file__).resolve().parents[1] / 'image'
+        tree = ast.parse((image / 'assemble.py').read_text())
+        loops = [node for node in ast.walk(tree) if isinstance(node, ast.For)
+                 and isinstance(node.target, ast.Name) and node.target.id == 'folder'
+                 and isinstance(node.iter, ast.Tuple)]
+        self.assertEqual(len(loops), 1)
+        self.assertEqual(ast.literal_eval(loops[0].iter), snapshot.FOLDERS)
+        self.assertIn('docs/adr', snapshot.FOLDERS)
+        repository = image.parents[1]
+        policy = repository / 'docs/adr/0004-policy-model.md'
+        self.assertTrue(policy.is_file())
+        source = (repository / 'rust/luma-platform/src/policy_decisions.rs').read_text()
+        self.assertIn('include_bytes!("../../../docs/adr/0004-policy-model.md")', source)
+        included = 0
+        for member in (repository / 'rust/luma-platform/src').rglob('*.rs'):
+            # Container-only fixture sources below cfg(test) are sweep inputs,
+            # not inputs to the offline release compilation in assemble.py.
+            production = member.read_text().split('#[cfg(test)]', 1)[0]
+            for relative in re.findall(r'include_(?:bytes|str)!\(\s*"([^"]+)"\s*\)',
+                                       production):
+                target = (member.parent / relative).resolve(strict=True)
+                self.assertTrue(any(target.is_relative_to(repository / folder)
+                                    for folder in snapshot.FOLDERS), str(target))
+                included += 1
+        self.assertGreater(included, 0)
 
 
 @unittest.skipUnless(os.name == 'posix', 'Linux source capture semantics')

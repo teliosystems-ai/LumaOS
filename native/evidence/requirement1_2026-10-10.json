@@ -2,7 +2,7 @@
   "schema_version": 1,
   "requirement": 1,
   "date": "2026-10-10",
-  "status": "verified-source-candidate-with-export-admission-open",
+  "status": "verified-source-candidate-awaiting-image-and-native-qualification",
   "gate_closing": false,
   "installed_image_tested": false,
   "physical_tpm_tested": false,
@@ -48,9 +48,7 @@
     "real_pam_transcript_sha256": "2776b9f3a77d0cdbc50ff7bef5ca3784923464ca4c3be823a9df1a693e823d5b",
     "product_admin_enrolled": false
   },
-  "remaining_software": [
-    "Large-export authenticated lifetime decision and implementation: approve fixed export-only 30-minute sessions, or retain 30-second sessions and implement reviewed resumable transfers. No lifetime extension implemented."
-  ],
+  "remaining_software": [],
   "remaining_qualification": [
     "Installed account, UTC, grant, worker, retention and confinement integration",
     "Final D-drive image build and consolidated image/model sweep",
@@ -589,6 +587,780 @@
       "rust/luma-platform/src/workflow_runs.rs"
     ],
     "security_review": "Exact staged identity/bytes pinned across authority I/O; named parent and absent-domain proof retained across tombstone publication. Both review findings closed; no further actionable bypass found in reviewed paths."
+  },
+  "export_session_approval": {
+    "date": "2026-10-10",
+    "standard_lifetime_seconds": 30,
+    "export_lifetime_seconds": 1800,
+    "purpose": "immutable-export-only",
+    "routes": [
+      "artifact-owned-export",
+      "artifact-governed-export",
+      "policy-archive-export",
+      "workflow-history-export"
+    ],
+    "continuous_authorization": "Account pins, original principal/password epoch, finite Read and Export grants, and protected UTC rechecked jointly; same private final kernel coordinate validates both session deadlines.",
+    "resume_or_renewal_supported": false
+  },
+  "export_baseline_full_sweep": {
+    "evidence_directory": "/mnt/luma-build/work/r1-export-evidence-20261010-a/sweep",
+    "result": "passed",
+    "source_manifest_sha256": "19f4fac2ba8931f9670207c7dd839958759c1d7be93f5b1dd981d7bb36738b05",
+    "runner_sha256": "dd383f53af365e728632d8e4ab1f520ae28a0d9080ccae8bda7fe1e967549ca6",
+    "elapsed_seconds": 879.343,
+    "warnings_denied": true,
+    "cases": [
+      {
+        "name": "rust-all-targets-check",
+        "exit_code": 0,
+        "test_counts": null,
+        "verification_error": null,
+        "transcript_sha256": "7657659e5db4bf150900acf7b0cecb1752e695221f8bde22cfe8ed74423c3cb1"
+      },
+      {
+        "name": "rust-tests",
+        "exit_code": 0,
+        "test_counts": {
+          "failed": 0,
+          "filtered_out": 0,
+          "ignored": 42,
+          "measured": 0,
+          "passed": 841
+        },
+        "verification_error": null,
+        "transcript_sha256": "8e7959a27d9390e2b69f9a859e66b96b0ce5b55a4b6be66180fc51a42e563acf"
+      },
+      {
+        "name": "native-source-tests",
+        "exit_code": 0,
+        "test_counts": {
+          "discovered": 333,
+          "failed": 0,
+          "passed": 333,
+          "skipped": 0
+        },
+        "verification_error": null,
+        "transcript_sha256": "abe5cf25c531a358a9474e6ce95cd3cefdf8b8501f612f218d2cc49479fbebed"
+      },
+      {
+        "name": "real-pam-fixture",
+        "exit_code": 0,
+        "test_counts": null,
+        "verification_error": null,
+        "transcript_sha256": "b96a673f74e39f8ae3f47acba9c3478f6493f8569933f260cf67411bd5828add"
+      },
+      {
+        "name": "resource-software-tpm",
+        "exit_code": 0,
+        "test_counts": null,
+        "verification_error": null,
+        "transcript_sha256": "f6ad3100a55035afec3faae4dcf3006caa8a22e419a9af219de602d26358b72d"
+      },
+      {
+        "name": "admin-software-tpm-regression",
+        "exit_code": 0,
+        "test_counts": null,
+        "verification_error": null,
+        "transcript_sha256": "5e5f18175ab1ad2056d0cd072ffef68a3e4eb834accb0119ade75a588658eb84"
+      }
+    ],
+    "fixture_execution": {
+      "real_pam_cases_passed": 6,
+      "resource_tpm_cases_passed": 4,
+      "admin_software_tpm_driver_passed": true,
+      "host_tpm_accessed": false
+    }
+  },
+  "export_review_verification_attempts": [
+    {
+      "evidence_directory": "/mnt/luma-build/work/r1-export-evidence-20261010-c/sweep",
+      "result": "failed",
+      "source_manifest_sha256": "a60be01ed731e9328c137ca529f8f44a7f66bf4a41de4d421d3dc867b2c36f0a",
+      "runner_sha256": "dd383f53af365e728632d8e4ab1f520ae28a0d9080ccae8bda7fe1e967549ca6",
+      "elapsed_seconds": 177.89,
+      "warnings_denied": true,
+      "cases": [
+        {
+          "name": "rust-all-targets-check",
+          "exit_code": 101,
+          "test_counts": null,
+          "verification_error": null,
+          "transcript_sha256": "663ac218f7a52c835e4b05d3a77225649f4f3f0febb358ec5e5b72be5a9bdf1f"
+        },
+        {
+          "name": "rust-tests",
+          "exit_code": 101,
+          "test_counts": null,
+          "verification_error": null,
+          "transcript_sha256": "663ac218f7a52c835e4b05d3a77225649f4f3f0febb358ec5e5b72be5a9bdf1f"
+        },
+        {
+          "name": "rust-tests-admin_governance",
+          "exit_code": 101,
+          "test_counts": null,
+          "verification_error": null,
+          "transcript_sha256": "663ac218f7a52c835e4b05d3a77225649f4f3f0febb358ec5e5b72be5a9bdf1f"
+        },
+        {
+          "name": "rust-tests-principal",
+          "exit_code": 101,
+          "test_counts": null,
+          "verification_error": null,
+          "transcript_sha256": "663ac218f7a52c835e4b05d3a77225649f4f3f0febb358ec5e5b72be5a9bdf1f"
+        },
+        {
+          "name": "rust-tests-utc_stream",
+          "exit_code": 101,
+          "test_counts": null,
+          "verification_error": null,
+          "transcript_sha256": "663ac218f7a52c835e4b05d3a77225649f4f3f0febb358ec5e5b72be5a9bdf1f"
+        },
+        {
+          "name": "rust-tests-workflow_history",
+          "exit_code": 101,
+          "test_counts": null,
+          "verification_error": null,
+          "transcript_sha256": "663ac218f7a52c835e4b05d3a77225649f4f3f0febb358ec5e5b72be5a9bdf1f"
+        },
+        {
+          "name": "rust-tests-policy_decisions",
+          "exit_code": 101,
+          "test_counts": null,
+          "verification_error": null,
+          "transcript_sha256": "663ac218f7a52c835e4b05d3a77225649f4f3f0febb358ec5e5b72be5a9bdf1f"
+        },
+        {
+          "name": "rust-tests-artifact_catalog",
+          "exit_code": 101,
+          "test_counts": null,
+          "verification_error": null,
+          "transcript_sha256": "663ac218f7a52c835e4b05d3a77225649f4f3f0febb358ec5e5b72be5a9bdf1f"
+        },
+        {
+          "name": "native-source-tests",
+          "exit_code": 0,
+          "test_counts": {
+            "discovered": 334,
+            "failed": 0,
+            "passed": 334,
+            "skipped": 0
+          },
+          "verification_error": null,
+          "transcript_sha256": "1a18465c1229f5ef0c7b2fee092e03a58c905ed5bb987ba6286794a47e69c5be"
+        },
+        {
+          "name": "real-pam-fixture",
+          "exit_code": 1,
+          "test_counts": null,
+          "verification_error": null,
+          "transcript_sha256": "11dc3fc765e543b7e9fc8bcf3f26ff4122fac41b13b30862f20bfda6b5746e40"
+        },
+        {
+          "name": "resource-software-tpm",
+          "exit_code": 1,
+          "test_counts": null,
+          "verification_error": null,
+          "transcript_sha256": "f40449c834f992e3f7e6a59319c8e78ada9c7be1cddfc24fc419afb0f6f1b09c"
+        },
+        {
+          "name": "admin-software-tpm-regression",
+          "exit_code": 1,
+          "test_counts": null,
+          "verification_error": null,
+          "transcript_sha256": "815faa057b50653bc187567f328f0d9c41007742eecd856fb5bef6245effcc07"
+        }
+      ],
+      "failure": "New test lacked BTreeMap import; compile and dependent Rust/PAM/TPM execution failed. Test-only import corrected."
+    },
+    {
+      "evidence_directory": "/mnt/luma-build/work/r1-export-evidence-20261010-d/sweep",
+      "result": "failed",
+      "source_manifest_sha256": "fac24bef0f7c2dd4689e9accd64c198e521130cfff5f3752d9de9aad923dd340",
+      "runner_sha256": "dd383f53af365e728632d8e4ab1f520ae28a0d9080ccae8bda7fe1e967549ca6",
+      "elapsed_seconds": 293.035,
+      "warnings_denied": true,
+      "cases": [
+        {
+          "name": "rust-all-targets-check",
+          "exit_code": 0,
+          "test_counts": null,
+          "verification_error": null,
+          "transcript_sha256": "81316ce61b5532cdfeff7f4212eccdf2ee1e54643f9436fcae7f8ecf2202fff2"
+        },
+        {
+          "name": "rust-tests",
+          "exit_code": 0,
+          "test_counts": {
+            "failed": 0,
+            "filtered_out": 879,
+            "ignored": 1,
+            "measured": 0,
+            "passed": 19
+          },
+          "verification_error": null,
+          "transcript_sha256": "cc6f69aa5d92c3a9d077071a5152269a53f42a827b16e6b51125a7e31c2ab153"
+        },
+        {
+          "name": "rust-tests-admin_governance--",
+          "exit_code": 0,
+          "test_counts": {
+            "failed": 0,
+            "filtered_out": 812,
+            "ignored": 1,
+            "measured": 0,
+            "passed": 86
+          },
+          "verification_error": null,
+          "transcript_sha256": "3db0a8a3c98284b327aa3009c9952ca653ec7ca088ec7b9f00f05204a751b873"
+        },
+        {
+          "name": "rust-tests-principal--",
+          "exit_code": 0,
+          "test_counts": {
+            "failed": 0,
+            "filtered_out": 882,
+            "ignored": 0,
+            "measured": 0,
+            "passed": 17
+          },
+          "verification_error": null,
+          "transcript_sha256": "4293c89a5793e68d268f28d4f6d0cf08686188fc3aeb775b717360389c5c8059"
+        },
+        {
+          "name": "rust-tests-utc_stream--",
+          "exit_code": 0,
+          "test_counts": {
+            "failed": 0,
+            "filtered_out": 875,
+            "ignored": 0,
+            "measured": 0,
+            "passed": 24
+          },
+          "verification_error": null,
+          "transcript_sha256": "df22e0fa65b5eab6415dd143e4c35026a7c7544f5eca488f6d3e0c5f6263bdbe"
+        },
+        {
+          "name": "rust-tests-workflow_history--",
+          "exit_code": 0,
+          "test_counts": null,
+          "verification_error": "Rust lane did not execute any recognized tests",
+          "transcript_sha256": "a59520e06c8351050f71321d11030b08d68a25f96af68da02f40d97ea7f25f67"
+        },
+        {
+          "name": "rust-tests-policy_decisions--",
+          "exit_code": 0,
+          "test_counts": {
+            "failed": 0,
+            "filtered_out": 876,
+            "ignored": 0,
+            "measured": 0,
+            "passed": 23
+          },
+          "verification_error": null,
+          "transcript_sha256": "b73dbf74b7f8133e1df23795f5da4b3adeb4dfd4245c37792f85b420a891e19d"
+        },
+        {
+          "name": "rust-tests-artifact_catalog--",
+          "exit_code": 0,
+          "test_counts": {
+            "failed": 0,
+            "filtered_out": 870,
+            "ignored": 0,
+            "measured": 0,
+            "passed": 29
+          },
+          "verification_error": null,
+          "transcript_sha256": "bc0d129a311edf495e2b4ddc4d3c76b767a3a8e981a26556d05b5d34ce9c219e"
+        },
+        {
+          "name": "native-source-tests",
+          "exit_code": 0,
+          "test_counts": {
+            "discovered": 334,
+            "failed": 0,
+            "passed": 334,
+            "skipped": 0
+          },
+          "verification_error": null,
+          "transcript_sha256": "cca20f1618b5ca8aa6f83467430449f9e4ba0cd0bc710963fa1ef29236b0ab18"
+        },
+        {
+          "name": "real-pam-fixture",
+          "exit_code": 0,
+          "test_counts": null,
+          "verification_error": null,
+          "transcript_sha256": "1edf737c5549cf23f456711721fc260876da6ca69d389ac75936cbbd7ce7b69d"
+        },
+        {
+          "name": "resource-software-tpm",
+          "exit_code": 0,
+          "test_counts": null,
+          "verification_error": null,
+          "transcript_sha256": "0b108d98dcc8a4247d2c71830a47204357d036edbf09d1547672601a0323c721"
+        },
+        {
+          "name": "admin-software-tpm-regression",
+          "exit_code": 0,
+          "test_counts": null,
+          "verification_error": null,
+          "transcript_sha256": "13d3f33d42eca63d9b354e616f67fa10b6eb8ace65aa2e6769b4cb67d1df4403"
+        }
+      ],
+      "failure": "workflow_history:: matched zero tests; runner correctly rejected the lane. Actual namespace is workflow_runs::history::."
+    },
+    {
+      "evidence_directory": "/mnt/luma-build/work/r1-export-evidence-20261010-e/sweep",
+      "result": "failed",
+      "source_manifest_sha256": "fac24bef0f7c2dd4689e9accd64c198e521130cfff5f3752d9de9aad923dd340",
+      "runner_sha256": "dd383f53af365e728632d8e4ab1f520ae28a0d9080ccae8bda7fe1e967549ca6",
+      "elapsed_seconds": 114.993,
+      "warnings_denied": true,
+      "cases": [
+        {
+          "name": "rust-all-targets-check",
+          "exit_code": 0,
+          "test_counts": null,
+          "verification_error": null,
+          "transcript_sha256": "b20cb65448d21f20296af2a9b6c56b48bb681bba5dea360764f756df7104ab26"
+        },
+        {
+          "name": "rust-tests",
+          "exit_code": 0,
+          "test_counts": {
+            "failed": 0,
+            "filtered_out": 879,
+            "ignored": 1,
+            "measured": 0,
+            "passed": 19
+          },
+          "verification_error": null,
+          "transcript_sha256": "161b704308b80a7687a233575e333049042a84b526b4f6c10063fbf2e21c1673"
+        },
+        {
+          "name": "rust-tests-admin_governance--",
+          "exit_code": 0,
+          "test_counts": {
+            "failed": 0,
+            "filtered_out": 812,
+            "ignored": 1,
+            "measured": 0,
+            "passed": 86
+          },
+          "verification_error": null,
+          "transcript_sha256": "9b86cc6bacf4ad66048abd0c45a98e0a3cbffb0cd06fda86bacd3bfbd12829bd"
+        },
+        {
+          "name": "rust-tests-principal--",
+          "exit_code": 0,
+          "test_counts": {
+            "failed": 0,
+            "filtered_out": 882,
+            "ignored": 0,
+            "measured": 0,
+            "passed": 17
+          },
+          "verification_error": null,
+          "transcript_sha256": "61e837213a804ec3b8d85009cf44a742a2a8e9debb90820731c3e6324ed68227"
+        },
+        {
+          "name": "rust-tests-utc_stream--",
+          "exit_code": 0,
+          "test_counts": {
+            "failed": 0,
+            "filtered_out": 875,
+            "ignored": 0,
+            "measured": 0,
+            "passed": 24
+          },
+          "verification_error": null,
+          "transcript_sha256": "df22e0fa65b5eab6415dd143e4c35026a7c7544f5eca488f6d3e0c5f6263bdbe"
+        },
+        {
+          "name": "rust-tests-workflow_runs--history--",
+          "exit_code": 101,
+          "test_counts": null,
+          "verification_error": null,
+          "transcript_sha256": "fba4174366a7121f50944fcd31d2eb67aa389e0bd9e36a91f7d0794863e9ef44"
+        },
+        {
+          "name": "rust-tests-policy_decisions--",
+          "exit_code": 101,
+          "test_counts": null,
+          "verification_error": null,
+          "transcript_sha256": "1fd68bf35c2d811b7af55ef3e18a8c58b0e61e3d9ccb54bab465da070a8a37e6"
+        },
+        {
+          "name": "rust-tests-artifact_catalog--",
+          "exit_code": 101,
+          "test_counts": null,
+          "verification_error": null,
+          "transcript_sha256": "c6620a5debcc51264cbeef17a493e95f0fb374ffe98839b6c7a21b70fce63e76"
+        },
+        {
+          "name": "native-source-tests",
+          "exit_code": 0,
+          "test_counts": {
+            "discovered": 334,
+            "failed": 0,
+            "passed": 334,
+            "skipped": 0
+          },
+          "verification_error": null,
+          "transcript_sha256": "adaa2e5dde6854efe172bfef0fe5e67257974200c28f7b661bad6bb45092a0de"
+        },
+        {
+          "name": "real-pam-fixture",
+          "exit_code": 0,
+          "test_counts": null,
+          "verification_error": null,
+          "transcript_sha256": "3065465db4809dc2a3e829983796c0b70527119cffaa90b9e96ba4e03bcd36f5"
+        },
+        {
+          "name": "resource-software-tpm",
+          "exit_code": 0,
+          "test_counts": null,
+          "verification_error": null,
+          "transcript_sha256": "2cd71c4a11348ece1b97d77e011d1daab7567cda222ee8a15d6491c33e4a0424"
+        },
+        {
+          "name": "admin-software-tpm-regression",
+          "exit_code": 0,
+          "test_counts": null,
+          "verification_error": null,
+          "transcript_sha256": "940eba65b0c11ce079e0a747529ff91b2d4dd2076a3f6df25b48492f4d7bb526"
+        }
+      ],
+      "failure": "Container omitted LUMA_STORAGE_TEST_ROOT=/storage; ext4-dependent tests refused. Container environment corrected without relaxing production or fixture checks."
+    }
+  ],
+  "export_final_review_verification": {
+    "admin_software_tpm_requested": true,
+    "cargo_profile_dev_debug": "0",
+    "cargo_profile_test_debug": "0",
+    "cases": [
+      {
+        "command": [
+          "cargo",
+          "check",
+          "--offline",
+          "--locked",
+          "--all-targets",
+          "--target-dir",
+          "/cache/target"
+        ],
+        "elapsed_seconds": 0.467,
+        "exit_code": 0,
+        "name": "rust-all-targets-check",
+        "test_counts": null,
+        "timed_out": false,
+        "transcript_sha256": "9f8b053324f78c7cecf30f7d8b0016e42cc114c2d16087ec7c93389879736d23",
+        "verification_error": null
+      },
+      {
+        "command": [
+          "cargo",
+          "test",
+          "--offline",
+          "--locked",
+          "--target-dir",
+          "/cache/target",
+          "authentication::",
+          "--",
+          "--test-threads=1"
+        ],
+        "elapsed_seconds": 0.817,
+        "exit_code": 0,
+        "name": "rust-tests",
+        "test_counts": {
+          "failed": 0,
+          "filtered_out": 879,
+          "ignored": 1,
+          "measured": 0,
+          "passed": 19
+        },
+        "timed_out": false,
+        "transcript_sha256": "a806edd339ea588b44ad7e81f03448e7d2e1c6b964dc9fbaaf759d1105acc96d",
+        "verification_error": null
+      },
+      {
+        "command": [
+          "cargo",
+          "test",
+          "--offline",
+          "--locked",
+          "--target-dir",
+          "/cache/target",
+          "admin_governance::",
+          "--",
+          "--test-threads=1"
+        ],
+        "elapsed_seconds": 81.015,
+        "exit_code": 0,
+        "name": "rust-tests-admin_governance--",
+        "test_counts": {
+          "failed": 0,
+          "filtered_out": 812,
+          "ignored": 1,
+          "measured": 0,
+          "passed": 86
+        },
+        "timed_out": false,
+        "transcript_sha256": "8ab774bc9c816579c7f6802e51eba901f38c962256b25e56f18d1c697b94e816",
+        "verification_error": null
+      },
+      {
+        "command": [
+          "cargo",
+          "test",
+          "--offline",
+          "--locked",
+          "--target-dir",
+          "/cache/target",
+          "principal::",
+          "--",
+          "--test-threads=1"
+        ],
+        "elapsed_seconds": 7.387,
+        "exit_code": 0,
+        "name": "rust-tests-principal--",
+        "test_counts": {
+          "failed": 0,
+          "filtered_out": 882,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 17
+        },
+        "timed_out": false,
+        "transcript_sha256": "f7e7103f2e097283017b35088c5010c3c74af27e64e118811500c01e613a5fc1",
+        "verification_error": null
+      },
+      {
+        "command": [
+          "cargo",
+          "test",
+          "--offline",
+          "--locked",
+          "--target-dir",
+          "/cache/target",
+          "utc_stream::",
+          "--",
+          "--test-threads=1"
+        ],
+        "elapsed_seconds": 0.115,
+        "exit_code": 0,
+        "name": "rust-tests-utc_stream--",
+        "test_counts": {
+          "failed": 0,
+          "filtered_out": 875,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 24
+        },
+        "timed_out": false,
+        "transcript_sha256": "acc758ff40366f129dacb00ea842e06798db14a182b19d20299c5de7bd865efe",
+        "verification_error": null
+      },
+      {
+        "command": [
+          "cargo",
+          "test",
+          "--offline",
+          "--locked",
+          "--target-dir",
+          "/cache/target",
+          "workflow_runs::history::",
+          "--",
+          "--test-threads=1"
+        ],
+        "elapsed_seconds": 5.08,
+        "exit_code": 0,
+        "name": "rust-tests-workflow_runs--history--",
+        "test_counts": {
+          "failed": 0,
+          "filtered_out": 883,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 16
+        },
+        "timed_out": false,
+        "transcript_sha256": "31b96eb9d54f17cc31978cddc1965d5e681dc9d75e278908d69c6c4b4d9c033c",
+        "verification_error": null
+      },
+      {
+        "command": [
+          "cargo",
+          "test",
+          "--offline",
+          "--locked",
+          "--target-dir",
+          "/cache/target",
+          "policy_decisions::",
+          "--",
+          "--test-threads=1"
+        ],
+        "elapsed_seconds": 15.511,
+        "exit_code": 0,
+        "name": "rust-tests-policy_decisions--",
+        "test_counts": {
+          "failed": 0,
+          "filtered_out": 876,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 23
+        },
+        "timed_out": false,
+        "transcript_sha256": "d388cd234307cb83e6964e5f5ceb8ffb0ea8d8a9221c17f215d6598d44adccf1",
+        "verification_error": null
+      },
+      {
+        "command": [
+          "cargo",
+          "test",
+          "--offline",
+          "--locked",
+          "--target-dir",
+          "/cache/target",
+          "artifact_catalog::",
+          "--",
+          "--test-threads=1"
+        ],
+        "elapsed_seconds": 31.962,
+        "exit_code": 0,
+        "name": "rust-tests-artifact_catalog--",
+        "test_counts": {
+          "failed": 0,
+          "filtered_out": 870,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 29
+        },
+        "timed_out": false,
+        "transcript_sha256": "80f631fb887adf81c9b6a4a5d1864c8f92526b22004d3065d5c65d863ab56be3",
+        "verification_error": null
+      },
+      {
+        "command": [
+          "/usr/bin/python3",
+          "-B",
+          "-m",
+          "unittest",
+          "discover",
+          "-s",
+          "native/tests",
+          "-p",
+          "test_*.py",
+          "-v"
+        ],
+        "elapsed_seconds": 20.071,
+        "exit_code": 0,
+        "name": "native-source-tests",
+        "test_counts": {
+          "discovered": 334,
+          "failed": 0,
+          "passed": 334,
+          "skipped": 0
+        },
+        "timed_out": false,
+        "transcript_sha256": "8be1125017711224c78a495f80b1f79b3b1436052be934d981bc6a17aa58388c",
+        "verification_error": null
+      },
+      {
+        "command": [
+          "/usr/bin/python3",
+          "-B",
+          "/src/native/tests/principal_pam_integration.py"
+        ],
+        "elapsed_seconds": 10.445,
+        "exit_code": 0,
+        "name": "real-pam-fixture",
+        "test_counts": null,
+        "timed_out": false,
+        "transcript_sha256": "f2cee949c7d11dfcc0d6b292268d5937f9ab7085fd86598ade86bdd9ea672088",
+        "verification_error": null
+      },
+      {
+        "command": [
+          "/usr/bin/python3",
+          "-B",
+          "/src/native/tests/resource_checkpoint_integration.py"
+        ],
+        "elapsed_seconds": 4.076,
+        "exit_code": 0,
+        "name": "resource-software-tpm",
+        "test_counts": null,
+        "timed_out": false,
+        "transcript_sha256": "5cdc480c1b7146c2e2c1ba9133281324d903f252b9e8bde10bad712dffcb0803",
+        "verification_error": null
+      },
+      {
+        "command": [
+          "/usr/bin/python3",
+          "-B",
+          "/src/native/tests/admin_enrollment_integration.py"
+        ],
+        "elapsed_seconds": 2.07,
+        "exit_code": 0,
+        "name": "admin-software-tpm-regression",
+        "test_counts": null,
+        "timed_out": false,
+        "transcript_sha256": "30c78019590560588067f3c489f442f90d76104d45a5facfa4d5e6f544ce90f7",
+        "verification_error": null
+      }
+    ],
+    "chrony_fixture": "release-4.9-pinned",
+    "elapsed_seconds": 179.02,
+    "extra_rust_filters": [
+      "admin_governance::",
+      "principal::",
+      "utc_stream::",
+      "workflow_runs::history::",
+      "policy_decisions::",
+      "artifact_catalog::"
+    ],
+    "gate_closing": false,
+    "installed_image_tested": false,
+    "kernel": "6.18.33.2-microsoft-standard-WSL2",
+    "physical_tpm_tested": false,
+    "production_authorization_qualified": false,
+    "real_pam_fixture_requested": true,
+    "resource_software_tpm_requested": true,
+    "result": "passed",
+    "runner_sha256": "dd383f53af365e728632d8e4ab1f520ae28a0d9080ccae8bda7fe1e967549ca6",
+    "rust_filter": "authentication::",
+    "schema_version": 1,
+    "scope": "requirement-1-offline-targeted",
+    "source_manifest_sha256": "fac24bef0f7c2dd4689e9accd64c198e521130cfff5f3752d9de9aad923dd340",
+    "warnings_denied": true,
+    "evidence_directory": "/mnt/luma-build/work/r1-export-evidence-20261010-f/sweep",
+    "fixture_execution": {
+      "real_pam_cases_passed": 6,
+      "resource_tpm_cases_passed": 4,
+      "admin_software_tpm_driver_passed": true,
+      "host_tpm_accessed": false
+    },
+    "container": {
+      "image": "luma-utc-targeted-tools:20261005",
+      "image_digest": "sha256:69fd23acb13ac259eb28e84bad65c65756e53d3980085f8275ecb8fb94d391c0",
+      "memory_mib": 2048,
+      "additional_swap_mib": 0,
+      "cpus": 1,
+      "pids_limit": 128,
+      "network": "none",
+      "source_mount": "read-only",
+      "storage_test_root": "/storage",
+      "storage": "D-backed ext4",
+      "cargo_jobs": 1
+    },
+    "coverage": {
+      "rust_selected_passed": 214,
+      "rust_selected_failed": 0,
+      "rust_selected_ignored": 2,
+      "native_source_passed": 334,
+      "native_source_skipped": 0,
+      "full_suite_for_final_reviewed_bytes": false,
+      "current_tree_matches_frozen_implementation_and_test_bytes": true
+    },
+    "security_review": "Joint Read and Export scopes bind the identical original principal/account pins and one fresh catalog/UTC sample. Original final PAM deadlines and password-aging constraints are validated at the same opaque full-nanosecond kernel coordinate after blocking I/O; no UTC age-budget renewal. Encoded history output checks before and after each 32 KiB transport block. No caller-selectable lifetime or general mutation extension."
   },
   "custody_approval": {
     "date": "2026-10-10",

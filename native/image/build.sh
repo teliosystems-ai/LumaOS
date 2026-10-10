@@ -33,6 +33,10 @@ run_id=$(date -u +%Y%m%dT%H%M%SZ)
 volume="luma-native-build-$run_id-$edition"
 export_container="luma-native-export-$run_id"
 tools=luma-native-tools:20260927
+# Bound build work independently of the host's WSL memory/CPU configuration.
+# Compilation and assembly run after the source sweep, not concurrently with it.
+build_limits=(--memory 4g --memory-swap 4g --cpu-period 100000 --cpu-quota 200000)
+run_limits=(--memory 4g --memory-swap 4g --cpus 2)
 base=ubuntu@sha256:008173c23f95b170204355c12626cb5a965d779a7e1283b09e9cffbb1bf33ca3
 runtime_context="${build_root:-$repository/dist}/native-inputs/$run_id-$edition"
 source_context="${build_root:-$repository/dist}/native-sources/$run_id-$edition"
@@ -57,16 +61,17 @@ python3 "$source_context/native/image/prepare_runtime.py" "${runtime_args[@]}"
 utc_args=(--output "$runtime_context")
 if [ -n "${LUMA_UTC_ARCHIVE:-}" ]; then utc_args+=(--cached "$LUMA_UTC_ARCHIVE"); fi
 python3 "$source_context/native/image/utc/prepare_release_input.py" "${utc_args[@]}"
-docker build --network "$build_network" --build-arg "UBUNTU_BASE=$base" -f "$source_context/native/image/Dockerfile.tools" -t "$tools" "$source_context/native/image"
-docker build --network "$build_network" --build-arg "EDITION=$edition" -f "$source_context/native/image/Dockerfile.root" -t "luma-native-root:20260927-$edition" "$runtime_context"
+docker build "${build_limits[@]}" --network "$build_network" --build-arg "UBUNTU_BASE=$base" -f "$source_context/native/image/Dockerfile.tools" -t "$tools" "$source_context/native/image"
+docker build "${build_limits[@]}" --network "$build_network" --build-arg "EDITION=$edition" -f "$source_context/native/image/Dockerfile.root" -t "luma-native-root:20260927-$edition" "$runtime_context"
 docker volume create "$volume"
 docker volume create luma-native-lab-keys
-docker run --rm --network none --mount "type=volume,src=$volume,dst=/work" "$tools" mkdir /work/root
+docker run --rm "${run_limits[@]}" --network none --mount "type=volume,src=$volume,dst=/work" "$tools" mkdir /work/root
 docker create --name "$export_container" "luma-native-root:20260927-$edition"
-docker export "$export_container" | docker run --rm -i --network none --mount "type=volume,src=$volume,dst=/work" "$tools" tar -xpf - -C /work/root
+docker export "$export_container" | docker run --rm -i "${run_limits[@]}" --network none --mount "type=volume,src=$volume,dst=/work" "$tools" tar -xpf - -C /work/root
 # Remove only the stopped export container created by this invocation.
 docker rm "$export_container"
-docker run --rm --network none \
+docker run --rm "${run_limits[@]}" --network none \
+    -e CARGO_BUILD_JOBS=1 -e RUSTFLAGS=-Dwarnings \
     --mount "type=volume,src=$volume,dst=/work" \
     "${artifact_mount[@]}" \
     --mount type=volume,src=luma-native-lab-keys,dst=/keys \
@@ -75,7 +80,7 @@ docker run --rm --network none \
     "$tools" python3 /repo/native/image/assemble.py --edition "$edition" --sequence "$sequence" "${assembly_args[@]}"
 mkdir -p -- "$(dirname -- "$destination")"
 mkdir -- "$destination"
-docker run --rm --network none \
+docker run --rm "${run_limits[@]}" --network none \
     --mount "type=volume,src=$volume,dst=/work,readonly" \
     "${artifact_mount_ro[@]}" \
     --mount "type=bind,src=$source_context,dst=/repo,readonly" \

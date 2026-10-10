@@ -704,6 +704,34 @@ impl PrincipalSession {
         login: PrincipalLogin,
         reader: &mut PrincipalReader<'_, A>,
     ) -> Result<Self> {
+        Self::new_for(
+            account,
+            login,
+            reader,
+            authentication::SessionPurpose::Standard,
+        )
+    }
+
+    fn new_export<A: Checkpoint>(
+        account: authentication::AuthenticatedAccount,
+        login: PrincipalLogin,
+        reader: &mut PrincipalReader<'_, A>,
+    ) -> Result<Self> {
+        Self::new_for(
+            account,
+            login,
+            reader,
+            authentication::SessionPurpose::Export,
+        )
+    }
+
+    fn new_for<A: Checkpoint>(
+        account: authentication::AuthenticatedAccount,
+        login: PrincipalLogin,
+        reader: &mut PrincipalReader<'_, A>,
+        purpose: authentication::SessionPurpose,
+    ) -> Result<Self> {
+        require_session_purpose(account.purpose(), purpose)?;
         let binding = reader.read_account(&account, &login)?;
         let clock = reader
             .last_clock
@@ -901,7 +929,11 @@ struct GrantCapture {
 
 impl GrantBoundary<'_> {
     pub(crate) fn require_admin(&mut self) -> Result<()> {
-        self.restriction(current_admin)
+        let purpose = self.session.account.purpose();
+        self.restriction(|catalog, identity| {
+            require_session_purpose(purpose, authentication::SessionPurpose::Standard)?;
+            current_admin(catalog, identity)
+        })
     }
     /// Additional ownership restriction, never a replacement for exact grants.
     /// The original Admin may retire only fully deleted principals' history.
@@ -922,7 +954,9 @@ impl GrantBoundary<'_> {
         principal: &str,
         old_generation: u64,
     ) -> Result<()> {
+        let purpose = self.session.account.purpose();
         self.restriction(|catalog, identity| {
+            require_session_purpose(purpose, authentication::SessionPurpose::Standard)?;
             workflow_recovery_owner(catalog, identity, principal, old_generation)
         })
     }
@@ -999,6 +1033,10 @@ impl GrantBoundary<'_> {
         effect_id: &str,
         kind: crate::policy_decisions::EffectKind,
     ) -> Result<crate::policy_decisions::PendingEffect> {
+        if let Err(error) = export_effect_scope(self.session.account.purpose(), &self.uses, kind) {
+            self.restriction(|_, _| Err(error))?;
+            return Err("export-purpose effect restriction unexpectedly admitted".into());
+        }
         self.check()?;
         let mut pending = self
             .operation
@@ -1027,26 +1065,40 @@ impl GrantBoundary<'_> {
         &mut self,
         pending: &crate::policy_decisions::PendingEffect,
     ) -> Result<()> {
-        let captured = self.stream_capture(pending)?;
+        let captured = self.stream_capture(pending, None)?;
         self.observation = Some(captured.observation);
         self.fenced = false;
         Ok(())
     }
-    pub(crate) fn stream_history_owner(
+    pub(crate) fn stream_check_with_reader(
         &mut self,
+        reader: &mut GrantBoundary<'_>,
+        pending: &crate::policy_decisions::PendingEffect,
+    ) -> Result<()> {
+        let captured = self.stream_capture(pending, Some(reader))?;
+        self.observation = Some(captured.observation);
+        self.fenced = false;
+        reader.fenced = false;
+        Ok(())
+    }
+    pub(crate) fn stream_history_owner_with_reader(
+        &mut self,
+        reader: &mut GrantBoundary<'_>,
         pending: &crate::policy_decisions::PendingEffect,
         principal: &str,
         generation: u64,
     ) -> Result<()> {
-        let captured = self.stream_capture(pending)?;
+        let captured = self.stream_capture(pending, Some(reader))?;
         if let Err(error) =
             history_owner(&captured.catalog, &captured.identity, principal, generation)
         {
             self.stream_denial(&captured, crate::policy_decisions::Reason::SubjectMismatch)?;
+            reader.stream_denial(&captured, crate::policy_decisions::Reason::SubjectMismatch)?;
             return Err(error);
         }
         self.observation = Some(captured.observation);
         self.fenced = false;
+        reader.fenced = false;
         Ok(())
     }
     fn stream_denial(
@@ -1065,16 +1117,28 @@ impl GrantBoundary<'_> {
     fn stream_capture(
         &mut self,
         pending: &crate::policy_decisions::PendingEffect,
+        mut reader: Option<&mut GrantBoundary<'_>>,
     ) -> Result<GrantCapture> {
-        if self.fenced {
+        if self.fenced || reader.as_ref().is_some_and(|r| r.fenced) {
+            self.fenced = true;
+            if let Some(r) = reader {
+                r.fenced = true;
+            }
             return Err("finite grant operation is permanently fenced".into());
         }
         self.fenced = true;
         self.observation = None;
-        let captured = match self.capture() {
+        if let Some(r) = reader.as_deref_mut() {
+            r.fenced = true;
+            r.observation = None;
+        }
+        let captured = match self.capture_with_reader(reader.as_deref()) {
             Ok(value) => value,
             Err(error) => {
                 self.unavailable(self.capture_reason)?;
+                if let Some(r) = reader.as_deref() {
+                    r.unavailable(self.capture_reason)?;
+                }
                 return Err(error);
             }
         };
@@ -1082,6 +1146,9 @@ impl GrantBoundary<'_> {
             Ok(value) => value,
             Err(error) => {
                 self.stream_denial(&captured, crate::policy_decisions::Reason::TargetMismatch)?;
+                if let Some(r) = reader.as_deref() {
+                    r.stream_denial(&captured, crate::policy_decisions::Reason::TargetMismatch)?;
+                }
                 return Err(error);
             }
         };
@@ -1093,11 +1160,25 @@ impl GrantBoundary<'_> {
             self.operation.id(),
         ) {
             self.stream_denial(&captured, crate::policy_decisions::Reason::AuthorityChanged)?;
+            if let Some(r) = reader.as_deref() {
+                r.stream_denial(&captured, crate::policy_decisions::Reason::AuthorityChanged)?;
+            }
             return Err(error);
         }
         let decisions = self.decisions(&captured)?;
         if !self.operation.ongoing_decisions(decisions)? {
+            if let Some(r) = reader.as_deref() {
+                r.stream_denial(&captured, crate::policy_decisions::Reason::GrantDenied)?;
+            }
             return Err("current finite policy denied ongoing export".into());
+        }
+        if let Some(r) = reader.as_deref() {
+            if !r.operation.ongoing_decisions(r.decisions(&captured)?)? {
+                self.stream_denial(&captured, crate::policy_decisions::Reason::GrantDenied)?;
+                return Err(
+                    "current finite Read policy denied the same ongoing export projection".into(),
+                );
+            }
         }
         Ok(captured)
     }
@@ -1175,7 +1256,85 @@ impl GrantBoundary<'_> {
         Ok(())
     }
 
+    /// Durable joint admission for final export acknowledgement. Persistence
+    /// precedes a second fresh projection of BOTH exact scopes, never follows
+    /// its successful dispatch check.
+    pub(crate) fn check_with_reader(&mut self, reader: &mut GrantBoundary<'_>) -> Result<()> {
+        if self.fenced || reader.fenced {
+            self.fenced = true;
+            reader.fenced = true;
+            return Err("compound export operation is permanently fenced".into());
+        }
+        self.fenced = true;
+        reader.fenced = true;
+        self.observation = None;
+        reader.observation = None;
+        let capture = |this: &mut Self, reader: &GrantBoundary<'_>| -> Result<GrantCapture> {
+            match this.capture_with_reader(Some(reader)) {
+                Ok(value) => Ok(value),
+                Err(error) => {
+                    this.unavailable(this.capture_reason)?;
+                    reader.unavailable(this.capture_reason)?;
+                    Err(error)
+                }
+            }
+        };
+        let first = capture(self, reader)?;
+        let decisions = self.decisions(&first)?;
+        let reads = reader.decisions(&first)?;
+        let allowed = decisions
+            .iter()
+            .chain(&reads)
+            .all(|d| d.outcome == crate::policy_decisions::DecisionOutcome::Allow);
+        self.decision_ids = self.operation.decisions(decisions)?;
+        reader.decision_ids = reader.operation.decisions(reads)?;
+        if !allowed {
+            return Err("compound finite export policy denied its exact scopes".into());
+        }
+        let final_capture = capture(self, reader)?;
+        let decisions = self.decisions(&final_capture)?;
+        let reads = reader.decisions(&final_capture)?;
+        if decisions
+            .iter()
+            .chain(&reads)
+            .any(|d| d.outcome != crate::policy_decisions::DecisionOutcome::Allow)
+        {
+            self.operation.decisions(decisions)?;
+            reader.operation.decisions(reads)?;
+            return Err("compound export authority changed after durable admission".into());
+        }
+        self.observation = Some(final_capture.observation);
+        self.fenced = false;
+        reader.fenced = false;
+        Ok(())
+    }
+
     fn capture(&mut self) -> Result<GrantCapture> {
+        self.capture_with_reader(None)
+    }
+    fn capture_with_reader(&mut self, reader: Option<&GrantBoundary<'_>>) -> Result<GrantCapture> {
+        self.capture_reason = crate::policy_decisions::Reason::SubjectMismatch;
+        if let Some(r) = reader {
+            if self.session.binding != r.session.binding {
+                return Err("compound export requires the same original principal and password-epoch binding".into());
+            }
+            joint_export_binding(
+                self.session.account.purpose(),
+                r.session.account.purpose(),
+                &self.session.binding.identity,
+                &self.session.binding.checkpoint_head,
+                &r.session.binding.identity,
+                &r.session.binding.checkpoint_head,
+                &self.uses,
+                &r.uses,
+            )?;
+            if !self.session.account.same_pins(&r.session.account) {
+                return Err(
+                    "compound export requires the same original captured account pins".into(),
+                );
+            }
+        }
+        grant_session_scope(self.session.account.purpose(), &self.uses)?;
         self.capture_reason = crate::policy_decisions::Reason::CatalogUnavailable;
         let client = &mut self.client;
         let stage = &mut self.capture_reason;
@@ -1213,41 +1372,140 @@ impl GrantBoundary<'_> {
         // Full catalog/PAM/history reads may block. Project from the SAME live
         // producer/keeper generation again after those reads, not from the
         // interval returned before semantic replay completed.
-        *stage = crate::policy_decisions::Reason::UtcUnavailable;
-        let final_observation = client.recheck(&history, &observation)?;
-        *stage = crate::policy_decisions::Reason::CredentialsExpired;
-        let principal = identity["principal"]
-            .as_str()
-            .ok_or("finite grant subject is missing")?;
-        let credential_refusal = if let Some(day) = catalog.password_day(principal) {
-            if password_window(
-                day,
-                self.session
-                    .binding
-                    .password_epoch
-                    .as_ref()
-                    .ok_or("finite grant actor lacks its original protected password epoch")?,
+        // The last keeper query is blocking too. Its sealed result and password
+        // window may escape only after the ORIGINAL PAM account's final local
+        // credential pins and fixed lifetime have survived that same query.
+        *stage = crate::policy_decisions::Reason::PrincipalUnavailable;
+        let mut captured = self.session.account.observe(|_| {
+            *stage = crate::policy_decisions::Reason::UtcUnavailable;
+            let final_observation = client.recheck(&history, &observation)?;
+            *stage = crate::policy_decisions::Reason::CredentialsExpired;
+            let credential_refusal = capture_credential_refusal(
+                &catalog,
+                &identity,
+                self.session.binding.password_epoch.as_ref(),
                 &final_observation,
-            )
-            .is_err()
-            {
-                Some(crate::policy_decisions::Reason::CredentialsExpired)
-            } else {
-                None
-            }
-        } else if self.session.binding.password_epoch.is_some() {
-            Some(crate::policy_decisions::Reason::CredentialsExpired)
-        } else {
-            None
-        };
-        Ok(GrantCapture {
-            catalog,
-            identity,
-            head: self.session.binding.checkpoint_head.clone(),
-            observation: final_observation,
-            credential_refusal,
-        })
+            )?;
+            *stage = crate::policy_decisions::Reason::PrincipalUnavailable;
+            Ok(GrantCapture {
+                catalog,
+                identity,
+                head: self.session.binding.checkpoint_head.clone(),
+                observation: final_observation,
+                credential_refusal,
+            })
+        })?;
+        // The original PAM observation's final credential reads may block.
+        // Shift the SAME private query sample only after they finish; this
+        // performs no delivery/file I/O and retains its original total-age cap.
+        *stage = crate::policy_decisions::Reason::UtcUnavailable;
+        captured.observation =
+            client.project_after_checks(&history, &captured.observation, |clock| {
+                *stage = crate::policy_decisions::Reason::PrincipalUnavailable;
+                self.session.account.check_projection(clock)?;
+                if let Some(r) = reader {
+                    r.session.account.check_projection(clock)?;
+                }
+                *stage = crate::policy_decisions::Reason::UtcUnavailable;
+                Ok(())
+            })?;
+        *stage = crate::policy_decisions::Reason::CredentialsExpired;
+        captured.credential_refusal = capture_credential_refusal(
+            &captured.catalog,
+            &captured.identity,
+            self.session.binding.password_epoch.as_ref(),
+            &captured.observation,
+        )?;
+        if let Some(r) = reader {
+            captured.credential_refusal =
+                captured.credential_refusal.or(capture_credential_refusal(
+                    &captured.catalog,
+                    &captured.identity,
+                    r.session.binding.password_epoch.as_ref(),
+                    &captured.observation,
+                )?);
+        }
+        Ok(captured)
     }
+}
+
+fn require_session_purpose(
+    actual: authentication::SessionPurpose,
+    expected: authentication::SessionPurpose,
+) -> Result<()> {
+    if actual != expected {
+        return Err("authenticated session purpose cannot be converted".into());
+    }
+    Ok(())
+}
+
+fn joint_export_binding(
+    export_purpose: authentication::SessionPurpose,
+    read_purpose: authentication::SessionPurpose,
+    export_identity: &serde_json::Value,
+    export_head: &str,
+    read_identity: &serde_json::Value,
+    read_head: &str,
+    exports: &[(String, crate::finite_grants::Use)],
+    reads: &[(String, crate::finite_grants::Use)],
+) -> Result<()> {
+    use crate::finite_grants::{Action, Kind};
+    require_session_purpose(export_purpose, authentication::SessionPurpose::Export)?;
+    require_session_purpose(read_purpose, authentication::SessionPurpose::Export)?;
+    if export_identity != read_identity
+        || export_head != read_head
+        || exports.len() != 1
+        || reads.len() != 1
+        || exports[0].1.action != Action::Export
+        || exports[0].1.selector.kind != Kind::Artifact
+        || reads[0].1.action != Action::Read
+        || reads[0].1.selector.kind != Kind::File
+        || !matches!(
+            reads[0].1.selector.id.as_str(),
+            "policy-archive-inspect" | "workflow-history-inspect" | "catalog-inspect"
+        )
+    {
+        return Err(
+            "compound export requires exact shared actor/head and companion Read scope".into(),
+        );
+    }
+    Ok(())
+}
+
+fn grant_session_scope(
+    purpose: authentication::SessionPurpose,
+    uses: &[(String, crate::finite_grants::Use)],
+) -> Result<()> {
+    use crate::finite_grants::{Action, Kind};
+    if purpose == authentication::SessionPurpose::Export
+        && (uses.is_empty()
+            || uses.iter().any(|(_, usage)| {
+                !matches!(
+                    (usage.action, usage.selector.kind),
+                    (Action::Read, Kind::File) | (Action::Export, Kind::Artifact)
+                )
+            }))
+    {
+        return Err("export-only session refuses mutation or unrelated admission scopes".into());
+    }
+    Ok(())
+}
+
+fn export_effect_scope(
+    purpose: authentication::SessionPurpose,
+    uses: &[(String, crate::finite_grants::Use)],
+    kind: crate::policy_decisions::EffectKind,
+) -> Result<()> {
+    grant_session_scope(purpose, uses)?;
+    if purpose == authentication::SessionPurpose::Export
+        && (kind != crate::policy_decisions::EffectKind::ArtifactExport
+            || !uses
+                .iter()
+                .any(|(_, usage)| usage.action == crate::finite_grants::Action::Export))
+    {
+        return Err("export-only effect requires its actual finite Export scope".into());
+    }
+    Ok(())
 }
 
 fn current_admin(catalog: &Catalog, identity: &serde_json::Value) -> Result<()> {
@@ -1418,6 +1676,36 @@ pub(crate) fn with_grants<T>(
     uses: &[(String, crate::finite_grants::Use)],
     effect: impl FnOnce(&mut GrantBoundary<'_>) -> Result<T>,
 ) -> Result<T> {
+    with_grants_for(
+        login,
+        uses,
+        authentication::SessionPurpose::Standard,
+        effect,
+    )
+}
+
+/// Explicit trusted export composition; ordinary Read or Export commands do
+/// not select a longer session by action, caller flags, or requested lifetime.
+pub(crate) fn with_export_grant<T>(
+    login: &str,
+    grant_id: &str,
+    usage: &crate::finite_grants::Use,
+    effect: impl FnOnce(&mut GrantBoundary<'_>) -> Result<T>,
+) -> Result<T> {
+    with_grants_for(
+        login,
+        &[(grant_id.into(), usage.clone())],
+        authentication::SessionPurpose::Export,
+        effect,
+    )
+}
+
+fn with_grants_for<T>(
+    login: &str,
+    uses: &[(String, crate::finite_grants::Use)],
+    purpose: authentication::SessionPurpose,
+    effect: impl FnOnce(&mut GrantBoundary<'_>) -> Result<T>,
+) -> Result<T> {
     crate::require_root()?;
     platform::require_installed()?;
     if uses.is_empty() || uses.len() > 64 {
@@ -1430,6 +1718,7 @@ pub(crate) fn with_grants<T>(
             return Err("invalid or duplicate exact grant identifier".into());
         }
     }
+    grant_session_scope(purpose, uses)?;
     let directory = Path::new(DIRECTORY);
     let registry_path = Path::new(crate::principal::REGISTRY);
     let mut operation = crate::policy_decisions::Operation::begin(
@@ -1444,7 +1733,11 @@ pub(crate) fn with_grants<T>(
             )?;
             PrincipalLogin::prepare(&mut PrincipalReader::new(&mut store, directory), login)?
         };
-        let account = match authentication::local(login) {
+        let authentication = match purpose {
+            authentication::SessionPurpose::Standard => authentication::local(login),
+            authentication::SessionPurpose::Export => authentication::local_export(login),
+        };
+        let account = match authentication {
             Ok(value) => value,
             Err(error) => {
                 operation.decisions(
@@ -1465,11 +1758,16 @@ pub(crate) fn with_grants<T>(
             tpm::LocalAnchor::installed()?,
             &directory.join("journal.json"),
         )?;
-        let session = PrincipalSession::new(
-            account,
-            attempt,
-            &mut PrincipalReader::new(&mut store, directory),
-        )?;
+        let mut reader = PrincipalReader::new(&mut store, directory);
+        let session = match purpose {
+            authentication::SessionPurpose::Standard => {
+                PrincipalSession::new(account, attempt, &mut reader)
+            }
+            authentication::SessionPurpose::Export => {
+                PrincipalSession::new_export(account, attempt, &mut reader)
+            }
+        }?;
+        drop(reader);
         drop(store);
         Ok(session)
     })();
@@ -2441,6 +2739,27 @@ struct AccountTime {
 }
 
 type PasswordEpoch = (String, String, u64, u64, u64);
+
+fn capture_credential_refusal(
+    catalog: &Catalog,
+    identity: &serde_json::Value,
+    epoch: Option<&PasswordEpoch>,
+    observation: &crate::utc_stream::Observation,
+) -> Result<Option<crate::policy_decisions::Reason>> {
+    let principal = identity["principal"]
+        .as_str()
+        .ok_or("finite grant subject is missing")?;
+    if let Some(day) = catalog.password_day(principal) {
+        let epoch =
+            epoch.ok_or("finite grant actor lacks its original protected password epoch")?;
+        if password_window(day, epoch, observation).is_err() {
+            return Ok(Some(crate::policy_decisions::Reason::CredentialsExpired));
+        }
+    } else if epoch.is_some() {
+        return Ok(Some(crate::policy_decisions::Reason::CredentialsExpired));
+    }
+    Ok(None)
+}
 
 fn password_epoch(live: &crate::utc_stream::Observation) -> PasswordEpoch {
     let context = live.context();
@@ -10670,6 +10989,363 @@ mod tests {
 #[cfg(test)]
 mod current_principal_projection_tests {
     use super::*;
+    use std::collections::BTreeMap;
+    #[test]
+    fn joint_export_latest_interval_denies_expired_or_revoked_read_even_while_export_is_valid() {
+        use crate::finite_grants::{Action, Assignment, Constraints, Grant, Kind, Selector, Use};
+        use crate::policy_decisions::{Decision, DecisionOutcome, Reason};
+        let principal = "ab".repeat(32);
+        let registry = serde_json::from_value(serde_json::json!({"schema_version":1,"installation":"cd".repeat(32),
+            "principals":[{"id":principal,"generation":2,"login":"human","uid":1001,"enabled":true}]})).unwrap();
+        let mut catalog = Catalog::initial();
+        catalog
+            .apply(&Command::AdoptPrincipals { registry })
+            .unwrap();
+        catalog
+            .apply(&Command::CheckpointAccounts {
+                commitments: BTreeMap::from([(principal.clone(), "12".repeat(32))]),
+            })
+            .unwrap();
+        for activity in ["file.read", "artifact.export"] {
+            catalog
+                .apply(&Command::RegisterActivity {
+                    activity: activity.into(),
+                })
+                .unwrap();
+        }
+        catalog
+            .apply(&Command::DefineRole {
+                name: "Operator".into(),
+                activities: vec!["artifact.export".into(), "file.read".into()],
+                expected_version: 0,
+            })
+            .unwrap();
+        catalog
+            .apply(&Command::AssignRole {
+                assignment: Assignment {
+                    id: "operator-one".into(),
+                    subject: principal.clone(),
+                    subject_generation: 2,
+                    role: "Operator".into(),
+                    role_version: 1,
+                    version: 1,
+                    not_before_ms: 1000,
+                    expires_ms: 20000,
+                    revoked: false,
+                },
+            })
+            .unwrap();
+        let identity = serde_json::json!({"principal":principal,"generation":2});
+        let usages = [
+            Use {
+                action: Action::Export,
+                selector: Selector {
+                    kind: Kind::Artifact,
+                    id: "policy-archive".into(),
+                    generation: 1,
+                    digest: "ef".repeat(32),
+                },
+                input_bytes: 32,
+                output_bytes: 32,
+                units: 1,
+            },
+            Use {
+                action: Action::Read,
+                selector: Selector {
+                    kind: Kind::File,
+                    id: "policy-archive-inspect".into(),
+                    generation: 1,
+                    digest: "34".repeat(32),
+                },
+                input_bytes: 0,
+                output_bytes: 32,
+                units: 1,
+            },
+        ];
+        for (index, usage) in usages.iter().enumerate() {
+            catalog
+                .apply(&Command::IssueGrant {
+                    grant: Grant {
+                        id: format!("scope-{index}"),
+                        assignment: "operator-one".into(),
+                        assignment_version: 1,
+                        subject: principal.clone(),
+                        subject_generation: 2,
+                        action: usage.action,
+                        selector: usage.selector.clone(),
+                        constraints: Constraints {
+                            max_input_bytes: 32,
+                            max_output_bytes: 32,
+                            max_units: 1,
+                        },
+                        version: 1,
+                        not_before_ms: 1000,
+                        expires_ms: if index == 0 { 10000 } else { 5000 },
+                        revoked: false,
+                    },
+                })
+                .unwrap();
+        }
+        let context = crate::utc_history::Statement {
+            floor_ms: 4800,
+            policy_sha256: crate::utc_history::policy_digest().unwrap(),
+            boot_id: "12".repeat(16),
+            process_generation: 1,
+            source_clock_generation: 1,
+            keeper_generation: 1,
+            runtime_sha256: "56".repeat(32),
+        };
+        let initial = crate::utc_stream::Observation::fixture(
+            context.clone(),
+            crate::utc_bounds::Interval::new(4800, 4999).unwrap(),
+        );
+        for (index, usage) in usages.iter().enumerate() {
+            assert_eq!(
+                Decision::evaluate(
+                    &catalog,
+                    &identity,
+                    &"78".repeat(32),
+                    &initial,
+                    &format!("scope-{index}"),
+                    usage,
+                    None
+                )
+                .unwrap()
+                .outcome,
+                DecisionOutcome::Allow
+            );
+        }
+        let mut final_context = context;
+        final_context.floor_ms = 4999;
+        let final_observation = crate::utc_stream::Observation::fixture(
+            final_context,
+            crate::utc_bounds::Interval::new(4999, 5000).unwrap(),
+        );
+        assert_eq!(
+            Decision::evaluate(
+                &catalog,
+                &identity,
+                &"78".repeat(32),
+                &final_observation,
+                "scope-0",
+                &usages[0],
+                None
+            )
+            .unwrap()
+            .outcome,
+            DecisionOutcome::Allow
+        );
+        assert_eq!(
+            Decision::evaluate(
+                &catalog,
+                &identity,
+                &"78".repeat(32),
+                &final_observation,
+                "scope-1",
+                &usages[1],
+                None
+            )
+            .unwrap()
+            .reason_code,
+            Reason::OutsideValidity
+        );
+        catalog
+            .apply(&Command::RevokeGrant {
+                grant: "scope-1".into(),
+                expected_version: 1,
+            })
+            .unwrap();
+        assert_eq!(
+            Decision::evaluate(
+                &catalog,
+                &identity,
+                &"78".repeat(32),
+                &initial,
+                "scope-1",
+                &usages[1],
+                None
+            )
+            .unwrap()
+            .reason_code,
+            Reason::GrantRevoked
+        );
+    }
+    #[test]
+    fn joint_export_projection_requires_exact_reader_identity_head_purpose_and_closed_scopes() {
+        use crate::finite_grants::{Action, Kind, Selector, Use};
+        use authentication::SessionPurpose::{Export, Standard};
+        let identity = serde_json::json!({"principal":"ab".repeat(32),"generation":2,"uid":1001});
+        let head = "cd".repeat(32);
+        let export = vec![(
+            "export-one".into(),
+            Use {
+                action: Action::Export,
+                selector: Selector {
+                    kind: Kind::Artifact,
+                    id: "policy-archive".into(),
+                    generation: 1,
+                    digest: "ef".repeat(32),
+                },
+                input_bytes: 32,
+                output_bytes: 32,
+                units: 1,
+            },
+        )];
+        let mut read = export.clone();
+        read[0].0 = "read-one".into();
+        read[0].1.action = Action::Read;
+        read[0].1.selector.kind = Kind::File;
+        read[0].1.selector.id = "policy-archive-inspect".into();
+        joint_export_binding(
+            Export, Export, &identity, &head, &identity, &head, &export, &read,
+        )
+        .unwrap();
+        for case in 0..6 {
+            let mut actor = identity.clone();
+            let mut reader_head = head.clone();
+            let mut scopes = read.clone();
+            let mut purpose = Export;
+            match case {
+                0 => actor["principal"] = "12".repeat(32).into(),
+                1 => actor["generation"] = 3.into(),
+                2 => reader_head = "34".repeat(32),
+                3 => purpose = Standard,
+                4 => scopes[0].1.action = Action::Delete,
+                5 => scopes[0].1.selector.id = "unrelated-file".into(),
+                _ => unreachable!(),
+            }
+            assert!(joint_export_binding(
+                Export,
+                purpose,
+                &identity,
+                &head,
+                &actor,
+                &reader_head,
+                &export,
+                &scopes
+            )
+            .is_err());
+        }
+        assert!(joint_export_binding(
+            Standard, Export, &identity, &head, &identity, &head, &export, &read
+        )
+        .is_err());
+        assert!(joint_export_binding(
+            Export, Export, &identity, &head, &identity, &head, &read, &read
+        )
+        .is_err());
+    }
+    #[test]
+    fn final_keeper_projection_brackets_pam_then_shifts_same_sample_before_password_evaluation() {
+        let source = include_str!("admin_governance.rs");
+        let capture = source
+            .split("fn capture(&mut self) -> Result<GrantCapture> {")
+            .nth(1)
+            .unwrap()
+            .split("fn require_session_purpose(")
+            .next()
+            .unwrap();
+        let bracket = capture
+            .split("self.session.account.observe(|_| {")
+            .nth(1)
+            .unwrap();
+        let query = bracket
+            .find("let final_observation = client.recheck")
+            .unwrap();
+        let aging = bracket.find("capture_credential_refusal(").unwrap();
+        let output = bracket.find("Ok(GrantCapture {").unwrap();
+        assert!(query < aging && aging < output);
+        assert!(!capture
+            .split("self.session.account.observe(|_| {")
+            .next()
+            .unwrap()
+            .contains("let final_observation = client.recheck"));
+        assert!(bracket[output..].contains("observation: final_observation"));
+        let shifted = bracket.find("client.project_after_checks(").unwrap();
+        let completed_pam = bracket.find("})?;").unwrap();
+        let final_aging = bracket
+            .find("captured.credential_refusal = capture_credential_refusal(")
+            .unwrap();
+        assert!(output < completed_pam && completed_pam < shifted && shifted < final_aging);
+        assert!(final_aging < bracket.find("Ok(captured)").unwrap());
+        let final_lifetime = bracket
+            .find("self.session.account.check_projection(clock)?")
+            .unwrap();
+        let companion_lifetime = bracket
+            .find("r.session.account.check_projection(clock)?")
+            .unwrap();
+        assert!(
+            shifted < final_lifetime
+                && final_lifetime < companion_lifetime
+                && companion_lifetime < final_aging
+        );
+    }
+    #[test]
+    fn export_session_purpose_never_converts_or_admits_mutation_effects() {
+        use crate::finite_grants::{Action, Kind, Selector, Use};
+        use crate::policy_decisions::EffectKind;
+        use authentication::SessionPurpose::{Export, Standard};
+        require_session_purpose(Standard, Standard).unwrap();
+        require_session_purpose(Export, Export).unwrap();
+        assert!(require_session_purpose(Export, Standard).is_err());
+        assert!(require_session_purpose(Standard, Export).is_err());
+        let mut usage = Use {
+            action: Action::Export,
+            selector: Selector {
+                kind: Kind::Artifact,
+                id: "policy-archive".into(),
+                generation: 1,
+                digest: "12".repeat(32),
+            },
+            input_bytes: 32,
+            output_bytes: 32,
+            units: 1,
+        };
+        let scopes = vec![("export-one".into(), usage.clone())];
+        grant_session_scope(Export, &scopes).unwrap();
+        export_effect_scope(Export, &scopes, EffectKind::ArtifactExport).unwrap();
+        for kind in [
+            EffectKind::Snapshot,
+            EffectKind::Calculation,
+            EffectKind::Checkpoint,
+            EffectKind::ArtifactPublication,
+            EffectKind::Retention,
+            EffectKind::Deletion,
+            EffectKind::WorkerAdmission,
+            EffectKind::ResourceAdmission,
+            EffectKind::Inference,
+            EffectKind::Recovery,
+        ] {
+            assert!(export_effect_scope(Export, &scopes, kind).is_err());
+            export_effect_scope(Standard, &scopes, kind).unwrap();
+        }
+        usage.action = Action::Read;
+        usage.selector.kind = Kind::File;
+        let read = vec![("read-one".into(), usage.clone())];
+        grant_session_scope(Export, &read).unwrap();
+        assert!(export_effect_scope(Export, &read, EffectKind::ArtifactExport).is_err());
+        assert!(grant_session_scope(Export, &[]).is_err());
+        for action in [
+            Action::Write,
+            Action::Delete,
+            Action::Retain,
+            Action::Cancel,
+            Action::Resume,
+            Action::Execute,
+            Action::Calculate,
+            Action::AcquireResource,
+            Action::StartWorker,
+            Action::StopWorker,
+            Action::Infer,
+            Action::ProvisionResource,
+            Action::RecoverResource,
+        ] {
+            usage.action = action;
+            assert!(
+                grant_session_scope(Export, &[("mutation-one".into(), usage.clone())]).is_err()
+            );
+        }
+    }
     #[test]
     fn original_admin_restriction_uses_current_enabled_unaged_actor_only() {
         let registry: crate::principal::Registry = serde_json::from_value(serde_json::json!({

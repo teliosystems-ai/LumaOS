@@ -1,11 +1,12 @@
-//! Receiver/keeper composition for the source fixture, NOT a time authority.
-//! Shared history is freshly bound in source; runtime approval is still pending.
-//! No listener, CLI, serialized capability, Admin assignment or effect wiring.
+//! Admitted producer/keeper composition and protected delivery observations.
+//! Runtime candidate still requires native qualification.
+//! Saved wire intervals cannot construct authority.
 #![cfg_attr(not(test), allow(dead_code))]
 use crate::{
     admin_governance::{HistoryBinding, HistoryReader},
     tpm::Checkpoint,
     utc_bounds::{Interval, Measurement},
+    utc_history::Statement,
     utc_keeper::{Clock, Keeper, Round, Source, State},
     utc_policy::ApprovedPolicy,
     utc_protocol::{ProducerEpoch, ProducerRound, SourceData},
@@ -13,6 +14,77 @@ use crate::{
     utc_step_watch::StepWatch,
     Result,
 };
+
+#[path = "utc_provider.rs"]
+pub(crate) mod provider;
+
+/// Ephemeral history evidence. Only this admitted-stream composition can build
+/// it in production; it is deliberately neither Clone nor a wire capability.
+pub(crate) struct Observation {
+    context: Statement,
+    utc: Interval,
+}
+impl Observation {
+    pub(crate) fn context(&self) -> &Statement {
+        &self.context
+    }
+    pub(crate) fn interval(&self) -> Interval {
+        self.utc
+    }
+    #[cfg(test)]
+    pub(crate) fn fixture(context: Statement, utc: Interval) -> Self {
+        Self { context, utc }
+    }
+}
+
+/// A transaction-scoped delivery borrowing the actual stream. The caller must
+/// hold the shared journal writer while replaying and committing the proposal;
+/// no saved interval, digest or callback can construct this delivery.
+pub(crate) struct HistoryDelivery<'a> {
+    stream: &'a mut BoundStream,
+}
+impl HistoryDelivery<'_> {
+    pub(crate) fn support(&mut self, statement: &Statement) -> Result<()> {
+        let result = (|| {
+            self.stream.stream.poll()?;
+            let runtime = self.stream.stream.receiver.runtime_digest()?.to_owned();
+            let utc = self
+                .stream
+                .stream
+                .candidate_after_history()?
+                .ok_or("UTC history delivery is still acquiring quorum")?;
+            let producer = self.stream.stream.batch.producer;
+            let context = Statement {
+                floor_ms: utc.endpoints().0,
+                policy_sha256: crate::bundle::hex(&producer.policy_digest),
+                boot_id: crate::bundle::hex(&producer.boot_id),
+                process_generation: producer.process_generation,
+                source_clock_generation: producer.source_clock_generation,
+                keeper_generation: self.stream.stream.batch.keeper.epoch().clock_generation,
+                runtime_sha256: runtime,
+            };
+            let observation = Observation { context, utc };
+            statement.supported_by(&observation)?;
+            // Even arithmetic work is bracketed by the same live queue, watch
+            // and clock checks; never return a candidate cached before them.
+            let current = self
+                .stream
+                .stream
+                .candidate_after_history()?
+                .ok_or("UTC history delivery lost quorum")?;
+            let mut context = observation.context;
+            context.floor_ms = current.endpoints().0;
+            statement.supported_by(&Observation {
+                context,
+                utc: current,
+            })
+        })();
+        if result.is_err() {
+            self.stream.invalidate();
+        }
+        result
+    }
+}
 
 // The receiver preserves EVERY queued round. Quorum loss or disagreement in an
 // intermediate round must not be hidden by a later, numerically valid round.
@@ -229,6 +301,16 @@ pub(crate) struct BoundStream {
 }
 
 impl BoundStream {
+    pub(crate) fn history_delivery<'a>(
+        &'a mut self,
+        current: &HistoryBinding,
+    ) -> Result<HistoryDelivery<'a>> {
+        if current != &self.history || !matches!(self.state(), State::Acquiring | State::Bounded) {
+            self.invalidate();
+            return Err("UTC history delivery changed its shared checkpoint binding".into());
+        }
+        Ok(HistoryDelivery { stream: self })
+    }
     pub(crate) fn attach<A: Checkpoint>(
         receiver: Receiver,
         reader: &mut HistoryReader<'_, A>,

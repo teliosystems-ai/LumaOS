@@ -67,4 +67,24 @@ fn main() {
         .status()
         .expect("PAM helper compiler")
         .success());
+    println!("cargo:rerun-if-changed=src/utc_restart.c");
+    assert!(Command::new("cc")
+        .args([
+            "-std=c11",
+            "-O2",
+            "-Wall",
+            "-Wextra",
+            "-Werror",
+            "-fstack-protector-strong",
+            "-D_FORTIFY_SOURCE=3",
+            "-fPIE",
+            "-pie",
+            "-Wl,-z,relro,-z,now",
+            "src/utc_restart.c",
+            "-o"
+        ])
+        .arg(out.join("luma-utc-restart"))
+        .status()
+        .expect("fixed UTC supervisor compiler")
+        .success());
 }

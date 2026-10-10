@@ -148,10 +148,12 @@ struct Record {
     // are not rewritten or permitted to resume as a newly bound request.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     input_digest: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    product: Option<crate::finite_grants::Audit>,
 }
 impl Record {
     fn receipt(&self) -> serde_json::Value {
-        serde_json::json!({"kind":"permit", "nonce":self.nonce, "worker":self.worker,
+        let mut receipt = serde_json::json!({"kind":"permit", "nonce":self.nonce, "worker":self.worker,
             "phase":self.phase, "profile":self.profile,
             "max_output_tokens":self.limit.to_string(), "context_tokens":self.context.to_string(),
             "request_deadline":self.until.to_string(),
@@ -159,7 +161,12 @@ impl Record {
             "prompt_tokens":self.prompt.map(|v|v.to_string()), "token_digest":self.token_digest,
             "output_tokens":self.output.map(|v|v.to_string()), "result_digest":self.result_digest,
             "slot_released":matches!(self.phase,Phase::Completed|Phase::Released),
-            "worker_resources_released":false})
+            "worker_resources_released":false});
+        if let Some(product) = &self.product {
+            receipt["product"] =
+                serde_json::to_value(product).expect("typed finite attribution is serializable");
+        }
+        receipt
     }
 }
 
@@ -249,6 +256,7 @@ impl Gate {
             output: None,
             result_digest: None,
             input_digest: Some(input_digest.clone()),
+            product: None,
         };
         let receipt = record.receipt();
         self.records.push(record);
@@ -959,6 +967,12 @@ impl Manager {
     ) -> Result<serde_json::Value> {
         validate(request, peer.uid, now()?)?;
         crate::platform::require_installed()?;
+        if !matches!(
+            request.payload,
+            Message::Inspect {} | Message::Cancel { .. }
+        ) {
+            crate::admin_governance::reject_laboratory_effects_after_bootstrap()?;
+        }
         self.maintain()?;
         let caller = Caller::observe(peer, &pin)?;
         let reply_pin = pin.try_clone()?;

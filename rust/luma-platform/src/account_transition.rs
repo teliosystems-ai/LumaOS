@@ -28,14 +28,39 @@ pub(crate) struct Intent {
     pub credential_after: String,
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) enum Kind {
     Password,
+    Activation {
+        day: u32,
+        utc: crate::utc_history::Statement,
+    },
+    AdminRecovery {
+        day: u32,
+        utc: crate::utc_history::Statement,
+    },
+    Renewal {
+        day: u32,
+        utc: crate::utc_history::Statement,
+    },
 }
 
 impl Intent {
     pub(crate) fn validate(&self) -> Result<()> {
+        if let Some(
+            Kind::Activation { day, utc }
+            | Kind::AdminRecovery { day, utc }
+            | Kind::Renewal { day, utc },
+        ) = &self.kind
+        {
+            utc.validate()?;
+            if self.locked || *day == 0 || i64::from(*day) != utc.floor_ms / 86_400_000 {
+                return Err(
+                    "activation requires the protected UTC day and unlocked publication".into(),
+                );
+            }
+        }
         if !crate::admin_roles::identifier(&self.transaction)
             || self.transaction == "admin-bootstrap-v1"
             || self.expected_generation == 0
@@ -196,7 +221,138 @@ fn validate_password_change(before: &[u8], after: &[u8], name: &str) -> Result<b
 enum Replacement<'a> {
     Lock(bool),
     Password(&'a crate::account_password::Hash),
+    Activation(u32, &'a crate::utc_history::Statement),
+    AdminRecovery(
+        &'a crate::account_password::Hash,
+        u32,
+        &'a crate::utc_history::Statement,
+    ),
+    Renewal(
+        &'a crate::account_password::Hash,
+        u32,
+        &'a crate::utc_history::Statement,
+    ),
     Retained(&'a Intent),
+}
+
+fn activation_shadow(input: &[u8], name: &str, day: u32) -> Result<PrivateBuffer> {
+    if day == 0 || day > 47_483 || input.is_empty() || !input.ends_with(b"\n") {
+        return Err("invalid protected UTC password-aging day".into());
+    }
+    let text = std::str::from_utf8(input).map_err(|_| "invalid shadow encoding")?;
+    let mut offset = 0;
+    let mut selected = None;
+    for row in text.split_inclusive('\n') {
+        let fields: Vec<_> = row.trim_end_matches('\n').split(':').collect();
+        if fields.len() != 9 {
+            return Err("invalid shadow record".into());
+        }
+        if fields[0] == name {
+            if selected.is_some() {
+                return Err("ambiguous shadow record".into());
+            }
+            let crypt = fields[1].strip_prefix('!').unwrap_or(fields[1]);
+            crate::account_password::validate_hash(crypt.as_bytes())?;
+            if fields[2] != "0" || fields[3..] != ["0", "99999", "7", "", "", ""] {
+                return Err("activation requires the exact creation aging policy".into());
+            }
+            let start = offset + name.len() + 1;
+            let end = offset + row.len();
+            selected = Some((start, end, crypt.as_bytes()));
+        }
+        offset += row.len();
+    }
+    let (start, end, crypt) = selected.ok_or("missing activation credential")?;
+    let day = format!(":{day}:0:90:7:::\n");
+    let mut output = PrivateBuffer::new(input.len() - (end - start) + crypt.len() + day.len())?;
+    output.bytes_mut()[..start].copy_from_slice(&input[..start]);
+    let mut at = start;
+    output.bytes_mut()[at..at + crypt.len()].copy_from_slice(crypt);
+    at += crypt.len();
+    output.bytes_mut()[at..at + day.len()].copy_from_slice(day.as_bytes());
+    at += day.len();
+    output.bytes_mut()[at..].copy_from_slice(&input[end..]);
+    Ok(output)
+}
+
+fn recovered_shadow(
+    input: &[u8],
+    name: &str,
+    password: &crate::account_password::Hash,
+    day: u32,
+) -> Result<PrivateBuffer> {
+    if day == 0 || day > 47_483 || !input.ends_with(b"\n") {
+        return Err("invalid recovery aging day".into());
+    }
+    let text = std::str::from_utf8(input).map_err(|_| "invalid shadow encoding")?;
+    let mut offset = 0;
+    let mut selected = None;
+    for row in text.split_inclusive('\n') {
+        let fields: Vec<_> = row.trim_end_matches('\n').split(':').collect();
+        if fields.len() != 9 {
+            return Err("invalid shadow record".into());
+        }
+        if fields[0] == name {
+            if selected.is_some() {
+                return Err("ambiguous Admin shadow record".into());
+            }
+            selected = Some((offset + name.len() + 1, offset + row.len()));
+        }
+        offset += row.len();
+    }
+    let (start, end) = selected.ok_or("missing Admin shadow record")?;
+    let hash = password.bytes()?;
+    let age = format!(":{day}:0:90:7:::\n");
+    let mut output = PrivateBuffer::new(input.len() - (end - start) + hash.len() + age.len())?;
+    output.bytes_mut()[..start].copy_from_slice(&input[..start]);
+    output.bytes_mut()[start..start + hash.len()].copy_from_slice(hash);
+    output.bytes_mut()[start + hash.len()..start + hash.len() + age.len()]
+        .copy_from_slice(age.as_bytes());
+    output.bytes_mut()[start + hash.len() + age.len()..].copy_from_slice(&input[end..]);
+    Ok(output)
+}
+
+fn validate_recovered_shadow(before: &[u8], after: &[u8], name: &str, day: u32) -> Result<()> {
+    let rows = |bytes: &[u8]| -> Result<(usize, usize)> {
+        if !bytes.ends_with(b"\n") {
+            return Err("incomplete recovery shadow".into());
+        }
+        let text = std::str::from_utf8(bytes).map_err(|_| "invalid shadow encoding")?;
+        let mut at = 0;
+        let mut found = None;
+        for row in text.split_inclusive('\n') {
+            let fields: Vec<_> = row.trim_end_matches('\n').split(':').collect();
+            if fields.len() != 9 {
+                return Err("invalid shadow record".into());
+            }
+            if fields[0] == name {
+                if found.is_some() {
+                    return Err("ambiguous Admin shadow".into());
+                }
+                found = Some((at + name.len() + 1, at + row.len()));
+            }
+            at += row.len();
+        }
+        found.ok_or_else(|| "missing recovery shadow".into())
+    };
+    let (old_start, old_end) = rows(before)?;
+    let (new_start, new_end) = rows(after)?;
+    if old_start != new_start
+        || before[..old_start] != after[..new_start]
+        || before[old_end..] != after[new_end..]
+    {
+        return Err("Admin recovery changes unrelated shadow rows".into());
+    }
+    let row = &after[new_start..new_end];
+    let end = row
+        .iter()
+        .position(|&byte| byte == b':')
+        .ok_or("missing recovered hash")?;
+    crate::account_password::validate_hash(&row[..end])?;
+    if row[end..] != *format!(":{day}:0:90:7:::\n").as_bytes() {
+        return Err("Admin recovery changes reviewed aging policy".into());
+    }
+    Ok(())
 }
 
 /// Nonserializable lifetime guard over the original directory, migration lock
@@ -218,6 +374,156 @@ pub(crate) struct Guard {
 }
 
 impl Guard {
+    pub(crate) fn prepare_renewal(
+        registry_path: &Path,
+        identity: &Path,
+        target: &str,
+        generation: u64,
+        transaction: &str,
+        hash: &crate::account_password::Hash,
+        day: u32,
+        utc: &crate::utc_history::Statement,
+    ) -> Result<Self> {
+        Self::capture(
+            registry_path,
+            identity,
+            target,
+            generation,
+            transaction,
+            Replacement::Renewal(hash, day, utc),
+        )
+    }
+
+    pub(crate) fn retained_renewal(
+        registry_path: &Path,
+        identity: &Path,
+        intent: &Intent,
+    ) -> Result<Self> {
+        intent.validate()?;
+        if !matches!(intent.kind, Some(Kind::Renewal { .. })) {
+            return Err("not a password renewal".into());
+        }
+        let registry = principal::RegistryBinding::capture(registry_path)?;
+        let name = &registry
+            .current()?
+            .principal(&intent.principal)
+            .ok_or("unknown account")?
+            .login;
+        let guard = Self::capture(
+            registry_path,
+            identity,
+            name,
+            intent.expected_generation,
+            &intent.transaction,
+            Replacement::Retained(intent),
+        )?;
+        if &guard.intent != intent {
+            return Err("renewal differs from protected records".into());
+        }
+        guard.retain_stage()?;
+        registry.current()?;
+        Ok(guard)
+    }
+    pub(crate) fn prepare_admin_recovery(
+        registry_path: &Path,
+        identity: &Path,
+        target: &str,
+        generation: u64,
+        transaction: &str,
+        hash: &crate::account_password::Hash,
+        day: u32,
+        utc: &crate::utc_history::Statement,
+    ) -> Result<Self> {
+        Self::capture(
+            registry_path,
+            identity,
+            target,
+            generation,
+            transaction,
+            Replacement::AdminRecovery(hash, day, utc),
+        )
+    }
+
+    pub(crate) fn retained_admin_recovery(
+        registry_path: &Path,
+        identity: &Path,
+        intent: &Intent,
+    ) -> Result<Self> {
+        intent.validate()?;
+        if !matches!(intent.kind, Some(Kind::AdminRecovery { .. })) {
+            return Err("not an Admin account recovery".into());
+        }
+        let registry = principal::RegistryBinding::capture(registry_path)?;
+        let name = &registry
+            .current()?
+            .principal(&intent.principal)
+            .ok_or("unknown Admin")?
+            .login;
+        let guard = Self::capture(
+            registry_path,
+            identity,
+            name,
+            intent.expected_generation,
+            &intent.transaction,
+            Replacement::Retained(intent),
+        )?;
+        if &guard.intent != intent {
+            return Err("Admin recovery differs from protected records".into());
+        }
+        guard.retain_stage()?;
+        registry.current()?;
+        Ok(guard)
+    }
+    pub(crate) fn prepare_activation(
+        registry_path: &Path,
+        identity: &Path,
+        target: &str,
+        generation: u64,
+        transaction: &str,
+        day: u32,
+        utc: &crate::utc_history::Statement,
+    ) -> Result<Self> {
+        Self::capture(
+            registry_path,
+            identity,
+            target,
+            generation,
+            transaction,
+            Replacement::Activation(day, utc),
+        )
+    }
+
+    pub(crate) fn retained_activation(
+        registry_path: &Path,
+        identity: &Path,
+        intent: &Intent,
+    ) -> Result<Self> {
+        intent.validate()?;
+        let Some(Kind::Activation { day, utc }) = &intent.kind else {
+            return Err("not an account activation".into());
+        };
+        let registry = principal::RegistryBinding::capture(registry_path)?;
+        let name = &registry
+            .current()?
+            .principal(&intent.principal)
+            .ok_or("unknown account")?
+            .login;
+        let guard = Self::prepare_activation(
+            registry_path,
+            identity,
+            name,
+            intent.expected_generation,
+            &intent.transaction,
+            *day,
+            utc,
+        )?;
+        if &guard.intent != intent {
+            return Err("activation differs from protected records".into());
+        }
+        guard.retain_stage()?;
+        registry.current()?;
+        Ok(guard)
+    }
     pub(crate) fn prepare(
         registry_path: &Path,
         identity: &Path,
@@ -300,11 +606,13 @@ impl Guard {
         {
             return Err("invalid account transaction scope".into());
         }
+        let admin_recovery = matches!(&replacement, Replacement::AdminRecovery(..))
+            || matches!(&replacement, Replacement::Retained(intent) if matches!(intent.kind, Some(Kind::AdminRecovery { .. })));
         let registry = principal::RegistryBinding::capture(registry_path)?;
         let current = registry.current()?;
         let principal = current
             .account(target)
-            .filter(|record| record.enabled && record.uid != 1001)
+            .filter(|record| record.enabled && ((record.uid == 1001) == admin_recovery))
             .ok_or("lock changes require an installed non-Admin principal")?;
         let directory = OpenOptions::new()
             .read(true)
@@ -345,17 +653,59 @@ impl Guard {
                 let (after, locked) = password_shadow(before.bytes(), target, hash)?;
                 (after, locked, Some(Kind::Password))
             }
+            Replacement::Activation(day, utc) => (
+                activation_shadow(before.bytes(), target, day)?,
+                false,
+                Some(Kind::Activation {
+                    day,
+                    utc: utc.clone(),
+                }),
+            ),
+            Replacement::AdminRecovery(password, day, utc) => (
+                recovered_shadow(before.bytes(), target, password, day)?,
+                false,
+                Some(Kind::AdminRecovery {
+                    day,
+                    utc: utc.clone(),
+                }),
+            ),
+            Replacement::Renewal(password, day, utc) => (
+                recovered_shadow(before.bytes(), target, password, day)?,
+                false,
+                Some(Kind::Renewal {
+                    day,
+                    utc: utc.clone(),
+                }),
+            ),
             Replacement::Retained(intent) => {
                 let stage = identity.join(format!("account-transition-{}", intent.transaction));
                 tpm::private_directory(&stage)?;
                 let (after, pin) = principal::account_file(&stage.join("shadow.new"), true)?;
-                let locked = validate_password_change(before.bytes(), after.bytes(), target)?;
+                let (locked, kind) =
+                    if let Some(Kind::AdminRecovery { day, .. } | Kind::Renewal { day, .. }) =
+                        &intent.kind
+                    {
+                        validate_recovered_shadow(before.bytes(), after.bytes(), target, *day)?;
+                        (false, intent.kind.clone())
+                    } else {
+                        (
+                            validate_password_change(before.bytes(), after.bytes(), target)?,
+                            Some(Kind::Password),
+                        )
+                    };
                 pin.recheck()?;
-                (after, locked, Some(Kind::Password))
+                (after, locked, kind)
             }
         };
-        let old =
-            principal::account_rows_digest(passwd_bytes.bytes(), before.bytes(), principal, true)?;
+        let old = if matches!(kind, Some(Kind::AdminRecovery { .. })) {
+            principal::recovery_account_rows_digest(
+                passwd_bytes.bytes(),
+                before.bytes(),
+                principal,
+            )?
+        } else {
+            principal::account_rows_digest(passwd_bytes.bytes(), before.bytes(), principal, true)?
+        };
         let new =
             principal::account_rows_digest(passwd_bytes.bytes(), after.bytes(), principal, true)?;
         let metadata = fs::symlink_metadata(identity.join("shadow"))?;
@@ -459,7 +809,15 @@ impl Guard {
         &self,
         authorize: impl FnOnce() -> Result<()>,
     ) -> Result<()> {
-        if self.intent.kind != Some(Kind::Password) {
+        if !matches!(
+            self.intent.kind,
+            Some(
+                Kind::Password
+                    | Kind::Activation { .. }
+                    | Kind::AdminRecovery { .. }
+                    | Kind::Renewal { .. }
+            )
+        ) {
             return Err("password proposal requires its explicit intent kind".into());
         }
         self.recheck()?;
@@ -741,7 +1099,9 @@ impl Published {
         let record = current
             .principal(&intent.principal)
             .ok_or("unknown publication principal")?;
-        if current.installation() != intent.installation || record.uid == 1001 {
+        if current.installation() != intent.installation
+            || ((record.uid == 1001) != matches!(intent.kind, Some(Kind::AdminRecovery { .. })))
+        {
             return Err("publication belongs to another installation or Admin".into());
         }
         let (passwd_bytes, passwd) = principal::account_file(&identity.join("passwd"), false)?;
@@ -846,6 +1206,201 @@ mod tests {
         fn drop(&mut self) {
             fs::remove_dir_all(&self.0).unwrap();
         }
+    }
+
+    fn timed_statement(day: u32) -> crate::utc_history::Statement {
+        crate::utc_history::Statement {
+            floor_ms: i64::from(day) * 86_400_000,
+            policy_sha256: crate::utc_history::policy_digest().unwrap(),
+            boot_id: "12".repeat(16),
+            process_generation: 1,
+            source_clock_generation: 1,
+            keeper_generation: 1,
+            runtime_sha256: "34".repeat(32),
+        }
+    }
+    fn new_hash() -> crate::account_password::Hash {
+        let mut secret = PrivateBuffer::new(1025).unwrap();
+        let value = b"Strong integrated account recovery fixture 2026";
+        secret.bytes_mut()[..value.len()].copy_from_slice(value);
+        crate::account_password::Password::fixture(&secret)
+            .unwrap()
+            .hash()
+            .unwrap()
+    }
+
+    #[test]
+    fn activation_commits_exact_utc_day_policy_and_preserves_every_other_record() {
+        let fixture = Fixture::new();
+        let hash = new_hash();
+        let mut before = PrivateBuffer::new(256 + hash.bytes().unwrap().len()).unwrap();
+        let prefix = b"human:$6$fixture$one:20000:0:99999:7:::\notherhuman:!";
+        let suffix = b":0:0:99999:7:::\n";
+        let len = prefix.len() + hash.bytes().unwrap().len() + suffix.len();
+        before.bytes_mut()[..prefix.len()].copy_from_slice(prefix);
+        before.bytes_mut()[prefix.len()..prefix.len() + hash.bytes().unwrap().len()]
+            .copy_from_slice(hash.bytes().unwrap());
+        before.bytes_mut()[prefix.len() + hash.bytes().unwrap().len()..len].copy_from_slice(suffix);
+        crate::platform::write_atomic(
+            &fixture.identity().join("shadow"),
+            &before.bytes()[..len],
+            0o600,
+        )
+        .unwrap();
+        let utc = timed_statement(20_642);
+        let guard = Guard::prepare_activation(
+            &fixture.registry(),
+            &fixture.identity(),
+            "otherhuman",
+            1,
+            "activate-one",
+            20_642,
+            &utc,
+        )
+        .unwrap();
+        assert!(guard
+            .after
+            .bytes()
+            .starts_with(b"human:$6$fixture$one:20000:0:99999:7:::\notherhuman:$y$j9T$"));
+        assert!(guard.after.bytes().ends_with(b":20642:0:90:7:::\n"));
+        assert!(!guard.intent.locked);
+        let intent = guard.intent.clone();
+        guard.stage_password_proposal(|| Ok(())).unwrap();
+        drop(guard);
+        let guard =
+            Guard::retained_activation(&fixture.registry(), &fixture.identity(), &intent).unwrap();
+        assert!(guard
+            .publish(|| Err("revoked before final rename".into()))
+            .is_err());
+        assert_eq!(
+            principal::account_file(&fixture.identity().join("shadow"), true)
+                .unwrap()
+                .0
+                .bytes(),
+            &before.bytes()[..len]
+        );
+        guard.publish(|| Ok(())).unwrap();
+        Published::capture(&fixture.registry(), &fixture.identity(), &intent)
+            .unwrap()
+            .recheck()
+            .unwrap();
+        assert!(
+            Guard::retained_activation(&fixture.registry(), &fixture.identity(), &intent).is_err()
+        );
+    }
+
+    #[test]
+    fn original_admin_unusable_credential_recovery_is_separate_from_ordinary_lock_and_password() {
+        let fixture = Fixture::new();
+        let before = b"human:*:0:0:90:7:::\notherhuman:$6$fixture$two:20000:0:99999:7:::\n";
+        crate::platform::write_atomic(&fixture.identity().join("shadow"), before, 0o600).unwrap();
+        let hash = new_hash();
+        assert!(Guard::prepare_password(
+            &fixture.registry(),
+            &fixture.identity(),
+            "human",
+            1,
+            "ordinary-admin",
+            &hash
+        )
+        .is_err());
+        assert!(Guard::prepare(
+            &fixture.registry(),
+            &fixture.identity(),
+            "human",
+            1,
+            "ordinary-admin-unlock",
+            false
+        )
+        .is_err());
+        let utc = timed_statement(20_642);
+        let guard = Guard::prepare_admin_recovery(
+            &fixture.registry(),
+            &fixture.identity(),
+            "human",
+            1,
+            "custody-admin",
+            &hash,
+            20_642,
+            &utc,
+        )
+        .unwrap();
+        assert!(guard
+            .after
+            .bytes()
+            .ends_with(b"otherhuman:$6$fixture$two:20000:0:99999:7:::\n"));
+        validate_recovered_shadow(before, guard.after.bytes(), "human", 20_642).unwrap();
+        let intent = guard.intent.clone();
+        guard.stage_password_proposal(|| Ok(())).unwrap();
+        drop(guard);
+        let guard =
+            Guard::retained_admin_recovery(&fixture.registry(), &fixture.identity(), &intent)
+                .unwrap();
+        assert!(guard
+            .publish(|| Err("offline credential rotated".into()))
+            .is_err());
+        assert_eq!(
+            principal::account_file(&fixture.identity().join("shadow"), true)
+                .unwrap()
+                .0
+                .bytes(),
+            before
+        );
+        guard.publish(|| Ok(())).unwrap();
+        Published::capture(&fixture.registry(), &fixture.identity(), &intent)
+            .unwrap()
+            .recheck()
+            .unwrap();
+    }
+
+    #[test]
+    fn timed_renewal_refuses_different_day_kind_and_unrelated_retained_rows() {
+        let fixture = Fixture::new();
+        let hash = new_hash();
+        let utc = timed_statement(20_642);
+        let guard = Guard::prepare_renewal(
+            &fixture.registry(),
+            &fixture.identity(),
+            "otherhuman",
+            1,
+            "renew-one",
+            &hash,
+            20_642,
+            &utc,
+        )
+        .unwrap();
+        let intent = guard.intent.clone();
+        guard.stage_password_proposal(|| Ok(())).unwrap();
+        drop(guard);
+        let mut wrong = intent.clone();
+        wrong.kind = Some(Kind::Renewal {
+            day: 20_643,
+            utc: utc.clone(),
+        });
+        assert!(wrong.validate().is_err());
+        wrong.kind = Some(Kind::AdminRecovery { day: 20_642, utc });
+        assert!(
+            Guard::retained_admin_recovery(&fixture.registry(), &fixture.identity(), &wrong)
+                .is_err()
+        );
+        let guard =
+            Guard::retained_renewal(&fixture.registry(), &fixture.identity(), &intent).unwrap();
+        let mut changed = PrivateBuffer::new(guard.after.bytes().len()).unwrap();
+        changed.bytes_mut().copy_from_slice(guard.after.bytes());
+        changed.bytes_mut()[0] = b'H';
+        assert!(validate_recovered_shadow(
+            guard.before.bytes(),
+            changed.bytes(),
+            "otherhuman",
+            20_642
+        )
+        .is_err());
+        let stage = guard.stage_path().join("shadow.new");
+        drop(guard);
+        crate::platform::write_atomic(&stage, changed.bytes(), 0o600).unwrap();
+        assert!(
+            Guard::retained_renewal(&fixture.registry(), &fixture.identity(), &intent).is_err()
+        );
     }
 
     #[test]

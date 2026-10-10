@@ -501,6 +501,7 @@ impl Catalog {
             io::open_at(&self.objects, &receipt.content_sha256, libc::O_RDONLY, 0)?.sync_all()?;
             self.objects.sync_all()?;
             self.root.sync_all()?;
+            authorize(receipt)?;
             return Ok(true);
         }
         if io::names(&self.retained, MAX_FILES)?.contains(&receipt.request_id) {
@@ -540,6 +541,7 @@ impl Catalog {
                 {
                     return Err("insufficient artifact catalog storage reserve".into());
                 }
+                authorize(receipt)?;
                 io::write_member(&self.pending, &receipt.request_id, bytes, 0o400)?;
                 self.pending.sync_all()?;
             }
@@ -549,6 +551,7 @@ impl Catalog {
             io::open_at(&self.pending, &receipt.request_id, libc::O_RDONLY, 0)?.sync_all()?;
             self.pending.sync_all()?;
             hook(Phase::TemporarySynced)?;
+            authorize(receipt)?;
             self.rename(
                 &self.pending,
                 &self.objects,
@@ -608,6 +611,7 @@ impl Catalog {
         authorize(receipt)?;
         // WAL/SHM namespace entries must be durable before the WAL commit.
         self.root.sync_all()?;
+        authorize(receipt)?;
         transaction.commit()?;
         hook(Phase::Committed)?;
         self.root.sync_all()?;
@@ -615,6 +619,15 @@ impl Catalog {
     }
 
     fn retain(&self, request: &str, review: &str) -> Result<()> {
+        self.retain_checked(request, review, || Ok(()))
+    }
+
+    fn retain_checked(
+        &self,
+        request: &str,
+        review: &str,
+        mut check: impl FnMut() -> Result<()>,
+    ) -> Result<()> {
         if !io::identifier(request) || !io::hash(review) {
             return Err("invalid artifact retention review".into());
         }
@@ -631,6 +644,7 @@ impl Catalog {
         if self.review(request, &bytes)? != review {
             return Err("artifact preparation changed since review".into());
         }
+        check()?;
         if !already {
             self.rename(&self.pending, &self.retained, request, request)?;
         }
@@ -638,6 +652,7 @@ impl Catalog {
         self.retained.sync_all()?;
         self.pending.sync_all()?;
         self.root.sync_all()?;
+        check()?;
         Ok(())
     }
 
@@ -873,6 +888,129 @@ pub fn retain(request: &str, review: &str) -> Result<()> {
     println!(
         "{}",
         serde_json::json!({"request_id":request,"state":"retained","gate_closing":false})
+    );
+    Ok(())
+}
+
+fn export_usage(receipt: &Receipt) -> Result<crate::finite_grants::Use> {
+    use crate::finite_grants::{Action, Kind, Selector, Use};
+    let usage = Use {
+        action: Action::Export,
+        selector: Selector {
+            kind: Kind::Artifact,
+            id: receipt.artifact_id.clone(),
+            generation: receipt.version,
+            digest: io::digest(&serde_json::to_vec(receipt)?),
+        },
+        input_bytes: 0,
+        output_bytes: receipt.content_bytes,
+        units: 1,
+    };
+    usage.validate()?;
+    Ok(usage)
+}
+
+pub(crate) fn governed_export_review(artifact: &str, version: &str) -> Result<()> {
+    crate::require_root()?;
+    crate::platform::require_installed()?;
+    let catalog = Catalog::open(Path::new(DIRECTORY), &io::installation()?)?;
+    let (records, _, _) = catalog.inventory()?;
+    let receipt = records
+        .iter()
+        .find(|(_, r)| r.artifact_id == artifact && r.version.to_string() == version)
+        .ok_or("artifact version not found")?;
+    println!(
+        "{}",
+        serde_json::json!({"usage":export_usage(&receipt.1)?,
+        "receipt":receipt.1,"content_exported":false,"grant_issued":false})
+    );
+    Ok(())
+}
+
+pub(crate) fn governed_export(args: &[String]) -> Result<()> {
+    if args.len() != 5 {
+        return Err("expected artifact-governed-export LOGIN EXPORT-GRANT ARTIFACT VERSION".into());
+    }
+    let catalog = Catalog::open(Path::new(DIRECTORY), &io::installation()?)?;
+    let (records, _, _) = catalog.inventory()?;
+    let receipt = records
+        .iter()
+        .find(|(_, r)| r.artifact_id == args[3] && r.version.to_string() == args[4])
+        .ok_or("artifact version not found")?
+        .1
+        .clone();
+    let usage = export_usage(&receipt)?;
+    crate::admin_governance::with_grant(&args[1], &args[2], &usage, |boundary| {
+        boundary.check()?;
+        let bytes = io::read_member(&catalog.objects, &receipt.content_sha256, MAX_CONTENT)?;
+        if bytes.len() as u64 != receipt.content_bytes
+            || io::digest(&bytes) != receipt.content_sha256
+        {
+            return Err("artifact export content changed".into());
+        }
+        let mut output = std::io::stdout().lock();
+        for block in bytes.chunks(32 * 1024) {
+            boundary.check()?;
+            output.write_all(block)?;
+        }
+        output.flush()?;
+        boundary.check()?;
+        if !catalog.inventory()?.0.iter().any(|(_, r)| r == &receipt) {
+            return Err("artifact export outcome uncertain; preserve destination bytes".into());
+        }
+        Ok(())
+    })
+}
+
+pub(crate) fn governed_retain(args: &[String]) -> Result<()> {
+    if args.len() != 5 {
+        return Err(
+            "expected artifact-governed-retain LOGIN RETENTION-GRANT REQUEST REVIEW-SHA256".into(),
+        );
+    }
+    let installation = io::installation()?;
+    let catalog = Catalog::open(Path::new(DIRECTORY), &installation)?;
+    catalog.inventory()?;
+    let already = io::names(&catalog.retained, MAX_FILES)?.contains(&args[3]);
+    let bytes = io::read_member(
+        if already {
+            &catalog.retained
+        } else {
+            &catalog.pending
+        },
+        &args[3],
+        MAX_CONTENT,
+    )?;
+    let review = catalog.review(&args[3], &bytes)?;
+    if args[4] != review {
+        return Err("artifact retention review changed".into());
+    }
+    use crate::finite_grants::{Action, Kind, Selector, Use};
+    let usage = Use {
+        action: Action::Retain,
+        selector: Selector {
+            kind: Kind::Artifact,
+            id: args[3].clone(),
+            generation: 1,
+            digest: review.clone(),
+        },
+        input_bytes: bytes.len() as u64,
+        output_bytes: 0,
+        units: 1,
+    };
+    crate::admin_governance::with_grant(&args[1], &args[2], &usage, |boundary| {
+        catalog.retain_checked(&args[3], &review, || {
+            boundary.check()?;
+            if io::installation()? != installation {
+                return Err("retention installation changed".into());
+            }
+            Ok(())
+        })
+    })?;
+    println!(
+        "{}",
+        serde_json::json!({"request_id":args[3],"state":"retained",
+        "review_sha256":review,"bytes_preserved":true,"content_deleted":false})
     );
     Ok(())
 }
@@ -1381,21 +1519,64 @@ mod tests {
     fn revocation_rolls_back_metadata_and_preserves_object_for_review() {
         let f = Fixture::new("revocation");
         let (r, bytes) = proposal("request-1", "invoice", 0);
-        let calls = Cell::new(0);
+        let inserted = Cell::new(false);
         assert!(f
             .open()
-            .publish(&r, &bytes, |_| {
-                calls.set(calls.get() + 1);
-                if calls.get() == 2 {
-                    Err("revoked before metadata commit".into())
-                } else {
+            .publish_with_hook(
+                &r,
+                &bytes,
+                |_| {
+                    if inserted.get() {
+                        Err("revoked before metadata commit".into())
+                    } else {
+                        Ok(())
+                    }
+                },
+                |phase| {
+                    if matches!(phase, Phase::MetadataInserted) {
+                        inserted.set(true);
+                    }
                     Ok(())
                 }
-            })
+            )
             .is_err());
-        assert_eq!(calls.get(), 2);
+        assert!(inserted.get());
         assert!(f.open().inventory().unwrap().0.is_empty());
         assert_eq!(f.open().inventory().unwrap().1, [r.content_sha256]);
+    }
+
+    #[test]
+    fn revocation_after_pending_sync_refuses_object_rename_and_preserves_exact_bytes() {
+        let f = Fixture::new("pending-rename-revocation");
+        let (receipt, bytes) = proposal("request-1", "invoice", 0);
+        let synced = Cell::new(false);
+        let catalog = f.open();
+        assert!(catalog
+            .publish_with_hook(
+                &receipt,
+                &bytes,
+                |_| {
+                    if synced.get() {
+                        Err("revoked before object rename".into())
+                    } else {
+                        Ok(())
+                    }
+                },
+                |phase| {
+                    if matches!(phase, Phase::TemporarySynced) {
+                        synced.set(true);
+                    }
+                    Ok(())
+                }
+            )
+            .is_err());
+        assert!(synced.get());
+        assert_eq!(
+            io::read_member(&catalog.pending, &receipt.request_id, MAX_CONTENT).unwrap(),
+            bytes
+        );
+        assert!(io::names(&catalog.objects, MAX_FILES).unwrap().is_empty());
+        assert!(catalog.inventory().unwrap().0.is_empty());
     }
 
     #[test]
@@ -1432,6 +1613,53 @@ mod tests {
         assert!(catalog.publish(&other, &bytes, |_| Ok(())).is_err());
         let (other, _) = proposal("new-request", "other", 0);
         catalog.publish(&other, &bytes, |_| Ok(())).unwrap();
+    }
+
+    #[test]
+    fn retention_denial_preserves_preparation_and_post_rename_denial_preserves_evidence() {
+        let f = Fixture::new("retention-boundaries");
+        let catalog = f.open();
+        io::write_member(&catalog.pending, "partial", b"part", 0o400).unwrap();
+        let review = catalog.review("partial", b"part").unwrap();
+        assert!(catalog
+            .retain_checked("partial", &review, || Err("grant revoked".into()))
+            .is_err());
+        assert_eq!(
+            io::read_member(&catalog.pending, "partial", MAX_CONTENT).unwrap(),
+            b"part"
+        );
+        let calls = Cell::new(0);
+        assert!(catalog
+            .retain_checked("partial", &review, || {
+                calls.set(calls.get() + 1);
+                if calls.get() == 2 {
+                    Err("expired after rename; inspect exact retained evidence".into())
+                } else {
+                    Ok(())
+                }
+            })
+            .is_err());
+        assert_eq!(
+            io::read_member(&catalog.retained, "partial", MAX_CONTENT).unwrap(),
+            b"part"
+        );
+        catalog
+            .retain_checked("partial", &review, || Ok(()))
+            .unwrap();
+    }
+
+    #[test]
+    fn export_scope_binds_complete_receipt_and_exact_output_bound() {
+        let (mut receipt, _) = proposal("export-one", "invoice", 0);
+        let original = export_usage(&receipt).unwrap();
+        assert_eq!(original.output_bytes, receipt.content_bytes);
+        assert_eq!(original.input_bytes, 0);
+        assert_eq!(original.selector.generation, receipt.version);
+        receipt.request_id = "different-outcome".into();
+        assert_ne!(
+            export_usage(&receipt).unwrap().selector.digest,
+            original.selector.digest
+        );
     }
 
     #[test]

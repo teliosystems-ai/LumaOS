@@ -20,6 +20,18 @@ PINS = {
     'nts_ke_session.c': 'c14550e4fc40c045f404ee9df7052809413555b651777ba211eff4e5ebc7abc0',
     'Makefile.in': '17224c3c9aca09ae665c8e389d81349b0dfca17e3c2791eb9fac3f1fbad2a820',
 }
+RELEASE = '4.9'
+RELEASE_ARCHIVE_SHA256 = '4924c6f530105bcd5b9e9e33c48a2ae1bfd889222c8480bc41601110efc864d0'
+RELEASE_PINS = {
+    'ntp_core.c': 'ca206410bddc03c56996bba2bddbca2ab01029f9c5b619d4a55025f37d8c4ac0',
+    'ntp_auth.c': 'b22f29ec98a42c63917fbc985dff21d2151f2e95a7525b78c2baf13626392574',
+    'nts_ntp_client.c': 'f4e51bf8f1115ff745a661dbd22e4665071764cbf6149481c859481e07fccae0',
+    'nts_ke_session.c': '37cd0927b28798d71049c37896f6a9034505b77ea5ac0d5b5bbf902af686920d',
+    'Makefile.in': 'ebda5a94d5cb8dee9b264dc270e8d1613763e1a5dc8e1b95a69e8cfd4d637a2e',
+    'tls_gnutls.c': '558749987c98db10696dc133d0f6a748f20b531d5dd45a8422b7c77178a166b6',
+    'sys_linux.c': '5ac89030226212a0d826b4d564fdee761735b332ee74dc3f184608598157c5ae',
+    'local.c': 'af16a2e6f46716f5bd4e405bdeebaecacbf15ca62476e153323e3836e2c7d3ac',
+}
 
 
 def once(text, before, after):
@@ -28,7 +40,7 @@ def once(text, before, after):
     return text.replace(before, after, 1)
 
 
-def prepare(source, output):
+def prepare(source, output, release=False):
     source = source.resolve(strict=True)
     if output.exists() or output.is_symlink():
         raise ValueError('fixture destination must be new')
@@ -36,7 +48,10 @@ def prepare(source, output):
     if output.is_relative_to(source) or source.is_relative_to(output):
         raise ValueError('fixture must not overlap upstream source')
     # The archive digest must ALSO be verified by the caller before extraction.
-    for name, expected in PINS.items():
+    pins = RELEASE_PINS if release else PINS
+    if release and (source / 'version.txt').read_bytes() != b'4.9\n':
+        raise ValueError('release version differs from selected candidate')
+    for name, expected in pins.items():
         path = source / name
         if not stat.S_ISREG(path.lstat().st_mode) or hashlib.sha256(path.read_bytes()).hexdigest() != expected:
             raise ValueError('upstream source pin mismatch: ' + name)
@@ -72,7 +87,8 @@ def prepare(source, output):
                 '      /* Adjust the polling interval, accumulate the sample, etc. */')
     (output / 'ntp_core.c').write_text(core)
     makefile = (output / 'Makefile.in').read_text()
-    makefile = once(makefile, 'OBJS = array.o cmdparse.o', 'OBJS = publisher.o chrony_hook.o array.o cmdparse.o')
+    anchor = 'OBJS = addrfilt.o array.o' if release else 'OBJS = array.o cmdparse.o'
+    makefile = once(makefile, anchor, 'OBJS = publisher.o chrony_hook.o ' + anchor[len('OBJS = '):])
     (output / 'Makefile.in').write_text(makefile)
     assets = Path(__file__).resolve().parent
     for name in ('publisher.c', 'publisher.h', 'chrony_hook.c', 'chrony_hook.h'):
@@ -83,10 +99,13 @@ def prepare(source, output):
         '/* Generated fixed policy byte digest; not a signature. */\n'
         'static const unsigned char luma_policy_digest[32] = {' +
         ','.join(str(b) for b in digest) + '};\n')
-    manifest = {'schema_version': 1, 'upstream_commit': COMMIT,
-                'upstream_archive_sha256': ARCHIVE_SHA256, 'policy_digest': digest.hex(),
+    manifest = {'schema_version': 1,
+                **({'upstream_version': RELEASE, 'qualification': 'native-image-qualification-required'}
+                   if release else {'upstream_commit': COMMIT}),
+                'upstream_archive_sha256': RELEASE_ARCHIVE_SHA256 if release else ARCHIVE_SHA256,
+                'policy_digest': digest.hex(),
                 'files': {name: hashlib.sha256((output / name).read_bytes()).hexdigest()
-                          for name in (*PINS, 'publisher.c', 'publisher.h', 'chrony_hook.c',
+                          for name in (*pins, 'publisher.c', 'publisher.h', 'chrony_hook.c',
                                        'chrony_hook.h', 'luma_policy_digest.h')}}
     (output / 'luma-hook-inputs.json').write_text(json.dumps(manifest, indent=2) + '\n')
 
@@ -95,5 +114,6 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--source', required=True, type=Path)
     parser.add_argument('--output', required=True, type=Path)
+    parser.add_argument('--release-candidate', action='store_true')
     args = parser.parse_args()
-    prepare(args.source, args.output)
+    prepare(args.source, args.output, release=args.release_candidate)

@@ -55,10 +55,16 @@ class AccountLockPolicyTests(unittest.TestCase):
 
     def test_pending_transition_is_not_credential_or_principal_enable_authority(self):
         source = (ROOT / 'rust/luma-platform/src/admin_roles.rs').read_text()
-        reducer = source.split('match command {')[1].split('Command::CheckpointAccounts')[0]
-        prepare = reducer.split('Command::PrepareAccountLock')[1].split('Command::PermitAccountPublication')[0]
+        reducer = source.split('match command {', 1)[1].split('\n            Command::CheckpointAccounts', 1)[0]
+        prepare = reducer.split('Command::PrepareAccountLock')[1].split('\n            Command::PermitAccountPublication')[0]
         self.assertIn('enabled: false', prepare)
-        self.assertNotIn('account_commitments.insert', prepare)
+        # The separately authenticated offline-custody path deliberately pins
+        # the physically changed Admin credential while fencing that principal.
+        # Ordinary password/lock preparation must still never adopt it.
+        custody = prepare.split('if let Command::PrepareAdminAccountRecovery')[1].split('\n                let generation')[0]
+        self.assertIn('intent.credential_before.clone()', custody)
+        ordinary = prepare.replace(custody, '')
+        self.assertNotRegex(ordinary, r'account_commitments\s*\.insert')
         permit = reducer.split('Command::PermitAccountPublication')[1].split('Command::CompleteAccountLock')[0]
         self.assertNotIn('account_commitments.insert', permit)
         complete = reducer.split('Command::CompleteAccountLock')[1]

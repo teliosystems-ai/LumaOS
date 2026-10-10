@@ -2,10 +2,8 @@
 //! A canonical payload or verified historical floor never grants authority.
 //! No new NV index, writer endpoint, clock seed, reset or automatic recovery.
 #![cfg_attr(not(test), allow(dead_code))]
-use crate::{
-    admin_governance::Identity, bundle, tpm, utc_bounds::Interval, utc_policy::ApprovedPolicy,
-    Result,
-};
+pub(crate) use crate::utc_stream::Observation;
+use crate::{admin_governance::Identity, bundle, tpm, utc_policy::ApprovedPolicy, Result};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
@@ -40,12 +38,12 @@ impl Statement {
     }
     pub(crate) fn supported_by(&self, live: &Observation) -> Result<()> {
         self.validate()?;
-        live.context.validate()?;
-        let (lower, upper) = live.utc.endpoints();
-        let mut expected = live.context.clone();
+        live.context().validate()?;
+        let (lower, upper) = live.interval().endpoints();
+        let mut expected = live.context().clone();
         expected.floor_ms = self.floor_ms;
         if &expected != self
-            || live.context.floor_ms != lower
+            || live.context().floor_ms != lower
             || upper - lower > 500
             || upper > 4_102_444_800_000
             || self.floor_ms > lower
@@ -54,13 +52,6 @@ impl Statement {
         }
         Ok(())
     }
-}
-
-/// Test/composition seam only. The future protected provider must establish
-/// live provenance/eligibility; this data shape and callback cannot do that.
-pub(crate) struct Observation {
-    pub context: Statement,
-    pub utc: Interval,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -134,6 +125,7 @@ pub(crate) fn policy_digest() -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::utc_bounds::Interval;
     fn statement() -> Statement {
         Statement {
             floor_ms: 1000,
@@ -227,18 +219,18 @@ mod tests {
     fn fresh_observation_must_support_floor_and_exact_context() {
         let s = statement();
         assert!(s
-            .supported_by(&Observation {
-                context: s.clone(),
-                utc: Interval::new(1000, 1100).unwrap()
-            })
+            .supported_by(&Observation::fixture(
+                s.clone(),
+                Interval::new(1000, 1100).unwrap()
+            ))
             .is_ok());
         let mut advanced = s.clone();
         advanced.floor_ms = 1100;
         assert!(s
-            .supported_by(&Observation {
-                context: advanced,
-                utc: Interval::new(1100, 1200).unwrap()
-            })
+            .supported_by(&Observation::fixture(
+                advanced,
+                Interval::new(1100, 1200).unwrap()
+            ))
             .is_ok());
         for variant in 0..7 {
             let mut context = s.clone();
@@ -255,7 +247,7 @@ mod tests {
                 5 => utc = Interval::new(1000, 1501).unwrap(),
                 _ => context.floor_ms = 1001,
             }
-            assert!(s.supported_by(&Observation { context, utc }).is_err());
+            assert!(s.supported_by(&Observation::fixture(context, utc)).is_err());
         }
     }
     #[test]

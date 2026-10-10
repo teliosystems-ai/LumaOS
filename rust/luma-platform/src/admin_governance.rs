@@ -8,11 +8,12 @@ use crate::{
     admin_roles::{self, Catalog, Command},
     authentication, bundle, platform,
     tpm::{self, Checkpoint},
-    utc_history::{self, History, Observation, Record as HistoryRecord, Statement},
+    utc_history::{self, History, Record as HistoryRecord, Statement},
     Result,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use std::cell::RefCell;
 use std::collections::BTreeSet;
 use std::fs::{self, File, OpenOptions};
 use std::io::Write;
@@ -150,6 +151,22 @@ impl<'a> Context<'a> {
         Identity::parse(catalog.resolve_principal(&serde_json::to_value(&self.principal)?)?)
     }
 
+    fn custody_writer(&self, catalog: &Catalog) -> Result<Identity> {
+        let registry = catalog.registry()?;
+        let admin = registry
+            .bootstrap_admin()
+            .ok_or("missing original Admin custody identity")?;
+        if registry.identity(admin) != serde_json::to_value(&self.principal)? {
+            return Err("offline custody does not bind the enrolled original Admin".into());
+        }
+        let mut writer = self.principal.clone();
+        writer.generation = catalog
+            .principal_states
+            .get(&admin.id)
+            .map_or(admin.generation, |state| state.generation);
+        Ok(writer)
+    }
+
     fn payload(&self, previous_head: &str) -> Bootstrap {
         Bootstrap {
             schema_version: 1,
@@ -269,8 +286,8 @@ impl<'a> Context<'a> {
         let mut records = Vec::new();
         let mut names = BTreeSet::new();
         for (position, entry) in snapshot.entries.iter().enumerate().skip(1) {
-            let writer = self.writer(&catalog)?;
             if entry.activity == utc_history::ACTIVITY {
+                let writer = self.writer(&catalog)?;
                 let (record, bytes) = utc_history::read(
                     &self.directory.join(event_name(&entry.request_id)),
                     &entry.request_id,
@@ -295,6 +312,11 @@ impl<'a> Context<'a> {
                 continue;
             }
             let (event, bytes) = read_event(self.directory, &entry.request_id)?;
+            let writer = if admin_account_recovery(&event.command) {
+                self.custody_writer(&catalog)?
+            } else {
+                self.writer(&catalog)?
+            };
             if !admin_roles::identifier(&entry.request_id)
                 || entry.request_id == REQUEST
                 || event.schema_version != 1
@@ -364,10 +386,12 @@ impl<'a> Context<'a> {
 enum PrincipalPurpose {
     General,
     AdminCatalog { candidate: Option<String> },
+    UtcSeed { candidate: Option<String> },
 }
 
 #[derive(Debug, PartialEq, Eq)]
 struct PrincipalBinding {
+    password_epoch: Option<(String, String, u64, u64, u64)>,
     credential_sha256: Option<String>,
     identity_path: std::path::PathBuf,
     purpose: PrincipalPurpose,
@@ -424,6 +448,7 @@ pub(crate) struct PrincipalReader<'a, A: Checkpoint> {
     last_clock: Option<tpm::Clock>,
     fenced: bool,
     admin_candidate: Option<Option<&'a str>>,
+    seed_only: bool,
 }
 
 impl<'a, A: Checkpoint> PrincipalReader<'a, A> {
@@ -440,6 +465,7 @@ impl<'a, A: Checkpoint> PrincipalReader<'a, A> {
             last_clock: None,
             fenced: false,
             admin_candidate: None,
+            seed_only: false,
         }
     }
 
@@ -451,6 +477,17 @@ impl<'a, A: Checkpoint> PrincipalReader<'a, A> {
     ) -> Self {
         let mut reader = Self::at(store, directory, registry_path);
         reader.admin_candidate = Some(candidate);
+        reader
+    }
+
+    fn seed_at(
+        store: &'a mut Store<A>,
+        directory: &'a Path,
+        registry_path: &'a Path,
+        candidate: Option<&'a str>,
+    ) -> Self {
+        let mut reader = Self::admin_at(store, directory, registry_path, candidate);
+        reader.seed_only = true;
         reader
     }
 
@@ -498,12 +535,50 @@ impl<'a, A: Checkpoint> PrincipalReader<'a, A> {
             }
             (
                 serde_json::to_value(context.writer(&catalog)?)?,
-                PrincipalPurpose::AdminCatalog {
-                    candidate: candidate.map(str::to_owned),
+                if self.seed_only {
+                    PrincipalPurpose::UtcSeed {
+                        candidate: candidate.map(str::to_owned),
+                    }
+                } else {
+                    PrincipalPurpose::AdminCatalog {
+                        candidate: candidate.map(str::to_owned),
+                    }
                 },
             )
         } else {
             (catalog.resolve_principal(local)?, PrincipalPurpose::General)
+        };
+        let password_epoch = if let Some(day) = catalog
+            .password_day(local["principal"].as_str().ok_or("missing principal")?)
+            .filter(|_| !self.seed_only)
+        {
+            let mut history = match self.admin_candidate.flatten() {
+                Some(request) => HistoryReader::for_candidate(self.store, self.directory, request)?,
+                None => HistoryReader::new(self.store, self.directory),
+            };
+            let binding = history.read()?;
+            let mut client = crate::utc_provider::Client::installed()?;
+            let live = client.current(&binding)?;
+            binding.recheck(&mut history)?;
+            let (lower, upper) = live.interval().endpoints();
+            let start = i64::from(day) * 86_400_000;
+            let end = i64::from(day)
+                .checked_add(90)
+                .ok_or("password age overflow")?
+                * 86_400_000;
+            if lower < start || upper >= end {
+                return Err("password aging expired or current protected UTC unavailable; governed password renewal required".into());
+            }
+            let context = live.context();
+            Some((
+                context.runtime_sha256.clone(),
+                context.boot_id.clone(),
+                context.process_generation,
+                context.source_clock_generation,
+                context.keeper_generation,
+            ))
+        } else {
+            None
         };
         let final_snapshot = self.store.snapshot()?;
         final_snapshot.clock.elapsed_since(snapshot.clock)?;
@@ -520,6 +595,7 @@ impl<'a, A: Checkpoint> PrincipalReader<'a, A> {
         }
         Ok((
             PrincipalBinding {
+                password_epoch,
                 credential_sha256: credential.map(|(commitment, _)| commitment),
                 identity_path: self.identity_path.into(),
                 purpose,
@@ -719,6 +795,213 @@ impl Drop for PrincipalSession {
     }
 }
 
+/// An owned operation's live human, catalog and UTC boundary. The grant record
+/// itself is never returned, and neither this object nor its PAM session has a
+/// serialized form. The catalog writer lock is held only for each check, never
+/// through the workflow: revocation can commit between every effect/poll.
+pub(crate) struct GrantBoundary<'a> {
+    session: &'a PrincipalSession,
+    directory: &'a Path,
+    registry_path: &'a Path,
+    client: crate::utc_provider::Client,
+    uses: Vec<(String, crate::finite_grants::Use)>,
+    fenced: bool,
+}
+
+impl GrantBoundary<'_> {
+    pub(crate) fn audit(&self) -> Result<crate::finite_grants::Audit> {
+        if self.fenced || self.uses.len() != 1 {
+            return Err("inference attribution requires its current single owned scope".into());
+        }
+        let record = crate::finite_grants::Audit {
+            subject: self.subject()?.into(),
+            subject_generation: self.subject_generation()?,
+            grant_id: self.uses[0].0.clone(),
+            grant_version: 1,
+            checkpoint_head: self.session.binding.checkpoint_head.clone(),
+            usage: self.uses[0].1.clone(),
+        };
+        record.validate()?;
+        Ok(record)
+    }
+    pub(crate) fn subject(&self) -> Result<&str> {
+        self.session.binding.identity["principal"]
+            .as_str()
+            .ok_or_else(|| "missing governed grant subject".into())
+    }
+
+    pub(crate) fn subject_generation(&self) -> Result<u64> {
+        self.session.binding.identity["generation"]
+            .as_u64()
+            .filter(|v| *v > 0)
+            .ok_or_else(|| "missing governed subject generation".into())
+    }
+
+    pub(crate) fn check(&mut self) -> Result<()> {
+        if self.fenced {
+            return Err("finite grant operation is permanently fenced".into());
+        }
+        self.fenced = true;
+        let client = &mut self.client;
+        let uses = &self.uses;
+        let directory = self.directory;
+        let registry_path = self.registry_path;
+        let mut store = Store::open(
+            tpm::LocalAnchor::installed()?,
+            &directory.join("journal.json"),
+        )?;
+        let (catalog, identity, history, observation) = self.session.observe_store(
+            &mut PrincipalReader::at(&mut store, directory, registry_path),
+            |identity, store| {
+                let snapshot = store.snapshot()?;
+                let context = Context::load_at(directory, &snapshot.deployment, registry_path)?;
+                let catalog = context.events(&snapshot, None)?.0;
+                let history = HistoryReader::new(store, directory).read()?;
+                let current = client.current(&history)?;
+                history.recheck(&mut HistoryReader::new(store, directory))?;
+                for (grant_id, usage) in uses {
+                    catalog
+                        .grants
+                        .get(grant_id)
+                        .ok_or("no checkpointed exact grant")?
+                        .authorize(&catalog, identity, current.interval(), usage)?;
+                }
+                let final_snapshot = store.snapshot()?;
+                final_snapshot.clock.elapsed_since(snapshot.clock)?;
+                if final_snapshot.head != snapshot.head
+                    || final_snapshot.deployment != snapshot.deployment
+                    || context.events(&final_snapshot, None)?.0 != catalog
+                {
+                    return Err("finite grant catalog changed at the effect boundary".into());
+                }
+                history.recheck(&mut HistoryReader::new(store, directory))?;
+                Ok((catalog, identity.clone(), history, current))
+            },
+        )?;
+        // Full catalog/PAM/history reads may block. Project from the SAME live
+        // producer/keeper generation again after those reads, not from the
+        // interval returned before semantic replay completed.
+        let final_observation = client.recheck(&history, &observation)?;
+        let principal = identity["principal"]
+            .as_str()
+            .ok_or("finite grant subject is missing")?;
+        if let Some(day) = catalog.password_day(principal) {
+            password_window(
+                day,
+                self.session
+                    .binding
+                    .password_epoch
+                    .as_ref()
+                    .ok_or("finite grant actor lacks its original protected password epoch")?,
+                &final_observation,
+            )?;
+        } else if self.session.binding.password_epoch.is_some() {
+            return Err("finite grant actor aging authority disappeared".into());
+        }
+        for (grant_id, usage) in uses {
+            catalog
+                .grants
+                .get(grant_id)
+                .ok_or("no checkpointed exact grant")?
+                .authorize(&catalog, &identity, final_observation.interval(), usage)?;
+        }
+        self.fenced = false;
+        Ok(())
+    }
+}
+
+/// Protected local-terminal composition. Root is an execution prerequisite,
+/// never the subject or grant authority; genuine PAM establishes the subject.
+pub(crate) fn with_grant<T>(
+    login: &str,
+    grant_id: &str,
+    usage: &crate::finite_grants::Use,
+    effect: impl FnOnce(&mut GrantBoundary<'_>) -> Result<T>,
+) -> Result<T> {
+    with_grants(login, &[(grant_id.into(), usage.clone())], effect)
+}
+
+pub(crate) fn with_grants<T>(
+    login: &str,
+    uses: &[(String, crate::finite_grants::Use)],
+    effect: impl FnOnce(&mut GrantBoundary<'_>) -> Result<T>,
+) -> Result<T> {
+    crate::require_root()?;
+    platform::require_installed()?;
+    if uses.is_empty() || uses.len() > 64 {
+        return Err("finite operation needs one to 64 exact grant scopes".into());
+    }
+    let mut identities = BTreeSet::new();
+    for (grant_id, usage) in uses {
+        usage.validate()?;
+        if !admin_roles::identifier(grant_id) || !identities.insert(grant_id) {
+            return Err("invalid or duplicate exact grant identifier".into());
+        }
+    }
+    let directory = Path::new(DIRECTORY);
+    let registry_path = Path::new(crate::principal::REGISTRY);
+    let attempt = {
+        let mut store = Store::open(
+            tpm::LocalAnchor::installed()?,
+            &directory.join("journal.json"),
+        )?;
+        PrincipalLogin::prepare(&mut PrincipalReader::new(&mut store, directory), login)?
+    };
+    let account = authentication::local(login)?;
+    let mut store = Store::open(
+        tpm::LocalAnchor::installed()?,
+        &directory.join("journal.json"),
+    )?;
+    let session = PrincipalSession::new(
+        account,
+        attempt,
+        &mut PrincipalReader::new(&mut store, directory),
+    )?;
+    drop(store);
+    let mut boundary = GrantBoundary {
+        session: &session,
+        directory,
+        registry_path,
+        client: crate::utc_provider::Client::installed()?,
+        uses: uses.to_vec(),
+        fenced: false,
+    };
+    boundary.check()?;
+    let result = effect(&mut boundary)?;
+    boundary.check()?;
+    Ok(result)
+}
+
+/// Legacy qualification entrypoints are not alternate product effect routes.
+/// Missing/uncertain history refuses; only the exact enrolled, empty pre-
+/// bootstrap journal can enter the explicitly non-product laboratory path.
+pub(crate) fn reject_laboratory_effects_after_bootstrap() -> Result<()> {
+    crate::require_root()?;
+    platform::require_installed()?;
+    let directory = Path::new(DIRECTORY);
+    let mut store = Store::open(
+        tpm::LocalAnchor::installed()?,
+        &directory.join("journal.json"),
+    )?;
+    let snapshot = store.snapshot()?;
+    let context = Context::load(directory, &snapshot.deployment)?;
+    let (_, bootstrapped) = context.state(&snapshot, None)?;
+    let final_snapshot = store.snapshot()?;
+    final_snapshot.clock.elapsed_since(snapshot.clock)?;
+    if final_snapshot.head != snapshot.head
+        || final_snapshot.deployment != snapshot.deployment
+        || tpm::private_read(&directory.join("enrollment.json"), 16384)? != context.enrollment
+    {
+        return Err("laboratory mode authority changed during inspection".into());
+    }
+    if bootstrapped || !snapshot.entries.is_empty() || context.existing()?.is_some() {
+        return Err(
+            "unscoped laboratory effects are unavailable after product Admin bootstrap".into(),
+        );
+    }
+    Ok(())
+}
+
 pub fn principal_check(login: &str) -> Result<()> {
     crate::require_root()?;
     platform::require_installed()?;
@@ -790,6 +1073,7 @@ pub(crate) struct HistoryReader<'a, A: Checkpoint> {
     directory: &'a Path,
     last_clock: Option<tpm::Clock>,
     fenced: bool,
+    candidate: Option<&'a str>,
 }
 
 #[cfg_attr(not(test), allow(dead_code))]
@@ -800,7 +1084,22 @@ impl<'a, A: Checkpoint> HistoryReader<'a, A> {
             directory,
             last_clock: None,
             fenced: false,
+            candidate: None,
         }
+    }
+
+    pub(crate) fn for_candidate(
+        store: &'a mut Store<A>,
+        directory: &'a Path,
+        request: &'a str,
+    ) -> Result<Self> {
+        if !admin_roles::identifier(request) || request == REQUEST {
+            return Err("invalid UTC history candidate".into());
+        }
+        Ok(Self {
+            candidate: Some(request),
+            ..Self::new(store, directory)
+        })
     }
 
     pub(crate) fn read(&mut self) -> Result<HistoryBinding> {
@@ -834,7 +1133,7 @@ impl<'a, A: Checkpoint> HistoryReader<'a, A> {
         if !context.bootstrap_state(&snapshot)?.1 {
             return Err("explicit product Admin bootstrap required for UTC history read".into());
         }
-        let (history, _) = context.history(&snapshot, None)?;
+        let (history, _) = context.history(&snapshot, self.candidate)?;
         // The retained identity identifies the historical writer only. It is
         // deliberately NOT substituted for current PAM/effect authorization.
         if tpm::private_read(&self.directory.join("enrollment.json"), 16384)? != context.enrollment
@@ -863,17 +1162,427 @@ impl<'a, A: Checkpoint> HistoryReader<'a, A> {
     }
 }
 
-// Deliberately private and not wired to any CLI, IPC or installed service.
-// The future approved composition root must supply actual authenticated UTC
-// observations. A caller's Statement, runtime digest or successful fake callback
-// is not source provenance or live authority. This implements the durable
-// semantic transaction/replay boundary while that provider remains unavailable.
-#[cfg_attr(not(test), allow(dead_code))]
+fn utc_input<T: serde::de::DeserializeOwned>(path: &str) -> Result<T> {
+    use std::io::Read;
+    let mut file = OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC)
+        .open(path)?;
+    let before = file.metadata()?;
+    if !before.is_file() || before.len() == 0 || before.len() > 16_384 {
+        return Err("UTC input must be a bounded regular JSON file".into());
+    }
+    let mut bytes = Vec::new();
+    (&mut file).take(16_385).read_to_end(&mut bytes)?;
+    use std::os::unix::fs::MetadataExt;
+    let same = |a: &fs::Metadata, b: &fs::Metadata| {
+        a.dev() == b.dev()
+            && a.ino() == b.ino()
+            && a.len() == b.len()
+            && a.mtime() == b.mtime()
+            && a.mtime_nsec() == b.mtime_nsec()
+            && a.ctime() == b.ctime()
+            && a.ctime_nsec() == b.ctime_nsec()
+    };
+    if bytes.len() as u64 != before.len()
+        || !same(&before, &file.metadata()?)
+        || !same(&before, &fs::symlink_metadata(path)?)
+    {
+        return Err("UTC input changed during review".into());
+    }
+    Ok(serde_json::from_slice(&bytes)?)
+}
+
+pub(crate) struct SeedCustody<'a> {
+    credential: &'a crate::admin_recovery::Credential,
+    verifier: crate::admin_recovery::Verifier,
+    registry: crate::principal::RegistryBinding,
+    store: std::cell::RefCell<Store<tpm::LocalAnchor>>,
+    catalog: Catalog,
+    enrollment: Vec<u8>,
+    binding: HistoryBinding,
+    clock: std::cell::Cell<tpm::Clock>,
+    lifetime: authentication::ProtectedOperation,
+}
+impl<'a> SeedCustody<'a> {
+    fn installed(credential: &'a crate::admin_recovery::Credential) -> Result<Self> {
+        let directory = Path::new(DIRECTORY);
+        let registry =
+            crate::principal::RegistryBinding::capture(Path::new(crate::principal::REGISTRY))?;
+        let mut store = Store::open(
+            tpm::LocalAnchor::installed()?,
+            &directory.join("journal.json"),
+        )?;
+        let snapshot = store.snapshot()?;
+        let context = Context::load(directory, &snapshot.deployment)?;
+        if !context.state(&snapshot, None)?.1 {
+            return Err("offline seed custody requires original Admin bootstrap".into());
+        }
+        let catalog = context.events(&snapshot, None)?.0;
+        let writer = context.custody_writer(&catalog)?;
+        if registry.current()? != catalog.registry()? {
+            return Err("offline seed custody registry changed".into());
+        }
+        let verifier = catalog.recovery_verifier()?.clone();
+        verifier.validate(&writer.installation, &writer.principal)?;
+        verifier.verify(credential)?;
+        let binding = HistoryReader::new(&mut store, directory).read()?;
+        let final_snapshot = store.snapshot()?;
+        final_snapshot.clock.elapsed_since(snapshot.clock)?;
+        if snapshot.head != final_snapshot.head
+            || context.events(&final_snapshot, None)?.0 != catalog
+        {
+            return Err("offline seed authority changed during verification".into());
+        }
+        let result = Self {
+            credential,
+            verifier,
+            registry,
+            store: std::cell::RefCell::new(store),
+            catalog,
+            enrollment: context.enrollment,
+            binding,
+            clock: std::cell::Cell::new(final_snapshot.clock),
+            lifetime: authentication::ProtectedOperation::start()?,
+        };
+        result.recheck()?;
+        Ok(result)
+    }
+    fn recheck(&self) -> Result<()> {
+        self.registry.current()?;
+        let mut store = self.store.borrow_mut();
+        let snapshot = store.snapshot()?;
+        snapshot.clock.elapsed_since(self.clock.get())?;
+        self.clock.set(snapshot.clock);
+        let context = Context::load(Path::new(DIRECTORY), &snapshot.deployment)?;
+        let catalog = context.events(&snapshot, None)?.0;
+        if snapshot.head != self.binding.checkpoint_head
+            || context.enrollment != self.enrollment
+            || catalog != self.catalog
+            || catalog.recovery_verifier()? != &self.verifier
+            || catalog.registry()? != self.registry.current()?
+        {
+            return Err("offline seed custody no longer binds exact current authority".into());
+        }
+        context.custody_writer(&catalog)?;
+        self.verifier.verify(self.credential)?;
+        self.binding
+            .recheck(&mut HistoryReader::new(&mut *store, Path::new(DIRECTORY)))?;
+        self.registry.current()?;
+        self.verifier.verify(self.credential)
+    }
+    pub(crate) fn observe<T>(&self, operation: impl FnOnce() -> Result<T>) -> Result<T> {
+        self.lifetime.within(|| {
+            self.recheck()?;
+            let result = operation()?;
+            self.recheck()?;
+            Ok(result)
+        })
+    }
+}
+
+pub(crate) fn utc_seed_recovery_command(args: &[String]) -> Result<()> {
+    crate::require_root()?;
+    platform::require_installed()?;
+    let commit = if args.len() == 2 {
+        None
+    } else if args.len() == 5 && args[2] == "--commit" {
+        Some((&args[3], &args[4]))
+    } else {
+        return Err("expected utc-seed-recovery SEED-FILE [--commit KEEPER-INSTANCE REVIEW-SHA256]; current offline credential is terminal-only".into());
+    };
+    let seed: crate::utc_provider::Seed = utc_input(&args[1])?;
+    let credential = crate::admin_recovery::Credential::read()?;
+    let custody = SeedCustody::installed(&credential)?;
+    let result = if let Some((instance, reviewed)) = commit {
+        let delivered = crate::utc_provider::deliver_seed_custody(
+            &custody,
+            &custody.binding,
+            &seed,
+            instance,
+            reviewed,
+        );
+        custody.lifetime.close();
+        delivered?;
+        serde_json::json!({"schema_version":1,"instance":instance,"seed_delivered":true,
+            "custody_verified":true,"timed_authority":false,"admin_password_changed":false,
+            "effect_grant":false,"automatic_retry":false})
+    } else {
+        custody.observe(|| crate::utc_provider::seed_proposal(&custody.binding, &seed))?
+    };
+    println!("{result}");
+    Ok(())
+}
+
+/// Only the current original Admin can deliver an independently reviewed seed.
+/// The shared history is held and rechecked throughout; the seed is not time
+/// authority and does not append to the checkpoint or activate a grant.
+pub(crate) fn utc_seed_command(args: &[String]) -> Result<()> {
+    crate::require_root()?;
+    platform::require_installed()?;
+    let commit = if args.len() == 3 {
+        None
+    } else if args.len() == 6 && args[3] == "--commit" {
+        Some((&args[4], &args[5]))
+    } else {
+        return Err(
+            "expected utc-seed LOGIN SEED-FILE [--commit KEEPER-INSTANCE REVIEW-SHA256]".into(),
+        );
+    };
+    let seed: crate::utc_provider::Seed = utc_input(&args[2])?;
+    let prepared = prepare_seed_control(&args[1], None)?;
+    let account = authentication::local(&args[1])?;
+    let directory = Path::new(DIRECTORY);
+    let mut store = Store::open(
+        tpm::LocalAnchor::installed()?,
+        &directory.join("journal.json"),
+    )?;
+    let session = prepared.issue(
+        account,
+        &mut store,
+        directory,
+        Path::new(crate::principal::REGISTRY),
+        None,
+    )?;
+    let result = session.observe_store(
+        &mut PrincipalReader::seed_at(
+            &mut store,
+            directory,
+            Path::new(crate::principal::REGISTRY),
+            None,
+        ),
+        |identity, store| {
+            let snapshot = store.snapshot()?;
+            let context = Context::load(directory, &snapshot.deployment)?;
+            let catalog = context.events(&snapshot, None)?.0;
+            if serde_json::to_value(context.writer(&catalog)?)? != *identity {
+                return Err("seed delivery requires the current original Admin".into());
+            }
+            let binding = HistoryReader::new(store, directory).read()?;
+            let result = if let Some((instance, reviewed)) = commit {
+                crate::utc_provider::deliver_seed(
+                    &session.account,
+                    &binding,
+                    &seed,
+                    instance,
+                    reviewed,
+                )?;
+                serde_json::json!({"schema_version":1,"instance":instance,
+                "seed_delivered":true,"timed_authority":false,"automatic_retry":false})
+            } else {
+                crate::utc_provider::seed_proposal(&binding, &seed)?
+            };
+            binding.recheck(&mut HistoryReader::new(store, directory))?;
+            Ok(result)
+        },
+    )?;
+    println!("{result}");
+    Ok(())
+}
+
+pub(crate) fn utc_query_command(login: &str) -> Result<()> {
+    crate::require_root()?;
+    platform::require_installed()?;
+    let directory = Path::new(DIRECTORY);
+    let attempt = {
+        let mut store = Store::open(
+            tpm::LocalAnchor::installed()?,
+            &directory.join("journal.json"),
+        )?;
+        PrincipalLogin::prepare(&mut PrincipalReader::new(&mut store, directory), login)?
+    };
+    let account = authentication::local(login)?;
+    let mut store = Store::open(
+        tpm::LocalAnchor::installed()?,
+        &directory.join("journal.json"),
+    )?;
+    let session = PrincipalSession::new(
+        account,
+        attempt,
+        &mut PrincipalReader::new(&mut store, directory),
+    )?;
+    let result = session.observe_store(
+        &mut PrincipalReader::new(&mut store, directory),
+        |_, store| {
+            let binding = HistoryReader::new(store, directory).read()?;
+            let mut client = crate::utc_provider::Client::installed()?;
+            let observation = client.current(&binding)?;
+            binding.recheck(&mut HistoryReader::new(store, directory))?;
+            let observation = client.recheck(&binding, &observation)?;
+            let (lower, upper) = observation.interval().endpoints();
+            Ok(
+                serde_json::json!({"statement":observation.context(),"earliest_ms":lower,
+            "latest_ms":upper,"serialized_time_authority":false}),
+            )
+        },
+    )?;
+    println!("{result}");
+    Ok(())
+}
+
+pub(crate) fn utc_reacquire_command(args: &[String]) -> Result<()> {
+    crate::require_root()?;
+    platform::require_installed()?;
+    let commit = if args.len() == 2 {
+        None
+    } else if args.len() == 5 && args[2] == "--commit" {
+        Some((&args[3], &args[4]))
+    } else {
+        return Err("expected utc-reacquire LOGIN [--commit KEEPER-INSTANCE REVIEW-SHA256]".into());
+    };
+    let prepared = prepare_seed_control(&args[1], None)?;
+    let account = authentication::local(&args[1])?;
+    let directory = Path::new(DIRECTORY);
+    let registry = Path::new(crate::principal::REGISTRY);
+    let mut store = Store::open(
+        tpm::LocalAnchor::installed()?,
+        &directory.join("journal.json"),
+    )?;
+    let session = prepared.issue(account, &mut store, directory, registry, None)?;
+    let result = session.observe_store(&mut PrincipalReader::seed_at(&mut store, directory, registry, None), |identity, store| {
+        let snapshot = store.snapshot()?;
+        let context = Context::load(directory, &snapshot.deployment)?;
+        let catalog = context.events(&snapshot, None)?.0;
+        if serde_json::to_value(context.writer(&catalog)?)? != *identity {
+            return Err("UTC reacquisition requires the current original Admin".into());
+        }
+        let binding = HistoryReader::new(store, directory).read()?;
+        let result = if let Some((instance, reviewed)) = commit {
+            crate::utc_provider::reacquire_admin(&session.account, &binding, instance, reviewed)?;
+            serde_json::json!({"utc_reacquisition_dispatched":true,"fresh_independent_seed_required":true,
+                "timed_authority":false,"automatic_retry":false})
+        } else { crate::utc_provider::reacquire_proposal(&binding)? };
+        binding.recheck(&mut HistoryReader::new(store, directory))?;
+        Ok(result)
+    })?;
+    println!("{result}");
+    Ok(())
+}
+
+pub(crate) fn utc_reacquire_recovery_command(args: &[String]) -> Result<()> {
+    crate::require_root()?;
+    platform::require_installed()?;
+    let commit = if args.len() == 1 {
+        None
+    } else if args.len() == 4 && args[1] == "--commit" {
+        Some((&args[2], &args[3]))
+    } else {
+        return Err("expected utc-reacquire-recovery [--commit KEEPER-INSTANCE REVIEW-SHA256]; custody credential is terminal-only".into());
+    };
+    let credential = crate::admin_recovery::Credential::read()?;
+    let custody = SeedCustody::installed(&credential)?;
+    let result = if let Some((instance, reviewed)) = commit {
+        let dispatched =
+            crate::utc_provider::reacquire_custody(&custody, &custody.binding, instance, reviewed);
+        custody.lifetime.close();
+        dispatched?;
+        serde_json::json!({"utc_reacquisition_dispatched":true,"fresh_independent_seed_required":true,
+            "custody_verified":true,"timed_authority":false,"automatic_retry":false})
+    } else {
+        custody.observe(|| crate::utc_provider::reacquire_proposal(&custody.binding))?
+    };
+    println!("{result}");
+    Ok(())
+}
+
+pub(crate) fn utc_history_command(args: &[String]) -> Result<()> {
+    crate::require_root()?;
+    platform::require_installed()?;
+    let reviewed = if args.len() == 4 {
+        None
+    } else if args.len() == 6 && args[4] == "--commit" {
+        Some(args[5].as_str())
+    } else {
+        return Err(
+            "expected utc-history LOGIN REQUEST STATEMENT-FILE [--commit REVIEW-SHA256]".into(),
+        );
+    };
+    let statement: Statement = utc_input(&args[3])?;
+    let request = &args[2];
+    let prepared = prepare_control(&args[1], Some(request))?;
+    let account = authentication::local(&args[1])?;
+    let directory = Path::new(DIRECTORY);
+    let mut store = Store::open(
+        tpm::LocalAnchor::installed()?,
+        &directory.join("journal.json"),
+    )?;
+    let session = prepared.issue(
+        account,
+        &mut store,
+        directory,
+        Path::new(crate::principal::REGISTRY),
+        Some(request),
+    )?;
+    session.identity(&mut PrincipalReader::admin_at(
+        &mut store,
+        directory,
+        Path::new(crate::principal::REGISTRY),
+        Some(request),
+    ))?;
+    let binding = HistoryReader::for_candidate(&mut store, directory, request)?.read()?;
+    let mut client = crate::utc_provider::Client::installed()?;
+    let result = execute_history_at(
+        &mut store,
+        directory,
+        Path::new(crate::principal::REGISTRY),
+        || session.account.identity(),
+        |proposed| proposed.supported_by(&client.current(&binding)?),
+        request,
+        &statement,
+        reviewed,
+    )?;
+    // No old client or PAM session survives this command. Any successful append
+    // changes the shared head; a later command must explicitly bind it anew.
+    println!("{result}");
+    Ok(())
+}
+
+/// Internal delivery from the admitted stream and a real current PAM account.
+/// The Store is the existing exclusive journal writer, not a second UTC owner.
+/// There is still no human-control listener or seed acceptance in this adapter.
+#[allow(dead_code)]
+pub(crate) fn execute_history_live<A: Checkpoint>(
+    store: &mut Store<A>,
+    directory: &Path,
+    account: &authentication::AuthenticatedAccount,
+    stream: &mut crate::utc_stream::BoundStream,
+    request: &str,
+    statement: &Statement,
+    reviewed: Option<&str>,
+) -> Result<serde_json::Value> {
+    let result = (|| {
+        crate::require_root()?;
+        platform::require_installed()?;
+        let binding = HistoryReader::new(store, directory).read()?;
+        execute_history_at(
+            store,
+            directory,
+            Path::new(crate::principal::REGISTRY),
+            || account.identity(),
+            |proposed| stream.history_delivery(&binding)?.support(proposed),
+            request,
+            statement,
+            reviewed,
+        )
+    })();
+    // A new checkpoint is a generation boundary. Errors may follow an uncertain
+    // TPM dispatch; neither case permits reuse of the previous stream binding.
+    if result
+        .as_ref()
+        .map_or(true, |receipt| receipt["tpm_write_performed"] == true)
+    {
+        stream.invalidate();
+    }
+    result
+}
+
+// Arbitrary authentication/source callbacks exist only in isolated fixtures.
+#[cfg(test)]
 fn execute_history<A: Checkpoint>(
     store: &mut Store<A>,
     directory: &Path,
     authenticate: impl FnMut() -> Result<serde_json::Value>,
-    observe: impl FnMut() -> Result<Observation>,
+    observe: impl FnMut(&Statement) -> Result<()>,
     request: &str,
     statement: &Statement,
     reviewed: Option<&str>,
@@ -896,7 +1605,7 @@ fn execute_history_at<A: Checkpoint>(
     directory: &Path,
     registry_path: &Path,
     mut authenticate: impl FnMut() -> Result<serde_json::Value>,
-    mut observe: impl FnMut() -> Result<Observation>,
+    mut observe: impl FnMut(&Statement) -> Result<()>,
     request: &str,
     statement: &Statement,
     reviewed: Option<&str>,
@@ -932,7 +1641,7 @@ fn execute_history_at<A: Checkpoint>(
         if statement.floor_ms < history.floor_ms {
             return Err("UTC history floor regression refused".into());
         }
-        statement.supported_by(&observe()?)?;
+        observe(statement)?;
         (
             HistoryRecord {
                 schema_version: 1,
@@ -979,8 +1688,9 @@ fn execute_history_at<A: Checkpoint>(
         }
         if changed {
             // Never prepare disk state on the strength of a caller's floor.
-            statement.supported_by(&observe()?)?;
+            observe(statement)?;
             context.recheck(&mut authenticate)?;
+            observe(statement)?;
             match fs::symlink_metadata(&path) {
                 Ok(_) => (),
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
@@ -1014,7 +1724,7 @@ fn execute_history_at<A: Checkpoint>(
                 }
                 // Renew the live observation on every journal writer boundary.
                 // It may block; re-read semantic inputs after it, then renew PAM.
-                statement.supported_by(&observe()?)?;
+                observe(statement)?;
                 if utc_history::read(&path, request)?.1 != bytes
                     || !context.state(&snapshot, Some(request))?.1
                     || context.history(&snapshot, Some(request))?.0 != history
@@ -1022,7 +1732,10 @@ fn execute_history_at<A: Checkpoint>(
                 {
                     return Err("UTC history inputs changed before TPM dispatch".into());
                 }
-                context.recheck(&mut authenticate)
+                context.recheck(&mut authenticate)?;
+                // Semantic replay and PAM may block. Renew the actual source
+                // after them, at the final writer authorization boundary.
+                observe(statement)
             })?;
             written = true;
         }
@@ -1134,11 +1847,163 @@ enum CatalogAuthority<'a, 's> {
     Primitive,
 }
 
+fn admin_account_recovery(command: &Command) -> bool {
+    matches!(
+        command,
+        Command::PrepareAdminAccountRecovery { .. }
+            | Command::PermitAdminAccountRecovery { .. }
+            | Command::CompleteAdminAccountRecovery { .. }
+    )
+}
+
+struct AccountTime {
+    client: crate::utc_provider::Client,
+    binding: HistoryBinding,
+    day: u32,
+}
+
+type PasswordEpoch = (String, String, u64, u64, u64);
+
+fn password_epoch(live: &crate::utc_stream::Observation) -> PasswordEpoch {
+    let context = live.context();
+    (
+        context.runtime_sha256.clone(),
+        context.boot_id.clone(),
+        context.process_generation,
+        context.source_clock_generation,
+        context.keeper_generation,
+    )
+}
+
+fn password_window(
+    day: u32,
+    expected: &PasswordEpoch,
+    live: &crate::utc_stream::Observation,
+) -> Result<()> {
+    live.context().validate()?;
+    let start = i64::from(day)
+        .checked_mul(86_400_000)
+        .ok_or("password age overflow")?;
+    let end = i64::from(day)
+        .checked_add(90)
+        .and_then(|value| value.checked_mul(86_400_000))
+        .ok_or("password age overflow")?;
+    if day == 0 || &password_epoch(live) != expected || !live.interval().within(start, end)? {
+        return Err(
+            "acting principal password expired or its protected UTC generation changed".into(),
+        );
+    }
+    Ok(())
+}
+
+struct ActorAging {
+    client: crate::utc_provider::Client,
+    history: HistoryBinding,
+    day: u32,
+    epoch: PasswordEpoch,
+}
+impl ActorAging {
+    fn capture<A: Checkpoint>(
+        session: &PrincipalSession,
+        catalog: &Catalog,
+        store: &mut Store<A>,
+        directory: &Path,
+        request: &str,
+    ) -> Result<Option<Self>> {
+        if session.fenced.get() {
+            return Err("aged actor session is fenced".into());
+        }
+        let principal = session.binding.identity["principal"]
+            .as_str()
+            .ok_or("missing actor principal")?;
+        let Some(day) = catalog.password_day(principal) else {
+            if session.binding.password_epoch.is_some() {
+                return Err("acting principal aging authority disappeared".into());
+            }
+            return Ok(None);
+        };
+        let epoch = session
+            .binding
+            .password_epoch
+            .clone()
+            .ok_or("acting principal lacks its original protected UTC epoch")?;
+        let history = HistoryReader::for_candidate(store, directory, request)?.read()?;
+        let mut actor = Self {
+            client: crate::utc_provider::Client::installed()?,
+            history,
+            day,
+            epoch,
+        };
+        actor.recheck()?;
+        actor.history.recheck(&mut HistoryReader::for_candidate(
+            store, directory, request,
+        )?)?;
+        if session.fenced.get() {
+            return Err("aged actor session was fenced during reconstruction".into());
+        }
+        actor.recheck()?;
+        Ok(Some(actor))
+    }
+    fn recheck(&mut self) -> Result<()> {
+        password_window(self.day, &self.epoch, &self.client.current(&self.history)?)
+    }
+}
+impl AccountTime {
+    fn capture<A: Checkpoint>(
+        store: &mut Store<A>,
+        directory: &Path,
+        day: u32,
+        request: &str,
+    ) -> Result<Self> {
+        let mut reader = HistoryReader::for_candidate(store, directory, request)?;
+        let binding = reader.read()?;
+        let mut result = Self {
+            client: crate::utc_provider::Client::installed()?,
+            binding,
+            day,
+        };
+        result.recheck()?;
+        result.binding.recheck(&mut reader)?;
+        Ok(result)
+    }
+    fn recheck(&mut self) -> Result<()> {
+        let live = self.client.current(&self.binding)?;
+        let (lower, upper) = live.interval().endpoints();
+        if lower <= 0 || lower < i64::from(self.day) * 86_400_000 || upper < lower {
+            return Err("current protected UTC precedes the exact recorded credential day".into());
+        }
+        Ok(())
+    }
+}
+
+fn account_day(catalog: &Catalog, command: &Command) -> Option<u32> {
+    let intent = match command {
+        Command::PrepareAccountLock { intent }
+        | Command::PrepareAdminAccountRecovery { intent, .. } => intent,
+        Command::PermitAccountPublication { transaction }
+        | Command::CompleteAccountLock { transaction }
+        | Command::PermitAdminAccountRecovery { transaction }
+        | Command::CompleteAdminAccountRecovery { transaction } => {
+            &catalog.account_transitions.get(transaction)?.intent
+        }
+        _ => return None,
+    };
+    match &intent.kind {
+        Some(
+            crate::account_transition::Kind::Activation { day, .. }
+            | crate::account_transition::Kind::AdminRecovery { day, .. }
+            | crate::account_transition::Kind::Renewal { day, .. },
+        ) => Some(*day),
+        _ => None,
+    }
+}
+
 /// The original Admin's catalog-scoped, pre-PAM login. It cannot be supplied
 /// through JSON, reused as a general-principal login or used as an effect grant.
 pub(crate) struct AdminLogin {
     login: PrincipalLogin,
     candidate: Option<String>,
+    seed_only: bool,
 }
 
 impl AdminLogin {
@@ -1160,6 +2025,7 @@ impl AdminLogin {
         Ok(Self {
             login,
             candidate: candidate.map(str::to_owned),
+            seed_only: false,
         })
     }
 
@@ -1178,7 +2044,11 @@ impl AdminLogin {
         PrincipalSession::new(
             account,
             self.login,
-            &mut PrincipalReader::admin_at(store, directory, registry_path, candidate),
+            &mut if self.seed_only {
+                PrincipalReader::seed_at(store, directory, registry_path, candidate)
+            } else {
+                PrincipalReader::admin_at(store, directory, registry_path, candidate)
+            },
         )
     }
 }
@@ -1198,12 +2068,83 @@ fn prepare_control(name: &str, candidate: Option<&str>) -> Result<AdminLogin> {
     )
 }
 
+fn prepare_seed_control(name: &str, candidate: Option<&str>) -> Result<AdminLogin> {
+    if candidate.is_some_and(|request| !admin_roles::identifier(request) || request == REQUEST) {
+        return Err("invalid seed-only request".into());
+    }
+    let directory = Path::new(DIRECTORY);
+    let mut store = Store::open(
+        tpm::LocalAnchor::installed()?,
+        &directory.join("journal.json"),
+    )?;
+    let login = PrincipalLogin::prepare(
+        &mut PrincipalReader::seed_at(
+            &mut store,
+            directory,
+            Path::new(crate::principal::REGISTRY),
+            candidate,
+        ),
+        name,
+    )?;
+    Ok(AdminLogin {
+        login,
+        candidate: candidate.map(str::to_owned),
+        seed_only: true,
+    })
+}
+
 pub(crate) fn prepare_service(
     name: &str,
     candidate: Option<&str>,
     peer: &crate::admin_service::Peer,
 ) -> Result<AdminLogin> {
     peer.observe(|| prepare_control(name, candidate))
+}
+
+struct GrantTime {
+    client: crate::utc_provider::Client,
+    history: HistoryBinding,
+    not_before_ms: i64,
+    expires_ms: i64,
+}
+impl GrantTime {
+    fn capture<A: Checkpoint>(
+        store: &mut Store<A>,
+        directory: &Path,
+        request: &str,
+        command: &Command,
+    ) -> Result<Option<Self>> {
+        let (not_before_ms, expires_ms) = match command {
+            Command::AssignRole { assignment } => (assignment.not_before_ms, assignment.expires_ms),
+            Command::IssueGrant { grant } => (grant.not_before_ms, grant.expires_ms),
+            _ => return Ok(None),
+        };
+        let history = HistoryReader::for_candidate(store, directory, request)?.read()?;
+        let mut time = Self {
+            client: crate::utc_provider::Client::installed()?,
+            history,
+            not_before_ms,
+            expires_ms,
+        };
+        time.recheck()?;
+        time.history.recheck(&mut HistoryReader::for_candidate(
+            store, directory, request,
+        )?)?;
+        Ok(Some(time))
+    }
+    fn recheck(&mut self) -> Result<()> {
+        if !self
+            .client
+            .current(&self.history)?
+            .interval()
+            .within(self.not_before_ms, self.expires_ms)?
+        {
+            return Err(
+                "role/grant issuance is outside the entire current protected UTC interval".into(),
+            );
+        }
+        Ok(())
+    }
 }
 
 // A narrowly scoped continuation across a deliberate journal mutation. The
@@ -1218,6 +2159,9 @@ struct CatalogAttempt<'s> {
     request: String,
     command: Command,
     peer: Option<&'s crate::admin_service::Peer>,
+    account_time: std::cell::RefCell<Option<AccountTime>>,
+    grant_time: std::cell::RefCell<Option<GrantTime>>,
+    actor_aging: std::cell::RefCell<Option<ActorAging>>,
 }
 
 impl<'s> CatalogAttempt<'s> {
@@ -1231,7 +2175,7 @@ impl<'s> CatalogAttempt<'s> {
         peer: Option<&'s crate::admin_service::Peer>,
     ) -> Result<Self> {
         command.validate()?;
-        if matches!(command, Command::RecoverAdmin { .. }) {
+        if matches!(command, Command::RecoverAdmin { .. }) || admin_account_recovery(command) {
             return Err("catalog sessions cannot substitute for offline recovery custody".into());
         }
         match &session.binding.purpose {
@@ -1263,6 +2207,20 @@ impl<'s> CatalogAttempt<'s> {
                         request: request.into(),
                         command: command.clone(),
                         peer,
+                        actor_aging: std::cell::RefCell::new(ActorAging::capture(
+                            session, &catalog, store, directory, request,
+                        )?),
+                        grant_time: std::cell::RefCell::new(GrantTime::capture(
+                            store, directory, request, command,
+                        )?),
+                        account_time: std::cell::RefCell::new(
+                            match account_day(&catalog, command) {
+                                Some(day) => {
+                                    Some(AccountTime::capture(store, directory, day, request)?)
+                                }
+                                None => None,
+                            },
+                        ),
                     })
                 },
             )
@@ -1278,9 +2236,21 @@ impl<'s> CatalogAttempt<'s> {
         if self.session.fenced.get() {
             return Err("catalog session has been closed".into());
         }
+        if let Some(aging) = &mut *self.actor_aging.borrow_mut() {
+            aging.recheck()?;
+        }
+        if let Some(time) = &mut *self.grant_time.borrow_mut() {
+            time.recheck()?;
+        }
+        if let Some(time) = &mut *self.account_time.borrow_mut() {
+            time.recheck()?;
+        }
         let project = || {
             self.session.account.observe(|local| {
                 self.registry.current()?;
+                if let Some(aging) = &mut *self.actor_aging.borrow_mut() {
+                    aging.recheck()?;
+                }
                 Ok(local.clone())
             })
         };
@@ -1362,10 +2332,25 @@ impl<'s> CatalogAttempt<'s> {
                 {
                     return Err("account publication lacks its exact governed continuation".into());
                 }
+                *self.actor_aging.borrow_mut() = ActorAging::capture(
+                    self.session,
+                    &catalog,
+                    store,
+                    &self.directory,
+                    &self.request,
+                )?;
                 let transition = catalog
                     .account_transitions
                     .get(transaction)
                     .ok_or("missing account transition")?;
+                if let Some(day) = account_day(&catalog, &self.command) {
+                    *self.account_time.borrow_mut() = Some(AccountTime::capture(
+                        store,
+                        &self.directory,
+                        day,
+                        &self.request,
+                    )?);
+                }
                 if transition.phase == crate::account_transition::Phase::PublicationPermitted {
                     let boundary = account_boundary(
                         &catalog,
@@ -1470,7 +2455,9 @@ fn execute_catalog_authorized_at<A: Checkpoint>(
         return Err("invalid or reserved Admin request".into());
     }
     command.validate()?;
-    if let Command::PrepareAccountLock { intent } = command {
+    if let Command::PrepareAccountLock { intent }
+    | Command::PrepareAdminAccountRecovery { intent, .. } = command
+    {
         if intent.transaction != request {
             return Err("account preparation must bind its exact request".into());
         }
@@ -1487,7 +2474,7 @@ fn execute_catalog_authorized_at<A: Checkpoint>(
     }
     let snapshot = store.snapshot()?;
     match (command, &authority) {
-        (Command::RecoverAdmin { .. }, CatalogAuthority::Recovery(attempt))
+        (_, CatalogAuthority::Recovery(attempt))
             if command == &attempt.command && snapshot.head == attempt.head =>
         {
             snapshot.clock.elapsed_since(attempt.clock.get())?;
@@ -1498,6 +2485,9 @@ fn execute_catalog_authorized_at<A: Checkpoint>(
             return Err("Admin recovery requires its exact live offline-credential proof, not PAM or caller authority".into());
         }
         (_, CatalogAuthority::Governed(attempt)) => {
+            if admin_account_recovery(command) {
+                return Err("Admin OS recovery requires offline custody, not PAM".into());
+            }
             attempt.check_boundary(&snapshot, directory, registry_path, request, command)?;
         }
         #[cfg(test)]
@@ -1508,7 +2498,11 @@ fn execute_catalog_authorized_at<A: Checkpoint>(
         return Err("explicit product Admin bootstrap required".into());
     }
     let (catalog, events) = context.events(&snapshot, Some(request))?;
-    let writer = context.writer(&catalog)?;
+    let writer = if admin_account_recovery(command) {
+        context.custody_writer(&catalog)?
+    } else {
+        context.writer(&catalog)?
+    };
     if let CatalogAuthority::Governed(attempt) = &authority {
         if serde_json::to_value(&writer)? != attempt.session.binding.identity
             || bundle::hex(&Sha256::digest(&context.enrollment))
@@ -1663,7 +2657,10 @@ fn execute_catalog_authorized_at<A: Checkpoint>(
                     .ok_or("deletion preparation lacks protected sources")?
                     .stage()?;
             }
-            if matches!(command, Command::PrepareAccountLock { .. }) {
+            if matches!(
+                command,
+                Command::PrepareAccountLock { .. } | Command::PrepareAdminAccountRecovery { .. }
+            ) {
                 if let Some(AccountBoundary::Plan(guard)) = &account_boundary {
                     guard.stage()?;
                 } else {
@@ -1741,7 +2738,11 @@ fn execute_catalog_authorized_at<A: Checkpoint>(
         "review_sha256":digest,"proposal":event,"catalog":current,
         "committed":reviewed.is_some() && (written || replayed),"replayed":replayed,
         "no_change":!changed && !replayed,"tpm_write_performed":written,
-        "product_admin_active":true,"delegation_available":false,"effect_grant":false,
+        "product_admin_active":current.principal_states.get(&context.principal.principal).map_or(true, |state| state.enabled),
+        "account_password_aging_policy":account_day(&current, command).map(|day| serde_json::json!({
+            "credential_day":day,"minimum_days":0,"maximum_days":90,"warning_days":7,
+            "clock_source":"protected_utc","saved_policy_is_authority":false})),
+        "delegation_available":false,"effect_grant":false,
         "trusted_utc_available":false,"production_custody_verified":false,"gate_closing":false}),
     )
 }
@@ -1874,7 +2875,8 @@ fn account_boundary(
 ) -> Result<Option<AccountBoundary>> {
     use crate::account_transition::{Guard, Phase, Published};
     let intent = match command {
-        Command::PrepareAccountLock { intent } => {
+        Command::PrepareAccountLock { intent }
+        | Command::PrepareAdminAccountRecovery { intent, .. } => {
             if catalog
                 .account_transitions
                 .contains_key(&intent.transaction)
@@ -1884,7 +2886,9 @@ fn account_boundary(
             intent
         }
         Command::PermitAccountPublication { transaction }
-        | Command::CompleteAccountLock { transaction } => {
+        | Command::CompleteAccountLock { transaction }
+        | Command::PermitAdminAccountRecovery { transaction }
+        | Command::CompleteAdminAccountRecovery { transaction } => {
             let transition = catalog
                 .account_transitions
                 .get(transaction)
@@ -1896,12 +2900,18 @@ fn account_boundary(
         }
         _ => return Ok(None),
     };
-    if !matches!(command, Command::PrepareAccountLock { .. }) {
+    if !matches!(
+        command,
+        Command::PrepareAccountLock { .. } | Command::PrepareAdminAccountRecovery { .. }
+    ) {
         // Already-published recovery is an exact read, never a second rename.
         if let Ok(published) = Published::capture(registry_path, identity_path, intent) {
             return Ok(Some(AccountBoundary::Published(published)));
         }
-        if matches!(command, Command::CompleteAccountLock { .. }) {
+        if matches!(
+            command,
+            Command::CompleteAccountLock { .. } | Command::CompleteAdminAccountRecovery { .. }
+        ) {
             return Err("account completion requires the exact published records".into());
         }
     }
@@ -1911,7 +2921,22 @@ fn account_boundary(
         .principal(&intent.principal)
         .ok_or("unknown account transition principal")?
         .login;
-    let guard = if intent.kind == Some(crate::account_transition::Kind::Password) {
+    let guard = if matches!(
+        intent.kind,
+        Some(crate::account_transition::Kind::Renewal { .. })
+    ) {
+        Guard::retained_renewal(registry_path, identity_path, intent)?
+    } else if matches!(
+        intent.kind,
+        Some(crate::account_transition::Kind::AdminRecovery { .. })
+    ) {
+        Guard::retained_admin_recovery(registry_path, identity_path, intent)?
+    } else if matches!(
+        intent.kind,
+        Some(crate::account_transition::Kind::Activation { .. })
+    ) {
+        Guard::retained_activation(registry_path, identity_path, intent)?
+    } else if intent.kind == Some(crate::account_transition::Kind::Password) {
         Guard::retained_password(registry_path, identity_path, intent)?
     } else {
         Guard::prepare(
@@ -1926,7 +2951,10 @@ fn account_boundary(
     if &guard.intent != intent {
         return Err("account transition differs from protected records".into());
     }
-    if matches!(command, Command::PermitAccountPublication { .. }) {
+    if matches!(
+        command,
+        Command::PermitAccountPublication { .. } | Command::PermitAdminAccountRecovery { .. }
+    ) {
         guard.retain_stage()?;
     }
     registry.current()?;
@@ -1944,6 +2972,7 @@ struct RecoveryAttempt<'a> {
     clock: std::cell::Cell<tpm::Clock>,
     command: Command,
     lifetime: authentication::ProtectedOperation,
+    account_time: std::cell::RefCell<Option<AccountTime>>,
 }
 
 impl<'a> RecoveryAttempt<'a> {
@@ -2007,11 +3036,75 @@ impl<'a> RecoveryAttempt<'a> {
             clock: std::cell::Cell::new(final_snapshot.clock),
             command,
             lifetime: authentication::ProtectedOperation::start()?,
+            account_time: std::cell::RefCell::new(None),
+        })
+    }
+
+    fn account<A: Checkpoint>(
+        store: &mut Store<A>,
+        directory: &Path,
+        registry_path: &Path,
+        credential: &'a crate::admin_recovery::Credential,
+        request: &str,
+        command: Command,
+    ) -> Result<Self> {
+        if !admin_account_recovery(&command) {
+            return Err("not an offline Admin OS recovery command".into());
+        }
+        let registry = crate::principal::RegistryBinding::capture(registry_path)?;
+        let snapshot = store.snapshot()?;
+        let context = Context::load_at(directory, &snapshot.deployment, registry_path)?;
+        if !context.state(&snapshot, Some(request))?.1 {
+            return Err("Admin bootstrap required for OS recovery".into());
+        }
+        let (catalog, events) = context.events(&snapshot, Some(request))?;
+        if catalog.registry()? != registry.current()? {
+            return Err("Admin recovery registry changed".into());
+        }
+        let writer = context.custody_writer(&catalog)?;
+        let verifier = catalog.recovery_verifier()?.clone();
+        verifier.validate(&writer.installation, &writer.principal)?;
+        verifier.verify(credential)?;
+        let mut predicted = catalog.clone();
+        if let Some(old) = events.iter().find(|event| event.request_id == request) {
+            if old.command != command {
+                return Err("Admin recovery request belongs to another command".into());
+            }
+        } else {
+            predicted.apply(&command)?;
+        }
+        let time = AccountTime::capture(
+            store,
+            directory,
+            account_day(&catalog, &command).ok_or("Admin recovery missing protected aging")?,
+            request,
+        )?;
+        let final_snapshot = store.snapshot()?;
+        final_snapshot.clock.elapsed_since(snapshot.clock)?;
+        if final_snapshot.head != snapshot.head
+            || context.events(&final_snapshot, Some(request))?.0 != catalog
+        {
+            return Err("Admin recovery authority changed".into());
+        }
+        registry.current()?;
+        Ok(Self {
+            credential,
+            verifier,
+            registry,
+            baseline: serde_json::to_value(context.principal)?,
+            head: snapshot.head,
+            clock: std::cell::Cell::new(final_snapshot.clock),
+            command,
+            lifetime: authentication::ProtectedOperation::start()?,
+            account_time: std::cell::RefCell::new(Some(time)),
         })
     }
 
     fn authenticate(&self) -> Result<serde_json::Value> {
         self.lifetime.within(|| {
+            if let Some(time) = &mut *self.account_time.borrow_mut() {
+                time.recheck()?;
+            }
             self.registry.current()?;
             self.verifier.verify(self.credential)?;
             self.registry.current()?;
@@ -2028,7 +3121,7 @@ impl<'a> RecoveryAttempt<'a> {
         reviewed: Option<&str>,
     ) -> Result<serde_json::Value> {
         let result = self.lifetime.within(|| {
-            execute_catalog_authorized_at(
+            let report = execute_catalog_authorized_at(
                 store,
                 directory,
                 registry_path,
@@ -2038,7 +3131,55 @@ impl<'a> RecoveryAttempt<'a> {
                 &self.command,
                 reviewed,
                 CatalogAuthority::Recovery(self),
-            )
+            )?;
+            if let Command::PermitAdminAccountRecovery { transaction } = &self.command {
+                if report["committed"] == true {
+                    let snapshot = store.snapshot()?;
+                    snapshot.clock.elapsed_since(self.clock.get())?;
+                    self.clock.set(snapshot.clock);
+                    let context = Context::load_at(directory, &snapshot.deployment, registry_path)?;
+                    let (catalog, events) = context.events(&snapshot, None)?;
+                    if catalog.recovery_verifier()? != &self.verifier
+                        || !events.iter().any(|event| {
+                            event.request_id == request && event.command == self.command
+                        })
+                    {
+                        return Err(
+                            "Admin OS publication lacks its exact live custody continuation".into(),
+                        );
+                    }
+                    if let Some(day) = account_day(&catalog, &self.command) {
+                        *self.account_time.borrow_mut() =
+                            Some(AccountTime::capture(store, directory, day, request)?);
+                    }
+                    let boundary = account_boundary(
+                        &catalog,
+                        registry_path,
+                        Path::new(crate::principal::IDENTITY),
+                        &self.command,
+                    )?;
+                    match boundary {
+                        Some(AccountBoundary::Plan(guard)) => guard.publish(|| {
+                            self.authenticate()?;
+                            let current = store.snapshot()?;
+                            current.clock.elapsed_since(self.clock.get())?;
+                            self.clock.set(current.clock);
+                            if current.head != snapshot.head
+                                || context.events(&current, None)?.0 != catalog
+                            {
+                                return Err(
+                                    "Admin OS recovery authority changed before rename".into()
+                                );
+                            }
+                            context.recheck(&mut || self.authenticate())
+                        })?,
+                        Some(AccountBoundary::Published(guard)) => guard.recheck()?,
+                        None => return Err("missing Admin OS publication guard".into()),
+                    }
+                    let _ = transaction;
+                }
+            }
+            Ok(report)
         });
         // A dispatched write attempt consumes this in-process proof even if the
         // TPM outcome is uncertain. Only exact journal reconciliation can follow.
@@ -2081,6 +3222,294 @@ pub fn recover_admin(request: &str) -> Result<()> {
     Ok(())
 }
 
+pub fn admin_account_recovery_command(args: &[String]) -> Result<()> {
+    crate::require_root()?;
+    platform::require_installed()?;
+    let prepare = args.first().map(String::as_str) == Some("admin-account-recover");
+    if (prepare && args.len() != 2) || (!prepare && args.len() != 3) {
+        return Err("use admin-account-recover TRANSACTION, admin-account-recover-publish TRANSACTION REQUEST, or admin-account-recover-complete TRANSACTION REQUEST; credentials remain terminal-only".into());
+    }
+    let transaction = &args[1];
+    let request = if prepare { transaction } else { &args[2] };
+    if !admin_roles::identifier(transaction)
+        || !admin_roles::identifier(request)
+        || transaction == REQUEST
+        || request == REQUEST
+        || (!prepare && transaction == request)
+    {
+        return Err("invalid or reused Admin account recovery request".into());
+    }
+    let directory = Path::new(DIRECTORY);
+    let registry_path = Path::new(crate::principal::REGISTRY);
+    let identity_path = Path::new(crate::principal::IDENTITY);
+    let retained = crate::account_transition::retained_intent(identity_path, transaction)?;
+    let retained_path = identity_path
+        .join(format!("account-transition-{transaction}"))
+        .join("recovery.json");
+    let retained_command = match fs::symlink_metadata(&retained_path) {
+        Ok(_) => {
+            let bytes = tpm::private_read(&retained_path, 16384)?;
+            let command: Command = serde_json::from_slice(&bytes)?;
+            command.validate()?;
+            if serde_json::to_vec(&command)? != bytes
+                || !matches!(command, Command::PrepareAdminAccountRecovery { .. })
+            {
+                return Err(
+                    "noncanonical retained Admin recovery proposal; preserve evidence".into(),
+                );
+            }
+            Some(command)
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(error) => return Err(error.into()),
+    };
+    println!("Enter the CURRENT offline Admin credential. Root access and the Unix password are not recovery authorization.");
+    let credential = crate::admin_recovery::Credential::read()?;
+    let password = if prepare && retained.is_none() {
+        Some(crate::account_password::Password::local_confirmed()?)
+    } else {
+        None
+    };
+    let replacement = if prepare {
+        if retained_command.is_some() {
+            println!("Enter the NEW offline recovery credential recorded when this exact retained proposal was first prepared.");
+            Some(crate::admin_recovery::Credential::read()?)
+        } else {
+            Some(crate::admin_recovery::Credential::generate_confirmed()?)
+        }
+    } else {
+        None
+    };
+    let mut store = Store::open(
+        tpm::LocalAnchor::installed()?,
+        &directory.join("journal.json"),
+    )?;
+    let snapshot = store.snapshot()?;
+    let context = Context::load_at(directory, &snapshot.deployment, registry_path)?;
+    if !context.state(&snapshot, Some(request))?.1 {
+        return Err("explicit Admin bootstrap required".into());
+    }
+    let catalog = context.events(&snapshot, Some(request))?.0;
+    let writer = context.custody_writer(&catalog)?;
+    let verifier = catalog.recovery_verifier()?;
+    verifier.verify(&credential)?;
+    let command = if prepare {
+        if let Some(command) = retained_command {
+            if let Command::PrepareAdminAccountRecovery {
+                intent,
+                replacement: approved,
+                ..
+            } = &command
+            {
+                if retained.as_ref() != Some(intent) || intent.transaction != *transaction {
+                    return Err("retained Admin recovery records disagree".into());
+                }
+                approved.verify(
+                    replacement
+                        .as_ref()
+                        .ok_or("missing retained replacement credential")?,
+                )?;
+                if !catalog.account_transitions.contains_key(transaction) {
+                    crate::account_transition::Guard::retained_admin_recovery(
+                        registry_path,
+                        identity_path,
+                        intent,
+                    )?;
+                }
+            }
+            command
+        } else {
+            if catalog.account_transitions.contains_key(transaction) {
+                return Err(
+                    "anchored Admin recovery lost its retained custody proposal; preserve state"
+                        .into(),
+                );
+            }
+            let binding = HistoryReader::for_candidate(&mut store, directory, request)?.read()?;
+            let mut client = crate::utc_provider::Client::installed()?;
+            let live = client.current(&binding)?;
+            binding.recheck(&mut HistoryReader::for_candidate(
+                &mut store, directory, request,
+            )?)?;
+            let (low, high) = live.interval().endpoints();
+            if low <= 0 || low / 86_400_000 != high / 86_400_000 {
+                return Err("Admin recovery requires an unambiguous protected UTC day".into());
+            }
+            let day = u32::try_from(low / 86_400_000)?;
+            let replacement = replacement
+                .as_ref()
+                .ok_or("missing new confirmed offline credential")?;
+            if verifier.verify(replacement).is_ok() {
+                return Err("replacement offline credential must differ".into());
+            }
+            let new_verifier = crate::admin_recovery::Verifier::create(
+                replacement,
+                &writer.installation,
+                &writer.principal,
+                verifier
+                    .generation
+                    .checked_add(1)
+                    .ok_or("recovery generation exhausted")?,
+            )?;
+            let guard = if let Some(intent) = &retained {
+                crate::account_transition::Guard::retained_admin_recovery(
+                    registry_path,
+                    identity_path,
+                    intent,
+                )?
+            } else {
+                let hash = password
+                    .as_ref()
+                    .ok_or("new Admin recovery needs a confirmed password")?
+                    .hash()?;
+                crate::account_transition::Guard::prepare_admin_recovery(
+                    registry_path,
+                    identity_path,
+                    &writer.login,
+                    writer.generation,
+                    transaction,
+                    &hash,
+                    day,
+                    live.context(),
+                )?
+            };
+            let command = Command::PrepareAdminAccountRecovery {
+                intent: guard.intent.clone(),
+                expected_credential: catalog
+                    .account_commitments
+                    .get(&writer.principal)
+                    .ok_or("Admin recovery requires prior checkpointed credentials")?
+                    .clone(),
+                expected_recovery_generation: verifier.generation,
+                replacement: new_verifier,
+            };
+            let mut projected = catalog.clone();
+            projected.apply(&command)?;
+            guard.stage_password_proposal(|| {
+                verifier.verify(&credential)?;
+                let current = store.snapshot()?;
+                if current.head != snapshot.head
+                    || context.events(&current, Some(request))?.0 != catalog
+                {
+                    return Err("Admin recovery authority changed before proposal retention".into());
+                }
+                binding.recheck(&mut HistoryReader::for_candidate(
+                    &mut store, directory, request,
+                )?)?;
+                let current = client.current(&binding)?;
+                let (lower, upper) = current.interval().endpoints();
+                if lower / 86_400_000 != i64::from(day) || upper / 86_400_000 != i64::from(day) {
+                    return Err("Admin recovery protected day changed".into());
+                }
+                binding.recheck(&mut HistoryReader::for_candidate(
+                    &mut store, directory, request,
+                )?)
+            })?;
+            let bytes = serde_json::to_vec(&command)?;
+            let mut file = OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .mode(0o600)
+                .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
+                .open(&retained_path)?;
+            file.write_all(&bytes)?;
+            file.sync_all()?;
+            File::open(retained_path.parent().ok_or("missing proposal directory")?)?.sync_all()?;
+            if tpm::private_read(&retained_path, 16384)? != bytes {
+                return Err("Admin recovery proposal changed; preserve state".into());
+            }
+            command
+        }
+    } else {
+        match args[0].as_str() {
+            "admin-account-recover-publish" => Command::PermitAdminAccountRecovery {
+                transaction: transaction.clone(),
+            },
+            "admin-account-recover-complete" => Command::CompleteAdminAccountRecovery {
+                transaction: transaction.clone(),
+            },
+            _ => return Err("unknown Admin account recovery action".into()),
+        }
+    };
+    let attempt = RecoveryAttempt::account(
+        &mut store,
+        directory,
+        registry_path,
+        &credential,
+        request,
+        command,
+    )?;
+    let inspected = attempt.execute(&mut store, directory, registry_path, request, None)?;
+    println!("{}", serde_json::to_string(&inspected)?);
+    let review = inspected["review_sha256"]
+        .as_str()
+        .ok_or("missing Admin OS recovery review")?;
+    crate::admin_recovery::review(review)?;
+    let committed = attempt.execute(&mut store, directory, registry_path, request, Some(review))?;
+    println!("{}", serde_json::to_string(&committed)?);
+    Ok(())
+}
+
+const MAX_GRANT_COMMAND_INPUT: usize = 16_384;
+
+fn finite_catalog_json(bytes: &[u8]) -> Result<Command> {
+    if bytes.is_empty() || bytes.len() > MAX_GRANT_COMMAND_INPUT {
+        return Err("finite catalog command input exceeds its closed bound".into());
+    }
+    let command: Command = serde_json::from_slice(bytes)?;
+    if !matches!(
+        command,
+        Command::AssignRole { .. }
+            | Command::RevokeAssignment { .. }
+            | Command::IssueGrant { .. }
+            | Command::RevokeGrant { .. }
+    ) {
+        return Err("catalog JSON accepts only finite role assignment and grant governance".into());
+    }
+    command.validate()?;
+    Ok(command)
+}
+
+/// The file contributes inert command data only. Its bytes are captured before
+/// genuine PAM, then the normal catalog review and TPM writer bind that exact
+/// owned command, current Admin, checkpoint, role, subject and UTC validity.
+fn finite_catalog_file(path: &Path) -> Result<Command> {
+    use std::io::Read;
+    use std::os::unix::fs::MetadataExt;
+    let mut file = OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NONBLOCK)
+        .open(path)?;
+    let initial = file.metadata()?;
+    if !initial.is_file() || initial.len() == 0 || initial.len() > MAX_GRANT_COMMAND_INPUT as u64 {
+        return Err("finite catalog JSON must be a bounded regular file".into());
+    }
+    let key = |m: &fs::Metadata| {
+        (
+            m.dev(),
+            m.ino(),
+            m.len(),
+            m.mtime(),
+            m.mtime_nsec(),
+            m.ctime(),
+            m.ctime_nsec(),
+        )
+    };
+    let mut bytes = Vec::new();
+    (&mut file)
+        .take(MAX_GRANT_COMMAND_INPUT as u64 + 1)
+        .read_to_end(&mut bytes)?;
+    let named = fs::symlink_metadata(path)?;
+    if !named.is_file()
+        || key(&initial) != key(&file.metadata()?)
+        || key(&initial) != key(&named)
+        || bytes.len() as u64 != initial.len()
+    {
+        return Err("finite catalog command input changed while captured".into());
+    }
+    finite_catalog_json(&bytes)
+}
+
 fn parse_command(args: &[String]) -> Result<(&str, &str, Command, Option<&str>)> {
     let committed = args.len() >= 2 && args[args.len() - 2] == "--commit";
     let end = args.len() - if committed { 2 } else { 0 };
@@ -2089,7 +3518,11 @@ fn parse_command(args: &[String]) -> Result<(&str, &str, Command, Option<&str>)>
     } else {
         None
     };
+    if let Some(review) = review {
+        tpm::decode::<32>(review)?;
+    }
     let command = match args.first().map(String::as_str) {
+        Some("admin-catalog") if end == 4 => finite_catalog_file(Path::new(&args[3]))?,
         Some("admin-activity-register") if end == 4 => Command::RegisterActivity { activity: args[3].clone() },
         Some("admin-principal-advance") if end == 6 => Command::AdvancePrincipal {
             principal: args[3].clone(), expected_generation: args[4].parse()?, enabled: principal_enabled(&args[5])?,
@@ -2102,7 +3535,7 @@ fn parse_command(args: &[String]) -> Result<(&str, &str, Command, Option<&str>)>
             activities.sort();
             Command::DefineRole { name: args[3].clone(), activities, expected_version: args[4].parse()? }
         }
-        _ => return Err("use admin-activity-register LOGIN REQUEST ACTIVITY, admin-principal-advance LOGIN REQUEST PRINCIPAL-ID EXPECTED-GENERATION enabled|disabled, admin-principal-rotate LOGIN REQUEST EXPECTED-GENERATION, or admin-role-define LOGIN REQUEST ROLE EXPECTED-VERSION ACTIVITY...; optional --commit REVIEW-SHA256".into()),
+        _ => return Err("use admin-catalog LOGIN REQUEST FILE for finite assignment/grant JSON, admin-activity-register LOGIN REQUEST ACTIVITY, admin-principal-advance LOGIN REQUEST PRINCIPAL-ID EXPECTED-GENERATION enabled|disabled, admin-principal-rotate LOGIN REQUEST EXPECTED-GENERATION, or admin-role-define LOGIN REQUEST ROLE EXPECTED-VERSION ACTIVITY...; optional --commit REVIEW-SHA256".into()),
     };
     command.validate()?;
     if !admin_roles::identifier(&args[2]) || args[2] == REQUEST {
@@ -2392,6 +3825,7 @@ fn creation_proposal<A: Checkpoint>(
 
 struct CreationAttempt<'s> {
     session: &'s PrincipalSession,
+    actor_aging: RefCell<Option<ActorAging>>,
     directory: std::path::PathBuf,
     registry_path: std::path::PathBuf,
     guard: crate::account_creation::Guard,
@@ -2450,8 +3884,11 @@ impl<'s> CreationAttempt<'s> {
                     guard.complete()?;
                 }
                 context.recheck(&mut || session.account.identity())?;
+                let actor_aging =
+                    ActorAging::capture(session, &catalog, store, directory, transaction)?;
                 Ok(Self {
                     session,
+                    actor_aging: RefCell::new(actor_aging),
                     directory: directory.into(),
                     registry_path: registry_path.into(),
                     guard,
@@ -2471,6 +3908,9 @@ impl<'s> CreationAttempt<'s> {
             if self.session.fenced.get() {
                 return Err("creation continuation is fenced".into());
             }
+            if let Some(aging) = self.actor_aging.borrow_mut().as_mut() {
+                aging.recheck()?;
+            }
             self.session.account.identity()?;
             let current = store.snapshot()?;
             current.clock.elapsed_since(self.session.clock.get())?;
@@ -2483,7 +3923,11 @@ impl<'s> CreationAttempt<'s> {
             {
                 return Err("creation authority changed before dispatch".into());
             }
-            context.recheck(&mut || self.session.account.identity())
+            context.recheck(&mut || self.session.account.identity())?;
+            if let Some(aging) = self.actor_aging.borrow_mut().as_mut() {
+                aging.recheck()?;
+            }
+            Ok(())
         })?;
         Ok(
             serde_json::json!({"schema_version":1,"action":"admin-account-create-file",
@@ -2568,6 +4012,182 @@ pub fn account_creation_command(args: &[String]) -> Result<()> {
         },
         _ => return Err("unknown creation command".into()),
     };
+    let report = CatalogAttempt::prepare(
+        &session,
+        &mut store,
+        directory,
+        registry_path,
+        request,
+        &command,
+        None,
+    )?
+    .execute(&mut store, reviewed)?;
+    println!("{}", serde_json::to_string(&report)?);
+    Ok(())
+}
+
+pub fn account_activation_command(args: &[String]) -> Result<()> {
+    crate::require_root()?;
+    platform::require_installed()?;
+    let reviewed = if args.len() == 4 {
+        None
+    } else if args.len() == 6 && args[4] == "--commit" {
+        tpm::decode::<32>(&args[5])?;
+        Some(args[5].as_str())
+    } else {
+        return Err(
+            "expected admin-account-activate LOGIN TARGET TRANSACTION [--commit REVIEW-SHA256]"
+                .into(),
+        );
+    };
+    let request = &args[3];
+    if !admin_roles::identifier(request) || request == REQUEST {
+        return Err("invalid activation transaction".into());
+    }
+    let directory = Path::new(DIRECTORY);
+    let registry_path = Path::new(crate::principal::REGISTRY);
+    let identity_path = Path::new(crate::principal::IDENTITY);
+    let renewal = args[0] == "admin-account-renew";
+    let retained = crate::account_transition::retained_intent(identity_path, request)?;
+    let password = if renewal && retained.is_none() {
+        if reviewed.is_some() {
+            return Err("renewal commit requires its inspected proposal".into());
+        }
+        Some(crate::account_password::Password::local_confirmed()?)
+    } else {
+        None
+    };
+    let prepared = prepare_control(&args[1], Some(request))?;
+    let account = authentication::local(&args[1])?;
+    let mut store = Store::open(
+        tpm::LocalAnchor::installed()?,
+        &directory.join("journal.json"),
+    )?;
+    let session = prepared.issue(account, &mut store, directory, registry_path, Some(request))?;
+    let command = session.observe_store(
+        &mut PrincipalReader::admin_at(&mut store, directory, registry_path, Some(request)),
+        |identity, store| {
+            let snapshot = store.snapshot()?;
+            let context = Context::load_at(directory, &snapshot.deployment, registry_path)?;
+            let catalog = context.events(&snapshot, Some(request))?.0;
+            if serde_json::to_value(context.writer(&catalog)?)? != *identity {
+                return Err("activation writer changed".into());
+            }
+            let registry = crate::principal::RegistryBinding::capture(registry_path)?;
+            let record = registry
+                .current()?
+                .account(&args[2])
+                .ok_or("unknown activation account")?;
+            let intent = if let Some(transition) = catalog.account_transitions.get(request) {
+                transition.intent.clone()
+            } else if let Some(intent) =
+                crate::account_transition::retained_intent(identity_path, request)?
+            {
+                if renewal {
+                    crate::account_transition::Guard::retained_renewal(
+                        registry_path,
+                        identity_path,
+                        &intent,
+                    )?;
+                } else {
+                    crate::account_transition::Guard::retained_activation(
+                        registry_path,
+                        identity_path,
+                        &intent,
+                    )?;
+                }
+                intent
+            } else {
+                if reviewed.is_some() {
+                    return Err("activation commit requires its inspected retained proposal".into());
+                }
+                let binding = HistoryReader::for_candidate(store, directory, request)?.read()?;
+                let mut client = crate::utc_provider::Client::installed()?;
+                let live = client.current(&binding)?;
+                binding.recheck(&mut HistoryReader::for_candidate(
+                    store, directory, request,
+                )?)?;
+                let (lower, upper) = live.interval().endpoints();
+                if lower <= 0 || lower / 86_400_000 != upper / 86_400_000 {
+                    return Err("activation needs an unambiguous protected UTC day".into());
+                }
+                let day = u32::try_from(lower / 86_400_000)?;
+                let generation = catalog
+                    .principal_states
+                    .get(&record.id)
+                    .map_or(record.generation, |state| state.generation);
+                let guard = if renewal {
+                    let hash = password
+                        .as_ref()
+                        .ok_or("renewal requires confirmed local password")?
+                        .hash()?;
+                    crate::account_transition::Guard::prepare_renewal(
+                        registry_path,
+                        identity_path,
+                        &record.login,
+                        generation,
+                        request,
+                        &hash,
+                        day,
+                        live.context(),
+                    )?
+                } else {
+                    crate::account_transition::Guard::prepare_activation(
+                        registry_path,
+                        identity_path,
+                        &record.login,
+                        generation,
+                        request,
+                        day,
+                        live.context(),
+                    )?
+                };
+                let mut projected = catalog.clone();
+                projected.apply(&Command::PrepareAccountLock {
+                    intent: guard.intent.clone(),
+                })?;
+                guard.stage_password_proposal(|| {
+                    context.recheck(&mut || session.account.identity())?;
+                    let current = store.snapshot()?;
+                    if current.head != snapshot.head
+                        || context.events(&current, Some(request))?.0 != catalog
+                    {
+                        return Err("activation authority changed before proposal retention".into());
+                    }
+                    binding.recheck(&mut HistoryReader::for_candidate(
+                        store, directory, request,
+                    )?)?;
+                    let fresh = client.current(&binding)?;
+                    let (low, high) = fresh.interval().endpoints();
+                    if low / 86_400_000 != i64::from(day) || high / 86_400_000 != i64::from(day) {
+                        return Err("activation aging day changed before retention".into());
+                    }
+                    binding.recheck(&mut HistoryReader::for_candidate(
+                        store, directory, request,
+                    )?)
+                })?;
+                guard.intent.clone()
+            };
+            if intent.principal != record.id
+                || (renewal
+                    != matches!(
+                        intent.kind,
+                        Some(crate::account_transition::Kind::Renewal { .. })
+                    ))
+                || !matches!(
+                    intent.kind,
+                    Some(
+                        crate::account_transition::Kind::Activation { .. }
+                            | crate::account_transition::Kind::Renewal { .. }
+                    )
+                )
+            {
+                return Err("activation/renewal transaction belongs to another account".into());
+            }
+            registry.current()?;
+            Ok(Command::PrepareAccountLock { intent })
+        },
+    )?;
     let report = CatalogAttempt::prepare(
         &session,
         &mut store,
@@ -2743,6 +4363,7 @@ pub fn account_lock_command(args: &[String]) -> Result<()> {
 // valid PAM session with a different purpose cannot construct this continuation.
 struct DeletionAttempt<'s> {
     session: &'s PrincipalSession,
+    actor_aging: RefCell<Option<ActorAging>>,
     directory: std::path::PathBuf,
     registry_path: std::path::PathBuf,
     guard: crate::account_deletion::Guard,
@@ -2801,8 +4422,11 @@ impl<'s> DeletionAttempt<'s> {
                     guard.complete()?;
                 }
                 context.recheck(&mut || session.account.identity())?;
+                let actor_aging =
+                    ActorAging::capture(session, &catalog, store, directory, transaction)?;
                 Ok(Self {
                     session,
+                    actor_aging: RefCell::new(actor_aging),
                     directory: directory.into(),
                     registry_path: registry_path.into(),
                     guard,
@@ -2823,6 +4447,9 @@ impl<'s> DeletionAttempt<'s> {
             if self.session.fenced.get() {
                 return Err("deletion continuation is fenced".into());
             }
+            if let Some(aging) = self.actor_aging.borrow_mut().as_mut() {
+                aging.recheck()?;
+            }
             self.session.account.identity()?;
             let current = store.snapshot()?;
             current.clock.elapsed_since(self.session.clock.get())?;
@@ -2835,7 +4462,11 @@ impl<'s> DeletionAttempt<'s> {
             {
                 return Err("deletion authority changed before file dispatch".into());
             }
-            context.recheck(&mut || self.session.account.identity())
+            context.recheck(&mut || self.session.account.identity())?;
+            if let Some(aging) = self.actor_aging.borrow_mut().as_mut() {
+                aging.recheck()?;
+            }
+            Ok(())
         })?;
         Ok(
             serde_json::json!({"schema_version":1,"action":"admin-account-delete-file",
@@ -5052,6 +6683,56 @@ mod tests {
         }
     }
 
+    #[test]
+    fn acting_password_aging_refuses_expiry_at_final_boundary() {
+        let day = 20_000u32;
+        let start = i64::from(day) * 86_400_000;
+        let expiry = (i64::from(day) + 90) * 86_400_000;
+        let initial = crate::utc_stream::Observation::fixture(
+            floor_statement(expiry - 500),
+            crate::utc_bounds::Interval::new(expiry - 500, expiry - 1).unwrap(),
+        );
+        let original_epoch = password_epoch(&initial);
+        password_window(day, &original_epoch, &initial).unwrap();
+        for (lower, upper) in [
+            (expiry - 499, expiry),
+            (expiry, expiry),
+            (expiry, expiry + 100),
+            (start - 1, start + 100),
+        ] {
+            let final_observation = crate::utc_stream::Observation::fixture(
+                floor_statement(lower),
+                crate::utc_bounds::Interval::new(lower, upper).unwrap(),
+            );
+            assert!(password_window(day, &original_epoch, &final_observation).is_err());
+        }
+        assert!(password_window(0, &original_epoch, &initial).is_err());
+    }
+
+    #[test]
+    fn acting_password_aging_never_revives_across_protected_utc_epochs() {
+        let day = 20_000u32;
+        let lower = i64::from(day) * 86_400_000 + 1;
+        let interval = crate::utc_bounds::Interval::new(lower, lower + 100).unwrap();
+        let context = floor_statement(lower);
+        let initial = crate::utc_stream::Observation::fixture(context.clone(), interval);
+        let original_epoch = password_epoch(&initial);
+        password_window(day, &original_epoch, &initial).unwrap();
+        for field in 0..5 {
+            let mut changed = context.clone();
+            match field {
+                0 => changed.runtime_sha256 = "ac".repeat(32),
+                1 => changed.boot_id = "ac".repeat(16),
+                2 => changed.process_generation += 1,
+                3 => changed.source_clock_generation += 1,
+                4 => changed.keeper_generation += 1,
+                _ => unreachable!(),
+            }
+            let final_observation = crate::utc_stream::Observation::fixture(changed, interval);
+            assert!(password_window(day, &original_epoch, &final_observation).is_err());
+        }
+    }
+
     fn principal_registry(f: &Fixture) -> Command {
         let value = serde_json::json!({"schema_version":1,"installation":"ab".repeat(32),
         "principals":[
@@ -5560,7 +7241,7 @@ mod tests {
                 &f.directory,
                 &f.directory.join("registry.json"),
                 || Ok(f.identity.clone()),
-                || Ok(observation(statement)),
+                |proposed| proposed.supported_by(&observation(statement)),
                 request,
                 statement,
                 reviewed,
@@ -6911,12 +8592,11 @@ mod tests {
             assert_eq!(f.writes(), 2);
         }
     }
-    fn observation(statement: &Statement) -> Observation {
-        Observation {
-            context: statement.clone(),
-            utc: crate::utc_bounds::Interval::new(statement.floor_ms, statement.floor_ms + 100)
-                .unwrap(),
-        }
+    fn observation(statement: &Statement) -> crate::utc_history::Observation {
+        crate::utc_history::Observation::fixture(
+            statement.clone(),
+            crate::utc_bounds::Interval::new(statement.floor_ms, statement.floor_ms + 100).unwrap(),
+        )
     }
     fn history_call(
         f: &Fixture,
@@ -6928,7 +8608,7 @@ mod tests {
             &mut f.store(),
             &f.directory,
             || Ok(f.identity.clone()),
-            || Ok(observation(statement)),
+            |proposed| proposed.supported_by(&observation(statement)),
             request,
             statement,
             review,
@@ -7135,6 +8815,23 @@ mod tests {
                     assert_eq!(f.writes(), 2);
                     stream.invalidate();
                 }
+                "raw-history-delivery" => {
+                    let current = reader.read().unwrap();
+                    let mut delivery = stream.history_delivery(&current).unwrap();
+                    assert!(delivery.support(&floor_statement(1000)).is_err());
+                    assert_eq!(stream.state(), State::Fenced);
+                }
+                "delivery-binding-change" => {
+                    f.catalog_commit("register-model", &register());
+                    // The old Store correctly fences on another writer's head.
+                    // Reopen the current checkpoint without refreshing the
+                    // retained stream, and test that delivery still refuses.
+                    let current = HistoryReader::new(&mut f.store(), &f.directory)
+                        .read()
+                        .unwrap();
+                    assert!(stream.history_delivery(&current).is_err());
+                    assert_eq!(stream.state(), State::Fenced);
+                }
                 "catalog-change" => {
                     f.catalog_commit("register-model", &register());
                 }
@@ -7173,7 +8870,10 @@ mod tests {
         assert!(stream.poll(&mut reader).is_err());
         assert_eq!(
             f.writes(),
-            if matches!(variant, "catalog-change" | "floor-change") {
+            if matches!(
+                variant,
+                "catalog-change" | "floor-change" | "delivery-binding-change"
+            ) {
                 3
             } else {
                 2
@@ -7194,7 +8894,7 @@ mod tests {
                 &mut f.store(),
                 &f.directory,
                 || Ok(wrong.clone()),
-                || panic!("unauthenticated actor cannot observe/write"),
+                |_| panic!("unauthenticated actor cannot observe/write"),
                 "floor-1",
                 &statement,
                 None
@@ -7244,7 +8944,7 @@ mod tests {
             &mut f.store(),
             &f.directory,
             || Ok(f.identity.clone()),
-            || panic!("historical replay is not acquisition"),
+            |_| panic!("historical replay is not acquisition"),
             "floor-1",
             &statement,
             None,
@@ -7254,7 +8954,7 @@ mod tests {
             &mut f.store(),
             &f.directory,
             || Ok(f.identity.clone()),
-            || panic!("historical replay is not acquisition"),
+            |_| panic!("historical replay is not acquisition"),
             "floor-1",
             &statement,
             Some(inspected["review_sha256"].as_str().unwrap()),
@@ -7319,19 +9019,19 @@ mod tests {
             &mut f.store(),
             &f.directory,
             || Ok(f.identity.clone()),
-            || {
+            |proposed| {
                 observations += 1;
-                if observations == 5 {
+                if observations == 9 {
                     return Err("source fenced at final boundary".into());
                 }
-                Ok(observation(&statement))
+                proposed.supported_by(&observation(&statement))
             },
             "floor-1",
             &statement,
             Some(inspected["review_sha256"].as_str().unwrap()),
         );
         assert!(result.is_err());
-        assert_eq!(observations, 5);
+        assert_eq!(observations, 9);
         assert_eq!(f.writes(), 1);
         assert!(f.directory.join("journal.pending.json").exists());
         assert!(f.directory.join(event_name("floor-1")).exists());
@@ -7355,7 +9055,7 @@ mod tests {
                 }
                 Ok(identity)
             },
-            || Ok(observation(&statement)),
+            |proposed| proposed.supported_by(&observation(&statement)),
             "floor-1",
             &statement,
             Some(inspected["review_sha256"].as_str().unwrap()),
@@ -7364,6 +9064,76 @@ mod tests {
         assert_eq!(authentications, 5);
         assert_eq!(f.writes(), 1);
         assert!(f.directory.join("journal.pending.json").exists());
+    }
+    #[test]
+    fn utc_history_source_loss_during_final_pam_check_cannot_dispatch() {
+        let f = Fixture::new("utc-pam-source-loss");
+        f.activate();
+        let statement = floor_statement(1000);
+        let inspected = history_call(&f, "floor-1", &statement, None).unwrap();
+        let authentications = std::cell::Cell::new(0);
+        let source_lost = std::cell::Cell::new(false);
+        let result = execute_history(
+            &mut f.store(),
+            &f.directory,
+            || {
+                authentications.set(authentications.get() + 1);
+                if authentications.get() == 5 {
+                    source_lost.set(true);
+                }
+                Ok(f.identity.clone())
+            },
+            |proposed| {
+                if source_lost.get() {
+                    return Err("UTC source lost during PAM".into());
+                }
+                proposed.supported_by(&observation(&statement))
+            },
+            "floor-1",
+            &statement,
+            Some(inspected["review_sha256"].as_str().unwrap()),
+        );
+        assert!(result.is_err());
+        assert_eq!(authentications.get(), 5);
+        assert_eq!(f.writes(), 1);
+        assert!(f.directory.join("journal.pending.json").exists());
+        assert!(f.directory.join(event_name("floor-1")).exists());
+    }
+    #[test]
+    fn utc_history_every_source_refusal_preserves_evidence_without_dispatch() {
+        for refusal in 1..=9 {
+            let f = Fixture::new(&format!("utc-source-boundary-{refusal}"));
+            f.activate();
+            let statement = floor_statement(1000);
+            let inspected = history_call(&f, "floor-1", &statement, None).unwrap();
+            let mut calls = 0;
+            let result = execute_history(
+                &mut f.store(),
+                &f.directory,
+                || Ok(f.identity.clone()),
+                |proposed| {
+                    calls += 1;
+                    if calls == refusal {
+                        return Err("current source refused".into());
+                    }
+                    proposed.supported_by(&observation(&statement))
+                },
+                "floor-1",
+                &statement,
+                Some(inspected["review_sha256"].as_str().unwrap()),
+            );
+            assert!(result.is_err(), "boundary {refusal}");
+            assert_eq!(calls, refusal);
+            assert_eq!(f.writes(), 1);
+            assert_eq!(
+                f.directory.join(event_name("floor-1")).exists(),
+                refusal >= 4
+            );
+            assert_eq!(
+                f.directory.join("journal.pending.json").exists(),
+                refusal >= 6
+            );
+        }
     }
     #[test]
     fn utc_history_lost_reply_requires_reviewed_committed_publication_not_retry() {
@@ -7390,7 +9160,7 @@ mod tests {
             &mut recovered,
             &f.directory,
             || Ok(f.identity.clone()),
-            || panic!("publication must not redispatch or reacquire"),
+            |_| panic!("publication must not redispatch or reacquire"),
             "floor-1",
             &statement,
             None,
@@ -7530,22 +9300,22 @@ mod tests {
             &mut f.store(),
             &f.directory,
             || Ok(f.identity.clone()),
-            || {
+            |proposed| {
                 observations += 1;
-                if observations == 5 {
+                if observations == 8 {
                     let mut record: HistoryRecord =
                         serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
                     record.statement.floor_ms += 1;
                     platform::write_atomic(&path, &serde_json::to_vec(&record).unwrap(), 0o600)?;
                 }
-                Ok(observation(&statement))
+                proposed.supported_by(&observation(&statement))
             },
             "floor-1",
             &statement,
             Some(inspected["review_sha256"].as_str().unwrap()),
         );
         assert!(result.is_err());
-        assert_eq!(observations, 5);
+        assert_eq!(observations, 8);
         assert_eq!(f.writes(), 1);
         assert!(f.directory.join("journal.pending.json").exists());
         assert!(path.exists());
@@ -8122,6 +9892,85 @@ mod tests {
             assert!(parse_command(&args.iter().map(|v| (*v).into()).collect::<Vec<_>>()).is_err());
         }
         assert_eq!(f.writes(), 1);
+    }
+
+    #[test]
+    fn finite_catalog_json_only_delivers_closed_valid_governance_data() {
+        let assignment = serde_json::json!({"action":"assign_role","assignment":{
+            "id":"operator-one","subject":"12".repeat(32),"subject_generation":1,
+            "role":"Operator","role_version":1,"version":1,"not_before_ms":1_000,
+            "expires_ms":61_000,"revoked":false}});
+        let grant = serde_json::json!({"action":"issue_grant","grant":{
+            "id":"infer-one","assignment":"operator-one","assignment_version":1,
+            "subject":"12".repeat(32),"subject_generation":1,"action":"inference.execute",
+            "selector":{"kind":"model","id":"Qwen3-4B","generation":1,"digest":"34".repeat(32)},
+            "constraints":{"max_input_bytes":8192,"max_output_bytes":8192,"max_units":128},
+            "version":1,"not_before_ms":1_000,"expires_ms":61_000,"revoked":false}});
+        for value in [
+            assignment,
+            grant,
+            serde_json::json!({"action":"revoke_assignment","assignment":"operator-one","expected_version":1}),
+            serde_json::json!({"action":"revoke_grant","grant":"infer-one","expected_version":1}),
+        ] {
+            let bytes = serde_json::to_vec(&value).unwrap();
+            assert!(finite_catalog_json(&bytes).is_ok());
+            let mut expanded = value;
+            expanded["authenticated"] = true.into();
+            assert!(finite_catalog_json(&serde_json::to_vec(&expanded).unwrap()).is_err());
+        }
+        for value in [
+            serde_json::json!({"action":"register_activity","activity":"inference.execute"}),
+            serde_json::json!({"action":"rotate_admin","expected_generation":1}),
+            serde_json::json!({"action":"permit_account_publication","transaction":"password-one"}),
+            serde_json::json!({"action":"revoke_grant","grant":"*","expected_version":1}),
+            serde_json::json!({"action":"revoke_grant","grant":"infer-one","expected_version":0}),
+            serde_json::json!({"action":"trusted_grant","subject":"root"}),
+        ] {
+            assert!(finite_catalog_json(&serde_json::to_vec(&value).unwrap()).is_err());
+        }
+        assert!(finite_catalog_json(&[]).is_err());
+        assert!(finite_catalog_json(&vec![b' '; MAX_GRANT_COMMAND_INPUT + 1]).is_err());
+        assert!(finite_catalog_json(b"{}{}").is_err());
+    }
+
+    #[test]
+    fn finite_catalog_cli_reads_bounded_regular_inert_file_and_exact_commit_shape() {
+        let fixture = Fixture::new("finite-catalog-cli");
+        let path = fixture.directory.join("command-input.json");
+        fs::write(
+            &path,
+            br#"{"action":"revoke_grant","grant":"infer-one","expected_version":1}"#,
+        )
+        .unwrap();
+        let mut args = vec![
+            "admin-catalog".into(),
+            "human".into(),
+            "grant-revoke-one".into(),
+            path.to_str().unwrap().into(),
+        ];
+        let (login, request, command, review) = parse_command(&args).unwrap();
+        assert_eq!(login, "human");
+        assert_eq!(request, "grant-revoke-one");
+        assert!(matches!(command, Command::RevokeGrant { .. }));
+        assert!(review.is_none());
+        args.extend(["--commit".into(), "56".repeat(32)]);
+        assert_eq!(parse_command(&args).unwrap().3, Some(args[5].as_str()));
+        args[5] = "caller-approval".into();
+        assert!(parse_command(&args).is_err());
+        args.truncate(4);
+        args.push("--commit".into());
+        assert!(parse_command(&args).is_err());
+        let link = fixture.directory.join("command-link.json");
+        std::os::unix::fs::symlink(&path, &link).unwrap();
+        args.truncate(4);
+        args[3] = link.to_str().unwrap().into();
+        assert!(parse_command(&args).is_err());
+        args[3] = fixture.directory.to_str().unwrap().into();
+        assert!(parse_command(&args).is_err());
+        args[3] = path.to_str().unwrap().into();
+        fs::write(&path, vec![b' '; MAX_GRANT_COMMAND_INPUT + 1]).unwrap();
+        assert!(parse_command(&args).is_err());
+        assert_eq!(fixture.writes(), 0);
     }
 
     #[test]

@@ -1,0 +1,15 @@
+[Unit]
+Description=Start fixed NTS producer only after reviewed seed and protected bind
+After=luma-utc-keeper.service
+Requires=luma-utc-keeper.service
+BindsTo=luma-utc-keeper.service
+ConditionKernelCommandLine=luma.mode=installed
+
+[Path]
+PathExists=/run/luma-utc/seed-ready
+Unit=luma-utc-producer.service
+TriggerLimitIntervalSec=60
+TriggerLimitBurst=1
+
+[Install]
+WantedBy=multi-user.target

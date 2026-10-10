@@ -1,0 +1,53 @@
+[Unit]
+Description=Luma fixed-provider authenticated NTS measurement producer
+After=apparmor.service network-online.target luma-utc-keeper.service
+Requires=apparmor.service luma-utc-keeper.service
+BindsTo=luma-utc-keeper.service
+Wants=network-online.target
+Conflicts=systemd-timesyncd.service chrony.service ntp.service
+ConditionKernelCommandLine=luma.mode=installed
+ConditionPathExists=/run/luma-utc/seed-ready
+ConditionPathExists=/run/luma-utc/measurements.sock
+
+[Service]
+Type=simple
+ExecStart=/usr/libexec/luma-os/chronyd -n -U -f /usr/share/luma-os/utc/chrony.conf -u luma-utc-producer -F 1
+User=luma-utc-producer
+Group=luma-utc-producer
+RuntimeDirectory=luma-utc-producer
+RuntimeDirectoryMode=0700
+RuntimeDirectoryPreserve=no
+UMask=0077
+Environment=LANG=C LC_ALL=C TZ=UTC PATH=/usr/sbin:/usr/bin:/sbin:/bin
+NoNewPrivileges=yes
+CapabilityBoundingSet=CAP_SYS_TIME
+AmbientCapabilities=CAP_SYS_TIME
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+DevicePolicy=closed
+ReadWritePaths=/run/luma-utc-producer /run/luma-utc/measurements.sock
+InaccessiblePaths=/var/lib/luma-os/admin /var/lib/luma-os/principals /var/lib/luma-os/models /run/luma-admin /run/luma-governance /run/luma-utc-control /efi /boot
+BindReadOnlyPaths=/var/lib/luma-os/identity
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+ProtectProc=invisible
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+RestrictNamespaces=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service @clock
+SystemCallFilter=~@mount @raw-io @reboot @swap @obsolete @debug
+AppArmorProfile=luma-utc-producer
+LimitCORE=0
+LimitNOFILE=128
+MemoryMax=128M
+MemorySwapMax=0
+TasksMax=8
+CPUQuota=20%
+TimeoutStopSec=5
+KillMode=control-group
+Restart=no

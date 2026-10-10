@@ -416,6 +416,77 @@ fn offline_store() -> Result<Option<Store>> {
     }
 }
 
+/// A real, retained physical exclusion for reviewed damaged-ledger recovery.
+/// This does not parse, initialize, replace or release the damaged authority.
+/// Runtime masks must already be installed by the reviewed operator action;
+/// success never unmasks or restarts any service.
+pub(crate) struct ShutdownGuard {
+    _operation: File,
+    _idle: File,
+    model: Group,
+    acquisition: Group,
+    masks: BTreeMap<String, (String, String, String, String)>,
+    boot: String,
+    model_identity: (u64, u64),
+    acquisition_identity: (u64, u64),
+}
+impl ShutdownGuard {
+    pub(crate) fn check(&self) -> Result<()> {
+        if masks_at(Path::new("/run/systemd/system"))? != self.masks
+            || boot_identity()? != self.boot
+            || self.model.identity()? != self.model_identity
+            || self.acquisition.identity()? != self.acquisition_identity
+        {
+            return Err("retained recovery shutdown generation changed".into());
+        }
+        manager_masks()?;
+        if self.model.populated()? || self.acquisition.populated()? {
+            return Err(
+                "damaged authority recovery requires both physical worker slices drained".into(),
+            );
+        }
+        no_model_tasks(&trusted_proc()?)?;
+        if masks_at(Path::new("/run/systemd/system"))? != self.masks
+            || boot_identity()? != self.boot
+        {
+            return Err("shutdown proof changed during complete task census".into());
+        }
+        Ok(())
+    }
+}
+
+pub(crate) fn shutdown_guard() -> Result<ShutdownGuard> {
+    crate::require_root()?;
+    crate::platform::require_installed()?;
+    for directory in [
+        "/run",
+        "/run/systemd",
+        "/var",
+        "/var/lib",
+        "/var/lib/luma-os",
+    ] {
+        trusted_directory(Path::new(directory))?;
+    }
+    let masks = masks_at(Path::new("/run/systemd/system"))?;
+    manager_masks()?;
+    let operation = model::resource_recovery_exclusion()?;
+    let idle = model::resource_idle()?;
+    let model = Group::open()?;
+    let acquisition = Group::for_kind(Kind::Acquisition)?;
+    let guard = ShutdownGuard {
+        _operation: operation,
+        _idle: idle,
+        model_identity: model.identity()?,
+        acquisition_identity: acquisition.identity()?,
+        model,
+        acquisition,
+        masks,
+        boot: boot_identity()?,
+    };
+    guard.check()?;
+    Ok(guard)
+}
+
 pub(crate) fn status() -> Result<()> {
     crate::require_root()?;
     crate::platform::require_installed()?;

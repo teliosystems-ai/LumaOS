@@ -2,7 +2,7 @@
 
 On 2026-10-09, the native source gained immutable producer admission and the
 fixed UTC measurement endpoint, followed by cold-start acquisition handling.
-The final targeted D-backed evaluation passed. **Protected UTC deployment,
+The runtime admission evaluation passed. **Protected UTC deployment,
 Requirement #1 and G2 remain incomplete.** No clock, host service, physical TPM,
 ownership, account or WSL setting was changed; no final image was rebuilt.
 
@@ -48,13 +48,13 @@ Subsequent quorum loss, malformed state, heartbeat loss or an invalid boundary
 fences; a later valid round cannot revive the stream. Shared history still comes
 from the existing internal Admin semantic reader, never a saved UTC estimate.
 
-## Executed evaluation
+## Runtime admission evaluation
 
 Final evidence directory:
 `D:\LumaOS-builds\g2-utc-runtime-20261009-03`.
 The frozen runner finished with exit zero and `UTC_RUNTIME_SWEEP_PASSED`.
-All 225 captured build inputs and 65 native support inputs matched the final
-checkout by raw-byte SHA-256; the retained CI workflow also matched.
+All 225 captured build inputs and 65 native support inputs matched the checkout
+at that checkpoint by raw-byte SHA-256; the retained CI workflow also matched.
 
 - 176 ordinary targeted Rust passes, including eleven new runtime tests, one
   receiver admission test and two cold-start stream tests. The selected binary
@@ -107,6 +107,84 @@ compilation also detected unsafe-call annotation and unused-method issues; those
 were repaired before the final frozen evaluation. Older passes are not credited
 as qualification of the final code.
 
+## Internal history delivery implementation
+
+The subsequent source increment adds `execute_history_live`, which accepts the
+actual ephemeral PAM account and admitted bound stream rather than arbitrary
+authentication JSON or an observation-producing callback. It borrows the same
+exclusive Admin journal Store, replays the current history binding, and requires
+that exact binding when obtaining new live evidence. The lower-level callback
+transaction remains private; its externally callable arbitrary adapter is
+compiled only for fixtures.
+
+`HistoryDelivery` borrows the stream and has no wire form. Observation fields
+are private to the stream, with a fixture-only numeric constructor. Production
+delivery polls the actual receiver, derives the admitted runtime digest and
+producer/keeper context, and checks the proposed floor against the fresh
+candidate. Queue, peer, clock and step-watch checks repeat before returning.
+It cannot obtain production evidence from a raw fixture receiver or replace the
+bound checkpoint with a freshly opened different head.
+
+Source checks now repeat after potentially blocking semantic replay and PAM
+checks at each journal authorization boundary, including immediately before
+TPM advancement. A successful checkpoint-changing write, or any error including
+failed installed-environment admission, invalidates the old stream. Historical
+acknowledgement obtains no new live evidence and cannot redispatch the write.
+This does not return a time capability or activate grants.
+
+The internal adapter is not connected to an installed human-control endpoint.
+No independent seed, producer service, keeper service, system clock change,
+production TPM write or native-image qualification was executed by this work.
+
+## History delivery evaluation
+
+The final implementation has passing source evaluation recorded in two frozen
+D-backed directories. Trial 05 passed 178 ordinary targeted Rust tests, all six
+explicit fixture invocations and the locked offline production build with
+warnings denied. The kernel suites exercised 42 cases, including two new
+history-delivery cases: a raw receiver cannot supply admitted runtime evidence,
+and a reopened different checkpoint cannot refresh the retained stream.
+Two new ordinary tests exercise every one of nine source-refusal boundaries and
+source loss during the final PAM check without TPM dispatch. The binary
+discovered 751 tests; the full ordinary Rust suite and real-PAM/software-TPM
+bootstrap fixture were not rerun.
+
+Trial 05 then failed three stale Python source-scope assertions. Their boundaries
+were corrected without changing any Rust/runtime build input. Trial 07 proved
+its complete 225-file build-input manifest byte-identical to trial 05 and passed
+all 307 native Python checks with no skips, plus formatting. Its runner exited
+zero with `UTC_HISTORY_PYTHON_RECHECK_PASSED`. All 225 build inputs, 65 native
+support files excluding bytecode caches, and the CI workflow matched the final
+checkout by SHA-256. Rust/kernel/C/build results are from trial 05; trial 07
+does not claim to have rerun them or upgraded them to installed qualification.
+
+The ordinary Rust runs still report eight existing prerequisite-dependent
+ignores. The four parent UTC kernel fixtures and both C fixtures were explicitly
+executed; their owned sender is exercised by its parent. Shared-history/TPM
+semantics use fake checkpoints in these fixtures. No fully admitted installed
+NTS-to-PAM-to-TPM positive journey was executed.
+
+The final Python container used one CPU, 512 MiB memory/memory-plus-swap and
+128 PIDs, without network, host devices, CAP_SYS_TIME or CAP_SYS_ADMIN.
+Its Linux scratch filesystem was inside the verified D-backed Docker root.
+No WSL memory setting, host service, clock, account or TPM ownership changed.
+
+| Retained history delivery artifact | SHA-256 |
+| --- | --- |
+| Trial 05 and 07 `source/build-inputs.json` | `496b94d2c015b22d901788c6dc03f8db4dbcf407259ba632a7dd96221aee73c1` |
+| Trial 05 `test.log` | `c20af28c1f45f1bdea13d66accd8ccdf8b6780b860cd87580c341b414893ace2` |
+| Trial 07 `checks/runner.sh` | `485e75fb64c565b269c3767840557e12534f1befd8812d8aff34169fedc5d358` |
+| Trial 07 `test.log` | `18baf9fa98dd248207cecf93aec1cc50d6880e93a20d40c026a0bba4252038df` |
+| Production executable verified in trial 07 | `e10a4f40850f1e4fe27bbf91db9f53f6285f689e3b490035228cfd07edf63f0f` |
+
+Trials 04, 05 and 06 remain retained. Trial 04 exposed the fixture's attempt to
+read another writer's new head through its intentionally stale Store; the
+corrected case reopens current history but keeps the old stream. Trial 06 used
+Windows-filesystem temporary storage, encountered excessive initrd I/O and
+Linux fixture filesystem incompatibilities, and was stopped after verifying
+the exact owned container source mount. Trial 07 uses Linux scratch on D.
+No failed/cancelled trial is counted as a complete passing sweep.
+
 ## Required work not closed
 
 The image still needs the qualified producer dependency and provenance,
@@ -114,7 +192,7 @@ runtime inventory, producer UID/GID 987, enforcing producer/keeper profiles and
 units, and a protected composition able to inspect the admitted process.
 No installed command currently activates this endpoint. Authenticated human
 acquisition/query control, independently reviewed certificate seed delivery,
-production history delivery and explicit recovery/lifecycle integration remain
+installed history delivery and explicit recovery/lifecycle integration remain
 software work. Current status still denies trusted UTC and timed authority.
 
 The approved total rate envelope, live certificate/NTS attacks, loaded confinement,

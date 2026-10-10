@@ -262,8 +262,16 @@ pub(crate) fn recheck_report(
 }
 
 pub(crate) fn calculate(bytes: &[u8]) -> Result<Calculation> {
+    calculate_checked(bytes, &mut || Ok(()))
+}
+
+pub(crate) fn calculate_checked(
+    bytes: &[u8],
+    check: &mut dyn FnMut() -> Result<()>,
+) -> Result<Calculation> {
     crate::require_root()?;
     crate::platform::require_installed()?;
+    check()?;
     if bytes.is_empty() || bytes.len() > MAX_SOURCE {
         return Err("calculation source size denied before launch".into());
     }
@@ -294,6 +302,7 @@ pub(crate) fn calculate(bytes: &[u8]) -> Result<Calculation> {
         .stdout(Stdio::from(output.try_clone()?))
         .stderr(Stdio::null());
     model::supervise_owned_controller(&mut command, || {
+        check()?;
         if resource_manager::now()? >= deadline || output.metadata()?.len() >= MAX_OUTPUT {
             return Err("calculation controller deadline or output bound exceeded".into());
         }
@@ -302,6 +311,7 @@ pub(crate) fn calculate(bytes: &[u8]) -> Result<Calculation> {
     // The unit/controller may have exited, but no capacity is returned here.
     // Drainage and retained cache are observed through the existing helper pool.
     acquisition::await_drainage()?;
+    check()?;
     seal(&output)?;
     output.seek(SeekFrom::Start(0))?;
     let mut contents = Vec::new();
@@ -322,6 +332,7 @@ pub(crate) fn calculate(bytes: &[u8]) -> Result<Calculation> {
         &expected_binding,
         reply.status.ok_or("calculation receipt missing")?,
     )?;
+    check()?;
     Ok(Calculation {
         report: output.report.into_bytes(),
         lease: output.lease,

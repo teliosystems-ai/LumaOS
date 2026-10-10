@@ -116,6 +116,55 @@ def package_skill_registry(root: Path, keys: Path) -> None:
     (skills_dir/'registry.sig').chmod(0o644)
 
 
+def package_protected_utc(root: Path, source: Path, work: Path) -> None:
+    """Build the release candidate; never seed, run or certify a host clock."""
+    assets = source/'native/image/utc'
+    package = work/'utc-package'
+    run('bash', assets/'build_release.sh', '/inputs/chrony-4.9.tar.gz',
+        work/'utc-build', package)
+    target = root/'usr/share/luma-os/utc'
+    target.mkdir(parents=True, exist_ok=True)
+    for name in ('chrony.conf', 'approved-policy.json'):
+        shutil.copy2(assets/name, target/name)
+        (target/name).chmod(0o644)
+    shutil.copy2(root/'etc/ssl/certs/ca-certificates.crt', target/'ca-certificates.crt')
+    (target/'ca-certificates.crt').chmod(0o644)
+    for name in ('COPYING.chrony', 'source-inputs.json', 'build-packages.tsv', 'SHA256SUMS', 'version.txt'):
+        shutil.copy2(package/name, target/name)
+        (target/name).chmod(0o644)
+    shutil.copy2(Path('/inputs/chrony-4.9.provenance.json'), target/'upstream-provenance.json')
+    (target/'upstream-provenance.json').chmod(0o644)
+    corresponding = target/'source'
+    corresponding.mkdir()
+    shutil.copy2(Path('/inputs/chrony-4.9.tar.gz'), corresponding/'chrony-4.9.tar.gz')
+    for name in ('prepare_chrony.py', 'build_release.sh', 'publisher.c', 'publisher.h', 'chrony_hook.c', 'chrony_hook.h', 'approved-policy.json'):
+        shutil.copy2(assets/name, corresponding/name)
+    for member in corresponding.iterdir():
+        member.chmod(0o644)
+    executable = root/'usr/libexec/luma-os/chronyd'
+    shutil.copy2(package/'chronyd', executable)
+    executable.chmod(0o755)
+    vendor = root/'usr/lib/systemd/system'
+    vendor.mkdir(parents=True, exist_ok=True)
+    for unit in ('luma-utc-keeper.service', 'luma-utc-producer.service', 'luma-utc-producer.path'):
+        shutil.copy2(assets/unit, vendor/unit)
+        (vendor/unit).chmod(0o644)
+    system = root/'etc/systemd/system'
+    for unit in ('systemd-timesyncd.service', 'chrony.service', 'ntp.service'):
+        mask = system/unit
+        if mask.exists() or mask.is_symlink():
+            mask.unlink()
+        mask.symlink_to('/dev/null')
+    wanted = system/'multi-user.target.wants'
+    wanted.mkdir(parents=True, exist_ok=True)
+    for unit in ('luma-utc-keeper.service', 'luma-utc-producer.path'):
+        link = wanted/unit
+        if link.exists() or link.is_symlink():
+            raise SystemExit('unexpected pre-enabled UTC unit: '+unit)
+        link.symlink_to('/usr/lib/systemd/system/'+unit)
+    run('python3', assets/'package_runtime.py', '--root', root)
+
+
 def main() -> None:
     global REPO
     parser = argparse.ArgumentParser(description=__doc__)
@@ -184,6 +233,12 @@ def main() -> None:
     auth_helper = binary.parent/'luma-auth-helper'
     shutil.copy2(helpers[0], auth_helper)
     auth_helper.chmod(0o700)  # Never setuid; only the trusted root process calls it.
+    supervisors = list((WORK/'cargo/release/build').glob('luma-platform-*/out/luma-utc-restart'))
+    if len(supervisors) != 1:
+        raise SystemExit('expected one freshly compiled fixed UTC supervisor')
+    supervisor = binary.parent/'luma-utc-restart'
+    shutil.copy2(supervisors[0], supervisor)
+    supervisor.chmod(0o700)
     (ROOT/'usr/bin/luma-platform').symlink_to('/usr/libexec/luma-os/luma-platform')
     shutil.copytree(REPO/'native/image/overlay',ROOT,dirs_exist_ok=True)
     # WSL Windows-mounted source files often report 0777. Never propagate those
@@ -194,6 +249,7 @@ def main() -> None:
         target.chmod(0o755 if source.is_dir() or source.suffix=='.sh' or source.parent.name=='system-generators' else 0o644)
     for script in (ROOT/'usr/lib/dracut/modules.d/91luma').glob('*.sh'):
         script.chmod(0o755)
+    (ROOT/'usr/bin/luma-admin-control').chmod(0o755)
     reference = ROOT/'usr/share/luma-os/reference'
     for name in ('src','web','schemas','examples'):
         shutil.copytree(REPO/name,reference/name,ignore=shutil.ignore_patterns('__pycache__','*.pyc'))
@@ -233,10 +289,11 @@ def main() -> None:
     run('chroot',ROOT,'groupadd','--gid','990','luma-control')
     run('chroot',ROOT,'useradd','--uid','990','--gid','990','--system','--no-create-home',
         '--home-dir','/var/lib/luma-os/reference','--shell','/usr/sbin/nologin','luma-control')
-    for uid,name in ((989,'luma-model'),(988,'luma-fetch')):
+    for uid,name in ((989,'luma-model'),(988,'luma-fetch'),(987,'luma-utc-producer')):
         run('chroot',ROOT,'groupadd','--gid',str(uid),name)
         run('chroot',ROOT,'useradd','--uid',str(uid),'--gid',str(uid),'--system','--no-create-home',
             '--home-dir','/nonexistent','--shell','/usr/sbin/nologin',name)
+    package_protected_utc(ROOT, REPO, WORK)
     run('chroot',ROOT,'passwd','--lock','root')
     # Ubuntu's container image may ship a UID 1000 convenience account. Never
     # carry that account into an OS with operator-created first-user identities.

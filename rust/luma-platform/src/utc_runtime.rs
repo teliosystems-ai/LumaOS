@@ -220,13 +220,26 @@ fn readonly(file: &File) -> Result<()> {
     }
     Ok(())
 }
-struct Pin {
+pub(crate) struct Pin {
     path: PathBuf,
     file: File,
     identity: Identity,
     parents: Vec<Parent>,
 }
 impl Pin {
+    pub(crate) fn immutable(path: &str, limit: u64, exact: Option<&[u8]>) -> Result<Self> {
+        let pin = Self::open(Path::new(path), limit)?;
+        pin.immutable_recheck()?;
+        if exact.is_some_and(|expected| pin.bytes(limit).map_or(true, |bytes| bytes != expected)) {
+            return Err("UTC immutable artifact differs from compiled release".into());
+        }
+        pin.immutable_recheck()?;
+        Ok(pin)
+    }
+    pub(crate) fn immutable_recheck(&self) -> Result<()> {
+        self.recheck()?;
+        readonly(&self.file)
+    }
     fn open(path: &Path, limit: u64) -> Result<Self> {
         canonical_path(path.to_str().ok_or("invalid UTC runtime path")?)?;
         let mut names = path.components().skip(1).collect::<Vec<_>>();
@@ -563,7 +576,7 @@ mod tests {
             assert!(environment(value, 42).is_err(), "{value:?}");
         }
         assert!(environment(&[b'X'; 257], 42).is_err());
-        assert_eq!(command_line().split(|b| *b == 0).count(), 9);
+        assert_eq!(command_line().split(|b| *b == 0).count(), 10);
     }
     fn mapping_identity() -> Identity {
         Identity {
@@ -983,6 +996,7 @@ fn command_line() -> Vec<u8> {
     [
         EXECUTABLE,
         "-n",
+        "-U",
         "-f",
         CONFIGURATION,
         "-u",

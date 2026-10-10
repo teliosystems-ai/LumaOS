@@ -33,6 +33,20 @@ pub(crate) enum Command {
         activities: Vec<String>,
         expected_version: u64,
     },
+    AssignRole {
+        assignment: crate::finite_grants::Assignment,
+    },
+    RevokeAssignment {
+        assignment: String,
+        expected_version: u64,
+    },
+    IssueGrant {
+        grant: crate::finite_grants::Grant,
+    },
+    RevokeGrant {
+        grant: String,
+        expected_version: u64,
+    },
     AdoptPrincipals {
         registry: crate::principal::Registry,
     },
@@ -79,6 +93,18 @@ pub(crate) enum Command {
         expected_recovery_generation: u64,
         replacement: crate::admin_recovery::Verifier,
     },
+    PrepareAdminAccountRecovery {
+        intent: crate::account_transition::Intent,
+        expected_credential: String,
+        expected_recovery_generation: u64,
+        replacement: crate::admin_recovery::Verifier,
+    },
+    PermitAdminAccountRecovery {
+        transaction: String,
+    },
+    CompleteAdminAccountRecovery {
+        transaction: String,
+    },
 }
 
 impl Command {
@@ -86,12 +112,32 @@ impl Command {
         match self {
             Self::RegisterActivity { .. } => "admin.activity.register",
             Self::DefineRole { .. } => "admin.role.define",
+            Self::AssignRole { .. } => "admin.role.assign",
+            Self::RevokeAssignment { .. } => "admin.role.revoke",
+            Self::IssueGrant { .. } => "admin.grant.issue",
+            Self::RevokeGrant { .. } => "admin.grant.revoke",
             Self::AdoptPrincipals { .. } => "admin.principal.adopt",
             Self::CheckpointAccounts { .. } => "admin.account.checkpoint",
             Self::PrepareAccountLock { intent }
                 if intent.kind == Some(crate::account_transition::Kind::Password) =>
             {
                 "admin.account.password_prepare"
+            }
+            Self::PrepareAccountLock { intent }
+                if matches!(
+                    intent.kind,
+                    Some(crate::account_transition::Kind::Activation { .. })
+                ) =>
+            {
+                "admin.account.activation_prepare"
+            }
+            Self::PrepareAccountLock { intent }
+                if matches!(
+                    intent.kind,
+                    Some(crate::account_transition::Kind::Renewal { .. })
+                ) =>
+            {
+                "admin.account.password_renew_prepare"
             }
             Self::PrepareAccountLock { .. } => "admin.account.lock_prepare",
             Self::PrepareAccountDeletion { .. } => "admin.account.delete_prepare",
@@ -105,15 +151,57 @@ impl Command {
             Self::AdvancePrincipal { .. } => "admin.principal.advance",
             Self::RotateAdmin { .. } => "admin.principal.rotate_admin",
             Self::RecoverAdmin { .. } => "admin.principal.recover",
+            Self::PrepareAdminAccountRecovery { .. } => "admin.account.recovery_prepare",
+            Self::PermitAdminAccountRecovery { .. } => "admin.account.recovery_publish",
+            Self::CompleteAdminAccountRecovery { .. } => "admin.account.recovery_complete",
         }
     }
     pub(crate) fn validate(&self) -> Result<()> {
         let valid_activity = |v: &str| identifier(v) && v != "admin.bootstrap";
         match self {
+            Self::AssignRole { assignment } => assignment.validate(),
+            Self::IssueGrant { grant } => grant.validate(),
+            Self::RevokeAssignment {
+                assignment,
+                expected_version,
+            }
+            | Self::RevokeGrant {
+                grant: assignment,
+                expected_version,
+            } => {
+                if !identifier(assignment) || *expected_version == 0 {
+                    return Err(
+                        "revocation requires an exact assignment/grant ID and version".into(),
+                    );
+                }
+                Ok(())
+            }
             Self::PrepareAccountLock { intent } => intent.validate(),
+            Self::PrepareAdminAccountRecovery {
+                intent,
+                expected_credential,
+                expected_recovery_generation,
+                ..
+            } => {
+                intent.validate()?;
+                if crate::tpm::decode::<32>(expected_credential)? == [0; 32] {
+                    return Err("missing prior Admin credential authority".into());
+                }
+                if *expected_recovery_generation == 0
+                    || !matches!(
+                        intent.kind,
+                        Some(crate::account_transition::Kind::AdminRecovery { .. })
+                    )
+                {
+                    return Err("Admin account recovery requires offline custody and an exact OS transition".into());
+                }
+                Ok(())
+            }
             Self::PrepareAccountDeletion { intent } => intent.validate(),
             Self::PrepareAccountCreation { intent } => intent.validate(),
             Self::PermitAccountPublication { transaction }
+            | Self::PermitAdminAccountRecovery { transaction }
+            | Self::CompleteAdminAccountRecovery { transaction }
             | Self::CompleteAccountLock { transaction }
             | Self::PermitAccountDeletion { transaction }
             | Self::CompleteAccountDeletion { transaction } => {
@@ -205,6 +293,10 @@ pub(crate) struct Catalog {
     pub state_version: u64,
     pub activities: BTreeSet<String>,
     pub roles: BTreeMap<String, Role>,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub assignments: BTreeMap<String, crate::finite_grants::Assignment>,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub grants: BTreeMap<String, crate::finite_grants::Grant>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub principal_registry: Option<crate::principal::Registry>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -234,11 +326,32 @@ pub(crate) struct PrincipalState {
 }
 
 impl Catalog {
+    pub(crate) fn password_day(&self, principal: &str) -> Option<u32> {
+        self.account_transitions
+            .values()
+            .filter(|transition| {
+                transition.intent.principal == principal
+                    && transition.phase == crate::account_transition::Phase::Complete
+            })
+            .filter_map(|transition| match &transition.intent.kind {
+                Some(
+                    crate::account_transition::Kind::Activation { day, .. }
+                    | crate::account_transition::Kind::Renewal { day, .. }
+                    | crate::account_transition::Kind::AdminRecovery { day, .. },
+                ) => Some((transition.intent.expected_generation, *day)),
+                _ => None,
+            })
+            .max_by_key(|(generation, _)| *generation)
+            .map(|(_, day)| day)
+    }
+
     pub(crate) fn initial() -> Self {
         Self {
             state_version: 1,
             activities: CONTROL.iter().map(|v| (*v).into()).collect(),
             roles: BTreeMap::new(),
+            assignments: BTreeMap::new(),
+            grants: BTreeMap::new(),
             principal_registry: None,
             current_registry: None,
             account_creations: BTreeMap::new(),
@@ -286,6 +399,75 @@ impl Catalog {
             .checked_add(1)
             .ok_or("Admin catalog version exhausted")?;
         match command {
+            Command::AssignRole { assignment } => {
+                let role = self
+                    .roles
+                    .get(&assignment.role)
+                    .ok_or("assignment requires defined role")?;
+                let principal = self
+                    .registry()?
+                    .principal(&assignment.subject)
+                    .ok_or("assignment requires adopted principal")?;
+                let state = self.principal_states.get(&assignment.subject);
+                if role.version != assignment.role_version
+                    || !principal.enabled
+                    || state.is_some_and(|v| !v.enabled)
+                    || state.map_or(principal.generation, |v| v.generation)
+                        != assignment.subject_generation
+                    || self.deleted_principals.contains(&assignment.subject)
+                    || self.needs_password_aging.contains(&assignment.subject)
+                    || !self.account_commitments.contains_key(&assignment.subject)
+                    || self.assignments.contains_key(&assignment.id)
+                    || self.assignments.len() >= 512
+                {
+                    return Err(
+                        "assignment subject, role/version or bounded history is unavailable".into(),
+                    );
+                }
+                self.assignments
+                    .insert(assignment.id.clone(), assignment.clone());
+            }
+            Command::RevokeAssignment {
+                assignment,
+                expected_version,
+            } => {
+                let record = self
+                    .assignments
+                    .get_mut(assignment)
+                    .ok_or("unknown assignment revocation")?;
+                if record.revoked || record.version != *expected_version {
+                    return Err("assignment revocation version conflict".into());
+                }
+                record.version = record
+                    .version
+                    .checked_add(1)
+                    .ok_or("assignment version exhausted")?;
+                record.revoked = true;
+            }
+            Command::IssueGrant { grant } => {
+                grant.issue(self)?;
+                if self.grants.contains_key(&grant.id) || self.grants.len() >= 1024 {
+                    return Err("grant identifier used or bounded grant history exhausted".into());
+                }
+                self.grants.insert(grant.id.clone(), grant.clone());
+            }
+            Command::RevokeGrant {
+                grant,
+                expected_version,
+            } => {
+                let record = self
+                    .grants
+                    .get_mut(grant)
+                    .ok_or("unknown grant revocation")?;
+                if record.revoked || record.version != *expected_version {
+                    return Err("grant revocation version conflict".into());
+                }
+                record.version = record
+                    .version
+                    .checked_add(1)
+                    .ok_or("grant version exhausted")?;
+                record.revoked = true;
+            }
             Command::PrepareAccountCreation { intent } => {
                 use crate::account_transition::Phase;
                 if self.registry()? != &intent.registry_before
@@ -440,19 +622,30 @@ impl Catalog {
                     .insert(current.intent.principal.clone());
                 current.phase = crate::account_transition::Phase::Complete;
             }
-            Command::PrepareAccountLock { intent } => {
+            Command::PrepareAccountLock { intent }
+            | Command::PrepareAdminAccountRecovery { intent, .. } => {
                 use crate::account_transition::{Phase, Transition};
+                let activation = matches!(
+                    intent.kind,
+                    Some(crate::account_transition::Kind::Activation { .. })
+                );
+                let custody = matches!(command, Command::PrepareAdminAccountRecovery { .. });
                 let registry = self.registry()?;
                 let principal = registry
                     .principal(&intent.principal)
-                    .filter(|record| record.enabled && record.uid != 1001)
+                    .filter(|record| record.enabled && ((record.uid == 1001) == custody))
                     .ok_or("account lock changes cannot mutate the original Admin")?;
                 let generation = self
                     .principal_states
                     .get(&intent.principal)
                     .map_or(principal.generation, |state| state.generation);
-                if intent.kind == Some(crate::account_transition::Kind::Password)
-                    && !intent.locked
+                if matches!(
+                    intent.kind,
+                    Some(
+                        crate::account_transition::Kind::Password
+                            | crate::account_transition::Kind::Renewal { .. }
+                    )
+                ) && !intent.locked
                     && self
                         .principal_states
                         .get(&intent.principal)
@@ -461,11 +654,23 @@ impl Catalog {
                     return Err("password changes cannot implicitly enable a disabled principal; use governed lock/unlock".into());
                 }
                 if registry.installation() != intent.installation
-                    || (!intent.locked && self.needs_password_aging.contains(&intent.principal))
+                    || (!custody
+                        && activation != self.needs_password_aging.contains(&intent.principal)
+                        && (activation || !intent.locked))
+                    || (matches!(
+                        intent.kind,
+                        Some(crate::account_transition::Kind::AdminRecovery { .. })
+                    ) != custody)
                     || self.deleted_principals.contains(&intent.principal)
                     || generation != intent.expected_generation
                     || self.account_commitments.get(&intent.principal)
-                        != Some(&intent.credential_before)
+                        != Some(match command {
+                            Command::PrepareAdminAccountRecovery {
+                                expected_credential,
+                                ..
+                            } => expected_credential,
+                            _ => &intent.credential_before,
+                        })
                     || self.account_transitions.contains_key(&intent.transaction)
                     || self.account_deletions.contains_key(&intent.transaction)
                     || self.transaction_capacity() >= 128
@@ -481,6 +686,21 @@ impl Catalog {
                         .any(|v| v.phase != Phase::Complete)
                 {
                     return Err("account transition conflicts with current credential, generation or pending publication".into());
+                }
+                if let Command::PrepareAdminAccountRecovery {
+                    expected_recovery_generation,
+                    replacement,
+                    ..
+                } = command
+                {
+                    let verifier = self.recovery_verifier()?;
+                    if verifier.generation != *expected_recovery_generation {
+                        return Err("Admin recovery credential generation conflict".into());
+                    }
+                    verifier.successor(replacement)?;
+                    self.admin_recovery = Some(replacement.clone());
+                    self.account_commitments
+                        .insert(intent.principal.clone(), intent.credential_before.clone());
                 }
                 let generation = generation
                     .checked_add(1)
@@ -500,24 +720,35 @@ impl Catalog {
                     },
                 );
             }
-            Command::PermitAccountPublication { transaction } => {
+            Command::PermitAccountPublication { transaction }
+            | Command::PermitAdminAccountRecovery { transaction } => {
                 use crate::account_transition::Phase;
                 let current = self
                     .account_transitions
                     .get_mut(transaction)
                     .ok_or("no anchored account transition")?;
-                if current.phase != Phase::Prepared {
+                if current.phase != Phase::Prepared
+                    || (matches!(
+                        current.intent.kind,
+                        Some(crate::account_transition::Kind::AdminRecovery { .. })
+                    ) != matches!(command, Command::PermitAdminAccountRecovery { .. }))
+                {
                     return Err("account publication requires its exact prepared phase".into());
                 }
                 current.phase = Phase::PublicationPermitted;
             }
-            Command::CompleteAccountLock { transaction } => {
+            Command::CompleteAccountLock { transaction }
+            | Command::CompleteAdminAccountRecovery { transaction } => {
                 use crate::account_transition::Phase;
                 let current = self
                     .account_transitions
                     .get_mut(transaction)
                     .ok_or("no anchored account transition")?;
                 if current.phase != Phase::PublicationPermitted
+                    || (matches!(
+                        current.intent.kind,
+                        Some(crate::account_transition::Kind::AdminRecovery { .. })
+                    ) != matches!(command, Command::CompleteAdminAccountRecovery { .. }))
                     || self.account_commitments.get(&current.intent.principal)
                         != Some(&current.intent.credential_before)
                     || self.principal_states.get(&current.intent.principal)
@@ -541,6 +772,14 @@ impl Catalog {
                         enabled: !current.intent.locked,
                     },
                 );
+                if matches!(
+                    current.intent.kind,
+                    Some(crate::account_transition::Kind::Activation { .. })
+                ) {
+                    if !self.needs_password_aging.remove(&current.intent.principal) {
+                        return Err("activation completion lost its creation aging fence".into());
+                    }
+                }
                 current.phase = Phase::Complete;
             }
             Command::CheckpointAccounts { commitments } => {
@@ -769,6 +1008,183 @@ impl Catalog {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn timed_intent(
+        principal: &str,
+        kind: fn(u32, crate::utc_history::Statement) -> crate::account_transition::Kind,
+    ) -> crate::account_transition::Intent {
+        let day = 20_642;
+        let utc = crate::utc_history::Statement {
+            floor_ms: i64::from(day) * 86_400_000,
+            policy_sha256: crate::utc_history::policy_digest().unwrap(),
+            boot_id: "12".repeat(16),
+            process_generation: 1,
+            source_clock_generation: 1,
+            keeper_generation: 1,
+            runtime_sha256: "34".repeat(32),
+        };
+        crate::account_transition::Intent {
+            kind: Some(kind(day, utc)),
+            transaction: "timed-one".into(),
+            installation: "ab".repeat(32),
+            principal: principal.repeat(32),
+            expected_generation: 1,
+            locked: false,
+            passwd_sha256: "56".repeat(32),
+            shadow_before_sha256: "78".repeat(32),
+            shadow_after_sha256: "90".repeat(32),
+            credential_before: "34".repeat(32),
+            credential_after: "56".repeat(32),
+        }
+    }
+    fn timed_catalog(verifier: Option<crate::admin_recovery::Verifier>) -> Catalog {
+        let mut document = serde_json::json!({"schema_version":1,"installation":"ab".repeat(32),
+            "principals":[{"id":"cd".repeat(32),"generation":1,"login":"human","uid":1001,"enabled":true},
+                {"id":"ef".repeat(32),"generation":1,"login":"otherhuman","uid":1002,"enabled":true}]});
+        if let Some(verifier) = verifier {
+            document["admin_recovery"] = serde_json::to_value(verifier).unwrap();
+        }
+        let mut catalog = Catalog::initial();
+        catalog
+            .apply(&Command::AdoptPrincipals {
+                registry: serde_json::from_value(document).unwrap(),
+            })
+            .unwrap();
+        catalog
+            .apply(&Command::CheckpointAccounts {
+                commitments: BTreeMap::from([
+                    ("cd".repeat(32), "12".repeat(32)),
+                    ("ef".repeat(32), "34".repeat(32)),
+                ]),
+            })
+            .unwrap();
+        catalog
+    }
+
+    #[test]
+    fn activation_aging_fence_is_cleared_only_by_exact_permitted_completion() {
+        let mut catalog = timed_catalog(None);
+        let intent = timed_intent("ef", |day, utc| {
+            crate::account_transition::Kind::Activation { day, utc }
+        });
+        assert!(catalog
+            .apply(&Command::PrepareAccountLock {
+                intent: intent.clone()
+            })
+            .is_err());
+        catalog
+            .needs_password_aging
+            .insert(intent.principal.clone());
+        catalog.principal_states.insert(
+            intent.principal.clone(),
+            PrincipalState {
+                generation: 1,
+                enabled: false,
+            },
+        );
+        catalog
+            .apply(&Command::PrepareAccountLock {
+                intent: intent.clone(),
+            })
+            .unwrap();
+        assert!(catalog.needs_password_aging.contains(&intent.principal));
+        assert_eq!(catalog.password_day(&intent.principal), None);
+        assert!(!catalog.principal_states[&intent.principal].enabled);
+        assert!(catalog
+            .apply(&Command::CompleteAccountLock {
+                transaction: intent.transaction.clone()
+            })
+            .is_err());
+        catalog
+            .apply(&Command::PermitAccountPublication {
+                transaction: intent.transaction.clone(),
+            })
+            .unwrap();
+        assert!(catalog.needs_password_aging.contains(&intent.principal));
+        catalog
+            .apply(&Command::CompleteAccountLock {
+                transaction: intent.transaction.clone(),
+            })
+            .unwrap();
+        assert!(!catalog.needs_password_aging.contains(&intent.principal));
+        assert!(catalog.principal_states[&intent.principal].enabled);
+        assert_eq!(catalog.password_day(&intent.principal), Some(20_642));
+        assert_eq!(
+            catalog.account_commitments[&intent.principal],
+            intent.credential_after
+        );
+        assert!(catalog
+            .apply(&Command::CompleteAccountLock {
+                transaction: intent.transaction
+            })
+            .is_err());
+    }
+
+    #[test]
+    fn admin_os_recovery_rotates_custody_and_refuses_general_publication_while_fenced() {
+        use crate::admin_recovery::{Credential, Verifier};
+        let old = Credential::fixture(0x52);
+        let new = Credential::fixture(0x53);
+        let first = Verifier::create(&old, &"ab".repeat(32), &"cd".repeat(32), 1).unwrap();
+        let replacement = Verifier::create(&new, &"ab".repeat(32), &"cd".repeat(32), 2).unwrap();
+        let mut catalog = timed_catalog(Some(first));
+        let intent = timed_intent("cd", |day, utc| {
+            crate::account_transition::Kind::AdminRecovery { day, utc }
+        });
+        let command = Command::PrepareAdminAccountRecovery {
+            intent: intent.clone(),
+            expected_credential: "12".repeat(32),
+            expected_recovery_generation: 1,
+            replacement,
+        };
+        assert!(catalog
+            .apply(&Command::PrepareAccountLock {
+                intent: intent.clone()
+            })
+            .is_err());
+        catalog.apply(&command).unwrap();
+        assert!(!catalog.principal_states[&intent.principal].enabled);
+        assert_eq!(
+            catalog.account_commitments[&intent.principal],
+            intent.credential_before
+        );
+        assert!(catalog.recovery_verifier().unwrap().verify(&old).is_err());
+        catalog.recovery_verifier().unwrap().verify(&new).unwrap();
+        assert!(catalog
+            .apply(&Command::PermitAccountPublication {
+                transaction: intent.transaction.clone()
+            })
+            .is_err());
+        assert!(catalog
+            .apply(&Command::CompleteAdminAccountRecovery {
+                transaction: intent.transaction.clone()
+            })
+            .is_err());
+        catalog
+            .apply(&Command::PermitAdminAccountRecovery {
+                transaction: intent.transaction.clone(),
+            })
+            .unwrap();
+        assert!(catalog
+            .apply(&Command::CompleteAccountLock {
+                transaction: intent.transaction.clone()
+            })
+            .is_err());
+        assert_eq!(catalog.password_day(&intent.principal), None);
+        catalog
+            .apply(&Command::CompleteAdminAccountRecovery {
+                transaction: intent.transaction,
+            })
+            .unwrap();
+        assert!(catalog.principal_states[&intent.principal].enabled);
+        assert_eq!(catalog.principal_states[&intent.principal].generation, 2);
+        assert_eq!(catalog.password_day(&intent.principal), Some(20_642));
+        assert_eq!(
+            catalog.account_commitments[&intent.principal],
+            intent.credential_after
+        );
+        assert!(catalog.apply(&command).is_err());
+    }
     #[test]
     fn deletion_fences_immediately_and_completed_tombstones_cannot_be_reenabled() {
         use crate::account_transition::Phase;

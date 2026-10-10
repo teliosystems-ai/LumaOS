@@ -34,6 +34,14 @@ Use [G2_SOFTWARE_STATUS.md](G2_SOFTWARE_STATUS.md) for implemented scope and
 evidence. Every row here remains open until its complete implementation exists;
 targeted source checks alone cannot close G2 acceptance.
 
+The [2026-10-10 integrated candidate](evidence/G2_REQUIREMENT1_INTEGRATION_2026-10-10.md)
+adds usable-account/UTC/grant interfaces and principal-bound invoice/export/
+preserving-retention paths. It is not complete generic workflow, destructive
+retention or damaged-authority restoration. Linux compilation is currently
+blocked by Ubuntu WSL launch failure; no C-backed fallback build or unapproved
+WSL shutdown is permitted. Preserve the implementation-first sequence and
+qualify one fully implemented, frozen image rather than a partially closed gate.
+
 | Work package | Required integration before candidate freeze |
 | --- | --- |
 | Admin and trust | The native sealed-child backend, durable parent intent, fixed-path loader and positive existing-owner checkpoint enrollment now pass targeted disposable-TPM tests. Read-only inspection, reviewed bound-parent/no-NV continuation and exact TPM-committed pending-proposal publication pass targeted tests. A separately authenticated, reviewed product bootstrap anchors the initial governance principal. Fresh principal-bound finite activity registration and versioned role definitions now have TPM-bound semantic receipts and exact restart/replay; neither enables assignment or resource effects. The local catalog service/client, enforced-confinement startup checks and packaged unit/profile now exist in source; kernel-peer/framing checks are not installed PAM-to-TPM qualification. Vacant or mismatched NV, unbound-parent and other uncertain states remain fenced. The older systemd 255 path still refuses nonempty owner authorization and is not the product backend. Keep existing ownership; no weaker fallback. Complete the remaining reviewed enrollment recovery, full confined Admin lifecycle, trusted-time finite assignment/revocation, governed principal/bootstrap recovery and signer/time/custody lifecycle, and qualify the installed flow. External Admin remains a future variant. |
@@ -79,9 +87,17 @@ live producer code/namespace/confinement checks and one-use acquisition-boundary
 handoff. Initial zero/one-source acquisition returns no time; quorum loss after
 a candidate remains a fence. Raw receiver attachment is fixture-only. This does
 not install or qualify the producer/keeper, deliver a reviewed clock seed,
-authenticate human control/query, implement history delivery, activate grants
+authenticate human control/query, deploy history delivery, activate grants
 or close usable-account activation. Those software integrations remain part of
 the same package before candidate freeze.
+
+The subsequent internal history-delivery adapter connects a real PAM account
+and the admitted stream to the same exclusive Admin journal. New floor evidence
+requires a fresh matching semantic history binding, live runtime-derived
+context and source revalidation after replay/authentication at every write
+boundary. Observation construction is sealed; committed or uncertain writes
+invalidate the old stream binding. Installed human-control and reviewed seed
+delivery are still absent, so this does not close protected UTC or timed grants.
 
 The [UTC history backend](evidence/G2_UTC_HISTORY_2026-10-05.md) now implements
 canonical monotonic floors, shared Admin journal replay and private reviewed

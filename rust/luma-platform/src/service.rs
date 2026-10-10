@@ -12,6 +12,7 @@ const SOCKET: &str = "/run/luma-broker/control.sock";
 const MAX_FRAME: usize = 16384;
 const FRAME_TIMEOUT: Duration = Duration::from_secs(2);
 
+pub(crate) mod granted_gateway;
 mod ingress;
 
 #[derive(Deserialize, Serialize)]
@@ -234,6 +235,7 @@ fn handle_request(
     validate(&request, uid, now()?)?;
     if request.action != "status" {
         crate::platform::require_installed()?;
+        crate::admin_governance::reject_laboratory_effects_after_bootstrap()?;
         let action = broker_effects::Action::parse(&request.action)?;
         let budget = request.deadline.saturating_sub(now()?).min(10);
         let deadline = Instant::now() + Duration::from_secs(budget);
@@ -374,6 +376,29 @@ pub fn serve() -> Result<()> {
                     let result = (|| -> Result<serde_json::Value> {
                         let peer = credentials(&incoming.stream)?;
                         let envelope: serde_json::Value = serde_json::from_slice(&incoming.bytes)?;
+                        if envelope.get("action").and_then(|v| v.as_str())
+                            == Some("resource-granted-gateway")
+                        {
+                            let request: resource_manager::requests::gateway::Request =
+                                serde_json::from_slice(&incoming.bytes)?;
+                            let admission = if matches!(
+                                &request.payload,
+                                resource_manager::requests::gateway::Message::Submit { .. }
+                            ) {
+                                Some(granted_gateway::for_request(&incoming.stream, &request)?)
+                            } else {
+                                None
+                            };
+                            return manager
+                                .as_mut()
+                                .ok_or("resource manager unavailable in this session")?
+                                .handle_gateway_admitted(
+                                    &request,
+                                    peer,
+                                    peer_pidfd(&incoming.stream)?,
+                                    admission,
+                                );
+                        }
                         if envelope.get("action").and_then(|v| v.as_str())
                             == Some("resource-gateway")
                         {

@@ -1,9 +1,19 @@
 # Native resource leases and generations
 
-Updated 2026-10-09. Requirement #1 remains open until its remaining integrations
+Updated 2026-10-10. Requirement #1 remains open until its remaining integrations
 and the applicable installed-image qualification pass. This implementation is
 not a claim that all G2 resources, inference clients or hardware are qualified.
 Requirement #2 has not been started by this work.
+
+The [integrated candidate checkpoint](evidence/G2_REQUIREMENT1_INTEGRATION_2026-10-10.md)
+records new source paths for account activation/renewal, offline-custody original
+Admin recovery, authenticated deployed UTC control, finite catalog grants,
+live inference admission and governed invoice/artifact operations. Those paths
+are not yet compiled or qualified on the installed image. Older descriptions
+below retain their historical scope; they are not evidence that the new source
+is absent or that its positive runtime flows pass. Generic consumers, complete
+policy-decision evidence, destructive retention and damaged-authority restoration
+remain open software work, not merely unavailable-hardware testing.
 
 Existing non-Admin credential changes now include a reviewed native password
 replacement path alongside lock/unlock. Both advance and fence the target

@@ -99,7 +99,10 @@ class PublisherAssets(unittest.TestCase):
         self.assertIn('store.append(entry.clone()', governance)
         self.assertIn('fn execute_history<', governance)
         self.assertNotIn('pub fn execute_history', governance)
-        self.assertNotIn('pub(crate) fn execute_history', governance)
+        self.assertNotIn('pub(crate) fn execute_history_at', governance)
+        self.assertIn('pub(crate) fn execute_history_live', governance)
+        self.assertIn('account: &authentication::AuthenticatedAccount', governance)
+        self.assertIn('stream.history_delivery(&binding)?.support(proposed)', governance)
         self.assertNotIn('LocalAnchor', history)
         self.assertNotIn('advance(', history)
         main = (ROOT / 'rust/luma-platform/src/main.rs').read_text()
@@ -113,7 +116,7 @@ class PublisherAssets(unittest.TestCase):
         self.assertIn('record.statement.floor_ms <= self.floor_ms', history)
         self.assertRegex(history, r'self\s*\.version\s*\.checked_add\(1\)')
         self.assertIn('self.floor_ms > lower', history)
-        self.assertGreaterEqual(governance.count('statement.supported_by(&observe()?)?'), 3)
+        self.assertGreaterEqual(governance.count('observe(statement)'), 5)
         self.assertIn('context.recheck(&mut authenticate)', governance)
         for forbidden in ('clock_settime(', 'nocerttimecheck', 'pub fn seed', 'reacquire('):
             self.assertNotIn(forbidden, history)
@@ -123,13 +126,13 @@ class PublisherAssets(unittest.TestCase):
         self.assertIn('Result<Vec<ProducerRound>>', receiver)
         self.assertIn('rounds.push(round)', receiver)
         self.assertNotIn('Result<Option<ProducerRound>>', receiver)
-        stream = (ROOT / 'rust/luma-platform/src/utc_stream.rs').read_text().split('#[cfg(test)]')[0]
+        stream = (ROOT / 'rust/luma-platform/src/utc_stream.rs').read_text().rsplit('\n#[cfg(test)]\nmod tests {', 1)[0]
         self.assertIn('for producer in rounds', stream)
         self.assertIn('self.receiver.recheck_quiet()?', stream)
         self.assertIn('self.keeper.candidate_at(now)', stream)
 
     def test_stream_does_not_enable_authority_or_automatic_recovery(self):
-        stream = (ROOT / 'rust/luma-platform/src/utc_stream.rs').read_text().split('#[cfg(test)]')[0]
+        stream = (ROOT / 'rust/luma-platform/src/utc_stream.rs').read_text().rsplit('\n#[cfg(test)]\nmod tests {', 1)[0]
         for forbidden in ('Serialize', 'Deserialize', 'UnixDatagram::bind',
                           'pub(crate) fn reacquire', 'pub(crate) fn assign'):
             self.assertNotIn(forbidden, stream)
@@ -175,10 +178,10 @@ class PublisherAssets(unittest.TestCase):
 
     def test_history_binding_is_not_a_wire_token_or_separate_tpm_owner(self):
         governance = (ROOT / 'rust/luma-platform/src/admin_governance.rs').read_text()
-        reader = governance.split('pub(crate) struct HistoryBinding', 1)[1].split('// Deliberately private', 1)[0]
+        reader = governance.split('pub(crate) struct HistoryBinding', 1)[1].split('fn utc_input', 1)[0]
         self.assertIn("store: &'a mut Store<A>", reader)
         self.assertIn('context.bootstrap_state(&snapshot)?', reader)
-        self.assertIn('context.history(&snapshot, None)?', reader)
+        self.assertIn('context.history(&snapshot, self.candidate)?', reader)
         self.assertIn('self.fenced = true', reader)
         self.assertIn('last_clock.elapsed_since(first_clock)?', reader)
         self.assertEqual(reader.count('self.replay()?'), 2)

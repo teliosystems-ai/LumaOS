@@ -40,6 +40,15 @@ struct Plan {
     workflow_sha256: String,
     source_sha256: String,
     source_bytes: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    authority: Option<PrincipalOwner>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+struct PrincipalOwner {
+    principal: String,
+    generation: u64,
 }
 impl Plan {
     fn validate(&self, installation: &str) -> Result<()> {
@@ -56,6 +65,28 @@ impl Plan {
             || self.source_bytes > 1024 * 1024
         {
             return Err("invalid native invoice workflow plan".into());
+        }
+        if let Some(owner) = &self.authority {
+            if crate::tpm::decode::<32>(&owner.principal)? == [0; 32] || owner.generation == 0 {
+                return Err("invalid governed workflow owner".into());
+            }
+        }
+        Ok(())
+    }
+    fn scope_digest(&self) -> Result<String> {
+        let mut proposal = self.clone();
+        proposal.authority = None;
+        digest(&proposal)
+    }
+    fn check_owner(&self, boundary: &mut crate::admin_governance::GrantBoundary<'_>) -> Result<()> {
+        boundary.check()?;
+        let owner = self.authority.as_ref().ok_or(
+            "laboratory workflow cannot become governed authority; preserve it and create a new request",
+        )?;
+        if owner.principal != boundary.subject()?
+            || owner.generation != boundary.subject_generation()?
+        {
+            return Err("workflow owner or principal generation changed".into());
         }
         Ok(())
     }
@@ -125,7 +156,7 @@ struct Store {
     objects: File,
     pending: File,
     installation: String,
-    calculator: fn(&[u8]) -> Result<workflow_resource::Calculation>,
+    calculator: fn(&[u8], &mut dyn FnMut() -> Result<()>) -> Result<workflow_resource::Calculation>,
     calculation_check: fn(&workflow_resource::Calculation, &[u8], &str) -> Result<()>,
 }
 pub(crate) fn initialize(path: &Path, installation: &str) -> Result<()> {
@@ -236,7 +267,7 @@ impl Store {
             objects,
             pending,
             installation: installation.into(),
-            calculator: workflow_resource::calculate,
+            calculator: workflow_resource::calculate_checked,
             calculation_check: workflow_resource::Calculation::recheck,
         };
         result.inventory()?;
@@ -383,7 +414,8 @@ impl Store {
         }
         Ok((plan, last))
     }
-    fn put_object(&self, content: &[u8]) -> Result<String> {
+    fn put_object(&self, content: &[u8], mut check: impl FnMut() -> Result<()>) -> Result<String> {
+        check()?;
         if content.is_empty() || content.len() as u64 > MAX_OBJECT {
             return Err("workflow object size denied".into());
         }
@@ -415,6 +447,7 @@ impl Store {
                 {
                     return Err("workflow storage capacity/reserve exhausted".into());
                 }
+                check()?;
                 io::write_member(&self.pending, &hash, content, 0o400)?;
                 self.pending.sync_all()?;
             }
@@ -427,6 +460,7 @@ impl Store {
             io::open_at(&self.pending, &hash, libc::O_RDONLY, 0)?.sync_all()?;
             self.pending.sync_all()?;
             let name = CString::new(hash.as_str())?;
+            check()?;
             if unsafe {
                 libc::renameat2(
                     self.pending.as_raw_fd(),
@@ -445,6 +479,7 @@ impl Store {
         io::open_at(&self.objects, &hash, libc::O_RDONLY, 0)?.sync_all()?;
         self.objects.sync_all()?;
         self.root.sync_all()?;
+        check()?;
         Ok(hash)
     }
     fn prepare(
@@ -473,6 +508,7 @@ impl Store {
             }
             authorize(plan)?;
             self.root.sync_all()?;
+            authorize(plan)?;
             return Ok(true);
         }
         if self
@@ -483,10 +519,12 @@ impl Store {
         {
             return Err("workflow run capacity exhausted".into());
         }
-        let validation = (self.calculator)(source)?;
+        authorize(plan)?;
+        let validation = (self.calculator)(source, &mut || authorize(plan))?;
         authorize(plan)?;
         (self.calculation_check)(&validation, source, &plan.installation)?;
-        self.put_object(source)?;
+        authorize(plan)?;
+        self.put_object(source, || authorize(plan))?;
         let checkpoint = Checkpoint {
             stage: 0,
             plan_sha256: digest(plan)?,
@@ -506,8 +544,10 @@ impl Store {
         authorize(plan)?;
         (self.calculation_check)(&validation, source, &plan.installation)?;
         self.root.sync_all()?;
+        authorize(plan)?;
         tx.commit()?;
         self.root.sync_all()?;
+        authorize(plan)?;
         Ok(false)
     }
     fn insert(&self, plan: &Plan, checkpoint: &Checkpoint) -> Result<()> {
@@ -549,8 +589,10 @@ impl Store {
         self.insert(plan, next)?;
         authorize(plan)?;
         self.root.sync_all()?;
+        authorize(plan)?;
         tx.commit()?;
         self.root.sync_all()?;
+        authorize(plan)?;
         Ok(())
     }
     fn status(&self, request: &str) -> Result<serde_json::Value> {
@@ -564,6 +606,7 @@ impl Store {
             "effect_request_id":plan.effect_id()?,"receipt":checkpoint.receipt,
             "cancellation_allowed":checkpoint.stage < 3 || checkpoint.stage == 5,
             "input_kind":"operator-stdin-snapshot","product_admin_active":false,
+            "governed_owner":plan.authority,
             "folder_grant":false,"gate_closing":false}),
         )
     }
@@ -648,9 +691,11 @@ impl Store {
             }
             1 => {
                 let source = self.object(&plan.source_sha256)?;
-                let result = (self.calculator)(&source)?;
+                authorize(&plan)?;
+                let result = (self.calculator)(&source, &mut || authorize(&plan))?;
+                authorize(&plan)?;
                 (self.calculation_check)(&result, &source, &plan.installation)?;
-                next.report_sha256 = self.put_object(&result.report)?;
+                next.report_sha256 = self.put_object(&result.report, || authorize(&plan))?;
                 next.resource_lease = Some(result.lease.clone());
                 self.transition(&plan, &previous, &next, |plan| {
                     authorize(plan)?;
@@ -700,10 +745,14 @@ impl Store {
     ) -> Result<()> {
         let bytes = self.object(&applying.report_sha256)?;
         let source = self.object(&plan.source_sha256)?;
-        let calculation = (self.calculator)(&source)?;
-        if calculation.report != bytes {
-            return Err("workflow deterministic report differs from source".into());
-        }
+        authorize(plan)?;
+        let calculation = workflow_resource::Calculation {
+            report: bytes.clone(),
+            lease: applying.resource_lease.clone().ok_or(
+                "workflow publication lacks its original resource provenance; retain and use a new request",
+            )?,
+        };
+        authorize(plan)?;
         (self.calculation_check)(&calculation, &source, &plan.installation)?;
         let result = effect(plan, &bytes, false, &mut || {
             self.check_current(plan, applying)?;
@@ -746,9 +795,11 @@ impl Store {
         let applying: Checkpoint =
             serde_json::from_str(&row.first().ok_or("applying checkpoint missing")?[0])?;
         let report = self.object(&applying.report_sha256)?;
-        if (self.calculator)(&self.object(&plan.source_sha256)?)?.report != report {
-            return Err("reconciliation report differs from its bound source".into());
-        }
+        // The immutable original report and exact committed receipt prove the
+        // historical outcome. Verification does not rerun the calculator or
+        // manufacture a replacement resource lease after withdrawal/recovery.
+        let effect = plan.effect_id()?;
+        catalog::invoice_receipt(&plan.commit(&effect), &report)?;
         Ok((plan, current, applying, report))
     }
 
@@ -839,6 +890,7 @@ pub fn prepare(request: &str, artifact: &str, expected: &str) -> Result<()> {
             .into(),
         source_sha256: io::digest(&source),
         source_bytes: source.len() as u64,
+        authority: None,
     };
     let store = Store::open(Path::new(DIRECTORY), &installation)?;
     let replayed = store.prepare(&plan, &source, authorize)?;
@@ -925,11 +977,407 @@ pub fn reconcile(request: &str, review: Option<&str>) -> Result<()> {
     Ok(())
 }
 
+fn governed_use(
+    plan: &Plan,
+    action: crate::finite_grants::Action,
+) -> Result<crate::finite_grants::Use> {
+    use crate::finite_grants::{Action, Kind, Selector, Use};
+    let (kind, id, generation, commitment, input_bytes, output_bytes) = match action {
+        Action::Execute | Action::Resume | Action::Cancel => (
+            Kind::Workflow,
+            plan.request_id.clone(),
+            1,
+            plan.scope_digest()?,
+            plan.source_bytes,
+            MAX_OBJECT,
+        ),
+        Action::Calculate => (
+            Kind::Calculation,
+            "invoice-v1".into(),
+            1,
+            plan.source_sha256.clone(),
+            plan.source_bytes,
+            MAX_OBJECT,
+        ),
+        Action::Write => (
+            Kind::Artifact,
+            plan.artifact_id.clone(),
+            plan.expected_version
+                .checked_add(1)
+                .ok_or("workflow artifact generation overflow")?,
+            plan.scope_digest()?,
+            MAX_OBJECT,
+            MAX_OBJECT,
+        ),
+        _ => return Err("unsupported workflow effect scope".into()),
+    };
+    let usage = Use {
+        action,
+        selector: Selector {
+            kind,
+            id,
+            generation,
+            digest: commitment,
+        },
+        input_bytes,
+        output_bytes,
+        units: 1,
+    };
+    usage.validate()?;
+    Ok(usage)
+}
+
+fn proposed_plan(request: &str, artifact: &str, expected: &str, source: &[u8]) -> Result<Plan> {
+    let installation = io::installation()?;
+    let version = expected.parse::<u64>()?;
+    if version.to_string() != expected {
+        return Err("noncanonical expected artifact version".into());
+    }
+    let admission = skills::admission()?;
+    let plan = Plan {
+        schema_version: 1,
+        environment: "lab".into(),
+        installation: installation.clone(),
+        request_id: request.into(),
+        artifact_id: artifact.into(),
+        expected_version: version,
+        workflow_sha256: admission["workflow_sha256"]
+            .as_str()
+            .ok_or("workflow digest missing")?
+            .into(),
+        source_sha256: io::digest(source),
+        source_bytes: source.len() as u64,
+        authority: None,
+    };
+    plan.validate(&installation)?;
+    authorize(&plan)?;
+    Ok(plan)
+}
+
+/// A review is an inert exact scope description. It cannot execute, publish,
+/// reserve resources or become a grant by being passed back on stdin.
+fn operator_snapshot(path: &str) -> Result<Vec<u8>> {
+    use std::io::Read;
+    use std::os::unix::fs::OpenOptionsExt;
+    let path = Path::new(path);
+    let parent = path.parent().ok_or("missing private input parent")?;
+    if parent.parent() != Some(Path::new("/run/luma-granted-client/requests"))
+        || parent
+            .file_name()
+            .and_then(|v| v.to_str())
+            .map_or(true, |v| {
+                v.len() != 32
+                    || !v
+                        .bytes()
+                        .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
+            })
+    {
+        return Err("workflow input must be an owned launcher snapshot, not a folder grant".into());
+    }
+    crate::tpm::private_directory(parent)?;
+    let mut file = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC)
+        .open(path)?;
+    let before = file.metadata()?;
+    if !before.is_file()
+        || before.uid() != 0
+        || before.nlink() != 1
+        || before.mode() & 0o7777 != 0o400
+        || before.len() == 0
+        || before.len() > 1024 * 1024
+    {
+        return Err("unsafe operator snapshot".into());
+    }
+    let key = |m: &std::fs::Metadata| {
+        (
+            m.dev(),
+            m.ino(),
+            m.len(),
+            m.mtime(),
+            m.mtime_nsec(),
+            m.ctime(),
+            m.ctime_nsec(),
+        )
+    };
+    let mut bytes = Vec::new();
+    (&mut file).take(1024 * 1024 + 1).read_to_end(&mut bytes)?;
+    if bytes.len() as u64 != before.len()
+        || key(&file.metadata()?) != key(&before)
+        || key(&std::fs::symlink_metadata(path)?) != key(&before)
+    {
+        return Err("operator snapshot changed during admission".into());
+    }
+    Ok(bytes)
+}
+
+pub(crate) fn governed_review(
+    request: &str,
+    artifact: &str,
+    expected: &str,
+    snapshot: &str,
+) -> Result<()> {
+    let source = operator_snapshot(snapshot)?;
+    let plan = proposed_plan(request, artifact, expected, &source)?;
+    println!(
+        "{}",
+        serde_json::json!({"plan":plan,"input_kind":"operator-stdin-snapshot",
+        "execute":governed_use(&plan,crate::finite_grants::Action::Execute)?,
+        "calculate":governed_use(&plan,crate::finite_grants::Action::Calculate)?,
+        "write":governed_use(&plan,crate::finite_grants::Action::Write)?,
+        "resume":governed_use(&plan,crate::finite_grants::Action::Resume)?,
+        "cancel":governed_use(&plan,crate::finite_grants::Action::Cancel)?,
+        "effect_executed":false,"grant_issued":false})
+    );
+    Ok(())
+}
+
+pub(crate) fn governed_prepare(args: &[String]) -> Result<()> {
+    if args.len() != 8 {
+        return Err("expected owned workflow-governed-prepare LOGIN EXECUTE-GRANT CALCULATE-GRANT REQUEST ARTIFACT EXPECTED-VERSION SNAPSHOT (use granted-run with CSV stdin)".into());
+    }
+    let source = operator_snapshot(&args[7])?;
+    let mut plan = proposed_plan(&args[4], &args[5], &args[6], &source)?;
+    let uses = vec![
+        (
+            args[2].clone(),
+            governed_use(&plan, crate::finite_grants::Action::Execute)?,
+        ),
+        (
+            args[3].clone(),
+            governed_use(&plan, crate::finite_grants::Action::Calculate)?,
+        ),
+    ];
+    let result = crate::admin_governance::with_grants(&args[1], &uses, |boundary| {
+        plan.authority = Some(PrincipalOwner {
+            principal: boundary.subject()?.into(),
+            generation: boundary.subject_generation()?,
+        });
+        let store = Store::open(Path::new(DIRECTORY), &plan.installation)?;
+        let replayed = store.prepare(&plan, &source, |plan| {
+            plan.check_owner(boundary)?;
+            authorize(plan)
+        })?;
+        let mut status = store.status(&plan.request_id)?;
+        status["replayed"] = replayed.into();
+        Ok(status)
+    })?;
+    println!("{result}");
+    Ok(())
+}
+
+pub(crate) fn governed_advance(args: &[String]) -> Result<()> {
+    if args.len() != 7 {
+        return Err("expected workflow-governed-advance LOGIN RESUME-GRANT CALCULATE-GRANT WRITE-GRANT REQUEST REVIEW-SHA256".into());
+    }
+    let store = Store::open(Path::new(DIRECTORY), &io::installation()?)?;
+    let (plan, checkpoint) = store.load(&args[5])?;
+    let mut uses = vec![(
+        args[2].clone(),
+        governed_use(&plan, crate::finite_grants::Action::Resume)?,
+    )];
+    // Source/checkpoint transitions do not borrow publication or calculation
+    // authority. A saved checkpoint never stands in for either live grant.
+    if matches!(checkpoint.stage, 1 | 2 | 3) {
+        uses.push((
+            args[3].clone(),
+            governed_use(&plan, crate::finite_grants::Action::Calculate)?,
+        ));
+    }
+    if matches!(checkpoint.stage, 2 | 3 | 4) {
+        uses.push((
+            args[4].clone(),
+            governed_use(&plan, crate::finite_grants::Action::Write)?,
+        ));
+    }
+    let result = crate::admin_governance::with_grants(&args[1], &uses, |boundary| {
+        plan.check_owner(boundary)?;
+        store.advance(
+            &args[5],
+            &args[6],
+            |plan| {
+                plan.check_owner(boundary)?;
+                authorize(plan)
+            },
+            |plan, report, replay_only, check| {
+                let effect = plan.effect_id()?;
+                catalog::commit_invoice(&plan.commit(&effect), report, replay_only, check)
+            },
+        )?;
+        store.status(&args[5])
+    })?;
+    println!("{result}");
+    Ok(())
+}
+
+pub(crate) fn governed_cancel(args: &[String]) -> Result<()> {
+    if args.len() != 5 {
+        return Err(
+            "expected workflow-governed-cancel LOGIN CANCEL-GRANT REQUEST REVIEW-SHA256".into(),
+        );
+    }
+    let store = Store::open(Path::new(DIRECTORY), &io::installation()?)?;
+    let (plan, _) = store.load(&args[3])?;
+    let usage = governed_use(&plan, crate::finite_grants::Action::Cancel)?;
+    let result = crate::admin_governance::with_grant(&args[1], &args[2], &usage, |boundary| {
+        store.cancel(&args[3], &args[4], |plan| plan.check_owner(boundary))?;
+        store.status(&args[3])
+    })?;
+    println!("{result}");
+    Ok(())
+}
+
+pub(crate) fn governed_reconcile(args: &[String]) -> Result<()> {
+    let reviewed = if args.len() == 4 {
+        None
+    } else if args.len() == 6 && args[4] == "--publish-committed" {
+        Some(args[5].as_str())
+    } else {
+        return Err("expected workflow-governed-reconcile LOGIN RESUME-GRANT REQUEST [--publish-committed REVIEW-SHA256]".into());
+    };
+    let store = Store::open(Path::new(DIRECTORY), &io::installation()?)?;
+    let (plan, _) = store.load(&args[3])?;
+    let usage = governed_use(&plan, crate::finite_grants::Action::Resume)?;
+    let result = crate::admin_governance::with_grant(&args[1], &args[2], &usage, |boundary| {
+        plan.check_owner(boundary)?;
+        let (plan, _, applying, report) = store.reconciliation_input(&args[3])?;
+        let effect = plan.effect_id()?;
+        let proof = catalog::committed_invoice(&plan.commit(&effect), &report)?;
+        let receipt = proof.recheck()?;
+        let review = Store::reconciliation_review(&plan, &applying, &receipt)?;
+        let replayed = reviewed
+            .map(|review| {
+                store.acknowledge_committed(&args[3], review, |plan, _| {
+                    plan.check_owner(boundary)?;
+                    proof.recheck()
+                })
+            })
+            .transpose()?;
+        plan.check_owner(boundary)?;
+        Ok(
+            serde_json::json!({"request_id":args[3],"review_sha256":review,
+            "receipt":receipt,"replayed":replayed,"effect_executed":false,
+            "state":store.status(&args[3])?["state"]}),
+        )
+    })?;
+    println!("{result}");
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::cell::Cell;
     use std::os::unix::fs::PermissionsExt;
+    #[test]
+    fn original_calculation_receipt_is_required_and_retry_never_launches_a_worker() {
+        let f = Fixture::new("original-calculation");
+        let mut store = f.open();
+        let (plan, bytes) = plan();
+        store.prepare(&plan, &bytes, |_| Ok(())).unwrap();
+        for _ in 0..2 {
+            store
+                .advance("run-1", &review(&store), |_| Ok(()), |_, _, _, _| panic!())
+                .unwrap();
+        }
+        let lease = store.load("run-1").unwrap().1.resource_lease.unwrap();
+        store.calculator = |_, _| panic!("publication must use the original generation");
+        store
+            .advance(
+                "run-1",
+                &review(&store),
+                |_| Ok(()),
+                |plan, bytes, _, check| {
+                    check()?;
+                    receipt(plan, bytes)
+                },
+            )
+            .unwrap();
+        assert_eq!(store.load("run-1").unwrap().1.resource_lease, Some(lease));
+        let token = ack_review(&store);
+        assert!(store
+            .acknowledge_committed("run-1", &token, receipt)
+            .unwrap());
+    }
+
+    #[test]
+    fn object_admission_is_rechecked_after_pending_sync_before_rename() {
+        let f = Fixture::new("object-rename-admission");
+        let store = f.open();
+        let bytes = b"bounded exact operator snapshot";
+        let hash = io::digest(bytes);
+        assert!(store
+            .put_object(bytes, || {
+                if io::names(&store.pending, MAX_OBJECTS)?.contains(&hash) {
+                    Err("grant changed after private object preparation".into())
+                } else {
+                    Ok(())
+                }
+            })
+            .is_err());
+        assert!(io::names(&store.objects, MAX_OBJECTS).unwrap().is_empty());
+        assert_eq!(
+            io::read_member(&store.pending, &hash, MAX_OBJECT).unwrap(),
+            bytes
+        );
+        assert!(store
+            .db
+            .query("SELECT request_id FROM runs", &[], MAX_RUNS)
+            .unwrap()
+            .is_empty());
+    }
+
+    #[test]
+    fn denied_worker_boundary_leaves_no_checkpoint_or_source_object() {
+        let f = Fixture::new("worker-boundary-denial");
+        let mut store = f.open();
+        store.calculator = |_, check| {
+            check()?;
+            panic!("denied worker cannot execute")
+        };
+        let (plan, bytes) = plan();
+        let calls = Cell::new(0);
+        assert!(store
+            .prepare(&plan, &bytes, |_| {
+                calls.set(calls.get() + 1);
+                if calls.get() >= 3 {
+                    Err("grant expired before owned worker".into())
+                } else {
+                    Ok(())
+                }
+            })
+            .is_err());
+        assert!(store.load("run-1").is_err());
+        assert!(io::names(&store.objects, MAX_OBJECTS).unwrap().is_empty());
+    }
+
+    #[test]
+    fn governed_scopes_bind_exact_source_target_and_operation_without_rewriting_legacy_bytes() {
+        use crate::finite_grants::Action;
+        let (mut plan, _) = plan();
+        let original = serde_json::to_vec(&plan).unwrap();
+        let original_effect = plan.effect_id().unwrap();
+        assert!(!String::from_utf8(original.clone())
+            .unwrap()
+            .contains("authority"));
+        let usage = governed_use(&plan, Action::Write).unwrap();
+        assert_eq!(usage.selector.generation, 1);
+        let scope = plan.scope_digest().unwrap();
+        plan.authority = Some(PrincipalOwner {
+            principal: "ab".repeat(32),
+            generation: 7,
+        });
+        assert_eq!(plan.scope_digest().unwrap(), scope);
+        assert_ne!(plan.effect_id().unwrap(), original_effect);
+        plan.expected_version = 1;
+        assert_ne!(
+            governed_use(&plan, Action::Write).unwrap().selector,
+            usage.selector
+        );
+        assert!(governed_use(&plan, Action::Infer).is_err());
+        plan.source_sha256 = "cd".repeat(32);
+        assert_ne!(plan.scope_digest().unwrap(), scope);
+    }
     #[test]
     fn failed_resource_calculation_never_advances_or_crosses_the_artifact_boundary() {
         let f = Fixture::new("resource-failure");
@@ -945,7 +1393,7 @@ mod tests {
             )
             .unwrap();
         let before = store.load("run-1").unwrap();
-        store.calculator = |_| Err("resource generation unavailable".into());
+        store.calculator = |_, _| Err("resource generation unavailable".into());
         assert!(store
             .advance(
                 "run-1",
@@ -964,7 +1412,7 @@ mod tests {
         let (plan, bytes) = plan();
         let mut store = f.open();
         store.prepare(&plan, &bytes, |_| Ok(())).unwrap();
-        store.calculator = |_| panic!("replay must not allocate another physical generation");
+        store.calculator = |_, _| panic!("replay must not allocate another physical generation");
         assert!(store.prepare(&plan, &bytes, |_| Ok(())).unwrap());
         let legacy = serde_json::json!({"stage":2,"plan_sha256":"a".repeat(64),
             "previous_sha256":"b".repeat(64),"report_sha256":"c".repeat(64),"receipt":null});
@@ -977,7 +1425,7 @@ mod tests {
         let f = Fixture::new("resource-prepare-failure");
         let (plan, bytes) = plan();
         let mut store = f.open();
-        store.calculator = |_| Err("resource acknowledgement lost".into());
+        store.calculator = |_, _| Err("resource acknowledgement lost".into());
         assert!(store.prepare(&plan, &bytes, |_| Ok(())).is_err());
         assert!(store.load("run-1").is_err());
         assert!(io::names(&store.objects, MAX_OBJECTS).unwrap().is_empty());
@@ -998,7 +1446,8 @@ mod tests {
             let mut store = Store::open(&self.0.join("runs"), &"a".repeat(64)).unwrap();
             // This fixture exercises coordinator persistence, not the installed
             // systemd/lease boundary. The production constructor always uses it.
-            store.calculator = |source| {
+            store.calculator = |source, check| {
+                check()?;
                 Ok(workflow_resource::Calculation {
                     report: calculation::report_bytes(source)?,
                     lease: resources::Token {
@@ -1038,6 +1487,7 @@ mod tests {
                 workflow_sha256: "b".repeat(64),
                 source_sha256: io::digest(&source),
                 source_bytes: source.len() as u64,
+                authority: None,
             },
             source,
         )

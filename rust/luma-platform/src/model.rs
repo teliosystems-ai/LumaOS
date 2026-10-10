@@ -84,6 +84,14 @@ pub(crate) fn resource_catalog_binding() -> Result<String> {
     Ok(bundle::hex(&Sha256::digest(CATALOG.as_bytes())))
 }
 
+pub(crate) fn catalog_profile(id: &str) -> Result<Profile> {
+    catalog()?
+        .models
+        .into_iter()
+        .find(|profile| profile.id == id)
+        .ok_or_else(|| "profile is absent from the immutable model catalog".into())
+}
+
 pub(crate) fn resource_profile(id: &str) -> Result<Profile> {
     let p = selected()?;
     if p.id != id {

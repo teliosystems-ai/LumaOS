@@ -19,6 +19,7 @@ mod bundle;
 mod calculation;
 mod credential_observer;
 mod disk;
+mod finite_grants;
 mod model;
 mod owner_credential;
 mod platform;
@@ -45,6 +46,7 @@ mod utc_receiver;
 mod utc_runtime;
 mod utc_step_watch;
 mod utc_stream;
+pub(crate) use utc_stream::provider as utc_provider;
 mod workflow;
 mod workflow_resource;
 mod workflow_runs;
@@ -74,6 +76,44 @@ fn protect_memory() -> Result<()> {
     Ok(())
 }
 
+fn inference_input(path: &str) -> Result<Vec<resource_manager::requests::gateway::ChatMessage>> {
+    use std::io::Read;
+    use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
+    let mut file = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC)
+        .open(path)?;
+    let before = file.metadata()?;
+    if !before.is_file() || before.len() == 0 || before.len() > 16_384 {
+        return Err(
+            "inference input must be bounded regular JSON, not an authorization record".into(),
+        );
+    }
+    let key = |m: &std::fs::Metadata| {
+        (
+            m.dev(),
+            m.ino(),
+            m.len(),
+            m.mtime(),
+            m.mtime_nsec(),
+            m.ctime(),
+            m.ctime_nsec(),
+        )
+    };
+    let mut bytes = Vec::new();
+    (&mut file).take(16_385).read_to_end(&mut bytes)?;
+    if bytes.len() as u64 != before.len()
+        || key(&before) != key(&file.metadata()?)
+        || key(&before) != key(&std::fs::symlink_metadata(path)?)
+    {
+        return Err("inference input changed while being captured".into());
+    }
+    let messages: Vec<resource_manager::requests::gateway::ChatMessage> =
+        serde_json::from_slice(&bytes)?;
+    resource_manager::requests::gateway::messages_valid(&messages)?;
+    Ok(messages)
+}
+
 fn main() {
     // Set once before library initialization or worker threads. TPM library
     // trace logging must never be enabled by an inherited shell environment;
@@ -87,7 +127,96 @@ fn main() {
 
 fn dispatch() -> Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    let confined_client = std::fs::read_to_string("/proc/self/attr/current")
+        .unwrap_or_default()
+        .trim()
+        == "luma-granted-client (enforce)";
+    if confined_client
+        && !matches!(
+            args.first().map(String::as_str),
+            Some(
+                "granted-infer"
+                    | "granted-infer-review"
+                    | "workflow-governed-review"
+                    | "workflow-governed-prepare"
+                    | "workflow-governed-advance"
+                    | "workflow-governed-cancel"
+                    | "workflow-governed-reconcile"
+                    | "artifact-governed-export-review"
+                    | "artifact-governed-export"
+                    | "artifact-governed-retain"
+            )
+        )
+    {
+        return Err(
+            "confined granted client cannot enter a daemon, worker, seed or Admin control path"
+                .into(),
+        );
+    }
+    if confined_client {
+        service::granted_gateway::prepare_terminal()?;
+    }
+    if matches!(
+        args.first().map(String::as_str),
+        Some(
+            "workflow-invoice-prepare"
+                | "workflow-invoice-advance"
+                | "workflow-invoice-cancel"
+                | "workflow-invoice-reconcile"
+                | "artifact-publish-invoice"
+                | "artifact-read"
+                | "artifact-reconcile"
+                | "artifact-abort"
+                | "artifact-catalog-publish-invoice"
+                | "artifact-catalog-read"
+                | "artifact-catalog-retain"
+                | "artifact-catalog-import-legacy"
+                | "invoice-calculate"
+                | "scoped-file-read"
+        )
+    ) {
+        admin_governance::reject_laboratory_effects_after_bootstrap()?;
+    }
     match args.first().map(String::as_str) {
+        Some("granted-run") => service::granted_gateway::launch(&args[1..]),
+        Some("granted-infer") if args.len() == 5 => {
+            let max_tokens = args[4].parse::<u64>()?;
+            if max_tokens.to_string() != args[4] {
+                return Err("noncanonical inference token bound".into());
+            }
+            service::granted_gateway::infer(
+                &args[1],
+                &args[2],
+                inference_input(&args[3])?,
+                max_tokens,
+            )
+        }
+        Some("granted-infer-review") if args.len() == 3 => {
+            let max_tokens = args[2].parse::<u64>()?;
+            if max_tokens.to_string() != args[2] {
+                return Err("noncanonical inference token bound".into());
+            }
+            service::granted_gateway::infer_review(inference_input(&args[1])?, max_tokens)
+        }
+        Some("utc-keeper") if args.len() == 1 => utc_provider::serve(),
+        Some("utc-seed") => admin_governance::utc_seed_command(&args),
+        Some("utc-seed-recovery") => admin_governance::utc_seed_recovery_command(&args),
+        Some("utc-reacquire") => admin_governance::utc_reacquire_command(&args),
+        Some("utc-reacquire-recovery") => admin_governance::utc_reacquire_recovery_command(&args),
+        Some("utc-query") if args.len() == 2 => admin_governance::utc_query_command(&args[1]),
+        Some("utc-history") => admin_governance::utc_history_command(&args),
+        Some("workflow-governed-review") if args.len() == 5 => {
+            workflow_runs::governed_review(&args[1], &args[2], &args[3], &args[4])
+        }
+        Some("workflow-governed-prepare") => workflow_runs::governed_prepare(&args),
+        Some("workflow-governed-advance") => workflow_runs::governed_advance(&args),
+        Some("workflow-governed-cancel") => workflow_runs::governed_cancel(&args),
+        Some("workflow-governed-reconcile") => workflow_runs::governed_reconcile(&args),
+        Some("artifact-governed-export-review") if args.len() == 3 => {
+            artifact_catalog::governed_export_review(&args[1], &args[2])
+        }
+        Some("artifact-governed-export") => artifact_catalog::governed_export(&args),
+        Some("artifact-governed-retain") => artifact_catalog::governed_retain(&args),
         Some("workflow-resource-worker") if args.len() == 2 => workflow_resource::worker(&args[1]),
         Some("model-acquisition-worker") if args.len() == 4 => {
             acquisition::worker(&args[1], &args[2], Path::new(&args[3]))
@@ -143,6 +272,14 @@ fn dispatch() -> Result<()> {
             admin_governance::checkpoint_accounts(&args[1], &args[2], Some(&args[4]))
         }
         Some("admin-account-password") => admin_governance::account_password_command(&args),
+        Some("admin-account-activate" | "admin-account-renew") => {
+            admin_governance::account_activation_command(&args)
+        }
+        Some(
+            "admin-account-recover"
+            | "admin-account-recover-publish"
+            | "admin-account-recover-complete",
+        ) => admin_governance::admin_account_recovery_command(&args),
         Some(
             "admin-account-create"
             | "admin-account-create-permit"
@@ -159,6 +296,7 @@ fn dispatch() -> Result<()> {
         | Some("admin-account-publish")
         | Some("admin-account-complete") => admin_governance::account_lock_command(&args),
         Some("admin-activity-register")
+        | Some("admin-catalog")
         | Some("admin-role-define")
         | Some("admin-principal-advance")
         | Some("admin-principal-rotate") => admin_governance::catalog_command(&args),
@@ -363,6 +501,8 @@ fn dispatch() -> Result<()> {
             println!("resource-runtime-lock-status | resource-runtime-lock-recover REVIEW-SHA256: explicit installed-root offline recovery of an absent model exclusion inode. Requires loaded runtime masks for luma-model, luma-acquisition and luma-broker, empty worker slices, no surviving model-identity task in the installed PID namespace, no outstanding resource generations and exclusive operation/store locks. Preserves masks and all ledger/receipt bytes; does not start services, release resources or grant product Admin.");
             println!("Resources: resource-status | resource-reconcile REVIEW-SHA256 | resource-archive REVIEW-SHA256 | resource-revoke LEASE-ID GENERATION MANAGER-EPOCH | resource-migrate | resource-migration-status | resource-migrate REVIEW-SHA256. Existing broker authority; installed root maintenance only. No-argument migration initializes only missing state; reviewed offline migration preserves receipts, epochs and retained charges with both worker slices idle and the broker stopped. Uncertain state is never reset. Workers require exact generation-fenced leases before heavy work.");
             println!("Local TPM diagnostics: tpm-probe | admin-checkpoint-status (root only; read-only; neither enrolls nor grants Admin). External Admin deployment is deferred.");
+            println!("Integrated governed controls (software qualification pending): sudo luma-admin-control utc-seed/utc-seed-recovery/utc-query/utc-history, admin-account-activate/renew and admin-account-recover/-publish/-complete. Use /run/luma-admin for inert reviewed seed/statement files. Original PAM or offline custody, not sudo, authorizes control.");
+            println!("Confined granted operations: sudo luma-platform granted-run granted-infer-review MESSAGES-JSON MAX-TOKENS | granted-infer LOGIN GRANT MESSAGES-JSON MAX-TOKENS; workflow-governed-review/prepare/advance/cancel/reconcile; artifact-governed-export-review/export/retain. Exact finite scopes, current PAM/TPM/UTC and fresh resource generations are required. Unscoped laboratory effects refuse after product bootstrap. Generic DAG execution and damaged-authority restoration remain open.");
             println!("admin-checkpoint-enroll LOGIN --existing-owner: explicit installed-root checkpoint enrollment with local PAM and hidden custodian owner authorization; retains interrupted attempts; does not grant product Admin.");
             println!("admin-checkpoint-enrollment-inspect: read-only retained-intent and fixed TPM-handle observation; does not repair, retry, delete or grant Admin.");
             println!("admin-checkpoint-enrollment-resume LOGIN REVIEW-SHA256: explicit fresh-auth continuation only from a reviewed, bound parent with no NV proposal or index; never retries parent allocation.");

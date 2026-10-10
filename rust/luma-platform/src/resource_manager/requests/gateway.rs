@@ -97,6 +97,7 @@ pub(crate) struct Job {
     worker: Token,
     messages: Vec<ChatMessage>,
     result: Option<Output>,
+    admission: Option<crate::service::granted_gateway::Admission>,
 }
 
 fn validate(request: &Request, uid: u32, time: u64) -> Result<()> {
@@ -104,17 +105,24 @@ fn validate(request: &Request, uid: u32, time: u64) -> Result<()> {
         Message::Inspect {}
         | Message::Submit { .. }
         | Message::Fetch { .. }
-        | Message::Ack { .. } => uid == 990,
+        | Message::Ack { .. } => {
+            uid == 990 || (uid == 0 && request.action == "resource-granted-gateway")
+        }
         Message::Ready { .. }
         | Message::Claim { .. }
         | Message::Admit { .. }
         | Message::Finish { .. } => uid == 989,
-        Message::Cancel { .. } => matches!(uid, 989 | 990),
+        Message::Cancel { .. } => {
+            matches!(uid, 989 | 990) || (uid == 0 && request.action == "resource-granted-gateway")
+        }
     };
     if !method
         || request.schema_version != 1
         || request.caller != uid
-        || request.action != "resource-gateway"
+        || !matches!(
+            request.action.as_str(),
+            "resource-gateway" | "resource-granted-gateway"
+        )
         || request.request_id.is_empty()
         || request.request_id.len() > 64
         || !request
@@ -286,6 +294,16 @@ impl Manager {
         peer: libc::ucred,
         pin: File,
     ) -> Result<serde_json::Value> {
+        self.handle_gateway_admitted(request, peer, pin, None)
+    }
+
+    pub(crate) fn handle_gateway_admitted(
+        &mut self,
+        request: &Request,
+        peer: libc::ucred,
+        pin: File,
+        mut admission: Option<crate::service::granted_gateway::Admission>,
+    ) -> Result<serde_json::Value> {
         validate(request, peer.uid, now()?)?;
         crate::platform::require_installed()?;
         let identity = super::super::peer::live_generation(peer, &pin)?;
@@ -317,6 +335,14 @@ impl Manager {
                 max_output_tokens,
                 request_deadline,
             } => {
+                if peer.uid == 0 {
+                    admission
+                        .as_mut()
+                        .ok_or("product inference needs its live protected admission connection")?
+                        .check()?;
+                } else {
+                    crate::admin_governance::reject_laboratory_effects_after_bootstrap()?;
+                }
                 messages_valid(messages)?;
                 let (_, selected) = self.gateway_serving(Some(worker), time)?;
                 if self.gateway_ready.as_ref() != Some(worker) || profile != &selected.id {
@@ -342,20 +368,38 @@ impl Manager {
                 };
                 // Bound the eventual claim before durable reservation. This prevents
                 // a valid submission from becoming an unrepresentable worker job.
-                let planned = serde_json::json!({"kind":"job","messages":messages,"receipt":{
+                let mut planned = serde_json::json!({"kind":"job","messages":messages,"receipt":{
                     "kind":"permit","nonce":nonce,"worker":worker,"phase":"preparing","profile":profile,
                     "input_digest":input_digest(messages)?,"max_output_tokens":max_output_tokens.to_string(),
                     "context_tokens":selected.context_limit().to_string(),"request_deadline":request_deadline.to_string(),
                     "prompt_tokens":null,"token_digest":null,"output_tokens":null,"result_digest":null,
                     "slot_released":false,"worker_resources_released":false}});
+                if let Some(admission) = &admission {
+                    planned["receipt"]["product"] = serde_json::to_value(admission.attribution()?)?;
+                }
                 wire_bound(&planned)?;
-                let receipt = self.requests.begin(
+                let mut receipt = self.requests.begin(
                     caller.clone(),
                     pin.try_clone()?,
                     &begin,
                     selected.context_limit(),
                     time,
                 )?;
+                if let Some(admission) = &admission {
+                    let attribution = admission.attribution()?.clone();
+                    let record = self.requests.record(&caller, nonce, worker)?;
+                    if record
+                        .product
+                        .as_ref()
+                        .is_some_and(|old| old != &attribution)
+                    {
+                        return Err(
+                            "inference receipt belongs to another granted subject or scope".into(),
+                        );
+                    }
+                    record.product = Some(attribution);
+                    receipt = record.receipt();
+                }
                 if self.gateway.is_none() {
                     self.gateway = Some(Job {
                         caller,
@@ -364,6 +408,7 @@ impl Manager {
                         worker: worker.clone(),
                         messages: messages.clone(),
                         result: None,
+                        admission,
                     });
                 }
                 serde_json::json!({"kind":"permit","receipt":receipt})
@@ -372,6 +417,11 @@ impl Manager {
                 self.gateway_worker(peer, worker, time)?;
                 if self.gateway_ready.as_ref() != Some(worker) {
                     return Err("gateway worker not registered".into());
+                }
+                if let Some(admission) =
+                    self.gateway.as_mut().and_then(|job| job.admission.as_mut())
+                {
+                    admission.check()?;
                 }
                 if let Some(job) = &self.gateway {
                     if &job.worker != worker {
@@ -394,6 +444,11 @@ impl Manager {
                 token_digest,
             } => {
                 self.gateway_worker(peer, worker, time)?;
+                if let Some(admission) =
+                    self.gateway.as_mut().and_then(|job| job.admission.as_mut())
+                {
+                    admission.check()?;
+                }
                 let caller = self.gateway_job(nonce, worker)?.caller.clone();
                 let receipt = self.requests.admit(
                     &caller,
@@ -413,6 +468,11 @@ impl Manager {
                 output,
             } => {
                 self.gateway_worker(peer, worker, time)?;
+                if let Some(admission) =
+                    self.gateway.as_mut().and_then(|job| job.admission.as_mut())
+                {
+                    admission.check()?;
+                }
                 if output.text.trim().is_empty() || output.text.len() > 8192 {
                     return Err("gateway result exceeds bound".into());
                 }
@@ -490,7 +550,7 @@ impl Manager {
                         .find(|record| {
                             record.nonce == *nonce
                                 && record.worker == *worker
-                                && record.caller.uid == 990
+                                && matches!(record.caller.uid, 0 | 990)
                         })
                         .ok_or("gateway cancellation unavailable")?
                         .caller
@@ -539,6 +599,20 @@ impl Manager {
         {
             return Err("gateway acknowledgement expired".into());
         }
+        if matches!(&request.payload, Message::Finish { .. }) {
+            if let Some(job) = self.gateway.as_mut().filter(|job| job.admission.is_some()) {
+                let output = job
+                    .result
+                    .as_ref()
+                    .ok_or("granted completion output missing")?;
+                let receipt = status["receipt"].clone();
+                job.admission
+                    .as_mut()
+                    .ok_or("granted completion admission missing")?
+                    .deliver(output, receipt)?;
+                self.gateway = None;
+            }
+        }
         Ok(
             serde_json::json!({"schema_version":1,"request_id":request.request_id,"caller":peer.uid,"result":"ok","status":status}),
         )
@@ -568,10 +642,22 @@ pub(crate) struct Permit {
     pub result_digest: Option<String>,
     pub slot_released: bool,
     pub worker_resources_released: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub product: Option<crate::finite_grants::Audit>,
 }
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "kebab-case", deny_unknown_fields)]
 pub(crate) enum Status {
+    Worker {
+        worker: Token,
+        profile: String,
+        #[serde(with = "resources::decimal")]
+        context_tokens: u64,
+        #[serde(with = "resources::decimal")]
+        max_output_tokens: u64,
+        #[serde(with = "resources::decimal")]
+        slots: u64,
+    },
     Idle {},
     Ready {
         worker: Token,

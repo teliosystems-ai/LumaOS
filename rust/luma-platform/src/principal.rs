@@ -442,6 +442,27 @@ pub(crate) fn account_rows_digest(
     principal: &Principal,
     allow_locked: bool,
 ) -> Result<[u8; 32]> {
+    account_rows_digest_inner(passwd, shadow, principal, allow_locked, false)
+}
+
+pub(crate) fn recovery_account_rows_digest(
+    passwd: &[u8],
+    shadow: &[u8],
+    principal: &Principal,
+) -> Result<[u8; 32]> {
+    if principal.uid != 1001 {
+        return Err("offline credential recovery is reserved for the original Admin".into());
+    }
+    account_rows_digest_inner(passwd, shadow, principal, true, true)
+}
+
+fn account_rows_digest_inner(
+    passwd: &[u8],
+    shadow: &[u8],
+    principal: &Principal,
+    allow_locked: bool,
+    allow_unusable: bool,
+) -> Result<[u8; 32]> {
     let passwd_text = std::str::from_utf8(passwd).map_err(|_| "invalid local account encoding")?;
     let shadow_text = std::str::from_utf8(shadow).map_err(|_| "invalid local account encoding")?;
     let mut account = None;
@@ -479,9 +500,9 @@ pub(crate) fn account_rows_digest(
         }
         if fields[0] == principal.login {
             if credential.is_some()
-                || fields[1].is_empty()
+                || (!allow_unusable && fields[1].is_empty())
                 || (!allow_locked && fields[1].starts_with('!'))
-                || fields[1].starts_with('*')
+                || (!allow_unusable && fields[1].starts_with('*'))
             {
                 return Err("missing, locked or ambiguous local credential".into());
             }

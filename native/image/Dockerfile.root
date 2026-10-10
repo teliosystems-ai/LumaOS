@@ -29,6 +29,8 @@ RUN apt-get update --snapshot=${SNAPSHOT} -o APT::Update::Error-Mode=any && \
 RUN apt-get install -y --no-install-recommends --snapshot=${SNAPSHOT} systemd-boot
 RUN apt-get install -y --no-install-recommends --snapshot=${SNAPSHOT} curl libgomp1
 RUN apt-get install -y --no-install-recommends --snapshot=${SNAPSHOT} \
+    libgnutls30t64 libnettle8t64 libhogweed6t64 libcap2 libseccomp2
+RUN apt-get install -y --no-install-recommends --snapshot=${SNAPSHOT} \
     libtss2-esys-3.0.2-0t64 libtss2-tctildr0t64 libtss2-tcti-device0t64 tpm2-tools
 COPY llama-runtime.tar.gz /tmp/luma-llama-runtime.tar.gz
 RUN \

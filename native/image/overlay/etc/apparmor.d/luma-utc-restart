@@ -1,0 +1,23 @@
+#include <tunables/global>
+profile luma-utc-restart flags=(attach_disconnected) {
+  #include <abstractions/base>
+  /usr/libexec/luma-os/luma-utc-restart mr,
+  /usr/bin/systemctl mrix,
+  /usr/lib/** mr,
+  /lib/** mr,
+  /lib64/** mr,
+  owner /proc/@{pid}/attr/current r,
+  /run/systemd/private rw,
+  /run/dbus/system_bus_socket rw,
+  /dev/null rw,
+  /dev/{urandom,random} r,
+  network unix stream,
+  dbus (send,receive) bus=system peer=(name=org.freedesktop.systemd1),
+  signal (send,receive) peer=luma-admin,
+  signal (receive) peer=unconfined,
+  deny /etc/{shadow,gshadow} r,
+  deny /dev/{tpm*,mem,kmem,port,kvm,dxg,nvidia*,dri/**} rw,
+  deny /var/lib/luma-os/** rwklx,
+  deny /efi/** rwklx,
+  deny /boot/** rwklx,
+}

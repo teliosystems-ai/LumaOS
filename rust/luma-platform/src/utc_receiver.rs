@@ -184,7 +184,7 @@ fn capture_clocks() -> Result<Capture> {
         real_ms,
     })
 }
-fn kernel_boot() -> Result<[u8; 16]> {
+pub(crate) fn kernel_boot() -> Result<[u8; 16]> {
     let value = bounded_text("/proc/sys/kernel/random/boot_id")?;
     let bytes = value.trim_end_matches('\n').as_bytes();
     if bytes.len() != 36 || [8, 13, 18, 23].iter().any(|i| bytes[*i] != b'-') {
@@ -1362,6 +1362,8 @@ mod tests {
     fn kernel_shared_history_composition() {
         for variant in [
             "quiet",
+            "raw-history-delivery",
+            "delivery-binding-change",
             "history-ahead",
             "catalog-change",
             "floor-change",

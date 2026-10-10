@@ -513,6 +513,7 @@ mod tests {
                 result_digest: None,
                 slot_released: false,
                 worker_resources_released: false,
+                product: None,
             };
             let listener = TcpListener::bind("127.0.0.1:8081").unwrap();
             listener.set_nonblocking(true).unwrap();

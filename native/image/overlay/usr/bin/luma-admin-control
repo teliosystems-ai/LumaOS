@@ -1,0 +1,12 @@
+#!/bin/bash
+set -euo pipefail
+if [ "$(/usr/bin/id -u)" != 0 ]; then
+    echo 'Use sudo for the fixed privileged executor; PAM or offline custody still supplies authorization.' >&2
+    exit 1
+fi
+case "${1:-}" in
+    utc-seed|utc-seed-recovery|utc-query|utc-history|utc-reacquire|utc-reacquire-recovery|admin-account-activate|admin-account-renew|admin-account-recover|admin-account-recover-publish|admin-account-recover-complete|admin-account-create|admin-account-create-permit|admin-account-create-file|admin-account-create-complete|admin-account-delete|admin-account-delete-permit|admin-account-delete-file|admin-account-delete-complete|admin-account-password|admin-account-lock|admin-account-publish|admin-account-complete|admin-catalog|admin-governance-status|admin-principals-adopt|admin-accounts-checkpoint|admin-activity-register|admin-role-define|admin-principal-advance|admin-principal-rotate|admin-custody-recover) ;;
+    *) echo 'Choose a supported typed local Admin control command; no shell or general executor is provided.' >&2; exit 2 ;;
+esac
+exec /usr/bin/env -i PATH=/usr/sbin:/usr/bin:/sbin:/bin LC_ALL=C LANG=C TZ=UTC \
+    /usr/bin/aa-exec -p luma-admin -- /usr/libexec/luma-os/luma-platform "$@"

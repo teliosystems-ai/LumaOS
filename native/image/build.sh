@@ -54,6 +54,9 @@ if [ -n "${LUMA_RUNTIME_ARCHIVE:-}" ]; then runtime_args+=(--cached "$LUMA_RUNTI
 # Capture before any long download/package build, not only before compilation.
 python3 "$repository/native/image/snapshot.py" --repository "$repository" --output "$source_context"
 python3 "$source_context/native/image/prepare_runtime.py" "${runtime_args[@]}"
+utc_args=(--output "$runtime_context")
+if [ -n "${LUMA_UTC_ARCHIVE:-}" ]; then utc_args+=(--cached "$LUMA_UTC_ARCHIVE"); fi
+python3 "$source_context/native/image/utc/prepare_release_input.py" "${utc_args[@]}"
 docker build --network "$build_network" --build-arg "UBUNTU_BASE=$base" -f "$source_context/native/image/Dockerfile.tools" -t "$tools" "$source_context/native/image"
 docker build --network "$build_network" --build-arg "EDITION=$edition" -f "$source_context/native/image/Dockerfile.root" -t "luma-native-root:20260927-$edition" "$runtime_context"
 docker volume create "$volume"
@@ -68,6 +71,7 @@ docker run --rm --network none \
     "${artifact_mount[@]}" \
     --mount type=volume,src=luma-native-lab-keys,dst=/keys \
     --mount "type=bind,src=$source_context,dst=/repo,readonly" \
+    --mount "type=bind,src=$runtime_context,dst=/inputs,readonly" \
     "$tools" python3 /repo/native/image/assemble.py --edition "$edition" --sequence "$sequence" "${assembly_args[@]}"
 mkdir -p -- "$(dirname -- "$destination")"
 mkdir -- "$destination"

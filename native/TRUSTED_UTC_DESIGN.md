@@ -270,6 +270,18 @@ are tested with fakes here, not deployed as authenticators. Protected provider
 composition, current floor revalidation in the keeper/effect path and the
 installed recovery ceremony remain open; a stored floor cannot restore UTC.
 
+The later internal history-delivery adapter supplies those transactions from
+the actual admitted bound stream and a non-caller-constructible PAM account.
+Observation data is private to the stream; there is no production constructor
+accepting a claimed runtime digest, estimate or generation. A newly replayed
+shared history binding must match the stream, and live source checks bracket
+potentially blocking semantic replay and authentication before TPM dispatch.
+Success that changes the checkpoint, or an uncertain/error outcome, fences the
+previous stream. Exact historical acknowledgement does not reacquire UTC or
+redispatch the write. The adapter has no installed control endpoint yet;
+independently reviewed seed delivery, producer/keeper provisioning and installed
+qualification remain required, with no timed grant activation from this work.
+
 The [current history binding checkpoint](evidence/G2_UTC_HISTORY_BINDING_2026-10-05.md)
 adds a read-only semantic adapter borrowing the Admin owner's existing store.
 It validates the explicit bootstrap and every mixed catalog/history payload,

@@ -229,6 +229,19 @@ fn validate_records(records: &[Record]) -> Result<BTreeSet<String>> {
     let mut nonces = BTreeSet::new();
     let mut outstanding = 0;
     for record in records {
+        if let Some(product) = &record.product {
+            product.validate()?;
+            if record.caller.uid != 0
+                || product.usage.action != crate::finite_grants::Action::Infer
+                || product.usage.selector.generation != record.worker.generation
+                || product.usage.selector.id != record.profile
+                || product.usage.units != record.limit
+            {
+                return Err(
+                    "request product attribution differs from its exact serving task".into(),
+                );
+            }
+        }
         if !nonce_valid(&record.nonce)
             || !nonces.insert(record.nonce.clone())
             || !nonce_valid(&record.worker.lease_id)

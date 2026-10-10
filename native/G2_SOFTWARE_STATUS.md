@@ -1,6 +1,6 @@
 # G2 software completion register
 
-Updated 2026-10-09. **G2 software is not complete.** This register separates
+Updated 2026-10-10. **G2 software is not complete.** This register separates
 work that can be executed in the current Windows/Ubuntu WSL/VM environment
 from production deployment decisions and physical qualification. It does not
 change the frozen reference release, governing requirements, or exit criteria.
@@ -13,7 +13,37 @@ requirement.
 
 ## Current software inventory and work still required
 
+### Integrated Requirement #1 candidate, 2026-10-10
+
+The source now connects protected-UTC account activation/renewal, separate
+offline-custody original Admin password/lock recovery, finite role assignments
+and grants, authenticated UTC seed/query/history/reacquisition, live inference
+admission, and principal-bound invoice/artifact operations. Image assembly now
+includes the dedicated UTC identity, fixed units/profiles, independently pinned
+chrony 4.9 candidate, immutable runtime inventory and corresponding source.
+This supersedes the deployment-wiring gaps in the previous checkpoint below,
+not its historical test results. No final image has been built from these bytes.
+
+See [the integrated deliverable and qualification limits](evidence/G2_REQUIREMENT1_INTEGRATION_2026-10-10.md).
+Ubuntu WSL relaunched successfully after the owner-approved full WSL shutdown
+on 2026-10-10. The dedicated Docker daemon/cache remains on the D-backed ext4
+mount; Docker Desktop's distribution is stopped. The earlier WSL startup blocker
+is resolved. A bounded offline Linux `cargo check --tests` now passes, including
+the C helper build, with three unused shutdown-guard warnings. This type-check
+does not run tests or link/qualify the final release image; native positive flows
+and recovery integration remain open. The owner approved the 90-day
+password-aging duration on 2026-10-10; it is an explicit implementation policy,
+not a number specified by the original governing documents.
+
+Requirement #1 remains open: complete typed policy-decision/outcome evidence,
+generic DAG/folder/worker consumers, governed destructive retention/deletion,
+and protected damaged-authority reconstruction are still required, alongside
+the integrated/native qualification. Do not advance to Requirement #2.
+
 ### UTC runtime admission and measurement endpoint
+
+The following describes the 2026-10-09 checkpoint; use the integrated candidate
+section above for subsequent source deployment and control wiring.
 
 The native source now admits a UTC producer against a closed release inventory,
 not merely an unchanged process fingerprint. The inventory and its original
@@ -40,11 +70,25 @@ This is source integration, **not protected UTC deployment completion**. The
 image does not yet provision producer UID/GID 987, the approved producer and
 keeper units/profiles, release runtime inventory or qualified dependency tuple.
 No service or CLI activates the endpoint, and no seed or time capability is
-returned. Authenticated human seed/acquisition/query control, production history
+returned. Authenticated human seed/acquisition/query control, installed history
 delivery, explicit recovery, installed lifecycle and clock-envelope qualification
 remain required. Usable-account activation, original Admin credential recovery,
 finite grants and broader workflows/retention have not been closed by this work.
 See [the runtime admission evidence](evidence/G2_UTC_RUNTIME_ADMISSION_2026-10-09.md).
+
+The internal history-write adapter now takes a real current PAM account and the
+admitted bound stream, borrowing the existing exclusive Admin journal writer.
+It obtains a freshly replayed history binding and requires the stream to match
+that exact binding before supplying new floor evidence. Observation fields and
+production construction are private to the stream; arbitrary observation and
+authentication callbacks are fixture-only. Delivery derives the runtime digest
+and producer/keeper generations from the live receiver, then rechecks queue,
+clocks and step watch. Source eligibility is renewed after potentially blocking
+semantic replay and PAM checks, including the final TPM-dispatch boundary.
+A successful write or uncertain/error result invalidates the old stream.
+Historical acknowledgement still requires no reacquisition or redispatch.
+This adapter is not yet invoked by an installed human-control endpoint and
+does not accept a clock seed, return a time capability or enable timed grants.
 
 ### Governed locked account creation
 

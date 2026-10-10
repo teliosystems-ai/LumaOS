@@ -7,6 +7,37 @@ RUST = ROOT / 'rust/luma-platform/src'
 
 
 class UtcRuntimePolicy(unittest.TestCase):
+    def test_history_observations_are_sealed_and_not_wire_capabilities(self):
+        stream = (RUST / 'utc_stream.rs').read_text()
+        observation = stream.split('pub(crate) struct Observation {', 1)[1].split('impl Observation', 1)[0]
+        self.assertIn('context: Statement', observation)
+        self.assertNotIn('pub ', observation)
+        self.assertNotIn('Clone', observation)
+        fixture = stream.split('pub(crate) fn fixture(', 1)[0]
+        self.assertTrue(fixture.rstrip().endswith('#[cfg(test)]'))
+        delivery = stream.split('impl HistoryDelivery', 1)[1].split('// The receiver', 1)[0]
+        for check in ('self.stream.stream.poll()?', 'runtime_digest()?.to_owned()',
+                      'candidate_after_history()', 'statement.supported_by(',
+                      'self.stream.invalidate()', 'producer.process_generation',
+                      'producer.source_clock_generation', 'keeper.epoch().clock_generation'):
+            self.assertIn(check, delivery)
+
+    def test_history_delivery_requires_real_pam_and_same_shared_checkpoint(self):
+        governance = (RUST / 'admin_governance.rs').read_text()
+        live = governance.split('pub(crate) fn execute_history_live', 1)[1].split('// Arbitrary authentication', 1)[0]
+        for check in ('account: &authentication::AuthenticatedAccount', 'crate::require_root()?',
+                      'platform::require_installed()?', 'HistoryReader::new(store, directory).read()?',
+                      'account.identity()', 'stream.history_delivery(&binding)?.support(proposed)',
+                      'stream.invalidate()'):
+            self.assertIn(check, live)
+        self.assertNotIn('caller_pid', live)
+        self.assertNotIn('Observation', live)
+        prefix = governance.split('fn execute_history<', 1)[0]
+        self.assertTrue(prefix.rstrip().endswith('#[cfg(test)]'))
+        stream = (RUST / 'utc_stream.rs').read_text()
+        self.assertIn('current != &self.history', stream)
+        self.assertNotIn('Serialize', stream.split('pub(crate) struct HistoryDelivery', 1)[1].split('impl HistoryDelivery', 1)[0])
+
     def test_raw_receiver_construction_is_fixture_only(self):
         receiver = (RUST / 'utc_receiver.rs').read_text()
         prefix = receiver.split('pub(crate) fn attach(', 1)[0]
@@ -99,11 +130,19 @@ class UtcRuntimePolicy(unittest.TestCase):
         runtime = (RUST / 'utc_runtime.rs').read_text()
         self.assertIn('pin.bytes(MAX_MANIFEST)? != CONFIGURATION_BYTES', runtime)
 
-    def test_no_listener_activation_or_time_authority_claim(self):
+    def test_keeper_activation_keeps_seed_measurements_and_authority_separate(self):
         main = (RUST / 'main.rs').read_text()
         self.assertIn('mod utc_runtime;', main)
         self.assertNotIn('Some("utc-runtime")', main)
-        self.assertNotIn('Some("utc-keeper")', main)
+        self.assertIn('Some("utc-keeper")', main)
+        self.assertIn('utc_provider::serve()', main)
+        provider = (RUST / 'utc_provider.rs').read_text()
+        for check in ('struct Client', 'SO_PEERSEC', 'SO_PEERCRED',
+                      'service::peer_pidfd', 'binding_digest(binding)',
+                      'self.watch.check()?',
+                      'seed_transport', 'luma-admin (enforce)'):
+            self.assertIn(check, provider)
+        self.assertNotIn('Deserialize', provider.split('pub(crate) struct Client', 1)[1].split('impl Client', 1)[0])
         runtime = (RUST / 'utc_runtime.rs').read_text()
         for forbidden in ('clock_settime(', 'settimeofday(', 'adjtimex(', 'Command::new(',
                           'trusted_utc_available: true', 'pub(crate) fn grant'):

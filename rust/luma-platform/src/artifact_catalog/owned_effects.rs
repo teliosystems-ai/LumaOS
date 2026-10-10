@@ -106,10 +106,20 @@ pub(crate) fn command(args: &[String]) -> Result<()> {
                     {
                         return Err("owned export content integrity failed".into());
                     }
-                    let mut output = std::io::stdout().lock();
+                    let mut output = crate::service::granted_gateway::export_writer()?;
                     for block in bytes.chunks(32 * 1024) {
-                        gc_cli::check_owner(&binding, &account, reader)?;
-                        gc_cli::check_owner(&binding, &account, boundary)?;
+                        reader.stream_check(&pending)?;
+                        boundary.stream_check(&pending)?;
+                        binding.current()?;
+                        if reader.subject()? != account.id
+                            || boundary.subject()? != account.id
+                            || reader.subject_generation()? != account.generation
+                            || boundary.subject_generation()? != account.generation
+                            || reader.subject_uid()? != account.uid
+                            || boundary.subject_uid()? != account.uid
+                        {
+                            return Err("owned export subject changed during delivery".into());
+                        }
                         output.write_all(block)?;
                     }
                     output.flush()?;

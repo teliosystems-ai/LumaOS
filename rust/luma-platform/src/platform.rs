@@ -757,7 +757,7 @@ pub fn install(selection: &str, source: &Path, model_id: Option<&str>) -> Result
         return Err(format!("disk requires at least {minimum} bytes").into());
     }
     println!("Release {}: EFI 1 GiB; two {} MiB roots and {} MiB hash partitions; remaining space encrypted.",verified.manifest.release,roots_mib,hashes_mib);
-    println!("Admin profile: local-tpm2. Laboratory limitation: sealed product Admin enrollment remains required and unavailable; this install creates only separate Unix accounts, not active product Admin authority.");
+    println!("Admin profile: local-tpm2. This install creates separate Unix accounts; explicit checkpoint enrollment, product Admin bootstrap and principal adoption remain required after boot.");
     disk.confirm("ERASE")?;
     let user = user_name("First user")?;
     let admin = user_name("Separate administrator")?;
@@ -907,6 +907,10 @@ pub fn install(selection: &str, source: &Path, model_id: Option<&str>) -> Result
         &data.at.join("lib/luma-os/workflow-runs"),
         &crate::principal::installation_at(&data.at.join("lib/luma-os/principals/registry.json"))?,
     )?;
+    crate::workflow_runs::history::initialize_at(
+        &data.at.join("lib/luma-os/workflow-history"),
+        &crate::principal::installation_at(&data.at.join("lib/luma-os/principals/registry.json"))?,
+    )?;
     // The encrypted filesystem is freshly formatted and populated only from
     // the verified image template. Provision fixed empty owner-domain roots;
     // never create these as a fallback while loading an established authority.
@@ -961,7 +965,8 @@ pub fn install(selection: &str, source: &Path, model_id: Option<&str>) -> Result
             return Err(error);
         }
     }
-    println!("ADMIN ENROLLMENT REQUIRED: local TPM2 hardware admission passed, but sealed product Admin enrollment is not implemented in this laboratory installer. The separate Unix administrator is not product Admin.");
+    println!("ADMIN ENROLLMENT REQUIRED: local TPM2 hardware admission passed. Use explicit existing-owner Admin checkpoint enrollment, bootstrap and principal adoption after boot; the separate Unix administrator is not automatically product Admin.");
+    println!("RESOURCE CHECKPOINT REQUIRED before installed broker admission: after Admin/UTC setup, use reviewed resource-checkpoint prepare/enroll ceremonies with the broker/model/acquisition masked and drained. This installer does not mutate existing TPM ownership or provision a resource NV handle unattended.");
     println!("Offline Admin recovery verifier installed but NOT recovery authority until explicit TPM checkpoint enrollment, product bootstrap and principal adoption commit. Retain the confirmed Admin recovery credential separately from the disk recovery passphrase.");
     println!("INSTALLATION COMPLETE: remove recovery media and boot the selected disk. Secure Boot requires the laboratory certificate to be enrolled by the operator. Keep the independent recovery passphrase offline.");
     Ok(())

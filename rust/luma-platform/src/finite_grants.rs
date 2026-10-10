@@ -47,6 +47,10 @@ pub(crate) enum Action {
     StopWorker,
     #[serde(rename = "resource.acquire")]
     AcquireResource,
+    #[serde(rename = "resource.provision")]
+    ProvisionResource,
+    #[serde(rename = "resource.recover")]
+    RecoverResource,
 }
 impl Action {
     pub(crate) fn activity(self) -> &'static str {
@@ -64,6 +68,8 @@ impl Action {
             Self::StartWorker => "worker.start",
             Self::StopWorker => "worker.stop",
             Self::AcquireResource => "resource.acquire",
+            Self::ProvisionResource => "resource.provision",
+            Self::RecoverResource => "resource.recover",
         }
     }
 }
@@ -113,7 +119,7 @@ impl Selector {
                 )
                 | (Kind::Model, Action::Infer)
                 | (Kind::Worker, Action::StartWorker | Action::StopWorker)
-                | (Kind::Resource, Action::AcquireResource | Action::Retain)
+                | (Kind::Resource, Action::AcquireResource | Action::Retain | Action::ProvisionResource | Action::RecoverResource)
         )
     }
 }

@@ -350,7 +350,8 @@ class ResourcePolicyTests(unittest.TestCase):
         persist = source.split('fn persist_with(')[1].split('fn retention_status(')[0]
         self.assertLess(persist.index('self.verify_durable(store, published)?'),
                         persist.index('next == published && !acknowledge'))
-        self.assertLess(persist.index('publish(&path, &bytes)?'),
+        self.assertIn('store.publish_request(&bytes, publish)?', persist)
+        self.assertLess(persist.index('store.publish_request(&bytes, publish)?'),
                         persist.index('self.verify_durable(store, &next)?'))
         self.assertLess(persist.index('self.verify_durable(store, &next)?'),
                         persist.index('self.retention.published = Some(next)'))

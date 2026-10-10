@@ -14,6 +14,312 @@ const CLIENT_PROFILE: &str = "/etc/apparmor.d/luma-granted-client";
 const IMAGE_EXE: &str = "/usr/libexec/luma-os/luma-platform";
 const CHALLENGE_LIMIT: usize = 4096;
 const CHALLENGE_BUDGET: Duration = Duration::from_secs(3);
+const PAYLOAD_ROOT: &str = "/run/luma-granted-client/payloads";
+const PAYLOAD_BLOCK: usize = 32_768;
+const PAYLOAD_MAX: u64 = 256 * 1024 * 1024;
+const PAYLOAD_TIMEOUT: Duration = Duration::from_secs(60);
+const PAYLOAD_RUNTIME: Duration = Duration::from_secs(1800);
+const PAYLOAD_MAGIC: &[u8; 16] = b"LUMAEXPORTv1!!!!";
+thread_local! {
+    static PAYLOAD: std::cell::RefCell<Option<PayloadWriter>> = const { std::cell::RefCell::new(None) };
+    static PAYLOAD_SELECTED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+fn payload_command(command: &str) -> bool {
+    matches!(
+        command,
+        "artifact-owned-export"
+            | "artifact-governed-export"
+            | "policy-archive-export"
+            | "workflow-history-export"
+    )
+}
+
+/// Internal fixed-launcher transport, never a serialized grant or arbitrary
+/// privileged output path. The producer still checks its live grants per block.
+pub(crate) fn capture_export_channel(arguments: &mut Vec<String>) -> Result<()> {
+    let Some(index) = arguments.iter().position(|v| v == "--export-channel") else {
+        return Ok(());
+    };
+    if index + 2 != arguments.len()
+        || index == 0
+        || !payload_command(&arguments[0])
+        || fs::read_to_string("/proc/self/attr/current")?.trim() != PROFILE
+    {
+        return Err("export channel is internal to the fixed enforcing client".into());
+    }
+    let path = Path::new(&arguments[index + 1]);
+    let parent = path.parent().ok_or("export channel parent absent")?;
+    if path.file_name().and_then(|v| v.to_str()) != Some("output.sock")
+        || parent.parent() != Some(Path::new(PAYLOAD_ROOT))
+    {
+        return Err("export channel outside the fixed private namespace".into());
+    }
+    crate::tpm::decode::<16>(
+        parent
+            .file_name()
+            .and_then(|v| v.to_str())
+            .ok_or("export channel identity absent")?,
+    )?;
+    for directory in [Path::new(PAYLOAD_ROOT), parent] {
+        crate::tpm::private_directory(directory)?;
+    }
+    use std::os::unix::fs::FileTypeExt;
+    let before = fs::symlink_metadata(path)?;
+    if !before.file_type().is_socket()
+        || before.uid() != 0
+        || before.mode() & 0o7777 != 0o600
+        || before.nlink() != 1
+    {
+        return Err("unsafe export channel inode".into());
+    }
+    let mut socket = UnixStream::connect(path)?;
+    socket.set_read_timeout(Some(PAYLOAD_TIMEOUT))?;
+    socket.set_write_timeout(Some(PAYLOAD_TIMEOUT))?;
+    let peer = crate::service::credentials(&socket)?;
+    let after = fs::symlink_metadata(path)?;
+    if peer.uid != 0 || (before.dev(), before.ino()) != (after.dev(), after.ino()) {
+        return Err("export relay peer or inode changed".into());
+    }
+    arguments.truncate(index);
+    let command_hash = Sha256::digest(serde_json::to_vec(arguments)?);
+    socket.write_all(PAYLOAD_MAGIC)?;
+    socket.write_all(&command_hash)?;
+    let writer = PayloadWriter {
+        socket,
+        bytes: 0,
+        digest: Sha256::new(),
+    };
+    PAYLOAD.with(|slot| -> Result<()> {
+        let mut slot = slot.borrow_mut();
+        if slot.is_some() {
+            return Err("duplicate export transport".into());
+        }
+        *slot = Some(writer);
+        Ok(())
+    })?;
+    PAYLOAD_SELECTED.with(|selected| selected.set(true));
+    Ok(())
+}
+
+pub(crate) fn export_writer() -> Result<Box<dyn Write>> {
+    PAYLOAD.with(|slot| match slot.borrow_mut().take() {
+        Some(writer) => Ok(Box::new(writer) as Box<dyn Write>),
+        None if PAYLOAD_SELECTED.with(|selected| selected.get()) => {
+            Err("export payload transport already consumed".into())
+        }
+        None => Ok(Box::new(std::io::stdout()) as Box<dyn Write>),
+    })
+}
+
+struct PayloadWriter {
+    socket: UnixStream,
+    bytes: u64,
+    digest: Sha256,
+}
+impl PayloadWriter {
+    fn acknowledgement(&mut self) -> std::io::Result<()> {
+        let mut ack = [0u8; 40];
+        self.socket.read_exact(&mut ack)?;
+        if ack[..8] != self.bytes.to_be_bytes() || ack[8..] != self.digest.clone().finalize()[..] {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "export relay delivery acknowledgment differs",
+            ));
+        }
+        Ok(())
+    }
+}
+impl Write for PayloadWriter {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        if bytes.is_empty() {
+            return Ok(0);
+        }
+        let count = bytes.len().min(PAYLOAD_BLOCK);
+        let next = self
+            .bytes
+            .checked_add(count as u64)
+            .filter(|v| *v <= PAYLOAD_MAX)
+            .ok_or_else(|| {
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "export relay payload exceeds bound",
+                )
+            })?;
+        self.socket.write_all(&(count as u32).to_be_bytes())?;
+        self.socket.write_all(&bytes[..count])?;
+        self.bytes = next;
+        self.digest.update(&bytes[..count]);
+        self.acknowledgement()?;
+        Ok(count)
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.socket.write_all(&0u32.to_be_bytes())?;
+        self.acknowledgement()
+    }
+}
+
+struct PayloadListener {
+    listener: UnixListener,
+    path: std::path::PathBuf,
+    command_hash: [u8; 32],
+    unit: String,
+    directory: fs::File,
+    socket_identity: (u64, u64),
+}
+impl PayloadListener {
+    fn create(arguments: &[String], unit: &str) -> Result<Self> {
+        crate::tpm::private_directory(Path::new("/run/luma-granted-client"))?;
+        match fs::symlink_metadata(PAYLOAD_ROOT) {
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                fs::DirBuilder::new().mode(0o700).create(PAYLOAD_ROOT)?;
+                fs::File::open("/run/luma-granted-client")?.sync_all()?;
+            }
+            Err(e) => return Err(e.into()),
+            Ok(_) => {}
+        }
+        crate::tpm::private_directory(Path::new(PAYLOAD_ROOT))?;
+        if fs::read_dir(PAYLOAD_ROOT)?.count() >= 1024 {
+            return Err("retained export transport capacity exhausted".into());
+        }
+        let directory = Path::new(PAYLOAD_ROOT).join(crate::resources::random_id()?);
+        fs::DirBuilder::new().mode(0o700).create(&directory)?;
+        let path = directory.join("output.sock");
+        let listener = UnixListener::bind(&path)?;
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600))?;
+        listener.set_nonblocking(true)?;
+        let directory = fs::File::open(&directory)?;
+        let socket_meta = fs::symlink_metadata(&path)?;
+        Ok(Self {
+            listener,
+            path,
+            command_hash: Sha256::digest(serde_json::to_vec(arguments)?).into(),
+            unit: unit.into(),
+            directory,
+            socket_identity: (socket_meta.dev(), socket_meta.ino()),
+        })
+    }
+    fn relay(&self, child: &mut Child) -> Result<()> {
+        let deadline = Instant::now() + PAYLOAD_RUNTIME + Duration::from_secs(5);
+        let (mut socket, _) = loop {
+            match self.listener.accept() {
+                Ok(peer) => break peer,
+                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                    if Instant::now() >= deadline || child.try_wait()?.is_some() {
+                        return Err(
+                            "export producer closed before opening its payload channel".into()
+                        );
+                    }
+                    // A bounded wait on the exact listener; no busy spinning or
+                    // pathname replacement can select another producer.
+                    let mut poll = libc::pollfd {
+                        fd: self.listener.as_raw_fd(),
+                        events: libc::POLLIN,
+                        revents: 0,
+                    };
+                    let result = unsafe { libc::poll(&mut poll, 1, 100) };
+                    if result < 0 {
+                        return Err(std::io::Error::last_os_error().into());
+                    }
+                }
+                Err(e) => return Err(e.into()),
+            }
+        };
+        label(&socket)?;
+        let peer = crate::service::credentials(&socket)?;
+        let expected = format!("0::/system.slice/{}\n", self.unit);
+        if peer.uid != 0
+            || peer.pid <= 0
+            || kernel_text(
+                &Path::new(&format!("/proc/{}/cgroup", peer.pid)),
+                4096,
+                0x9fa0,
+            )? != expected
+        {
+            return Err("export payload is not from the exact enforcing transient unit".into());
+        }
+        socket.set_read_timeout(Some(PAYLOAD_TIMEOUT))?;
+        socket.set_write_timeout(Some(PAYLOAD_TIMEOUT))?;
+        let mut header = [0u8; 48];
+        socket.read_exact(&mut header)?;
+        if header[..16] != PAYLOAD_MAGIC[..] || header[16..] != self.command_hash {
+            return Err("export payload command binding differs".into());
+        }
+        relay_payload(&mut socket, &mut std::io::stdout().lock(), deadline)
+    }
+}
+impl Drop for PayloadListener {
+    fn drop(&mut self) {
+        // Only an ephemeral owned transport is removed, never delivered bytes
+        // or product history. Failed product effects remain separately durable.
+        if let Some(parent) = self.path.parent() {
+            if let (Ok(held), Ok(named), Ok(socket)) = (
+                self.directory.metadata(),
+                fs::symlink_metadata(parent),
+                fs::symlink_metadata(&self.path),
+            ) {
+                if (held.dev(), held.ino()) == (named.dev(), named.ino())
+                    && (socket.dev(), socket.ino()) == self.socket_identity
+                {
+                    let _ = fs::remove_file(&self.path);
+                    let _ = fs::remove_dir(parent);
+                }
+            }
+        }
+    }
+}
+
+fn relay_payload(
+    socket: &mut UnixStream,
+    output: &mut impl Write,
+    deadline: Instant,
+) -> Result<()> {
+    let mut digest = Sha256::new();
+    let mut total = 0u64;
+    let mut flushed = false;
+    loop {
+        if Instant::now() >= deadline {
+            return Err("export payload exceeded its fixed runtime budget".into());
+        }
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return Err("export payload exhausted its runtime budget".into());
+        }
+        socket.set_read_timeout(Some(PAYLOAD_TIMEOUT.min(remaining)))?;
+        socket.set_write_timeout(Some(PAYLOAD_TIMEOUT.min(remaining)))?;
+        let mut size = [0u8; 4];
+        let count = socket.read(&mut size[..1])?;
+        if count == 0 {
+            return if flushed {
+                Ok(())
+            } else {
+                Err("export channel closed without confirmed flush".into())
+            };
+        }
+        socket.read_exact(&mut size[1..])?;
+        let length = u32::from_be_bytes(size) as usize;
+        if length > PAYLOAD_BLOCK {
+            return Err("export payload frame exceeds bound".into());
+        }
+        total = total
+            .checked_add(length as u64)
+            .filter(|v| *v <= PAYLOAD_MAX)
+            .ok_or("export payload total exceeds bound")?;
+        let mut bytes = [0u8; PAYLOAD_BLOCK];
+        socket.read_exact(&mut bytes[..length])?;
+        if length == 0 {
+            output.flush()?;
+            flushed = true;
+        } else {
+            output.write_all(&bytes[..length])?;
+            digest.update(&bytes[..length]);
+            flushed = false;
+        }
+        socket.write_all(&total.to_be_bytes())?;
+        socket.write_all(&digest.clone().finalize())?;
+    }
+}
 
 #[derive(Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
@@ -815,6 +1121,29 @@ pub(crate) fn launch(arguments: &[String]) -> Result<()> {
                 | "policy-evidence-retain"
                 | "policy-evidence-pending-review"
                 | "policy-evidence-pending-retain"
+                | "policy-archive-review"
+                | "policy-archive-export-proposal"
+                | "policy-archive-export"
+                | "policy-archive-dispose-proposal"
+                | "policy-archive-dispose-mark"
+                | "policy-archive-delete-proposal"
+                | "policy-archive-delete"
+                | "policy-archive-outcomes"
+                | "policy-archive-cleanup-proposal"
+                | "policy-archive-cleanup"
+                | "workflow-history-inspection-review"
+                | "workflow-history-proposal"
+                | "workflow-history-export"
+                | "workflow-history-mark"
+                | "workflow-history-mark-proposal"
+                | "workflow-history-delete-proposal"
+                | "workflow-history-delete"
+                | "workflow-history-staging-proposal"
+                | "workflow-history-staging-discard"
+                | "workflow-recovery-review"
+                | "workflow-recovery-inspect"
+                | "workflow-recovery-cancel"
+                | "workflow-recovery-reconcile"
         )
     {
         return Err("granted client launcher accepts only fixed protected product commands".into());
@@ -879,9 +1208,9 @@ pub(crate) fn launch(arguments: &[String]) -> Result<()> {
         }
         "workflow-governed-review" | "workflow-governed-prepare" => {
             let count = if arguments[0] == "workflow-governed-review" {
-                4
+                5
             } else {
-                9
+                10
             };
             if arguments.len() != count {
                 return Err("governed workflow argument shape differs".into());
@@ -919,11 +1248,31 @@ pub(crate) fn launch(arguments: &[String]) -> Result<()> {
         return Err("product authentication requires an actual controlling terminal".into());
     }
     let unit = format!("luma-granted-client-{}", crate::resources::random_id()?);
-    let mut writable = "--property=ReadWritePaths=/var/lib/luma-os/workflow-runs /var/lib/luma-os/workflow-dags /var/lib/luma-os/workflow-invoice-domains /var/lib/luma-os/artifacts /var/lib/luma-os/artifact-catalog /var/lib/luma-os/artifact-catalog-domains /var/lib/luma-os/policy-decisions /var/lib/luma-broker/resources /run/luma-admin -/var/lib/luma-os/model.lock".to_owned();
+    let mut writable = "--property=ReadWritePaths=/var/lib/luma-os/workflow-runs /var/lib/luma-os/workflow-dags /var/lib/luma-os/workflow-invoice-domains /var/lib/luma-os/workflow-history /var/lib/luma-os/artifacts /var/lib/luma-os/artifact-catalog /var/lib/luma-os/artifact-catalog-domains /var/lib/luma-os/policy-decisions /var/lib/luma-broker/resources /run/luma-admin -/var/lib/luma-os/model.lock /run/luma-resource-checkpoint/authority.lock".to_owned();
     if arguments[0] == "workflow-inputs-init" {
         writable.push_str(" /var/lib/luma-os/workflow-inputs");
     }
+    let payload = if payload_command(&owned[0]) {
+        Some(PayloadListener::create(&owned, &unit)?)
+    } else {
+        None
+    };
+    if let Some(payload) = &payload {
+        owned.push("--export-channel".into());
+        owned.push(
+            payload
+                .path
+                .to_str()
+                .ok_or("export payload path is not UTF-8")?
+                .into(),
+        );
+    }
     let mut command = Command::new("/usr/bin/systemd-run");
+    let runtime = if payload.is_some() {
+        "--property=RuntimeMaxSec=1800"
+    } else {
+        "--property=RuntimeMaxSec=60"
+    };
     command.args([
         "--pty",
         "--wait",
@@ -954,13 +1303,16 @@ pub(crate) fn launch(arguments: &[String]) -> Result<()> {
         "--property=SystemCallFilter=@system-service @memlock",
         "--property=SystemCallFilter=~@mount @raw-io @reboot @swap @obsolete @debug",
         "--property=LimitCORE=0",
-        "--property=LimitNOFILE=128",
+        // Nested archive inspection/export keeps up to three independently
+        // pinned 1024-entry policy stores. Reserve bounded workflow and native
+        // I/O headroom without changing capabilities or writable namespaces.
+        "--property=LimitNOFILE=8192",
         "--property=LimitMEMLOCK=524288",
         "--property=MemoryMax=268435456",
         "--property=MemorySwapMax=0",
         "--property=TasksMax=16",
         "--property=CPUQuota=50%",
-        "--property=RuntimeMaxSec=60",
+        runtime,
         "--property=TimeoutStopSec=5",
         "--property=KillMode=control-group",
         writable.as_str(),
@@ -972,16 +1324,60 @@ pub(crate) fn launch(arguments: &[String]) -> Result<()> {
     ]);
     command
         .args(&owned)
-        .stdin(std::process::Stdio::from(tty))
+        .stdin(std::process::Stdio::from(tty.try_clone()?))
         .env_clear()
         .env("PATH", "/usr/bin")
         .env("LANG", "C")
         .env("LC_ALL", "C")
         .env("TZ", "UTC");
+    if payload.is_some() {
+        // PAM and systemd PTY relay bytes go exclusively to the actual terminal.
+        // The caller's stdout carries only the independently framed payload.
+        command
+            .stdout(Stdio::from(tty.try_clone()?))
+            .stderr(Stdio::from(tty));
+    }
     if let Some(stage) = &stage {
         stage.check()?;
     }
-    if !command.status()?.success() {
+    let successful = if let Some(payload) = &payload {
+        let mut child = command.spawn()?;
+        if let Err(error) = payload.relay(&mut child) {
+            let mut stop = Command::new("/usr/bin/systemctl");
+            stop.args(["--no-ask-password", "--no-pager", "stop", &unit])
+                .env_clear()
+                .env("PATH", "/usr/bin")
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null());
+            let deadline = Instant::now() + Duration::from_secs(5);
+            let _ = crate::model::supervise_owned_controller(&mut stop, || {
+                if Instant::now() >= deadline {
+                    Err("owned export unit stop exceeded budget".into())
+                } else {
+                    Ok(())
+                }
+            });
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(error);
+        }
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            if let Some(status) = child.try_wait()? {
+                break status.success();
+            }
+            if Instant::now() >= deadline {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err("owned export controller did not exit after payload completion".into());
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    } else {
+        command.status()?.success()
+    };
+    if !successful {
         return Err("confined granted client refused; preserve any uncertain effect state".into());
     }
     if let Some(stage) = &stage {
@@ -993,6 +1389,91 @@ pub(crate) fn launch(arguments: &[String]) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn framed_export_preserves_binary_bytes_and_acknowledges_actual_delivery() {
+        let (sender, mut receiver) = UnixStream::pair().unwrap();
+        let data = vec![0, 10, 13, 27, 255, 128]
+            .into_iter()
+            .cycle()
+            .take(90_001)
+            .collect::<Vec<_>>();
+        let wanted = data.clone();
+        let producer = std::thread::spawn(move || {
+            let mut writer = PayloadWriter {
+                socket: sender,
+                bytes: 0,
+                digest: Sha256::new(),
+            };
+            writer.write_all(&data).unwrap();
+            writer.flush().unwrap();
+        });
+        let mut output = Vec::new();
+        relay_payload(
+            &mut receiver,
+            &mut output,
+            Instant::now() + Duration::from_secs(5),
+        )
+        .unwrap();
+        producer.join().unwrap();
+        assert_eq!(output, wanted);
+    }
+    #[test]
+    fn forged_delivery_acknowledgment_and_unflushed_close_are_refused() {
+        let (sender, mut receiver) = UnixStream::pair().unwrap();
+        let producer = std::thread::spawn(move || {
+            let mut writer = PayloadWriter {
+                socket: sender,
+                bytes: 0,
+                digest: Sha256::new(),
+            };
+            assert!(writer.write_all(b"payload").is_err());
+        });
+        let mut length = [0; 4];
+        receiver.read_exact(&mut length).unwrap();
+        let mut bytes = vec![0; u32::from_be_bytes(length) as usize];
+        receiver.read_exact(&mut bytes).unwrap();
+        receiver.write_all(&[0; 40]).unwrap();
+        producer.join().unwrap();
+        let (sender, mut receiver) = UnixStream::pair().unwrap();
+        drop(sender);
+        assert!(relay_payload(
+            &mut receiver,
+            &mut Vec::new(),
+            Instant::now() + Duration::from_secs(1)
+        )
+        .is_err());
+    }
+    #[test]
+    fn failed_external_output_is_not_acknowledged_and_oversized_frames_refuse() {
+        struct Refuse;
+        impl Write for Refuse {
+            fn write(&mut self, _: &[u8]) -> std::io::Result<usize> {
+                Err(std::io::Error::from(std::io::ErrorKind::BrokenPipe))
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Err(std::io::Error::from(std::io::ErrorKind::BrokenPipe))
+            }
+        }
+        let (mut sender, mut receiver) = UnixStream::pair().unwrap();
+        sender.write_all(&1u32.to_be_bytes()).unwrap();
+        sender.write_all(b"x").unwrap();
+        assert!(relay_payload(
+            &mut receiver,
+            &mut Refuse,
+            Instant::now() + Duration::from_secs(1)
+        )
+        .is_err());
+        let (mut sender, mut receiver) = UnixStream::pair().unwrap();
+        sender
+            .write_all(&((PAYLOAD_BLOCK + 1) as u32).to_be_bytes())
+            .unwrap();
+        assert!(relay_payload(
+            &mut receiver,
+            &mut Vec::new(),
+            Instant::now() + Duration::from_secs(1)
+        )
+        .is_err());
+    }
     #[test]
     fn source_client_requires_every_closed_privilege_and_capability_field() {
         let supported="NoNewPrivs:\t1\nSeccomp:\t2\nCapEff:\t0000000000000001\nCapPrm:\t0000000000000001\nCapBnd:\t0000000000000001\nCapInh:\t0000000000000000\nCapAmb:\t0000000000000000\n";

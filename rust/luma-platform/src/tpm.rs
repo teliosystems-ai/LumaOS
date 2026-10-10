@@ -15,12 +15,15 @@ pub const PROFILE: &str = "local-tpm2";
 const DEVICE: &str = "/dev/tpmrm0";
 const INDEX: u32 = 0x01804c41;
 const CREDENTIAL_PARENT: u32 = 0x81004c41;
+pub(crate) const RESOURCE_INDEX: u32 = 0x01804c52;
+pub(crate) const RESOURCE_PARENT: u32 = 0x81004c52;
 // AUTHWRITE | TPM_NT_EXTEND | AUTHREAD | NO_DA | WRITTEN. In particular no
 // OWNERWRITE, ordinary NV_Write, POLICYWRITE, WRITE_STCLEAR or ORDERLY.
 const ATTRIBUTES: u32 = 0x22040044;
 
 extern "C" {
     fn luma_tpm_open(transport: *const c_char, context: *mut *mut c_void) -> u32;
+    fn luma_tpm_resource_open(transport: *const c_char, context: *mut *mut c_void) -> u32;
     fn luma_tpm_close(context: *mut c_void);
     fn luma_tpm_clock(
         context: *mut c_void,
@@ -55,6 +58,18 @@ extern "C" {
         owner: *const u8,
         owner_size: u16,
         name: *mut u8,
+    ) -> u32;
+    fn luma_tpm_resource_prepare_parent(
+        context: *mut c_void,
+        owner: *const u8,
+        owner_size: u16,
+        name: *mut u8,
+    ) -> u32;
+    fn luma_tpm_resource_persist_parent(
+        context: *mut c_void,
+        owner: *const u8,
+        owner_size: u16,
+        name: *const u8,
     ) -> u32;
     fn luma_tpm_credential_seal(
         context: *mut c_void,
@@ -104,7 +119,7 @@ fn check(code: u32) -> Result<()> {
     Ok(())
 }
 
-struct Context(*mut c_void);
+struct Context(*mut c_void, bool);
 impl Drop for Context {
     fn drop(&mut self) {
         unsafe { luma_tpm_close(self.0) };
@@ -247,7 +262,12 @@ impl Context {
             return Err("existing nonempty TPM owner authorization required".into());
         }
         let mut occupied = 1;
-        check(unsafe { luma_tpm_index_exists(self.0, CREDENTIAL_PARENT, &mut occupied) })?;
+        let handle = if self.1 {
+            RESOURCE_PARENT
+        } else {
+            CREDENTIAL_PARENT
+        };
+        check(unsafe { luma_tpm_index_exists(self.0, handle, &mut occupied) })?;
         if occupied != 0 {
             return Err("credential parent handle occupied; preserve existing state".into());
         }
@@ -298,7 +318,17 @@ impl Context {
         if raw.is_null() {
             return Err("TPM library returned no context".into());
         }
-        Ok(Self(raw))
+        Ok(Self(raw, false))
+    }
+
+    fn resource_open(transport: &str) -> Result<Self> {
+        let transport = CString::new(transport)?;
+        let mut raw = std::ptr::null_mut();
+        check(unsafe { luma_tpm_resource_open(transport.as_ptr(), &mut raw) })?;
+        if raw.is_null() {
+            return Err("TPM library returned no resource context".into());
+        }
+        Ok(Self(raw, true))
     }
 
     fn local() -> Result<Self> {
@@ -309,6 +339,14 @@ impl Context {
         }
         // Never use environment-selected/default TCTIs in the product path.
         Self::open("device:/dev/tpmrm0")
+    }
+
+    fn resource_local() -> Result<Self> {
+        let metadata = fs::symlink_metadata(DEVICE)?;
+        if !metadata.file_type().is_char_device() || metadata.uid() != 0 {
+            return Err("local TPM2 resource-manager character device required".into());
+        }
+        Self::resource_open("device:/dev/tpmrm0")
     }
 
     fn clock(&mut self) -> Result<Clock> {
@@ -335,9 +373,10 @@ impl Context {
 
     fn admission(&mut self) -> Result<Admission> {
         let mut occupied = 1;
-        check(unsafe { luma_tpm_index_exists(self.0, INDEX, &mut occupied) })?;
+        let index = if self.1 { RESOURCE_INDEX } else { INDEX };
+        check(unsafe { luma_tpm_index_exists(self.0, index, &mut occupied) })?;
         if occupied != 0 {
-            return Err("local TPM2 Admin index is occupied; preserve existing state; no automatic overwrite or recovery".into());
+            return Err("local TPM2 checkpoint index is occupied; preserve existing state; no automatic overwrite or recovery".into());
         }
         let mut pcrs = [0u8; 64];
         check(unsafe { luma_tpm_pcrs(self.0, pcrs.as_mut_ptr()) })?;
@@ -433,6 +472,190 @@ impl CredentialDevice {
     }
 }
 
+/// Closed, independent resource checkpoint transport. The caller owns durable
+/// preparation and authenticated Admin admission; this adapter has no CLI,
+/// credential prompting, shared Admin journal access, clearing or retry path.
+pub(crate) struct ResourceDevice(Context);
+impl ResourceDevice {
+    pub(crate) fn local() -> Result<Self> {
+        crate::require_root()?;
+        crate::platform::require_installed()?;
+        Ok(Self(Context::resource_local()?))
+    }
+    #[cfg(test)]
+    pub(crate) fn fixture(directory: &Path) -> Result<Self> {
+        if !Path::new("/.dockerenv").is_file()
+            || Path::new("/dev/tpm0").exists()
+            || Path::new("/dev/tpmrm0").exists()
+            || directory.parent() != Some(Path::new("/tmp"))
+            || !directory
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("")
+                .starts_with("luma-tpm-")
+        {
+            return Err("isolated software TPM resource fixture required".into());
+        }
+        Ok(Self(Context::resource_open(&format!(
+            "swtpm:path={}/tpm.sock",
+            directory.display()
+        ))?))
+    }
+    pub(crate) fn vacant(&mut self) -> Result<Admission> {
+        if self.0.handle_exists(RESOURCE_PARENT)? {
+            return Err(
+                "resource credential parent occupied; preserve enrollment, never overwrite".into(),
+            );
+        }
+        self.0.admission()
+    }
+    pub(crate) fn observation(&mut self) -> Result<Admission> {
+        let mut pcrs = [0u8; 64];
+        check(unsafe { luma_tpm_pcrs(self.0 .0, pcrs.as_mut_ptr()) })?;
+        Ok(Admission {
+            clock: self.0.clock()?,
+            pcr7_sha256: bundle::hex(&pcrs[..32]),
+            pcr11_sha256: bundle::hex(&pcrs[32..]),
+        })
+    }
+    pub(crate) fn recheck(&mut self, admission: &Admission) -> Result<()> {
+        let current = self.observation()?;
+        admission.compare(&current)?;
+        if current.clock.elapsed_since(admission.clock)? > 300_000 {
+            return Err(
+                "resource enrollment admission exceeded five-minute protected budget".into(),
+            );
+        }
+        Ok(())
+    }
+    pub(crate) fn prepare_parent(
+        &mut self,
+        owner: &crate::sealed_credential::PrivateBuffer,
+    ) -> Result<[u8; 34]> {
+        if owner.bytes().is_empty() || owner.bytes().len() > 64 {
+            return Err("existing nonempty TPM owner authorization required".into());
+        }
+        let mut name = [0u8; 34];
+        check(unsafe {
+            luma_tpm_resource_prepare_parent(
+                self.0 .0,
+                owner.bytes().as_ptr(),
+                owner.bytes().len() as u16,
+                name.as_mut_ptr(),
+            )
+        })?;
+        if name[..2] != [0, 0xb] {
+            return Err("resource prepared primary Name algorithm changed".into());
+        }
+        Ok(name)
+    }
+    pub(crate) fn persist_parent(
+        &mut self,
+        owner: &crate::sealed_credential::PrivateBuffer,
+        name: &[u8; 34],
+    ) -> Result<()> {
+        if owner.bytes().is_empty() || owner.bytes().len() > 64 {
+            return Err("existing nonempty TPM owner authorization required".into());
+        }
+        check(unsafe {
+            luma_tpm_resource_persist_parent(
+                self.0 .0,
+                owner.bytes().as_ptr(),
+                owner.bytes().len() as u16,
+                name.as_ptr(),
+            )
+        })
+    }
+    pub(crate) fn parent_matches(&mut self, name: &[u8; 34]) -> Result<()> {
+        self.0.parent_matches(name)
+    }
+    pub(crate) fn nv_absent(&mut self) -> Result<()> {
+        if self.0.handle_exists(RESOURCE_INDEX)? {
+            return Err("resource NV exists; refuse pre-NV phase continuation".into());
+        }
+        Ok(())
+    }
+    pub(crate) fn provision(
+        &mut self,
+        owner: &crate::sealed_credential::PrivateBuffer,
+        secret: &crate::sealed_credential::Secret,
+        genesis: [u8; 32],
+    ) -> Result<()> {
+        self.0.provision_existing(owner, secret, genesis)
+    }
+    pub(crate) fn seal(
+        &mut self,
+        parent: &[u8; 34],
+        public: &[u8],
+        secret: &crate::sealed_credential::Secret,
+    ) -> Result<(Vec<u8>, Vec<u8>)> {
+        self.0.seal_child(parent, public, secret)
+    }
+    pub(crate) fn unseal(
+        &mut self,
+        parent: &[u8; 34],
+        public: &[u8],
+        public_blob: &[u8],
+        private_blob: &[u8],
+        policy: &[u8; 32],
+        signature: &[u8; 256],
+    ) -> Result<crate::sealed_credential::Secret> {
+        Ok(crate::sealed_credential::Secret::from_buffer(
+            self.0
+                .unseal_child(parent, public, public_blob, private_blob, policy, signature)?,
+        ))
+    }
+    pub(crate) fn verify_boot(
+        &mut self,
+        public: &[u8],
+        policy: &[u8; 32],
+        signature: &[u8; 256],
+    ) -> Result<()> {
+        self.0.verify_policy11(public, policy, signature)
+    }
+    pub(crate) fn current_policy11(&mut self) -> Result<[u8; 32]> {
+        self.0.current_policy11()
+    }
+    pub(crate) fn connect(&mut self, secret: &crate::sealed_credential::Secret) -> Result<()> {
+        let mut name = [0u8; 34];
+        let (mut attributes, mut size, mut algorithm, mut policy_size) = (0, 0, 0, 0);
+        check(unsafe {
+            luma_tpm_index(
+                self.0 .0,
+                RESOURCE_INDEX,
+                secret.bytes().as_ptr(),
+                name.as_mut_ptr(),
+                &mut attributes,
+                &mut size,
+                &mut algorithm,
+                &mut policy_size,
+            )
+        })?;
+        if name != resource_checkpoint_name()
+            || attributes != ATTRIBUTES
+            || size != 32
+            || algorithm != 0xb
+            || policy_size != 0
+        {
+            return Err("resource checkpoint Name or closed extend-only profile changed".into());
+        }
+        self.0.clock()?;
+        self.read()?;
+        Ok(())
+    }
+    pub(crate) fn read(&mut self) -> Result<[u8; 32]> {
+        let mut value = [0u8; 32];
+        check(unsafe { luma_tpm_read(self.0 .0, value.as_mut_ptr()) })?;
+        Ok(value)
+    }
+    pub(crate) fn extend(&mut self, event: [u8; 32]) -> Result<()> {
+        check(unsafe { luma_tpm_extend(self.0 .0, event.as_ptr()) })
+    }
+    pub(crate) fn clock(&mut self) -> Result<Clock> {
+        self.0.clock()
+    }
+}
+
 /// Read-only admission observation, NOT enrollment, attestation or NV reservation.
 #[derive(Clone, Debug, Serialize)]
 pub struct Admission {
@@ -441,6 +664,15 @@ pub struct Admission {
     pcr11_sha256: String,
 }
 impl Admission {
+    pub(crate) fn pcr7(&self) -> &str {
+        &self.pcr7_sha256
+    }
+    pub(crate) fn pcr11(&self) -> &str {
+        &self.pcr11_sha256
+    }
+    pub(crate) fn epoch(&self) -> (u32, u32) {
+        (self.clock.reset_count, self.clock.restart_count)
+    }
     fn compare(&self, current: &Self) -> Result<()> {
         current.clock.elapsed_since(self.clock)?;
         if self.pcr7_sha256 != current.pcr7_sha256 || self.pcr11_sha256 != current.pcr11_sha256 {
@@ -469,9 +701,9 @@ pub fn installation_admission() -> Result<Admission> {
     Context::local()?.admission()
 }
 
-pub(crate) fn checkpoint_name() -> [u8; 34] {
+fn name_for_index(index: u32) -> [u8; 34] {
     let mut public = Vec::new();
-    public.extend(INDEX.to_be_bytes());
+    public.extend(index.to_be_bytes());
     public.extend(0x000bu16.to_be_bytes());
     public.extend(ATTRIBUTES.to_be_bytes());
     public.extend(0u16.to_be_bytes());
@@ -480,6 +712,12 @@ pub(crate) fn checkpoint_name() -> [u8; 34] {
     name[1] = 0xb;
     name[2..].copy_from_slice(&Sha256::digest(public));
     name
+}
+pub(crate) fn checkpoint_name() -> [u8; 34] {
+    name_for_index(INDEX)
+}
+pub(crate) fn resource_checkpoint_name() -> [u8; 34] {
+    name_for_index(RESOURCE_INDEX)
 }
 
 /// Read-only fixed-handle observation for enrollment inspection. This does
@@ -796,6 +1034,84 @@ pub(crate) fn exclusive_lock(path: &Path) -> Result<File> {
 mod tests {
     use super::*;
     use crate::admin_journal::{Entry, Store};
+
+    #[test]
+    #[ignore = "requires fresh disposable existing-owner swtpm without host devices"]
+    fn emulator_admin_and_resource_authorities_have_independent_handles_and_secrets() {
+        use crate::sealed_credential::{PrivateBuffer, Secret};
+        let directory = std::path::PathBuf::from(std::env::var("LUMA_TPM_TEST_DIRECTORY").unwrap());
+        let mut resource = ResourceDevice::fixture(&directory).unwrap();
+        let mut admin = CredentialDevice::fixture(&directory).unwrap().0;
+        let mut owner = PrivateBuffer::new(32).unwrap();
+        File::open(directory.join("owner.binary"))
+            .unwrap()
+            .read_exact(owner.bytes_mut())
+            .unwrap();
+        let admin_secret = Secret::generate().unwrap();
+        let resource_secret = Secret::generate().unwrap();
+        let admin_parent = admin.provision_parent_existing(&owner).unwrap();
+        admin
+            .provision_existing(&owner, &admin_secret, [0xa1; 32])
+            .unwrap();
+        resource.vacant().unwrap();
+        let resource_parent = resource.prepare_parent(&owner).unwrap();
+        resource.persist_parent(&owner, &resource_parent).unwrap();
+        assert_ne!(admin_parent, resource_parent);
+        resource
+            .provision(&owner, &resource_secret, [0xb1; 32])
+            .unwrap();
+        resource.connect(&resource_secret).unwrap();
+        let admin_lock = exclusive_lock(&directory.join("admin-independent.lock")).unwrap();
+        let mut admin = LocalAnchor::connect(
+            admin,
+            INDEX,
+            checkpoint_name(),
+            admin_secret.bytes(),
+            admin_lock,
+        )
+        .unwrap();
+        let original_admin = admin.read().unwrap();
+        assert_eq!(original_admin, extend_value([0; 32], [0xa1; 32]));
+        let original_resource = resource.read().unwrap();
+        assert_eq!(original_resource, extend_value([0; 32], [0xb1; 32]));
+        resource.extend([0xb2; 32]).unwrap();
+        assert_eq!(
+            resource.read().unwrap(),
+            extend_value(original_resource, [0xb2; 32])
+        );
+        assert_eq!(admin.read().unwrap(), original_admin);
+        admin.advance(original_admin, [0xa2; 32]).unwrap();
+        assert_eq!(
+            resource.read().unwrap(),
+            extend_value(original_resource, [0xb2; 32])
+        );
+        let mut wrong = ResourceDevice::fixture(&directory).unwrap();
+        assert!(wrong.connect(&admin_secret).is_err());
+        let mut name = [0u8; 34];
+        let (mut attributes, mut size, mut algorithm, mut policy_size) = (0, 0, 0, 0);
+        let crossed = ResourceDevice::fixture(&directory).unwrap();
+        assert!(check(unsafe {
+            luma_tpm_index(
+                crossed.0 .0,
+                INDEX,
+                admin_secret.bytes().as_ptr(),
+                name.as_mut_ptr(),
+                &mut attributes,
+                &mut size,
+                &mut algorithm,
+                &mut policy_size,
+            )
+        })
+        .is_err());
+        assert!(resource.prepare_parent(&owner).is_err());
+        assert!(resource
+            .provision(&owner, &resource_secret, [0xb3; 32])
+            .is_err());
+        assert_eq!(
+            resource.read().unwrap(),
+            extend_value(original_resource, [0xb2; 32])
+        );
+    }
 
     #[test]
     #[ignore = "requires fresh isolated existing-owner TPM and signed PCR policy fixture"]

@@ -2,7 +2,7 @@
   "schema_version": 1,
   "requirement": 1,
   "date": "2026-10-10",
-  "status": "integrated-source-candidate",
+  "status": "verified-source-candidate-with-export-admission-open",
   "gate_closing": false,
   "installed_image_tested": false,
   "physical_tpm_tested": false,
@@ -49,12 +49,561 @@
     "product_admin_enrolled": false
   },
   "remaining_software": [
-    "Independently protected resource checkpoint authority and damaged-authority reconstruction; custody approval pending",
-    "Long-term evidence/workflow history export and disposition, including closed runs and deleted principals"
+    "Large-export authenticated lifetime decision and implementation: approve fixed export-only 30-minute sessions, or retain 30-second sessions and implement reviewed resumable transfers. No lifetime extension implemented."
   ],
   "remaining_qualification": [
     "Installed account, UTC, grant, worker, retention and confinement integration",
     "Final D-drive image build and consolidated image/model sweep",
     "Separate native Ubuntu and physical security/recovery qualification"
-  ]
+  ],
+  "checkpoint_history_attempts": [
+    {
+      "evidence_directory": "/mnt/luma-build/work/r1-checkpoint-evidence-20261010-d/sweep",
+      "result": "failed",
+      "source_manifest_sha256": "6b605001bd5be8baaea45c5e967cc984292ec7298d3e17a6f3ba17f2f6d213ff",
+      "rust": {
+        "passed": 816,
+        "failed": 1,
+        "ignored": 42
+      },
+      "native_source": {
+        "discovered": 324,
+        "passed": 322,
+        "skipped": 2
+      },
+      "failure": "Directory inode recycling accepted as retired namespace; resource TPM parent verification double-closed an ESAPI handle. Retained failed traces."
+    },
+    {
+      "evidence_directory": "/mnt/luma-build/work/r1-checkpoint-evidence-20261010-e/sweep",
+      "result": "failed",
+      "source_manifest_sha256": "03fa6189b6857aefbf89eaedf9e00f7005768d10ac40ef0257e6097d530a3f04",
+      "native_source": {
+        "discovered": 325,
+        "passed": 325,
+        "skipped": 0
+      },
+      "failure": "DAG recovery test imports failed compilation; Rust and dependent PAM/TPM lanes did not execute their tests."
+    },
+    {
+      "evidence_directory": "/mnt/luma-build/work/r1-checkpoint-evidence-20261010-f",
+      "result": "interrupted-failed",
+      "source_manifest_sha256": "c43b20f3027164bd9a1fec235e13468c150fb5a10d5d7e28acb01f94d8274eab",
+      "all_targets_check_exit_code": 0,
+      "native_source": {
+        "discovered": 327,
+        "passed": 327,
+        "skipped": 0
+      },
+      "rust_transcript_sha256": "9e41725c1ae335984d9c2e06c6510c906ceae7206158736abde68c4d742d9be4",
+      "container_exit_code": 137,
+      "failure": "Rust test executable compilation killed by the 2GiB memory limit; stopped isolated container after native checks. No Rust/TPM success claimed; PAM interrupted. Subsequent retry disables debug symbols, not host security checks or WSL memory limits."
+    },
+    {
+      "admin_software_tpm_requested": true,
+      "cargo_profile_dev_debug": "0",
+      "cargo_profile_test_debug": "0",
+      "cases": [
+        {
+          "command": [
+            "cargo",
+            "check",
+            "--offline",
+            "--locked",
+            "--all-targets",
+            "--target-dir",
+            "/cache/target"
+          ],
+          "elapsed_seconds": 56.913,
+          "exit_code": 0,
+          "name": "rust-all-targets-check",
+          "test_counts": null,
+          "timed_out": false,
+          "transcript_sha256": "1fcfdc5791ce1d750da47fd474492c263b34e19c299be58314bac8daf8822cf9",
+          "verification_error": null
+        },
+        {
+          "command": [
+            "cargo",
+            "test",
+            "--offline",
+            "--locked",
+            "--target-dir",
+            "/cache/target",
+            "--",
+            "--test-threads=1"
+          ],
+          "elapsed_seconds": 763.095,
+          "exit_code": 101,
+          "name": "rust-tests",
+          "test_counts": null,
+          "timed_out": false,
+          "transcript_sha256": "f0562605076832f758b3d421459dcf360053c1a744df54c3164762b352008434",
+          "verification_error": null
+        },
+        {
+          "command": [
+            "/usr/bin/python3",
+            "-B",
+            "-m",
+            "unittest",
+            "discover",
+            "-s",
+            "native/tests",
+            "-p",
+            "test_*.py",
+            "-v"
+          ],
+          "elapsed_seconds": 25.144,
+          "exit_code": 0,
+          "name": "native-source-tests",
+          "test_counts": {
+            "discovered": 328,
+            "failed": 0,
+            "passed": 328,
+            "skipped": 0
+          },
+          "timed_out": false,
+          "transcript_sha256": "aa29ab6b71131e3b7ca6ba217941e904ead11f45ffbdff2293f01c8ab9fcd2d7",
+          "verification_error": null
+        },
+        {
+          "command": [
+            "/usr/bin/python3",
+            "-B",
+            "/src/native/tests/principal_pam_integration.py"
+          ],
+          "elapsed_seconds": 12.102,
+          "exit_code": 0,
+          "name": "real-pam-fixture",
+          "test_counts": null,
+          "timed_out": false,
+          "transcript_sha256": "483c99e25dd3851a8b471c9522c7a58d9d1a9b1ac6ce67b48d593d078bcb6e72",
+          "verification_error": null
+        },
+        {
+          "command": [
+            "/usr/bin/python3",
+            "-B",
+            "/src/native/tests/resource_checkpoint_integration.py"
+          ],
+          "elapsed_seconds": 5.883,
+          "exit_code": 0,
+          "name": "resource-software-tpm",
+          "test_counts": null,
+          "timed_out": false,
+          "transcript_sha256": "ca95179171e97db71b242504071f223ac70d6a6dd859f2e3e775c282d0108342",
+          "verification_error": null
+        },
+        {
+          "command": [
+            "/usr/bin/python3",
+            "-B",
+            "/src/native/tests/admin_enrollment_integration.py"
+          ],
+          "elapsed_seconds": 4.178,
+          "exit_code": 0,
+          "name": "admin-software-tpm-regression",
+          "test_counts": null,
+          "timed_out": false,
+          "transcript_sha256": "59d7972ee48a4fa1c5a542de0b5607499b2c6c7f668abae27e3c3d61a2685a69",
+          "verification_error": null
+        }
+      ],
+      "chrony_fixture": "release-4.9-pinned",
+      "elapsed_seconds": 867.675,
+      "gate_closing": false,
+      "installed_image_tested": false,
+      "kernel": "6.18.33.2-microsoft-standard-WSL2",
+      "physical_tpm_tested": false,
+      "production_authorization_qualified": false,
+      "real_pam_fixture_requested": true,
+      "resource_software_tpm_requested": true,
+      "result": "failed",
+      "runner_sha256": "29479a6e38014048f31eaed7968f2638e6093941ed5f809daa12f3978f15d6ea",
+      "rust_filter": null,
+      "schema_version": 1,
+      "scope": "requirement-1-offline-development",
+      "source_manifest_sha256": "49e36521592736ec23284bf3a9953de7de4308008107c3efb9a6760b615fb050",
+      "warnings_denied": true,
+      "evidence_directory": "/mnt/luma-build/work/r1-checkpoint-evidence-20261010-g/sweep",
+      "observed_rust_test_summary": {
+        "passed": 829,
+        "failed": 2,
+        "ignored": 42,
+        "source": "retained rust-tests.log terminal summary; runner counts unavailable on nonzero exit"
+      },
+      "failures": [
+        "policy_decisions::tests::additional_subject_restriction_denial_prevents_false_completed_operation reused immutable test record ID",
+        "workflow_runs::dag::tests::orphan_dag_applying_intent_without_confirmed_catalog_proof_never_cancels_or_redispatches assumed an incorrect signed-graph node order"
+      ],
+      "correction": "Both fixtures corrected without changing production completion/cancellation guards; verified by H and I."
+    }
+  ],
+  "checkpoint_history_targeted_verification": {
+    "admin_software_tpm_requested": true,
+    "cargo_profile_dev_debug": "0",
+    "cargo_profile_test_debug": "0",
+    "cases": [
+      {
+        "command": [
+          "cargo",
+          "check",
+          "--offline",
+          "--locked",
+          "--all-targets",
+          "--target-dir",
+          "/cache/target"
+        ],
+        "elapsed_seconds": 59.866,
+        "exit_code": 0,
+        "name": "rust-all-targets-check",
+        "test_counts": null,
+        "timed_out": false,
+        "transcript_sha256": "8db20002104098c301ba9604805e9b0d3a4d77b0c7bd4aa8f9af0bafccc6ad77",
+        "verification_error": null
+      },
+      {
+        "command": [
+          "cargo",
+          "test",
+          "--offline",
+          "--locked",
+          "--target-dir",
+          "/cache/target",
+          "workflow_runs",
+          "--",
+          "--test-threads=1"
+        ],
+        "elapsed_seconds": 112.869,
+        "exit_code": 0,
+        "name": "rust-tests",
+        "test_counts": {
+          "failed": 0,
+          "filtered_out": 831,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 46
+        },
+        "timed_out": false,
+        "transcript_sha256": "71fc03e3f192fec31d8f077fd6b0590bddbfda52692685b5d2cc195bd6e0ff6f",
+        "verification_error": null
+      },
+      {
+        "command": [
+          "cargo",
+          "test",
+          "--offline",
+          "--locked",
+          "--target-dir",
+          "/cache/target",
+          "policy_decisions",
+          "--",
+          "--test-threads=1"
+        ],
+        "elapsed_seconds": 23.738,
+        "exit_code": 0,
+        "name": "rust-tests-policy_decisions",
+        "test_counts": {
+          "failed": 0,
+          "filtered_out": 854,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 23
+        },
+        "timed_out": false,
+        "transcript_sha256": "746971fa4d617b96fc09b7f8edfcc106351a2209b735a2f3036fad3486b8f5f4",
+        "verification_error": null
+      },
+      {
+        "command": [
+          "/usr/bin/python3",
+          "-B",
+          "-m",
+          "unittest",
+          "discover",
+          "-s",
+          "native/tests",
+          "-p",
+          "test_*.py",
+          "-v"
+        ],
+        "elapsed_seconds": 23.008,
+        "exit_code": 0,
+        "name": "native-source-tests",
+        "test_counts": {
+          "discovered": 330,
+          "failed": 0,
+          "passed": 330,
+          "skipped": 0
+        },
+        "timed_out": false,
+        "transcript_sha256": "d0454ed8de956435019c6eb4d780317376da5051c2ad48abb21d1cec616211f6",
+        "verification_error": null
+      },
+      {
+        "command": [
+          "/usr/bin/python3",
+          "-B",
+          "/src/native/tests/principal_pam_integration.py"
+        ],
+        "elapsed_seconds": 8.992,
+        "exit_code": 0,
+        "name": "real-pam-fixture",
+        "test_counts": null,
+        "timed_out": false,
+        "transcript_sha256": "88b08c40bada97c620a22a9fd6aa16742918563eaaa11db378b97ce9063ace13",
+        "verification_error": null
+      },
+      {
+        "command": [
+          "/usr/bin/python3",
+          "-B",
+          "/src/native/tests/resource_checkpoint_integration.py"
+        ],
+        "elapsed_seconds": 3.83,
+        "exit_code": 0,
+        "name": "resource-software-tpm",
+        "test_counts": null,
+        "timed_out": false,
+        "transcript_sha256": "4385efbf61c674a99958206824d7b724eae83bdb6d7868c075f60c9351242a03",
+        "verification_error": null
+      },
+      {
+        "command": [
+          "/usr/bin/python3",
+          "-B",
+          "/src/native/tests/admin_enrollment_integration.py"
+        ],
+        "elapsed_seconds": 2.021,
+        "exit_code": 0,
+        "name": "admin-software-tpm-regression",
+        "test_counts": null,
+        "timed_out": false,
+        "transcript_sha256": "bc4a43ae28d8697211c063294dbc1f54cf7423f57033cae66a4869be099ce5bc",
+        "verification_error": null
+      }
+    ],
+    "chrony_fixture": "release-4.9-pinned",
+    "elapsed_seconds": 234.329,
+    "extra_rust_filters": [
+      "policy_decisions"
+    ],
+    "gate_closing": false,
+    "installed_image_tested": false,
+    "kernel": "6.18.33.2-microsoft-standard-WSL2",
+    "physical_tpm_tested": false,
+    "production_authorization_qualified": false,
+    "real_pam_fixture_requested": true,
+    "resource_software_tpm_requested": true,
+    "result": "passed",
+    "runner_sha256": "dd383f53af365e728632d8e4ab1f520ae28a0d9080ccae8bda7fe1e967549ca6",
+    "rust_filter": "workflow_runs",
+    "schema_version": 1,
+    "scope": "requirement-1-offline-targeted",
+    "source_manifest_sha256": "f7c1339a677f8103ea177968fedc9e84fa50bb2cb21b20dc7ac79721ef7fa53c",
+    "warnings_denied": true,
+    "evidence_directory": "/mnt/luma-build/work/r1-checkpoint-evidence-20261010-h/sweep"
+  },
+  "checkpoint_history_final_verification": {
+    "admin_software_tpm_requested": true,
+    "cargo_profile_dev_debug": "0",
+    "cargo_profile_test_debug": "0",
+    "cases": [
+      {
+        "command": [
+          "cargo",
+          "check",
+          "--offline",
+          "--locked",
+          "--all-targets",
+          "--target-dir",
+          "/cache/target"
+        ],
+        "elapsed_seconds": 57.914,
+        "exit_code": 0,
+        "name": "rust-all-targets-check",
+        "test_counts": null,
+        "timed_out": false,
+        "transcript_sha256": "c3bfa6686a695d845b4b372703f698792358a9f18c5b4ba8538619e03cd1ad2a",
+        "verification_error": null
+      },
+      {
+        "command": [
+          "cargo",
+          "test",
+          "--offline",
+          "--locked",
+          "--target-dir",
+          "/cache/target",
+          "workflow_runs",
+          "--",
+          "--test-threads=1"
+        ],
+        "elapsed_seconds": 115.388,
+        "exit_code": 0,
+        "name": "rust-tests",
+        "test_counts": {
+          "failed": 0,
+          "filtered_out": 831,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 48
+        },
+        "timed_out": false,
+        "transcript_sha256": "b3c52cd3dffe3f70da96ef74066ae8d8ca1b2089e6052e454eb7a30679146539",
+        "verification_error": null
+      },
+      {
+        "command": [
+          "cargo",
+          "test",
+          "--offline",
+          "--locked",
+          "--target-dir",
+          "/cache/target",
+          "policy_decisions",
+          "--",
+          "--test-threads=1"
+        ],
+        "elapsed_seconds": 18.073,
+        "exit_code": 0,
+        "name": "rust-tests-policy_decisions",
+        "test_counts": {
+          "failed": 0,
+          "filtered_out": 856,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 23
+        },
+        "timed_out": false,
+        "transcript_sha256": "22f4de798057e117e35009ba6dd1fa078ea85b2a6f0cda28a48f2fe7bdf5f193",
+        "verification_error": null
+      },
+      {
+        "command": [
+          "/usr/bin/python3",
+          "-B",
+          "-m",
+          "unittest",
+          "discover",
+          "-s",
+          "native/tests",
+          "-p",
+          "test_*.py",
+          "-v"
+        ],
+        "elapsed_seconds": 24.592,
+        "exit_code": 0,
+        "name": "native-source-tests",
+        "test_counts": {
+          "discovered": 330,
+          "failed": 0,
+          "passed": 330,
+          "skipped": 0
+        },
+        "timed_out": false,
+        "transcript_sha256": "10d4b15d087a11dee8c5a476891318f93aea7930529f0842e9fdc611b5ca7915",
+        "verification_error": null
+      },
+      {
+        "command": [
+          "/usr/bin/python3",
+          "-B",
+          "/src/native/tests/principal_pam_integration.py"
+        ],
+        "elapsed_seconds": 8.692,
+        "exit_code": 0,
+        "name": "real-pam-fixture",
+        "test_counts": null,
+        "timed_out": false,
+        "transcript_sha256": "6e1369d08d498fe0c9aa83f21631b34c478b4f4b198eda6ef3475fe91d14ce1e",
+        "verification_error": null
+      },
+      {
+        "command": [
+          "/usr/bin/python3",
+          "-B",
+          "/src/native/tests/resource_checkpoint_integration.py"
+        ],
+        "elapsed_seconds": 3.224,
+        "exit_code": 0,
+        "name": "resource-software-tpm",
+        "test_counts": null,
+        "timed_out": false,
+        "transcript_sha256": "dbeec7e3ce89cb5b8fccc1fec3a0833fc75030e0724ee7881481a632ddaba06c",
+        "verification_error": null
+      },
+      {
+        "command": [
+          "/usr/bin/python3",
+          "-B",
+          "/src/native/tests/admin_enrollment_integration.py"
+        ],
+        "elapsed_seconds": 2.371,
+        "exit_code": 0,
+        "name": "admin-software-tpm-regression",
+        "test_counts": null,
+        "timed_out": false,
+        "transcript_sha256": "9c77e5993292bfb05d66db550b03c18f904f8ce1cdb5a032e359879b4204db5b",
+        "verification_error": null
+      }
+    ],
+    "chrony_fixture": "release-4.9-pinned",
+    "elapsed_seconds": 230.255,
+    "extra_rust_filters": [
+      "policy_decisions"
+    ],
+    "gate_closing": false,
+    "installed_image_tested": false,
+    "kernel": "6.18.33.2-microsoft-standard-WSL2",
+    "physical_tpm_tested": false,
+    "production_authorization_qualified": false,
+    "real_pam_fixture_requested": true,
+    "resource_software_tpm_requested": true,
+    "result": "passed",
+    "runner_sha256": "dd383f53af365e728632d8e4ab1f520ae28a0d9080ccae8bda7fe1e967549ca6",
+    "rust_filter": "workflow_runs",
+    "schema_version": 1,
+    "scope": "requirement-1-offline-targeted",
+    "source_manifest_sha256": "2f004d5d3df9e2e6f4a8b860866f6127c7a06a990f45e43acb0fbeb6c687c392",
+    "warnings_denied": true,
+    "evidence_directory": "/mnt/luma-build/work/r1-checkpoint-evidence-20261010-i/sweep",
+    "fixture_execution": {
+      "real_pam_cases_passed": 6,
+      "resource_tpm_cases_passed": 4,
+      "admin_software_tpm_driver_passed": true,
+      "host_tpm_accessed": false
+    },
+    "source_delta_from_h": [
+      "rust/luma-platform/src/workflow_history.rs"
+    ],
+    "source_delta_from_g": [
+      "native/tests/requirement1_sweep.py",
+      "native/tests/test_requirement1_integration.py",
+      "native/tests/test_requirement1_sweep.py",
+      "rust/luma-platform/src/main.rs",
+      "rust/luma-platform/src/policy_decisions.rs",
+      "rust/luma-platform/src/service/granted_gateway.rs",
+      "rust/luma-platform/src/workflow_dag.rs",
+      "rust/luma-platform/src/workflow_history.rs",
+      "rust/luma-platform/src/workflow_runs.rs"
+    ],
+    "security_review": "Exact staged identity/bytes pinned across authority I/O; named parent and absent-domain proof retained across tombstone publication. Both review findings closed; no further actionable bypass found in reviewed paths."
+  },
+  "custody_approval": {
+    "date": "2026-10-10",
+    "authority": "separate Admin-provisioned TPM2 resource checkpoint isolated from shared Admin journal",
+    "scope": "software-and-disposable-TPM-only",
+    "host_tpm_mutation_authorized": false,
+    "automatic_verified_stage_commit_and_push": true
+  },
+  "syntax_verification": {
+    "admin_wrapper_bash_n_exit_code": 0,
+    "admin_profile_parser_exit_code": 0,
+    "granted_profile_parser_exit_code": 0,
+    "parser_environment": "Ubuntu WSL AppArmor 5.0.0~beta1",
+    "kernel_profiles_loaded": false,
+    "cache_read_write": false,
+    "installed_confinement_qualified": false
+  }
 }

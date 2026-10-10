@@ -50,6 +50,9 @@ impl Store {
             if bundle::hex(&Sha256::digest(&bytes)) != self.published_sha256 {
                 return Err("resource ledger changed outside this writer; preserve state".into());
             }
+            if let Some(authority) = &self.checkpoint {
+                authority.borrow_mut().verify_pair(&self.directory)?;
+            }
             self.verify_exclusion()?;
             Ok(bytes)
         })();

@@ -17,9 +17,9 @@ Ubuntu WSL, followed by full WSL shutdown after the narrower restart failed.
 | Protected UTC | Fixed keeper/producer units and profiles; admitted query peer, private live observation, authenticated seed/history; explicit reviewed fixed-unit reacquisition | Installed systemd/AppArmor startup; NTS, clock/rate/suspend envelopes |
 | Finite grants | Shared TPM catalog assignments/grants/revocation, exact typed selector and subject generation, finite validity and input/output/unit ceilings; fresh PAM/catalog/live UTC checks | Native issuance/revocation/admission, expiry and concurrency qualification |
 | Inference | Live original-client challenge at submit/claim/admit/finish/delivery, exact physical lease binding, durable inert grant attribution, fixed confined launcher | Real installed client/broker/model route, malicious/stale peer and revocation checks |
-| Policy evidence | Typed durable decisions with normalized scopes, actual PAM/catalog/grant/role evidence, protected UTC, stable denial reasons and pending/confirmed/uncertain effects; exact archive-before-unlink | Installed positive/adversarial flows; approved long-term archive lifecycle beyond bounded local capacity |
+| Policy evidence | Typed durable decisions with normalized scopes, actual PAM/catalog/grant/role evidence, protected UTC, stable denial reasons and pending/confirmed/uncertain effects; exact archive-before-unlink and separately granted export/custody/grace/disposition | Installed positive/adversarial flows, full-quota throughput and long-running export admission |
 | Workflows/artifacts | Signed closed typed DAGs with branched reads, leased bounded batch calculations and artifact writes; principal-isolated journals/catalogs; exact replay/cancellation/committed recovery; historical invoice route retains original provenance | Installed journal/catalog/worker flows, failures at every boundary; migration of old global laboratory state is not automatic |
-| Sources and cleanup | Principal input-folder ACL provisioning, retained source descriptors, separate inspection/Retain/Delete grants, protected-UTC artifact grace, explicit offline resource evidence deletion | Effective installed DAC/AppArmor/worker and recovery enforcement; protected damaged-authority reconstruction remains open |
+| Sources and cleanup | Principal input-folder ACL provisioning, retained source descriptors, separate inspection/Retain/Delete grants, protected-UTC artifact grace, explicit offline resource evidence deletion and independent NV-selected pair reconstruction | Effective installed DAC/AppArmor/worker, provisioning and damaged-authority recovery enforcement |
 
 Protected UTC bootstrap does not require inventing a live time capability:
 seed-only principal/custody actors can submit an independently reviewed bound.
@@ -35,6 +35,12 @@ subsequent protected aging establishment; do not claim all historical accounts
 already have a protected aging epoch.
 
 ## Operator interfaces included in the image candidate
+
+The subsequent independent resource checkpoint and history increment is described
+in [resource checkpoint custody and recovery](../RESOURCE_CHECKPOINT_CUSTODY.md).
+Its separate TPM authority was approved on 2026-10-10 for software/disposable-TPM
+tests only. The earlier sweep below remains evidence for its own frozen source,
+not the later checkpoint/history bytes.
 
 These are executable source entry points, not tested installation instructions.
 Use the produced image only after Linux compilation and candidate validation.
@@ -76,6 +82,88 @@ cannot be retracted after revocation; uncertainty must preserve the destination.
 Retaining a preparation preserves its bytes—it is not artifact deletion.
 
 ## Typed workflow and cleanup interfaces
+
+Terminal-domain history commands use `TYPE` equal to `dag` or `invoice`, the
+exact product principal ID and its generation. Run through the fixed
+`granted-run` launcher:
+
+- `workflow-history-inspection-review LOGIN TYPE PRINCIPAL GENERATION`
+- `workflow-history-proposal LOGIN READ-GRANT TYPE PRINCIPAL GENERATION`
+- `workflow-history-export LOGIN READ-GRANT EXPORT-GRANT TYPE PRINCIPAL GENERATION REVIEW`
+- `workflow-history-mark-proposal LOGIN READ-GRANT TYPE PRINCIPAL GENERATION ARCHIVE-SHA GRACE`
+- `workflow-history-mark LOGIN READ-GRANT RETAIN-GRANT TYPE PRINCIPAL GENERATION ARCHIVE-SHA GRACE REVIEW`
+- `workflow-history-delete-proposal LOGIN READ-GRANT TYPE PRINCIPAL GENERATION`
+- `workflow-history-delete LOGIN READ-GRANT DELETE-GRANT TYPE PRINCIPAL GENERATION REVIEW`
+- `workflow-history-staging-proposal LOGIN READ-GRANT TYPE PRINCIPAL GENERATION`
+- `workflow-history-staging-discard LOGIN READ-GRANT RETAIN-GRANT TYPE PRINCIPAL GENERATION REVIEW`
+
+Every run in the selected domain must be terminal, with no unresolved applying
+effect. Independently retained artifact receipts must confirm completed writes.
+Unpublished partial and empty workflow fragments remain opaque archive-only
+members: their filenames are not accepted as content hashes or committed results.
+A domain interrupted before its first run can be retired only with a validated
+installation database, exact principal namespace and nonempty retained fragments.
+Export carries canonical base64 records on a separate framed
+payload socket; terminal PAM/systemd messages cannot enter the caller's binary
+stdout. Acknowledgements confirm exact delivered bytes and flush, not remote
+storage persistence. Validate the saved archive with
+`workflow-history-archive-verify FILE` before accepting custody. Grace marking
+binds the exact manifest, recorded export, supplied archive digest and selected
+3,600–2,592,000-second grace period. Only protected UTC can establish expiry.
+
+Explicit retirement removes only descriptor-pinned terminal workflow copies;
+artifact catalogs, acknowledged artifact content and external sources remain.
+The out-of-domain history ledger advances a durable epoch. New invoice/DAG
+proposals and effect IDs bind that epoch, so old scopes cannot authorize a new
+namespace after retirement. Whole-filesystem epoch rollback is not independently
+TPM-detected by this history module; archives never authorize reconstruction.
+
+Closed policy archives have separately scoped export, custody acknowledgement,
+grace marking, deletion and evidence cleanup commands under `policy-archive-*`.
+They refuse active or uncertain operations and unresolved original record copies.
+Current PAM/catalog/UTC/grant authorization is checked on each output block.
+Successful unchanged checks within an already durably admitted export do not
+append repeated Allow records; initial admission, denials and final outcomes stay
+durable. This bounds audit growth for large archives without caching authority.
+
+Exports have a fixed 1,800-second unit runtime ceiling and 256MiB payload ceiling;
+ordinary commands retain 60 seconds. Socket idle waits are capped at 60 seconds
+and the remaining overall deadline. Current PAM sessions independently expire
+after 30 seconds; the transport ceiling does not extend authentication. A narrow
+export-only lifetime change requires the owner's pending decision. Grant validity
+is never extended. Native
+maximum-quota throughput and memory measurements remain qualification work.
+The confined launcher retains a fixed 8,192-descriptor ceiling because nested
+inspection/export can retain three independent 1,024-entry policy archive caches.
+This changes no capabilities or writable namespaces. The schema-2 workflow
+manifest also binds ext4 inode incarnations and immutable creation timestamps;
+a reused inode is not accepted as the former retired namespace.
+Interrupted history-ledger staging is inert and cannot replace the published
+epoch. Its exact private bytes require separate reviewed disposition; no
+cleanup command adopts a staged state or deletes the published ledger. Governed
+invoice domains also require their immutable installation/principal owner record.
+Unmarked laboratory or older unowned domains are not automatically relabeled.
+
+Retained runs belonging to an older principal generation have explicit
+disposition-only recovery interfaces:
+
+- `workflow-recovery-review LOGIN TYPE PRINCIPAL OLD-GENERATION REQUEST`
+- `workflow-recovery-inspect LOGIN READ-GRANT TYPE PRINCIPAL OLD-GENERATION REQUEST`
+- `workflow-recovery-cancel LOGIN READ-GRANT CANCEL-GRANT TYPE PRINCIPAL OLD-GENERATION REQUEST REVIEW`
+- `workflow-recovery-reconcile LOGIN READ-GRANT RESUME-GRANT TYPE PRINCIPAL OLD-GENERATION REQUEST REVIEW`
+
+Only the current usable owner, or the original Admin acting on an independently
+verified advanced, disabled or deleted target, can perform these operations.
+Cancellation cannot cross an unresolved Applying effect. Reconciliation records
+only an exact independently committed artifact outcome; it cannot redispatch a
+worker or create another artifact. These recovery scopes do not revive old
+execution or write grants.
+
+The lifecycle is bounded: retired principal names/UIDs remain reserved, the
+registry supports at most 128 lifetime principals, catalog transaction history is
+capped, and owned artifact catalogs retain at most 1,024 receipts. Terminal
+workflow retirement frees run capacity, not artifact-receipt or identity capacity.
+Quota refusal preserves evidence and does not imply indefinite local operation.
 
 The fixed launcher now also accepts `workflow-dag-review`, `workflow-dag-prepare`,
 `workflow-dag-status`, `workflow-dag-advance`, `workflow-dag-cancel` and
@@ -228,6 +316,49 @@ The granted-client profile also parsed with Ubuntu WSL's AppArmor
 No profile was loaded or cached. This is syntax checking on the host parser,
 not enforcement evidence or qualification of the Ubuntu 24.04 image tuple.
 
+## Verified independent checkpoint and history increment
+
+The final immutable snapshot I passed its offline targeted sweep at
+`/mnt/luma-build/work/r1-checkpoint-evidence-20261010-i/sweep`:
+
+- Warnings-denied `cargo check --all-targets` passed.
+- **48 workflow/recovery tests and 23 policy/admission tests passed**, with no
+  failures or ignored tests in either selected lane. These are targeted filters,
+  not a repeated full Rust suite.
+- **330 native tests passed, zero skips**. The pinned chrony 4.9 release source
+  was supplied read-only, so the two previously unavailable upstream checks ran.
+- **Six real PAM cases, four independent disposable resource-TPM cases and the
+  existing-owner Admin software-TPM driver passed**. Exact fixture invocations
+  executed real selected tests; zero matches cannot qualify the resource driver.
+- Admin wrapper Bash syntax and both confinement profiles parsed successfully.
+  Profiles were not loaded or cached; this does not establish enforcement.
+
+The frozen source manifest SHA256 is
+`2f004d5d3df9e2e6f4a8b860866f6127c7a06a990f45e43acb0fbeb6c687c392`.
+The runner SHA256 is
+`dd383f53af365e728632d8e4ab1f520ae28a0d9080ccae8bda7fe1e967549ca6`.
+Case commands, counts, exit codes, elapsed time and transcript digests are in
+[the machine-readable evidence](requirement1_2026-10-10.json) and the retained
+external `result.json`. Snapshot I differs from passing snapshot H only in
+`workflow_history.rs`, where the final security-review fixes and regressions
+pin exact staged bytes and retain the original absent-domain parent.
+
+The preceding full sweep G is explicitly **failed**, with 829 Rust passes,
+two fixture failures and 42 fixture-only entries not selected in the ordinary
+unit invocation. Its denial fixture reused an immutable record ID; its DAG
+Applying fixture assumed the wrong signed node order. Both fixtures were
+corrected without weakening production guards and passed H/I. G also passed
+328 native tests, PAM and the TPM drivers. Failed attempts D/E/F/G remain
+recorded, including F's 2GiB compiler OOM and interrupted dependent PAM lane.
+They are not relabeled as successful sweeps.
+
+H/I retain the same one-CPU, 2GiB isolated container limit and use
+`CARGO_PROFILE_TEST_DEBUG=0` and `CARGO_PROFILE_DEV_DEBUG=0` to bound compiler
+memory. No WSL memory increase, host TPM access, host clock/account change or
+additional service restart was performed. Network was disabled; source and
+chrony fixtures were read-only, and cache/storage/evidence remained on D:.
+No installed image or physical qualification is claimed.
+
 ## Earlier verification and recovery of the build environment
 
 - Windows targeted integration/account/package/UTC source checks: **37 passed**,
@@ -292,24 +423,26 @@ effective confinement, clock qualification or physical certification is claimed.
 
 ## Still open before Requirement #1 closes
 
-1. Authenticated damaged-authority/ledger/referenced-archive reconstruction from
-   exact protected history, after proved drainage. The new shutdown guard is an
-   isolation proof, not restoration. Never delete a ledger or substitute an empty
-   one to make recovery appear successful. A separate TPM2-backed checkpoint
-   authority is proposed and awaits the owner's custody decision. Reusing the
-   shared Admin journal for each lease heartbeat would conflict with its writer
-   and custody boundaries; unanchored backups cannot become authority.
-2. Complete the approved long-term evidence/workflow history retention lifecycle,
-   including archive capacity, closed-run and deleted-principal disposition, and
-   explicit export/disposition rather than treating quota refusal as indefinite
-   operation. Historical records are preserved, not automatically purged.
-3. Qualify the actual account/UTC/grant/worker/retention paths together under
+1. Finish large-export admission: choose an explicitly approved export-only
+   30-minute authenticated session or retain the 30-second session and implement
+   reviewed resumable transfers. Transport timeouts alone do not extend PAM
+   authentication. Write/Admin mutation sessions must not silently gain a longer
+   lifetime. This is remaining software work, not just performance qualification.
+2. Qualify the actual account/UTC/grant/worker/retention paths together under
    installed confinement. The development failures described above are repaired;
    passing unit and disposable-container tests cannot establish installed
    qualification.
-4. Freeze the fully implemented candidate, build once on D:, and perform the
+3. Freeze the fully implemented candidate, build once on D:, and perform the
    consolidated image/model sweep followed by separate native Ubuntu/physical
    qualification.
+
+The separately approved checkpoint reconstruction, terminal-domain disposition,
+explicit unpublished-staging cleanup and policy-archive lifecycle are implemented
+source candidates. They preserve damaged bytes, resolve only independently
+authenticated outcomes, and never adopt an unanchored backup or staged epoch.
+History publication binds the exact staged inode, incarnation and bytes across
+authority I/O; absent-domain retirement retains the marked parent through
+tombstone publication. Historical records are never automatically purged.
 
 Requirement #2 has not been started. Neither Requirement #1 nor G2 is marked
 complete; the passing development sweep does not eliminate the remaining software.

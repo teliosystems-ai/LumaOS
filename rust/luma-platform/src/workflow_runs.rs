@@ -15,6 +15,10 @@ const DIRECTORY: &str = "/var/lib/luma-os/workflow-runs";
 const GOVERNED_DIRECTORY: &str = "/var/lib/luma-os/workflow-invoice-domains";
 #[path = "workflow_dag.rs"]
 pub(crate) mod dag;
+#[path = "workflow_history.rs"]
+pub(crate) mod history;
+#[path = "workflow_recovery.rs"]
+pub(crate) mod recovery;
 const MAX_RUNS: usize = 256;
 const MAX_OBJECTS: usize = 512;
 const MAX_BYTES: u64 = 64 * 1024 * 1024;
@@ -45,6 +49,8 @@ struct Plan {
     source_bytes: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     authority: Option<PrincipalOwner>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    history_epoch: Option<u64>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -66,6 +72,9 @@ impl Plan {
             || !io::hash(&self.source_sha256)
             || self.source_bytes == 0
             || self.source_bytes > 1024 * 1024
+            || self
+                .history_epoch
+                .is_some_and(|epoch| epoch == 0 || epoch == u64::MAX)
         {
             return Err("invalid native invoice workflow plan".into());
         }
@@ -91,6 +100,11 @@ impl Plan {
         {
             return Err("workflow owner or principal generation changed".into());
         }
+        history::check_epoch(
+            history::Domain::Invoice,
+            &owner.principal,
+            self.history_epoch.unwrap_or(0),
+        )?;
         Ok(())
     }
     fn effect_id(&self) -> Result<String> {
@@ -259,13 +273,35 @@ struct Store {
     // SQLite closes before the exclusive directory lock is released.
     db: Connection,
     root: File,
+    root_path: std::path::PathBuf,
     objects: File,
     pending: File,
     installation: String,
+    domain_owner: Option<DomainOwner>,
+    domain_owner_file: Option<File>,
     calculator: fn(&[u8], &mut dyn FnMut() -> Result<()>) -> Result<workflow_resource::Calculation>,
     calculation_check: fn(&workflow_resource::Calculation, &[u8], &str) -> Result<()>,
 }
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+struct DomainOwner {
+    schema_version: u32,
+    installation: String,
+    principal: String,
+}
 pub(crate) fn initialize(path: &Path, installation: &str) -> Result<()> {
+    initialize_domain(path, installation, None)
+}
+fn initialize_governed(path: &Path, installation: &str, principal: &str) -> Result<()> {
+    if path.file_name().and_then(|name| name.to_str())
+        != Some(io::digest(principal.as_bytes()).as_str())
+        || !io::hash(principal)
+    {
+        return Err("governed invoice initializer requires its exact principal namespace".into());
+    }
+    initialize_domain(path, installation, Some(principal))
+}
+fn initialize_domain(path: &Path, installation: &str, principal: Option<&str>) -> Result<()> {
     if !io::hash(installation) {
         return Err("invalid workflow installation".into());
     }
@@ -280,6 +316,18 @@ pub(crate) fn initialize(path: &Path, installation: &str) -> Result<()> {
     }
     io::mkdir_at(&root, "objects")?;
     io::mkdir_at(&root, "pending")?;
+    if let Some(principal) = principal {
+        io::write_member(
+            &root,
+            "owner.json",
+            &serde_json::to_vec(&DomainOwner {
+                schema_version: 1,
+                installation: installation.into(),
+                principal: principal.into(),
+            })?,
+            0o400,
+        )?;
+    }
     io::write_member(&root, "metadata.sqlite3", b"", 0o600)?;
     let db = Connection::open(&path.join("metadata.sqlite3"))?;
     if db.query("PRAGMA journal_mode=WAL", &[], 1)? != [vec!["wal".to_owned()]] {
@@ -312,7 +360,30 @@ impl Store {
         if unsafe { libc::flock(root.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
             return Err("workflow coordinator is busy; cancellation was not accepted".into());
         }
-        let names = io::names(&root, 5)?;
+        let names = io::names(&root, 6)?;
+        let mut domain_owner_file = None;
+        let domain_owner = if names.contains(&"owner.json".into()) {
+            let file = io::open_at(&root, "owner.json", libc::O_RDONLY, 0)?;
+            let bytes = io::read_member(&root, "owner.json", 4096)?;
+            let owner: DomainOwner = serde_json::from_slice(&bytes)?;
+            if file.metadata()?.mode() & 0o7777 != 0o400
+                || serde_json::to_vec(&owner)? != bytes
+                || owner.schema_version != 1
+                || owner.installation != installation
+                || !io::hash(&owner.principal)
+                || path.file_name().and_then(|name| name.to_str())
+                    != Some(io::digest(owner.principal.as_bytes()).as_str())
+            {
+                return Err(
+                    "invoice domain owner marker differs from its actual namespace/installation"
+                        .into(),
+                );
+            }
+            domain_owner_file = Some(file);
+            Some(owner)
+        } else {
+            None
+        };
         if !names.contains(&"metadata.sqlite3".into())
             || !names.contains(&"objects".into())
             || !names.contains(&"pending".into())
@@ -322,6 +393,7 @@ impl Store {
         for name in names {
             match name.as_str() {
                 "objects" | "pending" => (),
+                "owner.json" => (),
                 "metadata.sqlite3" | "metadata.sqlite3-wal" => {
                     io::read_member(&root, &name, 16 * 1024 * 1024)?;
                 }
@@ -368,16 +440,74 @@ impl Store {
         }
         db.exec("PRAGMA max_page_count=4096;")?;
         let result = Self {
+            root_path: path.into(),
             db,
             root,
             objects,
             pending,
             installation: installation.into(),
+            domain_owner,
+            domain_owner_file,
             calculator: workflow_resource::calculate_checked,
             calculation_check: workflow_resource::Calculation::recheck,
         };
         result.inventory()?;
         Ok(result)
+    }
+    fn require_owner(&self, principal: &str) -> Result<()> {
+        catalog::safe_path(&self.root_path)?;
+        if scoped_read::identity(&scoped_read::open_directory(&self.root_path)?)?
+            != scoped_read::identity(&self.root)?
+        {
+            return Err("governed invoice domain detached from its actual namespace".into());
+        }
+        let expected = self.domain_owner.as_ref().filter(|owner| owner.principal == principal).ok_or("invoice namespace has no exact governed owner; do not adopt laboratory or old unowned history")?;
+        let file = io::open_at(&self.root, "owner.json", libc::O_RDONLY, 0)?;
+        let retained = self
+            .domain_owner_file
+            .as_ref()
+            .ok_or("invoice owner descriptor missing")?
+            .metadata()?;
+        let named = file.metadata()?;
+        if named.mode() & 0o7777 != 0o400
+            || named.nlink() != 1
+            || retained.nlink() != 1
+            || (
+                retained.dev(),
+                retained.ino(),
+                retained.len(),
+                retained.ctime(),
+                retained.ctime_nsec(),
+                retained.mtime(),
+                retained.mtime_nsec(),
+            ) != (
+                named.dev(),
+                named.ino(),
+                named.len(),
+                named.ctime(),
+                named.ctime_nsec(),
+                named.mtime(),
+                named.mtime_nsec(),
+            )
+            || io::read_member(&self.root, "owner.json", 4096)? != serde_json::to_vec(expected)?
+        {
+            return Err("invoice governed owner marker changed".into());
+        }
+        Ok(())
+    }
+    fn current_plan_owner(&self, plan: &Plan) -> Result<()> {
+        if let Some(owner) = &self.domain_owner {
+            self.require_owner(&owner.principal)?;
+            if plan
+                .authority
+                .as_ref()
+                .map(|owner| owner.principal.as_str())
+                != Some(owner.principal.as_str())
+            {
+                return Err("invoice immutable plan differs from governed domain owner".into());
+            }
+        }
+        Ok(())
     }
     fn object(&self, hash: &str) -> Result<Vec<u8>> {
         if !io::hash(hash) {
@@ -430,6 +560,9 @@ impl Store {
         Ok(())
     }
     fn load(&self, request: &str) -> Result<(Plan, Checkpoint)> {
+        if let Some(owner) = &self.domain_owner {
+            self.require_owner(&owner.principal)?;
+        }
         if !io::identifier(request) {
             return Err("invalid workflow request".into());
         }
@@ -441,6 +574,7 @@ impl Store {
         let row = row.first().ok_or("workflow run not found")?;
         let plan: Plan = serde_json::from_str(&row[0])?;
         plan.validate(&self.installation)?;
+        self.current_plan_owner(&plan)?;
         if serde_json::to_string(&plan)? != row[0]
             || plan.request_id != request
             || self.object(&plan.source_sha256)?.len() as u64 != plan.source_bytes
@@ -611,6 +745,10 @@ impl Store {
         trace: &mut impl FnMut(TraceEvent) -> Result<()>,
     ) -> Result<bool> {
         plan.validate(&self.installation)?;
+        let mut authorize = |plan: &Plan| -> Result<()> {
+            authorize(plan)?;
+            self.current_plan_owner(plan)
+        };
         if plan.authority.is_some() && operation.is_none() {
             return Err(
                 "governed workflow requires its live audited operation, not laboratory callbacks"
@@ -721,6 +859,10 @@ impl Store {
         if self.load(&plan.request_id)? != (plan.clone(), previous.clone()) {
             return Err("workflow changed before checkpoint commit".into());
         }
+        let mut authorize = |plan: &Plan| -> Result<()> {
+            authorize(plan)?;
+            self.current_plan_owner(plan)
+        };
         self.db.exec("BEGIN IMMEDIATE;")?;
         let tx = Transaction(&self.db, false);
         self.db.query(
@@ -775,6 +917,10 @@ impl Store {
         operation: Option<&str>,
     ) -> Result<()> {
         let (plan, previous) = self.load(request)?;
+        let mut authorize = |plan: &Plan| -> Result<()> {
+            authorize(plan)?;
+            self.current_plan_owner(plan)
+        };
         if plan.authority.is_some() && operation.is_none() {
             return Err("governed cancellation requires its live audited operation".into());
         }
@@ -832,6 +978,10 @@ impl Store {
         if plan.authority.is_some() && operation.is_none() {
             return Err("governed continuation requires its live audited operation".into());
         }
+        let mut authorize = |plan: &Plan| -> Result<()> {
+            authorize(plan)?;
+            self.current_plan_owner(plan)
+        };
         let current_review = digest(&previous)?;
         let retry_previous_step =
             (1..=4).contains(&previous.stage) && previous.previous_sha256 == review;
@@ -1118,6 +1268,7 @@ pub fn prepare(request: &str, artifact: &str, expected: &str) -> Result<()> {
         source_sha256: io::digest(&source),
         source_bytes: source.len() as u64,
         authority: None,
+        history_epoch: None,
     };
     let store = Store::open(Path::new(DIRECTORY), &installation)?;
     let replayed = store.prepare(&plan, &source, authorize)?;
@@ -1298,6 +1449,7 @@ fn proposed_plan(request: &str, artifact: &str, expected: &str, source: &[u8]) -
         source_sha256: io::digest(source),
         source_bytes: source.len() as u64,
         authority: None,
+        history_epoch: None,
     };
     plan.validate(&installation)?;
     authorize(&plan)?;
@@ -1365,10 +1517,12 @@ pub(crate) fn governed_review(
     request: &str,
     artifact: &str,
     expected: &str,
+    epoch: &str,
     snapshot: &str,
 ) -> Result<()> {
     let source = operator_snapshot(snapshot)?;
-    let plan = proposed_plan(request, artifact, expected, &source)?;
+    let mut plan = proposed_plan(request, artifact, expected, &source)?;
+    plan.history_epoch = history::epoch_argument(epoch)?;
     println!(
         "{}",
         serde_json::json!({"plan":plan,"input_kind":"operator-stdin-snapshot",
@@ -1425,6 +1579,202 @@ fn governed_path(principal: &str) -> Result<std::path::PathBuf> {
     catalog::safe_path(Path::new(GOVERNED_DIRECTORY))?;
     Ok(Path::new(GOVERNED_DIRECTORY).join(io::digest(principal.as_bytes())))
 }
+struct InvoiceRecovery {
+    store: Store,
+    plan: Plan,
+    request: String,
+}
+fn recovery_open(
+    principal: &str,
+    generation: u64,
+    request: &str,
+) -> Result<Box<dyn recovery::Run>> {
+    let store = Store::open(&governed_path(principal)?, &io::installation()?)?;
+    store.require_owner(principal)?;
+    let (plan, _) = store.load(request)?;
+    let owner = plan
+        .authority
+        .as_ref()
+        .ok_or("laboratory run cannot be adopted by recovery")?;
+    if owner.principal != principal || owner.generation != generation {
+        return Err(
+            "recovery target does not match the actual immutable invoice owner/generation".into(),
+        );
+    }
+    Ok(Box::new(InvoiceRecovery {
+        store,
+        plan,
+        request: request.into(),
+    }))
+}
+impl recovery::Run for InvoiceRecovery {
+    fn epoch(&self) -> u64 {
+        self.plan.history_epoch.unwrap_or(0)
+    }
+    fn scope(&self, action: crate::finite_grants::Action) -> Result<crate::finite_grants::Use> {
+        let owner = self
+            .plan
+            .authority
+            .as_ref()
+            .ok_or("missing retained invoice owner")?;
+        recovery::disposition_scope(
+            history::Domain::Invoice,
+            &owner.principal,
+            owner.generation,
+            &self.request,
+            &self.plan,
+            action,
+        )
+    }
+    fn evidence(&self) -> Result<serde_json::Value> {
+        let mut status = self.store.status(&self.request)?;
+        let (_, checkpoint) = self.store.load(&self.request)?;
+        status["cancel_allowed"] = matches!(checkpoint.stage, 0 | 1 | 2 | 5).into();
+        status["cancel"] = serde_json::to_value(self.scope(crate::finite_grants::Action::Cancel)?)?;
+        status["resume"] = serde_json::to_value(self.scope(crate::finite_grants::Action::Resume)?)?;
+        if matches!(checkpoint.stage, 3 | 4) {
+            let committed = (|| -> Result<serde_json::Value> {
+                let (plan, _, applying, report) = self.store.reconciliation_input(&self.request)?;
+                let proof = plan.committed(&plan.effect_id()?, &report)?;
+                let receipt = proof.recheck()?;
+                Ok(
+                    serde_json::json!({"review_sha256":Store::reconciliation_review(&plan,&applying,&receipt)?,"committed_receipt":receipt,"effect_executed":false}),
+                )
+            })();
+            match committed {
+                Ok(value) => status["committed_outcome"] = value,
+                Err(error) => {
+                    status["committed_outcome"] = serde_json::Value::Null;
+                    status["uncertain_reason"] = error.to_string().into();
+                }
+            }
+        }
+        status["disposition_only"] = true.into();
+        Ok(status)
+    }
+    fn cancel(
+        &self,
+        review: &str,
+        operation: &str,
+        check: &mut dyn FnMut() -> Result<()>,
+    ) -> Result<serde_json::Value> {
+        self.store.cancel_traced(
+            &self.request,
+            review,
+            |plan| {
+                if plan != &self.plan {
+                    return Err("retained cancellation plan changed".into());
+                }
+                check()
+            },
+            Some(operation),
+        )?;
+        check()?;
+        let mut status = self.store.status(&self.request)?;
+        status["disposition_only"] = true.into();
+        status["effect_executed"] = false.into();
+        Ok(status)
+    }
+    fn reconcile(
+        &self,
+        review: &str,
+        operation: &str,
+        check: &mut dyn FnMut() -> Result<()>,
+    ) -> Result<serde_json::Value> {
+        check()?;
+        let (plan, _, _, report) = self.store.reconciliation_input(&self.request)?;
+        if plan != self.plan {
+            return Err("retained reconciliation plan changed".into());
+        }
+        let proof = plan.committed(&plan.effect_id()?, &report)?;
+        let replayed = self.store.acknowledge_traced(
+            &self.request,
+            review,
+            |plan, _| {
+                if plan != &self.plan {
+                    return Err("retained reconciliation owner changed".into());
+                }
+                check()?;
+                proof.recheck()
+            },
+            Some(operation),
+        )?;
+        check()?;
+        let mut status = self.store.status(&self.request)?;
+        status["replayed"] = replayed.into();
+        status["disposition_only"] = true.into();
+        status["effect_executed"] = false.into();
+        Ok(status)
+    }
+}
+pub(crate) fn closed_history(
+    principal: &str,
+    generation: u64,
+    epoch: u64,
+) -> Result<history::Input> {
+    let path = governed_path(principal)?;
+    let store = Store::open(&path, &io::installation()?)?;
+    let (semantic_sha256, count) = closed_evidence(&store, principal, generation, epoch)?;
+    let root = store.root.try_clone()?;
+    drop(store);
+    Ok(history::Input {
+        root,
+        path,
+        semantic_sha256,
+        runs: count,
+    })
+}
+fn closed_evidence(
+    store: &Store,
+    principal: &str,
+    generation: u64,
+    epoch: u64,
+) -> Result<(String, usize)> {
+    store.require_owner(principal)?;
+    let pending = io::names(&store.pending, MAX_OBJECTS)?;
+    let rows = store.db.query(
+        "SELECT request_id,plan,current_stage FROM runs ORDER BY request_id",
+        &[],
+        MAX_RUNS,
+    )?;
+    if rows.is_empty() && pending.is_empty() {
+        return Err("empty invoice history has no terminal evidence to retire".into());
+    }
+    for row in &rows {
+        let (plan, checkpoint) = store.load(&row[0])?;
+        let owner = plan
+            .authority
+            .as_ref()
+            .ok_or("laboratory history cannot become a governed retirement target")?;
+        if owner.principal != principal
+            || owner.generation > generation
+            || plan.history_epoch.unwrap_or(0) != epoch
+            || !matches!(checkpoint.stage, 4 | 5)
+        {
+            return Err("invoice history contains another owner, epoch or nonterminal workflow; preserve state".into());
+        }
+        if checkpoint.stage == 4 {
+            let report = store.object(&checkpoint.report_sha256)?;
+            plan.committed(&plan.effect_id()?, &report)?.recheck()?;
+        }
+    }
+    let checkpoints = store.db.query(
+        "SELECT sequence,request_id,stage,canonical FROM checkpoints ORDER BY sequence",
+        &[],
+        MAX_RUNS * 5,
+    )?;
+    let semantic_sha256 = digest(&(
+        "invoice-closed-history-v2",
+        &store.installation,
+        principal,
+        generation,
+        epoch,
+        &rows,
+        &checkpoints,
+    ))?;
+    let count = rows.len();
+    Ok((semantic_sha256, count))
+}
 fn governed_login_store(login: &str) -> Result<Store> {
     let registry =
         crate::principal::RegistryBinding::capture(Path::new(crate::principal::REGISTRY))?;
@@ -1434,7 +1784,10 @@ fn governed_login_store(login: &str) -> Result<Store> {
         .ok_or("unknown governed workflow principal")?
         .id
         .clone();
-    Store::open(&governed_path(&principal)?, &io::installation()?)
+    history::active_epoch(history::Domain::Invoice, &principal)?;
+    let store = Store::open(&governed_path(&principal)?, &io::installation()?)?;
+    store.require_owner(&principal)?;
+    Ok(store)
 }
 fn governed_owned_store(plan: &Plan, trace: &GovernedTrace<'_, '_>) -> Result<Store> {
     trace.check(plan)?;
@@ -1459,21 +1812,24 @@ fn governed_owned_store(plan: &Plan, trace: &GovernedTrace<'_, '_>) -> Result<St
                 return Err("governed workflow domain capacity exhausted".into());
             }
             trace.check(plan)?;
-            initialize(&path, &plan.installation)?;
+            initialize_governed(&path, &plan.installation, &owner.principal)?;
             trace.check(plan)?;
         }
         Err(error) => return Err(error.into()),
         Ok(_) => (),
     }
-    Store::open(&path, &plan.installation)
+    let store = Store::open(&path, &plan.installation)?;
+    store.require_owner(&owner.principal)?;
+    Ok(store)
 }
 
 pub(crate) fn governed_prepare(args: &[String]) -> Result<()> {
-    if args.len() != 10 {
-        return Err("expected owned workflow-governed-prepare LOGIN EXECUTE-GRANT CALCULATE-GRANT WORKER-GRANT RESOURCE-GRANT REQUEST ARTIFACT EXPECTED-VERSION SNAPSHOT (use granted-run with CSV stdin)".into());
+    if args.len() != 11 {
+        return Err("expected owned workflow-governed-prepare LOGIN EXECUTE-GRANT CALCULATE-GRANT WORKER-GRANT RESOURCE-GRANT REQUEST ARTIFACT EXPECTED-VERSION HISTORY-EPOCH SNAPSHOT (use granted-run with CSV stdin)".into());
     }
-    let source = operator_snapshot(&args[9])?;
+    let source = operator_snapshot(&args[10])?;
     let mut plan = proposed_plan(&args[6], &args[7], &args[8], &source)?;
+    plan.history_epoch = history::epoch_argument(&args[9])?;
     let uses = vec![
         (
             args[2].clone(),
@@ -1682,6 +2038,78 @@ mod tests {
     use std::cell::Cell;
     use std::os::unix::fs::PermissionsExt;
     #[test]
+    fn terminal_history_requires_safe_run_state_and_preserves_unpublished_partial_preparations() {
+        let fixture = Fixture::owned("terminal-pending");
+        let store = fixture.open();
+        let principal = "c".repeat(64);
+        assert!(closed_evidence(&store, &principal, 1, 0).is_err());
+        let partial_name = "d".repeat(64);
+        io::write_member(&store.pending, &partial_name, b"partial bytes", 0o400).unwrap();
+        io::write_member(&store.pending, &"e".repeat(64), b"", 0o400).unwrap();
+        store.inventory().unwrap();
+        let (_, count) = closed_evidence(&store, &principal, 1, 0).unwrap();
+        assert_eq!(count, 0);
+        let (mut plan, source) = plan();
+        plan.authority = Some(PrincipalOwner {
+            principal: principal.clone(),
+            generation: 1,
+        });
+        store
+            .prepare_traced(
+                &plan,
+                &source,
+                |_| Ok(()),
+                Some(&"f".repeat(32)),
+                &mut |_| Ok(()),
+            )
+            .unwrap();
+        assert!(closed_evidence(&store, &principal, 2, 0).is_err());
+        store
+            .cancel_traced(
+                &plan.request_id,
+                &review(&store),
+                |_| Ok(()),
+                Some(&"f".repeat(32)),
+            )
+            .unwrap();
+        assert_eq!(closed_evidence(&store, &principal, 2, 0).unwrap().1, 1);
+        assert!(closed_evidence(&store, &"b".repeat(64), 2, 0).is_err());
+        assert!(closed_evidence(&store, &principal, 2, 1).is_err());
+        assert_eq!(
+            io::read_member(&store.pending, &partial_name, MAX_OBJECT).unwrap(),
+            b"partial bytes"
+        );
+        assert_eq!(store.object(&plan.source_sha256).unwrap(), source);
+    }
+    #[test]
+    fn zero_run_invoice_history_requires_an_exact_installer_created_principal_owner_marker() {
+        let fixture = Fixture::new("unowned-zero-run");
+        let store = fixture.open();
+        io::write_member(&store.pending, &"d".repeat(64), b"unpublished", 0o400).unwrap();
+        assert!(closed_evidence(&store, &"c".repeat(64), 1, 0).is_err());
+        assert!(initialize_governed(
+            &fixture.0.join("unbound"),
+            &store.installation,
+            &"c".repeat(64)
+        )
+        .is_err());
+        assert!(!fixture.0.join("unbound").exists());
+        let owned = Fixture::owned("owner-zero-run");
+        let store = owned.open();
+        io::write_member(&store.pending, &"d".repeat(64), b"", 0o400).unwrap();
+        assert_eq!(closed_evidence(&store, &"c".repeat(64), 1, 0).unwrap().1, 0);
+        assert!(closed_evidence(&store, &"e".repeat(64), 1, 0).is_err());
+        let bytes = io::read_member(&store.root, "owner.json", 4096).unwrap();
+        fs::rename(
+            owned.0.join(&owned.1).join("owner.json"),
+            owned.0.join(&owned.1).join("owner.prior"),
+        )
+        .unwrap();
+        io::write_member(&store.root, "owner.json", &bytes, 0o400).unwrap();
+        assert!(store.require_owner(&"c".repeat(64)).is_err());
+        assert!(closed_evidence(&store, &"c".repeat(64), 1, 0).is_err());
+    }
+    #[test]
     fn governed_trace_is_issued_before_real_calculation_and_links_checkpoint_without_legacy_rewrite(
     ) {
         let fixture = Fixture::new("trace");
@@ -1882,6 +2310,155 @@ mod tests {
         assert_ne!(plan.scope_digest().unwrap(), scope);
     }
     #[test]
+    fn retired_invoice_namespace_epoch_changes_authority_scope_and_effect_without_rewriting_initial_bytes(
+    ) {
+        let (mut plan, _) = plan();
+        let original = serde_json::to_vec(&plan).unwrap();
+        assert!(!String::from_utf8(original.clone())
+            .unwrap()
+            .contains("history_epoch"));
+        let scope = plan.scope_digest().unwrap();
+        let effect = plan.effect_id().unwrap();
+        let usage = governed_use(&plan, crate::finite_grants::Action::Execute).unwrap();
+        plan.history_epoch = Some(1);
+        assert_ne!(plan.scope_digest().unwrap(), scope);
+        assert_ne!(plan.effect_id().unwrap(), effect);
+        assert_ne!(
+            governed_use(&plan, crate::finite_grants::Action::Execute)
+                .unwrap()
+                .selector,
+            usage.selector
+        );
+        let epoch_one = plan.effect_id().unwrap();
+        plan.history_epoch = Some(2);
+        assert_ne!(plan.effect_id().unwrap(), epoch_one);
+        plan.history_epoch = None;
+        assert_eq!(serde_json::to_vec(&plan).unwrap(), original);
+    }
+    #[test]
+    fn orphan_invoice_disposition_requires_new_scope_and_revocation_preserves_source_without_worker_dispatch(
+    ) {
+        use recovery::Run;
+        let fixture = Fixture::owned("orphan-disposition");
+        let mut store = fixture.open();
+        let (mut plan, source) = plan();
+        plan.authority = Some(PrincipalOwner {
+            principal: "c".repeat(64),
+            generation: 1,
+        });
+        store
+            .prepare_traced(
+                &plan,
+                &source,
+                |_| Ok(()),
+                Some(&"d".repeat(32)),
+                &mut |_| Ok(()),
+            )
+            .unwrap();
+        store.calculator =
+            |_, _| panic!("disposition cannot launch calculation or acquire a lease");
+        let before = store.object(&plan.source_sha256).unwrap();
+        let review = review(&store);
+        let run = InvoiceRecovery {
+            store,
+            plan: plan.clone(),
+            request: plan.request_id.clone(),
+        };
+        assert_ne!(
+            run.scope(crate::finite_grants::Action::Cancel)
+                .unwrap()
+                .selector,
+            governed_use(&plan, crate::finite_grants::Action::Cancel)
+                .unwrap()
+                .selector
+        );
+        assert!(run
+            .cancel(&review, &"e".repeat(32), &mut || Err(
+                "fresh current generation grant revoked".into()
+            ))
+            .is_err());
+        assert_eq!(run.store.load(&plan.request_id).unwrap().1.stage, 0);
+        assert_eq!(run.store.object(&plan.source_sha256).unwrap(), before);
+        let result = run
+            .cancel(&review, &"e".repeat(32), &mut || Ok(()))
+            .unwrap();
+        assert_eq!(result["state"], "cancelled");
+        assert_eq!(run.store.object(&plan.source_sha256).unwrap(), before);
+        assert!(run.cancel(&review, &"f".repeat(32), &mut || Ok(())).is_ok());
+        assert!(run
+            .reconcile(&review, &"f".repeat(32), &mut || Ok(()))
+            .is_err());
+        assert!(run
+            .store
+            .advance_traced(
+                &plan.request_id,
+                &review,
+                |_| Err("old execution authority is withdrawn".into()),
+                |_, _, _, _| panic!("no artifact redispatch"),
+                Some(&"f".repeat(32)),
+                &mut |_| Ok(())
+            )
+            .is_err());
+    }
+    #[test]
+    fn applying_orphan_invoice_cannot_cancel_or_invent_committed_outcome() {
+        use recovery::Run;
+        let fixture = Fixture::owned("orphan-applying");
+        let store = fixture.open();
+        let (mut plan, source) = plan();
+        plan.authority = Some(PrincipalOwner {
+            principal: "c".repeat(64),
+            generation: 1,
+        });
+        store
+            .prepare_traced(
+                &plan,
+                &source,
+                |_| Ok(()),
+                Some(&"d".repeat(32)),
+                &mut |_| Ok(()),
+            )
+            .unwrap();
+        for _ in 0..2 {
+            let review = review(&store);
+            store
+                .advance_traced(
+                    &plan.request_id,
+                    &review,
+                    |_| Ok(()),
+                    |_, _, _, _| panic!("pre-applying stages cannot publish"),
+                    Some(&"e".repeat(32)),
+                    &mut |_| Ok(()),
+                )
+                .unwrap();
+        }
+        let applying_review = review(&store);
+        assert!(store
+            .advance_traced(
+                &plan.request_id,
+                &applying_review,
+                |_| Ok(()),
+                |_, _, _, _| Err("publication outcome unavailable".into()),
+                Some(&"e".repeat(32)),
+                &mut |_| Ok(())
+            )
+            .is_err());
+        let review = review(&store);
+        let run = InvoiceRecovery {
+            store,
+            plan: plan.clone(),
+            request: plan.request_id.clone(),
+        };
+        assert!(run
+            .cancel(&review, &"f".repeat(32), &mut || Ok(()))
+            .is_err());
+        assert!(run
+            .reconcile(&review, &"f".repeat(32), &mut || Ok(()))
+            .is_err());
+        assert_eq!(run.store.load(&plan.request_id).unwrap().1.stage, 3);
+        assert_eq!(run.store.object(&plan.source_sha256).unwrap(), source);
+    }
+    #[test]
     fn failed_resource_calculation_never_advances_or_crosses_the_artifact_boundary() {
         let f = Fixture::new("resource-failure");
         let (plan, bytes) = plan();
@@ -1934,7 +2511,7 @@ mod tests {
         assert!(io::names(&store.objects, MAX_OBJECTS).unwrap().is_empty());
         assert!(io::names(&store.pending, MAX_OBJECTS).unwrap().is_empty());
     }
-    struct Fixture(std::path::PathBuf);
+    struct Fixture(std::path::PathBuf, String);
     impl Fixture {
         fn new(label: &str) -> Self {
             let root = std::env::var_os("LUMA_STORAGE_TEST_ROOT")
@@ -1943,10 +2520,17 @@ mod tests {
                 .join(format!("luma-workflow-{label}-{}", std::process::id()));
             fs::DirBuilder::new().mode(0o700).create(&root).unwrap();
             initialize(&root.join("runs"), &"a".repeat(64)).unwrap();
-            Self(root)
+            Self(root, "runs".into())
+        }
+        fn owned(label: &str) -> Self {
+            let mut fixture = Self::new(label);
+            let principal = "c".repeat(64);
+            fixture.1 = io::digest(principal.as_bytes());
+            initialize_governed(&fixture.0.join(&fixture.1), &"a".repeat(64), &principal).unwrap();
+            fixture
         }
         fn open(&self) -> Store {
-            let mut store = Store::open(&self.0.join("runs"), &"a".repeat(64)).unwrap();
+            let mut store = Store::open(&self.0.join(&self.1), &"a".repeat(64)).unwrap();
             // This fixture exercises coordinator persistence, not the installed
             // systemd/lease boundary. The production constructor always uses it.
             store.calculator = |source, check| {
@@ -1991,6 +2575,7 @@ mod tests {
                 source_sha256: io::digest(&source),
                 source_bytes: source.len() as u64,
                 authority: None,
+                history_epoch: None,
             },
             source,
         )

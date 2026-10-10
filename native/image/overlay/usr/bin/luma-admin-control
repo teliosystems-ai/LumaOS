@@ -5,6 +5,7 @@ if [ "$(/usr/bin/id -u)" != 0 ]; then
     exit 1
 fi
 case "${1:-}" in
+    resource-checkpoint-prepare-review|resource-checkpoint-prepare|resource-checkpoint-enroll-review|resource-checkpoint-enroll|resource-checkpoint-parent-review|resource-checkpoint-parent-continue|resource-checkpoint-pending-review|resource-checkpoint-finalize|resource-checkpoint-recovery-review|resource-checkpoint-recover|resource-checkpoint-gc-review|resource-checkpoint-gc) ;;
     utc-seed|utc-seed-recovery|utc-query|utc-history|utc-reacquire|utc-reacquire-recovery|admin-account-activate|admin-account-renew|admin-account-recover|admin-account-recover-publish|admin-account-recover-complete|admin-account-create|admin-account-create-permit|admin-account-create-file|admin-account-create-complete|admin-account-delete|admin-account-delete-permit|admin-account-delete-file|admin-account-delete-complete|admin-account-password|admin-account-lock|admin-account-publish|admin-account-complete|admin-catalog|admin-governance-status|admin-principals-adopt|admin-accounts-checkpoint|admin-activity-register|admin-role-define|admin-principal-advance|admin-principal-rotate|admin-custody-recover) ;;
     *) echo 'Choose a supported typed local Admin control command; no shell or general executor is provided.' >&2; exit 2 ;;
 esac

@@ -55,6 +55,8 @@ struct Proposal {
     workflow_sha256: String,
     inputs: BTreeMap<String, SourceIdentity>,
     targets: BTreeMap<String, Target>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    history_epoch: Option<u64>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -151,6 +153,9 @@ impl Proposal {
         if self.schema_version != 1
             || !io::identifier(&self.request_id)
             || self.workflow_sha256 != graph.sha256
+            || self
+                .history_epoch
+                .is_some_and(|epoch| epoch == 0 || epoch == u64::MAX)
         {
             return Err("DAG proposal identity differs from its signed installed graph".into());
         }
@@ -233,6 +238,10 @@ impl Plan {
         if !io::hash(&stored.sha256)
             || !io::identifier(&self.proposal.request_id)
             || self.proposal.schema_version != 1
+            || self
+                .proposal
+                .history_epoch
+                .is_some_and(|epoch| epoch == 0 || epoch == u64::MAX)
             || self.proposal.inputs.len() > 64
             || self.proposal.targets.len() > 64
         {
@@ -305,6 +314,11 @@ impl Plan {
             .owner
             .as_ref()
             .ok_or("DAG requires its original governed owner")?;
+        super::history::check_epoch(
+            super::history::Domain::Dag,
+            &owner.principal,
+            self.proposal.history_epoch.unwrap_or(0),
+        )?;
         if boundary.subject()? != owner.principal
             || boundary.subject_generation()? != owner.generation
             || io::installation()? != self.installation
@@ -1127,6 +1141,298 @@ fn domain(principal: &str) -> Result<std::path::PathBuf> {
     catalog::ext4(&directory)?;
     Ok(root.join(principal))
 }
+pub(crate) fn closed_history(
+    principal: &str,
+    generation: u64,
+    epoch: u64,
+) -> Result<super::history::Input> {
+    let path = domain(principal)?;
+    let store = Store::open(&path, &io::installation()?)?;
+    let (semantic_sha256, count) = closed_evidence(&store, principal, generation, epoch)?;
+    let root = store.root.try_clone()?;
+    drop(store);
+    Ok(super::history::Input {
+        root,
+        path,
+        semantic_sha256,
+        runs: count,
+    })
+}
+fn closed_evidence(
+    store: &Store,
+    principal: &str,
+    generation: u64,
+    epoch: u64,
+) -> Result<(String, usize)> {
+    if store.principal != principal {
+        return Err("closed DAG history differs from its actual principal namespace".into());
+    }
+    let pending = io::names(&store.pending, MAX_OBJECTS)?;
+    let rows = store.db.query(
+        "SELECT request_id,plan FROM runs ORDER BY request_id",
+        &[],
+        MAX_RUNS,
+    )?;
+    if rows.is_empty() && pending.is_empty() {
+        return Err("empty DAG history has no terminal evidence to retire".into());
+    }
+    for row in &rows {
+        let run = store.load(&row[0])?;
+        let owner = run.plan.owner()?;
+        if owner.principal != principal
+            || owner.generation > generation
+            || run.plan.proposal.history_epoch.unwrap_or(0) != epoch
+            || (run.event.phase != Phase::Cancelled && run.cursor != run.plan.order.len())
+        {
+            return Err(
+                "DAG history contains another owner, epoch or nonterminal workflow; preserve state"
+                    .into(),
+            );
+        }
+        let graph = run.plan.validate(&run.plan.installation)?;
+        for (id, output) in &run.outputs {
+            if let Output::Artifact { receipt } = output {
+                let node = graph.node(id)?;
+                let (input, report, _) = store.report(node, &run.outputs)?;
+                let effect = run.plan.effect_id(id)?;
+                if catalog::committed_owned_invoice(
+                    &run.plan.commit(id, &input, &effect)?,
+                    principal,
+                    owner.generation,
+                    &report,
+                )?
+                .recheck()?
+                    != *receipt
+                {
+                    return Err("DAG terminal artifact no longer has its exact independently retained catalog outcome".into());
+                }
+            }
+        }
+    }
+    let events = store.db.query(
+        "SELECT sequence,request_id,ordinal,canonical FROM events ORDER BY sequence",
+        &[],
+        MAX_EVENTS,
+    )?;
+    let semantic_sha256 = hash(&(
+        "dag-closed-history-v2",
+        &store.installation,
+        principal,
+        generation,
+        epoch,
+        &rows,
+        &events,
+    ))?;
+    let count = rows.len();
+    Ok((semantic_sha256, count))
+}
+struct DagRecovery {
+    store: Store,
+    plan: Plan,
+    request: String,
+}
+pub(super) fn recovery_open(
+    principal: &str,
+    generation: u64,
+    request: &str,
+) -> Result<Box<dyn super::recovery::Run>> {
+    let store = Store::open(&domain(principal)?, &io::installation()?)?;
+    let run = store.load(request)?;
+    let owner = run.plan.owner()?;
+    if owner.principal != principal || owner.generation != generation {
+        return Err(
+            "recovery target differs from the actual retained DAG principal/generation".into(),
+        );
+    }
+    Ok(Box::new(DagRecovery {
+        store,
+        plan: run.plan,
+        request: request.into(),
+    }))
+}
+impl DagRecovery {
+    fn committed(
+        &self,
+    ) -> Result<(
+        Run,
+        String,
+        bool,
+        catalog::InvoiceOutcome,
+        serde_json::Value,
+        String,
+    )> {
+        let run = self.store.load(&self.request)?;
+        if run.plan != self.plan {
+            return Err("retained DAG recovery plan changed".into());
+        }
+        let graph = run.plan.validate(&run.plan.installation)?;
+        let (applying, node, replayed) = if run.event.phase == Phase::Applying {
+            (
+                run.event.clone(),
+                graph.node(&run.plan.order[run.cursor])?,
+                false,
+            )
+        } else if run.event.phase == Phase::Completed
+            && graph.node(&run.event.node)?.kind == Kind::ArtifactWrite
+        {
+            let rows = self.store.db.query(
+                "SELECT canonical FROM events WHERE request_id=? AND ordinal=?",
+                &[&self.request, &(run.event.ordinal - 1).to_string()],
+                1,
+            )?;
+            let previous: Event = serde_json::from_str(
+                &rows
+                    .first()
+                    .ok_or("retained applying predecessor missing")?[0],
+            )?;
+            if previous.phase != Phase::Applying || previous.node != run.event.node {
+                return Err("DAG recovery has no exact retained applying predecessor".into());
+            }
+            (previous, graph.node(&run.event.node)?, true)
+        } else {
+            return Err(
+                "DAG recovery requires an actual applying or acknowledged artifact checkpoint"
+                    .into(),
+            );
+        };
+        if node.kind != Kind::ArtifactWrite {
+            return Err("DAG applying recovery cannot admit a new non-artifact effect".into());
+        }
+        let (input, report, _) = self.store.report(node, &run.outputs)?;
+        let effect = run.plan.effect_id(&node.id)?;
+        let owner = run.plan.owner()?;
+        let proof = catalog::committed_owned_invoice(
+            &run.plan.commit(&node.id, &input, &effect)?,
+            &owner.principal,
+            owner.generation,
+            &report,
+        )?;
+        let receipt = proof.recheck()?;
+        let review = hash(&(
+            "luma-native-dag-committed-outcome-v1",
+            &run.plan,
+            &applying,
+            &receipt,
+        ))?;
+        Ok((run, node.id.clone(), replayed, proof, receipt, review))
+    }
+}
+impl super::recovery::Run for DagRecovery {
+    fn epoch(&self) -> u64 {
+        self.plan.proposal.history_epoch.unwrap_or(0)
+    }
+    fn scope(&self, action: Action) -> Result<Use> {
+        let owner = self.plan.owner()?;
+        super::recovery::disposition_scope(
+            super::history::Domain::Dag,
+            &owner.principal,
+            owner.generation,
+            &self.request,
+            &self.plan,
+            action,
+        )
+    }
+    fn evidence(&self) -> Result<serde_json::Value> {
+        let mut status = self.store.status(&self.request)?;
+        let run = self.store.load(&self.request)?;
+        status["cancel_allowed"] = (run.event.phase == Phase::Cancelled
+            || (run.event.phase != Phase::Applying && run.cursor < run.plan.order.len()))
+        .into();
+        status["cancel"] = serde_json::to_value(self.scope(Action::Cancel)?)?;
+        status["resume"] = serde_json::to_value(self.scope(Action::Resume)?)?;
+        match self.committed() {
+            Ok((_, _, replayed, _, receipt, review)) => {
+                status["committed_outcome"] = serde_json::json!({"review_sha256":review,"committed_receipt":receipt,"already_acknowledged":replayed,"effect_executed":false})
+            }
+            Err(error) => {
+                status["committed_outcome"] = serde_json::Value::Null;
+                status["uncertain_reason"] = error.to_string().into();
+            }
+        }
+        status["disposition_only"] = true.into();
+        Ok(status)
+    }
+    fn cancel(
+        &self,
+        review: &str,
+        operation: &str,
+        check: &mut dyn FnMut() -> Result<()>,
+    ) -> Result<serde_json::Value> {
+        check()?;
+        let run = self.store.load(&self.request)?;
+        if run.plan != self.plan {
+            return Err("retained DAG cancellation plan changed".into());
+        }
+        let replayed = self.store.replayed_review(&run, review, true)?;
+        if !replayed && run.event.phase != Phase::Cancelled {
+            if run.event.phase == Phase::Applying || run.cursor == run.plan.order.len() {
+                return Err("applying or completed DAG cannot be cancelled; exact outcome reconciliation is required".into());
+            }
+            let event = next_event(
+                &run.plan,
+                Some(&run.event),
+                "",
+                Phase::Cancelled,
+                None,
+                operation,
+            )?;
+            self.store
+                .persist(&run.plan, Some(&run.event), &event, || check())?;
+        }
+        check()?;
+        let mut status = self.store.status(&self.request)?;
+        status["replayed"] = replayed.into();
+        status["disposition_only"] = true.into();
+        status["effect_executed"] = false.into();
+        Ok(status)
+    }
+    fn reconcile(
+        &self,
+        review: &str,
+        operation: &str,
+        check: &mut dyn FnMut() -> Result<()>,
+    ) -> Result<serde_json::Value> {
+        check()?;
+        let (run, node, replayed, proof, receipt, expected) = self.committed()?;
+        if expected != review {
+            return Err("retained DAG committed-outcome review changed".into());
+        }
+        if !replayed {
+            let event = next_event(
+                &run.plan,
+                Some(&run.event),
+                &node,
+                Phase::Completed,
+                Some(Output::Artifact {
+                    receipt: receipt.clone(),
+                }),
+                operation,
+            )?;
+            self.store
+                .persist(&run.plan, Some(&run.event), &event, || {
+                    check()?;
+                    if proof.recheck()? != receipt {
+                        return Err(
+                            "independent committed outcome changed before recovery acknowledgement"
+                                .into(),
+                        );
+                    }
+                    Ok(())
+                })?;
+        }
+        check()?;
+        if proof.recheck()? != receipt {
+            return Err(
+                "independent committed outcome changed after recovery acknowledgement".into(),
+            );
+        }
+        let mut status = self.store.status(&self.request)?;
+        status["replayed"] = replayed.into();
+        status["disposition_only"] = true.into();
+        status["effect_executed"] = false.into();
+        Ok(status)
+    }
+}
 fn login_store(login: &str) -> Result<Store> {
     let registry =
         crate::principal::RegistryBinding::capture(Path::new(crate::principal::REGISTRY))?;
@@ -1136,6 +1442,7 @@ fn login_store(login: &str) -> Result<Store> {
         .ok_or("unknown DAG principal")?
         .id
         .clone();
+    super::history::active_epoch(super::history::Domain::Dag, &principal)?;
     Store::open(&domain(&principal)?, &io::installation()?)
 }
 fn owned_store(
@@ -1171,6 +1478,44 @@ fn owned_store(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn terminal_dag_history_preserves_opaque_pending_and_never_disposes_nonterminal_runs() {
+        let fixture = Fixture::new("terminal-pending");
+        let store = fixture.open();
+        let principal = &fixture.plan.owner().unwrap().principal;
+        assert!(closed_evidence(&store, principal, 1, 0).is_err());
+        let partial = "f".repeat(64);
+        io::write_member(&store.pending, &partial, b"partial unpublished", 0o400).unwrap();
+        io::write_member(&store.pending, &"e".repeat(64), b"", 0o400).unwrap();
+        store.inventory().unwrap();
+        assert_eq!(closed_evidence(&store, principal, 1, 0).unwrap().1, 0);
+        assert!(closed_evidence(&store, &"d".repeat(64), 1, 0).is_err());
+        drop(store);
+        fixture.prepare();
+        let store = fixture.open();
+        assert!(closed_evidence(&store, principal, 2, 0).is_err());
+        let run = store.load(&fixture.plan.proposal.request_id).unwrap();
+        let cancelled = next_event(
+            &run.plan,
+            Some(&run.event),
+            "",
+            Phase::Cancelled,
+            None,
+            &"c".repeat(32),
+        )
+        .unwrap();
+        store
+            .persist(&run.plan, Some(&run.event), &cancelled, || Ok(()))
+            .unwrap();
+        assert_eq!(closed_evidence(&store, principal, 2, 0).unwrap().1, 1);
+        assert!(closed_evidence(&store, &"d".repeat(64), 2, 0).is_err());
+        assert!(closed_evidence(&store, principal, 2, 1).is_err());
+        assert_eq!(
+            io::read_member(&store.pending, &partial, MAX_OBJECT).unwrap(),
+            b"partial unpublished"
+        );
+        assert!(io::names(&store.objects, MAX_OBJECTS).unwrap().is_empty());
+    }
     struct Fixture {
         root: std::path::PathBuf,
         plan: Plan,
@@ -1241,6 +1586,7 @@ mod tests {
                 installation: "b".repeat(64),
                 proposal: Proposal {
                     schema_version: 1,
+                    history_epoch: None,
                     request_id: "branch-run".into(),
                     workflow_sha256: executable.sha256,
                     inputs,
@@ -1356,6 +1702,143 @@ mod tests {
     impl Drop for Fixture {
         fn drop(&mut self) {
             fs::remove_dir_all(self.root.parent().unwrap()).unwrap();
+        }
+    }
+    #[test]
+    fn retired_dag_epoch_requires_new_execute_scope_and_disjoint_artifact_effects() {
+        let fixture = Fixture::new("retired-epoch");
+        let mut plan = fixture.plan.clone();
+        let original = serde_json::to_vec(&plan).unwrap();
+        assert!(!String::from_utf8(original.clone())
+            .unwrap()
+            .contains("history_epoch"));
+        let execute = plan.usage(Action::Execute, None, None).unwrap();
+        let effect = plan.effect_id("first").unwrap();
+        plan.proposal.history_epoch = Some(1);
+        assert_ne!(
+            plan.usage(Action::Execute, None, None).unwrap().selector,
+            execute.selector
+        );
+        assert_ne!(plan.effect_id("first").unwrap(), effect);
+        let epoch_one = plan.effect_id("first").unwrap();
+        plan.proposal.history_epoch = Some(2);
+        assert_ne!(plan.effect_id("first").unwrap(), epoch_one);
+        plan.proposal.history_epoch = Some(0);
+        assert!(plan.validate(&plan.installation).is_err());
+        plan.proposal.history_epoch = Some(u64::MAX);
+        assert!(plan.validate(&plan.installation).is_err());
+        plan.proposal.history_epoch = None;
+        assert_eq!(serde_json::to_vec(&plan).unwrap(), original);
+    }
+    #[test]
+    fn orphan_dag_cancel_is_checkpoint_only_newly_scoped_and_exactly_replayed_without_advancement()
+    {
+        use crate::workflow_runs::recovery::Run;
+        let fixture = Fixture::new("orphan-cancel");
+        fixture.prepare();
+        let store = fixture.open();
+        let review = store.status("branch-run").unwrap()["review_sha256"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let recovery = DagRecovery {
+            store,
+            plan: fixture.plan.clone(),
+            request: "branch-run".into(),
+        };
+        assert_ne!(
+            recovery.scope(Action::Cancel).unwrap().selector,
+            fixture
+                .plan
+                .usage(Action::Cancel, None, None)
+                .unwrap()
+                .selector
+        );
+        assert!(recovery
+            .cancel(&review, &"e".repeat(32), &mut || Err(
+                "current finite grant revoked".into()
+            ))
+            .is_err());
+        assert_eq!(
+            recovery.store.load("branch-run").unwrap().event.phase,
+            Phase::Prepared
+        );
+        let outcome = recovery
+            .cancel(&review, &"e".repeat(32), &mut || Ok(()))
+            .unwrap();
+        assert_eq!(outcome["state"], "cancelled");
+        let event = recovery.store.load("branch-run").unwrap().event;
+        assert_eq!(
+            recovery
+                .cancel(&review, &"f".repeat(32), &mut || Ok(()))
+                .unwrap()["replayed"],
+            true
+        );
+        assert_eq!(recovery.store.load("branch-run").unwrap().event, event);
+        assert_eq!(recovery.store.load("branch-run").unwrap().cursor, 0);
+        assert!(recovery
+            .reconcile(&review, &"f".repeat(32), &mut || Ok(()))
+            .is_err());
+    }
+    #[test]
+    fn orphan_dag_applying_intent_without_confirmed_catalog_proof_never_cancels_or_redispatches() {
+        use crate::workflow_runs::recovery::Run;
+        let fixture = Fixture::new("orphan-applying");
+        fixture.prepare();
+        let graph = fixture.plan.validate(&fixture.plan.installation).unwrap();
+        let first_publication = fixture
+            .plan
+            .order
+            .iter()
+            .position(|id| graph.node(id).unwrap().kind == Kind::ArtifactWrite)
+            .unwrap();
+        for _ in 0..first_publication {
+            assert_eq!(fixture.one(), Phase::Completed);
+        }
+        let store = fixture.open();
+        let run = store.load("branch-run").unwrap();
+        let graph = run.plan.validate(&run.plan.installation).unwrap();
+        let node = graph.node(&run.plan.order[run.cursor]).unwrap();
+        assert_eq!(node.kind, Kind::ArtifactWrite);
+        let applying = next_event(
+            &run.plan,
+            Some(&run.event),
+            &node.id,
+            Phase::Applying,
+            None,
+            &"d".repeat(32),
+        )
+        .unwrap();
+        store
+            .persist(&run.plan, Some(&run.event), &applying, || Ok(()))
+            .unwrap();
+        let review = store.status("branch-run").unwrap()["review_sha256"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let recovery = DagRecovery {
+            store,
+            plan: fixture.plan.clone(),
+            request: "branch-run".into(),
+        };
+        let objects = io::names(&recovery.store.objects, MAX_OBJECTS).unwrap();
+        let source_bytes: Vec<_> = objects
+            .iter()
+            .map(|name| (name.clone(), recovery.store.object(name).unwrap()))
+            .collect();
+        assert!(recovery
+            .cancel(&review, &"e".repeat(32), &mut || Ok(()))
+            .is_err());
+        assert!(recovery
+            .reconcile(&review, &"e".repeat(32), &mut || Ok(()))
+            .is_err());
+        assert_eq!(recovery.store.load("branch-run").unwrap().event, applying);
+        assert_eq!(
+            io::names(&recovery.store.objects, MAX_OBJECTS).unwrap(),
+            objects
+        );
+        for (name, bytes) in source_bytes {
+            assert_eq!(recovery.store.object(&name).unwrap(), bytes);
         }
     }
     #[test]

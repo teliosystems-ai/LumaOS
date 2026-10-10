@@ -1,6 +1,7 @@
 """Integrated Requirement #1 source/assembly checks, not native qualification."""
 import ast
 import importlib.util
+import re
 from pathlib import Path
 import shutil
 import tempfile
@@ -60,7 +61,7 @@ class RequirementOneIntegration(unittest.TestCase):
                       'fstatfs', '0x01021994'):
             self.assertIn(check, launcher)
         for check in ('before.nlink() != 1', 'before.mode() & 0o7777 != 0o400',
-                      'operator_snapshot(&args[9])?', 'owned launcher snapshot'):
+                      'operator_snapshot(&args[10])?', 'owned launcher snapshot'):
             self.assertIn(check, workflow)
         self.assertIn('SystemCallFilter=@system-service @memlock', launcher)
 
@@ -192,6 +193,66 @@ class RequirementOneIntegration(unittest.TestCase):
                         boundary_check.index('self.fenced = false'))
         self.assertIn('self.decisions(&final_capture)?', boundary_check)
         self.assertIn('original protected password epoch', final)
+
+    def test_independent_checkpoint_has_closed_custody_and_no_client_write_access(self):
+        checkpoint = (RUST / 'resource_checkpoint.rs').read_text()
+        tpm = (RUST / 'tpm.rs').read_text()
+        c = (RUST / 'tpm_esys.c').read_text()
+        profile = (IMAGE / 'overlay/etc/apparmor.d/luma-granted-client').read_text()
+        unit = (IMAGE / 'overlay/etc/systemd/system/luma-broker.service').read_text()
+        for value in ('0x01804c52', '0x81004c52'):
+            self.assertIn(value.lower(), (tpm + c).lower())
+        for command in ('resource-checkpoint-parent-review', 'resource-checkpoint-parent-continue',
+                        'resource-checkpoint-finalize', 'resource-checkpoint-recover'):
+            self.assertIn(command, (RUST / 'main.rs').read_text())
+            self.assertIn(command, (IMAGE / 'overlay/usr/bin/luma-admin-control').read_text())
+        self.assertIn('.parent-dispatched.json', checkpoint)
+        self.assertIn('.parent-reconciled.json', checkpoint)
+        self.assertIn('/var/lib/luma-os/resource-checkpoint/sealed/** r,', profile)
+        self.assertNotIn('/var/lib/luma-os/resource-checkpoint/** rw', profile)
+        self.assertIn('DevicePolicy=closed', unit)
+        self.assertIn('DeviceAllow=/dev/tpmrm0 rw', unit)
+        self.assertIn('/run/luma-resource-checkpoint/authority.lock', checkpoint)
+        self.assertNotIn('/run/luma-broker/resource-anchor.lock', checkpoint)
+        runtime = (IMAGE / 'overlay/etc/tmpfiles.d/luma-resource-checkpoint.conf').read_text()
+        self.assertIn('d /run/luma-resource-checkpoint 0700 root root -', runtime)
+        self.assertIn('f /run/luma-resource-checkpoint/authority.lock 0600 root root -', runtime)
+        initialize = (RUST / 'resources.rs').read_text().split('pub(crate) fn initialize(', 1)[1].split('impl Store', 1)[0]
+        self.assertIn('directory.join("ledger.lock")', initialize)
+        self.assertIn('lock.sync_all()?', initialize)
+
+    def test_export_payload_is_separate_from_the_authentication_terminal(self):
+        launcher = (RUST / 'service/granted_gateway.rs').read_text()
+        for value in ('LUMAEXPORTv1!!!!', 'PAYLOAD_BLOCK', 'PAYLOAD_MAX',
+                      'payload.relay(&mut child)', 'self.acknowledgement()',
+                      'output.flush()?', 'LimitNOFILE=8192', 'socket_identity'):
+            self.assertIn(value, launcher)
+        self.assertIn('command.stdout(Stdio::from(tty.try_clone()?))', launcher.replace('\n', '').replace('            ', ''))
+        for file in ('artifact_catalog/owned_effects.rs', 'artifact_catalog.rs'):
+            self.assertIn('stream_check(&pending)?', (RUST / file).read_text())
+
+    def test_export_descriptor_budget_covers_nested_pinned_stores(self):
+        launcher = (RUST / 'service/granted_gateway.rs').read_text()
+        policy = (RUST / 'policy_decisions.rs').read_text()
+        dag = (RUST / 'workflow_dag.rs').read_text()
+        limit = int(re.search(r'LimitNOFILE=(\d+)', launcher)[1])
+        archives = int(re.search(r'const MAX_ARCHIVES: usize = (\d+);', policy)[1])
+        objects = int(re.search(r'const MAX_OBJECTS: usize = (\d+);', dag)[1])
+        # Policy history target + outer Read + inner Export each keep their own
+        # immutable archive pins. Conservatively reserve both workflow areas
+        # plus 512 native, terminal, transport and authentication descriptors.
+        required = 3 * (archives + 5) + 2 * objects + 5 + 512
+        self.assertGreaterEqual(limit, required)
+        self.assertLessEqual(limit, 8192)
+
+    def test_history_staging_is_explicitly_confined_not_a_payload_export(self):
+        main = (RUST / 'main.rs').read_text()
+        launcher = (RUST / 'service/granted_gateway.rs').read_text()
+        payload = launcher.split('fn payload_command(', 1)[1].split('\n}', 1)[0]
+        for verb in ('workflow-history-staging-proposal', 'workflow-history-staging-discard'):
+            self.assertEqual(main.count('"' + verb + '"'), 2)
+            self.assertEqual(launcher.count('"' + verb + '"'), 1)
+            self.assertNotIn(verb, payload)
 
 
 if __name__ == '__main__':

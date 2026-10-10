@@ -4,6 +4,7 @@
 use super::*;
 pub(crate) mod gateway;
 mod journal;
+pub(crate) use journal::checkpoint_members;
 pub(crate) use journal::initialize;
 pub(crate) use journal::request_migration;
 pub(crate) use journal::retention_evidence;

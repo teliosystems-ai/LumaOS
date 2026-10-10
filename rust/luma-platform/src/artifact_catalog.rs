@@ -1034,9 +1034,9 @@ pub(crate) fn governed_export(args: &[String]) -> Result<()> {
         {
             return Err("artifact export content changed".into());
         }
-        let mut output = std::io::stdout().lock();
+        let mut output = crate::service::granted_gateway::export_writer()?;
         for block in bytes.chunks(32 * 1024) {
-            boundary.check()?;
+            boundary.stream_check(&pending)?;
             output.write_all(block)?;
         }
         output.flush()?;

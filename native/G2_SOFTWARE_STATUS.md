@@ -42,12 +42,24 @@ artifact stores, and governed orphan/preparation cleanup with protected-UTC grac
 Offline resource cleanup proves drainage before exact unreferenced evidence
 deletion. No broader client capability or host mutation was added.
 
-Requirement #1 remains open for independently anchored damaged-authority
-reconstruction, long-term evidence/workflow history disposition, and integrated
-installed qualification. The proposed separate TPM2 checkpoint authority awaits
-the owner's custody decision; a backup checksum is not rollback protection.
-The current source has not been built into a final image. Do not advance to
-Requirement #2.
+The owner approved a separate TPM2-backed resource checkpoint authority on
+2026-10-10, provisioned by the original Admin and isolated from the shared Admin
+journal. Approval covers software and disposable-TPM tests only, not host TPM
+provisioning, clearing or ownership changes. The source increment implements
+paired ledger/request/archive checkpoints, explicit NV-selected damaged-state
+repair, terminal workflow-domain retirement and policy-archive disposition.
+The final targeted checkpoint/history sweep passed: **48 workflow/recovery tests,
+23 policy/admission tests, 330 native tests with no skips, six real PAM cases,
+four independent disposable-TPM cases and the existing-owner Admin TPM driver**.
+All Rust targets checked with warnings denied. The preceding full Rust sweep
+had 829 passes and two fixture failures; both fixtures were corrected and passed
+the targeted reruns. This is not another full-suite pass. Exact hashes and failed
+attempts are retained in the linked evidence. Large exports still require an
+authenticated-lifetime decision and implementation; the 1,800-second transport
+limit does not extend the current 30-second PAM session. Requirement #1 and G2
+remain open for that software work and installed qualification.
+No final image has been built from these bytes.
+Do not advance to Requirement #2.
 
 The expanded functional source passed its D-backed offline sweep: **782 Rust
 tests passed with zero failures and 38 fixture-only entries not directly selected;

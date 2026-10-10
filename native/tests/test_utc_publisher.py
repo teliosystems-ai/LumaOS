@@ -188,12 +188,16 @@ class PublisherAssets(unittest.TestCase):
         for forbidden in ('Serialize', 'Deserialize', 'advance(', 'LocalAnchor', 'eligible', 'reacquire('):
             self.assertNotIn(forbidden, reader)
 
-    @unittest.skipUnless(os.environ.get('LUMA_CHRONY_UPSTREAM'), 'needs isolated pinned source fixture')
+    @unittest.skipUnless(os.environ.get('LUMA_CHRONY_UPSTREAM') or
+                         os.environ.get('LUMA_CHRONY_RELEASE_UPSTREAM'),
+                         'needs isolated pinned source fixture')
     def test_pinned_hook_follows_actual_authentication_guard(self):
-        source = Path(os.environ['LUMA_CHRONY_UPSTREAM'])
+        release = bool(os.environ.get('LUMA_CHRONY_RELEASE_UPSTREAM'))
+        source = Path(os.environ['LUMA_CHRONY_RELEASE_UPSTREAM'] if release
+                      else os.environ['LUMA_CHRONY_UPSTREAM'])
         with tempfile.TemporaryDirectory() as directory:
             output = Path(directory) / 'patched'
-            prepare.prepare(source, output)
+            prepare.prepare(source, output, release=release)
             core = (output / 'ntp_core.c').read_text()
             self.assertEqual(core.count('LUH_Good('), 1)
             self.assertIn('if (valid_packet) {\n    LUH_Leap(inst->luma_operator, pkt_leap == LEAP_Normal);', core)
@@ -206,13 +210,19 @@ class PublisherAssets(unittest.TestCase):
             self.assertIn('info->auth.mode != instance->mode', auth)
             self.assertIn('NNC_CheckResponseAuth(instance->nts, response, info)', auth)
 
-    @unittest.skipUnless(os.environ.get('LUMA_CHRONY_UPSTREAM'), 'needs isolated pinned source fixture')
+    @unittest.skipUnless(os.environ.get('LUMA_CHRONY_UPSTREAM') or
+                         os.environ.get('LUMA_CHRONY_RELEASE_UPSTREAM'),
+                         'needs isolated pinned source fixture')
     def test_modified_upstream_pin_refuses_preparation(self):
-        source = Path(os.environ['LUMA_CHRONY_UPSTREAM'])
+        release = bool(os.environ.get('LUMA_CHRONY_RELEASE_UPSTREAM'))
+        source = Path(os.environ['LUMA_CHRONY_RELEASE_UPSTREAM'] if release
+                      else os.environ['LUMA_CHRONY_UPSTREAM'])
         with tempfile.TemporaryDirectory() as directory:
             altered = Path(directory) / 'altered'
             altered.mkdir()
+            if release:
+                (altered / 'version.txt').write_bytes(b'4.9\n')
             (altered / 'ntp_core.c').write_bytes((source / 'ntp_core.c').read_bytes() + b'\n')
             with self.assertRaisesRegex(ValueError, 'pin mismatch'):
-                prepare.prepare(altered, Path(directory) / 'patched')
+                prepare.prepare(altered, Path(directory) / 'patched', release=release)
             self.assertFalse((Path(directory) / 'patched').exists())

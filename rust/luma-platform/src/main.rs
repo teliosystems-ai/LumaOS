@@ -28,6 +28,7 @@ mod principal;
 #[cfg(test)]
 mod publication_fixture;
 mod recovery_export;
+mod resource_checkpoint;
 mod resource_manager;
 mod resources;
 mod scoped_read;
@@ -128,7 +129,8 @@ fn main() {
 }
 
 fn dispatch() -> Result<()> {
-    let args: Vec<String> = std::env::args().skip(1).collect();
+    let mut args: Vec<String> = std::env::args().skip(1).collect();
+    service::granted_gateway::capture_export_channel(&mut args)?;
     let confined_client = std::fs::read_to_string("/proc/self/attr/current")
         .unwrap_or_default()
         .trim()
@@ -160,6 +162,29 @@ fn dispatch() -> Result<()> {
                     | "policy-evidence-retain"
                     | "policy-evidence-pending-review"
                     | "policy-evidence-pending-retain"
+                    | "policy-archive-review"
+                    | "policy-archive-export-proposal"
+                    | "policy-archive-export"
+                    | "policy-archive-dispose-proposal"
+                    | "policy-archive-dispose-mark"
+                    | "policy-archive-delete-proposal"
+                    | "policy-archive-delete"
+                    | "policy-archive-outcomes"
+                    | "policy-archive-cleanup-proposal"
+                    | "policy-archive-cleanup"
+                    | "workflow-history-inspection-review"
+                    | "workflow-history-proposal"
+                    | "workflow-history-export"
+                    | "workflow-history-mark"
+                    | "workflow-history-mark-proposal"
+                    | "workflow-history-delete-proposal"
+                    | "workflow-history-delete"
+                    | "workflow-history-staging-proposal"
+                    | "workflow-history-staging-discard"
+                    | "workflow-recovery-review"
+                    | "workflow-recovery-inspect"
+                    | "workflow-recovery-cancel"
+                    | "workflow-recovery-reconcile"
                     | "artifact-gc-inspection-review"
                     | "artifact-gc-proposal"
                     | "artifact-gc-mark"
@@ -203,6 +228,57 @@ fn dispatch() -> Result<()> {
         admin_governance::reject_laboratory_effects_after_bootstrap()?;
     }
     match args.first().map(String::as_str) {
+        Some(
+            "resource-checkpoint-prepare-review"
+            | "resource-checkpoint-prepare"
+            | "resource-checkpoint-enroll-review"
+            | "resource-checkpoint-enroll"
+            | "resource-checkpoint-parent-review"
+            | "resource-checkpoint-parent-continue"
+            | "resource-checkpoint-pending-review"
+            | "resource-checkpoint-finalize"
+            | "resource-checkpoint-recovery-review"
+            | "resource-checkpoint-recover"
+            | "resource-checkpoint-gc-review"
+            | "resource-checkpoint-gc",
+        ) => resources::checkpoint::command(&args),
+        Some(
+            "policy-archive-review"
+            | "policy-archive-export-proposal"
+            | "policy-archive-export"
+            | "policy-archive-dispose-proposal"
+            | "policy-archive-dispose-mark"
+            | "policy-archive-delete-proposal"
+            | "policy-archive-delete"
+            | "policy-archive-outcomes"
+            | "policy-archive-cleanup-proposal"
+            | "policy-archive-cleanup",
+        ) => policy_decisions::archive_command(&args),
+        Some(
+            "workflow-history-inspection-review"
+            | "workflow-history-proposal"
+            | "workflow-history-export"
+            | "workflow-history-mark"
+            | "workflow-history-mark-proposal"
+            | "workflow-history-delete-proposal"
+            | "workflow-history-delete"
+            | "workflow-history-staging-proposal"
+            | "workflow-history-staging-discard",
+        ) => workflow_runs::history::command(&args),
+        Some("workflow-history-init") if args.len() == 1 => {
+            require_root()?;
+            platform::require_installed()?;
+            workflow_runs::history::initialize_installed()
+        }
+        Some("workflow-history-archive-verify") if args.len() == 2 => {
+            workflow_runs::history::archive_verify(&args[1])
+        }
+        Some(
+            "workflow-recovery-review"
+            | "workflow-recovery-inspect"
+            | "workflow-recovery-cancel"
+            | "workflow-recovery-reconcile",
+        ) => workflow_runs::recovery::command(&args),
         Some("granted-run") => service::granted_gateway::launch(&args[1..]),
         Some(
             "artifact-owned-export-review"
@@ -271,8 +347,8 @@ fn dispatch() -> Result<()> {
         Some("utc-reacquire-recovery") => admin_governance::utc_reacquire_recovery_command(&args),
         Some("utc-query") if args.len() == 2 => admin_governance::utc_query_command(&args[1]),
         Some("utc-history") => admin_governance::utc_history_command(&args),
-        Some("workflow-governed-review") if args.len() == 5 => {
-            workflow_runs::governed_review(&args[1], &args[2], &args[3], &args[4])
+        Some("workflow-governed-review") if args.len() == 6 => {
+            workflow_runs::governed_review(&args[1], &args[2], &args[3], &args[4], &args[5])
         }
         Some("workflow-governed-prepare") => workflow_runs::governed_prepare(&args),
         Some("workflow-governed-advance") => workflow_runs::governed_advance(&args),
@@ -561,6 +637,8 @@ fn dispatch() -> Result<()> {
         Some("boot-failed") if args.len() == 1 => platform::boot_failed(),
         Some("init-data") if args.len() == 2 => platform::init_data(&args[1]),
         Some("help" | "--help") | None => {
+            println!("Independent resource custody: luma-admin-control resource-checkpoint-prepare-review LOGIN | resource-checkpoint-prepare LOGIN GRANT REVIEW; enroll-review/enroll, parent-review/parent-continue, pending-review/finalize, recovery-review/recover and gc-review/gc follow the typed review plus exact finite-grant ceremony. Requires original Admin, protected UTC, fixed masks and drainage; no ownership takeover, NV replay, capacity release or service restart. See RESOURCE_CHECKPOINT_CUSTODY.md.");
+            println!("Terminal history: granted-run workflow-history-inspection-review/proposal/export/mark-proposal/mark/delete-proposal/delete. Export uses a separate binary payload channel; marks bind exact custody acknowledgement and protected grace. Deletion retires only terminal workflow copies, preserves owned artifacts and sources, and advances a durable domain epoch. Historical invoice review/prepare requires HISTORY-EPOCH before captured CSV input. Policy archives: policy-archive-review/export-proposal/export/dispose-proposal/dispose-mark/delete-proposal/delete/outcomes/cleanup-proposal/cleanup, each with separate exact scopes; archives never restore authorization.");
             println!("Physical receipt preparation recovery: resource-recovery-status | resource-recover REVIEW-SHA256. Installed-root broker maintenance with terminal requests and empty, released worker generations. Review binds the exact hot ledger and selected interrupted stage inode/bytes; preserves the stage under an immutable private incident name. Complete checksum-matching stages remain for exact archival retry. Never deletes evidence, retires an owner, grants an effect or releases capacity.");
             println!("Receipt export: resource-request-export BATCH SHA256 writes a referenced immutable archive only after bounded chunk assembly and complete digest verification. Interrupted-stage recovery: resource-request-recovery-status | resource-request-recover REVIEW-SHA256 requires drained physical generations and empty workers; retains incomplete stage bytes under a reviewed immutable incident name. Neither command deletes evidence, releases resources or grants product Admin.");
             println!("Request history: resource-request-status | resource-request-archive REVIEW-SHA256. Installed-root reviewed archival preserves receipts and retired nonces; it never releases worker resources or automatically deletes history. Older images: resource-request-migration-status | resource-request-migrate REVIEW-SHA256, with broker stopped, both worker slices drained and the runtime exclusion held. Creates only absent request history, rotates an initialized physical manager epoch and explicitly records that pre-upgrade request receipts were not retained. A virgin ledger stays uninitialized. Never resets uncertain state.");

@@ -900,6 +900,53 @@ struct GrantCapture {
 }
 
 impl GrantBoundary<'_> {
+    pub(crate) fn require_admin(&mut self) -> Result<()> {
+        self.restriction(current_admin)
+    }
+    /// Additional ownership restriction, never a replacement for exact grants.
+    /// The original Admin may retire only fully deleted principals' history.
+    pub(crate) fn authorize_history_owner(
+        &mut self,
+        principal: &str,
+        generation: u64,
+    ) -> Result<()> {
+        self.restriction(|catalog, identity| {
+            history_owner(catalog, identity, principal, generation)
+        })
+    }
+    /// Grants must separately name the exact old plan and only cancellation or
+    /// confirmed-outcome reconciliation. This ownership exception never
+    /// restores old grant/session generations or admits execution/publication.
+    pub(crate) fn authorize_workflow_recovery(
+        &mut self,
+        principal: &str,
+        old_generation: u64,
+    ) -> Result<()> {
+        self.restriction(|catalog, identity| {
+            workflow_recovery_owner(catalog, identity, principal, old_generation)
+        })
+    }
+    fn restriction(
+        &mut self,
+        guard: impl FnOnce(&Catalog, &serde_json::Value) -> Result<()>,
+    ) -> Result<()> {
+        self.check()?;
+        self.fenced = true;
+        self.observation = None;
+        let captured = match self.capture() {
+            Ok(value) => value,
+            Err(error) => {
+                self.unavailable(self.capture_reason)?;
+                return Err(error);
+            }
+        };
+        if let Err(error) = guard(&captured.catalog, &captured.identity) {
+            self.stream_denial(&captured, crate::policy_decisions::Reason::SubjectMismatch)?;
+            return Err(error);
+        }
+        self.fenced = false;
+        self.check()
+    }
     pub(crate) fn audit(&self) -> Result<crate::finite_grants::Audit> {
         if self.fenced || self.uses.len() != 1 {
             return Err("inference attribution requires its current single owned scope".into());
@@ -953,9 +1000,12 @@ impl GrantBoundary<'_> {
         kind: crate::policy_decisions::EffectKind,
     ) -> Result<crate::policy_decisions::PendingEffect> {
         self.check()?;
-        let pending = self
+        let mut pending = self
             .operation
             .effect_begin(effect_id, kind, &self.decision_ids)?;
+        if kind == crate::policy_decisions::EffectKind::ArtifactExport {
+            pending.bind_export(&self.audit()?)?;
+        }
         self.check()?;
         Ok(pending)
     }
@@ -969,6 +1019,87 @@ impl GrantBoundary<'_> {
         // A confirmed outcome is retained even when this final live check
         // refuses. No denial can erase or re-dispatch an already committed effect.
         self.check()
+    }
+    /// A fresh live check during one already durably admitted export. Only
+    /// unchanged Allows are coalesced; denial evidence is always durable. This
+    /// does not construct, resume, or complete an effect from stored evidence.
+    pub(crate) fn stream_check(
+        &mut self,
+        pending: &crate::policy_decisions::PendingEffect,
+    ) -> Result<()> {
+        let captured = self.stream_capture(pending)?;
+        self.observation = Some(captured.observation);
+        self.fenced = false;
+        Ok(())
+    }
+    pub(crate) fn stream_history_owner(
+        &mut self,
+        pending: &crate::policy_decisions::PendingEffect,
+        principal: &str,
+        generation: u64,
+    ) -> Result<()> {
+        let captured = self.stream_capture(pending)?;
+        if let Err(error) =
+            history_owner(&captured.catalog, &captured.identity, principal, generation)
+        {
+            self.stream_denial(&captured, crate::policy_decisions::Reason::SubjectMismatch)?;
+            return Err(error);
+        }
+        self.observation = Some(captured.observation);
+        self.fenced = false;
+        Ok(())
+    }
+    fn stream_denial(
+        &self,
+        capture: &GrantCapture,
+        reason: crate::policy_decisions::Reason,
+    ) -> Result<()> {
+        let mut decisions = self.decisions(capture)?;
+        for decision in &mut decisions {
+            decision.outcome = crate::policy_decisions::DecisionOutcome::Deny;
+            decision.reason_code = reason;
+        }
+        self.operation.decisions(decisions)?;
+        Ok(())
+    }
+    fn stream_capture(
+        &mut self,
+        pending: &crate::policy_decisions::PendingEffect,
+    ) -> Result<GrantCapture> {
+        if self.fenced {
+            return Err("finite grant operation is permanently fenced".into());
+        }
+        self.fenced = true;
+        self.observation = None;
+        let captured = match self.capture() {
+            Ok(value) => value,
+            Err(error) => {
+                self.unavailable(self.capture_reason)?;
+                return Err(error);
+            }
+        };
+        let admission = match pending.export_admission() {
+            Ok(value) => value,
+            Err(error) => {
+                self.stream_denial(&captured, crate::policy_decisions::Reason::TargetMismatch)?;
+                return Err(error);
+            }
+        };
+        if let Err(error) = stream_binding_matches(
+            admission,
+            &captured.identity,
+            &captured.head,
+            &self.uses,
+            self.operation.id(),
+        ) {
+            self.stream_denial(&captured, crate::policy_decisions::Reason::AuthorityChanged)?;
+            return Err(error);
+        }
+        let decisions = self.decisions(&captured)?;
+        if !self.operation.ongoing_decisions(decisions)? {
+            return Err("current finite policy denied ongoing export".into());
+        }
+        Ok(captured)
     }
 
     fn unavailable(&self, reason: crate::policy_decisions::Reason) -> Result<()> {
@@ -1117,6 +1248,158 @@ impl GrantBoundary<'_> {
             credential_refusal,
         })
     }
+}
+
+fn current_admin(catalog: &Catalog, identity: &serde_json::Value) -> Result<()> {
+    let original = catalog
+        .registry()?
+        .bootstrap_admin()
+        .ok_or("current Admin requires the adopted original principal")?;
+    let state = catalog.principal_states.get(&original.id);
+    let generation = state.map_or(original.generation, |s| s.generation);
+    if identity["principal"].as_str() != Some(original.id.as_str())
+        || identity["generation"].as_u64() != Some(generation)
+        || state.is_some_and(|s| !s.enabled)
+        || catalog.deleted_principals.contains(&original.id)
+        || catalog.needs_password_aging.contains(&original.id)
+    {
+        return Err("operation requires the current approved original Admin actor".into());
+    }
+    Ok(())
+}
+fn stream_binding_matches(
+    admission: &crate::finite_grants::Audit,
+    identity: &serde_json::Value,
+    head: &str,
+    uses: &[(String, crate::finite_grants::Use)],
+    operation: &str,
+) -> Result<()> {
+    use crate::finite_grants::{Action, Kind};
+    admission.validate()?;
+    if identity["principal"].as_str() != Some(admission.subject.as_str())
+        || identity["generation"].as_u64() != Some(admission.subject_generation)
+        || head != admission.checkpoint_head
+        || uses.len() != 1
+    {
+        return Err("ongoing export actor or authority changed".into());
+    }
+    let (grant, usage) = &uses[0];
+    let valid = match usage.action {
+        Action::Export => {
+            admission.operation_id.as_deref() == Some(operation)
+                && admission.grant_id == *grant
+                && admission.usage == *usage
+        }
+        Action::Read => {
+            usage.selector.kind == Kind::File
+                && matches!(
+                    usage.selector.id.as_str(),
+                    "policy-archive-inspect" | "workflow-history-inspect" | "catalog-inspect"
+                )
+        }
+        _ => false,
+    };
+    if !valid {
+        return Err("ongoing export check has unrelated source or effect scope".into());
+    }
+    Ok(())
+}
+fn history_owner(
+    catalog: &Catalog,
+    identity: &serde_json::Value,
+    principal: &str,
+    generation: u64,
+) -> Result<()> {
+    if !crate::artifacts::hash(principal) || generation == 0 {
+        return Err("invalid history owner".into());
+    }
+    if identity["principal"].as_str() == Some(principal)
+        && identity["generation"].as_u64() == Some(generation)
+    {
+        return Ok(());
+    }
+    let original = catalog
+        .registry()?
+        .bootstrap_admin()
+        .ok_or("history retirement lacks original Admin")?;
+    if identity["principal"].as_str() != Some(original.id.as_str())
+        || !catalog.deleted_principals.contains(principal)
+        || !catalog.account_deletions.values().any(|deletion| {
+            deletion.intent.principal == principal
+                && generation <= deletion.intent.expected_generation
+                && deletion.phase == crate::account_transition::Phase::Complete
+                && catalog
+                    .principal_states
+                    .get(principal)
+                    .is_some_and(|state| {
+                        !state.enabled
+                            && state.generation == deletion.intent.expected_generation + 1
+                    })
+        })
+    {
+        return Err("only current owner or original Admin retiring completed deleted-account history is admitted".into());
+    }
+    Ok(())
+}
+fn workflow_recovery_owner(
+    catalog: &Catalog,
+    identity: &serde_json::Value,
+    principal: &str,
+    old_generation: u64,
+) -> Result<()> {
+    if !crate::artifacts::hash(principal) || old_generation == 0 {
+        return Err("invalid exact workflow recovery owner".into());
+    }
+    let registry = catalog.registry()?;
+    let actor = registry
+        .principal(
+            identity["principal"]
+                .as_str()
+                .ok_or("missing actual workflow recovery actor")?,
+        )
+        .filter(|p| p.enabled)
+        .ok_or("unknown actual workflow recovery actor")?;
+    if catalog.resolve_principal(&registry.identity(actor))? != *identity
+        || catalog.deleted_principals.contains(&actor.id)
+        || catalog.needs_password_aging.contains(&actor.id)
+    {
+        return Err("workflow recovery requires actual current usable actor generation".into());
+    }
+    let target = registry
+        .principal(principal)
+        .ok_or("workflow recovery target is not adopted")?;
+    let state = catalog.principal_states.get(principal);
+    let generation = state.map_or(target.generation, |s| s.generation);
+    if old_generation > generation {
+        return Err("workflow recovery cannot name a future target generation".into());
+    }
+    if actor.id == principal {
+        return Ok(());
+    }
+    if registry.bootstrap_admin().map(|p| p.id.as_str()) != Some(actor.id.as_str()) {
+        return Err("other-owner workflow recovery requires actual original Admin".into());
+    }
+    if catalog.account_deletions.values().any(|d| {
+        d.intent.principal == principal && d.phase != crate::account_transition::Phase::Complete
+    }) {
+        return Err("complete exact account deletion before orphan workflow recovery".into());
+    }
+    if catalog.deleted_principals.contains(principal) {
+        if !catalog.account_deletions.values().any(|d| {
+            d.intent.principal == principal
+                && d.phase == crate::account_transition::Phase::Complete
+                && old_generation <= d.intent.expected_generation
+                && state
+                    .is_some_and(|s| !s.enabled && s.generation == d.intent.expected_generation + 1)
+        }) {
+            return Err(
+                "orphan workflow recovery lacks exact completed deletion generation".into(),
+            );
+        }
+    } else if generation <= old_generation {
+        return Err("current unrelated active owner is not a recoverable orphan".into());
+    }
+    Ok(())
 }
 
 /// Protected local-terminal composition. Root is an execution prerequisite,
@@ -10387,6 +10670,197 @@ mod tests {
 #[cfg(test)]
 mod current_principal_projection_tests {
     use super::*;
+    #[test]
+    fn original_admin_restriction_uses_current_enabled_unaged_actor_only() {
+        let registry: crate::principal::Registry = serde_json::from_value(serde_json::json!({
+        "schema_version":1,"installation":"ab".repeat(32),"principals":[
+            {"id":"cd".repeat(32),"generation":2,"login":"admin","uid":1001,"enabled":true},
+            {"id":"ef".repeat(32),"generation":1,"login":"human","uid":1002,"enabled":true}
+        ]}))
+        .unwrap();
+        let baseline = registry.identity(registry.account("admin").unwrap());
+        let human = registry.identity(registry.account("human").unwrap());
+        let principal = "cd".repeat(32);
+        let mut catalog = Catalog::initial();
+        catalog
+            .apply(&Command::AdoptPrincipals { registry })
+            .unwrap();
+        current_admin(&catalog, &baseline).unwrap();
+        assert!(current_admin(&catalog, &human).is_err());
+        catalog.principal_states.insert(
+            principal.clone(),
+            admin_roles::PrincipalState {
+                generation: 3,
+                enabled: true,
+            },
+        );
+        assert!(current_admin(&catalog, &baseline).is_err());
+        let current = catalog.resolve_principal(&baseline).unwrap();
+        current_admin(&catalog, &current).unwrap();
+        catalog
+            .principal_states
+            .get_mut(&principal)
+            .unwrap()
+            .enabled = false;
+        assert!(current_admin(&catalog, &current).is_err());
+        catalog
+            .principal_states
+            .get_mut(&principal)
+            .unwrap()
+            .enabled = true;
+        catalog.needs_password_aging.insert(principal.clone());
+        assert!(current_admin(&catalog, &current).is_err());
+        catalog.needs_password_aging.clear();
+        catalog.deleted_principals.insert(principal);
+        assert!(current_admin(&catalog, &current).is_err());
+    }
+    #[test]
+    fn workflow_recovery_ownership_uses_actual_advanced_and_completed_deleted_generations_only() {
+        let registry:crate::principal::Registry=serde_json::from_value(serde_json::json!({"schema_version":1,"installation":"ab".repeat(32),"principals":[{"id":"cd".repeat(32),"generation":2,"login":"admin","uid":1001,"enabled":true},{"id":"ef".repeat(32),"generation":1,"login":"human","uid":1002,"enabled":true}]})).unwrap();
+        let admin = registry.identity(registry.account("admin").unwrap());
+        let baseline = registry.identity(registry.account("human").unwrap());
+        let target = "ef".repeat(32);
+        let mut catalog = Catalog::initial();
+        catalog
+            .apply(&Command::AdoptPrincipals { registry })
+            .unwrap();
+        assert!(workflow_recovery_owner(&catalog, &admin, &target, 1).is_err());
+        catalog.principal_states.insert(
+            target.clone(),
+            admin_roles::PrincipalState {
+                generation: 4,
+                enabled: true,
+            },
+        );
+        workflow_recovery_owner(&catalog, &admin, &target, 1).unwrap();
+        let owner = catalog.resolve_principal(&baseline).unwrap();
+        workflow_recovery_owner(&catalog, &owner, &target, 1).unwrap();
+        assert!(workflow_recovery_owner(&catalog, &admin, &target, 5).is_err());
+        assert!(workflow_recovery_owner(&catalog, &owner, &"cd".repeat(32), 1).is_err());
+        catalog.principal_states.get_mut(&target).unwrap().enabled = false;
+        workflow_recovery_owner(&catalog, &admin, &target, 1).unwrap();
+        assert!(workflow_recovery_owner(&catalog, &owner, &target, 1).is_err());
+        let intent = crate::account_deletion::Intent {
+            transaction: "delete-one".into(),
+            installation: "ab".repeat(32),
+            principal: target.clone(),
+            expected_generation: 4,
+            credential_before: "12".repeat(32),
+            files: crate::account_deletion::FILES
+                .iter()
+                .map(|name| {
+                    (
+                        name.to_string(),
+                        crate::account_deletion::Change {
+                            before: "34".repeat(32),
+                            after: "56".repeat(32),
+                            mode: if name.ends_with("shadow") {
+                                0o640
+                            } else {
+                                0o644
+                            },
+                            gid: 0,
+                        },
+                    )
+                })
+                .collect(),
+        };
+        intent.validate().unwrap();
+        catalog.account_deletions.insert(
+            "delete-one".into(),
+            crate::account_deletion::Transition {
+                intent,
+                phase: crate::account_transition::Phase::Prepared,
+            },
+        );
+        catalog
+            .principal_states
+            .get_mut(&target)
+            .unwrap()
+            .generation = 5;
+        assert!(workflow_recovery_owner(&catalog, &admin, &target, 4).is_err());
+        catalog.deleted_principals.insert(target.clone());
+        catalog
+            .account_deletions
+            .get_mut("delete-one")
+            .unwrap()
+            .phase = crate::account_transition::Phase::Complete;
+        workflow_recovery_owner(&catalog, &admin, &target, 4).unwrap();
+        assert!(workflow_recovery_owner(&catalog, &admin, &target, 5).is_err());
+        catalog.needs_password_aging.insert("cd".repeat(32));
+        assert!(workflow_recovery_owner(&catalog, &admin, &target, 4).is_err());
+    }
+    #[test]
+    fn ongoing_export_binding_requires_exact_effect_actor_head_and_relevant_read() {
+        use crate::finite_grants::{Action, Audit, Kind, Selector, Use};
+        let usage = Use {
+            action: Action::Export,
+            selector: Selector {
+                kind: Kind::Artifact,
+                id: "policy-archive".into(),
+                generation: 1,
+                digest: "12".repeat(32),
+            },
+            input_bytes: 16,
+            output_bytes: 16,
+            units: 1,
+        };
+        let audit = Audit {
+            subject: "cd".repeat(32),
+            subject_generation: 2,
+            grant_id: "export-one".into(),
+            grant_version: 1,
+            checkpoint_head: "ef".repeat(32),
+            operation_id: Some("34".repeat(16)),
+            usage: usage.clone(),
+        };
+        let identity = serde_json::json!({"principal":audit.subject,"generation":2});
+        let uses = vec![(audit.grant_id.clone(), usage.clone())];
+        stream_binding_matches(
+            &audit,
+            &identity,
+            &audit.checkpoint_head,
+            &uses,
+            audit.operation_id.as_deref().unwrap(),
+        )
+        .unwrap();
+        for case in 0..5 {
+            let mut actor = identity.clone();
+            let mut head = audit.checkpoint_head.clone();
+            let mut scopes = uses.clone();
+            let mut operation = audit.operation_id.clone().unwrap();
+            match case {
+                0 => actor["principal"] = "ab".repeat(32).into(),
+                1 => actor["generation"] = 3.into(),
+                2 => head = "56".repeat(32),
+                3 => scopes[0].1.selector.digest = "78".repeat(32),
+                4 => operation = "90".repeat(16),
+                _ => unreachable!(),
+            };
+            assert!(stream_binding_matches(&audit, &actor, &head, &scopes, &operation).is_err());
+        }
+        let mut read = usage;
+        read.action = Action::Read;
+        read.selector.kind = Kind::File;
+        read.selector.id = "policy-archive-inspect".into();
+        stream_binding_matches(
+            &audit,
+            &identity,
+            &audit.checkpoint_head,
+            &[("read-one".into(), read.clone())],
+            &"56".repeat(16),
+        )
+        .unwrap();
+        read.selector.id = "unrelated-file".into();
+        assert!(stream_binding_matches(
+            &audit,
+            &identity,
+            &audit.checkpoint_head,
+            &[("read-one".into(), read)],
+            &"56".repeat(16)
+        )
+        .is_err());
+    }
     #[test]
     fn projected_current_generation_is_catalog_bound_and_disabled_deleted_activation_refuse() {
         let principal = "cd".repeat(32);

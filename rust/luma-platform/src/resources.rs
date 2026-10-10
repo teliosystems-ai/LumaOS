@@ -15,6 +15,7 @@ const MAX_RECORDS: usize = 4096;
 const MAX_BYTES: u64 = 8 * 1024 * 1024;
 const MAX_ARCHIVES: usize = 64;
 const MAX_ARCHIVE_FILES: usize = 128;
+pub(crate) mod checkpoint;
 mod exclusion;
 mod retention;
 
@@ -805,6 +806,8 @@ pub(crate) struct Store {
     poisoned: bool,
     observations: BTreeMap<String, u64>,
     retired_owners: BTreeSet<[u8; 32]>,
+    renewal_deadlines: BTreeMap<String, u64>,
+    checkpoint: Option<checkpoint::Shared>,
 }
 
 pub(crate) fn initialize(directory: &Path) -> Result<()> {
@@ -818,6 +821,13 @@ pub(crate) fn initialize(directory: &Path) -> Result<()> {
         .open(directory.join("ledger.json"))?;
     file.write_all(&serde_json::to_vec(&Ledger::empty())?)?;
     file.sync_all()?;
+    let lock = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
+        .open(directory.join("ledger.lock"))?;
+    lock.sync_all()?;
     crate::resource_manager::requests::initialize(directory)?;
     File::open(directory)?.sync_all()?;
     File::open(directory.parent().ok_or("missing resource parent")?)?.sync_all()?;
@@ -845,7 +855,19 @@ impl Store {
             poisoned: false,
             observations: BTreeMap::new(),
             retired_owners: BTreeSet::new(),
+            renewal_deadlines: BTreeMap::new(),
+            checkpoint: None,
         };
+        if directory == Path::new(DIRECTORY) && platform::require_live().is_err() {
+            let anchor = crate::resource_checkpoint::ResourceAnchor::installed()?;
+            let installation = anchor.installation().to_owned();
+            store.checkpoint = Some(std::cell::RefCell::new(checkpoint::Authority::open(
+                &Path::new(crate::resource_checkpoint::DIRECTORY).join("paired"),
+                directory,
+                &installation,
+                Box::new(anchor),
+            )?));
+        }
         let ledger = store.read()?;
         store.retired_owners = store.verify_archives(&ledger)?;
         Ok(store)
@@ -871,6 +893,13 @@ impl Store {
                 .ok_or("telemetry inventory changed")?
                 .observed = *used;
         }
+        for lease in &mut ledger.leases {
+            if lease.state == State::Active {
+                if let Some(deadline) = self.renewal_deadlines.get(&lease.token.lease_id) {
+                    lease.deadline_ms = *deadline;
+                }
+            }
+        }
         self.verify_exclusion()?;
         Ok(ledger)
     }
@@ -891,6 +920,22 @@ impl Store {
         self.transaction(operation, false, |path, bytes| {
             platform::write_atomic(path, bytes, 0o600)
         })
+    }
+
+    pub(crate) fn publish_request(
+        &self,
+        bytes: &[u8],
+        publish: impl FnOnce(&Path, &[u8]) -> Result<()>,
+    ) -> Result<()> {
+        self.verify_exclusion()?;
+        match &self.checkpoint {
+            Some(authority) => {
+                authority
+                    .borrow_mut()
+                    .publish(&self.directory, "requests.json", bytes, publish)
+            }
+            None => publish(&self.directory.join("requests.json"), bytes),
+        }
     }
 
     fn archived(&self, reference: &Archive) -> Result<Ledger> {
@@ -1108,14 +1153,27 @@ impl Store {
         publish: impl FnOnce(&Path, &[u8]) -> Result<()>,
     ) -> Result<T> {
         let mut next = self.read()?;
-        let before = next.clone();
         let result = operation(&mut next)?;
         next.validate()?;
-        let bytes = serde_json::to_vec(&next)?;
+        // Renewal is session-local and conservative after a writer restart.
+        // The durable admission deadline is never prolonged by a heartbeat.
+        // Other mutations keep their full generation/fence/accounting state.
+        let durable_before: Ledger = serde_json::from_slice(&self.durable_bytes()?)?;
+        let mut durable_next = next.clone();
+        for lease in &mut durable_next.leases {
+            if let Some(old) = durable_before
+                .leases
+                .iter()
+                .find(|old| old.token == lease.token)
+            {
+                lease.deadline_ms = old.deadline_ms;
+            }
+        }
+        let bytes = serde_json::to_vec(&durable_next)?;
         if bytes.len() as u64 > MAX_BYTES {
             return Err("resource journal capacity exhausted".into());
         }
-        let unchanged = before.review()? == next.review()?;
+        let unchanged = durable_before.review()? == durable_next.review()?;
         if unchanged {
             // Exact retries acknowledge durable existing state, never acquire
             // another lease or infer success from an earlier rename alone.
@@ -1137,11 +1195,25 @@ impl Store {
                 .iter()
                 .map(|(id, d)| (id.clone(), d.observed))
                 .collect();
+            self.renewal_deadlines = next
+                .leases
+                .iter()
+                .filter(|l| l.state == State::Active)
+                .map(|l| (l.token.lease_id.clone(), l.deadline_ms))
+                .collect();
             return Ok(result);
         }
         let published = (|| -> Result<()> {
             self.verify_exclusion()?;
-            publish(&self.directory.join("ledger.json"), &bytes)?;
+            match &self.checkpoint {
+                Some(authority) => authority.borrow_mut().publish(
+                    &self.directory,
+                    "ledger.json",
+                    &bytes,
+                    publish,
+                )?,
+                None => publish(&self.directory.join("ledger.json"), &bytes)?,
+            }
             self.verify_exclusion()?;
             if tpm::private_read(&self.directory.join("ledger.json"), MAX_BYTES)? != bytes {
                 return Err("resource publication readback differs; preserve state".into());
@@ -1159,6 +1231,12 @@ impl Store {
             .iter()
             .map(|(id, d)| (id.clone(), d.observed))
             .collect();
+        self.renewal_deadlines = next
+            .leases
+            .iter()
+            .filter(|l| l.state == State::Active)
+            .map(|l| (l.token.lease_id.clone(), l.deadline_ms))
+            .collect();
         Ok(result)
     }
 }
@@ -1166,6 +1244,42 @@ impl Store {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn heartbeat_renewal_changes_only_session_deadline_and_restart_is_conservative() {
+        let directory = std::env::temp_dir().join(format!(
+            "luma-resource-volatile-renewal-{}",
+            random_id().unwrap()
+        ));
+        initialize(&directory).unwrap();
+        let mut store = Store::open(&directory).unwrap();
+        store
+            .transact(|l| l.restart("epoch-one".into(), ledger().domains))
+            .unwrap();
+        let token = store
+            .transact(|l| admit(l, 1, vec![reserve("host", 100)]))
+            .unwrap();
+        let bytes = fs::read(directory.join("ledger.json")).unwrap();
+        let original = store.read().unwrap().leases[0].deadline_ms;
+        store
+            .transact(|l| l.renew(&token, &owner(1), 2, original + 1000))
+            .unwrap();
+        assert_eq!(fs::read(directory.join("ledger.json")).unwrap(), bytes);
+        assert_eq!(store.read().unwrap().leases[0].deadline_ms, original + 1000);
+        drop(store);
+        let mut store = Store::open(&directory).unwrap();
+        assert_eq!(store.read().unwrap().leases[0].deadline_ms, original);
+        store
+            .transact(|l| l.restart("epoch-two".into(), ledger().domains))
+            .unwrap();
+        assert!(store
+            .read()
+            .unwrap()
+            .assert_active(&token, &owner(1), 2)
+            .is_err());
+        assert_eq!(store.read().unwrap().charged("host").unwrap(), 100);
+        drop(store);
+        fs::remove_dir_all(directory).unwrap();
+    }
     #[test]
     fn output_fence_survives_physical_release_archive_and_store_restart() {
         let directory =

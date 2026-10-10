@@ -446,6 +446,39 @@ fn inventory(
     Ok(retired)
 }
 
+/// Exact referenced request closure for the independent paired checkpoint.
+/// Inspect one bounded archive at a time; do not accumulate historical bytes.
+pub(crate) fn checkpoint_members(directory: &Path, bytes: &[u8]) -> Result<Vec<(String, String)>> {
+    let snapshot = decode(bytes)?;
+    let mut retired = BTreeSet::new();
+    let mut result = Vec::new();
+    for (index, reference) in snapshot.archives.iter().enumerate() {
+        let bytes = tpm::private_read(&directory.join(reference.name()), MAX_BYTES)?;
+        let archived = decode(&bytes)?;
+        if digest(&bytes) != reference.sha256
+            || archived.origin != snapshot.origin
+            || archived.archives != snapshot.archives[..index]
+            || archived.records.is_empty()
+            || archived
+                .records
+                .iter()
+                .any(|r| !matches!(r.phase, Phase::Completed | Phase::Released))
+        {
+            return Err("paired request archive closure differs".into());
+        }
+        for record in archived.records {
+            if !retired.insert(record.nonce) {
+                return Err("duplicate archived request identity".into());
+            }
+        }
+        result.push((reference.name(), reference.sha256.clone()));
+    }
+    if snapshot.records.iter().any(|r| retired.contains(&r.nonce)) {
+        return Err("checkpoint hot request reuses a retired identity".into());
+    }
+    Ok(result)
+}
+
 impl Gate {
     pub(in crate::resource_manager) fn open(store: &Store) -> Result<Self> {
         let directory = store.request_directory()?;
@@ -550,7 +583,7 @@ impl Gate {
                 File::open(&path)?.sync_all()?;
                 File::open(directory)?.sync_all()?;
             } else {
-                publish(&path, &bytes)?;
+                store.publish_request(&bytes, publish)?;
             }
             self.verify_durable(store, &next)?;
             Ok(())

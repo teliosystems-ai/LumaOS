@@ -7,13 +7,16 @@ use crate::{
     Result,
 };
 use serde::{Deserialize, Serialize};
+use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File, OpenOptions};
-use std::io::Write;
+use std::io::{Read, Write};
 use std::os::fd::AsRawFd;
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
+mod history;
+pub(crate) use history::command as archive_command;
 
 pub(crate) const DIRECTORY: &str = "/var/lib/luma-os/policy-decisions";
 const MAX_RECORDS: usize = 16_384;
@@ -185,6 +188,7 @@ fn policy_digest() -> String {
             bytes.extend_from_slice(include_bytes!("finite_grants.rs"));
             bytes.extend_from_slice(include_bytes!("admin_governance.rs"));
             bytes.extend_from_slice(include_bytes!("policy_decisions.rs"));
+            bytes.extend_from_slice(include_bytes!("policy_decisions/history.rs"));
             bytes.extend_from_slice(include_bytes!("../../../docs/adr/0004-policy-model.md"));
             io::digest(&bytes)
         })
@@ -463,6 +467,8 @@ enum Payload {
         begin_sha256: String,
         receipt_sha256: Option<String>,
         outcome: OperationOutcome,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        evidence: Option<history::Evidence>,
     },
     OperationFinished {
         outcome: OperationOutcome,
@@ -519,6 +525,7 @@ impl Record {
                 begin_sha256,
                 receipt_sha256,
                 outcome,
+                evidence,
             } => {
                 if !id(begin_id)
                     || !io::hash(begin_sha256)
@@ -529,6 +536,15 @@ impl Record {
                     || *outcome == OperationOutcome::Denied
                 {
                     return Err("invalid policy effect terminal evidence".into());
+                }
+                if let Some(evidence) = evidence {
+                    evidence.validate()?;
+                    if *outcome != OperationOutcome::Completed
+                        || receipt_sha256.as_deref()
+                            != Some(io::digest(&serde_json::to_vec(evidence)?).as_str())
+                    {
+                        return Err("policy typed outcome evidence disagrees with receipt".into());
+                    }
                 }
             }
             Payload::OperationFinished { .. } => {}
@@ -542,8 +558,40 @@ pub(crate) struct Store {
     pending: File,
     archives: File,
     retained: File,
+    history: File,
     path: PathBuf,
     installation: String,
+    archive_cache: RefCell<BTreeMap<String, ArchivePin>>,
+}
+type ArchiveIdentity = (u64, u64, u64, u32, u32, u32, u64, i64, i64, i64, i64);
+struct ArchivePin {
+    file: File,
+    identity: ArchiveIdentity,
+}
+fn archive_identity(m: &fs::Metadata) -> Result<ArchiveIdentity> {
+    if !m.is_file()
+        || m.uid() != 0
+        || m.gid() != 0
+        || m.nlink() != 1
+        || m.mode() & 0o7777 != 0o400
+        || m.len() == 0
+        || m.len() > MAX_ARCHIVE
+    {
+        return Err("unsafe immutable archive cache candidate".into());
+    }
+    Ok((
+        m.dev(),
+        m.ino(),
+        m.len(),
+        m.mode(),
+        m.uid(),
+        m.gid(),
+        m.nlink(),
+        m.mtime(),
+        m.mtime_nsec(),
+        m.ctime(),
+        m.ctime_nsec(),
+    ))
 }
 impl Store {
     pub(crate) fn installed() -> Result<Rc<Self>> {
@@ -609,13 +657,27 @@ impl Store {
                 io::mkdir_at(&root, "retained")?
             }
         };
+        let history = match io::child_directory(&root, "history") {
+            Ok(value) => value,
+            Err(error) => {
+                if io::names(&root, MAX_RECORDS + 5)?
+                    .iter()
+                    .any(|v| v == "history")
+                {
+                    return Err(error);
+                }
+                io::mkdir_at(&root, "history")?
+            }
+        };
         let store = Self {
             root,
             pending,
             archives,
             retained,
+            history,
             path: path.into(),
             installation: installation.into(),
+            archive_cache: RefCell::new(BTreeMap::new()),
         };
         let _lock = store.lock()?;
         store.inventory()?;
@@ -632,6 +694,7 @@ impl Store {
             ("pending", &self.pending),
             ("archives", &self.archives),
             ("retained", &self.retained),
+            ("history", &self.history),
         ] {
             let current = io::child_directory(&self.root, name)?;
             let current = current.metadata()?;
@@ -656,7 +719,7 @@ impl Store {
     fn inventory(&self) -> Result<BTreeMap<String, Record>> {
         let mut records = BTreeMap::new();
         let mut total = 0u64;
-        for name in io::names(&self.root, MAX_RECORDS + 4)? {
+        for name in io::names(&self.root, MAX_RECORDS + 5)? {
             if name == "lock" {
                 continue;
             }
@@ -670,6 +733,10 @@ impl Store {
             }
             if name == "retained" {
                 io::private_directory(&self.retained)?;
+                continue;
+            }
+            if name == "history" {
+                history::validate_directory(&self.history)?;
                 continue;
             }
             let record_id = name
@@ -766,12 +833,26 @@ impl Store {
                     match &r.payload {
                         Payload::OperationStarted { scopes } => {
                             Some(scopes.iter().all(|(_, usage)| {
-                                usage.action == crate::finite_grants::Action::Retain
-                                    && usage.selector.kind == crate::finite_grants::Kind::Resource
-                                    && matches!(
-                                        usage.selector.id.as_str(),
-                                        "policy-evidence" | "policy-pending"
-                                    )
+                                (usage.action == crate::finite_grants::Action::Read
+                                    && usage.selector.kind == crate::finite_grants::Kind::File
+                                    && usage.selector.id == "policy-archive-inspect")
+                                    || (matches!(
+                                        usage.action,
+                                        crate::finite_grants::Action::Export
+                                            | crate::finite_grants::Action::Delete
+                                    ) && usage.selector.kind
+                                        == crate::finite_grants::Kind::Artifact
+                                        && usage.selector.id == "policy-archive")
+                                    || (usage.action == crate::finite_grants::Action::Retain
+                                        && usage.selector.kind
+                                            == crate::finite_grants::Kind::Resource
+                                        && matches!(
+                                            usage.selector.id.as_str(),
+                                            "policy-evidence"
+                                                | "policy-pending"
+                                                | "policy-archive-mark"
+                                                | "policy-archive-history"
+                                        ))
                             }))
                         }
                         _ => None,
@@ -813,8 +894,11 @@ impl Store {
         // physical quota. Capacity is checked before allocating another file.
         let mut physical_bytes = 0u64;
         let mut physical_records = 0usize;
-        for name in io::names(&self.root, MAX_RECORDS + 4)? {
-            if matches!(name.as_str(), "lock" | "pending" | "archives" | "retained") {
+        for name in io::names(&self.root, MAX_RECORDS + 5)? {
+            if matches!(
+                name.as_str(),
+                "lock" | "pending" | "archives" | "retained" | "history"
+            ) {
                 continue;
             }
             let member = name
@@ -904,31 +988,62 @@ impl Store {
     ) -> Result<BTreeMap<String, String>> {
         let mut total = 0u64;
         let mut operations = BTreeMap::new();
-        for name in io::names(&self.archives, MAX_ARCHIVES)? {
+        let names = io::names(&self.archives, MAX_ARCHIVES)?;
+        let mut cache = self.archive_cache.borrow_mut();
+        cache.retain(|name, _| names.contains(name));
+        for name in names {
             let (operation, digest) = archive_name(&name)?;
-            let bytes = io::read_member(&self.archives, &name, MAX_ARCHIVE)?;
+            let file = io::open_at(&self.archives, &name, libc::O_RDONLY, 0)?;
+            let identity = archive_identity(&file.metadata()?)?;
             total = total
-                .checked_add(bytes.len() as u64)
+                .checked_add(identity.2)
                 .ok_or("policy archive size overflow")?;
-            if total > MAX_ARCHIVE_BYTES || io::digest(&bytes) != digest {
+            if total > MAX_ARCHIVE_BYTES {
                 return Err("policy archive capacity or digest failure".into());
+            }
+            if operations.insert(operation.into(), name.clone()).is_some() {
+                return Err("duplicate retained policy operation".into());
+            }
+            let residual = active
+                .values()
+                .any(|record| record.operation_id == operation);
+            let cached = if let Some(pin) = cache.get(&name) {
+                pin.identity == identity && archive_identity(&pin.file.metadata()?)? == pin.identity
+            } else {
+                false
+            };
+            if !residual && cached {
+                // This is explanatory evidence, not an admission cache. Every
+                // call still opens the named inode and verifies both pinned
+                // and named immutable metadata, including ctime. A surviving
+                // original always forces full independent graph validation.
+                continue;
+            }
+            cache.remove(&name);
+            let mut bytes = Vec::new();
+            (&file).take(MAX_ARCHIVE + 1).read_to_end(&mut bytes)?;
+            if bytes.len() as u64 != identity.2 || io::digest(&bytes) != digest {
+                return Err("policy archive byte digest changed".into());
             }
             let archive: Archive = serde_json::from_slice(&bytes)?;
             archive.validate()?;
             if archive.installation != self.installation
                 || archive.operation_id != operation
                 || serde_json::to_vec(&archive)? != bytes
-                || operations.insert(operation.into(), name.clone()).is_some()
             {
                 return Err(
                     "policy archive substituted installation, operation or canonical content"
                         .into(),
                 );
             }
-            if active
-                .values()
-                .any(|record| record.operation_id == operation)
+            if archive_identity(&file.metadata()?)? != identity
+                || archive_identity(
+                    &io::open_at(&self.archives, &name, libc::O_RDONLY, 0)?.metadata()?,
+                )? != identity
             {
+                return Err("policy archive inode changed during validation".into());
+            }
+            if residual {
                 for record in &archive.records {
                     if active
                         .get(&record.record_id)
@@ -954,6 +1069,7 @@ impl Store {
                 // the current admission graph after an interrupted unlink.
                 active.retain(|_, record| record.operation_id != operation);
             }
+            cache.insert(name, ArchivePin { file, identity });
         }
         Ok(operations)
     }
@@ -1500,6 +1616,7 @@ fn validate_record_links(records: &BTreeMap<String, &Record>) -> Result<()> {
             Payload::EffectFinished {
                 begin_id,
                 begin_sha256,
+                evidence,
                 ..
             } => {
                 let begin = records
@@ -1516,6 +1633,54 @@ fn validate_record_links(records: &BTreeMap<String, &Record>) -> Result<()> {
                         "effect outcome changed or duplicated original pending evidence".into(),
                     );
                 }
+                if let Some(evidence) = evidence {
+                    let (kind, usage, audit) = evidence.authorization()?;
+                    let decision_ids = match &begin.payload {
+                        Payload::EffectStarted {
+                            effect_kind,
+                            decision_ids,
+                            ..
+                        } if *effect_kind == kind => decision_ids,
+                        _ => {
+                            return Err("typed effect evidence changed original effect kind".into())
+                        }
+                    };
+                    if decision_ids.len() != 1 {
+                        return Err(
+                            "typed archive outcome requires its exact single finite scope".into(),
+                        );
+                    }
+                    let decision = match &records
+                        .get(&decision_ids[0])
+                        .ok_or("typed effect decision missing")?
+                        .payload
+                    {
+                        Payload::Decision { decision } => decision,
+                        _ => return Err("typed effect decision substituted".into()),
+                    };
+                    if decision.evaluated_constraints != usage {
+                        return Err("typed effect evidence changed original granted scope".into());
+                    }
+                    if let Some(audit) = audit {
+                        if audit.operation_id.as_deref() != Some(record.operation_id.as_str())
+                            || audit.grant_id != decision.grant_id
+                            || audit.checkpoint_head.as_str()
+                                != decision
+                                    .checkpoint_head
+                                    .as_deref()
+                                    .ok_or("typed effect decision head missing")?
+                            || decision.subject.as_ref().map_or(true, |s| {
+                                s.principal != audit.subject
+                                    || s.generation != audit.subject_generation
+                            })
+                        {
+                            return Err(
+                                "typed effect attribution differs from original admitted decision"
+                                    .into(),
+                            );
+                        }
+                    }
+                }
             }
             Payload::OperationFinished { .. } => {
                 if !terminals.insert(&record.operation_id) {
@@ -1526,6 +1691,7 @@ fn validate_record_links(records: &BTreeMap<String, &Record>) -> Result<()> {
         }
     }
     for record in records.values() {
+        if matches!(record.payload,Payload::OperationFinished{outcome:OperationOutcome::Completed}) && records.values().any(|r|r.operation_id==record.operation_id && matches!(&r.payload,Payload::Decision{decision} if decision.outcome==DecisionOutcome::Deny)){return Err("completed policy operation retains a permanent denied boundary".into());}
         if matches!(
             record.payload,
             Payload::OperationFinished {
@@ -1593,6 +1759,25 @@ impl Operation {
         }
         Ok(ids)
     }
+    /// Called only by a live boundary holding an unfinished export. Initial
+    /// admission, pending dispatch, and final evidence remain durable; an
+    /// unchanged successful heartbeat is not another effect admission.
+    pub(crate) fn ongoing_decisions(&self, decisions: Vec<Decision>) -> Result<bool> {
+        if decisions
+            .iter()
+            .any(|d| d.outcome != DecisionOutcome::Allow)
+        {
+            self.decisions(decisions)?;
+            return Ok(false);
+        }
+        if decisions.is_empty() {
+            return Err("ongoing export lacks exact scope evaluation".into());
+        }
+        for decision in &decisions {
+            decision.validate()?;
+        }
+        Ok(true)
+    }
     pub(crate) fn effect_begin(
         &self,
         effect_id: &str,
@@ -1611,6 +1796,7 @@ impl Operation {
             store: self.store.clone(),
             begin,
             finished: false,
+            export_binding: None,
         })
     }
     pub(crate) fn finish(&mut self, outcome: OperationOutcome) -> Result<()> {
@@ -1636,8 +1822,63 @@ pub(crate) struct PendingEffect {
     store: Rc<Store>,
     begin: Record,
     finished: bool,
+    export_binding: Option<crate::finite_grants::Audit>,
 }
 impl PendingEffect {
+    pub(crate) fn bind_export(&mut self, audit: &crate::finite_grants::Audit) -> Result<()> {
+        audit.validate()?;
+        if self.finished
+            || self.export_binding.is_some()
+            || audit.operation_id.as_deref() != Some(self.begin.operation_id.as_str())
+            || audit.usage.action != crate::finite_grants::Action::Export
+            || !matches!(
+                self.begin.payload,
+                Payload::EffectStarted {
+                    effect_kind: EffectKind::ArtifactExport,
+                    ..
+                }
+            )
+        {
+            return Err("pending export binding does not match actual owning admission".into());
+        }
+        self.export_binding = Some(audit.clone());
+        Ok(())
+    }
+    pub(crate) fn export_admission(&self) -> Result<&crate::finite_grants::Audit> {
+        if self.finished
+            || !matches!(
+                self.begin.payload,
+                Payload::EffectStarted {
+                    effect_kind: EffectKind::ArtifactExport,
+                    ..
+                }
+            )
+        {
+            return Err("ongoing checks require an actual unfinished artifact export".into());
+        }
+        self.export_binding
+            .as_ref()
+            .ok_or_else(|| "pending export lacks its actual live boundary binding".into())
+    }
+    fn complete_evidence(mut self, operation: &str, evidence: history::Evidence) -> Result<()> {
+        if operation != self.begin.operation_id {
+            return Err("typed effect completion substituted operation".into());
+        }
+        evidence.validate()?;
+        let receipt = io::digest(&serde_json::to_vec(&evidence)?);
+        self.store.append(
+            &self.begin.operation_id,
+            Payload::EffectFinished {
+                begin_id: self.begin.record_id.clone(),
+                begin_sha256: io::digest(&serde_json::to_vec(&self.begin)?),
+                receipt_sha256: Some(receipt),
+                outcome: OperationOutcome::Completed,
+                evidence: Some(evidence),
+            },
+        )?;
+        self.finished = true;
+        Ok(())
+    }
     pub(crate) fn complete(mut self, operation: &str, receipt: &str) -> Result<()> {
         if operation != self.begin.operation_id || !io::hash(receipt) || receipt == "00".repeat(32)
         {
@@ -1656,6 +1897,7 @@ impl PendingEffect {
                 begin_sha256: io::digest(&serde_json::to_vec(&self.begin)?),
                 receipt_sha256: receipt,
                 outcome,
+                evidence: None,
             },
         )?;
         self.finished = true;
@@ -1706,6 +1948,198 @@ mod tests {
         fn drop(&mut self) {
             fs::remove_dir_all(&self.0).unwrap();
         }
+    }
+    #[test]
+    fn ongoing_maximum_export_heartbeat_does_not_consume_admission_quota_but_denials_are_durable() {
+        let fixture = Fixture::new("stream-heartbeats");
+        let store = fixture.store();
+        let mut operation =
+            Operation::begin(store.clone(), &[("infer-one".into(), usage())]).unwrap();
+        let allow = allow_data();
+        operation.decisions(vec![allow.clone()]).unwrap();
+        let before = store.inventory().unwrap().len();
+        // More heartbeats than a maximum256MiB export could need. The real
+        // stream boundary independently captures authority for every call.
+        for _ in 0..32_768 {
+            assert!(operation.ongoing_decisions(vec![allow.clone()]).unwrap());
+        }
+        assert_eq!(store.inventory().unwrap().len(), before);
+        let denial =
+            Decision::unavailable("infer-one", &usage(), Reason::AuthorityChanged).unwrap();
+        assert!(!operation.ongoing_decisions(vec![denial]).unwrap());
+        assert_eq!(store.inventory().unwrap().len(), before + 1);
+        operation.finish(OperationOutcome::Denied).unwrap();
+    }
+    #[test]
+    fn ongoing_export_re_evaluation_refuses_fresh_expiry_revocation_and_subject_change_durably() {
+        use crate::admin_roles::Command;
+        use crate::finite_grants::{Action, Kind};
+        for variant in 0..3 {
+            let fixture = Fixture::new(&format!("live-denial-{variant}"));
+            let store = Rc::new(Store::open(&fixture.0, &"ef".repeat(32)).unwrap());
+            let definition = allow_data();
+            let mut grant = definition.grant.as_ref().unwrap().definition.clone();
+            grant.id = "export-one".into();
+            grant.action = Action::Export;
+            grant.selector.kind = Kind::Artifact;
+            grant.selector.id = "policy-archive".into();
+            let mut usage = usage();
+            usage.action = Action::Export;
+            usage.selector = grant.selector.clone();
+            let registry=serde_json::from_value(serde_json::json!({"schema_version":1,"installation":"ef".repeat(32),"principals":[{"id":"ab".repeat(32),"generation":2,"login":"human","uid":1001,"enabled":true}]})).unwrap();
+            let mut catalog = Catalog::initial();
+            catalog
+                .apply(&Command::AdoptPrincipals { registry })
+                .unwrap();
+            catalog
+                .apply(&Command::CheckpointAccounts {
+                    commitments: BTreeMap::from([("ab".repeat(32), "12".repeat(32))]),
+                })
+                .unwrap();
+            catalog
+                .apply(&Command::RegisterActivity {
+                    activity: "artifact.export".into(),
+                })
+                .unwrap();
+            catalog
+                .apply(&Command::DefineRole {
+                    name: "Operator".into(),
+                    activities: vec!["artifact.export".into()],
+                    expected_version: 0,
+                })
+                .unwrap();
+            catalog
+                .apply(&Command::AssignRole {
+                    assignment: definition
+                        .grant
+                        .as_ref()
+                        .unwrap()
+                        .assignment
+                        .clone()
+                        .unwrap(),
+                })
+                .unwrap();
+            catalog
+                .apply(&Command::IssueGrant {
+                    grant: grant.clone(),
+                })
+                .unwrap();
+            let mut identity = serde_json::json!({"installation":"ef".repeat(32),"principal":"ab".repeat(32),"generation":2,"login":"human","uid":1001});
+            let initial = definition.timestamp.as_ref().unwrap();
+            let mut context = initial.context.clone();
+            let mut lower = initial.lower_ms;
+            let mut upper = initial.upper_ms;
+            let observe = crate::utc_stream::Observation::fixture(
+                context.clone(),
+                crate::utc_bounds::Interval::new(lower, upper).unwrap(),
+            );
+            let decision = Decision::evaluate(
+                &catalog,
+                &identity,
+                &"cd".repeat(32),
+                &observe,
+                &grant.id,
+                &usage,
+                None,
+            )
+            .unwrap();
+            assert_eq!(decision.outcome, DecisionOutcome::Allow);
+            let mut operation =
+                Operation::begin(store.clone(), &[(grant.id.clone(), usage.clone())]).unwrap();
+            operation.decisions(vec![decision]).unwrap();
+            match variant {
+                0 => {
+                    upper = grant.expires_ms;
+                    lower = upper - 200;
+                    context.floor_ms = lower;
+                }
+                1 => {
+                    catalog
+                        .apply(&Command::RevokeGrant {
+                            grant: grant.id.clone(),
+                            expected_version: 1,
+                        })
+                        .unwrap();
+                }
+                2 => identity["generation"] = 3.into(),
+                _ => unreachable!(),
+            }
+            let fresh = crate::utc_stream::Observation::fixture(
+                context,
+                crate::utc_bounds::Interval::new(lower, upper).unwrap(),
+            );
+            let refused = Decision::evaluate(
+                &catalog,
+                &identity,
+                &"cd".repeat(32),
+                &fresh,
+                &grant.id,
+                &usage,
+                None,
+            )
+            .unwrap();
+            assert_eq!(refused.outcome, DecisionOutcome::Deny);
+            let expected = [
+                Reason::OutsideValidity,
+                Reason::GrantRevoked,
+                Reason::SubjectMismatch,
+            ][variant];
+            assert_eq!(refused.reason_code, expected);
+            let timestamp = refused.timestamp.clone();
+            assert!(!operation.ongoing_decisions(vec![refused]).unwrap());
+            operation.finish(OperationOutcome::Denied).unwrap();
+            assert!(store.inventory().unwrap().values().any(|r|matches!(&r.payload,Payload::Decision{decision} if decision.reason_code==expected && decision.timestamp==timestamp)));
+        }
+    }
+    #[test]
+    fn pinned_archive_cache_invalidates_changed_inode_and_revalidates_same_operation_residual() {
+        let fixture = Fixture::new("cache");
+        let store = fixture.store();
+        let mut operation =
+            Operation::begin(store.clone(), &[("infer-one".into(), usage())]).unwrap();
+        let op = operation.id().to_owned();
+        operation
+            .decisions(vec![Decision::unavailable(
+                "infer-one",
+                &usage(),
+                Reason::GrantMissing,
+            )
+            .unwrap()])
+            .unwrap();
+        operation.finish(OperationOutcome::Denied).unwrap();
+        let archive = store.retention_input(&op).unwrap();
+        let (_, bytes, _) = archive_review(&archive).unwrap();
+        store.archive(&archive, &bytes).unwrap();
+        for record in &archive.records {
+            store.unlink_archived(record, &archive).unwrap();
+        }
+        store.inventory().unwrap();
+        assert_eq!(store.archive_cache.borrow().len(), 1);
+        let mut fake = archive.records[0].clone();
+        fake.record_id = "98".repeat(16);
+        io::write_member(
+            &store.root,
+            &format!("record-{}.json", fake.record_id),
+            &serde_json::to_vec(&fake).unwrap(),
+            0o400,
+        )
+        .unwrap();
+        assert!(store.inventory().is_err());
+        fs::remove_file(fixture.0.join(format!("record-{}.json", fake.record_id))).unwrap();
+        store.inventory().unwrap();
+        let name = io::names(&store.archives, MAX_ARCHIVES).unwrap().remove(0);
+        let path = fixture.0.join("archives").join(&name);
+        let old = fixture.0.with_extension("saved-archive");
+        fs::rename(&path, &old).unwrap();
+        io::write_member(&store.archives, &name, &bytes, 0o400).unwrap();
+        store.inventory().unwrap();
+        let pin = store.archive_cache.borrow();
+        assert_eq!(pin[&name].identity.1, fs::metadata(&path).unwrap().ino());
+        assert_ne!(pin[&name].identity.1, fs::metadata(&old).unwrap().ino());
+        drop(pin);
+        fs::remove_file(old).unwrap();
+        fs::write(&path, b"changed").unwrap();
+        assert!(store.inventory().is_err());
     }
     #[test]
     fn unavailable_decisions_never_fabricate_subject_or_time_and_wire_is_closed() {
@@ -1910,6 +2344,33 @@ mod tests {
         assert!(store.write(&terminal, &records).is_err());
         assert!(io::names(&store.pending, 1024).unwrap().is_empty());
         assert!(store.inventory().unwrap().is_empty());
+    }
+    #[test]
+    fn additional_subject_restriction_denial_prevents_false_completed_operation() {
+        let fixture = Fixture::new("restriction-denial");
+        let store = fixture.store();
+        let mut operation =
+            Operation::begin(store.clone(), &[("infer-one".into(), usage())]).unwrap();
+        let mut decision = allow_data();
+        operation.decisions(vec![decision.clone()]).unwrap();
+        decision.decision_id = crate::resources::random_id().unwrap();
+        decision.outcome = DecisionOutcome::Deny;
+        decision.reason_code = Reason::SubjectMismatch;
+        operation.decisions(vec![decision]).unwrap();
+        assert!(operation.finish(OperationOutcome::Completed).is_err());
+        operation.finish(OperationOutcome::Denied).unwrap();
+        drop(operation);
+        drop(store);
+        let records = fixture.store().inventory().unwrap();
+        assert!(records.values().any(|record| matches!(&record.payload,
+            Payload::Decision { decision } if decision.outcome == DecisionOutcome::Deny
+                && decision.reason_code == Reason::SubjectMismatch)));
+        assert!(!records.values().any(|record| matches!(
+            record.payload,
+            Payload::OperationFinished {
+                outcome: OperationOutcome::Completed
+            }
+        )));
     }
     #[test]
     fn effect_receipt_is_exact_and_uncertain_or_unclosed_effect_blocks_completed_operation() {

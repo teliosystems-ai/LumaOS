@@ -2,7 +2,8 @@
   "schema_version": 1,
   "requirement": 1,
   "date": "2026-10-10",
-  "status": "verified-source-candidate-awaiting-image-and-native-qualification",
+  "status": "source-verified-image-smoke-passed-awaiting-installed-and-native-qualification",
+  "image_evidence": "requirement1_image_2026-10-11.json",
   "gate_closing": false,
   "installed_image_tested": false,
   "physical_tpm_tested": false,
@@ -51,7 +52,7 @@
   "remaining_software": [],
   "remaining_qualification": [
     "Installed account, UTC, grant, worker, retention and confinement integration",
-    "Final D-drive image build and consolidated image/model sweep",
+    "Consolidated installed image/model/large-export sweep; D-backed sequence-12 build and live smoke passed separately",
     "Separate native Ubuntu and physical security/recovery qualification"
   ],
   "checkpoint_history_attempts": [
@@ -1358,7 +1359,7 @@
       "native_source_passed": 334,
       "native_source_skipped": 0,
       "full_suite_for_final_reviewed_bytes": false,
-      "current_tree_matches_frozen_implementation_and_test_bytes": true
+      "implementation_and_test_bytes_matched_frozen_snapshot_at_2026_10_10_freeze": true
     },
     "security_review": "Joint Read and Export scopes bind the identical original principal/account pins and one fresh catalog/UTC sample. Original final PAM deadlines and password-aging constraints are validated at the same opaque full-nanosecond kernel coordinate after blocking I/O; no UTC age-budget renewal. Encoded history output checks before and after each 32 KiB transport block. No caller-selectable lifetime or general mutation extension."
   },

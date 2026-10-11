@@ -22,12 +22,14 @@ admission, and principal-bound invoice/artifact operations. Image assembly now
 includes the dedicated UTC identity, fixed units/profiles, independently pinned
 chrony 4.9 candidate, immutable runtime inventory and corresponding source.
 This supersedes the deployment-wiring gaps in the previous checkpoint below,
-not its historical test results. No final image has been built from these bytes.
+not its historical test results. A sequence-12 laboratory test image is now built
+from the integrated candidate; installed/native qualification remains open.
 
 See [the integrated deliverable and qualification limits](evidence/G2_REQUIREMENT1_INTEGRATION_2026-10-10.md).
 Ubuntu WSL relaunched successfully after the owner-approved full WSL shutdown
 on 2026-10-10. The dedicated Docker daemon/cache remains on the D-backed ext4
-mount; Docker Desktop's distribution is stopped. The earlier WSL startup blocker
+mount; Docker Desktop's distribution was stopped at that restart checkpoint.
+The earlier WSL startup blocker
 is resolved. A bounded offline Linux `cargo check --tests` passed, including
 the C helper build. Its unused shutdown guard is now consumed by offline cleanup. This type-check
 does not run tests or link/qualify the final release image; native positive flows
@@ -69,13 +71,19 @@ independent disposable-TPM cases and the existing-owner Admin TPM driver**.
 All Rust targets checked with warnings denied. This is targeted post-review
 verification, not a second full-suite pass; failed harness attempts and exact
 source/transcript hashes are retained separately.
-Requirement #1 and G2 remain open for final image and installed qualification.
-No final image has been built from these bytes.
+Requirement #1 and G2 remain open for installed/native qualification.
 The first sequence-12 attempt compiled the optimized Rust release but refused
 UTC packaging before image export. The missing `pkg-config` dependency and
 explicit Chrony seccomp configure flag are now repaired: an actual offline
 release build passed with NTS/privilege-drop/seccomp, followed by 335 native
-source tests with no skips. The image must be rebuilt from the corrected bytes;
+source tests with no skips. The corrected desktop sequence-12 image is built at
+`D:/LumaOS-builds/native/20261011T160300Z-desktop`: all eleven public artifacts
+and exported checksum records verified, and the exact raw image passed a
+4 GiB TCG/UEFI Secure Boot live smoke with clean guest shutdown. Intermediates
+and private VM evidence stay in a D-backed Linux volume; public output is on
+Windows D:. This is not installation, model, long-export, installed-confinement
+or physical-TPM qualification. No host TPM, partition, account, clock or WSL configuration was
+changed, and no lab private keys were exported;
 see [the retained image evidence](evidence/requirement1_image_2026-10-11.json).
 Do not advance to Requirement #2.
 

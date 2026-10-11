@@ -520,8 +520,44 @@ policy was not relaxed. The earlier failed build/test attempts and exact
 source/binary/transcript hashes are retained in
 [the image evidence record](requirement1_image_2026-10-11.json).
 
-The final desktop image rebuild and installed/native qualification remain open.
-No source or compilation result is a production-qualification claim.
+The desktop sequence-12 laboratory image is now built and exported at
+`D:/LumaOS-builds/native/20261011T160300Z-desktop`. Its compressed image is
+`luma-native-lab-20260927-desktop-12.img.zst` (2,850,564,825 bytes), SHA-256
+`880a2d71373c00afbd0f631b9ac846791ad03869c0bd67006117ebfac9669417`.
+All eleven public artifacts and exported checksum records verified. The raw
+image SHA-256 is
+`c70b13618d07ecf43621c7e806b4ffecb87a95f50611e56ebfd5c07b39e57f55`;
+source-lock SHA-256 is
+`d22e6b25b73817ae16d8018567ad2599a9e3e3e94ef08c81075292339165e610`.
+All 264 captured inputs matched committed source `3884d48`.
+
+Windows-backed intermediates were slow. That attempt was stopped during
+compression, which reported read-error exit 37; the cause of that error was
+not independently established. Only its unexported generated raw image was
+removed to restore the unchanged storage headroom. Frozen inputs, signed
+components and its build volume remain. Every assembly step was rerun in a
+fresh D-backed Linux volume, with the same source, limits and lab keys; no
+storage guard, optimization or mandatory feature check was bypassed. The fresh
+optimized release compiled with warnings denied in 4m28s. Neither C: build
+storage nor a WSL memory/restart change was used.
+
+The exact image passed a **4 GiB TCG/UEFI Secure Boot live-media smoke test with
+clean guest shutdown**. Fresh virtual disks and a disposable software TPM were
+used; no host disk, host TPM, network or signing-key volume was attached. The
+RAM guard admitted 6,657,605,632 available bytes against a 4 GiB guest plus
+2 GiB host reserve. This was **not an installation, Wayland/model, long-export,
+installed-confinement or physical-security test**. Its result and transcript
+hashes are retained in the image evidence record. Version-only execution also
+verified the packaged Chrony runtime libraries; all nine Luma AppArmor profile
+files parsed with kernel loading and cache access disabled. Parsing is not
+proof of effective installed enforcement.
+
+Raw media and private VM evidence remain in Docker volume
+`luma-native-build-20261011T160300Z-desktop`, on the verified D-backed ext4 store.
+Lab signing keys remain separate and were not exported. The public build
+record retains its historical `built-not-yet-boot-tested` state; the later
+smoke result is separate evidence. Production signing and installed/native
+qualification remain open. No build or smoke result closes Requirement #1.
 
 ## Still open before Requirement #1 closes
 
@@ -529,9 +565,10 @@ No source or compilation result is a production-qualification claim.
    installed confinement. The development failures described above are repaired;
    passing unit and disposable-container tests cannot establish installed
    qualification.
-2. Freeze the fully implemented candidate, build once on D:, and perform the
-   consolidated image/model sweep followed by separate native Ubuntu/physical
-   qualification.
+2. Perform the consolidated installed image/model/large-export sweep using the
+   exact D-backed sequence-12 image, followed by separate native Ubuntu/physical
+   qualification. Image construction, export integrity and live Secure Boot
+   smoke are complete; their evidence does not qualify installed flows.
 
 The separately approved checkpoint reconstruction, terminal-domain disposition,
 explicit unpublished-staging cleanup and policy-archive lifecycle are implemented

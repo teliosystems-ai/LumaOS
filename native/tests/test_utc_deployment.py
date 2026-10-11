@@ -54,6 +54,15 @@ class UtcDeployment(unittest.TestCase):
         self.assertNotIn('--without-seccomp', script)
         self.assertNotIn('--without-libcap', script)
 
+    def test_release_builder_requires_feature_detection_tool_before_workspace_creation(self):
+        script = (ASSETS / 'build_release.sh').read_text()
+        tools = (ROOT / 'native/image/Dockerfile.tools').read_text()
+        self.assertIn('make pkg-config libgnutls28-dev libcap-dev libseccomp-dev', tools)
+        self.assertLess(script.index('command -v pkg-config'), script.index('mkdir "$build" "$package"'))
+        self.assertIn('requires pkg-config for NTS and seccomp detection', script)
+        self.assertIn('gcc libc6-dev pkg-config libgnutls28-dev', script)
+        self.assertIn('--enable-scfilter', script)
+
     def test_keeper_has_read_only_producer_metadata_but_no_tpm_or_network(self):
         unit = (ASSETS / 'luma-utc-keeper.service').read_text()
         profile = (ROOT / 'native/image/overlay/etc/apparmor.d/luma-utc-keeper').read_text()

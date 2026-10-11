@@ -1,0 +1,81 @@
+{
+  "schema_version": 1,
+  "requirement": 1,
+  "date": "2026-10-11",
+  "status": "utc-packaging-verified-awaiting-image-rebuild",
+  "gate_closing": false,
+  "installed_image_tested": false,
+  "native_hardware_tested": false,
+  "previous_source_commit": "74a97ecf7a754658401e918e403f28ec4da14fbf",
+  "failed_image_attempt": {
+    "build_volume": "luma-native-build-20261010T210838Z-desktop",
+    "source_manifest_sha256": "8f224514c1cefd5be29fb3346c1ce278667fb128034f9a0b43cd0ae406431dd6",
+    "release_rust_build": "passed-optimized-warnings-denied",
+    "release_rust_build_duration": "4m53s",
+    "image_exported": false,
+    "reason": "UTC configure lacked pkg-config; mandatory NTS and seccomp feature checks refused assembly"
+  },
+  "packaging_fixes": [
+    "Install pkg-config from the existing pinned Ubuntu snapshot",
+    "Refuse before creating UTC build/package directories if pkg-config is absent",
+    "Explicitly enable Chrony seccomp support with --enable-scfilter",
+    "Include pkg-config in the UTC build dependency inventory"
+  ],
+  "verification": {
+    "source_snapshot": "/mnt/luma-build/work/r1-export-packaging-20261011-b",
+    "source_manifest_sha256": "cd25bd7c758fa9531dd7fa6c4e8c443322c73528930ab87b60f5c79ed0464faf",
+    "evidence_directory": "/mnt/luma-build/work/r1-export-packaging-evidence-20261011-b",
+    "tools_image_id": "sha256:78c8868267b4e6f406d765dd0c2968f6387334a2e207bd6a87965a9bcc9f505e",
+    "utc_release_build": {
+      "result": "passed",
+      "network": "none",
+      "memory_gib": 4,
+      "additional_swap_gib": 0,
+      "cpu_limit": 2,
+      "make_jobs": 1,
+      "daemon_run": false,
+      "version": "chronyd (chrony) version 4.9 (+CMDMON +REFCLOCK +RTC +PRIVDROP +SCFILTER -SIGND +NTS +SECHASH +IPV6 -DEBUG)",
+      "chronyd_sha256": "1805cbad23a612b76617571ade222b033f94fe74c0cd10ef2a139b179b0b6b8f",
+      "transcript_sha256": "a507d35d69e012539c65452689a022fddfd6400d78071d2f2a923b16e6a5f05f"
+    },
+    "native_source_tests": {
+      "result": "passed",
+      "passed": 335,
+      "failed": 0,
+      "skipped": 0,
+      "elapsed_seconds": 11.794,
+      "network": "none",
+      "memory_gib": 2,
+      "cpu_limit": 1,
+      "temporary_mount": "rw,exec,mode=1777-disposable-container-only",
+      "transcript_sha256": "5f64b99c3001d18e70d2c0953a10a76740748b5e49258aa3d5e9747ff884a10c"
+    }
+  },
+  "retained_failed_attempts": [
+    {
+      "stage": "tools-image-rebuild",
+      "reason": "Docker bridge DNS could not resolve snapshot.ubuntu.com",
+      "resolution": "Use working host networking for the same pinned packages; no network configuration or dependency snapshot change"
+    },
+    {
+      "evidence_directory": "/mnt/luma-build/work/r1-export-packaging-evidence-20261011-a",
+      "stage": "utc-release-configure",
+      "reason": "NTS detected after pkg-config installation, but seccomp requires explicit --enable-scfilter",
+      "image_exported": false
+    },
+    {
+      "stage": "native-source-tests",
+      "passed": 331,
+      "failed": 4,
+      "reason": "Disposable /tmp defaulted to noexec, preventing generated shell stubs",
+      "transcript_sha256": "3a48780c84d6dfe6399c4a224fd16dc5c1b89aa09c70e346291916a6664d62e6",
+      "resolution": "Rerun unchanged source with executable disposable fixture storage; no production policy change"
+    }
+  ],
+  "limits": [
+    "Compilation and source tests do not establish installed NTS, AppArmor, systemd, PAM or grant qualification",
+    "The previous targeted Rust/PAM/software-TPM evidence remains evidence for unchanged Rust bytes; this is not another full Rust suite",
+    "No host TPM, clock, account, Windows service, WSL configuration or unrelated Docker workload was changed",
+    "Requirement #2 has not been started"
+  ]
+}

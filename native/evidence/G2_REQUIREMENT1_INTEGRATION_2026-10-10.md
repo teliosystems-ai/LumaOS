@@ -493,10 +493,35 @@ software-TPM driver also passed. This is targeted verification, not another
 full-suite pass. The frozen manifest SHA-256 is
 `fac24bef0f7c2dd4689e9accd64c198e521130cfff5f3752d9de9aad923dd340`;
 logs remain at `/mnt/luma-build/work/r1-export-evidence-20261010-f/sweep`.
-The current implementation, image tooling and native tests match that snapshot.
+The implementation, image tooling and native tests matched that snapshot at
+the 2026-10-10 source freeze; the subsequent packaging repair is recorded below.
 The container used 2 GiB, no additional swap, one CPU, one Cargo job, no network
 and no physical TPM devices. Exact per-lane transcript hashes, failed attempts
 and scope limits are in [the machine-readable record](requirement1_2026-10-10.json).
+
+## Image packaging repair, 2026-10-11
+
+The first D-backed desktop sequence-12 attempt used committed source
+`74a97ec` and source-lock SHA-256
+`8f224514c1cefd5be29fb3346c1ce278667fb128034f9a0b43cd0ae406431dd6`.
+The optimized Rust release compiled with warnings denied in 4m53s. Assembly
+then correctly refused the protected-UTC package: the tools image omitted
+`pkg-config`, and Chrony also requires explicit `--enable-scfilter`. No image
+was exported or boot-tested. The failed volume is retained, not reused.
+
+The corrected tools image installs `pkg-config` from the unchanged pinned
+Ubuntu snapshot. The release script refuses a missing detection tool before
+creating output, explicitly enables seccomp, and still requires NTS,
+privilege-drop and seccomp features. An actual offline Chrony 4.9 release
+build passed with `+NTS +PRIVDROP +SCFILTER`; the daemon was not run. The
+unchanged-source native suite passed **335 tests with no skips** after fixing
+the disposable fixture mount's accidental `noexec` setting. Production mount
+policy was not relaxed. The earlier failed build/test attempts and exact
+source/binary/transcript hashes are retained in
+[the image evidence record](requirement1_image_2026-10-11.json).
+
+The final desktop image rebuild and installed/native qualification remain open.
+No source or compilation result is a production-qualification claim.
 
 ## Still open before Requirement #1 closes
 

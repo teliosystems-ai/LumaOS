@@ -1,6 +1,6 @@
 # G2 software completion register
 
-Updated 2026-10-10. **G2 software is not complete.** This register separates
+Updated 2026-10-11. **G2 software is not complete.** This register separates
 work that can be executed in the current Windows/Ubuntu WSL/VM environment
 from production deployment decisions and physical qualification. It does not
 change the frozen reference release, governing requirements, or exit criteria.
@@ -71,6 +71,12 @@ verification, not a second full-suite pass; failed harness attempts and exact
 source/transcript hashes are retained separately.
 Requirement #1 and G2 remain open for final image and installed qualification.
 No final image has been built from these bytes.
+The first sequence-12 attempt compiled the optimized Rust release but refused
+UTC packaging before image export. The missing `pkg-config` dependency and
+explicit Chrony seccomp configure flag are now repaired: an actual offline
+release build passed with NTS/privilege-drop/seccomp, followed by 335 native
+source tests with no skips. The image must be rebuilt from the corrected bytes;
+see [the retained image evidence](evidence/requirement1_image_2026-10-11.json).
 Do not advance to Requirement #2.
 
 The expanded functional source passed its D-backed offline sweep: **782 Rust

@@ -13,6 +13,36 @@ requirement.
 
 ## Current software inventory and work still required
 
+### Parallel workflow, OS release trust and UTC dependency stage, 2026-10-11
+
+The owner requested these tracks in parallel. Their integrated source now
+passes **888 Rust tests**, all-target checks with warnings denied, **345 native
+tests with zero skips**, eight real UTC signature/source tests, sixteen
+capability-free upstream crypto/NTS cases, six real PAM cases, four independent
+resource software-TPM cases and the existing-owner Admin driver. The default
+Rust run leaves 42 fixture-only entries ignored; selected drivers execute
+their stated fixtures, not all 42. Failed earlier attempts are retained.
+
+| Track | Current scoped status | Still required |
+| --- | --- | --- |
+| Broader workflow/platform | Bounded reviewed multi-run scheduling joins the existing signed closed typed DAG, principal/grant/resource/effect gates, checkpoint/reconciliation and terminal retention/recovery. Aggregate output excludes private status from expired earlier sessions. | Installed/native qualification; production skill/catalog governance is separately unfinished. Arbitrary populated schema/principal migration is provisionally G4, not claimed here. |
+| Production OS trust/update lifecycle | Native public root trust, rotation/revocation, increasing TPM-journal admission floors, exact signed prepare/resolve, guarded writes and measured health/fallback are implemented and source-tested. | Production initial installation/activation and target-mounted governed repair are **software gaps**, pending the owner decisions below; actual public roots/signatures/custody and native interruption/firmware/TPM qualification remain external. |
+| UTC dependency | Real detached-signature verification, exact authenticated source snapshots, closed immutable runtime provenance/source review, NTS/privilege-drop/seccomp build and mandatory crypto/source/unit checks pass. | Native NTS/certificate/quorum/loss/leap/step/suspend/rate-error/confinement qualification, and the recovery-mode UTC adapter. Static upstream authentication does not certify live key revocation. |
+
+The remaining owner decisions are initial production admission (UTC before any
+write versus explicitly approved inert offline signed staging with first-boot
+activation) and a separately bounded original-Admin repair session. Proposed
+repair duration is at most 30 minutes with continuous exact target/TPM/journal/
+custody/current-UTC checks and no renewal; existing custody stays at 30 seconds
+until approved. Export-only 30-minute approval does not cover repair. No new
+recovery-mode code or authority extension was implemented without that approval.
+
+See [the integrated evidence](evidence/G2_PARALLEL_INTEGRATION_2026-10-11.md)
+and [the release lifecycle](RELEASE_TRUST.md). This stage built no final image;
+the prior sequence-12 smoke does not qualify the changed source. Requirement #1
+and G2 remain open. Historical sections below are superseded only within the
+explicit implemented scope above, not their retained test/qualification limits.
+
 ### Integrated Requirement #1 candidate, 2026-10-10
 
 The source now connects protected-UTC account activation/renewal, separate

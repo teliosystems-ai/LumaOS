@@ -28,6 +28,7 @@ mod principal;
 #[cfg(test)]
 mod publication_fixture;
 mod recovery_export;
+mod release_trust;
 mod resource_checkpoint;
 mod resource_manager;
 mod resources;
@@ -155,6 +156,7 @@ fn dispatch() -> Result<()> {
                     | "workflow-dag-advance"
                     | "workflow-dag-cancel"
                     | "workflow-dag-reconcile"
+                    | "workflow-dag-schedule"
                     | "resource-retention"
                     | "workflow-inputs-review"
                     | "workflow-inputs-init"
@@ -308,6 +310,7 @@ fn dispatch() -> Result<()> {
         Some("workflow-dag-advance") => workflow_runs::dag::advance(&args),
         Some("workflow-dag-cancel") => workflow_runs::dag::cancel(&args),
         Some("workflow-dag-reconcile") => workflow_runs::dag::reconcile(&args),
+        Some("workflow-dag-schedule") => workflow_runs::dag::schedule_command(&args),
         Some("workflow-inputs-review") if args.len() == 2 => workflow_inputs::review(&args[1]),
         Some("workflow-inputs-init") => workflow_inputs::initialize(&args),
         Some("policy-evidence-review") if args.len() == 2 => policy_decisions::review(&args[1]),
@@ -637,6 +640,8 @@ fn dispatch() -> Result<()> {
         Some("boot-failed") if args.len() == 1 => platform::boot_failed(),
         Some("init-data") if args.len() == 2 => platform::init_data(&args[1]),
         Some("help" | "--help") | None => {
+            println!("Bounded workflow scheduling: granted-run workflow-dag-schedule LOGIN SCHEDULE-JSON. Up to 16 distinct reviewed run checkpoints; one currently authorized node step per run, no automatic retry or authority restoration. A failed item preserves its uncertain outcome and leaves the suffix undispatched.");
+            println!("Release governance: admin-catalog accepts publish_release_trust, prepare_release and resolve_release proposals through current original Admin, protected UTC and the existing TPM journal. Trust/root environments, irreversible revocations, exact signed candidate bytes, geometry and monotonic admission floors are checked. Public production roots and real signing custody must be provisioned separately.");
             println!("Independent resource custody: luma-admin-control resource-checkpoint-prepare-review LOGIN | resource-checkpoint-prepare LOGIN GRANT REVIEW; enroll-review/enroll, parent-review/parent-continue, pending-review/finalize, recovery-review/recover and gc-review/gc follow the typed review plus exact finite-grant ceremony. Requires original Admin, protected UTC, fixed masks and drainage; no ownership takeover, NV replay, capacity release or service restart. See RESOURCE_CHECKPOINT_CUSTODY.md.");
             println!("Terminal history: granted-run workflow-history-inspection-review/proposal/export/mark-proposal/mark/delete-proposal/delete. Export uses a separate binary payload channel; marks bind exact custody acknowledgement and protected grace. Deletion retires only terminal workflow copies, preserves owned artifacts and sources, and advances a durable domain epoch. Historical invoice review/prepare requires HISTORY-EPOCH before captured CSV input. Policy archives: policy-archive-review/export-proposal/export/dispose-proposal/dispose-mark/delete-proposal/delete/outcomes/cleanup-proposal/cleanup, each with separate exact scopes; archives never restore authorization.");
             println!("Physical receipt preparation recovery: resource-recovery-status | resource-recover REVIEW-SHA256. Installed-root broker maintenance with terminal requests and empty, released worker generations. Review binds the exact hot ledger and selected interrupted stage inode/bytes; preserves the stage under an immutable private incident name. Complete checksum-matching stages remain for exact archival retry. Never deletes evidence, retires an owner, grants an effect or releases capacity.");

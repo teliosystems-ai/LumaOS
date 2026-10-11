@@ -25,6 +25,21 @@ pub(crate) fn identifier(value: &str) -> bool {
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) enum Command {
+    PublishReleaseTrust {
+        expected_version: u64,
+        bundle: crate::release_trust::SignedTrust,
+    },
+    PrepareRelease {
+        expected_floor: u64,
+        admission: crate::release_trust::Admission,
+    },
+    InitializeRelease {
+        release: crate::release_trust::SignedRelease,
+    },
+    ResolveRelease {
+        candidate_sha256: String,
+        outcome: crate::release_trust::Outcome,
+    },
     RegisterActivity {
         activity: String,
     },
@@ -110,6 +125,10 @@ pub(crate) enum Command {
 impl Command {
     pub(crate) fn activity(&self) -> &'static str {
         match self {
+            Self::PublishReleaseTrust { .. } => "admin.release.trust_publish",
+            Self::PrepareRelease { .. } => "admin.release.prepare",
+            Self::InitializeRelease { .. } => "admin.release.initialize",
+            Self::ResolveRelease { .. } => "admin.release.resolve",
             Self::RegisterActivity { .. } => "admin.activity.register",
             Self::DefineRole { .. } => "admin.role.define",
             Self::AssignRole { .. } => "admin.role.assign",
@@ -159,6 +178,34 @@ impl Command {
     pub(crate) fn validate(&self) -> Result<()> {
         let valid_activity = |v: &str| identifier(v) && v != "admin.bootstrap";
         match self {
+            Self::PublishReleaseTrust {
+                expected_version,
+                bundle,
+            } => {
+                if *expected_version >= i64::MAX as u64 {
+                    return Err("release trust version exhausted".into());
+                }
+                bundle.validate()
+            }
+            Self::PrepareRelease {
+                expected_floor,
+                admission,
+            } => {
+                if *expected_floor >= i64::MAX as u64 {
+                    return Err("release admission floor exhausted".into());
+                }
+                crate::bundle::validate_manifest(&admission.prior)?;
+                admission.candidate.validate()?;
+                crate::tpm::decode::<32>(&admission.trust_sha256)?;
+                Ok(())
+            }
+            Self::InitializeRelease { release } => release.validate(),
+            Self::ResolveRelease {
+                candidate_sha256, ..
+            } => {
+                crate::tpm::decode::<32>(candidate_sha256)?;
+                Ok(())
+            }
             Self::AssignRole { assignment } => assignment.validate(),
             Self::IssueGrant { grant } => grant.validate(),
             Self::RevokeAssignment {
@@ -290,6 +337,8 @@ pub(crate) struct Role {
 
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 pub(crate) struct Catalog {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub release: Option<crate::release_trust::State>,
     pub state_version: u64,
     pub activities: BTreeSet<String>,
     pub roles: BTreeMap<String, Role>,
@@ -347,6 +396,7 @@ impl Catalog {
 
     pub(crate) fn initial() -> Self {
         Self {
+            release: None,
             state_version: 1,
             activities: CONTROL.iter().map(|v| (*v).into()).collect(),
             roles: BTreeMap::new(),
@@ -399,6 +449,27 @@ impl Catalog {
             .checked_add(1)
             .ok_or("Admin catalog version exhausted")?;
         match command {
+            Command::PublishReleaseTrust {
+                expected_version,
+                bundle,
+            } => {
+                crate::release_trust::publish(&mut self.release, *expected_version, bundle)?;
+            }
+            Command::PrepareRelease {
+                expected_floor,
+                admission,
+            } => {
+                crate::release_trust::prepare(&mut self.release, *expected_floor, admission)?;
+            }
+            Command::InitializeRelease { release } => {
+                crate::release_trust::initialize(&mut self.release, release)?;
+            }
+            Command::ResolveRelease {
+                candidate_sha256,
+                outcome,
+            } => {
+                crate::release_trust::resolve(&mut self.release, candidate_sha256, *outcome)?;
+            }
             Command::AssignRole { assignment } => {
                 let role = self
                     .roles

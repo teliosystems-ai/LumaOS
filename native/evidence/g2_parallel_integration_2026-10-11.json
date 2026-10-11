@@ -1,0 +1,80 @@
+{
+  "schema_version": 1,
+  "date_utc": "2026-10-11",
+  "scope": "parallel-workflow-os-release-trust-utc-dependency-source-stage",
+  "result": "passed-scoped-software-verification",
+  "source_file_count": 360,
+  "post_test_current_source_bytes_match_snapshot": true,
+  "source_manifest_sha256": "2e42f69f4484a50bb6c2f71ad7ff517d2943986dbb235e96c8fac45a865260dd",
+  "source_snapshot": "/mnt/luma-build/work/g2-parallel-source-20261011-e",
+  "tools_image": "sha256:78c8868267b4e6f406d765dd0c2968f6387334a2e207bd6a87965a9bcc9f505e",
+  "kernel": "6.18.33.2-microsoft-standard-WSL2",
+  "sweep": {
+    "path": "/mnt/luma-build/work/g2-parallel-tests-20261011-e/sweep/result.json",
+    "sha256": "5fefc585c0fdbae12d13ff1ca68894440b5070f42c3630fea8340fbd3450e155",
+    "elapsed_seconds": 308.204,
+    "container_memory_gib": 4,
+    "container_memory_plus_swap_gib": 4,
+    "container_cpus": 2,
+    "network": "none",
+    "warnings_denied": true,
+    "rust": {"passed": 888, "failed": 0, "fixture_entries_ignored_in_default_run": 42},
+    "native": {"passed": 345, "failed": 0, "skipped": 0},
+    "utc_release_authentication": {"passed": 8, "failed": 0, "skipped": 0},
+    "utc_release_build": "passed-NTS-PRIVDROP-SCFILTER-without-daemon",
+    "real_pam_cases": 6,
+    "independent_resource_software_tpm_cases": 4,
+    "existing_owner_admin_software_tpm_driver": "passed",
+    "transcript_sha256": {
+      "rust-all-targets-check": "284c472cbc8c33fe25d98a41319ff68bed7a6fc47ff5c01c96ad7353110b74f7",
+      "rust-tests": "86866b28de3e399bc9e78dad0444d1e649027be461d9e4b9e1f3db59585f51a7",
+      "native-source-tests": "307b42969ba02b74ea61179f59e64e218b72168664de7a7bf194304aaa469607",
+      "utc-release-authentication": "3f99679e70697176bf79b9a56f1ea2ed705e8b3604a2fe8209fc45d6b62a896f",
+      "utc-release-build": "898844931f2b7b84db3f435001ece10a220a623b9c0237d56363c02466c2f733",
+      "real-pam-fixture": "238c286f50320b661851090df15a9503f65796fc7d740846508eec203dd33f72",
+      "resource-software-tpm": "d5066942f57b83d91dd27feaf0a590a1f2bd549cadfa69b9973221236a12a1b0",
+      "admin-software-tpm-regression": "8b23141a2a653562fb29c8e5f1685b27981c2447f55494e3fe6c384509aaa581"
+    }
+  },
+  "utc_dependency_units": {
+    "path": "/mnt/luma-build/work/g2-parallel-tests-20261011-e/utc-units/evidence.json",
+    "sha256": "bc0fe58c047dadd1cd36b489417c0a583a7de327780d7fe6ca546718103f539b",
+    "transcript_sha256": "357a952b64a47d1219c7b267322129efc554ace0b93c0ed21953997414273c27",
+    "passed": 16,
+    "failed": 0,
+    "skipped": 0,
+    "container_memory_gib": 1,
+    "container_memory_plus_swap_gib": 1,
+    "container_cpus": 1,
+    "network": "none",
+    "all_capability_sets_zero": true,
+    "source_archive_sha256": "4924c6f530105bcd5b9e9e33c48a2ae1bfd889222c8480bc41601110efc864d0"
+  },
+  "retained_failed_attempts": [
+    {
+      "path": "/mnt/luma-build/work/g2-parallel-tests-20261011-b/sweep/result.json",
+      "sha256": "38b6abcc2ec51bef1a9f5a99cc2c781f3235697e6a6605c9041f2532b4830171",
+      "reason": "pinned-libc compile error, two stale source assertions and missing signature in legacy UTC input directory"
+    },
+    {
+      "path": "/mnt/luma-build/work/g2-parallel-tests-20261011-d/sweep/result.json",
+      "sha256": "f60a1398b41c5781b502f39ca69cfb6f11c0c1ba4b5d8871e6fd271499a6abed",
+      "reason": "one real trust-environment admission defect; 886 Rust passes and one failure, not a full pass"
+    }
+  ],
+  "remaining_software": [
+    "production initial signed staging and first-boot activation, pending owner bootstrap policy",
+    "target-mounted governed repair with target Admin/TPM/history/current UTC, pending separate finite repair-session policy"
+  ],
+  "separate_unclosed_scope": [
+    "production model and skill catalog signing/governance",
+    "general populated cross-schema/reference/principal migration, provisionally G4"
+  ],
+  "new_image_built": false,
+  "installed_image_tested": false,
+  "physical_tpm_tested": false,
+  "live_nts_clock_confinement_qualified": false,
+  "production_custody_qualified": false,
+  "requirement1_closed": false,
+  "g2_closed": false
+}

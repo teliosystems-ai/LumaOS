@@ -178,7 +178,10 @@ class PublisherAssets(unittest.TestCase):
 
     def test_history_binding_is_not_a_wire_token_or_separate_tpm_owner(self):
         governance = (ROOT / 'rust/luma-platform/src/admin_governance.rs').read_text()
-        reader = governance.split('pub(crate) struct HistoryBinding', 1)[1].split('fn utc_input', 1)[0]
+        # Inspect the binding and reader themselves, not unrelated release
+        # authority functions inserted between their declaration and impl.
+        fields = governance.split('pub(crate) struct HistoryBinding', 1)[1].split('\n}', 1)[0]
+        reader = fields + governance.split('impl HistoryBinding {', 1)[1].split('fn utc_input', 1)[0]
         self.assertIn("store: &'a mut Store<A>", reader)
         self.assertIn('context.bootstrap_state(&snapshot)?', reader)
         self.assertIn('context.history(&snapshot, self.candidate)?', reader)

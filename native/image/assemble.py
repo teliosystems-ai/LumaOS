@@ -129,15 +129,20 @@ def package_protected_utc(root: Path, source: Path, work: Path) -> None:
         (target/name).chmod(0o644)
     shutil.copy2(root/'etc/ssl/certs/ca-certificates.crt', target/'ca-certificates.crt')
     (target/'ca-certificates.crt').chmod(0o644)
-    for name in ('COPYING.chrony', 'source-inputs.json', 'build-packages.tsv', 'SHA256SUMS', 'version.txt'):
+    for name in ('COPYING.chrony', 'source-inputs.json', 'build-packages.tsv', 'SHA256SUMS',
+                 'version.txt', 'upstream-provenance.json'):
         shutil.copy2(package/name, target/name)
         (target/name).chmod(0o644)
-    shutil.copy2(Path('/inputs/chrony-4.9.provenance.json'), target/'upstream-provenance.json')
-    (target/'upstream-provenance.json').chmod(0o644)
     corresponding = target/'source'
     corresponding.mkdir()
-    shutil.copy2(Path('/inputs/chrony-4.9.tar.gz'), corresponding/'chrony-4.9.tar.gz')
-    for name in ('prepare_chrony.py', 'build_release.sh', 'publisher.c', 'publisher.h', 'chrony_hook.c', 'chrony_hook.h', 'approved-policy.json'):
+    shutil.copy2(package/'chrony-4.9.tar.gz', corresponding/'chrony-4.9.tar.gz')
+    shutil.copy2(package/'chrony-4.9.tar.gz.asc', corresponding/'chrony-4.9.tar.gz.asc')
+    shutil.copy2(package/'upstream-provenance.json', corresponding/'chrony-4.9.provenance.json')
+    for name in ('prepare_chrony.py', 'prepare_release_input.py', 'verify_release.py',
+                 'upstream-signing-key.asc', 'build_release.sh', 'publisher.c', 'publisher.h',
+                 'chrony_hook.c', 'chrony_hook.h', 'approved-policy.json',
+                 'reviewed-release.json', 'reviewed-source-inputs.json',
+                 'test_release_authentication.py', 'test_release_units.py'):
         shutil.copy2(assets/name, corresponding/name)
     for member in corresponding.iterdir():
         member.chmod(0o644)
@@ -195,7 +200,7 @@ def main() -> None:
     inputs=[]
     snapshot=WORK/'source'
     snapshot.mkdir()
-    for folder in ('rust','native/image','src','web','schemas','examples','docs/adr'):
+    for folder in ('rust','native/image','src','web','schemas','examples','docs/adr','scripts'):
         for source in sorted((REPO/folder).rglob('*')):
             if source.is_file() and not any(p in ('target','__pycache__') for p in source.relative_to(REPO).parts):
                 if source.is_symlink():raise SystemExit('source snapshot refuses symbolic links')
@@ -254,6 +259,10 @@ def main() -> None:
     for name in ('src','web','schemas','examples'):
         shutil.copytree(REPO/name,reference/name,ignore=shutil.ignore_patterns('__pycache__','*.pyc'))
     put('usr/share/luma-os/release-id',release+'\n')
+    put('usr/share/luma-os/release-identity.json', json.dumps({
+        'schema_version': 1, 'release': release, 'sequence': args.sequence,
+        'environment': 'lab', 'architecture': 'amd64', 'ubuntu': '24.04',
+        'edition': args.edition}, separators=(',', ':'))+'\n')
     if not (KEYS/'release.key').exists():
         run('openssl','genpkey','-algorithm','ED25519','-out',KEYS/'release.key')
     run('openssl','pkey','-in',KEYS/'release.key','-pubout','-out',ROOT/'usr/share/luma-os/release.pub')

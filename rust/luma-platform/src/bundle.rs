@@ -12,7 +12,7 @@ use std::process::{Command, Stdio};
 const MAX_MANIFEST: u64 = 65536;
 const TRUST: &str = "/usr/share/luma-os/release.pub";
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct Artifact {
     pub name: String,
@@ -20,7 +20,7 @@ pub struct Artifact {
     pub sha256: String,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct Manifest {
     pub schema_version: u32,
@@ -38,6 +38,8 @@ pub struct Manifest {
 
 pub struct VerifiedBundle {
     pub manifest: Manifest,
+    pub(crate) manifest_bytes: Vec<u8>,
+    pub(crate) signature: Vec<u8>,
     snapshot: crate::staging::Snapshot,
 }
 
@@ -63,7 +65,7 @@ fn is_hash(value: &str) -> bool {
 
 pub fn validate_manifest(m: &Manifest) -> Result<()> {
     if m.schema_version != 1
-        || m.environment != "lab"
+        || !matches!(m.environment.as_str(), "lab" | "production")
         || m.architecture != "amd64"
         || m.ubuntu != "24.04"
         || !matches!(m.edition.as_str(), "desktop" | "headless")
@@ -179,6 +181,8 @@ pub fn verify(source: &Path) -> Result<VerifiedBundle> {
     validate_manifest(&m)?;
     let verified = VerifiedBundle {
         manifest: m,
+        manifest_bytes: bytes.clone(),
+        signature: signature.clone(),
         snapshot: crate::staging::Snapshot::create()?,
     };
     // Verification inputs and every consumed artifact become private snapshots.
@@ -194,20 +198,27 @@ pub fn verify(source: &Path) -> Result<VerifiedBundle> {
         file.write_all(content)?;
         file.sync_all()?;
     }
-    let status = Command::new("/usr/bin/openssl")
-        .env_clear()
-        .env("PATH", "/usr/sbin:/usr/bin")
-        .args([
-            "pkeyutl", "-verify", "-pubin", "-inkey", TRUST, "-rawin", "-in",
-        ])
-        .arg(verified.snapshot.path().join("release.json"))
-        .arg("-sigfile")
-        .arg(verified.snapshot.path().join("release.sig"))
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()?;
-    if !status.success() {
-        return Err("release signature verification failed".into());
+    if verified.manifest.environment == "production"
+        || (crate::platform::require_installed().is_ok()
+            && crate::admin_governance::release_authority_optional()?.is_some())
+    {
+        crate::release_trust::verify_installed_release(&bytes, &signature)?;
+    } else {
+        let status = Command::new("/usr/bin/openssl")
+            .env_clear()
+            .env("PATH", "/usr/sbin:/usr/bin")
+            .args([
+                "pkeyutl", "-verify", "-pubin", "-inkey", TRUST, "-rawin", "-in",
+            ])
+            .arg(verified.snapshot.path().join("release.json"))
+            .arg("-sigfile")
+            .arg(verified.snapshot.path().join("release.sig"))
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()?;
+        if !status.success() {
+            return Err("release signature verification failed".into());
+        }
     }
     // Live /var is memory-backed. Admit measured sparse-copy allocation, not
     // the logical ext4 image size (which exceeds a small live VM's tmpfs).
@@ -365,7 +376,7 @@ mod tests {
     #[test]
     fn rejects_wrong_environment_geometry_and_hash() {
         let mut m = fixture();
-        m.environment = "production".into();
+        m.environment = "caller-selected".into();
         assert!(validate_manifest(&m).is_err());
         let mut m = fixture();
         m.root_bytes = u64::MAX;

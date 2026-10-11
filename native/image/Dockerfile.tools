@@ -27,4 +27,4 @@ RUN apt-get install -y --no-install-recommends --snapshot=${SNAPSHOT} \
 RUN apt-get install -y --no-install-recommends --snapshot=${SNAPSHOT} libpam0g-dev
 RUN apt-get install -y --no-install-recommends --snapshot=${SNAPSHOT} libcrypt-dev
 RUN apt-get install -y --no-install-recommends --snapshot=${SNAPSHOT} \
-    make pkg-config libgnutls28-dev libcap-dev libseccomp-dev
+    make pkg-config gpgv libgnutls28-dev libcap-dev libseccomp-dev

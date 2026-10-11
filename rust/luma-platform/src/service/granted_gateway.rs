@@ -1104,6 +1104,7 @@ pub(crate) fn launch(arguments: &[String]) -> Result<()> {
                 | "workflow-dag-advance"
                 | "workflow-dag-cancel"
                 | "workflow-dag-reconcile"
+                | "workflow-dag-schedule"
                 | "workflow-inputs-review"
                 | "workflow-inputs-init"
                 | "resource-retention"
@@ -1155,7 +1156,8 @@ pub(crate) fn launch(arguments: &[String]) -> Result<()> {
         | "workflow-dag-status"
         | "workflow-dag-advance"
         | "workflow-dag-cancel"
-        | "workflow-dag-reconcile" => {
+        | "workflow-dag-reconcile"
+        | "workflow-dag-schedule" => {
             let index = if arguments[0] == "workflow-dag-review" {
                 1
             } else {
@@ -1164,6 +1166,7 @@ pub(crate) fn launch(arguments: &[String]) -> Result<()> {
             let valid = match arguments[0].as_str() {
                 "workflow-dag-review" => arguments.len() == 2,
                 "workflow-dag-prepare" => arguments.len() == 3,
+                "workflow-dag-schedule" => arguments.len() == 3,
                 "workflow-dag-status" => arguments.len() == 4,
                 "workflow-dag-advance" | "workflow-dag-cancel" => arguments.len() == 5,
                 "workflow-dag-reconcile" => {

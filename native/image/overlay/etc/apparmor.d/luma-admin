@@ -5,6 +5,7 @@ profile luma-admin flags=(attach_disconnected) {
   /usr/libexec/luma-os/luma-auth-helper mrix,
   /usr/sbin/unix_chkpwd mrix,
   /usr/bin/systemd-creds mrix,
+  /usr/bin/openssl mrix,
   /usr/libexec/luma-os/luma-utc-restart Px -> luma-utc-restart,
   /usr/libexec/luma-os/luma-utc-restart r,
   /etc/apparmor.d/luma-utc-restart r,
@@ -31,6 +32,7 @@ profile luma-admin flags=(attach_disconnected) {
   /sys/fs/cgroup/system.slice/luma-admin.service/{memory.max,memory.swap.max,pids.max} r,
   /sys/fs/cgroup/system.slice/luma-peer-observer.service/{memory.max,memory.swap.max,pids.max} r,
   /usr/share/luma-os/admin-pcr-public.pem r,
+  /usr/share/luma-os/{release.pub,production-release-root.pub,release-identity.json} r,
   /usr/share/luma-os/utc/** r,
   /usr/lib/systemd/system/luma-utc-*.service r,
   /etc/apparmor.d/luma-utc-{keeper,producer} r,
@@ -116,6 +118,7 @@ profile luma-admin flags=(attach_disconnected) {
   /dev/null rw,
   /dev/tty rw,
   /memfd:luma-private-credential rwkm,
+  /memfd:luma-release-{root,key,message,signature} rwk,
   capability chown,
   # Local creation must inspect its new user-owned mode-0700 home. The socket
   # service keeps CAP_CHOWN as its sole capability and cannot acquire this one.

@@ -11,7 +11,7 @@ import os
 from pathlib import Path
 import stat
 
-FOLDERS = ('rust', 'native/image', 'src', 'web', 'schemas', 'examples', 'docs/adr')
+FOLDERS = ('rust', 'native/image', 'src', 'web', 'schemas', 'examples', 'docs/adr', 'scripts')
 EXCLUDED = {'target', '__pycache__', '.git'}
 MAX_FILE = 16*1024*1024
 MAX_TOTAL = 64*1024*1024

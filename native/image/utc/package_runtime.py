@@ -7,6 +7,7 @@ of live NTS qualification. Never run a time daemon during packaging.
 """
 import argparse
 import hashlib
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -21,11 +22,34 @@ REQUIRED = {
     'policy': '/usr/share/luma-os/utc/approved-policy.json',
     'service': '/usr/lib/systemd/system/luma-utc-producer.service',
     'confinement': '/etc/apparmor.d/luma-utc-producer',
+    'provenance': '/usr/share/luma-os/utc/upstream-provenance.json',
+    'source_inputs': '/usr/share/luma-os/utc/source-inputs.json',
 }
 
 
 def inventory(root):
     root = root.resolve(strict=True)
+    assets = Path(__file__).resolve().parent
+    spec = importlib.util.spec_from_file_location('luma_packaged_release_verifier', assets / 'verify_release.py')
+    verifier = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(verifier)
+    source = root / 'usr/share/luma-os/utc/source/chrony-4.9.tar.gz'
+    # Reverify bytes, not the caller's signature_verified field, before ldd or
+    # publication. Runtime retains both records as mandatory immutable pins.
+    verifier.verified_provenance(source, root / REQUIRED['provenance'].lstrip('/'), work=root)
+    def unique(pairs):
+        value = {}
+        for key, item in pairs:
+            if key in value:
+                raise ValueError('duplicate UTC source input field')
+            value[key] = item
+        return value
+    actual = json.loads(verifier.bounded(root / REQUIRED['source_inputs'].lstrip('/'), 32768),
+                        object_pairs_hook=unique)
+    reviewed = json.loads(verifier.bounded(assets / 'reviewed-source-inputs.json', 32768))
+    if (json.dumps(actual, sort_keys=True, separators=(',', ':')) !=
+            json.dumps(reviewed, sort_keys=True, separators=(',', ':'))):
+        raise ValueError('UTC packaged hook/source inputs differ from reviewed identity')
     files = []
     paths = set()
     for role, path in REQUIRED.items():
@@ -61,7 +85,7 @@ def inventory(root):
         if not 0 < len(data) <= 64 * 1024 * 1024:
             raise ValueError('release artifact exceeds its bounded size')
         files.append({'role': role, 'path': path, 'bytes': len(data), 'sha256': hashlib.sha256(data).hexdigest()})
-    if not 7 <= len(files) <= 64 or sum(f['bytes'] for f in files) > 256 * 1024 * 1024:
+    if not len(REQUIRED) + 1 <= len(files) <= 64 or sum(f['bytes'] for f in files) > 256 * 1024 * 1024:
         raise ValueError('release closure exceeds its bounded inventory')
     policy = (root / REQUIRED['policy'].lstrip('/')).read_bytes()
     policy_digest = hashlib.sha256(b'luma-native-approved-utc-policy-v1\0' + policy).hexdigest()

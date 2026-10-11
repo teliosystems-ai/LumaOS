@@ -30,7 +30,7 @@ class RequirementOneIntegration(unittest.TestCase):
         self.assertLess(terminal, dispatch)
         allowed = source[guard:terminal]
         for verb in ('granted-infer', 'workflow-governed-advance', 'artifact-governed-export',
-                     'artifact-owned-export', 'artifact-owned-retain'):
+                     'artifact-owned-export', 'artifact-owned-retain', 'workflow-dag-schedule'):
             self.assertIn('"' + verb + '"', allowed)
         for verb in ('admin-service', 'utc-keeper', 'admin-catalog', 'granted-run'):
             self.assertNotIn('"' + verb + '"', allowed)
@@ -64,6 +64,17 @@ class RequirementOneIntegration(unittest.TestCase):
                       'operator_snapshot(&args[10])?', 'owned launcher snapshot'):
             self.assertIn(check, workflow)
         self.assertIn('SystemCallFilter=@system-service @memlock', launcher)
+
+    def test_bounded_schedule_uses_the_confined_snapshot_and_existing_dag_dispatch(self):
+        launcher = (RUST / 'service/granted_gateway.rs').read_text()
+        dispatch = (RUST / 'main.rs').read_text()
+        self.assertIn('Some("workflow-dag-schedule") => workflow_runs::dag::schedule_command(&args)',
+                      dispatch)
+        staging = launcher[launcher.index('let stage = match arguments[0].as_str()'):]
+        self.assertIn('| "workflow-dag-schedule" => {', staging)
+        self.assertIn('"workflow-dag-schedule" => arguments.len() == 3', staging)
+        self.assertIn('let bytes = bounded_json_input(&arguments[index])?', staging)
+        self.assertIn('InputStage::capture(&bytes, "input.json")?', staging)
 
     def test_product_namespaces_are_installed_and_inputs_stay_read_only_during_execution(self):
         assembly = (IMAGE / 'assemble.py').read_text()
@@ -114,7 +125,6 @@ class RequirementOneIntegration(unittest.TestCase):
             inputs = base / 'inputs'
             inputs.mkdir()
             (inputs / 'chrony-4.9.tar.gz').write_bytes(b'candidate source fixture')
-            (inputs / 'chrony-4.9.provenance.json').write_text('{"signature_verified":false}')
             calls = []
             links = []
             original_copy = shutil.copy2
@@ -131,7 +141,8 @@ class RequirementOneIntegration(unittest.TestCase):
                     package = Path(args[-1])
                     package.mkdir()
                     for name in ('chronyd', 'COPYING.chrony', 'source-inputs.json',
-                                 'build-packages.tsv', 'SHA256SUMS', 'version.txt'):
+                                 'build-packages.tsv', 'SHA256SUMS', 'version.txt',
+                                 'chrony-4.9.tar.gz', 'chrony-4.9.tar.gz.asc', 'upstream-provenance.json'):
                         (package / name).write_bytes(('fixture:' + name).encode())
                 return ''
 
@@ -142,7 +153,17 @@ class RequirementOneIntegration(unittest.TestCase):
                 assembly.package_protected_utc(image, ROOT, work)
             target = image / 'usr/share/luma-os/utc'
             self.assertEqual((target / 'source/chrony-4.9.tar.gz').read_bytes(),
-                             (inputs / 'chrony-4.9.tar.gz').read_bytes())
+                             b'fixture:chrony-4.9.tar.gz')
+            self.assertNotEqual((target / 'source/chrony-4.9.tar.gz').read_bytes(),
+                                (inputs / 'chrony-4.9.tar.gz').read_bytes())
+            self.assertEqual((target / 'upstream-provenance.json').read_bytes(),
+                             b'fixture:upstream-provenance.json')
+            self.assertEqual((target / 'source/chrony-4.9.provenance.json').read_bytes(),
+                             (target / 'upstream-provenance.json').read_bytes())
+            self.assertEqual((target / 'source/chrony-4.9.tar.gz.asc').read_bytes(),
+                             b'fixture:chrony-4.9.tar.gz.asc')
+            self.assertEqual((target / 'source/upstream-signing-key.asc').read_bytes(),
+                             (IMAGE / 'utc/upstream-signing-key.asc').read_bytes())
             self.assertEqual((image / 'usr/libexec/luma-os/chronyd').read_bytes(), b'fixture:chronyd')
             self.assertEqual((target / 'source/chrony_hook.c').read_bytes(),
                              (IMAGE / 'utc/chrony_hook.c').read_bytes())

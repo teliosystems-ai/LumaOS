@@ -16,6 +16,8 @@ use std::os::unix::fs::{FileTypeExt, MetadataExt, OpenOptionsExt};
 use std::os::unix::net::UnixDatagram;
 use std::path::{Component, Path, PathBuf};
 use std::time::{Duration, Instant};
+#[path = "utc_runtime/release.rs"]
+mod release;
 
 pub(crate) const PRODUCER_ID: u32 = 987;
 const MANIFEST: &str = "/usr/share/luma-os/utc/runtime.json";
@@ -23,7 +25,7 @@ const DIRECTORY: &str = "/run/luma-utc";
 const SOCKET_NAME: &str = "measurements.sock";
 const EXECUTABLE: &str = "/usr/libexec/luma-os/chronyd";
 const CONFIGURATION: &str = "/usr/share/luma-os/utc/chrony.conf";
-const REQUIRED: [(&str, &str); 6] = [
+const REQUIRED: [(&str, &str); 8] = [
     ("executable", EXECUTABLE),
     ("configuration", CONFIGURATION),
     ("certificates", "/usr/share/luma-os/utc/ca-certificates.crt"),
@@ -33,6 +35,11 @@ const REQUIRED: [(&str, &str); 6] = [
         "/usr/lib/systemd/system/luma-utc-producer.service",
     ),
     ("confinement", "/etc/apparmor.d/luma-utc-producer"),
+    (
+        "provenance",
+        "/usr/share/luma-os/utc/upstream-provenance.json",
+    ),
+    ("source_inputs", "/usr/share/luma-os/utc/source-inputs.json"),
 ];
 const MAX_MANIFEST: u64 = 32 * 1024;
 const MAX_FILE: u64 = 64 * 1024 * 1024;
@@ -377,6 +384,20 @@ mod tests {
         fn drop(&mut self) {
             fs::remove_dir_all(&self.0).unwrap();
         }
+    }
+
+    #[test]
+    fn legacy_unsigned_manifest_and_missing_dependency_provenance_roles_refuse() {
+        for role in ["provenance", "source_inputs"] {
+            let mut missing = manifest();
+            missing.files.retain(|artifact| artifact.role != role);
+            assert!(missing.validate().is_err());
+        }
+        let mut legacy = manifest();
+        legacy
+            .files
+            .retain(|artifact| !matches!(artifact.role.as_str(), "provenance" | "source_inputs"));
+        assert!(legacy.validate().is_err());
     }
 
     #[test]
@@ -864,6 +885,9 @@ impl Deployment {
                 return Err(
                     "UTC installed source configuration differs from compiled approval".into(),
                 );
+            }
+            if matches!(artifact.role.as_str(), "provenance" | "source_inputs") {
+                release::validate(&artifact.role, &pin.bytes(MAX_MANIFEST)?)?;
             }
             files.insert(artifact.path, (artifact.role, pin));
         }

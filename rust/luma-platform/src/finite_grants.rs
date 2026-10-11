@@ -119,7 +119,13 @@ impl Selector {
                 )
                 | (Kind::Model, Action::Infer)
                 | (Kind::Worker, Action::StartWorker | Action::StopWorker)
-                | (Kind::Resource, Action::AcquireResource | Action::Retain | Action::ProvisionResource | Action::RecoverResource)
+                | (
+                    Kind::Resource,
+                    Action::AcquireResource
+                        | Action::Retain
+                        | Action::ProvisionResource
+                        | Action::RecoverResource
+                )
         )
     }
 }

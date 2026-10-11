@@ -28,6 +28,9 @@ const MAX_EVENTS: usize = MAX_RUNS * 130;
 const MAX_OBJECTS: usize = 1024;
 const MAX_BYTES: u64 = 128 * 1024 * 1024;
 const MAX_OBJECT: u64 = 2 * 1024 * 1024;
+#[path = "workflow_schedule.rs"]
+mod schedule;
+pub(crate) use schedule::command as schedule_command;
 const SCHEMA: &[&str] = &[
     "CREATE TABLE identity (id INTEGER PRIMARY KEY CHECK(id=1), installation TEXT NOT NULL CHECK(length(installation)=64)) STRICT",
     "CREATE TABLE runs (request_id TEXT PRIMARY KEY, plan TEXT NOT NULL) STRICT",
@@ -319,23 +322,41 @@ impl Plan {
             &owner.principal,
             self.proposal.history_epoch.unwrap_or(0),
         )?;
-        if boundary.subject()? != owner.principal
-            || boundary.subject_generation()? != owner.generation
-            || io::installation()? != self.installation
-            || crate::resource_manager::storage_device(Path::new("/var"))? != self.storage_device
+        let graph = Executable::installed()?;
+        self.execution_binding(
+            &io::installation()?,
+            &boundary.subject()?,
+            boundary.subject_generation()?,
+            &crate::resource_manager::storage_device(Path::new("/var"))?,
+            &graph,
+        )?;
+        boundary.check()
+    }
+    fn execution_binding(
+        &self,
+        installation: &str,
+        principal: &str,
+        generation: u64,
+        storage_device: &str,
+        graph: &Executable,
+    ) -> Result<()> {
+        let owner = self.owner()?;
+        if principal != owner.principal
+            || generation != owner.generation
+            || installation != self.installation
+            || storage_device != self.storage_device
         {
             return Err(
                 "DAG principal, installation or physical storage generation changed".into(),
             );
         }
-        let graph = Executable::installed()?;
         if graph.sha256 != self.proposal.workflow_sha256
             || graph.graph != self.graph
             || graph.order != self.order
         {
             return Err("DAG signed graph changed; saved checkpoints confer no authority".into());
         }
-        boundary.check()
+        Ok(())
     }
     fn authorize(&self, boundary: &mut crate::admin_governance::GrantBoundary<'_>) -> Result<()> {
         self.authorize_base(boundary)?;
@@ -1705,6 +1726,153 @@ mod tests {
         }
     }
     #[test]
+    fn deployment_changes_preserve_old_evidence_without_reissuing_execution_authority() {
+        let fixture = Fixture::new("deployment-fences");
+        fixture.prepare();
+        let graph = fixture.plan.validate(&fixture.plan.installation).unwrap();
+        let original = serde_json::to_vec(&fixture.plan).unwrap();
+        let principal = &fixture.plan.owner().unwrap().principal;
+        let binding =
+            |installation: &str, owner: &str, generation: u64, device: &str, graph: &Executable| {
+                fixture
+                    .plan
+                    .execution_binding(installation, owner, generation, device, graph)
+            };
+        assert!(binding(&fixture.plan.installation, principal, 1, "1:0", &graph).is_err());
+        assert!(binding(&fixture.plan.installation, principal, 2, "253:0", &graph).is_err());
+        assert!(binding(
+            &fixture.plan.installation,
+            &"f".repeat(64),
+            1,
+            "253:0",
+            &graph
+        )
+        .is_err());
+        assert!(binding(&"f".repeat(64), principal, 1, "253:0", &graph).is_err());
+        let mut changed_graph = fixture.plan.validate(&fixture.plan.installation).unwrap();
+        changed_graph.graph.graph_id = "other-signed-release".into();
+        assert!(binding(
+            &fixture.plan.installation,
+            principal,
+            1,
+            "253:0",
+            &changed_graph
+        )
+        .is_err());
+        let mut changed_bytes = fixture.plan.validate(&fixture.plan.installation).unwrap();
+        changed_bytes.sha256 = "e".repeat(64);
+        assert!(binding(
+            &fixture.plan.installation,
+            principal,
+            1,
+            "253:0",
+            &changed_bytes
+        )
+        .is_err());
+        let mut changed_order = fixture.plan.validate(&fixture.plan.installation).unwrap();
+        changed_order.order.reverse();
+        assert!(binding(
+            &fixture.plan.installation,
+            principal,
+            1,
+            "253:0",
+            &changed_order
+        )
+        .is_err());
+        assert!(binding(&fixture.plan.installation, principal, 1, "253:0", &graph).is_ok());
+        assert_eq!(serde_json::to_vec(&fixture.plan).unwrap(), original);
+        assert_eq!(fixture.open().load("branch-run").unwrap().cursor, 0);
+    }
+    #[test]
+    fn incompatible_schema_is_not_auto_migrated_and_pending_content_is_retained() {
+        let fixture = Fixture::new("schema-fences");
+        fixture.prepare();
+        let opaque = "e".repeat(64);
+        let store = fixture.open();
+        io::write_member(
+            &store.pending,
+            &opaque,
+            b"unacknowledged retained input",
+            0o400,
+        )
+        .unwrap();
+        let plans = store
+            .db
+            .query("SELECT plan FROM runs", &[], MAX_RUNS)
+            .unwrap();
+        let events = store
+            .db
+            .query("SELECT canonical FROM events", &[], MAX_EVENTS)
+            .unwrap();
+        store.db.exec("PRAGMA user_version=2;").unwrap();
+        drop(store);
+        assert!(Store::open(&fixture.root, &fixture.plan.installation).is_err());
+        let db = Connection::open(&fixture.root.join("metadata.sqlite3")).unwrap();
+        assert_eq!(
+            db.query("PRAGMA user_version", &[], 1).unwrap(),
+            [vec!["2".to_owned()]]
+        );
+        assert_eq!(
+            db.query("SELECT plan FROM runs", &[], MAX_RUNS).unwrap(),
+            plans
+        );
+        assert_eq!(
+            db.query("SELECT canonical FROM events", &[], MAX_EVENTS)
+                .unwrap(),
+            events
+        );
+        let root = scoped_read::open_directory(&fixture.root).unwrap();
+        let pending = io::child_directory(&root, "pending").unwrap();
+        assert_eq!(
+            io::read_member(&pending, &opaque, MAX_OBJECT).unwrap(),
+            b"unacknowledged retained input"
+        );
+        drop(pending);
+        drop(root);
+        drop(db);
+        let mut unsupported = fixture.plan.clone();
+        unsupported.schema_version = 2;
+        assert!(unsupported.validate(&fixture.plan.installation).is_err());
+        let mut unsupported_proposal = fixture.plan.clone();
+        unsupported_proposal.proposal.schema_version = 2;
+        assert!(unsupported_proposal
+            .validate(&fixture.plan.installation)
+            .is_err());
+    }
+    #[test]
+    fn schedule_fences_stale_terminal_and_uncertain_reviews_without_redispatch() {
+        let fixture = Fixture::new("schedule-reviews");
+        fixture.prepare();
+        let store = fixture.open();
+        let run = store.load("branch-run").unwrap();
+        let review = hash(&(&run.plan, &run.event)).unwrap();
+        assert!(schedule_review(&run, &review).is_ok());
+        assert!(schedule_review(&run, &"e".repeat(64)).is_err());
+        let mut terminal = store.load("branch-run").unwrap();
+        terminal.cursor = terminal.plan.order.len();
+        assert!(schedule_review(
+            &terminal,
+            &hash(&(&terminal.plan, &terminal.event)).unwrap()
+        )
+        .is_err());
+        let mut cancelled = store.load("branch-run").unwrap();
+        cancelled.event.phase = Phase::Cancelled;
+        assert!(schedule_review(
+            &cancelled,
+            &hash(&(&cancelled.plan, &cancelled.event)).unwrap()
+        )
+        .is_err());
+        let mut uncertain = store.load("branch-run").unwrap();
+        uncertain.event.phase = Phase::Applying;
+        assert!(schedule_review(
+            &uncertain,
+            &hash(&(&uncertain.plan, &uncertain.event)).unwrap()
+        )
+        .is_err());
+        assert_eq!(store.load("branch-run").unwrap().event, run.event);
+        assert_eq!(store.load("branch-run").unwrap().cursor, 0);
+    }
+    #[test]
     fn retired_dag_epoch_requires_new_execute_scope_and_disjoint_artifact_effects() {
         let fixture = Fixture::new("retired-epoch");
         let mut plan = fixture.plan.clone();
@@ -2158,8 +2326,21 @@ pub(crate) fn advance(args: &[String]) -> Result<()> {
         );
     }
     let grants: BTreeMap<String, String> = snapshot(&args[2])?;
+    let result = advance_reviewed(args, grants, false)?;
+    println!("{result}");
+    Ok(())
+}
+
+fn advance_reviewed(
+    args: &[String],
+    grants: BTreeMap<String, String>,
+    scheduled: bool,
+) -> Result<serde_json::Value> {
     let store = login_store(&args[1])?;
     let run = store.load(&args[3])?;
+    if scheduled {
+        schedule_review(&run, &args[4])?;
+    }
     if run.event.phase == Phase::Cancelled {
         return Err("cancelled DAG cannot execute".into());
     }
@@ -2179,10 +2360,10 @@ pub(crate) fn advance(args: &[String]) -> Result<()> {
             }
             let mut result = store.status(&args[3])?;
             result["replayed"] = true.into();
+            result["checkpoint_transitions"] = 0.into();
             Ok(result)
         })?;
-        println!("{result}");
-        return Ok(());
+        return Ok(result);
     }
     if run.cursor == run.plan.order.len() {
         let result = crate::admin_governance::with_grants(&args[1], &uses, |boundary| {
@@ -2190,10 +2371,11 @@ pub(crate) fn advance(args: &[String]) -> Result<()> {
             if hash(&(&run.plan, &run.event))? != args[4] {
                 return Err("completed DAG review changed".into());
             }
-            store.status(&args[3])
+            let mut result = store.status(&args[3])?;
+            result["checkpoint_transitions"] = 0.into();
+            Ok(result)
         })?;
-        println!("{result}");
-        return Ok(());
+        return Ok(result);
     }
     let graph = run.plan.validate(&run.plan.installation)?;
     let node = graph.node(&run.plan.order[run.cursor])?;
@@ -2429,9 +2611,25 @@ pub(crate) fn advance(args: &[String]) -> Result<()> {
             }
         })?;
         boundary.effect_complete(pending, &hash(&next)?)?;
-        store.status(&args[3])
+        let mut result = store.status(&args[3])?;
+        result["checkpoint_transitions"] =
+            if node.kind == Kind::ArtifactWrite && run.event.phase != Phase::Applying {
+                2.into()
+            } else {
+                1.into()
+            };
+        Ok(result)
     })?;
-    println!("{result}");
+    Ok(result)
+}
+
+fn schedule_review(run: &Run, review: &str) -> Result<()> {
+    if run.cursor == run.plan.order.len()
+        || matches!(run.event.phase, Phase::Cancelled | Phase::Applying)
+        || hash(&(&run.plan, &run.event))? != review
+    {
+        return Err("scheduler requires an exact current nonterminal checkpoint without publication uncertainty".into());
+    }
     Ok(())
 }
 

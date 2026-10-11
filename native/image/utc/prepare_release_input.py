@@ -2,12 +2,17 @@
 """Retrieve the exact independently pinned UTC candidate without replacing inputs."""
 import argparse
 import hashlib
+import importlib.util
 import json
 import os
 from pathlib import Path
-import stat
 import urllib.parse
 import urllib.request
+
+_spec = importlib.util.spec_from_file_location('luma_fixed_utc_release_verifier',
+                                               Path(__file__).resolve().with_name('verify_release.py'))
+verifier = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(verifier)
 
 URL = 'https://chrony-project.org/releases/chrony-4.9.tar.gz'
 SHA256 = '4924c6f530105bcd5b9e9e33c48a2ae1bfd889222c8480bc41601110efc864d0'
@@ -23,18 +28,17 @@ class SameOriginHTTPS(urllib.request.HTTPRedirectHandler):
 
 
 def prepare(output, cached=None):
-    output = output.resolve(strict=True)
     if not output.is_dir() or output.is_symlink():
         raise ValueError('UTC context must already be a protected build directory')
+    output = output.resolve(strict=True)
     target = output / 'chrony-4.9.tar.gz'
+    signature = output / 'chrony-4.9.tar.gz.asc'
     provenance = output / 'chrony-4.9.provenance.json'
-    if target.exists() or target.is_symlink() or provenance.exists() or provenance.is_symlink():
+    if any(path.exists() or path.is_symlink() for path in (target, signature, provenance)):
         raise ValueError('UTC dependency inputs must be new; preserve any existing evidence')
     if cached is not None:
-        m = cached.lstat()
-        if not stat.S_ISREG(m.st_mode) or not 0 < m.st_size <= LIMIT:
-            raise ValueError('cached UTC dependency is not bounded regular data')
-        source = cached.open('rb')
+        import io
+        source = io.BytesIO(verifier.bounded(cached, LIMIT))
     else:
         opener = urllib.request.build_opener(SameOriginHTTPS())
         source = opener.open(urllib.request.Request(URL, headers={'User-Agent': 'LumaOS-reviewed-UTC-builder/1'}), timeout=30)
@@ -56,11 +60,13 @@ def prepare(output, cached=None):
         os.fsync(file.fileno())
     if size == 0 or digest.hexdigest() != SHA256:
         raise ValueError('UTC dependency archive differs from independently retained pin')
-    record = {'schema_version': 1, 'upstream': 'chrony', 'version': '4.9', 'url': URL,
-              'sha256': SHA256, 'bytes': size,
-              'source_review': 'fixed-provider-NTS-good-sample-hook-and-closed-seccomp-candidate',
-              'qualification': 'native-image-network-clock-and-confinement-testing-required',
-              'signature_verified': False}
+    detached = verifier.bounded(Path(__file__).resolve().with_name('chrony-4.9.tar.gz.asc'),
+                                verifier.SIGNATURE_LIMIT)
+    with signature.open('xb') as file:
+        file.write(detached)
+        file.flush()
+        os.fsync(file.fileno())
+    record = verifier.verify(target)
     with provenance.open('x', encoding='utf-8', newline='\n') as file:
         json.dump(record, file, sort_keys=True, indent=2)
         file.write('\n')

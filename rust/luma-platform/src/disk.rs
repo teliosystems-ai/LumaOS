@@ -248,7 +248,14 @@ impl Disk {
         self.recheck()
     }
 
-    pub fn write_artifact(&self, source: &Path, partition: u8, bytes: u64) -> Result<()> {
+    pub(crate) fn write_artifact_guarded(
+        &self,
+        source: &Path,
+        partition: u8,
+        bytes: u64,
+        guard: &mut impl FnMut() -> Result<()>,
+    ) -> Result<()> {
+        guard()?;
         self.recheck()?;
         let path = self.partition(partition)?;
         let size: u64 = command(
@@ -268,25 +275,54 @@ impl Disk {
             .write(true)
             .custom_flags(libc::O_EXCL | libc::O_NOFOLLOW)
             .open(&path)?;
-        let copied = std::io::copy(&mut input, &mut target)?;
-        if copied != bytes {
-            return Err("short artifact write".into());
-        }
+        copy_bounded_guarded(&mut input, &mut target, bytes, guard)?;
         target.flush()?;
         target.sync_all()?;
+        guard()?;
         // Full read-back against the verified private source before publishing boot selection.
         use sha2::{Digest, Sha256};
         let mut source = File::open(source)?;
         let mut target = File::open(path)?.take(bytes);
         let mut a = Sha256::new();
         let mut b = Sha256::new();
-        std::io::copy(&mut source, &mut a)?;
-        std::io::copy(&mut target, &mut b)?;
+        let mut buffer = vec![0u8; 1024 * 1024];
+        let mut remaining = bytes;
+        while remaining > 0 {
+            guard()?;
+            let count = buffer.len().min(remaining as usize);
+            source.read_exact(&mut buffer[..count])?;
+            guard()?;
+            a.update(&buffer[..count]);
+            target.read_exact(&mut buffer[..count])?;
+            guard()?;
+            b.update(&buffer[..count]);
+            remaining -= count as u64;
+        }
         if a.finalize() != b.finalize() {
             return Err("artifact read-back mismatch".into());
         }
         Ok(())
     }
+}
+
+fn copy_bounded_guarded(
+    input: &mut impl Read,
+    target: &mut impl Write,
+    bytes: u64,
+    guard: &mut impl FnMut() -> Result<()>,
+) -> Result<()> {
+    let mut buffer = vec![0u8; 1024 * 1024];
+    let mut remaining = bytes;
+    while remaining > 0 {
+        guard()?;
+        let count = buffer.len().min(remaining as usize);
+        input.read_exact(&mut buffer[..count])?;
+        guard()?;
+        target.write_all(&buffer[..count])?;
+        guard()?;
+        remaining -= count as u64;
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -307,5 +343,52 @@ mod tests {
         for bad in ["/dev/sda", "/dev/disk/by-id/../../sda", "/", "*"] {
             assert!(Disk::open(bad, false).is_err());
         }
+    }
+    #[test]
+    fn bounded_copy_guard_checks_before_and_after_every_io() {
+        let bytes = vec![7u8; 2 * 1024 * 1024 + 17];
+        let mut input = std::io::Cursor::new(&bytes);
+        let mut output = Vec::new();
+        let mut checks = 0;
+        copy_bounded_guarded(&mut input, &mut output, bytes.len() as u64, &mut || {
+            checks += 1;
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(output, bytes);
+        assert_eq!(checks, 9);
+    }
+    #[test]
+    fn revoked_copy_stops_before_next_effect_and_preserves_partial_bytes() {
+        let bytes = vec![7u8; 3 * 1024 * 1024];
+        for stop in [1, 2, 3, 4, 5, 6] {
+            let mut input = std::io::Cursor::new(&bytes);
+            let mut output = Vec::new();
+            let mut checks = 0;
+            let result =
+                copy_bounded_guarded(&mut input, &mut output, bytes.len() as u64, &mut || {
+                    checks += 1;
+                    if checks == stop {
+                        Err("revoked".into())
+                    } else {
+                        Ok(())
+                    }
+                });
+            assert!(result.is_err());
+            assert_eq!(checks, stop);
+            let expected = match stop {
+                1 | 2 => 0,
+                3 | 4 | 5 => 1024 * 1024,
+                _ => 2 * 1024 * 1024,
+            };
+            assert_eq!(output.len(), expected);
+        }
+    }
+    #[test]
+    fn short_bounded_input_never_publishes_success() {
+        let mut input = std::io::Cursor::new(vec![1u8; 17]);
+        let mut output = Vec::new();
+        assert!(copy_bounded_guarded(&mut input, &mut output, 1024, &mut || Ok(())).is_err());
+        assert!(output.is_empty());
     }
 }

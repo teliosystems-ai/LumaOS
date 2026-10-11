@@ -1926,6 +1926,129 @@ pub(crate) struct HistoryBinding {
     restart_count: u32,
 }
 
+/// Read-only current public release authority. This is not a human session or
+/// a transferable authorization receipt; every updater boundary reconstructs
+/// and compares it against the hardware-selected Admin journal.
+pub(crate) fn release_authority() -> Result<(
+    Option<crate::release_trust::State>,
+    crate::utc_bounds::Interval,
+)> {
+    release_authority_optional()?
+        .ok_or_else(|| "release trust is not yet enrolled in the Admin checkpoint".into())
+}
+
+pub(crate) fn release_authority_optional() -> Result<
+    Option<(
+        Option<crate::release_trust::State>,
+        crate::utc_bounds::Interval,
+    )>,
+> {
+    let expected = release_state_optional()?;
+    if expected.is_none() {
+        return Ok(None);
+    }
+    let directory = Path::new(DIRECTORY);
+    let mut store = Store::open(
+        tpm::LocalAnchor::installed()?,
+        &directory.join("journal.json"),
+    )?;
+    let first = store.snapshot()?;
+    let context = Context::load_at(
+        directory,
+        &first.deployment,
+        Path::new(crate::principal::REGISTRY),
+    )?;
+    let catalog = context.events(&first, None)?.0;
+    if catalog.release != expected {
+        return Err("release authority changed before time projection".into());
+    }
+    let history = HistoryReader::new(&mut store, directory).read()?;
+    let mut client = crate::utc_provider::Client::installed()?;
+    client.current(&history)?;
+    history.recheck(&mut HistoryReader::new(&mut store, directory))?;
+    let last = store.snapshot()?;
+    last.clock.elapsed_since(first.clock)?;
+    if first.head != last.head
+        || first.deployment != last.deployment
+        || context.events(&last, None)?.0 != catalog
+    {
+        return Err("release authority changed during current verification".into());
+    }
+    let interval = client.current(&history)?.interval();
+    Ok(Some((catalog.release, interval)))
+}
+
+/// Hardware-fresh public state replay without a UTC projection. This permits
+/// already acknowledged manual operation and exact retained fallback when
+/// networks/keeper are unavailable; it cannot admit a new release effect.
+pub(crate) fn release_state_optional() -> Result<Option<crate::release_trust::State>> {
+    crate::require_root()?;
+    platform::require_installed()?;
+    let directory = Path::new(DIRECTORY);
+    match fs::symlink_metadata(directory.join("anchor.json")) {
+        Ok(_) => (),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            let retained = match fs::read_dir(directory) {
+                Ok(mut entries) => entries.next().transpose()?.is_some(),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
+                Err(error) => return Err(error.into()),
+            } || directory.with_file_name("admin.parent-intent").exists()
+                || directory
+                    .with_file_name("admin.enrollment-pending")
+                    .exists();
+            let (parent, nv, _) = tpm::enrollment_handles(None)?;
+            require_unenrolled_release_fallback(retained, parent || nv)?;
+            return Ok(None);
+        }
+        Err(error) => return Err(error.into()),
+    }
+    let mut store = Store::open(
+        tpm::LocalAnchor::installed()?,
+        &directory.join("journal.json"),
+    )?;
+    let first = store.snapshot()?;
+    let context = Context::load_at(
+        directory,
+        &first.deployment,
+        Path::new(crate::principal::REGISTRY),
+    )?;
+    if !context.state(&first, None)?.1 {
+        return Ok(None);
+    }
+    let catalog = context.events(&first, None)?.0;
+    if catalog.release.is_none() {
+        return Ok(None);
+    }
+    let last = store.snapshot()?;
+    last.clock.elapsed_since(first.clock)?;
+    if first.head != last.head
+        || first.deployment != last.deployment
+        || context.events(&last, None)?.0 != catalog
+    {
+        return Err("release authority changed during current verification".into());
+    }
+    Ok(catalog.release)
+}
+
+fn require_unenrolled_release_fallback(retained: bool, occupied: bool) -> Result<()> {
+    if retained || occupied {
+        return Err("missing release/Admin anchor with retained enrollment or occupied TPM; no laboratory static-key downgrade".into());
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod release_anchor_tests {
+    use super::*;
+    #[test]
+    fn deleted_anchor_cannot_downgrade_any_retained_or_hardware_selected_enrollment() {
+        for (retained, occupied) in [(true, false), (false, true), (true, true)] {
+            assert!(require_unenrolled_release_fallback(retained, occupied).is_err());
+        }
+        require_unenrolled_release_fallback(false, false).unwrap();
+    }
+}
+
 #[cfg_attr(not(test), allow(dead_code))]
 impl HistoryBinding {
     pub(crate) fn floor_ms(&self) -> i64 {
@@ -3004,6 +3127,46 @@ struct GrantTime {
     not_before_ms: i64,
     expires_ms: i64,
 }
+
+struct ReleaseTime {
+    client: crate::utc_provider::Client,
+    history: HistoryBinding,
+    state: Option<crate::release_trust::State>,
+    command: Command,
+}
+impl ReleaseTime {
+    fn capture<A: Checkpoint>(
+        store: &mut Store<A>,
+        directory: &Path,
+        request: &str,
+        catalog: &Catalog,
+        command: &Command,
+    ) -> Result<Option<Self>> {
+        if !crate::release_trust::is_command(command) {
+            return Ok(None);
+        }
+        let history = HistoryReader::for_candidate(store, directory, request)?.read()?;
+        let mut value = Self {
+            client: crate::utc_provider::Client::installed()?,
+            history,
+            state: catalog.release.clone(),
+            command: command.clone(),
+        };
+        value.recheck()?;
+        value.history.recheck(&mut HistoryReader::for_candidate(
+            store, directory, request,
+        )?)?;
+        Ok(Some(value))
+    }
+    fn recheck(&mut self) -> Result<()> {
+        let before = self.client.current(&self.history)?.interval();
+        crate::release_trust::check_live(&self.command, &self.state, before)?;
+        // Signature/measurement/health checks can block. Never authorize an
+        // append with the earlier UTC sample after those operations return.
+        let after = self.client.current(&self.history)?.interval();
+        crate::release_trust::check_command_time(&self.command, &self.state, after)
+    }
+}
 impl GrantTime {
     fn capture<A: Checkpoint>(
         store: &mut Store<A>,
@@ -3058,6 +3221,7 @@ struct CatalogAttempt<'s> {
     peer: Option<&'s crate::admin_service::Peer>,
     account_time: std::cell::RefCell<Option<AccountTime>>,
     grant_time: std::cell::RefCell<Option<GrantTime>>,
+    release_time: std::cell::RefCell<Option<ReleaseTime>>,
     actor_aging: std::cell::RefCell<Option<ActorAging>>,
 }
 
@@ -3110,6 +3274,9 @@ impl<'s> CatalogAttempt<'s> {
                         grant_time: std::cell::RefCell::new(GrantTime::capture(
                             store, directory, request, command,
                         )?),
+                        release_time: std::cell::RefCell::new(ReleaseTime::capture(
+                            store, directory, request, &catalog, command,
+                        )?),
                         account_time: std::cell::RefCell::new(
                             match account_day(&catalog, command) {
                                 Some(day) => {
@@ -3137,6 +3304,9 @@ impl<'s> CatalogAttempt<'s> {
             aging.recheck()?;
         }
         if let Some(time) = &mut *self.grant_time.borrow_mut() {
+            time.recheck()?;
+        }
+        if let Some(time) = &mut *self.release_time.borrow_mut() {
             time.recheck()?;
         }
         if let Some(time) = &mut *self.account_time.borrow_mut() {

@@ -33,7 +33,7 @@ def executed_tests(name, output):
         if not summaries or counts['passed'] + counts['failed'] == 0:
             raise ValueError('Rust lane did not execute any recognized tests')
         return counts
-    if name == 'native-source-tests':
+    if name in ('native-source-tests', 'utc-release-authentication'):
         summaries = re.findall(r'^Ran (\d+) tests? in .+$', output, re.MULTILINE)
         if len(summaries) != 1 or int(summaries[0]) == 0:
             raise ValueError('native lane did not execute a recognized nonempty suite')
@@ -46,6 +46,8 @@ def executed_tests(name, output):
         discovered = int(summaries[0])
         failed = details.get('failures', 0) + details.get('errors', 0)
         skipped = details.get('skipped', 0)
+        if name == 'utc-release-authentication' and any(details.values()):
+            raise ValueError('UTC release authentication requires every test to pass without skips')
         return {'discovered': discovered, 'passed': discovered - failed - skipped
                 - details.get('expected failures', 0) - details.get('unexpected successes', 0),
                 'failed': failed, 'skipped': skipped, **details}
@@ -66,7 +68,13 @@ def main():
                         help='run four independent resource authority cases on fresh software TPMs')
     parser.add_argument('--admin-tpm-fixture', action='store_true',
                         help='regression-test existing-owner Admin enrollment on a fresh software TPM')
+    parser.add_argument('--utc-release-archive', type=Path,
+                        help='run mandatory real upstream signature/source authentication tests')
+    parser.add_argument('--utc-release-build', action='store_true',
+                        help='also build the authenticated NTS/seccomp release without running a daemon')
     args = parser.parse_args()
+    if args.utc_release_build and args.utc_release_archive is None:
+        raise SystemExit('UTC release build requires an explicit authenticated archive')
     filters = ([args.rust_filter] if args.rust_filter else []) + args.extra_rust_filter
     if (args.extra_rust_filter and not args.rust_filter) or len(filters) > 8 \
             or len(set(filters)) != len(filters) \
@@ -131,6 +139,16 @@ def main():
         ('native-source-tests', ['/usr/bin/python3', '-B', '-m', 'unittest', 'discover',
                                  '-s', 'native/tests', '-p', 'test_*.py', '-v'], repository, 600),
     ])
+    if args.utc_release_archive:
+        archive = args.utc_release_archive.resolve(strict=True)
+        cases.append(('utc-release-authentication', ['/usr/bin/python3', '-B',
+                      str(repository / 'native/image/utc/test_release_authentication.py'),
+                      '--archive', str(archive), '--work', str(args.output)], repository, 120))
+        if args.utc_release_build:
+            cases.append(('utc-release-build', ['/bin/bash',
+                          str(repository / 'native/image/utc/build_release.sh'), str(archive),
+                          str(args.output / 'utc-build'), str(args.output / 'utc-package')],
+                          repository, 600))
     if args.pam_fixture:
         environment['CARGO_TARGET_DIR'] = '/cache/target'
         cases.append(('real-pam-fixture', ['/usr/bin/python3', '-B',
@@ -181,6 +199,8 @@ def main():
               'real_pam_fixture_requested': args.pam_fixture,
               'resource_software_tpm_requested': args.resource_tpm_fixture,
               'admin_software_tpm_requested': args.admin_tpm_fixture,
+              'utc_release_authentication_requested': args.utc_release_archive is not None,
+              'utc_release_build_requested': args.utc_release_build,
               'chrony_fixture': 'release-4.9-pinned' if environment.get('LUMA_CHRONY_RELEASE_UPSTREAM')
                                  else ('commit-pinned' if environment.get('LUMA_CHRONY_UPSTREAM')
                                        else 'not-supplied'),

@@ -4,7 +4,6 @@ import importlib.util
 from pathlib import Path
 import tempfile
 import unittest
-from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[2]
 ASSETS = ROOT / 'native/image/utc'
@@ -26,18 +25,52 @@ class UtcDeployment(unittest.TestCase):
             cached.write_bytes(b'verified fixture archive')
             context = base / 'context'
             context.mkdir()
-            with patch.object(acquire, 'SHA256', hashlib.sha256(cached.read_bytes()).hexdigest()):
+            with self.assertRaises(ValueError):
                 acquire.prepare(context, cached)
-                self.assertEqual((context / 'chrony-4.9.tar.gz').read_bytes(), cached.read_bytes())
-                self.assertIn('"signature_verified": false', (context / 'chrony-4.9.provenance.json').read_text())
-                with self.assertRaises(ValueError):
-                    acquire.prepare(context, cached)
+            self.assertEqual((context / 'chrony-4.9.tar.gz').read_bytes(), cached.read_bytes())
+            self.assertFalse((context / 'chrony-4.9.provenance.json').exists())
+            with self.assertRaises(ValueError):
+                acquire.prepare(context, cached)
             invalid = base / 'invalid'
             invalid.mkdir()
             with self.assertRaises(ValueError):
                 acquire.prepare(invalid, cached)
             self.assertTrue((invalid / 'chrony-4.9.tar.gz').exists())
             self.assertFalse((invalid / 'chrony-4.9.provenance.json').exists())
+
+    def test_authentication_reverifies_actual_signature_and_preserves_fixed_key_selection(self):
+        verifier = module('verify_release')
+        self.assertEqual(hashlib.sha256((ASSETS / 'upstream-signing-key.asc').read_bytes()).hexdigest(),
+                         verifier.KEY_SHA256)
+        self.assertEqual(hashlib.sha256((ASSETS / 'chrony-4.9.tar.gz.asc').read_bytes()).hexdigest(),
+                         verifier.SIGNATURE_SHA256)
+        self.assertEqual(verifier.FINGERPRINT, '8F375C7E8D0EE125A3D3BD51537E2B76F7680DAC')
+        script = (ASSETS / 'build_release.sh').read_text()
+        self.assertLess(script.index('verify_release.py'), script.index('tar --no-same-owner'))
+        self.assertIn('upstream-provenance.json', script)
+        self.assertIn('--snapshot "$build/authenticated"', script)
+        self.assertIn('archive="$build/authenticated/chrony-4.9.tar.gz"', script)
+        self.assertIn('install -m 0644 "$archive" "$package/chrony-4.9.tar.gz"', script)
+        acquire = (ASSETS / 'prepare_release_input.py').read_text()
+        self.assertIn('verifier.verify(target)', acquire)
+        self.assertNotIn("'signature_verified': False", acquire)
+        self.assertLess(acquire.index('output.is_symlink()'), acquire.index('output.resolve(strict=True)'))
+
+    def test_image_and_runtime_require_authentication_and_source_review_records(self):
+        package = module('package_runtime')
+        runtime = (ROOT / 'rust/luma-platform/src/utc_runtime.rs').read_text()
+        for role, path in [('provenance', '/usr/share/luma-os/utc/upstream-provenance.json'),
+                           ('source_inputs', '/usr/share/luma-os/utc/source-inputs.json')]:
+            self.assertEqual(package.REQUIRED[role], path)
+            self.assertIn('"' + role + '"', runtime)
+            self.assertIn(path, runtime)
+        packaging = (ASSETS / 'package_runtime.py').read_text()
+        self.assertLess(packaging.index('verifier.verified_provenance('), packaging.index("['chroot'"))
+        self.assertIn('release::validate(&artifact.role', runtime)
+        release = (ROOT / 'rust/luma-platform/src/utc_runtime/release.rs').read_text()
+        self.assertIn('deny_unknown_fields', release)
+        self.assertIn('reviewed-release.json', release)
+        self.assertIn('reviewed-source-inputs.json', release)
 
     def test_release_candidate_never_promotes_fixture_or_omits_confinement(self):
         prepare = module('prepare_chrony')
@@ -57,7 +90,7 @@ class UtcDeployment(unittest.TestCase):
     def test_release_builder_requires_feature_detection_tool_before_workspace_creation(self):
         script = (ASSETS / 'build_release.sh').read_text()
         tools = (ROOT / 'native/image/Dockerfile.tools').read_text()
-        self.assertIn('make pkg-config libgnutls28-dev libcap-dev libseccomp-dev', tools)
+        self.assertIn('make pkg-config gpgv libgnutls28-dev libcap-dev libseccomp-dev', tools)
         self.assertLess(script.index('command -v pkg-config'), script.index('mkdir "$build" "$package"'))
         self.assertIn('requires pkg-config for NTS and seccomp detection', script)
         self.assertIn('gcc libc6-dev pkg-config libgnutls28-dev', script)

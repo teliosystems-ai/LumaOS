@@ -35,12 +35,18 @@ evidence. Every row here remains open until its complete implementation exists;
 targeted source checks alone cannot close G2 acceptance.
 
 The [2026-10-10 integrated candidate](evidence/G2_REQUIREMENT1_INTEGRATION_2026-10-10.md)
-adds usable-account/UTC/grant interfaces and principal-bound invoice/export/
-preserving-retention paths. It is not complete generic workflow, destructive
-retention or damaged-authority restoration. Linux compilation is currently
-blocked by Ubuntu WSL launch failure; no C-backed fallback build or unapproved
-WSL shutdown is permitted. Preserve the implementation-first sequence and
-qualify one fully implemented, frozen image rather than a partially closed gate.
+and subsequent Requirement #1 checkpoints add usable-account/UTC/grant
+interfaces, signed typed workflow execution and explicit terminal retention/
+damaged-authority disposition. WSL startup was restored by the owner-approved
+2026-10-10 restart; Linux verification is no longer blocked by that failure.
+The 2026-10-11 parallel work adds bounded reviewed workflow scheduling,
+native OS release trust/update admission and authenticated UTC dependency
+selection. See [release lifecycle and remaining policy decisions](RELEASE_TRUST.md)
+and the current software register for exact verification and incomplete scope.
+Preserve implementation-first delivery: target-mounted governed recovery and
+production installation activation are still software work, not merely native
+testing. The historical table below is a baseline; newer checkpoints supersede
+its already-implemented account, grant, workflow and resource integrations.
 
 | Work package | Required integration before candidate freeze |
 | --- | --- |

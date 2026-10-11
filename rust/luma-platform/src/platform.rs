@@ -317,6 +317,15 @@ fn unlock(device: &Path, readonly: bool) -> Result<Crypt> {
 }
 
 fn install_slots(disk: &Disk, bundle: &VerifiedBundle, slots: &[char]) -> Result<()> {
+    install_slots_guarded(disk, bundle, slots, &mut || Ok(()))
+}
+
+fn install_slots_guarded(
+    disk: &Disk,
+    bundle: &VerifiedBundle,
+    slots: &[char],
+    guard: &mut impl FnMut() -> Result<()>,
+) -> Result<()> {
     for slot in slots {
         println!("Writing and verifying system slot {slot}...");
         let (data, hash) = match slot {
@@ -324,11 +333,17 @@ fn install_slots(disk: &Disk, bundle: &VerifiedBundle, slots: &[char]) -> Result
             'b' => (4, 5),
             _ => return Err("invalid slot".into()),
         };
-        disk.write_artifact(&bundle.path("root.ext4")?, data, bundle.manifest.root_bytes)?;
-        disk.write_artifact(
+        disk.write_artifact_guarded(
+            &bundle.path("root.ext4")?,
+            data,
+            bundle.manifest.root_bytes,
+            guard,
+        )?;
+        disk.write_artifact_guarded(
             &bundle.path("root.verity")?,
             hash,
             bundle.manifest.hash_bytes,
+            guard,
         )?;
         command(
             "/usr/sbin/veritysetup",
@@ -339,27 +354,43 @@ fn install_slots(disk: &Disk, bundle: &VerifiedBundle, slots: &[char]) -> Result
                 &bundle.manifest.root_hash,
             ],
         )?;
+        guard()?;
     }
     Ok(())
 }
 
 fn publish_efi(esp: &Path, bundle: &VerifiedBundle, slots: &[char], trial: char) -> Result<()> {
+    publish_efi_guarded(esp, bundle, slots, trial, &mut || Ok(()))
+}
+
+fn publish_efi_guarded(
+    esp: &Path,
+    bundle: &VerifiedBundle,
+    slots: &[char],
+    trial: char,
+    guard: &mut impl FnMut() -> Result<()>,
+) -> Result<()> {
+    guard()?;
     let linux = esp.join("EFI/Linux");
     fs::create_dir_all(&linux)?;
     let loader = esp.join("EFI/BOOT");
     fs::create_dir_all(&loader)?;
     if !loader.join("BOOTX64.EFI").exists() {
+        guard()?;
         write_atomic(
             &loader.join("BOOTX64.EFI"),
             &fs::read(bundle.path("bootloader.efi")?)?,
             0o600,
         )?;
+        guard()?;
     }
     for slot in slots {
+        guard()?;
         let source = bundle.path(&format!("slot-{slot}.efi"))?;
         let suffix = if *slot == trial { "+3" } else { "" };
         let name = format!("luma-{slot}-{:020}{suffix}.efi", bundle.manifest.sequence);
         write_atomic(&linux.join(&name), &fs::read(source)?, 0o600)?;
+        guard()?;
         // A reused slot no longer contains the old release's root. Remove only
         // our obsolete entries for that exact slot, after publishing its UKI.
         for entry in fs::read_dir(&linux)? {
@@ -371,14 +402,17 @@ fn publish_efi(esp: &Path, bundle: &VerifiedBundle, slots: &[char], trial: char)
                     return Err("unexpected boot entry type".into());
                 }
                 fs::remove_file(entry.path())?;
+                guard()?;
             }
         }
     }
     fs::create_dir_all(esp.join("loader"))?;
     // Firmware receives no automatic key enrollment or boot-order mutation.
     let config = loader_config(trial, bundle.manifest.sequence, true);
+    guard()?;
     write_atomic(&esp.join("loader/loader.conf"), config.as_bytes(), 0o600)?;
     File::open(esp)?.sync_all()?;
+    guard()?;
     Ok(())
 }
 
@@ -1045,16 +1079,295 @@ fn verify_esp(disk: &Disk) -> Result<()> {
     Ok(())
 }
 
+#[derive(Debug, serde::Deserialize, serde::Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+struct RunningIdentity {
+    schema_version: u32,
+    release: String,
+    sequence: u64,
+    environment: String,
+    architecture: String,
+    ubuntu: String,
+    edition: String,
+}
+
+#[cfg(test)]
+mod measured_release_tests {
+    use super::*;
+    fn fixture() -> (RunningIdentity, Manifest, String, String) {
+        let root_bytes = 512 * 1024 * 1024;
+        let hash_bytes = 8 * 1024 * 1024;
+        let manifest = Manifest {
+            schema_version: 1,
+            release: "test-release".into(),
+            sequence: 10,
+            environment: "lab".into(),
+            architecture: "amd64".into(),
+            ubuntu: "24.04".into(),
+            edition: "headless".into(),
+            root_hash: "1".repeat(64),
+            root_bytes,
+            hash_bytes,
+            artifacts: [
+                "root.ext4",
+                "root.verity",
+                "slot-a.efi",
+                "slot-b.efi",
+                "bootloader.efi",
+                "secureboot.cer",
+            ]
+            .iter()
+            .map(|name| bundle::Artifact {
+                name: (*name).into(),
+                bytes: match *name {
+                    "root.ext4" => root_bytes,
+                    "root.verity" => hash_bytes,
+                    _ => 4096,
+                },
+                sha256: "2".repeat(64),
+            })
+            .collect(),
+        };
+        let identity = RunningIdentity {
+            schema_version: 1,
+            release: manifest.release.clone(),
+            sequence: 10,
+            environment: "lab".into(),
+            architecture: "amd64".into(),
+            ubuntu: "24.04".into(),
+            edition: "headless".into(),
+        };
+        let args = format!(
+            "root=/dev/mapper/root ro luma.slot=a luma.mode=installed roothash={}",
+            manifest.root_hash
+        );
+        let table = format!(
+            "0 {} verity 1 8:2 8:3 4096 4096 {} 1 sha256 {} -\n",
+            root_bytes / 512,
+            root_bytes / 4096,
+            manifest.root_hash
+        );
+        (identity, manifest, args, table)
+    }
+    #[test]
+    fn exact_running_metadata_signed_uki_and_actual_verity_geometry_match() {
+        let (identity, manifest, args, table) = fixture();
+        check_identity(&identity, &manifest, &args, &table).unwrap();
+    }
+    #[test]
+    fn reused_release_id_does_not_acknowledge_different_sequence_edition_or_root() {
+        let (mut identity, manifest, args, table) = fixture();
+        identity.sequence += 1;
+        assert!(check_identity(&identity, &manifest, &args, &table).is_err());
+        identity.sequence -= 1;
+        identity.edition = "desktop".into();
+        assert!(check_identity(&identity, &manifest, &args, &table).is_err());
+        let (identity, manifest, args, table) = fixture();
+        assert!(check_identity(
+            &identity,
+            &manifest,
+            &args,
+            &table.replace(&manifest.root_hash, &"3".repeat(64))
+        )
+        .is_err());
+    }
+    #[test]
+    fn ambiguous_kernel_hash_mode_or_slot_and_verity_dimensions_refuse() {
+        let (identity, manifest, args, table) = fixture();
+        for extra in [
+            format!(" roothash={}", manifest.root_hash),
+            " luma.slot=b".into(),
+            " luma.mode=live".into(),
+        ] {
+            assert!(
+                check_identity(&identity, &manifest, &(args.clone() + &extra), &table).is_err()
+            );
+        }
+        for changed in [
+            table.replace("4096 4096", "8192 4096"),
+            table.replace("sha256", "sha512"),
+            table.replace("verity 1", "verity 0"),
+            format!("{table}{table}"),
+        ] {
+            assert!(check_identity(&identity, &manifest, &args, &changed).is_err());
+        }
+    }
+    #[test]
+    fn missing_metadata_or_unknown_fields_cannot_be_migrated_implicitly() {
+        let (identity, _, _, _) = fixture();
+        let bytes = serde_json::to_string(&identity).unwrap();
+        assert!(serde_json::from_str::<RunningIdentity>(&bytes.replacen(
+            "{",
+            "{\"bootstrap_override\":true,",
+            1
+        ))
+        .is_err());
+        assert!(serde_json::from_str::<RunningIdentity>("{}").is_err());
+    }
+}
+
+fn check_governance_identity(
+    identity: &RunningIdentity,
+    manifest: &Manifest,
+    args: &str,
+) -> Result<()> {
+    bundle::validate_manifest(manifest)?;
+    if identity.schema_version != 1
+        || identity.release != manifest.release
+        || identity.sequence != manifest.sequence
+        || identity.environment != manifest.environment
+        || identity.architecture != manifest.architecture
+        || identity.ubuntu != manifest.ubuntu
+        || identity.edition != manifest.edition
+    {
+        return Err("running immutable image identity differs from the signed release".into());
+    }
+    let roots: Vec<_> = args
+        .split_whitespace()
+        .filter_map(|v| v.strip_prefix("roothash="))
+        .collect();
+    let slots: Vec<_> = args
+        .split_whitespace()
+        .filter_map(|v| v.strip_prefix("luma.slot="))
+        .collect();
+    let modes: Vec<_> = args
+        .split_whitespace()
+        .filter_map(|v| v.strip_prefix("luma.mode="))
+        .collect();
+    if roots != [manifest.root_hash.as_str()]
+        || modes != ["installed"]
+        || slots.len() != 1
+        || !matches!(slots[0], "a" | "b")
+    {
+        return Err("signed UKI release hash/mode/slot differs from release intent".into());
+    }
+    Ok(())
+}
+
+fn check_identity(
+    identity: &RunningIdentity,
+    manifest: &Manifest,
+    args: &str,
+    table: &str,
+) -> Result<()> {
+    check_governance_identity(identity, manifest, args)?;
+    let values: Vec<_> = table.split_whitespace().collect();
+    if table.lines().count() != 1
+        || values.len() < 13
+        || values[0] != "0"
+        || values[2] != "verity"
+        || values[3] != "1"
+        || values[6] != "4096"
+        || values[7] != "4096"
+        || values[10] != "sha256"
+        || values[8].parse::<u64>()? != manifest.root_bytes / 4096
+        || values[1].parse::<u64>()? != manifest.root_bytes / 512
+        || values[11] != manifest.root_hash
+    {
+        return Err("actual dm-verity geometry/hash differs from signed UKI and release".into());
+    }
+    Ok(())
+}
+
+/// Confined Admin governance may inspect immutable image metadata and the
+/// kernel-owned signed UKI command line; it cannot perform raw device ioctls.
+/// This is intent governance, never a machine health acknowledgement.
+pub(crate) fn check_governance_manifest(manifest: &Manifest) -> Result<()> {
+    require_installed()?;
+    let identity: RunningIdentity =
+        serde_json::from_slice(&crate::admin_credentials::public_input(
+            Path::new("/usr/share/luma-os/release-identity.json"),
+            4096,
+        )?)?;
+    check_governance_identity(&identity, manifest, &cmdline()?)
+}
+
+pub(crate) fn check_running_manifest(manifest: &Manifest) -> Result<()> {
+    require_installed()?;
+    let identity: RunningIdentity =
+        serde_json::from_slice(&crate::admin_credentials::public_input(
+            Path::new("/usr/share/luma-os/release-identity.json"),
+            4096,
+        )?)?;
+    let args = cmdline()?;
+    let table = command("/usr/sbin/dmsetup", &["table", "root"])?;
+    check_identity(&identity, manifest, &args, &table)?;
+    let slot = running_slot()?;
+    active_root_partition(slot)?;
+    let fields: Vec<_> = table.split_whitespace().collect();
+    for (field, label) in [
+        (4, format!("luma-root-{slot}")),
+        (5, format!("luma-hash-{slot}")),
+    ] {
+        let metadata = fs::metadata(format!("/dev/disk/by-partlabel/{label}"))?;
+        use std::os::unix::fs::FileTypeExt;
+        // These libc helpers only decode the scalar dev_t returned by stat;
+        // they neither dereference a pointer nor access the device.
+        let (major, minor) =
+            unsafe { (libc::major(metadata.rdev()), libc::minor(metadata.rdev())) };
+        if !metadata.file_type().is_block_device() || fields[field] != format!("{major}:{minor}") {
+            return Err("verity devices do not bind the actual selected signed slot".into());
+        }
+    }
+    Ok(())
+}
+
+fn update_operation() -> Result<File> {
+    use std::os::unix::fs::DirBuilderExt;
+    let directory = Path::new("/run/luma-platform-update");
+    match fs::DirBuilder::new().mode(0o700).create(directory) {
+        Ok(()) => (),
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => (),
+        Err(error) => return Err(error.into()),
+    }
+    crate::tpm::exclusive_lock(&directory.join("operation.lock"))
+}
+
 pub fn update(source: &Path) -> Result<()> {
     crate::require_root()?;
+    let _operation = update_operation()?;
     let verified = bundle::verify(source)?;
-    let current: Manifest = serde_json::from_slice(&fs::read("/var/lib/luma-os/installed.json")?)?;
+    let current: Manifest = serde_json::from_slice(&crate::admin_credentials::public_input(
+        Path::new("/var/lib/luma-os/installed.json"),
+        65536,
+    )?)?;
+    bundle::validate_manifest(&current)?;
+    check_running_manifest(&current)?;
+    if verified.manifest.environment != current.environment
+        || verified.manifest.edition != current.edition
+        || verified.manifest.root_bytes != current.root_bytes
+        || verified.manifest.hash_bytes != current.hash_bytes
+    {
+        return Err(
+            "update cannot change environment, edition or physical root/hash geometry".into(),
+        );
+    }
+    let governed = crate::admin_governance::release_authority_optional()?;
+    if let Some((state, interval)) = &governed {
+        let authority = state
+            .as_ref()
+            .ok_or("Admin must publish release trust and admit this exact update")?;
+        crate::release_trust::check_bundle_admission(&verified, authority)?;
+        crate::release_trust::check_effect_time(authority, *interval)?;
+        if authority.acknowledged.as_ref() != Some(&current) {
+            return Err("installed manifest differs from TPM-anchored acknowledged release".into());
+        }
+    } else if current.environment == "production" {
+        return Err("production update requires anchored Admin release authority".into());
+    }
     if verified.manifest.sequence <= current.sequence {
         return Err("update sequence must increase".into());
     }
     let pending = Path::new("/var/lib/luma-os/pending.json");
     if pending.exists() {
-        return Err("an update already requires boot or explicit recovery reconciliation".into());
+        let previous: Manifest =
+            serde_json::from_slice(&crate::admin_credentials::public_input(pending, 65536)?)?;
+        if previous != verified.manifest {
+            return Err(
+                "a different update requires explicit recovery; pending intent cannot be replaced"
+                    .into(),
+            );
+        }
     }
     let slot = if running_slot()? == 'a' { 'b' } else { 'a' };
     let disk = running_disk()?;
@@ -1064,9 +1377,34 @@ pub fn update(source: &Path) -> Result<()> {
         current.release, verified.manifest.release
     );
     disk.confirm("UPDATE")?;
+    if let Some(expected) = &governed {
+        let current = crate::admin_governance::release_authority()?;
+        if current.0 != expected.0 {
+            return Err(
+                "release trust/admission changed while awaiting local disk confirmation".into(),
+            );
+        }
+        crate::release_trust::check_effect_time(
+            current.0.as_ref().ok_or("missing release admission")?,
+            current.1,
+        )?;
+    }
     write_atomic(pending, &serde_json::to_vec(&verified.manifest)?, 0o600)?;
-    install_slots(&disk, &verified, &[slot])?;
-    publish_efi(Path::new("/efi"), &verified, &[slot], slot)?;
+    let mut guard = || {
+        if let Some(expected) = &governed {
+            let current = crate::admin_governance::release_authority()?;
+            if current.0 != expected.0 {
+                return Err("release authority changed during inactive-slot staging; preserve pending evidence".into());
+            }
+            crate::release_trust::check_effect_time(
+                current.0.as_ref().ok_or("missing release admission")?,
+                current.1,
+            )?;
+        }
+        Ok(())
+    };
+    install_slots_guarded(&disk, &verified, &[slot], &mut guard)?;
+    publish_efi_guarded(Path::new("/efi"), &verified, &[slot], slot, &mut guard)?;
     println!("Inactive slot staged for at most three trial boots. Reboot when ready.");
     Ok(())
 }
@@ -1093,6 +1431,33 @@ pub fn recover(args: &[String]) -> Result<()> {
     }
     if matches!(action.as_str(), "repair-a" | "repair-b") && args.len() == 3 {
         let verified = bundle::verify(Path::new(&args[2]))?;
+        if verified.manifest.environment == "production" {
+            return Err("production repair requires target-mounted journal/TPM and recovered protected UTC admission; no media-journal or mutable-manifest fallback".into());
+        }
+        let crypt = unlock(&disk.partition(6)?, true)?;
+        let staging = bundle::private_dir("repair-admission")?;
+        let data = Mount::new(
+            Path::new(&format!("/dev/mapper/{}", crypt.name)),
+            staging.join("data"),
+            "ro,nodev,nosuid,noexec",
+        )?;
+        let target = data.at.join("lib/luma-os");
+        if target.join("admin/bootstrap.json").exists() {
+            return Err("governed target repair requires target-bound TPM/UTC admission; media journal and target installed.json are not authority".into());
+        }
+        let current: Manifest = serde_json::from_slice(&crate::admin_credentials::public_input(
+            &target.join("installed.json"),
+            65536,
+        )?)?;
+        bundle::validate_manifest(&current)?;
+        if current.environment != "lab"
+            || verified.manifest.sequence < current.sequence
+            || current.edition != verified.manifest.edition
+            || current.root_bytes != verified.manifest.root_bytes
+            || current.hash_bytes != verified.manifest.hash_bytes
+        {
+            return Err("laboratory repair cannot lower target release sequence or change target environment/geometry/edition".into());
+        }
         disk.confirm("REPAIR")?;
         let slot = if action == "repair-a" { 'a' } else { 'b' };
         install_slots(&disk, &verified, &[slot])?;
@@ -1145,9 +1510,86 @@ pub fn recover(args: &[String]) -> Result<()> {
 
 pub fn boot_health() -> Result<()> {
     crate::require_root()?;
+    let _operation = update_operation()?;
     if live()? {
         return Err("recovery media cannot acknowledge installed boot health".into());
     }
+    check_essential_health()?;
+    let pending = Path::new("/var/lib/luma-os/pending.json");
+    let mut acknowledged: Manifest =
+        serde_json::from_slice(&crate::admin_credentials::public_input(
+            Path::new("/var/lib/luma-os/installed.json"),
+            65536,
+        )?)?;
+    let mut failed = None;
+    if pending.exists() {
+        let manifest: Manifest =
+            serde_json::from_slice(&crate::admin_credentials::public_input(pending, 65536)?)?;
+        if check_running_manifest(&manifest).is_ok() {
+            acknowledged = manifest;
+        } else {
+            check_running_manifest(&acknowledged)?;
+            failed = Some(manifest);
+        }
+    } else {
+        check_running_manifest(&acknowledged)?;
+    }
+    if let Some(authority) = crate::admin_governance::release_state_optional()? {
+        // The prepared exact intent authorizes machine health confirmation but
+        // never a machine append impersonating the original Admin. Catalog
+        // pending state remains until fresh human reconciliation; its floor
+        // already prevents another lower-sequence installation/update.
+        if let Some(admission) = &authority.pending {
+            if acknowledged == admission.candidate.manifest {
+                let current = crate::admin_governance::release_authority()?;
+                if current.0.as_ref() != Some(&authority) {
+                    return Err(
+                        "release admission changed during candidate health validation".into(),
+                    );
+                }
+                crate::release_trust::check_effect_time(&authority, current.1)?;
+            } else if acknowledged != admission.prior {
+                return Err(
+                    "healthy image is not exact admitted candidate or retained prior".into(),
+                );
+            }
+        } else if authority.acknowledged.as_ref() != Some(&acknowledged) {
+            return Err("healthy image differs from TPM-anchored acknowledged release".into());
+        }
+    } else if acknowledged.environment == "production" {
+        return Err("production health requires anchored release authority".into());
+    }
+    if Path::new(BOOT_COUNT_PATH).exists() {
+        command("/usr/lib/systemd/systemd-bless-boot", &["good"])?;
+    }
+    write_atomic(
+        Path::new("/var/lib/luma-os/installed.json"),
+        &serde_json::to_vec(&acknowledged)?,
+        0o600,
+    )?;
+    if let Some(manifest) = failed {
+        write_atomic(
+            Path::new("/var/lib/luma-os/failed-update.json"),
+            &serde_json::to_vec(&manifest)?,
+            0o600,
+        )?;
+    }
+    write_atomic(
+        Path::new("/efi/loader/loader.conf"),
+        loader_config(running_slot()?, acknowledged.sequence, false).as_bytes(),
+        0o600,
+    )?;
+    if pending.exists() {
+        fs::remove_file(pending)?;
+        File::open("/var/lib/luma-os")?.sync_all()?;
+    }
+    println!("LUMA_BOOT_HEALTH_OK");
+    Ok(())
+}
+
+pub(crate) fn check_essential_health() -> Result<()> {
+    crate::require_root()?;
+    require_installed()?;
     running_slot()?;
     verify_esp(&running_disk()?)?;
     crate::service::security_check()?;
@@ -1177,51 +1619,6 @@ pub fn boot_health() -> Result<()> {
     if fs::read(probe)? != b"durable\n" {
         return Err("data read-back failed".into());
     }
-    let pending = Path::new("/var/lib/luma-os/pending.json");
-    let mut acknowledged: Manifest =
-        serde_json::from_slice(&fs::read("/var/lib/luma-os/installed.json")?)?;
-    let mut failed = None;
-    if pending.exists() {
-        let manifest: Manifest = serde_json::from_slice(&fs::read(pending)?)?;
-        let installed_release = fs::read_to_string("/usr/share/luma-os/release-id")?;
-        if installed_release.trim() == manifest.release {
-            acknowledged = manifest;
-        } else {
-            if installed_release.trim() != acknowledged.release {
-                return Err("running release is neither current nor pending".into());
-            }
-            // A failed trial fell back to the previously acknowledged root.
-            // Retain evidence, clear the pending transaction and select that root.
-            failed = Some(manifest);
-        }
-    }
-    // Do not replace the last acknowledged manifest before blessing succeeds.
-    // A crash after blessing leaves pending available for idempotent promotion.
-    if Path::new(BOOT_COUNT_PATH).exists() {
-        command("/usr/lib/systemd/systemd-bless-boot", &["good"])?;
-    }
-    write_atomic(
-        Path::new("/var/lib/luma-os/installed.json"),
-        &serde_json::to_vec(&acknowledged)?,
-        0o600,
-    )?;
-    if let Some(manifest) = failed {
-        write_atomic(
-            Path::new("/var/lib/luma-os/failed-update.json"),
-            &serde_json::to_vec(&manifest)?,
-            0o600,
-        )?;
-    }
-    write_atomic(
-        Path::new("/efi/loader/loader.conf"),
-        loader_config(running_slot()?, acknowledged.sequence, false).as_bytes(),
-        0o600,
-    )?;
-    if pending.exists() {
-        fs::remove_file(pending)?;
-        File::open("/var/lib/luma-os")?.sync_all()?;
-    }
-    println!("LUMA_BOOT_HEALTH_OK");
     Ok(())
 }
 

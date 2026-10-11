@@ -1,10 +1,100 @@
-# Authenticated UTC publisher source fixture
+# Authenticated UTC dependency and publisher
 
-This is the pinned-source chrony good-sample hook and closed measurement codec
-for G2 development. It is **not installed**, not a trusted-time service and not
-an authorization API. Admin's trusted-time status remains false. The production
-dependency, approved confined receiver/supervisor, reviewed bootstrap, deployed history and grant
-integration remain open. Do not start the fixture daemon on the host.
+The image build selects authenticated upstream Chrony 4.9 and links the fixed
+good-sample hook and closed measurement codec. Source/package authentication
+does not certify live NTS, native confinement, time-error bounds or G2. Historical
+commit fixtures below remain development-only. Never start a fixture daemon on
+the build host or grant the build container a clock capability.
+
+## Release authentication and source review
+
+`prepare_release_input.py` retains a new bounded archive and the committed
+detached signature, then verifies them cryptographically with `/usr/bin/gpgv`.
+`build_release.sh` repeats verification before extraction and after compilation;
+`package_runtime.py` repeats it before inventory publication. Caller-provided
+`signature_verified` JSON, default keyrings, environment-selected tools, keys
+and network key discovery cannot satisfy this boundary. Inputs must match the
+exact reviewed archive/signature/key pins and the actual single binary-document
+RSA/SHA512 signature from the selected primary fingerprint. No arbitrary signing
+subkey is accepted.
+
+Extraction and package/source retention use a new build-owned private snapshot
+of the exact bytes retained by the completed cryptographic verification, not
+a later reopen of caller archive paths. Descriptor-relative no-follow exclusive
+publication, fsync, readback and namespace checks preserve the snapshot; partial
+or failed attempts are not silently retried or overwritten. The package retains
+the same authenticated archive/signature/provenance, and image assembly copies
+that package source. A caller-side path replacement after verification cannot
+substitute the extracted or distributed source.
+
+The selected fingerprint is
+`8F375C7E8D0EE125A3D3BD51537E2B76F7680DAC`. The public key SHA512 exactly matches
+Gentoo's independently maintained key-package manifest. The small public key is
+redistributed as public-domain key data as identified by that package; the detached
+signature is upstream's publicly distributed verification material. Both retain
+their original exact bytes. See the
+[upstream release and signature](https://chrony-project.org/download.html),
+[upstream maintainer key](https://chrony-project.org/),
+[Gentoo key attribution](https://raw.githubusercontent.com/gentoo/gentoo/master/sec-keys/openpgp-keys-mlichvar/openpgp-keys-mlichvar-20210513.ebuild)
+and [independent key hash](https://raw.githubusercontent.com/gentoo/gentoo/master/sec-keys/openpgp-keys-mlichvar/Manifest).
+
+This is **static authenticated release selection**, not a live key-revocation
+service: [gpgv explicitly does not check expired or revoked keys](https://gnupg.org/documentation/manuals/gnupg/gpgv.html).
+A changed/revoked upstream key, advisory, release or hook requires a reviewed
+source update and regenerated pins, never caller key substitution or automatic
+acceptance. `reviewed-release.json` records the actual verified tuple;
+`reviewed-source-inputs.json` records the exact resulting patched authentication,
+TLS, seccomp, local-clock, hook and publisher inputs. Neither file is authority
+by itself. The builder verifies real signature bytes; runtime additionally
+requires readonly, retained, digest-bound provenance and source-input records
+and closed-schema comparison with the compiled reviewed identities.
+
+On 2026-10-11, upstream lists 4.9 (2026-08-27) as the latest stable release.
+The [upstream release notes](https://chrony-project.org/news.html) and
+[4.9 NEWS](https://gitlab.com/chrony/chrony/-/raw/4.9/NEWS) were reviewed alongside
+the [Debian upstream-package security tracker](https://security-tracker.debian.org/tracker/source-package/chrony).
+That tracker listed eleven historical resolved CVEs and no open upstream-package
+issues at review time; this is not proof of absence of undisclosed flaws or
+qualification of the installed GnuTLS/libc/kernel/CA closure. The latest listed
+Chrony CVE, [CVE-2020-14367](https://security-tracker.debian.org/tracker/CVE-2020-14367),
+concerns PID-file symlink handling before 3.5.1 and is recorded fixed for 4.9.
+The closed image config disables network command/server ports and manual/local
+fallback, retains the approved providers/bounds/offline-refusal policy and
+requires NTS/privilege-drop/seccomp build features.
+
+The mandatory executable regression suite requires an actual pinned archive and
+actual installed gpgv; unavailable tools or inputs fail, not skip:
+
+```sh
+python3 native/image/utc/test_release_authentication.py \
+  --archive /readonly/chrony-4.9.tar.gz --work /dedicated-D-work
+```
+
+It checks real positive and negative cryptography, exact provenance/type/schema,
+symlink/size/overwrite refusals and the actual signed source's per-packet NTS
+authentication and TLS-refusal hook position. It never starts Chrony. Installed
+native NTS certificate/packet journeys, provider quorum/loss/leap attacks,
+clock-step/suspend/power-loss behavior, rate-error bounds and confinement remain
+final-image/runtime qualification requirements.
+
+`test_release_units.py` provides a second mandatory isolated dependency lane.
+It authenticates and freshly extracts/patches the exact source before configuring
+the production-required NTS, privilege-drop and seccomp features. It builds and
+runs only hash, CMAC, SIV, NTP extensions/authentication, NTS packet authentication,
+NTS client and NTS-KE session units with deterministic seeds 1 and 2. An upstream
+zero-exit `SKIP` is a failure: every invocation must return its exact `PASS` line.
+The script requires a Docker build container with all kernel capability sets
+zero and only loopback network, a new evidence directory and bounded commands.
+Run with `--cap-drop ALL --network none --memory 1g --memory-swap 1g --cpus 1`:
+
+```sh
+python3 native/image/utc/test_release_units.py \
+  --archive /readonly/chrony-4.9.tar.gz --output /dedicated-D-work/new-unit-evidence
+```
+
+The retained transcript/hash and `evidence.json` identify the actual release,
+patched source and all sixteen results. They are dependency-unit evidence, not
+a production certificate or a live provider/certificate/confinement journey.
 
 ## Source boundary and retained samples
 

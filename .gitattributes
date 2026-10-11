@@ -5,6 +5,11 @@
 *.service text eol=lf
 *.path text eol=lf
 native/image/utc/chrony.conf text eol=lf
+native/image/utc/*.asc text eol=lf
+native/image/utc/*.c text eol=lf
+native/image/utc/*.h text eol=lf
+native/image/utc/*.json text eol=lf
+native/image/utc/*.py text eol=lf
 native/image/overlay/etc/apparmor.d/* text eol=lf
 native/image/overlay/usr/bin/luma-admin-control text eol=lf
 Makefile text eol=lf

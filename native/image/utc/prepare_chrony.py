@@ -107,6 +107,8 @@ def prepare(source, output, release=False):
                 'files': {name: hashlib.sha256((output / name).read_bytes()).hexdigest()
                           for name in (*pins, 'publisher.c', 'publisher.h', 'chrony_hook.c',
                                        'chrony_hook.h', 'luma_policy_digest.h')}}
+    if release and manifest != json.loads((assets / 'reviewed-source-inputs.json').read_bytes()):
+        raise ValueError('patched release differs from independently reviewed hook/source identity')
     (output / 'luma-hook-inputs.json').write_text(json.dumps(manifest, indent=2) + '\n')
 
 

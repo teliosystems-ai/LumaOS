@@ -9,6 +9,15 @@ SPEC.loader.exec_module(SWEEP)
 
 
 class SweepExecutionTests(unittest.TestCase):
+    def test_utc_crypto_lane_requires_nonempty_all_passing_tests(self):
+        text = 'Ran 7 tests in 0.1s\n\nOK\n'
+        self.assertEqual(SWEEP.executed_tests('utc-release-authentication', text)['passed'], 7)
+        for invalid in ('', text.replace('7 tests', '0 tests'),
+                        text.replace('OK', 'OK (skipped=1)'),
+                        text.replace('OK', 'OK (expected failures=1)')):
+            with self.assertRaises(ValueError):
+                SWEEP.executed_tests('utc-release-authentication', invalid)
+
     def test_additional_rust_lane_requires_actual_execution(self):
         text = ('test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; '
                 '50 filtered out; finished in 0.1s\n')

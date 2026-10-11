@@ -1,0 +1,106 @@
+{
+  "schema_version": 1,
+  "date_utc": "2026-10-11",
+  "scope": "approved-parallel-staging-target-recovery-governed-skills-and-utc-source-integration",
+  "result": "passed-scoped-software-verification",
+  "base_commit": "1f4daad217a240398ce48fcd77c185eb67fcb4d6",
+  "source_file_count": 375,
+  "source_snapshot": "/mnt/luma-build/work/g2-approved-source-20261011-c",
+  "source_manifest_sha256": "afb568a77f8f1274cf18218555682fcd22c018929e881ec00f873ac15ccbcd4c",
+  "post_test_snapshot": "/mnt/luma-build/work/g2-approved-source-20261011-post-test",
+  "post_test_current_source_bytes_match_snapshot": true,
+  "tools_image": "sha256:78c8868267b4e6f406d765dd0c2968f6387334a2e207bd6a87965a9bcc9f505e",
+  "kernel": "6.18.33.2-microsoft-standard-WSL2",
+  "sweep": {
+    "path": "/mnt/luma-build/work/g2-approved-tests-20261011-c/sweep/result.json",
+    "sha256": "d0adb5c42ef626ef0931964a86dbe5b2c617bf99778b7b9c4ff7f19bb99efc6c",
+    "runner_sha256": "be49cb4e0174ba0acb0c1ab838ed375e6ec155ade748d87e78cf1933057a6aea",
+    "elapsed_seconds": 318.352,
+    "container_memory_gib": 4,
+    "container_memory_plus_swap_gib": 4,
+    "container_cpus": 2,
+    "network": "none",
+    "warnings_denied": true,
+    "rust": {"passed": 920, "failed": 0, "fixture_entries_ignored_in_default_run": 42},
+    "native": {"passed": 358, "failed": 0, "skipped": 0},
+    "public_trust_authentication": {"passed": 13, "failed": 0, "skipped": 0},
+    "utc_release_authentication": {"passed": 8, "failed": 0, "skipped": 0},
+    "utc_release_build": "passed-NTS-PRIVDROP-SCFILTER-without-daemon",
+    "real_pam_cases": 6,
+    "independent_resource_software_tpm_cases": 4,
+    "existing_owner_admin_software_tpm_driver": "passed",
+    "fixture_coverage": "selected-drivers-not-all-42-default-ignored-entries",
+    "transcript_sha256": {
+      "rust-all-targets-check": "ffa99e6b5fcc62a2ce4f67b99b661b8780eb243be4d0ab1aedc71d9b949f5a38",
+      "rust-tests": "ece8bb3b950adcaa774d49f1d790484d5e2ab11f63242c1a23d1a609267047f0",
+      "native-source-tests": "e68798ef6513781ed15ffffd6695c0cbd04b71caa6793c9c0a959baad8589698",
+      "public-trust-authentication": "009bb04542ec94ba656b04f394b9d5f954dbf7cffee963e92e150afeeffeb537",
+      "utc-release-authentication": "66c9e5a37981f936cbb290f1f7c08e09806e4ffac55430d9788eadf5e287ca6f",
+      "utc-release-build": "898844931f2b7b84db3f435001ece10a220a623b9c0237d56363c02466c2f733",
+      "real-pam-fixture": "d605dd863c9e89c8dfa3f64e136dff91fa59945c305d31b155fd0e3a40883738",
+      "resource-software-tpm": "0218af2b56e138cae3519f69291da980586362e90eb4755a973036393b6dfc07",
+      "admin-software-tpm-regression": "ca2d15722f789313990acc1707e7a6b9f8573d96f1bc5301460b662782edc3c8"
+    }
+  },
+  "utc_dependency_units": {
+    "path": "/mnt/luma-build/work/g2-approved-tests-20261011-c/utc-units/evidence.json",
+    "sha256": "04e91d17aea5e5c3d03b6830141406efae1890540eea975bba05eb2c6de7a755",
+    "transcript_sha256": "357a952b64a47d1219c7b267322129efc554ace0b93c0ed21953997414273c27",
+    "passed": 16,
+    "failed": 0,
+    "skipped": 0,
+    "container_memory_gib": 1,
+    "container_memory_plus_swap_gib": 1,
+    "container_cpus": 1,
+    "network": "none",
+    "all_capability_sets_zero": true,
+    "source_archive_sha256": "4924c6f530105bcd5b9e9e33c48a2ae1bfd889222c8480bc41601110efc864d0"
+  },
+  "policy_syntax": {
+    "apparmor_profiles_passed": 13,
+    "parser": "apparmor_parser-4.0.1",
+    "parser_image": "sha256:4179250388593ec3ae3d953073aa35a2ce5ada21f0fa59ca5426beb76402464c",
+    "flags": ["-Q", "-K"],
+    "host_policies_loaded": false,
+    "actual_confinement_qualified": false,
+    "shell_syntax_checked": ["native/image/build.sh", "native/image/overlay/usr/bin/luma-admin-control", "native/image/overlay/usr/bin/luma-recovery-control"],
+    "output_retention": "tool-transcript-only"
+  },
+  "retained_attempts": [
+    {
+      "path": "/mnt/luma-build/work/g2-approved-tests-20261011-a/sweep/result.json",
+      "sha256": "230c4ee5c2dd206ccbb406a1cb2f82222b2802a851f84c6540c8fc7148d08431",
+      "result": "failed",
+      "reason": "two test-only JSON type errors and three source-inspection failures; no failed lane counted as a pass"
+    },
+    {
+      "path": "/mnt/luma-build/work/g2-approved-tests-20261011-b/sweep/result.json",
+      "sha256": "53b5278ea707a9e5319201d1c63c0e931e0bb7a62fb85aff3e48db3a0c8ae26d",
+      "source_manifest_sha256": "bdccc4f57aa341b7b02b4f76114b17e0494b23ded2655ff3d1ebb599c9c71dab",
+      "result": "passed-before-final-release-operator-route",
+      "rust_passed": 917,
+      "native_passed": 358,
+      "qualification": "not-final-source"
+    }
+  ],
+  "remaining_external_or_native": [
+    "externally provisioned production public roots, signed bundles and actual signing custody",
+    "new final image from this exact source, installation, first-boot activation and service/confinement qualification",
+    "native update, trial confirmation, fallback, read-only target recovery, interruption and storage-pressure journeys",
+    "physical existing-owner TPM, PCR, Secure Boot and firmware qualification",
+    "native NTS certificate bootstrap, quorum/loss/leap/step/suspend/rate-error and confinement qualification"
+  ],
+  "separate_unclosed_scope": [
+    "production model catalog and model-pack governance",
+    "arbitrary plugins and generated-code isolation are not the closed file-to-artifact profile",
+    "general populated cross-schema/reference/principal migration remains provisionally G4"
+  ],
+  "new_image_built": false,
+  "installed_image_tested": false,
+  "physical_tpm_tested": false,
+  "host_clock_account_firmware_disk_changed": false,
+  "production_custody_qualified": false,
+  "live_nts_clock_confinement_qualified": false,
+  "requirement1_closed": false,
+  "g2_closed": false
+}

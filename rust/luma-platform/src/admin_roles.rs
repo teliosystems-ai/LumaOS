@@ -25,6 +25,14 @@ pub(crate) fn identifier(value: &str) -> bool {
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) enum Command {
+    PublishSkillTrust {
+        expected_version: u64,
+        bundle: crate::skill_trust::SignedTrust,
+    },
+    AdmitSkillRegistry {
+        expected_floor: u64,
+        admission: crate::skill_trust::Admission,
+    },
     PublishReleaseTrust {
         expected_version: u64,
         bundle: crate::release_trust::SignedTrust,
@@ -125,6 +133,8 @@ pub(crate) enum Command {
 impl Command {
     pub(crate) fn activity(&self) -> &'static str {
         match self {
+            Self::PublishSkillTrust { .. } => "admin.skills.trust_publish",
+            Self::AdmitSkillRegistry { .. } => "admin.skills.registry_admit",
             Self::PublishReleaseTrust { .. } => "admin.release.trust_publish",
             Self::PrepareRelease { .. } => "admin.release.prepare",
             Self::InitializeRelease { .. } => "admin.release.initialize",
@@ -178,6 +188,24 @@ impl Command {
     pub(crate) fn validate(&self) -> Result<()> {
         let valid_activity = |v: &str| identifier(v) && v != "admin.bootstrap";
         match self {
+            Self::PublishSkillTrust {
+                expected_version,
+                bundle,
+            } => {
+                if *expected_version >= i64::MAX as u64 {
+                    return Err("skill trust version exhausted".into());
+                }
+                bundle.validate()
+            }
+            Self::AdmitSkillRegistry {
+                expected_floor,
+                admission,
+            } => {
+                if *expected_floor > i64::MAX as u64 {
+                    return Err("skill registry floor exhausted".into());
+                }
+                admission.validate()
+            }
             Self::PublishReleaseTrust {
                 expected_version,
                 bundle,
@@ -338,6 +366,8 @@ pub(crate) struct Role {
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 pub(crate) struct Catalog {
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub skill_trust: Option<crate::skill_trust::State>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub release: Option<crate::release_trust::State>,
     pub state_version: u64,
     pub activities: BTreeSet<String>,
@@ -396,6 +426,7 @@ impl Catalog {
 
     pub(crate) fn initial() -> Self {
         Self {
+            skill_trust: None,
             release: None,
             state_version: 1,
             activities: CONTROL.iter().map(|v| (*v).into()).collect(),
@@ -449,6 +480,18 @@ impl Catalog {
             .checked_add(1)
             .ok_or("Admin catalog version exhausted")?;
         match command {
+            Command::PublishSkillTrust {
+                expected_version,
+                bundle,
+            } => {
+                crate::skill_trust::publish(&mut self.skill_trust, *expected_version, bundle)?;
+            }
+            Command::AdmitSkillRegistry {
+                expected_floor,
+                admission,
+            } => {
+                crate::skill_trust::admit(&mut self.skill_trust, *expected_floor, admission)?;
+            }
             Command::PublishReleaseTrust {
                 expected_version,
                 bundle,

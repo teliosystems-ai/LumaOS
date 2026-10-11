@@ -5,6 +5,18 @@ import unittest
 ROOT = Path(__file__).resolve().parents[2]
 
 
+def governance_source():
+    source = (ROOT / 'rust/luma-platform/src/admin_governance.rs').read_text().split(
+        '\n#[cfg(test)]\nfn execute_catalog', 1)[0]
+    # Exclude only these exact cfg(test) regions, preserving every runtime path.
+    before, fixtures = source.split('\n#[cfg(test)]\nmod release_command_tests {', 1)
+    _, runtime = fixtures.split('\n}\n\nfn skill_command_json(', 1)
+    source = before + '\n\nfn skill_command_json(' + runtime
+    before, fixtures = source.split('\n#[cfg(test)]\nmod skill_command_tests {', 1)
+    _, runtime = fixtures.split('\n}\n\npub(crate) fn staged_release_command(', 1)
+    return before + '\n\npub(crate) fn staged_release_command(' + runtime
+
+
 class AdminCredentialPolicyTests(unittest.TestCase):
     def test_product_checkpoint_has_no_plaintext_credential_fallback(self):
         tpm = (ROOT / 'rust/luma-platform/src/tpm.rs').read_text().split('mod tests {')[0]
@@ -25,7 +37,7 @@ class AdminCredentialPolicyTests(unittest.TestCase):
                          ['d /run/luma-admin 0700 root root -'])
 
     def test_bootstrap_has_fixed_paths_and_independent_pam_entry_point(self):
-        source = (ROOT / 'rust/luma-platform/src/admin_governance.rs').read_text().split('\n#[cfg(test)]\nfn execute_catalog', 1)[0]
+        source = governance_source()
         self.assertIn('const DIRECTORY: &str = "/var/lib/luma-os/admin"', source)
         entry = source.split('pub fn bootstrap(')[1]
         for required in ('crate::require_root()?', 'platform::require_installed()?',
@@ -45,9 +57,13 @@ class AdminCredentialPolicyTests(unittest.TestCase):
             self.assertNotIn('admin_governance::bootstrap', source)
 
     def test_catalog_operations_have_independent_pam_and_finite_assignment_validation(self):
-        source = (ROOT / 'rust/luma-platform/src/admin_governance.rs').read_text().split('\n#[cfg(test)]\nfn execute_catalog', 1)[0]
+        source = governance_source()
         for name in ('catalog_command', 'catalog_status'):
             entry = source.split(f'pub fn {name}(')[1].split('\n}\n', 1)[0]
+            if name == 'catalog_command':
+                self.assertIn('parse_command(args)?', entry)
+                self.assertIn('run_catalog_command(login, request, &command, reviewed)', entry)
+                entry = source.split('fn run_catalog_command(')[1].split('\n}\n', 1)[0]
             for required in ('crate::require_root()?', 'platform::require_installed()?',
                              'authentication::local(login)?', 'tpm::LocalAnchor::installed()?',
                              'prepare_control(login,', 'run_control_at('):

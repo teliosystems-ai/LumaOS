@@ -31,9 +31,17 @@ production signatures must come from approved external custody.
 
 ## Reviewed native transitions
 
-The existing original-Admin `admin-catalog` review/commit path accepts these
-closed commands. Fresh identity, current protected UTC, semantic replay and
-the hardware-selected journal are checked at the commit boundaries.
+Use `sudo luma-admin-control admin-release-command LOGIN REQUEST FILE` to review
+one complete JSON command below, then repeat the exact request/input with
+`--commit REVIEW-SHA256`. Stage bounded public inputs under `/run/luma-admin`;
+the command captures a regular, nonsymlink file of at most 131072 bytes before
+authentication and refuses duplicate/unknown fields and trailing JSON. It
+accepts only these four release transitions, including public proposals emitted
+by `scripts/release_trust_ceremony.py`. The existing `admin-catalog` command
+remains restricted to finite role assignment/grant governance. Fresh original
+Admin identity, current protected UTC, semantic replay and the hardware-selected
+journal are checked at the commit boundaries. Input JSON and review digests
+are not authority, signatures or replacement immutable roots.
 
 | Action | Required state and outcome |
 | --- | --- |
@@ -58,32 +66,60 @@ resolution is required before another governed update.
 Deleting an enrollment/anchor file while retained enrollment or the fixed Luma
 TPM handles remain cannot enable the static laboratory-key fallback.
 
-## Still required before production deployment
+## Approved initial staging and target recovery
 
-Production initial installation and target-mounted governed repair are not
-implemented end to end. They remain fail-closed, not qualified capabilities.
-The owner must choose the initial installation policy and a separately bounded
-repair-custody session before their coordinated implementation:
+The owner approved immutable signed offline staging followed by first-boot
+activation and a separate repair-only session capped at thirty minutes.
+[ADR 0012](../docs/adr/0012-production-staging-repair-and-skill-trust.md) records
+the scope and security boundaries. These approvals are not qualification evidence.
 
-- Either authenticated UTC before any production installation write, or explicit
-  approval of immutable signed offline staging followed by first-boot
-  Admin/TPM/UTC/trust activation. A seed or wall clock cannot authorize activation.
-- A finite repair session suitable for multi-GiB write/readback. The existing
-  custody bound is 30 seconds; the export-only 30-minute approval does not cover
-  repair. A proposed separate 30-minute session must retain continuous
-  target/TPM/journal/custody/UTC checks and cannot renew automatically.
+Before initial production writes, `release-trust.json` beside the release bundle
+must verify against the independently provisioned immutable production public
+root; the exact manifest signature and artifact hashes are also checked. The
+installer retains signed evidence in `/var/lib/luma-os/staged-release.json`,
+leaves the model disabled and creates an uncounted first boot. There is no health
+acknowledgement, timed grant or protected worker/effect authority from staging.
 
-The recovery adapter must mint private typed image/target contexts from exact
-live-media and selected disk/mount identities, load only that target's sealed
-credentials and principal/history state, and preserve the existing TPM owner,
+After enrollment, original-Admin bootstrap and authenticated UTC delivery, use
+`luma-admin-control admin-release-trust-stage LOGIN REQUEST`, review its digest,
+and repeat with `--commit REVIEW`. Then separately review and commit
+`admin-release-activate LOGIN REQUEST`. Both consume the exact retained signed
+evidence and existing hardware-selected journal. Neither accepts a replacement
+root. An approximate seed or wall clock cannot activate authority. The broker
+and model can be started explicitly only after successful activation. During an
+unresolved trial update, protected account/grant/skill changes remain unavailable
+until fresh Admin resolution acknowledges the running candidate; exact release
+resolution and candidate health remain possible.
+
+The recovery adapter mints private typed image/target contexts from exact
+live-media and selected disk/mount identities, loads only that target's sealed
+credentials and principal/history state, and preserves the existing TPM owner,
 handles and approved PCR policy. Arbitrary directories, serialized contexts,
 chroot execution, media-journal substitution and new clock authority are not
-acceptable substitutes. Keeper processes must receive neither target secrets
-nor TPM credentials. Manual unlock/export/model-disable must stay available
+acceptable substitutes. Keeper processes receive neither target secrets
+nor TPM credentials. Manual unlock/export/model-disable stays available
 independently of models and online UTC.
+
+The fixed `luma-recovery-control` launcher exposes only `utc-seed`,
+`utc-reacquire`, `repair-a` and `repair-b`. Seed proposals use
+`utc-seed DISK /run/luma-recovery-input/seed.json`; delivery repeats the exact
+proposal with `--commit KEEPER-INSTANCE REVIEW`. Reacquisition follows the same
+review/delivery pattern and still requires a new independent seed. Repair uses
+`repair-a|repair-b DISK /run/luma-recovery-bundle`, with explicit local review and
+disk confirmation. Inputs must be operator-staged at these confined locations
+or `/media/luma`; the launcher is not a general shell or directory authority.
+
+The target data mount remains read-only with journal replay disabled. Existing
+original-Admin offline custody, target TPM epoch/head/principals/history and
+release trust/floor are rechecked around each bounded write/readback and EFI
+publication. The repair lifetime cannot renew, serialize or become a PAM/export
+session. Ordinary Admin/seed-control thirty-second limits remain unchanged.
+
+## Still required before production deployment
 
 Production public roots/signatures and actual custody, final image builds,
 installed services/confinement, power-loss/interruption and physical firmware/
 TPM qualification remain separate evidence. General populated schema/principal
-migration and production model/skill governance are not completed by this
-OS-release implementation.
+migration and production model catalog/pack governance are not completed by this
+OS-release implementation. The separate native skill-registry adapter and its
+public-input packaging are described in [SKILL_TRUST.md](SKILL_TRUST.md).

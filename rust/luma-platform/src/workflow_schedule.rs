@@ -17,7 +17,7 @@ struct Item {
     grants: BTreeMap<String, String>,
 }
 
-fn deserialize_grants<'de, D>(
+pub(super) fn deserialize_grants<'de, D>(
     deserializer: D,
 ) -> std::result::Result<BTreeMap<String, String>, D::Error>
 where

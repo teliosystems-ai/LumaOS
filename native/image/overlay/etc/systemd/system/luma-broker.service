@@ -29,6 +29,7 @@ ReadOnlyPaths=/sys/fs/cgroup
 ReadWritePaths=/sys/fs/cgroup/lumamodel.slice /sys/fs/cgroup/lumaacquisition.slice
 ReadWritePaths=-/var/lib/luma-os/resource-checkpoint/paired
 ReadWritePaths=/run/luma-resource-checkpoint/authority.lock
+ReadWritePaths=/run/luma-admin
 ReadOnlyPaths=-/var/lib/luma-os/resource-checkpoint/sealed
 RestrictAddressFamilies=AF_UNIX
 RestrictNamespaces=yes

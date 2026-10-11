@@ -245,7 +245,174 @@ pub(crate) fn require_live() -> Result<()> {
     Ok(())
 }
 
+/// Shared service/CLI activation fence. A structurally signed initial image
+/// has no protected authority until current TPM-backed Admin trust explicitly
+/// acknowledges this exact installed immutable release.
+pub(crate) fn require_production_activation() -> Result<()> {
+    let identity: RunningIdentity =
+        serde_json::from_slice(&crate::admin_credentials::public_input(
+            Path::new("/usr/share/luma-os/release-identity.json"),
+            4096,
+        )?)?;
+    validate_image_identity(&identity)?;
+    if identity.environment != "production" {
+        return Ok(());
+    }
+    require_installed()?;
+    let state = crate::admin_governance::release_state_optional()?
+        .ok_or("production image is inert until Admin/TPM/UTC release activation")?;
+    for retained in [state.acknowledged.as_ref(), state.retained.as_ref()] {
+        if let Some(manifest) = retained {
+            if check_governance_manifest(manifest).is_ok() {
+                return Ok(());
+            }
+        }
+    }
+    if let Some(pending) = &state.pending {
+        check_governance_manifest(&pending.candidate.manifest)?;
+        let current = crate::admin_governance::release_authority()?;
+        if current.0.as_ref() != Some(&state) {
+            return Err("production release activation changed".into());
+        }
+        return crate::release_trust::check_effect_time(&state, current.1);
+    }
+    Err("production image is not an exact activated release or retained fallback".into())
+}
+
+enum CatalogImageSource {
+    Installed,
+    #[cfg(test)]
+    Disposable {
+        directory: PathBuf,
+        descriptor: File,
+        identity: (u64, u64),
+    },
+}
+
+/// Private image context owned by one authenticated catalog attempt. A
+/// disposable laboratory context is available only to isolated test builds;
+/// there is no caller environment flag or missing-file production fallback.
+pub(crate) struct CatalogImage {
+    source: CatalogImageSource,
+    bytes: Vec<u8>,
+    identity: RunningIdentity,
+}
+impl CatalogImage {
+    pub(crate) fn capture(directory: &Path) -> Result<Self> {
+        #[cfg(test)]
+        if directory.file_name() == Some(std::ffi::OsStr::new("admin"))
+            && directory.parent().is_some_and(|parent| {
+                parent.parent() == Some(Path::new("/tmp"))
+                    && parent.file_name().is_some_and(|name| {
+                        name.to_string_lossy().starts_with("luma-tpm-delivery-")
+                    })
+            })
+            && Path::new("/.dockerenv").is_file()
+            && !Path::new("/dev/tpm0").exists()
+            && !Path::new("/dev/tpmrm0").exists()
+        {
+            let descriptor = OpenOptions::new()
+                .read(true)
+                .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC)
+                .open(directory)?;
+            let metadata = descriptor.metadata()?;
+            if metadata.uid() != 0 || metadata.mode() & 0o077 != 0 {
+                return Err("unsafe disposable catalog image context".into());
+            }
+            let identity = RunningIdentity {
+                schema_version: 1,
+                release: "disposable-catalog-fixture".into(),
+                sequence: 1,
+                environment: "lab".into(),
+                architecture: "amd64".into(),
+                ubuntu: "24.04".into(),
+                edition: "headless".into(),
+            };
+            let bytes = serde_json::to_vec(&identity)?;
+            return Ok(Self {
+                source: CatalogImageSource::Disposable {
+                    directory: directory.into(),
+                    descriptor,
+                    identity: (metadata.dev(), metadata.ino()),
+                },
+                bytes,
+                identity,
+            });
+        }
+        if directory != Path::new("/var/lib/luma-os/admin") {
+            return Err("installed catalog image requires the fixed Admin namespace".into());
+        }
+        let bytes = crate::admin_credentials::public_input(
+            Path::new("/usr/share/luma-os/release-identity.json"),
+            4096,
+        )?;
+        let identity: RunningIdentity = serde_json::from_slice(&bytes)?;
+        validate_image_identity(&identity)?;
+        Ok(Self {
+            source: CatalogImageSource::Installed,
+            bytes,
+            identity,
+        })
+    }
+    pub(crate) fn production(&self) -> bool {
+        self.identity.environment == "production"
+    }
+    pub(crate) fn recheck(&self) -> Result<()> {
+        match &self.source {
+            CatalogImageSource::Installed => {
+                if crate::admin_credentials::public_input(
+                    Path::new("/usr/share/luma-os/release-identity.json"),
+                    4096,
+                )? != self.bytes
+                {
+                    return Err("catalog immutable image identity changed".into());
+                }
+            }
+            #[cfg(test)]
+            CatalogImageSource::Disposable {
+                directory,
+                descriptor,
+                identity,
+            } => {
+                let current = fs::symlink_metadata(directory)?;
+                let held = descriptor.metadata()?;
+                if !current.is_dir()
+                    || (current.dev(), current.ino()) != *identity
+                    || (held.dev(), held.ino()) != *identity
+                {
+                    return Err("disposable catalog context changed".into());
+                }
+            }
+        }
+        validate_image_identity(&self.identity)
+    }
+}
+
+fn validate_image_identity(identity: &RunningIdentity) -> Result<()> {
+    if identity.schema_version != 1
+        || identity.sequence == 0
+        || identity.sequence > i64::MAX as u64
+        || !crate::admin_roles::identifier(&identity.release)
+        || !matches!(identity.environment.as_str(), "lab" | "production")
+        || identity.architecture != "amd64"
+        || identity.ubuntu != "24.04"
+        || !matches!(identity.edition.as_str(), "headless" | "desktop")
+    {
+        return Err("invalid immutable release identity".into());
+    }
+    Ok(())
+}
+
 pub(crate) fn write_atomic(destination: &Path, bytes: &[u8], mode: u32) -> Result<()> {
+    write_atomic_guarded(destination, bytes, mode, &mut || Ok(()))
+}
+
+fn write_atomic_guarded(
+    destination: &Path,
+    bytes: &[u8],
+    mode: u32,
+    guard: &mut impl FnMut() -> Result<()>,
+) -> Result<()> {
     let parent = destination.parent().ok_or("missing parent")?;
     let mut random = [0u8; 16];
     File::open("/dev/urandom")?.read_exact(&mut random)?;
@@ -262,24 +429,34 @@ pub(crate) fn write_atomic(destination: &Path, bytes: &[u8], mode: u32) -> Resul
         }
     }
     let _cleanup = Cleanup(temporary.clone());
-    f.write_all(bytes)?;
+    for chunk in bytes.chunks(1024 * 1024) {
+        guard()?;
+        f.write_all(chunk)?;
+        guard()?;
+    }
+    guard()?;
     f.sync_all()?;
+    guard()?;
     fs::rename(&temporary, destination)?;
+    guard()?;
     File::open(parent)?.sync_all()?;
+    guard()?;
     Ok(())
 }
 
 struct Mount {
     at: PathBuf,
+    device: PathBuf,
 }
 impl Mount {
     fn new(device: &Path, at: PathBuf, options: &str) -> Result<Self> {
+        let device = fs::canonicalize(device)?;
         fs::create_dir_all(&at)?;
         command(
             "/usr/bin/mount",
-            &["-o", options, path(device)?, path(&at)?],
+            &["-o", options, path(&device)?, path(&at)?],
         )?;
-        Ok(Self { at })
+        Ok(Self { at, device })
     }
 }
 impl Drop for Mount {
@@ -314,6 +491,667 @@ fn unlock(device: &Path, readonly: bool) -> Result<Crypt> {
     }
     with_input("/usr/sbin/cryptsetup", &args, &secret)?;
     Ok(Crypt { name })
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct KernelMount {
+    id: u64,
+    device: String,
+    root: String,
+    at: PathBuf,
+    options: Vec<String>,
+    filesystem: String,
+    source: String,
+    super_options: Vec<String>,
+}
+
+fn mount_word(word: &str) -> Result<String> {
+    let mut out = Vec::new();
+    let bytes = word.as_bytes();
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'\\' {
+            if index + 3 >= bytes.len()
+                || !bytes[index + 1..index + 4]
+                    .iter()
+                    .all(|v| (b'0'..=b'7').contains(v))
+            {
+                return Err("invalid kernel mount escape".into());
+            }
+            let value = u8::try_from(
+                u16::from(bytes[index + 1] - b'0') * 64
+                    + u16::from(bytes[index + 2] - b'0') * 8
+                    + u16::from(bytes[index + 3] - b'0'),
+            )?;
+            if value == 0 {
+                return Err("NUL kernel mount path".into());
+            }
+            out.push(value);
+            index += 4;
+        } else {
+            out.push(bytes[index]);
+            index += 1;
+        }
+    }
+    Ok(String::from_utf8(out)?)
+}
+
+fn kernel_mount(at: &Path) -> Result<KernelMount> {
+    let bytes = fs::read("/proc/self/mountinfo")?;
+    if bytes.len() > 1024 * 1024 {
+        return Err("oversized kernel mount inventory".into());
+    }
+    let inventory = String::from_utf8(bytes)?;
+    parse_kernel_mount(&inventory, at)
+}
+
+fn parse_kernel_mount(inventory: &str, at: &Path) -> Result<KernelMount> {
+    let mut found = None;
+    for line in inventory.lines() {
+        let (left, right) = line
+            .split_once(" - ")
+            .ok_or("malformed kernel mount record")?;
+        let a: Vec<_> = left.split_whitespace().collect();
+        let b: Vec<_> = right.split_whitespace().collect();
+        if a.len() < 6 || b.len() != 3 {
+            return Err("malformed kernel mount fields".into());
+        }
+        let point = PathBuf::from(mount_word(a[4])?);
+        if point != at {
+            continue;
+        }
+        if found.is_some() {
+            return Err("stacked recovery mountpoint is ambiguous".into());
+        }
+        found = Some(KernelMount {
+            id: a[0].parse()?,
+            device: a[2].into(),
+            root: mount_word(a[3])?,
+            at: point,
+            options: a[5].split(',').map(str::to_owned).collect(),
+            filesystem: b[0].into(),
+            source: mount_word(b[1])?,
+            super_options: b[2].split(',').map(str::to_owned).collect(),
+        });
+    }
+    found.ok_or_else(|| "expected kernel mount is absent".into())
+}
+
+fn has_option(options: &[String], value: &str) -> bool {
+    options.iter().any(|option| option == value)
+}
+
+fn device_number(metadata: &fs::Metadata) -> String {
+    // The libc scalar helpers decode stat's dev_t without accessing a device.
+    let (major, minor) = unsafe { (libc::major(metadata.rdev()), libc::minor(metadata.rdev())) };
+    format!("{major}:{minor}")
+}
+
+/// Independently verifiable immutable live-image proof. The UTC keeper may
+/// retain this token without ever opening target data, a TPM, or a raw device.
+pub(crate) struct RecoveryImage {
+    identity: Vec<u8>,
+    command_line: String,
+    mount: KernelMount,
+    root: File,
+    root_identity: (u64, u64),
+}
+impl RecoveryImage {
+    pub(crate) fn current() -> Result<Self> {
+        require_live()?;
+        let identity = crate::admin_credentials::public_input(
+            Path::new("/usr/share/luma-os/release-identity.json"),
+            4096,
+        )?;
+        let parsed: RunningIdentity = serde_json::from_slice(&identity)?;
+        let command_line = cmdline()?;
+        let mount = kernel_mount(Path::new("/"))?;
+        validate_recovery_image(&parsed, &command_line, &mount)?;
+        let root = OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC)
+            .open("/")?;
+        let metadata = root.metadata()?;
+        let result = Self {
+            identity,
+            command_line,
+            mount,
+            root,
+            root_identity: (metadata.dev(), metadata.ino()),
+        };
+        result.recheck()?;
+        Ok(result)
+    }
+    pub(crate) fn recheck(&self) -> Result<()> {
+        require_live()?;
+        let metadata = self.root.metadata()?;
+        let current = fs::metadata("/")?;
+        if (metadata.dev(), metadata.ino()) != self.root_identity
+            || (current.dev(), current.ino()) != self.root_identity
+            || cmdline()? != self.command_line
+            || kernel_mount(Path::new("/"))? != self.mount
+            || crate::admin_credentials::public_input(
+                Path::new("/usr/share/luma-os/release-identity.json"),
+                4096,
+            )? != self.identity
+        {
+            return Err("immutable recovery image changed".into());
+        }
+        validate_recovery_image(
+            &serde_json::from_slice(&self.identity)?,
+            &self.command_line,
+            &self.mount,
+        )
+    }
+}
+
+fn validate_recovery_image(
+    identity: &RunningIdentity,
+    args: &str,
+    mount: &KernelMount,
+) -> Result<()> {
+    check_recovery_image_claims(identity, args, mount)?;
+    let dm = Path::new("/sys/dev/block").join(&mount.device).join("dm");
+    if fs::read_to_string(dm.join("name"))?.trim() != "root"
+        || !fs::read_to_string(dm.join("uuid"))?
+            .trim()
+            .starts_with("CRYPT-VERITY-")
+    {
+        return Err("live root is not the kernel verity mapping".into());
+    }
+    require_firmware_authentication()?;
+    Ok(())
+}
+
+fn check_recovery_image_claims(
+    identity: &RunningIdentity,
+    args: &str,
+    mount: &KernelMount,
+) -> Result<()> {
+    validate_image_identity(identity)?;
+    let (major, minor) = mount
+        .device
+        .split_once(':')
+        .ok_or("invalid kernel mount device number")?;
+    let major = major.parse::<u32>()?;
+    let minor = minor.parse::<u32>()?;
+    if major == 0
+        || !(mount.source == "/dev/mapper/root" || mount.source == format!("/dev/dm-{minor}"))
+    {
+        return Err("recovery root source is not the exact kernel mapper".into());
+    }
+    let values = |prefix: &str| {
+        args.split_whitespace()
+            .filter_map(|arg| arg.strip_prefix(prefix))
+            .map(str::to_owned)
+            .collect::<Vec<_>>()
+    };
+    let hash = values("roothash=");
+    if identity.schema_version != 1
+        || identity.sequence == 0
+        || identity.sequence > i64::MAX as u64
+        || !crate::admin_roles::identifier(&identity.release)
+        || !matches!(identity.environment.as_str(), "lab" | "production")
+        || identity.architecture != "amd64"
+        || identity.ubuntu != "24.04"
+        || !matches!(identity.edition.as_str(), "headless" | "desktop")
+        || values("luma.mode=") != ["live"]
+        || values("luma.slot=") != ["live"]
+        || values("root=") != ["/dev/mapper/root"]
+        || hash.len() != 1
+        || crate::tpm::decode::<32>(&hash[0]).is_err()
+        || mount.root != "/"
+        || mount.filesystem != "ext4"
+        || !has_option(&mount.options, "ro")
+        || !has_option(&mount.super_options, "ro")
+    {
+        return Err(
+            "recovery requires the fixed read-only verity live UKI and immutable image identity"
+                .into(),
+        );
+    }
+    let expected=format!("root=/dev/mapper/root ro roothash={} systemd.verity_root_options=panic-on-corruption systemd.verity_root_data=/dev/disk/by-partlabel/luma-live-root systemd.verity_root_hash=/dev/disk/by-partlabel/luma-live-hash luma.mode=live luma.slot=live systemd.unit=multi-user.target console=tty0 console=ttyS0,115200n8 apparmor=1 security=apparmor systemd.show_status=yes rd.shell=0 panic=10",hash[0]);
+    let words: Vec<_> = args.split_whitespace().collect();
+    let actual: std::collections::BTreeSet<_> = words.iter().copied().collect();
+    if actual.len() != words.len() || actual != expected.split_whitespace().collect() {
+        return Err(
+            "recovery command line has an unknown, duplicate or alternate security/boot option"
+                .into(),
+        );
+    }
+    Ok(())
+}
+
+fn require_firmware_authentication() -> Result<()> {
+    for (variable, expected) in [("SecureBoot", 1u8), ("SetupMode", 0u8)] {
+        let value = fs::read(format!(
+            "/sys/firmware/efi/efivars/{variable}-8be4df61-93ca-11d2-aa0d-00e098032b8c"
+        ))?;
+        check_firmware_variable(&value, expected)?;
+    }
+    Ok(())
+}
+
+fn check_firmware_variable(value: &[u8], expected: u8) -> Result<()> {
+    if value.len() != 5 || value[4] != expected || value[..4] != [6, 0, 0, 0] {
+        return Err(
+            "authenticated recovery requires protected firmware Secure Boot outside setup mode"
+                .into(),
+        );
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod recovery_claim_tests {
+    use super::*;
+    fn identity() -> RunningIdentity {
+        RunningIdentity {
+            schema_version: 1,
+            release: "recovery-fixture".into(),
+            sequence: 10,
+            environment: "lab".into(),
+            architecture: "amd64".into(),
+            ubuntu: "24.04".into(),
+            edition: "headless".into(),
+        }
+    }
+    fn mount() -> KernelMount {
+        parse_kernel_mount(
+            "30 20 253:0 / / ro,relatime - ext4 /dev/mapper/root ro\n",
+            Path::new("/"),
+        )
+        .unwrap()
+    }
+    fn arguments() -> String {
+        format!("root=/dev/mapper/root ro roothash={} systemd.verity_root_options=panic-on-corruption systemd.verity_root_data=/dev/disk/by-partlabel/luma-live-root systemd.verity_root_hash=/dev/disk/by-partlabel/luma-live-hash luma.mode=live luma.slot=live systemd.unit=multi-user.target console=tty0 console=ttyS0,115200n8 apparmor=1 security=apparmor systemd.show_status=yes rd.shell=0 panic=10","1".repeat(64))
+    }
+    #[test]
+    fn live_claims_require_closed_readonly_signed_uki_shape() {
+        check_recovery_image_claims(&identity(), &arguments(), &mount()).unwrap();
+        for extra in [
+            " init=/bin/sh",
+            " rw",
+            " luma.mode=installed",
+            " luma.slot=live",
+            " systemd.unit=rescue.target",
+            " apparmor=0",
+            " rd.shell=1",
+        ] {
+            assert!(
+                check_recovery_image_claims(&identity(), &(arguments() + extra), &mount()).is_err(),
+                "{extra}"
+            );
+        }
+        for case in 0..6 {
+            let mut current = mount();
+            match case {
+                0 => current.options = vec!["rw".into()],
+                1 => current.super_options = vec!["rw".into()],
+                2 => current.root = "/subdir".into(),
+                3 => current.filesystem = "overlay".into(),
+                4 => current.source = "/dev/dm-1".into(),
+                _ => current.device = "../other".into(),
+            }
+            assert!(
+                check_recovery_image_claims(&identity(), &arguments(), &current).is_err(),
+                "{case}"
+            );
+        }
+        for environment in ["unknown", "", "production-override"] {
+            let mut i = identity();
+            i.environment = environment.into();
+            assert!(check_recovery_image_claims(&i, &arguments(), &mount()).is_err());
+        }
+        let mut i = identity();
+        i.environment = "production".into();
+        check_recovery_image_claims(&i, &arguments(), &mount()).unwrap();
+    }
+    #[test]
+    fn mount_parser_rejects_stacked_missing_malformed_and_hostile_escapes() {
+        let line = "30 20 253:0 / / ro - ext4 /dev/mapper/root ro\n";
+        assert!(parse_kernel_mount(&(line.to_owned() + line), Path::new("/")).is_err());
+        assert!(parse_kernel_mount(line, Path::new("/missing")).is_err());
+        for malformed in [
+            "30 20 253:0 / / ro\n",
+            "30 - ext4 device ro\n",
+            "30 20 253:0 / / ro - ext4 device\n",
+        ] {
+            assert!(parse_kernel_mount(malformed, Path::new("/")).is_err());
+        }
+        assert_eq!(
+            mount_word("/mounted\\040space\\134slash").unwrap(),
+            "/mounted space\\slash"
+        );
+        for word in ["\\000", "\\777", "\\12", "\\xyz"] {
+            assert!(mount_word(word).is_err());
+        }
+        let escaped=parse_kernel_mount("31 20 253:1 / /mounted\\040space ro,nodev,nosuid,noexec - ext4 /dev/mapper/luma-recovery-123 ro\n",Path::new("/mounted space")).unwrap();
+        assert_eq!(escaped.at, Path::new("/mounted space"));
+        assert_eq!(escaped.source, "/dev/mapper/luma-recovery-123");
+    }
+    #[test]
+    fn firmware_state_requires_exact_protected_bool_variable() {
+        check_firmware_variable(&[6, 0, 0, 0, 1], 1).unwrap();
+        check_firmware_variable(&[6, 0, 0, 0, 0], 0).unwrap();
+        for malformed in [
+            &[6, 0, 0, 0, 0][..],
+            &[7, 0, 0, 0, 1][..],
+            &[6, 0, 0, 0, 2][..],
+            &[6, 0, 0, 1][..],
+            &[6, 0, 0, 0, 1, 0][..],
+        ] {
+            assert!(check_firmware_variable(malformed, 1).is_err());
+        }
+    }
+    #[test]
+    fn target_claims_keep_data_readonly_and_esp_separate() {
+        let data = parse_kernel_mount(
+            "31 20 253:1 / /data ro,nodev,nosuid,noexec - ext4 /dev/mapper/luma-recovery-1 ro\n",
+            Path::new("/data"),
+        )
+        .unwrap();
+        check_recovery_mount_claims(
+            &data,
+            "253:1",
+            6,
+            true,
+            "CRYPT-LUKS2-fixture-luma-recovery-1",
+        )
+        .unwrap();
+        for case in 0..6 {
+            let mut bad=parse_kernel_mount("31 20 253:1 / /data ro,nodev,nosuid,noexec - ext4 /dev/mapper/luma-recovery-1 ro\n",Path::new("/data")).unwrap();
+            match case {
+                0 => bad.device = "253:2".into(),
+                1 => bad.options.retain(|v| v != "noexec"),
+                2 => bad.options.retain(|v| v != "nodev"),
+                3 => bad.options.retain(|v| v != "nosuid"),
+                4 => bad.root = "/subdir".into(),
+                _ => bad.filesystem = "vfat".into(),
+            }
+            assert!(
+                check_recovery_mount_claims(&bad, "253:1", 6, true, "CRYPT-LUKS2-fixture").is_err()
+            );
+        }
+        assert!(
+            check_recovery_mount_claims(&data, "253:1", 6, false, "CRYPT-LUKS2-fixture").is_err()
+        );
+        assert!(check_recovery_mount_claims(&data, "253:1", 6, true, "linear-other").is_err());
+        assert!(
+            check_recovery_mount_claims(&data, "253:1", 2, true, "CRYPT-LUKS2-fixture").is_err()
+        );
+        let esp = parse_kernel_mount(
+            "32 20 8:1 / /esp rw,nodev,nosuid,noexec - vfat /dev/sda1 rw\n",
+            Path::new("/esp"),
+        )
+        .unwrap();
+        check_recovery_mount_claims(&esp, "8:1", 1, false, "").unwrap();
+        assert!(check_recovery_mount_claims(&esp, "8:1", 6, false, "").is_err());
+        assert!(check_recovery_mount_claims(&esp, "8:1", 1, true, "").is_err());
+    }
+}
+
+/// Retained exact mount proof, minted only by this module after its own mount.
+pub(crate) struct RecoveryMount {
+    device: PathBuf,
+    at: PathBuf,
+    mount: KernelMount,
+    directory: File,
+    identity: (u64, u64),
+    disk: crate::disk::Identity,
+    partition: u8,
+    mapper_uuid: Option<String>,
+}
+impl RecoveryMount {
+    fn capture(disk: &Disk, mount: &Mount, partition: u8) -> Result<Self> {
+        let directory = OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC)
+            .open(&mount.at)?;
+        let metadata = directory.metadata()?;
+        let mapper_uuid = if partition == 6 {
+            Some(fs::read_to_string(
+                Path::new("/sys/class/block")
+                    .join(mount.device.file_name().ok_or("mapper name")?)
+                    .join("dm/uuid"),
+            )?)
+        } else {
+            None
+        };
+        let result = Self {
+            device: mount.device.clone(),
+            at: mount.at.clone(),
+            mount: kernel_mount(&mount.at)?,
+            directory,
+            identity: (metadata.dev(), metadata.ino()),
+            disk: disk.identity.clone(),
+            partition,
+            mapper_uuid,
+        };
+        result.recheck(&disk.identity)?;
+        Ok(result)
+    }
+    pub(crate) fn device(&self) -> &Path {
+        &self.device
+    }
+    pub(crate) fn at(&self) -> &Path {
+        &self.at
+    }
+    pub(crate) fn recheck(&self, disk: &crate::disk::Identity) -> Result<()> {
+        if &self.disk != disk || kernel_mount(&self.at)? != self.mount {
+            return Err("target recovery mount changed".into());
+        }
+        let metadata = self.directory.metadata()?;
+        let current = fs::symlink_metadata(&self.at)?;
+        if (metadata.dev(), metadata.ino()) != self.identity
+            || (current.dev(), current.ino()) != self.identity
+            || !current.is_dir()
+        {
+            return Err("target mounted directory identity changed".into());
+        }
+        let metadata = fs::metadata(&self.device)?;
+        use std::os::unix::fs::FileTypeExt;
+        if !metadata.file_type().is_block_device()
+            || device_number(&metadata) != self.mount.device
+            || self.mount.root != "/"
+        {
+            return Err("target mount source does not bind retained block device".into());
+        }
+        let name = self
+            .device
+            .file_name()
+            .ok_or("missing recovery device name")?;
+        let sys = Path::new("/sys/class/block").join(name);
+        let underlying = if self.partition == 6 {
+            let uuid = fs::read_to_string(sys.join("dm/uuid"))?;
+            if self.mapper_uuid.as_ref() != Some(&uuid) {
+                return Err("target mapper UUID changed".into());
+            }
+            check_recovery_mount_claims(
+                &self.mount,
+                &device_number(&metadata),
+                6,
+                fs::read_to_string(sys.join("ro"))?.trim() == "1",
+                uuid.trim(),
+            )?;
+            let slaves = fs::read_dir(sys.join("slaves"))?.collect::<std::io::Result<Vec<_>>>()?;
+            if slaves.len() != 1 {
+                return Err("ambiguous recovery mapper backing device".into());
+            }
+            Path::new("/dev").join(slaves[0].file_name())
+        } else if self.partition == 1 && self.mount.filesystem == "vfat" {
+            check_recovery_mount_claims(&self.mount, &device_number(&metadata), 1, false, "")?;
+            self.device.clone()
+        } else {
+            return Err("unsupported recovery mount partition".into());
+        };
+        if crate::disk::parent_disk(&underlying)? != Path::new(&disk.path) {
+            return Err("recovery mapping belongs to another disk".into());
+        }
+        let actual = fs::read_to_string(
+            Path::new("/sys/class/block")
+                .join(underlying.file_name().ok_or("partition name")?)
+                .join("partition"),
+        )?;
+        if actual.trim().parse::<u8>()? != self.partition {
+            return Err("recovery mapping is not the exact target partition".into());
+        }
+        Ok(())
+    }
+}
+
+fn check_recovery_mount_claims(
+    mount: &KernelMount,
+    device: &str,
+    partition: u8,
+    readonly: bool,
+    uuid: &str,
+) -> Result<()> {
+    if mount.device != device
+        || mount.root != "/"
+        || !["nodev", "nosuid", "noexec"]
+            .iter()
+            .all(|option| has_option(&mount.options, option))
+    {
+        return Err("target mount source or security flags differ from retained descriptor".into());
+    }
+    if partition == 6 {
+        if mount.filesystem != "ext4"
+            || !readonly
+            || !has_option(&mount.options, "ro")
+            || !has_option(&mount.super_options, "ro")
+            || !uuid.starts_with("CRYPT-LUKS2-")
+        {
+            return Err("target data requires the exact read-only LUKS2 mapping".into());
+        }
+    } else if partition == 1 {
+        if mount.filesystem != "vfat"
+            || readonly
+            || !has_option(&mount.options, "rw")
+            || !has_option(&mount.super_options, "rw")
+            || !uuid.is_empty()
+        {
+            return Err("recovery ESP requires the exact writable FAT mount".into());
+        }
+    } else {
+        return Err("recovery cannot adopt arbitrary target partitions".into());
+    }
+    Ok(())
+}
+
+/// Nontransferable live recovery target. Only the exact initially unmounted
+/// selected disk and this process's read-only decrypted mount can mint it.
+pub(crate) struct RecoveryTarget {
+    image: RecoveryImage,
+    disk: Disk,
+    proof: RecoveryMount,
+    data: Mount,
+    _crypt: Crypt,
+    esp: std::cell::RefCell<Option<(RecoveryMount, Mount)>>,
+    admin: PathBuf,
+    registry: PathBuf,
+    root_table: String,
+}
+impl RecoveryTarget {
+    fn open(disk: Disk) -> Result<Self> {
+        let image = RecoveryImage::current()?;
+        let table = command("/usr/sbin/dmsetup", &["table", "root"])?;
+        let hash = image
+            .command_line
+            .split_whitespace()
+            .find_map(|arg| arg.strip_prefix("roothash="))
+            .ok_or("missing live hash")?;
+        let fields: Vec<_> = table.split_whitespace().collect();
+        if table.lines().count() != 1
+            || fields.len() < 13
+            || fields[0] != "0"
+            || fields[2] != "verity"
+            || fields[3] != "1"
+            || fields[6] != "4096"
+            || fields[7] != "4096"
+            || fields[10] != "sha256"
+            || fields[11] != hash
+            || fields[8].parse::<u64>()? == 0
+            || fields[1].parse::<u64>()?
+                != fields[8]
+                    .parse::<u64>()?
+                    .checked_mul(8)
+                    .ok_or("verity geometry overflow")?
+        {
+            return Err("actual live verity mapping differs from immutable UKI intent".into());
+        }
+        for (field, label) in [(4, "luma-live-root"), (5, "luma-live-hash")] {
+            if device_number(&fs::metadata(format!("/dev/disk/by-partlabel/{label}"))?)
+                != fields[field]
+            {
+                return Err("live verity devices do not match recovery media".into());
+            }
+        }
+        disk.recheck()?;
+        let crypt = unlock(&disk.partition(6)?, true)?;
+        let staging = bundle::private_dir("target-recovery")?;
+        let data = Mount::new(
+            Path::new(&format!("/dev/mapper/{}", crypt.name)),
+            staging.join("data"),
+            "ro,noload,nodev,nosuid,noexec",
+        )?;
+        let proof = RecoveryMount::capture(&disk, &data, 6)?;
+        disk.admit_recovery_mount(&proof)?;
+        let admin = data.at.join("lib/luma-os/admin");
+        let registry = data.at.join("lib/luma-os/principals/registry.json");
+        let result = Self {
+            image,
+            disk,
+            proof,
+            data,
+            _crypt: crypt,
+            esp: std::cell::RefCell::new(None),
+            admin,
+            registry,
+            root_table: table,
+        };
+        result.recheck()?;
+        Ok(result)
+    }
+    pub(crate) fn image(&self) -> &RecoveryImage {
+        &self.image
+    }
+    pub(crate) fn admin_directory(&self) -> &Path {
+        &self.admin
+    }
+    pub(crate) fn registry_path(&self) -> &Path {
+        &self.registry
+    }
+    pub(crate) fn data_root(&self) -> &Path {
+        &self.data.at
+    }
+    pub(crate) fn recheck(&self) -> Result<()> {
+        self.image.recheck()?;
+        if command("/usr/sbin/dmsetup", &["table", "root"])? != self.root_table {
+            return Err("actual recovery media verity mapping changed".into());
+        }
+        self.proof.recheck(&self.disk.identity)?;
+        if let Some((proof, _)) = &*self.esp.borrow() {
+            proof.recheck(&self.disk.identity)?;
+        }
+        self.disk.recheck()
+    }
+    fn mount_esp(&self) -> Result<()> {
+        self.recheck()?;
+        if self.esp.borrow().is_some() {
+            return Err("recovery ESP already mounted".into());
+        }
+        let staging = bundle::private_dir("target-esp")?;
+        let mount = Mount::new(
+            &self.disk.partition(1)?,
+            staging.join("esp"),
+            "nodev,nosuid,noexec,umask=0077",
+        )?;
+        let proof = RecoveryMount::capture(&self.disk, &mount, 1)?;
+        self.disk.admit_recovery_mount(&proof)?;
+        *self.esp.borrow_mut() = Some((proof, mount));
+        self.recheck()
+    }
 }
 
 fn install_slots(disk: &Disk, bundle: &VerifiedBundle, slots: &[char]) -> Result<()> {
@@ -359,15 +1197,22 @@ fn install_slots_guarded(
     Ok(())
 }
 
-fn publish_efi(esp: &Path, bundle: &VerifiedBundle, slots: &[char], trial: char) -> Result<()> {
-    publish_efi_guarded(esp, bundle, slots, trial, &mut || Ok(()))
-}
-
 fn publish_efi_guarded(
     esp: &Path,
     bundle: &VerifiedBundle,
     slots: &[char],
     trial: char,
+    guard: &mut impl FnMut() -> Result<()>,
+) -> Result<()> {
+    publish_efi_guarded_mode(esp, bundle, slots, trial, true, guard)
+}
+
+fn publish_efi_guarded_mode(
+    esp: &Path,
+    bundle: &VerifiedBundle,
+    slots: &[char],
+    trial: char,
+    counted: bool,
     guard: &mut impl FnMut() -> Result<()>,
 ) -> Result<()> {
     guard()?;
@@ -376,20 +1221,19 @@ fn publish_efi_guarded(
     let loader = esp.join("EFI/BOOT");
     fs::create_dir_all(&loader)?;
     if !loader.join("BOOTX64.EFI").exists() {
+        let bytes = fs::read(bundle.path("bootloader.efi")?)?;
         guard()?;
-        write_atomic(
-            &loader.join("BOOTX64.EFI"),
-            &fs::read(bundle.path("bootloader.efi")?)?,
-            0o600,
-        )?;
+        write_atomic_guarded(&loader.join("BOOTX64.EFI"), &bytes, 0o600, guard)?;
         guard()?;
     }
     for slot in slots {
         guard()?;
         let source = bundle.path(&format!("slot-{slot}.efi"))?;
-        let suffix = if *slot == trial { "+3" } else { "" };
+        let suffix = if counted && *slot == trial { "+3" } else { "" };
         let name = format!("luma-{slot}-{:020}{suffix}.efi", bundle.manifest.sequence);
-        write_atomic(&linux.join(&name), &fs::read(source)?, 0o600)?;
+        let bytes = fs::read(source)?;
+        guard()?;
+        write_atomic_guarded(&linux.join(&name), &bytes, 0o600, guard)?;
         guard()?;
         // A reused slot no longer contains the old release's root. Remove only
         // our obsolete entries for that exact slot, after publishing its UKI.
@@ -401,6 +1245,7 @@ fn publish_efi_guarded(
                 if !entry.file_type()?.is_file() {
                     return Err("unexpected boot entry type".into());
                 }
+                guard()?;
                 fs::remove_file(entry.path())?;
                 guard()?;
             }
@@ -408,9 +1253,15 @@ fn publish_efi_guarded(
     }
     fs::create_dir_all(esp.join("loader"))?;
     // Firmware receives no automatic key enrollment or boot-order mutation.
-    let config = loader_config(trial, bundle.manifest.sequence, true);
+    let config = loader_config(trial, bundle.manifest.sequence, counted);
     guard()?;
-    write_atomic(&esp.join("loader/loader.conf"), config.as_bytes(), 0o600)?;
+    write_atomic_guarded(
+        &esp.join("loader/loader.conf"),
+        config.as_bytes(),
+        0o600,
+        guard,
+    )?;
+    guard()?;
     File::open(esp)?.sync_all()?;
     guard()?;
     Ok(())
@@ -770,8 +1621,21 @@ pub fn install(selection: &str, source: &Path, model_id: Option<&str>) -> Result
     // Observe available RAM before the live installer's verified bundle
     // snapshot temporarily occupies memory-backed staging. Recheck again
     // after releasing that snapshot and before acquiring any model bytes.
-    let model = crate::model::choose(model_id, disk.identity.bytes)?;
-    let verified = bundle::verify(source)?;
+    let preview = bundle::initial_preview(source)?;
+    let preview_manifest: Manifest = serde_json::from_slice(&preview)?;
+    let model = if preview_manifest.environment == "production" {
+        if model_id.is_some_and(|id| id != "manual-only") {
+            return Err("inert production installation cannot acquire a model before separately signed catalog and Admin/TPM/UTC activation; select manual-only".into());
+        }
+        println!("Production image will be staged inertly in manual mode; protected services and model acquisition remain disabled until explicit Admin/TPM/UTC/trust activation.");
+        None
+    } else {
+        crate::model::choose(model_id, disk.identity.bytes)?
+    };
+    let verified = bundle::verify_initial(source)?;
+    if verified.manifest_bytes != preview {
+        return Err("installation manifest changed after model/resource planning".into());
+    }
     let roots_mib = verified
         .manifest
         .root_bytes
@@ -984,12 +1848,32 @@ pub fn install(selection: &str, source: &Path, model_id: Option<&str>) -> Result
         &serde_json::to_vec(&verified.manifest)?,
         0o600,
     )?;
+    if let Some(trust) = &verified.inert_trust {
+        let staged = crate::release_trust::StagedRelease {
+            schema_version: 1,
+            trust: serde_json::from_slice(trust)?,
+            manifest_json: String::from_utf8(verified.manifest_bytes.clone())?,
+            signature_hex: bundle::hex(&verified.signature),
+        };
+        write_atomic(
+            &data.at.join("lib/luma-os/staged-release.json"),
+            &serde_json::to_vec(&staged)?,
+            0o600,
+        )?;
+    }
     let esp = Mount::new(
         &disk.partition(1)?,
         staging.join("esp"),
         "nodev,nosuid,noexec,umask=0077",
     )?;
-    publish_efi(&esp.at, &verified, &['a', 'b'], 'a')?;
+    publish_efi_guarded_mode(
+        &esp.at,
+        &verified,
+        &['a', 'b'],
+        'a',
+        verified.manifest.environment != "production",
+        &mut || Ok(()),
+    )?;
     command("/usr/bin/sync", &[])?;
     drop(root);
     drop(verified);
@@ -1279,7 +2163,26 @@ pub(crate) fn check_governance_manifest(manifest: &Manifest) -> Result<()> {
             Path::new("/usr/share/luma-os/release-identity.json"),
             4096,
         )?)?;
-    check_governance_identity(&identity, manifest, &cmdline()?)
+    check_governance_identity(&identity, manifest, &cmdline()?)?;
+    if manifest.environment == "production" {
+        require_firmware_authentication()?;
+        let mount = kernel_mount(Path::new("/"))?;
+        let dm = Path::new("/sys/dev/block").join(&mount.device).join("dm");
+        if mount.root != "/"
+            || mount.filesystem != "ext4"
+            || !has_option(&mount.options, "ro")
+            || !has_option(&mount.super_options, "ro")
+            || fs::read_to_string(dm.join("name"))?.trim() != "root"
+            || !fs::read_to_string(dm.join("uuid"))?
+                .trim()
+                .starts_with("CRYPT-VERITY-")
+        {
+            return Err(
+                "production governance requires authenticated read-only kernel verity root".into(),
+            );
+        }
+    }
+    Ok(())
 }
 
 pub(crate) fn check_running_manifest(manifest: &Manifest) -> Result<()> {
@@ -1411,8 +2314,47 @@ pub fn update(source: &Path) -> Result<()> {
 
 pub fn recover(args: &[String]) -> Result<()> {
     require_live()?;
+    if args.len() < 2 {
+        return Err("recovery needs an action and exact disk identity".into());
+    }
     let action = &args[0];
     let disk = Disk::open(&args[1], false)?;
+    if matches!(action.as_str(), "utc-seed" | "utc-reacquire") {
+        let target = RecoveryTarget::open(disk)?;
+        let credential = crate::admin_recovery::Credential::read()?;
+        let authority = crate::admin_governance::TargetAuthority::new(&target, &credential)?;
+        let report = if action == "utc-seed" {
+            if args.len() != 3 && !(args.len() == 6 && args[3] == "--commit") {
+                return Err(
+                    "recover utc-seed DISK SEED-FILE [--commit KEEPER-INSTANCE REVIEW-SHA256]"
+                        .into(),
+                );
+            }
+            let seed: crate::utc_provider::Seed = serde_json::from_slice(
+                &crate::admin_credentials::public_input(Path::new(&args[2]), 16384)?,
+            )?;
+            if args.len() == 3 {
+                crate::utc_provider::recovery_seed_proposal(&authority, &seed)?
+            } else {
+                crate::utc_provider::recovery_deliver_seed(&authority, &seed, &args[4], &args[5])?;
+                serde_json::json!({"schema_version":1,"seed_delivered":true,"timed_authority":false,"target_custody_verified":true})
+            }
+        } else {
+            if args.len() != 2 && !(args.len() == 5 && args[2] == "--commit") {
+                return Err(
+                    "recover utc-reacquire DISK [--commit KEEPER-INSTANCE REVIEW-SHA256]".into(),
+                );
+            }
+            if args.len() == 2 {
+                crate::utc_provider::recovery_reacquire_proposal(&authority)?
+            } else {
+                crate::utc_provider::recovery_reacquire(&authority, &args[3], &args[4])?;
+                serde_json::json!({"schema_version":1,"reacquired":true,"new_independent_seed_required":true,"timed_authority":false})
+            }
+        };
+        println!("{}", serde_json::to_string(&report)?);
+        return Ok(());
+    }
     if action == "repair-data" && args.len() == 2 {
         println!("This repairs ext4 metadata and replays its journal. It never formats the encrypted volume. Preserve a backup before repairing damaged media.");
         disk.confirm("REPAIR-DATA")?;
@@ -1430,23 +2372,29 @@ pub fn recover(args: &[String]) -> Result<()> {
         return Ok(());
     }
     if matches!(action.as_str(), "repair-a" | "repair-b") && args.len() == 3 {
+        let target = RecoveryTarget::open(disk)?;
+        if fs::symlink_metadata(target.admin_directory().join("anchor.json")).is_ok() {
+            return repair_governed(&target, action, Path::new(&args[2]));
+        }
+        let retained = match fs::read_dir(target.admin_directory()) {
+            Ok(mut entries) => entries.next().transpose()?.is_some(),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
+            Err(error) => return Err(error.into()),
+        } || target
+            .admin_directory()
+            .with_file_name("admin.parent-intent")
+            .exists()
+            || target
+                .admin_directory()
+                .with_file_name("admin.enrollment-pending")
+                .exists();
+        let (parent, nv, _) = crate::tpm::enrollment_handles(None)?;
+        if retained || parent || nv {
+            return Err("target enrollment is damaged or another fixed Luma authority exists; no static lab downgrade".into());
+        }
         let verified = bundle::verify(Path::new(&args[2]))?;
-        if verified.manifest.environment == "production" {
-            return Err("production repair requires target-mounted journal/TPM and recovered protected UTC admission; no media-journal or mutable-manifest fallback".into());
-        }
-        let crypt = unlock(&disk.partition(6)?, true)?;
-        let staging = bundle::private_dir("repair-admission")?;
-        let data = Mount::new(
-            Path::new(&format!("/dev/mapper/{}", crypt.name)),
-            staging.join("data"),
-            "ro,nodev,nosuid,noexec",
-        )?;
-        let target = data.at.join("lib/luma-os");
-        if target.join("admin/bootstrap.json").exists() {
-            return Err("governed target repair requires target-bound TPM/UTC admission; media journal and target installed.json are not authority".into());
-        }
         let current: Manifest = serde_json::from_slice(&crate::admin_credentials::public_input(
-            &target.join("installed.json"),
+            &target.data_root().join("lib/luma-os/installed.json"),
             65536,
         )?)?;
         bundle::validate_manifest(&current)?;
@@ -1458,16 +2406,19 @@ pub fn recover(args: &[String]) -> Result<()> {
         {
             return Err("laboratory repair cannot lower target release sequence or change target environment/geometry/edition".into());
         }
-        disk.confirm("REPAIR")?;
+        target.disk.confirm("REPAIR")?;
         let slot = if action == "repair-a" { 'a' } else { 'b' };
-        install_slots(&disk, &verified, &[slot])?;
-        let staging = bundle::private_dir("repair")?;
-        let esp = Mount::new(
-            &disk.partition(1)?,
-            staging.join("esp"),
-            "nodev,nosuid,noexec,umask=0077",
+        let mut guard = || target.recheck();
+        install_slots_guarded(&target.disk, &verified, &[slot], &mut guard)?;
+        target.mount_esp()?;
+        let esp = target.esp.borrow();
+        publish_efi_guarded(
+            &esp.as_ref().ok_or("missing target ESP")?.1.at,
+            &verified,
+            &[slot],
+            slot,
+            &mut guard,
         )?;
-        publish_efi(&esp.at, &verified, &[slot], slot)?;
         println!("Selected system slot repaired; encrypted data was not formatted.");
         return Ok(());
     }
@@ -1508,33 +2459,141 @@ pub fn recover(args: &[String]) -> Result<()> {
     Ok(())
 }
 
+fn repair_governed(target: &RecoveryTarget, action: &str, source: &Path) -> Result<()> {
+    let credential = crate::admin_recovery::Credential::read()?;
+    let authority = crate::admin_governance::TargetAuthority::new(target, &credential)?;
+    let state = authority.release_state()?.clone();
+    let mut client = crate::utc_provider::RecoveryClient::new(&authority)?;
+    let first = client.current()?;
+    let verified = bundle::verify_recovery(source, &state, first.interval())?;
+    let signed = crate::release_trust::verify_current_release(
+        &state.trust,
+        &verified.manifest_bytes,
+        &verified.signature,
+        client.current()?.interval(),
+    )?;
+    let slot = if action == "repair-a" { 'a' } else { 'b' };
+    let review = serde_json::json!({"schema_version":1,"kind":"target-bound-retained-image-repair","disk":target.disk.identity,
+        "data_mount_device":target.proof.mount.device,"data_mount_id":target.proof.mount.id,
+        "history_sha256":bundle::hex(&sha2::Sha256::digest(format!("{:?}",authority.history_binding()).as_bytes())),
+        "release":verified.manifest,"manifest_sha256":signed.digest()?,"signer":signed.signer,
+        "trust_sha256":state.trust.digest()?,"floor":state.floor,"slot":slot,"maximum_session_seconds":1800,
+        "data_writable":false,"checkpoint_mutation":false,"automatic_renewal":false});
+    let review_bytes = serde_json::to_vec(&review)?;
+    use sha2::Digest;
+    let digest = bundle::hex(&sha2::Sha256::digest(&review_bytes));
+    println!("{}", serde_json::to_string_pretty(&review)?);
+    println!("Review this exact disk/image transaction. Type exactly: REPAIR {digest}");
+    if console_line(false)? != format!("REPAIR {digest}") {
+        return Err("exact target repair review denied".into());
+    }
+    target.disk.confirm("REPAIR")?;
+    let mut previous = client.current()?;
+    let mut guard = || {
+        let current = client.project_after_checks(&previous)?;
+        crate::release_trust::repair_identity(&state, &verified.manifest)?;
+        signed.check_time(&state.trust, current.interval())?;
+        previous = current;
+        Ok(())
+    };
+    guard()?;
+    install_slots_guarded(&target.disk, &verified, &[slot], &mut guard)?;
+    guard()?;
+    target.mount_esp()?;
+    guard()?;
+    let esp = target.esp.borrow();
+    publish_efi_guarded(
+        &esp.as_ref().ok_or("missing governed repair ESP")?.1.at,
+        &verified,
+        &[slot],
+        slot,
+        &mut guard,
+    )?;
+    guard()?;
+    println!("Exact TPM-anchored image repaired with continuous target/Admin/UTC checks. Encrypted data and monotonic release floor were not changed. Boot qualification remains required.");
+    Ok(())
+}
+
 pub fn boot_health() -> Result<()> {
     crate::require_root()?;
     let _operation = update_operation()?;
     if live()? {
         return Err("recovery media cannot acknowledge installed boot health".into());
     }
+    let authority = crate::admin_governance::release_state_optional()?;
+    let immutable: RunningIdentity =
+        serde_json::from_slice(&crate::admin_credentials::public_input(
+            Path::new("/usr/share/luma-os/release-identity.json"),
+            4096,
+        )?)?;
+    if immutable.environment == "production"
+        && authority
+            .as_ref()
+            .map_or(true, |state| state.acknowledged.is_none())
+    {
+        let staged: crate::release_trust::StagedRelease =
+            serde_json::from_slice(&crate::admin_credentials::public_input(
+                Path::new("/var/lib/luma-os/staged-release.json"),
+                131072,
+            )?)?;
+        check_running_manifest(&staged.release()?.manifest)?;
+        println!("LUMA_BOOT_INERT_PRODUCTION: explicit Admin/TPM/protected-UTC/trust activation remains required; no boot-health acknowledgement or protected service authority issued.");
+        return Ok(());
+    }
     check_essential_health()?;
     let pending = Path::new("/var/lib/luma-os/pending.json");
-    let mut acknowledged: Manifest =
-        serde_json::from_slice(&crate::admin_credentials::public_input(
-            Path::new("/var/lib/luma-os/installed.json"),
-            65536,
-        )?)?;
     let mut failed = None;
-    if pending.exists() {
-        let manifest: Manifest =
-            serde_json::from_slice(&crate::admin_credentials::public_input(pending, 65536)?)?;
-        if check_running_manifest(&manifest).is_ok() {
-            acknowledged = manifest;
-        } else {
-            check_running_manifest(&acknowledged)?;
-            failed = Some(manifest);
+    let acknowledged = if let Some(state) = &authority {
+        let mut identities = Vec::new();
+        for identity in [
+            state.acknowledged.as_ref(),
+            state.retained.as_ref(),
+            state.pending.as_ref().map(|p| &p.prior),
+            state.pending.as_ref().map(|p| &p.candidate.manifest),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            if !identities.contains(identity) {
+                identities.push(identity.clone());
+            }
         }
+        let mut matches = identities
+            .into_iter()
+            .filter(|identity| check_running_manifest(identity).is_ok());
+        let selected = matches
+            .next()
+            .ok_or("healthy running root is not any exact TPM-anchored release identity")?;
+        if matches.next().is_some() {
+            return Err("running release identity is ambiguous".into());
+        }
+        if let Some(p) = &state.pending {
+            if selected != p.candidate.manifest {
+                failed = Some(p.candidate.manifest.clone());
+            }
+        }
+        selected
     } else {
-        check_running_manifest(&acknowledged)?;
-    }
-    if let Some(authority) = crate::admin_governance::release_state_optional()? {
+        let mut selected: Manifest =
+            serde_json::from_slice(&crate::admin_credentials::public_input(
+                Path::new("/var/lib/luma-os/installed.json"),
+                65536,
+            )?)?;
+        if pending.exists() {
+            let candidate: Manifest =
+                serde_json::from_slice(&crate::admin_credentials::public_input(pending, 65536)?)?;
+            if check_running_manifest(&candidate).is_ok() {
+                selected = candidate;
+            } else {
+                check_running_manifest(&selected)?;
+                failed = Some(candidate);
+            }
+        } else {
+            check_running_manifest(&selected)?;
+        }
+        selected
+    };
+    if let Some(authority) = authority {
         // The prepared exact intent authorizes machine health confirmation but
         // never a machine append impersonating the original Admin. Catalog
         // pending state remains until fresh human reconciliation; its floor
@@ -1548,12 +2607,16 @@ pub fn boot_health() -> Result<()> {
                     );
                 }
                 crate::release_trust::check_effect_time(&authority, current.1)?;
-            } else if acknowledged != admission.prior {
+            } else if acknowledged != admission.prior
+                && authority.retained.as_ref() != Some(&acknowledged)
+            {
                 return Err(
                     "healthy image is not exact admitted candidate or retained prior".into(),
                 );
             }
-        } else if authority.acknowledged.as_ref() != Some(&acknowledged) {
+        } else if authority.acknowledged.as_ref() != Some(&acknowledged)
+            && authority.retained.as_ref() != Some(&acknowledged)
+        {
             return Err("healthy image differs from TPM-anchored acknowledged release".into());
         }
     } else if acknowledged.environment == "production" {

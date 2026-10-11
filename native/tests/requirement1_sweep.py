@@ -33,7 +33,7 @@ def executed_tests(name, output):
         if not summaries or counts['passed'] + counts['failed'] == 0:
             raise ValueError('Rust lane did not execute any recognized tests')
         return counts
-    if name in ('native-source-tests', 'utc-release-authentication'):
+    if name in ('native-source-tests', 'utc-release-authentication', 'public-trust-authentication'):
         summaries = re.findall(r'^Ran (\d+) tests? in .+$', output, re.MULTILINE)
         if len(summaries) != 1 or int(summaries[0]) == 0:
             raise ValueError('native lane did not execute a recognized nonempty suite')
@@ -46,7 +46,7 @@ def executed_tests(name, output):
         discovered = int(summaries[0])
         failed = details.get('failures', 0) + details.get('errors', 0)
         skipped = details.get('skipped', 0)
-        if name == 'utc-release-authentication' and any(details.values()):
+        if name in ('utc-release-authentication', 'public-trust-authentication') and any(details.values()):
             raise ValueError('UTC release authentication requires every test to pass without skips')
         return {'discovered': discovered, 'passed': discovered - failed - skipped
                 - details.get('expected failures', 0) - details.get('unexpected successes', 0),
@@ -138,6 +138,9 @@ def main():
     cases.extend([
         ('native-source-tests', ['/usr/bin/python3', '-B', '-m', 'unittest', 'discover',
                                  '-s', 'native/tests', '-p', 'test_*.py', '-v'], repository, 600),
+        ('public-trust-authentication', ['/usr/bin/python3', '-B', '-m', 'unittest', 'discover',
+                                         '-s', 'native/image', '-p', 'test_public_trust.py', '-v'],
+                                         repository, 120),
     ])
     if args.utc_release_archive:
         archive = args.utc_release_archive.resolve(strict=True)

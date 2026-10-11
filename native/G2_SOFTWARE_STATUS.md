@@ -13,7 +13,46 @@ requirement.
 
 ## Current software inventory and work still required
 
-### Parallel workflow, OS release trust and UTC dependency stage, 2026-10-11
+### Approved parallel staging, recovery and governed skills, 2026-10-11
+
+The owner approved offline signed immutable staging with explicit first-boot
+activation, and separately approved a repair-only, nonrenewable original-Admin
+custody session of at most thirty minutes. Those two policy decisions are no
+longer blockers. The approval is for software/disposable tests, not host disk,
+TPM, clock, firmware, account or production private-key changes.
+
+| Track | Implemented source scope | Separate qualification or scope |
+| --- | --- | --- |
+| Broader workflow/platform | Purpose-separated governed schema-2 skill registry, immutable public root policy, trust rotation/irreversible revocation, monotonic admission floors, reviewed Admin interfaces, bounded duplicate-refusing DAG/scheduler inputs and common final UTC projection across account/grant/release/skill constraints. Legacy schema-1 lab admission cannot return after trust enrollment or damaged authority. | Final-image workflows, grants, worker pressure/cancellation and retention/recovery journeys; populated cross-schema/reference/principal migration remains provisionally G4. Arbitrary plugins/generated code are not this closed profile. |
+| Production trust/update lifecycle | Exact signed inert initial staging and retained evidence, explicit Admin/TPM/UTC activation, protected service/effect fences, usable typed release publication/initialize/prepare/resolve command, target-bound read-only custody reconstruction and continuously checked bounded repair writes/readback/EFI publication. Existing TPM ownership and PCR policy are preserved. | Externally supplied production public roots/signatures/custody, final-image installation/activation/update/fallback, interruption/storage pressure and physical firmware/TPM/PCR qualification. Production model catalog/pack governance remains separate. |
+| UTC dependency | Authenticated pinned source/build/provenance plus fixed recovery keeper/producer/restart units and profiles; original target history and custody bind authenticated recovery seed/reacquisition/query delivery. Keeper receives no target secrets or TPM credentials. | Actual NTS certificate/quorum/loss/leap/step/suspend/rate-error and enforcing installed/recovery confinement qualification. Source signatures and upstream unit passes do not certify live dependency revocation or the installed dependency closure. |
+
+Immutable public-input packaging happens before verity sealing, accepts no
+private signing key and activates no authority. The lab builder can carry an
+externally supplied production release root for recovery and a governed lab
+skill group; it does not manufacture a production-signed OS image.
+
+The final frozen source passes **920 Rust tests**, all-target checks with warnings
+denied, **358 native-source tests with zero skips**, thirteen real public-trust
+crypto cases, eight UTC authentication cases, sixteen capability-free upstream
+crypto/NTS cases, the authenticated NTS/privilege-drop/seccomp release build,
+six real PAM cases, four independent resource software-TPM cases and the
+existing-owner Admin driver. The default Rust run retains 42 fixture-only entries
+ignored; selected fixture drivers execute their stated cases, not all 42. All
+thirteen AppArmor profiles parse without kernel loading. Post-test source bytes
+match the independently recaptured manifest. Failed earlier attempts are retained.
+
+See [the approved integrated evidence](evidence/G2_APPROVED_INTEGRATION_2026-10-11.md),
+[the release commands](RELEASE_TRUST.md), [the closed skill trust guide](SKILL_TRUST.md)
+and [ADR 0012](../docs/adr/0012-production-staging-repair-and-skill-trust.md).
+The prior sequence-12 image does not contain this changed source. Requirement #1
+and G2 remain open pending the required final-image/native qualification and
+separate remaining scope; do not advance to Requirement #2.
+
+### Prior parallel workflow, OS release trust and UTC checkpoint, 2026-10-11
+
+This historical checkpoint is superseded by the approved stage above only for
+its implemented scope; its earlier tests and image limitations remain retained.
 
 The owner requested these tracks in parallel. Their integrated source now
 passes **888 Rust tests**, all-target checks with warnings denied, **345 native

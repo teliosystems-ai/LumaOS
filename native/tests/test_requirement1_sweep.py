@@ -9,6 +9,14 @@ SPEC.loader.exec_module(SWEEP)
 
 
 class SweepExecutionTests(unittest.TestCase):
+    def test_public_trust_lane_requires_actual_unskipped_crypto_cases(self):
+        text = 'Ran 13 tests in 0.1s\n\nOK\n'
+        self.assertEqual(SWEEP.executed_tests('public-trust-authentication', text)['passed'], 13)
+        for invalid in ('', text.replace('13 tests', '0 tests'),
+                        text.replace('OK', 'OK (skipped=1)'),
+                        text.replace('OK', 'OK (expected failures=1)')):
+            with self.assertRaises(ValueError):
+                SWEEP.executed_tests('public-trust-authentication', invalid)
     def test_utc_crypto_lane_requires_nonempty_all_passing_tests(self):
         text = 'Ran 7 tests in 0.1s\n\nOK\n'
         self.assertEqual(SWEEP.executed_tests('utc-release-authentication', text)['passed'], 7)

@@ -41,12 +41,20 @@ damaged-authority disposition. WSL startup was restored by the owner-approved
 2026-10-10 restart; Linux verification is no longer blocked by that failure.
 The 2026-10-11 parallel work adds bounded reviewed workflow scheduling,
 native OS release trust/update admission and authenticated UTC dependency
-selection. See [release lifecycle and remaining policy decisions](RELEASE_TRUST.md)
+selection. See [release lifecycle and approved staging/repair](RELEASE_TRUST.md)
 and the current software register for exact verification and incomplete scope.
-Preserve implementation-first delivery: target-mounted governed recovery and
-production installation activation are still software work, not merely native
-testing. The historical table below is a baseline; newer checkpoints supersede
-its already-implemented account, grant, workflow and resource integrations.
+The owner subsequently approved signed inert staging and a separate finite
+repair custody session. The integrated source now includes first-boot production
+activation, target-mounted governed recovery, purpose-separated closed skill
+trust/admission, usable release transitions and mode-specific authenticated UTC
+delivery. Their source verification is recorded in
+[the approved parallel evidence](evidence/G2_APPROVED_INTEGRATION_2026-10-11.md).
+The final image and native qualification, actual production custody and separate
+model/generated-code/migration scope are not closed by these implementations.
+Preserve implementation-first delivery and test the exact final candidate, not
+the old sequence-12 image. The historical table below is a baseline; newer
+checkpoints supersede only their implemented account, grant, workflow, trust,
+recovery and resource integrations.
 
 | Work package | Required integration before candidate freeze |
 | --- | --- |

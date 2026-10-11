@@ -18,7 +18,10 @@ class BuildDriverTests(unittest.TestCase):
     def test_installed_profile_automatically_selects_external_build_storage(self):
         self.exercise_driver('auto')
 
-    def exercise_driver(self, profile):
+    def test_public_trust_is_mounted_readonly_only_for_assembly(self):
+        self.exercise_driver('auto', public_trust=True)
+
+    def exercise_driver(self, profile, public_trust=False):
         with tempfile.TemporaryDirectory(prefix='luma-build-driver-') as temporary:
             root = Path(temporary)
             driver = root/'repo/native/image/build.sh'
@@ -27,6 +30,8 @@ class BuildDriverTests(unittest.TestCase):
             installed = root/'profile.sh'
             external = root/'external'
             external.mkdir()
+            trust = root/'public-trust'
+            trust.mkdir()
             installed.write_text('export LUMA_BUILD_ROOT='+str(external)+'\n'
                                  'export DOCKER_HOST=unix:///run/luma-build-docker.sock\n')
             # Substitute only this temporary driver's profile path; never read
@@ -63,6 +68,7 @@ if '/repo/native/image/assemble.py' in sys.argv:
                            'LUMA_DRIVER_FIXTURE':str(root), 'LUMA_BUILD_ROOT':'',
                            'LUMA_RUNTIME_ARCHIVE':'', 'LUMA_BUILD_NETWORK':'none',
                            'LUMA_BUILD_PROFILE':profile,
+                           'LUMA_NATIVE_PUBLIC_TRUST':str(trust) if public_trust else '',
                            'DOCKER_HOST':'unix:///var/run/docker.sock'}
             process = subprocess.Popen(['/bin/bash', str(driver), 'headless', '12'],
                                        env=environment, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
@@ -105,6 +111,14 @@ if '/repo/native/image/assemble.py' in sys.argv:
                 assembly = next(args for args in docker if '/repo/native/image/assemble.py' in args)
                 self.assertIn('CARGO_BUILD_JOBS=1', assembly)
                 self.assertIn('RUSTFLAGS=-Dwarnings', assembly)
+                mount = 'type=bind,src='+str(trust)+',dst=/public-trust,readonly'
+                if public_trust:
+                    self.assertIn(mount, assembly)
+                    self.assertEqual(assembly[assembly.index('--public-trust-inputs')+1], '/public-trust')
+                    other = [args for args in docker if args is not assembly]
+                    self.assertFalse(any(mount in args for args in other))
+                else:
+                    self.assertNotIn('--public-trust-inputs', assembly)
             finally:
                 if process.poll() is None:
                     process.kill()

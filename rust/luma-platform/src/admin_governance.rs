@@ -1708,6 +1708,7 @@ fn with_grants_for<T>(
 ) -> Result<T> {
     crate::require_root()?;
     platform::require_installed()?;
+    platform::require_production_activation()?;
     if uses.is_empty() || uses.len() > 64 {
         return Err("finite operation needs one to 64 exact grant scopes".into());
     }
@@ -1982,6 +1983,156 @@ pub(crate) fn release_authority_optional() -> Result<
 /// already acknowledged manual operation and exact retained fallback when
 /// networks/keeper are unavailable; it cannot admit a new release effect.
 pub(crate) fn release_state_optional() -> Result<Option<crate::release_trust::State>> {
+    Ok(catalog_state_optional()?.and_then(|catalog| catalog.release))
+}
+
+pub(crate) fn skill_trust_present() -> Result<bool> {
+    Ok(catalog_state_optional()?.is_some_and(|catalog| catalog.skill_trust.is_some()))
+}
+
+pub(crate) fn check_production_catalog(
+    image: &platform::CatalogImage,
+    catalog: &Catalog,
+    command: &Command,
+) -> Result<()> {
+    image.recheck()?;
+    if !image.production() {
+        return Ok(());
+    }
+    if inert_catalog_command(command) {
+        return Ok(());
+    }
+    let release = catalog
+        .release
+        .as_ref()
+        .ok_or("production catalog effects remain inert until signed release activation")?;
+    let acknowledged = release
+        .acknowledged
+        .as_ref()
+        .ok_or("production initial release not activated")?;
+    platform::check_governance_manifest(acknowledged)
+}
+
+fn inert_catalog_command(command: &Command) -> bool {
+    matches!(
+        command,
+        Command::RegisterActivity { .. }
+            | Command::DefineRole { .. }
+            | Command::AdoptPrincipals { .. }
+            | Command::CheckpointAccounts { .. }
+            | Command::PublishReleaseTrust { .. }
+            | Command::InitializeRelease { .. }
+            | Command::ResolveRelease { .. }
+            | Command::RevokeGrant { .. }
+            | Command::RevokeAssignment { .. }
+    )
+}
+
+#[cfg(test)]
+mod initial_catalog_gate_tests {
+    use super::*;
+    #[test]
+    fn inert_stage_only_allows_setup_denial_and_exact_release_reconciliation() {
+        for command in [
+            Command::RegisterActivity {
+                activity: "file.read".into(),
+            },
+            Command::DefineRole {
+                name: "Reader".into(),
+                activities: vec!["file.read".into()],
+                expected_version: 0,
+            },
+            Command::RevokeAssignment {
+                assignment: "assignment-1".into(),
+                expected_version: 1,
+            },
+            Command::RevokeGrant {
+                grant: "grant-1".into(),
+                expected_version: 1,
+            },
+            Command::ResolveRelease {
+                candidate_sha256: "1".repeat(64),
+                outcome: crate::release_trust::Outcome::Confirmed,
+            },
+        ] {
+            assert!(inert_catalog_command(&command));
+        }
+        for command in [
+            Command::AdvancePrincipal {
+                principal: "1".repeat(64),
+                expected_generation: 1,
+                enabled: true,
+            },
+            Command::RotateAdmin {
+                expected_generation: 1,
+            },
+            Command::PermitAccountCreation {
+                transaction: "transaction-1".into(),
+            },
+            Command::PermitAccountPublication {
+                transaction: "transaction-1".into(),
+            },
+            Command::PermitAccountDeletion {
+                transaction: "transaction-1".into(),
+            },
+            Command::CompleteAccountCreation {
+                transaction: "transaction-1".into(),
+            },
+        ] {
+            assert!(!inert_catalog_command(&command));
+        }
+    }
+}
+
+pub(crate) fn skill_authority() -> Result<(
+    Option<crate::skill_trust::State>,
+    crate::utc_bounds::Interval,
+    Option<crate::release_trust::State>,
+)> {
+    let expected = catalog_state_optional()?.ok_or("skill admission requires Admin bootstrap")?;
+    let directory = Path::new(DIRECTORY);
+    let mut store = Store::open(
+        tpm::LocalAnchor::installed()?,
+        &directory.join("journal.json"),
+    )?;
+    let first = store.snapshot()?;
+    let context = Context::load(directory, &first.deployment)?;
+    if context.events(&first, None)?.0 != expected {
+        return Err("skill authority changed before current UTC admission".into());
+    }
+    let history = HistoryReader::new(&mut store, directory).read()?;
+    let mut client = crate::utc_provider::Client::installed()?;
+    client.current(&history)?;
+    if expected
+        .skill_trust
+        .as_ref()
+        .is_some_and(|state| state.trust.trust.environment == "production")
+    {
+        let release = expected
+            .release
+            .as_ref()
+            .ok_or("production skill admission requires activated OS release")?;
+        platform::check_governance_manifest(
+            release
+                .acknowledged
+                .as_ref()
+                .ok_or("production release is not acknowledged")?,
+        )?;
+    }
+    history.recheck(&mut HistoryReader::new(&mut store, directory))?;
+    let last = store.snapshot()?;
+    last.clock.elapsed_since(first.clock)?;
+    if first.head != last.head
+        || first.deployment != last.deployment
+        || context.events(&last, None)?.0 != expected
+    {
+        return Err("skill authority changed during current UTC admission".into());
+    }
+    let interval = client.current(&history)?.interval();
+    Ok((expected.skill_trust, interval, expected.release))
+}
+
+fn catalog_state_optional() -> Result<Option<Catalog>> {
     crate::require_root()?;
     platform::require_installed()?;
     let directory = Path::new(DIRECTORY);
@@ -2016,9 +2167,6 @@ pub(crate) fn release_state_optional() -> Result<Option<crate::release_trust::St
         return Ok(None);
     }
     let catalog = context.events(&first, None)?.0;
-    if catalog.release.is_none() {
-        return Ok(None);
-    }
     let last = store.snapshot()?;
     last.clock.elapsed_since(first.clock)?;
     if first.head != last.head
@@ -2027,7 +2175,7 @@ pub(crate) fn release_state_optional() -> Result<Option<crate::release_trust::St
     {
         return Err("release authority changed during current verification".into());
     }
-    Ok(catalog.release)
+    Ok(Some(catalog))
 }
 
 fn require_unenrolled_release_fallback(retained: bool, occupied: bool) -> Result<()> {
@@ -2070,6 +2218,7 @@ impl HistoryBinding {
 pub(crate) struct HistoryReader<'a, A: Checkpoint> {
     store: &'a mut Store<A>,
     directory: &'a Path,
+    registry_path: &'a Path,
     last_clock: Option<tpm::Clock>,
     fenced: bool,
     candidate: Option<&'a str>,
@@ -2081,9 +2230,17 @@ impl<'a, A: Checkpoint> HistoryReader<'a, A> {
         Self {
             store,
             directory,
+            registry_path: Path::new(crate::principal::REGISTRY),
             last_clock: None,
             fenced: false,
             candidate: None,
+        }
+    }
+
+    fn recovery(store: &'a mut Store<A>, target: &'a platform::RecoveryTarget) -> Self {
+        Self {
+            registry_path: target.registry_path(),
+            ..Self::new(store, target.admin_directory())
         }
     }
 
@@ -2128,7 +2285,7 @@ impl<'a, A: Checkpoint> HistoryReader<'a, A> {
 
     fn replay(&mut self) -> Result<(HistoryBinding, tpm::Clock)> {
         let snapshot = self.store.snapshot()?;
-        let context = Context::load(self.directory, &snapshot.deployment)?;
+        let context = Context::load_at(self.directory, &snapshot.deployment, self.registry_path)?;
         if !context.bootstrap_state(&snapshot)?.1 {
             return Err("explicit product Admin bootstrap required for UTC history read".into());
         }
@@ -2190,6 +2347,142 @@ fn utc_input<T: serde::de::DeserializeOwned>(path: &str) -> Result<T> {
         return Err("UTC input changed during review".into());
     }
     Ok(serde_json::from_slice(&bytes)?)
+}
+
+/// Original Admin independent custody for one nonrenewable repair process.
+/// The mounted target and existing sealed TPM checkpoint are never replaced
+/// by the live image's empty journal or by a caller-selected filesystem path.
+pub(crate) struct TargetAuthority<'target, 'credential> {
+    target: &'target platform::RecoveryTarget,
+    credential: &'credential crate::admin_recovery::Credential,
+    verifier: crate::admin_recovery::Verifier,
+    registry: crate::principal::RegistryBinding,
+    anchor: tpm::RecoveryAnchor<'target>,
+    catalog: Catalog,
+    enrollment: Vec<u8>,
+    binding: HistoryBinding,
+    clock: std::cell::Cell<tpm::Clock>,
+    lifetime: authentication::RepairOperation,
+}
+impl<'target, 'credential> TargetAuthority<'target, 'credential> {
+    pub(crate) fn new(
+        target: &'target platform::RecoveryTarget,
+        credential: &'credential crate::admin_recovery::Credential,
+    ) -> Result<Self> {
+        let lifetime = authentication::RepairOperation::start()?;
+        target.recheck()?;
+        let registry = crate::principal::RegistryBinding::capture(target.registry_path())?;
+        let anchor = tpm::RecoveryAnchor::new(target)?;
+        let mut store = Store::open(
+            anchor.connect()?,
+            &target.admin_directory().join("journal.json"),
+        )?;
+        let snapshot = store.snapshot()?;
+        let context = Context::load_at(
+            target.admin_directory(),
+            &snapshot.deployment,
+            target.registry_path(),
+        )?;
+        if !context.state(&snapshot, None)?.1 {
+            return Err("governed repair requires target original Admin bootstrap".into());
+        }
+        let catalog = context.events(&snapshot, None)?.0;
+        let writer = context.custody_writer(&catalog)?;
+        if registry.current()? != catalog.registry()? {
+            return Err("target registry is not checkpointed current authority".into());
+        }
+        let verifier = catalog.recovery_verifier()?.clone();
+        verifier.validate(&writer.installation, &writer.principal)?;
+        verifier.verify(credential)?;
+        let binding = HistoryReader::recovery(&mut store, target).read()?;
+        let final_snapshot = store.snapshot()?;
+        final_snapshot.clock.elapsed_since(snapshot.clock)?;
+        if snapshot.head != final_snapshot.head
+            || context.events(&final_snapshot, None)?.0 != catalog
+        {
+            return Err("target custody changed during recovery verification".into());
+        }
+        drop(store);
+        let result = Self {
+            target,
+            credential,
+            verifier,
+            registry,
+            anchor,
+            catalog,
+            enrollment: context.enrollment,
+            binding,
+            clock: std::cell::Cell::new(final_snapshot.clock),
+            lifetime,
+        };
+        result.lifetime.within(|| result.recheck())?;
+        Ok(result)
+    }
+    pub(crate) fn target(&self) -> &platform::RecoveryTarget {
+        self.target
+    }
+    pub(crate) fn history_binding(&self) -> &HistoryBinding {
+        &self.binding
+    }
+    pub(crate) fn release_state(&self) -> Result<&crate::release_trust::State> {
+        self.catalog
+            .release
+            .as_ref()
+            .ok_or_else(|| "target release trust must already be activated".into())
+    }
+    fn recheck(&self) -> Result<()> {
+        self.target.recheck()?;
+        let registry = self.registry.current()?;
+        let mut store = Store::open(
+            self.anchor.connect()?,
+            &self.target.admin_directory().join("journal.json"),
+        )?;
+        let snapshot = store.snapshot()?;
+        snapshot.clock.elapsed_since(self.clock.get())?;
+        self.clock.set(snapshot.clock);
+        let context = Context::load_at(
+            self.target.admin_directory(),
+            &snapshot.deployment,
+            self.target.registry_path(),
+        )?;
+        let catalog = context.events(&snapshot, None)?.0;
+        if snapshot.head != self.binding.checkpoint_head
+            || context.enrollment != self.enrollment
+            || catalog != self.catalog
+            || catalog.recovery_verifier()? != &self.verifier
+            || catalog.registry()? != registry
+        {
+            return Err("repair custody no longer binds exact target authority".into());
+        }
+        context.custody_writer(&catalog)?;
+        self.verifier.verify(self.credential)?;
+        self.binding
+            .recheck(&mut HistoryReader::recovery(&mut store, self.target))?;
+        self.registry.current()?;
+        self.target.recheck()?;
+        self.verifier.verify(self.credential)
+    }
+    pub(crate) fn observe_history<T>(
+        &self,
+        binding: &HistoryBinding,
+        operation: impl FnOnce() -> Result<T>,
+    ) -> Result<T> {
+        if binding != &self.binding {
+            return Err("recovery UTC history does not bind this target custody".into());
+        }
+        self.lifetime.within(|| {
+            self.recheck()?;
+            let result = operation()?;
+            self.recheck()?;
+            Ok(result)
+        })
+    }
+    pub(crate) fn check_projection(
+        &self,
+        clock: &crate::utc_provider::ProjectionClock,
+    ) -> Result<()> {
+        self.lifetime.check_projection(clock)
+    }
 }
 
 pub(crate) struct SeedCustody<'a> {
@@ -2988,11 +3281,7 @@ impl AccountTime {
     }
     fn recheck(&mut self) -> Result<()> {
         let live = self.client.current(&self.binding)?;
-        let (lower, upper) = live.interval().endpoints();
-        if lower <= 0 || lower < i64::from(self.day) * 86_400_000 || upper < lower {
-            return Err("current protected UTC precedes the exact recorded credential day".into());
-        }
-        Ok(())
+        check_account_day(self.day, live.interval())
     }
 }
 
@@ -3128,6 +3417,161 @@ struct GrantTime {
     expires_ms: i64,
 }
 
+/// One private query sample projects every finite catalog constraint past all
+/// blocking account, peer, registry and signature checks without renewing it.
+struct CatalogTime {
+    client: crate::utc_provider::Client,
+    history: HistoryBinding,
+    constraints: CatalogTimeConstraints,
+    last: Option<crate::utc_stream::Observation>,
+}
+struct CatalogTimeConstraints {
+    aging: Option<(u32, PasswordEpoch)>,
+    grant: Option<(i64, i64)>,
+    account_day: Option<u32>,
+    release: Option<crate::release_trust::State>,
+    skills: Option<crate::skill_trust::State>,
+    command: Command,
+}
+impl CatalogTime {
+    fn capture<A: Checkpoint>(
+        session: &PrincipalSession,
+        store: &mut Store<A>,
+        directory: &Path,
+        request: &str,
+        catalog: &Catalog,
+        command: &Command,
+    ) -> Result<Option<Self>> {
+        let principal = session.binding.identity["principal"]
+            .as_str()
+            .ok_or("missing catalog actor")?;
+        let aging = match catalog.password_day(principal) {
+            Some(day) => Some((
+                day,
+                session
+                    .binding
+                    .password_epoch
+                    .clone()
+                    .ok_or("catalog actor lost its protected password epoch")?,
+            )),
+            None => None,
+        };
+        let grant = match command {
+            Command::AssignRole { assignment } => {
+                Some((assignment.not_before_ms, assignment.expires_ms))
+            }
+            Command::IssueGrant { grant } => Some((grant.not_before_ms, grant.expires_ms)),
+            _ => None,
+        };
+        let account_day = account_day(catalog, command);
+        if aging.is_none()
+            && grant.is_none()
+            && account_day.is_none()
+            && !crate::release_trust::is_command(command)
+            && !crate::skill_trust::is_command(command)
+        {
+            return Ok(None);
+        }
+        Ok(Some(Self {
+            client: crate::utc_provider::Client::installed()?,
+            history: HistoryReader::for_candidate(store, directory, request)?.read()?,
+            constraints: CatalogTimeConstraints {
+                aging,
+                grant,
+                account_day,
+                release: catalog.release.clone(),
+                skills: catalog.skill_trust.clone(),
+                command: command.clone(),
+            },
+            last: None,
+        }))
+    }
+    fn finish(
+        &mut self,
+        previous: &crate::utc_stream::Observation,
+        finish: impl FnOnce(&crate::utc_provider::ProjectionClock) -> Result<()>,
+    ) -> Result<()> {
+        let final_live = self
+            .client
+            .project_after_checks(&self.history, previous, finish)?;
+        self.constraints.check(&final_live)?;
+        self.last = Some(final_live);
+        Ok(())
+    }
+    fn finish_last(
+        &mut self,
+        finish: impl FnOnce(&crate::utc_provider::ProjectionClock) -> Result<()>,
+    ) -> Result<()> {
+        let previous = self
+            .last
+            .take()
+            .ok_or("catalog report lacks its original private delivery sample")?;
+        self.finish(&previous, finish)
+    }
+}
+impl CatalogTimeConstraints {
+    fn check(&self, live: &crate::utc_stream::Observation) -> Result<()> {
+        if let Some((day, epoch)) = &self.aging {
+            password_window(*day, epoch, live)?;
+        }
+        if let Some((start, end)) = self.grant {
+            if !live.interval().within(start, end)? {
+                return Err("catalog grant expired during final account projection".into());
+            }
+        }
+        if let Some(day) = self.account_day {
+            check_account_day(day, live.interval())?;
+        }
+        crate::release_trust::check_command_time(&self.command, &self.release, live.interval())?;
+        crate::skill_trust::check_command_time(&self.command, &self.skills, live.interval())
+    }
+}
+fn check_account_day(day: u32, interval: crate::utc_bounds::Interval) -> Result<()> {
+    let (lower, upper) = interval.endpoints();
+    if lower <= 0 || lower < i64::from(day) * 86_400_000 || upper < lower {
+        return Err("current protected UTC precedes the exact recorded credential day".into());
+    }
+    Ok(())
+}
+struct SkillTime {
+    client: crate::utc_provider::Client,
+    history: HistoryBinding,
+    state: Option<crate::skill_trust::State>,
+    release: Option<crate::release_trust::State>,
+    command: Command,
+}
+impl SkillTime {
+    fn capture<A: Checkpoint>(
+        store: &mut Store<A>,
+        directory: &Path,
+        request: &str,
+        catalog: &Catalog,
+        command: &Command,
+    ) -> Result<Option<Self>> {
+        if !crate::skill_trust::is_command(command) {
+            return Ok(None);
+        }
+        let history = HistoryReader::for_candidate(store, directory, request)?.read()?;
+        let mut value = Self {
+            client: crate::utc_provider::Client::installed()?,
+            history,
+            state: catalog.skill_trust.clone(),
+            release: catalog.release.clone(),
+            command: command.clone(),
+        };
+        value.recheck()?;
+        value.history.recheck(&mut HistoryReader::for_candidate(
+            store, directory, request,
+        )?)?;
+        Ok(Some(value))
+    }
+    fn recheck(&mut self) -> Result<()> {
+        let before = self.client.current(&self.history)?.interval();
+        crate::skill_trust::check_live(&self.command, &self.state, &self.release, before)?;
+        let after = self.client.current(&self.history)?.interval();
+        crate::skill_trust::check_command_time(&self.command, &self.state, after)
+    }
+}
 struct ReleaseTime {
     client: crate::utc_provider::Client,
     history: HistoryBinding,
@@ -3213,6 +3657,7 @@ impl GrantTime {
 // Do not use a normal session projection after commit: the old head is stale.
 struct CatalogAttempt<'s> {
     session: &'s PrincipalSession,
+    image: platform::CatalogImage,
     registry: crate::principal::RegistryBinding,
     directory: std::path::PathBuf,
     registry_path: std::path::PathBuf,
@@ -3222,6 +3667,8 @@ struct CatalogAttempt<'s> {
     account_time: std::cell::RefCell<Option<AccountTime>>,
     grant_time: std::cell::RefCell<Option<GrantTime>>,
     release_time: std::cell::RefCell<Option<ReleaseTime>>,
+    skill_time: std::cell::RefCell<Option<SkillTime>>,
+    final_time: std::cell::RefCell<Option<CatalogTime>>,
     actor_aging: std::cell::RefCell<Option<ActorAging>>,
 }
 
@@ -3254,6 +3701,8 @@ impl<'s> CatalogAttempt<'s> {
                     session.clock.set(snapshot.clock);
                     let context = Context::load_at(directory, &snapshot.deployment, registry_path)?;
                     let catalog = context.events(&snapshot, Some(request))?.0;
+                    let image = platform::CatalogImage::capture(directory)?;
+                    check_production_catalog(&image, &catalog, command)?;
                     if serde_json::to_value(context.writer(&catalog)?)? != *identity {
                         return Err(
                             "catalog projection differs from the original governed Admin".into(),
@@ -3262,6 +3711,7 @@ impl<'s> CatalogAttempt<'s> {
                     context.recheck(&mut || session.account.identity())?;
                     Ok(Self {
                         session,
+                        image,
                         registry: crate::principal::RegistryBinding::capture(registry_path)?,
                         directory: directory.into(),
                         registry_path: registry_path.into(),
@@ -3276,6 +3726,12 @@ impl<'s> CatalogAttempt<'s> {
                         )?),
                         release_time: std::cell::RefCell::new(ReleaseTime::capture(
                             store, directory, request, &catalog, command,
+                        )?),
+                        skill_time: std::cell::RefCell::new(SkillTime::capture(
+                            store, directory, request, &catalog, command,
+                        )?),
+                        final_time: std::cell::RefCell::new(CatalogTime::capture(
+                            session, store, directory, request, &catalog, command,
                         )?),
                         account_time: std::cell::RefCell::new(
                             match account_day(&catalog, command) {
@@ -3309,23 +3765,43 @@ impl<'s> CatalogAttempt<'s> {
         if let Some(time) = &mut *self.release_time.borrow_mut() {
             time.recheck()?;
         }
+        if let Some(time) = &mut *self.skill_time.borrow_mut() {
+            time.recheck()?;
+        }
         if let Some(time) = &mut *self.account_time.borrow_mut() {
             time.recheck()?;
         }
-        let project = || {
+        let mut observed = None;
+        let mut project = || {
             self.session.account.observe(|local| {
                 self.registry.current()?;
                 if let Some(aging) = &mut *self.actor_aging.borrow_mut() {
                     aging.recheck()?;
                 }
+                observed = self
+                    .final_time
+                    .borrow_mut()
+                    .as_mut()
+                    .map(|time| time.client.current(&time.history))
+                    .transpose()?;
                 Ok(local.clone())
             })
         };
-        if let Some(peer) = self.peer {
-            peer.observe(project)
+        let identity = if let Some(peer) = self.peer {
+            peer.observe(project)?
         } else {
-            project()
+            project()?
+        };
+        if let Some(previous) = observed {
+            self.final_time
+                .borrow_mut()
+                .as_mut()
+                .ok_or("catalog finite clock disappeared")?
+                .finish(&previous, |clock| {
+                    self.session.account.check_projection(clock)
+                })?;
         }
+        Ok(identity)
     }
 
     fn check_boundary(
@@ -3350,6 +3826,9 @@ impl<'s> CatalogAttempt<'s> {
         }
         snapshot.clock.elapsed_since(self.session.clock.get())?;
         self.session.clock.set(snapshot.clock);
+        let context = Context::load_at(directory, &snapshot.deployment, registry_path)?;
+        let catalog = context.events(snapshot, Some(request))?.0;
+        check_production_catalog(&self.image, &catalog, command)?;
         self.authenticate()?;
         Ok(())
     }
@@ -3444,6 +3923,14 @@ impl<'s> CatalogAttempt<'s> {
                     }
                 }
             }
+        }
+        if let Some(time) = self.final_time.borrow_mut().as_mut() {
+            // This shifts the same private sample after outer PAM/peer reads
+            // and commit/readback. It performs no new query or history claim.
+            // Deliberate shadow publication invalidates old credential pins;
+            // its separate live prepublication guard remains authoritative,
+            // while this pure check retains the original session deadline.
+            time.finish_last(|clock| self.session.account.check_projection(clock))?;
         }
         Ok(report)
     }
@@ -4541,6 +5028,10 @@ fn finite_catalog_json(bytes: &[u8]) -> Result<Command> {
 /// genuine PAM, then the normal catalog review and TPM writer bind that exact
 /// owned command, current Admin, checkpoint, role, subject and UTC validity.
 fn finite_catalog_file(path: &Path) -> Result<Command> {
+    finite_catalog_json(&catalog_input(path, MAX_GRANT_COMMAND_INPUT)?)
+}
+
+fn catalog_input(path: &Path, limit: usize) -> Result<Vec<u8>> {
     use std::io::Read;
     use std::os::unix::fs::MetadataExt;
     let mut file = OpenOptions::new()
@@ -4548,7 +5039,7 @@ fn finite_catalog_file(path: &Path) -> Result<Command> {
         .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NONBLOCK)
         .open(path)?;
     let initial = file.metadata()?;
-    if !initial.is_file() || initial.len() == 0 || initial.len() > MAX_GRANT_COMMAND_INPUT as u64 {
+    if !initial.is_file() || initial.len() == 0 || initial.len() > limit as u64 {
         return Err("finite catalog JSON must be a bounded regular file".into());
     }
     let key = |m: &fs::Metadata| {
@@ -4563,9 +5054,7 @@ fn finite_catalog_file(path: &Path) -> Result<Command> {
         )
     };
     let mut bytes = Vec::new();
-    (&mut file)
-        .take(MAX_GRANT_COMMAND_INPUT as u64 + 1)
-        .read_to_end(&mut bytes)?;
+    (&mut file).take(limit as u64 + 1).read_to_end(&mut bytes)?;
     let named = fs::symlink_metadata(path)?;
     if !named.is_file()
         || key(&initial) != key(&file.metadata()?)
@@ -4574,7 +5063,7 @@ fn finite_catalog_file(path: &Path) -> Result<Command> {
     {
         return Err("finite catalog command input changed while captured".into());
     }
-    finite_catalog_json(&bytes)
+    Ok(bytes)
 }
 
 fn parse_command(args: &[String]) -> Result<(&str, &str, Command, Option<&str>)> {
@@ -4613,6 +5102,574 @@ fn parse_command(args: &[String]) -> Result<(&str, &str, Command, Option<&str>)>
 
 pub fn catalog_command(args: &[String]) -> Result<()> {
     let (login, request, command, reviewed) = parse_command(args)?;
+    run_catalog_command(login, request, &command, reviewed)
+}
+
+const MAX_RELEASE_COMMAND_INPUT: usize = 131_072;
+
+fn release_command_json(bytes: &[u8]) -> Result<Command> {
+    if bytes.is_empty() || bytes.len() > MAX_RELEASE_COMMAND_INPUT {
+        return Err("release command input exceeds its closed bound".into());
+    }
+    let command: Command = serde_json::from_slice(bytes)?;
+    if !crate::release_trust::is_command(&command) {
+        return Err("release command accepts only public trust publication, initialization, preparation or resolution".into());
+    }
+    command.validate()?;
+    Ok(command)
+}
+
+fn parse_release_command(args: &[String]) -> Result<(&str, &str, Command, Option<&str>)> {
+    if (args.len() != 4 && !(args.len() == 6 && args[4] == "--commit"))
+        || args.first().map(String::as_str) != Some("admin-release-command")
+    {
+        return Err(
+            "expected admin-release-command LOGIN REQUEST FILE [--commit REVIEW-SHA256]".into(),
+        );
+    }
+    if !admin_roles::identifier(&args[2]) || args[2] == REQUEST {
+        return Err("invalid or reserved release Admin request".into());
+    }
+    let reviewed = if args.len() == 6 {
+        tpm::decode::<32>(&args[5])?;
+        Some(args[5].as_str())
+    } else {
+        None
+    };
+    let command = release_command_json(&catalog_input(
+        Path::new(&args[3]),
+        MAX_RELEASE_COMMAND_INPUT,
+    )?)?;
+    Ok((&args[1], &args[2], command, reviewed))
+}
+
+/// Captured public JSON contributes no authority. All four release transitions
+/// use the same current original Admin, protected UTC and TPM catalog writer as
+/// the first-boot ceremony; this route cannot substitute root or bypass review.
+pub(crate) fn release_catalog_command(args: &[String]) -> Result<()> {
+    let (login, request, command, reviewed) = parse_release_command(args)?;
+    run_catalog_command(login, request, &command, reviewed)
+}
+
+#[cfg(test)]
+mod release_command_tests {
+    use super::*;
+    fn trust() -> crate::release_trust::SignedTrust {
+        crate::release_trust::SignedTrust {
+            trust: crate::release_trust::Trust {
+                schema_version: 1,
+                environment: "lab".into(),
+                version: 1,
+                root_sha256: "1".repeat(64),
+                not_before_ms: 1000,
+                expires_ms: 10000,
+                keys: vec![crate::release_trust::Key {
+                    id: "release-a".into(),
+                    public_key_hex: "2".repeat(64),
+                    purpose: "os-release".into(),
+                    not_before_ms: 1100,
+                    expires_ms: 9000,
+                    revoked: false,
+                }],
+            },
+            signature_hex: "3".repeat(128),
+        }
+    }
+    fn manifest(sequence: u64) -> crate::bundle::Manifest {
+        crate::bundle::Manifest {
+            schema_version: 1,
+            release: format!("release-{sequence}"),
+            sequence,
+            environment: "lab".into(),
+            architecture: "amd64".into(),
+            ubuntu: "24.04".into(),
+            edition: "headless".into(),
+            root_hash: "4".repeat(64),
+            root_bytes: 512 * 1024 * 1024,
+            hash_bytes: 8 * 1024 * 1024,
+            artifacts: [
+                "root.ext4",
+                "root.verity",
+                "slot-a.efi",
+                "slot-b.efi",
+                "bootloader.efi",
+                "secureboot.cer",
+            ]
+            .iter()
+            .map(|name| crate::bundle::Artifact {
+                name: (*name).into(),
+                bytes: match *name {
+                    "root.ext4" => 512 * 1024 * 1024,
+                    "root.verity" => 8 * 1024 * 1024,
+                    _ => 4096,
+                },
+                sha256: "5".repeat(64),
+            })
+            .collect(),
+        }
+    }
+    fn signed(sequence: u64) -> crate::release_trust::SignedRelease {
+        let manifest = manifest(sequence);
+        crate::release_trust::SignedRelease {
+            manifest_json: serde_json::to_string_pretty(&manifest).unwrap(),
+            manifest,
+            signature_hex: "6".repeat(128),
+            signer: "release-a".into(),
+        }
+    }
+    #[test]
+    fn release_json_only_delivers_four_closed_valid_inert_transitions() {
+        let trust = trust();
+        for command in [
+            Command::PublishReleaseTrust {
+                expected_version: 0,
+                bundle: trust.clone(),
+            },
+            Command::InitializeRelease { release: signed(1) },
+            Command::PrepareRelease {
+                expected_floor: 1,
+                admission: crate::release_trust::Admission {
+                    prior: manifest(1),
+                    candidate: signed(2),
+                    trust_version: 1,
+                    trust_sha256: trust.digest().unwrap(),
+                },
+            },
+            Command::ResolveRelease {
+                candidate_sha256: "7".repeat(64),
+                outcome: crate::release_trust::Outcome::Confirmed,
+            },
+        ] {
+            let bytes = serde_json::to_vec(&command).unwrap();
+            assert_eq!(release_command_json(&bytes).unwrap(), command);
+            assert!(finite_catalog_json(&bytes).is_err());
+            let mut value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+            value["authenticated"] = true.into();
+            assert!(release_command_json(&serde_json::to_vec(&value).unwrap()).is_err());
+            let duplicate = String::from_utf8(bytes.clone()).unwrap().replacen(
+                "{",
+                "{\"action\":\"resolve_release\",",
+                1,
+            );
+            assert!(release_command_json(duplicate.as_bytes()).is_err());
+            let mut trailing = bytes;
+            trailing.extend_from_slice(b"{}");
+            assert!(release_command_json(&trailing).is_err());
+        }
+        for bytes in [
+            br#"{"action":"revoke_grant","grant":"infer-one","expected_version":1}"#.to_vec(),
+            br#"{"action":"resolve_release","candidate_sha256":"bad","outcome":"confirmed"}"#.to_vec(),
+            br#"{"action":"resolve_release","candidate_sha256":"7777777777777777777777777777777777777777777777777777777777777777","outcome":"automatic"}"#.to_vec(),
+            Vec::new(), vec![b' '; MAX_RELEASE_COMMAND_INPUT + 1],
+        ] {
+            assert!(release_command_json(&bytes).is_err());
+        }
+        let mut value = serde_json::to_value(Command::PublishReleaseTrust {
+            expected_version: 0,
+            bundle: trust,
+        })
+        .unwrap();
+        value["bundle"]["trust"]["allow_offline"] = true.into();
+        assert!(release_command_json(&serde_json::to_vec(&value).unwrap()).is_err());
+        value["bundle"]["trust"]
+            .as_object_mut()
+            .unwrap()
+            .remove("allow_offline");
+        let duplicate = serde_json::to_string(&value).unwrap().replace(
+            "\"expected_version\":0",
+            "\"expected_version\":0,\"expected_version\":1",
+        );
+        assert!(release_command_json(duplicate.as_bytes()).is_err());
+    }
+    #[test]
+    fn release_cli_requires_exact_shape_review_request_and_retained_regular_input() {
+        let dir = std::env::temp_dir().join(format!("luma-release-command-{}", std::process::id()));
+        fs::create_dir(&dir).unwrap();
+        let input = dir.join("input.json");
+        fs::write(
+            &input,
+            serde_json::to_vec(&Command::ResolveRelease {
+                candidate_sha256: "7".repeat(64),
+                outcome: crate::release_trust::Outcome::Fallback,
+            })
+            .unwrap(),
+        )
+        .unwrap();
+        let base = vec![
+            "admin-release-command".into(),
+            "operator".into(),
+            "release-review".into(),
+            input.to_str().unwrap().into(),
+        ];
+        let (login, request, command, review) = parse_release_command(&base).unwrap();
+        assert_eq!(
+            (login, request, review),
+            ("operator", "release-review", None)
+        );
+        assert!(matches!(command, Command::ResolveRelease { .. }));
+        let mut committed = base.clone();
+        committed.extend(["--commit".into(), "8".repeat(64)]);
+        assert_eq!(
+            parse_release_command(&committed).unwrap().3,
+            Some(committed[5].as_str())
+        );
+        for extra in [
+            vec!["--commit".into()],
+            vec!["--commit".into(), "caller-approved".into()],
+            vec!["--other".into(), "8".repeat(64)],
+            vec!["--commit".into(), "8".repeat(64), "extra".into()],
+        ] {
+            let mut args = base.clone();
+            args.extend(extra);
+            assert!(parse_release_command(&args).is_err());
+        }
+        for request in [REQUEST, "../request"] {
+            let mut args = base.clone();
+            args[2] = request.into();
+            assert!(parse_release_command(&args).is_err());
+        }
+        assert!(parse_release_command(&[]).is_err());
+        let mut args = base.clone();
+        args[0] = "admin-catalog".into();
+        assert!(parse_release_command(&args).is_err());
+        let link = dir.join("link.json");
+        std::os::unix::fs::symlink(&input, &link).unwrap();
+        args = base.clone();
+        args[3] = link.to_str().unwrap().into();
+        assert!(parse_release_command(&args).is_err());
+        args[3] = dir.to_str().unwrap().into();
+        assert!(parse_release_command(&args).is_err());
+        fs::write(&input, vec![b' '; MAX_RELEASE_COMMAND_INPUT + 1]).unwrap();
+        assert!(parse_release_command(&base).is_err());
+        fs::remove_dir_all(dir).unwrap();
+    }
+    #[test]
+    fn delivered_release_commands_keep_final_protected_utc_and_shared_authenticated_writer() {
+        let command = release_command_json(
+            &serde_json::to_vec(&Command::PublishReleaseTrust {
+                expected_version: 0,
+                bundle: trust(),
+            })
+            .unwrap(),
+        )
+        .unwrap();
+        let constraints = CatalogTimeConstraints {
+            aging: None,
+            grant: None,
+            account_day: None,
+            release: None,
+            skills: None,
+            command,
+        };
+        let live = |lower, upper| {
+            crate::utc_stream::Observation::fixture(
+                crate::utc_history::Statement {
+                    floor_ms: lower,
+                    policy_sha256: bundle::hex(
+                        &crate::utc_policy::ApprovedPolicy::fixed().unwrap().digest(),
+                    ),
+                    boot_id: "1".repeat(32),
+                    process_generation: 1,
+                    source_clock_generation: 1,
+                    keeper_generation: 1,
+                    runtime_sha256: "2".repeat(64),
+                },
+                crate::utc_bounds::Interval::new(lower, upper).unwrap(),
+            )
+        };
+        constraints.check(&live(1200, 1300)).unwrap();
+        assert!(constraints.check(&live(999, 1200)).is_err());
+        assert!(constraints.check(&live(9999, 10000)).is_err());
+        let source = include_str!("admin_governance.rs");
+        let route = &source[source
+            .find("pub(crate) fn release_catalog_command(")
+            .unwrap()..];
+        let route = &route[..route.find("#[cfg(test)]").unwrap()];
+        assert!(route.contains("parse_release_command(args)?"));
+        assert!(route.contains("run_catalog_command(login, request, &command, reviewed)"));
+        let writer = &source[source.find("\nfn run_catalog_command(").unwrap()..];
+        let writer = &writer[..writer.find("\npub(crate) fn principal_enabled").unwrap()];
+        for guard in [
+            "prepare_control(login, Some(request))?",
+            "authentication::local(login)?",
+            "tpm::LocalAnchor::installed()?",
+            "run_control_at(",
+        ] {
+            assert!(writer.contains(guard));
+        }
+        assert!(
+            include_str!("main.rs").contains("admin_governance::release_catalog_command(&args)")
+        );
+        assert!(
+            include_str!("../../../native/image/overlay/usr/bin/luma-admin-control")
+                .contains("admin-release-command) ;;")
+        );
+    }
+}
+
+fn skill_command_json(action: &str, expected: u64, bytes: &[u8]) -> Result<Command> {
+    if bytes.is_empty() {
+        return Err("empty signed skill command input".into());
+    }
+    let command = match action {
+        "admin-skill-trust-publish" if bytes.len() <= 32768 => Command::PublishSkillTrust {
+            expected_version: expected,
+            bundle: serde_json::from_slice(bytes)?,
+        },
+        "admin-skill-registry-admit" if bytes.len() <= 4096 => Command::AdmitSkillRegistry {
+            expected_floor: expected,
+            admission: serde_json::from_slice(bytes)?,
+        },
+        _ => return Err("unsupported or oversized purpose-separated skill command".into()),
+    };
+    command.validate()?;
+    Ok(command)
+}
+fn parse_skill_command(args: &[String]) -> Result<(&str, &str, Command, Option<&str>)> {
+    if args.len() != 5 && !(args.len() == 7 && args[5] == "--commit") {
+        return Err("expected admin-skill-trust-publish|admin-skill-registry-admit LOGIN REQUEST EXPECTED-VERSION-OR-FLOOR FILE [--commit REVIEW-SHA256]".into());
+    }
+    if !admin_roles::identifier(&args[2]) || args[2] == REQUEST {
+        return Err("invalid or reserved skill Admin request".into());
+    }
+    let limit = match args[0].as_str() {
+        "admin-skill-trust-publish" => 32768,
+        "admin-skill-registry-admit" => 4096,
+        _ => return Err("unknown purpose-separated skill control command".into()),
+    };
+    let reviewed = if args.len() == 7 {
+        tpm::decode::<32>(&args[6])?;
+        Some(args[6].as_str())
+    } else {
+        None
+    };
+    let command = skill_command_json(
+        &args[0],
+        args[3].parse()?,
+        &catalog_input(Path::new(&args[4]), limit)?,
+    )?;
+    Ok((&args[1], &args[2], command, reviewed))
+}
+pub(crate) fn skill_catalog_command(args: &[String]) -> Result<()> {
+    let (login, request, command, reviewed) = parse_skill_command(args)?;
+    run_catalog_command(login, request, &command, reviewed)
+}
+
+#[cfg(test)]
+mod skill_command_tests {
+    use super::*;
+    fn live(lower: i64, upper: i64) -> crate::utc_stream::Observation {
+        crate::utc_stream::Observation::fixture(
+            crate::utc_history::Statement {
+                floor_ms: lower,
+                policy_sha256: bundle::hex(
+                    &crate::utc_policy::ApprovedPolicy::fixed().unwrap().digest(),
+                ),
+                boot_id: "1".repeat(32),
+                process_generation: 1,
+                source_clock_generation: 1,
+                keeper_generation: 1,
+                runtime_sha256: "2".repeat(64),
+            },
+            crate::utc_bounds::Interval::new(lower, upper).unwrap(),
+        )
+    }
+    #[test]
+    fn final_catalog_projection_checks_grant_aging_account_day_and_each_signing_domain() {
+        let start = 86_400_000;
+        let first = live(start + 120, start + 130);
+        let mut constraints = CatalogTimeConstraints {
+            aging: Some((1, password_epoch(&first))),
+            grant: Some((start + 100, start + 1000)),
+            account_day: Some(1),
+            release: None,
+            skills: None,
+            command: Command::RegisterActivity {
+                activity: "test.inert".into(),
+            },
+        };
+        constraints.check(&first).unwrap();
+        assert!(constraints.check(&live(start + 999, start + 1000)).is_err());
+        assert!(constraints
+            .check(&live(91 * 86_400_000, 91 * 86_400_000 + 1))
+            .is_err());
+        constraints.account_day = Some(2);
+        assert!(constraints.check(&first).is_err());
+        constraints.account_day = Some(1);
+        constraints.grant = None;
+        let mut skill: crate::skill_trust::SignedTrust =
+            serde_json::from_slice(&signed_trust()).unwrap();
+        skill.trust.not_before_ms = start;
+        skill.trust.expires_ms = start + 1000;
+        skill.trust.keys[0].not_before_ms = start + 100;
+        skill.trust.keys[0].expires_ms = start + 900;
+        constraints.command = Command::PublishSkillTrust {
+            expected_version: 0,
+            bundle: skill,
+        };
+        constraints.check(&first).unwrap();
+        assert!(constraints.check(&live(start + 999, start + 1000)).is_err());
+        constraints.command = Command::PublishReleaseTrust {
+            expected_version: 0,
+            bundle: crate::release_trust::SignedTrust {
+                trust: crate::release_trust::Trust {
+                    schema_version: 1,
+                    environment: "production".into(),
+                    version: 1,
+                    root_sha256: "3".repeat(64),
+                    not_before_ms: start,
+                    expires_ms: start + 1000,
+                    keys: vec![],
+                },
+                signature_hex: "4".repeat(128),
+            },
+        };
+        constraints.check(&first).unwrap();
+        assert!(constraints.check(&live(start + 999, start + 1000)).is_err());
+    }
+    #[test]
+    fn catalog_final_clock_projection_occurs_after_all_blocking_delivery_checks() {
+        let source = include_str!("admin_governance.rs");
+        let source = &source[source.find("impl<'s> CatalogAttempt<'s>").unwrap()..];
+        let start = source.find("fn authenticate(&self)").unwrap();
+        let end = source[start..].find("fn check_boundary(").unwrap();
+        let body = &source[start..start + end];
+        assert!(
+            body.rfind("aging.recheck()?").unwrap()
+                < body.find("time.client.current(&time.history)").unwrap()
+        );
+        assert!(body.find("peer.observe(project)?").unwrap() < body.find(".finish(").unwrap());
+        let tail = &body[body.find(".finish(").unwrap()..];
+        assert!(tail.contains("self.session.account.check_projection(clock)"));
+        for forbidden in [".current(", ".recheck(", ".observe(", "read(", "open("] {
+            assert!(!tail.contains(forbidden));
+        }
+        let execute = &source[source.find("fn execute<A: Checkpoint>(").unwrap()..];
+        let execute = &execute[..execute.find("impl Drop for CatalogAttempt").unwrap()];
+        assert!(
+            execute.find("peer.observe(project)").unwrap()
+                < execute.find("time.finish_last(").unwrap()
+        );
+        let tail = &execute[execute.find("time.finish_last(").unwrap()..];
+        for forbidden in [".current(", ".recheck(", ".observe(", "read(", "open("] {
+            assert!(!tail.contains(forbidden));
+        }
+    }
+    fn signed_trust() -> Vec<u8> {
+        serde_json::to_vec(&serde_json::json!({"trust":{"schema_version":1,"environment":"production",
+            "domain":"skill-registry","purpose":"skill-registry","policy":"closed-file-to-artifact-v1",
+            "version":1,"previous_sha256":"0".repeat(64),"root_sha256":"2".repeat(64),
+            "not_before_ms":1000,"expires_ms":10000,"keys":[{"id":"skill-a","public_key_hex":"1".repeat(64),
+                "role":"skill-registry-signer","purpose":"skill-registry","not_before_ms":1100,
+                "expires_ms":9000,"revoked":false}]},"signature_hex":"3".repeat(128)})).unwrap()
+    }
+    #[test]
+    fn typed_skill_inputs_are_inert_bounded_and_reject_duplicates_unknown_fields_and_cross_actions()
+    {
+        let bytes = signed_trust();
+        let command = skill_command_json("admin-skill-trust-publish", 0, &bytes).unwrap();
+        assert_eq!(command.activity(), "admin.skills.trust_publish");
+        assert!(skill_command_json("admin-catalog", 0, &bytes).is_err());
+        assert!(skill_command_json("admin-skill-registry-admit", 0, &bytes).is_err());
+        assert!(skill_command_json("admin-skill-trust-publish", u64::MAX, &bytes).is_err());
+        assert!(skill_command_json("admin-skill-trust-publish", 0, &vec![b' '; 32769]).is_err());
+        let duplicate =
+            String::from_utf8(bytes.clone())
+                .unwrap()
+                .replacen("{", "{\"signature_hex\":\"3\",", 1);
+        assert!(skill_command_json("admin-skill-trust-publish", 0, duplicate.as_bytes()).is_err());
+        let mut value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        value["execute"] = serde_json::Value::Bool(true);
+        assert!(skill_command_json(
+            "admin-skill-trust-publish",
+            0,
+            &serde_json::to_vec(&value).unwrap()
+        )
+        .is_err());
+        assert!(skill_command_json("admin-skill-registry-admit", 0, &vec![b' '; 4097]).is_err());
+    }
+    #[test]
+    fn typed_skill_cli_requires_explicit_floor_exact_request_review_and_regular_file() {
+        let dir = std::env::temp_dir().join(format!("luma-skill-command-{}", std::process::id()));
+        fs::create_dir(&dir).unwrap();
+        let input = dir.join("input.json");
+        fs::write(&input, signed_trust()).unwrap();
+        let mut args = vec![
+            "admin-skill-trust-publish".into(),
+            "operator".into(),
+            "skill-review".into(),
+            "0".into(),
+            input.to_str().unwrap().into(),
+        ];
+        let (login, request, command, review) = parse_skill_command(&args).unwrap();
+        assert_eq!(login, "operator");
+        assert_eq!(request, "skill-review");
+        assert!(review.is_none());
+        assert!(matches!(
+            command,
+            Command::PublishSkillTrust {
+                expected_version: 0,
+                ..
+            }
+        ));
+        args.extend(["--commit".into(), "7".repeat(64)]);
+        assert_eq!(
+            parse_skill_command(&args).unwrap().3,
+            Some(args[6].as_str())
+        );
+        args[5] = "--approve".into();
+        assert!(parse_skill_command(&args).is_err());
+        args.truncate(5);
+        args[2] = REQUEST.into();
+        assert!(parse_skill_command(&args).is_err());
+        args[2] = "skill-review".into();
+        fs::remove_file(&input).unwrap();
+        std::os::unix::fs::symlink(dir.join("missing"), &input).unwrap();
+        assert!(parse_skill_command(&args).is_err());
+        fs::remove_dir_all(dir).unwrap();
+    }
+}
+
+pub(crate) fn staged_release_command(args: &[String]) -> Result<()> {
+    if args.len() != 3 && !(args.len() == 5 && args[3] == "--commit") {
+        return Err("expected admin-release-trust-stage|admin-release-activate LOGIN REQUEST [--commit REVIEW-SHA256]".into());
+    }
+    crate::require_root()?;
+    platform::require_installed()?;
+    let staged: crate::release_trust::StagedRelease =
+        serde_json::from_slice(&crate::admin_credentials::public_input(
+            Path::new("/var/lib/luma-os/staged-release.json"),
+            131072,
+        )?)?;
+    let release = staged.release()?;
+    platform::check_governance_manifest(&release.manifest)?;
+    let command = match args[0].as_str() {
+        "admin-release-trust-stage" => Command::PublishReleaseTrust {
+            expected_version: 0,
+            bundle: staged.trust,
+        },
+        "admin-release-activate" => Command::InitializeRelease { release },
+        _ => return Err("unknown first-boot release ceremony".into()),
+    };
+    command.validate()?;
+    run_catalog_command(
+        &args[1],
+        &args[2],
+        &command,
+        if args.len() == 5 {
+            Some(&args[4])
+        } else {
+            None
+        },
+    )
+}
+
+fn run_catalog_command(
+    login: &str,
+    request: &str,
+    command: &Command,
+    reviewed: Option<&str>,
+) -> Result<()> {
     crate::require_root()?;
     platform::require_installed()?;
     let prepared = prepare_control(login, Some(request))?;
@@ -4630,7 +5687,7 @@ pub fn catalog_command(args: &[String]) -> Result<()> {
         prepared,
         None,
         request,
-        Some(&command),
+        Some(command),
         reviewed,
     )?;
     println!("{}", serde_json::to_string(&report)?);

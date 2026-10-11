@@ -54,6 +54,9 @@ fn target_shape(target: &Path, installed: bool) -> bool {
 
 fn target(target: &Path) -> Result<()> {
     let installed = platform::require_installed().is_ok();
+    if installed {
+        platform::require_production_activation()?;
+    }
     if !installed {
         platform::require_live()?;
     }

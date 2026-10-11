@@ -8,6 +8,7 @@ from __future__ import annotations
 import argparse
 import errno
 import hashlib
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -151,7 +152,9 @@ def package_protected_utc(root: Path, source: Path, work: Path) -> None:
     executable.chmod(0o755)
     vendor = root/'usr/lib/systemd/system'
     vendor.mkdir(parents=True, exist_ok=True)
-    for unit in ('luma-utc-keeper.service', 'luma-utc-producer.service', 'luma-utc-producer.path'):
+    for unit in ('luma-utc-keeper.service', 'luma-utc-producer.service', 'luma-utc-producer.path',
+                 'luma-utc-recovery-keeper.service', 'luma-utc-recovery-producer.service',
+                 'luma-utc-recovery-producer.path'):
         shutil.copy2(assets/unit, vendor/unit)
         (vendor/unit).chmod(0o644)
     system = root/'etc/systemd/system'
@@ -162,7 +165,8 @@ def package_protected_utc(root: Path, source: Path, work: Path) -> None:
         mask.symlink_to('/dev/null')
     wanted = system/'multi-user.target.wants'
     wanted.mkdir(parents=True, exist_ok=True)
-    for unit in ('luma-utc-keeper.service', 'luma-utc-producer.path'):
+    for unit in ('luma-utc-keeper.service', 'luma-utc-producer.path',
+                 'luma-utc-recovery-keeper.service', 'luma-utc-recovery-producer.path'):
         link = wanted/unit
         if link.exists() or link.is_symlink():
             raise SystemExit('unexpected pre-enabled UTC unit: '+unit)
@@ -176,6 +180,8 @@ def main() -> None:
     parser.add_argument('--edition', choices=('headless','desktop'), default='headless')
     parser.add_argument('--sequence', type=int, default=1)
     parser.add_argument('--external-artifacts', action='store_true')
+    parser.add_argument('--public-trust-inputs', type=Path,
+                        help='independently signed public roots and inert skill admissions; never private keys')
     args = parser.parse_args()
     if os.uname().machine != 'x86_64' or run('dpkg','--print-architecture').strip() != 'amd64':
         raise SystemExit('native image assembly requires the amd64 toolchain container')
@@ -244,6 +250,13 @@ def main() -> None:
     supervisor = binary.parent/'luma-utc-restart'
     shutil.copy2(supervisors[0], supervisor)
     supervisor.chmod(0o700)
+    recovery_supervisors = list((WORK/'cargo/release/build').glob(
+        'luma-platform-*/out/luma-utc-recovery-restart'))
+    if len(recovery_supervisors) != 1:
+        raise SystemExit('expected one freshly compiled fixed recovery UTC supervisor')
+    recovery_supervisor = binary.parent/'luma-utc-recovery-restart'
+    shutil.copy2(recovery_supervisors[0], recovery_supervisor)
+    recovery_supervisor.chmod(0o700)
     (ROOT/'usr/bin/luma-platform').symlink_to('/usr/libexec/luma-os/luma-platform')
     shutil.copytree(REPO/'native/image/overlay',ROOT,dirs_exist_ok=True)
     # WSL Windows-mounted source files often report 0777. Never propagate those
@@ -255,6 +268,7 @@ def main() -> None:
     for script in (ROOT/'usr/lib/dracut/modules.d/91luma').glob('*.sh'):
         script.chmod(0o755)
     (ROOT/'usr/bin/luma-admin-control').chmod(0o755)
+    (ROOT/'usr/bin/luma-recovery-control').chmod(0o755)
     reference = ROOT/'usr/share/luma-os/reference'
     for name in ('src','web','schemas','examples'):
         shutil.copytree(REPO/name,reference/name,ignore=shutil.ignore_patterns('__pycache__','*.pyc'))
@@ -274,6 +288,13 @@ def main() -> None:
     # Neither laboratory private key enters the source snapshot, image or
     # published artifacts. Production signing custody remains separate.
     package_skill_registry(ROOT, KEYS)
+    public_spec = importlib.util.spec_from_file_location(
+        'luma_public_trust', REPO/'native/image/provision_public_trust.py')
+    public_trust = importlib.util.module_from_spec(public_spec)
+    public_spec.loader.exec_module(public_trust)
+    public_inputs = public_trust.provision(ROOT, args.public_trust_inputs)
+    put('usr/share/luma-os/public-trust-inputs.json',
+        json.dumps(public_inputs, sort_keys=True, separators=(',', ':'))+'\n')
     if not (KEYS/'secureboot.key').exists():
         run('openssl','req','-new','-x509','-newkey','rsa:3072','-nodes','-sha256','-days','365',
             '-subj','/CN=Luma Native Laboratory Only/','-keyout',KEYS/'secureboot.key','-out',KEYS/'secureboot.pem',stderr=subprocess.DEVNULL)

@@ -35,6 +35,7 @@ mod resources;
 mod scoped_read;
 mod sealed_credential;
 mod service;
+mod skill_trust;
 mod skills;
 mod sqlite;
 mod staging;
@@ -227,6 +228,7 @@ fn dispatch() -> Result<()> {
                 | "scoped-file-read"
         )
     ) {
+        platform::require_production_activation()?;
         admin_governance::reject_laboratory_effects_after_bootstrap()?;
     }
     match args.first().map(String::as_str) {
@@ -344,6 +346,7 @@ fn dispatch() -> Result<()> {
             service::granted_gateway::infer_review(inference_input(&args[1])?, max_tokens)
         }
         Some("utc-keeper") if args.len() == 1 => utc_provider::serve(),
+        Some("utc-recovery-keeper") if args.len() == 1 => utc_provider::serve_recovery(),
         Some("utc-seed") => admin_governance::utc_seed_command(&args),
         Some("utc-seed-recovery") => admin_governance::utc_seed_recovery_command(&args),
         Some("utc-reacquire") => admin_governance::utc_reacquire_command(&args),
@@ -401,6 +404,13 @@ fn dispatch() -> Result<()> {
             admin_governance::catalog_status(&args[1])
         }
         Some("admin-service") if args.len() == 1 => admin_service::serve(),
+        Some("admin-release-trust-stage" | "admin-release-activate") => {
+            admin_governance::staged_release_command(&args)
+        }
+        Some("admin-release-command") => admin_governance::release_catalog_command(&args),
+        Some("admin-skill-trust-publish" | "admin-skill-registry-admit") => {
+            admin_governance::skill_catalog_command(&args)
+        }
         Some("peer-observer") if args.len() == 1 => credential_observer::serve(),
         Some("admin-service-request") if args.len() == 1 => admin_service::connection(),
         Some("admin-client") => admin_service::client(&args[1..]),
@@ -641,7 +651,7 @@ fn dispatch() -> Result<()> {
         Some("init-data") if args.len() == 2 => platform::init_data(&args[1]),
         Some("help" | "--help") | None => {
             println!("Bounded workflow scheduling: granted-run workflow-dag-schedule LOGIN SCHEDULE-JSON. Up to 16 distinct reviewed run checkpoints; one currently authorized node step per run, no automatic retry or authority restoration. A failed item preserves its uncertain outcome and leaves the suffix undispatched.");
-            println!("Release governance: admin-catalog accepts publish_release_trust, prepare_release and resolve_release proposals through current original Admin, protected UTC and the existing TPM journal. Trust/root environments, irreversible revocations, exact signed candidate bytes, geometry and monotonic admission floors are checked. Public production roots and real signing custody must be provisioned separately.");
+            println!("Release governance: luma-admin-control admin-release-command LOGIN REQUEST FILE [--commit REVIEW-SHA256] accepts only publish_release_trust, initialize_release, prepare_release and resolve_release JSON through current original Admin, protected UTC and the existing TPM journal. Trust/root environments, irreversible revocations, exact signed candidate bytes, geometry and monotonic admission floors are checked. Public production roots and real signing custody must be provisioned separately. admin-catalog remains finite role/grant governance only.");
             println!("Independent resource custody: luma-admin-control resource-checkpoint-prepare-review LOGIN | resource-checkpoint-prepare LOGIN GRANT REVIEW; enroll-review/enroll, parent-review/parent-continue, pending-review/finalize, recovery-review/recover and gc-review/gc follow the typed review plus exact finite-grant ceremony. Requires original Admin, protected UTC, fixed masks and drainage; no ownership takeover, NV replay, capacity release or service restart. See RESOURCE_CHECKPOINT_CUSTODY.md.");
             println!("Terminal history: granted-run workflow-history-inspection-review/proposal/export/mark-proposal/mark/delete-proposal/delete. Export uses a separate binary payload channel; marks bind exact custody acknowledgement and protected grace. Deletion retires only terminal workflow copies, preserves owned artifacts and sources, and advances a durable domain epoch. Historical invoice review/prepare requires HISTORY-EPOCH before captured CSV input. Policy archives: policy-archive-review/export-proposal/export/dispose-proposal/dispose-mark/delete-proposal/delete/outcomes/cleanup-proposal/cleanup, each with separate exact scopes; archives never restore authorization.");
             println!("Physical receipt preparation recovery: resource-recovery-status | resource-recover REVIEW-SHA256. Installed-root broker maintenance with terminal requests and empty, released worker generations. Review binds the exact hot ledger and selected interrupted stage inode/bytes; preserves the stage under an immutable private incident name. Complete checksum-matching stages remain for exact archival retry. Never deletes evidence, retires an owner, grants an effect or releases capacity.");
@@ -662,6 +672,9 @@ fn dispatch() -> Result<()> {
             println!("admin-checkpoint-reconcile [--publish-committed REVIEW-SHA256]: inspect or explicitly publish a TPM-proven pending inert audit commit; never replays effects or resets TPM state. Requires existing enrollment and credential delivery.");
             println!("admin-auth-check LOGIN: installed-system, controlling-terminal account authentication diagnostic; does not enroll or grant product Admin.");
             println!("admin-bootstrap LOGIN [--activate REVIEW-SHA256]: freshly authenticate the enrolled human, inspect or explicitly commit the installation-bound Admin bootstrap receipt. No role delegation, signing, resource capability or effect execution is enabled by this command.");
+            println!("First-boot production activation: luma-admin-control admin-release-trust-stage LOGIN REQUEST [--commit REVIEW] then admin-release-activate LOGIN REQUEST [--commit REVIEW]. Each reviews exact retained signed staging evidence, original Admin, TPM and current protected UTC. Offline staging alone enables no protected operation.");
+            println!("Skill trust: luma-admin-control admin-skill-trust-publish LOGIN REQUEST EXPECTED-VERSION SIGNED-TRUST-FILE [--commit REVIEW] | admin-skill-registry-admit LOGIN REQUEST EXPECTED-FLOOR SIGNED-ADMISSION-FILE [--commit REVIEW]. Separate immutable skill roots/policy, exact schema-2 registry/graph, finite current UTC, monotonic TPM trust/floor and explicit Admin review; no signing private key or effect grant.");
+            println!("Target recovery: luma-recovery-control utc-seed DISK /run/luma-recovery-input/seed.json [--commit KEEPER-INSTANCE REVIEW] | utc-reacquire DISK [--commit KEEPER-INSTANCE REVIEW] | repair-a|repair-b DISK /run/luma-recovery-bundle. Original offline Admin custody and exact live image/target TPM/history are mandatory. Repairs use a separate nonrenewable 30-minute deadline and continuously current UTC; ordinary Admin/export sessions are unchanged.");
             println!("admin-governance-status LOGIN: fresh principal-bound inspection of the TPM-verified finite activity/role definition catalog; no assignment or effect grant.");
             println!("admin-client LOGIN status | LOGIN register REQUEST ACTIVITY | LOGIN define REQUEST ROLE VERSION ACTIVITY... [--commit REVIEW]: one fresh PAM-authenticated request to the fixed local Admin service, from the selected human account without sudo. No assignments or effect grants.");
             println!("admin-client LOGIN adopt-principals REQUEST [--commit REVIEW] | admin-principals-adopt LOGIN REQUEST [--commit REVIEW]: explicitly checkpoint the exact current installed principal registry after product bootstrap. Does not create/change accounts or grant effects. Once adopted, mismatched registry state fences Admin semantics; root file edits cannot replace the checkpoint.");

@@ -87,4 +87,25 @@ fn main() {
         .status()
         .expect("fixed UTC supervisor compiler")
         .success());
+    // A separate compile-time target, never a caller-selected restart unit.
+    assert!(Command::new("cc")
+        .args([
+            "-std=c11",
+            "-O2",
+            "-Wall",
+            "-Wextra",
+            "-Werror",
+            "-fstack-protector-strong",
+            "-D_FORTIFY_SOURCE=3",
+            "-fPIE",
+            "-pie",
+            "-Wl,-z,relro,-z,now",
+            "-DLUMA_UTC_RECOVERY",
+            "src/utc_restart.c",
+            "-o",
+        ])
+        .arg(out.join("luma-utc-recovery-restart"))
+        .status()
+        .expect("fixed recovery UTC supervisor compiler")
+        .success());
 }

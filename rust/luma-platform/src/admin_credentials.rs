@@ -151,6 +151,56 @@ pub(crate) fn load() -> Result<(Configuration, Secret)> {
     )
 }
 
+pub(crate) fn load_recovery(
+    target: &crate::platform::RecoveryTarget,
+) -> Result<(Configuration, Secret)> {
+    target.recheck()?;
+    let result = load_at(
+        target.admin_directory(),
+        Path::new(PUBLIC_KEY),
+        Path::new(BOOT_SIGNATURE),
+        |deployment, parent, public, blob, signature| {
+            owner_credential::unseal_recovery(target, deployment, parent, public, blob, signature)
+        },
+    )?;
+    target.recheck()?;
+    Ok(result)
+}
+
+/// Retained exact delivery inputs, not a key or an authority receipt.
+pub(crate) struct RecoveryDelivery {
+    configuration: Vec<u8>,
+    sealed: Vec<u8>,
+    parent: Vec<u8>,
+    public: Vec<u8>,
+    signature: Vec<u8>,
+}
+impl RecoveryDelivery {
+    pub(crate) fn capture(target: &crate::platform::RecoveryTarget) -> Result<Self> {
+        target.recheck()?;
+        let directory = target.admin_directory();
+        Ok(Self {
+            configuration: crate::tpm::private_read(&directory.join("anchor.json"), 4096)?,
+            sealed: crate::tpm::private_read(&directory.join("nv-auth.cred"), 16384)?,
+            parent: crate::tpm::private_read(&directory.join("parent.name"), 256)?,
+            public: public_input(Path::new(PUBLIC_KEY), 4096)?,
+            signature: public_input(Path::new(BOOT_SIGNATURE), 16384)?,
+        })
+    }
+    pub(crate) fn recheck(&self, target: &crate::platform::RecoveryTarget) -> Result<()> {
+        let current = Self::capture(target)?;
+        if current.configuration != self.configuration
+            || current.sealed != self.sealed
+            || current.parent != self.parent
+            || current.public != self.public
+            || current.signature != self.signature
+        {
+            return Err("recovery sealed delivery or approved media PCR policy changed".into());
+        }
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

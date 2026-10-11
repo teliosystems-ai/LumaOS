@@ -18,6 +18,18 @@
 #define SO_PEERPIDFD 77
 #endif
 
+#ifdef LUMA_UTC_RECOVERY
+#define CONTROLLER_LABEL "luma-recovery (enforce)"
+#define RESTART_LABEL "luma-utc-recovery-restart (enforce)\n"
+#define KEEPER_UNIT "luma-utc-recovery-keeper.service"
+#define PRODUCER_PATH "luma-utc-recovery-producer.path"
+#else
+#define CONTROLLER_LABEL "luma-admin (enforce)"
+#define RESTART_LABEL "luma-utc-restart (enforce)\n"
+#define KEEPER_UNIT "luma-utc-keeper.service"
+#define PRODUCER_PATH "luma-utc-producer.path"
+#endif
+
 static int exact(int fd, void *buffer, size_t size)
 {
   unsigned char *bytes = buffer;
@@ -36,8 +48,8 @@ static int label(int fd)
   if (getsockopt(fd, SOL_SOCKET, SO_PEERSEC, value, &length) ||
       !length || length > sizeof(value)) return 0;
   if (value[length - 1] == '\0') --length;
-  return length == sizeof("luma-admin (enforce)") - 1 &&
-         !memcmp(value, "luma-admin (enforce)", length);
+  return length == sizeof(CONTROLLER_LABEL) - 1 &&
+         !memcmp(value, CONTROLLER_LABEL, length);
 }
 int main(int argc, char **argv)
 {
@@ -58,8 +70,8 @@ int main(int argc, char **argv)
   if (profile < 0) goto refuse;
   ssize_t count = read(profile, self, sizeof(self));
   close(profile);
-  if (count != (ssize_t)(sizeof("luma-utc-restart (enforce)\n") - 1) ||
-      memcmp(self, "luma-utc-restart (enforce)\n", (size_t)count)) goto refuse;
+  if (count != (ssize_t)(sizeof(RESTART_LABEL) - 1) ||
+      memcmp(self, RESTART_LABEL, (size_t)count)) goto refuse;
   if (getsockopt(3, SOL_SOCKET, SO_PEERCRED, &peer, &length) ||
       length != sizeof(peer) || peer.uid || peer.gid || peer.pid <= 0 || !label(3)) goto refuse;
   length = sizeof(pin);
@@ -84,7 +96,7 @@ int main(int argc, char **argv)
   close(pin);
   close(3);
   char *const command[] = {"/usr/bin/systemctl", "--no-ask-password", "restart",
-      "luma-utc-keeper.service", "luma-utc-producer.path", NULL};
+      KEEPER_UNIT, PRODUCER_PATH, NULL};
   char *const environment[] = {"PATH=/usr/sbin:/usr/bin:/sbin:/bin", "LANG=C", "LC_ALL=C", NULL};
   execve(command[0], command, environment);
 refuse:

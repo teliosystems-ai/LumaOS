@@ -820,6 +820,7 @@ impl Manager {
         peer: libc::ucred,
         pinned: Option<File>,
     ) -> Result<Response> {
+        crate::platform::require_production_activation()?;
         validate(r, peer.uid, now()?)?;
         let current_peer = peer::live_generation(
             peer,

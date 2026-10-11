@@ -168,7 +168,9 @@ class RequirementOneIntegration(unittest.TestCase):
             self.assertEqual((target / 'source/chrony_hook.c').read_bytes(),
                              (IMAGE / 'utc/chrony_hook.c').read_bytes())
             enabled = {path.name for path, _ in links if path.parent.name == 'multi-user.target.wants'}
-            self.assertEqual(enabled, {'luma-utc-keeper.service', 'luma-utc-producer.path'})
+            self.assertEqual(enabled, {'luma-utc-keeper.service', 'luma-utc-producer.path',
+                                       'luma-utc-recovery-keeper.service',
+                                       'luma-utc-recovery-producer.path'})
             masked = {path.name for path, destination in links if destination == '/dev/null'}
             self.assertEqual(masked, {'systemd-timesyncd.service', 'chrony.service', 'ntp.service'})
             self.assertEqual(calls[0][0], 'bash')
@@ -180,7 +182,7 @@ class RequirementOneIntegration(unittest.TestCase):
         tree = ast.parse(source)
         self.assertTrue(any(isinstance(node, ast.FunctionDef)
                             and node.name == 'package_protected_utc' for node in tree.body))
-        for input_path in ('native/image/overlay', 'luma-utc-restart',
+        for input_path in ('native/image/overlay', 'luma-utc-restart', 'luma-utc-recovery-restart',
                            'luma-admin-control', 'package_protected_utc(ROOT, REPO, WORK)'):
             self.assertIn(input_path, source)
         driver = (IMAGE / 'build.sh').read_text()

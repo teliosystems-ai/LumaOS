@@ -145,6 +145,36 @@ pub(crate) struct ExchangeBoundary {
 /// Recovery uses the same boot/process/root pins and suspend-aware 30s bound.
 pub(crate) struct ProtectedOperation(session::Lifetime);
 
+/// A separate, nonrenewable repair-process lifetime. This supplies neither
+/// custody nor a grant: the target authority must check both at every effect.
+/// It cannot be used to construct an authenticated account or export session.
+pub(crate) struct RepairOperation(session::RepairLifetime);
+
+impl RepairOperation {
+    pub(crate) fn start() -> Result<Self> {
+        crate::require_root()?;
+        Ok(Self(session::RepairLifetime::start()?))
+    }
+    pub(crate) fn within<T>(&self, operation: impl FnOnce() -> Result<T>) -> Result<T> {
+        self.0.observe(operation)
+    }
+    pub(crate) fn check_projection(
+        &self,
+        clock: &crate::utc_provider::ProjectionClock,
+    ) -> Result<()> {
+        self.0.check_projection(clock)
+    }
+    pub(crate) fn close(&self) {
+        self.0.close();
+    }
+}
+
+impl Drop for RepairOperation {
+    fn drop(&mut self) {
+        self.close();
+    }
+}
+
 impl ProtectedOperation {
     pub(crate) fn start() -> Result<Self> {
         Ok(Self(session::Lifetime::start()?))

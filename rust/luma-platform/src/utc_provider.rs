@@ -28,6 +28,13 @@ const MAX_FRAME: usize = 4096;
 const BUDGET: Duration = Duration::from_millis(250);
 const MAX_SEED_WIDTH: i64 = 300_000;
 
+#[path = "utc_provider/recovery.rs"]
+mod recovery;
+pub(crate) use recovery::{
+    recovery_deliver_seed, recovery_reacquire, recovery_reacquire_proposal, recovery_seed_proposal,
+    RecoveryClient,
+};
+
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Query {
@@ -168,9 +175,7 @@ fn credentials_any(socket: &UnixStream, labels: &[&str]) -> Result<libc::ucred> 
         )
     } != 0
         || length as usize != size_of::<libc::ucred>()
-        || value.uid != 0
-        || value.gid != 0
-        || value.pid <= 0
+        || !protected_peer_ids(value.uid, value.gid, value.pid)
     {
         return Err("UTC local endpoint requires its original protected root peer".into());
     }
@@ -191,13 +196,18 @@ fn credentials_any(socket: &UnixStream, labels: &[&str]) -> Result<libc::ucred> 
         return Err("UTC peer enforcing label unavailable".into());
     }
     let bytes = &bytes[..length as usize];
-    if !labels
-        .iter()
-        .any(|label| bytes.strip_suffix(&[0]).unwrap_or(bytes) == label.as_bytes())
-    {
+    if !approved_peer_label(bytes, labels) {
         return Err("UTC peer does not have its approved enforcing profile".into());
     }
     Ok(value)
+}
+fn protected_peer_ids(uid: u32, gid: u32, pid: i32) -> bool {
+    uid == 0 && gid == 0 && pid > 0
+}
+fn approved_peer_label(bytes: &[u8], labels: &[&str]) -> bool {
+    labels
+        .iter()
+        .any(|label| bytes.strip_suffix(&[0]).unwrap_or(bytes) == label.as_bytes())
 }
 
 #[derive(PartialEq, Eq)]
@@ -221,46 +231,68 @@ impl Identity {
 }
 struct Release {
     files: Vec<crate::utc_runtime::Pin>,
+    mode: crate::utc_runtime::Mode,
 }
 impl Release {
     fn installed() -> Result<Self> {
-        crate::platform::require_installed()?;
-        Ok(Self {
+        Self::from_mode(crate::utc_runtime::Mode::installed()?)
+    }
+    fn recovery() -> Result<Self> {
+        Self::from_mode(crate::utc_runtime::Mode::recovery()?)
+    }
+    fn from_mode(mode: crate::utc_runtime::Mode) -> Result<Self> {
+        mode.recheck()?;
+        let (profile, profile_bytes, service, service_bytes, caller_profile, caller_bytes) =
+            match &mode {
+                crate::utc_runtime::Mode::Installed => (
+                    "/etc/apparmor.d/luma-utc-keeper",
+                    include_bytes!("../../../native/image/overlay/etc/apparmor.d/luma-utc-keeper")
+                        .as_slice(),
+                    "/usr/lib/systemd/system/luma-utc-keeper.service",
+                    include_bytes!("../../../native/image/utc/luma-utc-keeper.service").as_slice(),
+                    "/etc/apparmor.d/luma-granted-client",
+                    Some(
+                        include_bytes!(
+                            "../../../native/image/overlay/etc/apparmor.d/luma-granted-client"
+                        )
+                        .as_slice(),
+                    ),
+                ),
+                crate::utc_runtime::Mode::Recovery(_) => (
+                    "/etc/apparmor.d/luma-utc-recovery-keeper",
+                    include_bytes!(
+                        "../../../native/image/overlay/etc/apparmor.d/luma-utc-recovery-keeper"
+                    )
+                    .as_slice(),
+                    "/usr/lib/systemd/system/luma-utc-recovery-keeper.service",
+                    include_bytes!("../../../native/image/utc/luma-utc-recovery-keeper.service")
+                        .as_slice(),
+                    "/etc/apparmor.d/luma-recovery",
+                    None,
+                ),
+            };
+        let release = Self {
             files: vec![
                 crate::utc_runtime::Pin::immutable(
                     "/usr/libexec/luma-os/luma-platform",
                     64 * 1024 * 1024,
                     None,
                 )?,
-                crate::utc_runtime::Pin::immutable(
-                    "/etc/apparmor.d/luma-utc-keeper",
-                    32 * 1024,
-                    Some(include_bytes!(
-                        "../../../native/image/overlay/etc/apparmor.d/luma-utc-keeper"
-                    )),
-                )?,
-                crate::utc_runtime::Pin::immutable(
-                    "/usr/lib/systemd/system/luma-utc-keeper.service",
-                    32 * 1024,
-                    Some(include_bytes!(
-                        "../../../native/image/utc/luma-utc-keeper.service"
-                    )),
-                )?,
-                crate::utc_runtime::Pin::immutable(
-                    "/etc/apparmor.d/luma-granted-client",
-                    32 * 1024,
-                    Some(include_bytes!(
-                        "../../../native/image/overlay/etc/apparmor.d/luma-granted-client"
-                    )),
-                )?,
+                crate::utc_runtime::Pin::immutable(profile, 32 * 1024, Some(profile_bytes))?,
+                crate::utc_runtime::Pin::immutable(service, 32 * 1024, Some(service_bytes))?,
+                crate::utc_runtime::Pin::immutable(caller_profile, 32 * 1024, caller_bytes)?,
             ],
-        })
+            mode,
+        };
+        release.recheck()?;
+        Ok(release)
     }
     fn recheck(&self) -> Result<()> {
+        self.mode.recheck()?;
         for file in &self.files {
             file.immutable_recheck()?;
         }
-        Ok(())
+        self.mode.recheck()
     }
 }
 fn endpoint(path: &str) -> Result<Identity> {
@@ -541,11 +573,17 @@ pub(crate) struct Client {
 }
 impl Client {
     pub(crate) fn installed() -> Result<Self> {
+        Self::with_release(Release::installed()?)
+    }
+    fn recovery() -> Result<Self> {
+        Self::with_release(Release::recovery()?)
+    }
+    fn with_release(release: Release) -> Result<Self> {
         crate::require_root()?;
         let watch = crate::utc_step_watch::StepWatch::arm()?;
         let initial = Receiver::clock(0)?;
         Ok(Self {
-            release: Release::installed()?,
+            release,
             endpoint: endpoint(QUERY)?,
             peer: None,
             history: None,
@@ -582,7 +620,7 @@ impl Client {
         let before = Receiver::clock(0)?;
         let mut socket = UnixStream::connect(QUERY)?;
         socket_budget(&socket)?;
-        let peer = credentials(&socket, "luma-utc-keeper (enforce)")?;
+        let peer = credentials(&socket, self.release.mode.keeper_label())?;
         if let Some((pid, pin)) = &self.peer {
             if peer.pid != *pid || !crate::resource_manager::pidfd_alive(pin)? {
                 return Err("UTC keeper process generation changed".into());
@@ -596,7 +634,7 @@ impl Client {
         };
         frame(&mut socket, &request)?;
         let reply: Reply = read_frame(&mut socket)?;
-        credentials(&socket, "luma-utc-keeper (enforce)")?;
+        credentials(&socket, self.release.mode.keeper_label())?;
         let now = Receiver::clock(0)?;
         if reply.schema_version != 1
             || reply.nonce != request.nonce
@@ -809,10 +847,16 @@ fn listener(path: &str) -> Result<UnixListener> {
 /// NTS producer gets network access; ptrace permission is read-only and limited
 /// by AppArmor to that producer's metadata, never process mutation.
 pub(crate) fn serve() -> Result<()> {
+    serve_release(Release::installed()?)
+}
+pub(crate) fn serve_recovery() -> Result<()> {
+    serve_release(Release::recovery()?)
+}
+fn serve_release(release: Release) -> Result<()> {
     crate::require_root()?;
-    let release = Release::installed()?;
-    if fs::read_to_string("/proc/self/attr/current")? != "luma-utc-keeper (enforce)\n"
-        || fs::read_to_string("/proc/self/cgroup")? != "0::/system.slice/luma-utc-keeper.service\n"
+    if fs::read_to_string("/proc/self/attr/current")?
+        != format!("{}\n", release.mode.keeper_label())
+        || fs::read_to_string("/proc/self/cgroup")? != release.mode.keeper_cgroup()
     {
         return Err("UTC keeper must run in its enforcing installed unit".into());
     }
@@ -859,10 +903,7 @@ pub(crate) fn serve() -> Result<()> {
         if let Ok((mut socket, _)) = queries.accept() {
             let result = (|| {
                 socket_budget(&socket)?;
-                credentials_any(
-                    &socket,
-                    &["luma-admin (enforce)", "luma-granted-client (enforce)"],
-                )?;
+                credentials_any(&socket, release.mode.query_labels())?;
                 let request: Query = read_frame(&mut socket)?;
                 nonce(&request.nonce)?;
                 if request.schema_version != 1 {
@@ -941,7 +982,7 @@ pub(crate) fn serve() -> Result<()> {
         if let Ok((mut socket, _)) = controls.accept() {
             let result = (|| {
                 socket_budget(&socket)?;
-                credentials(&socket, "luma-admin (enforce)")?;
+                credentials(&socket, release.mode.control_label())?;
                 let request: Control = match read_frame::<ControlRequest>(&mut socket)? {
                     ControlRequest::Inspect(request) => {
                         nonce(&request.nonce)?;
@@ -992,7 +1033,10 @@ pub(crate) fn serve() -> Result<()> {
                     return Err(std::io::Error::last_os_error().into());
                 }
                 seeded = true;
-                let deployment = Deployment::installed()?;
+                let deployment = match &release.mode {
+                    crate::utc_runtime::Mode::Installed => Deployment::installed()?,
+                    crate::utc_runtime::Mode::Recovery(_) => Deployment::recovery()?,
+                };
                 pending = Some(Endpoint::bind(deployment)?);
                 let mut ready = OpenOptions::new()
                     .write(true)
@@ -1051,10 +1095,14 @@ pub(crate) fn seed_review(seed: &Seed, history: &str, instance: &str) -> Result<
 
 fn control_inspect() -> Result<ControlReply> {
     let release = Release::installed()?;
+    control_inspect_release(&release)
+}
+fn control_inspect_release(release: &Release) -> Result<ControlReply> {
+    release.recheck()?;
     let original = endpoint(CONTROL)?;
     let mut socket = UnixStream::connect(CONTROL)?;
     socket_budget(&socket)?;
-    let peer = credentials(&socket, "luma-utc-keeper (enforce)")?.pid;
+    let peer = credentials(&socket, release.mode.keeper_label())?.pid;
     let pin = crate::service::peer_pidfd(&socket)?;
     let request = Query {
         schema_version: 1,
@@ -1069,7 +1117,7 @@ fn control_inspect() -> Result<ControlReply> {
             reply.result.as_str(),
             "seed-required" | "acquisition-already-started"
         )
-        || credentials(&socket, "luma-utc-keeper (enforce)")?.pid != peer
+        || credentials(&socket, release.mode.keeper_label())?.pid != peer
         || !crate::resource_manager::pidfd_alive(&pin)?
         || endpoint(CONTROL)? != original
     {
@@ -1119,28 +1167,43 @@ pub(crate) fn reacquire_custody(
     custody.observe(|| restart_fixed(binding, instance, reviewed))
 }
 fn restart_fixed(binding: &HistoryBinding, instance: &str, reviewed: &str) -> Result<()> {
+    restart_fixed_release(&Release::installed()?, binding, instance, reviewed)
+}
+fn restart_fixed_release(
+    release: &Release,
+    binding: &HistoryBinding,
+    instance: &str,
+    reviewed: &str,
+) -> Result<()> {
     use std::os::unix::process::CommandExt;
     use std::process::{Command, Stdio};
     crate::require_root()?;
-    let helper = crate::utc_runtime::Pin::immutable(
-        "/usr/libexec/luma-os/luma-utc-restart",
-        1024 * 1024,
-        None,
-    )?;
-    let profile = crate::utc_runtime::Pin::immutable(
-        "/etc/apparmor.d/luma-utc-restart",
-        32 * 1024,
-        Some(include_bytes!(
-            "../../../native/image/overlay/etc/apparmor.d/luma-utc-restart"
-        )),
-    )?;
-    let reply = control_inspect()?;
+    release.recheck()?;
+    let (helper_path, profile_path, profile_bytes) = match &release.mode {
+        crate::utc_runtime::Mode::Installed => (
+            "/usr/libexec/luma-os/luma-utc-restart",
+            "/etc/apparmor.d/luma-utc-restart",
+            include_bytes!("../../../native/image/overlay/etc/apparmor.d/luma-utc-restart")
+                .as_slice(),
+        ),
+        crate::utc_runtime::Mode::Recovery(_) => (
+            "/usr/libexec/luma-os/luma-utc-recovery-restart",
+            "/etc/apparmor.d/luma-utc-recovery-restart",
+            include_bytes!(
+                "../../../native/image/overlay/etc/apparmor.d/luma-utc-recovery-restart"
+            )
+            .as_slice(),
+        ),
+    };
+    let helper = crate::utc_runtime::Pin::immutable(helper_path, 1024 * 1024, None)?;
+    let profile = crate::utc_runtime::Pin::immutable(profile_path, 32 * 1024, Some(profile_bytes))?;
+    let reply = control_inspect_release(release)?;
     if reply.instance != instance || restart_review(binding, &reply)? != reviewed {
         return Err("UTC restart requires exact current instance and shared-history review".into());
     }
     let (mut parent, child) = UnixStream::pair()?;
     let child_fd = child.as_raw_fd();
-    let mut command = Command::new("/usr/libexec/luma-os/luma-utc-restart");
+    let mut command = Command::new(helper_path);
     command
         .env_clear()
         .stdin(Stdio::null())
@@ -1186,7 +1249,8 @@ fn restart_fixed(binding: &HistoryBinding, instance: &str, reviewed: &str) -> Re
             }
             helper.immutable_recheck()?;
             profile.immutable_recheck()?;
-            let after = control_inspect()?;
+            release.recheck()?;
+            let after = control_inspect_release(release)?;
             if after.instance == instance || after.result != "seed-required" {
                 return Err("UTC restart did not prove a new fenced seed-required instance".into());
             }
@@ -1206,24 +1270,32 @@ fn restart_fixed(binding: &HistoryBinding, instance: &str, reviewed: &str) -> Re
 pub(crate) fn seed_proposal(binding: &HistoryBinding, seed: &Seed) -> Result<serde_json::Value> {
     crate::require_root()?;
     let release = Release::installed()?;
+    seed_proposal_release(&release, binding, seed)
+}
+fn seed_proposal_release(
+    release: &Release,
+    binding: &HistoryBinding,
+    seed: &Seed,
+) -> Result<serde_json::Value> {
+    release.recheck()?;
     let original = endpoint(CONTROL)?;
     seed.validate(binding.floor_ms())?;
     let mut socket = UnixStream::connect(CONTROL)?;
     socket_budget(&socket)?;
-    credentials(&socket, "luma-utc-keeper (enforce)")?;
+    credentials(&socket, release.mode.keeper_label())?;
     let request = Query {
         schema_version: 1,
         nonce: random()?,
     };
     let expected_nonce = request.nonce.clone();
-    let expected_peer = credentials(&socket, "luma-utc-keeper (enforce)")?.pid;
+    let expected_peer = credentials(&socket, release.mode.keeper_label())?.pid;
     let pin = crate::service::peer_pidfd(&socket)?;
     frame(&mut socket, &ControlRequest::Inspect(request))?;
     let reply: ControlReply = read_frame(&mut socket)?;
     if reply.schema_version != 1
         || reply.nonce != expected_nonce
         || reply.result != "seed-required"
-        || credentials(&socket, "luma-utc-keeper (enforce)")?.pid != expected_peer
+        || credentials(&socket, release.mode.keeper_label())?.pid != expected_peer
         || !crate::resource_manager::pidfd_alive(&pin)?
         || endpoint(CONTROL)? != original
     {
@@ -1275,6 +1347,16 @@ fn seed_transport(
 ) -> Result<()> {
     crate::require_root()?;
     let release = Release::installed()?;
+    seed_transport_release(&release, binding, seed, instance, reviewed)
+}
+fn seed_transport_release(
+    release: &Release,
+    binding: &HistoryBinding,
+    seed: &Seed,
+    instance: &str,
+    reviewed: &str,
+) -> Result<()> {
+    release.recheck()?;
     let original = endpoint(CONTROL)?;
     seed.validate(binding.floor_ms())?;
     nonce(instance)?;
@@ -1284,7 +1366,7 @@ fn seed_transport(
     }
     let mut socket = UnixStream::connect(CONTROL)?;
     socket_budget(&socket)?;
-    let peer = credentials(&socket, "luma-utc-keeper (enforce)")?;
+    let peer = credentials(&socket, release.mode.keeper_label())?;
     let pin = crate::service::peer_pidfd(&socket)?;
     let request = Control {
         schema_version: 1,
@@ -1302,7 +1384,7 @@ fn seed_transport(
         || reply.nonce != nonce
         || reply.instance != instance
         || reply.result != "acquisition-started-not-time-authority"
-        || credentials(&socket, "luma-utc-keeper (enforce)")?.pid != peer.pid
+        || credentials(&socket, release.mode.keeper_label())?.pid != peer.pid
         || !crate::resource_manager::pidfd_alive(&pin)?
         || endpoint(CONTROL)? != original
     {
@@ -1314,6 +1396,30 @@ fn seed_transport(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn kernel_root_machine_query_is_not_seed_control_or_nonroot_authority() {
+        let mode = crate::utc_runtime::Mode::Installed;
+        assert!(protected_peer_ids(0, 0, 1));
+        for (uid, gid, pid) in [(1001, 0, 1), (0, 1001, 1), (0, 0, 0), (0, 0, -1)] {
+            assert!(!protected_peer_ids(uid, gid, pid));
+        }
+        assert!(approved_peer_label(b"unconfined", mode.query_labels()));
+        assert!(approved_peer_label(b"unconfined\0", mode.query_labels()));
+        for label in [
+            b"other (enforce)".as_slice(),
+            b"unconfined (enforce)",
+            b"unconfined\0extra",
+        ] {
+            assert!(!approved_peer_label(label, mode.query_labels()));
+        }
+        assert!(!approved_peer_label(b"unconfined", &[mode.control_label()]));
+        for wire in [
+            br#"{"schema_version":1,"nonce":"aa","seed":{}}"#.as_slice(),
+            br#"{"schema_version":1,"nonce":"aa","history_floor_ms":1}"#,
+        ] {
+            assert!(serde_json::from_slice::<Query>(wire).is_err());
+        }
+    }
     fn projection_clock(boot: u64, mono: u64) -> crate::utc_keeper::Clock {
         crate::utc_keeper::Clock {
             boottime_ms: boot,

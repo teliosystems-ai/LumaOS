@@ -6,6 +6,47 @@ does not certify live NTS, native confinement, time-error bounds or G2. Historic
 commit fixtures below remain development-only. Never start a fixture daemon on
 the build host or grant the build container a clock capability.
 
+## Target-bound recovery UTC
+
+The installed constructors continue to require an installed slot. Recovery uses
+separate fixed `luma-utc-recovery-{keeper,producer}` units, enforcing profiles and
+cgroup identities, while retaining the same reviewed producer, NTS providers,
+configuration, signed-source provenance, dependency inventory and measurement
+codec. Both mode-specific producer service/profile pairs are mandatory immutable
+runtime inventory members. The units are mutually exclusive; their fixed Unix
+endpoints are not caller-selected namespaces.
+
+Installed query delivery also permits an exact kernel-root `unconfined` peer
+for the fixed machine updater and broker. OS root is outside the application
+threat model; UID/GID zero, original PID/pidfd and the exact kernel label remain
+mandatory. This applies only to closed nonce-only queries for public estimates,
+never installed seed/control, recovery queries or recovery control. Machine
+consumers must still reconstruct current TPM/catalog history and obtain the
+private UTC observation before admitting effects; serialized estimates cannot
+authorize work.
+
+The recovery keeper independently retains `RecoveryImage` proof of the current
+read-only live verity image and Secure Boot outside setup mode. It has no target
+mount, TPM, account data or recovery secret access. Only a sealed target Admin
+`TargetAuthority` can inspect, deliver an independently reviewed certificate
+bootstrap seed, or explicitly restart the fixed recovery supervisor. A seed or
+successful restart never provides time authority. Repair must receive current
+authenticated multi-operator NTS quorum above the target's hardware-bound
+semantic history floor.
+
+`RecoveryClient` borrows that exact target authority and brackets every delivery
+with fresh disk/mount, TPM/catalog, offline credential and history checks. After
+the potentially blocking post-checks, it reprojects the original bounded query
+and checks the original, fixed repair-session deadline at the same private
+kernel coordinate, with no final file/IPC/clock reads or session renewal. Errors
+permanently fence that client. Reacquisition uses a separately compiled fixed
+helper; no caller unit, profile, command or role can be selected through JSON.
+
+Source-composition tests and controlled quorum/replay/floor tests are software
+evidence only. Actual firmware, native recovery NTS/certificate/network paths,
+confinement, clock-rate bounds and power-loss repair qualification still require
+the produced image on the native test machine.
+
 ## Release authentication and source review
 
 `prepare_release_input.py` retains a new bounded archive and the committed

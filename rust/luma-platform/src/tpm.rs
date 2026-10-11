@@ -412,6 +412,12 @@ impl CredentialDevice {
         crate::platform::require_installed()?;
         Ok(Self(Context::local()?))
     }
+    pub(crate) fn recovery(target: &crate::platform::RecoveryTarget) -> Result<Self> {
+        target.recheck()?;
+        let result = Self(Context::local()?);
+        target.recheck()?;
+        Ok(result)
+    }
     #[cfg(test)]
     pub(crate) fn fixture(directory: &Path) -> Result<Self> {
         if !Path::new("/.dockerenv").is_file()
@@ -865,6 +871,47 @@ pub trait Checkpoint {
 pub struct LocalAnchor {
     context: Context,
     _lock: File,
+}
+
+/// Private recovered credential owner. Each observation opens and releases
+/// the existing shared writer lock so current revocations remain possible.
+/// The fixed target/PCR delivery and locked secret cannot be caller supplied.
+pub(crate) struct RecoveryAnchor<'target> {
+    target: &'target crate::platform::RecoveryTarget,
+    configuration: crate::admin_credentials::Configuration,
+    delivery: crate::admin_credentials::RecoveryDelivery,
+    secret: crate::sealed_credential::Secret,
+}
+impl<'target> RecoveryAnchor<'target> {
+    pub(crate) fn new(target: &'target crate::platform::RecoveryTarget) -> Result<Self> {
+        let delivery = crate::admin_credentials::RecoveryDelivery::capture(target)?;
+        let (configuration, secret) = crate::admin_credentials::load_recovery(target)?;
+        delivery.recheck(target)?;
+        Ok(Self {
+            target,
+            configuration,
+            delivery,
+            secret,
+        })
+    }
+    pub(crate) fn connect(&self) -> Result<LocalAnchor> {
+        self.delivery.recheck(self.target)?;
+        let lock = exclusive_lock(Path::new("/run/luma-admin/anchor.lock"))?;
+        let parent_name = decode::<34>(&self.configuration.parent_name)?;
+        let (parent, nv, matching) = enrollment_handles(Some(&parent_name))?;
+        if !parent || !nv || !matching {
+            return Err("recovery existing TPM parent or checkpoint namespace changed".into());
+        }
+        let result = LocalAnchor::connect(
+            Context::local()?,
+            self.configuration.index,
+            decode(&self.configuration.nv_name)?,
+            self.secret.bytes(),
+            lock,
+        )?;
+        self.delivery.recheck(self.target)?;
+        Ok(result)
+    }
 }
 
 impl LocalAnchor {

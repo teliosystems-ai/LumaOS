@@ -195,6 +195,27 @@ fn unseal_with(
     )
 }
 
+pub(crate) fn unseal_recovery(
+    target: &crate::platform::RecoveryTarget,
+    deployment: &str,
+    parent_name: &[u8; 34],
+    public_pem: &[u8],
+    blob: &[u8],
+    signature_json: &[u8],
+) -> Result<Secret> {
+    let mut device = CredentialDevice::recovery(target)?;
+    let result = unseal_with(
+        &mut device,
+        deployment,
+        parent_name,
+        public_pem,
+        blob,
+        signature_json,
+    )?;
+    target.recheck()?;
+    Ok(result)
+}
+
 #[cfg(test)]
 pub(crate) fn fixture_verify_boot(
     directory: &std::path::Path,

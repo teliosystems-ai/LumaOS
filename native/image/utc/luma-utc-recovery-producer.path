@@ -1,0 +1,16 @@
+[Unit]
+Description=Start recovery NTS only after reviewed seed and protected bind
+After=luma-utc-recovery-keeper.service
+Requires=luma-utc-recovery-keeper.service
+BindsTo=luma-utc-recovery-keeper.service
+Conflicts=luma-utc-keeper.service luma-utc-producer.service luma-utc-producer.path
+ConditionKernelCommandLine=luma.mode=live
+
+[Path]
+PathExists=/run/luma-utc/seed-ready
+Unit=luma-utc-recovery-producer.service
+TriggerLimitIntervalSec=60
+TriggerLimitBurst=1
+
+[Install]
+WantedBy=multi-user.target

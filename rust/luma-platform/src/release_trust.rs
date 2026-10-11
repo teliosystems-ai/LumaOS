@@ -155,7 +155,7 @@ impl SignedTrust {
             &serde_json::to_value(self)?,
         )?)))
     }
-    fn verify_root(&self) -> Result<()> {
+    pub(crate) fn verify_root(&self) -> Result<()> {
         self.validate()?;
         let path = match self.trust.environment.as_str() {
             "lab" => "/usr/share/luma-os/release.pub",
@@ -209,7 +209,7 @@ impl SignedRelease {
         }
         Ok(())
     }
-    fn verify(&self, trust: &SignedTrust) -> Result<()> {
+    pub(crate) fn verify(&self, trust: &SignedTrust) -> Result<()> {
         self.validate()?;
         if self.manifest.environment != trust.trust.environment {
             return Err("release environment differs from its root-authorized trust".into());
@@ -238,6 +238,31 @@ impl SignedRelease {
     pub(crate) fn digest(&self) -> Result<String> {
         self.validate()?;
         Ok(bundle::hex(&Sha256::digest(self.manifest_json.as_bytes())))
+    }
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct StagedRelease {
+    pub schema_version: u32,
+    pub trust: SignedTrust,
+    pub manifest_json: String,
+    pub signature_hex: String,
+}
+impl StagedRelease {
+    pub(crate) fn release(&self) -> Result<SignedRelease> {
+        self.trust.verify_root()?;
+        self.parse_verified_root()
+    }
+    fn parse_verified_root(&self) -> Result<SignedRelease> {
+        if self.schema_version != 1 {
+            return Err("invalid inert release staging schema".into());
+        }
+        if self.trust.trust.environment != "production" {
+            return Err("inert staging requires production purpose-separated root trust".into());
+        }
+        let signature = crate::tpm::decode::<64>(&self.signature_hex)?;
+        signed_release_verified_root(&self.trust, self.manifest_json.as_bytes(), &signature)
     }
 }
 
@@ -462,12 +487,24 @@ pub(crate) fn verify_installed_release(bytes: &[u8], signature: &[u8]) -> Result
     let (state, interval) = crate::admin_governance::release_authority()?;
     let s =
         state.ok_or("production release requires provisioned root and anchored release trust")?;
-    s.trust.verify_root()?;
-    s.trust.check_time(interval)?;
+    verify_current_release(&s.trust, bytes, signature, interval)?;
+    Ok(())
+}
+
+fn signed_release(trust: &SignedTrust, bytes: &[u8], signature: &[u8]) -> Result<SignedRelease> {
+    trust.verify_root()?;
+    signed_release_verified_root(trust, bytes, signature)
+}
+
+fn signed_release_verified_root(
+    trust: &SignedTrust,
+    bytes: &[u8],
+    signature: &[u8],
+) -> Result<SignedRelease> {
     let manifest: Manifest = serde_json::from_slice(bytes)?;
-    let mut matches = 0;
-    for key in &s.trust.trust.keys {
-        if key.revoked || !interval.within(key.not_before_ms, key.expires_ms)? {
+    let mut matched = None;
+    for key in &trust.trust.keys {
+        if key.revoked {
             continue;
         }
         let release = SignedRelease {
@@ -476,12 +513,64 @@ pub(crate) fn verify_installed_release(bytes: &[u8], signature: &[u8]) -> Result
             signature_hex: bundle::hex(signature),
             signer: key.id.clone(),
         };
-        if release.verify(&s.trust).is_ok() {
-            matches += 1;
+        if release.verify(trust).is_ok() {
+            if matched.is_some() {
+                return Err("release signature ambiguously matches multiple keys".into());
+            }
+            matched = Some(release);
         }
     }
-    if matches != 1 {
-        return Err("release signature lacks one exact current production signer".into());
+    matched.ok_or_else(|| "release signature lacks one exact root-authorized signer".into())
+}
+
+/// Structural/signature validation only. This deliberately returns no timed
+/// authority and is usable solely for approved inert initial installation.
+pub(crate) fn verify_inert_release(
+    trust: &SignedTrust,
+    bytes: &[u8],
+    signature: &[u8],
+) -> Result<()> {
+    if trust.trust.environment != "production" {
+        return Err("inert production staging requires production root trust".into());
+    }
+    signed_release(trust, bytes, signature)?;
+    Ok(())
+}
+
+pub(crate) fn verify_current_release(
+    trust: &SignedTrust,
+    bytes: &[u8],
+    signature: &[u8],
+    interval: crate::utc_bounds::Interval,
+) -> Result<SignedRelease> {
+    let release = signed_release(trust, bytes, signature)?;
+    release.check_time(trust, interval)?;
+    Ok(release)
+}
+
+pub(crate) fn repair_identity(state: &State, manifest: &Manifest) -> Result<()> {
+    bundle::validate_manifest(manifest)?;
+    let anchored = state.acknowledged.as_ref() == Some(manifest)
+        || state.retained.as_ref() == Some(manifest)
+        || state
+            .pending
+            .as_ref()
+            .is_some_and(|p| &p.prior == manifest || &p.candidate.manifest == manifest);
+    if !anchored
+        || manifest.environment != state.trust.trust.environment
+        || manifest.sequence > state.floor
+    {
+        return Err(
+            "repair image is not an exact retained, acknowledged or prepared TPM identity".into(),
+        );
+    }
+    if let Some(pending) = &state.pending {
+        if &pending.candidate.manifest == manifest
+            && (pending.trust_version != state.trust.trust.version
+                || pending.trust_sha256 != state.trust.digest()?)
+        {
+            return Err("prepared repair identity was invalidated by trust rotation".into());
+        }
     }
     Ok(())
 }
@@ -566,7 +655,7 @@ fn sealed(name: &str, bytes: &[u8]) -> Result<File> {
     Ok(f)
 }
 
-fn public_der(pem: &[u8]) -> Result<Vec<u8>> {
+pub(crate) fn public_der(pem: &[u8]) -> Result<Vec<u8>> {
     let key = sealed("luma-release-root", pem)?;
     let output = Command::new("/usr/bin/openssl")
         .env_clear()
@@ -586,7 +675,7 @@ fn public_der(pem: &[u8]) -> Result<Vec<u8>> {
     Ok(output.stdout)
 }
 
-fn verify_der(key: &[u8], message: &[u8], signature: &[u8]) -> Result<()> {
+pub(crate) fn verify_der(key: &[u8], message: &[u8], signature: &[u8]) -> Result<()> {
     if key.len() != 44
         || !key.starts_with(&ED25519_SPKI)
         || signature.len() != 64
@@ -934,5 +1023,78 @@ mod tests {
         assert!(r.verify(&t).is_err());
         let (_, wrong_root) = generated_key();
         assert!(t.verify_root_bytes(&wrong_root).is_err());
+    }
+    #[test]
+    fn inert_staging_real_signatures_preserve_exact_bytes_but_never_create_timed_activation() {
+        let (root_private, root_public) = generated_key();
+        let (delegate_private, delegate_public) = generated_key();
+        let mut t = trust();
+        t.trust.environment = "production".into();
+        t.trust.root_sha256 = bundle::hex(&Sha256::digest(public_der(&root_public).unwrap()));
+        t.trust.keys[0].public_key_hex = bundle::hex(&public_der(&delegate_public).unwrap()[12..]);
+        t.signature_hex = bundle::hex(&sign(&root_private, &t.signing_bytes().unwrap()));
+        t.verify_root_bytes(&root_public).unwrap();
+        let mut manifest = manifest(10);
+        manifest.environment = "production".into();
+        let bytes = serde_json::to_string_pretty(&manifest).unwrap();
+        let mut staged = StagedRelease {
+            schema_version: 1,
+            trust: t,
+            manifest_json: bytes.clone(),
+            signature_hex: bundle::hex(&sign(&delegate_private, bytes.as_bytes())),
+        };
+        let release = staged.parse_verified_root().unwrap();
+        assert_eq!(release.manifest_json, bytes);
+        release
+            .check_time(
+                &staged.trust,
+                crate::utc_bounds::Interval::new(200, 201).unwrap(),
+            )
+            .unwrap();
+        assert!(release
+            .check_time(
+                &staged.trust,
+                crate::utc_bounds::Interval::new(999_000, 999_001).unwrap()
+            )
+            .is_err());
+        // Finite activation refusal does not turn structural offline staging
+        // into a wall-clock fallback; its output still supplies no UTC value.
+        staged.parse_verified_root().unwrap();
+        staged.manifest_json = staged.manifest_json.replace("release-10", "release-11");
+        assert!(staged.parse_verified_root().is_err());
+        staged.manifest_json = bytes;
+        staged.signature_hex = "0".repeat(128);
+        assert!(staged.parse_verified_root().is_err());
+    }
+    #[test]
+    fn retained_repair_identity_cannot_lower_floor_substitute_metadata_or_reuse_changed_pending_trust(
+    ) {
+        let mut value = initialized();
+        let first = admission(&value, 12);
+        prepare(&mut value, 10, &first).unwrap();
+        let state = value.as_ref().unwrap();
+        repair_identity(state, &first.prior).unwrap();
+        repair_identity(state, &first.candidate.manifest).unwrap();
+        let floor = state.floor;
+        let mut changed = first.candidate.manifest.clone();
+        changed.root_hash = "e".repeat(64);
+        assert!(repair_identity(state, &changed).is_err());
+        assert!(repair_identity(state, &manifest(9)).is_err());
+        assert!(repair_identity(state, &manifest(13)).is_err());
+        let mut rotated = state.clone();
+        rotated.trust.trust.version += 1;
+        assert!(repair_identity(&rotated, &first.candidate.manifest).is_err());
+        repair_identity(&rotated, &first.prior).unwrap();
+        resolve(
+            &mut value,
+            &first.candidate.digest().unwrap(),
+            Outcome::Confirmed,
+        )
+        .unwrap();
+        let state = value.as_ref().unwrap();
+        repair_identity(state, &first.prior).unwrap();
+        repair_identity(state, &first.candidate.manifest).unwrap();
+        assert_eq!(state.floor, floor);
+        assert_eq!(state.retained.as_ref(), Some(&first.prior));
     }
 }

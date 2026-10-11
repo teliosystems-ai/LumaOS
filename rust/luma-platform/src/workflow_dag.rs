@@ -1141,8 +1141,13 @@ fn snapshot<T: for<'de> Deserialize<'de>>(path: &str) -> Result<T> {
 #[serde(deny_unknown_fields)]
 struct Request {
     proposal: Proposal,
+    #[serde(deserialize_with = "schedule::deserialize_grants")]
     grants: BTreeMap<String, String>,
 }
+#[derive(Deserialize)]
+struct GrantMap(
+    #[serde(deserialize_with = "schedule::deserialize_grants")] BTreeMap<String, String>,
+);
 fn grant(grants: &BTreeMap<String, String>, key: &str, usage: Use) -> Result<(String, Use)> {
     let id = grants.get(key).ok_or("missing exact DAG grant")?;
     if !scope_id(id) {
@@ -1499,6 +1504,39 @@ fn owned_store(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn every_dag_command_refuses_duplicate_or_excessive_grant_maps_before_admission() {
+        for duplicated in [
+            r#"{"resume":"first","resume":"second"}"#,
+            r#"{"read.left":"first","read.left":"second"}"#,
+        ] {
+            assert!(serde_json::from_str::<GrantMap>(duplicated).is_err());
+        }
+        let grants: BTreeMap<String, String> = (0..257)
+            .map(|index| (format!("read.node-{index}"), "exact-grant".into()))
+            .collect();
+        assert!(serde_json::from_slice::<GrantMap>(&serde_json::to_vec(&grants).unwrap()).is_err());
+        let fixture = Fixture::new("request-duplicate-grants");
+        let mut encoded = serde_json::to_string(&serde_json::json!({
+            "proposal":fixture.plan.proposal,
+            "grants":{"execute":"first"},
+        }))
+        .unwrap();
+        encoded = encoded.replace(
+            r#"{"execute":"first"}"#,
+            r#"{"execute":"first","execute":"second"}"#,
+        );
+        assert!(serde_json::from_str::<Request>(&encoded).is_err());
+        assert_eq!(
+            fixture
+                .open()
+                .db
+                .query("SELECT request_id FROM runs", &[], MAX_RUNS)
+                .unwrap()
+                .len(),
+            0
+        );
+    }
     #[test]
     fn terminal_dag_history_preserves_opaque_pending_and_never_disposes_nonterminal_runs() {
         let fixture = Fixture::new("terminal-pending");
@@ -2273,7 +2311,7 @@ pub(crate) fn status(args: &[String]) -> Result<()> {
     if args.len() != 4 {
         return Err("expected workflow-dag-status LOGIN GRANTS-SNAPSHOT REQUEST".into());
     }
-    let grants: BTreeMap<String, String> = snapshot(&args[2])?;
+    let GrantMap(grants) = snapshot(&args[2])?;
     let store = login_store(&args[1])?;
     let run = store.load(&args[3])?;
     let uses = vec![grant(
@@ -2325,7 +2363,7 @@ pub(crate) fn advance(args: &[String]) -> Result<()> {
             "expected workflow-dag-advance LOGIN GRANTS-SNAPSHOT REQUEST REVIEW-SHA256".into(),
         );
     }
-    let grants: BTreeMap<String, String> = snapshot(&args[2])?;
+    let GrantMap(grants) = snapshot(&args[2])?;
     let result = advance_reviewed(args, grants, false)?;
     println!("{result}");
     Ok(())
@@ -2639,7 +2677,7 @@ pub(crate) fn cancel(args: &[String]) -> Result<()> {
             "expected workflow-dag-cancel LOGIN GRANTS-SNAPSHOT REQUEST REVIEW-SHA256".into(),
         );
     }
-    let grants: BTreeMap<String, String> = snapshot(&args[2])?;
+    let GrantMap(grants) = snapshot(&args[2])?;
     let store = login_store(&args[1])?;
     let run = store.load(&args[3])?;
     let uses = vec![grant(
@@ -2692,7 +2730,7 @@ pub(crate) fn reconcile(args: &[String]) -> Result<()> {
     } else {
         return Err("expected workflow-dag-reconcile LOGIN GRANTS-SNAPSHOT REQUEST [--publish-committed REVIEW-SHA256]".into());
     };
-    let grants: BTreeMap<String, String> = snapshot(&args[2])?;
+    let GrantMap(grants) = snapshot(&args[2])?;
     let store = login_store(&args[1])?;
     let run = store.load(&args[3])?;
     let graph = run.plan.validate(&run.plan.installation)?;

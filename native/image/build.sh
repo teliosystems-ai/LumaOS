@@ -44,6 +44,7 @@ destination="${build_root:-$repository/dist}/native/$run_id-$edition"
 artifact_mount=()
 artifact_mount_ro=()
 assembly_args=()
+public_trust_mount=()
 if [ -n "$build_root" ]; then
     external_work="$build_root/work/$run_id-$edition"
     mkdir -p -- "$build_root/work"
@@ -52,6 +53,14 @@ if [ -n "$build_root" ]; then
     artifact_mount=(--mount "type=bind,src=$external_work/artifacts,dst=/work/artifacts")
     artifact_mount_ro=(--mount "type=bind,src=$external_work/artifacts,dst=/work/artifacts,readonly")
     assembly_args=(--external-artifacts)
+fi
+if [ -n "${LUMA_NATIVE_PUBLIC_TRUST:-}" ]; then
+    test ! -L "$LUMA_NATIVE_PUBLIC_TRUST"
+    public_trust_input=$(realpath -e -- "$LUMA_NATIVE_PUBLIC_TRUST")
+    test -d "$public_trust_input"
+    case "$public_trust_input" in /|*','*) echo 'select an exact public trust input directory' >&2; exit 2;; esac
+    public_trust_mount=(--mount "type=bind,src=$public_trust_input,dst=/public-trust,readonly")
+    assembly_args+=(--public-trust-inputs /public-trust)
 fi
 runtime_args=(--output "$runtime_context")
 if [ -n "${LUMA_RUNTIME_ARCHIVE:-}" ]; then runtime_args+=(--cached "$LUMA_RUNTIME_ARCHIVE"); fi
@@ -74,6 +83,7 @@ docker run --rm "${run_limits[@]}" --network none \
     -e CARGO_BUILD_JOBS=1 -e RUSTFLAGS=-Dwarnings \
     --mount "type=volume,src=$volume,dst=/work" \
     "${artifact_mount[@]}" \
+    "${public_trust_mount[@]}" \
     --mount type=volume,src=luma-native-lab-keys,dst=/keys \
     --mount "type=bind,src=$source_context,dst=/repo,readonly" \
     --mount "type=bind,src=$runtime_context,dst=/inputs,readonly" \

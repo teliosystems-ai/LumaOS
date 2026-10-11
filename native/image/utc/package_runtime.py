@@ -24,6 +24,8 @@ REQUIRED = {
     'confinement': '/etc/apparmor.d/luma-utc-producer',
     'provenance': '/usr/share/luma-os/utc/upstream-provenance.json',
     'source_inputs': '/usr/share/luma-os/utc/source-inputs.json',
+    'recovery_service': '/usr/lib/systemd/system/luma-utc-recovery-producer.service',
+    'recovery_confinement': '/etc/apparmor.d/luma-utc-recovery-producer',
 }
 
 

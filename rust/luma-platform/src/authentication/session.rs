@@ -9,6 +9,8 @@ use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 
 const WINDOW_NS: u64 = 30_000_000_000;
 const EXPORT_WINDOW_NS: u64 = 1_800_000_000_000;
+// Approved independently of export. No caller duration, renewal or PAM purpose.
+const REPAIR_WINDOW_NS: u64 = 1_800_000_000_000;
 impl SessionPurpose {
     fn window_ns(self) -> u64 {
         match self {
@@ -285,6 +287,119 @@ impl Lifetime {
     }
 }
 
+/// A repair budget is a different type from a PAM account lifetime. Sharing
+/// kernel-clock/context checks does not make it an authentication observation.
+pub(super) struct RepairLifetime {
+    issued: Clock,
+    deadline_ns: u64,
+    last_ns: Cell<u64>,
+    phase: Cell<Phase>,
+}
+
+struct RepairObservation<'a> {
+    lifetime: &'a RepairLifetime,
+    completed: bool,
+}
+impl Drop for RepairObservation<'_> {
+    fn drop(&mut self) {
+        if !self.completed {
+            self.lifetime.fence();
+        }
+    }
+}
+
+impl RepairLifetime {
+    pub(super) fn start() -> Result<Self> {
+        Self::at(Clock::read()?)
+    }
+    fn at(issued: Clock) -> Result<Self> {
+        if issued.boot == [0; 16] || issued.process == 0 || issued.uid != 0 {
+            return Err("repair session requires its protected custody process".into());
+        }
+        let deadline_ns = issued
+            .boottime_ns
+            .checked_add(REPAIR_WINDOW_NS)
+            .ok_or("repair session expiry overflow")?;
+        Ok(Self {
+            issued,
+            deadline_ns,
+            last_ns: Cell::new(issued.boottime_ns),
+            phase: Cell::new(Phase::Active),
+        })
+    }
+    fn check_at(&self, observed: Result<Clock>) -> Result<()> {
+        if self.phase.get() != Phase::Active {
+            return Err("repair session is closed; authenticate and review again".into());
+        }
+        let result = (|| -> Result<()> {
+            let now = observed?;
+            if now.boot != self.issued.boot
+                || now.process != self.issued.process
+                || now.uid != self.issued.uid
+                || now.boottime_ns < self.last_ns.get()
+            {
+                return Err("repair session context changed".into());
+            }
+            if now.boottime_ns >= self.deadline_ns {
+                self.phase.set(Phase::Expired);
+                return Err("repair session expired".into());
+            }
+            self.last_ns.set(now.boottime_ns);
+            Ok(())
+        })();
+        if result.is_err() {
+            self.fence();
+        }
+        result
+    }
+    pub(super) fn check_projection(
+        &self,
+        clock: &crate::utc_provider::ProjectionClock,
+    ) -> Result<()> {
+        // No I/O or second clock capture after the UTC final coordinate.
+        self.check_at(Ok(Clock {
+            boot: self.issued.boot,
+            process: clock.process(),
+            uid: clock.euid(),
+            boottime_ns: clock.boottime_ns(),
+        }))
+    }
+    fn fence(&self) {
+        if self.phase.get() == Phase::Active {
+            self.phase.set(Phase::Fenced);
+        }
+    }
+    pub(super) fn close(&self) {
+        if self.phase.get() == Phase::Active {
+            self.phase.set(Phase::Closed);
+        }
+    }
+    pub(super) fn observe<T>(&self, operation: impl FnOnce() -> Result<T>) -> Result<T> {
+        self.observe_with(|| self.check_at(Clock::read()), operation)
+    }
+    fn observe_with<T>(
+        &self,
+        mut check: impl FnMut() -> Result<()>,
+        operation: impl FnOnce() -> Result<T>,
+    ) -> Result<T> {
+        let mut guard = RepairObservation {
+            lifetime: self,
+            completed: false,
+        };
+        check()?;
+        let result = operation()?;
+        check()?;
+        guard.completed = true;
+        Ok(result)
+    }
+}
+
+impl Drop for RepairLifetime {
+    fn drop(&mut self) {
+        self.close();
+    }
+}
+
 impl Drop for Lifetime {
     fn drop(&mut self) {
         self.close();
@@ -302,6 +417,121 @@ mod tests {
             uid: 0,
             boottime_ns: ns,
         }
+    }
+
+    #[test]
+    fn repair_has_an_independent_fixed_deadline_and_never_extends_pam() {
+        let repair = RepairLifetime::at(clock(7)).unwrap();
+        let standard = Lifetime::at(clock(7)).unwrap();
+        assert!(standard.check_at(Ok(clock(7 + WINDOW_NS))).is_err());
+        for offset in [WINDOW_NS, REPAIR_WINDOW_NS / 2, REPAIR_WINDOW_NS - 1] {
+            repair.check_at(Ok(clock(7 + offset))).unwrap();
+            assert_eq!(repair.deadline_ns, 7 + REPAIR_WINDOW_NS);
+        }
+        assert!(repair.check_at(Ok(clock(7 + REPAIR_WINDOW_NS))).is_err());
+        assert_eq!(repair.phase.get(), Phase::Expired);
+        assert!(repair.check_at(Ok(clock(8))).is_err());
+        assert!(standard.check_at(Ok(clock(8))).is_err());
+    }
+
+    #[test]
+    fn repair_final_projection_is_pure_exact_and_sticky_on_failure() {
+        use crate::utc_provider::ProjectionClock;
+        for (ns, pid, uid) in [
+            (6, 100, 0),
+            (8, 101, 0),
+            (8, 100, 1),
+            (7 + REPAIR_WINDOW_NS, 100, 0),
+        ] {
+            let repair = RepairLifetime::at(clock(7)).unwrap();
+            assert!(repair
+                .check_projection(&ProjectionClock::fixture(ns, pid, uid))
+                .is_err());
+            assert!(repair
+                .check_projection(&ProjectionClock::fixture(8, 100, 0))
+                .is_err());
+        }
+        let repair = RepairLifetime::at(clock(7)).unwrap();
+        repair
+            .check_projection(&ProjectionClock::fixture(7 + REPAIR_WINDOW_NS - 1, 100, 0))
+            .unwrap();
+        assert_eq!(repair.deadline_ns, 7 + REPAIR_WINDOW_NS);
+        repair.close();
+        assert!(repair
+            .check_projection(&ProjectionClock::fixture(7 + REPAIR_WINDOW_NS - 1, 100, 0))
+            .is_err());
+    }
+
+    #[test]
+    fn repair_fences_clock_boot_errors_revocation_and_panics_without_revival() {
+        for observed in [
+            Err("missing kernel clock".into()),
+            Ok(Clock {
+                boot: [2; 16],
+                ..clock(8)
+            }),
+        ] {
+            let repair = RepairLifetime::at(clock(7)).unwrap();
+            assert!(repair.check_at(observed).is_err());
+            assert_eq!(repair.phase.get(), Phase::Fenced);
+            assert!(repair.check_at(Ok(clock(8))).is_err());
+        }
+        let repair = RepairLifetime::at(clock(7)).unwrap();
+        assert!(repair
+            .observe_with(
+                || repair.check_at(Ok(clock(8))),
+                || -> Result<()> { Err("target custody/journal authority changed".into()) }
+            )
+            .is_err());
+        assert_eq!(repair.phase.get(), Phase::Fenced);
+        let panicked = RepairLifetime::at(clock(7)).unwrap();
+        assert!(std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _ = panicked.observe_with(
+                || panicked.check_at(Ok(clock(8))),
+                || -> Result<()> { panic!("interrupted repair boundary") },
+            );
+        }))
+        .is_err());
+        assert_eq!(panicked.phase.get(), Phase::Fenced);
+        assert!(panicked.check_at(Ok(clock(9))).is_err());
+    }
+
+    #[test]
+    fn repair_expires_during_blocking_work_and_refuses_invalid_or_overflow_context() {
+        let repair = RepairLifetime::at(clock(7)).unwrap();
+        let calls = Cell::new(0);
+        assert!(repair
+            .observe_with(
+                || {
+                    calls.set(calls.get() + 1);
+                    repair.check_at(Ok(clock(if calls.get() == 1 {
+                        7
+                    } else {
+                        7 + REPAIR_WINDOW_NS
+                    })))
+                },
+                || Ok(())
+            )
+            .is_err());
+        assert_eq!(calls.get(), 2);
+        assert_eq!(repair.phase.get(), Phase::Expired);
+        for bad in [
+            Clock {
+                boot: [0; 16],
+                ..clock(7)
+            },
+            Clock {
+                process: 0,
+                ..clock(7)
+            },
+            Clock { uid: 1, ..clock(7) },
+            clock(u64::MAX - REPAIR_WINDOW_NS + 1),
+        ] {
+            assert!(RepairLifetime::at(bad).is_err());
+        }
+        let final_ns = RepairLifetime::at(clock(u64::MAX - REPAIR_WINDOW_NS)).unwrap();
+        final_ns.check_at(Ok(clock(u64::MAX - 1))).unwrap();
+        assert!(final_ns.check_at(Ok(clock(u64::MAX))).is_err());
     }
 
     #[test]

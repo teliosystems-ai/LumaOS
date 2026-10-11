@@ -25,7 +25,7 @@ const DIRECTORY: &str = "/run/luma-utc";
 const SOCKET_NAME: &str = "measurements.sock";
 const EXECUTABLE: &str = "/usr/libexec/luma-os/chronyd";
 const CONFIGURATION: &str = "/usr/share/luma-os/utc/chrony.conf";
-const REQUIRED: [(&str, &str); 8] = [
+const REQUIRED: [(&str, &str); 10] = [
     ("executable", EXECUTABLE),
     ("configuration", CONFIGURATION),
     ("certificates", "/usr/share/luma-os/utc/ca-certificates.crt"),
@@ -40,6 +40,14 @@ const REQUIRED: [(&str, &str); 8] = [
         "/usr/share/luma-os/utc/upstream-provenance.json",
     ),
     ("source_inputs", "/usr/share/luma-os/utc/source-inputs.json"),
+    (
+        "recovery_service",
+        "/usr/lib/systemd/system/luma-utc-recovery-producer.service",
+    ),
+    (
+        "recovery_confinement",
+        "/etc/apparmor.d/luma-utc-recovery-producer",
+    ),
 ];
 const MAX_MANIFEST: u64 = 32 * 1024;
 const MAX_FILE: u64 = 64 * 1024 * 1024;
@@ -377,6 +385,7 @@ mod tests {
                 manifest: Pin::open(&path, MAX_MANIFEST).unwrap(),
                 files: BTreeMap::new(),
                 digest: "ab".repeat(32),
+                mode: Mode::Installed,
             }
         }
     }
@@ -388,7 +397,12 @@ mod tests {
 
     #[test]
     fn legacy_unsigned_manifest_and_missing_dependency_provenance_roles_refuse() {
-        for role in ["provenance", "source_inputs"] {
+        for role in [
+            "provenance",
+            "source_inputs",
+            "recovery_service",
+            "recovery_confinement",
+        ] {
             let mut missing = manifest();
             missing.files.retain(|artifact| artifact.role != role);
             assert!(missing.validate().is_err());
@@ -398,6 +412,32 @@ mod tests {
             .files
             .retain(|artifact| !matches!(artifact.role.as_str(), "provenance" | "source_inputs"));
         assert!(legacy.validate().is_err());
+    }
+
+    #[test]
+    fn installed_mode_never_selects_recovery_peers_or_mutable_live_image() {
+        let mode = Mode::Installed;
+        assert_eq!(mode.producer_label(), "luma-utc-producer (enforce)");
+        assert_eq!(
+            mode.producer_cgroup(),
+            "0::/system.slice/luma-utc-producer.service\n"
+        );
+        assert_eq!(mode.keeper_label(), "luma-utc-keeper (enforce)");
+        assert_eq!(
+            mode.keeper_cgroup(),
+            "0::/system.slice/luma-utc-keeper.service\n"
+        );
+        assert_eq!(mode.control_label(), "luma-admin (enforce)");
+        assert_eq!(
+            mode.query_labels(),
+            &[
+                "luma-admin (enforce)",
+                "luma-granted-client (enforce)",
+                "unconfined"
+            ]
+        );
+        assert!(Mode::recovery().is_err());
+        assert!(Deployment::recovery().is_err());
     }
 
     #[test]
@@ -848,15 +888,88 @@ mod tests {
     }
 }
 
+/// The recovery variant retains independently verified live-image pins. A
+/// command-line mode, target path or caller-supplied digest cannot construct it.
+pub(crate) enum Mode {
+    Installed,
+    Recovery(crate::platform::RecoveryImage),
+}
+impl Mode {
+    pub(crate) fn installed() -> Result<Self> {
+        crate::platform::require_installed()?;
+        Ok(Self::Installed)
+    }
+    pub(crate) fn recovery() -> Result<Self> {
+        let image = crate::platform::RecoveryImage::current()?;
+        image.recheck()?;
+        Ok(Self::Recovery(image))
+    }
+    pub(crate) fn recheck(&self) -> Result<()> {
+        match self {
+            Self::Installed => Ok(()),
+            Self::Recovery(image) => image.recheck(),
+        }
+    }
+    pub(crate) fn producer_label(&self) -> &'static str {
+        match self {
+            Self::Installed => "luma-utc-producer (enforce)",
+            Self::Recovery(_) => "luma-utc-recovery-producer (enforce)",
+        }
+    }
+    fn producer_cgroup(&self) -> &'static str {
+        match self {
+            Self::Installed => "0::/system.slice/luma-utc-producer.service\n",
+            Self::Recovery(_) => "0::/system.slice/luma-utc-recovery-producer.service\n",
+        }
+    }
+    pub(crate) fn keeper_label(&self) -> &'static str {
+        match self {
+            Self::Installed => "luma-utc-keeper (enforce)",
+            Self::Recovery(_) => "luma-utc-recovery-keeper (enforce)",
+        }
+    }
+    pub(crate) fn keeper_cgroup(&self) -> &'static str {
+        match self {
+            Self::Installed => "0::/system.slice/luma-utc-keeper.service\n",
+            Self::Recovery(_) => "0::/system.slice/luma-utc-recovery-keeper.service\n",
+        }
+    }
+    pub(crate) fn query_labels(&self) -> &'static [&'static str] {
+        match self {
+            // Kernel-root machine consumers may query a public estimate; the
+            // nonce-only response cannot grant a timed effect or seed control.
+            Self::Installed => &[
+                "luma-admin (enforce)",
+                "luma-granted-client (enforce)",
+                "unconfined",
+            ],
+            Self::Recovery(_) => &["luma-recovery (enforce)"],
+        }
+    }
+    pub(crate) fn control_label(&self) -> &'static str {
+        match self {
+            Self::Installed => "luma-admin (enforce)",
+            Self::Recovery(_) => "luma-recovery (enforce)",
+        }
+    }
+}
+
 /// This cannot be deserialized or reconstructed from a caller's digest.
 pub(crate) struct Deployment {
     manifest: Pin,
     files: BTreeMap<String, (String, Pin)>,
     digest: String,
+    mode: Mode,
 }
 impl Deployment {
     pub(crate) fn installed() -> Result<Self> {
-        crate::platform::require_installed()?;
+        Self::from_mode(Mode::installed()?)
+    }
+    pub(crate) fn recovery() -> Result<Self> {
+        Self::from_mode(Mode::recovery()?)
+    }
+    fn from_mode(mode: Mode) -> Result<Self> {
+        mode.recheck()?;
         let manifest = Pin::open(Path::new(MANIFEST), MAX_MANIFEST)?;
         readonly(&manifest.file)?;
         let bytes = manifest.bytes(MAX_MANIFEST)?;
@@ -898,18 +1011,20 @@ impl Deployment {
             manifest,
             files,
             digest: bundle::hex(&digest.finalize()),
+            mode,
         };
         deployment.recheck()?;
         Ok(deployment)
     }
     fn recheck(&self) -> Result<()> {
+        self.mode.recheck()?;
         self.manifest.recheck()?;
         readonly(&self.manifest.file)?;
         for (_, pin) in self.files.values() {
             pin.recheck()?;
             readonly(&pin.file)?;
         }
-        Ok(())
+        self.mode.recheck()
     }
     pub(crate) fn digest(&self) -> &str {
         &self.digest
@@ -943,9 +1058,9 @@ impl Deployment {
         }
         controls(&proc_text(&prefix.join("status"), 65_536)?)?;
         environment(&proc_bytes(&prefix.join("environ"), 16_384)?, pid)?;
-        if proc_text(&prefix.join("attr/current"), 256)? != "luma-utc-producer (enforce)\n"
-            || proc_text(&prefix.join("cgroup"), 4096)?
-                != "0::/system.slice/luma-utc-producer.service\n"
+        if proc_text(&prefix.join("attr/current"), 256)?
+            != format!("{}\n", self.mode.producer_label())
+            || proc_text(&prefix.join("cgroup"), 4096)? != self.mode.producer_cgroup()
             || proc_bytes(&prefix.join("cmdline"), 4096)? != command_line()
         {
             return Err("UTC producer executable arguments or enforced confinement differs".into());
@@ -969,7 +1084,7 @@ impl Deployment {
         for tid in &tasks {
             controls(&proc_text(&task_path.join(tid).join("status"), 65_536)?)?;
             if proc_text(&task_path.join(tid).join("attr/current"), 256)?
-                != "luma-utc-producer (enforce)\n"
+                != format!("{}\n", self.mode.producer_label())
             {
                 return Err("UTC producer task confinement differs".into());
             }

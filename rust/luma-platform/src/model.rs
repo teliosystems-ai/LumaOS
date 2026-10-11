@@ -792,6 +792,9 @@ fn operation_lock(var: &Path) -> Result<File> {
 
 pub fn provision(var: &Path, p: &Profile) -> Result<()> {
     crate::require_root()?;
+    if var == Path::new(VAR) {
+        platform::require_production_activation()?;
+    }
     let _lock = operation_lock(var)?;
     provision_locked(var, p)
 }
@@ -2836,6 +2839,7 @@ pub fn install_check(id: &str) -> Result<()> {
 pub fn install(id: &str) -> Result<()> {
     crate::require_root()?;
     platform::require_installed()?;
+    platform::require_production_activation()?;
     let p = profile(id)?;
     let _lock = operation_lock(Path::new(VAR))?;
     let trial = std::cell::RefCell::new(None);

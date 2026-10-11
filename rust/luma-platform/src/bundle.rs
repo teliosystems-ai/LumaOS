@@ -7,7 +7,6 @@ use std::io::{Read, Seek, SeekFrom, Write};
 use std::os::fd::{AsRawFd, FromRawFd};
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
 
 const MAX_MANIFEST: u64 = 65536;
 const TRUST: &str = "/usr/share/luma-os/release.pub";
@@ -40,6 +39,7 @@ pub struct VerifiedBundle {
     pub manifest: Manifest,
     pub(crate) manifest_bytes: Vec<u8>,
     pub(crate) signature: Vec<u8>,
+    pub(crate) inert_trust: Option<Vec<u8>>,
     snapshot: crate::staging::Snapshot,
 }
 
@@ -167,6 +167,87 @@ pub fn private_dir(prefix: &str) -> Result<PathBuf> {
 }
 
 pub fn verify(source: &Path) -> Result<VerifiedBundle> {
+    verify_with(source, |bytes, signature| {
+        let manifest: Manifest = serde_json::from_slice(bytes)?;
+        if manifest.environment == "production"
+            || (crate::platform::require_installed().is_ok()
+                && crate::admin_governance::release_authority_optional()?.is_some())
+        {
+            crate::release_trust::verify_installed_release(bytes, signature)
+        } else {
+            verify_lab_signature(bytes, signature)
+        }
+    })
+}
+
+fn verify_lab_signature(bytes: &[u8], signature: &[u8]) -> Result<()> {
+    let trust = crate::admin_credentials::public_input(Path::new(TRUST), 4096)?;
+    let der = crate::release_trust::public_der(&trust)?;
+    crate::release_trust::verify_der(&der, bytes, signature)
+}
+
+pub(crate) fn verify_initial(source: &Path) -> Result<VerifiedBundle> {
+    crate::platform::require_live()?;
+    let mut staged_trust = None;
+    let mut verified = verify_with(source, |bytes, signature| {
+        let manifest: Manifest = serde_json::from_slice(bytes)?;
+        if manifest.environment == "production" {
+            let directory = OpenOptions::new()
+                .read(true)
+                .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW)
+                .open(source)?;
+            let trust_bytes = read_bounded(open_member(&directory, "release-trust.json")?, 16384)?;
+            let trust: crate::release_trust::SignedTrust = serde_json::from_slice(&trust_bytes)?;
+            crate::release_trust::verify_inert_release(&trust, bytes, signature)?;
+            staged_trust = Some(trust_bytes);
+            Ok(())
+        } else {
+            verify_lab_signature(bytes, signature)
+        }
+    })?;
+    verified.inert_trust = staged_trust;
+    Ok(verified)
+}
+
+/// UI/resource planning only. The installer later compares these exact bytes
+/// with the privately snapshotted, cryptographically verified manifest.
+pub(crate) fn initial_preview(source: &Path) -> Result<Vec<u8>> {
+    let directory = OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW)
+        .open(source)?;
+    let bytes = read_bounded(open_member(&directory, "release.json")?, MAX_MANIFEST)?;
+    validate_manifest(&serde_json::from_slice(&bytes)?)?;
+    Ok(bytes)
+}
+
+pub(crate) fn verify_recovery(
+    source: &Path,
+    state: &crate::release_trust::State,
+    interval: crate::utc_bounds::Interval,
+) -> Result<VerifiedBundle> {
+    verify_with(source, |bytes, signature| {
+        let manifest: Manifest = serde_json::from_slice(bytes)?;
+        crate::release_trust::repair_identity(state, &manifest)?;
+        if let Some(pending) = &state.pending {
+            if pending.candidate.manifest == manifest
+                && (pending.candidate.manifest_json.as_bytes() != bytes
+                    || pending.candidate.signature_hex != hex(signature))
+            {
+                return Err(
+                    "prepared repair must retry exact originally admitted signed bytes".into(),
+                );
+            }
+        }
+        crate::release_trust::verify_current_release(&state.trust, bytes, signature, interval)?;
+        Ok(())
+    })
+}
+
+fn verify_with(
+    source: &Path,
+    validate_signature: impl FnOnce(&[u8], &[u8]) -> Result<()>,
+) -> Result<VerifiedBundle> {
     crate::require_root()?;
     let dir = OpenOptions::new()
         .read(true)
@@ -183,6 +264,7 @@ pub fn verify(source: &Path) -> Result<VerifiedBundle> {
         manifest: m,
         manifest_bytes: bytes.clone(),
         signature: signature.clone(),
+        inert_trust: None,
         snapshot: crate::staging::Snapshot::create()?,
     };
     // Verification inputs and every consumed artifact become private snapshots.
@@ -198,28 +280,7 @@ pub fn verify(source: &Path) -> Result<VerifiedBundle> {
         file.write_all(content)?;
         file.sync_all()?;
     }
-    if verified.manifest.environment == "production"
-        || (crate::platform::require_installed().is_ok()
-            && crate::admin_governance::release_authority_optional()?.is_some())
-    {
-        crate::release_trust::verify_installed_release(&bytes, &signature)?;
-    } else {
-        let status = Command::new("/usr/bin/openssl")
-            .env_clear()
-            .env("PATH", "/usr/sbin:/usr/bin")
-            .args([
-                "pkeyutl", "-verify", "-pubin", "-inkey", TRUST, "-rawin", "-in",
-            ])
-            .arg(verified.snapshot.path().join("release.json"))
-            .arg("-sigfile")
-            .arg(verified.snapshot.path().join("release.sig"))
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()?;
-        if !status.success() {
-            return Err("release signature verification failed".into());
-        }
-    }
+    validate_signature(&bytes, &signature)?;
     // Live /var is memory-backed. Admit measured sparse-copy allocation, not
     // the logical ext4 image size (which exceeds a small live VM's tmpfs).
     // Retain source descriptors, verify their bytes, then rehash while copying;

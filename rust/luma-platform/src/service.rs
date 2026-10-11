@@ -283,6 +283,7 @@ pub fn security_check() -> Result<()> {
 pub fn serve() -> Result<()> {
     crate::require_root()?;
     security_check()?;
+    crate::platform::require_production_activation()?;
     // RuntimeDirectory is created and owned by systemd. Never unlink an unknown socket.
     let mut manager = if crate::platform::require_installed().is_ok()
         || crate::platform::require_live().is_ok()

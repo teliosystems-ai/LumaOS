@@ -84,6 +84,34 @@ fn mounted(node: &serde_json::Value) -> bool {
             .map_or(false, |v| v.iter().any(mounted))
 }
 
+fn check_recovery_mounts(node: &serde_json::Value, permitted: &[(PathBuf, PathBuf)]) -> Result<()> {
+    if let Some(mounts) = node["mountpoints"].as_array() {
+        for mount in mounts.iter().filter(|value| !value.is_null()) {
+            let at = Path::new(
+                mount
+                    .as_str()
+                    .ok_or("invalid recovery mountpoint inventory")?,
+            );
+            let device = fs::canonicalize(
+                node["path"]
+                    .as_str()
+                    .ok_or("missing mounted device identity")?,
+            )?;
+            if !permitted.iter().any(|(expected, point)| {
+                point == at && fs::canonicalize(expected).ok().as_ref() == Some(&device)
+            }) {
+                return Err("unapproved target mount appeared during recovery".into());
+            }
+        }
+    }
+    if let Some(children) = node["children"].as_array() {
+        for child in children {
+            check_recovery_mounts(child, permitted)?;
+        }
+    }
+    Ok(())
+}
+
 pub fn identity(path: &Path, allow_mounted: bool) -> Result<Identity> {
     let value = lsblk(Some(path))?;
     let nodes = value["blockdevices"]
@@ -117,6 +145,7 @@ pub struct Disk {
     handle: File,
     _operation_lock: File,
     allow_mounted: bool,
+    recovery_mounts: std::cell::RefCell<Vec<(PathBuf, PathBuf)>>,
 }
 
 impl Disk {
@@ -173,6 +202,7 @@ impl Disk {
             handle,
             _operation_lock: operation_lock,
             allow_mounted,
+            recovery_mounts: std::cell::RefCell::new(Vec::new()),
         };
         disk.recheck()?;
         Ok(disk)
@@ -181,11 +211,41 @@ impl Disk {
     pub fn recheck(&self) -> Result<()> {
         let path = Path::new(&self.identity.path);
         if self.handle.metadata()?.rdev() != fs::metadata(path)?.rdev()
-            || identity(path, self.allow_mounted)? != self.identity
+            || identity(
+                path,
+                self.allow_mounted || !self.recovery_mounts.borrow().is_empty(),
+            )? != self.identity
         {
             return Err("disk identity, size, or mount disposition changed".into());
         }
+        if !self.recovery_mounts.borrow().is_empty() {
+            let tree = lsblk(Some(path))?;
+            check_recovery_mounts(&tree["blockdevices"][0], &self.recovery_mounts.borrow())?;
+        }
         Ok(())
+    }
+
+    /// A capability minted only by the live recovery mount owner. General
+    /// callers cannot substitute a path, toggle mounted admission, or adopt
+    /// pre-existing mounts through this interface.
+    pub(crate) fn admit_recovery_mount(
+        &self,
+        proof: &crate::platform::RecoveryMount,
+    ) -> Result<()> {
+        proof.recheck(&self.identity)?;
+        if self.allow_mounted
+            || self
+                .recovery_mounts
+                .borrow()
+                .iter()
+                .any(|(_, at)| at == proof.at())
+        {
+            return Err("recovery mount disposition already admitted or installed disk".into());
+        }
+        self.recovery_mounts
+            .borrow_mut()
+            .push((proof.device().to_path_buf(), proof.at().to_path_buf()));
+        self.recheck()
     }
 
     pub fn partition(&self, index: u8) -> Result<PathBuf> {
@@ -276,7 +336,9 @@ impl Disk {
             .custom_flags(libc::O_EXCL | libc::O_NOFOLLOW)
             .open(&path)?;
         copy_bounded_guarded(&mut input, &mut target, bytes, guard)?;
+        guard()?;
         target.flush()?;
+        guard()?;
         target.sync_all()?;
         guard()?;
         // Full read-back against the verified private source before publishing boot selection.

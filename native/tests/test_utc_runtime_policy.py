@@ -140,10 +140,12 @@ class UtcRuntimePolicy(unittest.TestCase):
         for check in ('struct Client', 'SO_PEERSEC', 'SO_PEERCRED',
                       'service::peer_pidfd', 'binding_digest(binding)',
                       'self.watch.check()?',
-                      'seed_transport', 'luma-admin (enforce)'):
+                      'seed_transport', 'release.mode.control_label()',
+                      'release.mode.query_labels()'):
             self.assertIn(check, provider)
         self.assertNotIn('Deserialize', provider.split('pub(crate) struct Client', 1)[1].split('impl Client', 1)[0])
         runtime = (RUST / 'utc_runtime.rs').read_text()
+        self.assertIn('Self::Installed => "luma-admin (enforce)"', runtime)
         for forbidden in ('clock_settime(', 'settimeofday(', 'adjtimex(', 'Command::new(',
                           'trusted_utc_available: true', 'pub(crate) fn grant'):
             self.assertNotIn(forbidden, runtime)

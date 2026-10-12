@@ -17,7 +17,7 @@ RUN apt-get update --snapshot=${SNAPSHOT} -o APT::Update::Error-Mode=any && \
       systemd-ukify libpam-systemd libcrypt1 dbus sudo bash coreutils util-linux \
       linux-image-generic linux-firmware \
       dracut-core cryptsetup-bin dmsetup e2fsprogs dosfstools gdisk \
-      apparmor apparmor-utils openssl sbsigntool python3 libsqlite3-0 iproute2 qemu-system-x86 \
+      apparmor apparmor-utils openssl sbsigntool python3 libsqlite3-0 iproute2 \
       network-manager rsync zstd less nano kmod pciutils usbutils && \
     if [ "$EDITION" = desktop ]; then \
       apt-get install -y --no-install-recommends --snapshot=${SNAPSHOT} \
@@ -39,4 +39,7 @@ RUN \
     tar -xzf /tmp/luma-llama-runtime.tar.gz --strip-components=1 -C /usr/libexec/luma-os/llama && \
     rm /tmp/luma-llama-runtime.tar.gz /usr/libexec/luma-os/llama/libggml-rpc.so /usr/libexec/luma-os/llama/ggml-rpc-server && \
     LD_LIBRARY_PATH=/usr/libexec/luma-os/llama /usr/libexec/luma-os/llama/llama-server --version
+# Keep the fixed KVM dependency separate so adding it does not invalidate the
+# large, already pinned firmware and desktop package layers.
+RUN apt-get install -y --no-install-recommends --snapshot=${SNAPSHOT} qemu-system-x86
 CMD ["/sbin/init"]

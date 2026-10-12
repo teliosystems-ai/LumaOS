@@ -12,6 +12,15 @@ import unittest
 
 @unittest.skipUnless(os.name == 'posix' and shutil.which('bash'), 'Linux Bash fixture')
 class BuildDriverTests(unittest.TestCase):
+    def test_fixed_qemu_dependency_does_not_invalidate_firmware_or_runtime_layers(self):
+        recipe = (Path(__file__).resolve().parents[1] / 'image/Dockerfile.root').read_text()
+        qemu = 'RUN apt-get install -y --no-install-recommends --snapshot=${SNAPSHOT} qemu-system-x86'
+        self.assertEqual(recipe.count(qemu), 1)
+        self.assertNotIn('qemu-system-x86', recipe.split(qemu)[0])
+        self.assertLess(recipe.index('linux-image-generic linux-firmware'), recipe.index(qemu))
+        self.assertLess(recipe.index('llama-server --version'), recipe.index(qemu))
+        self.assertLess(recipe.index(qemu), recipe.index('CMD ["/sbin/init"]'))
+
     def test_edit_during_assembly_cannot_replace_remaining_driver_commands(self):
         self.exercise_driver('standard')
 

@@ -1,6 +1,6 @@
 # G2 software completion register
 
-Updated 2026-10-12. **G2 is not closed; the latest software candidate is under integrated validation.** This register separates
+Updated 2026-10-12. **The compact-profile software candidate passes integrated software verification; G2 is not closed.** This register separates
 work that can be executed in the current Windows/Ubuntu WSL/VM environment
 from production deployment decisions and physical qualification. It does not
 change the frozen reference release, governing requirements, or exit criteria.
@@ -33,18 +33,22 @@ including actual broker epoch/generation rather than only a service name.
 Independent review corrected import evidence byte limits, incomplete output
 provenance, certificate/image self-reference, actual confinement paths, worker
 grant separation, retained key revocations and current account binding. The
-source is frozen for the serialized D-backed software sweep. Bounded preliminary
-checks include thirteen model-public/sidecar cases, twelve generated-request
-cases, eighteen orchestration cases and thirteen real disposable KVM guest
-cases. Those guest cases explicitly do not test installed AppArmor or the
-complete PAM/broker journey. Full integrated results must be recorded separately.
+source passes the serialized D-backed checks: 962 full-baseline Rust tests,
+393 native tests with zero skips, thirteen OS public-trust and thirteen
+model-public crypto cases, eight UTC authentication cases, fourteen policy
+parses, the authenticated UTC build and sixteen upstream crypto/NTS cases.
+Combined unchanged-product fixture evidence and corrected reruns supply passing
+owners for all 26 lanes and all 42 fixture-only Rust entries. Failed attempts
+remain retained; this is not a claim of a full 26-lane final-snapshot run.
+Thirteen separate real KVM guest cases do not test installed AppArmor or the
+complete PAM/broker journey. See [the integrated results](evidence/G2_NATIVE_INTEGRATION_2026-10-12.md).
 
 On 2026-10-12 the owner approved separately purpose-bound, nonrenewable
 thirty-minute sessions for model import and model activation. The integrated
 candidate implements both purposes with exact pre-PAM operation binding and
 continuous account, UTC, finite-grant and lease checks. Standard sessions retain
 thirty seconds. Neither model purpose authorizes inference, signing, general
-workflows, export or repair; validation of these changed paths remains required.
+workflows, export or repair. Their scope, expiry and conversion regressions pass.
 
 Final-image installation, actual model/custody/QA inputs, installed authorization
 and confinement, native NTS/error-bound behavior, pressure/interruption/recovery,

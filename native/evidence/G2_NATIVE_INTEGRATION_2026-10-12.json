@@ -1,0 +1,516 @@
+{
+  "schema_version": 1,
+  "date_utc": "2026-10-12",
+  "scope": "compact-cpu-g2-native-model-generated-runtime-and-purpose-bound-session-software",
+  "result": "passed-scoped-software-verification",
+  "commit": "bf30ae2",
+  "tools_image": "sha256:28e1138fa7e0616b0518a95c1f2599a2205929e247391862bf48319fe5f7594d",
+  "source_snapshot": "/mnt/luma-build/work/g2-final-source-20261012-n",
+  "source_file_count": 393,
+  "source_manifest_sha256": "4beb1624283fed4f7c6596673c34d9f23ea9d1d13d9d7e7d08bec19cd0d93fc1",
+  "post_test_snapshot": "/mnt/luma-build/work/g2-final-source-20261012-post-test",
+  "post_test_manifest_matches": true,
+  "image_build_source": "/mnt/d/LumaOS-builds/native-sources/20261012T174442Z-desktop",
+  "image_build_source_manifest_sha256": "8be7cc57c74b647427e4a454428096256896afc9737b5195e2f27dd90a1c35f5",
+  "image_build_files": 314,
+  "image_build_matches_tested_inputs": true,
+  "core": {
+    "path": "/mnt/luma-build/work/g2-final-validation-20261012-b/core-n/result.json",
+    "sha256": "914cad4070af97d8997df0e6540f3b37a152056fb497b593a9e641a843a42f73",
+    "warnings_denied": true,
+    "native_passed": 393,
+    "native_skipped": 0,
+    "public_trust_crypto_passed": 13,
+    "model_public_crypto_passed": 13,
+    "utc_authentication_passed": 8,
+    "apparmor_parser_passed": 14,
+    "apparmor_kernel_loaded": false,
+    "utc_release_build_passed": true,
+    "targeted_rust_cases": [
+      {
+        "name": "rust-tests",
+        "failed": 0,
+        "filtered_out": 979,
+        "ignored": 1,
+        "measured": 0,
+        "passed": 24
+      },
+      {
+        "name": "rust-tests-authentication",
+        "failed": 0,
+        "filtered_out": 976,
+        "ignored": 1,
+        "measured": 0,
+        "passed": 27
+      },
+      {
+        "name": "rust-tests-admin_governance--model_operation_session_tests",
+        "failed": 0,
+        "filtered_out": 1002,
+        "ignored": 0,
+        "measured": 0,
+        "passed": 2
+      },
+      {
+        "name": "rust-tests-service--granted_gateway--tests",
+        "failed": 0,
+        "filtered_out": 997,
+        "ignored": 0,
+        "measured": 0,
+        "passed": 7
+      },
+      {
+        "name": "rust-tests-platform--atomic_write_tests",
+        "failed": 0,
+        "filtered_out": 1003,
+        "ignored": 0,
+        "measured": 0,
+        "passed": 1
+      }
+    ]
+  },
+  "baseline": {
+    "passed": 962,
+    "failed": 0,
+    "ignored_fixture_entries": 42,
+    "seconds": 680.54,
+    "umask": "077",
+    "transcript": "/mnt/luma-build/work/g2-final-validation-20261012-b/fixtures-n/tpm-journal/tpm/transcript.txt",
+    "sha256": "6f6e266555399d513481e8ed27614d75fd600a4e459f358af8ccd32a37ce875e"
+  },
+  "fixtures": {
+    "evidence_scope": "combined-passed-lanes-with-targeted-reruns-not-a-full-26-lane-N-pass",
+    "first_run": {
+      "path": "/mnt/luma-build/work/g2-final-validation-20261012-b/fixtures-m/result.json",
+      "sha256": "a33b98ca72289419d5bb7dd14a450f44575b898366a762f49be46b31ce6d25d0",
+      "source_manifest_sha256": "c2a5990d65a6cd36535bbb85d52584aace6c62939fa2fdce167c6aa40aaba221",
+      "result": "failed",
+      "passed_lanes": 24,
+      "failed_lanes": [
+        "pam-catalog",
+        "tpm-journal"
+      ]
+    },
+    "corrected_run": {
+      "path": "/mnt/luma-build/work/g2-final-validation-20261012-b/fixtures-n/result.json",
+      "sha256": "9f29caf6f17a3d3033d96b2dda91b34ab92331dd430fadd1cb66ea54cd8ddba9",
+      "result": "passed",
+      "selected_lanes": [
+        "pam-catalog",
+        "tpm-journal",
+        "native-source"
+      ]
+    },
+    "changed_inputs": [
+      "native/tests/g2_fixture_sweep.py",
+      "native/tests/test_g2_fixture_sweep.py",
+      "rust/luma-platform/src/model/validation.rs"
+    ],
+    "validation_production_prefix_unchanged_sha256": "9277ce0ba6c8afb9caafcf9eb1beb0f8a88b27eeaaf5da01eba108b9e477c4c2",
+    "passed_owners": [
+      {
+        "lane": "kernel",
+        "source_manifest_sha256": "c2a5990d65a6cd36535bbb85d52584aace6c62939fa2fdce167c6aa40aaba221",
+        "seconds": 23.4,
+        "docker_log_sha256": "af9d6fe764141ca186f46fc18cfbe8d75df650a47c0c96724a2a791e28ba6b01"
+      },
+      {
+        "lane": "utc-boundaries",
+        "source_manifest_sha256": "c2a5990d65a6cd36535bbb85d52584aace6c62939fa2fdce167c6aa40aaba221",
+        "seconds": 11.809,
+        "docker_log_sha256": "1359a98562ddd4dda029b946324dba65c2fd3fd4ca1b5b85db08c00d03bf69c6"
+      },
+      {
+        "lane": "principal-pam",
+        "source_manifest_sha256": "c2a5990d65a6cd36535bbb85d52584aace6c62939fa2fdce167c6aa40aaba221",
+        "seconds": 18.179,
+        "docker_log_sha256": "505c52a10ece1550bbfd5392a83351d88cc6df315c1c8d7904434b175c595457"
+      },
+      {
+        "lane": "resource-tpm",
+        "source_manifest_sha256": "c2a5990d65a6cd36535bbb85d52584aace6c62939fa2fdce167c6aa40aaba221",
+        "seconds": 7.645,
+        "docker_log_sha256": "410b6e541a9328806e69f471090cb4811f7765f2cb74acf809621e5175aa54a4"
+      },
+      {
+        "lane": "admin-enrollment",
+        "source_manifest_sha256": "c2a5990d65a6cd36535bbb85d52584aace6c62939fa2fdce167c6aa40aaba221",
+        "seconds": 5.582,
+        "docker_log_sha256": "68aeaaedb6061d278d12425b9e371adea490342a05f586a56bc1deff24f5bfa0"
+      },
+      {
+        "lane": "admin-pending",
+        "source_manifest_sha256": "c2a5990d65a6cd36535bbb85d52584aace6c62939fa2fdce167c6aa40aaba221",
+        "seconds": 12.004,
+        "docker_log_sha256": "4b546c6e16e6dfc293a52f61d7e5a4e58218cfdf3a14274013039b259e0a9708"
+      },
+      {
+        "lane": "admin-resume",
+        "source_manifest_sha256": "c2a5990d65a6cd36535bbb85d52584aace6c62939fa2fdce167c6aa40aaba221",
+        "seconds": 4.824,
+        "docker_log_sha256": "a258bd4431b07e3404bf38afaa3da1b50c5e716d7e45a8b5a34682bffffbeb36"
+      },
+      {
+        "lane": "admin-bootstrap",
+        "source_manifest_sha256": "c2a5990d65a6cd36535bbb85d52584aace6c62939fa2fdce167c6aa40aaba221",
+        "seconds": 5.628,
+        "docker_log_sha256": "a4ca2e9386938819e8cb25ccac9cd05feb87e01f0c2a81b5529a295236748e75"
+      },
+      {
+        "lane": "admin-recovery",
+        "source_manifest_sha256": "c2a5990d65a6cd36535bbb85d52584aace6c62939fa2fdce167c6aa40aaba221",
+        "seconds": 3.473,
+        "docker_log_sha256": "7f0a571d0995a8f8db426d3c8ac371a9a6b94d7cce21895697cebce38acc2d96"
+      },
+      {
+        "lane": "sealed-delivery",
+        "source_manifest_sha256": "c2a5990d65a6cd36535bbb85d52584aace6c62939fa2fdce167c6aa40aaba221",
+        "seconds": 5.032,
+        "docker_log_sha256": "1a56f5d39a66daf758d6f476267300350ebd86b0d1d1d0aa1dff65f062b76a6b"
+      },
+      {
+        "lane": "native-seal",
+        "source_manifest_sha256": "c2a5990d65a6cd36535bbb85d52584aace6c62939fa2fdce167c6aa40aaba221",
+        "seconds": 6.246,
+        "docker_log_sha256": "a301f1de2961132847fb657a5c9f25382b9dcfa5fb690b7f6a62069a2d0494d9"
+      },
+      {
+        "lane": "existing-owner",
+        "source_manifest_sha256": "c2a5990d65a6cd36535bbb85d52584aace6c62939fa2fdce167c6aa40aaba221",
+        "seconds": 3.825,
+        "docker_log_sha256": "5bc80b1ae51120c2ad557f8b5b697f98e7bb63d902e12fd20c4223a2efc5b245"
+      },
+      {
+        "lane": "model-process",
+        "source_manifest_sha256": "c2a5990d65a6cd36535bbb85d52584aace6c62939fa2fdce167c6aa40aaba221",
+        "seconds": 48.394,
+        "docker_log_sha256": "16da128dbce5c0dec011d30f5c8d34cf52e6f44ef0f5ae6e1fb1ba72179eec5f"
+      },
+      {
+        "lane": "broker-cli",
+        "source_manifest_sha256": "c2a5990d65a6cd36535bbb85d52584aace6c62939fa2fdce167c6aa40aaba221",
+        "seconds": 62.071,
+        "docker_log_sha256": "55671fafd100da77e17f12938247d992d9774052cad483e0272ec9873ef8ed0f"
+      },
+      {
+        "lane": "resource-history-cli",
+        "source_manifest_sha256": "c2a5990d65a6cd36535bbb85d52584aace6c62939fa2fdce167c6aa40aaba221",
+        "seconds": 4.691,
+        "docker_log_sha256": "17c7eb921b3badadb78ceb66fa802a5b1194acb9415c04ba024229150e27f569"
+      },
+      {
+        "lane": "model-chat-cli",
+        "source_manifest_sha256": "c2a5990d65a6cd36535bbb85d52584aace6c62939fa2fdce167c6aa40aaba221",
+        "seconds": 6.89,
+        "docker_log_sha256": "fca76df151928596c764d622c986fbf2d6ba6184ffe4fbce2733ef91fb716257"
+      },
+      {
+        "lane": "native-source",
+        "source_manifest_sha256": "4beb1624283fed4f7c6596673c34d9f23ea9d1d13d9d7e7d08bec19cd0d93fc1",
+        "seconds": 14.978,
+        "docker_log_sha256": "c4168d04971f39d577444278a370227be016dfcd2efc4bfee6186c28ff10f191"
+      },
+      {
+        "lane": "public-trust",
+        "source_manifest_sha256": "c2a5990d65a6cd36535bbb85d52584aace6c62939fa2fdce167c6aa40aaba221",
+        "seconds": 7.705,
+        "docker_log_sha256": "c3a034931a1c289b61d3d7737885b0dd811d7ede6a84c84b91306e3e5e9048fa"
+      },
+      {
+        "lane": "model-public",
+        "source_manifest_sha256": "c2a5990d65a6cd36535bbb85d52584aace6c62939fa2fdce167c6aa40aaba221",
+        "seconds": 7.702,
+        "docker_log_sha256": "06211a7362971b16fa9f5a9185290011466f54d21324c535f4a06dd7cb59d011"
+      },
+      {
+        "lane": "utc-authentication",
+        "source_manifest_sha256": "c2a5990d65a6cd36535bbb85d52584aace6c62939fa2fdce167c6aa40aaba221",
+        "seconds": 4.391,
+        "docker_log_sha256": "996a6699d6938af5c780dc4149b27c4c6f4d8ca948246e7ed4f052c585bbf7ea"
+      },
+      {
+        "lane": "utc-upstream-units",
+        "source_manifest_sha256": "c2a5990d65a6cd36535bbb85d52584aace6c62939fa2fdce167c6aa40aaba221",
+        "seconds": 24.203,
+        "docker_log_sha256": "cf580a36ff4c0822bb1bf73c1c06be8f3fd8e0e57dd44e06538fdd3c5f737288"
+      },
+      {
+        "lane": "qmp-display",
+        "source_manifest_sha256": "c2a5990d65a6cd36535bbb85d52584aace6c62939fa2fdce167c6aa40aaba221",
+        "seconds": 3.845,
+        "docker_log_sha256": "5338064ee4c48a2fb284af8c545d9abd7f7e0caa3f68d4f534b3dc678f991074"
+      },
+      {
+        "lane": "storage",
+        "source_manifest_sha256": "c2a5990d65a6cd36535bbb85d52584aace6c62939fa2fdce167c6aa40aaba221",
+        "seconds": 201.245,
+        "docker_log_sha256": "80a72bea487d848bc7fbb6fcfc18ec1715e83287fcd3d51ff8bfd19aab4c787e"
+      },
+      {
+        "lane": "recovery-enospc",
+        "source_manifest_sha256": "c2a5990d65a6cd36535bbb85d52584aace6c62939fa2fdce167c6aa40aaba221",
+        "seconds": 2.99,
+        "docker_log_sha256": "bf793dd889d34130dbfcbcbd04a16508982a055ac9d55c46c6b3e53bbe6b5207"
+      },
+      {
+        "lane": "pam-catalog",
+        "source_manifest_sha256": "4beb1624283fed4f7c6596673c34d9f23ea9d1d13d9d7e7d08bec19cd0d93fc1",
+        "seconds": 251.039,
+        "docker_log_sha256": "39d26b812180d5e4a0439146b169b8c3b92c1d3b1bd11149223f235b5a76a10a"
+      },
+      {
+        "lane": "tpm-journal",
+        "source_manifest_sha256": "4beb1624283fed4f7c6596673c34d9f23ea9d1d13d9d7e7d08bec19cd0d93fc1",
+        "seconds": 764.75,
+        "docker_log_sha256": "1a34dd18aa85ef7b596d7e4a58a425b4c9be6dd9bfb908dffcd0b0b8231e2877"
+      }
+    ],
+    "ignored_entry_coverage": [
+      {
+        "entry": "admin_credentials::tests::emulator_sealed_delivery",
+        "kind": "external-fixture",
+        "covered": true
+      },
+      {
+        "entry": "admin_enrollment::tests::emulator_pending_enrollment_publication",
+        "kind": "external-fixture",
+        "covered": true
+      },
+      {
+        "entry": "admin_enrollment::tests::emulator_resume_bound_parent_without_reallocation",
+        "kind": "external-fixture",
+        "covered": true
+      },
+      {
+        "entry": "admin_enrollment::tests::emulator_enrollment",
+        "kind": "external-fixture",
+        "covered": true
+      },
+      {
+        "entry": "admin_enrollment::tests::emulator_enrolled_delivery",
+        "kind": "external-fixture",
+        "covered": true
+      },
+      {
+        "entry": "admin_enrollment::tests::emulator_existing_owner_seal_refusal",
+        "kind": "external-fixture",
+        "covered": true
+      },
+      {
+        "entry": "admin_governance::tests::emulator_bootstrap",
+        "kind": "external-fixture",
+        "covered": true
+      },
+      {
+        "entry": "admin_service::peer::tests::kernel_fsuid_change_fences_peer_even_after_restore",
+        "kind": "external-fixture",
+        "covered": true
+      },
+      {
+        "entry": "admin_service::peer::tests::kernel_fsuid_child",
+        "kind": "owned-child-only",
+        "parent": "admin_service::peer::tests::kernel_fsuid_change_fences_peer_even_after_restore",
+        "covered": true
+      },
+      {
+        "entry": "admin_service::tests::kernel_human_connection",
+        "kind": "external-fixture",
+        "covered": true
+      },
+      {
+        "entry": "admin_service::tests::kernel_human_child",
+        "kind": "owned-child-only",
+        "parent": "admin_service::tests::kernel_human_connection",
+        "covered": true
+      },
+      {
+        "entry": "admin_service::tests::pam_catalog_connection",
+        "kind": "external-fixture",
+        "covered": true
+      },
+      {
+        "entry": "admin_service::tests::pam_catalog_child",
+        "kind": "owned-child-only",
+        "parent": "admin_service::tests::pam_catalog_connection",
+        "covered": true
+      },
+      {
+        "entry": "authentication::tests::local_pam_account",
+        "kind": "external-fixture",
+        "covered": true
+      },
+      {
+        "entry": "credential_observer::tests::kernel_fd_census",
+        "kind": "external-fixture",
+        "covered": true
+      },
+      {
+        "entry": "credential_observer::tests::kernel_task_inventory_limit",
+        "kind": "external-fixture",
+        "covered": true
+      },
+      {
+        "entry": "credential_observer::tests::kernel_credential_change",
+        "kind": "external-fixture",
+        "covered": true
+      },
+      {
+        "entry": "credential_observer::tests::kernel_credential_child",
+        "kind": "owned-child-only",
+        "parent": "credential_observer::tests::kernel_credential_change",
+        "covered": true
+      },
+      {
+        "entry": "model::validation::tests::owned_process_helper",
+        "kind": "owned-child-only",
+        "parent": "model::validation::tests::supervisor_observes_normal_and_failed_owned_runtime_exit_with_verified_descriptors",
+        "covered": true
+      },
+      {
+        "entry": "model::tests::prior_restore_umask_child",
+        "kind": "owned-child-only",
+        "parent": "model::tests::prior_restoration_publishes_service_modes_under_restrictive_umask",
+        "covered": true
+      },
+      {
+        "entry": "owner_credential::tests::emulator_native_envelope",
+        "kind": "external-fixture",
+        "covered": true
+      },
+      {
+        "entry": "recovery_export::tests::actual_full_filesystem_retains_partial_and_never_publishes_final",
+        "kind": "external-fixture",
+        "covered": true
+      },
+      {
+        "entry": "resource_checkpoint::tests::emulator_resource_enrollment_sealed_restart_and_exact_extend",
+        "kind": "external-fixture",
+        "covered": true
+      },
+      {
+        "entry": "resource_checkpoint::tests::emulator_resource_lost_publication_is_explicit_finalize_without_nv_replay",
+        "kind": "external-fixture",
+        "covered": true
+      },
+      {
+        "entry": "resource_checkpoint::tests::emulator_resource_parent_lost_reply_reconciles_predispatch_name_without_persistence_replay",
+        "kind": "external-fixture",
+        "covered": true
+      },
+      {
+        "entry": "sealed_credential::tests::emulator_signed_credential",
+        "kind": "external-fixture",
+        "covered": true
+      },
+      {
+        "entry": "tpm::tests::emulator_admin_and_resource_authorities_have_independent_handles_and_secrets",
+        "kind": "external-fixture",
+        "covered": true
+      },
+      {
+        "entry": "tpm::tests::emulator_native_sealed_child",
+        "kind": "external-fixture",
+        "covered": true
+      },
+      {
+        "entry": "tpm::tests::emulator_existing_owner_parent_provisioning",
+        "kind": "external-fixture",
+        "covered": true
+      },
+      {
+        "entry": "tpm::tests::emulator_existing_owner_provisioning",
+        "kind": "external-fixture",
+        "covered": true
+      },
+      {
+        "entry": "tpm::tests::emulator_install_admission",
+        "kind": "external-fixture",
+        "covered": true
+      },
+      {
+        "entry": "tpm::tests::emulator_committed_journal_recovery",
+        "kind": "external-fixture",
+        "covered": true
+      },
+      {
+        "entry": "tpm::tests::emulator_nv_journal_and_rollback",
+        "kind": "external-fixture",
+        "covered": true
+      },
+      {
+        "entry": "tpm::tests::emulator_restart_and_external_change",
+        "kind": "external-fixture",
+        "covered": true
+      },
+      {
+        "entry": "tpm::tests::emulator_rejects_missing_or_redefined_index",
+        "kind": "external-fixture",
+        "covered": true
+      },
+      {
+        "entry": "utc_protocol::tests::c_publisher_cross_language_envelope",
+        "kind": "external-fixture",
+        "covered": true
+      },
+      {
+        "entry": "utc_protocol::tests::c_publisher_cross_language_frame",
+        "kind": "external-fixture",
+        "covered": true
+      },
+      {
+        "entry": "utc_receiver::tests::kernel_sender_child",
+        "kind": "owned-child-only",
+        "parent": "utc_receiver::tests::kernel_datagram_boundary",
+        "covered": true
+      },
+      {
+        "entry": "utc_receiver::tests::kernel_datagram_boundary",
+        "kind": "external-fixture",
+        "covered": true
+      },
+      {
+        "entry": "utc_receiver::tests::kernel_keeper_composition",
+        "kind": "external-fixture",
+        "covered": true
+      },
+      {
+        "entry": "utc_receiver::tests::kernel_final_queue_recheck",
+        "kind": "external-fixture",
+        "covered": true
+      },
+      {
+        "entry": "utc_receiver::tests::kernel_shared_history_composition",
+        "kind": "external-fixture",
+        "covered": true
+      }
+    ],
+    "upstream_utc_capability_free_cases": 16,
+    "model_chat_cli_cases": 20,
+    "real_model_custody_purpose_cases": 6,
+    "isolated_containers_memory_gib": 4,
+    "isolated_containers_cpus": 2,
+    "network": "none"
+  },
+  "generated_guest": {
+    "path": "/mnt/luma-build/work/g2-generated-kvm-20261012-a/attempt-5/cases/result.json",
+    "sha256": "482ceac9082b8c92eaf034a36cf1f5bb58af9f31ebd545c39cb7bf5084419008",
+    "passed": 13,
+    "source_asset_hashes_unchanged": true,
+    "installed_pam_broker_journey_qualified": false,
+    "installed_apparmor_qualified": false
+  },
+  "model_sessions": {
+    "owner_approved": "2026-10-12",
+    "import_seconds": 1800,
+    "activation_seconds": 1800,
+    "standard_seconds": 30,
+    "renewable": false,
+    "purpose_conversion_allowed": false
+  },
+  "installed_image_tested": false,
+  "physical_tpm_tested": false,
+  "production_signing_custody_qualified": false,
+  "live_nts_qualified": false,
+  "requirement1_closed": false,
+  "g2_closed": false
+}

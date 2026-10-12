@@ -34,7 +34,7 @@ execution and its required completion evidence; empty selections, unexpected
 ignores, skipped Python cases and success markers without actual executions
 are rejected. Source bytes are checked before and after each lane.
 
-Fourteen orchestration regression tests passed on 2026-10-12 in the isolated
+Fifteen orchestration regression tests passed on 2026-10-12 in the isolated
 Linux tools container. They test the runner's accounting and rejection paths,
 not the underlying hardware or product fixtures. Actual selected fixture
 results belong to their frozen source manifest and retained `result.json`.

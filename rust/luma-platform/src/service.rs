@@ -12,6 +12,7 @@ const SOCKET: &str = "/run/luma-broker/control.sock";
 const MAX_FRAME: usize = 16384;
 const FRAME_TIMEOUT: Duration = Duration::from_secs(2);
 
+pub(crate) mod granted_acquisition;
 pub(crate) mod granted_gateway;
 mod ingress;
 
@@ -284,6 +285,10 @@ pub fn serve() -> Result<()> {
     crate::require_root()?;
     security_check()?;
     crate::platform::require_production_activation()?;
+    // Physical pack hashing must never run inside a short admission/heartbeat
+    // request. This private background preparation confers no trust or grant;
+    // each serving boundary still checks current authority and file identity.
+    let _pack_verifier = crate::model::start_pack_verifier()?;
     // RuntimeDirectory is created and owned by systemd. Never unlink an unknown socket.
     let mut manager = if crate::platform::require_installed().is_ok()
         || crate::platform::require_live().is_ok()
@@ -377,6 +382,20 @@ pub fn serve() -> Result<()> {
                     let result = (|| -> Result<serde_json::Value> {
                         let peer = credentials(&incoming.stream)?;
                         let envelope: serde_json::Value = serde_json::from_slice(&incoming.bytes)?;
+                        if envelope.get("action").and_then(|v| v.as_str())
+                            == Some("resource-granted-acquisition")
+                        {
+                            let request: granted_acquisition::Request =
+                                serde_json::from_slice(&incoming.bytes)?;
+                            let manager = manager
+                                .as_mut()
+                                .ok_or("resource manager unavailable in this session")?;
+                            let authority = granted_acquisition::Authority::capture(
+                                &incoming.stream,
+                                &request,
+                            )?;
+                            return manager.register_acquisition(&request, peer, authority);
+                        }
                         if envelope.get("action").and_then(|v| v.as_str())
                             == Some("resource-granted-gateway")
                         {

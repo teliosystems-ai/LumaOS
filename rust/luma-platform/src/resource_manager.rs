@@ -357,20 +357,72 @@ fn acquisition_binding(profile: &model::Profile, device: &str) -> Result<String>
 enum AcquisitionProfile {
     Model(model::Profile),
     Invoice(String),
+    Generated(String),
 }
 impl AcquisitionProfile {
     fn resolve(id: &str) -> Result<Self> {
         if id.starts_with("invoice-") {
             crate::workflow_resource::source_digest(id)?;
             Ok(Self::Invoice(id.into()))
+        } else if id.starts_with("generated-") {
+            crate::generated_runtime::source_digest(id)?;
+            Ok(Self::Generated(id.into()))
         } else {
-            Ok(Self::Model(model::profile(id)?))
+            Ok(Self::Model(model::public_profile(id)?))
         }
     }
     fn binding(&self, device: &str) -> Result<String> {
         match self {
             Self::Model(profile) => acquisition_binding(profile, device),
             Self::Invoice(id) => crate::workflow_resource::binding(id, device),
+            Self::Generated(id) => crate::generated_runtime::binding(id, device),
+        }
+    }
+    fn current(&self, device: &str, pid: u32) -> Result<()> {
+        match self {
+            Self::Model(profile) => {
+                if crate::platform::live()? {
+                    crate::platform::require_live()?;
+                    let image = crate::platform::CatalogImage::capture(Path::new(
+                        "/var/lib/luma-os/admin",
+                    ))?;
+                    if image.production()
+                        || profile.governed.is_some()
+                        || model::public_profile(&profile.id)?.resource_binding()?
+                            != profile.resource_binding()?
+                    {
+                        return Err("live acquisition admits only the exact never-governed laboratory factory profile".into());
+                    }
+                    let text = safe_text(
+                        &Path::new("/proc").join(pid.to_string()).join("cmdline"),
+                        4096,
+                    )?;
+                    let args = text.split('\0').collect::<Vec<_>>();
+                    if args.len() != 6
+                        || args[0] != "/usr/libexec/luma-os/luma-platform"
+                        || args[1] != "model-acquisition-worker"
+                        || !matches!(args[2], "prepare" | "verify")
+                        || args[3] != profile.id
+                        || !args[5].is_empty()
+                    {
+                        return Err("live acquisition peer lacks exact fixed worker command".into());
+                    }
+                    let target = Path::new(args[4]);
+                    crate::acquisition::target(target)?;
+                    if storage_device(target)? != device {
+                        return Err(
+                            "live acquisition storage differs from its verified staging mount"
+                                .into(),
+                        );
+                    }
+                    crate::admin_governance::pack_preparation_authority(profile)?;
+                    image.recheck()
+                } else {
+                    crate::admin_governance::pack_preparation_authority(profile)
+                }
+            }
+            Self::Invoice(id) => crate::workflow_resource::source_digest(id).map(|_| ()),
+            Self::Generated(id) => crate::generated_runtime::source_digest(id).map(|_| ()),
         }
     }
 }
@@ -550,6 +602,7 @@ pub(crate) struct Manager {
     acquisition_oom: u64,
     owners: BTreeMap<String, File>,
     acquisition_bindings: BTreeMap<String, (AcquisitionProfile, String)>,
+    acquisition_authority: Option<crate::service::granted_acquisition::Authority>,
     requests: requests::Gate,
     gateway: Option<requests::gateway::Job>,
     gateway_ready: Option<Token>,
@@ -576,6 +629,35 @@ pub(crate) fn fence_unavailable() -> Result<()> {
 }
 
 impl Manager {
+    pub(crate) fn register_acquisition(
+        &mut self,
+        request: &crate::service::granted_acquisition::Request,
+        peer: libc::ucred,
+        mut authority: crate::service::granted_acquisition::Authority,
+    ) -> Result<serde_json::Value> {
+        request.validate(peer)?;
+        if self.acquisition_authority.is_some()
+            || self.acquisition.populated()?
+            || self
+                .store
+                .read()?
+                .leases
+                .iter()
+                .any(|lease| lease.owner.uid == 0 && lease.state != State::Released)
+        {
+            return Err(
+                "finite acquisition domain is occupied; previous generation must drain".into(),
+            );
+        }
+        if !authority.matches(&request.profile, &request.storage_device) {
+            return Err("finite acquisition capture substituted operation".into());
+        }
+        authority.check()?;
+        self.acquisition_authority = Some(authority);
+        Ok(
+            serde_json::json!({"schema_version":1,"result":"ok","request_id":request.request_id,"job":request.job}),
+        )
+    }
     pub(crate) fn fence_on_fault(&self) -> Result<()> {
         // These controls are opened relative to the already pinned worker slice.
         // Do not discover a replacement or infer that reservations are released.
@@ -608,6 +690,7 @@ impl Manager {
             acquisition_oom,
             owners: BTreeMap::new(),
             acquisition_bindings: BTreeMap::new(),
+            acquisition_authority: None,
             requests,
             gateway: None,
             gateway_ready: None,
@@ -617,6 +700,37 @@ impl Manager {
     }
 
     pub(crate) fn maintain(&mut self) -> Result<()> {
+        if self
+            .acquisition_authority
+            .as_mut()
+            .is_some_and(|authority| authority.check().is_err())
+        {
+            if let Some(authority) = self.acquisition_authority.take() {
+                if let Some(token) = authority.token() {
+                    self.store.transact(|ledger| {
+                        ledger.revoke(token, "original-acquisition-principal-fenced")
+                    })?;
+                }
+            }
+        }
+        if self
+            .acquisition_authority
+            .as_ref()
+            .is_some_and(|authority| authority.completed())
+        {
+            let mut authority = self
+                .acquisition_authority
+                .take()
+                .ok_or("completed acquisition authority disappeared")?;
+            let ledger = self.store.read()?;
+            let terminal = authority.completed_result(&ledger);
+            if terminal {
+                authority.finish_ack()?;
+            } else if let Some(token) = authority.token() {
+                self.store
+                    .transact(|ledger| ledger.revoke(token, "premature-acquisition-completion"))?;
+            }
+        }
         let cancellations = self.requests.maintain(&self.store.read()?, now()?)?;
         self.requests.persist(&self.store, false)?;
         for token in cancellations {
@@ -716,7 +830,8 @@ impl Manager {
                         (
                             ACQUISITION_MEMORY,
                             device.clone(),
-                            profile.binding(device)? == lease.binding,
+                            profile.binding(device)? == lease.binding
+                                && profile.current(device, lease.owner.pid).is_ok(),
                         )
                     }
                 };
@@ -894,12 +1009,30 @@ impl Manager {
                 let binding = match kind {
                     Kind::Model => match &profile {
                         AcquisitionProfile::Model(profile) => profile.resource_binding()?,
-                        AcquisitionProfile::Invoice(_) => {
+                        AcquisitionProfile::Invoice(_) | AcquisitionProfile::Generated(_) => {
                             return Err("workflow cannot occupy the serving domain".into())
                         }
                     },
                     Kind::Acquisition => profile.binding(&storage)?,
                 };
+                if kind == Kind::Acquisition {
+                    profile.current(&storage, peer.pid.try_into()?)?;
+                    if matches!(&profile,AcquisitionProfile::Model(p) if p.governed.is_some())
+                        || matches!(&profile, AcquisitionProfile::Generated(_))
+                    {
+                        let authority = self
+                            .acquisition_authority
+                            .as_mut()
+                            .ok_or("governed acquisition requires its original finite principal")?;
+                        if !authority.matches(id, &storage) {
+                            return Err(
+                                "acquisition principal belongs to a different exact operation"
+                                    .into(),
+                            );
+                        }
+                        authority.check()?;
+                    }
+                }
                 let owner = owner(peer.pid.try_into()?, peer.uid, group)?;
                 if self.store.owner_retired(&owner)? {
                     return Err("resource owner belongs to a retired allocation generation".into());
@@ -964,6 +1097,14 @@ impl Manager {
                 let admitted = token.as_ref().ok_or("missing admitted resource token")?;
                 self.owners.insert(admitted.lease_id.clone(), pin);
                 if kind == Kind::Acquisition {
+                    if matches!(&profile,AcquisitionProfile::Model(p) if p.governed.is_some())
+                        || matches!(&profile, AcquisitionProfile::Generated(_))
+                    {
+                        self.acquisition_authority
+                            .as_mut()
+                            .ok_or("finite acquisition connection lost before lease publication")?
+                            .attach(admitted)?;
+                    }
                     self.acquisition_bindings
                         .insert(admitted.lease_id.clone(), (profile, storage));
                 }
@@ -995,15 +1136,23 @@ impl Manager {
                     .acquisition_bindings
                     .get(&t.lease_id)
                     .ok_or("missing computation generation binding")?;
-                if !matches!(profile, AcquisitionProfile::Invoice(_)) {
-                    return Err("model acquisition cannot publish workflow output".into());
-                }
                 let observed = owner(peer.pid.try_into()?, peer.uid, &self.acquisition)?;
                 let digest = r
                     .review
                     .as_deref()
                     .ok_or("missing computation output digest")?;
                 let binding = profile.binding(device)?;
+                if let AcquisitionProfile::Model(profile) = profile {
+                    if ![
+                        model::pack_completion(profile, "prepare")?,
+                        model::pack_completion(profile, "verify")?,
+                    ]
+                    .iter()
+                    .any(|expected| expected == digest)
+                    {
+                        return Err("model acquisition completion differs from exact immutable profile/action".into());
+                    }
+                }
                 self.store.transact(|ledger| {
                     if ledger.assert_active(t, &observed, time)?.binding != binding {
                         return Err("computation input generation changed".into());
@@ -1056,7 +1205,7 @@ impl Manager {
                 }
                 status = Some(
                     serde_json::json!({"review":ledger.review()?,"domains":ledger.domains,
-                    "generation":ledger.generation.to_string(),"active":ledger.leases.iter().filter(|l|l.state==State::Active).count(),
+                    "generation":ledger.generation.to_string(),"manager_epoch":ledger.manager_epoch,"active":ledger.leases.iter().filter(|l|l.state==State::Active).count(),
                     "draining":ledger.leases.iter().filter(|l|l.state==State::Draining).count(),
                     "receipts":ledger.leases.len(),"archives":ledger.archives,"outstanding":outstanding,
                     "workers":{"model_populated":self.group.populated()?,"acquisition_populated":self.acquisition.populated()?,
@@ -1791,7 +1940,7 @@ mod tests {
         changed = l.clone();
         changed.leases[0].binding = "A".repeat(64);
         assert!(native_outstanding(&changed).is_err());
-        let p = model::profile("qwen3-1-7b-q4-k-m").unwrap();
+        let p = model::public_profile("qwen3-1-7b-q4-k-m").unwrap();
         changed = l.clone();
         changed.leases[0].owner.uid = 989;
         changed.leases[0].binding = p.resource_binding().unwrap();
@@ -1892,13 +2041,17 @@ mod tests {
 
     #[test]
     fn acquisition_storage_is_canonical_and_cryptographically_bound_to_the_profile() {
-        let p = model::profile("qwen3-4b-q4-k-m").unwrap();
+        let p = model::public_profile("qwen3-4b-q4-k-m").unwrap();
         let b = acquisition_binding(&p, "253:0").unwrap();
         assert_ne!(b, acquisition_binding(&p, "253:1").unwrap());
         assert_ne!(b, p.resource_binding().unwrap());
         assert_ne!(
             b,
-            acquisition_binding(&model::profile("qwen3-1-7b-q4-k-m").unwrap(), "253:0").unwrap()
+            acquisition_binding(
+                &model::public_profile("qwen3-1-7b-q4-k-m").unwrap(),
+                "253:0"
+            )
+            .unwrap()
         );
         for storage in [
             "0:1",

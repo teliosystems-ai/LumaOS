@@ -42,7 +42,12 @@ class AccountCheckpointPolicyTests(unittest.TestCase):
         self.assertIn('account_checkpoint_at(registry_path, identity_path)?', engine)
         self.assertIn('&observed != command', engine)
         self.assertEqual(engine.count('for account in &account_pins'), 2)
-        self.assertIn('context.recheck(&mut authenticate)', engine)
+        self.assertIn('context.recheck_command(&catalog, command, &mut authenticate)', engine)
+        recheck = source.split('fn recheck_command(')[1].split('fn custody_writer(')[0]
+        self.assertIn('if !model_decision(command)', recheck)
+        self.assertIn('return self.recheck(authenticate)', recheck)
+        self.assertIn('catalog.resolve_principal(&authenticate()?)?', recheck)
+        self.assertIn('self.command_writer(catalog, command)?', recheck)
         reader = source.split('fn replay(')[2].split('fn resolve(')[0]
         self.assertRegex(reader, r'catalog\s*\.account_commitments\s*\.get\(principal\)')
         self.assertIn('account.credential_commitment()? != expected', reader)

@@ -21,7 +21,13 @@ class BuildDriverTests(unittest.TestCase):
     def test_public_trust_is_mounted_readonly_only_for_assembly(self):
         self.exercise_driver('auto', public_trust=True)
 
-    def exercise_driver(self, profile, public_trust=False):
+    def test_model_public_inputs_are_mounted_readonly_only_for_assembly(self):
+        self.exercise_driver('auto', model_public=True)
+
+    def test_model_and_release_public_inputs_keep_separate_readonly_mounts(self):
+        self.exercise_driver('auto', public_trust=True, model_public=True)
+
+    def exercise_driver(self, profile, public_trust=False, model_public=False):
         with tempfile.TemporaryDirectory(prefix='luma-build-driver-') as temporary:
             root = Path(temporary)
             driver = root/'repo/native/image/build.sh'
@@ -32,6 +38,8 @@ class BuildDriverTests(unittest.TestCase):
             external.mkdir()
             trust = root/'public-trust'
             trust.mkdir()
+            models = root/'model-public'
+            models.mkdir()
             installed.write_text('export LUMA_BUILD_ROOT='+str(external)+'\n'
                                  'export DOCKER_HOST=unix:///run/luma-build-docker.sock\n')
             # Substitute only this temporary driver's profile path; never read
@@ -69,6 +77,7 @@ if '/repo/native/image/assemble.py' in sys.argv:
                            'LUMA_RUNTIME_ARCHIVE':'', 'LUMA_BUILD_NETWORK':'none',
                            'LUMA_BUILD_PROFILE':profile,
                            'LUMA_NATIVE_PUBLIC_TRUST':str(trust) if public_trust else '',
+                           'LUMA_NATIVE_MODEL_PUBLIC_INPUTS':str(models) if model_public else '',
                            'DOCKER_HOST':'unix:///var/run/docker.sock'}
             process = subprocess.Popen(['/bin/bash', str(driver), 'headless', '12'],
                                        env=environment, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
@@ -119,6 +128,14 @@ if '/repo/native/image/assemble.py' in sys.argv:
                     self.assertFalse(any(mount in args for args in other))
                 else:
                     self.assertNotIn('--public-trust-inputs', assembly)
+                model_mount = 'type=bind,src='+str(models)+',dst=/model-public,readonly'
+                if model_public:
+                    self.assertIn(model_mount, assembly)
+                    self.assertEqual(assembly[assembly.index('--model-public-inputs')+1], '/model-public')
+                    other = [args for args in docker if args is not assembly]
+                    self.assertFalse(any(model_mount in args for args in other))
+                else:
+                    self.assertNotIn('--model-public-inputs', assembly)
             finally:
                 if process.poll() is None:
                     process.kill()

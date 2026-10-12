@@ -527,6 +527,8 @@ pub(crate) struct Admission {
     policy: ImagePin,
     fenced: bool,
     audit: Option<crate::finite_grants::Audit>,
+    acquisition_profile: Option<String>,
+    acquisition_completed: bool,
 }
 impl Admission {
     pub(crate) fn capture(
@@ -564,6 +566,8 @@ impl Admission {
             )?,
             fenced: false,
             audit: None,
+            acquisition_profile: None,
+            acquisition_completed: false,
         };
         admission.check()?;
         Ok(admission)
@@ -577,6 +581,13 @@ impl Admission {
         crate::credential_observer::kernel_check(&self.pin, 0, 0)?;
         let process = Path::new("/proc").join(self.peer.pid.to_string());
         client_status(&kernel_text(&process.join("status"), 65_536, 0x9fa0)?)?;
+        if let Some(profile) = &self.acquisition_profile {
+            acquisition_arguments(
+                self.peer.pid,
+                profile,
+                self.audit.as_ref().map(|audit| audit.grant_id.as_str()),
+            )?;
+        }
         let group = kernel_text(&process.join("cgroup"), 4096, 0x9fa0)?;
         let unit = group
             .strip_prefix("0::/system.slice/luma-granted-client-")
@@ -629,7 +640,8 @@ impl Admission {
         }
         let proof: Proof = serde_json::from_slice(&raw)?;
         if proof.schema_version != 1
-            || proof.kind != "grant-proof"
+            || !(proof.kind == "grant-proof"
+                || proof.kind == "grant-acquisition-complete" && self.acquisition_profile.is_some())
             || proof.nonce != nonce
             || proof.job != self.job
         {
@@ -649,6 +661,7 @@ impl Admission {
         self.peer_check()?;
         remaining(deadline)?;
         self.fenced = false;
+        self.acquisition_completed = proof.kind == "grant-acquisition-complete";
         Ok(())
     }
     pub(crate) fn deliver(&mut self, output: &Output, receipt: serde_json::Value) -> Result<()> {
@@ -666,6 +679,131 @@ impl Admission {
             .filter(|_| !self.fenced)
             .ok_or_else(|| "missing current granted subject attribution".into())
     }
+    pub(crate) fn capture_acquisition(
+        socket: &UnixStream,
+        job: &str,
+        profile: &str,
+        usage: Use,
+        input_sha256: String,
+    ) -> Result<Self> {
+        if usage != crate::service::granted_acquisition::usage(profile)? {
+            return Err(
+                "acquisition admission scope differs from exact public resource/storage".into(),
+            );
+        }
+        acquisition_arguments(credentials(socket)?.pid, profile, None)?;
+        let mut result = Self::capture(socket, job, usage, input_sha256)?;
+        result.acquisition_profile = Some(profile.into());
+        result.peer_check()?;
+        Ok(result)
+    }
+    pub(crate) fn acquisition_liveness(&self) -> Result<()> {
+        if self.fenced {
+            return Err("acquisition admission is permanently fenced".into());
+        }
+        crate::credential_observer::kernel_check(&self.pin, 0, 0)?;
+        let mut poll = libc::pollfd {
+            fd: self.socket.as_raw_fd(),
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        if unsafe { libc::poll(&mut poll, 1, 0) } < 0 {
+            return Err(std::io::Error::last_os_error().into());
+        }
+        if poll.revents & (libc::POLLERR | libc::POLLHUP | libc::POLLNVAL | libc::POLLIN) != 0 {
+            return Err("acquisition original client disconnected or sent unsolicited data".into());
+        }
+        Ok(())
+    }
+    pub(crate) fn acquisition_completed(&self) -> bool {
+        self.acquisition_completed
+    }
+    pub(crate) fn acquisition_finish_ack(&mut self) -> Result<()> {
+        if !self.acquisition_completed || self.fenced {
+            return Err("acquisition completion lacks current original proof".into());
+        }
+        self.peer_check()?;
+        write_frame_until(
+            &mut self.socket,
+            &serde_json::to_vec(
+                &serde_json::json!({"schema_version":1,"kind":"acquisition-completed","job":self.job}),
+            )?,
+            Instant::now() + CHALLENGE_BUDGET,
+        )
+    }
+}
+
+fn acquisition_arguments(pid: i32, profile: &str, grant: Option<&str>) -> Result<()> {
+    if pid <= 0 {
+        return Err("acquisition principal peer is not live".into());
+    }
+    let raw = kernel_text(
+        &Path::new("/proc").join(pid.to_string()).join("cmdline"),
+        4096,
+        0x9fa0,
+    )?;
+    let args = raw.split('\0').collect::<Vec<_>>();
+    let generated = profile.starts_with("generated-v1-");
+    if args.len() != 6
+        || args[0] != IMAGE_EXE
+        || args[1]
+            != (if generated {
+                "generated-execute"
+            } else {
+                "model-pack-import"
+            })
+        || (!generated && args[4] != profile)
+        || !args[5].is_empty()
+        || args[2].is_empty()
+        || args[2].len() > 32
+        || !crate::admin_roles::identifier(args[3])
+        || grant.is_some_and(|id| args[3] != id)
+    {
+        return Err(
+            "acquisition grant proof requires exact fixed model-pack-import arguments".into(),
+        );
+    }
+    if generated {
+        crate::generated_runtime::verify_client_request(Path::new(args[4]), profile)?;
+    }
+    Ok(())
+}
+
+pub(crate) fn acquisition_proof(
+    raw: &[u8],
+    job: &str,
+    usage: &Use,
+    input_sha256: &str,
+    boundary: &mut crate::admin_governance::GrantBoundary<'_>,
+    complete: bool,
+) -> Result<Vec<u8>> {
+    if raw.len() > CHALLENGE_LIMIT {
+        return Err("acquisition challenge exceeds bound".into());
+    }
+    let challenge: Challenge = serde_json::from_slice(raw)?;
+    if challenge.schema_version != 1
+        || challenge.kind != "grant-challenge"
+        || challenge.job != job
+        || challenge.usage != *usage
+        || challenge.input_sha256 != input_sha256
+        || !challenge.nonce.starts_with("console-")
+        || challenge.nonce.len() != 40
+    {
+        return Err("acquisition challenge substituted its exact task/scope/input".into());
+    }
+    boundary.check()?;
+    Ok(serde_json::to_vec(&Proof {
+        schema_version: 1,
+        kind: if complete {
+            "grant-acquisition-complete"
+        } else {
+            "grant-proof"
+        }
+        .into(),
+        nonce: challenge.nonce,
+        job: job.into(),
+        audit: boundary.audit()?,
+    })?)
 }
 
 fn infer_usage(
@@ -978,9 +1116,14 @@ fn bounded_json_input(path: &str) -> Result<Vec<u8>> {
 }
 impl InputStage {
     fn capture(bytes: &[u8], leaf: &str) -> Result<Self> {
-        if !matches!(leaf, "input.json" | "input.csv")
+        let maximum = if leaf == "generated.json" {
+            2_228_480
+        } else {
+            1_048_576
+        };
+        if !matches!(leaf, "input.json" | "input.csv" | "generated.json")
             || bytes.is_empty()
-            || bytes.len() > 1_048_576
+            || bytes.len() > maximum
         {
             return Err("invalid bounded inert product input".into());
         }
@@ -1090,6 +1233,19 @@ pub(crate) fn launch(arguments: &[String]) -> Result<()> {
             arguments[0].as_str(),
             "granted-infer"
                 | "granted-infer-review"
+                | "generated-review"
+                | "generated-execute"
+                | "model-pack-import-review"
+                | "model-pack-import"
+                | "model-pack-pending-review"
+                | "model-pack-pending-retain"
+                | "model-activate-review"
+                | "model-activate"
+                | "model-qualification-observe"
+                | "model-qualification-review"
+                | "model-qualification-install"
+                | "model-qualification-pending-review"
+                | "model-qualification-pending-retain"
                 | "workflow-governed-review"
                 | "workflow-governed-prepare"
                 | "workflow-governed-advance"
@@ -1151,6 +1307,44 @@ pub(crate) fn launch(arguments: &[String]) -> Result<()> {
     }
     let mut owned = arguments.to_vec();
     let stage = match arguments[0].as_str() {
+        "model-qualification-review" | "model-qualification-install" => {
+            let (count, index) = if arguments[0] == "model-qualification-review" {
+                (3, 2)
+            } else {
+                (5, 4)
+            };
+            if arguments.len() != count {
+                return Err(
+                    "qualification launcher requires its exact finite command shape".into(),
+                );
+            }
+            let bytes = crate::model_qualification::stage_input(Path::new(&arguments[index]))?;
+            let stage = InputStage::capture(&bytes, "input.json")?;
+            owned[index] = stage
+                .path
+                .to_str()
+                .ok_or("invalid private qualification request path")?
+                .into();
+            Some(stage)
+        }
+        "generated-review" | "generated-execute" => {
+            let (count, index) = if arguments[0] == "generated-review" {
+                (2, 1)
+            } else {
+                (4, 3)
+            };
+            if arguments.len() != count {
+                return Err("generated launcher requires its exact finite command shape".into());
+            }
+            let bytes = crate::generated_runtime::read_request(&arguments[index])?;
+            let stage = InputStage::capture(&bytes, "generated.json")?;
+            owned[index] = stage
+                .path
+                .to_str()
+                .ok_or("invalid private generated request path")?
+                .into();
+            Some(stage)
+        }
         "workflow-dag-review"
         | "workflow-dag-prepare"
         | "workflow-dag-status"
@@ -1254,6 +1448,21 @@ pub(crate) fn launch(arguments: &[String]) -> Result<()> {
     let mut writable = "--property=ReadWritePaths=/var/lib/luma-os/workflow-runs /var/lib/luma-os/workflow-dags /var/lib/luma-os/workflow-invoice-domains /var/lib/luma-os/workflow-history /var/lib/luma-os/artifacts /var/lib/luma-os/artifact-catalog /var/lib/luma-os/artifact-catalog-domains /var/lib/luma-os/policy-decisions /var/lib/luma-broker/resources /run/luma-admin -/var/lib/luma-os/model.lock /run/luma-resource-checkpoint/authority.lock".to_owned();
     if arguments[0] == "workflow-inputs-init" {
         writable.push_str(" /var/lib/luma-os/workflow-inputs");
+    }
+    if arguments[0] == "model-activate" {
+        // File creation/atomic rename needs its protected parent mount. The
+        // enforcing profile permits only fixed configuration/fence names and
+        // denies all model-weight mutations; no caller path is interpolated.
+        writable.push_str(" /var/lib/luma-os");
+    }
+    if arguments[0] == "model-pack-pending-retain" {
+        writable.push_str(" /var/lib/luma-os/model-packs");
+    }
+    if matches!(
+        arguments[0].as_str(),
+        "model-qualification-install" | "model-qualification-pending-retain"
+    ) {
+        writable.push_str(" /var/lib/luma-os/model-qualifications");
     }
     let payload = if payload_command(&owned[0]) {
         Some(PayloadListener::create(&owned, &unit)?)

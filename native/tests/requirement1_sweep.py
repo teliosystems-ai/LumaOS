@@ -21,6 +21,24 @@ def digest(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def fixture_environment(output, deny_warnings):
+    environment = dict(os.environ, PYTHONDONTWRITEBYTECODE='1', CARGO_INCREMENTAL='0',
+                       LUMA_STORAGE_TEST_ROOT=str(output))
+    if deny_warnings:
+        environment['RUSTFLAGS'] = '-Dwarnings'
+    return environment
+
+
+def apparmor_cases(repository):
+    profiles = sorted((repository / 'native/image/overlay/etc/apparmor.d').glob('luma-*'))
+    if not 1 <= len(profiles) <= 32 or any(path.is_symlink() or not path.is_file()
+            or not re.fullmatch(r'luma-[a-z0-9-]{1,64}', path.name) for path in profiles):
+        raise ValueError('invalid closed AppArmor parser input group')
+    # -Q prevents kernel loading; -K prevents reading or writing policy caches.
+    return [('apparmor-parse-' + path.name, ['apparmor_parser', '-Q', '-K', str(path)],
+             repository, 60) for path in profiles]
+
+
 def executed_tests(name, output):
     """An empty or unrecognized test invocation cannot qualify a lane."""
     if name == 'rust-tests' or name.startswith('rust-tests-'):
@@ -33,7 +51,7 @@ def executed_tests(name, output):
         if not summaries or counts['passed'] + counts['failed'] == 0:
             raise ValueError('Rust lane did not execute any recognized tests')
         return counts
-    if name in ('native-source-tests', 'utc-release-authentication', 'public-trust-authentication'):
+    if name in ('native-source-tests', 'utc-release-authentication', 'public-trust-authentication', 'model-public-authentication'):
         summaries = re.findall(r'^Ran (\d+) tests? in .+$', output, re.MULTILINE)
         if len(summaries) != 1 or int(summaries[0]) == 0:
             raise ValueError('native lane did not execute a recognized nonempty suite')
@@ -46,8 +64,8 @@ def executed_tests(name, output):
         discovered = int(summaries[0])
         failed = details.get('failures', 0) + details.get('errors', 0)
         skipped = details.get('skipped', 0)
-        if name in ('utc-release-authentication', 'public-trust-authentication') and any(details.values()):
-            raise ValueError('UTC release authentication requires every test to pass without skips')
+        if name in ('utc-release-authentication', 'public-trust-authentication', 'model-public-authentication') and any(details.values()):
+            raise ValueError('public authentication requires every test to pass without skips')
         return {'discovered': discovered, 'passed': discovered - failed - skipped
                 - details.get('expected failures', 0) - details.get('unexpected successes', 0),
                 'failed': failed, 'skipped': skipped, **details}
@@ -62,6 +80,8 @@ def main():
     parser.add_argument('--extra-rust-filter', action='append', default=[],
                         help='additional independently executed targeted regression filter')
     parser.add_argument('--deny-warnings', action='store_true')
+    parser.add_argument('--apparmor-parse', action='store_true',
+                        help='parse shipped profiles without kernel loading or policy caching')
     parser.add_argument('--pam-fixture', action='store_true',
                         help='also run the real PAM fixture in this disposable container')
     parser.add_argument('--resource-tpm-fixture', action='store_true',
@@ -118,9 +138,7 @@ def main():
     if args.output.exists() or args.output.is_symlink():
         raise SystemExit('evidence directory must be new')
     args.output.mkdir(mode=0o700, parents=True)
-    environment = dict(os.environ, PYTHONDONTWRITEBYTECODE='1', CARGO_INCREMENTAL='0')
-    if args.deny_warnings:
-        environment['RUSTFLAGS'] = '-Dwarnings'
+    environment = fixture_environment(args.output, args.deny_warnings)
     results = []
     def rust_command(value):
         command = ['cargo', 'test', '--offline', '--locked', '--target-dir', '/cache/target']
@@ -141,7 +159,12 @@ def main():
         ('public-trust-authentication', ['/usr/bin/python3', '-B', '-m', 'unittest', 'discover',
                                          '-s', 'native/image', '-p', 'test_public_trust.py', '-v'],
                                          repository, 120),
+        ('model-public-authentication', ['/usr/bin/python3', '-B', '-m', 'unittest', 'discover',
+                                        '-s', 'native/image', '-p', 'test_model_inputs.py', '-v'],
+                                        repository, 180),
     ])
+    if args.apparmor_parse:
+        cases.extend(apparmor_cases(repository))
     if args.utc_release_archive:
         archive = args.utc_release_archive.resolve(strict=True)
         cases.append(('utc-release-authentication', ['/usr/bin/python3', '-B',

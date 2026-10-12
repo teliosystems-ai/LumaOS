@@ -34,7 +34,8 @@ class AdminCredentialPolicyTests(unittest.TestCase):
     def test_tmpfiles_creates_lock_directory_not_enrollment(self):
         lines = (ROOT / 'native/image/overlay/etc/tmpfiles.d/luma-admin.conf').read_text().splitlines()
         self.assertEqual([line for line in lines if line and not line.startswith('#')],
-                         ['d /run/luma-admin 0700 root root -'])
+                         ['d /run/luma-admin 0700 root root -',
+                          'd /run/luma-admin/model-qualifications 0700 root root -'])
 
     def test_bootstrap_has_fixed_paths_and_independent_pam_entry_point(self):
         source = governance_source()

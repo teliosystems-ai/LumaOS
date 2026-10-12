@@ -15,7 +15,7 @@ D cache directory searchable by unprivileged fixture children, and
 store its data on D. The runner pins the inspected local tools image identity
 for the complete run and never pulls an image.
 
-The default selection has 23 lanes. `--private-mounts` includes the storage
+The default selection has 24 lanes. `--private-mounts` includes the storage
 and recovery ENOSPC fixtures, using SYS_ADMIN only in disposable container
 namespaces. Those lanes receive neither host devices nor a privileged
 container. Repeated `--lane NAME` selects an explicit subset; omitted lanes
@@ -29,10 +29,19 @@ execution and its required completion evidence; empty selections, unexpected
 ignores, skipped Python cases and success markers without actual executions
 are rejected. Source bytes are checked before and after each lane.
 
-Eleven orchestration regression tests passed on 2026-10-12 in the isolated
+Fourteen orchestration regression tests passed on 2026-10-12 in the isolated
 Linux tools container. They test the runner's accounting and rejection paths,
 not the underlying hardware or product fixtures. Actual selected fixture
 results belong to their frozen source manifest and retained `result.json`.
+The PAM catalog lane also requires all six scoped model-custody case markers
+alongside actual named Rust executions. The public-model lane runs the real
+signature and sidecar tests; neither an empty suite nor skipped cases passes.
+Sparse model fixtures have an independent 8 GiB file extent bound. Each
+transcript retains its separate 64 MiB ceiling; an oversized transcript fails
+even when its child exits successfully. This does not change product limits.
+The consolidated source sweep can additionally use `--apparmor-parse` to parse
+each shipped profile with kernel loading and policy caches disabled. Parser
+success is not evidence of enforcing installed confinement.
 
 Native NTS/provider connectivity, clock and confinement behavior, the signed
 installer image, boot and interruption recovery, installed graphical login,

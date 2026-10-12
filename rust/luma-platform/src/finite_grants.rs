@@ -51,6 +51,8 @@ pub(crate) enum Action {
     ProvisionResource,
     #[serde(rename = "resource.recover")]
     RecoverResource,
+    #[serde(rename = "generated.execute")]
+    ExecuteGenerated,
 }
 impl Action {
     pub(crate) fn activity(self) -> &'static str {
@@ -70,6 +72,7 @@ impl Action {
             Self::AcquireResource => "resource.acquire",
             Self::ProvisionResource => "resource.provision",
             Self::RecoverResource => "resource.recover",
+            Self::ExecuteGenerated => "generated.execute",
         }
     }
 }
@@ -84,6 +87,7 @@ pub(crate) enum Kind {
     Model,
     Worker,
     Resource,
+    GeneratedCode,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -119,6 +123,7 @@ impl Selector {
                 )
                 | (Kind::Model, Action::Infer)
                 | (Kind::Worker, Action::StartWorker | Action::StopWorker)
+                | (Kind::GeneratedCode, Action::ExecuteGenerated)
                 | (
                     Kind::Resource,
                     Action::AcquireResource
@@ -138,9 +143,22 @@ pub(crate) struct Constraints {
     pub max_units: u64,
 }
 impl Constraints {
-    fn validate(&self) -> Result<()> {
-        if self.max_input_bytes > 1_073_741_824
-            || self.max_output_bytes > 1_073_741_824
+    pub(crate) fn validate(&self, selector: &Selector, action: Action) -> Result<()> {
+        // The two compiled GGUF packs exceed one GiB. Their exact import
+        // targets may name a larger finite storage peak; this does not widen
+        // file/artifact/export, other resources or generated-code grants.
+        let bytes = if selector.kind == Kind::Resource
+            && action == Action::AcquireResource
+            && matches!(
+                selector.id.as_str(),
+                "ModelPack-qwen3-4b-q4-k-m" | "ModelPack-qwen3-1-7b-q4-k-m"
+            ) {
+            64 * 1024 * 1024 * 1024
+        } else {
+            1_073_741_824
+        };
+        if self.max_input_bytes > bytes
+            || self.max_output_bytes > bytes
             || self.max_units == 0
             || self.max_units > 1_000_000
         {
@@ -242,7 +260,7 @@ impl Grant {
         crate::tpm::decode::<32>(&self.subject)?;
         validity(self.not_before_ms, self.expires_ms)?;
         self.selector.validate()?;
-        self.constraints.validate()?;
+        self.constraints.validate(&self.selector, self.action)?;
         if !crate::admin_roles::identifier(&self.id)
             || !crate::admin_roles::identifier(&self.assignment)
             || self.assignment_version == 0
@@ -384,6 +402,48 @@ impl Use {
 mod tests {
     use super::*;
     use crate::admin_roles::Command;
+    #[test]
+    fn large_pack_byte_limits_are_specific_to_the_exact_import_targets() {
+        let (_, _, mut grant, _) = fixture();
+        grant.action = Action::AcquireResource;
+        grant.selector.kind = Kind::Resource;
+        grant.selector.id = "ModelPack-qwen3-4b-q4-k-m".into();
+        grant.constraints.max_input_bytes = 2_497_280_256;
+        grant.constraints.max_output_bytes = 8 * 1024 * 1024 * 1024;
+        assert!(grant.validate().is_ok());
+        grant.selector.id = "ModelPack-qwen3-1-7b-q4-k-m".into();
+        assert!(grant.validate().is_ok());
+        for id in [
+            "ModelPack-unknown",
+            "different-resource",
+            "ModelPack-qwen3-4b-q4-k-m-extra",
+        ] {
+            grant.selector.id = id.into();
+            assert!(grant.validate().is_err());
+        }
+        grant.selector.id = "ModelPack-qwen3-4b-q4-k-m".into();
+        for action in [
+            Action::Retain,
+            Action::ProvisionResource,
+            Action::RecoverResource,
+        ] {
+            grant.action = action;
+            assert!(grant.validate().is_err());
+        }
+        grant.action = Action::AcquireResource;
+        grant.constraints.max_output_bytes = 64 * 1024 * 1024 * 1024 + 1;
+        assert!(grant.validate().is_err());
+        grant.constraints.max_output_bytes = 64 * 1024 * 1024 * 1024;
+        grant.constraints.max_input_bytes = grant.constraints.max_output_bytes + 1;
+        assert!(grant.validate().is_err());
+        grant.action = Action::Read;
+        grant.selector.kind = Kind::File;
+        grant.constraints.max_input_bytes = 1_073_741_824;
+        grant.constraints.max_output_bytes = 1_073_741_824;
+        assert!(grant.validate().is_ok());
+        grant.constraints.max_output_bytes += 1;
+        assert!(grant.validate().is_err());
+    }
     fn fixture() -> (Catalog, serde_json::Value, Grant, Use) {
         let registry = serde_json::from_value(serde_json::json!({"schema_version":1,
             "installation":"ab".repeat(32),"principals":[

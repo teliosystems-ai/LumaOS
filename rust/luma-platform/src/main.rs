@@ -20,7 +20,10 @@ mod calculation;
 mod credential_observer;
 mod disk;
 mod finite_grants;
+mod generated_runtime;
 mod model;
+mod model_qualification;
+mod model_trust;
 mod owner_credential;
 mod platform;
 mod policy_decisions;
@@ -143,6 +146,19 @@ fn dispatch() -> Result<()> {
             Some(
                 "granted-infer"
                     | "granted-infer-review"
+                    | "generated-review"
+                    | "generated-execute"
+                    | "model-pack-import-review"
+                    | "model-pack-import"
+                    | "model-pack-pending-review"
+                    | "model-pack-pending-retain"
+                    | "model-qualification-review"
+                    | "model-qualification-install"
+                    | "model-qualification-observe"
+                    | "model-qualification-pending-review"
+                    | "model-qualification-pending-retain"
+                    | "model-activate-review"
+                    | "model-activate"
                     | "workflow-governed-review"
                     | "workflow-governed-prepare"
                     | "workflow-governed-advance"
@@ -284,6 +300,9 @@ fn dispatch() -> Result<()> {
             | "workflow-recovery-reconcile",
         ) => workflow_runs::recovery::command(&args),
         Some("granted-run") => service::granted_gateway::launch(&args[1..]),
+        Some("generated-resource-worker" | "generated-review" | "generated-execute") => {
+            generated_runtime::command(&args)
+        }
         Some(
             "artifact-owned-export-review"
             | "artifact-owned-export"
@@ -408,6 +427,9 @@ fn dispatch() -> Result<()> {
             admin_governance::staged_release_command(&args)
         }
         Some("admin-release-command") => admin_governance::release_catalog_command(&args),
+        Some("admin-model-command" | "admin-model-custodian-command") => {
+            admin_governance::model_catalog_command(&args)
+        }
         Some("admin-skill-trust-publish" | "admin-skill-registry-admit") => {
             admin_governance::skill_catalog_command(&args)
         }
@@ -547,6 +569,33 @@ fn dispatch() -> Result<()> {
             platform::install(&args[1], Path::new(&args[2]), Some(&args[4]))
         }
         Some("models") if args.len() == 1 => model::list(),
+        Some("model-pack-import-review") if args.len() == 2 => model::pack_import_review(&args[1]),
+        Some("model-pack-import") if args.len() == 4 => {
+            model::pack_import(&args[1], &args[2], &args[3])
+        }
+        Some("model-pack-pending-review") if args.len() == 2 => {
+            model::pack_pending_review(&args[1])
+        }
+        Some("model-pack-pending-retain") if args.len() == 5 => {
+            model::pack_pending_retain(&args[1], &args[2], &args[3], &args[4])
+        }
+        Some("model-activate-review") if args.len() == 2 => model::activate_review(&args[1]),
+        Some("model-activate") if args.len() == 4 => model::activate(&args[1], &args[2], &args[3]),
+        Some("model-qualification-review") if args.len() == 3 => {
+            model_qualification::review(&args[1], Path::new(&args[2]))
+        }
+        Some("model-qualification-install") if args.len() == 5 => {
+            model_qualification::install(&args[1], &args[2], &args[3], Path::new(&args[4]))
+        }
+        Some("model-qualification-observe") if args.len() == 4 => {
+            model_qualification::observe(&args[1], &args[2], &args[3])
+        }
+        Some("model-qualification-pending-review") if args.len() == 2 => {
+            model_qualification::pending_review(&args[1])
+        }
+        Some("model-qualification-pending-retain") if args.len() == 5 => {
+            model_qualification::pending_retain(&args[1], &args[2], &args[3], &args[4])
+        }
         Some("model-install") if args.len() == 2 => model::install(&args[1]),
         Some("model-install-check") if args.len() == 2 => model::install_check(&args[1]),
         Some("model-migrate-legacy") if args.len() == 1 => model::migrate_legacy(),
@@ -701,6 +750,10 @@ fn dispatch() -> Result<()> {
             println!("Native ADR-0003 catalog (installed root only, ext4): artifact-catalog-init | artifact-catalog-status | artifact-catalog-publish-invoice REQUEST-ID ARTIFACT-ID EXPECTED-VERSION (CSV stdin; broker-leased calculation; 0 creates version 1) | artifact-catalog-read ARTIFACT-ID VERSION | artifact-catalog-retain REQUEST-ID RETAIN-REVIEW-SHA256. WAL metadata and append-only generation receipts commit after synchronized content objects and a fresh result recheck. No automatic migration/deletion, product Admin grants or rollback protection.");
             println!("Explicit legacy copy import (installed root only): artifact-catalog-legacy-inspect LEGACY-REQUEST-ID | artifact-catalog-import-legacy LEGACY-REQUEST-ID REVIEW-SHA256. Review binds the complete source receipt; fixed source/catalog locks and current signed workflow checks span publication. Stable mapped IDs provide exact replay. Original data/receipts and retained preparations are preserved; no automatic migration or format downgrade.");
             println!("Model operations: models | model-install-check MODEL-ID | model-install MODEL-ID | model-chat [--timeout-seconds 1..1800] [--max-tokens 1..128] (prompt on stdin).\nInstaller accepts --model MODEL-ID or --model manual-only; otherwise prompts.\nPreflight does not change model configuration or reserve future serving capacity; cached verification uses a temporary acquisition lease. Activation rechecks after stopping the worker. Weights are acquired from pinned HTTPS publisher URLs after hardware admission.");
+            println!("Governed model distribution: admin-model-command LOGIN REQUEST FILE [--commit REVIEW-SHA256] (trust publication/catalog admission only); admin-model-custodian-command LOGIN REQUEST FILE [--commit REVIEW-SHA256] (closed approve/sign intent, actual scoped PAM, server-derived UTC and event receipt). Sign only the canonical statement returned after its committed signing authorization; private signing custody remains external. model-pack-import-review MODEL-ID | model-pack-import LOGIN GRANT MODEL-ID (pack preparation only, never catalog/serving activation).");
+            println!("Interrupted pack preparation: model-pack-pending-review MODEL-ID | model-pack-pending-retain LOGIN GRANT MODEL-ID REVIEW-SHA256 (retain exact interrupted unverified bytes; no deletion or catalog activation).");
+            println!("Externally certified exact-image/machine qualification: model-qualification-observe MODEL-ID LEVEL REPORT-SHA256 (unsigned measured descriptor only); model-qualification-review MODEL-ID INPUT | model-qualification-install LOGIN GRANT MODEL-ID INPUT (original Admin finite resource.provision, atomic public package, exact reviewed predecessor). Serving after admitted catalog: model-activate-review MODEL-ID | model-activate LOGIN GRANTS-JSON MODEL-ID (closed provision/start/stop grants).");
+            println!("Interrupted qualification metadata: model-qualification-pending-review MODEL-ID | model-qualification-pending-retain LOGIN GRANT MODEL-ID REVIEW-SHA256 (original Admin finite retention, preserve unverified bytes).");
             println!("model-activation-reconcile [--abort-unchanged REVIEW-SHA256 | --publish-committed REVIEW-SHA256 | --complete-candidate REVIEW-SHA256 | --restore-prior REVIEW-SHA256 | --discard-orphan-backup REVIEW-SHA256]: inspect, clear a verified fence, roll forward, restore retained prior settings, or discard an unchanged orphan backup. Root-only; does not start the worker. Older pending markers without saved prior bytes cannot be restored.");
             println!("model-migrate-legacy: explicit installed-root migration of one validated older model environment and runtime lock; stops and restarts the managed model/reference services. No automatic boot migration.");
             println!("model-rollback-reconcile [--restore-prior REVIEW-SHA256]: inspect or explicitly restore one retained prior configuration after completed activation. Installed-root maintenance; requires an idle runtime lock, does not start services or prove readiness, consumes the rollback record, and preserves a fence on interruption. Not production Admin authorization.");

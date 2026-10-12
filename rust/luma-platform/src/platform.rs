@@ -231,7 +231,7 @@ fn path(p: &Path) -> Result<&str> {
 fn cmdline() -> Result<String> {
     Ok(fs::read_to_string("/proc/cmdline")?)
 }
-fn live() -> Result<bool> {
+pub(crate) fn live() -> Result<bool> {
     Ok(cmdline()?.split_whitespace().any(|a| a == "luma.mode=live"))
 }
 
@@ -420,7 +420,7 @@ fn write_atomic_guarded(
     let mut f = OpenOptions::new()
         .write(true)
         .create_new(true)
-        .mode(mode)
+        .mode(0o600)
         .open(&temporary)?;
     struct Cleanup(PathBuf);
     impl Drop for Cleanup {
@@ -429,11 +429,16 @@ fn write_atomic_guarded(
         }
     }
     let _cleanup = Cleanup(temporary.clone());
+    f.set_permissions(fs::Permissions::from_mode(0o600))?;
     for chunk in bytes.chunks(1024 * 1024) {
         guard()?;
         f.write_all(chunk)?;
         guard()?;
     }
+    guard()?;
+    // Publish the exact requested mode, independently of hardened service
+    // umasks. Incomplete staging stays private until all bytes are written.
+    f.set_permissions(fs::Permissions::from_mode(mode))?;
     guard()?;
     f.sync_all()?;
     guard()?;
@@ -442,6 +447,69 @@ fn write_atomic_guarded(
     File::open(parent)?.sync_all()?;
     guard()?;
     Ok(())
+}
+
+#[cfg(test)]
+mod atomic_write_tests {
+    use super::*;
+
+    #[test]
+    fn exact_modes_survive_restrictive_umask_without_public_partial_bytes() {
+        if std::env::var_os("LUMA_ATOMIC_UMASK_FIXTURE").is_none() {
+            let result = Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "platform::atomic_write_tests::exact_modes_survive_restrictive_umask_without_public_partial_bytes",
+                    "--test-threads=1",
+                ])
+                .env("LUMA_ATOMIC_UMASK_FIXTURE", "1")
+                .output()
+                .unwrap();
+            assert!(
+                result.status.success(),
+                "{} {}",
+                String::from_utf8_lossy(&result.stdout),
+                String::from_utf8_lossy(&result.stderr)
+            );
+            return;
+        }
+        // This is an owned test process, never the parallel harness or host.
+        unsafe {
+            libc::umask(0o077);
+        }
+        let directory =
+            std::env::temp_dir().join(format!("luma-atomic-mode-{}", std::process::id()));
+        fs::create_dir(&directory).unwrap();
+        let destination = directory.join("published");
+        for mode in [0o600, 0o644, 0o444, 0o755] {
+            let bytes = vec![b'x'; 2 * 1024 * 1024];
+            let mut observations = 0;
+            write_atomic_guarded(&destination, &bytes, mode, &mut || {
+                for entry in fs::read_dir(&directory)? {
+                    let entry = entry?;
+                    if entry
+                        .file_name()
+                        .to_string_lossy()
+                        .starts_with("published.new-")
+                    {
+                        let metadata = entry.metadata()?;
+                        if metadata.len() < bytes.len() as u64 {
+                            assert_eq!(metadata.mode() & 0o777, 0o600);
+                            observations += 1;
+                        }
+                    }
+                }
+                Ok(())
+            })
+            .unwrap();
+            assert!(observations > 0);
+            assert_eq!(fs::metadata(&destination).unwrap().mode() & 0o777, mode);
+            assert_eq!(fs::read(&destination).unwrap(), bytes);
+            assert_eq!(fs::read_dir(&directory).unwrap().count(), 1);
+        }
+        fs::remove_file(destination).unwrap();
+        fs::remove_dir(directory).unwrap();
+    }
 }
 
 struct Mount {

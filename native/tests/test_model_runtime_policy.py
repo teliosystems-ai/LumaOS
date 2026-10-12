@@ -6,6 +6,15 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 class ModelRuntimePolicyTests(unittest.TestCase):
+    def test_governed_worker_reads_only_immutable_factory_metadata(self):
+        profile = (ROOT / 'native/image/overlay/etc/apparmor.d/luma-model').read_text()
+        for rule in ('/usr/share/luma-os/models/catalog.json r,',
+                     '/usr/share/luma-os/model-packs/*/manifest.json r,'):
+            self.assertIn('  ' + rule, profile.splitlines())
+        self.assertNotIn('/usr/share/luma-os/model-packs/**', profile)
+        self.assertNotIn('/dev/tpm', profile)
+        self.assertNotIn('/var/lib/luma-os/models/trust', profile)
+
     def test_apparmor_allows_only_read_and_lock_for_runtime_inode(self):
         profile = (ROOT / 'native/image/overlay/etc/apparmor.d/luma-model').read_text()
         self.assertIn('  /var/lib/luma-os/model-runtime.lock rk,', profile.splitlines())

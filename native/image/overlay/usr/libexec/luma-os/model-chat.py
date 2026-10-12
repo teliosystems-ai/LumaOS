@@ -272,6 +272,26 @@ def whole_request_deadline(seconds):
         signal.signal(signal.SIGALRM, previous)
 
 
+def selected_model(selection):
+    if (not isinstance(selection, dict) or type(selection.get('schema_version')) is not int
+            or not isinstance(selection.get('id'), str) or not 1 <= len(selection['id']) <= 64
+            or any(c not in 'abcdefghijklmnopqrstuvwxyz0123456789-' for c in selection['id'])):
+        raise InferenceReplyError('invalid selected model')
+    if selection['schema_version'] == 2 and set(selection) == {'schema_version', 'id'}:
+        return selection['id']
+    if selection['schema_version'] != 3 or set(selection) != {'schema_version', 'id', 'binding'}:
+        raise InferenceReplyError('invalid selected model schema')
+    binding = selection['binding']
+    if (not isinstance(binding, dict) or set(binding) != {'catalog_sha256', 'profile_sha256',
+            'manifest_sha256', 'runtime_tuple_sha256'} or any(not isinstance(value, str)
+            or len(value) != 64 or any(c not in '0123456789abcdef' for c in value)
+            for value in binding.values())):
+        raise InferenceReplyError('invalid exact governed model binding')
+    # These are inert shape checks only. The root broker reconstructs the
+    # installed catalog/pack/UTC/grant authority and actual worker generation.
+    return selection['id']
+
+
 def inference(options):
     started = boot_ms()
     if os.geteuid()!=0:raise SystemExit('use the local administrator account with sudo')
@@ -286,11 +306,7 @@ def inference(options):
     if len(raw_selection) > 16384:
         raise InferenceReplyError('selection exceeds bound')
     selection = strict_json(raw_selection)
-    if (not isinstance(selection, dict) or set(selection) != {'schema_version', 'id'}
-            or type(selection['schema_version']) is not int or selection['schema_version'] != 2
-            or not isinstance(selection['id'], str) or not 1 <= len(selection['id']) <= 64
-            or any(c not in 'abcdefghijklmnopqrstuvwxyz0123456789-' for c in selection['id'])):
-        raise InferenceReplyError('invalid selected model')
+    selected_model(selection)
     with Path('/var/lib/luma-os/model-auth/api-key').open('rb') as key_file:
         raw_token = key_file.read(129)
     if len(raw_token) != 64 or any(c not in b'0123456789abcdefABCDEF' for c in raw_token):

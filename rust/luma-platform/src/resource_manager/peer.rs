@@ -65,6 +65,23 @@ fn worker_status(status: &str, kind: Kind, uid: u32) -> Result<()> {
     confined_status(status, uid, mask)
 }
 
+fn generated_status(status: &str, uid: u32, cmdline: &str) -> Result<()> {
+    let parts = cmdline.split('\0').collect::<Vec<_>>();
+    if parts.len() != 4
+        || parts[0] != "/usr/libexec/luma-os/luma-platform"
+        || parts[1] != "generated-resource-worker"
+        || !parts[3].is_empty()
+        || crate::generated_runtime::source_digest(parts[2]).is_err()
+    {
+        return Err("extra capability is restricted to the exact generated supervisor".into());
+    }
+    confined_status(
+        status,
+        uid,
+        (1u64 << 7) | (1u64 << 6) | (1u64 << 5) | (1u64 << 8),
+    )
+}
+
 fn locked_memory(limits: &str) -> Result<()> {
     let mut lines = limits
         .lines()
@@ -101,7 +118,12 @@ pub(super) fn worker_generation(
         {
             return Err("worker group or enforcing AppArmor generation differs".into());
         }
-        worker_status(&read("status", STATUS_BYTES)?, kind, uid)?;
+        let status = read("status", STATUS_BYTES)?;
+        if kind == Kind::Acquisition && field(&status, "CapBnd")? == "00000000000001e0" {
+            generated_status(&status, uid, &read("cmdline", 4096)?)?;
+        } else {
+            worker_status(&status, kind, uid)?;
+        }
         locked_memory(&read("limits", 8192)?)?;
         if start_ticks(&read("stat", 4096)?)? != start {
             return Err("worker process generation changed during observation".into());
@@ -167,6 +189,25 @@ pub(super) fn live_generation(peer: libc::ucred, pin: &File) -> Result<(u64, Str
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn generated_extra_capability_requires_exact_closed_supervisor_argv() {
+        let status = status(Kind::Acquisition, 0).replace("00000000000000e0", "00000000000001e0");
+        let profile = format!("generated-v1-{}", "a".repeat(64));
+        let exact =
+            format!("/usr/libexec/luma-os/luma-platform\0generated-resource-worker\0{profile}\0");
+        generated_status(&status, 0, &exact).unwrap();
+        for altered in [
+            exact.replace("generated-resource-worker", "model-acquisition-worker"),
+            exact.replace("/usr/libexec/luma-os/luma-platform", "/tmp/luma-platform"),
+            format!("{exact}extra\0"),
+            exact.trim_end_matches('\0').to_owned(),
+            exact.replace(&profile, "generated-v1-invalid"),
+        ] {
+            assert!(generated_status(&status, 0, &altered).is_err());
+        }
+        assert!(worker_status(&status, Kind::Acquisition, 0).is_err());
+        assert!(generated_status(&status, 989, &exact).is_err());
+    }
 
     fn status(kind: Kind, uid: u32) -> String {
         let mask = if kind == Kind::Model { 0 } else { 0xe0 };

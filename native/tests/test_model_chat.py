@@ -259,6 +259,8 @@ class AdmissionFixture:
         self.order.append(operation)
         self.messages.append(copy.deepcopy(payload))
         if operation == 'inspect':
+            if operation == self.fail_at:
+                raise TimeoutError('private fixture')
             return {'kind':'worker', 'worker':self.worker, 'profile':'fixture-model',
                     'context_tokens':'2048','max_output_tokens':'128','slots':'1'}
         if operation == 'begin':
@@ -303,6 +305,37 @@ class AdmissionFixture:
 
 
 class NativeAdmissionTests(unittest.TestCase):
+    def governed_selection(self):
+        return {'schema_version':3, 'id':'fixture-model', 'binding':{
+            'catalog_sha256':'a'*64, 'profile_sha256':'b'*64,
+            'manifest_sha256':'c'*64, 'runtime_tuple_sha256':'d'*64}}
+
+    def test_governed_selection_has_exact_closed_binding_and_retains_broker_authority(self):
+        selection=self.governed_selection(); fixture=AdmissionFixture()
+        result=fixture.run(selection=json.dumps(selection).encode())
+        self.assertEqual(result['model'],'fixture-model')
+        self.assertEqual(fixture.order,['inspect','begin','/apply-template','/tokenize','admit','/completion','finish'])
+        fixture=AdmissionFixture(); fixture.fail_at='inspect'
+        with self.assertRaises(TimeoutError): fixture.run(selection=json.dumps(selection).encode())
+        self.assertEqual(fixture.order,['inspect']); self.assertEqual(fixture.posts,[])
+
+    def test_governed_binding_faults_refuse_before_credentials_or_runtime(self):
+        cases=[]
+        for field in self.governed_selection()['binding']:
+            for invalid in ['f'*63, 'A'*64, True, None, 1, []]:
+                value=self.governed_selection(); value['binding'][field]=invalid; cases.append(json.dumps(value).encode())
+        value=self.governed_selection(); value['binding']['caller_authority']=True; cases.append(json.dumps(value).encode())
+        value=self.governed_selection(); value['binding'].pop('catalog_sha256'); cases.append(json.dumps(value).encode())
+        value=self.governed_selection(); value['schema_version']=2; cases.append(json.dumps(value).encode())
+        value=self.governed_selection(); value['binding']=None; cases.append(json.dumps(value).encode())
+        valid=json.dumps(self.governed_selection()).encode()
+        cases.append(valid.replace(b'"catalog_sha256":',b'"catalog_sha256":"'+b'f'*64+b'","catalog_sha256":'))
+        for raw in cases:
+            fixture=AdmissionFixture()
+            with self.assertRaises(chat.InferenceReplyError): fixture.run(selection=raw)
+            self.assertEqual(fixture.opened_files,[str(chat.Path('/var/lib/luma-os/model-selection.json'))])
+            self.assertEqual(fixture.order,[]); self.assertEqual(fixture.posts,[])
+
     def test_legacy_or_malformed_selection_refuses_before_key_read_or_runtime_io(self):
         for selection in (
             {'id':'fixture-model'}, {'schema_version':1,'id':'fixture-model'},

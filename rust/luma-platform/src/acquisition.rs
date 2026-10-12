@@ -52,9 +52,13 @@ fn target_shape(target: &Path, installed: bool) -> bool {
             .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
 }
 
-fn target(target: &Path) -> Result<()> {
+pub(crate) fn target(target: &Path) -> Result<()> {
+    target_context(target, true)
+}
+
+fn target_context(target: &Path, controller: bool) -> Result<()> {
     let installed = platform::require_installed().is_ok();
-    if installed {
+    if installed && controller {
         platform::require_production_activation()?;
     }
     if !installed {
@@ -85,7 +89,7 @@ pub(crate) fn arguments(target: &Path, profile: &str, action: &str) -> Result<Ve
     let text = target
         .to_str()
         .ok_or("invalid acquisition target encoding")?;
-    if !matches!(action, "prepare" | "verify" | "invoice") {
+    if !matches!(action, "prepare" | "verify" | "invoice" | "generated") {
         return Err("invalid acquisition action".into());
     }
     let mut args = vec![
@@ -116,7 +120,6 @@ pub(crate) fn arguments(target: &Path, profile: &str, action: &str) -> Result<Ve
         "LockPersonality=yes",
         "MemoryDenyWriteExecute=yes",
         "SystemCallArchitectures=native",
-        "CapabilityBoundingSet=CAP_SETUID CAP_SETGID CAP_KILL",
         "MemoryHigh=384M",
         "MemoryMax=512M",
         "MemorySwapMax=0",
@@ -138,11 +141,22 @@ pub(crate) fn arguments(target: &Path, profile: &str, action: &str) -> Result<Ve
     ] {
         args.push(format!("--property={property}"));
     }
-    if action == "invoice" {
+    args.push(if action == "generated" {
+        "--property=CapabilityBoundingSet=CAP_SETUID CAP_SETGID CAP_KILL CAP_SETPCAP".into()
+    } else {
+        "--property=CapabilityBoundingSet=CAP_SETUID CAP_SETGID CAP_KILL".into()
+    });
+    if matches!(action, "invoice" | "generated") {
         if target != Path::new("/var") {
             return Err("workflow calculation requires the installed data mount".into());
         }
-        crate::workflow_resource::source_digest(profile)?;
+        if action == "invoice" {
+            crate::workflow_resource::source_digest(profile)?;
+        } else {
+            crate::generated_runtime::source_digest(profile)?;
+            args.push("--property=BindPaths=/dev/kvm".into());
+            args.push("--property=DeviceAllow=/dev/kvm rw".into());
+        }
         for property in [
             "RestrictAddressFamilies=AF_UNIX",
             "RuntimeMaxSec=30",
@@ -161,11 +175,15 @@ pub(crate) fn arguments(target: &Path, profile: &str, action: &str) -> Result<Ve
     ] {
         args.push(format!("--property={property}"));
     }
-    if action == "invoice" {
+    if matches!(action, "invoice" | "generated") {
         args.extend([
             "--".into(),
             "/usr/libexec/luma-os/luma-platform".into(),
-            "workflow-resource-worker".into(),
+            if action == "invoice" {
+                "workflow-resource-worker".into()
+            } else {
+                "generated-resource-worker".into()
+            },
             profile.into(),
         ]);
         return Ok(args);
@@ -223,10 +241,14 @@ fn available(status: &serde_json::Value) -> Result<bool> {
 }
 
 pub(crate) fn await_drainage() -> Result<()> {
+    await_drainage_checked(&mut || Ok(()))
+}
+pub(crate) fn await_drainage_checked(check: &mut impl FnMut() -> Result<()>) -> Result<()> {
     let deadline = resource_manager::now()?
         .checked_add(30_000)
         .ok_or("drainage deadline overflow")?;
     loop {
+        check()?;
         let status = resource_manager::acquisition_status()?;
         if resource_manager::now()? >= deadline {
             return Err("prior acquisition drainage unconfirmed".into());
@@ -239,17 +261,36 @@ pub(crate) fn await_drainage() -> Result<()> {
 }
 
 pub(crate) fn run(target_path: &Path, profile: &model::Profile, action: &str) -> Result<()> {
+    run_checked(target_path, profile, action, || Ok(()))
+}
+pub(crate) fn run_checked(
+    target_path: &Path,
+    profile: &model::Profile,
+    action: &str,
+    mut check: impl FnMut() -> Result<()>,
+) -> Result<()> {
+    check()?;
     crate::require_root()?;
     target(target_path)?;
     // Resolve only the immutable image catalog; never serialize a supplied
     // model URL or runtime command across the launch boundary.
-    if model::profile(&profile.id)?.resource_binding()? != profile.resource_binding()? {
+    if model::public_profile(&profile.id)?.resource_binding()? != profile.resource_binding()? {
         return Err("acquisition profile differs from the pinned catalog".into());
+    }
+    if target_path == Path::new("/var") {
+        crate::admin_governance::pack_preparation_authority(profile)?;
+    } else {
+        let image = crate::platform::CatalogImage::capture(Path::new("/var/lib/luma-os/admin"))?;
+        if image.production() || profile.governed.is_some() {
+            return Err("governed pack preparation requires installed release/TPM/UTC bootstrap; installer remains manual-only".into());
+        }
+        image.recheck()?;
     }
     // Do not populate a recycled unit before the broker has observed the old
     // owner gone, the slice empty and its residual charge retained. A unit's
     // successful exit alone is not the corresponding allocation receipt.
-    await_drainage()?;
+    await_drainage_checked(&mut check)?;
+    check()?;
     let mut command = Command::new("/usr/bin/systemd-run");
     command
         .args(arguments(target_path, &profile.id, action)?)
@@ -267,6 +308,7 @@ pub(crate) fn run(target_path: &Path, profile: &model::Profile, action: &str) ->
     // stop is sent to a possibly newer invocation. Broker token revocation and
     // the finite service lifetime retain exact-generation control instead.
     model::supervise_owned_controller(&mut command, || {
+        check()?;
         if resource_manager::now()? >= deadline {
             return Err("acquisition controller timed out; service outcome uncertain".into());
         }
@@ -274,19 +316,22 @@ pub(crate) fn run(target_path: &Path, profile: &model::Profile, action: &str) ->
     })?;
     // The controller waits for an observed handoff, not just process exit.
     // Residual kernel bytes remain charged; no zero-byte cleanup is inferred.
-    await_drainage()
+    await_drainage_checked(&mut check)
 }
 
 pub(crate) fn worker(action: &str, id: &str, target_path: &Path) -> Result<()> {
     crate::require_root()?;
-    target(target_path)?;
+    // The confined acquisition worker has no TPM or Admin credentials. Its
+    // live broker lease supplies activation/trust checks; this path checks
+    // only exact installed/live mount shape and effective block storage.
+    target_context(target_path, false)?;
     if fs::read_to_string("/proc/self/cgroup")? != LEAF {
         return Err("acquisition must run in its fixed isolated unit".into());
     }
     if fs::read_to_string("/proc/self/attr/current")? != "luma-acquisition (enforce)\n" {
         return Err("acquisition confinement is not enforcing".into());
     }
-    let profile = model::profile(id)?;
+    let profile = model::public_profile(id)?;
     let lease = resource_manager::WorkerLease::acquire_acquisition(id, target_path)?;
     lease.check()?;
     match action {
@@ -294,6 +339,8 @@ pub(crate) fn worker(action: &str, id: &str, target_path: &Path) -> Result<()> {
         "verify" => model::verify_acquired_model(target_path, &profile, || lease.check_local())?,
         _ => return Err("invalid acquisition worker action".into()),
     }
+    lease.check()?;
+    lease.complete_output(&model::pack_completion(&profile, action)?)?;
     lease.check()?;
     // Exit and heartbeat drop do not free bytes. The broker observes the
     // entire slice, surviving cache and this exact kernel owner generation.
@@ -333,7 +380,7 @@ mod tests {
             "../secret"
         )
         .is_err());
-        let p = model::profile(id).unwrap();
+        let p = model::public_profile(id).unwrap();
         assert!(verify_path(Path::new("/tmp/model.gguf"), &p).is_err());
     }
     #[test]
@@ -414,5 +461,24 @@ mod tests {
             ]
         );
         assert!(arguments(Path::new("/var"), "qwen3-4b-q4-k-m", "shell").is_err());
+    }
+    #[test]
+    fn generated_launch_alone_exposes_fixed_kvm_device_and_setpcap() {
+        let profile = format!("generated-v1-{}", "a".repeat(64));
+        let args = arguments(Path::new("/var"), &profile, "generated").unwrap();
+        for expected in [
+            "--property=BindPaths=/dev/kvm",
+            "--property=DeviceAllow=/dev/kvm rw",
+            "--property=CapabilityBoundingSet=CAP_SETUID CAP_SETGID CAP_KILL CAP_SETPCAP",
+            "--property=RuntimeMaxSec=30",
+            "--property=RestrictAddressFamilies=AF_UNIX",
+        ] {
+            assert!(args.iter().any(|a| a == expected), "{expected}");
+        }
+        let model = arguments(Path::new("/var"), "qwen3-4b-q4-k-m", "prepare").unwrap();
+        assert!(model
+            .iter()
+            .all(|a| !a.contains("/dev/kvm") && !a.contains("SETPCAP")));
+        assert!(arguments(Path::new("/tmp"), &profile, "generated").is_err());
     }
 }

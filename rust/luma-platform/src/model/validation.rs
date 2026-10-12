@@ -81,7 +81,7 @@ fn decode(bytes: &[u8], resolve: &impl Fn(&str) -> Result<Profile>) -> Result<Re
         || record.boot_id == "00".repeat(16)
         || candidate.id != record.candidate
         || candidate.sha256 != record.candidate_sha256
-        || record.catalog_sha256 != bundle::hex(&Sha256::digest(CATALOG.as_bytes()))
+        || record.catalog_sha256 != public_catalog_binding()?
         || [&record.hashes.0, &record.hashes.1, &record.hashes.2]
             .iter()
             .any(|h| h.as_ref().map_or(true, |h| tpm::decode::<32>(h).is_err()))
@@ -264,7 +264,7 @@ impl Guard {
             lease_inode: metadata.ino(),
             candidate: p.id.clone(),
             candidate_sha256: p.sha256.clone(),
-            catalog_sha256: bundle::hex(&Sha256::digest(CATALOG.as_bytes())),
+            catalog_sha256: public_catalog_binding()?,
             hashes: snapshot,
         };
         let bytes = serde_json::to_vec(&record)?;
@@ -583,7 +583,7 @@ fn inspect_incomplete_locked(
     }
     let mut digest = Sha256::new();
     digest.update(b"luma-model-incomplete-validation-review-v1\0");
-    digest.update(CATALOG.as_bytes());
+    digest.update(public_catalog_binding()?.as_bytes());
     digest.update(&bytes);
     digest.update(serde_json::to_vec(&identity)?);
     let metadata = lease.metadata()?;

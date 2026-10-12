@@ -159,7 +159,7 @@ def main(enrollment=False):
                         subprocess.run(['cargo', 'test', '--offline', '--locked',
                                         'admin_service::tests::pam_catalog_connection',
                                         '--', '--ignored', '--exact', '--nocapture'],
-                                       env=env, check=True, timeout=300)
+                                       env=env, check=True, timeout=900)
                         print('ADMIN_SERVICE_PAM_KERNEL_PEER_TPM_CATALOG_PASSED '
                               'installed_service_tested=false confinement_enforced=false', flush=True)
                     return

@@ -25,8 +25,40 @@ const REFERENCE_ENV: &str = "model-reference.env";
 
 mod gateway;
 mod layout;
+mod pack_store;
 mod supervision;
 mod validation;
+pub(crate) use pack_store::{
+    public_catalog_binding, public_native_profiles, start_pack_verifier, verify_catalog_packs,
+    verify_public_preparation,
+};
+
+/// Public tuple data only. Current authority is reconstructed by the root
+/// controller/broker; this serialized binding can never authorize a worker.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct NativeBinding {
+    pub catalog_sha256: String,
+    pub profile_sha256: String,
+    pub manifest_sha256: String,
+    pub runtime_tuple_sha256: String,
+}
+impl NativeBinding {
+    fn validate(&self) -> Result<()> {
+        if [
+            &self.catalog_sha256,
+            &self.profile_sha256,
+            &self.manifest_sha256,
+            &self.runtime_tuple_sha256,
+        ]
+        .iter()
+        .any(|value| !crate::artifacts::hash(value))
+        {
+            return Err("invalid exact governed native model tuple binding".into());
+        }
+        Ok(())
+    }
+}
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -44,6 +76,8 @@ pub struct Profile {
     context_tokens: u32,
     memory_max_bytes: u64,
     layout: layout::Shape,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) governed: Option<NativeBinding>,
     #[cfg(test)]
     #[serde(skip)]
     fixture_verifier: Option<fn(&Path, &Profile) -> Result<()>>,
@@ -80,8 +114,7 @@ pub(crate) fn resource_binding_profile(binding: &str) -> Result<Profile> {
 }
 
 pub(crate) fn resource_catalog_binding() -> Result<String> {
-    catalog()?;
-    Ok(bundle::hex(&Sha256::digest(CATALOG.as_bytes())))
+    public_catalog_binding()
 }
 
 pub(crate) fn catalog_profile(id: &str) -> Result<Profile> {
@@ -102,6 +135,7 @@ pub(crate) fn resource_profile(id: &str) -> Result<Profile> {
     activation_records_absent(&state)?;
     quarantine_absent(&state)?;
     validation::worker_admission(&state, &p)?;
+    crate::admin_governance::current_model_authority(&p)?;
     Ok(p)
 }
 
@@ -153,7 +187,7 @@ struct Catalog {
     models: Vec<Profile>,
 }
 
-fn catalog() -> Result<Catalog> {
+fn legacy_catalog() -> Result<Catalog> {
     let c: Catalog = serde_json::from_str(CATALOG)?;
     if c.schema_version != 1
         || c.environment != "lab"
@@ -189,12 +223,164 @@ fn catalog() -> Result<Catalog> {
     Ok(c)
 }
 
-pub fn profile(id: &str) -> Result<Profile> {
+fn catalog() -> Result<Catalog> {
+    let mut value = legacy_catalog()?;
+    if let Some(profiles) = public_native_profiles()? {
+        value.models = profiles;
+    }
+    Ok(value)
+}
+
+/// Public exact image metadata only; safe in confined workers without TPM access.
+pub(crate) fn public_profile(id: &str) -> Result<Profile> {
     catalog()?
         .models
         .into_iter()
         .find(|p| p.id == id)
-        .ok_or_else(|| "model is not in this signed image's catalog".into())
+        .ok_or_else(|| "model is not in this signed image's exact supported catalog".into())
+}
+
+pub fn profile(id: &str) -> Result<Profile> {
+    let profile = public_profile(id)?;
+    crate::admin_governance::current_model_authority(&profile)?;
+    Ok(profile)
+}
+
+pub(crate) fn pack_import_usage(id: &str) -> Result<crate::finite_grants::Use> {
+    use crate::finite_grants::{Action, Kind, Selector, Use};
+    let p = public_profile(id)?;
+    let (input_bytes, output_bytes) = pack_store::import_bounds(&p)?;
+    let device = crate::resource_manager::storage_device(Path::new(VAR))?;
+    let installation = crate::artifacts::installation()?;
+    let digest = bundle::hex(&Sha256::digest(serde_json::to_vec(&(
+        "luma-native-model-pack-import-v1",
+        installation,
+        p.resource_binding()?,
+        &p.governed,
+        device,
+        input_bytes,
+        output_bytes,
+    ))?));
+    let usage = Use {
+        action: Action::AcquireResource,
+        selector: Selector {
+            kind: Kind::Resource,
+            id: format!("ModelPack-{id}"),
+            generation: 1,
+            digest,
+        },
+        input_bytes,
+        output_bytes,
+        units: 1,
+    };
+    usage.validate()?;
+    Ok(usage)
+}
+pub(crate) fn pack_import_review(id: &str) -> Result<()> {
+    crate::require_root()?;
+    platform::require_installed()?;
+    platform::require_production_activation()?;
+    let p = public_profile(id)?;
+    crate::admin_governance::pack_preparation_authority(&p)?;
+    println!(
+        "{}",
+        serde_json::json!({"schema_version":1,"profile":id,"usage":pack_import_usage(id)?,
+        "binding":p.governed,"activates_model":false,"authority_returned":false})
+    );
+    Ok(())
+}
+pub(crate) fn pack_import(login: &str, grant: &str, id: &str) -> Result<()> {
+    crate::require_root()?;
+    platform::require_installed()?;
+    platform::require_production_activation()?;
+    let p = public_profile(id)?;
+    crate::admin_governance::pack_preparation_authority(&p)?;
+    let _lock = operation_lock(Path::new(VAR))?;
+    let usage = pack_import_usage(id)?;
+    crate::admin_governance::with_grant(login, grant, &usage, |boundary| {
+        let effect = boundary.effect_begin(
+            &usage.selector.digest,
+            crate::policy_decisions::EffectKind::ResourceAdmission,
+        )?;
+        crate::service::granted_acquisition::run(&p, &usage, boundary)?;
+        boundary.effect_complete(effect, &pack_completion(&p, "prepare")?)
+    })
+}
+pub(crate) fn pack_completion(profile: &Profile, action: &str) -> Result<String> {
+    if !matches!(action, "prepare" | "verify") {
+        return Err("model completion action is not closed".into());
+    }
+    Ok(bundle::hex(&Sha256::digest(serde_json::to_vec(&(
+        "luma-native-model-acquisition-completion-v1",
+        profile.resource_binding()?,
+        &profile.governed,
+        action,
+    ))?)))
+}
+fn pending_usage(id: &str, review: &str, bytes: u64) -> Result<crate::finite_grants::Use> {
+    use crate::finite_grants::{Action, Kind, Selector, Use};
+    tpm::decode::<32>(review)?;
+    let usage = Use {
+        action: Action::Retain,
+        selector: Selector {
+            kind: Kind::Resource,
+            id: format!("ModelPack-{id}"),
+            generation: 1,
+            digest: review.into(),
+        },
+        input_bytes: bytes
+            .checked_add(16 * 1024 * 1024)
+            .ok_or("retention metadata bound overflow")?,
+        output_bytes: 0,
+        units: 1,
+    };
+    usage.validate()?;
+    Ok(usage)
+}
+pub(crate) fn pack_pending_review(id: &str) -> Result<()> {
+    crate::require_root()?;
+    platform::require_installed()?;
+    platform::require_production_activation()?;
+    let profile = public_profile(id)?;
+    crate::admin_governance::pack_preparation_authority(&profile)?;
+    let _lock = operation_lock(Path::new(VAR))?;
+    crate::acquisition::await_drainage()?;
+    let (review, bytes, _) = pack_store::pending_review(&profile)?;
+    println!(
+        "{}",
+        serde_json::json!({"schema_version":1,"profile":id,"review":review,"usage":pending_usage(id,&review,bytes)?,"byte_verified":false,"disposition":"retain-unverified","deletes_content":false})
+    );
+    Ok(())
+}
+pub(crate) fn pack_pending_retain(login: &str, grant: &str, id: &str, review: &str) -> Result<()> {
+    crate::require_root()?;
+    platform::require_installed()?;
+    platform::require_production_activation()?;
+    let profile = public_profile(id)?;
+    crate::admin_governance::pack_preparation_authority(&profile)?;
+    let _lock = operation_lock(Path::new(VAR))?;
+    crate::acquisition::await_drainage()?;
+    let (current, bytes, _) = pack_store::pending_review(&profile)?;
+    if current != review {
+        return Err("pending disposition review no longer describes current bytes".into());
+    }
+    let usage = pending_usage(id, review, bytes)?;
+    crate::admin_governance::with_grant(login, grant, &usage, |boundary| {
+        let effect =
+            boundary.effect_begin(review, crate::policy_decisions::EffectKind::Retention)?;
+        pack_store::retain_pending(&profile, review, &mut || boundary.check())?;
+        let receipt = bundle::hex(&Sha256::digest(serde_json::to_vec(&(
+            "model-pack-pending-retained-unverified-v1",
+            id,
+            review,
+        ))?));
+        boundary.effect_complete(effect, &receipt)?;
+        println!(
+            "{}",
+            serde_json::json!({"schema_version":1,"profile":id,"review":review,"retained_unverified":true,"activates_model":false})
+        );
+        Ok(())
+    })
 }
 
 pub fn list() -> Result<()> {
@@ -211,7 +397,7 @@ pub fn list() -> Result<()> {
             p.license
         );
     }
-    println!("Catalog is laboratory authority, not production model certification. No cloud inference fallback.");
+    println!("Public pinned profile metadata only; this listing does not establish current trust, admission or certification. No cloud inference fallback.");
     Ok(())
 }
 
@@ -422,7 +608,7 @@ pub fn choose(id: Option<&str>, free: u64) -> Result<Option<Profile>> {
     if selected == "manual-only" {
         return Ok(None);
     }
-    let p = profile(&selected)?;
+    let p = public_profile(&selected)?;
     check(&p, free)?;
     println!("Selected {}. Installation downloads {} bytes over HTTPS from the publisher and verifies SHA-256. License: {}. Model output is untrusted.", p.id, p.bytes, p.license);
     Ok(Some(p))
@@ -535,6 +721,19 @@ fn verify_file(at: &Path, p: &Profile) -> Result<()> {
     #[cfg(test)]
     if let Some(verifier) = p.fixture_verifier {
         return verifier(at, p);
+    }
+    if p.governed.is_some() {
+        if at
+            != Path::new(VAR)
+                .join(STATE)
+                .join("models")
+                .join(format!("{}.gguf", p.id))
+        {
+            return Err(
+                "governed runtime verification requires exact installed pinned cache".into(),
+            );
+        }
+        return crate::admin_governance::current_model_authority(p);
     }
     crate::acquisition::verify_path(at, p)
 }
@@ -866,6 +1065,8 @@ pub(crate) fn prepare_model_contents(
         Err(error) => return Err(error.into()),
     }
     check()?;
+    pack_store::import_pack(var, p, &file, &mut check)?;
+    check()?;
     Ok(())
 }
 
@@ -880,9 +1081,10 @@ fn acquisition_admission(
     // The broker reserves the acquisition worker's bounded physical peak;
     // retain installation feasibility checks without borrowing serving RAM.
     crate::resource_manager::check_loading(total, total, p.memory_max_bytes, 0)?;
-    let required = (if cached { 0 } else { p.bytes })
+    let legacy_required = (if cached { 0 } else { p.bytes })
         .checked_add(2 * 1024 * 1024 * 1024)
         .ok_or("acquisition space overflow")?;
+    let required = pack_store::acquisition_space(p, cached)?.unwrap_or(legacy_required);
     if total < p.minimum_ram_bytes || cpus < 2 || free < required {
         return Err("model acquisition profile or storage does not fit".into());
     }
@@ -912,29 +1114,61 @@ fn activate_cached_with<T>(
     p: &Profile,
     before_publication: impl FnOnce(&Path, &Profile) -> Result<T>,
 ) -> Result<T> {
+    activate_cached_with_guard(var, p, before_publication, &mut || Ok(()), None)
+}
+fn activate_cached_with_guard<T>(
+    var: &Path,
+    p: &Profile,
+    before_publication: impl FnOnce(&Path, &Profile) -> Result<T>,
+    check: &mut impl FnMut() -> Result<()>,
+    prepared: Option<Activation>,
+) -> Result<T> {
+    check()?;
     // Excludes a concurrently started/manual worker for the whole activation,
     // including credential/selection writes. Released before systemd restart.
     let _runtime = runtime_lock(var, true)?;
     let state = var.join(STATE);
-    activation_absent(&state)?;
+    if let Some(record) = &prepared {
+        let bytes = activation_bytes(&state.join(ACTIVATION), 4096)?
+            .ok_or("prepared model activation marker disappeared")?;
+        if serde_json::from_slice::<Activation>(&bytes)? != *record {
+            return Err("prepared model activation marker changed".into());
+        }
+    } else {
+        activation_absent(&state)?;
+    }
     let models = state.join("models");
     safe_dir(&models)?;
     check_cached(p, available_space(&models)?)?;
     verify_file(&models.join(format!("{}.gguf", p.id)), p)?;
+    check()?;
     // All worker-visible activation writes follow a durable pending fence.
     // A crash or failed write preserves it for explicit review.
-    let activation = begin_activation(&state, p)?;
-    write_candidate_config(&state, p)?;
+    let activation = match prepared {
+        Some(record) => record,
+        None => begin_activation(&state, p)?,
+    };
+    write_candidate_config_guard(&state, p, check)?;
     // For installed reconfiguration, publish the durable validation trial
     // before clearing the activation fence. Other provisioning callers have
     // no managed restart/readiness sequence and do not manufacture a trial.
+    check()?;
     let trial = before_publication(&state, p)?;
+    check()?;
     finish_activation(&state, p, &activation)?;
     println!("MODEL FILES INSTALLED AND VERIFIED: {}. Runtime readiness is checked separately after reconfiguration or at installed-system boot; no production certification implied.", p.id);
     Ok(trial)
 }
 
 fn write_candidate_config(state: &Path, p: &Profile) -> Result<()> {
+    write_candidate_config_guard(state, p, &mut || Ok(()))
+}
+fn write_candidate_config_guard(
+    state: &Path,
+    p: &Profile,
+    check: &mut impl FnMut() -> Result<()>,
+) -> Result<()> {
+    check()?;
     let auth = state.join("model-auth");
     safe_dir(&auth)?;
     fs::set_permissions(&auth, fs::Permissions::from_mode(0o750))?;
@@ -958,6 +1192,7 @@ fn write_candidate_config(state: &Path, p: &Profile) -> Result<()> {
     if old_key.as_deref() == Some(token.as_bytes()) {
         return Err("model credential rotation did not change the key; preserve fence".into());
     }
+    check()?;
     platform::write_atomic(&key_path, token.as_bytes(), 0o640)?;
     fs::set_permissions(&key_path, fs::Permissions::from_mode(0o640))?;
     command(
@@ -965,6 +1200,7 @@ fn write_candidate_config(state: &Path, p: &Profile) -> Result<()> {
         &["0:989", key_path.to_str().ok_or("invalid auth path")?],
     )?;
     let env = state.join(REFERENCE_ENV);
+    check()?;
     platform::write_atomic(&env, &reference_environment(p), 0o640)?;
     fs::set_permissions(&env, fs::Permissions::from_mode(0o640))?;
     command(
@@ -972,6 +1208,7 @@ fn write_candidate_config(state: &Path, p: &Profile) -> Result<()> {
         &["0:990", env.to_str().ok_or("invalid environment path")?],
     )?;
     let selection = state.join("model-selection.json");
+    check()?;
     platform::write_atomic(&selection, &broker_selection(p)?, 0o644)?;
     fs::set_permissions(&selection, fs::Permissions::from_mode(0o644))?;
     // Atomic writes sync their data/rename, but chmod/chown follow those writes.
@@ -1076,12 +1313,23 @@ fn selected_at(state: &Path) -> Result<Profile> {
     struct Selection {
         schema_version: u32,
         id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        binding: Option<NativeBinding>,
     }
     let s: Selection = serde_json::from_str(&text)?;
-    if text.len() > 4096 || !matches!(s.schema_version, 1 | 2) {
+    if text.len() > 4096 || !matches!(s.schema_version, 1 | 2 | 3) {
         return Err("invalid model selection".into());
     }
-    profile(&s.id)
+    let selected = public_profile(&s.id)?;
+    match (&selected.governed, s.schema_version, &s.binding) {
+        (Some(expected), 3, Some(binding)) if expected == binding => binding.validate()?,
+        (None, 1 | 2, None) => (),
+        _ => return Err(
+            "model selection schema or exact catalog/pack/runtime tuple changed; preserve state"
+                .into(),
+        ),
+    }
+    Ok(selected)
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -1098,7 +1346,7 @@ struct Activation {
 
 // Contains the local model API credential. Never print or return this record.
 // It is root-private recovery material, not a catalog or Admin grant.
-#[derive(Deserialize, Serialize)]
+#[derive(Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct PriorBackup {
     schema_version: u32,
@@ -1132,7 +1380,9 @@ fn decode_prior_backup(bytes: &[u8]) -> Result<PriorBackup> {
     {
         return Err("invalid model prior backup; preserve state".into());
     }
-    profile(&backup.candidate)?;
+    // This decodes retained inert bytes, not permission to restore them.
+    // Mutation callers resolve current authority again at their effect boundary.
+    public_profile(&backup.candidate)?;
     Ok(backup)
 }
 
@@ -1260,9 +1510,16 @@ fn activation_digest(bytes: &Option<Vec<u8>>) -> Option<String> {
 fn broker_selection(p: &Profile) -> Result<Vec<u8>> {
     // Version 2 is published last, only after rotation and the key-free env.
     // Version 1 remains inspectable solely for explicit legacy migration.
-    Ok(serde_json::to_vec(
-        &serde_json::json!({"schema_version":2,"id":p.id}),
-    )?)
+    if let Some(binding) = &p.governed {
+        binding.validate()?;
+        Ok(serde_json::to_vec(
+            &serde_json::json!({"schema_version":3,"id":p.id,"binding":binding}),
+        )?)
+    } else {
+        Ok(serde_json::to_vec(
+            &serde_json::json!({"schema_version":2,"id":p.id}),
+        )?)
+    }
 }
 
 fn reference_environment(p: &Profile) -> Vec<u8> {
@@ -1518,7 +1775,7 @@ fn observe_activation(
     // through manual reconciliation after an interrupted migration.
     let private_prior = backup
         .as_ref()
-        .is_some_and(|backup| prior_restore_profile(backup, profile).is_ok());
+        .is_some_and(|backup| prior_restore_profile(backup, public_profile).is_ok());
     let rotated =
         record.prior_key_sha256.is_none() || hashes.2 != record.prior_key_sha256 || private_prior;
     let candidate = if let (Some(selection), Some(env), Some(token)) =
@@ -1647,13 +1904,19 @@ fn prior_restore_profile(
             struct Selection {
                 schema_version: u32,
                 id: String,
+                #[serde(default)]
+                binding: Option<NativeBinding>,
             }
             let selected: Selection = serde_json::from_slice(selection)
                 .map_err(|_| "invalid saved prior model selection; preserve state")?;
             let prior = resolve(&selected.id)?;
             let token = std::str::from_utf8(key)?;
-            if selected.schema_version != 2
-                || prior.id != selected.id
+            match (&prior.governed, selected.schema_version, &selected.binding) {
+                (Some(expected), 3, Some(binding)) if expected == binding => binding.validate()?,
+                (None, 2, None) => (),
+                _ => return Err("saved prior model schema or exact catalog/pack/runtime binding changed; preserve state".into()),
+            }
+            if prior.id != selected.id
                 || *selection != broker_selection(&prior)?
                 || token.len() != 64
                 || !token.bytes().all(|b| b.is_ascii_hexdigit())
@@ -1703,10 +1966,14 @@ fn restore_config_file(
     Ok(())
 }
 
-fn write_prior_configuration(state: &Path, backup: &PriorBackup) -> Result<()> {
+fn write_prior_configuration(
+    state: &Path,
+    backup: &PriorBackup,
+    resolve: &impl Fn(&str) -> Result<Profile>,
+) -> Result<()> {
     // Never resurrect a previously exposed runtime key or direct-HTTP env,
     // including through interrupted/completed rollback entrypoints.
-    prior_restore_profile(backup, profile)?;
+    prior_restore_profile(backup, resolve)?;
     let auth = state.join("model-auth");
     let auth_present = match fs::symlink_metadata(&auth) {
         Ok(_) => true,
@@ -1740,7 +2007,7 @@ fn reviewed_restore_configuration(
     state: &Path,
     candidate: &Profile,
     reviewed: &str,
-    resolve: impl FnOnce(&str) -> Result<Profile>,
+    resolve: impl Fn(&str) -> Result<Profile>,
 ) -> Result<()> {
     tpm::decode::<32>(reviewed)?;
     let observed = observe_activation(state, candidate, true)?;
@@ -1749,7 +2016,7 @@ fn reviewed_restore_configuration(
     }
     let backup = bound_prior_backup(state, &observed.record)?
         .ok_or("no retained prior model bytes; restoration unavailable")?;
-    let prior = prior_restore_profile(&backup, resolve)?;
+    let prior = prior_restore_profile(&backup, &resolve)?;
     if let Some(prior) = &prior {
         verify_file(
             &state.join("models").join(format!("{}.gguf", prior.id)),
@@ -1760,7 +2027,7 @@ fn reviewed_restore_configuration(
     if current.review != observed.review {
         return Err("model activation changed before restoration".into());
     }
-    write_prior_configuration(state, &backup)?;
+    write_prior_configuration(state, &backup, &resolve)?;
     // Retain both records across every failed write. An explicit retry starts
     // with a NEW review of its partially restored state; no automatic replay.
     let restored = observe_activation(state, candidate, true)?;
@@ -1951,7 +2218,7 @@ fn retain_completed_prior(
     }
     let record = CompletedRollback {
         schema_version: 1,
-        catalog_sha256: bundle::hex(&Sha256::digest(CATALOG.as_bytes())),
+        catalog_sha256: public_catalog_binding()?,
         completed_profile: p.id.clone(),
         completed_weight_sha256: p.sha256.clone(),
         completed_marker_sha256: bundle::hex(&Sha256::digest(&observed.marker)),
@@ -1989,7 +2256,7 @@ fn observe_rollback(
     let bytes = rollback_bytes(state)?.ok_or("no completed model rollback record")?;
     let record = decode_rollback(&bytes)?;
     let completed = resolve(&record.completed_profile)?;
-    if record.catalog_sha256 != bundle::hex(&Sha256::digest(CATALOG.as_bytes()))
+    if record.catalog_sha256 != public_catalog_binding()?
         || completed.id != record.completed_profile
         || completed.sha256 != record.completed_weight_sha256
     {
@@ -2068,7 +2335,7 @@ fn reviewed_completed_rollback(
     {
         return Err("completed model state changed during fence creation; preserve state".into());
     }
-    write_prior_configuration(state, &observed.record.prior)?;
+    write_prior_configuration(state, &observed.record.prior, resolve)?;
     let (selection, env, key) = activation_snapshot(state)?;
     if selection != observed.record.prior.selection
         || env != observed.record.prior.environment
@@ -2211,7 +2478,7 @@ fn publish_quarantine(state: &Path, candidate: &Profile, failed_stage: RestartSt
         incident_id: bundle::hex(&incident),
         candidate: candidate.id.clone(),
         candidate_sha256: candidate.sha256.clone(),
-        catalog_sha256: bundle::hex(&Sha256::digest(CATALOG.as_bytes())),
+        catalog_sha256: public_catalog_binding()?,
         failed_stage,
     };
     // Never overwrite unknown or existing state; even a partial record fences
@@ -2262,7 +2529,7 @@ fn observe_quarantine(
         || !record.incident_id.bytes().all(|b| b.is_ascii_hexdigit())
         || candidate.id != record.candidate
         || candidate.sha256 != record.candidate_sha256
-        || record.catalog_sha256 != bundle::hex(&Sha256::digest(CATALOG.as_bytes()))
+        || record.catalog_sha256 != public_catalog_binding()?
     {
         return Err("model quarantine catalog or canonical record changed; preserve state".into());
     }
@@ -2430,7 +2697,7 @@ fn observe_incomplete_quarantine(
     }
     let mut digest = Sha256::new();
     digest.update(b"luma-model-incomplete-quarantine-review-v1\0");
-    digest.update(CATALOG.as_bytes());
+    digest.update(public_catalog_binding()?.as_bytes());
     digest.update(&bytes);
     digest.update(serde_json::to_vec(&identity)?);
     digest.update(serde_json::to_vec(&hashes)?);
@@ -2841,6 +3108,9 @@ pub fn install(id: &str) -> Result<()> {
     platform::require_installed()?;
     platform::require_production_activation()?;
     let p = profile(id)?;
+    if p.governed.is_some() {
+        return Err("governed model bytes require model-pack-import; activation requires model-activate with exact finite authority".into());
+    }
     let _lock = operation_lock(Path::new(VAR))?;
     let trial = std::cell::RefCell::new(None);
     install_after_preflight(
@@ -2909,6 +3179,355 @@ pub fn install(id: &str) -> Result<()> {
         },
         |prior| restore_prior(Path::new(VAR), prior),
     )
+}
+
+fn activation_usage(p: &Profile) -> Result<crate::finite_grants::Use> {
+    use crate::finite_grants::{Action, Kind, Selector, Use};
+    if p.governed.is_none() {
+        return Err("typed model activation requires a governed exact native profile".into());
+    }
+    let state = Path::new(VAR).join(STATE);
+    let prior = activation_snapshot(&state)?;
+    let bytes = serde_json::to_vec(&(
+        "luma-native-model-activation-v1",
+        crate::artifacts::installation()?,
+        p.resource_binding()?,
+        &p.governed,
+        crate::resource_manager::storage_device(Path::new(VAR))?,
+        activation_digest(&prior.0),
+        activation_digest(&prior.1),
+        activation_digest(&prior.2),
+    ))?;
+    let usage = Use {
+        action: Action::ProvisionResource,
+        selector: Selector {
+            kind: Kind::Resource,
+            id: format!("ModelPack-{}", p.id),
+            generation: 1,
+            digest: bundle::hex(&Sha256::digest(&bytes)),
+        },
+        input_bytes: MAX_PRIOR_BACKUP + bytes.len() as u64,
+        output_bytes: MAX_PRIOR_BACKUP + 16384,
+        units: 1,
+    };
+    usage.validate()?;
+    Ok(usage)
+}
+pub(crate) fn activate_review(id: &str) -> Result<()> {
+    crate::require_root()?;
+    platform::require_installed()?;
+    platform::require_production_activation()?;
+    let p = profile(id)?;
+    let _operation = operation_lock(Path::new(VAR))?;
+    preflight_at(Path::new(VAR), &p, check_preflight)?;
+    println!(
+        "{}",
+        serde_json::json!({"schema_version":1,"profile":id,"scopes":activation_scopes(&p)?,"current_admission_checked":true,"activates_model":false,"reservation":false})
+    );
+    Ok(())
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ActivationGrants {
+    provision: String,
+    start: String,
+    stop: String,
+}
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+struct ActivationWorker {
+    lease: crate::resources::Token,
+    owner: crate::resources::Owner,
+    state: crate::resources::State,
+    reason: String,
+}
+fn activation_workers() -> Result<(Vec<ActivationWorker>, u64, String)> {
+    let status = crate::resource_manager::acquisition_status()?;
+    let floor = status["generation"]
+        .as_str()
+        .ok_or("model worker generation floor unavailable")?;
+    let generation = floor.parse::<u64>()?;
+    if generation.to_string() != floor {
+        return Err("model worker floor not canonical".into());
+    }
+    let epoch = status["manager_epoch"]
+        .as_str()
+        .ok_or("model worker manager epoch unavailable")?;
+    if epoch.len() != 32
+        || !epoch
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+    {
+        return Err("model worker manager epoch invalid".into());
+    }
+    let mut workers = Vec::new();
+    let outstanding = status["outstanding"]
+        .as_array()
+        .ok_or("current model worker inventory unavailable")?;
+    if outstanding.len() > 16 {
+        return Err("model activation worker inventory oversized".into());
+    }
+    for raw in outstanding {
+        let worker: ActivationWorker = serde_json::from_value(raw.clone())?;
+        if ![0, 989].contains(&worker.owner.uid)
+            || worker.state == crate::resources::State::Released
+        {
+            return Err("unsupported outstanding model worker".into());
+        }
+        if worker.owner.uid == 989 {
+            workers.push(worker);
+        }
+    }
+    if workers.len() > 1
+        || status["workers"]["model_populated"]
+            .as_bool()
+            .ok_or("current model population missing")?
+            && workers.is_empty()
+    {
+        return Err("model activation refuses an unleased or ambiguous current worker".into());
+    }
+    Ok((workers, generation, epoch.to_owned()))
+}
+fn activation_scopes(p: &Profile) -> Result<[(String, crate::finite_grants::Use); 3]> {
+    use crate::finite_grants::{Action, Kind, Selector, Use};
+    let provision = activation_usage(p)?;
+    let (workers, floor, epoch) = activation_workers()?;
+    let digest = bundle::hex(&Sha256::digest(serde_json::to_vec(&(
+        "luma-native-model-activation-fixed-workers-v1",
+        &provision.selector,
+        ["luma-model.service", "luma-reference.service"],
+        &workers,
+        floor,
+        &epoch,
+    ))?));
+    let worker = |action| -> Result<Use> {
+        let generation = if action == Action::StopWorker {
+            workers
+                .first()
+                .map_or(floor.max(1), |worker| worker.lease.generation)
+        } else {
+            floor
+                .checked_add(1)
+                .ok_or("model start generation overflow")?
+        };
+        let usage = Use {
+            action,
+            selector: Selector {
+                kind: Kind::Worker,
+                id: "ModelRuntime".into(),
+                generation,
+                digest: digest.clone(),
+            },
+            input_bytes: provision.input_bytes,
+            output_bytes: 0,
+            units: 1,
+        };
+        usage.validate()?;
+        Ok(usage)
+    };
+    Ok([
+        ("provision".into(), provision.clone()),
+        ("start".into(), worker(Action::StartWorker)?),
+        ("stop".into(), worker(Action::StopWorker)?),
+    ])
+}
+fn guarded_command(
+    program: &str,
+    args: &[&str],
+    guard: &mut crate::admin_governance::GrantBoundary<'_>,
+) -> Result<()> {
+    guard.check()?;
+    let mut command = Command::new(program);
+    command
+        .args(args)
+        .env_clear()
+        .env("PATH", "/usr/bin")
+        .env("LC_ALL", "C")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::inherit());
+    supervise_owned_controller(&mut command, || guard.check())?;
+    guard.check()
+}
+fn matches_activation_worker(
+    token: &crate::resources::Token,
+    generation: u64,
+    epoch: &str,
+) -> bool {
+    token.generation == generation && token.manager_epoch == epoch
+}
+fn wait_current_gateway(
+    profile: &Profile,
+    generation: u64,
+    epoch: &str,
+    guard: &mut crate::admin_governance::GrantBoundary<'_>,
+) -> Result<()> {
+    use crate::resource_manager::requests::gateway::{Message, Request, Status};
+    loop {
+        guard.check()?;
+        let request = Request {
+            schema_version: 1,
+            request_id: format!("console-{}", crate::resources::random_id()?),
+            caller: 0,
+            deadline: crate::resource_manager::now()?
+                .checked_add(3000)
+                .ok_or("readiness deadline overflow")?,
+            action: "resource-gateway".into(),
+            payload: Message::Inspect {},
+        };
+        if let Ok(Status::Worker {
+            profile: id,
+            worker,
+            ..
+        }) = crate::service::gateway_exchange(&request)
+        {
+            if id != profile.id || !matches_activation_worker(&worker, generation, epoch) {
+                let mut revoke = crate::resource_manager::request("resource-revoke")?;
+                revoke.lease = Some(worker);
+                crate::service::resource_exchange(&revoke)?;
+                return Err("broker readiness does not match the granted model generation and manager epoch".into());
+            }
+            return guard.check();
+        }
+        guard.check()?;
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+}
+pub(crate) fn activate(login: &str, grants: &str, id: &str) -> Result<()> {
+    crate::require_root()?;
+    platform::require_installed()?;
+    platform::require_production_activation()?;
+    let p = profile(id)?;
+    let _operation = operation_lock(Path::new(VAR))?;
+    preflight_at(Path::new(VAR), &p, check_preflight)?;
+    if grants.len() > 4096 {
+        return Err("model activation grant map exceeds bound".into());
+    }
+    let grants: ActivationGrants = serde_json::from_str(grants)?;
+    if [&grants.provision, &grants.start, &grants.stop]
+        .iter()
+        .any(|id| !crate::admin_roles::identifier(id))
+    {
+        return Err("model activation requires exact finite grant identities".into());
+    }
+    let scopes = activation_scopes(&p)?;
+    let (reviewed_workers, reviewed_floor, reviewed_epoch) = activation_workers()?;
+    if scopes[1].1.selector.generation
+        != reviewed_floor
+            .checked_add(1)
+            .ok_or("model start generation overflow")?
+    {
+        return Err("model generation changed during activation review".into());
+    }
+    let uses = vec![
+        (grants.provision, scopes[0].1.clone()),
+        (grants.start, scopes[1].1.clone()),
+        (grants.stop, scopes[2].1.clone()),
+    ];
+    let usage = scopes[0].1.clone();
+    crate::admin_governance::with_grants(login, &uses, |guard| {
+        if activation_scopes(&p)? != scopes {
+            return Err(
+                "model activation prior configuration changed after finite admission".into(),
+            );
+        }
+        if activation_workers()?.0 != reviewed_workers {
+            return Err("planned model stop kernel generation changed".into());
+        }
+        crate::admin_governance::current_model_authority(&p)?;
+        guard.check()?;
+        let effect = guard.effect_begin(
+            &usage.selector.digest,
+            crate::policy_decisions::EffectKind::ResourceAdmission,
+        )?;
+        if activation_workers()?.0 != reviewed_workers {
+            return Err(
+                "planned model stop kernel witness changed during authority admission".into(),
+            );
+        }
+        guard.check()?;
+        // Publish the transaction fence before retiring the old generation so
+        // Restart=on-failure cannot replay its prior selected configuration.
+        let activation = begin_activation(&Path::new(VAR).join(STATE), &p)?;
+        for worker in &reviewed_workers {
+            guard.check()?;
+            let mut request = crate::resource_manager::request("resource-revoke")?;
+            request.lease = Some(worker.lease.clone());
+            crate::service::resource_exchange(&request)?;
+            guard.check()?;
+        }
+        loop {
+            guard.check()?;
+            let current = activation_workers()?.0;
+            if current.is_empty() {
+                break;
+            }
+            if current.iter().any(|worker| {
+                !reviewed_workers
+                    .iter()
+                    .any(|old| old.lease == worker.lease && old.owner == worker.owner)
+            }) {
+                return Err(
+                    "model stop observed a replacement owner; no name-based stop attempted".into(),
+                );
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+        let trial = activate_cached_with_guard(
+            Path::new(VAR),
+            &p,
+            validation::Guard::begin,
+            &mut || guard.check(),
+            Some(activation),
+        )?;
+        let outcome = (|| -> Result<()> {
+            guarded_command("/usr/bin/systemctl", &["daemon-reload"], guard)?;
+            guarded_command(
+                "/usr/bin/systemctl",
+                &["reset-failed", "luma-model.service"],
+                guard,
+            )?;
+            guarded_command(
+                "/usr/bin/systemctl",
+                &["restart", "luma-model.service", "luma-reference.service"],
+                guard,
+            )?;
+            // The fixed model supervisor establishes authenticated alias and
+            // listener readiness. The client retains AF_UNIX-only confinement.
+            wait_current_gateway(&p, scopes[1].1.selector.generation, &reviewed_epoch, guard)?;
+            guard.check()?;
+            trial.check(&p)?;
+            if !model_service_running()? {
+                return Err("new selected model worker is not running".into());
+            }
+            guarded_command(
+                "/usr/bin/systemctl",
+                &["is-active", "--quiet", "luma-reference.service"],
+                guard,
+            )?;
+            guard.check()?;
+            trial.complete(&p)?;
+            guard.check()
+        })();
+        if let Err(error) = outcome {
+            // Protective denial does not restore prior authority or erase a
+            // committed partial configuration/validation transaction.
+            publish_quarantine(&Path::new(VAR).join(STATE), &p, RestartStage::Validation)?;
+            command("/usr/bin/systemctl", &["stop", "luma-model.service"])?;
+            return Err(error);
+        }
+        let receipt = bundle::hex(&Sha256::digest(serde_json::to_vec(&(
+            "luma-native-model-activation-completed-v1",
+            &usage.selector,
+            p.resource_binding()?,
+        ))?));
+        guard.effect_complete(effect, &receipt)?;
+        println!(
+            "{}",
+            serde_json::json!({"schema_version":1,"profile":id,"activated":true,"native_qualification_claimed":false})
+        );
+        Ok(())
+    })
 }
 
 pub fn unit() -> Result<()> {
@@ -3039,6 +3658,123 @@ pub fn serve() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn saved_prior_schema3_requires_exact_governed_binding_and_never_downgrades() {
+        let mut prior = public_profile("qwen3-4b-q4-k-m").unwrap();
+        prior.governed = Some(NativeBinding {
+            catalog_sha256: "a".repeat(64),
+            profile_sha256: "b".repeat(64),
+            manifest_sha256: "c".repeat(64),
+            runtime_tuple_sha256: "d".repeat(64),
+        });
+        let mut backup = PriorBackup {
+            schema_version: 1,
+            candidate: prior.id.clone(),
+            selection: Some(broker_selection(&prior).unwrap()),
+            environment: Some(reference_environment(&prior)),
+            key: Some("e".repeat(64).into_bytes()),
+        };
+        assert_eq!(
+            prior_restore_profile(&backup, |_| Ok(prior.clone()))
+                .unwrap()
+                .unwrap()
+                .governed,
+            prior.governed
+        );
+        for field in [
+            "catalog_sha256",
+            "profile_sha256",
+            "manifest_sha256",
+            "runtime_tuple_sha256",
+        ] {
+            let mut selection: serde_json::Value =
+                serde_json::from_slice(backup.selection.as_ref().unwrap()).unwrap();
+            selection["binding"][field] = serde_json::json!("f".repeat(64));
+            let mut altered = backup.clone();
+            altered.selection = Some(serde_json::to_vec(&selection).unwrap());
+            assert!(prior_restore_profile(&altered, |_| Ok(prior.clone())).is_err());
+        }
+        let mut legacy = prior.clone();
+        legacy.governed = None;
+        assert!(prior_restore_profile(&backup, |_| Ok(legacy.clone())).is_err());
+        backup.selection = Some(broker_selection(&legacy).unwrap());
+        assert!(prior_restore_profile(&backup, |_| Ok(prior.clone())).is_err());
+        prior_restore_profile(&backup, |_| Ok(legacy.clone())).unwrap();
+        backup.selection = Some(
+            serde_json::to_vec(&serde_json::json!({"schema_version":1,"id":prior.id})).unwrap(),
+        );
+        assert!(prior_restore_profile(&backup, |_| Ok(legacy.clone())).is_err());
+        backup.selection = Some(
+            format!(
+                "{{\"schema_version\":2,\"schema_version\":2,\"id\":\"{}\"}}",
+                prior.id
+            )
+            .into_bytes(),
+        );
+        assert!(prior_restore_profile(&backup, |_| Ok(legacy)).is_err());
+    }
+    #[test]
+    fn inert_prior_decode_does_not_authorize_or_write_a_fenced_restoration() {
+        let (root, p) = activation_fixture("prior-inert-authority");
+        let state = root.join(STATE);
+        let backup = PriorBackup {
+            schema_version: 1,
+            candidate: p.id.clone(),
+            selection: Some(broker_selection(&p).unwrap()),
+            environment: Some(reference_environment(&p)),
+            key: Some("a".repeat(64).into_bytes()),
+        };
+        let parsed = decode_prior_backup(&serde_json::to_vec(&backup).unwrap()).unwrap();
+        let before = activation_snapshot(&state).unwrap();
+        let calls = std::cell::Cell::new(0);
+        assert!(write_prior_configuration(&state, &parsed, &|_| {
+            calls.set(calls.get() + 1);
+            Err("current installed model authorization fenced".into())
+        })
+        .is_err());
+        assert_eq!(calls.get(), 1);
+        assert_eq!(activation_snapshot(&state).unwrap(), before);
+        remove_activation_fixture(&root, &p);
+    }
+    #[test]
+    fn finite_activation_grants_refuse_duplicates_unknown_and_missing_scopes() {
+        for input in [
+            r#"{"provision":"P","start":"S","stop":"T","start":"Other"}"#,
+            r#"{"provision":"P","start":"S"}"#,
+            r#"{"provision":"P","start":"S","stop":"T","other":"X"}"#,
+        ] {
+            assert!(serde_json::from_str::<ActivationGrants>(input).is_err());
+        }
+        let grants: ActivationGrants =
+            serde_json::from_str(r#"{"provision":"P","start":"S","stop":"T"}"#).unwrap();
+        assert_eq!(
+            (grants.provision, grants.start, grants.stop),
+            ("P".into(), "S".into(), "T".into())
+        );
+    }
+    #[test]
+    fn activation_receipt_requires_exact_reviewed_generation_and_manager_epoch() {
+        let token = crate::resources::Token {
+            lease_id: "a".repeat(32),
+            generation: 17,
+            manager_epoch: "b".repeat(32),
+        };
+        assert!(matches_activation_worker(&token, 17, &"b".repeat(32)));
+        assert!(!matches_activation_worker(&token, 18, &"b".repeat(32)));
+        assert!(!matches_activation_worker(&token, 17, &"c".repeat(32)));
+    }
+    #[test]
+    fn pending_retention_counts_metadata_not_multi_gigabyte_blob_payload() {
+        let usage = pending_usage("qwen3-4b-q4-k-m", &"a".repeat(64), 65536).unwrap();
+        assert_eq!(usage.input_bytes, 16 * 1024 * 1024 + 65536);
+        assert!(usage.input_bytes < 1024 * 1024 * 1024);
+        assert_eq!(usage.output_bytes, 0);
+    }
+    // Unit fixtures exercise pure profile/layout/lifecycle behavior. Installed
+    // authority is covered by separate TPM/current-UTC integration tests.
+    fn profile(id: &str) -> Result<Profile> {
+        public_profile(id)
+    }
     #[test]
     fn offline_runtime_lock_creation_is_exclusive_and_never_replaces_evidence() {
         let directory =
@@ -4208,7 +4944,9 @@ print('ISOLATED_MODEL_LOCK_PASSED')
         let observed = observe_rollback(&state, &|_| Ok(p.clone())).unwrap();
         assert!(!observed.restorable);
         assert!(reviewed_completed_rollback(&state, &observed.review, &|_| Ok(p.clone())).is_err());
-        assert!(write_prior_configuration(&state, &observed.record.prior).is_err());
+        assert!(
+            write_prior_configuration(&state, &observed.record.prior, &|_| Ok(p.clone())).is_err()
+        );
         assert_eq!(activation_snapshot(&state).unwrap(), after);
         fs::remove_file(state.join("model-runtime.lock")).unwrap();
         remove_activation_fixture(&root, &p);
@@ -5288,7 +6026,10 @@ print('MODEL_PRIOR_BACKUP_DAC_PASSED')
             observe_rollback(&state, &|id| fixture_resolve(id, &completed, &prior)).unwrap();
         let before = activation_snapshot(&state).unwrap();
         begin_activation(&state, &completed).unwrap();
-        write_prior_configuration(&state, &observed.record.prior).unwrap();
+        write_prior_configuration(&state, &observed.record.prior, &|id| {
+            fixture_resolve(id, &completed, &prior)
+        })
+        .unwrap();
         fs::remove_file(state.join(ROLLBACK)).unwrap();
         assert!(activation_absent(&state).is_err());
         let pending = observe_activation(&state, &completed, true).unwrap();

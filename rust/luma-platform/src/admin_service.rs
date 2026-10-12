@@ -634,6 +634,135 @@ pub fn client(args: &[String]) -> Result<()> {
 mod tests {
     use super::*;
 
+    struct PublicTestExecutable {
+        path: std::path::PathBuf,
+        descriptor: File,
+        identity: (u64, u64, u64, i64, i64),
+        sha256: Vec<u8>,
+    }
+    impl PublicTestExecutable {
+        fn stage(directory: &Path) -> Result<Self> {
+            use sha2::{Digest, Sha256};
+            use std::os::unix::fs::OpenOptionsExt;
+            let source_path = std::env::current_exe()?;
+            let mut source = fs::OpenOptions::new()
+                .read(true)
+                .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
+                .open(&source_path)?;
+            let before = source.metadata()?;
+            let parent = fs::symlink_metadata(directory)?;
+            if !before.is_file()
+                || before.uid() != 0
+                || before.mode() & 0o022 != 0
+                || before.len() == 0
+                || before.len() > 512 * 1024 * 1024
+                || !parent.is_dir()
+                || parent.uid() != 0
+                || parent.mode() & 0o022 != 0
+            {
+                return Err("unsafe disposable public test executable source".into());
+            }
+            let path = directory.join("public-test-executable");
+            let mut descriptor = fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .create_new(true)
+                .mode(0o600)
+                .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
+                .open(&path)?;
+            let mut digest = Sha256::new();
+            let mut buffer = [0; 65536];
+            let mut count = 0u64;
+            loop {
+                let read = source.read(&mut buffer)?;
+                if read == 0 {
+                    break;
+                }
+                count = count
+                    .checked_add(read as u64)
+                    .ok_or("test executable size overflow")?;
+                if count > before.len() {
+                    return Err("test executable grew during staging".into());
+                }
+                digest.update(&buffer[..read]);
+                descriptor.write_all(&buffer[..read])?;
+            }
+            let after = source.metadata()?;
+            if count != before.len()
+                || Self::identity(&before) != Self::identity(&after)
+                || Self::identity(&before) != Self::identity(&fs::symlink_metadata(source_path)?)
+            {
+                return Err("actual compiled test executable changed during staging".into());
+            }
+            descriptor.set_permissions(fs::Permissions::from_mode(0o555))?;
+            descriptor.sync_all()?;
+            let identity = Self::identity(&descriptor.metadata()?);
+            // execve refuses an inode retained open for writing. Publication
+            // ends the staging writer; retain only an independently reopened
+            // read-only descriptor of the exact completed public inode.
+            drop(descriptor);
+            let descriptor = fs::OpenOptions::new()
+                .read(true)
+                .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
+                .open(&path)?;
+            if Self::identity(&descriptor.metadata()?) != identity {
+                return Err("disposable executable replaced after staging".into());
+            }
+            let staged = Self {
+                path,
+                descriptor,
+                identity,
+                sha256: digest.finalize().to_vec(),
+            };
+            staged.recheck()?;
+            Ok(staged)
+        }
+        fn identity(metadata: &fs::Metadata) -> (u64, u64, u64, i64, i64) {
+            (
+                metadata.dev(),
+                metadata.ino(),
+                metadata.len(),
+                metadata.ctime(),
+                metadata.ctime_nsec(),
+            )
+        }
+        fn recheck(&self) -> Result<()> {
+            use sha2::{Digest, Sha256};
+            use std::io::{Seek, SeekFrom};
+            let current = fs::symlink_metadata(&self.path)?;
+            let held = self.descriptor.metadata()?;
+            if !current.is_file()
+                || current.uid() != 0
+                || current.nlink() != 1
+                || current.mode() & 0o777 != 0o555
+                || Self::identity(&current) != self.identity
+                || Self::identity(&held) != self.identity
+            {
+                return Err("disposable public executable namespace changed".into());
+            }
+            let mut reader = self.descriptor.try_clone()?;
+            reader.seek(SeekFrom::Start(0))?;
+            let mut digest = Sha256::new();
+            let mut bytes = [0; 65536];
+            loop {
+                let read = reader.read(&mut bytes)?;
+                if read == 0 {
+                    break;
+                }
+                digest.update(&bytes[..read]);
+            }
+            if digest.finalize().as_slice() != self.sha256
+                || Self::identity(&reader.metadata()?) != self.identity
+                || Self::identity(&fs::symlink_metadata(&self.path)?) != self.identity
+            {
+                return Err(
+                    "disposable executable differs from actual compiled test binary".into(),
+                );
+            }
+            Ok(())
+        }
+    }
+
     // Explicitly uninstalled disposable-kernel composition. The shipped handle
     // always requires the confined observer; no environment/JSON fallback exists.
     fn handle(
@@ -1156,11 +1285,13 @@ mod tests {
         let directory = std::env::temp_dir().join(format!("luma-admin-ipc-{}", std::process::id()));
         fs::create_dir(&directory).unwrap();
         fs::set_permissions(&directory, fs::Permissions::from_mode(0o711)).unwrap();
+        let public_executable = PublicTestExecutable::stage(&directory).unwrap();
         let path = directory.join("control.sock");
         let listener = UnixListener::bind(&path).unwrap();
         fs::set_permissions(&path, fs::Permissions::from_mode(0o666)).unwrap();
         for mode in ["allow", "deny", "truncated"] {
-            let mut child = Command::new(std::env::current_exe().unwrap())
+            public_executable.recheck().unwrap();
+            let mut child = Command::new(&public_executable.path)
                 .args([
                     "--ignored",
                     "--exact",
@@ -1190,6 +1321,8 @@ mod tests {
         }
         drop(listener);
         fs::remove_file(path).unwrap();
+        fs::remove_file(&public_executable.path).unwrap();
+        drop(public_executable);
         fs::remove_dir(directory).unwrap();
     }
     #[test]
@@ -1368,6 +1501,7 @@ mod tests {
             std::env::temp_dir().join(format!("luma-admin-pam-ipc-{}", std::process::id()));
         fs::create_dir(&directory).unwrap();
         fs::set_permissions(&directory, fs::Permissions::from_mode(0o711)).unwrap();
+        let public_executable = PublicTestExecutable::stage(&directory).unwrap();
         let path = directory.join("control.sock");
         let listener = UnixListener::bind(&path).unwrap();
         let name = std::ffi::CString::new(path.as_os_str().as_encoded_bytes()).unwrap();
@@ -1534,7 +1668,8 @@ mod tests {
             } else {
                 None
             };
-            let mut child_command = Command::new(std::env::current_exe().unwrap());
+            public_executable.recheck().unwrap();
+            let mut child_command = Command::new(&public_executable.path);
             child_command
                 .args([
                     "--ignored",
@@ -1807,6 +1942,8 @@ mod tests {
         admin_governance::fixture_account_checkpoint(&root, &password);
         drop(listener);
         fs::remove_file(path).unwrap();
+        fs::remove_file(&public_executable.path).unwrap();
+        drop(public_executable);
         fs::remove_dir(directory).unwrap();
     }
 

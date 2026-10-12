@@ -486,7 +486,7 @@ mod tests {
         // The broker exchange below is a synthetic authority, not a passing
         // installed UID/cgroup/PIDFD or real-model qualification claim.
         for fault in ["none", "admission-ack", "context", "completion", "fence"] {
-            let profile = profile("qwen3-1-7b-q4-k-m").unwrap();
+            let profile = public_profile("qwen3-1-7b-q4-k-m").unwrap();
             let worker = crate::resources::Token {
                 lease_id: "a".repeat(32),
                 generation: 1,

@@ -26,7 +26,7 @@ def main():
     repo = args.repository.resolve(strict=True)
     os.umask(0o077)
     environment = dict(os.environ, CARGO_TARGET_DIR=os.environ.get('CARGO_TARGET_DIR', '/tmp/luma-tpm-target'),
-                       RUSTFLAGS='-Dwarnings', TSS2_LOG='all+NONE')
+                       LUMA_STORAGE_TEST_ROOT=str(args.output), RUSTFLAGS='-Dwarnings', TSS2_LOG='all+NONE')
     with tempfile.TemporaryDirectory(prefix='luma-tpm-') as folder:
         work = Path(folder)
         state = work / 'state'
@@ -53,10 +53,10 @@ def main():
         emulator = None
         log = (args.output / 'transcript.txt').open('wb')
         try:
-            def run(argv, expected=0):
+            def run(argv, expected=0, timeout=240):
                 print('TPM test: ' + Path(argv[0]).name + ' ' + str(argv[1]), flush=True)
                 result = subprocess.run([str(a) for a in argv], cwd=repo/'rust', env=environment,
-                                        stdout=log, stderr=subprocess.STDOUT, timeout=240)
+                                        stdout=log, stderr=subprocess.STDOUT, timeout=timeout)
                 if result.returncode != expected:
                     raise RuntimeError(f'{Path(argv[0]).name} returned {result.returncode}, expected {expected}')
 
@@ -110,7 +110,8 @@ def main():
                  '-i', work/'genesis', '0x01804c41'])
             environment['LUMA_TPM_TEST_ADMISSION'] = 'occupied'
             run(admission)
-            run(['cargo', 'test', '--offline', '--locked', '--', '--nocapture'])
+            run(['cargo', 'test', '--offline', '--locked', '--', '--nocapture',
+                 '--test-threads=1'], timeout=1800)
             # Real PAM/shadow account checks, confined to this fresh container.
             # Never create, expire or lock an account on the Windows/WSL host.
             pam_profile = Path('/etc/pam.d/luma-admin')

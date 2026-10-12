@@ -65,6 +65,7 @@ pub(crate) enum OperationOutcome {
 pub(crate) enum EffectKind {
     Snapshot,
     Calculation,
+    GeneratedExecution,
     Checkpoint,
     ArtifactPublication,
     ArtifactExport,
@@ -340,16 +341,15 @@ impl Decision {
         }
         if let Some(grant) = &self.grant {
             grant.definition.selector.validate()?;
+            grant
+                .constraints
+                .validate(&grant.definition.selector, grant.definition.action)?;
             if grant.grant_id != self.grant_id
                 || !crate::admin_roles::identifier(&grant.assignment_id)
                 || grant.grant_version == 0
                 || grant.assignment_version == 0
                 || grant.not_before_ms <= 0
                 || grant.expires_ms <= grant.not_before_ms
-                || grant.constraints.max_input_bytes > 1_073_741_824
-                || grant.constraints.max_output_bytes > 1_073_741_824
-                || grant.constraints.max_units == 0
-                || grant.constraints.max_units > 1_000_000
                 || (!grant.role.is_empty() && !crate::admin_roles::identifier(&grant.role))
             {
                 return Err("invalid policy grant evidence".into());
@@ -2268,6 +2268,60 @@ mod tests {
         });
         decision.validate().unwrap();
         decision
+    }
+    #[test]
+    fn model_import_decision_evidence_uses_exact_selector_aware_byte_limits() {
+        for id in ["ModelPack-qwen3-4b-q4-k-m", "ModelPack-qwen3-1-7b-q4-k-m"] {
+            let mut decision = allow_data();
+            let scope = Use {
+                action: crate::finite_grants::Action::AcquireResource,
+                selector: crate::finite_grants::Selector {
+                    kind: crate::finite_grants::Kind::Resource,
+                    id: id.into(),
+                    generation: 1,
+                    digest: "56".repeat(32),
+                },
+                input_bytes: 2 * 1024 * 1024 * 1024,
+                output_bytes: 6 * 1024 * 1024 * 1024,
+                units: 1,
+            };
+            decision.capability = scope.action;
+            decision.normalized_resource = scope.selector.clone();
+            decision.evaluated_constraints = scope.clone();
+            let grant = decision.grant.as_mut().unwrap();
+            grant.definition.action = scope.action;
+            grant.definition.selector = scope.selector;
+            grant.constraints = Constraints {
+                max_input_bytes: scope.input_bytes,
+                max_output_bytes: scope.output_bytes,
+                max_units: 1,
+            };
+            grant.definition.constraints = grant.constraints.clone();
+            grant.current_role.as_mut().unwrap().activities = vec![scope.action.activity().into()];
+            decision.validate().unwrap();
+            let retained: Decision =
+                serde_json::from_slice(&serde_json::to_vec(&decision).unwrap()).unwrap();
+            retained.validate().unwrap();
+            for variant in 0..4 {
+                let mut wrong = retained.clone();
+                let grant = wrong.grant.as_mut().unwrap();
+                match variant {
+                    0 => grant.definition.selector.id = "ModelPack-other".into(),
+                    1 => grant.definition.action = crate::finite_grants::Action::ProvisionResource,
+                    2 => grant.definition.action = crate::finite_grants::Action::Retain,
+                    _ => {
+                        grant.constraints.max_output_bytes = 64 * 1024 * 1024 * 1024 + 1;
+                        grant.definition.constraints = grant.constraints.clone();
+                    }
+                }
+                assert!(wrong.validate().is_err());
+            }
+        }
+        let mut ordinary = allow_data();
+        let grant = ordinary.grant.as_mut().unwrap();
+        grant.constraints.max_input_bytes = 1_073_741_825;
+        grant.definition.constraints = grant.constraints.clone();
+        assert!(ordinary.validate().is_err());
     }
     #[test]
     fn allowed_evidence_requires_exact_subject_role_scope_and_full_utc_window() {

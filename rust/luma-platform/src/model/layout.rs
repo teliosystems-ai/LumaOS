@@ -266,6 +266,99 @@ enum Value {
     Other,
 }
 
+/// Lossless private native sidecar representation. Raw GGUF value encodings
+/// preserve f32 bit patterns and string/array lengths without JSON float drift.
+pub(super) fn sidecars(
+    file: &mut (impl Read + Seek),
+    p: &Profile,
+    mut check: impl FnMut() -> Result<()>,
+) -> Result<(Vec<u8>, Vec<u8>)> {
+    verify(file, p, &mut check)?;
+    file.seek(SeekFrom::Start(0))?;
+    let mut metadata = Metadata {
+        file,
+        check: &mut check,
+        position: 0,
+        bound: p.bytes.min(MAX_METADATA),
+    };
+    let mut magic = [0; 4];
+    metadata.read(&mut magic)?;
+    if magic != *b"GGUF" || metadata.u32()? != 3 {
+        return Err("native sidecars require GGUF v3".into());
+    }
+    let tensors = metadata.u64()?;
+    let count = metadata.u64()?;
+    if tensors == 0 || tensors > 8192 || count == 0 || count > MAX_KEYS {
+        return Err("sidecar GGUF counts exceed bound".into());
+    }
+    let mut entries = BTreeMap::new();
+    let mut keys = BTreeSet::new();
+    let mut template = None;
+    let mut raw_total = 0u64;
+    for _ in 0..count {
+        let key = metadata.string(512)?;
+        if key.is_empty() || key.contains('\0') || !keys.insert(key.clone()) {
+            return Err("duplicate or unsafe sidecar metadata key".into());
+        }
+        let kind = metadata.u32()?;
+        let start = metadata.position;
+        let value = metadata.value(kind)?;
+        let end = metadata.position;
+        if key == "tokenizer.chat_template" {
+            match value {
+                Value::Text(text) if !text.is_empty() => template = Some(text.into_bytes()),
+                _ => return Err("GGUF chat template is absent, empty or not UTF8 text".into()),
+            }
+        } else if key.starts_with("tokenizer.") {
+            if key == "tokenizer.ggml.model" && !matches!(&value,Value::Text(text) if text=="gpt2")
+            {
+                return Err("native tokenizer model must be embedded gpt2 metadata".into());
+            }
+            let size = end
+                .checked_sub(start)
+                .ok_or("tokenizer value offset underflow")?;
+            raw_total = raw_total
+                .checked_add(size)
+                .filter(|n| *n <= 7 * 1024 * 1024)
+                .ok_or("native tokenizer sidecar exceeds raw byte budget")?;
+            let mut raw = vec![0; size.try_into()?];
+            metadata.file.seek(SeekFrom::Start(start))?;
+            (metadata.check)()?;
+            metadata.file.read_exact(&mut raw)?;
+            (metadata.check)()?;
+            metadata.file.seek(SeekFrom::Start(end))?;
+            if key == "tokenizer.ggml.tokens"
+                && (kind != 9
+                    || raw.len() < 12
+                    || raw[..4] != 8u32.to_le_bytes()
+                    || u64::from_le_bytes(raw[4..12].try_into()?) == 0)
+            {
+                return Err("native tokenizer tokens must be a nonempty GGUF string array".into());
+            }
+            entries.insert(
+                key.clone(),
+                serde_json::json!({"key":key,"type":kind,"value_hex":crate::bundle::hex(&raw)}),
+            );
+        }
+    }
+    if !entries.contains_key("tokenizer.ggml.model")
+        || !entries.contains_key("tokenizer.ggml.tokens")
+    {
+        return Err("native model is missing embedded tokenizer model/tokens".into());
+    }
+    let bytes = serde_json::to_vec(
+        &serde_json::json!({"format":"gguf-tokenizer-metadata-v1","schema_version":1,"entries":entries.into_values().collect::<Vec<_>>()}),
+    )?;
+    if bytes.len() > 16 * 1024 * 1024 {
+        return Err("native tokenizer sidecar JSON exceeds bound".into());
+    }
+    check()?;
+    Ok((
+        bytes,
+        template.ok_or("native model has no embedded chat template")?,
+    ))
+}
+
 pub(super) fn verify(
     file: &mut (impl Read + Seek),
     p: &Profile,
@@ -406,7 +499,7 @@ mod tests {
             ("qwen3-4b-q4-k-m", 301_989_888),
             ("qwen3-1-7b-q4-k-m", 234_881_024),
         ] {
-            let p = super::super::profile(id).unwrap();
+            let p = super::super::public_profile(id).unwrap();
             let inventory = parse(&p, &entries(&p)).unwrap();
             assert_eq!(inventory.kv_tensor_bytes, kv);
             assert_eq!(inventory.context_cells, 2048);
@@ -429,7 +522,7 @@ mod tests {
     #[test]
     fn head_width_defaults_match_runtime_and_do_not_guess_from_embedding() {
         for (id, admitted) in [("qwen3-4b-q4-k-m", false), ("qwen3-1-7b-q4-k-m", true)] {
-            let p = super::super::profile(id).unwrap();
+            let p = super::super::public_profile(id).unwrap();
             let mut fields = entries(&p);
             fields.retain(|(key, _, _)| {
                 !key.ends_with("key_length") && !key.ends_with("value_length")
@@ -439,7 +532,7 @@ mod tests {
     }
     #[test]
     fn every_shape_mismatch_and_wrong_type_refuses() {
-        let p = super::super::profile("qwen3-4b-q4-k-m").unwrap();
+        let p = super::super::public_profile("qwen3-4b-q4-k-m").unwrap();
         for index in 1..entries(&p).len() {
             let mut fields = entries(&p);
             fields[index].2 = 1u32.to_le_bytes().to_vec();
@@ -453,7 +546,7 @@ mod tests {
     }
     #[test]
     fn duplicate_missing_and_unsupported_layouts_refuse() {
-        let p = super::super::profile("qwen3-4b-q4-k-m").unwrap();
+        let p = super::super::public_profile("qwen3-4b-q4-k-m").unwrap();
         let mut fields = entries(&p);
         fields.push(fields[1].clone());
         assert!(parse(&p, &fields).is_err());
@@ -474,7 +567,7 @@ mod tests {
     }
     #[test]
     fn all_truncated_prefixes_and_bad_header_counts_refuse() {
-        let p = super::super::profile("qwen3-4b-q4-k-m").unwrap();
+        let p = super::super::public_profile("qwen3-4b-q4-k-m").unwrap();
         let bytes = encoded(&entries(&p));
         for length in 0..bytes.len() {
             assert!(verify(&mut Cursor::new(&bytes[..length]), &p, || Ok(())).is_err());
@@ -496,7 +589,7 @@ mod tests {
     }
     #[test]
     fn metadata_array_limits_types_and_boolean_encoding_refuse() {
-        let p = super::super::profile("qwen3-4b-q4-k-m").unwrap();
+        let p = super::super::public_profile("qwen3-4b-q4-k-m").unwrap();
         for (element, count) in [(4u32, MAX_ARRAY + 1), (9, 1), (99, 0), (4, u64::MAX)] {
             let mut value = element.to_le_bytes().to_vec();
             value.extend_from_slice(&count.to_le_bytes());
@@ -517,7 +610,7 @@ mod tests {
     }
     #[test]
     fn bounded_unrelated_tokenizer_arrays_are_scanned_without_retaining_tokens() {
-        let p = super::super::profile("qwen3-4b-q4-k-m").unwrap();
+        let p = super::super::public_profile("qwen3-4b-q4-k-m").unwrap();
         let mut fields = entries(&p);
         let mut value = 8u32.to_le_bytes().to_vec();
         value.extend_from_slice(&2u64.to_le_bytes());
@@ -528,7 +621,7 @@ mod tests {
     }
     #[test]
     fn file_bound_and_cancellation_apply_to_every_metadata_read() {
-        let mut p = super::super::profile("qwen3-4b-q4-k-m").unwrap();
+        let mut p = super::super::public_profile("qwen3-4b-q4-k-m").unwrap();
         let bytes = encoded(&entries(&p));
         p.bytes = bytes.len() as u64 - 1;
         assert!(verify(&mut Cursor::new(&bytes), &p, || Ok(())).is_err());
@@ -550,7 +643,7 @@ mod tests {
     fn checked_products_alignment_and_peak_exhaustion_refuse() {
         assert!(product(&[u64::MAX, 2]).is_err());
         assert!(round_up(u64::MAX, 32).is_err());
-        let mut p = super::super::profile("qwen3-4b-q4-k-m").unwrap();
+        let mut p = super::super::public_profile("qwen3-4b-q4-k-m").unwrap();
         p.memory_max_bytes = p.bytes;
         assert!(Inventory::for_profile(&p).is_err());
         p.bytes = u64::MAX;
@@ -563,7 +656,7 @@ mod tests {
             std::env::temp_dir().join(format!("luma-layout-descriptor-{}", std::process::id()));
         fs::create_dir(&directory).unwrap();
         let path = directory.join("model.gguf");
-        let mut p = model::profile("qwen3-4b-q4-k-m").unwrap();
+        let mut p = model::public_profile("qwen3-4b-q4-k-m").unwrap();
         let bytes = encoded(&entries(&p));
         p.bytes = bytes.len() as u64;
         p.sha256 = bundle::hex(&Sha256::digest(&bytes));
@@ -590,7 +683,7 @@ mod tests {
             std::env::temp_dir().join(format!("luma-layout-incompatible-{}", std::process::id()));
         fs::create_dir(&directory).unwrap();
         let path = directory.join("model.gguf");
-        let mut p = model::profile("qwen3-4b-q4-k-m").unwrap();
+        let mut p = model::public_profile("qwen3-4b-q4-k-m").unwrap();
         let mut fields = entries(&p);
         fields[1].2 = 28u32.to_le_bytes().to_vec();
         let bytes = encoded(&fields);
@@ -606,7 +699,7 @@ mod tests {
 
     #[test]
     fn scalar_and_array_types_are_bounded_and_fully_read() {
-        let p = model::profile("qwen3-4b-q4-k-m").unwrap();
+        let p = model::public_profile("qwen3-4b-q4-k-m").unwrap();
         for kind in [0, 1, 2, 3, 4, 5, 6, 10, 11, 12] {
             let mut fields = entries(&p);
             fields.push((
@@ -636,5 +729,45 @@ mod tests {
             vec![1, 0, 0, 0, 0, 0, 0, 0, 255],
         ));
         assert!(parse(&p, &malformed).is_err());
+    }
+    #[test]
+    fn lossless_sidecars_bind_embedded_tokens_scores_and_template() {
+        let profile = model::public_profile("qwen3-4b-q4-k-m").unwrap();
+        let mut fields = entries(&profile);
+        let mut tokens = 8u32.to_le_bytes().to_vec();
+        tokens.extend_from_slice(&2u64.to_le_bytes());
+        tokens.extend_from_slice(&text("hello"));
+        tokens.extend_from_slice(&text("世界"));
+        let mut scores = 6u32.to_le_bytes().to_vec();
+        scores.extend_from_slice(&2u64.to_le_bytes());
+        scores.extend_from_slice(&(-1.5f32).to_le_bytes());
+        scores.extend_from_slice(&0.125f32.to_le_bytes());
+        fields.extend([
+            ("tokenizer.ggml.model".into(), 8, text("gpt2")),
+            ("tokenizer.ggml.tokens".into(), 9, tokens.clone()),
+            ("tokenizer.ggml.scores".into(), 9, scores.clone()),
+            (
+                "tokenizer.chat_template".into(),
+                8,
+                text("{{ messages }}\n"),
+            ),
+        ]);
+        let (tokenizer, template) =
+            sidecars(&mut Cursor::new(encoded(&fields)), &profile, || Ok(())).unwrap();
+        assert_eq!(template, b"{{ messages }}\n");
+        let value: serde_json::Value = serde_json::from_slice(&tokenizer).unwrap();
+        assert_eq!(value["format"], "gguf-tokenizer-metadata-v1");
+        assert_eq!(value["entries"][1]["value_hex"], bundle::hex(&scores));
+        assert_eq!(value["entries"][2]["value_hex"], bundle::hex(&tokens));
+        assert_eq!(serde_json::to_vec(&value).unwrap(), tokenizer);
+        let mut bad = fields.clone();
+        bad.retain(|(key, _, _)| key != "tokenizer.chat_template");
+        assert!(sidecars(&mut Cursor::new(encoded(&bad)), &profile, || Ok(())).is_err());
+        let mut bad = fields.clone();
+        bad.push(fields.last().unwrap().clone());
+        assert!(sidecars(&mut Cursor::new(encoded(&bad)), &profile, || Ok(())).is_err());
+        let mut bad = fields;
+        bad.push(("tokenizer.bool".into(), 7, vec![2]));
+        assert!(sidecars(&mut Cursor::new(encoded(&bad)), &profile, || Ok(())).is_err());
     }
 }

@@ -1,6 +1,6 @@
 # G2 software completion register
 
-Updated 2026-10-11. **G2 software is not complete.** This register separates
+Updated 2026-10-12. **G2 is not closed; the latest software candidate is under integrated validation.** This register separates
 work that can be executed in the current Windows/Ubuntu WSL/VM environment
 from production deployment decisions and physical qualification. It does not
 change the frozen reference release, governing requirements, or exit criteria.
@@ -12,6 +12,50 @@ unit test, default-deny placeholder, or smaller model cannot close a different
 requirement.
 
 ## Current software inventory and work still required
+
+### Integrated native model and generated-runtime candidate, 2026-10-12
+
+The parallel implementation adds the closed native signed model trust/catalog
+and pack adapter, real scoped custody and current credential checks, lossless
+GGUF tokenizer/template verification, finite preparation/retention and composite
+model activation grants. Externally signed qualification binds the anchored
+installation, full acknowledged image, exact profile/runtime and measured
+CPU/memory tuple. Atomic public qualification delivery preserves reviewed
+predecessors, history and uncertain transfer bytes. No production keys, approvals
+or QA certificates are manufactured by the builder.
+
+Generated static-amd64 payloads run only in the fixed KVM guest. The original
+private PAM boundary joins the exact shared helper lease through live challenges;
+completion requires authenticated exact-generation release and output provenance.
+Model activation separately checks provision, start and planned-stop scopes,
+including actual broker epoch/generation rather than only a service name.
+
+Independent review corrected import evidence byte limits, incomplete output
+provenance, certificate/image self-reference, actual confinement paths, worker
+grant separation, retained key revocations and current account binding. The
+source is frozen for the serialized D-backed software sweep. Bounded preliminary
+checks include thirteen model-public/sidecar cases, twelve generated-request
+cases, eighteen orchestration cases and thirteen real disposable KVM guest
+cases. Those guest cases explicitly do not test installed AppArmor or the
+complete PAM/broker journey. Full integrated results must be recorded separately.
+
+Two policy decisions remain unanswered: separately purpose-bound, nonrenewable
+thirty-minute sessions for model import and model activation. Both remain at
+the standard thirty seconds. Large downloads and cold 4B hash/load/warm-up can
+exceed that duration; no production-usability guarantee is made for those
+paths under the current limit. Export/repair approvals do not authorize either
+extension.
+
+Final-image installation, actual model/custody/QA inputs, installed authorization
+and confinement, native NTS/error-bound behavior, pressure/interruption/recovery,
+firmware/encryption/TPM and both required physical-board executions remain
+separate qualification. Populated cross-schema/reference/principal migration
+remains provisionally G4. The previous sequence-12 image contains neither this
+candidate nor its new runtime; it is not qualifying evidence for these changes.
+
+See [native model delivery](MODEL_TRUST.md), [generated runtime](GENERATED_RUNTIME.md)
+and [ADR 0013](../docs/adr/0013-native-model-governance-and-generated-runtime.md).
+Requirement 1 remains open; do not advance to Requirement 2.
 
 ### Approved parallel staging, recovery and governed skills, 2026-10-11
 

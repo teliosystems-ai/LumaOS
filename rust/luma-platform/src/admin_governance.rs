@@ -24,6 +24,75 @@ const DIRECTORY: &str = "/var/lib/luma-os/admin";
 const REQUEST: &str = "admin-bootstrap-v1";
 const ACTIVITY: &str = "admin.bootstrap";
 const MAX_CATALOG_EVENT: u64 = 128 * 1024;
+const MAX_MODEL_EVENT: u64 = 12 * 1024 * 1024;
+
+fn model_decision(command: &Command) -> bool {
+    matches!(
+        command,
+        Command::RecordModelCatalogApproval { .. } | Command::RecordModelCatalogSigning { .. }
+    )
+}
+fn model_actor(command: &Command) -> Option<(&str, &str, &str, &str, &str)> {
+    match command {
+        Command::RecordModelCatalogApproval { approval, .. } => Some((
+            &approval.principal_id,
+            &approval.assignment_id,
+            &approval.assignment_receipt_sha256,
+            &approval.activity,
+            &approval.approved_at,
+        )),
+        Command::RecordModelCatalogSigning { statement } => Some((
+            &statement.signing_principal_id,
+            &statement.signing_assignment_id,
+            &statement.signing_assignment_receipt_sha256,
+            &statement.signing_activity,
+            &statement.signed_at,
+        )),
+        _ => None,
+    }
+}
+fn model_decision_receipt(event: &CatalogEvent) -> Result<String> {
+    let mut value = serde_json::to_value(event)?;
+    let approval = value["command"]["approval"]
+        .as_object_mut()
+        .ok_or("approval event preimage missing")?;
+    approval
+        .remove("approval_decision_receipt_sha256")
+        .ok_or("approval event receipt missing")?;
+    Ok(bundle::hex(&Sha256::digest(crate::model_trust::canonical(
+        &value,
+    )?)))
+}
+fn check_model_receipt(event: &CatalogEvent) -> Result<()> {
+    if let Command::RecordModelCatalogApproval { approval, .. } = &event.command {
+        if approval.approval_decision_receipt_sha256 != model_decision_receipt(event)? {
+            return Err(
+                "model approval receipt is not its exact authenticated event preimage".into(),
+            );
+        }
+    }
+    Ok(())
+}
+fn catalog_review_event(event: &CatalogEvent) -> Result<serde_json::Value> {
+    let mut value = serde_json::to_value(event)?;
+    if model_decision(&event.command) {
+        if let Some(a) = value["command"]["approval"].as_object_mut() {
+            a.remove("approved_at");
+            a.remove("approval_decision_receipt_sha256");
+        }
+        if let Some(s) = value["command"]["statement"].as_object_mut() {
+            s.remove("signed_at");
+        }
+    }
+    Ok(value)
+}
+fn retain_assignment_receipt(catalog: &mut Catalog, command: &Command, bytes: &[u8]) {
+    if let Command::AssignRole { assignment } = command {
+        catalog
+            .assignment_receipts
+            .insert(assignment.id.clone(), bundle::hex(&Sha256::digest(bytes)));
+    }
+}
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
@@ -92,9 +161,13 @@ fn event_name(request: &str) -> String {
 }
 
 fn read_event(directory: &Path, request: &str) -> Result<(CatalogEvent, Vec<u8>)> {
-    let bytes = tpm::private_read(&directory.join(event_name(request)), MAX_CATALOG_EVENT)?;
+    let bytes = tpm::private_read(&directory.join(event_name(request)), MAX_MODEL_EVENT)?;
     let event: CatalogEvent = serde_json::from_slice(&bytes)?;
-    if serde_json::to_vec(&event)? != bytes || event.request_id != request {
+    if serde_json::to_vec(&event)? != bytes
+        || event.request_id != request
+        || (bytes.len() as u64 > MAX_CATALOG_EVENT
+            && !crate::model_trust::is_command(&event.command))
+    {
         return Err("noncanonical or substituted Admin catalog payload; preserve state".into());
     }
     Ok((event, bytes))
@@ -149,6 +222,47 @@ impl<'a> Context<'a> {
             return Ok(self.principal.clone());
         }
         Identity::parse(catalog.resolve_principal(&serde_json::to_value(&self.principal)?)?)
+    }
+
+    fn command_writer(&self, catalog: &Catalog, command: &Command) -> Result<Identity> {
+        let Some((principal, assignment, receipt, activity, at)) = model_actor(command) else {
+            return self.writer(catalog);
+        };
+        let time = crate::model_trust::timestamp(at)?;
+        crate::model_trust::check_custodian(
+            catalog,
+            principal,
+            assignment,
+            receipt,
+            activity,
+            crate::utc_bounds::Interval::new(time, time)?,
+        )?;
+        let registry = catalog.registry()?;
+        let local = registry.identity(
+            registry
+                .principal(principal)
+                .ok_or("unknown model decision actor")?,
+        );
+        Ok(serde_json::from_value(catalog.resolve_principal(&local)?)?)
+    }
+
+    fn recheck_command(
+        &self,
+        catalog: &Catalog,
+        command: &Command,
+        authenticate: &mut impl FnMut() -> Result<serde_json::Value>,
+    ) -> Result<()> {
+        if !model_decision(command) {
+            return self.recheck(authenticate);
+        }
+        if tpm::private_read(&self.directory.join("enrollment.json"), 16384)? != self.enrollment {
+            return Err("model custody enrollment changed".into());
+        }
+        let actor = catalog.resolve_principal(&authenticate()?)?;
+        if actor != serde_json::to_value(self.command_writer(catalog, command)?)? {
+            return Err("model decision differs from its actual scoped PAM principal".into());
+        }
+        Ok(())
     }
 
     fn custody_writer(&self, catalog: &Catalog) -> Result<Identity> {
@@ -315,7 +429,7 @@ impl<'a> Context<'a> {
             let writer = if admin_account_recovery(&event.command) {
                 self.custody_writer(&catalog)?
             } else {
-                self.writer(&catalog)?
+                self.command_writer(&catalog, &event.command)?
             };
             if !admin_roles::identifier(&entry.request_id)
                 || entry.request_id == REQUEST
@@ -327,15 +441,17 @@ impl<'a> Context<'a> {
                 || event.sequence != position + 1
                 || event.state_version_before != catalog.state_version
                 || snapshot.prefix_heads.get(position) != Some(&event.previous_head)
-                || entry.authenticated_uid != self.principal.uid
+                || entry.authenticated_uid != writer.uid
                 || entry.activity != event.command.activity()
                 || entry.payload_sha256 != bundle::hex(&Sha256::digest(&bytes))
             {
                 return Err("Admin catalog event does not bind the authenticated history".into());
             }
+            check_model_receipt(&event)?;
             if !catalog.apply(&event.command)? {
                 return Err("anchored Admin catalog event is not a mutation".into());
             }
+            retain_assignment_receipt(&mut catalog, &event.command, &bytes);
             if let Command::AdoptPrincipals { registry } = &event.command {
                 if !registry.binds(
                     &self.principal.installation,
@@ -385,8 +501,16 @@ impl<'a> Context<'a> {
 #[derive(Debug, PartialEq, Eq)]
 enum PrincipalPurpose {
     General,
-    AdminCatalog { candidate: Option<String> },
-    UtcSeed { candidate: Option<String> },
+    AdminCatalog {
+        candidate: Option<String>,
+    },
+    UtcSeed {
+        candidate: Option<String>,
+    },
+    ModelCustody {
+        candidate: String,
+        command_sha256: String,
+    },
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -449,6 +573,7 @@ pub(crate) struct PrincipalReader<'a, A: Checkpoint> {
     fenced: bool,
     admin_candidate: Option<Option<&'a str>>,
     seed_only: bool,
+    model_command: Option<Command>,
 }
 
 impl<'a, A: Checkpoint> PrincipalReader<'a, A> {
@@ -466,6 +591,7 @@ impl<'a, A: Checkpoint> PrincipalReader<'a, A> {
             fenced: false,
             admin_candidate: None,
             seed_only: false,
+            model_command: None,
         }
     }
 
@@ -488,6 +614,21 @@ impl<'a, A: Checkpoint> PrincipalReader<'a, A> {
     ) -> Self {
         let mut reader = Self::admin_at(store, directory, registry_path, candidate);
         reader.seed_only = true;
+        reader
+    }
+
+    fn command_at(
+        store: &'a mut Store<A>,
+        directory: &'a Path,
+        registry_path: &'a Path,
+        candidate: &'a str,
+        command: &Command,
+        custodian: bool,
+    ) -> Self {
+        let mut reader = Self::admin_at(store, directory, registry_path, Some(candidate));
+        if custodian {
+            reader.model_command = Some(command.clone());
+        }
         reader
     }
 
@@ -529,7 +670,25 @@ impl<'a, A: Checkpoint> PrincipalReader<'a, A> {
             }
             Some((expected.clone(), account))
         };
-        let (identity, purpose) = if let Some(candidate) = self.admin_candidate {
+        let (identity, purpose) = if let Some(command) = &self.model_command {
+            let candidate = self
+                .admin_candidate
+                .flatten()
+                .ok_or("model custody candidate missing")?;
+            let writer = context.command_writer(&catalog, command)?;
+            if catalog.resolve_principal(local)? != serde_json::to_value(&writer)? {
+                return Err(
+                    "model custody login does not match the retained decision actor".into(),
+                );
+            }
+            (
+                serde_json::to_value(writer)?,
+                PrincipalPurpose::ModelCustody {
+                    candidate: candidate.into(),
+                    command_sha256: crate::model_trust::digest_command(command)?,
+                },
+            )
+        } else if let Some(candidate) = self.admin_candidate {
             if Identity::parse(local.clone())? != context.principal {
                 return Err("catalog session requires the original enrolled Admin account".into());
             }
@@ -689,6 +848,27 @@ struct PrincipalProjection<'r, 's, A: Checkpoint> {
     completed: bool,
 }
 
+// A borrowed, inert-aging-only proof of this precise PAM and semantic
+// projection. It is minted only after the first validated replay and cannot
+// escape the callback. It never permits nested session/effect admission.
+struct PrincipalAgingProjection<'a> {
+    session: &'a PrincipalSession,
+    local: &'a serde_json::Value,
+}
+impl PrincipalAgingProjection<'_> {
+    fn check(&self) -> Result<()> {
+        if !self.session.fenced.get() {
+            return Err("actor aging requires its active protected projection".into());
+        }
+        // close(), including a rejected reentrant observe, irreversibly logs
+        // out the real account. A lexical token cannot revive that session.
+        if self.session.account.identity()? != *self.local {
+            return Err("actor aging projection lost its original live PAM account".into());
+        }
+        Ok(())
+    }
+}
+
 impl<A: Checkpoint> Drop for PrincipalProjection<'_, '_, A> {
     fn drop(&mut self) {
         if !self.completed {
@@ -770,6 +950,20 @@ impl PrincipalSession {
         reader: &mut PrincipalReader<'_, A>,
         project: impl FnOnce(&serde_json::Value, &mut Store<A>) -> Result<T>,
     ) -> Result<T> {
+        self.observe_store_projected(reader, |identity, store, _projection| {
+            project(identity, store)
+        })
+    }
+
+    fn observe_store_projected<A: Checkpoint, T>(
+        &self,
+        reader: &mut PrincipalReader<'_, A>,
+        project: impl FnOnce(
+            &serde_json::Value,
+            &mut Store<A>,
+            &PrincipalAgingProjection<'_>,
+        ) -> Result<T>,
+    ) -> Result<T> {
         if self.fenced.get() {
             reader.fenced = true;
             self.close();
@@ -790,7 +984,13 @@ impl PrincipalSession {
                     "governed generation or shared authority changed; authenticate again".into(),
                 );
             }
-            let result = project(&before.identity, projection.reader.store)?;
+            let aging_projection = PrincipalAgingProjection {
+                session: self,
+                local,
+            };
+            aging_projection.check()?;
+            let result = project(&before.identity, projection.reader.store, &aging_projection)?;
+            aging_projection.check()?;
             let after = projection
                 .reader
                 .resolve_since(local, Some(self.clock.get()))?;
@@ -1988,6 +2188,324 @@ pub(crate) fn release_state_optional() -> Result<Option<crate::release_trust::St
 
 pub(crate) fn skill_trust_present() -> Result<bool> {
     Ok(catalog_state_optional()?.is_some_and(|catalog| catalog.skill_trust.is_some()))
+}
+
+pub(crate) fn current_model_authority(profile: &crate::model::Profile) -> Result<()> {
+    model_authority(profile, false, None)
+}
+pub(crate) fn pack_preparation_authority(profile: &crate::model::Profile) -> Result<()> {
+    model_authority(profile, true, None)
+}
+pub(crate) fn qualification_preparation(
+    profile: &crate::model::Profile,
+    record: &crate::model_trust::CertificationRecord,
+    evidence: &crate::model_trust::QualificationEvidence,
+    signature: &[u8],
+) -> Result<()> {
+    model_authority(profile, true, Some((record, evidence, signature)))
+}
+pub(crate) fn qualification_observation(
+    profile: &crate::model::Profile,
+    level: &str,
+    report_sha256: &str,
+) -> Result<crate::model_trust::QualificationEvidence> {
+    crate::require_root()?;
+    platform::require_installed()?;
+    platform::require_production_activation()?;
+    let image = platform::CatalogImage::capture(Path::new(DIRECTORY))?;
+    if !image.production() {
+        return Err(
+            "external native exact-image qualification observation is production-only".into(),
+        );
+    }
+    let catalog =
+        catalog_state_optional()?.ok_or("qualification observation requires Admin checkpoint")?;
+    let release = catalog
+        .release
+        .as_ref()
+        .and_then(|s| s.acknowledged.as_ref())
+        .ok_or("qualification observation requires acknowledged running image")?;
+    platform::check_governance_manifest(release)?;
+    let binding = profile
+        .governed
+        .as_ref()
+        .ok_or("qualification observation requires governed public model tuple")?;
+    let profiles =
+        crate::model_trust::ModelCatalog::parse(&crate::admin_credentials::public_input(
+            Path::new("/usr/share/luma-os/models/catalog.json"),
+            crate::model_trust::MAX_CATALOG as u64,
+        )?)?;
+    let selected = profiles
+        .profiles
+        .iter()
+        .find_map(|p| match p {
+            crate::model_trust::SelectableProfile::Model(p) if p.profile_id == profile.id => {
+                Some(p)
+            }
+            _ => None,
+        })
+        .ok_or("qualification observation profile absent")?;
+    if profiles.digest()? != binding.catalog_sha256 || selected.digest()? != binding.profile_sha256
+    {
+        return Err("qualification observation tuple changed".into());
+    }
+    let evidence = crate::model_trust::QualificationEvidence {
+        schema_version: 1,
+        level: level.into(),
+        installation_sha256: catalog.registry()?.installation().into(),
+        release_manifest_sha256: crate::model_trust::digest(release)?,
+        model_profile_sha256: selected.digest()?,
+        runtime_tuple_sha256: selected.runtime_tuple_sha256.clone(),
+        hardware: crate::model_trust::MachineTuple::current()?,
+        test_report_sha256: report_sha256.into(),
+    };
+    evidence.validate()?;
+    image.recheck()?;
+    if catalog_state_optional()?.as_ref() != Some(&catalog) {
+        return Err("qualification observation authority changed".into());
+    }
+    Ok(evidence)
+}
+fn model_authority(
+    profile: &crate::model::Profile,
+    preparation: bool,
+    qualification: Option<(
+        &crate::model_trust::CertificationRecord,
+        &crate::model_trust::QualificationEvidence,
+        &[u8],
+    )>,
+) -> Result<()> {
+    crate::require_root()?;
+    let image = platform::CatalogImage::capture(Path::new(DIRECTORY))?;
+    if qualification.is_some() && !image.production() {
+        return Err("external native exact-image qualification delivery is production-only; laboratory certification remains explicit development input".into());
+    }
+    if preparation && platform::live()? {
+        platform::require_live()?;
+        if qualification.is_some()
+            || image.production()
+            || profile.governed.is_some()
+            || crate::model::public_native_profiles()?.is_some()
+            || crate::model::public_profile(&profile.id)?.resource_binding()?
+                != profile.resource_binding()?
+        {
+            return Err(
+                "live model preparation accepts only exact laboratory factory metadata".into(),
+            );
+        }
+        let directory = Path::new(DIRECTORY);
+        let retained = match fs::read_dir(directory) {
+            Ok(mut entries) => entries.next().transpose()?.is_some(),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => false,
+            Err(e) => return Err(e.into()),
+        };
+        let parent = directory.with_file_name("admin.parent-intent");
+        let enrollment = directory.with_file_name("admin.enrollment-pending");
+        let exists = |path: &Path| -> Result<bool> {
+            match fs::symlink_metadata(path) {
+                Ok(_) => Ok(true),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(false),
+                Err(e) => Err(e.into()),
+            }
+        };
+        let (owned, nv, _) = tpm::enrollment_handles(None)?;
+        require_unenrolled_release_fallback(
+            retained || exists(&parent)? || exists(&enrollment)?,
+            owned || nv,
+        )?;
+        image.recheck()?;
+        platform::require_live()?;
+        return Ok(());
+    }
+    platform::require_installed()?;
+    let expected = catalog_state_optional()?;
+    if profile.governed.is_none() {
+        if qualification.is_some()
+            || image.production()
+            || expected.as_ref().is_some_and(|c| c.model_trust.is_some())
+        {
+            return Err(
+                "legacy model metadata cannot substitute for anchored production/model trust"
+                    .into(),
+            );
+        }
+        if crate::model::public_native_profiles()?.is_some()
+            || crate::model::public_profile(&profile.id)?.resource_binding()?
+                != profile.resource_binding()?
+        {
+            return Err("legacy laboratory profile is not the exact factory model".into());
+        }
+        image.recheck()?;
+        return Ok(());
+    }
+    let expected = expected.ok_or("governed model requires current Admin checkpoint")?;
+    let state = expected
+        .model_trust
+        .as_ref()
+        .ok_or("model trust is not anchored")?;
+    if image.production() != (state.trust.bundle.environment == "production") {
+        return Err("model trust environment differs from immutable running image".into());
+    }
+    let directory = Path::new(DIRECTORY);
+    let mut store = Store::open(
+        tpm::LocalAnchor::installed()?,
+        &directory.join("journal.json"),
+    )?;
+    let first = store.snapshot()?;
+    let context = Context::load(directory, &first.deployment)?;
+    if context.events(&first, None)?.0 != expected {
+        return Err("model authority changed before admission".into());
+    }
+    if image.production() {
+        platform::check_governance_manifest(
+            expected
+                .release
+                .as_ref()
+                .and_then(|s| s.acknowledged.as_ref())
+                .ok_or("production model requires acknowledged current release")?,
+        )?;
+    }
+    let history = HistoryReader::new(&mut store, directory).read()?;
+    let mut client = crate::utc_provider::Client::installed()?;
+    let before = client.current(&history)?.interval();
+    state.trust.check_root(before)?;
+    crate::model_trust::check_model_separation(&expected, &state.trust)?;
+    // Public physical byte scans never retain the shared journal writer lock.
+    // The exact current snapshot/history is reacquired and compared below.
+    drop(store);
+    let (command, packs) = if preparation {
+        let mut proof = crate::model::verify_public_preparation(profile, &state.trust, before)?;
+        if let Some((record, evidence, signature)) = qualification {
+            record.validate()?;
+            let binding = profile
+                .governed
+                .as_ref()
+                .ok_or("qualification requires a governed profile")?;
+            let profiles =
+                crate::model_trust::ModelCatalog::parse(&crate::admin_credentials::public_input(
+                    Path::new("/usr/share/luma-os/models/catalog.json"),
+                    crate::model_trust::MAX_CATALOG as u64,
+                )?)?;
+            let selected = profiles
+                .profiles
+                .iter()
+                .find_map(|p| match p {
+                    crate::model_trust::SelectableProfile::Model(p)
+                        if p.profile_id == profile.id =>
+                    {
+                        Some(p)
+                    }
+                    _ => None,
+                })
+                .ok_or("qualification profile absent from immutable catalog")?;
+            if profiles.digest()? != binding.catalog_sha256
+                || selected.digest()? != binding.profile_sha256
+                || record.pack_manifest_sha256 != binding.manifest_sha256
+                || record.runtime_tuple_sha256 != binding.runtime_tuple_sha256
+            {
+                return Err("qualification differs from exact immutable model tuple".into());
+            }
+            crate::model_trust::QualificationEvidence::parse(
+                &crate::model_trust::canonical(evidence)?,
+                record,
+            )?;
+            evidence.check(
+                expected
+                    .release
+                    .as_ref()
+                    .and_then(|s| s.acknowledged.as_ref())
+                    .ok_or("qualification requires acknowledged OS release")?,
+                selected,
+                &crate::model_trust::MachineTuple::current()?,
+                expected.registry()?.installation(),
+            )?;
+            let purpose = if record.level == "execution" {
+                "model-pack-execution-certification"
+            } else {
+                "model-pack-interactive-certification"
+            };
+            state.trust.verify(
+                &record.signer_key_id,
+                purpose,
+                &crate::model_trust::canonical(record)?,
+                signature,
+                before,
+            )?;
+            proof
+                .signing_keys
+                .push((record.signer_key_id.clone(), purpose.into()));
+        }
+        (
+            Command::PublishModelTrust {
+                expected_sequence: state.trust.bundle.bundle_sequence,
+                bundle: state.trust.clone(),
+            },
+            vec![proof],
+        )
+    } else {
+        let admission = state
+            .current
+            .as_ref()
+            .ok_or("model catalog is not admitted")?;
+        let catalog = crate::model_trust::ModelCatalog::parse(admission.catalog_json.as_bytes())?;
+        let packs = crate::model::verify_catalog_packs(&catalog, &state.trust, before)?;
+        crate::model_trust::current_catalog(&expected, before, &packs)?;
+        let binding = profile.governed.as_ref().ok_or("model tuple missing")?;
+        let selected = catalog
+            .profiles
+            .iter()
+            .find_map(|p| match p {
+                crate::model_trust::SelectableProfile::Model(p) if p.profile_id == profile.id => {
+                    Some(p)
+                }
+                _ => None,
+            })
+            .ok_or("model absent from admitted catalog")?;
+        if selected.availability != "available"
+            || catalog.digest()? != binding.catalog_sha256
+            || selected.digest()? != binding.profile_sha256
+            || selected.model_pack_manifest_sha256 != binding.manifest_sha256
+            || selected.runtime_tuple_sha256 != binding.runtime_tuple_sha256
+            || crate::model::public_profile(&profile.id)?.resource_binding()?
+                != profile.resource_binding()?
+        {
+            return Err(
+                "model profile does not bind exact admitted catalog/pack/runtime tuple".into(),
+            );
+        }
+        (
+            Command::AdmitModelCatalog {
+                expected_floor: state.floor,
+                admission: admission.clone(),
+            },
+            packs,
+        )
+    };
+    let proof = crate::model_trust::TimeProof::capture(&expected, &command, &packs)?;
+    let accounts =
+        ModelAccounts::capture(&expected, &command, Path::new(crate::principal::REGISTRY))?;
+    let mut store = Store::open(
+        tpm::LocalAnchor::installed()?,
+        &directory.join("journal.json"),
+    )?;
+    image.recheck()?;
+    history.recheck(&mut HistoryReader::new(&mut store, directory))?;
+    let last = store.snapshot()?;
+    last.clock.elapsed_since(first.clock)?;
+    if last.head != first.head
+        || last.deployment != first.deployment
+        || context.events(&last, None)?.0 != expected
+    {
+        return Err("model authority changed during physical admission".into());
+    }
+    accounts.recheck()?;
+    let sampled = client.current(&history)?;
+    client
+        .project_after_checks(&history, &sampled, |clock| {
+            let _ = clock;
+            Ok(())
+        })
+        .and_then(|live| proof.check(live.interval()))
 }
 
 pub(crate) fn check_production_catalog(
@@ -3223,9 +3741,38 @@ impl ActorAging {
         directory: &Path,
         request: &str,
     ) -> Result<Option<Self>> {
-        if session.fenced.get() {
-            return Err("aged actor session is fenced".into());
-        }
+        Self::capture_checked(session, catalog, store, directory, request, || {
+            if session.fenced.get() {
+                return Err("aged actor session is fenced".into());
+            }
+            Ok(())
+        })
+    }
+    fn capture_projected<A: Checkpoint>(
+        projection: &PrincipalAgingProjection<'_>,
+        catalog: &Catalog,
+        store: &mut Store<A>,
+        directory: &Path,
+        request: &str,
+    ) -> Result<Option<Self>> {
+        Self::capture_checked(
+            projection.session,
+            catalog,
+            store,
+            directory,
+            request,
+            || projection.check(),
+        )
+    }
+    fn capture_checked<A: Checkpoint>(
+        session: &PrincipalSession,
+        catalog: &Catalog,
+        store: &mut Store<A>,
+        directory: &Path,
+        request: &str,
+        check_session: impl Fn() -> Result<()>,
+    ) -> Result<Option<Self>> {
+        check_session()?;
         let principal = session.binding.identity["principal"]
             .as_str()
             .ok_or("missing actor principal")?;
@@ -3233,6 +3780,7 @@ impl ActorAging {
             if session.binding.password_epoch.is_some() {
                 return Err("acting principal aging authority disappeared".into());
             }
+            check_session()?;
             return Ok(None);
         };
         let epoch = session
@@ -3251,9 +3799,7 @@ impl ActorAging {
         actor.history.recheck(&mut HistoryReader::for_candidate(
             store, directory, request,
         )?)?;
-        if session.fenced.get() {
-            return Err("aged actor session was fenced during reconstruction".into());
-        }
+        check_session()?;
         actor.recheck()?;
         Ok(Some(actor))
     }
@@ -3431,6 +3977,7 @@ struct CatalogTimeConstraints {
     account_day: Option<u32>,
     release: Option<crate::release_trust::State>,
     skills: Option<crate::skill_trust::State>,
+    models: Option<crate::model_trust::TimeProof>,
     command: Command,
 }
 impl CatalogTime {
@@ -3469,6 +4016,7 @@ impl CatalogTime {
             && account_day.is_none()
             && !crate::release_trust::is_command(command)
             && !crate::skill_trust::is_command(command)
+            && !crate::model_trust::is_command(command)
         {
             return Ok(None);
         }
@@ -3481,6 +4029,7 @@ impl CatalogTime {
                 account_day,
                 release: catalog.release.clone(),
                 skills: catalog.skill_trust.clone(),
+                models: None,
                 command: command.clone(),
             },
             last: None,
@@ -3523,7 +4072,11 @@ impl CatalogTimeConstraints {
             check_account_day(day, live.interval())?;
         }
         crate::release_trust::check_command_time(&self.command, &self.release, live.interval())?;
-        crate::skill_trust::check_command_time(&self.command, &self.skills, live.interval())
+        crate::skill_trust::check_command_time(&self.command, &self.skills, live.interval())?;
+        if let Some(proof) = &self.models {
+            proof.check(live.interval())?;
+        }
+        Ok(())
     }
 }
 fn check_account_day(day: u32, interval: crate::utc_bounds::Interval) -> Result<()> {
@@ -3539,6 +4092,232 @@ struct SkillTime {
     state: Option<crate::skill_trust::State>,
     release: Option<crate::release_trust::State>,
     command: Command,
+}
+struct ModelTime {
+    client: crate::utc_provider::Client,
+    history: HistoryBinding,
+    catalog: Catalog,
+    command: Command,
+    proof: crate::model_trust::TimeProof,
+    retained: Option<RetainedModelDecision>,
+    accounts: ModelAccounts,
+}
+struct ModelAccounts {
+    accounts: Vec<(String, crate::principal::AccountBinding)>,
+}
+impl ModelAccounts {
+    fn capture(catalog: &Catalog, command: &Command, registry: &Path) -> Result<Self> {
+        let mut principals = BTreeSet::new();
+        match command {
+            Command::AdmitModelCatalog { admission, .. } => {
+                let envelope =
+                    crate::model_trust::Envelope::parse(admission.envelope_json.as_bytes())?;
+                for approval in envelope.approvals {
+                    principals.insert(approval.principal_id);
+                }
+                principals.insert(envelope.statement.signing_principal_id);
+            }
+            Command::RecordModelCatalogApproval { approval, .. } => {
+                principals.insert(approval.principal_id.clone());
+            }
+            Command::RecordModelCatalogSigning { statement } => {
+                principals.insert(statement.signing_principal_id.clone());
+                for approval in catalog
+                    .model_approvals
+                    .values()
+                    .filter(|a| a.release_request_sha256 == statement.release_request_sha256)
+                {
+                    principals.insert(approval.principal_id.clone());
+                }
+            }
+            _ => (),
+        }
+        let mut accounts = Vec::new();
+        for id in principals {
+            let principal = catalog
+                .registry()?
+                .principal(&id)
+                .ok_or("model custody account no longer exists")?;
+            let account = crate::principal::AccountBinding::capture(
+                registry,
+                account_identity(registry),
+                &principal.login,
+            )?;
+            catalog.resolve_principal(&account.identity()?)?;
+            let expected = catalog
+                .account_commitments
+                .get(&id)
+                .ok_or("model custody account credential is not checkpointed")?
+                .clone();
+            if account.credential_commitment()? != expected {
+                return Err(
+                    "model custodian password/lock rows differ from current anchored credentials"
+                        .into(),
+                );
+            }
+            accounts.push((expected, account));
+        }
+        let value = Self { accounts };
+        value.recheck()?;
+        Ok(value)
+    }
+    fn recheck(&self) -> Result<()> {
+        for (expected, account) in &self.accounts {
+            if account.credential_commitment()? != *expected {
+                return Err("model custody account changed during admission; current password/lock recovery required".into());
+            }
+        }
+        Ok(())
+    }
+}
+/// Private retained bytes are facts, not transferable signing authority.
+/// Only the installed held journal reader can bind this token; no JSON/path
+/// constructor is exposed to a caller or to the model distribution verifier.
+pub(crate) struct RetainedModelDecision {
+    path: std::path::PathBuf,
+    file: File,
+    identity: (u64, u64, u64, i64, i64),
+    bytes: Vec<u8>,
+    command_sha256: String,
+}
+impl RetainedModelDecision {
+    fn capture(
+        directory: &Path,
+        registry: &Path,
+        request: &str,
+        catalog: &Catalog,
+        snapshot: &Snapshot,
+        command: &Command,
+    ) -> Result<Option<Self>> {
+        use std::os::unix::fs::MetadataExt;
+        if !model_decision(command) {
+            return Ok(None);
+        }
+        let path = directory.join(event_name(request));
+        match fs::symlink_metadata(&path) {
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(e) => return Err(e.into()),
+            Ok(_) => (),
+        }
+        let (event, bytes) = read_event(directory, request)?;
+        check_model_receipt(&event)?;
+        if event.command != *command {
+            return Err("retained model event changes its exact original command".into());
+        }
+        let context = Context::load_at(directory, &snapshot.deployment, registry)?;
+        if event.schema_version != 1
+            || event.kind != "native-admin-catalog-event"
+            || event.deployment != snapshot.deployment
+            || event.enrollment_sha256 != bundle::hex(&Sha256::digest(&context.enrollment))
+            || event.principal != context.command_writer(catalog, command)?
+        {
+            return Err("retained model event changes its deployment, enrollment or actual original custodian".into());
+        }
+        let anchored = snapshot.entries.iter().any(|e| {
+            e.request_id == request
+                && e.payload_sha256 == bundle::hex(&Sha256::digest(&bytes))
+                && e.authenticated_uid == event.principal.uid
+                && e.activity == command.activity()
+        });
+        if !anchored
+            && (event.previous_head != snapshot.head
+                || event.sequence != snapshot.entries.len() + 1
+                || event.state_version_before != catalog.state_version)
+        {
+            return Err("retained model intent no longer binds the exact journal prefix".into());
+        }
+        let file = OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NONBLOCK)
+            .open(&path)?;
+        let m = file.metadata()?;
+        let proof = Self {
+            path,
+            file,
+            identity: (m.dev(), m.ino(), m.len(), m.ctime(), m.ctime_nsec()),
+            bytes,
+            command_sha256: crate::model_trust::digest(command)?,
+        };
+        proof.recheck()?;
+        Ok(Some(proof))
+    }
+    fn recheck(&self) -> Result<()> {
+        use std::os::unix::fs::MetadataExt;
+        for m in [self.file.metadata()?, fs::symlink_metadata(&self.path)?] {
+            if (m.dev(), m.ino(), m.len(), m.ctime(), m.ctime_nsec()) != self.identity {
+                return Err("retained model event descriptor changed".into());
+            }
+        }
+        if tpm::private_read(&self.path, MAX_MODEL_EVENT)? != self.bytes {
+            return Err("retained model event bytes changed".into());
+        }
+        Ok(())
+    }
+    pub(crate) fn accepts(&self, command: &Command) -> Result<()> {
+        if self.command_sha256 != crate::model_trust::digest(command)? {
+            return Err("retained model token cannot change its original command".into());
+        }
+        Ok(())
+    }
+}
+impl ModelTime {
+    fn capture<A: Checkpoint>(
+        store: &mut Store<A>,
+        directory: &Path,
+        registry: &Path,
+        request: &str,
+        catalog: &Catalog,
+        command: &Command,
+    ) -> Result<Option<Self>> {
+        if !crate::model_trust::is_command(command) {
+            return Ok(None);
+        }
+        let history = HistoryReader::for_candidate(store, directory, request)?.read()?;
+        let mut client = crate::utc_provider::Client::installed()?;
+        let packs =
+            crate::model_trust::check_live(catalog, command, client.current(&history)?.interval())?;
+        let retained = RetainedModelDecision::capture(
+            directory,
+            registry,
+            request,
+            catalog,
+            &store.snapshot()?,
+            command,
+        )?;
+        let accounts = ModelAccounts::capture(catalog, command, registry)?;
+        let mut proof = crate::model_trust::TimeProof::capture(catalog, command, &packs)?;
+        if let Some(retained) = &retained {
+            proof.retain_original(retained)?;
+        }
+        history.recheck(&mut HistoryReader::for_candidate(
+            store, directory, request,
+        )?)?;
+        proof.check(client.current(&history)?.interval())?;
+        Ok(Some(Self {
+            client,
+            history,
+            catalog: catalog.clone(),
+            command: command.clone(),
+            proof,
+            retained,
+            accounts,
+        }))
+    }
+    fn recheck(&mut self) -> Result<()> {
+        let packs = crate::model_trust::check_live(
+            &self.catalog,
+            &self.command,
+            self.client.current(&self.history)?.interval(),
+        )?;
+        self.proof = crate::model_trust::TimeProof::capture(&self.catalog, &self.command, &packs)?;
+        if let Some(retained) = &self.retained {
+            retained.recheck()?;
+            self.proof.retain_original(retained)?;
+        }
+        self.accounts.recheck()?;
+        self.proof
+            .check(self.client.current(&self.history)?.interval())
+    }
 }
 impl SkillTime {
     fn capture<A: Checkpoint>(
@@ -3668,6 +4447,7 @@ struct CatalogAttempt<'s> {
     grant_time: std::cell::RefCell<Option<GrantTime>>,
     release_time: std::cell::RefCell<Option<ReleaseTime>>,
     skill_time: std::cell::RefCell<Option<SkillTime>>,
+    model_time: std::cell::RefCell<Option<ModelTime>>,
     final_time: std::cell::RefCell<Option<CatalogTime>>,
     actor_aging: std::cell::RefCell<Option<ActorAging>>,
 }
@@ -3690,12 +4470,28 @@ impl<'s> CatalogAttempt<'s> {
             PrincipalPurpose::AdminCatalog {
                 candidate: Some(candidate),
             } if candidate == request => (),
+            PrincipalPurpose::ModelCustody {
+                candidate,
+                command_sha256,
+            } if candidate == request
+                && model_decision(command)
+                && command_sha256 == &crate::model_trust::digest_command(command)? =>
+            {
+                ()
+            }
             _ => return Err("catalog continuation requires its exact Admin login scope".into()),
         }
         let mut project = || {
-            session.observe_store(
-                &mut PrincipalReader::admin_at(store, directory, registry_path, Some(request)),
-                |identity, store| {
+            session.observe_store_projected(
+                &mut PrincipalReader::command_at(
+                    store,
+                    directory,
+                    registry_path,
+                    request,
+                    command,
+                    model_decision(command),
+                ),
+                |identity, store, projection| {
                     let snapshot = store.snapshot()?;
                     snapshot.clock.elapsed_since(session.clock.get())?;
                     session.clock.set(snapshot.clock);
@@ -3703,12 +4499,15 @@ impl<'s> CatalogAttempt<'s> {
                     let catalog = context.events(&snapshot, Some(request))?.0;
                     let image = platform::CatalogImage::capture(directory)?;
                     check_production_catalog(&image, &catalog, command)?;
-                    if serde_json::to_value(context.writer(&catalog)?)? != *identity {
+                    if serde_json::to_value(context.command_writer(&catalog, command)?)?
+                        != *identity
+                    {
                         return Err(
                             "catalog projection differs from the original governed Admin".into(),
                         );
                     }
-                    context.recheck(&mut || session.account.identity())?;
+                    context
+                        .recheck_command(&catalog, command, &mut || session.account.identity())?;
                     Ok(Self {
                         session,
                         image,
@@ -3718,8 +4517,8 @@ impl<'s> CatalogAttempt<'s> {
                         request: request.into(),
                         command: command.clone(),
                         peer,
-                        actor_aging: std::cell::RefCell::new(ActorAging::capture(
-                            session, &catalog, store, directory, request,
+                        actor_aging: std::cell::RefCell::new(ActorAging::capture_projected(
+                            projection, &catalog, store, directory, request,
                         )?),
                         grant_time: std::cell::RefCell::new(GrantTime::capture(
                             store, directory, request, command,
@@ -3729,6 +4528,14 @@ impl<'s> CatalogAttempt<'s> {
                         )?),
                         skill_time: std::cell::RefCell::new(SkillTime::capture(
                             store, directory, request, &catalog, command,
+                        )?),
+                        model_time: std::cell::RefCell::new(ModelTime::capture(
+                            store,
+                            directory,
+                            registry_path,
+                            request,
+                            &catalog,
+                            command,
                         )?),
                         final_time: std::cell::RefCell::new(CatalogTime::capture(
                             session, store, directory, request, &catalog, command,
@@ -3768,6 +4575,16 @@ impl<'s> CatalogAttempt<'s> {
         if let Some(time) = &mut *self.skill_time.borrow_mut() {
             time.recheck()?;
         }
+        if let Some(time) = &mut *self.model_time.borrow_mut() {
+            time.recheck()?;
+        }
+        if let (Some(model), Some(final_time)) = (
+            &*self.model_time.borrow(),
+            &mut *self.final_time.borrow_mut(),
+        ) {
+            // Preserve the actual pack signer windows obtained by physical verification.
+            final_time.constraints.models = Some(model.proof.clone());
+        }
         if let Some(time) = &mut *self.account_time.borrow_mut() {
             time.recheck()?;
         }
@@ -3777,6 +4594,9 @@ impl<'s> CatalogAttempt<'s> {
                 self.registry.current()?;
                 if let Some(aging) = &mut *self.actor_aging.borrow_mut() {
                     aging.recheck()?;
+                }
+                if let Some(model) = self.model_time.borrow().as_ref() {
+                    model.accounts.recheck()?;
                 }
                 observed = self
                     .final_time
@@ -4055,7 +4875,7 @@ fn execute_catalog_authorized_at<A: Checkpoint>(
     let writer = if admin_account_recovery(command) {
         context.custody_writer(&catalog)?
     } else {
-        context.writer(&catalog)?
+        context.command_writer(&catalog, command)?
     };
     if let CatalogAuthority::Governed(attempt) = &authority {
         if serde_json::to_value(&writer)? != attempt.session.binding.identity
@@ -4138,7 +4958,7 @@ fn execute_catalog_authorized_at<A: Checkpoint>(
         }
         Ok(value)
     };
-    context.recheck(&mut authenticate)?;
+    context.recheck_command(&catalog, command, &mut authenticate)?;
     let old = events.iter().find(|event| event.request_id == request);
     let replayed = old.is_some();
     let mut predicted = catalog.clone();
@@ -4173,7 +4993,17 @@ fn execute_catalog_authorized_at<A: Checkpoint>(
         )
     };
     let bytes = serde_json::to_vec(&event)?;
-    if bytes.len() as u64 > MAX_CATALOG_EVENT {
+    check_model_receipt(&event)?;
+    if changed {
+        retain_assignment_receipt(&mut predicted, command, &bytes);
+    }
+    if bytes.len() as u64
+        > if crate::model_trust::is_command(command) {
+            MAX_MODEL_EVENT
+        } else {
+            MAX_CATALOG_EVENT
+        }
+    {
         return Err("principal/catalog payload exceeds the fixed bound".into());
     }
     let path = directory.join(event_name(request));
@@ -4191,8 +5021,9 @@ fn execute_catalog_authorized_at<A: Checkpoint>(
     }
     let mut digest = Sha256::new();
     digest.update(b"luma-native-admin-catalog-review-v1\0");
+    let reviewed_event = catalog_review_event(&event)?;
     digest.update(serde_json::to_vec(
-        &serde_json::json!({"event":event,"head":snapshot.head,
+        &serde_json::json!({"event":reviewed_event,"head":snapshot.head,
         "replayed":replayed,"changed":changed,"reset_count":snapshot.clock.reset_count,
         "restart_count":snapshot.clock.restart_count}),
     )?);
@@ -4204,7 +5035,7 @@ fn execute_catalog_authorized_at<A: Checkpoint>(
             return Err("Admin catalog review changed; inspect again".into());
         }
         if changed {
-            context.recheck(&mut authenticate)?;
+            context.recheck_command(&catalog, command, &mut authenticate)?;
             if matches!(command, Command::PrepareAccountDeletion { .. }) {
                 deletion_boundary
                     .as_ref()
@@ -4246,7 +5077,7 @@ fn execute_catalog_authorized_at<A: Checkpoint>(
             File::open(directory)?.sync_all()?;
             let entry = Entry {
                 request_id: request.into(),
-                authenticated_uid: context.principal.uid,
+                authenticated_uid: event.principal.uid,
                 clock: snapshot.clock,
                 activity: command.activity().into(),
                 payload_sha256: bundle::hex(&Sha256::digest(&bytes)),
@@ -4261,7 +5092,7 @@ fn execute_catalog_authorized_at<A: Checkpoint>(
                         "Admin catalog authority or semantic inputs changed before commit".into(),
                     );
                 }
-                context.recheck(&mut authenticate)
+                context.recheck_command(&catalog, command, &mut authenticate)
             })?;
             written = true;
         }
@@ -4286,17 +5117,19 @@ fn execute_catalog_authorized_at<A: Checkpoint>(
     if written && current != predicted {
         return Err("committed Admin catalog differs from the proposed state".into());
     }
-    context.recheck(&mut authenticate)?;
+    context.recheck_command(&current, command, &mut authenticate)?;
     Ok(
         serde_json::json!({"schema_version":1,"action":"admin-catalog-command",
         "review_sha256":digest,"proposal":event,"catalog":current,
+        "model_custody_intent_review":model_decision(command),
+        "canonical_signing_statement":if reviewed.is_some()&&(written||replayed){match command {Command::RecordModelCatalogSigning{statement}=>Some(String::from_utf8(crate::model_trust::canonical(statement)?)?),_=>None}}else{None},
         "committed":reviewed.is_some() && (written || replayed),"replayed":replayed,
         "no_change":!changed && !replayed,"tpm_write_performed":written,
         "product_admin_active":current.principal_states.get(&context.principal.principal).map_or(true, |state| state.enabled),
         "account_password_aging_policy":account_day(&current, command).map(|day| serde_json::json!({
             "credential_day":day,"minimum_days":0,"maximum_days":90,"warning_days":7,
             "clock_source":"protected_utc","saved_policy_is_authority":false})),
-        "delegation_available":false,"effect_grant":false,
+        "delegation_available":model_decision(command),"effect_grant":false,
         "trusted_utc_available":false,"production_custody_verified":false,"gate_closing":false}),
     )
 }
@@ -5359,6 +6192,7 @@ mod release_command_tests {
             account_day: None,
             release: None,
             skills: None,
+            models: None,
             command,
         };
         let live = |lower, upper| {
@@ -5484,6 +6318,7 @@ mod skill_command_tests {
             account_day: Some(1),
             release: None,
             skills: None,
+            models: None,
             command: Command::RegisterActivity {
                 activity: "test.inert".into(),
             },
@@ -5672,6 +6507,38 @@ fn run_catalog_command(
 ) -> Result<()> {
     crate::require_root()?;
     platform::require_installed()?;
+    if let Command::AdmitModelCatalog { admission, .. } = command {
+        // Byte hashing is inert preparation, not catalog/effect admission. Do
+        // it before the original fixed PAM lifetime starts; only retained
+        // descriptor proofs are revisited by the live authenticated boundary.
+        let catalog = catalog_state_optional()?
+            .ok_or("model catalog preparation requires Admin bootstrap")?;
+        let trust = &catalog
+            .model_trust
+            .as_ref()
+            .ok_or("model trust is not anchored")?
+            .trust;
+        let directory = Path::new(DIRECTORY);
+        let mut store = Store::open(
+            tpm::LocalAnchor::installed()?,
+            &directory.join("journal.json"),
+        )?;
+        let snapshot = store.snapshot()?;
+        let context = Context::load(directory, &snapshot.deployment)?;
+        if context.events(&snapshot, Some(request))?.0 != catalog {
+            return Err("model preparation authority changed".into());
+        }
+        let history = HistoryReader::for_candidate(&mut store, directory, request)?.read()?;
+        let mut client = crate::utc_provider::Client::installed()?;
+        let profiles = crate::model_trust::ModelCatalog::parse(admission.catalog_json.as_bytes())?;
+        let inert_interval = client.current(&history)?.interval();
+        // The immutable byte witness does not carry journal authority. Release
+        // the shared writer lock before potentially multi-gigabyte reads so
+        // unrelated grant/UTC/worker rechecks remain available. Authentication
+        // later reacquires and validates the complete current authority.
+        drop(store);
+        crate::model::verify_catalog_packs(&profiles, trust, inert_interval)?;
+    }
     let prepared = prepare_control(login, Some(request))?;
     let authenticated = authentication::local(login)?;
     let directory = Path::new(DIRECTORY);
@@ -5692,6 +6559,385 @@ fn run_catalog_command(
     )?;
     println!("{}", serde_json::to_string(&report)?);
     Ok(())
+}
+
+#[derive(Deserialize)]
+#[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
+enum ModelCustodyIntent {
+    Approve {
+        request: crate::model_trust::ReleaseRequest,
+        principal_id: String,
+        assignment_id: String,
+        assignment_receipt_sha256: String,
+        activity: String,
+    },
+    Sign {
+        statement: crate::model_trust::SigningIntent,
+    },
+}
+impl ModelCustodyIntent {
+    fn command(&self, time: String, receipt: Option<String>) -> Result<Command> {
+        let command = match self {
+            Self::Approve {
+                request,
+                principal_id,
+                assignment_id,
+                assignment_receipt_sha256,
+                activity,
+            } => Command::RecordModelCatalogApproval {
+                request: request.clone(),
+                approval: crate::model_trust::Approval {
+                    activity: activity.clone(),
+                    approved_at: time,
+                    approval_decision_receipt_sha256: receipt
+                        .ok_or("native approval receipt must be derived from its actual event")?,
+                    assignment_id: assignment_id.clone(),
+                    assignment_receipt_sha256: assignment_receipt_sha256.clone(),
+                    catalog_sha256: request.catalog_sha256.clone(),
+                    decision: "approved".into(),
+                    principal_id: principal_id.clone(),
+                    release_request_sha256: request.digest()?,
+                    release_id: request.release_id.clone(),
+                },
+            },
+            Self::Sign { statement } => Command::RecordModelCatalogSigning {
+                statement: statement.at(time)?,
+            },
+        };
+        command.validate()?;
+        Ok(command)
+    }
+}
+fn bind_model_intent<A: Checkpoint>(
+    store: &mut Store<A>,
+    directory: &Path,
+    registry: &Path,
+    request: &str,
+    intent: &ModelCustodyIntent,
+) -> Result<Command> {
+    let snapshot = store.snapshot()?;
+    let context = Context::load_at(directory, &snapshot.deployment, registry)?;
+    let (catalog, events) = context.events(&snapshot, Some(request))?;
+    let history = HistoryReader::for_candidate(store, directory, request)?.read()?;
+    let mut client = crate::utc_provider::Client::installed()?;
+    let live = client.current(&history)?;
+    let time = crate::model_trust::utc_timestamp(live.interval().endpoints().0)?;
+    let receipt = if let ModelCustodyIntent::Approve {
+        request: release,
+        principal_id,
+        assignment_id,
+        assignment_receipt_sha256,
+        activity,
+    } = intent
+    {
+        crate::model_trust::check_custodian(
+            &catalog,
+            principal_id,
+            assignment_id,
+            assignment_receipt_sha256,
+            activity,
+            live.interval(),
+        )?;
+        let principals = catalog.registry()?;
+        let principal = catalog.resolve_principal(
+            &principals.identity(
+                principals
+                    .principal(principal_id)
+                    .ok_or("unknown custodian")?,
+            ),
+        )?;
+        let preimage = serde_json::json!({"schema_version":1,"kind":"native-admin-catalog-event","deployment":context.deployment,"enrollment_sha256":bundle::hex(&Sha256::digest(&context.enrollment)),"principal":principal,"request_id":request,"sequence":snapshot.entries.len()+1,"state_version_before":catalog.state_version,"previous_head":snapshot.head,"command":{"action":"record_model_catalog_approval","request":release,"approval":{"activity":activity,"approved_at":time,"assignment_id":assignment_id,"assignment_receipt_sha256":assignment_receipt_sha256,"catalog_sha256":release.catalog_sha256,"decision":"approved","principal_id":principal_id,"release_request_sha256":release.digest()?,"release_id":release.release_id}}});
+        Some(bundle::hex(&Sha256::digest(crate::model_trust::canonical(
+            &preimage,
+        )?)))
+    } else {
+        None
+    };
+    let command = intent.command(time, receipt)?;
+    if let Some(old) = events.iter().find(|event| event.request_id == request) {
+        if crate::model_trust::digest_command(&old.command)?
+            != crate::model_trust::digest_command(&command)?
+        {
+            return Err("model decision request already binds another exact intent".into());
+        }
+        return Ok(old.command.clone());
+    }
+    match fs::symlink_metadata(directory.join(event_name(request))) {
+        Ok(_) => {
+            let (original, _) = read_event(directory, request)?;
+            if crate::model_trust::digest_command(&original.command)?
+                != crate::model_trust::digest_command(&command)?
+            {
+                return Err("retained model preparation binds a different intent".into());
+            }
+            RetainedModelDecision::capture(
+                directory,
+                registry,
+                request,
+                &catalog,
+                &snapshot,
+                &original.command,
+            )?
+            .ok_or("retained model token missing")?;
+            return Ok(original.command);
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => (),
+        Err(e) => return Err(e.into()),
+    }
+    let event = CatalogEvent {
+        schema_version: 1,
+        kind: "native-admin-catalog-event".into(),
+        deployment: context.deployment.clone(),
+        enrollment_sha256: bundle::hex(&Sha256::digest(&context.enrollment)),
+        principal: context.command_writer(&catalog, &command)?,
+        request_id: request.into(),
+        sequence: snapshot.entries.len() + 1,
+        state_version_before: catalog.state_version,
+        previous_head: snapshot.head.clone(),
+        command: command.clone(),
+    };
+    check_model_receipt(&event)?;
+    history.recheck(&mut HistoryReader::for_candidate(
+        store, directory, request,
+    )?)?;
+    if store.snapshot()?.head != snapshot.head {
+        return Err("model decision head changed during stamping".into());
+    }
+    client.project_after_checks(&history, &live, |_| Ok(()))?;
+    Ok(command)
+}
+
+pub(crate) fn model_catalog_command(args: &[String]) -> Result<()> {
+    if (args.len() != 4 && !(args.len() == 6 && args[4] == "--commit"))
+        || !matches!(
+            args.first().map(String::as_str),
+            Some("admin-model-command" | "admin-model-custodian-command")
+        )
+    {
+        return Err("expected admin-model-command|admin-model-custodian-command LOGIN REQUEST FILE [--commit REVIEW-SHA256]".into());
+    }
+    if !admin_roles::identifier(&args[2]) || args[2] == REQUEST {
+        return Err("invalid model decision request".into());
+    }
+    let reviewed = if args.len() == 6 {
+        tpm::decode::<32>(&args[5])?;
+        Some(args[5].as_str())
+    } else {
+        None
+    };
+    let bytes = catalog_input(Path::new(&args[3]), MAX_MODEL_EVENT as usize)?;
+    if args[0] == "admin-model-command" {
+        let command: Command = serde_json::from_slice(&bytes)?;
+        if !matches!(
+            command,
+            Command::PublishModelTrust { .. } | Command::AdmitModelCatalog { .. }
+        ) {
+            return Err(
+                "Admin model route accepts only trust publication or catalog admission".into(),
+            );
+        }
+        if let Command::PublishModelTrust { bundle, .. } = &command {
+            crate::model_trust::SignedTrust::parse(&crate::model_trust::canonical(bundle)?)?;
+        }
+        command.validate()?;
+        return run_catalog_command(&args[1], &args[2], &command, reviewed);
+    }
+    let intent: ModelCustodyIntent = serde_json::from_slice(&bytes)?;
+    crate::require_root()?;
+    platform::require_installed()?;
+    let directory = Path::new(DIRECTORY);
+    let registry = Path::new(crate::principal::REGISTRY);
+    let mut store = Store::open(
+        tpm::LocalAnchor::installed()?,
+        &directory.join("journal.json"),
+    )?;
+    let command = bind_model_intent(&mut store, directory, registry, &args[2], &intent)?;
+    let login = PrincipalLogin::prepare(
+        &mut PrincipalReader::command_at(&mut store, directory, registry, &args[2], &command, true),
+        &args[1],
+    )?;
+    drop(store);
+    let account = authentication::local(&args[1])?;
+    let mut store = Store::open(
+        tpm::LocalAnchor::installed()?,
+        &directory.join("journal.json"),
+    )?;
+    let command = bind_model_intent(&mut store, directory, registry, &args[2], &intent)?;
+    let session = PrincipalSession::new(
+        account,
+        login,
+        &mut PrincipalReader::command_at(&mut store, directory, registry, &args[2], &command, true),
+    )?;
+    let attempt = CatalogAttempt::prepare(
+        &session, &mut store, directory, registry, &args[2], &command, None,
+    )?;
+    let report = attempt.execute(&mut store, reviewed)?;
+    println!("{}", serde_json::to_string(&report)?);
+    Ok(())
+}
+
+#[cfg(test)]
+mod model_custody_tests {
+    use super::*;
+    fn request() -> crate::model_trust::ReleaseRequest {
+        crate::model_trust::ReleaseRequest {
+            artifact_type: "model-profile-catalog-release-request".into(),
+            catalog_id: "test-models".into(),
+            catalog_sequence: 1,
+            catalog_sha256: "4".repeat(64),
+            environment: "lab".into(),
+            not_after: "2026-10-13T00:00:00Z".into(),
+            not_before: "2026-10-12T00:00:00Z".into(),
+            policy_version: "catalog-policy-v1".into(),
+            purpose: "model-profile-catalog-lab".into(),
+            release_id: "native-test".into(),
+            schema_version: 1,
+            signature_algorithm: "Ed25519".into(),
+            signer_key_id: "catalog-key".into(),
+            signing_activity: "model-catalog.sign.lab".into(),
+            signing_assignment_id: "signer-assignment".into(),
+            signing_assignment_receipt_sha256: "5".repeat(64),
+            signing_principal_id: "3".repeat(64),
+        }
+    }
+    pub(super) fn event() -> CatalogEvent {
+        let request = request();
+        let time = "2026-10-12T00:00:01Z".to_owned();
+        let principal = Identity {
+            installation: "1".repeat(64),
+            principal: "2".repeat(64),
+            generation: 1,
+            login: "custodian".into(),
+            uid: 1002,
+        };
+        let approval = serde_json::json!({"activity":"model-catalog.approve.lab-release","approved_at":time,"assignment_id":"approve-assignment","assignment_receipt_sha256":"6".repeat(64),"catalog_sha256":request.catalog_sha256,"decision":"approved","principal_id":principal.principal,"release_request_sha256":request.digest().unwrap(),"release_id":request.release_id});
+        let preimage = serde_json::json!({"schema_version":1,"kind":"native-admin-catalog-event","deployment":"7".repeat(64),"enrollment_sha256":"8".repeat(64),"principal":principal,"request_id":"custodian-approval","sequence":7,"state_version_before":5,"previous_head":"9".repeat(64),"command":{"action":"record_model_catalog_approval","request":request,"approval":approval}});
+        let receipt = bundle::hex(&Sha256::digest(
+            crate::model_trust::canonical(&preimage).unwrap(),
+        ));
+        let intent = ModelCustodyIntent::Approve {
+            request,
+            principal_id: principal.principal.clone(),
+            assignment_id: "approve-assignment".into(),
+            assignment_receipt_sha256: "6".repeat(64),
+            activity: "model-catalog.approve.lab-release".into(),
+        };
+        CatalogEvent {
+            schema_version: 1,
+            kind: "native-admin-catalog-event".into(),
+            deployment: "7".repeat(64),
+            enrollment_sha256: "8".repeat(64),
+            principal,
+            request_id: "custodian-approval".into(),
+            sequence: 7,
+            state_version_before: 5,
+            previous_head: "9".repeat(64),
+            command: intent.command(time, Some(receipt)).unwrap(),
+        }
+    }
+    #[test]
+    fn closed_custody_intents_exclude_caller_execution_time_receipts_and_other_actions() {
+        let value = serde_json::json!({"action":"approve","request":request(),"principal_id":"2".repeat(64),"assignment_id":"approve-assignment","assignment_receipt_sha256":"6".repeat(64),"activity":"model-catalog.approve.lab-release"});
+        assert!(serde_json::from_value::<ModelCustodyIntent>(value.clone()).is_ok());
+        for field in [
+            "approved_at",
+            "approval_decision_receipt_sha256",
+            "effect_grant",
+            "signed_at",
+        ] {
+            let mut wrong = value.clone();
+            wrong[field] = "caller".into();
+            assert!(serde_json::from_value::<ModelCustodyIntent>(wrong).is_err());
+        }
+        let duplicate =
+            serde_json::to_string(&value)
+                .unwrap()
+                .replacen("{", "{\"action\":\"sign\",", 1);
+        assert!(serde_json::from_str::<ModelCustodyIntent>(&duplicate).is_err());
+        assert!(serde_json::from_value::<ModelCustodyIntent>(
+            serde_json::json!({"action":"issue_grant"})
+        )
+        .is_err());
+    }
+    #[test]
+    fn actual_event_receipt_binds_actor_stamp_request_head_and_entire_payload() {
+        let original = event();
+        check_model_receipt(&original).unwrap();
+        assert!(Identity::parse(serde_json::to_value(&original.principal).unwrap()).is_err());
+        for case in 0..6 {
+            let mut changed = original.clone();
+            match case {
+                0 => changed.previous_head = "a".repeat(64),
+                1 => changed.principal.uid = 1003,
+                2 => changed.request_id = "other-request".into(),
+                3 => changed.sequence += 1,
+                4 => {
+                    if let Command::RecordModelCatalogApproval { approval, .. } =
+                        &mut changed.command
+                    {
+                        approval.approved_at = "2026-10-12T00:00:02Z".into();
+                    }
+                }
+                _ => {
+                    if let Command::RecordModelCatalogApproval { request, .. } =
+                        &mut changed.command
+                    {
+                        request.catalog_sha256 = "b".repeat(64);
+                    }
+                }
+            }
+            assert!(check_model_receipt(&changed).is_err());
+        }
+    }
+    #[test]
+    fn intent_review_omits_only_native_derived_fields_not_authority_or_body() {
+        let original = event();
+        let review = catalog_review_event(&original).unwrap();
+        let scope = crate::model_trust::digest_command(&original.command).unwrap();
+        let mut stamp = original.clone();
+        if let Command::RecordModelCatalogApproval { approval, .. } = &mut stamp.command {
+            approval.approved_at = "2026-10-12T00:00:03Z".into();
+            approval.approval_decision_receipt_sha256 = "a".repeat(64);
+        }
+        assert_eq!(review, catalog_review_event(&stamp).unwrap());
+        assert_eq!(
+            scope,
+            crate::model_trust::digest_command(&stamp.command).unwrap()
+        );
+        for case in 0..5 {
+            let mut changed = original.clone();
+            match case {
+                0 => changed.previous_head = "b".repeat(64),
+                1 => changed.principal.generation += 1,
+                2 => changed.sequence += 1,
+                3 => {
+                    if let Command::RecordModelCatalogApproval { approval, .. } =
+                        &mut changed.command
+                    {
+                        approval.assignment_receipt_sha256 = "c".repeat(64);
+                    }
+                }
+                _ => {
+                    if let Command::RecordModelCatalogApproval { request, .. } =
+                        &mut changed.command
+                    {
+                        request.catalog_sequence += 1;
+                    }
+                }
+            }
+            assert_ne!(review, catalog_review_event(&changed).unwrap());
+        }
+        let ordinary = CatalogEvent {
+            command: Command::RegisterActivity {
+                activity: "test.inert".into(),
+            },
+            ..original
+        };
+        assert_eq!(
+            catalog_review_event(&ordinary).unwrap(),
+            serde_json::to_value(&ordinary).unwrap()
+        );
+    }
 }
 
 pub(crate) fn principal_enabled(value: &str) -> Result<bool> {
@@ -5974,9 +7220,9 @@ impl<'s> CreationAttempt<'s> {
                 )
             }
         }
-        session.observe_store(
+        session.observe_store_projected(
             &mut PrincipalReader::admin_at(store, directory, registry_path, Some(transaction)),
-            |identity, store| {
+            |identity, store, projection| {
                 let snapshot = store.snapshot()?;
                 let context = Context::load_at(directory, &snapshot.deployment, registry_path)?;
                 let (catalog, events) = context.events(&snapshot, None)?;
@@ -6008,8 +7254,13 @@ impl<'s> CreationAttempt<'s> {
                     guard.complete()?;
                 }
                 context.recheck(&mut || session.account.identity())?;
-                let actor_aging =
-                    ActorAging::capture(session, &catalog, store, directory, transaction)?;
+                let actor_aging = ActorAging::capture_projected(
+                    projection,
+                    &catalog,
+                    store,
+                    directory,
+                    transaction,
+                )?;
                 Ok(Self {
                     session,
                     actor_aging: RefCell::new(actor_aging),
@@ -6513,9 +7764,9 @@ impl<'s> DeletionAttempt<'s> {
                 )
             }
         }
-        session.observe_store(
+        session.observe_store_projected(
             &mut PrincipalReader::admin_at(store, directory, registry_path, Some(transaction)),
-            |identity, store| {
+            |identity, store, projection| {
                 let snapshot = store.snapshot()?;
                 let context = Context::load_at(directory, &snapshot.deployment, registry_path)?;
                 let (catalog, events) = context.events(&snapshot, None)?;
@@ -6546,8 +7797,13 @@ impl<'s> DeletionAttempt<'s> {
                     guard.complete()?;
                 }
                 context.recheck(&mut || session.account.identity())?;
-                let actor_aging =
-                    ActorAging::capture(session, &catalog, store, directory, transaction)?;
+                let actor_aging = ActorAging::capture_projected(
+                    projection,
+                    &catalog,
+                    store,
+                    directory,
+                    transaction,
+                )?;
                 Ok(Self {
                     session,
                     actor_aging: RefCell::new(actor_aging),
@@ -6867,7 +8123,7 @@ pub(crate) fn fixture_service_request(
     peer.check()?;
     let directory = root.join("admin");
     let mut store = fixture_store(root)?;
-    run_control_at(
+    let result = run_control_at(
         &mut store,
         &directory,
         &root.join("registry.json"),
@@ -6877,7 +8133,13 @@ pub(crate) fn fixture_service_request(
         request,
         command,
         review,
-    )
+    );
+    if let Err(error) = &result {
+        // Only the isolated disposable test adapter reports its internal
+        // failure. Production peers receive the fixed generic denial.
+        eprintln!("DISPOSABLE_ADMIN_REQUEST_FAILURE: {error}");
+    }
+    result
 }
 
 #[cfg(test)]
@@ -7523,6 +8785,7 @@ pub(crate) fn fixture_account_checkpoint(
         false
     );
     println!("ACCOUNT_CHECKPOINT_CASE=identical-new-request-no-op");
+    fixture_model_custody_sessions(root, password);
     let prior = fixture_governed_session(root, "otherhuman", password).unwrap();
     assert!(prior.binding.credential_sha256.is_some());
     println!("ACCOUNT_CHECKPOINT_CASE=fresh-pam-session-binds-anchored-credential");
@@ -8435,6 +9698,9 @@ pub(crate) fn fixture_session_projections(
     let registry = root.join("registry.json");
     for mode in [
         "success",
+        "aging-unaged-projection",
+        "aging-terminal-close-in-projection",
+        "aging-reentrant-projection",
         "callback-error",
         "callback-unwind",
         "enrollment-change",
@@ -8509,9 +9775,57 @@ pub(crate) fn fixture_session_projections(
         let mut reader = PrincipalReader::at(&mut store, &directory, &registry);
         let calls = std::cell::Cell::new(0);
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            session.observe(&mut reader, |identity| {
+            session.observe_store_projected(&mut reader, |identity, store, projection| {
                 calls.set(calls.get() + 1);
                 assert_eq!(identity, &session.binding.identity);
+                if mode.starts_with("aging-") {
+                    let snapshot = store.snapshot()?;
+                    let context = Context::load_at(&directory, &snapshot.deployment, &registry)?;
+                    let catalog = context.events(&snapshot, None)?.0;
+                    assert!(ActorAging::capture(
+                        &session,
+                        &catalog,
+                        store,
+                        &directory,
+                        "aging-projection-fixture"
+                    )
+                    .is_err());
+                    assert!(ActorAging::capture_projected(
+                        projection,
+                        &catalog,
+                        store,
+                        &directory,
+                        "aging-projection-fixture"
+                    )?
+                    .is_none());
+                    if mode == "aging-terminal-close-in-projection" {
+                        session.close();
+                    }
+                    if mode == "aging-reentrant-projection" {
+                        let nested_calls = std::cell::Cell::new(0);
+                        assert!(session
+                            .observe(
+                                &mut PrincipalReader::at(store, &directory, &registry),
+                                |_| {
+                                    nested_calls.set(nested_calls.get() + 1);
+                                    Ok(())
+                                }
+                            )
+                            .is_err());
+                        assert_eq!(nested_calls.get(), 0);
+                    }
+                    if mode != "aging-unaged-projection" {
+                        assert!(ActorAging::capture_projected(
+                            projection,
+                            &catalog,
+                            store,
+                            &directory,
+                            "aging-projection-fixture"
+                        )
+                        .is_err());
+                        return Err("terminal or reentrant aging projection remains fenced".into());
+                    }
+                }
                 if mode == "callback-error" {
                     return Err("deliberate protected projection refusal".into());
                 }
@@ -8538,7 +9852,7 @@ pub(crate) fn fixture_session_projections(
         if mode.starts_with("injected-session-clock-") {
             session.clock.set(original_clock);
         }
-        if mode == "success" {
+        if mode == "success" || mode == "aging-unaged-projection" {
             assert_eq!(
                 result.unwrap().unwrap(),
                 session.binding.identity["generation"].as_u64().unwrap()
@@ -8586,7 +9900,7 @@ pub(crate) fn fixture_session_projections(
         assert!(reader.fenced);
         assert_eq!(
             calls.get(),
-            if mode == "success" {
+            if mode == "success" || mode == "aging-unaged-projection" {
                 2
             } else {
                 usize::from(
@@ -8625,6 +9939,298 @@ pub(crate) fn fixture_governed_session(
         attempt,
         &mut PrincipalReader::at(&mut store, &root.join("admin"), &root.join("registry.json")),
     )
+}
+
+#[cfg(test)]
+pub(crate) fn fixture_model_custody_sessions(
+    root: &Path,
+    password: &crate::sealed_credential::PrivateBuffer,
+) {
+    let directory = root.join("admin");
+    let registry = root.join("registry.json");
+    let commit = |request: &str, command: &Command| {
+        let mut store = fixture_store(root).unwrap();
+        let inspected = execute_catalog_authorized_at(
+            &mut store,
+            &directory,
+            &registry,
+            account_identity(&registry),
+            || {
+                crate::principal::RegistryBinding::capture(&registry)?
+                    .current()
+                    .and_then(|r| {
+                        r.account("human")
+                            .map(|p| r.identity(p))
+                            .ok_or_else(|| "missing fixture Admin".into())
+                    })
+            },
+            request,
+            command,
+            None,
+            CatalogAuthority::Primitive,
+        )
+        .unwrap_or_else(|error| {
+            panic!("DISPOSABLE_MODEL_CUSTODY_SETUP_FAILURE request={request} phase=review: {error}")
+        });
+        execute_catalog_authorized_at(
+            &mut store,
+            &directory,
+            &registry,
+            account_identity(&registry),
+            || {
+                crate::principal::RegistryBinding::capture(&registry)?
+                    .current()
+                    .and_then(|r| {
+                        r.account("human")
+                            .map(|p| r.identity(p))
+                            .ok_or_else(|| "missing fixture Admin".into())
+                    })
+            },
+            request,
+            command,
+            Some(inspected["review_sha256"].as_str().unwrap()),
+            CatalogAuthority::Primitive,
+        )
+        .unwrap_or_else(|error| {
+            panic!("DISPOSABLE_MODEL_CUSTODY_SETUP_FAILURE request={request} phase=commit: {error}")
+        })
+    };
+    let activity = "model-catalog.approve.lab-release";
+    commit(
+        "model-custody-activity",
+        &Command::RegisterActivity {
+            activity: activity.into(),
+        },
+    );
+    commit(
+        "model-custody-role",
+        &Command::DefineRole {
+            name: "ModelCustodian".into(),
+            expected_version: 0,
+            activities: vec![activity.into()],
+        },
+    );
+    commit(
+        "model-custody-accounts",
+        &account_checkpoint_command(&registry).unwrap(),
+    );
+    let mut store = fixture_store(root).unwrap();
+    let snapshot = store.snapshot().unwrap();
+    let context = Context::load_at(&directory, &snapshot.deployment, &registry).unwrap();
+    let catalog = context.events(&snapshot, None).unwrap().0;
+    let actor = catalog
+        .registry()
+        .unwrap()
+        .account("otherhuman")
+        .unwrap()
+        .clone();
+    let signer = catalog
+        .registry()
+        .unwrap()
+        .account("human")
+        .unwrap()
+        .clone();
+    let resolved = catalog
+        .resolve_principal(&catalog.registry().unwrap().identity(&actor))
+        .unwrap();
+    let generation = resolved["generation"].as_u64().unwrap();
+    drop(store);
+    let begin = crate::model_trust::timestamp("2026-10-12T00:00:00Z").unwrap();
+    let end = crate::model_trust::timestamp("2026-10-13T00:00:00Z").unwrap();
+    commit(
+        "model-custody-assign",
+        &Command::AssignRole {
+            assignment: crate::finite_grants::Assignment {
+                id: "model-custody-assignment".into(),
+                subject: actor.id.clone(),
+                subject_generation: generation,
+                role: "ModelCustodian".into(),
+                role_version: 1,
+                version: 1,
+                not_before_ms: begin,
+                expires_ms: end,
+                revoked: false,
+            },
+        },
+    );
+    let mut store = fixture_store(root).unwrap();
+    let snapshot = store.snapshot().unwrap();
+    let context = Context::load_at(&directory, &snapshot.deployment, &registry).unwrap();
+    let catalog = context.events(&snapshot, None).unwrap().0;
+    let assignment_receipt = catalog.assignment_receipts["model-custody-assignment"].clone();
+    drop(store);
+    let request = crate::model_trust::ReleaseRequest {
+        artifact_type: "model-profile-catalog-release-request".into(),
+        catalog_id: "fixture-models".into(),
+        catalog_sequence: 1,
+        catalog_sha256: "4".repeat(64),
+        environment: "lab".into(),
+        not_after: "2026-10-13T00:00:00Z".into(),
+        not_before: "2026-10-12T00:00:00Z".into(),
+        policy_version: "catalog-policy-v1".into(),
+        purpose: "model-profile-catalog-lab".into(),
+        release_id: "disposable-catalog-fixture".into(),
+        schema_version: 1,
+        signature_algorithm: "Ed25519".into(),
+        signer_key_id: "model-key".into(),
+        signing_activity: "model-catalog.sign.lab".into(),
+        signing_assignment_id: "signer-assignment".into(),
+        signing_assignment_receipt_sha256: "5".repeat(64),
+        signing_principal_id: signer.id,
+    };
+    let intent = ModelCustodyIntent::Approve {
+        request: request.clone(),
+        principal_id: actor.id.clone(),
+        assignment_id: "model-custody-assignment".into(),
+        assignment_receipt_sha256: assignment_receipt.clone(),
+        activity: activity.into(),
+    };
+    let mut store = fixture_store(root).unwrap();
+    let snapshot = store.snapshot().unwrap();
+    let context = Context::load_at(&directory, &snapshot.deployment, &registry).unwrap();
+    let catalog = context.events(&snapshot, None).unwrap().0;
+    let preimage = serde_json::json!({"schema_version":1,"kind":"native-admin-catalog-event","deployment":snapshot.deployment,"enrollment_sha256":bundle::hex(&Sha256::digest(&context.enrollment)),"principal":resolved,"request_id":"model-custody-success","sequence":snapshot.entries.len()+1,"state_version_before":catalog.state_version,"previous_head":snapshot.head,"command":{"action":"record_model_catalog_approval","request":request,"approval":{"activity":activity,"approved_at":"2026-10-12T00:00:01Z","assignment_id":"model-custody-assignment","assignment_receipt_sha256":assignment_receipt,"catalog_sha256":request.catalog_sha256,"decision":"approved","principal_id":actor.id,"release_request_sha256":request.digest().unwrap(),"release_id":request.release_id}}});
+    let receipt = bundle::hex(&Sha256::digest(
+        crate::model_trust::canonical(&preimage).unwrap(),
+    ));
+    drop(store);
+    let command = intent
+        .command("2026-10-12T00:00:01Z".into(), Some(receipt))
+        .unwrap();
+    let prepare = |candidate: &str| {
+        PrincipalLogin::prepare(
+            &mut PrincipalReader::command_at(
+                &mut fixture_store(root).unwrap(),
+                &directory,
+                &registry,
+                candidate,
+                &command,
+                true,
+            ),
+            "otherhuman",
+        )
+        .unwrap()
+    };
+    let login = prepare("model-custody-success");
+    let account = authentication::fixture_local_account(root, "otherhuman", password).unwrap();
+    let mut store = fixture_store(root).unwrap();
+    let session = PrincipalSession::new(
+        account,
+        login,
+        &mut PrincipalReader::command_at(
+            &mut store,
+            &directory,
+            &registry,
+            "model-custody-success",
+            &command,
+            true,
+        ),
+    )
+    .unwrap();
+    assert_eq!(
+        session
+            .identity(&mut PrincipalReader::command_at(
+                &mut store,
+                &directory,
+                &registry,
+                "model-custody-success",
+                &command,
+                true
+            ))
+            .unwrap()["uid"],
+        1002
+    );
+    assert!(matches!(
+        session.binding.purpose,
+        PrincipalPurpose::ModelCustody { .. }
+    ));
+    session.close();
+    drop(store);
+    println!("MODEL_CUSTODY_SCOPE_CASE=actual-nonadmin-pam-and-tpm-purpose");
+    let login = prepare("model-custody-wrong-pam");
+    let account = authentication::fixture_local_account(root, "human", password).unwrap();
+    assert!(PrincipalSession::new(
+        account,
+        login,
+        &mut PrincipalReader::command_at(
+            &mut fixture_store(root).unwrap(),
+            &directory,
+            &registry,
+            "model-custody-wrong-pam",
+            &command,
+            true
+        )
+    )
+    .is_err());
+    println!("MODEL_CUSTODY_SCOPE_CASE=wrong-actual-pam-principal");
+    for mode in [
+        "ordinary-admin",
+        "general-session",
+        "changed-intent",
+        "revoked-assignment",
+    ] {
+        let candidate = format!("model-custody-{mode}");
+        let login = prepare(&candidate);
+        let account = authentication::fixture_local_account(root, "otherhuman", password).unwrap();
+        let mut store = fixture_store(root).unwrap();
+        let session = PrincipalSession::new(
+            account,
+            login,
+            &mut PrincipalReader::command_at(
+                &mut store, &directory, &registry, &candidate, &command, true,
+            ),
+        )
+        .unwrap();
+        drop(store);
+        let result = match mode {
+            "ordinary-admin" => session.identity(&mut PrincipalReader::admin_at(
+                &mut fixture_store(root).unwrap(),
+                &directory,
+                &registry,
+                Some(&candidate),
+            )),
+            "general-session" => session.identity(&mut PrincipalReader::at(
+                &mut fixture_store(root).unwrap(),
+                &directory,
+                &registry,
+            )),
+            "changed-intent" => {
+                let mut changed = command.clone();
+                if let Command::RecordModelCatalogApproval { request, .. } = &mut changed {
+                    request.catalog_sequence += 1;
+                }
+                session.identity(&mut PrincipalReader::command_at(
+                    &mut fixture_store(root).unwrap(),
+                    &directory,
+                    &registry,
+                    &candidate,
+                    &changed,
+                    true,
+                ))
+            }
+            "revoked-assignment" => {
+                commit(
+                    "model-custody-revoke",
+                    &Command::RevokeAssignment {
+                        assignment: "model-custody-assignment".into(),
+                        expected_version: 1,
+                    },
+                );
+                session.identity(&mut PrincipalReader::command_at(
+                    &mut fixture_store(root).unwrap(),
+                    &directory,
+                    &registry,
+                    &candidate,
+                    &command,
+                    true,
+                ))
+            }
+            _ => unreachable!(),
+        };
+        assert!(result.is_err());
+        assert!(session.fenced.get());
+        println!("MODEL_CUSTODY_SCOPE_CASE={mode}-refused");
+    }
 }
 
 #[cfg(test)]
@@ -8870,6 +10476,127 @@ mod tests {
         )
         .unwrap();
         adoption_command(&f.directory.join("registry.json")).unwrap()
+    }
+
+    #[test]
+    fn retained_model_preparation_is_exact_private_original_context_not_caller_history() {
+        let f = Fixture::new("retained-model-decision");
+        f.activate();
+        let Command::AdoptPrincipals { registry } = principal_registry(&f) else {
+            panic!("registry fixture");
+        };
+        let mut catalog = Catalog::initial();
+        catalog.principal_registry = Some(registry);
+        let mut event = super::model_custody_tests::event();
+        let begin = crate::model_trust::timestamp("2026-10-12T00:00:00Z").unwrap();
+        let end = begin + 86_400_000;
+        let activity = "model-catalog.approve.lab-release";
+        catalog.roles.insert(
+            "Custodian".into(),
+            admin_roles::Role {
+                name: "Custodian".into(),
+                activities: vec![activity.into()],
+                version: 1,
+            },
+        );
+        catalog.assignments.insert(
+            "approve-assignment".into(),
+            crate::finite_grants::Assignment {
+                id: "approve-assignment".into(),
+                subject: "ef".repeat(32),
+                subject_generation: 1,
+                role: "Custodian".into(),
+                role_version: 1,
+                version: 1,
+                not_before_ms: begin,
+                expires_ms: end,
+                revoked: false,
+            },
+        );
+        catalog
+            .assignment_receipts
+            .insert("approve-assignment".into(), "6".repeat(64));
+        catalog
+            .account_commitments
+            .insert("ef".repeat(32), "a".repeat(64));
+        if let Command::RecordModelCatalogApproval { approval, .. } = &mut event.command {
+            approval.principal_id = "ef".repeat(32);
+        }
+        let snapshot = f.store().snapshot().unwrap();
+        let registry = f.directory.join("registry.json");
+        let context = Context::load_at(&f.directory, &snapshot.deployment, &registry).unwrap();
+        event.principal = context.command_writer(&catalog, &event.command).unwrap();
+        event.deployment = snapshot.deployment.clone();
+        event.enrollment_sha256 = bundle::hex(&Sha256::digest(&context.enrollment));
+        event.previous_head = snapshot.head.clone();
+        event.sequence = snapshot.entries.len() + 1;
+        event.state_version_before = catalog.state_version;
+        let receipt = model_decision_receipt(&event).unwrap();
+        if let Command::RecordModelCatalogApproval { approval, .. } = &mut event.command {
+            approval.approval_decision_receipt_sha256 = receipt;
+        }
+        let path = f.directory.join(event_name(&event.request_id));
+        platform::write_atomic(&path, &serde_json::to_vec(&event).unwrap(), 0o600).unwrap();
+        let token = RetainedModelDecision::capture(
+            &f.directory,
+            &registry,
+            &event.request_id,
+            &catalog,
+            &snapshot,
+            &event.command,
+        )
+        .unwrap()
+        .unwrap();
+        token.accepts(&event.command).unwrap();
+        token.recheck().unwrap();
+        let mut changed = event.command.clone();
+        if let Command::RecordModelCatalogApproval { approval, .. } = &mut changed {
+            approval.approved_at = "2026-10-12T00:00:02Z".into();
+        }
+        assert!(token.accepts(&changed).is_err());
+        let mut bad_snapshot = f.store().snapshot().unwrap();
+        bad_snapshot.head = "0".repeat(64);
+        assert!(RetainedModelDecision::capture(
+            &f.directory,
+            &registry,
+            &event.request_id,
+            &catalog,
+            &bad_snapshot,
+            &event.command
+        )
+        .is_err());
+        let mut revoked = catalog.clone();
+        revoked
+            .assignments
+            .get_mut("approve-assignment")
+            .unwrap()
+            .revoked = true;
+        assert!(RetainedModelDecision::capture(
+            &f.directory,
+            &registry,
+            &event.request_id,
+            &revoked,
+            &snapshot,
+            &event.command
+        )
+        .is_err());
+        platform::write_atomic(&path, &serde_json::to_vec(&event).unwrap(), 0o600).unwrap();
+        assert!(token.recheck().is_err());
+        event.principal.uid = 0;
+        let receipt = model_decision_receipt(&event).unwrap();
+        if let Command::RecordModelCatalogApproval { approval, .. } = &mut event.command {
+            approval.approval_decision_receipt_sha256 = receipt;
+        }
+        platform::write_atomic(&path, &serde_json::to_vec(&event).unwrap(), 0o600).unwrap();
+        assert!(RetainedModelDecision::capture(
+            &f.directory,
+            &registry,
+            &event.request_id,
+            &catalog,
+            &snapshot,
+            &event.command
+        )
+        .is_err());
     }
 
     fn recovery_fixture(label: &str, credential: &crate::admin_recovery::Credential) -> Fixture {

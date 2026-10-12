@@ -25,6 +25,21 @@ pub(crate) fn identifier(value: &str) -> bool {
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) enum Command {
+    PublishModelTrust {
+        expected_sequence: u64,
+        bundle: crate::model_trust::SignedTrust,
+    },
+    AdmitModelCatalog {
+        expected_floor: u64,
+        admission: crate::model_trust::Admission,
+    },
+    RecordModelCatalogApproval {
+        request: crate::model_trust::ReleaseRequest,
+        approval: crate::model_trust::Approval,
+    },
+    RecordModelCatalogSigning {
+        statement: crate::model_trust::Statement,
+    },
     PublishSkillTrust {
         expected_version: u64,
         bundle: crate::skill_trust::SignedTrust,
@@ -133,6 +148,20 @@ pub(crate) enum Command {
 impl Command {
     pub(crate) fn activity(&self) -> &'static str {
         match self {
+            Self::PublishModelTrust { .. } => "admin.models.trust_publish",
+            Self::AdmitModelCatalog { .. } => "admin.models.catalog_admit",
+            Self::RecordModelCatalogApproval { approval, .. } => match approval.activity.as_str() {
+                "model-catalog.approve.license" => "model-catalog.approve.license",
+                "model-catalog.approve.release" => "model-catalog.approve.release",
+                "model-catalog.approve.security" => "model-catalog.approve.security",
+                "model-catalog.approve.lab-release" => "model-catalog.approve.lab-release",
+                _ => "invalid-model-catalog-approval",
+            },
+            Self::RecordModelCatalogSigning { statement } => match statement.environment.as_str() {
+                "production" => "model-catalog.sign.production",
+                "lab" => "model-catalog.sign.lab",
+                _ => "invalid-model-catalog-signing",
+            },
             Self::PublishSkillTrust { .. } => "admin.skills.trust_publish",
             Self::AdmitSkillRegistry { .. } => "admin.skills.registry_admit",
             Self::PublishReleaseTrust { .. } => "admin.release.trust_publish",
@@ -188,6 +217,28 @@ impl Command {
     pub(crate) fn validate(&self) -> Result<()> {
         let valid_activity = |v: &str| identifier(v) && v != "admin.bootstrap";
         match self {
+            Self::PublishModelTrust {
+                expected_sequence,
+                bundle,
+            } => {
+                if *expected_sequence >= (1 << 53) - 1 {
+                    return Err("model trust sequence exhausted".into());
+                }
+                bundle.validate()
+            }
+            Self::AdmitModelCatalog {
+                expected_floor,
+                admission,
+            } => {
+                if *expected_floor > (1 << 53) - 1 {
+                    return Err("model catalog floor exhausted".into());
+                }
+                admission.validate()
+            }
+            Self::RecordModelCatalogApproval { request, approval } => {
+                approval.check_request(request)
+            }
+            Self::RecordModelCatalogSigning { statement } => statement.validate(),
             Self::PublishSkillTrust {
                 expected_version,
                 bundle,
@@ -366,6 +417,14 @@ pub(crate) struct Role {
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 pub(crate) struct Catalog {
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub model_trust: Option<crate::model_trust::State>,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub assignment_receipts: BTreeMap<String, String>,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub model_approvals: BTreeMap<String, crate::model_trust::Approval>,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub model_signings: BTreeMap<String, crate::model_trust::Statement>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub skill_trust: Option<crate::skill_trust::State>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub release: Option<crate::release_trust::State>,
@@ -426,6 +485,10 @@ impl Catalog {
 
     pub(crate) fn initial() -> Self {
         Self {
+            model_trust: None,
+            assignment_receipts: BTreeMap::new(),
+            model_approvals: BTreeMap::new(),
+            model_signings: BTreeMap::new(),
             skill_trust: None,
             release: None,
             state_version: 1,
@@ -480,6 +543,66 @@ impl Catalog {
             .checked_add(1)
             .ok_or("Admin catalog version exhausted")?;
         match command {
+            Command::PublishModelTrust {
+                expected_sequence,
+                bundle,
+            } => {
+                let before = self.model_trust.clone();
+                crate::model_trust::publish(&mut self.model_trust, *expected_sequence, bundle)?;
+                if self.model_trust == before {
+                    return Ok(false);
+                }
+            }
+            Command::AdmitModelCatalog {
+                expected_floor,
+                admission,
+            } => {
+                crate::model_trust::admit(&mut self.model_trust, *expected_floor, admission)?;
+            }
+            Command::RecordModelCatalogApproval { request, approval } => {
+                approval.check_request(request)?;
+                let at = crate::model_trust::timestamp(&approval.approved_at)?;
+                crate::model_trust::check_custodian(
+                    self,
+                    &approval.principal_id,
+                    &approval.assignment_id,
+                    &approval.assignment_receipt_sha256,
+                    &approval.activity,
+                    crate::utc_bounds::Interval::new(at, at)?,
+                )?;
+                if self.model_approvals.len() >= 1024
+                    || self
+                        .model_approvals
+                        .contains_key(&approval.approval_decision_receipt_sha256)
+                {
+                    return Err(
+                        "model approval decision is duplicate or bounded history is full".into(),
+                    );
+                }
+                self.model_approvals.insert(
+                    approval.approval_decision_receipt_sha256.clone(),
+                    approval.clone(),
+                );
+            }
+            Command::RecordModelCatalogSigning { statement } => {
+                statement.validate()?;
+                let at = crate::model_trust::timestamp(&statement.signed_at)?;
+                crate::model_trust::check_custodian(
+                    self,
+                    &statement.signing_principal_id,
+                    &statement.signing_assignment_id,
+                    &statement.signing_assignment_receipt_sha256,
+                    &statement.signing_activity,
+                    crate::utc_bounds::Interval::new(at, at)?,
+                )?;
+                let digest = statement.digest()?;
+                if self.model_signings.len() >= 1024 || self.model_signings.contains_key(&digest) {
+                    return Err(
+                        "model signing event is duplicate or bounded history is full".into(),
+                    );
+                }
+                self.model_signings.insert(digest, statement.clone());
+            }
             Command::PublishSkillTrust {
                 expected_version,
                 bundle,

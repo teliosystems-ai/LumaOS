@@ -19,6 +19,16 @@ profile luma-model flags=(attach_disconnected) {
   /sys/devices/system/node/** r,
   /sys/fs/cgroup/**/memory.max r,
   /sys/fs/cgroup/memory.max r,
+  # Immutable factory metadata only; serving obtains authority from the broker.
+  / r,
+  /usr/ r,
+  /usr/share/ r,
+  /usr/share/luma-os/ r,
+  /usr/share/luma-os/models/ r,
+  /usr/share/luma-os/models/catalog.json r,
+  /usr/share/luma-os/model-packs/ r,
+  /usr/share/luma-os/model-packs/*/ r,
+  /usr/share/luma-os/model-packs/*/manifest.json r,
   /var/lib/luma-os/model-selection.json r,
   /var/lib/luma-os/model-activation.pending r,
   # Needed for the orphan fence lookup; root-private DAC prevents content reads.

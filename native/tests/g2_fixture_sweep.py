@@ -25,6 +25,7 @@ BUILD_ROOTS = (Path('/mnt/luma-build'), Path('/mnt/d/LumaOS-builds'))
 CAPS = ('CHOWN', 'DAC_OVERRIDE', 'FOWNER', 'SETUID', 'SETGID', 'SETPCAP',
         'KILL', 'SYS_CHROOT', 'AUDIT_WRITE')
 MAX_LOG = 64 * 1024 * 1024
+MAX_FIXTURE_FILE = 8 * 1024 * 1024 * 1024
 SUMMARY = re.compile(r'^test result: (ok|FAILED)\. (\d+) passed; (\d+) failed; '
                      r'(\d+) ignored; (\d+) measured; (\d+) filtered out;', re.M)
 
@@ -54,6 +55,10 @@ TPM = names('tpm', 'emulator_install_admission', 'emulator_nv_journal_and_rollba
             'emulator_restart_and_external_change', 'emulator_rejects_missing_or_redefined_index') + names(
     'sealed_credential', 'emulator_signed_credential') + names('authentication', 'local_pam_account')
 MOUNT_TEST = names('recovery_export', 'actual_full_filesystem_retains_partial_and_never_publishes_final')[0]
+MODEL_CUSTODY_CASES = tuple('MODEL_CUSTODY_SCOPE_CASE=' + case for case in (
+    'actual-nonadmin-pam-and-tpm-purpose', 'wrong-actual-pam-principal',
+    'ordinary-admin-refused', 'general-session-refused',
+    'changed-intent-refused', 'revoked-assignment-refused'))
 
 # Child entries are not independently launchable. The enclosing test asserts
 # the owned child's exact status; hidden .output() children are not invented as
@@ -72,7 +77,7 @@ LANES = {
     'kernel': {'required': KERNEL, 'timeout': 600},
     'utc-boundaries': {'required': UTC, 'timeout': 600},
     'principal-pam': {'script': 'principal_pam_integration.py', 'required': names('authentication', 'local_pam_account'), 'marker': 'PRINCIPAL_PAM_CASES_PASSED=6', 'timeout': 600},
-    'pam-catalog': {'script': 'admin_service_pam_integration.py', 'required': names('admin_credentials', 'emulator_sealed_delivery') + names('admin_enrollment', 'emulator_existing_owner_seal_refusal', 'emulator_enrollment') + names('admin_governance', 'emulator_bootstrap') + names('admin_service', 'pam_catalog_connection'), 'marker': 'ADMIN_SERVICE_PAM_KERNEL_PEER_TPM_CATALOG_PASSED', 'timeout': 1800},
+    'pam-catalog': {'script': 'admin_service_pam_integration.py', 'required': names('admin_credentials', 'emulator_sealed_delivery') + names('admin_enrollment', 'emulator_existing_owner_seal_refusal', 'emulator_enrollment') + names('admin_governance', 'emulator_bootstrap') + names('admin_service', 'pam_catalog_connection'), 'marker': 'ADMIN_SERVICE_PAM_KERNEL_PEER_TPM_CATALOG_PASSED', 'required_markers': MODEL_CUSTODY_CASES, 'timeout': 1800},
     'resource-tpm': {'script': 'resource_checkpoint_integration.py', 'required': RESOURCE, 'marker': 'RESOURCE_CHECKPOINT_SOFTWARE_TPM_PASSED', 'timeout': 1800},
     'admin-enrollment': {'script': 'admin_enrollment_integration.py', 'required': ENROLL, 'marker': 'EXISTING_OWNER_NATIVE_CHECKPOINT_ENROLLMENT_PASSED', 'timeout': 1800},
     'admin-pending': {'script': 'admin_enrollment_pending_integration.py', 'required': names('admin_credentials', 'emulator_sealed_delivery') + names('admin_enrollment', 'emulator_pending_enrollment_publication'), 'marker': 'PENDING_ENROLLMENT_MODE_PASSED=lost-after-rename', 'timeout': 2400},
@@ -89,6 +94,7 @@ LANES = {
     'model-chat-cli': {'script': 'model_chat_integration.py', 'required': (), 'marker': 'MODEL_REPLY_CLI_UNIX_HTTP_PASSED cases=', 'timeout': 600, 'synthetic_authority': True},
     'native-source': {'required': (), 'timeout': 1200, 'unittest': True},
     'public-trust': {'required': (), 'timeout': 180, 'unittest': True},
+    'model-public': {'required': (), 'timeout': 180, 'unittest': True},
     'utc-authentication': {'required': (), 'timeout': 180, 'unittest': True},
     'utc-upstream-units': {'required': (), 'timeout': 900, 'capless': True},
     'qmp-display': {'script': 'qmp_display_integration.py', 'required': (), 'timeout': 120},
@@ -193,6 +199,9 @@ def verify_execution(lane_name, texts, inventory):
             raise ValueError('missing completed fixture marker: ' + marker)
         if marker.endswith('cases=') and not re.search(re.escape(marker) + r'[1-9][0-9]*\b', text):
             raise ValueError('zero/invalid fixture case count')
+    for marker in lane.get('required_markers', ()):
+        if not re.search(r'^' + re.escape(marker) + r'$', text, re.M):
+            raise ValueError('missing exact completed fixture case: ' + marker)
     if lane.get('unittest'):
         summaries_native = re.findall(r'^Ran ([1-9][0-9]*) tests? in .+$', text, re.M)
         terminal = re.findall(r'^(OK|FAILED)(?: \(([^\n]*)\))?$', text, re.M)
@@ -210,24 +219,42 @@ def limited_child():
     resource.setrlimit(resource.RLIMIT_FSIZE, (MAX_LOG, MAX_LOG))
 
 
+def fixture_child():
+    resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
+    # Oversized pinned-model fixtures deliberately create multi-GiB sparse
+    # files. Bound their extent separately from the transcript byte ceiling.
+    resource.setrlimit(resource.RLIMIT_FSIZE, (MAX_FIXTURE_FILE, MAX_FIXTURE_FILE))
+
+
 def execute(command, cwd, env, output, index, timeout):
     log = output / ('command-%03d.log' % index)
     began = time.monotonic()
     with log.open('xb') as stream:
         process = subprocess.Popen(command, cwd=cwd, env=env, stdout=stream,
-                                   stderr=subprocess.STDOUT, start_new_session=True, preexec_fn=limited_child)
-        timed_out = False
-        try:
-            process.wait(timeout=timeout)
-        except subprocess.TimeoutExpired:
-            timed_out = True
-            os.killpg(process.pid, signal.SIGKILL)
-            process.wait(timeout=10)
+                                   stderr=subprocess.STDOUT, start_new_session=True, preexec_fn=fixture_child)
+        timed_out, log_limit_exceeded = False, False
+        deadline = began + timeout
+        while process.poll() is None:
+            log_limit_exceeded = os.fstat(stream.fileno()).st_size > MAX_LOG
+            timed_out = time.monotonic() >= deadline
+            if timed_out or log_limit_exceeded:
+                try:
+                    os.killpg(process.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                process.wait(timeout=10)
+                break
+            try:
+                process.wait(timeout=min(0.1, max(0.001, deadline - time.monotonic())))
+            except subprocess.TimeoutExpired:
+                pass
+        log_limit_exceeded |= os.fstat(stream.fileno()).st_size > MAX_LOG
     item = {'command': [str(arg) for arg in command], 'exit_code': process.returncode,
-            'timed_out': timed_out, 'seconds': round(time.monotonic() - began, 3),
+            'timed_out': timed_out, 'log_limit_exceeded': log_limit_exceeded,
+            'seconds': round(time.monotonic() - began, 3),
             'transcript': log.name, 'sha256': digest(log)}
     print('G2_COMMAND_RESULT=' + json.dumps(item, sort_keys=True), flush=True)
-    if timed_out or process.returncode:
+    if timed_out or log_limit_exceeded or process.returncode:
         raise RuntimeError('fixture command failed; exact transcript preserved: ' + log.name)
     return bounded(log, MAX_LOG).decode(errors='replace'), item
 
@@ -271,7 +298,7 @@ def inside(lane_name):
     environment = dict(os.environ, CARGO_TARGET_DIR='/cache/target', CARGO_INCREMENTAL='0',
                        CARGO_PROFILE_TEST_DEBUG='0', CARGO_PROFILE_DEV_DEBUG='0',
                        RUSTFLAGS='-Dwarnings', PYTHONDONTWRITEBYTECODE='1', TMPDIR='/tmp',
-                       TSS2_LOG='all+NONE')
+                       LUMA_STORAGE_TEST_ROOT=str(output), TSS2_LOG='all+NONE')
     texts, commands = [], []
     def run(argv, cwd=repo / 'rust', timeout=300):
         text, result = execute([str(arg) for arg in argv], cwd, environment, output, len(commands), timeout)
@@ -318,6 +345,8 @@ def inside(lane_name):
         run(['/usr/bin/python3', '-B', '-W', 'error', '-m', 'unittest', 'discover', '-s', 'native/tests', '-p', 'test_*.py', '-v'], repo, 900)
     elif lane_name == 'public-trust':
         run(['/usr/bin/python3', '-B', '-W', 'error', '-m', 'unittest', 'discover', '-s', 'native/image', '-p', 'test_public_trust.py', '-v'], repo)
+    elif lane_name == 'model-public':
+        run(['/usr/bin/python3', '-B', '-W', 'error', '-m', 'unittest', 'discover', '-s', 'native/image', '-p', 'test_model_inputs.py', '-v'], repo)
     elif lane_name == 'utc-authentication':
         run(['/usr/bin/python3', '-B', repo / 'native/image/utc/test_release_authentication.py',
              '--archive', '/utc-input/chrony-4.9.tar.gz', '--work', output], repo)

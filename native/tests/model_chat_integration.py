@@ -29,6 +29,13 @@ def main():
     broker_root = Path('/run/luma-broker')
     broker_root.mkdir(mode=0o700)
     binary = '/usr/libexec/luma-os/luma-platform'
+    # The compiled CLI execs this fixed helper, not the import used by the
+    # synthetic authority above. Install its exact reviewed source in the
+    # fresh container so refusal cases reach the real runtime validator.
+    helper = Path('/usr/libexec/luma-os/model-chat.py')
+    with helper.open('xb') as stream:
+        stream.write(Path(chat.__file__).read_bytes())
+    helper.chmod(0o444)
     preloader = Path(os.environ['TMPDIR'])/'resource-history-cmdline-fixture.so'
     assert preloader.is_file()
     environment = dict(os.environ, LD_PRELOAD=str(preloader))
@@ -110,7 +117,7 @@ def main():
             self.wfile.write(raw)
 
     good = AdmissionFixture().responses['/completion']
-    fixtures = [('valid',json.dumps(good).encode(),True,None)]
+    fixtures = [('valid',json.dumps(good).encode(),True,None),('valid-governed',json.dumps(good).encode(),True,None)]
     for label, field, value in (('wrong-model','model','different-model'),
                                 ('over-budget','tokens_predicted',17),
                                 ('truncated','truncated',True),
@@ -141,6 +148,9 @@ def main():
                 {'schema_version':2, 'id':'fixture-model', 'transport':'openai-http'},
                 {'schema_version':2, 'id':'fixture/model'},
                 {'schema_version':2, 'id':'x'*65},
+                {'schema_version':3, 'id':'fixture-model'},
+                {'schema_version':3, 'id':'fixture-model', 'binding':{}},
+                {'schema_version':2, 'id':'fixture-model', 'binding':{}},
             ]
             for selection in invalid_selections:
                 fixture[0] = AdmissionFixture()
@@ -148,12 +158,18 @@ def main():
                 result = subprocess.run([binary,'model-chat','--timeout-seconds','3','--max-tokens','16'],
                     env=environment,input=b'Short greeting.',capture_output=True,timeout=8)
                 assert result.returncode != 0 and result.stdout == b''
-                assert b'local inference response failed validation' in result.stderr
+                assert b'local inference response failed validation' in result.stderr, (selection,result.stderr)
                 assert b'Traceback' not in result.stderr and token.encode() not in result.stderr
                 assert fixture[0].order == [] and not errors, (selection, fixture[0].order, errors)
                 print('CLI_SELECTION_REFUSAL_CASE_PASSED',flush=True)
             (root/'model-selection.json').write_text(json.dumps({'schema_version':2, 'id':'fixture-model'}))
             for label, raw, allowed, fail_at in fixtures:
+                selection={'schema_version':2,'id':'fixture-model'}
+                if label=='valid-governed':
+                    selection={'schema_version':3,'id':'fixture-model','binding':{
+                        'catalog_sha256':'a'*64,'profile_sha256':'b'*64,
+                        'manifest_sha256':'c'*64,'runtime_tuple_sha256':'d'*64}}
+                (root/'model-selection.json').write_text(json.dumps(selection))
                 fixture[0] = AdmissionFixture()
                 fixture[0].fail_at = fail_at
                 if fail_at == 'input-digest':

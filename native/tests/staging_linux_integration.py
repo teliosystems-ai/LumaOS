@@ -62,7 +62,10 @@ def main():
         return run(binary, 'staging-clean', expected=expected)
 
     clean()
-    with tempfile.TemporaryDirectory(prefix='luma-staging-integration-') as folder:
+    # The scratch sentinel must share the actual staging filesystem. TMPDIR
+    # may deliberately be an independent ext4 mount in the fixture driver;
+    # using it would test a cross-filesystem bind instead of this boundary.
+    with tempfile.TemporaryDirectory(prefix='luma-staging-integration-', dir=state) as folder:
         work = Path(folder)
         outside = work / 'sentinel'
         outside.mkdir(mode=0o700)
@@ -136,8 +139,12 @@ def main():
         signature = (source / 'release.sig').read_bytes()
         (source / 'release.sig').write_bytes(bytes(64))
         _, error = run(binary, 'verify', source, expected=1)
-        if b'signature verification failed' not in error or len(list(namespace.iterdir())) != 1:
-            raise RuntimeError('failed verification leaked snapshot')
+        remaining = list(namespace.iterdir())
+        if b'Ed25519 release signature rejected' not in error:
+            raise RuntimeError(f'bad signature did not reach exact Ed25519 refusal: {error!r}')
+        if remaining != [namespace / 'lock']:
+            raise RuntimeError(f'failed verification retained unexpected staging members: '
+                               f'{sorted(member.name for member in remaining)!r}; stderr={error!r}')
         (source / 'release.sig').write_bytes(signature)
         passed.append('bad-signature-refusal-cleans-snapshot')
 

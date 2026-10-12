@@ -182,6 +182,8 @@ def main() -> None:
     parser.add_argument('--external-artifacts', action='store_true')
     parser.add_argument('--public-trust-inputs', type=Path,
                         help='independently signed public roots and inert skill admissions; never private keys')
+    parser.add_argument('--model-public-inputs', type=Path,
+                        help='externally signed frozen model roots/trust/catalog, pack metadata and certificates; no weights or private keys')
     args = parser.parse_args()
     if os.uname().machine != 'x86_64' or run('dpkg','--print-architecture').strip() != 'amd64':
         raise SystemExit('native image assembly requires the amd64 toolchain container')
@@ -295,6 +297,13 @@ def main() -> None:
     public_inputs = public_trust.provision(ROOT, args.public_trust_inputs)
     put('usr/share/luma-os/public-trust-inputs.json',
         json.dumps(public_inputs, sort_keys=True, separators=(',', ':'))+'\n')
+    model_spec = importlib.util.spec_from_file_location(
+        'luma_model_inputs', REPO/'native/image/provision_model_inputs.py')
+    model_inputs = importlib.util.module_from_spec(model_spec)
+    model_spec.loader.exec_module(model_inputs)
+    model_report = model_inputs.provision(ROOT, args.model_public_inputs)
+    put('usr/share/luma-os/model-public-inputs.json',
+        json.dumps(model_report, sort_keys=True, separators=(',', ':'))+'\n')
     if not (KEYS/'secureboot.key').exists():
         run('openssl','req','-new','-x509','-newkey','rsa:3072','-nodes','-sha256','-days','365',
             '-subj','/CN=Luma Native Laboratory Only/','-keyout',KEYS/'secureboot.key','-out',KEYS/'secureboot.pem',stderr=subprocess.DEVNULL)
@@ -362,6 +371,9 @@ def main() -> None:
     # refuse a missing namespace rather than silently initializing one.
     (ROOT/'var/lib/luma-os/policy-decisions').mkdir()
     (ROOT/'var/lib/luma-os/policy-decisions').chmod(0o700)
+    # Empty public-certificate transport storage is not model authority.
+    (ROOT/'var/lib/luma-os/model-qualifications').mkdir()
+    (ROOT/'var/lib/luma-os/model-qualifications').chmod(0o700)
     (ROOT/'var/lib/luma-os/workflow-inputs').mkdir()
     (ROOT/'var/lib/luma-os/workflow-inputs').chmod(0o711)
     connections=ROOT/'var/lib/NetworkManager/system-connections'
@@ -398,6 +410,11 @@ def main() -> None:
         raise SystemExit('expected one pinned generic kernel')
     kernel = kernel_candidates[0]
     version = kernel.name.removeprefix('vmlinuz-')
+    generated_spec = importlib.util.spec_from_file_location(
+        'luma_generated_package', REPO/'native/image/generated/package_runtime.py')
+    generated_package = importlib.util.module_from_spec(generated_spec)
+    generated_spec.loader.exec_module(generated_package)
+    generated_package.package(ROOT, kernel, WORK)
     # Device nodes are created only within the new container-owned rootfs.
     for name,major,minor in [('null',1,3),('zero',1,5),('random',1,8),('urandom',1,9),('console',5,1)]:
         node = ROOT/'dev'/name

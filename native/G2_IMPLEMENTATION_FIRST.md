@@ -1,5 +1,9 @@
 # G2 implementation-first delivery sequence
 
+For the current implemented scope and validation state, use
+[G2 software status](G2_SOFTWARE_STATUS.md). The dated dependency table below
+preserves the original delivery sequence and is not a current gap assessment.
+
 Owner direction, 2026-10-01: finish the open implementation work before another
 memory-heavy VM/model sweep; then test one consolidated candidate and perform
 full testing of the produced image on the separate native Ubuntu machine.

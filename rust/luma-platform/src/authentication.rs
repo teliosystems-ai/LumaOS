@@ -22,6 +22,8 @@ mod session;
 pub(crate) enum SessionPurpose {
     Standard,
     Export,
+    ModelImport,
+    ModelActivation,
 }
 
 fn login(value: &str) -> Result<()> {
@@ -389,6 +391,12 @@ pub(crate) fn local(username: &str) -> Result<AuthenticatedAccount> {
 pub(crate) fn local_export(username: &str) -> Result<AuthenticatedAccount> {
     local_purpose(username, SessionPurpose::Export)
 }
+pub(crate) fn local_model_import(username: &str) -> Result<AuthenticatedAccount> {
+    local_purpose(username, SessionPurpose::ModelImport)
+}
+pub(crate) fn local_model_activation(username: &str) -> Result<AuthenticatedAccount> {
+    local_purpose(username, SessionPurpose::ModelActivation)
+}
 fn local_purpose(username: &str, purpose: SessionPurpose) -> Result<AuthenticatedAccount> {
     crate::require_root()?;
     crate::platform::require_installed()?;
@@ -662,7 +670,12 @@ mod tests {
         principal::initialize(&root.join("principals"), &[("human", 1001)]).unwrap();
         // Synthetic account/lifetime composition tests pin and unwind behavior,
         // not PAM success. Genuine PAM is exercised by the guarded integration.
-        for purpose in [SessionPurpose::Standard, SessionPurpose::Export] {
+        for purpose in [
+            SessionPurpose::Standard,
+            SessionPurpose::Export,
+            SessionPurpose::ModelImport,
+            SessionPurpose::ModelActivation,
+        ] {
             let account = || AuthenticatedAccount {
                 binding: AccountBinding::capture(
                     &root.join("principals/registry.json"),
@@ -824,6 +837,18 @@ mod tests {
             )
         };
         let exported = observe_export(&password);
+        let observe_model = |purpose, password: &PrivateBuffer| {
+            authenticate_at_purpose(
+                &helper,
+                "luma-auth-test",
+                password,
+                &registry,
+                Path::new("/etc"),
+                purpose,
+            )
+        };
+        let imported = observe_model(SessionPurpose::ModelImport, &password);
+        let activated = observe_model(SessionPurpose::ModelActivation, &password);
         if mode == "allow" {
             let standard = result.unwrap();
             assert_eq!(standard.purpose(), SessionPurpose::Standard);
@@ -831,9 +856,20 @@ mod tests {
             let exported = exported.unwrap();
             assert_eq!(exported.purpose(), SessionPurpose::Export);
             assert_eq!(exported.current_uid().unwrap(), 32001);
+            let imported = imported.unwrap();
+            let activated = activated.unwrap();
+            for (account, purpose) in [
+                (&imported, SessionPurpose::ModelImport),
+                (&activated, SessionPurpose::ModelActivation),
+            ] {
+                assert_eq!(account.purpose(), purpose);
+                assert_eq!(account.current_uid().unwrap(), 32001);
+            }
             let empty = PrivateBuffer::new(LIMIT + 1).unwrap();
             assert!(observe(&empty).is_err());
             assert!(observe_export(&empty).is_err());
+            assert!(observe_model(SessionPurpose::ModelImport, &empty).is_err());
+            assert!(observe_model(SessionPurpose::ModelActivation, &empty).is_err());
             assert!(authenticate_at(
                 &helper,
                 "luma-absent",
@@ -845,6 +881,8 @@ mod tests {
             password.bytes_mut()[0] ^= 1;
             assert!(observe(&password).is_err());
             assert!(observe_export(&password).is_err());
+            assert!(observe_model(SessionPurpose::ModelImport, &password).is_err());
+            assert!(observe_model(SessionPurpose::ModelActivation, &password).is_err());
             assert!(
                 authenticate_at(&helper, "root", &password, &registry, Path::new("/etc")).is_err()
             );
@@ -866,6 +904,8 @@ mod tests {
             assert!(bound.identity().is_err());
             assert!(exported.current_uid().is_err());
             assert!(exported.identity().is_err());
+            assert!(imported.current_uid().is_err());
+            assert!(activated.current_uid().is_err());
             assert!(Command::new("/usr/sbin/usermod")
                 .args(["--unlock", "luma-auth-test"])
                 .status()
@@ -873,6 +913,8 @@ mod tests {
                 .success());
             assert!(bound.current_uid().is_err()); // Unlock cannot revive an invalidated observation.
             assert!(exported.current_uid().is_err());
+            assert!(imported.current_uid().is_err());
+            assert!(activated.current_uid().is_err());
             let logged_out = observe(&password).unwrap();
             assert_eq!(logged_out.current_uid().unwrap(), 32001);
             logged_out.logout();
@@ -895,6 +937,8 @@ mod tests {
         } else {
             assert!(result.is_err());
             assert!(exported.is_err());
+            assert!(imported.is_err());
+            assert!(activated.is_err());
         }
     }
 }

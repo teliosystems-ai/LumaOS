@@ -35,8 +35,11 @@ Q4_K_M artifacts, context and llama.cpp tuple. Catalog capacity for other parame
 ranges does not install an unsupported backend or imply GPU/Gemma/large-model
 qualification. Effective memory, storage and peak reservations remain mandatory.
 Import and activation use separate exact finite resource scopes; neither is an
-inference grant. Governing standard session limits remain unchanged unless the
-owner separately approves an import-only extension.
+inference grant. On 2026-10-12 the owner approved separate, nonrenewable sessions
+of at most thirty minutes for import and activation. Each purpose remains
+restricted to its exact operation with continuous account, UTC, grant and lease
+checks. Neither extends standard sessions or authorizes inference, signing,
+workflows, export or repair.
 
 Every signed tokenizer and template sidecar must match the exact metadata in
 the GGUF bytes actually consumed by the runtime. Tokenizer encoding retains

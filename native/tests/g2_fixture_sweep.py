@@ -226,6 +226,17 @@ def fixture_child():
     resource.setrlimit(resource.RLIMIT_FSIZE, (MAX_FIXTURE_FILE, MAX_FIXTURE_FILE))
 
 
+def temporary_mounts(lane_name, temporary):
+    if lane_name not in LANES:
+        raise ValueError('unknown fixture lane')
+    # Real PAM uses disposable /etc and publishes the fixture registry by
+    # atomic rename. Both must share this fresh container's D-backed layer.
+    # A separate /tmp bind would create an artificial EXDEV failure.
+    if lane_name == 'pam-catalog':
+        return []
+    return ['--mount', f'type=bind,source={temporary},target=/tmp']
+
+
 def execute(command, cwd, env, output, index, timeout):
     log = output / ('command-%03d.log' % index)
     began = time.monotonic()
@@ -295,6 +306,8 @@ def inside(lane_name):
     identity = verify_source(repo)
     inventory = ignored_inventory(repo)
     lane = LANES[lane_name]
+    if lane_name == 'pam-catalog' and os.stat('/tmp').st_dev != os.stat('/etc').st_dev:
+        raise ValueError('disposable PAM account and registry staging must share a filesystem')
     environment = dict(os.environ, CARGO_TARGET_DIR='/cache/target', CARGO_INCREMENTAL='0',
                        CARGO_PROFILE_TEST_DEBUG='0', CARGO_PROFILE_DEV_DEBUG='0',
                        RUSTFLAGS='-Dwarnings', PYTHONDONTWRITEBYTECODE='1', TMPDIR='/tmp',
@@ -445,9 +458,9 @@ def main():
                    '--mount', f'type=bind,source={repo},target=/repo,readonly',
                    '--mount', f'type=bind,source={cache},target=/cache',
                    '--mount', f'type=bind,source={directory},target=/evidence',
-                   '--mount', f'type=bind,source={temporary},target=/tmp',
                    '--mount', f'type=bind,source={archive},target=/utc-input/chrony-4.9.tar.gz,readonly',
                    '--env', 'PYTHONDONTWRITEBYTECODE=1']
+        command.extend(temporary_mounts(name, temporary))
         if not lane.get('capless'):
             for capability in CAPS:
                 command.extend(('--cap-add', capability))

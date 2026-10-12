@@ -35,7 +35,7 @@ def apparmor_cases(repository):
             or not re.fullmatch(r'luma-[a-z0-9-]{1,64}', path.name) for path in profiles):
         raise ValueError('invalid closed AppArmor parser input group')
     # -Q prevents kernel loading; -K prevents reading or writing policy caches.
-    return [('apparmor-parse-' + path.name, ['apparmor_parser', '-Q', '-K', str(path)],
+    return [('apparmor-parse-' + path.name, ['/usr/sbin/apparmor_parser', '-Q', '-K', str(path)],
              repository, 60) for path in profiles]
 
 
@@ -206,6 +206,9 @@ def main():
                 os.killpg(process.pid, signal.SIGKILL)
                 process.wait(timeout=10)
                 outcome = {'exit_code': None, 'timed_out': True}
+            except OSError as error:
+                stream.write(('Failed to launch required command: ' + str(error) + '\n').encode())
+                outcome = {'exit_code': None, 'timed_out': False}
         counts = None
         verification_error = None
         if outcome['exit_code'] == 0:

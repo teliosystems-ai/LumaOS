@@ -297,7 +297,7 @@ pub(crate) fn pack_import(login: &str, grant: &str, id: &str) -> Result<()> {
     crate::admin_governance::pack_preparation_authority(&p)?;
     let _lock = operation_lock(Path::new(VAR))?;
     let usage = pack_import_usage(id)?;
-    crate::admin_governance::with_grant(login, grant, &usage, |boundary| {
+    crate::admin_governance::with_model_import_grant(login, grant, id, &usage, |boundary| {
         let effect = boundary.effect_begin(
             &usage.selector.digest,
             crate::policy_decisions::EffectKind::ResourceAdmission,
@@ -3331,6 +3331,13 @@ fn activation_scopes(p: &Profile) -> Result<[(String, crate::finite_grants::Use)
         ("stop".into(), worker(Action::StopWorker)?),
     ])
 }
+/// Exact inert scopes for the purpose-specific pre-PAM comparison. This does
+/// not reserve a generation or admit a worker; activation checks them again.
+pub(crate) fn activation_session_scopes(id: &str) -> Result<[crate::finite_grants::Use; 3]> {
+    let p = profile(id)?;
+    let scopes = activation_scopes(&p)?;
+    Ok(scopes.map(|(_, usage)| usage))
+}
 fn guarded_command(
     program: &str,
     args: &[&str],
@@ -3425,7 +3432,7 @@ pub(crate) fn activate(login: &str, grants: &str, id: &str) -> Result<()> {
         (grants.stop, scopes[2].1.clone()),
     ];
     let usage = scopes[0].1.clone();
-    crate::admin_governance::with_grants(login, &uses, |guard| {
+    crate::admin_governance::with_model_activation_grants(login, id, &uses, |guard| {
         if activation_scopes(&p)? != scopes {
             return Err(
                 "model activation prior configuration changed after finite admission".into(),

@@ -1,5 +1,9 @@
 # Native resource leases and generations
 
+Current implementation and remaining work are tracked in
+[G2 software status](G2_SOFTWARE_STATUS.md). The dated software-gap descriptions
+below are historical checkpoints, not the current development backlog.
+
 Updated 2026-10-10. Requirement #1 remains open until its remaining integrations
 and the applicable installed-image qualification pass. This implementation is
 not a claim that all G2 resources, inference clients or hardware are qualified.

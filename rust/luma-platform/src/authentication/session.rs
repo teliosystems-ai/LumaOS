@@ -9,6 +9,9 @@ use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 
 const WINDOW_NS: u64 = 30_000_000_000;
 const EXPORT_WINDOW_NS: u64 = 1_800_000_000_000;
+// Independently approved typed operations, never selected by caller duration.
+const MODEL_IMPORT_WINDOW_NS: u64 = 1_800_000_000_000;
+const MODEL_ACTIVATION_WINDOW_NS: u64 = 1_800_000_000_000;
 // Approved independently of export. No caller duration, renewal or PAM purpose.
 const REPAIR_WINDOW_NS: u64 = 1_800_000_000_000;
 impl SessionPurpose {
@@ -16,6 +19,8 @@ impl SessionPurpose {
         match self {
             Self::Standard => WINDOW_NS,
             Self::Export => EXPORT_WINDOW_NS,
+            Self::ModelImport => MODEL_IMPORT_WINDOW_NS,
+            Self::ModelActivation => MODEL_ACTIVATION_WINDOW_NS,
         }
     }
 }
@@ -537,7 +542,12 @@ mod tests {
     #[test]
     fn opaque_final_projection_enforces_both_original_nanosecond_deadlines_and_sticky_context() {
         use crate::utc_provider::ProjectionClock;
-        for purpose in [SessionPurpose::Standard, SessionPurpose::Export] {
+        for purpose in [
+            SessionPurpose::Standard,
+            SessionPurpose::Export,
+            SessionPurpose::ModelImport,
+            SessionPurpose::ModelActivation,
+        ] {
             let lifetime = Lifetime::at_purpose(clock(7), purpose).unwrap();
             let deadline = 7 + purpose.window_ns();
             lifetime
@@ -657,8 +667,35 @@ mod tests {
         assert!(export.check_at(Ok(clock(7 + WINDOW_NS))).is_err());
     }
     #[test]
+    fn model_operation_purposes_have_independent_fixed_nonrenewable_thirty_minute_deadlines() {
+        for purpose in [SessionPurpose::ModelImport, SessionPurpose::ModelActivation] {
+            let operation = Lifetime::at_purpose(clock(7), purpose).unwrap();
+            assert_eq!(operation.purpose(), purpose);
+            assert_eq!(operation.deadline_ns, 7 + 1_800_000_000_000);
+            for offset in [WINDOW_NS, 900_000_000_000, 1_799_999_999_999] {
+                operation.check_at(Ok(clock(7 + offset))).unwrap();
+                assert_eq!(operation.deadline_ns, 7 + 1_800_000_000_000);
+            }
+            assert!(operation
+                .check_at(Ok(clock(7 + 1_800_000_000_000)))
+                .is_err());
+            assert_eq!(operation.phase.get(), Phase::Expired);
+            assert!(operation.check_at(Ok(clock(8))).is_err());
+            let separately_authenticated = Lifetime::at_purpose(clock(8), purpose).unwrap();
+            separately_authenticated.check_at(Ok(clock(9))).unwrap();
+            assert!(operation.check_at(Ok(clock(9))).is_err());
+            let standard = Lifetime::at(clock(7)).unwrap();
+            assert!(standard.check_at(Ok(clock(7 + WINDOW_NS))).is_err());
+        }
+    }
+    #[test]
     fn both_purposes_fence_fork_context_clock_failure_suspension_and_revocation_without_revival() {
-        for purpose in [SessionPurpose::Standard, SessionPurpose::Export] {
+        for purpose in [
+            SessionPurpose::Standard,
+            SessionPurpose::Export,
+            SessionPurpose::ModelImport,
+            SessionPurpose::ModelActivation,
+        ] {
             for fault in ["missing", "regression", "boot", "fork", "uid"] {
                 let lifetime = Lifetime::at_purpose(clock(100), purpose).unwrap();
                 lifetime.check_at(Ok(clock(101))).unwrap();
@@ -707,7 +744,12 @@ mod tests {
     }
     #[test]
     fn both_purposes_expire_during_projection_and_refuse_overflow_without_renewal() {
-        for purpose in [SessionPurpose::Standard, SessionPurpose::Export] {
+        for purpose in [
+            SessionPurpose::Standard,
+            SessionPurpose::Export,
+            SessionPurpose::ModelImport,
+            SessionPurpose::ModelActivation,
+        ] {
             let lifetime = Lifetime::at_purpose(clock(1), purpose).unwrap();
             let checks = Cell::new(0);
             assert!(lifetime

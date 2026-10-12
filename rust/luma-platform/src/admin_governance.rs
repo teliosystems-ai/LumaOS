@@ -1142,7 +1142,9 @@ impl GrantBoundary<'_> {
         principal: &str,
         generation: u64,
     ) -> Result<()> {
+        let purpose = self.session.account.purpose();
         self.restriction(|catalog, identity| {
+            require_session_purpose(purpose, authentication::SessionPurpose::Standard)?;
             history_owner(catalog, identity, principal, generation)
         })
     }
@@ -1221,6 +1223,10 @@ impl GrantBoundary<'_> {
         self.operation.id()
     }
 
+    pub(crate) fn session_purpose(&self) -> authentication::SessionPurpose {
+        self.session.account.purpose()
+    }
+
     pub(crate) fn observation(&mut self) -> Result<crate::utc_stream::Observation> {
         self.check()?;
         self.observation
@@ -1233,6 +1239,20 @@ impl GrantBoundary<'_> {
         effect_id: &str,
         kind: crate::policy_decisions::EffectKind,
     ) -> Result<crate::policy_decisions::PendingEffect> {
+        if matches!(
+            self.session.account.purpose(),
+            authentication::SessionPurpose::ModelImport
+                | authentication::SessionPurpose::ModelActivation
+        ) && self
+            .uses
+            .first()
+            .map_or(true, |(_, usage)| usage.selector.digest != effect_id)
+        {
+            self.restriction(|_, _| {
+                Err("model-only effect must name its exact reviewed transaction".into())
+            })?;
+            return Err("model-purpose effect restriction unexpectedly admitted".into());
+        }
         if let Err(error) = export_effect_scope(self.session.account.purpose(), &self.uses, kind) {
             self.restriction(|_, _| Err(error))?;
             return Err("export-purpose effect restriction unexpectedly admitted".into());
@@ -1677,6 +1697,60 @@ fn grant_session_scope(
     uses: &[(String, crate::finite_grants::Use)],
 ) -> Result<()> {
     use crate::finite_grants::{Action, Kind};
+    let model_id = |id: &str| {
+        matches!(
+            id,
+            "ModelPack-qwen3-4b-q4-k-m" | "ModelPack-qwen3-1-7b-q4-k-m"
+        )
+    };
+    if purpose == authentication::SessionPurpose::ModelImport {
+        if uses.len() != 1
+            || uses[0].1.action != Action::AcquireResource
+            || uses[0].1.selector.kind != Kind::Resource
+            || !model_id(&uses[0].1.selector.id)
+            || uses[0].1.selector.generation != 1
+            || uses[0].1.units != 1
+        {
+            return Err(
+                "model-import session admits only its exact reviewed model CAS acquisition".into(),
+            );
+        }
+        uses[0].1.validate()?;
+    }
+    if purpose == authentication::SessionPurpose::ModelActivation {
+        if uses.len() != 3 {
+            return Err(
+                "model-activation requires all three exact provision/start/stop scopes".into(),
+            );
+        }
+        let provision = &uses[0].1;
+        let start = &uses[1].1;
+        let stop = &uses[2].1;
+        for (_, usage) in uses {
+            usage.validate()?;
+        }
+        if provision.action != Action::ProvisionResource
+            || provision.selector.kind != Kind::Resource
+            || !model_id(&provision.selector.id)
+            || provision.selector.generation != 1
+            || start.action != Action::StartWorker
+            || stop.action != Action::StopWorker
+            || start.selector.kind != Kind::Worker
+            || stop.selector.kind != Kind::Worker
+            || start.selector.id != "ModelRuntime"
+            || stop.selector.id != "ModelRuntime"
+            || start.selector.digest != stop.selector.digest
+            || start.input_bytes != provision.input_bytes
+            || stop.input_bytes != provision.input_bytes
+            || start.output_bytes != 0
+            || stop.output_bytes != 0
+            || [provision.units, start.units, stop.units] != [1; 3]
+        {
+            return Err(
+                "model-activation session refuses unrelated worker, model or effect scopes".into(),
+            );
+        }
+    }
     if purpose == authentication::SessionPurpose::Export
         && (uses.is_empty()
             || uses.iter().any(|(_, usage)| {
@@ -1697,6 +1771,17 @@ fn export_effect_scope(
     kind: crate::policy_decisions::EffectKind,
 ) -> Result<()> {
     grant_session_scope(purpose, uses)?;
+    if matches!(
+        purpose,
+        authentication::SessionPurpose::ModelImport
+            | authentication::SessionPurpose::ModelActivation
+    ) && kind != crate::policy_decisions::EffectKind::ResourceAdmission
+    {
+        return Err(
+            "model-only session refuses inference, workflow, signing, export or recovery effects"
+                .into(),
+        );
+    }
     if purpose == authentication::SessionPurpose::Export
         && (kind != crate::policy_decisions::EffectKind::ArtifactExport
             || !uses
@@ -1900,6 +1985,201 @@ pub(crate) fn with_export_grant<T>(
     )
 }
 
+/// Only this typed installed CAS import can select the independently approved
+/// import lifetime. Exact installation/profile/storage review is checked before
+/// PAM; every later boundary still replays actual credentials, grants and UTC.
+pub(crate) fn with_model_import_grant<T>(
+    login: &str,
+    grant_id: &str,
+    model_id: &str,
+    usage: &crate::finite_grants::Use,
+    effect: impl FnOnce(&mut GrantBoundary<'_>) -> Result<T>,
+) -> Result<T> {
+    require_model_session_review(
+        authentication::SessionPurpose::ModelImport,
+        &[usage.clone()],
+        &[crate::model::pack_import_usage(model_id)?],
+    )?;
+    with_grants_for(
+        login,
+        &[(grant_id.into(), usage.clone())],
+        authentication::SessionPurpose::ModelImport,
+        effect,
+    )
+}
+
+/// A separate nonrenewable purpose for this exact retained native model
+/// configuration and its reviewed provision/start/stop worker generations.
+pub(crate) fn with_model_activation_grants<T>(
+    login: &str,
+    model_id: &str,
+    uses: &[(String, crate::finite_grants::Use)],
+    effect: impl FnOnce(&mut GrantBoundary<'_>) -> Result<T>,
+) -> Result<T> {
+    let expected = crate::model::activation_session_scopes(model_id)?;
+    require_model_session_review(
+        authentication::SessionPurpose::ModelActivation,
+        &uses
+            .iter()
+            .map(|(_, usage)| usage.clone())
+            .collect::<Vec<_>>(),
+        &expected,
+    )?;
+    with_grants_for(
+        login,
+        uses,
+        authentication::SessionPurpose::ModelActivation,
+        effect,
+    )
+}
+
+fn require_model_session_review(
+    purpose: authentication::SessionPurpose,
+    actual: &[crate::finite_grants::Use],
+    expected: &[crate::finite_grants::Use],
+) -> Result<()> {
+    if !matches!(
+        purpose,
+        authentication::SessionPurpose::ModelImport
+            | authentication::SessionPurpose::ModelActivation
+    ) || actual != expected
+    {
+        return Err("model-only session cannot change its exact reviewed transaction".into());
+    }
+    grant_session_scope(
+        purpose,
+        &actual
+            .iter()
+            .enumerate()
+            .map(|(index, usage)| (format!("scope-{index}"), usage.clone()))
+            .collect::<Vec<_>>(),
+    )
+}
+
+#[cfg(test)]
+mod model_operation_session_tests {
+    use super::*;
+    use crate::finite_grants::{Action, Kind, Selector, Use};
+    use authentication::SessionPurpose::{Export, ModelActivation, ModelImport, Standard};
+    fn import() -> Use {
+        Use {
+            action: Action::AcquireResource,
+            selector: Selector {
+                kind: Kind::Resource,
+                id: "ModelPack-qwen3-4b-q4-k-m".into(),
+                generation: 1,
+                digest: "ab".repeat(32),
+            },
+            input_bytes: 2 * 1024 * 1024 * 1024,
+            output_bytes: 6 * 1024 * 1024 * 1024,
+            units: 1,
+        }
+    }
+    fn activation() -> Vec<Use> {
+        let mut provision = import();
+        provision.action = Action::ProvisionResource;
+        provision.input_bytes = 65536;
+        provision.output_bytes = 65536;
+        let mut start = provision.clone();
+        start.action = Action::StartWorker;
+        start.selector.kind = Kind::Worker;
+        start.selector.id = "ModelRuntime".into();
+        start.selector.generation = 8;
+        start.selector.digest = "cd".repeat(32);
+        start.output_bytes = 0;
+        let mut stop = start.clone();
+        stop.action = Action::StopWorker;
+        stop.selector.generation = 7;
+        vec![provision, start, stop]
+    }
+    #[test]
+    fn model_lifetimes_cannot_convert_or_share_unrelated_authority() {
+        let purposes = [Standard, Export, ModelImport, ModelActivation];
+        for actual in purposes {
+            for expected in purposes {
+                assert_eq!(
+                    require_session_purpose(actual, expected).is_ok(),
+                    actual == expected
+                );
+            }
+        }
+        let imported = vec![import()];
+        let activated = activation();
+        require_model_session_review(ModelImport, &imported, &imported).unwrap();
+        require_model_session_review(ModelActivation, &activated, &activated).unwrap();
+        for purpose in [Standard, Export] {
+            assert!(require_model_session_review(purpose, &imported, &imported).is_err());
+            assert!(require_model_session_review(purpose, &activated, &activated).is_err());
+        }
+        assert!(require_model_session_review(ModelImport, &activated, &activated).is_err());
+        assert!(require_model_session_review(ModelActivation, &imported, &imported).is_err());
+        for action in [
+            Action::Infer,
+            Action::Execute,
+            Action::Read,
+            Action::Export,
+            Action::Retain,
+            Action::RecoverResource,
+            Action::StartWorker,
+            Action::StopWorker,
+            Action::ProvisionResource,
+        ] {
+            let mut changed = imported.clone();
+            changed[0].action = action;
+            assert!(require_model_session_review(ModelImport, &changed, &changed).is_err());
+        }
+    }
+    #[test]
+    fn model_review_binds_every_byte_scope_and_all_three_exact_worker_generations() {
+        for (purpose, original) in [
+            (ModelImport, vec![import()]),
+            (ModelActivation, activation()),
+        ] {
+            for index in 0..original.len() {
+                for case in 0..8 {
+                    let mut changed = original.clone();
+                    match case {
+                        0 => changed[index].selector.digest = "ef".repeat(32),
+                        1 => changed[index].selector.generation += 1,
+                        2 => changed[index].input_bytes += 1,
+                        3 => changed[index].output_bytes += 1,
+                        4 => changed[index].units += 1,
+                        5 => changed[index].selector.id = "Unrelated".into(),
+                        6 => changed[index].selector.kind = Kind::File,
+                        _ => changed[index].action = Action::Infer,
+                    }
+                    assert!(require_model_session_review(purpose, &changed, &original).is_err());
+                }
+            }
+            assert!(require_model_session_review(purpose, &[], &original).is_err());
+            let scopes = original
+                .iter()
+                .enumerate()
+                .map(|(i, usage)| (format!("grant-{i}"), usage.clone()))
+                .collect::<Vec<_>>();
+            export_effect_scope(
+                purpose,
+                &scopes,
+                crate::policy_decisions::EffectKind::ResourceAdmission,
+            )
+            .unwrap();
+            for kind in [
+                crate::policy_decisions::EffectKind::WorkerAdmission,
+                crate::policy_decisions::EffectKind::Inference,
+                crate::policy_decisions::EffectKind::Calculation,
+                crate::policy_decisions::EffectKind::ArtifactExport,
+                crate::policy_decisions::EffectKind::Recovery,
+                crate::policy_decisions::EffectKind::Retention,
+            ] {
+                assert!(export_effect_scope(purpose, &scopes, kind).is_err());
+            }
+        }
+        let mut wrong = activation();
+        wrong.swap(1, 2);
+        assert!(require_model_session_review(ModelActivation, &wrong, &wrong).is_err());
+    }
+}
+
 fn with_grants_for<T>(
     login: &str,
     uses: &[(String, crate::finite_grants::Use)],
@@ -1937,6 +2217,12 @@ fn with_grants_for<T>(
         let authentication = match purpose {
             authentication::SessionPurpose::Standard => authentication::local(login),
             authentication::SessionPurpose::Export => authentication::local_export(login),
+            authentication::SessionPurpose::ModelImport => {
+                authentication::local_model_import(login)
+            }
+            authentication::SessionPurpose::ModelActivation => {
+                authentication::local_model_activation(login)
+            }
         };
         let account = match authentication {
             Ok(value) => value,
@@ -1966,6 +2252,10 @@ fn with_grants_for<T>(
             }
             authentication::SessionPurpose::Export => {
                 PrincipalSession::new_export(account, attempt, &mut reader)
+            }
+            authentication::SessionPurpose::ModelImport
+            | authentication::SessionPurpose::ModelActivation => {
+                PrincipalSession::new_for(account, attempt, &mut reader, purpose)
             }
         }?;
         drop(reader);

@@ -35,10 +35,12 @@ class PrincipalPackagingTests(unittest.TestCase):
         session = governance.split('impl PrincipalSession')[1].split('impl Drop for PrincipalSession')[0]
         identity = session.split('fn identity')[1].split('fn observe')[0]
         self.assertIn('self.observe(reader, |identity| Ok(identity.clone()))', identity)
-        projection = session.split('fn observe_store')[1].split('fn close')[0]
+        projection = session.split('fn observe_store_projected')[1].split('fn close')[0]
         self.assertEqual(projection.count('.resolve_since(local, Some(self.clock.get()))?'), 2)
-        self.assertLess(projection.index('let before ='), projection.index('project(&before.identity, projection.reader.store)?'))
-        self.assertLess(projection.index('project(&before.identity, projection.reader.store)?'), projection.index('let after ='))
+        call = 'project(&before.identity, projection.reader.store, &aging_projection)?'
+        self.assertLess(projection.index('let before ='), projection.index(call))
+        self.assertLess(projection.index(call), projection.index('let after ='))
+        self.assertEqual(projection.count('aging_projection.check()?'), 2)
         self.assertIn('before != self.binding', projection)
         self.assertIn('after != before', projection)
         self.assertIn('self.account.observe', projection)

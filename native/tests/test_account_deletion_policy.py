@@ -20,7 +20,8 @@ class AccountDeletionPolicyTests(unittest.TestCase):
         source = (ROOT / 'rust/luma-platform/src/admin_governance.rs').read_text()
         attempt = source.split('struct DeletionAttempt')[1].split('pub fn account_deletion_command(')[0]
         for marker in ('PrincipalPurpose::AdminCatalog', 'candidate == transaction',
-                       'session.observe_store(', 'Command::PermitAccountDeletion',
+                       'session.observe_store_projected(', 'ActorAging::capture_projected(',
+                       'Command::PermitAccountDeletion',
                        'Guard::retained(', 'self.guard.publish(', 'self.session.fenced.get()',
                        'current.head != self.snapshot.head', 'context.writer(&self.catalog)',
                        'self.session.account.identity()', 'self.session.close()'):

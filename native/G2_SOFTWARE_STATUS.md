@@ -39,12 +39,12 @@ cases, eighteen orchestration cases and thirteen real disposable KVM guest
 cases. Those guest cases explicitly do not test installed AppArmor or the
 complete PAM/broker journey. Full integrated results must be recorded separately.
 
-Two policy decisions remain unanswered: separately purpose-bound, nonrenewable
-thirty-minute sessions for model import and model activation. Both remain at
-the standard thirty seconds. Large downloads and cold 4B hash/load/warm-up can
-exceed that duration; no production-usability guarantee is made for those
-paths under the current limit. Export/repair approvals do not authorize either
-extension.
+On 2026-10-12 the owner approved separately purpose-bound, nonrenewable
+thirty-minute sessions for model import and model activation. The integrated
+candidate implements both purposes with exact pre-PAM operation binding and
+continuous account, UTC, finite-grant and lease checks. Standard sessions retain
+thirty seconds. Neither model purpose authorizes inference, signing, general
+workflows, export or repair; validation of these changed paths remains required.
 
 Final-image installation, actual model/custody/QA inputs, installed authorization
 and confinement, native NTS/error-bound behavior, pressure/interruption/recovery,

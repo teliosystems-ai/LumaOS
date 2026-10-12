@@ -52,8 +52,10 @@ Use `granted-run model-pack-import-review MODEL-ID` to obtain the exact finite
 signed pack in the private CAS and never activates serving. Its conservative
 storage peak includes cache, CAS, staging and reserve. Tokenizer/template
 sidecars must match the losslessly encoded GGUF metadata actually used by
-llama.cpp. Normal session limits apply; a long download cannot borrow the
-separate export or repair session purpose.
+llama.cpp. Import uses its independently approved, nonrenewable thirty-minute
+model-import-only session. Exact current account, UTC, finite grant and lease
+checks continue throughout preparation; export and repair purposes cannot
+substitute for it.
 
 Interrupted preparation remains digest-bound unverified state. Review it with
 `granted-run model-pack-pending-review MODEL-ID` and explicitly retain the exact
@@ -96,6 +98,10 @@ Once the actual certified catalog is admitted, review activation with
 worker-start and planned-worker-stop scopes through
 `granted-run model-activate LOGIN GRANTS-JSON MODEL-ID`. Import, qualification,
 activation, worker management and inference are distinct authorizations.
+Activation uses its separate, nonrenewable thirty-minute model-activation-only
+session, restricted to the exact reviewed configuration and the provision,
+start and planned-stop grants. Import, inference, signing and workflow authority
+cannot be exercised through that purpose.
 `GRANTS-JSON` is the closed inline map `{"provision":"GRANT-ID","start":"GRANT-ID","stop":"GRANT-ID"}`,
 not a path or a caller-defined list of worker actions.
 Activation preserves the existing trial, atomic configuration, quarantine,

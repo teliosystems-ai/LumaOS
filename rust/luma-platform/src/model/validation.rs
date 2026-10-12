@@ -667,13 +667,27 @@ mod tests {
         fs::create_dir(&root).unwrap();
         let state = root.join(STATE);
         fs::create_dir_all(state.join("models")).unwrap();
-        for dir in [&root, state.parent().unwrap(), &state] {
+        for dir in [
+            &root,
+            state.parent().unwrap(),
+            &state,
+            &state.join("models"),
+        ] {
             fs::set_permissions(dir, fs::Permissions::from_mode(0o755)).unwrap();
         }
         let p = fixture_profile();
-        fs::write(state.join("models").join(format!("{}.gguf", p.id)), WEIGHTS).unwrap();
+        let weights = state.join("models").join(format!("{}.gguf", p.id));
+        fs::write(&weights, WEIGHTS).unwrap();
+        fs::set_permissions(&weights, fs::Permissions::from_mode(0o644)).unwrap();
         write_candidate_config(&state, &p).unwrap();
         (root, state, p)
+    }
+    // Match the actual publisher's public trial-record mode independently of
+    // the test driver's inherited private umask. Unsafe-mode cases explicitly
+    // change the completed fixture afterwards and remain refusal tests.
+    fn write_trial_fixture(state: &Path, bytes: impl AsRef<[u8]>) -> std::io::Result<()> {
+        fs::write(state.join(PENDING), bytes)?;
+        fs::set_permissions(state.join(PENDING), fs::Permissions::from_mode(0o644))
     }
     fn cleanup(root: &Path, state: &Path, p: &Profile) {
         for entry in fs::read_dir(state).unwrap() {
@@ -802,7 +816,7 @@ mod tests {
             "hold" | "hold-partial" | "hold-complete" | "hold-exit" | "exit" => {
                 let guard = Guard::begin(&state, &p).unwrap();
                 if action == "hold-partial" {
-                    fs::write(state.join(PENDING), b"{").unwrap();
+                    write_trial_fixture(&state, b"{").unwrap();
                 }
                 fs::write(state.join("child.ready"), b"ready").unwrap();
                 if action == "hold-complete" || action == "hold-exit" {
@@ -1116,7 +1130,7 @@ mod tests {
                 "quarantine" => publish_quarantine(&state, &p, RestartStage::Health).unwrap(),
                 "activation" => fs::write(state.join(ACTIVATION), b"uncertain").unwrap(),
                 "orphan" => fs::write(state.join(PRIOR_BACKUP), b"uncertain").unwrap(),
-                "partial" => fs::write(state.join(PENDING), b"{").unwrap(),
+                "partial" => write_trial_fixture(&state, b"{").unwrap(),
                 "missing-key" => fs::remove_file(state.join("model-auth/api-key")).unwrap(),
                 "invalid-key" => {
                     fs::write(state.join("model-auth/api-key"), b"never-echo").unwrap()
@@ -1155,7 +1169,7 @@ mod tests {
                 "orphan" => fs::write(state.join(PRIOR_BACKUP), b"uncertain").unwrap(),
                 "selection" => fs::write(state.join("model-selection.json"), b"changed").unwrap(),
                 "key" => fs::write(state.join("model-auth/api-key"), b"never-echo").unwrap(),
-                "partial" => fs::write(state.join(PENDING), b"{").unwrap(),
+                "partial" => write_trial_fixture(&state, b"{").unwrap(),
                 _ => unreachable!(),
             }
             await_supervised_refusal(&root, child);
@@ -1231,7 +1245,7 @@ mod tests {
                 let mut record =
                     decode(&record_bytes(&state).unwrap().unwrap(), &|_| Ok(p.clone())).unwrap();
                 record.incident_id = "01".repeat(16);
-                fs::write(state.join(PENDING), serde_json::to_vec(&record).unwrap()).unwrap();
+                write_trial_fixture(&state, serde_json::to_vec(&record).unwrap()).unwrap();
                 None
             } else {
                 Some(Guard::begin(&state, &p).unwrap())
@@ -1374,7 +1388,7 @@ mod tests {
                 _ => unreachable!(),
             }
             if matches!(label, "boot" | "pid" | "start" | "pin") {
-                fs::write(state.join(PENDING), serde_json::to_vec(&record).unwrap()).unwrap();
+                write_trial_fixture(&state, serde_json::to_vec(&record).unwrap()).unwrap();
             }
             probe(&root, false);
             drop(child);
@@ -1442,7 +1456,7 @@ mod tests {
         ] {
             let (root, state, p) = fixture(label);
             drop(lock_file(&state, true).unwrap());
-            fs::write(state.join(PENDING), bytes).unwrap();
+            write_trial_fixture(&state, bytes).unwrap();
             if manual {
                 for name in ["model-selection.json", REFERENCE_ENV, "model-auth/api-key"] {
                     fs::remove_file(state.join(name)).unwrap();
@@ -1491,13 +1505,11 @@ mod tests {
         ] {
             let (root, state, p) = fixture(&format!("incomplete-record-{label}"));
             drop(lock_file(&state, true).unwrap());
-            fs::write(state.join(PENDING), b"{").unwrap();
+            write_trial_fixture(&state, b"{").unwrap();
             match label {
-                "complete" => {
-                    fs::write(state.join(PENDING), b"{\"future\":\"never-echo\"}").unwrap()
-                }
-                "null" => fs::write(state.join(PENDING), b"null").unwrap(),
-                "malformed" => fs::write(state.join(PENDING), b"{\"never-echo\":!}").unwrap(),
+                "complete" => write_trial_fixture(&state, b"{\"future\":\"never-echo\"}").unwrap(),
+                "null" => write_trial_fixture(&state, b"null").unwrap(),
+                "malformed" => write_trial_fixture(&state, b"{\"never-echo\":!}").unwrap(),
                 "mode" => {
                     fs::set_permissions(state.join(PENDING), fs::Permissions::from_mode(0o666))
                         .unwrap()
@@ -1507,7 +1519,7 @@ mod tests {
                     fs::rename(state.join(PENDING), state.join("alias")).unwrap();
                     std::os::unix::fs::symlink(state.join("alias"), state.join(PENDING)).unwrap();
                 }
-                "oversized" => fs::write(state.join(PENDING), vec![b' '; 8193]).unwrap(),
+                "oversized" => write_trial_fixture(&state, vec![b' '; 8193]).unwrap(),
                 "missing" => fs::remove_file(state.join(PENDING)).unwrap(),
                 _ => unreachable!(),
             }
@@ -1535,7 +1547,7 @@ mod tests {
         for label in ["missing", "mode", "linked", "symlink", "nonempty"] {
             let (root, state, p) = fixture(&format!("incomplete-lease-{label}"));
             drop(lock_file(&state, true).unwrap());
-            fs::write(state.join(PENDING), b"{").unwrap();
+            write_trial_fixture(&state, b"{").unwrap();
             match label {
                 "missing" => fs::remove_file(state.join(LEASE)).unwrap(),
                 "mode" => fs::set_permissions(state.join(LEASE), fs::Permissions::from_mode(0o666))
@@ -1565,7 +1577,7 @@ mod tests {
             let (root, state, p) = fixture(&format!("incomplete-holder-{action}"));
             let child = holder(&root, &state, action);
             if action != "hold-partial" {
-                fs::write(state.join(PENDING), b"{").unwrap();
+                write_trial_fixture(&state, b"{").unwrap();
             }
             assert!(inspect_incomplete(&state, &|_| Ok(p.clone())).is_err());
             assert!(retain_incomplete(&state, &"00".repeat(32), &|_| Ok(p.clone())).is_err());
@@ -1585,7 +1597,7 @@ mod tests {
         for label in ["settings", "weights", "record", "lease"] {
             let (root, state, p) = fixture(&format!("incomplete-stale-{label}"));
             drop(lock_file(&state, true).unwrap());
-            fs::write(state.join(PENDING), b"{").unwrap();
+            write_trial_fixture(&state, b"{").unwrap();
             let observed = inspect_incomplete(&state, &|_| Ok(p.clone())).unwrap();
             match label {
                 "settings" => {
@@ -1599,7 +1611,7 @@ mod tests {
                 .unwrap(),
                 "record" => {
                     fs::rename(state.join(PENDING), state.join("displaced.pending")).unwrap();
-                    fs::write(state.join(PENDING), b"{").unwrap();
+                    write_trial_fixture(&state, b"{").unwrap();
                 }
                 "lease" => {
                     fs::rename(state.join(LEASE), state.join("displaced.lock")).unwrap();
@@ -1625,7 +1637,7 @@ mod tests {
         ] {
             let (root, state, p) = fixture(&format!("incomplete-archive-{label}"));
             drop(lock_file(&state, true).unwrap());
-            fs::write(state.join(PENDING), b"{").unwrap();
+            write_trial_fixture(&state, b"{").unwrap();
             let observed = inspect_incomplete(&state, &|_| Ok(p.clone())).unwrap();
             let archive = state.join(&observed.archive);
             fs::write(&archive, b"{").unwrap();
@@ -1658,14 +1670,14 @@ mod tests {
         for label in ["identity", "activation"] {
             let (root, state, p) = fixture(&format!("incomplete-after-retention-{label}"));
             drop(lock_file(&state, true).unwrap());
-            fs::write(state.join(PENDING), b"{").unwrap();
+            write_trial_fixture(&state, b"{").unwrap();
             let observed = inspect_incomplete(&state, &|_| Ok(p.clone())).unwrap();
             let changed = std::cell::Cell::new(false);
             assert!(retain_incomplete(&state, &observed.review, &|_| {
                 if state.join(&observed.archive).exists() && !changed.replace(true) {
                     if label == "identity" {
                         fs::rename(state.join(PENDING), state.join("displaced.pending"))?;
-                        fs::write(state.join(PENDING), b"{")?;
+                        write_trial_fixture(&state, b"{")?;
                     } else {
                         fs::write(state.join(ACTIVATION), b"uncertain")?;
                     }
@@ -1691,7 +1703,7 @@ mod tests {
                 drop(controller(&root, &state));
             } else {
                 drop(lock_file(&state, true).unwrap());
-                fs::write(state.join(PENDING), b"{").unwrap();
+                write_trial_fixture(&state, b"{").unwrap();
             }
             let calls = std::cell::Cell::new(0);
             let resolve = |_: &str| {
@@ -1743,10 +1755,8 @@ mod tests {
             drop(controller(&root, &state));
             let observed = inspect(&state, &|_| Ok(p.clone())).unwrap();
             match label {
-                "partial" => fs::write(state.join(PENDING), b"{").unwrap(),
-                "unknown" => {
-                    fs::write(state.join(PENDING), b"{\"secret\":\"never-echo\"}").unwrap()
-                }
+                "partial" => write_trial_fixture(&state, b"{").unwrap(),
+                "unknown" => write_trial_fixture(&state, b"{\"secret\":\"never-echo\"}").unwrap(),
                 "public" => {
                     fs::set_permissions(state.join(PENDING), fs::Permissions::from_mode(0o666))
                         .unwrap()
@@ -1756,11 +1766,11 @@ mod tests {
                     std::os::unix::fs::symlink(state.join("alias"), state.join(PENDING)).unwrap();
                 }
                 "hardlink" => fs::hard_link(state.join(PENDING), state.join("alias")).unwrap(),
-                "oversized" => fs::write(state.join(PENDING), vec![b' '; 8193]).unwrap(),
+                "oversized" => write_trial_fixture(&state, vec![b' '; 8193]).unwrap(),
                 "catalog" => {
                     let mut record = decode(&observed.bytes, &|_| Ok(p.clone())).unwrap();
                     record.catalog_sha256 = "00".repeat(32);
-                    fs::write(state.join(PENDING), serde_json::to_vec(&record).unwrap()).unwrap();
+                    write_trial_fixture(&state, serde_json::to_vec(&record).unwrap()).unwrap();
                 }
                 "archive" => {
                     fs::write(

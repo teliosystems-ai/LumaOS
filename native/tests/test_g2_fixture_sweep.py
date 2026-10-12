@@ -123,6 +123,15 @@ class FixtureSweepTests(unittest.TestCase):
         self.assertNotIn('SYS_TIME', SWEEP.CAPS)
         self.assertTrue(SWEEP.LANES['utc-upstream-units']['capless'])
 
+    def test_actual_pam_atomic_registry_publication_uses_same_d_backed_layer(self):
+        temporary = Path('/mnt/luma-build/work/test/temporary')
+        for lane in SWEEP.LANES:
+            expected = [] if lane == 'pam-catalog' else [
+                '--mount', f'type=bind,source={temporary},target=/tmp']
+            self.assertEqual(SWEEP.temporary_mounts(lane, temporary), expected)
+        with self.assertRaises(ValueError):
+            SWEEP.temporary_mounts('unknown', temporary)
+
     def test_bounded_regular_read_refuses_symlink_hardlink_and_oversized(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)

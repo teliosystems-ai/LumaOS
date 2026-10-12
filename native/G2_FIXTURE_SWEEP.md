@@ -6,6 +6,11 @@ the lanes with a 4 GiB memory ceiling and two CPUs per container. The source is
 read-only; caches, temporary files and evidence remain on D. It never attaches
 host disks or physical TPM devices or changes host accounts or clocks.
 
+The real-PAM catalog lane keeps `/tmp` and its disposable `/etc` in the same
+fresh D-backed container layer, so account-registry publication exercises a
+real same-filesystem atomic rename. Other lanes bind their own D-backed ext4
+temporary directories. Neither layout writes to host accounts or C build storage.
+
 Run `native/tests/g2_fixture_sweep.py` from the root Linux build environment
 after sourcing `/etc/luma-build/environment.sh`. Supply `--repository` with a
 snapshot captured by `native/image/snapshot.py --include-tests`, `--output`

@@ -19,7 +19,7 @@ class SweepExecutionTests(unittest.TestCase):
         self.assertGreater(len(cases), 0)
         for (name, command, directory, timeout), profile in zip(cases, profiles):
             self.assertEqual(name, 'apparmor-parse-' + profile.name)
-            self.assertEqual(command, ['apparmor_parser', '-Q', '-K', str(profile)])
+            self.assertEqual(command, ['/usr/sbin/apparmor_parser', '-Q', '-K', str(profile)])
             self.assertEqual(directory, repository)
             self.assertEqual(timeout, 60)
 

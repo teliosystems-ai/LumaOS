@@ -35,6 +35,10 @@ fn payload_command(command: &str) -> bool {
     )
 }
 
+fn extended_client_command(command: &str) -> bool {
+    payload_command(command) || matches!(command, "model-pack-import" | "model-activate")
+}
+
 /// Internal fixed-launcher transport, never a serialized grant or arbitrary
 /// privileged output path. The producer still checks its live grants per block.
 pub(crate) fn capture_export_channel(arguments: &mut Vec<String>) -> Result<()> {
@@ -321,6 +325,27 @@ fn relay_payload(
     }
 }
 
+/// Closed purpose of this live broker exchange, not session authority. Only
+/// the original GrantBoundary can answer the matching challenge.
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+enum BrokerPurpose {
+    Standard,
+    ModelImport,
+}
+impl BrokerPurpose {
+    fn require(self, actual: crate::authentication::SessionPurpose) -> Result<()> {
+        let expected = match self {
+            Self::Standard => crate::authentication::SessionPurpose::Standard,
+            Self::ModelImport => crate::authentication::SessionPurpose::ModelImport,
+        };
+        if actual != expected {
+            return Err("broker challenge cannot convert the original session purpose".into());
+        }
+        Ok(())
+    }
+}
+
 #[derive(Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 struct Challenge {
@@ -330,6 +355,7 @@ struct Challenge {
     job: String,
     usage: Use,
     input_sha256: String,
+    purpose: BrokerPurpose,
 }
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -339,6 +365,7 @@ struct Proof {
     nonce: String,
     job: String,
     audit: crate::finite_grants::Audit,
+    purpose: BrokerPurpose,
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -529,6 +556,7 @@ pub(crate) struct Admission {
     audit: Option<crate::finite_grants::Audit>,
     acquisition_profile: Option<String>,
     acquisition_completed: bool,
+    purpose: BrokerPurpose,
 }
 impl Admission {
     pub(crate) fn capture(
@@ -536,6 +564,23 @@ impl Admission {
         job: &str,
         usage: Use,
         input_sha256: String,
+    ) -> Result<Self> {
+        Self::capture_for(
+            socket,
+            job,
+            usage,
+            input_sha256,
+            BrokerPurpose::Standard,
+            None,
+        )
+    }
+    fn capture_for(
+        socket: &UnixStream,
+        job: &str,
+        usage: Use,
+        input_sha256: String,
+        purpose: BrokerPurpose,
+        acquisition_profile: Option<String>,
     ) -> Result<Self> {
         usage.validate()?;
         crate::tpm::decode::<32>(&input_sha256)?;
@@ -566,8 +611,9 @@ impl Admission {
             )?,
             fenced: false,
             audit: None,
-            acquisition_profile: None,
+            acquisition_profile,
             acquisition_completed: false,
+            purpose,
         };
         admission.check()?;
         Ok(admission)
@@ -631,6 +677,7 @@ impl Admission {
             job: self.job.clone(),
             usage: self.usage.clone(),
             input_sha256: self.input_sha256.clone(),
+            purpose: self.purpose,
         };
         let deadline = Instant::now() + CHALLENGE_BUDGET;
         write_frame_until(&mut self.socket, &serde_json::to_vec(&challenge)?, deadline)?;
@@ -644,6 +691,7 @@ impl Admission {
                 || proof.kind == "grant-acquisition-complete" && self.acquisition_profile.is_some())
             || proof.nonce != nonce
             || proof.job != self.job
+            || proof.purpose != self.purpose
         {
             return Err(
                 "grant admission proof does not bind the pending original challenge".into(),
@@ -692,8 +740,19 @@ impl Admission {
             );
         }
         acquisition_arguments(credentials(socket)?.pid, profile, None)?;
-        let mut result = Self::capture(socket, job, usage, input_sha256)?;
-        result.acquisition_profile = Some(profile.into());
+        let purpose = if profile.starts_with("generated-v1-") {
+            BrokerPurpose::Standard
+        } else {
+            BrokerPurpose::ModelImport
+        };
+        let result = Self::capture_for(
+            socket,
+            job,
+            usage,
+            input_sha256,
+            purpose,
+            Some(profile.into()),
+        )?;
         result.peer_check()?;
         Ok(result)
     }
@@ -792,6 +851,7 @@ pub(crate) fn acquisition_proof(
         return Err("acquisition challenge substituted its exact task/scope/input".into());
     }
     boundary.check()?;
+    challenge.purpose.require(boundary.session_purpose())?;
     Ok(serde_json::to_vec(&Proof {
         schema_version: 1,
         kind: if complete {
@@ -803,6 +863,7 @@ pub(crate) fn acquisition_proof(
         nonce: challenge.nonce,
         job: job.into(),
         audit: boundary.audit()?,
+        purpose: challenge.purpose,
     })?)
 }
 
@@ -924,6 +985,7 @@ pub(crate) fn infer(
             if value["kind"] == "grant-challenge" {
                 let challenge: Challenge = serde_json::from_slice(&raw)?;
                 if challenge.schema_version != 1
+                    || challenge.purpose != BrokerPurpose::Standard
                     || challenge.job != job
                     || challenge.usage != usage
                     || challenge.input_sha256 != digest
@@ -935,6 +997,7 @@ pub(crate) fn infer(
                     );
                 }
                 boundary.check()?;
+                challenge.purpose.require(boundary.session_purpose())?;
                 write_frame_until(
                     &mut socket,
                     &serde_json::to_vec(&Proof {
@@ -943,6 +1006,7 @@ pub(crate) fn infer(
                         nonce: challenge.nonce,
                         job: job.clone(),
                         audit: boundary.audit()?,
+                        purpose: challenge.purpose,
                     })?,
                     Instant::now() + CHALLENGE_BUDGET,
                 )?;
@@ -1480,7 +1544,7 @@ pub(crate) fn launch(arguments: &[String]) -> Result<()> {
         );
     }
     let mut command = Command::new("/usr/bin/systemd-run");
-    let runtime = if payload.is_some() {
+    let runtime = if extended_client_command(&owned[0]) {
         "--property=RuntimeMaxSec=1800"
     } else {
         "--property=RuntimeMaxSec=60"
@@ -1740,9 +1804,13 @@ mod tests {
             job: "cd".repeat(16),
             usage: usage.clone(),
             input_sha256: "ef".repeat(32),
+            purpose: BrokerPurpose::Standard,
         };
         let mut value = serde_json::to_value(&challenge).unwrap();
         value["authenticated"] = true.into();
+        assert!(serde_json::from_value::<Challenge>(value).is_err());
+        let mut value = serde_json::to_value(&challenge).unwrap();
+        value.as_object_mut().unwrap().remove("purpose");
         assert!(serde_json::from_value::<Challenge>(value).is_err());
         let audit = crate::finite_grants::Audit {
             subject: "12".repeat(32),
@@ -1760,10 +1828,61 @@ mod tests {
             nonce: challenge.nonce,
             job: challenge.job,
             audit,
+            purpose: BrokerPurpose::Standard,
         };
         let mut value = serde_json::to_value(&proof).unwrap();
         value["utc_override"] = 1000.into();
         assert!(serde_json::from_value::<Proof>(value).is_err());
+        for unsupported in ["export", "model-activation", "admin", "Standard"] {
+            let mut value = serde_json::to_value(&proof).unwrap();
+            value["purpose"] = unsupported.into();
+            assert!(serde_json::from_value::<Proof>(value).is_err());
+        }
+        let mut value = serde_json::to_value(&proof).unwrap();
+        value.as_object_mut().unwrap().remove("purpose");
+        assert!(serde_json::from_value::<Proof>(value).is_err());
+    }
+    #[test]
+    fn live_broker_purposes_never_convert_or_extend_unrelated_commands() {
+        use crate::authentication::SessionPurpose;
+        for expected in [BrokerPurpose::Standard, BrokerPurpose::ModelImport] {
+            for actual in [
+                SessionPurpose::Standard,
+                SessionPurpose::Export,
+                SessionPurpose::ModelImport,
+                SessionPurpose::ModelActivation,
+            ] {
+                assert_eq!(
+                    expected.require(actual).is_ok(),
+                    matches!(
+                        (expected, actual),
+                        (BrokerPurpose::Standard, SessionPurpose::Standard)
+                            | (BrokerPurpose::ModelImport, SessionPurpose::ModelImport)
+                    )
+                );
+            }
+        }
+        for command in [
+            "model-pack-import",
+            "model-activate",
+            "artifact-owned-export",
+        ] {
+            assert!(extended_client_command(command));
+        }
+        for command in [
+            "model-pack-import-review",
+            "model-activate-review",
+            "model-install",
+            "model-pack-pending-retain",
+            "model-qualification-install",
+            "generated-execute",
+            "granted-infer",
+            "workflow-dag-advance",
+            "MODEL-ACTIVATE",
+            "model-activate-extra",
+        ] {
+            assert!(!extended_client_command(command));
+        }
     }
     #[test]
     fn plain_kernel_root_socket_never_substitutes_for_confined_source() {

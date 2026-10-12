@@ -25,7 +25,8 @@ class AccountCreationPolicyTests(unittest.TestCase):
         source = (ROOT / 'rust/luma-platform/src/admin_governance.rs').read_text()
         attempt = source.split('struct CreationAttempt')[1].split('pub fn account_creation_command(')[0]
         for marker in ('PrincipalPurpose::AdminCatalog', 'candidate == transaction',
-                       'session.observe_store(', 'Command::PermitAccountCreation',
+                       'session.observe_store_projected(', 'ActorAging::capture_projected(',
+                       'Command::PermitAccountCreation',
                        'Guard::retained(', 'self.guard.publish(', 'self.session.fenced.get()',
                        'current.head != self.snapshot.head', 'context.writer(&self.catalog)',
                        'self.session.account.identity()', 'self.session.close()'):

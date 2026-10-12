@@ -25,7 +25,7 @@ def main():
     args.output.mkdir(parents=True)
     repo = args.repository.resolve(strict=True)
     os.umask(0o077)
-    environment = dict(os.environ, CARGO_TARGET_DIR='/tmp/luma-tpm-target',
+    environment = dict(os.environ, CARGO_TARGET_DIR=os.environ.get('CARGO_TARGET_DIR', '/tmp/luma-tpm-target'),
                        RUSTFLAGS='-Dwarnings', TSS2_LOG='all+NONE')
     with tempfile.TemporaryDirectory(prefix='luma-tpm-') as folder:
         work = Path(folder)
@@ -285,7 +285,7 @@ def main():
                 'actual_tpm_event_replay_tested':True, 'slots':uki_records,
                 'gate_closing':False}, indent=2)+'\n', encoding='utf-8')
             run(['cargo', 'build', '--offline', '--locked'])
-            binary = '/tmp/luma-tpm-target/debug/luma-platform'
+            binary = str(Path(environment['CARGO_TARGET_DIR']) / 'debug/luma-platform')
             # Even when a reachable emulator is advertised in the usual tool
             # environment, the installed path insists on /dev/tpmrm0.
             environment['TPM2TOOLS_TCTI'] = transport

@@ -245,6 +245,25 @@ pub(crate) fn require_live() -> Result<()> {
     Ok(())
 }
 
+/// Static laboratory signatures are never a fallback for a production root,
+/// including an inert first boot with no enrolled release authority yet.
+pub(crate) fn require_laboratory_image() -> Result<()> {
+    let identity: RunningIdentity =
+        serde_json::from_slice(&crate::admin_credentials::public_input(
+            Path::new("/usr/share/luma-os/release-identity.json"),
+            4096,
+        )?)?;
+    validate_image_identity(&identity)?;
+    require_laboratory_environment(&identity.environment)
+}
+
+fn require_laboratory_environment(environment: &str) -> Result<()> {
+    if environment != "lab" {
+        return Err("static laboratory signatures require an immutable laboratory image; production cannot downgrade before enrollment".into());
+    }
+    Ok(())
+}
+
 /// Shared service/CLI activation fence. A structurally signed initial image
 /// has no protected authority until current TPM-backed Admin trust explicitly
 /// acknowledges this exact installed immutable release.
@@ -1942,6 +1961,7 @@ pub fn install(selection: &str, source: &Path, model_id: Option<&str>) -> Result
         verified.manifest.environment != "production",
         &mut || Ok(()),
     )?;
+    let trust_instruction = certificate_enrollment_instruction(&verified.manifest.environment)?;
     command("/usr/bin/sync", &[])?;
     drop(root);
     drop(verified);
@@ -1954,7 +1974,30 @@ pub fn install(selection: &str, source: &Path, model_id: Option<&str>) -> Result
     println!("ADMIN ENROLLMENT REQUIRED: local TPM2 hardware admission passed. Use explicit existing-owner Admin checkpoint enrollment, bootstrap and principal adoption after boot; the separate Unix administrator is not automatically product Admin.");
     println!("RESOURCE CHECKPOINT REQUIRED before installed broker admission: after Admin/UTC setup, use reviewed resource-checkpoint prepare/enroll ceremonies with the broker/model/acquisition masked and drained. This installer does not mutate existing TPM ownership or provision a resource NV handle unattended.");
     println!("Offline Admin recovery verifier installed but NOT recovery authority until explicit TPM checkpoint enrollment, product bootstrap and principal adoption commit. Retain the confirmed Admin recovery credential separately from the disk recovery passphrase.");
-    println!("INSTALLATION COMPLETE: remove recovery media and boot the selected disk. Secure Boot requires the laboratory certificate to be enrolled by the operator. Keep the independent recovery passphrase offline.");
+    println!("INSTALLATION COMPLETE: remove recovery media and boot the selected disk. {trust_instruction} Keep the independent recovery passphrase offline.");
+    Ok(())
+}
+
+fn certificate_enrollment_instruction(environment: &str) -> Result<&'static str> {
+    match environment {
+        "lab" => Ok("Secure Boot requires the laboratory certificate to be enrolled by the operator; it does not establish production qualification."),
+        "production" => Ok("Secure Boot requires the independently approved production certificate to be trusted by firmware. Preserve existing platform keys; this installer performs no certificate enrollment or firmware mutation. The staged release remains inert until explicit Admin/TPM/protected-UTC activation."),
+        _ => Err("unsupported certificate environment".into()),
+    }
+}
+
+fn validate_laboratory_repair(current: &Manifest, candidate: &Manifest) -> Result<()> {
+    bundle::validate_manifest(current)?;
+    bundle::validate_manifest(candidate)?;
+    if current.environment != "lab"
+        || candidate.environment != "lab"
+        || candidate.sequence < current.sequence
+        || current.edition != candidate.edition
+        || current.root_bytes != candidate.root_bytes
+        || current.hash_bytes != candidate.hash_bytes
+    {
+        return Err("laboratory repair cannot lower target release sequence or change target environment/geometry/edition".into());
+    }
     Ok(())
 }
 
@@ -2046,6 +2089,54 @@ struct RunningIdentity {
 #[cfg(test)]
 mod measured_release_tests {
     use super::*;
+    #[test]
+    fn laboratory_repair_never_crosses_a_production_boundary_or_lowers_geometry() {
+        let (_, current, _, _) = fixture();
+        validate_laboratory_repair(&current, &current).unwrap();
+        let mut newer = current.clone();
+        newer.sequence += 1;
+        validate_laboratory_repair(&current, &newer).unwrap();
+        for fault in 0..5 {
+            let mut candidate = current.clone();
+            match fault {
+                0 => candidate.environment = "production".into(),
+                1 => candidate.sequence -= 1,
+                2 => candidate.edition = "desktop".into(),
+                3 => {
+                    candidate.root_bytes += 4096;
+                    candidate.artifacts.iter_mut().find(|a| a.name == "root.ext4").unwrap().bytes += 4096;
+                },
+                _ => {
+                    candidate.hash_bytes += 4096;
+                    candidate.artifacts.iter_mut().find(|a| a.name == "root.verity").unwrap().bytes += 4096;
+                },
+            }
+            assert!(validate_laboratory_repair(&current, &candidate).is_err());
+        }
+        let mut production = current.clone();
+        production.environment = "production".into();
+        assert!(validate_laboratory_repair(&production, &current).is_err());
+        assert!(validate_laboratory_repair(&production, &production).is_err());
+    }
+    #[test]
+    fn installation_certificate_guidance_preserves_environment_and_custody() {
+        let lab = certificate_enrollment_instruction("lab").unwrap();
+        let production = certificate_enrollment_instruction("production").unwrap();
+        assert!(lab.contains("laboratory certificate"));
+        assert!(lab.contains("does not establish production qualification"));
+        assert!(production.contains("independently approved production certificate"));
+        assert!(production.contains("no certificate enrollment or firmware mutation"));
+        assert!(production.contains("remains inert"));
+        assert!(!production.contains("laboratory"));
+        assert!(certificate_enrollment_instruction("unknown").is_err());
+    }
+    #[test]
+    fn static_laboratory_signature_fallback_requires_exact_immutable_lab_environment() {
+        require_laboratory_environment("lab").unwrap();
+        for environment in ["production", "", "unknown", "LAB", "lab-override"] {
+            assert!(require_laboratory_environment(environment).is_err());
+        }
+    }
     fn fixture() -> (RunningIdentity, Manifest, String, String) {
         let root_bytes = 512 * 1024 * 1024;
         let hash_bytes = 8 * 1024 * 1024;
@@ -2465,15 +2556,7 @@ pub fn recover(args: &[String]) -> Result<()> {
             &target.data_root().join("lib/luma-os/installed.json"),
             65536,
         )?)?;
-        bundle::validate_manifest(&current)?;
-        if current.environment != "lab"
-            || verified.manifest.sequence < current.sequence
-            || current.edition != verified.manifest.edition
-            || current.root_bytes != verified.manifest.root_bytes
-            || current.hash_bytes != verified.manifest.hash_bytes
-        {
-            return Err("laboratory repair cannot lower target release sequence or change target environment/geometry/edition".into());
-        }
+        validate_laboratory_repair(&current, &verified.manifest)?;
         target.disk.confirm("REPAIR")?;
         let slot = if action == "repair-a" { 'a' } else { 'b' };
         let mut guard = || target.recheck();

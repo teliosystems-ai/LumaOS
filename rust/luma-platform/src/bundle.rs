@@ -102,7 +102,15 @@ pub fn validate_manifest(m: &Manifest) -> Result<()> {
         return Err("closed artifact inventory mismatch".into());
     }
     for a in &m.artifacts {
-        if a.bytes == 0 || a.bytes > 32 * 1024 * 1024 * 1024 || !is_hash(&a.sha256) {
+        let maximum = match a.name.as_str() {
+            "root.ext4" => 32 * 1024 * 1024 * 1024,
+            "root.verity" => 512 * 1024 * 1024,
+            "slot-a.efi" | "slot-b.efi" => 256 * 1024 * 1024,
+            "bootloader.efi" => 16 * 1024 * 1024,
+            "secureboot.cer" => 16 * 1024,
+            _ => return Err("unsupported release artifact".into()),
+        };
+        if a.bytes == 0 || a.bytes > maximum || !is_hash(&a.sha256) {
             return Err("invalid artifact bounds".into());
         }
         if (a.name == "root.ext4" && a.bytes != m.root_bytes)
@@ -167,6 +175,15 @@ pub fn private_dir(prefix: &str) -> Result<PathBuf> {
 }
 
 pub fn verify(source: &Path) -> Result<VerifiedBundle> {
+    // Live production media carries only inert, externally signed initial
+    // evidence. It cannot ask the installed Admin journal for timed authority
+    // or turn a missing installed enrollment into a static-key fallback.
+    if crate::platform::live()? {
+        let preview: Manifest = serde_json::from_slice(&initial_preview(source)?)?;
+        if inert_live_verification(&preview.environment, true)? {
+            return verify_initial(source);
+        }
+    }
     verify_with(source, |bytes, signature| {
         let manifest: Manifest = serde_json::from_slice(bytes)?;
         if manifest.environment == "production"
@@ -180,7 +197,16 @@ pub fn verify(source: &Path) -> Result<VerifiedBundle> {
     })
 }
 
+fn inert_live_verification(environment: &str, live: bool) -> Result<bool> {
+    match environment {
+        "production" => Ok(live),
+        "lab" => Ok(false),
+        _ => Err("unknown bundle verification environment".into()),
+    }
+}
+
 fn verify_lab_signature(bytes: &[u8], signature: &[u8]) -> Result<()> {
+    crate::platform::require_laboratory_image()?;
     let trust = crate::admin_credentials::public_input(Path::new(TRUST), 4096)?;
     let der = crate::release_trust::public_der(&trust)?;
     crate::release_trust::verify_der(&der, bytes, signature)
@@ -189,9 +215,11 @@ fn verify_lab_signature(bytes: &[u8], signature: &[u8]) -> Result<()> {
 pub(crate) fn verify_initial(source: &Path) -> Result<VerifiedBundle> {
     crate::platform::require_live()?;
     let mut staged_trust = None;
+    let mut production_image = None;
     let mut verified = verify_with(source, |bytes, signature| {
         let manifest: Manifest = serde_json::from_slice(bytes)?;
         if manifest.environment == "production" {
+            let image = crate::platform::RecoveryImage::current()?;
             let directory = OpenOptions::new()
                 .read(true)
                 .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW)
@@ -199,12 +227,19 @@ pub(crate) fn verify_initial(source: &Path) -> Result<VerifiedBundle> {
             let trust_bytes = read_bounded(open_member(&directory, "release-trust.json")?, 16384)?;
             let trust: crate::release_trust::SignedTrust = serde_json::from_slice(&trust_bytes)?;
             crate::release_trust::verify_inert_release(&trust, bytes, signature)?;
+            image.recheck()?;
+            production_image = Some(image);
             staged_trust = Some(trust_bytes);
             Ok(())
         } else {
             verify_lab_signature(bytes, signature)
         }
     })?;
+    if let Some(image) = production_image {
+        // Artifact hashing/snapshotting can block. The original authenticated
+        // live root, firmware state and UKI intent must still be unchanged.
+        image.recheck()?;
+    }
     verified.inert_trust = staged_trust;
     Ok(verified)
 }
@@ -422,6 +457,37 @@ mod tests {
     #[test]
     fn accepts_exact_lab_inventory() {
         validate_manifest(&fixture()).unwrap();
+    }
+    #[test]
+    fn inert_verification_is_live_production_only_not_an_installed_fallback() {
+        assert!(inert_live_verification("production", true).unwrap());
+        assert!(!inert_live_verification("production", false).unwrap());
+        assert!(!inert_live_verification("lab", true).unwrap());
+        assert!(!inert_live_verification("lab", false).unwrap());
+        for unknown in ["", "production-override", "LAB"] {
+            assert!(inert_live_verification(unknown, true).is_err());
+        }
+    }
+    #[test]
+    fn production_and_lab_boot_members_have_closed_individual_bounds() {
+        for environment in ["lab", "production"] {
+            let mut original = fixture();
+            original.environment = environment.into();
+            validate_manifest(&original).unwrap();
+            for (name, maximum) in [
+                ("slot-a.efi", 256 * 1024 * 1024),
+                ("slot-b.efi", 256 * 1024 * 1024),
+                ("bootloader.efi", 16 * 1024 * 1024),
+                ("secureboot.cer", 16 * 1024),
+            ] {
+                let mut changed = original.clone();
+                let member = changed.artifacts.iter_mut().find(|a| a.name == name).unwrap();
+                member.bytes = maximum;
+                validate_manifest(&changed).unwrap();
+                changed.artifacts.iter_mut().find(|a| a.name == name).unwrap().bytes += 1;
+                assert!(validate_manifest(&changed).is_err(), "{environment}/{name}");
+            }
+        }
     }
     #[test]
     fn rejects_duplicate_traversal_or_missing_artifacts() {

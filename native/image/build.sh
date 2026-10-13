@@ -4,6 +4,7 @@ set -euo pipefail
 # not resume reading a changed checkout at an old byte offset after Docker's
 # long assembly step. Build inputs are separately captured before package work.
 main() {
+export PYTHONDONTWRITEBYTECODE=1
 repository=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)
 case "${LUMA_BUILD_PROFILE:-auto}" in
     auto) if [ -f /etc/luma-build/environment.sh ]; then source /etc/luma-build/environment.sh; fi ;;
@@ -11,8 +12,52 @@ case "${LUMA_BUILD_PROFILE:-auto}" in
     standard) ;; # Explicit legacy/portable mode; retains its original guards.
     *) echo 'unknown build profile' >&2; exit 2 ;;
 esac
+if [ "${1:-}" = production-continue ]; then
+    if [ "$#" -ne 5 ]; then
+        echo 'usage: build.sh production-continue {pcr|pe|release} VOLUME CAPTURED_SOURCE RESPONSE_DIRECTORY' >&2; exit 2
+    fi
+    phase=$2; volume=$3; source_context=$4; response=$5
+    case "$phase" in pcr|pe|release) ;; *) echo 'invalid production response phase' >&2; exit 2;; esac
+    if ! [[ "$volume" =~ ^luma-native-build-[0-9]{8}T[0-9]{6}Z-(headless|desktop)$ ]]; then
+        echo 'production continuation requires its exact retained native build volume' >&2; exit 2
+    fi
+    edition=${volume##*-}
+    for path in "$source_context" "$response"; do
+        test ! -L "$path"; test -d "$path"
+        case "$path" in /|*','*) echo 'select exact readonly public phase directories' >&2; exit 2;; esac
+    done
+    source_context=$(realpath -e -- "$source_context")
+    response=$(realpath -e -- "$response")
+    build_root=${LUMA_BUILD_ROOT:-}
+    if [ -n "$build_root" ]; then build_root=$(realpath -e -- "$build_root"); fi
+    python3 "$repository/native/image/build_storage.py" preflight --repository "$repository" --external "$build_root" --edition "$edition"
+    docker run --rm --memory 4g --memory-swap 4g --cpus 2 --network none \
+        -e PYTHONDONTWRITEBYTECODE=1 \
+        --mount "type=volume,src=$volume,dst=/work" \
+        --mount "type=bind,src=$response,dst=/production-response,readonly" \
+        luma-native-tools:20260927 python3 /work/source/native/image/production_finalize.py "$phase"
+    run_id=$(date -u +%Y%m%dT%H%M%SZ)
+    destination="${build_root:-$repository/dist}/native/$run_id-production-$phase"
+    mkdir -p -- "$(dirname -- "$destination")"; mkdir -- "$destination"
+    if [ "$phase" = release ]; then
+        helper=export.py; next_args=()
+    else
+        helper=production_request_export.py
+        if [ "$phase" = pcr ]; then next_args=(pe); else next_args=(release); fi
+    fi
+    docker run --rm --memory 4g --memory-swap 4g --cpus 2 --network none \
+        -e PYTHONDONTWRITEBYTECODE=1 \
+        --mount "type=volume,src=$volume,dst=/work,readonly" \
+        --mount "type=bind,src=$destination,dst=/out" \
+        luma-native-tools:20260927 python3 "/work/source/native/image/$helper" "${next_args[@]}"
+    echo "Production phase output: $destination"
+    echo 'Production signing custody and native qualification remain external; no private keys were mounted.'
+    return
+fi
 edition=${1:-headless}
 sequence=${2:-1}
+environment=${LUMA_NATIVE_ENVIRONMENT:-lab}
+case "$environment" in lab|production) ;; *) echo 'environment must be lab or production' >&2; exit 2;; esac
 build_network=${LUMA_BUILD_NETWORK:-default}
 case "$build_network" in default|host|none) ;; *) echo 'unsupported build network' >&2; exit 2;; esac
 case "$edition" in headless|desktop) ;; *) echo 'edition must be headless or desktop' >&2; exit 2;; esac
@@ -46,14 +91,25 @@ artifact_mount_ro=()
 assembly_args=()
 public_trust_mount=()
 model_public_mount=()
-if [ -n "$build_root" ]; then
-    external_work="$build_root/work/$run_id-$edition"
-    mkdir -p -- "$build_root/work"
-    mkdir -- "$external_work"
-    mkdir -- "$external_work/artifacts"
-    artifact_mount=(--mount "type=bind,src=$external_work/artifacts,dst=/work/artifacts")
-    artifact_mount_ro=(--mount "type=bind,src=$external_work/artifacts,dst=/work/artifacts,readonly")
-    assembly_args=(--external-artifacts)
+# Raw roots, payload, ESP, sparse copies and compression remain in the Linux
+# build volume. The verified dedicated daemon places that volume on D-backed
+# ext4. Only final compressed/public exports go to the outer D: filesystem.
+private_key_mount=()
+production_public_mount=()
+assembly_args+=(--environment "$environment")
+if [ "$environment" = production ]; then
+    test -n "${LUMA_NATIVE_PRODUCTION_PUBLIC_INPUTS:-}"
+    test -n "${LUMA_NATIVE_PUBLIC_TRUST:-}"
+    test -n "${LUMA_NATIVE_MODEL_PUBLIC_INPUTS:-}"
+    test ! -L "$LUMA_NATIVE_PRODUCTION_PUBLIC_INPUTS"
+    production_input=$(realpath -e -- "$LUMA_NATIVE_PRODUCTION_PUBLIC_INPUTS")
+    test -d "$production_input"
+    case "$production_input" in /|*','*) echo 'select an exact public production input directory' >&2; exit 2;; esac
+    production_public_mount=(--mount "type=bind,src=$production_input,dst=/production-public,readonly")
+    assembly_args+=(--production-public-inputs /production-public)
+    if [ -n "${LUMA_NATIVE_PRODUCTION_RELEASE_ID:-}" ]; then assembly_args+=(--release-id "$LUMA_NATIVE_PRODUCTION_RELEASE_ID"); fi
+else
+    private_key_mount=(--mount type=volume,src=luma-native-lab-keys,dst=/keys)
 fi
 if [ -n "${LUMA_NATIVE_PUBLIC_TRUST:-}" ]; then
     test ! -L "$LUMA_NATIVE_PUBLIC_TRUST"
@@ -82,7 +138,7 @@ python3 "$source_context/native/image/utc/prepare_release_input.py" "${utc_args[
 docker build "${build_limits[@]}" --network "$build_network" --build-arg "UBUNTU_BASE=$base" -f "$source_context/native/image/Dockerfile.tools" -t "$tools" "$source_context/native/image"
 docker build "${build_limits[@]}" --network "$build_network" --build-arg "EDITION=$edition" -f "$source_context/native/image/Dockerfile.root" -t "luma-native-root:20260927-$edition" "$runtime_context"
 docker volume create "$volume"
-docker volume create luma-native-lab-keys
+if [ "$environment" = lab ]; then docker volume create luma-native-lab-keys; fi
 docker run --rm "${run_limits[@]}" --network none --mount "type=volume,src=$volume,dst=/work" "$tools" mkdir /work/root
 docker create --name "$export_container" "luma-native-root:20260927-$edition"
 docker export "$export_container" | docker run --rm -i "${run_limits[@]}" --network none --mount "type=volume,src=$volume,dst=/work" "$tools" tar -xpf - -C /work/root
@@ -90,17 +146,35 @@ docker export "$export_container" | docker run --rm -i "${run_limits[@]}" --netw
 docker rm "$export_container"
 docker run --rm "${run_limits[@]}" --network none \
     -e CARGO_BUILD_JOBS=1 -e RUSTFLAGS=-Dwarnings \
+    -e PYTHONDONTWRITEBYTECODE=1 \
     --mount "type=volume,src=$volume,dst=/work" \
     "${artifact_mount[@]}" \
     "${public_trust_mount[@]}" \
     "${model_public_mount[@]}" \
-    --mount type=volume,src=luma-native-lab-keys,dst=/keys \
+    "${production_public_mount[@]}" \
+    "${private_key_mount[@]}" \
     --mount "type=bind,src=$source_context,dst=/repo,readonly" \
     --mount "type=bind,src=$runtime_context,dst=/inputs,readonly" \
     "$tools" python3 /repo/native/image/assemble.py --edition "$edition" --sequence "$sequence" "${assembly_args[@]}"
+if [ "$environment" = production ]; then
+    destination="${build_root:-$repository/dist}/native-signing/$run_id-$edition-pcr"
+    mkdir -p -- "$(dirname -- "$destination")"; mkdir -- "$destination"
+    docker run --rm "${run_limits[@]}" --network none -e PYTHONDONTWRITEBYTECODE=1 \
+        --mount "type=volume,src=$volume,dst=/work,readonly" \
+        --mount "type=bind,src=$source_context,dst=/repo,readonly" \
+        --mount "type=bind,src=$destination,dst=/out" \
+        "$tools" python3 /repo/native/image/production_request_export.py pcr
+    echo "Public production PCR signing request: $destination"
+    echo "Retained production build volume: $volume"
+    echo "Captured build inputs: $source_context"
+    echo 'Continue with production-continue pcr/pe/release and independently produced signature responses.'
+    echo 'No production private key was generated, mounted, exported or used by Docker.'
+    return
+fi
 mkdir -p -- "$(dirname -- "$destination")"
 mkdir -- "$destination"
 docker run --rm "${run_limits[@]}" --network none \
+    -e PYTHONDONTWRITEBYTECODE=1 \
     --mount "type=volume,src=$volume,dst=/work,readonly" \
     "${artifact_mount_ro[@]}" \
     --mount "type=bind,src=$source_context,dst=/repo,readonly" \
@@ -109,11 +183,7 @@ docker run --rm "${run_limits[@]}" --network none \
 echo "Image output: $destination"
 echo "Retained Linux build volume: $volume"
 echo "Captured build inputs: $source_context"
-if [ -n "$build_root" ]; then
-    echo "External artifact/VM work directory: $external_work (bind at /work for VM tests)"
-else
-    echo "VM work remains in volume: $volume"
-fi
+echo "Raw artifact/VM work remains on the verified Linux ext4 build volume: $volume"
 echo 'Laboratory private keys remain in Docker volume luma-native-lab-keys; do not publish that volume.'
 }
 main "$@"

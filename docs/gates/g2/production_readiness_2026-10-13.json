@@ -1,0 +1,87 @@
+{
+  "schema_version": 1,
+  "gate": "G2",
+  "recorded_on": "2026-10-13",
+  "development_assessment": "in-progress",
+  "production_readiness": "not-yet-complete",
+  "gate_closing": false,
+  "claim_boundary": "Implementation and disposable software/cryptographic fixtures are not production signing custody, native boot evidence, model QA certification, or native Ubuntu qualification. The September blocker/evidence files retain their historical assessment; this record describes the current production-readiness review.",
+  "current_deliverable": {
+    "boot_runtime": "Immutable laboratory-only fallback, inert production live verification, bounded boot artifacts, and cross-environment repair refusal implemented.",
+    "production_assembly": "Public-only external PCR, Secure Boot, and OS manifest signature phases implemented and covered by software/cryptographic regressions. No genuine production assembly or native qualification performed.",
+    "model_qualification_delivery": "Public-only exact report/evidence/certificate transport implemented; it does not execute model QA or assert a QA pass.",
+    "desktop": "Explicit laboratory/production packaging labels with model-independent login; no graphical-session qualification claimed.",
+    "source_files": [
+      "native/image/assemble.py",
+      "native/image/build.sh",
+      "native/image/production_finalize.py",
+      "native/image/production_release.py",
+      "native/image/production_qualification.py",
+      "native/image/assembly_custody.py",
+      "rust/luma-platform/src/bundle.rs",
+      "rust/luma-platform/src/platform.rs"
+    ]
+  },
+  "remaining_development": [
+    {
+      "id": "G2-PROD-DEV-QA",
+      "status": "open",
+      "item": "A separately authorized, finite original-Admin QA-only execution route on the production image, with profile-derived resource leases, independent worker confinement, continuous authorization and inert measured output.",
+      "boundary": "Ordinary model serving and available-catalog admission must continue requiring genuine certification. A public report descriptor or certificate transport helper cannot substitute for executing QA.",
+      "decision": "Approval requested for a separate QA-only execution route; no longer session purpose is implicitly borrowed from import or activation approvals.",
+      "source_files": ["rust/luma-platform/src/model.rs", "rust/luma-platform/src/resource_manager.rs", "rust/luma-platform/src/admin_governance.rs"]
+    },
+    {
+      "id": "G2-PROD-DEV-INSTALL-STAGING",
+      "status": "open",
+      "item": "Installer-selected production model data download/staging bound to the exact target image, profile, installation and hardware/storage checks, while remaining disabled until genuine governance and qualification.",
+      "boundary": "Current production installation intentionally requires manual-only staging. Laboratory model downloading exists but is not a production installer staging implementation; staged data must not automatically become serving authority.",
+      "source_files": ["rust/luma-platform/src/platform.rs", "rust/luma-platform/src/acquisition.rs", "rust/luma-platform/src/model.rs"]
+    }
+  ],
+  "remaining_production_inputs": [
+    "Independently provisioned, purpose-separated production public roots, signed OS/skill/model metadata, Secure Boot certificate and PCR public key.",
+    "Authentic externally produced signature responses and governed production signing/recovery custody; laboratory keys must not be reclassified as production.",
+    "Real model QA reports and externally signed machine/image-specific qualification records after the production candidate exists."
+  ],
+  "remaining_native_qualification": [
+    "Boot and destructive installation on explicitly identified disposable targets.",
+    "Secure Boot, signed PCR/TPM2 ownership-preserving enrollment, verity, LUKS, A/B updates and trial fallback.",
+    "Recovery/export, interrupted operations, worker isolation, authenticated UTC, suspend/resume and lifecycle/performance qualification on the required native board tuples."
+  ],
+  "existing_image": {
+    "environment": "lab",
+    "source_commit": "ddae011ebf717528698115abb9756e48c03e80d4",
+    "directory": "D:/LumaOS-builds/native/20261013-resumed-desktop-13",
+    "file": "luma-native-lab-20260927-desktop-13.img.zst",
+    "sha256": "30591427894edd407996936d9608016abaafbb0d105de76f05db05a40ed6bb0b",
+    "contains_current_changes": false,
+    "native_boot_tested": false,
+    "production_qualified": false
+  },
+  "validation": {
+    "rust_all_targets_warnings_denied": "passed",
+    "focused_rust_boot_bundle_tests": {"passed": 14, "failed": 0, "ignored": 0},
+    "desktop_policy_tests": {"passed": 12, "failed": 0, "skipped": 0},
+    "public_domain_composition_tests": {"passed": 5, "failed": 0, "skipped": 0},
+    "integrated_source_bound_sweep": {
+      "result": "passed-development-tests-non-closing",
+      "rust": {"passed": 967, "failed": 0, "ignored": 42},
+      "native_final": {"passed": 441, "failed": 0, "skipped": 0},
+      "public_trust_authentication": {"passed": 13, "failed": 0, "skipped": 0},
+      "model_public_authentication": {"passed": 13, "failed": 0, "skipped": 0},
+      "apparmor_profiles_parsed_without_loading": 14,
+      "rust_source_manifest_sha256": "ef7910251733d1859acdc4dab1f55333cd07182bbe09b58f064643f842fd235a",
+      "native_final_source_manifest_sha256": "f13ff5f3821171135c367ba147d18c3eb8a91abaa0de12355d757239bb8d86b2",
+      "source_difference": "The final snapshot differs only in native/image/production_release.py and native/tests/test_production_command.py. Rust source is unchanged; final native tests were rerun after closed phase-inventory refinements.",
+      "rust_and_initial_native_evidence": "/mnt/luma-build/work/g2-production-evidence-20261013-b/sweep/result.json",
+      "rust_and_initial_native_evidence_sha256": "af21af5a151bdbbb5fb94291e41c97900df97cf9652e5adb3bafbcbc7b71788f",
+      "native_final_evidence": "/mnt/luma-build/work/g2-production-native-evidence-20261013-c/result.json",
+      "native_final_evidence_sha256": "694335c8ee4dcb74f757953b9c5b7c3fc93a2cb76b73d2d01cc7c9d86674b5d0",
+      "ignored_test_boundary": "The 42 isolated Rust fixture/owned-child cases were not executed by this unit sweep. No passing native-image, physical TPM, PAM qualification or hardware enforcement result is inferred from ignored cases."
+    },
+    "historical_gate_validator": "Preexisting September/current-source provenance mismatch confirmed; repair in progress without rewriting historical evidence.",
+    "physical_hardware_tested": false,
+    "production_custody_performed": false
+  }
+}

@@ -57,7 +57,9 @@ def put(root, name, data, mode=0o644):
     path.chmod(mode)
 
 
-def configure(root, edition):
+def configure(root, edition, environment='lab'):
+    if environment not in ('lab', 'production'):
+        raise ValueError('unknown image environment')
     target(edition, 'installed')  # Closed edition validation.
     if edition == 'headless':
         return {'profile': 'console', 'wayland_session_tested': False}
@@ -120,9 +122,11 @@ ConditionKernelCommandLine=luma.mode=installed
 TimeoutStartSec=90
 TimeoutStopSec=30
 ''')
-    put(root, 'usr/share/applications/luma-workspace.desktop', '''[Desktop Entry]
+    workspace_name = ('Luma Workspace (laboratory)' if environment == 'lab'
+                      else 'Luma Workspace')
+    put(root, 'usr/share/applications/luma-workspace.desktop', f'''[Desktop Entry]
 Type=Application
-Name=Luma Workspace (laboratory)
+Name={workspace_name}
 Comment=Local reference workspace; files and desktop remain available independently
 Exec=epiphany http://127.0.0.1:8765
 Icon=utilities-terminal

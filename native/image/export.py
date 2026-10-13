@@ -3,14 +3,25 @@
 import hashlib
 import os
 from pathlib import Path
+import sys
+
+sys.dont_write_bytecode = True
+from assembly_storage import export_headroom
 
 source=Path('/work/artifacts')
 destination=Path('/out')
 names=[p.name for p in source.glob('*.img.zst')]
 names+=['SHA256SUMS','build.json','packages.lock','release.json','release.sig','secureboot.cer',
         'source-lock.json','toolchain-packages.lock','native-source.tar.zst','boot-policy.json']
+import json
+record = json.loads((source/'build.json').read_text())
+if record.get('production_signed') is True:
+    names.append('release-trust.json')
+if len(list(source.glob('*.img.zst'))) != 1:
+    raise SystemExit('export requires exactly one sealed compressed image')
 if any(not (source/name).is_file() for name in names):
     raise SystemExit('incomplete artifact inventory; nothing has been exported')
+export_headroom(source, destination, names)
 for name in names:
     target=destination/name
     temporary=destination/(name+'.partial')

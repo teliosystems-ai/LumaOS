@@ -17,6 +17,10 @@ import stat
 import subprocess
 import sys
 
+# Imports run from the captured source tree. Interpreter caches are not product
+# inputs and must never appear in its corresponding source archive.
+sys.dont_write_bytecode = True
+
 MIB = 1024 * 1024
 REPO = Path('/repo')
 WORK = Path('/work')
@@ -179,6 +183,10 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--edition', choices=('headless','desktop'), default='headless')
     parser.add_argument('--sequence', type=int, default=1)
+    parser.add_argument('--environment', choices=('lab', 'production'), default='lab')
+    parser.add_argument('--release-id', help='owner-selected production release identity')
+    parser.add_argument('--production-public-inputs', type=Path,
+                        help='public-only OS trust, delegated signer, Secure Boot certificate and PCR public key')
     parser.add_argument('--external-artifacts', action='store_true')
     parser.add_argument('--public-trust-inputs', type=Path,
                         help='independently signed public roots and inert skill admissions; never private keys')
@@ -197,13 +205,28 @@ def main() -> None:
     if not 1 <= args.sequence <= 2**63-1:
         raise SystemExit('sequence must be a positive signed 64-bit integer')
     if not args.external_artifacts:OUT.mkdir()
-    KEYS.mkdir(mode=0o700, exist_ok=True)
-    if KEYS.is_symlink() or not KEYS.is_dir() or KEYS.stat().st_uid != os.geteuid():
-        raise SystemExit('laboratory key volume must be an owned directory, not a link')
+    from assembly_storage import require_ext4
+    require_ext4(OUT)
+    if args.environment == 'production':
+        if args.production_public_inputs is None or args.public_trust_inputs is None or args.model_public_inputs is None:
+            raise SystemExit('production assembly requires independently provisioned public OS, skill and model inputs')
+        if KEYS.exists():
+            raise SystemExit('production assembly must not mount or create a private-key volume')
+    elif args.production_public_inputs is not None or args.release_id is not None:
+        raise SystemExit('production custody inputs/release override cannot select laboratory signing')
+    else:
+        KEYS.mkdir(mode=0o700, exist_ok=True)
+        if KEYS.is_symlink() or not KEYS.is_dir() or KEYS.stat().st_uid != os.geteuid():
+            raise SystemExit('laboratory key volume must be an owned directory, not a link')
     # Docker creates a fresh volume root with 0755; restrict directory access
     # before generating any key. Existing private key files are not repaired.
-    KEYS.chmod(0o700)
-    release = f'luma-native-lab-20260927-{args.edition}-{args.sequence}'
+    if args.environment == 'lab':
+        KEYS.chmod(0o700)
+    release = (f'luma-native-lab-20260927-{args.edition}-{args.sequence}'
+               if args.environment == 'lab' else
+               args.release_id or f'luma-native-production-20260927-{args.edition}-{args.sequence}')
+    if not 1 <= len(release) <= 64 or any(c not in 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.-_' for c in release):
+        raise SystemExit('release identity must be finite ASCII alphanumeric .-_')
     print(f'Assembling {release}', flush=True)
     inputs=[]
     snapshot=WORK/'source'
@@ -277,24 +300,36 @@ def main() -> None:
     put('usr/share/luma-os/release-id',release+'\n')
     put('usr/share/luma-os/release-identity.json', json.dumps({
         'schema_version': 1, 'release': release, 'sequence': args.sequence,
-        'environment': 'lab', 'architecture': 'amd64', 'ubuntu': '24.04',
+        'environment': args.environment, 'architecture': 'amd64', 'ubuntu': '24.04',
         'edition': args.edition}, separators=(',', ':'))+'\n')
-    if not (KEYS/'release.key').exists():
-        run('openssl','genpkey','-algorithm','ED25519','-out',KEYS/'release.key')
-    run('openssl','pkey','-in',KEYS/'release.key','-pubout','-out',ROOT/'usr/share/luma-os/release.pub')
+    if args.environment == 'production':
+        import production_release
+        production_release.validate_public_inputs(ROOT, args.production_public_inputs,
+            {'schema_version': 1, 'release': release, 'sequence': args.sequence,
+             'environment': 'production', 'architecture': 'amd64', 'ubuntu': '24.04',
+             'edition': args.edition}, OUT)
+    else:
+        if not (KEYS/'release.key').exists():
+            run('openssl','genpkey','-algorithm','ED25519','-out',KEYS/'release.key')
+        run('openssl','pkey','-in',KEYS/'release.key','-pubout','-out',ROOT/'usr/share/luma-os/release.pub')
     for name in ('model-catalog.json','runtime-lock.json'):
         shutil.copy2(REPO/'native/image'/name,ROOT/'usr/share/luma-os'/name)
-    run('openssl','pkeyutl','-sign','-rawin','-inkey',KEYS/'release.key',
-        '-in',ROOT/'usr/share/luma-os/model-catalog.json',
-        '-out',ROOT/'usr/share/luma-os/model-catalog.sig')
+    if args.environment == 'lab':
+        run('openssl','pkeyutl','-sign','-rawin','-inkey',KEYS/'release.key',
+            '-in',ROOT/'usr/share/luma-os/model-catalog.json',
+            '-out',ROOT/'usr/share/luma-os/model-catalog.sig')
     # Neither laboratory private key enters the source snapshot, image or
     # published artifacts. Production signing custody remains separate.
-    package_skill_registry(ROOT, KEYS)
+    if args.environment == 'lab':
+        package_skill_registry(ROOT, KEYS)
     public_spec = importlib.util.spec_from_file_location(
         'luma_public_trust', REPO/'native/image/provision_public_trust.py')
     public_trust = importlib.util.module_from_spec(public_spec)
     public_spec.loader.exec_module(public_trust)
     public_inputs = public_trust.provision(ROOT, args.public_trust_inputs)
+    if args.environment == 'production' and (public_inputs.get('environment') != 'production'
+                                             or not public_inputs.get('skill_registry')):
+        raise SystemExit('production image requires the complete externally signed production skill group')
     put('usr/share/luma-os/public-trust-inputs.json',
         json.dumps(public_inputs, sort_keys=True, separators=(',', ':'))+'\n')
     model_spec = importlib.util.spec_from_file_location(
@@ -302,15 +337,29 @@ def main() -> None:
     model_inputs = importlib.util.module_from_spec(model_spec)
     model_spec.loader.exec_module(model_inputs)
     model_report = model_inputs.provision(ROOT, args.model_public_inputs)
+    if args.environment == 'production':
+        from assembly_custody import recheck_public_domains
+        if not model_report.get('provided') or model_report.get('environment') != 'production':
+            raise SystemExit('production assembly requires independently signed production model metadata')
+        profiles = json.loads((ROOT/'usr/share/luma-os/models/catalog.json').read_bytes())['profiles']
+        if not any(p.get('kind') == 'model' and p.get('profile_id') in
+                   ('qwen3-4b-q4-k-m', 'qwen3-1-7b-q4-k-m') for p in profiles):
+            raise SystemExit('production image must package a supported signed native Qwen3 model tuple')
+        recheck_public_domains(ROOT, OUT)
     put('usr/share/luma-os/model-public-inputs.json',
         json.dumps(model_report, sort_keys=True, separators=(',', ':'))+'\n')
-    if not (KEYS/'secureboot.key').exists():
-        run('openssl','req','-new','-x509','-newkey','rsa:3072','-nodes','-sha256','-days','365',
-            '-subj','/CN=Luma Native Laboratory Only/','-keyout',KEYS/'secureboot.key','-out',KEYS/'secureboot.pem',stderr=subprocess.DEVNULL)
-    run('openssl','x509','-in',KEYS/'secureboot.pem','-outform','DER','-out',OUT/'secureboot.cer')
-    pcr_key, pcr_public = boot_policy.prepare_lab_key(KEYS)
-    for p in KEYS.iterdir():
-        p.chmod(0o600)
+    if args.environment == 'production':
+        pcr_public = (OUT/'production-public/pcr-policy.pub').read_bytes()
+        pcr_key = None
+        run('openssl','x509','-in',OUT/'production-public/secureboot.pem','-outform','DER','-out',OUT/'secureboot.cer')
+    else:
+        if not (KEYS/'secureboot.key').exists():
+            run('openssl','req','-new','-x509','-newkey','rsa:3072','-nodes','-sha256','-days','365',
+                '-subj','/CN=Luma Native Laboratory Only/','-keyout',KEYS/'secureboot.key','-out',KEYS/'secureboot.pem',stderr=subprocess.DEVNULL)
+        run('openssl','x509','-in',KEYS/'secureboot.pem','-outform','DER','-out',OUT/'secureboot.cer')
+        pcr_key, pcr_public = boot_policy.prepare_lab_key(KEYS)
+        for p in KEYS.iterdir():
+            p.chmod(0o600)
     pcr_public_path = ROOT/'usr/share/luma-os/admin-pcr-public.pem'
     pcr_public_path.write_bytes(pcr_public)
     pcr_public_path.chmod(0o644)
@@ -342,7 +391,7 @@ def main() -> None:
     if any(1000 <= int(line.split(':')[2]) < 65534
            for line in (ROOT/'etc/passwd').read_text().splitlines()):
         raise SystemExit('unexpected pre-existing interactive identity in base image')
-    desktop_profile = desktop_policy.configure(ROOT, args.edition)
+    desktop_profile = desktop_policy.configure(ROOT, args.edition, args.environment)
     root_mib, payload_mib = desktop_policy.geometry(args.edition)
     template = ROOT/'usr/share/luma-os/var-template'
     # Fresh build-owned exported filesystem only; no host files are involved.
@@ -400,7 +449,7 @@ def main() -> None:
         wanted=ROOT/f'etc/systemd/system/{target}.wants'
         wanted.mkdir(parents=True,exist_ok=True)
         (wanted/unit).symlink_to('/usr/lib/systemd/system/'+unit)
-    put('etc/issue','Luma native Ubuntu laboratory image. Native qualification is pending.\nRun luma-platform --help. Installation/recovery bundle: /media/luma\n')
+    put('etc/issue',f'Luma native Ubuntu {args.environment} image. Native qualification is pending.\nRun luma-platform --help. Installation/recovery bundle: /media/luma\n')
     run('cp','-a',ROOT/'var',template)
     versions = run('chroot',ROOT,'dpkg-query','-W','-f=${Package}=${Version}\n')
     (OUT/'packages.lock').write_text(versions,encoding='utf-8')
@@ -439,7 +488,10 @@ def main() -> None:
     (OUT/'verity-format.txt').write_text(output)
     run('veritysetup','verify',root_image,verity,roothash)
     os_release = OUT/'uki-os-release'
-    os_release.write_text(f'ID=luma\nNAME="Luma Native Laboratory"\nVERSION_ID={args.sequence}\nPRETTY_NAME="{release}"\n')
+    os_release.write_text(f'ID=luma\nNAME="Luma Native {"Laboratory" if args.environment == "lab" else "Production"}"\nVERSION_ID={args.sequence}\nPRETTY_NAME="{release}"\n')
+    unsigned = OUT/'production-unsigned'
+    if args.environment == 'production':
+        unsigned.mkdir()
     pcr_records = []
     for slot in ('a','b','live'):
         mode = 'live' if slot=='live' else 'installed'
@@ -453,15 +505,33 @@ def main() -> None:
                    f'systemd.unit={desktop_policy.target(args.edition,mode)} '
                    'console=tty0 console=ttyS0,115200n8 apparmor=1 security=apparmor '
                    'systemd.show_status=yes rd.shell=0 panic=10')
+        custody_args = (['--secureboot-private-key',KEYS/'secureboot.key',
+                         '--secureboot-certificate',KEYS/'secureboot.pem',
+                         *boot_policy.signing_arguments(slot,pcr_key,pcr_public_path)]
+                        if args.environment == 'lab' else
+                        ['--pcrpkey',pcr_public_path] if slot != 'live' else [])
         run('/usr/lib/systemd/ukify','build','--linux',kernel,'--initrd',initrd,
             '--config','/dev/null',
             '--cmdline',cmdline,'--os-release','@'+str(os_release),'--uname',version,
-            '--secureboot-private-key',KEYS/'secureboot.key',
-            '--secureboot-certificate',KEYS/'secureboot.pem',
-            *boot_policy.signing_arguments(slot,pcr_key,pcr_public_path),
-            '--output',OUT/f'slot-{slot}.efi')
-        pcr_records.append(boot_policy.verify_uki(OUT/f'slot-{slot}.efi',slot,pcr_public,KEYS/'secureboot.pem'))
-        desktop_policy.verify_boot_target(boot_policy.read_sections(OUT/f'slot-{slot}.efi')['.cmdline'],args.edition,mode)
+            *custody_args,
+            '--output',(OUT if args.environment == 'lab' else unsigned)/f'slot-{slot}.efi')
+        if args.environment == 'lab':
+            pcr_records.append(boot_policy.verify_uki(OUT/f'slot-{slot}.efi',slot,pcr_public,KEYS/'secureboot.pem'))
+        desktop_policy.verify_boot_target(boot_policy.read_sections((OUT if args.environment == 'lab' else unsigned)/f'slot-{slot}.efi')['.cmdline'],args.edition,mode)
+    if args.environment == 'production':
+        shutil.copyfile('/usr/lib/systemd/boot/efi/systemd-bootx64.efi',unsigned/'bootloader.efi')
+        checkpoint = {'schema_version': 1, 'identity': {'schema_version': 1,
+            'release': release, 'sequence': args.sequence, 'environment': 'production',
+            'architecture': 'amd64', 'ubuntu': '24.04', 'edition': args.edition},
+            'root_hash': roothash, 'kernel': version, 'source_lock_sha256': digest(OUT/'source-lock.json'),
+            'initrd_policy': initrd_policy, 'desktop': desktop_profile}
+        with (OUT/'production-build.json').open('x') as stream:
+            json.dump(checkpoint, stream, sort_keys=True, indent=2); stream.write('\n')
+        request = production_release.prepare_pcr(OUT, ROOT)
+        print(json.dumps({'status': 'production-custody-pcr-signatures-required',
+            'request': request, 'product_rebuilt': True, 'production_signed': False,
+            'gate_closing': False}, default=str), flush=True)
+        return
     (OUT/'boot-policy.json').write_text(json.dumps({'schema_version':1,'environment':'lab',
         'slots':pcr_records,'initrd':initrd_policy,
         'enrollment_active':False,'gate_closing':False},indent=2)+'\n')
@@ -475,8 +545,23 @@ def main() -> None:
     (OUT/'release.json').write_text(json.dumps(manifest,separators=(',',':'))+'\n')
     run('openssl','pkeyutl','-sign','-rawin','-inkey',KEYS/'release.key',
         '-in',OUT/'release.json','-out',OUT/'release.sig')
+    seal_media(manifest, desktop_profile, version)
+
+
+def seal_media(manifest, desktop_profile, version):
+    """Seal already signed six-artifact bytes; never creates signing keys."""
+    production = manifest['environment'] == 'production'
+    if production:
+        import production_release
+        production_release.verify_complete(OUT)
+    release = manifest['release']
+    root_image, verity = OUT/'root.ext4', OUT/'root.verity'
+    roothash = manifest['root_hash']
+    root_mib, payload_mib = __import__('desktop_policy').geometry(manifest['edition'])
+    names=['root.ext4','root.verity','slot-a.efi','slot-b.efi','bootloader.efi','secureboot.cer']
     payload_tree=WORK/'payload'; payload_tree.mkdir()
-    for name in [*names,'release.json','release.sig','packages.lock']:
+    for name in [*names,'release.json','release.sig','packages.lock',
+                 *(['release-trust.json'] if production else [])]:
         stage_payload_member(OUT/name,payload_tree/name)
     payload=OUT/'payload.ext4'
     with payload.open('xb') as f:f.truncate(payload_mib*MIB)
@@ -505,13 +590,22 @@ def main() -> None:
     run(*argv,image)
     for source,offset in zip([esp,root_image,verity,payload],offsets):sparse_copy(source,image,offset)
     run('sgdisk','--verify',image)
+    import resume as image_checks
+    image_checks.verify_gpt(image, manifest['edition'])
+    partitions, _ = image_checks.layout(manifest['edition'])
+    image_checks.verify_ranges(image, [esp,root_image,verity,payload], partitions)
     run('zstd','-T2','-3',image,'-o',str(image)+'.zst')
-    selected=[image,Path(str(image)+'.zst'),OUT/'release.json',OUT/'release.sig',OUT/'secureboot.cer',OUT/'packages.lock',OUT/'source-lock.json',OUT/'toolchain-packages.lock',OUT/'native-source.tar.zst',OUT/'boot-policy.json']
+    run('zstd','-t',str(image)+'.zst')
+    selected=[image,Path(str(image)+'.zst'),OUT/'release.json',OUT/'release.sig',OUT/'secureboot.cer',OUT/'packages.lock',OUT/'source-lock.json',OUT/'toolchain-packages.lock',OUT/'native-source.tar.zst',OUT/'boot-policy.json',
+              *([OUT/'release-trust.json'] if production else [])]
     (OUT/'SHA256SUMS').write_text(''.join(f'{digest(p)}  {p.name}\n' for p in selected))
-    record={'status':'built-not-yet-boot-tested','release':release,'kernel':version,'edition':args.edition,
+    if production:
+        production_release.verify_complete(OUT)
+    record={'status':'built-not-yet-boot-tested','release':release,'kernel':version,'edition':manifest['edition'],
             'root_hash':roothash,'image':image.name,'image_sha256':digest(image),
             'source_lock_sha256':digest(OUT/'source-lock.json'),
-            'desktop':desktop_profile, 'production_signed':False,'gate_closing':False}
+            'desktop':desktop_profile, 'production_signed':production,'gate_closing':False,
+            'custody_qualified':False, 'native_qualification_claimed':False}
     (OUT/'build.json').write_text(json.dumps(record,indent=2)+'\n')
     print(json.dumps(record,indent=2),flush=True)
 

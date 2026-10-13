@@ -40,6 +40,25 @@ class DesktopPolicyTests(unittest.TestCase):
         self.assertFalse((self.root/'etc/gdm3').exists())
         self.assertFalse((self.root/'usr/share/luma-os/desktop-profile').exists())
 
+    def test_production_launcher_does_not_claim_lab_or_certification(self):
+        report = policy.configure(self.root, 'desktop', 'production')
+        launcher = (self.root/'usr/share/applications/luma-workspace.desktop').read_text()
+        self.assertIn('Name=Luma Workspace\n', launcher)
+        self.assertNotIn('laboratory', launcher)
+        self.assertNotIn('certified', launcher)
+        self.assertFalse(report['wayland_session_tested'])
+        self.assertFalse(report['model_required_for_login'])
+        policy.configure(self.root, 'desktop', 'lab')
+        self.assertIn('Name=Luma Workspace (laboratory)\n',
+                      (self.root/'usr/share/applications/luma-workspace.desktop').read_text())
+
+    def test_unknown_environment_refuses_before_any_configuration_write(self):
+        before = sorted(p.relative_to(self.root) for p in self.root.rglob('*'))
+        for edition in ('desktop', 'headless'):
+            with self.assertRaises(ValueError):
+                policy.configure(self.root, edition, 'certified')
+            self.assertEqual(before, sorted(p.relative_to(self.root) for p in self.root.rglob('*')))
+
     def test_exact_packaged_locale_alias_is_preserved_and_substitution_refused(self):
         alias = self.root/'etc/default/locale'
         alias.parent.mkdir(parents=True)

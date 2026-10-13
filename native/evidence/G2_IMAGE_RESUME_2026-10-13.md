@@ -1,9 +1,10 @@
 # G2 image assembly resume
 
-The desktop sequence-13 laboratory image is being packaged from the retained,
-sealed OS components. This checkpoint records the resumed build and its source
-archive correction. It does not attest a completed export, a successful boot,
-production signing, or closure of G2 or Requirement 1.
+The desktop sequence-13 laboratory image has completed resumed assembly and
+verified export. See [the native Ubuntu handoff](G2_TEST_IMAGE_2026-10-13.md)
+for final image hashes and preparation instructions. The checkpoint below
+preserves the run's source-archive correction and intermediate state; it does
+not attest a successful boot, production signing, or closure of G2 or Requirement 1.
 
 ## Committed implementation and verification
 
@@ -53,19 +54,19 @@ explicit metadata correction, not byte-for-byte reuse of every old artifact.
 The root filesystem, verity data, UKIs, release manifest and signatures remain
 unchanged. No private signing key is mounted or used, and no product is rebuilt.
 
-## Running assembly and output
+## Assembly run and output
 
-The foreground WSL job uses container `luma-image-resume-20261013-d`, the pinned
+The completed foreground WSL job used container `luma-image-resume-20261013-d`, the pinned
 tools image `sha256:28e1138fa7e0616b0518a95c1f2599a2205929e247391862bf48319fe5f7594d`,
 4 GiB memory, two CPUs, and no network. A prior detached attempt received
 SIGTERM when the dedicated Docker service stopped; Docker reports no OOM.
-The foreground client stays active through packaging and export. Do not shut
-down Ubuntu WSL or the dedicated daemon while this job is running.
+The foreground client stayed active through packaging and export. It exited
+successfully after transferring all eleven public output files.
 
 The new raw image and working metadata use D-backed ext4 storage at
 `/mnt/luma-build/work/g2-image-resume-20261013-d/artifacts`.
-After verified packaging succeeds, the same job exports the compressed image
-and public metadata to `D:\LumaOS-builds\native\20261013-resumed-desktop-13`.
+The same job exported the compressed image and public metadata to
+`D:\LumaOS-builds\native\20261013-resumed-desktop-13`.
 The interrupted raw image and all rejected attempts remain retained.
 
 The resume checks signed release artifacts, independently pinned public custody,
@@ -82,8 +83,8 @@ Read-only progress command from Windows PowerShell:
 wsl -d Ubuntu -u root -- docker -H unix:///run/luma-build-docker.sock logs --tail 50 luma-image-resume-20261013-d
 ```
 
-The image is ready for handoff only after successful packaging and export, with
-the compressed image, `build.json` and `SHA256SUMS` present and verified. The raw
+The compressed image, `build.json` and `SHA256SUMS` are present and verified.
+The raw
 image checksum is also retained in `SHA256SUMS`; the raw file remains in ext4
 working storage rather than the export directory. Native Ubuntu installation,
 boot, security, recovery, model/custody qualification and required physical

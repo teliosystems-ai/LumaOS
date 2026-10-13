@@ -1,0 +1,78 @@
+{
+  "schema_version": 1,
+  "date": "2026-10-13",
+  "status": "lab-image-exported-and-verified-for-native-testing",
+  "release": "luma-native-lab-20260927-desktop-13",
+  "architecture": "amd64",
+  "ubuntu": "24.04",
+  "kernel": "6.8.0-142-generic",
+  "edition": "desktop",
+  "export_directory": "D:\\LumaOS-builds\\native\\20261013-resumed-desktop-13",
+  "linux_working_directory": "/mnt/luma-build/work/g2-image-resume-20261013-d/artifacts",
+  "image": {
+    "compressed_file": "luma-native-lab-20260927-desktop-13.img.zst",
+    "compressed_bytes": 2927978781,
+    "compressed_sha256": "30591427894edd407996936d9608016abaafbb0d105de76f05db05a40ed6bb0b",
+    "raw_file": "luma-native-lab-20260927-desktop-13.img",
+    "raw_bytes": 16190013440,
+    "raw_sha256": "09ba55b4ab66831b42c5243ac8ac7ccb4b666a71b009f7fc23efe44b5554c88a",
+    "root_hash": "1417092ad434e99872e66b68e93d5b3c89886a4ebb47c482b8e4caa730811ca9"
+  },
+  "source": {
+    "files_verified": 314,
+    "source_lock_sha256": "58be10695ba8165541d4f4caa0f1853190fcf62cb8177230d886e9234e509885",
+    "product_rebuilt": false,
+    "archive_correction": {
+      "operation": "repack-only-locked-source-without-generated-python-cache",
+      "original_retained_sha256": "990b8e4d2c25e5a25f5546d269b0ace2b35d0b1ff849b73c2a4bc613d91b970d",
+      "corrected_archive_sha256": "7c6dc0689b6b3586e1f1ba85ea5617dba4f2f5d4447d96b2f2ad13ac1055c4ed",
+      "original_retained": true,
+      "all_declared_files_and_tail_verified": true
+    }
+  },
+  "packaging": {
+    "container": "luma-image-resume-20261013-d",
+    "exit_code": 0,
+    "tools_image": "sha256:28e1138fa7e0616b0518a95c1f2599a2205929e247391862bf48319fe5f7594d",
+    "packager_sha256": "6232a4f9851ddef80ecedd32be2eba66d8ba9fc337028c90f56e1ccf34378443",
+    "frozen_assembler_sha256": "173f2a05fbde5dcf8cd6100ce5cdaf64efa8580e57d1846e2b9940715d995033",
+    "memory_gib": 4,
+    "cpus": 2,
+    "network": "none",
+    "private_keys_used": false,
+    "sealed_artifact_signatures_verified": true,
+    "verity_verified": true,
+    "uki_pcr_policies_verified": true,
+    "payload_and_esp_verified": true,
+    "primary_and_backup_gpt_verified": true,
+    "copied_ranges_verified": true,
+    "compressed_integrity_verified": true,
+    "compressed_roundtrip_matches_raw": true,
+    "export_files": 11,
+    "export_destination_bytes_verified": true,
+    "independent_export_checksum_members_verified": 9,
+    "raw_checksum_not_exported_but_retained": true
+  },
+  "regressions": {
+    "frozen_source": "/mnt/luma-build/work/g2-image-resume-source-20261013-d",
+    "container": "luma-image-resume-native-tests-20261013-d",
+    "native_tests": 407,
+    "failures": 0,
+    "skipped": 0,
+    "focused_resume_tests": 13,
+    "test_file_sha256": "86eb819fb83317de8b29e9a14e7f9b5654eea03cff16c433550c498608abfd51"
+  },
+  "qualification": {
+    "build_status": "built-not-yet-boot-tested",
+    "image_boot_tested": false,
+    "native_installation_tested": false,
+    "native_security_and_recovery_qualified": false,
+    "production_signed": false,
+    "production_inputs_fabricated": false,
+    "e1_e2_physical_qualification_complete": false,
+    "gate_closing": false,
+    "g2_closed": false,
+    "requirement_1_closed": false,
+    "requirement_2_advanced": false
+  }
+}

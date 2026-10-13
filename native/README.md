@@ -13,6 +13,7 @@ image and Rust platform implementation. It is outside the historical Python
 - [Implementation plan](image/BUILD_PLAN.md)
 - [Current G2 software completion register](G2_SOFTWARE_STATUS.md)
 - [Current sequence-13 image assembly resume](evidence/G2_IMAGE_RESUME_2026-10-13.md)
+- [Current sequence-13 native Ubuntu test image](evidence/G2_TEST_IMAGE_2026-10-13.md)
 - [Selected local TPM2 Admin design and future external installer](LOCAL_TPM2_ADMIN.md)
 - [Native TPM checkpoint evaluation](evidence/NATIVE_TPM_STATUS_2026-09-28.md)
 - [Installer TPM admission and VM-fixture evaluation](evidence/NATIVE_TPM_ADMISSION_2026-09-28.md)
@@ -22,9 +23,11 @@ image and Rust platform implementation. It is outside the historical Python
 G2 remains in progress. Headless and candidate GNOME/Wayland desktop images are
 laboratory-signed, not a complete production OS or hardware certification.
 Bulk builds, images and VM disks are on the owner-designated D: drive; source
-stays on C:. The [current assembly checkpoint](evidence/G2_IMAGE_RESUME_2026-10-13.md)
-records the sequence-13 continuation, verified source archive correction and
-planned export. It is not a completed-image or boot-test result. The
+stays on C:. The [current image handoff](evidence/G2_TEST_IMAGE_2026-10-13.md)
+identifies the built and checksum-verified sequence-13 desktop candidate,
+native-media preparation and pending qualification. The
+[assembly checkpoint](evidence/G2_IMAGE_RESUME_2026-10-13.md) preserves the
+explicit source-archive correction. This image has not yet been boot-tested. The
 [historical export checkpoint](evidence/G2_BROKER_CLIENT_2026-10-01.md)
 identifies the earlier sequence-11 candidate and its source/image differences.
 Desktop and fresh 4B model acceptance remain pending. Earlier sequence-4 model

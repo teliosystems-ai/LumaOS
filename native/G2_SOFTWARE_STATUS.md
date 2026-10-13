@@ -68,9 +68,11 @@ suite passes 407 tests with zero failures and zero skips. Strict validation
 rejected cache files in the old source directory and archive. A clean capture
 preserves the exact original 314-file source lock; only the external source
 archive is repacked. Sealed OS/verity/boot artifacts and signatures are unchanged.
-Foreground D-backed packaging and automatic export are running, not yet a
-completed or boot-qualified image. See [the resume checkpoint](evidence/G2_IMAGE_RESUME_2026-10-13.md)
-for fingerprints, preserved attempts and the output path.
+Foreground D-backed packaging and automatic export completed successfully.
+The sequence-13 laboratory image is checksum verified and ready for native
+testing, not boot- or production-qualified. See [the native Ubuntu handoff](evidence/G2_TEST_IMAGE_2026-10-13.md)
+for final hashes and preparation; [the resume checkpoint](evidence/G2_IMAGE_RESUME_2026-10-13.md)
+preserves fingerprints, rejected attempts and the source-archive correction.
 
 ### Approved parallel staging, recovery and governed skills, 2026-10-11
 

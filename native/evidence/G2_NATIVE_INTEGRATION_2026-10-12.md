@@ -61,6 +61,18 @@ passing M lanes, this supplies passed owners for all 26 selected lanes and all
 42 ignored entries: 35 external fixtures and seven owned children. Children are
 not double-counted. This is combined evidence, not a full 26-lane N run.
 
+## Final packaging verification
+
+The final recipe moves QEMU into its own pinned package layer, avoiding a repeat
+download of unchanged firmware and desktop packages. Only `Dockerfile.root`
+and its regression test change from N; all Rust inputs remain identical.
+Snapshot O passes warnings-denied all-target checks, 394 native tests with zero
+skips, authentication regressions, crypto, all fourteen policy parses and the
+authenticated UTC build. Its 314 image inputs exactly match the replacement
+build snapshot. The first image attempt was stopped before image production;
+its source and work directories remain retained. This packaging change is
+committed at `41beeab` and supplies no native test pass.
+
 ## Generated guest and qualification boundaries
 
 The separate disposable KVM corpus passes thirteen real guest cases for identity,

@@ -507,6 +507,31 @@
     "renewable": false,
     "purpose_conversion_allowed": false
   },
+  "image_build_source_attempt_status": "cancelled-before-image-production-to-preserve-pinned-cache-layers",
+  "packaging_verification": {
+  "commit": "41beeab",
+  "source_snapshot": "/mnt/luma-build/work/g2-final-source-20261012-o",
+  "source_manifest_sha256": "c6360033f8e871acb338e22f11d7e0e4151c6ccdf525b3cf7bbb2db358e75366",
+  "changed_from_baseline_snapshot": [
+    "native/image/Dockerfile.root",
+    "native/tests/test_build_driver.py"
+  ],
+  "rust_inputs_unchanged": true,
+  "core_result": "/mnt/luma-build/work/g2-final-validation-20261012-b/core-o/result.json",
+  "core_result_sha256": "36aa9c236a6b9b2bd53bba6e09bbcf4ee5300812f2d229cb806aa0430d9943df",
+  "native_passed": 394,
+  "native_skipped": 0,
+  "all_target_check_passed": true,
+  "authentication_tests_passed": 27,
+  "public_trust_crypto_passed": 13,
+  "model_public_crypto_passed": 13,
+  "utc_authentication_passed": 8,
+  "apparmor_parser_passed": 14,
+  "utc_release_build_passed": true,
+  "image_build_source": "/mnt/d/LumaOS-builds/native-sources/20261012T180018Z-desktop",
+  "image_build_source_manifest_sha256": "58be10695ba8165541d4f4caa0f1853190fcf62cb8177230d886e9234e509885",
+  "image_build_matches_tested_inputs": true
+},
   "installed_image_tested": false,
   "physical_tpm_tested": false,
   "production_signing_custody_qualified": false,

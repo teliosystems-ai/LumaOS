@@ -1,6 +1,6 @@
 # G2 software completion register
 
-Updated 2026-10-12. **The compact-profile software candidate passes integrated software verification; G2 is not closed.** This register separates
+Updated 2026-10-13. **The compact-profile software candidate passes integrated software verification; G2 is not closed.** This register separates
 work that can be executed in the current Windows/Ubuntu WSL/VM environment
 from production deployment decisions and physical qualification. It does not
 change the frozen reference release, governing requirements, or exit criteria.
@@ -34,7 +34,7 @@ Independent review corrected import evidence byte limits, incomplete output
 provenance, certificate/image self-reference, actual confinement paths, worker
 grant separation, retained key revocations and current account binding. The
 source passes the serialized D-backed checks: 962 full-baseline Rust tests,
-393 native tests with zero skips, thirteen OS public-trust and thirteen
+394 native tests with zero skips after the final packaging recipe change, thirteen OS public-trust and thirteen
 model-public crypto cases, eight UTC authentication cases, fourteen policy
 parses, the authenticated UTC build and sixteen upstream crypto/NTS cases.
 Combined unchanged-product fixture evidence and corrected reruns supply passing
@@ -60,6 +60,17 @@ candidate nor its new runtime; it is not qualifying evidence for these changes.
 See [native model delivery](MODEL_TRUST.md), [generated runtime](GENERATED_RUNTIME.md)
 and [ADR 0013](../docs/adr/0013-native-model-governance-and-generated-runtime.md).
 Requirement 1 remains open; do not advance to Requirement 2.
+
+### Verified image assembly continuation, 2026-10-13
+
+The packaging-only resume adds thirteen focused regressions; the final native
+suite passes 407 tests with zero failures and zero skips. Strict validation
+rejected cache files in the old source directory and archive. A clean capture
+preserves the exact original 314-file source lock; only the external source
+archive is repacked. Sealed OS/verity/boot artifacts and signatures are unchanged.
+Foreground D-backed packaging and automatic export are running, not yet a
+completed or boot-qualified image. See [the resume checkpoint](evidence/G2_IMAGE_RESUME_2026-10-13.md)
+for fingerprints, preserved attempts and the output path.
 
 ### Approved parallel staging, recovery and governed skills, 2026-10-11
 

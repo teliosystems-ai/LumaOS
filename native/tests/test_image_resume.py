@@ -224,6 +224,16 @@ class ResumeTests(unittest.TestCase):
         with mock.patch.object(resume, 'run', return_value='Inode: 12 Type: regular Size: 4 Links: 1'):
             self.assertEqual(resume.ext4_member_size(Path('fixture'), '/release.json', 4), 4)
 
+    def test_actual_debugfs_empty_recovery_slots_are_not_members(self):
+        listing = '/11/040700/0/0/.//\n/2/040755/0/0/..//\n' + '/0/000000/0/0//0/\n' * 3
+        with mock.patch.object(resume, 'run', return_value=listing):
+            self.assertEqual(resume.ext4_entries(Path('fixture'), '/lost+found'), {})
+        for invalid in ('/0/000000/0/0/hidden/0/', '/0/100644/0/0//0/',
+                        '/0/000000/1/0//0/', '/0/000000/0/0//1/'):
+            with self.subTest(invalid=invalid), mock.patch.object(resume, 'run', return_value=invalid):
+                with self.assertRaises(ValueError):
+                    resume.ext4_entries(Path('fixture'), '/lost+found')
+
     def test_payload_root_prefix_plus_trailing_bytes_refuses_before_large_stream(self):
         previous = self.root/'previous'
         previous.mkdir()

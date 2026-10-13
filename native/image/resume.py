@@ -430,6 +430,11 @@ def ext4_entries(image, directory):
         if len(pieces) != 8 or pieces[0] or pieces[-1]:
             raise ValueError('unexpected debugfs inventory format')
         _, inode, mode, uid, gid, name, size, _ = pieces
+        # debugfs prints preallocated empty directory slots, notably in
+        # lost+found. These have no inode or name and are not filesystem
+        # members. Accept only its exact canonical empty-slot encoding.
+        if pieces == ['', '0', '000000', '0', '0', '', '0', '']:
+            continue
         if name in ('.', '..'):
             continue
         if (not inode.isdecimal() or int(inode) == 0 or not uid.isdecimal()

@@ -1,9 +1,13 @@
-# Native Ubuntu laboratory image
+# Native Ubuntu image assembly
 
 This is a separate native-platform build, not the Python `0.1.0` source archive.
 The source archive's historical G2 records do **not** attest this image. G2
 remains in progress until native implementation and its acceptance matrix pass.
 Read the execution record accompanying the particular image before testing it.
+The default build remains laboratory-signed. Production assembly accepts public
+inputs and externally produced signatures; it never operates production private
+keys. Neither a successful assembly nor the historical source-archive records
+establish production custody or native qualification.
 
 ## What the image implements
 
@@ -11,25 +15,87 @@ Read the execution record accompanying the particular image before testing it.
 - A Rust platform executable for signed-bundle admission, exact whole-disk
   confirmation, GPT creation, read-back verification, A/B roots, LUKS2 data,
   separate user/administrator identities, updates and offline recovery.
-- Ed25519 release metadata; laboratory-signed UKIs containing the kernel,
+- Ed25519 release metadata; signed UKIs containing the kernel,
   initramfs, command line and dm-verity root hash; signed systemd-boot.
 - Read-only verified root, encrypted `/var`, independent recovery passphrase,
   three-count trial entries and model-independent boot acknowledgement.
 - Kernel-authenticated Unix socket peers, a restricted native broker, an
   unprivileged reference workflow service, enforcing AppArmor and systemd
-  seccomp/device/cgroup restrictions. No generated native-code execution.
+  seccomp/device/cgroup restrictions. Generated-code runtime acceptance remains
+  subject to its explicit admission and hardware qualification.
 - Recovery unlock, data export, system-slot repair and worker disablement.
 
 The original sequence-1 image was **headless and manual-only**. New model-enabled
 builds include a pinned CPU runtime and an image-owned model catalog. Their
 installer downloads and verifies selected weights; weights are not embedded in
-the image or Git. Production Admin/custody/anti-rollback anchoring, TPM auto-unlock,
-a graphical installer, dual boot, and arbitrary-hardware qualification are still
-absent. Native model admission currently covers the catalog below, not the full
+the image or Git. TPM-backed Admin and monotonic release/checkpoint paths are
+implemented in source, but production signing/recovery custody and native
+qualification remain external prerequisites. TPM auto-unlock, a graphical
+installer, dual boot, and arbitrary-hardware qualification remain unavailable.
+Native model admission currently covers the catalog below, not the full
 governed multi-model contract/lifecycle matrix. `desktop` now selects a candidate
 GNOME/Wayland profile; it is not yet an installed-image qualification. Consult
 the execution record for the particular image: the old
 image's passing tests do not automatically attest a new build.
+
+## Production assembly and external signatures
+
+Production requires three independently prepared public input groups. Keep
+private keys, PINs, recovery shares and signing executors outside these groups,
+Docker, the source snapshot and exported media. Follow
+[production signing custody](../../docs/PRODUCTION_SIGNING_CUSTODY.md) for the
+actual custody and approval process.
+
+- OS inputs contain exactly `production-release-root.pub`, `release-trust.json`,
+  `release-signer.json`, `secureboot.pem` and `pcr-policy.pub`. They identify a
+  production Ed25519 root/delegated OS signer, the public Secure Boot certificate
+  and a separate RSA3072 PCR policy key.
+- Skill inputs contain the complete externally signed production skill group
+  accepted by `provision_public_trust.py`. Do not repeat the OS root in this group.
+- Model inputs contain production model roots/trust, signed catalog/profile and
+  supported Qwen3 pack metadata/auxiliary files accepted by
+  `provision_model_inputs.py`. Weights and final-machine QA certificates are not
+  baked into this group.
+
+Set `LUMA_NATIVE_ENVIRONMENT=production`,
+`LUMA_NATIVE_PRODUCTION_PUBLIC_INPUTS`, `LUMA_NATIVE_PUBLIC_TRUST` and
+`LUMA_NATIVE_MODEL_PUBLIC_INPUTS` to the three real input directories, then run
+`bash native/image/build.sh desktop 14` from Ubuntu/WSL. Choose a release sequence
+appropriate to the actual release floor; `14` is an invocation example, not a
+governed production allocation. Use the verified dedicated D build profile to
+keep tools, root files, payload, ESP, raw image, compression and temporary work
+on D-backed ext4. Only compressed media and public requests/metadata are exported
+to outer D. Existing build-space guards remain enforced.
+
+The initial build stops after exporting the public PCR request and prints its
+retained build volume and captured source paths. Each request contains
+`request.json` with exact member hashes. The approved external signing process
+must bind its response to that request's SHA256 and preserve every input byte.
+
+| Phase | External response | Next output |
+| --- | --- | --- |
+| PCR | `pcr-response.json` with schema 1, the request SHA256 and two base64 raw RSA3072 signatures per installed slot | Secure Boot request |
+| Secure Boot | `pe-response.json` with schema 1, request SHA256 and signed-member hashes, plus signed `slot-a.efi`, `slot-b.efi`, `slot-live.efi` and `bootloader.efi` | Exact OS manifest request |
+| OS release | `release-response.json` with schema 1 and request SHA256, plus raw 64-byte Ed25519 `release.sig` over the supplied manifest bytes | Sealed compressed image and public metadata |
+
+Continue the corresponding phase with
+`bash native/image/build.sh production-continue pcr VOLUME CAPTURED_SOURCE RESPONSE_DIRECTORY`,
+then repeat with `pe` and `release` and their independently produced response
+directories. Supply the actual paths printed by the initial build. Continuation
+executes only retained `/work/source` code, rechecks source and image bindings,
+and never mounts production private keys. Failed or partial output is retained
+for review; retries do not silently replace signing groups or final media.
+
+`production_qualification.py prepare` binds a genuine supplied report and native
+observation to a frozen certification request. Its `assemble` command verifies
+an external signature and emits the installed qualification transfer format.
+These commands neither execute QA nor authorize a model or certify a test pass.
+
+Production installation currently remains inert and manual-only. The separate
+QA-only execution path and installer-selected inert model data staging remain
+open development work; a signed image cannot substitute for either. Consult the
+[current production readiness record](../../docs/gates/g2/production_readiness_2026-10-13.json)
+before treating a candidate as ready for final native testing.
 
 ## Candidate Wayland desktop edition
 
@@ -48,9 +114,10 @@ remain the fallback; this change does not implement a graphical installer.
 
 Desktop roots are 6 GiB each, with an 8 GiB offline payload partition on the
 live media. Use a **32 GB or larger USB** for this edition (the existing
-headless media fits a 16 GB device). External-artifact desktop builds require
-60 GiB free on D:/the output filesystem and the unchanged 8 GiB minimum on the
-repository/WSL backing drive; a wholly local desktop build requires 24 GiB.
+headless media fits a 16 GB device). The dedicated D profile currently requires
+32 GiB free in its ext4 store and 60 GiB on outer D during build preflight; it
+does not reserve build space on C. The portable profile retains its separate
+repository/output guards. Raw artifact work always requires writable ext4.
 These are build thresholds, not certification of arbitrary desktop hardware.
 
 Desktop **installation** evaluation uses 6 GiB RAM; installed greeter checks

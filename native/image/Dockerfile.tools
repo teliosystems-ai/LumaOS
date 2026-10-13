@@ -29,3 +29,4 @@ RUN apt-get install -y --no-install-recommends --snapshot=${SNAPSHOT} libcrypt-d
 RUN apt-get install -y --no-install-recommends --snapshot=${SNAPSHOT} \
     make pkg-config gpgv libgnutls28-dev libcap-dev libseccomp-dev
 RUN apt-get install -y --no-install-recommends --snapshot=${SNAPSHOT} apparmor
+RUN apt-get install -y --no-install-recommends --snapshot=${SNAPSHOT} git

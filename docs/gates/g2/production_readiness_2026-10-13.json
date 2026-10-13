@@ -67,20 +67,32 @@
     "integrated_source_bound_sweep": {
       "result": "passed-development-tests-non-closing",
       "rust": {"passed": 967, "failed": 0, "ignored": 42},
-      "native_final": {"passed": 441, "failed": 0, "skipped": 0},
+      "native_final": {"passed": 448, "failed": 0, "skipped": 0},
       "public_trust_authentication": {"passed": 13, "failed": 0, "skipped": 0},
       "model_public_authentication": {"passed": 13, "failed": 0, "skipped": 0},
       "apparmor_profiles_parsed_without_loading": 14,
       "rust_source_manifest_sha256": "ef7910251733d1859acdc4dab1f55333cd07182bbe09b58f064643f842fd235a",
-      "native_final_source_manifest_sha256": "f13ff5f3821171135c367ba147d18c3eb8a91abaa0de12355d757239bb8d86b2",
-      "source_difference": "The final snapshot differs only in native/image/production_release.py and native/tests/test_production_command.py. Rust source is unchanged; final native tests were rerun after closed phase-inventory refinements.",
+      "native_final_source_manifest_sha256": "ce965bb61ef8a3484a6336b97e9a54c408bde1de76398fb4b922e82018b885d8",
+      "native_final_tools_image_sha256": "819dfe7772da1e3c76ffdc8f9ea4a1fa44c7c549bd4fa988e35d9397d87924b2",
+      "source_difference": "Rust source is unchanged. Final native tests were rerun after closed phase-inventory refinements, historical validator/provenance tests, the snapshot-pinned Git test-tools dependency and image assembly documentation changes.",
       "rust_and_initial_native_evidence": "/mnt/luma-build/work/g2-production-evidence-20261013-b/sweep/result.json",
       "rust_and_initial_native_evidence_sha256": "af21af5a151bdbbb5fb94291e41c97900df97cf9652e5adb3bafbcbc7b71788f",
-      "native_final_evidence": "/mnt/luma-build/work/g2-production-native-evidence-20261013-c/result.json",
-      "native_final_evidence_sha256": "694335c8ee4dcb74f757953b9c5b7c3fc93a2cb76b73d2d01cc7c9d86674b5d0",
+      "native_final_evidence": "/mnt/luma-build/work/g2-production-native-evidence-20261013-d/lane.json",
+      "native_final_evidence_sha256": "e574c766b29adc8d000732fe296b36170b278de3fde0280313e52a134246aa47",
       "ignored_test_boundary": "The 42 isolated Rust fixture/owned-child cases were not executed by this unit sweep. No passing native-image, physical TPM, PAM qualification or hardware enforcement result is inferred from ignored cases."
     },
-    "historical_gate_validator": "Preexisting September/current-source provenance mismatch confirmed; repair in progress without rewriting historical evidence.",
+    "historical_gate_validator": "Passed after repair: historical counts and archive inventory are verified against the exact recorded Git tree, with Git replacement objects disabled and historical records SHA256-protected. Current source remains separately observed; historical results do not attest the current image. Seven provenance regressions passed in the final native suite.",
+    "current_reference_repository_check": {
+      "result": "passed",
+      "command": "python3 -B scripts/check.py",
+      "python_modules_compiled": 38,
+      "release_files_validated": 176,
+      "unit_tests_discovered": 320,
+      "unit_tests_passed": 319,
+      "unit_tests_failed": 0,
+      "unit_tests_skipped": 1,
+      "boundary": "Current Ubuntu WSL reference-source check, separate from native image qualification. The existing platform-specific skip is retained and not counted as a pass. Historical evidence and its 170-file archive inventory remain unchanged."
+    },
     "physical_hardware_tested": false,
     "production_custody_performed": false
   }

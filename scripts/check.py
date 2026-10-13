@@ -13,6 +13,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import threading
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -73,6 +74,8 @@ DETACHED_G2_EVIDENCE_FILES = (
     *CURRENT_DETACHED_G2_EVIDENCE_FILES,
 )
 HISTORICAL_DETACHED_G2_SHA256 = {
+    G2_TEST_RUN: "3607eb424da32eb07db0e3040e0a34a86fc69665857e7e932b8c698815ea6ad4",
+    G2_ARCHIVE_ATTESTATION: "4829d1a9a3a72e628a5dc0ec04461a0ccc46f062f42c3c7283e69cee31c240b2",
     HISTORICAL_G2_TEST_RUN: (
         "a5ccf0720b2bbcfcd443ea565364a628979afc51724c4f70eb69d8d88be9b628"
     ),
@@ -478,6 +481,148 @@ def validate_historical_detached_evidence() -> None:
             )
 
 
+def bounded_git_output(arguments: list[str], maximum: int) -> bytes:
+    """Read immutable Git objects without executing their contents or changing Git."""
+    child = subprocess.Popen(
+        ["git", "--no-replace-objects", "--no-pager", *arguments], cwd=ROOT,
+        stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+    )
+    outputs: list[bytes | None] = [None, None]
+    failures: list[str] = []
+
+    def receive(index: int, limit: int) -> None:
+        pipe = child.stdout if index == 0 else child.stderr
+        assert pipe is not None
+        try:
+            raw = pipe.read(limit + 1)
+            if len(raw) > limit:
+                failures.append("historical Git output exceeds bound")
+                if child.poll() is None:
+                    child.kill()
+            else:
+                outputs[index] = raw
+        except OSError:
+            failures.append("historical Git output is unavailable")
+            if child.poll() is None:
+                child.kill()
+
+    readers = [threading.Thread(target=receive, args=(0, maximum), daemon=True),
+               threading.Thread(target=receive, args=(1, 16384), daemon=True)]
+    try:
+        for reader in readers:
+            reader.start()
+        try:
+            status = child.wait(timeout=30)
+        except subprocess.TimeoutExpired as exc:
+            child.kill()
+            child.wait(timeout=5)
+            raise RuntimeError("historical Git read exceeded its deadline") from exc
+        for reader in readers:
+            reader.join(timeout=5)
+        if failures or any(reader.is_alive() for reader in readers):
+            raise RuntimeError("historical Git read was incomplete or exceeded bounds")
+        if status or outputs[0] is None:
+            raise RuntimeError("recorded historical Git object is unavailable")
+        return outputs[0]
+    finally:
+        if child.poll() is None:
+            child.kill()
+        child.wait(timeout=5)
+        if child.stdout is not None:
+            child.stdout.close()
+        if child.stderr is not None:
+            child.stderr.close()
+
+
+def historical_source_counts(
+    commit: str, boundary_files: tuple[str, ...],
+) -> tuple[dict[str, int], list[str]]:
+    """Validate historical evidence against its own recorded tree, never HEAD."""
+    if not isinstance(commit, str) or not re.fullmatch(r"[0-9a-f]{40}", commit):
+        raise RuntimeError("historical evidence requires an exact full source commit")
+    if bounded_git_output(["rev-parse", "--verify", commit + "^{commit}"], 128).strip() != commit.encode():
+        raise RuntimeError("historical source identity is not an exact commit")
+    raw = bounded_git_output(["ls-tree", "-r", "-l", "-z", commit], 4 * 1024 * 1024)
+    tree: dict[str, tuple[str, int]] = {}
+    total = 0
+    if not raw or not raw.endswith(b"\0"):
+        raise RuntimeError("historical source tree is empty or incomplete")
+    for record in raw[:-1].split(b"\0"):
+        if len(tree) >= 4096 or b"\t" not in record:
+            raise RuntimeError("historical source tree exceeds bounds or is malformed")
+        metadata, encoded_name = record.split(b"\t", 1)
+        fields = metadata.split()
+        name = encoded_name.decode("utf-8", "strict")
+        path = PurePosixPath(name)
+        if (len(fields) != 4 or fields[0] not in (b"100644", b"100755")
+                or fields[1] != b"blob" or not re.fullmatch(rb"[0-9a-f]{40}", fields[2])
+                or not fields[3].isdigit() or len(name) > 512 or name in tree
+                or path.is_absolute() or path.as_posix() != name or "\\" in name
+                or any(part in ("", ".", "..") for part in name.split("/"))
+                or any(ord(value) < 32 for value in name)):
+            raise RuntimeError("historical source tree contains an unsafe or duplicate member")
+        size = int(fields[3])
+        total += size
+        if size > 32 * 1024 * 1024 or total > 256 * 1024 * 1024:
+            raise RuntimeError("historical source object sizes exceed bounds")
+        tree[name] = fields[2].decode("ascii"), size
+
+    def read(name: str) -> bytes:
+        if name not in tree:
+            raise RuntimeError("historical source is missing a required evidence input: " + name)
+        identity, size = tree[name]
+        value = bounded_git_output(["cat-file", "blob", identity], size)
+        if (len(value) != size or hashlib.sha1(
+                b"blob " + str(size).encode() + b"\0" + value).hexdigest() != identity):
+            raise RuntimeError("historical source blob differs from its recorded Git identity")
+        return value
+
+    declaration = r"^\s+(?:async\s+)?def\s+test_[A-Za-z0-9_]*\s*\("
+    tests = [name for name in tree if re.fullmatch(r"tests/test_[^/]+\.py", name)]
+    unit_count = sum(len(re.findall(declaration, read(name).decode("utf-8"), re.MULTILINE))
+                     for name in tests)
+    boundary_count = sum(len(re.findall(declaration, read("tests/" + name).decode("utf-8"), re.MULTILINE))
+                         for name in boundary_files)
+    manifest = json.loads(read("RELEASE_MANIFEST.json"))
+    release_paths = manifest.get("release_files") if isinstance(manifest, dict) else None
+    if (not isinstance(release_paths, list) or not release_paths
+            or any(not isinstance(name, str) or name not in tree for name in release_paths)
+            or len(set(release_paths)) != len(release_paths)):
+        raise RuntimeError("historical release inventory is missing, duplicated or not in its source tree")
+    registry = json.loads(read("requirements/registry.json"))
+    requirements = registry.get("requirements") if isinstance(registry, dict) else None
+    if (not isinstance(requirements, list) or len(requirements) != 288
+            or any(not isinstance(item, dict) for item in requirements)):
+        raise RuntimeError("historical requirement registry is incomplete")
+    g2 = [item for item in requirements if item.get("closure_gate") == "G2"]
+    if len(g2) != 34 or len({item.get("id") for item in g2}) != 34:
+        raise RuntimeError("historical G2 registry is missing or duplicated")
+    if unit_count <= 0 or boundary_count <= 0 or boundary_count > unit_count:
+        raise RuntimeError("historical test declaration counts are invalid")
+    counts = {
+        "python_modules_compiled": sum(name.startswith("src/") and name.endswith(".py") for name in tree),
+        "json_schemas_parsed": sum(re.fullmatch(r"schemas/[^/]+\.json", name) is not None for name in tree),
+        "unit_tests_run_per_lane": unit_count,
+        "unit_tests_run": unit_count,
+        "optimized_boundary_tests_run_per_lane": boundary_count,
+        "optimized_boundary_tests_run": boundary_count,
+        "requirement_entries_validated": len(requirements),
+        "g2_requirements_in_progress": sum(item.get("implementation_status") == "in_progress" for item in g2),
+        "g2_requirements_not_started": sum(item.get("implementation_status") == "not_started" for item in g2),
+        "g2_requirements_with_passing_product_evidence": sum(
+            isinstance(item.get("latest_evidence"), dict) and item["latest_evidence"].get("state") == "pass"
+            for item in g2),
+        "release_files_validated": len(release_paths),
+    }
+    return counts, release_paths
+
+
+def require_historical_counts(checks: dict[str, object], expected: dict[str, int]) -> None:
+    for field, value in expected.items():
+        if type(checks.get(field)) is not int or checks[field] != value:
+            raise RuntimeError("detached G2 test count differs from recorded source: " + field)
+
+
 def validate_detached_validation_state(
     evidence: dict[str, object],
     test_plan: dict[str, object],
@@ -610,6 +755,7 @@ def validate_gateway_smoke(
 
 
 def validate_gate_artifacts() -> None:
+    validate_historical_detached_evidence()
     json_paths = [
         path
         for path in REQUIRED_GATE_FILES
@@ -1535,22 +1681,31 @@ def validate_gate_artifacts() -> None:
         or declared_boundary_count <= 0
         or declared_boundary_count > declared_test_count
         or release_file_count <= 0
+        or current_evidence_counts["python_modules_compiled"] <= 0
+        or current_evidence_counts["json_schemas_parsed"] <= 0
     ):
         raise RuntimeError("current G2 repository test or release counts are invalid")
-    if detached_available and any(
-            g2_checks.get(field) != expected
-            for field, expected in current_evidence_counts.items()
-    ):
-        raise RuntimeError("detached G2 repository test counts are stale")
+    # The detached September reference run is bound to its recorded source tree,
+    # not today's native development checkout. Current counts remain valid
+    # observations above, but cannot renew or rewrite historical test evidence.
+    detached_counts: dict[str, int] = {}
+    detached_release_paths: list[str] = []
+    if detached_available:
+        detached_counts, detached_release_paths = historical_source_counts(
+            g2_test_run.get("release_source_commit"), boundary_test_files,
+        )
+        require_historical_counts(g2_checks, detached_counts)
+    historical_unit_count = detached_counts.get("unit_tests_run_per_lane", declared_test_count)
+    historical_boundary_count = detached_counts.get("optimized_boundary_tests_run_per_lane", declared_boundary_count)
     if detached_available and (
         g2_checks.get("unit_test_lanes") != 2
-        or g2_checks.get("unit_test_executions") != declared_test_count * 2
+        or g2_checks.get("unit_test_executions") != historical_unit_count * 2
         or g2_checks.get("unit_tests_failed") != 0
         or g2_checks.get("unit_tests_skipped")
         != {"ubuntu_wsl": 1, "windows_native": 5}
         or g2_checks.get("optimized_boundary_test_lanes") != 2
         or g2_checks.get("optimized_boundary_test_executions")
-        != declared_boundary_count * 2
+        != historical_boundary_count * 2
         or g2_checks.get("optimized_boundary_tests_failed") != 0
         or g2_checks.get("warnings_as_errors") is not True
         or g2_checks.get("reproducible_source_builds") != 2
@@ -1560,7 +1715,7 @@ def validate_gate_artifacts() -> None:
         or g2_checks.get("gate_artifact_state")
         != "development-in-progress; certification-blocked"
     ):
-        raise RuntimeError("current G2 test record carries stale results or gate disposition")
+        raise RuntimeError("historical G2 test record carries inconsistent results or gate disposition")
 
     archive_attestation = (
         json.loads((ROOT / G2_ARCHIVE_ATTESTATION).read_text(encoding="utf-8"))
@@ -1581,7 +1736,7 @@ def validate_gate_artifacts() -> None:
         != release_source_commit
         or archive_attestation.get("release_archive_inclusion")
         != "excluded-to-prevent-self-referential-archive-hashes"
-        or archive_attestation.get("file_count") != release_file_count
+        or archive_attestation.get("file_count") != len(detached_release_paths)
         or archive_attestation.get("source_date_epoch") != 0
         or archive_attestation.get("builds") != 2
         or archive_attestation.get("checksum_verification") != "pass"
@@ -1605,27 +1760,9 @@ def validate_gate_artifacts() -> None:
         build_hashes.append(hashes)  # type: ignore[arg-type]
     if detached_available and build_hashes[0] != build_hashes[1]:
         raise RuntimeError("detached G2 archive builds are not reproducible")
-    if detached_available and is_repository_checkout():
-        release_paths = release_manifest.get("release_files", [])
-        result = subprocess.run(
-            [
-                "git",
-                "diff",
-                "--quiet",
-                release_source_commit,
-                "HEAD",
-                "--",
-                *release_paths,
-            ],
-            cwd=ROOT,
-            check=False,
-        )
-        if result.returncode == 1:
-            raise RuntimeError(
-                "release inventory differs from the detached release-source commit"
-            )
-        if result.returncode:
-            raise RuntimeError("cannot compare HEAD with the detached release-source commit")
+    # Every historical release path was independently required to exist in its
+    # recorded tree above. HEAD may evolve; a historical archive pass supplies
+    # neither current-byte equality nor a current reproducible-build claim.
 
     hardware_smoke = documents["docs/gates/g1/hardware_smoke_2026-09-22.json"]
     if (

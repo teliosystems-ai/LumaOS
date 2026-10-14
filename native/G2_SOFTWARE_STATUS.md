@@ -1,6 +1,6 @@
 # G2 software completion register
 
-Updated 2026-10-13. **The compact-profile software candidate passes integrated software verification; G2 is not closed.** This register separates
+Updated 2026-10-14. **The compact-profile software candidate passes integrated software verification; G2 is not closed.** This register separates
 work that can be executed in the current Windows/Ubuntu WSL/VM environment
 from production deployment decisions and physical qualification. It does not
 change the frozen reference release, governing requirements, or exit criteria.
@@ -34,8 +34,19 @@ remain retained. See [the current readiness record](../docs/gates/g2/production_
 The QA session currently retains thirty seconds, with a twenty-five-second
 runtime budget. Cold 4B loading can refuse safely. The separately proposed
 thirty-minute QA-only session awaits explicit owner approval; other purpose
-approvals do not authorize that extension. Fresh laboratory image assembly,
-genuine production custody/inputs and native qualification remain distinct.
+approvals do not authorize that extension. Genuine production custody/inputs
+and native qualification remain distinct from successful laboratory assembly.
+
+The fresh sequence-14 desktop image was rebuilt, lab-signed and exported to
+`D:\LumaOS-builds\native\20261014T170707Z-desktop`. All 330 captured product
+files match the corresponding tested snapshot files byte for byte. Assembly,
+compression integrity and independent exported-member checksum checks passed;
+the image remains `built-not-yet-boot-tested`. It is standalone whole-disk OS
+media, not an in-place Ubuntu Server upgrade. See the
+[current native Ubuntu handoff](evidence/G2_TEST_IMAGE_2026-10-14.md) for the
+eleven-file delivery, exact hashes, destructive-install warnings and remaining
+native acceptance. The earlier sequence-13 delivery is preserved but does not
+include this checkpoint's new QA/staging changes.
 
 ### Integrated native model and generated-runtime candidate, 2026-10-12
 

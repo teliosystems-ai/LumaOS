@@ -73,6 +73,7 @@ pub(crate) enum EffectKind {
     Deletion,
     WorkerAdmission,
     ResourceAdmission,
+    ModelQa,
     Inference,
     Recovery,
 }

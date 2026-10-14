@@ -21,6 +21,7 @@ impl SessionPurpose {
             Self::Export => EXPORT_WINDOW_NS,
             Self::ModelImport => MODEL_IMPORT_WINDOW_NS,
             Self::ModelActivation => MODEL_ACTIVATION_WINDOW_NS,
+            Self::ModelQa => WINDOW_NS,
         }
     }
 }
@@ -547,6 +548,7 @@ mod tests {
             SessionPurpose::Export,
             SessionPurpose::ModelImport,
             SessionPurpose::ModelActivation,
+            SessionPurpose::ModelQa,
         ] {
             let lifetime = Lifetime::at_purpose(clock(7), purpose).unwrap();
             let deadline = 7 + purpose.window_ns();
@@ -695,6 +697,7 @@ mod tests {
             SessionPurpose::Export,
             SessionPurpose::ModelImport,
             SessionPurpose::ModelActivation,
+            SessionPurpose::ModelQa,
         ] {
             for fault in ["missing", "regression", "boot", "fork", "uid"] {
                 let lifetime = Lifetime::at_purpose(clock(100), purpose).unwrap();
@@ -749,6 +752,7 @@ mod tests {
             SessionPurpose::Export,
             SessionPurpose::ModelImport,
             SessionPurpose::ModelActivation,
+            SessionPurpose::ModelQa,
         ] {
             let lifetime = Lifetime::at_purpose(clock(1), purpose).unwrap();
             let checks = Cell::new(0);

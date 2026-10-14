@@ -293,7 +293,7 @@ fn key_fingerprint(public: &[u8; 32]) -> String {
 record!(RootAnchor {key_id:String,environment:String,trust_domain:String,public_key:String,not_before:String,not_after:String,revoked_at:Option<String>});
 record!(RootPolicy {schema_version:u32,trust_domain:String,accepted_trust_policy_versions:Vec<String>,accepted_catalog_policy_versions:Vec<String>,roots:Vec<RootAnchor>,separated_key_sha256:Vec<String>});
 impl RootPolicy {
-    fn validate(&self) -> Result<()> {
+    pub(crate) fn validate(&self) -> Result<()> {
         if self.schema_version != 1
             || self.trust_domain != DOMAIN
             || self.roots.is_empty()

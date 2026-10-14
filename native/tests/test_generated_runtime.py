@@ -117,6 +117,8 @@ class GeneratedRuntimeTests(unittest.TestCase):
         self.assertNotIn('os.fchown', runner)
 
     def test_fixed_qemu_profile_denies_authority_and_other_host_resources(self):
+        parent = (ROOT / 'native/image/overlay/etc/apparmor.d/luma-acquisition').read_text()
+        self.assertIn('qemu-system-x86_64 mrpx -> &luma-generated-qemu,', parent)
         profile = (ROOT / 'native/image/overlay/etc/apparmor.d/luma-generated-qemu').read_text()
         for denied in ('deny capability,', 'deny network,', 'deny mount,', 'deny ptrace,'):
             self.assertIn(denied, profile)

@@ -1,0 +1,13 @@
+[Unit]
+Description=Luma finite installer model byte staging domain
+
+[Slice]
+MemoryAccounting=yes
+CPUAccounting=yes
+IOAccounting=yes
+TasksAccounting=yes
+MemoryHigh=384M
+MemoryMax=512M
+MemorySwapMax=0
+TasksMax=16
+CPUQuota=200%

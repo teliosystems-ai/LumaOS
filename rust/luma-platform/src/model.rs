@@ -24,8 +24,10 @@ const QUARANTINE: &str = "model-quarantine.json";
 const REFERENCE_ENV: &str = "model-reference.env";
 
 mod gateway;
+pub(crate) mod installer_staging;
 mod layout;
 mod pack_store;
+pub(crate) mod qa;
 mod supervision;
 mod validation;
 pub(crate) use pack_store::{

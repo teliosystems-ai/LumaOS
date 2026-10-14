@@ -6,11 +6,21 @@ This guide separates three activities that must not be treated as equivalent:
 2. admitting a native Ubuntu 24.04 machine as a *candidate* for later G2 lab work; and
 3. executing destructive installation, boot, security, and recovery qualification.
 
-The repository currently supports the first activity and supplies read-only
-preparation tools for the second. It does not yet supply or authorize a disk
-installer, bootable product image, firmware-key enrollment, or destructive test
-runner. WSL evidence can support development but can never satisfy a physical
-Ubuntu board, firmware, boot, suspend, power-loss, or device-reset requirement.
+The repository supports the first activity, supplies read-only preparation
+tools for the second, and implements a separate native installer and bootable
+Ubuntu-based image under `native/image`. Use the execution record accompanying
+the selected image and [native assembly guide](../native/image/README.md) for
+that installation path. A source-runtime preflight does not authorize disk
+erasure, firmware-key enrollment, or destructive qualification. WSL evidence
+can support development but can never satisfy a physical Ubuntu board,
+firmware, boot, suspend, power-loss, or device-reset requirement.
+
+The native image is a standalone UEFI operating-system installation, not an
+in-place upgrade or application installed over an existing Ubuntu server.
+Installing it erases the explicitly confirmed target disk. Preserve the
+existing server system and test evidence on separate storage, and do not clear
+or reset an already-owned TPM. A laboratory-signed candidate can support native
+evaluation but does not establish production signing custody or close G2.
 
 ## What the two probes do
 

@@ -1,0 +1,71 @@
+{
+  "schema_version": 1,
+  "gate": "G2",
+  "recorded_on": "2026-10-14",
+  "development_assessment": "compact-laboratory-software-candidate-verified",
+  "production_readiness": "not-qualified",
+  "gate_closing": false,
+  "claim_boundary": "Offline software and disposable cryptographic/PAM/TPM evidence is not installed enforcement, native boot, model certification, production signing custody or the physical G2 exit matrix.",
+  "implemented": [
+    {
+      "id": "G2-PROD-DEV-QA",
+      "status": "implemented-with-current-authorized-budget",
+      "item": "Original-Admin model.qa grants and a separate nonrenewable QA session, fixed execution/cancellation scenarios, retained physically verified weights, profile-derived memory/task leases, continuous authorization, private credentials and inert reports. Ordinary serving/certification authority remains separate.",
+      "session_seconds": 30,
+      "runtime_seconds": 25,
+      "source_files": ["rust/luma-platform/src/model/qa.rs", "rust/luma-platform/src/resource_manager.rs", "rust/luma-platform/src/admin_governance.rs", "rust/luma-platform/src/service/granted_acquisition.rs", "rust/luma-platform/src/service/granted_gateway.rs"]
+    },
+    {
+      "id": "G2-PROD-DEV-INSTALL-STAGING",
+      "status": "implemented",
+      "item": "Installer-selected inert acquisition authenticates the exact verified target image and public pack provenance, checks hardware/storage, continuously verifies the held controller/disk/mount/installation, bounds an independent helper, verifies SHA/GGUF/CAS bytes and preserves pending receipts. LAB --stage-model and production --model never enable serving.",
+      "source_files": ["rust/luma-platform/src/model/installer_staging.rs", "rust/luma-platform/src/platform.rs", "rust/luma-platform/src/disk.rs", "rust/luma-platform/src/acquisition.rs", "rust/luma-platform/src/model/pack_store.rs"]
+    },
+    {
+      "id": "G2-DEV-CONFINEMENT-INTEGRATION",
+      "status": "implemented",
+      "item": "The broker has a dedicated read-observation profile with process memory and tracing denied. Worker profile changes fail closed from the first observation. QA, installer curl and generated QEMU add stacked restrictions while preserving no_new_privs; QA child credentials and capability bounds are dropped before execution.",
+      "kernel_basis": "https://code.googlesource.com/linux/torvalds/linux/+/4bf54e47525dcacd4c6cdd97fb5902592414dd7a/security/apparmor/domain.c",
+      "installed_enforcement_tested": false
+    }
+  ],
+  "pending_decisions": [
+    {
+      "id": "G2-QA-SESSION-BUDGET",
+      "item": "Explicit approval for a separate nonrenewable 30-minute QA-only Admin session; cold 4B loading can exceed the currently authorized 30-second session/25-second runtime. Existing longer import/activation/export/repair approvals are not reused.",
+      "status": "awaiting-owner-approval",
+      "current_behavior": "Refuse safely on expiry; no renewal, ordinary serving or certification."
+    }
+  ],
+  "validation": {
+    "source_snapshot": "/mnt/luma-build/work/g2-candidate-source-20261014-e",
+    "source_manifest_sha256": "0a82825040688f1fb2d0f94447d628440d0cd1f3b3156f0f9e0486e22f764ab0",
+    "evidence": "/mnt/luma-build/work/g2-candidate-evidence-20261014-e/sweep/result.json",
+    "evidence_sha256": "2ce5f4af42016a6c4f85657f5642abeec5dabb701d238b80b6954565d5d84ca2",
+    "result": "passed",
+    "rust_all_targets_warnings_denied": "passed",
+    "rust": {"passed": 982, "failed": 0, "ignored": 42},
+    "native_source": {"passed": 458, "failed": 0, "skipped": 0},
+    "public_trust_authentication": {"passed": 13, "failed": 0, "skipped": 0},
+    "model_public_authentication": {"passed": 13, "failed": 0, "skipped": 0},
+    "utc_release_authentication": {"passed": 8, "failed": 0, "skipped": 0},
+    "apparmor_profiles_parsed_without_loading": 19,
+    "real_pam_fixture": "passed-six-disposable-cases",
+    "resource_software_tpm": "passed-four-disposable-cases",
+    "ignored_boundary": "The 42 fixture-only/owned-child Rust entries were excluded from the unit suite. The explicitly executed PAM/resource software-TPM fixtures do not constitute a final 26-lane run or physical TPM qualification.",
+    "physical_hardware_tested": false,
+    "installed_image_tested": false,
+    "failed_attempts_preserved": ["/mnt/luma-build/work/g2-candidate-source-20261014-a", "/mnt/luma-build/work/g2-candidate-source-20261014-b", "/mnt/luma-build/work/g2-candidate-source-20261014-c", "/mnt/luma-build/work/g2-candidate-evidence-20261014-d/sweep/result.json"],
+    "failure_resolution": "Repaired interrupted syntax/trait edits and unused wrappers; fixed unsupported initial worker-profile observation instead of weakening its regression; updated the source assertion to the profile-derived memory/task reservation plan. The full corrected suite was rerun."
+  },
+  "candidate_build": {"requested_environment": "lab", "status": "pending-fresh-assembly", "storage": "D-backed-ext4-work-and-D-public-exports", "existing_image_unchanged": true},
+  "remaining_production_inputs": [
+    "Genuine purpose-separated production roots, signed metadata and externally produced PCR/Secure Boot/release signatures with approved custody.",
+    "Actual model QA observations and externally signed machine/image-specific qualification records; no certificate or QA pass is generated by the builder."
+  ],
+  "remaining_native_qualification": [
+    "Explicitly selected disposable-disk installation, model download interruption/recovery and actual native boot.",
+    "Existing-owner TPM, firmware trust/PCR/verity/LUKS, A/B update and fallback, account/credential/UTC/grant boundaries.",
+    "Installed AppArmor/seccomp/cgroup enforcement, workflow/retention/recovery, pressure and suspend/resume, required E1/E2 hardware executions."
+  ]
+}

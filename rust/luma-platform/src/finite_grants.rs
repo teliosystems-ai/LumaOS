@@ -53,6 +53,8 @@ pub(crate) enum Action {
     RecoverResource,
     #[serde(rename = "generated.execute")]
     ExecuteGenerated,
+    #[serde(rename = "model.qa")]
+    QualifyModel,
 }
 impl Action {
     pub(crate) fn activity(self) -> &'static str {
@@ -73,6 +75,7 @@ impl Action {
             Self::ProvisionResource => "resource.provision",
             Self::RecoverResource => "resource.recover",
             Self::ExecuteGenerated => "generated.execute",
+            Self::QualifyModel => "model.qa",
         }
     }
 }
@@ -88,6 +91,7 @@ pub(crate) enum Kind {
     Worker,
     Resource,
     GeneratedCode,
+    ModelQa,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -124,6 +128,7 @@ impl Selector {
                 | (Kind::Model, Action::Infer)
                 | (Kind::Worker, Action::StartWorker | Action::StopWorker)
                 | (Kind::GeneratedCode, Action::ExecuteGenerated)
+                | (Kind::ModelQa, Action::QualifyModel)
                 | (
                     Kind::Resource,
                     Action::AcquireResource

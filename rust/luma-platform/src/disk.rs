@@ -58,6 +58,13 @@ pub fn inventory() -> Result<()> {
     Ok(())
 }
 
+pub(crate) fn recheck_installer_identity(expected: &Identity) -> Result<()> {
+    if identity(Path::new(&expected.path), true)? != *expected {
+        return Err("installer disk identity changed".into());
+    }
+    Ok(())
+}
+
 pub fn parent_disk(partition: &Path) -> Result<PathBuf> {
     let name = partition.file_name().ok_or("partition name missing")?;
     let sys = fs::canonicalize(Path::new("/sys/class/block").join(name))?;
@@ -241,6 +248,26 @@ impl Disk {
                 .any(|(_, at)| at == proof.at())
         {
             return Err("recovery mount disposition already admitted or installed disk".into());
+        }
+        self.recovery_mounts
+            .borrow_mut()
+            .push((proof.device().to_path_buf(), proof.at().to_path_buf()));
+        self.recheck()
+    }
+
+    pub(crate) fn admit_installer_mount(
+        &self,
+        proof: &crate::platform::InstallerMount,
+    ) -> Result<()> {
+        proof.recheck(&self.identity)?;
+        if self.allow_mounted
+            || self
+                .recovery_mounts
+                .borrow()
+                .iter()
+                .any(|(_, at)| at == proof.at())
+        {
+            return Err("installer mount already admitted or incompatible disk mode".into());
         }
         self.recovery_mounts
             .borrow_mut()

@@ -105,7 +105,8 @@ class ResourcePolicyTests(unittest.TestCase):
         unit = (ROOT/'native/image/overlay/etc/systemd/system/luma-broker.service').read_text()
         self.assertIn('ReadOnlyPaths=/sys/fs/cgroup', unit)
         self.assertIn('ReadWritePaths=/sys/fs/cgroup/lumamodel.slice', unit)
-        self.assertIn('CapabilityBoundingSet=\n', unit)
+        self.assertIn('CapabilityBoundingSet=CAP_SYS_PTRACE\n', unit)
+        self.assertIn('AppArmorProfile=luma-broker\n', unit)
 
     def test_lease_precedes_weight_loading_and_runtime_execution(self):
         source = (ROOT/'rust/luma-platform/src/model.rs').read_text()
@@ -403,7 +404,8 @@ class ResourcePolicyTests(unittest.TestCase):
         broker = (ROOT/'rust/luma-platform/src/resource_manager.rs').read_text()
         self.assertIn('profile.binding(&storage)?', broker)
         self.assertIn('Self::Model(profile) => acquisition_binding(profile, device)', broker)
-        self.assertIn('reservation_plan(kind, memory)', broker)
+        self.assertIn('reservation_plan_for(kind, memory, tasks)', broker)
+        self.assertIn('profile.tasks()', broker)
         self.assertIn('self.acquisition_bindings.insert', ''.join(broker.split()))
         self.assertNotIn('r.capacity', broker)
 

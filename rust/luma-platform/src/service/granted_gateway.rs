@@ -332,12 +332,14 @@ fn relay_payload(
 enum BrokerPurpose {
     Standard,
     ModelImport,
+    ModelQa,
 }
 impl BrokerPurpose {
     fn require(self, actual: crate::authentication::SessionPurpose) -> Result<()> {
         let expected = match self {
             Self::Standard => crate::authentication::SessionPurpose::Standard,
             Self::ModelImport => crate::authentication::SessionPurpose::ModelImport,
+            Self::ModelQa => crate::authentication::SessionPurpose::ModelQa,
         };
         if actual != expected {
             return Err("broker challenge cannot convert the original session purpose".into());
@@ -742,6 +744,8 @@ impl Admission {
         acquisition_arguments(credentials(socket)?.pid, profile, None)?;
         let purpose = if profile.starts_with("generated-v1-") {
             BrokerPurpose::Standard
+        } else if profile.starts_with("qa-v1-") {
+            BrokerPurpose::ModelQa
         } else {
             BrokerPurpose::ModelImport
         };
@@ -802,6 +806,25 @@ fn acquisition_arguments(pid: i32, profile: &str, grant: Option<&str>) -> Result
         0x9fa0,
     )?;
     let args = raw.split('\0').collect::<Vec<_>>();
+    if profile.starts_with("qa-v1-") {
+        let (model, scenario) = crate::model::qa::parse_profile(profile)?;
+        if args.len() != 7
+            || args[0] != IMAGE_EXE
+            || args[1] != "model-qa-run"
+            || args[4] != model
+            || args[5] != scenario
+            || !args[6].is_empty()
+            || args[2].is_empty()
+            || args[2].len() > 32
+            || !crate::admin_roles::identifier(args[3])
+            || grant.is_some_and(|id| args[3] != id)
+        {
+            return Err(
+                "QA proof requires exact fixed original Admin/model/scenario command".into(),
+            );
+        }
+        return Ok(());
+    }
     let generated = profile.starts_with("generated-v1-");
     if args.len() != 6
         || args[0] != IMAGE_EXE
@@ -1305,6 +1328,8 @@ pub(crate) fn launch(arguments: &[String]) -> Result<()> {
                 | "model-pack-pending-retain"
                 | "model-activate-review"
                 | "model-activate"
+                | "model-qa-review"
+                | "model-qa-run"
                 | "model-qualification-observe"
                 | "model-qualification-review"
                 | "model-qualification-install"
@@ -1518,6 +1543,9 @@ pub(crate) fn launch(arguments: &[String]) -> Result<()> {
         // enforcing profile permits only fixed configuration/fence names and
         // denies all model-weight mutations; no caller path is interpolated.
         writable.push_str(" /var/lib/luma-os");
+    }
+    if arguments[0] == "model-qa-run" {
+        writable.push_str(" /run/luma-model-qa /var/lib/luma-os/model-qa");
     }
     if arguments[0] == "model-pack-pending-retain" {
         writable.push_str(" /var/lib/luma-os/model-packs");
@@ -1845,12 +1873,17 @@ mod tests {
     #[test]
     fn live_broker_purposes_never_convert_or_extend_unrelated_commands() {
         use crate::authentication::SessionPurpose;
-        for expected in [BrokerPurpose::Standard, BrokerPurpose::ModelImport] {
+        for expected in [
+            BrokerPurpose::Standard,
+            BrokerPurpose::ModelImport,
+            BrokerPurpose::ModelQa,
+        ] {
             for actual in [
                 SessionPurpose::Standard,
                 SessionPurpose::Export,
                 SessionPurpose::ModelImport,
                 SessionPurpose::ModelActivation,
+                SessionPurpose::ModelQa,
             ] {
                 assert_eq!(
                     expected.require(actual).is_ok(),
@@ -1858,6 +1891,7 @@ mod tests {
                         (expected, actual),
                         (BrokerPurpose::Standard, SessionPurpose::Standard)
                             | (BrokerPurpose::ModelImport, SessionPurpose::ModelImport)
+                            | (BrokerPurpose::ModelQa, SessionPurpose::ModelQa)
                     )
                 );
             }

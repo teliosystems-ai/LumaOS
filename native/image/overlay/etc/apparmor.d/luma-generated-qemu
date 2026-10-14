@@ -8,6 +8,7 @@ profile luma-generated-qemu flags=(attach_disconnected,mediate_deleted) {
   deny network,
   deny mount,
   deny ptrace,
+  signal (receive) peer=luma-broker,
   /usr/bin/qemu-system-x86_64 mr,
   /usr/lib/** mr,
   /lib/** mr,

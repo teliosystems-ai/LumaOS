@@ -271,13 +271,13 @@ impl Group {
             self.1,
         ))
     }
-    fn verify_limits(&self, memory: u64, storage: &str) -> Result<()> {
+    fn verify_limits_for(&self, memory: u64, storage: &str, maximum_tasks: u64) -> Result<()> {
         let limit = number(&self.read("memory.max")?)?;
         let tasks = number(&self.read("pids.max")?)?;
         if limit != memory
             || number(&self.read("memory.swap.max")?)? != 0
             || tasks == 0
-            || tasks > self.1.tasks()
+            || tasks > maximum_tasks
             || number(&self.read("memory.oom.group")?)? != 1
         {
             return Err("worker resource ceilings not enforced".into());
@@ -358,6 +358,7 @@ enum AcquisitionProfile {
     Model(model::Profile),
     Invoice(String),
     Generated(String),
+    Qa(String),
 }
 impl AcquisitionProfile {
     fn resolve(id: &str) -> Result<Self> {
@@ -367,6 +368,9 @@ impl AcquisitionProfile {
         } else if id.starts_with("generated-") {
             crate::generated_runtime::source_digest(id)?;
             Ok(Self::Generated(id.into()))
+        } else if id.starts_with("qa-") {
+            model::qa::parse_profile(id)?;
+            Ok(Self::Qa(id.into()))
         } else {
             Ok(Self::Model(model::public_profile(id)?))
         }
@@ -376,6 +380,20 @@ impl AcquisitionProfile {
             Self::Model(profile) => acquisition_binding(profile, device),
             Self::Invoice(id) => crate::workflow_resource::binding(id, device),
             Self::Generated(id) => crate::generated_runtime::binding(id, device),
+            Self::Qa(id) => model::qa::binding(id, device),
+        }
+    }
+    fn memory(&self) -> Result<u64> {
+        match self {
+            Self::Qa(id) => model::qa::memory(id),
+            _ => Ok(ACQUISITION_MEMORY),
+        }
+    }
+    fn tasks(&self) -> u64 {
+        if matches!(self, Self::Qa(_)) {
+            model::qa::TASKS
+        } else {
+            Kind::Acquisition.tasks()
         }
     }
     fn current(&self, device: &str, pid: u32) -> Result<()> {
@@ -423,11 +441,16 @@ impl AcquisitionProfile {
             }
             Self::Invoice(id) => crate::workflow_resource::source_digest(id).map(|_| ()),
             Self::Generated(id) => crate::generated_runtime::source_digest(id).map(|_| ()),
+            Self::Qa(id) => model::qa::check_worker(id, device, pid),
         }
     }
 }
 
+#[cfg(test)]
 fn reservation_plan(kind: Kind, memory: u64) -> Vec<Reservation> {
+    reservation_plan_for(kind, memory, kind.tasks())
+}
+fn reservation_plan_for(kind: Kind, memory: u64, tasks: u64) -> Vec<Reservation> {
     let mut reservations = vec![
         Reservation {
             domain: HOST.into(),
@@ -436,8 +459,8 @@ fn reservation_plan(kind: Kind, memory: u64) -> Vec<Reservation> {
         },
         Reservation {
             domain: PIDS.into(),
-            loading: kind.tasks(),
-            serving: kind.tasks(),
+            loading: tasks,
+            serving: tasks,
         },
         Reservation {
             domain: kind.domain().into(),
@@ -553,8 +576,11 @@ fn native_outstanding(ledger: &resources::Ledger) -> Result<()> {
     // a restored worker. Released history stays intact for reviewed retention.
     for lease in ledger.leases.iter().filter(|l| l.state != State::Released) {
         let kind = Kind::peer(lease.owner.uid)?;
-        let memory = match kind {
-            Kind::Model => model::resource_binding_profile(&lease.binding)?.memory_limit(),
+        let (memory, tasks) = match kind {
+            Kind::Model => (
+                model::resource_binding_profile(&lease.binding)?.memory_limit(),
+                kind.tasks(),
+            ),
             Kind::Acquisition => {
                 if lease.binding.len() != 64
                     || !lease
@@ -564,10 +590,25 @@ fn native_outstanding(ledger: &resources::Ledger) -> Result<()> {
                 {
                     return Err("unsupported saved acquisition binding".into());
                 }
-                ACQUISITION_MEMORY
+                let charged = lease
+                    .reservations
+                    .iter()
+                    .find(|r| r.domain == HOST)
+                    .ok_or("saved acquisition memory reservation absent")?
+                    .loading;
+                if charged == ACQUISITION_MEMORY {
+                    (ACQUISITION_MEMORY, kind.tasks())
+                } else {
+                    let device = storage_device(Path::new("/var"))?;
+                    (
+                        model::qa::restored_memory(&lease.binding, &device)?
+                            .ok_or("saved larger acquisition has no exact QA tuple")?,
+                        model::qa::TASKS,
+                    )
+                }
             }
         };
-        if lease.reservations != reservation_plan(kind, memory) {
+        if lease.reservations != reservation_plan_for(kind, memory, tasks) {
             return Err("saved resource plan differs from native enforcement policy".into());
         }
     }
@@ -813,11 +854,12 @@ impl Manager {
             if let Some(reason) = loss {
                 self.store.transact(|l| l.revoke(&lease.token, reason))?;
             } else {
-                let (memory, storage, valid) = match kind {
+                let (memory, tasks, storage, valid) = match kind {
                     Kind::Model => {
                         let profile = model::resource_binding_profile(&lease.binding)?;
                         (
                             profile.memory_limit(),
+                            kind.tasks(),
                             storage_device(Path::new("/var"))?,
                             model::resource_profile(&profile.id).is_ok(),
                         )
@@ -828,7 +870,8 @@ impl Manager {
                             .get(&lease.token.lease_id)
                             .ok_or("missing acquisition generation binding")?;
                         (
-                            ACQUISITION_MEMORY,
+                            profile.memory()?,
+                            profile.tasks(),
                             device.clone(),
                             profile.binding(device)? == lease.binding
                                 && profile.current(device, lease.owner.pid).is_ok(),
@@ -837,7 +880,11 @@ impl Manager {
                 };
                 if !valid
                     || number(&group.read("memory.max")?)? != memory
-                    || group.leaf()?.verify_limits(memory, &storage).is_err()
+                    || number(&group.read("pids.max")?)? != tasks
+                    || group
+                        .leaf()?
+                        .verify_limits_for(memory, &storage, tasks)
+                        .is_err()
                 {
                     self.store
                         .transact(|l| l.quarantine(kind.domain(), "resource-enforcement-lost"))?;
@@ -998,18 +1045,29 @@ impl Manager {
                             storage_device(Path::new("/var"))?,
                         )
                     }
-                    Kind::Acquisition => (
-                        AcquisitionProfile::resolve(id)?,
-                        ACQUISITION_MEMORY,
-                        r.storage_device
-                            .clone()
-                            .ok_or("missing acquisition storage identity")?,
-                    ),
+                    Kind::Acquisition => {
+                        let profile = AcquisitionProfile::resolve(id)?;
+                        let memory = profile.memory()?;
+                        (
+                            profile,
+                            memory,
+                            r.storage_device
+                                .clone()
+                                .ok_or("missing acquisition storage identity")?,
+                        )
+                    }
+                };
+                let tasks = if kind == Kind::Acquisition {
+                    profile.tasks()
+                } else {
+                    kind.tasks()
                 };
                 let binding = match kind {
                     Kind::Model => match &profile {
                         AcquisitionProfile::Model(profile) => profile.resource_binding()?,
-                        AcquisitionProfile::Invoice(_) | AcquisitionProfile::Generated(_) => {
+                        AcquisitionProfile::Invoice(_)
+                        | AcquisitionProfile::Generated(_)
+                        | AcquisitionProfile::Qa(_) => {
                             return Err("workflow cannot occupy the serving domain".into())
                         }
                     },
@@ -1018,7 +1076,10 @@ impl Manager {
                 if kind == Kind::Acquisition {
                     profile.current(&storage, peer.pid.try_into()?)?;
                     if matches!(&profile,AcquisitionProfile::Model(p) if p.governed.is_some())
-                        || matches!(&profile, AcquisitionProfile::Generated(_))
+                        || matches!(
+                            &profile,
+                            AcquisitionProfile::Generated(_) | AcquisitionProfile::Qa(_)
+                        )
                     {
                         let authority = self
                             .acquisition_authority
@@ -1037,7 +1098,7 @@ impl Manager {
                 if self.store.owner_retired(&owner)? {
                     return Err("resource owner belongs to a retired allocation generation".into());
                 }
-                group.leaf()?.verify_limits(memory, &storage)?;
+                group.leaf()?.verify_limits_for(memory, &storage, tasks)?;
                 let ledger = self.store.read()?;
                 if ledger.leases.iter().any(|l| {
                     l.state != State::Released && l.owner != owner && l.owner.uid == peer.uid
@@ -1068,13 +1129,16 @@ impl Manager {
                     // The parent ceiling includes cache reparented from earlier
                     // worker cgroups. Leaf limits alone would miss those bytes.
                     group.write("memory.max", &memory.to_string())?;
-                    if number(&group.read("memory.max")?)? != memory {
+                    group.write("pids.max", &tasks.to_string())?;
+                    if number(&group.read("memory.max")?)? != memory
+                        || number(&group.read("pids.max")?)? != tasks
+                    {
                         return Err("whole worker domain memory ceiling unavailable".into());
                     }
                 }
                 // Both loading and serving are bounded by the enforced full
                 // worker ceiling. No shrink is inferred from reported readiness.
-                let reservations = reservation_plan(kind, memory);
+                let reservations = reservation_plan_for(kind, memory, tasks);
                 let retained = self.retained(&ledger, None)?;
                 let credit = if replay { 0 } else { group.current()? };
                 token = Some(self.store.transact(|l| {
@@ -1098,7 +1162,10 @@ impl Manager {
                 self.owners.insert(admitted.lease_id.clone(), pin);
                 if kind == Kind::Acquisition {
                     if matches!(&profile,AcquisitionProfile::Model(p) if p.governed.is_some())
-                        || matches!(&profile, AcquisitionProfile::Generated(_))
+                        || matches!(
+                            &profile,
+                            AcquisitionProfile::Generated(_) | AcquisitionProfile::Qa(_)
+                        )
                     {
                         self.acquisition_authority
                             .as_mut()
@@ -1152,6 +1219,9 @@ impl Manager {
                     {
                         return Err("model acquisition completion differs from exact immutable profile/action".into());
                     }
+                }
+                if let AcquisitionProfile::Qa(id) = profile {
+                    model::qa::check_output(id, peer.pid.try_into()?, t, digest)?;
                 }
                 self.store.transact(|ledger| {
                     if ledger.assert_active(t, &observed, time)?.binding != binding {

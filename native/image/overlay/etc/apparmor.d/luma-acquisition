@@ -10,6 +10,8 @@ profile luma-acquisition flags=(attach_disconnected,mediate_deleted) {
   # Available only in the generated action's systemd capability ceiling;
   # the fixed runner uses it to irreversibly drop its child's bounding set.
   capability setpcap,
+  ptrace (readby) peer=luma-broker,
+  signal (receive) peer=luma-broker,
   network inet stream,
   network inet6 stream,
   network unix stream,
@@ -21,7 +23,10 @@ profile luma-acquisition flags=(attach_disconnected,mediate_deleted) {
   /usr/bin/curl mrix,
   /usr/bin/python3{,.12} mrix,
   /usr/libexec/luma-os/generated_runtime.py r,
-  /usr/bin/qemu-system-x86_64 mrpx -> luma-generated-qemu,
+  /usr/bin/qemu-system-x86_64 mrpx -> &luma-generated-qemu,
+  /usr/share/qemu/** r,
+  /usr/share/seabios/** r,
+  /dev/kvm rw,
   /usr/share/luma-os/generated/** r,
   /usr/share/luma-os/models/ r,
   /usr/share/luma-os/models/** r,

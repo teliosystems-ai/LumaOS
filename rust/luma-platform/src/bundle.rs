@@ -481,10 +481,19 @@ mod tests {
                 ("secureboot.cer", 16 * 1024),
             ] {
                 let mut changed = original.clone();
-                let member = changed.artifacts.iter_mut().find(|a| a.name == name).unwrap();
+                let member = changed
+                    .artifacts
+                    .iter_mut()
+                    .find(|a| a.name == name)
+                    .unwrap();
                 member.bytes = maximum;
                 validate_manifest(&changed).unwrap();
-                changed.artifacts.iter_mut().find(|a| a.name == name).unwrap().bytes += 1;
+                changed
+                    .artifacts
+                    .iter_mut()
+                    .find(|a| a.name == name)
+                    .unwrap()
+                    .bytes += 1;
                 assert!(validate_manifest(&changed).is_err(), "{environment}/{name}");
             }
         }

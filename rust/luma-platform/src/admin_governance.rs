@@ -1135,6 +1135,13 @@ impl GrantBoundary<'_> {
             current_admin(catalog, identity)
         })
     }
+    pub(crate) fn require_qa_admin(&mut self) -> Result<()> {
+        let purpose = self.session.account.purpose();
+        self.restriction(|catalog, identity| {
+            require_session_purpose(purpose, authentication::SessionPurpose::ModelQa)?;
+            current_admin(catalog, identity)
+        })
+    }
     /// Additional ownership restriction, never a replacement for exact grants.
     /// The original Admin may retire only fully deleted principals' history.
     pub(crate) fn authorize_history_owner(
@@ -1243,6 +1250,7 @@ impl GrantBoundary<'_> {
             self.session.account.purpose(),
             authentication::SessionPurpose::ModelImport
                 | authentication::SessionPurpose::ModelActivation
+                | authentication::SessionPurpose::ModelQa
         ) && self
             .uses
             .first()
@@ -1697,6 +1705,20 @@ fn grant_session_scope(
     uses: &[(String, crate::finite_grants::Use)],
 ) -> Result<()> {
     use crate::finite_grants::{Action, Kind};
+    if purpose == authentication::SessionPurpose::ModelQa {
+        if uses.len() != 1
+            || uses[0].1.action != Action::QualifyModel
+            || uses[0].1.selector.kind != Kind::ModelQa
+            || uses[0].1.selector.generation != 1
+            || uses[0].1.units != 1
+            || crate::model::qa::parse_profile(&uses[0].1.selector.id).is_err()
+        {
+            return Err(
+                "QA-only session refuses serving, import, signing or unrelated effect scope".into(),
+            );
+        }
+        uses[0].1.validate()?;
+    }
     let model_id = |id: &str| {
         matches!(
             id,
@@ -1771,6 +1793,11 @@ fn export_effect_scope(
     kind: crate::policy_decisions::EffectKind,
 ) -> Result<()> {
     grant_session_scope(purpose, uses)?;
+    if purpose == authentication::SessionPurpose::ModelQa
+        && kind != crate::policy_decisions::EffectKind::ModelQa
+    {
+        return Err("QA-only session cannot exercise normal model/platform effects".into());
+    }
     if matches!(
         purpose,
         authentication::SessionPurpose::ModelImport
@@ -2033,6 +2060,27 @@ pub(crate) fn with_model_activation_grants<T>(
     )
 }
 
+pub(crate) fn with_model_qa_grant<T>(
+    login: &str,
+    grant: &str,
+    profile: &str,
+    usage: &crate::finite_grants::Use,
+    effect: impl FnOnce(&mut GrantBoundary<'_>) -> Result<T>,
+) -> Result<T> {
+    if usage != &crate::model::qa::usage(profile)? {
+        return Err("QA session cannot replace its exact signed tuple/scenario review".into());
+    }
+    with_grants_for(
+        login,
+        &[(grant.into(), usage.clone())],
+        authentication::SessionPurpose::ModelQa,
+        |boundary| {
+            boundary.require_qa_admin()?;
+            effect(boundary)
+        },
+    )
+}
+
 fn require_model_session_review(
     purpose: authentication::SessionPurpose,
     actual: &[crate::finite_grants::Use],
@@ -2060,7 +2108,7 @@ fn require_model_session_review(
 mod model_operation_session_tests {
     use super::*;
     use crate::finite_grants::{Action, Kind, Selector, Use};
-    use authentication::SessionPurpose::{Export, ModelActivation, ModelImport, Standard};
+    use authentication::SessionPurpose::{Export, ModelActivation, ModelImport, ModelQa, Standard};
     fn import() -> Use {
         Use {
             action: Action::AcquireResource,
@@ -2094,7 +2142,7 @@ mod model_operation_session_tests {
     }
     #[test]
     fn model_lifetimes_cannot_convert_or_share_unrelated_authority() {
-        let purposes = [Standard, Export, ModelImport, ModelActivation];
+        let purposes = [Standard, Export, ModelImport, ModelActivation, ModelQa];
         for actual in purposes {
             for expected in purposes {
                 assert_eq!(
@@ -2178,6 +2226,57 @@ mod model_operation_session_tests {
         wrong.swap(1, 2);
         assert!(require_model_session_review(ModelActivation, &wrong, &wrong).is_err());
     }
+    #[test]
+    fn qa_session_is_original_admin_only_closed_target_and_nonconvertible_effect() {
+        let usage = Use {
+            action: Action::QualifyModel,
+            selector: Selector {
+                kind: Kind::ModelQa,
+                id: "qa-v1-qwen3-4b-q4-k-m-execution".into(),
+                generation: 1,
+                digest: "ab".repeat(32),
+            },
+            input_bytes: 37,
+            output_bytes: 65536,
+            units: 1,
+        };
+        let scopes = vec![("qa-grant".into(), usage.clone())];
+        grant_session_scope(ModelQa, &scopes).unwrap();
+        export_effect_scope(
+            ModelQa,
+            &scopes,
+            crate::policy_decisions::EffectKind::ModelQa,
+        )
+        .unwrap();
+        for purpose in [Export, ModelImport, ModelActivation] {
+            assert!(grant_session_scope(purpose, &scopes).is_err());
+        }
+        for kind in [
+            crate::policy_decisions::EffectKind::Inference,
+            crate::policy_decisions::EffectKind::ResourceAdmission,
+            crate::policy_decisions::EffectKind::Recovery,
+            crate::policy_decisions::EffectKind::ArtifactExport,
+        ] {
+            assert!(export_effect_scope(ModelQa, &scopes, kind).is_err());
+        }
+        for case in 0..7 {
+            let mut changed = usage.clone();
+            match case {
+                0 => changed.action = Action::Infer,
+                1 => changed.selector.kind = Kind::Resource,
+                2 => changed.selector.id = "qa-v1-qwen3-4b-q4-k-m-inference".into(),
+                3 => changed.selector.generation = 2,
+                4 => changed.units = 2,
+                5 => changed.selector.digest = "00".repeat(32),
+                _ => changed.selector.id = "Unreviewed".into(),
+            };
+            assert!(grant_session_scope(ModelQa, &[("qa-grant".into(), changed)]).is_err());
+        }
+        assert!(grant_session_scope(ModelQa, &[]).is_err());
+        let mut mixed = scopes.clone();
+        mixed.push(("import".into(), import()));
+        assert!(grant_session_scope(ModelQa, &mixed).is_err());
+    }
 }
 
 fn with_grants_for<T>(
@@ -2223,6 +2322,7 @@ fn with_grants_for<T>(
             authentication::SessionPurpose::ModelActivation => {
                 authentication::local_model_activation(login)
             }
+            authentication::SessionPurpose::ModelQa => authentication::local_model_qa(login),
         };
         let account = match authentication {
             Ok(value) => value,
@@ -2255,6 +2355,9 @@ fn with_grants_for<T>(
             }
             authentication::SessionPurpose::ModelImport
             | authentication::SessionPurpose::ModelActivation => {
+                PrincipalSession::new_for(account, attempt, &mut reader, purpose)
+            }
+            authentication::SessionPurpose::ModelQa => {
                 PrincipalSession::new_for(account, attempt, &mut reader, purpose)
             }
         }?;

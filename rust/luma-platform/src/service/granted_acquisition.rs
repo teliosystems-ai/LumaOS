@@ -75,6 +75,8 @@ impl Authority {
         )?;
         let expected_output = if request.profile.starts_with("generated-v1-") {
             None
+        } else if request.profile.starts_with("qa-v1-") {
+            None
         } else {
             Some(crate::model::pack_completion(
                 &crate::model::public_profile(&request.profile)?,
@@ -135,6 +137,8 @@ impl Authority {
 pub(crate) fn usage(profile: &str) -> Result<Use> {
     if profile.starts_with("generated-v1-") {
         crate::generated_runtime::acquisition_usage(profile)
+    } else if profile.starts_with("qa-v1-") {
+        crate::model::qa::usage(profile)
     } else {
         crate::model::pack_import_usage(profile)
     }
@@ -189,6 +193,29 @@ pub(crate) fn run_generated<T: Send>(
         controller(&mut || {
             if cancel.load(Ordering::Acquire) {
                 Err("original generated principal fenced".into())
+            } else {
+                Ok(())
+            }
+        })
+    })
+}
+
+pub(crate) fn run_qa<T: Send>(
+    profile: &str,
+    usage: &Use,
+    boundary: &mut crate::admin_governance::GrantBoundary<'_>,
+    controller: impl FnOnce(&mut dyn FnMut() -> Result<()>) -> Result<T> + Send,
+) -> Result<T> {
+    crate::model::qa::parse_profile(profile)?;
+    if boundary.session_purpose() != crate::authentication::SessionPurpose::ModelQa
+        || usage != &crate::model::qa::usage(profile)?
+    {
+        return Err("QA controller cannot borrow normal serving/import authority".into());
+    }
+    run_controller(profile, usage, boundary, move |cancel| {
+        controller(&mut || {
+            if cancel.load(Ordering::Acquire) {
+                Err("original QA Admin/UTC/grant connection fenced".into())
             } else {
                 Ok(())
             }

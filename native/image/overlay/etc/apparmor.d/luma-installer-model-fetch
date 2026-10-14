@@ -1,0 +1,29 @@
+#include <tunables/global>
+
+profile luma-installer-model-fetch flags=(attach_disconnected,mediate_deleted) {
+  #include <abstractions/base>
+  #include <abstractions/nameservice>
+
+  /usr/bin/curl mr,
+  /usr/lib/** mr,
+  /lib/** mr,
+  /lib64/** mr,
+  /etc/ssl/** r,
+  /usr/share/ca-certificates/** r,
+  /dev/{random,urandom} r,
+  /dev/null rw,
+  network inet stream,
+  network inet6 stream,
+  signal (receive) peer=luma-installer-model-stage,
+  signal (receive) peer=unconfined,
+  /var/lib/luma-os/staging/install-*/data/lib/luma-os/models/*.partial-* w,
+
+  deny /proc/@{pid}/{mem,environ,exe} rw,
+  deny /etc/{shadow,gshadow} r,
+  deny /dev/{tpm*,mem,kmem,port,kvm,dxg,nvidia*,dri/**} rw,
+  deny /var/lib/luma-os/{admin,model-qualifications}/** rwklmx,
+  deny /var/lib/luma-broker/** rwklmx,
+  deny /run/luma-{admin,governance,broker}/** rwklmx,
+  deny /efi/** rwklmx,
+  deny /boot/** rwklmx,
+}

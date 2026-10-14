@@ -1,5 +1,7 @@
 #include <tunables/global>
 profile luma-model flags=(attach_disconnected) {
+  ptrace (readby) peer=luma-broker,
+  signal (receive) peer=luma-broker,
   #include <abstractions/base>
   /usr/libexec/luma-os/luma-platform mrix,
   /usr/libexec/luma-os/llama/ r,

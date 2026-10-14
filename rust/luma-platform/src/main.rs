@@ -159,6 +159,8 @@ fn dispatch() -> Result<()> {
                     | "model-qualification-pending-retain"
                     | "model-activate-review"
                     | "model-activate"
+                    | "model-qa-review"
+                    | "model-qa-run"
                     | "workflow-governed-review"
                     | "workflow-governed-prepare"
                     | "workflow-governed-advance"
@@ -568,6 +570,17 @@ fn dispatch() -> Result<()> {
         Some("install") if args.len() == 5 && args[3] == "--model" => {
             platform::install(&args[1], Path::new(&args[2]), Some(&args[4]))
         }
+        Some("install") if args.len() == 5 && args[3] == "--stage-model" => {
+            platform::install_staged(&args[1], std::path::Path::new(&args[2]), &args[4])
+        }
+        Some("installer-model-stage-worker") if args.len() == 3 => {
+            model::installer_staging::worker(std::path::Path::new(&args[1]), &args[2])
+        }
+        Some("model-qa-review") if args.len() == 3 => model::qa::review(&args[1], &args[2]),
+        Some("model-qa-run") if args.len() == 5 => {
+            model::qa::run(&args[1], &args[2], &args[3], &args[4])
+        }
+        Some("model-qa-worker") if args.len() == 3 => model::qa::worker(&args[1], &args[2]),
         Some("models") if args.len() == 1 => model::list(),
         Some("model-pack-import-review") if args.len() == 2 => model::pack_import_review(&args[1]),
         Some("model-pack-import") if args.len() == 4 => {
@@ -753,6 +766,7 @@ fn dispatch() -> Result<()> {
             println!("Governed model distribution: admin-model-command LOGIN REQUEST FILE [--commit REVIEW-SHA256] (trust publication/catalog admission only); admin-model-custodian-command LOGIN REQUEST FILE [--commit REVIEW-SHA256] (closed approve/sign intent, actual scoped PAM, server-derived UTC and event receipt). Sign only the canonical statement returned after its committed signing authorization; private signing custody remains external. model-pack-import-review MODEL-ID | model-pack-import LOGIN GRANT MODEL-ID (pack preparation only, never catalog/serving activation).");
             println!("Interrupted pack preparation: model-pack-pending-review MODEL-ID | model-pack-pending-retain LOGIN GRANT MODEL-ID REVIEW-SHA256 (retain exact interrupted unverified bytes; no deletion or catalog activation).");
             println!("Externally certified exact-image/machine qualification: model-qualification-observe MODEL-ID LEVEL REPORT-SHA256 (unsigned measured descriptor only); model-qualification-review MODEL-ID INPUT | model-qualification-install LOGIN GRANT MODEL-ID INPUT (original Admin finite resource.provision, atomic public package, exact reviewed predecessor). Serving after admitted catalog: model-activate-review MODEL-ID | model-activate LOGIN GRANTS-JSON MODEL-ID (closed provision/start/stop grants).");
+            println!("Isolated native QA: model-qa-review MODEL-ID execution|cancellation | model-qa-run LOGIN GRANT MODEL-ID execution|cancellation. Original Admin, separate model.qa grant/session, physically pinned data and actual resource lease required; factual inert reports only, no certification, ordinary inference, selection or activation. Installer --stage-model MODEL-ID prepares inert cached bytes for this path.");
             println!("Interrupted qualification metadata: model-qualification-pending-review MODEL-ID | model-qualification-pending-retain LOGIN GRANT MODEL-ID REVIEW-SHA256 (original Admin finite retention, preserve unverified bytes).");
             println!("model-activation-reconcile [--abort-unchanged REVIEW-SHA256 | --publish-committed REVIEW-SHA256 | --complete-candidate REVIEW-SHA256 | --restore-prior REVIEW-SHA256 | --discard-orphan-backup REVIEW-SHA256]: inspect, clear a verified fence, roll forward, restore retained prior settings, or discard an unchanged orphan backup. Root-only; does not start the worker. Older pending markers without saved prior bytes cannot be restored.");
             println!("model-migrate-legacy: explicit installed-root migration of one validated older model environment and runtime lock; stops and restarts the managed model/reference services. No automatic boot migration.");

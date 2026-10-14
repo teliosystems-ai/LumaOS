@@ -421,11 +421,28 @@ pub(crate) fn import_pack(
     weight: &Path,
     check: &mut impl FnMut() -> Result<()>,
 ) -> Result<()> {
+    import_pack_from(Path::new(PUBLIC), var, p, weight, check)
+}
+/// Inert installer data import from an already authenticated target root.
+/// Ordinary installed acquisition always uses the fixed PUBLIC wrapper above.
+pub(super) fn import_pack_from(
+    public: &Path,
+    var: &Path,
+    p: &Profile,
+    weight: &Path,
+    check: &mut impl FnMut() -> Result<()>,
+) -> Result<()> {
     let Some(binding) = &p.governed else {
         return Ok(());
     };
-    let manifest = public_manifest(&binding.manifest_sha256)?;
-    let source = Path::new(PUBLIC).join(&binding.manifest_sha256);
+    let source = public.join(&binding.manifest_sha256);
+    let manifest = PackManifest::parse(&read(
+        &source.join("manifest.json"),
+        model_trust::MAX_TRUST as u64,
+    )?)?;
+    if manifest.digest()? != binding.manifest_sha256 {
+        return Err("installer source pack differs from exact immutable binding".into());
+    }
     if inventory(&source)? != expected(&manifest, true) {
         return Err("public model pack auxiliary inventory is incomplete or undeclared".into());
     }
@@ -1398,4 +1415,18 @@ pub(crate) fn verify_public_preparation(
         signing_keys: vec![(manifest.signer_key_id.clone(), "model-pack-manifest".into())],
         qualifications: vec![],
     })
+}
+
+/// Inert physical byte proof for QA: never reads certifications or admits a
+/// serving catalog. Caller independently checks current preparation authority.
+pub(super) fn verify_qa_physical(profile: &Profile) -> Result<()> {
+    let Some(binding) = &profile.governed else {
+        return Ok(());
+    };
+    let manifest = public_manifest(&binding.manifest_sha256)?;
+    let root = Path::new(VAR)
+        .join(STATE)
+        .join("model-packs")
+        .join(&binding.manifest_sha256);
+    retained_pack(&root, &manifest, true, &mut || Ok(()))
 }

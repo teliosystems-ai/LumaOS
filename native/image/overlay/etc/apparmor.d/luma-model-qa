@@ -1,0 +1,32 @@
+#include <tunables/global>
+
+profile luma-model-qa flags=(attach_disconnected,mediate_deleted) {
+  #include <abstractions/base>
+  /usr/libexec/luma-os/llama/ r,
+  /usr/libexec/luma-os/llama/** mr,
+  /usr/lib/** mr,
+  /lib/** mr,
+  /lib64/** mr,
+  /proc/@{pid}/fd/ r,
+  /proc/@{pid}/fd/[0-9]* r,
+  /proc/@{pid}/status r,
+  /proc/meminfo r,
+  /proc/cpuinfo r,
+  /sys/devices/system/cpu/** r,
+  /sys/devices/system/node/** r,
+  /var/lib/luma-os/models/*.gguf mr,
+  /memfd:luma-qa-key r,
+  /dev/urandom r,
+  /dev/null rw,
+  network inet stream,
+  ptrace (readby) peer=luma-qa-supervisor,
+  signal (receive) peer=luma-broker,
+  signal (receive) set=(kill) peer=luma-qa-supervisor,
+  deny /run/luma-broker/** rw,
+  deny /var/lib/luma-os/model-auth/** rwklx,
+  deny /var/lib/luma-os/admin/** rwklx,
+  deny /var/lib/luma-os/identity/** rwklx,
+  deny /efi/** rwklx,
+  deny /boot/** rwklx,
+  deny /dev/{tpm*,mem,kmem,port,kvm,dxg,nvidia*,dri/**} rw,
+}

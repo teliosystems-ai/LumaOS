@@ -1,5 +1,6 @@
 #include <tunables/global>
 profile luma-granted-client flags=(attach_disconnected) {
+  ptrace (readby) peer=luma-broker,
   #include <abstractions/base>
   / r,
   /usr/ r,
@@ -133,6 +134,11 @@ profile luma-granted-client flags=(attach_disconnected) {
   /var/lib/luma-broker/resources/ rw,
   /var/lib/luma-broker/resources/** rwkl,
   capability chown,
+  /run/luma-model-qa/ rw,
+  /run/luma-model-qa/** rw,
+  /var/lib/luma-os/model-qa/ rw,
+  /var/lib/luma-os/model-qa/** rw,
+  /proc/sys/kernel/osrelease r,
   /memfd:luma-private-credential rwkm,
   /memfd:luma-workflow-input rwk,
   /memfd:luma-workflow-output rwk,

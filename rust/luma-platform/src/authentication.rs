@@ -24,6 +24,7 @@ pub(crate) enum SessionPurpose {
     Export,
     ModelImport,
     ModelActivation,
+    ModelQa,
 }
 
 fn login(value: &str) -> Result<()> {
@@ -397,6 +398,9 @@ pub(crate) fn local_model_import(username: &str) -> Result<AuthenticatedAccount>
 pub(crate) fn local_model_activation(username: &str) -> Result<AuthenticatedAccount> {
     local_purpose(username, SessionPurpose::ModelActivation)
 }
+pub(crate) fn local_model_qa(username: &str) -> Result<AuthenticatedAccount> {
+    local_purpose(username, SessionPurpose::ModelQa)
+}
 fn local_purpose(username: &str, purpose: SessionPurpose) -> Result<AuthenticatedAccount> {
     crate::require_root()?;
     crate::platform::require_installed()?;
@@ -675,6 +679,7 @@ mod tests {
             SessionPurpose::Export,
             SessionPurpose::ModelImport,
             SessionPurpose::ModelActivation,
+            SessionPurpose::ModelQa,
         ] {
             let account = || AuthenticatedAccount {
                 binding: AccountBinding::capture(

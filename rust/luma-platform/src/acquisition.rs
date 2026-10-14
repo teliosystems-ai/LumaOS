@@ -9,6 +9,80 @@ use std::process::{Command, Stdio};
 const UNIT: &str = "luma-acquisition.service";
 const LEAF: &str = "0::/lumaacquisition.slice/luma-acquisition.service\n";
 
+/// Installer byte staging is a separate, finite data-only cgroup. It has no
+/// installed broker connection, resource ledger, serving or trust capability.
+pub(crate) fn installer_staging_arguments(
+    root: &Path,
+    data: &Path,
+    request: &Path,
+    sha: &str,
+    bytes: u64,
+) -> Result<Vec<String>> {
+    if !target_shape(data, false)
+        || root != data.parent().ok_or("installer mount parent")?.join("root")
+        || request.parent() != data.parent()
+        || !crate::artifacts::hash(sha)
+        || bytes == 0
+        || bytes > 64 * 1024 * 1024 * 1024
+    {
+        return Err("invalid closed installer staging arguments".into());
+    }
+    let data = data.to_str().ok_or("installer data encoding")?;
+    let mut args = vec![
+        "--quiet".into(),
+        "--wait".into(),
+        "--collect".into(),
+        "--service-type=exec".into(),
+        "--expand-environment=no".into(),
+        "--unit=luma-installer-model-stage.service".into(),
+        "--slice=lumainstallerstage.slice".into(),
+    ];
+    for property in ["User=root","Group=root","UMask=0077","NoNewPrivileges=yes","ProtectSystem=strict","ProtectHome=yes","PrivateTmp=yes","ProtectKernelTunables=yes","ProtectKernelModules=yes","ProtectControlGroups=yes","RestrictNamespaces=yes","LockPersonality=yes","MemoryDenyWriteExecute=yes","SystemCallArchitectures=native","AppArmorProfile=luma-installer-model-stage","MemoryHigh=384M","MemoryMax=512M","MemorySwapMax=0","OOMPolicy=kill","TasksMax=16","CPUQuota=200%","LimitMEMLOCK=0","LimitCORE=0","DevicePolicy=closed","KillMode=control-group","TimeoutStopSec=15","Restart=no","RuntimeMaxSec=3700","RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6","CapabilityBoundingSet=CAP_SETUID CAP_SETGID CAP_KILL CAP_SYS_PTRACE","SystemCallFilter=~ptrace process_vm_readv process_vm_writev","InaccessiblePaths=/var/lib/luma-broker /var/lib/luma-os/admin /var/lib/luma-os/model-qualifications"] { args.push(format!("--property={property}")); }
+    for property in [format!("ReadWritePaths={data}/lib/luma-os/models {data}/lib/luma-os/model-packs {data}/lib/luma-os/installer-model-staging {data}/lib/luma-os/model.lock"),format!("IOReadBandwidthMax={data} 64M"),format!("IOWriteBandwidthMax={data} 64M"),format!("LimitFSIZE={bytes}")] {args.push(format!("--property={property}"));}
+    args.extend([
+        "--".into(),
+        "/usr/libexec/luma-os/luma-platform".into(),
+        "installer-model-stage-worker".into(),
+        request.to_str().ok_or("installer request encoding")?.into(),
+        sha.into(),
+    ]);
+    Ok(args)
+}
+pub(crate) fn installer_staging_drain() -> Result<()> {
+    // The controller holds the private fixed-domain lock before launching.
+    // Stop the entire owned cgroup, never reclaim capacity from an exit code.
+    let at =
+        Path::new("/sys/fs/cgroup/lumainstallerstage.slice/luma-installer-model-stage.service");
+    match fs::symlink_metadata(at) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(e) => return Err(e.into()),
+        Ok(_) => (),
+    };
+    crate::disk::command(
+        "/usr/bin/systemctl",
+        &["stop", "luma-installer-model-stage.service"],
+    )?;
+    let started = resource_manager::now()?;
+    loop {
+        match fs::read_to_string(at.join("cgroup.events")) {
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(e) => return Err(e.into()),
+            Ok(text) if text.lines().any(|line| line == "populated 0") => return Ok(()),
+            Ok(_) => (),
+        }
+        if resource_manager::now()?
+            .checked_sub(started)
+            .ok_or("installer drainage clock regressed")?
+            >= 20_000
+        {
+            return Err(
+                "installer worker drainage is uncertain; preserve target pending state".into(),
+            );
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+}
+
 fn verification_target(at: &Path, id: &str) -> Result<PathBuf> {
     if id.is_empty()
         || !id
@@ -350,6 +424,59 @@ pub(crate) fn worker(action: &str, id: &str, target_path: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn inert_installer_helper_has_bounded_separate_domain_and_no_broker_or_serving_route() {
+        let base = PathBuf::from(format!(
+            "/var/lib/luma-os/staging/install-{}",
+            "a".repeat(32)
+        ));
+        let args = installer_staging_arguments(
+            &base.join("root"),
+            &base.join("data"),
+            &base.join("model.json"),
+            &"b".repeat(64),
+            4096,
+        )
+        .unwrap();
+        for bound in [
+            "--property=MemoryMax=512M",
+            "--property=MemorySwapMax=0",
+            "--property=TasksMax=16",
+            "--property=RuntimeMaxSec=3700",
+            "--property=DevicePolicy=closed",
+            "--slice=lumainstallerstage.slice",
+        ] {
+            assert!(args.iter().any(|arg| arg == bound));
+        }
+        assert!(args.iter().any(|arg| arg == "installer-model-stage-worker"));
+        assert!(!args.iter().any(|arg| arg.contains("BindsTo=luma-broker")
+            || arg.contains("Requires=luma-broker")
+            || arg == "model-serve"));
+        assert!(installer_staging_arguments(
+            Path::new("/tmp/root"),
+            &base.join("data"),
+            &base.join("model.json"),
+            &"b".repeat(64),
+            4096
+        )
+        .is_err());
+        assert!(installer_staging_arguments(
+            &base.join("root"),
+            Path::new("/var"),
+            &base.join("model.json"),
+            &"b".repeat(64),
+            4096
+        )
+        .is_err());
+        assert!(installer_staging_arguments(
+            &base.join("root"),
+            &base.join("data"),
+            &base.join("model.json"),
+            "wrong",
+            4096
+        )
+        .is_err());
+    }
     #[test]
     fn verification_has_no_unleased_or_arbitrary_path_fallback() {
         let id = "qwen3-4b-q4-k-m";

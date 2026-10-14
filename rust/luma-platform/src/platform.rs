@@ -580,7 +580,8 @@ fn unlock(device: &Path, readonly: bool) -> Result<Crypt> {
     Ok(Crypt { name })
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 struct KernelMount {
     id: u64,
     device: String,
@@ -590,6 +591,210 @@ struct KernelMount {
     filesystem: String,
     source: String,
     super_options: Vec<String>,
+}
+
+/// Data-only exact installer mount observation. It is not recovery, trust,
+/// model activation, or an installed resource lease.
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct InstallerMountClaim {
+    device: PathBuf,
+    at: PathBuf,
+    mount: KernelMount,
+    directory_identity: (u64, u64),
+    disk: crate::disk::Identity,
+    partition: u8,
+    mapper_uuid: Option<String>,
+}
+impl InstallerMountClaim {
+    pub(crate) fn at(&self) -> &Path {
+        &self.at
+    }
+    pub(crate) fn disk(&self) -> &crate::disk::Identity {
+        &self.disk
+    }
+    pub(crate) fn enter_worker(&mut self) -> Result<()> {
+        let current = kernel_mount(&self.at)?;
+        let mut expected = self.mount.clone();
+        expected.id = current.id;
+        if self.partition == 6 && current.options.iter().any(|v| v == "ro") {
+            for option in &mut expected.options {
+                if option == "rw" {
+                    *option = "ro".into();
+                }
+            }
+        }
+        if current != expected {
+            return Err("installer worker namespace differs from target mount".into());
+        }
+        self.mount = current;
+        self.recheck()
+    }
+    pub(crate) fn recheck(&self) -> Result<()> {
+        crate::disk::recheck_installer_identity(&self.disk)?;
+        let current = fs::symlink_metadata(&self.at)?;
+        let device = fs::metadata(&self.device)?;
+        use std::os::unix::fs::FileTypeExt;
+        if !current.is_dir()
+            || current.uid() != 0
+            || current.mode() & 0o022 != 0
+            || (current.dev(), current.ino()) != self.directory_identity
+            || kernel_mount(&self.at)? != self.mount
+            || !device.file_type().is_block_device()
+            || device_number(&device) != self.mount.device
+            || self.mount.root != "/"
+        {
+            return Err("installer target mount identity changed".into());
+        }
+        check_installer_mount_claim(&self.mount, self.partition)?;
+        let sys = Path::new("/sys/class/block")
+            .join(self.device.file_name().ok_or("installer device name")?);
+        let underlying = if self.partition == 6 {
+            let uuid = fs::read_to_string(sys.join("dm/uuid"))?;
+            if self.mapper_uuid.as_ref() != Some(&uuid) || !uuid.trim().starts_with("CRYPT-LUKS2-")
+            {
+                return Err("installer encrypted mapper identity changed".into());
+            }
+            let slaves = fs::read_dir(sys.join("slaves"))?.collect::<std::io::Result<Vec<_>>>()?;
+            if slaves.len() != 1 {
+                return Err("installer mapper backing device is ambiguous".into());
+            }
+            Path::new("/dev").join(slaves[0].file_name())
+        } else {
+            if self.mapper_uuid.is_some() {
+                return Err("unexpected installer mapper claim".into());
+            }
+            self.device.clone()
+        };
+        if crate::disk::parent_disk(&underlying)? != Path::new(&self.disk.path)
+            || fs::read_to_string(
+                Path::new("/sys/class/block")
+                    .join(underlying.file_name().ok_or("installer partition")?)
+                    .join("partition"),
+            )?
+            .trim()
+            .parse::<u8>()?
+                != self.partition
+        {
+            return Err("installer mount belongs to another target partition".into());
+        }
+        Ok(())
+    }
+}
+fn check_installer_mount_claim(mount: &KernelMount, partition: u8) -> Result<()> {
+    let has = |value: &str| mount.options.iter().any(|v| v == value);
+    if !has("nodev")
+        || !has("nosuid")
+        || mount.root != "/"
+        || match partition {
+            1 => mount.filesystem != "vfat" || !has("rw") || !has("noexec"),
+            2 => mount.filesystem != "ext4" || !has("ro") || !has("noexec"),
+            6 => mount.filesystem != "ext4" || !(has("rw") ^ has("ro")),
+            _ => true,
+        }
+    {
+        return Err("unsupported installer mount disposition".into());
+    }
+    Ok(())
+}
+/// Only the installer can mint this capability from its owned Mount object.
+pub(crate) struct InstallerMount {
+    claim: InstallerMountClaim,
+    directory: File,
+}
+impl InstallerMount {
+    fn capture(disk: &Disk, mount: &Mount, partition: u8) -> Result<Self> {
+        let directory = OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC)
+            .open(&mount.at)?;
+        let metadata = directory.metadata()?;
+        let claim = InstallerMountClaim {
+            device: mount.device.clone(),
+            at: mount.at.clone(),
+            mount: kernel_mount(&mount.at)?,
+            directory_identity: (metadata.dev(), metadata.ino()),
+            disk: disk.identity.clone(),
+            partition,
+            mapper_uuid: if partition == 6 {
+                Some(fs::read_to_string(
+                    Path::new("/sys/class/block")
+                        .join(mount.device.file_name().ok_or("installer mapper name")?)
+                        .join("dm/uuid"),
+                )?)
+            } else {
+                None
+            },
+        };
+        if partition == 6 && !claim.mount.options.iter().any(|v| v == "rw") {
+            return Err("installer controller data mount is not writable".into());
+        }
+        claim.recheck()?;
+        Ok(Self { claim, directory })
+    }
+    pub(crate) fn claim(&self) -> InstallerMountClaim {
+        self.claim.clone()
+    }
+    pub(crate) fn device(&self) -> &Path {
+        &self.claim.device
+    }
+    pub(crate) fn at(&self) -> &Path {
+        &self.claim.at
+    }
+    pub(crate) fn recheck(&self, disk: &crate::disk::Identity) -> Result<()> {
+        let m = self.directory.metadata()?;
+        if &self.claim.disk != disk || (m.dev(), m.ino()) != self.claim.directory_identity {
+            return Err("installer mount capability changed".into());
+        }
+        self.claim.recheck()
+    }
+}
+
+#[cfg(test)]
+mod installer_mount_tests {
+    use super::*;
+    #[test]
+    fn installer_mounts_are_closed_to_exact_filesystem_partition_and_access_mode() {
+        for (partition, line) in [
+            (
+                1,
+                "30 20 8:1 / /esp rw,nodev,nosuid,noexec - vfat /dev/sda1 rw\n",
+            ),
+            (
+                2,
+                "31 20 8:2 / /root ro,nodev,nosuid,noexec - ext4 /dev/sda2 rw\n",
+            ),
+            (
+                6,
+                "32 20 253:0 / /data rw,nodev,nosuid - ext4 /dev/dm-0 rw\n",
+            ),
+        ] {
+            let at = match partition {
+                1 => "/esp",
+                2 => "/root",
+                _ => "/data",
+            };
+            let mount = parse_kernel_mount(line, Path::new(at)).unwrap();
+            check_installer_mount_claim(&mount, partition).unwrap();
+            for case in 0..4 {
+                let mut other = mount.clone();
+                match case {
+                    0 => other.filesystem = "overlay".into(),
+                    1 => other.root = "/subtree".into(),
+                    2 => other.options.retain(|v| v != "nodev"),
+                    _ => other.options.retain(|v| v != "nosuid"),
+                };
+                assert!(check_installer_mount_claim(&other, partition).is_err());
+            }
+            assert!(check_installer_mount_claim(&mount, 3).is_err());
+        }
+        let root = parse_kernel_mount(
+            "31 20 8:2 / /root rw,nodev,nosuid,noexec - ext4 /dev/sda2 rw\n",
+            Path::new("/root"),
+        )
+        .unwrap();
+        assert!(check_installer_mount_claim(&root, 2).is_err());
+    }
 }
 
 fn mount_word(word: &str) -> Result<String> {
@@ -1700,21 +1905,33 @@ mod identity_migration_tests {
 }
 
 pub fn install(selection: &str, source: &Path, model_id: Option<&str>) -> Result<()> {
+    install_mode(selection, source, model_id, false)
+}
+pub(crate) fn install_staged(selection: &str, source: &Path, model_id: &str) -> Result<()> {
+    install_mode(selection, source, Some(model_id), true)
+}
+fn install_mode(
+    selection: &str,
+    source: &Path,
+    model_id: Option<&str>,
+    stage_only: bool,
+) -> Result<()> {
     require_live()?;
     // Local TPM2 is the selected installation profile. This is read-only,
     // before target admission or credentials, and never selects a fallback.
     let admin_admission = crate::tpm::installation_admission()?;
     let disk = Disk::open(selection, false)?;
+    let original_memory = fs::read_to_string("/proc/meminfo")?;
+    let original_total = crate::model::memory(&original_memory, "MemTotal")?;
+    let original_available = crate::model::memory(&original_memory, "MemAvailable")?;
     // Observe available RAM before the live installer's verified bundle
     // snapshot temporarily occupies memory-backed staging. Recheck again
     // after releasing that snapshot and before acquiring any model bytes.
     let preview = bundle::initial_preview(source)?;
     let preview_manifest: Manifest = serde_json::from_slice(&preview)?;
-    let model = if preview_manifest.environment == "production" {
-        if model_id.is_some_and(|id| id != "manual-only") {
-            return Err("inert production installation cannot acquire a model before separately signed catalog and Admin/TPM/UTC activation; select manual-only".into());
-        }
-        println!("Production image will be staged inertly in manual mode; protected services and model acquisition remain disabled until explicit Admin/TPM/UTC/trust activation.");
+    let inert = preview_manifest.environment == "production" || stage_only;
+    let model = if inert {
+        println!("Image will be installed in manual mode. Selected model bytes may be staged inertly; normal serving remains disabled pending genuine activation and qualification.");
         None
     } else {
         crate::model::choose(model_id, disk.identity.bytes)?
@@ -1741,6 +1958,35 @@ pub fn install(selection: &str, source: &Path, model_id: Option<&str>) -> Result
     if disk.identity.bytes < minimum {
         return Err(format!("disk requires at least {minimum} bytes").into());
     }
+    let staged_model = if inert {
+        let metadata_directory = bundle::private_dir("model-preview")?;
+        let metadata_root = Mount::new(
+            &verified.path("root.ext4")?,
+            metadata_directory.join("root"),
+            "loop,ro,nodev,nosuid,noexec",
+        )?;
+        let free = disk
+            .identity
+            .bytes
+            .checked_sub(
+                (2 * roots_mib + 2 * hashes_mib + 1024 + 32)
+                    .checked_mul(MIB)
+                    .ok_or("installer data geometry overflow")?,
+            )
+            .ok_or("installer data geometry underflow")?;
+        let planned = crate::model::installer_staging::select(
+            &metadata_root.at,
+            &verified.manifest,
+            model_id,
+            original_total,
+            original_available,
+            free,
+        )?;
+        drop(metadata_root);
+        planned
+    } else {
+        None
+    };
     println!("Release {}: EFI 1 GiB; two {} MiB roots and {} MiB hash partitions; remaining space encrypted.",verified.manifest.release,roots_mib,hashes_mib);
     println!("Admin profile: local-tpm2. This install creates separate Unix accounts; explicit checkpoint enrollment, product Admin bootstrap and principal adoption remain required after boot.");
     disk.confirm("ERASE")?;
@@ -1857,12 +2103,19 @@ pub fn install(selection: &str, source: &Path, model_id: Option<&str>) -> Result
     )?;
     let staging = bundle::private_dir("install")?;
     let data = Mount::new(&mapper, staging.join("data"), "nodev,nosuid")?;
+    let data_proof = InstallerMount::capture(&disk, &data, 6)?;
+    disk.admit_installer_mount(&data_proof)?;
     println!("Initializing encrypted identity and application state...");
     let root = Mount::new(
         &disk.partition(2)?,
         staging.join("root"),
         "ro,nodev,nosuid,noexec",
     )?;
+    let root_proof = InstallerMount::capture(&disk, &root, 2)?;
+    disk.admit_installer_mount(&root_proof)?;
+    if let Some(plan) = &staged_model {
+        crate::model::installer_staging::check_target(&root.at, &verified.manifest, plan)?;
+    }
     command(
         "/usr/bin/cp",
         &[
@@ -1953,6 +2206,8 @@ pub fn install(selection: &str, source: &Path, model_id: Option<&str>) -> Result
         staging.join("esp"),
         "nodev,nosuid,noexec,umask=0077",
     )?;
+    let esp_proof = InstallerMount::capture(&disk, &esp, 1)?;
+    disk.admit_installer_mount(&esp_proof)?;
     publish_efi_guarded_mode(
         &esp.at,
         &verified,
@@ -1963,8 +2218,22 @@ pub fn install(selection: &str, source: &Path, model_id: Option<&str>) -> Result
     )?;
     let trust_instruction = certificate_enrollment_instruction(&verified.manifest.environment)?;
     command("/usr/bin/sync", &[])?;
-    drop(root);
+    let target_release = verified.manifest.clone();
     drop(verified);
+    if let Some(plan) = &staged_model {
+        if let Err(error) = crate::model::installer_staging::run(
+            &root_proof,
+            &data_proof,
+            &disk,
+            &target_release,
+            plan,
+        ) {
+            eprintln!("OS remains installed in manual mode. Inert model staging is incomplete; preserve installer-model-staging receipts and uncertain partials. No normal model has been enabled.");
+            return Err(error);
+        }
+    }
+    drop(root_proof);
+    drop(root);
     if let Some(profile) = model {
         if let Err(error) = crate::model::provision(&data.at, &profile) {
             eprintln!("OS installation is bootable in manual mode, but the selected model was NOT installed. After boot and network setup, retry: sudo luma-platform model-install {}", profile.id);
@@ -2104,12 +2373,22 @@ mod measured_release_tests {
                 2 => candidate.edition = "desktop".into(),
                 3 => {
                     candidate.root_bytes += 4096;
-                    candidate.artifacts.iter_mut().find(|a| a.name == "root.ext4").unwrap().bytes += 4096;
-                },
+                    candidate
+                        .artifacts
+                        .iter_mut()
+                        .find(|a| a.name == "root.ext4")
+                        .unwrap()
+                        .bytes += 4096;
+                }
                 _ => {
                     candidate.hash_bytes += 4096;
-                    candidate.artifacts.iter_mut().find(|a| a.name == "root.verity").unwrap().bytes += 4096;
-                },
+                    candidate
+                        .artifacts
+                        .iter_mut()
+                        .find(|a| a.name == "root.verity")
+                        .unwrap()
+                        .bytes += 4096;
+                }
             }
             assert!(validate_laboratory_repair(&current, &candidate).is_err());
         }

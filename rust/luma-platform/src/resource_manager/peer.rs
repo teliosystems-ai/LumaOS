@@ -82,6 +82,26 @@ fn generated_status(status: &str, uid: u32, cmdline: &str) -> Result<()> {
     )
 }
 
+fn qa_status(status: &str, uid: u32, cmdline: &str) -> Result<()> {
+    let parts = cmdline.split('\0').collect::<Vec<_>>();
+    if parts.len() != 5
+        || parts[0] != "/usr/libexec/luma-os/luma-platform"
+        || parts[1] != "model-qa-worker"
+        || !parts[4].is_empty()
+        || crate::model::qa::parse_profile(parts[2]).is_err()
+        || crate::tpm::decode::<16>(parts[3]).is_err()
+    {
+        return Err(
+            "QA observation capabilities require the exact isolated supervisor command".into(),
+        );
+    }
+    confined_status(
+        status,
+        uid,
+        (1u64 << 0) | (1u64 << 7) | (1u64 << 6) | (1u64 << 5) | (1u64 << 8) | (1u64 << 19),
+    )
+}
+
 fn locked_memory(limits: &str) -> Result<()> {
     let mut lines = limits
         .lines()
@@ -108,9 +128,22 @@ pub(super) fn worker_generation(
         return Err("worker UID does not match the fixed execution domain".into());
     }
     let start = start_ticks(&read("stat", 4096)?)?;
-    let profile = match kind {
+    let initial_profile = read("attr/current", 128)?;
+    let qa = kind == Kind::Acquisition && initial_profile == "luma-qa-supervisor (enforce)\n";
+    let normal = match kind {
         Kind::Model => "luma-model (enforce)\n",
         Kind::Acquisition => "luma-acquisition (enforce)\n",
+    };
+    if !qa && initial_profile != normal {
+        return Err("initial worker confinement observation is unsupported or changed".into());
+    }
+    let profile = if qa {
+        "luma-qa-supervisor (enforce)\n"
+    } else {
+        match kind {
+            Kind::Model => "luma-model (enforce)\n",
+            Kind::Acquisition => "luma-acquisition (enforce)\n",
+        }
     };
     for _ in 0..2 {
         if read("cgroup", 4096)? != format!("0::{}\n", kind.leaf())
@@ -119,7 +152,9 @@ pub(super) fn worker_generation(
             return Err("worker group or enforcing AppArmor generation differs".into());
         }
         let status = read("status", STATUS_BYTES)?;
-        if kind == Kind::Acquisition && field(&status, "CapBnd")? == "00000000000001e0" {
+        if qa {
+            qa_status(&status, uid, &read("cmdline", 4096)?)?;
+        } else if kind == Kind::Acquisition && field(&status, "CapBnd")? == "00000000000001e0" {
             generated_status(&status, uid, &read("cmdline", 4096)?)?;
         } else {
             worker_status(&status, kind, uid)?;

@@ -32,8 +32,9 @@ the image or Git. TPM-backed Admin and monotonic release/checkpoint paths are
 implemented in source, but production signing/recovery custody and native
 qualification remain external prerequisites. TPM auto-unlock, a graphical
 installer, dual boot, and arbitrary-hardware qualification remain unavailable.
-Native model admission currently covers the catalog below, not the full
-governed multi-model contract/lifecycle matrix. `desktop` now selects a candidate
+Native adapters currently cover the compact Qwen CPU profiles below; other
+architectures, GPU execution and larger models need their own adapter and
+hardware qualification. `desktop` selects a candidate
 GNOME/Wayland profile; it is not yet an installed-image qualification. Consult
 the execution record for the particular image: the old
 image's passing tests do not automatically attest a new build.
@@ -91,11 +92,34 @@ observation to a frozen certification request. Its `assemble` command verifies
 an external signature and emits the installed qualification transfer format.
 These commands neither execute QA nor authorize a model or certify a test pass.
 
-Production installation currently remains inert and manual-only. The separate
-QA-only execution path and installer-selected inert model data staging remain
-open development work; a signed image cannot substitute for either. Consult the
-[current production readiness record](../../docs/gates/g2/production_readiness_2026-10-13.json)
-before treating a candidate as ready for final native testing.
+Production installation remains inert, but `--model` can now select data-only
+staging from the exact verified target image. Laboratory installation can use
+`--stage-model qwen3-4b-q4-k-m` (or the smaller supported profile) to download and
+verify bytes while leaving ordinary serving disabled. Existing laboratory
+`--model` behavior is unchanged. Acquisition uses a separate bounded installer
+worker and retains installation-bound pending receipts on interruption; those
+receipts confer no activation, trusted time or certification.
+
+Installed isolated QA uses `sudo luma-platform granted-run model-qa-review
+MODEL-ID execution` and `sudo luma-platform granted-run model-qa-run LOGIN GRANT
+MODEL-ID execution`, with `cancellation` as the other fixed scenario. Replace
+the model, login and grant with the actual installed profile and reviewed finite
+grant; no example grant is authority. Provision the existing-owner TPM-backed
+Admin and separate resource checkpoint, bootstrap/adopt the original Admin, and
+establish protected UTC before this operation. Register and assign the separate
+`model.qa` activity and issue the exact scope returned by review. QA admission
+requires that original Admin, the current account and grant, exact physically
+verified cached weights and resource leases; it does not require or manufacture
+a serving certificate. Production additionally requires its genuine signed
+preparation metadata and actual release activation.
+
+QA reports contain factual execution or cancellation observations and exact
+tuple digests under `/var/lib/luma-os/model-qa`. They never certify a pass or
+alter ordinary selection, credentials or serving. The current QA session has
+the existing nonrenewable 30-second lifetime and a 25-second runtime budget;
+cold 4B loading can safely refuse within these bounds. A separate proposed
+30-minute QA-only session still requires explicit owner approval and is not
+borrowed from the approved import, activation, export or repair purposes.
 
 ## Candidate Wayland desktop edition
 

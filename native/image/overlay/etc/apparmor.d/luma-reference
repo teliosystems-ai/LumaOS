@@ -1,5 +1,6 @@
 #include <tunables/global>
 profile luma-reference flags=(attach_disconnected) {
+  ptrace (readby) peer=luma-broker,
   #include <abstractions/base>
   /usr/bin/python3* mrix,
   /usr/lib/** mr,

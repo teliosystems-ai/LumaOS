@@ -13,6 +13,30 @@ requirement.
 
 ## Current software inventory and work still required
 
+### Isolated QA and inert installer model staging, 2026-10-14
+
+The compact candidate adds separately scoped original-Admin QA execution and
+cancellation, profile-derived resource budgets and inert measured reports.
+Installer-selected weights can be downloaded from the verified target image
+without enabling normal serving. Typed disk/mount/controller proofs, separate
+bounded acquisition, exact byte/layout verification and retained pending
+receipts cover that data-only path. Broker metadata observation and stacked
+child profiles preserve process protection and no-new-privileges confinement.
+
+The corrected final source passes 982 Rust tests, all-target checks with warnings
+denied, 458 native-source tests without skips, thirteen OS and thirteen model
+public-signature cases, eight upstream UTC authentication cases, nineteen policy
+parses and disposable PAM/resource-TPM fixtures. Forty-two existing fixture-only
+Rust entries remain excluded from the unit suite; no complete final fixture,
+installed enforcement or physical qualification is inferred. Failed attempts
+remain retained. See [the current readiness record](../docs/gates/g2/production_readiness_2026-10-14.json).
+
+The QA session currently retains thirty seconds, with a twenty-five-second
+runtime budget. Cold 4B loading can refuse safely. The separately proposed
+thirty-minute QA-only session awaits explicit owner approval; other purpose
+approvals do not authorize that extension. Fresh laboratory image assembly,
+genuine production custody/inputs and native qualification remain distinct.
+
 ### Integrated native model and generated-runtime candidate, 2026-10-12
 
 The parallel implementation adds the closed native signed model trust/catalog

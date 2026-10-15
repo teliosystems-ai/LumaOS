@@ -30,7 +30,84 @@ The proposed guest-memory check uses observed Windows available RAM plus an
 nor changes WSL limits. A smaller constrained profile needs its own measured
 budget and qualification; do not lower the reserve simply to obtain a pass.
 Storage free space is observed, but full active/candidate/model/state/backup
-and recovery capacity admission is not yet implemented by this first slice.
+and recovery budgets are compared only when an explicit plan is supplied.
+
+## Checked planning inputs
+
+Optional JSON inputs enable two additional read-only checks:
+
+```powershell
+.\packaging\windows\preflight.ps1 -StorageDrive D -DistributionName LumaOS-Dev `
+    -GuestMemoryGiB 12 -StoragePlanPath D:\LumaOS-builds\windows-storage-plan.json `
+    -ReleasePolicyPath D:\LumaOS-builds\windows-release-comparison.json
+```
+
+`planning_observations_passed` requires the original development observations,
+enough observed free space for every storage component, and an exact release
+tuple match. Missing inputs produce planning blockers, while malformed inputs
+raise an error. The original observation-only invocation remains available.
+Neither result authorizes installation or certifies the host.
+
+The storage schema has exactly these fields; byte counts below are a small
+synthetic example, not product sizing recommendations:
+
+```json
+{
+  "schema_version": 1,
+  "storage_drive": "D",
+  "active_image_bytes": 1073741824,
+  "candidate_image_bytes": 2147483648,
+  "model_pack_bytes": 3221225472,
+  "state_migration_bytes": 1073741824,
+  "user_quota_bytes": 4294967296,
+  "backup_staging_bytes": 2147483648,
+  "recovery_reserve_bytes": 1073741824
+}
+```
+
+All seven components are mandatory nonnegative integers, with positive
+candidate-image, user-quota and recovery-reserve budgets. Explicit zero means
+the corresponding optional allocation is not planned. The checked UInt64 sum
+is compared with the selected drive's actual observed free bytes, with no
+fixed 80-GiB pass threshold. The plan must name that exact uppercase drive
+letter. The calculation conservatively gives no credit for pre-existing
+allocations; it cannot replace later verified allocation accounting. Inputs
+cannot reserve capacity, prove package size or turn an undersized caller budget
+into a product admission. Installation still needs budgets derived from its
+authenticated package manifests and an immediate capacity recheck/allocation.
+
+The release comparison schema requires a review reference and a bounded list
+of complete, exact edition/build/runtime tuples. For example, the following is
+test data, not an approved production policy:
+
+```json
+{
+  "schema_version": 1,
+  "review_reference": "test-fixture-only-not-production",
+  "tuples": [
+    {
+      "windows_edition": "Professional",
+      "windows_build": 26100,
+      "wsl_runtime_version": "2.6.0.0"
+    }
+  ]
+}
+```
+
+Edition identifiers come from the observed Windows `EditionID`, not a fuzzy
+caption match. Build and WSL runtime must match exactly; wildcards, ranges,
+duplicate tuples and non-runtime version lines are refused. A review reference
+is a claim supplied by the caller, not authenticated custody. A matching tuple
+sets `tuple_matches_input` only: `policy_authenticated`, `production_qualified`
+and `product_installation_admitted` remain false. Genuine signed policy and
+per-tuple platform qualification remain separate requirements.
+
+Both schemas are closed: omitted/unknown fields, booleans or strings used as
+byte counts, negative/floating-point values and overflowing storage totals are
+refused. JSON files are bounded to 64 KiB and 16 object or array nesting levels;
+duplicate or escaped property names are refused before accepting a record.
+Storage capacity and release tuple comparison are not encryption, enterprise
+authorization, effective guest-limit, other-workload or confinement proofs.
 
 GWIN0 still needs signed independent packaging, authenticated launcher/bridge,
 scoped Windows ACL-aware ingestion, actual compact inference and confinement,

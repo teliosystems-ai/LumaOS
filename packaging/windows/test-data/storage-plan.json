@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "storage_drive": "D",
+  "active_image_bytes": 1073741824,
+  "candidate_image_bytes": 2147483648,
+  "model_pack_bytes": 3221225472,
+  "state_migration_bytes": 1073741824,
+  "user_quota_bytes": 4294967296,
+  "backup_staging_bytes": 2147483648,
+  "recovery_reserve_bytes": 1073741824
+}

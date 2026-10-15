@@ -1,0 +1,128 @@
+{
+  "schema_version": 1,
+  "recorded_on": "2026-10-15",
+  "branch": "feature/g3-gwin0-beta",
+  "baseline_commit": "7bb3d60",
+  "scope": "Strict prerequisite planning and exact tuple comparison, not product installation admission",
+  "source_sha256": {
+    "packaging/windows/Luma.Preflight.psm1": "fc1f18cb93627246cb4dc804a0ef283ed32bc308980a7f0b57d9d2ee2e60aeb5",
+    "packaging/windows/preflight.ps1": "5d7c1b9d63984456f7ffd8ef569f81ecfd8f723d3c4d33084ef99a047ccd5a67",
+    "packaging/windows/README.md": "d124c6944ba1e57bd75ef38b3768a3aeeca93a561a3be05f7e832c9a71e28d3f",
+    "packaging/windows/test-preflight.ps1": "efb06af461dc2f55a27799b45d002bbd1d30c2a5bbaf7d4a3586fe0b2e68b1f4",
+    "packaging/windows/test-data/deep-array.json": "29c6efca0a72e62ce84cf90f63a0cb2752f149f6e0101965a604e7e19b86c333",
+    "packaging/windows/test-data/duplicate-property.json": "4356371cc05ca0ee8da945a6441e4442a95f3698b1c16a4294dcf569ac86c907",
+    "packaging/windows/test-data/duplicate-tuple-property.json": "e5fc8b45d1466410201cf920e51814881a8bb11697766746f5f3804c94fcc977",
+    "packaging/windows/test-data/escaped-property.json": "4a66f2b9a98a0d2f6032d150a5f69c7bfda3052620712dc58222da4b3b9370f9",
+    "packaging/windows/test-data/invalid.json": "f55dfa5a147990eda0d602179ee281c4c76f86e550f0e3412fa4753a51a5aa29",
+    "packaging/windows/test-data/storage-plan.json": "2d85260daea6c877476d08ba7015607436ccbf2929b9b90224ba42f6e5a74ebe"
+  },
+  "validation": {
+    "syntax_files_parsed": 3,
+    "powershell_behavioral_assertions_passed": 154,
+    "powershell_behavioral_assertions_failed": 0,
+    "skipped": 0,
+    "native_probe_exit_code": 0,
+    "process_only_remote_signed_approved": true,
+    "persistent_execution_policy_changed": false
+  },
+  "implemented": [
+    "Seven explicit storage components with checked UInt64 arithmetic, positive candidate/user/recovery allocations, exact observed drive and no fixed capacity pass floor",
+    "Exact Windows edition/build and canonical WSL runtime tuple comparison, with policy_authenticated:false even when matching",
+    "Bounded strict UTF8 JSON parsing, maximum16 nesting, duplicate/case-equivalent/escaped/unknown keys and invalid types refused"
+  ],
+  "native_probe": {
+    "schema_version": 1,
+    "profile": "W",
+    "proposed_distribution": "LumaOS-Dev",
+    "development_observations_passed": false,
+    "blockers": [
+      "Observed available memory does not cover the proposed guest plus 8-GiB host reserve."
+    ],
+    "planning_observations_passed": false,
+    "planning_blockers": [
+      "An explicit complete storage budget must fit the observed selected-drive free capacity.",
+      "Observed Windows edition/build and WSL runtime must match an explicit reviewed comparison tuple."
+    ],
+    "storage_planning": {
+      "status": "not-provided",
+      "capacity_observation_passed": false,
+      "allocation_reserved": false
+    },
+    "release_comparison": {
+      "status": "not-provided",
+      "tuple_matches_input": false,
+      "policy_authenticated": false,
+      "production_qualified": false
+    },
+    "guest_memory_requested_bytes": 12884901888,
+    "host_reserve_bytes": 8589934592,
+    "guest_memory_reserved": false,
+    "global_wsl_settings_changed": false,
+    "existing_distributions_changed": false,
+    "product_installation_admitted": false,
+    "executable_skills_enabled": false,
+    "production_qualified": false,
+    "gate_closing": false,
+    "pending_qualification": [
+      "Authenticated production release policy and actual per-tuple qualification",
+      "Fresh storage recheck and exclusive allocation at installation",
+      "Host encryption and managed-device policy",
+      "Effective guest limits and other WSL workloads",
+      "Authenticated bridge and Windows ACL broker",
+      "Enforcing worker confinement",
+      "Actual compact inference",
+      "Hyper-V Gen2 desktop and recovery proof"
+    ],
+    "observation": {
+      "schema_version": 1,
+      "observed_at_utc": "2026-10-15T07:47:34.0701305Z",
+      "windows_caption": "Microsoft Windows 11 Home Single Language",
+      "windows_edition": "CoreSingleLanguage",
+      "windows_version": "10.0.26200",
+      "windows_build": 26200,
+      "windows_product_type": 1,
+      "processor_architectures": [
+        9
+      ],
+      "virtualization_firmware": [
+        true
+      ],
+      "hypervisor_present": true,
+      "total_memory_bytes": 16989728768,
+      "available_memory_bytes": 560492544,
+      "storage_drive": "D",
+      "storage_free_bytes": 75515297792,
+      "wsl_runtime": {
+        "exit_code": 0,
+        "text": "WSL version: 2.7.13.0\r\nKernel version: 6.18.33.2-2\r\nWSLg version: 1.0.73.2\r\nMSRDC version: 1.2.7214\r\nDirect3D version: 1.611.1-81528511\r\nDXCore version: 10.0.26100.1-240331-1435.ge-release\r\nWindows version: 10.0.26200.9457\r\n",
+        "status": "observed"
+      },
+      "wsl": {
+        "status": "observed",
+        "distributions": [
+          {
+            "name": "Ubuntu",
+            "version": 2,
+            "default": true,
+            "state": "Running"
+          },
+          {
+            "name": "docker-desktop",
+            "version": 2,
+            "default": false,
+            "state": "Running"
+          }
+        ]
+      },
+      "host_encryption": "not-qualified",
+      "enterprise_policy": "not-qualified",
+      "nested_virtualization": "not-qualified",
+      "confinement": "not-qualified",
+      "accelerator": "not-qualified"
+    }
+  },
+  "deliberate_malformed_test_fixtures": true,
+  "host_configuration_changed": false,
+  "product_installation_admitted": false,
+  "gate_closing": false
+}

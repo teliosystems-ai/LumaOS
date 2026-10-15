@@ -1,5 +1,170 @@
 Set-StrictMode -Version Latest
 
+function Assert-LumaClosedRecord {
+    param($Value, [string[]] $Fields, [string] $Name)
+    if ($null -eq $Value -or ($Value -isnot [pscustomobject] -and
+        $Value -isnot [System.Collections.IDictionary])) { throw "$Name must be an object." }
+    $keys = if ($Value -is [System.Collections.IDictionary]) { @($Value.Keys) } else { @($Value.PSObject.Properties.Name) }
+    if ($keys.Count -ne $Fields.Count) { throw "$Name has omitted or unsupported fields." }
+    foreach ($field in $Fields) {
+        if (@($keys | Where-Object { $_ -ceq $field }).Count -ne 1) {
+            throw "$Name has omitted or unsupported fields."
+        }
+    }
+}
+
+function ConvertTo-LumaUnsignedBytes {
+    param($Value, [string] $Name)
+    if ($null -eq $Value -or $Value.GetType() -notin @([byte], [sbyte], [int16], [uint16],
+        [int32], [uint32], [int64], [uint64]) -or $Value -lt 0) {
+        throw "$Name must be a nonnegative integral byte count."
+    }
+    return [uint64]$Value
+}
+
+function Read-LumaPlanningJson {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string] $LiteralPath)
+    $file = Get-Item -LiteralPath $LiteralPath -ErrorAction Stop
+    if ($file -isnot [System.IO.FileInfo] -or $file.Length -gt 65536) {
+        throw 'Planning input must be a JSON file of at most 65536 bytes.'
+    }
+    $stream = [System.IO.File]::Open($file.FullName, [System.IO.FileMode]::Open,
+        [System.IO.FileAccess]::Read, [System.IO.FileShare]::Read)
+    try {
+        $buffer = New-Object byte[] 65537
+        $count = 0
+        while ($count -lt $buffer.Length) {
+            $read = $stream.Read($buffer, $count, $buffer.Length - $count)
+            if ($read -eq 0) { break }
+            $count += $read
+        }
+        if ($count -gt 65536) { throw 'Planning JSON exceeds the input bound.' }
+        $encoding = New-Object System.Text.UTF8Encoding ($false, $true)
+        $text = $encoding.GetString($buffer, 0, $count).TrimStart([char]0xFEFF)
+    } finally { $stream.Dispose() }
+    # ConvertFrom-Json may silently collapse repeated keys on Windows PowerShell.
+    # Bound all container nesting and inspect complete string tokens before parsing.
+    $objects = New-Object 'System.Collections.Generic.Stack[System.Collections.Generic.HashSet[string]]'
+    $containers = New-Object 'System.Collections.Generic.Stack[string]'
+    foreach ($token in [regex]::Matches($text, '"(?<raw>(?:[^"\\]|\\.)*)"|(?<open>[\{\[])|(?<close>[\}\]])')) {
+        if ($token.Groups['open'].Success) {
+            if ($containers.Count -ge 16) { throw 'Planning JSON nesting exceeds the input bound.' }
+            $containers.Push($token.Value)
+            if ($token.Value -ceq '{') {
+                $objects.Push((New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)))
+            }
+        } elseif ($token.Groups['close'].Success) {
+            if ($containers.Count -eq 0) { throw 'Invalid planning JSON container nesting.' }
+            $expected = if ($token.Value -ceq '}') { '{' } else { '[' }
+            if ($containers.Pop() -cne $expected) { throw 'Invalid planning JSON container nesting.' }
+            if ($token.Value -ceq '}') { $null = $objects.Pop() }
+        } else {
+            $following = $text.Substring($token.Index + $token.Length).TrimStart()
+            if ($following.StartsWith(':')) {
+                $key = $token.Groups['raw'].Value
+                if ($containers.Count -eq 0 -or $containers.Peek() -cne '{' -or
+                    $objects.Count -eq 0 -or $key.Contains('\') -or -not $objects.Peek().Add($key)) {
+                    throw 'Duplicate, escaped or misplaced planning JSON property.'
+                }
+            }
+        }
+    }
+    if ($objects.Count -ne 0 -or $containers.Count -ne 0) { throw 'Invalid planning JSON container nesting.' }
+    return ConvertFrom-Json -InputObject $text -ErrorAction Stop
+}
+
+function Test-LumaCanonicalRuntimeVersion {
+    param($Value)
+    if ($Value -isnot [string] -or $Value -notmatch '^(?:0|[1-9][0-9]{0,4})(?:\.(?:0|[1-9][0-9]{0,4})){3}$') {
+        return $false
+    }
+    foreach ($part in $Value.Split('.')) { if ([int]$part -gt 65535) { return $false } }
+    return $true
+}
+
+function Test-LumaStoragePlan {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)] $Observation, $Plan)
+    if ($null -eq $Plan) {
+        return [pscustomobject]@{ status='not-provided'; capacity_observation_passed=$false; allocation_reserved=$false }
+    }
+    $components = @('active_image_bytes', 'candidate_image_bytes', 'model_pack_bytes',
+        'state_migration_bytes', 'user_quota_bytes', 'backup_staging_bytes', 'recovery_reserve_bytes')
+    Assert-LumaClosedRecord $Plan (@('schema_version', 'storage_drive') + $components) 'Storage plan'
+    if ((ConvertTo-LumaUnsignedBytes $Plan.schema_version 'Storage schema') -ne 1) {
+        throw 'Unsupported storage planning schema.'
+    }
+    if ($Plan.storage_drive -isnot [string] -or $Plan.storage_drive -cnotmatch '^[A-Z]$' -or
+        $Observation.storage_drive -isnot [string] -or $Plan.storage_drive -cne $Observation.storage_drive) {
+        throw 'Storage plan must name the exact observed uppercase drive letter.'
+    }
+    $total = [uint64]0
+    $calculated = [ordered]@{}
+    foreach ($component in $components) {
+        $bytes = ConvertTo-LumaUnsignedBytes $Plan.$component $component
+        if ($bytes -gt ([uint64]::MaxValue - $total)) { throw 'Storage planning sum exceeds UInt64 capacity.' }
+        $total += $bytes
+        $calculated[$component] = $bytes
+    }
+    if ($calculated.candidate_image_bytes -eq 0 -or $calculated.user_quota_bytes -eq 0 -or
+        $calculated.recovery_reserve_bytes -eq 0) {
+        throw 'Candidate image, user quota and recovery reserve must each be positive.'
+    }
+    $free = ConvertTo-LumaUnsignedBytes $Observation.storage_free_bytes 'Observed storage free bytes'
+    $enough = $free -ge $total
+    [pscustomobject]@{ status=$(if ($enough) { 'capacity-observed' } else { 'insufficient-capacity' })
+        capacity_observation_passed=$enough; allocation_reserved=$false; storage_drive=$Plan.storage_drive
+        required_free_bytes=$total; observed_free_bytes=$free
+        shortfall_bytes=$(if ($enough) { [uint64]0 } else { $total - $free }); components=[pscustomobject]$calculated }
+}
+
+function Test-LumaReleasePolicy {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)] $Observation, $Policy)
+    if ($null -eq $Policy) {
+        return [pscustomobject]@{ status='not-provided'; tuple_matches_input=$false; policy_authenticated=$false; production_qualified=$false }
+    }
+    Assert-LumaClosedRecord $Policy @('schema_version', 'review_reference', 'tuples') 'Release comparison policy'
+    if ((ConvertTo-LumaUnsignedBytes $Policy.schema_version 'Release schema') -ne 1) {
+        throw 'Unsupported release comparison schema.'
+    }
+    if ($Policy.review_reference -isnot [string] -or $Policy.review_reference -notmatch '^[\x21-\x7e]{1,256}$' -or
+        $Policy.tuples -isnot [array] -or $Policy.tuples.Count -lt 1 -or $Policy.tuples.Count -gt 128) {
+        throw 'Release comparison requires a bounded review reference and 1 to 128 explicit tuples.'
+    }
+    $observedVersion = $null
+    if ($Observation.wsl_runtime.status -eq 'observed' -and $Observation.wsl_runtime.exit_code -eq 0 -and
+        $Observation.wsl_runtime.text -is [string] -and $Observation.wsl_runtime.text.Length -le 65536) {
+        $firstLine = @($Observation.wsl_runtime.text -split '\r?\n' | Where-Object { $_.Trim().Length -gt 0 } | Select-Object -First 1)
+        if ($firstLine.Count -eq 1 -and $firstLine[0] -match '^(?:WSL\s+(?:version|versione)|WSL-Version|Version\s+WSL)\s*:\s*(?<version>[0-9]{1,5}(?:\.[0-9]{1,5}){3})\s*$') {
+            $parsedVersion = $Matches.version
+            if (Test-LumaCanonicalRuntimeVersion $parsedVersion) { $observedVersion = $parsedVersion }
+        }
+    }
+    $observedBuild = ConvertTo-LumaUnsignedBytes $Observation.windows_build 'Observed Windows build'
+    if ($Observation.windows_edition -isnot [string]) { throw 'Observed Windows edition must be a string.' }
+    $seen = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
+    $matchesInput = $false
+    foreach ($tuple in $Policy.tuples) {
+        Assert-LumaClosedRecord $tuple @('windows_edition', 'windows_build', 'wsl_runtime_version') 'Release tuple'
+        $build = ConvertTo-LumaUnsignedBytes $tuple.windows_build 'Tuple Windows build'
+        if ($build -lt 22000 -or $build -gt [int]::MaxValue -or $tuple.windows_edition -isnot [string] -or
+            $tuple.windows_edition -cnotmatch '^[A-Za-z][A-Za-z0-9]{0,63}$' -or
+            -not (Test-LumaCanonicalRuntimeVersion $tuple.wsl_runtime_version)) {
+            throw 'Release tuples require exact Windows 11 build, edition identifier and four-part WSL runtime version.'
+        }
+        $identity = '{0}|{1}|{2}' -f $tuple.windows_edition, $build, $tuple.wsl_runtime_version
+        if (-not $seen.Add($identity)) { throw 'Duplicate release comparison tuple.' }
+        if ($Observation.windows_edition -ceq $tuple.windows_edition -and $observedBuild -eq $build -and
+            $null -ne $observedVersion -and $observedVersion -ceq $tuple.wsl_runtime_version) { $matchesInput = $true }
+    }
+    [pscustomobject]@{ status=$(if ($matchesInput) { 'matches-reviewed-input' } else { 'unsupported-or-unobserved-tuple' })
+        tuple_matches_input=$matchesInput; review_reference=$Policy.review_reference
+        observed_windows_edition=$Observation.windows_edition; observed_windows_build=$observedBuild
+        observed_wsl_runtime_version=$observedVersion; policy_authenticated=$false; production_qualified=$false }
+}
+
 function ConvertFrom-LumaWslList {
     [CmdletBinding()]
     param([AllowEmptyString()][string] $Text, [int] $ExitCode)
@@ -98,6 +263,8 @@ function Get-LumaWindowsObservation {
     $os = Get-CimInstance Win32_OperatingSystem -ErrorAction Stop
     $system = Get-CimInstance Win32_ComputerSystem -ErrorAction Stop
     $processors = @(Get-CimInstance Win32_Processor -ErrorAction Stop)
+    $edition = Get-ItemProperty -LiteralPath 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion' `
+        -Name EditionID -ErrorAction Stop
     $version = Invoke-LumaWslObservation version
     $list = Invoke-LumaWslObservation list
     $distributions = ConvertFrom-LumaWslList -Text $list.text -ExitCode $list.exit_code
@@ -106,6 +273,7 @@ function Get-LumaWindowsObservation {
         schema_version = 1
         observed_at_utc = [DateTime]::UtcNow.ToString('o')
         windows_caption = [string]$os.Caption
+        windows_edition = [string]$edition.EditionID
         windows_version = [string]$os.Version
         windows_build = [int]$os.BuildNumber
         windows_product_type = [int]$os.ProductType
@@ -130,7 +298,8 @@ function Test-LumaWindowsPreflight {
     [CmdletBinding()]
     param([Parameter(Mandatory)] $Observation,
         [ValidatePattern('^LumaOS-[A-Za-z0-9-]{1,48}$')][string] $DistributionName = 'LumaOS-Dev',
-        [ValidateRange(1,1024)][int] $GuestMemoryGiB = 12)
+        [ValidateRange(1,1024)][int] $GuestMemoryGiB = 12,
+        $StoragePlan = $null, $ReleasePolicy = $null)
     if ($Observation.schema_version -ne 1) { throw 'Unsupported Windows observation schema.' }
     $blockers = New-Object 'System.Collections.Generic.List[string]'
     if ($Observation.windows_product_type -ne 1 -or $Observation.windows_build -lt 22000 -or
@@ -161,16 +330,27 @@ function Test-LumaWindowsPreflight {
         $Observation.available_memory_bytes -lt ($reserve + $requested)) {
         $blockers.Add('Observed available memory does not cover the proposed guest plus 8-GiB host reserve.')
     }
+    $storage = Test-LumaStoragePlan -Observation $Observation -Plan $StoragePlan
+    $release = Test-LumaReleasePolicy -Observation $Observation -Policy $ReleasePolicy
+    $planningBlockers = New-Object 'System.Collections.Generic.List[string]'
+    if (-not $storage.capacity_observation_passed) {
+        $planningBlockers.Add('An explicit complete storage budget must fit the observed selected-drive free capacity.')
+    }
+    if (-not $release.tuple_matches_input) {
+        $planningBlockers.Add('Observed Windows edition/build and WSL runtime must match an explicit reviewed comparison tuple.')
+    }
     [pscustomobject]@{
         schema_version = 1; profile = 'W'; proposed_distribution = $DistributionName
         development_observations_passed = ($blockers.Count -eq 0)
         blockers = @($blockers.ToArray())
+        planning_observations_passed = ($blockers.Count -eq 0 -and $planningBlockers.Count -eq 0)
+        planning_blockers = @($planningBlockers.ToArray()); storage_planning = $storage; release_comparison = $release
         guest_memory_requested_bytes = $requested; host_reserve_bytes = $reserve
         guest_memory_reserved = $false; global_wsl_settings_changed = $false
         existing_distributions_changed = $false; product_installation_admitted = $false
         executable_skills_enabled = $false; production_qualified = $false; gate_closing = $false
-        pending_qualification = @('Supported exact Windows/WSL release policy',
-            'Calculated active/candidate/model/state/backup/recovery storage',
+        pending_qualification = @('Authenticated production release policy and actual per-tuple qualification',
+            'Fresh storage recheck and exclusive allocation at installation',
             'Host encryption and managed-device policy', 'Effective guest limits and other WSL workloads',
             'Authenticated bridge and Windows ACL broker', 'Enforcing worker confinement',
             'Actual compact inference', 'Hyper-V Gen2 desktop and recovery proof')
@@ -178,4 +358,5 @@ function Test-LumaWindowsPreflight {
     }
 }
 
-Export-ModuleMember -Function ConvertFrom-LumaWslList, Get-LumaWindowsObservation, Test-LumaWindowsPreflight
+Export-ModuleMember -Function ConvertFrom-LumaWslList, Get-LumaWindowsObservation, Test-LumaWindowsPreflight,
+    Test-LumaStoragePlan, Test-LumaReleasePolicy, Read-LumaPlanningJson

@@ -62,6 +62,58 @@ class ContentContractCli(unittest.TestCase):
         self.assertEqual(result['validated'], version)
         self.assertEqual(version['receipt']['binding'], self.binding())
 
+    def test_spreadsheet_recalculates_exact_decimals_from_reopenable_source(self):
+        source = dict(schema_version=1, rows=[[
+            dict(kind='number', value='0.1'), dict(kind='number', value='0.2'),
+            dict(kind='formula', expression=dict(op='binary', operator='add',
+                left=dict(op='cell', row=0, column=0), right=dict(op='cell', row=0, column=1))) ]])
+        output = self.invoke('spreadsheet', source)
+        calculation = output['calculation']
+        self.assertEqual(calculation['canonical_csv'], '0.1,0.2,0.3\n')
+        self.assertEqual(calculation['csv_sha256'], hashlib.sha256(b'0.1,0.2,0.3\n').hexdigest())
+        self.assertEqual(output, self.invoke('spreadsheet', json.loads(calculation['canonical_source'])))
+        version = self.capture(calculation['canonical_source'], 'json')
+        stored_source = json.loads(version['canonical_envelope'])['content']
+        self.assertEqual(calculation, self.invoke('spreadsheet', json.loads(stored_source))['calculation'])
+        self.assertIs(output['source_retained'], False)
+        self.assertIs(output['csv_formula_text_executed'], False)
+
+    def test_spreadsheet_cycles_rounding_and_unknown_execution_are_refused(self):
+        for expression in [dict(op='cell', row=0, column=0),
+                dict(op='binary', operator='divide', left=dict(op='number', value='1'),
+                    right=dict(op='number', value='3')),
+                dict(op='shell', command='id')]:
+            self.invoke('spreadsheet', dict(schema_version=1,
+                rows=[[dict(kind='formula', expression=expression)]]), valid=False)
+
+    def test_spreadsheet_csv_formula_looking_text_stays_inert(self):
+        output = self.invoke('spreadsheet', dict(schema_version=1,
+            rows=[[dict(kind='text', value='=IMPORTDATA("https://example.invalid")')]]))
+        self.assertIs(output['csv_formula_text_executed'], False)
+        self.assertEqual(output['calculation']['values'][0][0],
+            dict(kind='text', value='=IMPORTDATA("https://example.invalid")'))
+        self.assertEqual(output['calculation']['canonical_csv'],
+            '"=IMPORTDATA(""https://example.invalid"")"\n')
+
+    def test_native_read_queries_are_inert_canonical_requests_not_apply_authority(self):
+        reference = dict(artifact_id='document-one', version=1,
+            content_sha256='a' * 64, receipt_sha256='b' * 64)
+        for operation in [dict(kind='current', artifact_id='document-one'),
+                dict(kind='historical', expected=reference),
+                dict(kind='page', expected=reference, offset=0, bytes=16384),
+                dict(kind='search', query='fox blue', limit=32)]:
+            request = dict(schema_version=1, login='alice', binding=self.binding(), operation=operation)
+            output = self.invoke('native-request', request)
+            self.assertIs(output['private_content_read'], False)
+            self.assertEqual(json.loads(output['canonical_request']), request)
+            self.assertEqual(output['request_sha256'],
+                hashlib.sha256(output['canonical_request'].encode()).hexdigest())
+        for operation in [dict(kind='page', expected=reference, offset=0, bytes=16385),
+                dict(kind='search', query='fox', limit=33),
+                dict(kind='search', query='https://example.invalid', limit=1)]:
+            self.invoke('native-request', dict(schema_version=1, login='alice',
+                binding=self.binding(), operation=operation), valid=False)
+
     def test_json_keys_are_canonical_and_duplicate_keys_are_refused(self):
         version = self.capture('{"z":2,"a":1}', 'json')
         self.assertEqual(json.loads(version['canonical_envelope'])['content'], '{"a":1,"z":2}')

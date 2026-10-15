@@ -19,7 +19,12 @@ use std::fs::File;
 use std::os::fd::AsRawFd;
 use std::path::Path;
 
+mod queries;
 mod storage;
+pub use queries::{
+    canonical_search_query, SearchHit, SearchResults, TermMatch, MAX_SEARCH_QUERY_BYTES,
+    MAX_SEARCH_RESPONSE_BYTES, MAX_SEARCH_RESULTS, MAX_SEARCH_TERMS, MAX_SEARCH_TERM_BYTES,
+};
 
 pub type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 pub const MAX_REPOSITORY_BYTES: u64 = 64 * 1024 * 1024;

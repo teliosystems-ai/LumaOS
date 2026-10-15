@@ -19,8 +19,8 @@ authorized these named new tracks separately.
 | Shared control | Native account lifecycle, finite grants, protected UTC, resource generations, workflow journal and recovery | Integrate each new effect through those boundaries; no Python MVP or UI success flag substitutes for native enforcement |
 | Artifacts | Native ext4/WAL catalogs, immutable invoice versions, per-principal domains, retention/export and recovery | General content types, governed discovery, semantic collections/indexes, external-edit conflicts and complete backup/restore journeys |
 | User interface | Model-independent reference workspace and candidate native GNOME/Wayland edition | Accessible conversational/manual shell, progress/cancellation, grounded references and qualified capture/input |
-| Content and adapters | Deterministic invoice calculation and fixed generated KVM runtime | Editable spreadsheet/document/diagram/animation engines, named LibreOffice/browser adapters, exact output/build/test receipts |
-| Windows development | Source-run WSL launchers, native Windows/WSL model smoke and platform observations | Separate signed product distribution, authenticated companion/file bridge, SID mapping, ACL-aware broker, WSL-specific lifecycle and confinement |
+| Content and adapters | Deterministic invoice and typed exact-decimal spreadsheet calculation, editable JSON/CSV sources and fixed generated KVM runtime | Document/diagram/animation engines, named LibreOffice/browser adapters, governed engine/workflow completion and exact output/build/test receipts |
+| Windows development | Source-run WSL launchers, model smoke, platform/package observations and explicit ordinary-user scoped-file reads | Separate signed product distribution, authenticated companion/file bridge, SID mapping, ACL-aware broker, WSL-specific lifecycle and confinement |
 | Windows desktop | No qualified complete VM product proof | Hyper-V Gen2 image/template, identity, storage, resource limits and recovery proof; no acceleration claim from display availability |
 
 ## Initial implementation checkpoint
@@ -171,9 +171,76 @@ current head back; its entire operation metadata and source must match.
 This is a governed laboratory storage adapter, not verified workflow execution.
 Caller-supplied workflow provenance is descriptive (`workflow_executed:false`,
 `provenance_authority:false`). Production catalog-head/rollback protection,
-workflow completion linkage, discovery, retention/export and recovery journeys
+workflow completion linkage, semantic collections, retention/export and recovery journeys
 remain development work. Actual installed PAM/broker/AppArmor/cgroup behavior
 also needs separately identified image qualification.
+
+### Governed reads and owner local search
+
+Schema-1 native requests now support `current`, `historical`, `page` and `search`
+operations through `content-owned-inspection-review` and `content-owned-review`.
+They use a dedicated `native-content-query-v1` finite Read scope. `current` and
+`historical` return immutable version metadata; `historical` requires every field
+of an exact published reference, never a retained conflict candidate. `page`
+requires that reference, a byte offset and a count from 1 through 16,384. It
+returns a hex slice with the complete envelope's byte count and SHA256, next
+offset and explicit EOF. Clients must assemble and hash the complete envelope
+before reopening it. Each page requires independently current authorization;
+a prior reference, hash or cursor is not permission.
+
+Search reconstructs all verified outcomes, then scans only the current owner's
+latest published versions. It matches every query term as an ASCII alphanumeric
+word, with case/order/ASCII-whitespace normalization and deterministic artifact-ID
+ordering. Byte offsets refer to canonical content, not the imported original.
+Queries are bounded to 256 bytes and eight terms; the native path returns at most
+32 hits within its finite 64-KiB response. No index is persisted or trusted, no
+other owner's domain is enumerated, and these are not semantic results.
+
+Query workers mount the store read-only; a missing or damaged repository is
+refused rather than initialized or repaired. Delivery preflights its destination
+before private reads/effects, uses nonblocking pipes/sockets/terminals, and
+rechecks the original principal, grants, protected UTC and exact broker output
+generation at every bounded write and retry. Direct regular-file/device output
+is refused; authorized export is a separate unfinished workflow. Already
+delivered bytes cannot be recalled. Laboratory and production fences are
+unchanged.
+
+Delivery never changes the caller's inherited open-file-description flags.
+Pipes use private nonblocking staging pipes and per-call nonblocking transfer;
+sockets use per-call nonblocking sends. A terminal needs a separately opened,
+identity-verified descriptor, and insufficient DAC/AppArmor access refuses before
+private reads or effects without adding privileges. This avoids relying on
+cleanup after forced process termination. See the Linux documentation for
+[shared descriptor flags](https://man7.org/linux/man-pages/man2/dup.2.html),
+[nonblocking socket sends](https://man7.org/linux/man-pages/man2/send.2.html) and
+[pipe transfer semantics](https://man7.org/linux/man-pages/man2/splice.2.html).
+
+### Typed spreadsheet source and recalculation
+
+`content-contract-spreadsheet` accepts a bounded schema-1 JSON source with 1 to
+64 rectangular rows and 1 to 32 columns. Cells are explicitly blank, text,
+decimal numbers or typed expression trees. Supported expressions are numeric
+literals, cell references, negation, addition, subtraction, multiplication,
+division and rectangular sum/minimum/maximum/average. References are zero-based.
+The engine has no functions for network access, files, scripts, clocks or random
+values, and never interprets text beginning with `=` as an expression.
+
+Decimal inputs have at most six fractional places and magnitude at most 10^24.
+Arithmetic is checked and exact: cycles, zero divisors, overflow and results
+requiring rounding are refused. Blank numeric references mean zero; aggregate
+functions skip blanks and refuse text. Sum of an all-blank range is zero; its
+minimum, maximum and average are undefined and refused. Wider checked range
+accumulators allow valid cancellation and averaging at the magnitude bound.
+Expression depth, total nodes, uncached reference recursion and evaluation work
+are bounded independently.
+
+The result binds canonical editable JSON source and canonical CSV by separate
+SHA256 digests and includes typed computed values. Source reopened as a generic
+JSON artifact recalculates to the same output. This is a data engine, not a
+governed execution receipt or native publication command. CSV formula-looking
+text remains inert inside Luma but is not sanitized for automatic interpretation
+by external spreadsheet applications; qualified Office adapters/export remain
+separate work.
 
 ## Windows detached signature primitive
 
@@ -198,6 +265,32 @@ scratch, Linux ext4 build storage and evidence stay on D, while these security
 tests use only tiny ephemeral metadata in the repository's NTFS `.luma` directory.
 No existing directory ACL is changed and cleanup never recursively deletes an
 unverified path. These primitives do not import or update a WSL distribution.
+
+### Explicit Windows scoped file reads
+
+`inspect-enrolled-file.ps1` accepts an explicit unsigned enrollment naming the
+actual ordinary interactive Windows SID, an exact local NTFS directory and
+relative file, a byte cap up to 1 MiB and the expected source SHA256. A review
+hash binds all fields; reading requires its exact `read-exact-file:HASH`
+confirmation. This input is not saved enrollment, authenticated custody or a
+product grant. No folder is enumerated and no Linux identity is inferred.
+
+The reader checks the actual non-elevated primary token, refuses impersonation
+and enabled bypass privileges, pins ancestor/file handles, repeatedly checks
+ordinary-caller ACL access, and verifies stable identity and complete bytes
+twice before returning hex data. Traversal/device/alternate-stream paths,
+reparse points, hard links, offline and observed cloud-placeholder attributes
+are refused. The same handle discipline captures the bounded enrollment input.
+The implementation follows [Windows handle sharing and open flags](https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-createfilew)
+and [file attribute definitions](https://learn.microsoft.com/en-us/windows/win32/fileio/file-attribute-constants).
+
+Its five-second observation window is checked between operations and bounds
+asynchronous reads; synchronous kernel opens, filters and disposal are not a
+hard wall-clock guarantee. Cloud-provider no-hydration behavior still needs
+provider-specific qualification. Token/ACL checks qualify this standalone local
+read, not an authenticated guest bridge, persistent enrollment or automatic
+background ingestion. No existing ACL, account, distribution or host policy is
+changed.
 
 ## Windows package content validation (structural foundation)
 
@@ -224,7 +317,7 @@ Requirement mapping remains partial:
 | Requirement | Development contribution | Still required for acceptance |
 | --- | --- | --- |
 | A063, T33 | Immutable generic content/storage, laboratory governed publication and managed-intent retention, plus lexical invoice index rebuild | Production head/rollback and recovery integration, generic discovery, collections and installed recovery/rebuild tests |
-| A060, T20 | Current owner-generation and Read-grant checks during verified invoice indexing and bounded result delivery | General per-result access policy, semantic search and installed revocation qualification |
+| A060, T20 | Current owner-generation/Read grants for verified invoice and generic-content search, exact historical pages and generation-fenced delivery | General per-result access policy, semantic collections/search and installed revocation qualification |
 | W005, V01 | Read-only platform observations, calculated storage and exact supplied release-tuple comparison | Authenticated release policy, encryption and enterprise policy checks |
 | W006, V01/V03 | Collision refusal, unchanged distributions, normalized package validation and a lab detached-signature primitive | Qualified custody/dependencies/time/revocation, authenticated populated root filesystem, safe import/rollback and first-user/Admin setup |
 | W009, V04/T13 | Observed free-memory planning check with an explicit Windows reserve | Effective guest limits, other guest workloads, measured host coexistence and installed worker cgroups |
@@ -236,8 +329,10 @@ No requirement in this table is marked complete by these development slices.
    Extend owner-domain discovery
    with collections and per-result access policy before embeddings or automatic
    organization; pure data inspection is not storage publication.
-2. Build the shared accessible manual/conversational shell and deterministic
-   editable-content engines on those contracts. Add adapters and capture only
+2. Build the shared accessible manual/conversational shell and remaining
+   document/diagram/animation engines on those contracts. Join the typed
+   spreadsheet engine to governed workflow completion and UI recalculation.
+   Add adapters and capture only
    with explicit permissions and real completion receipts.
 3. Join the purpose-separated Windows signature primitive to authenticated
    custody, protected time/revocation and a populated uniquely named WSL root
@@ -252,6 +347,31 @@ No requirement in this table is marked complete by these development slices.
 5. Run inherited regression and adversarial tests, then the actual G3 user
    journeys/held-out quality corpus and GWIN0 V-series proof on declared tuples.
    Keep GWIN1/GWIN2 dependencies and native G2 acceptance separate.
+
+### Remaining development and qualification
+
+The checkpoints above do not complete the following implementation work:
+
+- Production generic-content head/rollback authority, damaged-authority recovery,
+  governed workflow execution linkage, retention/export and clean-machine backup/restore.
+- Semantic collections/indexes and per-result access policy beyond the current
+  owner's lexical search; usable UI integration for paged reads and recalculation.
+- Accessible manual/conversational shell, progress/cancellation, grounded references,
+  explicit speech/image/screen/video capture and visible capture controls.
+- Deterministic document, diagram and animation engines, named/versioned
+  LibreOffice/browser and allowlisted hardware adapters with actual receipts.
+- Authenticated Windows companion, trusted dependency/custody/time/revocation
+  delivery, populated runnable WSL package, SID/principal bridge and persistent
+  scoped ingestion with product grants.
+- Windows import/update/rollback, effective resources/confinement, manual/model-disabled
+  controls, real compact inference and the complete separate Hyper-V desktop proof.
+
+Installed/native and declared Windows-tuple qualification remain separate from
+that development: loaded confinement, revocation and recovery journeys;
+two-user/ACL and cloud-provider tests; real inference, accessibility and capture;
+host coexistence and Hyper-V behavior; the held-out quality corpus; and final
+image/native acceptance. A software or structural test alone closes none of
+those qualification gates.
 
 ## Verification and host safety
 
@@ -361,3 +481,35 @@ The [governed-content record](gates/g3/governed_content_2026-10-15.json) and
 source/result hashes, execution limits and remaining development. These are
 laboratory development checkpoints, not complete G3/GWIN0 acceptance. No new
 image is claimed and the delivered G2 sequence-14 image remains unchanged.
+
+### Governed queries and spreadsheet verification
+
+The full offline workspace sweep passes 1,134 Rust tests, with the same 42
+existing fixture-only exclusions. A subsequent delivery review replaced shared
+descriptor-flag changes with per-call socket flags, private pipe staging and
+an independently opened terminal descriptor. The final source passes
+warnings-denied all-target compilation and all 45 affected Rust tests,
+including real backpressure, authorization revocation, forced termination and
+delivery through an inherited root-owned pipe as UID 65534. All other Rust
+inputs are byte-identical to the full-sweep snapshot. This is composed
+verification, not a claim that the complete workspace suite ran on the final
+snapshot; the two Rust totals are not additive.
+
+The final snapshot also passes 19 actual unprivileged CLI cases, all 469
+native-source tests without skips, OS/model public authentication (13 each),
+UTC authentication (8), policy parses (19), disposable PAM (6) and resource
+software-TPM cases (4). The initial failed search-response fixture is retained:
+it incorrectly expected truncation below the response budget. The corrected
+fixture proves its complete serialized response exceeds the unchanged budget
+before checking truncation. No production bound or assertion was weakened.
+
+The ordinary-user Windows scoped-read suite passes 85 assertions, including
+actual ACL revocation while a file remains pinned and successful read after
+restoring the owned fixture ACL. Package and preflight regressions pass 162
+and 154 assertions respectively. The standalone read is not yet an
+authenticated Windows/Linux product bridge.
+
+The [query and spreadsheet record](gates/g3/query_spreadsheet_2026-10-15.json)
+and [Windows scoped-read record](gates/gwin0/scoped_read_2026-10-15.json) bind
+the exact snapshots, results and remaining work. G3/GWIN0 remain open for the development and
+qualification listed above; the frozen G2 image remains unchanged.

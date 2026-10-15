@@ -237,7 +237,11 @@ pub(crate) fn arguments(target: &Path, profile: &str, action: &str) -> Result<Ve
             args.push("--property=DeviceAllow=/dev/kvm rw".into());
         } else {
             crate::content_governed::source_digest(profile)?;
-            args.push("--property=ReadWritePaths=/var/lib/luma-os/content-store".into());
+            args.push(if crate::content_governed::query_profile(profile)? {
+                "--property=ReadOnlyPaths=/var/lib/luma-os/content-store".into()
+            } else {
+                "--property=ReadWritePaths=/var/lib/luma-os/content-store".into()
+            });
         }
         for property in [
             "RestrictAddressFamilies=AF_UNIX",
@@ -603,6 +607,26 @@ mod tests {
         );
         assert!(arguments(Path::new("/var"), "qwen3-4b-q4-k-m", "shell").is_err());
     }
+    #[test]
+    fn content_query_launch_never_makes_the_private_store_writable() {
+        let digest = "a".repeat(64);
+        let profile = format!("content-v1-query-7-{digest}-{digest}");
+        let args = arguments(Path::new("/var"), &profile, "content").unwrap();
+        assert!(args
+            .iter()
+            .any(|arg| arg == "--property=ReadOnlyPaths=/var/lib/luma-os/content-store"));
+        assert!(!args
+            .iter()
+            .any(|arg| arg.starts_with("--property=ReadWritePaths=")));
+        assert!(args
+            .iter()
+            .any(|arg| arg == "--property=CapabilityBoundingSet="));
+        assert!(args
+            .iter()
+            .any(|arg| arg == "--property=RestrictAddressFamilies=AF_UNIX"));
+        assert!(arguments(Path::new("/tmp"), &profile, "content").is_err());
+    }
+
     #[test]
     fn generated_launch_alone_exposes_fixed_kvm_device_and_setpcap() {
         let profile = format!("generated-v1-{}", "a".repeat(64));

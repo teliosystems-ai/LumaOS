@@ -66,6 +66,12 @@ fn process(command: &str, bytes: &[u8]) -> Result<Value> {
         return Err("editable-content request exceeds fixed transport bound".into());
     }
     let result = match command {
+        "content-contract-spreadsheet" => {
+            let calculation = luma_content::spreadsheet::calculate(bytes)?;
+            json!({"operation":"spreadsheet","calculation":calculation,
+                "typed_expressions_evaluated":true,"csv_formula_text_executed":false,
+                "source_retained":false})
+        }
         "content-contract-native-request" => {
             let canonical = crate::content_governed::canonical_request(bytes)?;
             json!({"operation":"native-request","request_sha256":luma_content::sha256(&canonical),

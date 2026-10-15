@@ -90,6 +90,30 @@ class G3IntegrationTests(unittest.TestCase):
         self.assertIn('/run/luma-granted-client/requests/*/content.json r,', broker)
         self.assertNotIn('/var/lib/luma-os/content-store/** rw', broker)
 
+    def test_query_workers_are_read_only_and_delivery_rechecks_live_generation(self):
+        acquisition = (RUST / 'acquisition.rs').read_text()
+        self.assertIn('crate::content_governed::query_profile(profile)?', acquisition)
+        self.assertIn('ReadOnlyPaths=/var/lib/luma-os/content-store', acquisition)
+        governed = (RUST / 'content_governed.rs').read_text()
+        for required in ('native-content-query-v1', 'MAX_PAGE_BYTES', 'slice_hex',
+                         'repository.historical', 'repository.search', 'NonblockingOutput',
+                         'check_response(&response, &read_profile)', 'libc::O_NONBLOCK'):
+            self.assertIn(required, governed)
+        self.assertNotIn('SessionPurpose::Export', governed)
+
+    def test_spreadsheet_is_a_data_only_command_and_never_a_confined_effect(self):
+        main = (RUST / 'main.rs').read_text()
+        allowed = main.split('if confined_client\n', 1)[1].split('if confined_client {', 1)[0]
+        self.assertNotIn('content-contract-spreadsheet', allowed)
+        source = (RUST / 'content_contract.rs').read_text()
+        self.assertIn('luma_content::spreadsheet::calculate(bytes)?', source)
+        self.assertIn('"csv_formula_text_executed":false', source)
+        engine = (ROOT / 'rust/luma-content/src/spreadsheet.rs').read_text()
+        self.assertIn('MAX_EVALUATION_STEPS', engine)
+        self.assertIn('MAX_REFERENCE_DEPTH', engine)
+        self.assertNotIn('std::process', engine)
+        self.assertNotIn('std::fs', engine)
+
 
 if __name__ == '__main__':
     unittest.main()

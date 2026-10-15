@@ -10,6 +10,7 @@ use sha2::{Digest, Sha256};
 use std::fmt;
 
 mod canonical;
+pub mod spreadsheet;
 pub mod table;
 
 pub const MAX_CONTENT_BYTES: usize = 1024 * 1024;

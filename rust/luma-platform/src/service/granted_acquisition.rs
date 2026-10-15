@@ -77,6 +77,8 @@ impl Authority {
             None
         } else if request.profile.starts_with("qa-v1-") {
             None
+        } else if request.profile.starts_with("content-v1-") {
+            None
         } else {
             Some(crate::model::pack_completion(
                 &crate::model::public_profile(&request.profile)?,
@@ -98,7 +100,10 @@ impl Authority {
     pub(crate) fn check(&mut self) -> Result<()> {
         self.admission.acquisition_liveness()?;
         let now = crate::resource_manager::now()?;
-        if now < self.next_check {
+        // Content storage calls renew at every bounded I/O/commit checkpoint.
+        // It requires a fresh original PAM/grant/UTC proof there, not the
+        // model-controller's permitted 500ms cached sampling window.
+        if !self.profile.starts_with("content-v1-") && now < self.next_check {
             return Ok(());
         }
         self.admission.check()?;
@@ -139,6 +144,8 @@ pub(crate) fn usage(profile: &str) -> Result<Use> {
         crate::generated_runtime::acquisition_usage(profile)
     } else if profile.starts_with("qa-v1-") {
         crate::model::qa::usage(profile)
+    } else if profile.starts_with("content-v1-") {
+        crate::content_governed::acquisition_usage(profile)
     } else {
         crate::model::pack_import_usage(profile)
     }
@@ -216,6 +223,29 @@ pub(crate) fn run_qa<T: Send>(
         controller(&mut || {
             if cancel.load(Ordering::Acquire) {
                 Err("original QA Admin/UTC/grant connection fenced".into())
+            } else {
+                Ok(())
+            }
+        })
+    })
+}
+
+pub(crate) fn run_content<T: Send>(
+    profile: &str,
+    usage: &Use,
+    boundary: &mut crate::admin_governance::GrantBoundary<'_>,
+    controller: impl FnOnce(&mut dyn FnMut() -> Result<()>) -> Result<T> + Send,
+) -> Result<T> {
+    crate::content_governed::source_digest(profile)?;
+    if boundary.session_purpose() != crate::authentication::SessionPurpose::Standard
+        || usage != &crate::content_governed::acquisition_usage(profile)?
+    {
+        return Err("content controller cannot borrow another purpose or finite scope".into());
+    }
+    run_controller(profile, usage, boundary, move |cancel| {
+        controller(&mut || {
+            if cancel.load(Ordering::Acquire) {
+                Err("original content principal fenced".into())
             } else {
                 Ok(())
             }

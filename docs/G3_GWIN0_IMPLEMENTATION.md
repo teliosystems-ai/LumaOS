@@ -86,9 +86,8 @@ RFC8785.
 The real `luma-platform content-contract-capture`, `content-contract-reopen`
 and `content-contract-compare` commands accept bounded schema-1 JSON on stdin
 without root. They return inert data, explicitly without authenticated
-ownership, grants, committed storage or certification. Generic content
-publication into the protected catalog still needs finite write authority,
-resource leases and transactional integration. These commands do not open
+ownership, grants, committed storage or certification. They are separate from
+the laboratory governed publication commands described below. These commands do not open
 files, launch Office adapters or execute CSV formulas.
 
 Windows planning now accepts a closed seven-component storage budget: active
@@ -133,12 +132,74 @@ matching preparations, or refuse and preserve mismatching partial bytes.
 
 The storage API requires an explicit caller-supplied authorization and resource
 boundary before private I/O and between bounded reads, writes and commit steps.
-It supplies no default authority implementation. Product use still requires the
-native adapter that joins actual finite Read/write grants, current principal,
-protected UTC and broker resource leases. No generic product publication command
-is enabled by this library, and its journal is not TPM rollback protection.
+It supplies no default authority implementation. The native laboratory adapter
+now joins finite Read/effect grants, current principal, protected UTC and broker
+resource leases. Production admission still requires catalog head/rollback and
+recovery integration; this library's journal is not TPM rollback protection.
 
-## Windows package content validation
+## Governed laboratory publication and managed edit retention
+
+The next native slice adds three commands through the existing `granted-run`
+launcher: `content-owned-inspection-review LOGIN REQUEST`,
+`content-owned-review LOGIN READ-GRANT REQUEST`, and
+`content-owned-apply LOGIN READ-GRANT EFFECT-GRANT APPROVAL REQUEST`.
+`REQUEST` is an exact canonical schema-1 JSON file, prepared without authority
+by `content-contract-native-request`. The first command returns the exact Read
+scope without opening private content. Review uses that grant to inspect the
+current owner-generation store and returns the exact Read/effect pair and
+`write:SHA256` or `retain:SHA256` approval. Apply rechecks the same proposal under
+both independently admitted grants; approval text is never authority by itself.
+
+Capture, external replacement and typed managed table edits use the actual
+original PAM client's principal/generation, protected UTC, finite grants and
+broker acquisition lease. Both grants remain checked together. Every content
+renewal/checkpoint requires a fresh broker challenge rather than the model
+controller's 500-ms sampling cache. The resource worker has no capabilities,
+network or TPM access. The confined client cannot read the private store; sealed
+request/output memfds and a fixed staged request path cross the worker boundary.
+These commands require an installed **laboratory** image, including after Admin
+bootstrap. Production images refuse this beta path.
+
+Managed edits retain the exact canonical intent as `source.bin` in schema-2
+outcomes and independently bind the resulting canonical CSV version. History
+replays the typed engine against its recorded base; stale positions are never
+interpreted against changed content. Conflicts and no-ops retain intent without
+advancing versions. Existing schema-1 source records remain byte-compatible.
+An exact old request can be acknowledged without republishing or rolling the
+current head back; its entire operation metadata and source must match.
+
+This is a governed laboratory storage adapter, not verified workflow execution.
+Caller-supplied workflow provenance is descriptive (`workflow_executed:false`,
+`provenance_authority:false`). Production catalog-head/rollback protection,
+workflow completion linkage, discovery, retention/export and recovery journeys
+remain development work. Actual installed PAM/broker/AppArmor/cgroup behavior
+also needs separately identified image qualification.
+
+## Windows detached signature primitive
+
+`verify-package-signature.ps1` joins the normalized package inspector to a
+purpose-separated Ed25519 detached signature over the exact manifest. It requires
+an independently supplied, SHA256-pinned laboratory public anchor and an exact
+operator-selected, SHA256-pinned OpenSSL executable. No PATH lookup, production
+anchor provisioning or signer private key is part of verification. Anchor bounds
+are structurally checked, not compared with untrusted host wall time.
+
+Successful output establishes only `cryptographic_signature_valid:true`.
+Custody, verifier dependency authentication, protected UTC, current validity,
+revocation, package authentication and installation/production admission all
+remain false. In particular, pinning the executable does not qualify its DLLs
+or the host runtime. See the [Windows commands](../packaging/windows/README.md)
+for the signature format and separate compiler/security scratch roots.
+
+Windows signature scratch is atomically private, handle-verified and pinned
+against directory rename/delete. Volumes without persistent ACLs are refused
+before scratch creation. This host's D volume is exFAT: bulk archives, compiler
+scratch, Linux ext4 build storage and evidence stay on D, while these security
+tests use only tiny ephemeral metadata in the repository's NTFS `.luma` directory.
+No existing directory ACL is changed and cleanup never recursively deletes an
+unverified path. These primitives do not import or update a WSL distribution.
+
+## Windows package content validation (structural foundation)
 
 `packaging/windows/validate-package.ps1` inspects a separate manifest and
 uncompressed POSIX USTAR root filesystem without extraction or distribution
@@ -162,26 +223,25 @@ Requirement mapping remains partial:
 
 | Requirement | Development contribution | Still required for acceptance |
 | --- | --- | --- |
-| A063, T33 | Immutable generic content/storage APIs and disposable lexical index rebuild from verified current invoice versions | Governed generic publication and discovery, collections and installed recovery/rebuild tests |
+| A063, T33 | Immutable generic content/storage, laboratory governed publication and managed-intent retention, plus lexical invoice index rebuild | Production head/rollback and recovery integration, generic discovery, collections and installed recovery/rebuild tests |
 | A060, T20 | Current owner-generation and Read-grant checks during verified invoice indexing and bounded result delivery | General per-result access policy, semantic search and installed revocation qualification |
 | W005, V01 | Read-only platform observations, calculated storage and exact supplied release-tuple comparison | Authenticated release policy, encryption and enterprise policy checks |
-| W006, V01/V03 | Collision refusal, unchanged existing distributions and read-only normalized package validation | Authenticated populated root filesystem, safe import/rollback and explicit first-user/Admin setup |
+| W006, V01/V03 | Collision refusal, unchanged distributions, normalized package validation and a lab detached-signature primitive | Qualified custody/dependencies/time/revocation, authenticated populated root filesystem, safe import/rollback and first-user/Admin setup |
 | W009, V04/T13 | Observed free-memory planning check with an explicit Windows reserve | Effective guest limits, other guest workloads, measured host coexistence and installed worker cgroups |
 
 No requirement in this table is marked complete by these development slices.
 
-1. Publish the shared immutable content/version contracts through governed
-   catalog transactions, with finite write grants, resource admission and
-   durable external-edit conflict retention. Connect the new storage library to
-   actual native authority and resource leases; library boundary callbacks alone
-   do not close this work. Extend owner-domain discovery
+1. Finish production catalog head/rollback, recovery, retention/export and
+   workflow linkage for the laboratory governed content adapter described above.
+   Extend owner-domain discovery
    with collections and per-result access policy before embeddings or automatic
    organization; pure data inspection is not storage publication.
 2. Build the shared accessible manual/conversational shell and deterministic
    editable-content engines on those contracts. Add adapters and capture only
    with explicit permissions and real completion receipts.
-3. Build purpose-separated signed Windows packaging and a uniquely named WSL
-   root filesystem using the new content validator. Preserve existing
+3. Join the purpose-separated Windows signature primitive to authenticated
+   custody, protected time/revocation and a populated uniquely named WSL root
+   filesystem. Preserve existing
    distributions/defaults. Introduce the authenticated SID/principal bridge
    and a read-only enrolled-file path before
    any host-file write capability.
@@ -279,3 +339,25 @@ two immutable snapshots and exact results. These checks qualify development
 primitives, not installed product enforcement, a Windows installation image,
 the complete final fixture matrix or native/production acceptance. G3 and
 GWIN0 remain open for the integration and user journeys listed above.
+
+### Governed publication and detached-signature checkpoint
+
+The final 453-file frozen snapshot passes warnings-denied all-target checks,
+1,094 Rust tests, 467 native-source tests and 15 actual unprivileged CLI cases.
+The 42 existing fixture-only exclusions remain unchanged. OS/model public trust
+(13 cases each), UTC authentication (8), policy parses (19), disposable PAM (6)
+and resource software-TPM (4) also pass. A first 1,093-test sweep passed before
+cross-review found a false refusal of valid external JSON containing CR
+whitespace. The correction and new regression received a fresh complete sweep;
+the earlier snapshots/results remain retained, not relabelled.
+
+The Windows package/signature suite passes 162 assertions and the preflight
+suite passes 154. Actual signature CLI, substitution, junction, timeout/output
+bounds and NTFS rename/delete tests run, including refusal of non-ACL scratch
+storage. No package is imported and no runtime/custody qualification is inferred.
+
+The [governed-content record](gates/g3/governed_content_2026-10-15.json) and
+[signature record](gates/gwin0/package_signature_2026-10-15.json) bind exact
+source/result hashes, execution limits and remaining development. These are
+laboratory development checkpoints, not complete G3/GWIN0 acceptance. No new
+image is claimed and the delivered G2 sequence-14 image remains unchanged.

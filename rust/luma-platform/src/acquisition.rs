@@ -163,7 +163,10 @@ pub(crate) fn arguments(target: &Path, profile: &str, action: &str) -> Result<Ve
     let text = target
         .to_str()
         .ok_or("invalid acquisition target encoding")?;
-    if !matches!(action, "prepare" | "verify" | "invoice" | "generated") {
+    if !matches!(
+        action,
+        "prepare" | "verify" | "invoice" | "generated" | "content"
+    ) {
         return Err("invalid acquisition action".into());
     }
     let mut args = vec![
@@ -215,26 +218,35 @@ pub(crate) fn arguments(target: &Path, profile: &str, action: &str) -> Result<Ve
     ] {
         args.push(format!("--property={property}"));
     }
-    args.push(if action == "generated" {
+    args.push(if action == "content" {
+        "--property=CapabilityBoundingSet=".into()
+    } else if action == "generated" {
         "--property=CapabilityBoundingSet=CAP_SETUID CAP_SETGID CAP_KILL CAP_SETPCAP".into()
     } else {
         "--property=CapabilityBoundingSet=CAP_SETUID CAP_SETGID CAP_KILL".into()
     });
-    if matches!(action, "invoice" | "generated") {
+    if matches!(action, "invoice" | "generated" | "content") {
         if target != Path::new("/var") {
             return Err("workflow calculation requires the installed data mount".into());
         }
         if action == "invoice" {
             crate::workflow_resource::source_digest(profile)?;
-        } else {
+        } else if action == "generated" {
             crate::generated_runtime::source_digest(profile)?;
             args.push("--property=BindPaths=/dev/kvm".into());
             args.push("--property=DeviceAllow=/dev/kvm rw".into());
+        } else {
+            crate::content_governed::source_digest(profile)?;
+            args.push("--property=ReadWritePaths=/var/lib/luma-os/content-store".into());
         }
         for property in [
             "RestrictAddressFamilies=AF_UNIX",
             "RuntimeMaxSec=30",
-            "LimitFSIZE=4M",
+            if action == "content" {
+                "LimitFSIZE=16M"
+            } else {
+                "LimitFSIZE=4M"
+            },
         ] {
             args.push(format!("--property={property}"));
         }
@@ -249,14 +261,16 @@ pub(crate) fn arguments(target: &Path, profile: &str, action: &str) -> Result<Ve
     ] {
         args.push(format!("--property={property}"));
     }
-    if matches!(action, "invoice" | "generated") {
+    if matches!(action, "invoice" | "generated" | "content") {
         args.extend([
             "--".into(),
             "/usr/libexec/luma-os/luma-platform".into(),
             if action == "invoice" {
                 "workflow-resource-worker".into()
-            } else {
+            } else if action == "generated" {
                 "generated-resource-worker".into()
+            } else {
+                "content-resource-worker".into()
             },
             profile.into(),
         ]);

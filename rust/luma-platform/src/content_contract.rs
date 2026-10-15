@@ -66,6 +66,11 @@ fn process(command: &str, bytes: &[u8]) -> Result<Value> {
         return Err("editable-content request exceeds fixed transport bound".into());
     }
     let result = match command {
+        "content-contract-native-request" => {
+            let canonical = crate::content_governed::canonical_request(bytes)?;
+            json!({"operation":"native-request","request_sha256":luma_content::sha256(&canonical),
+                "canonical_request":String::from_utf8(canonical)?,"private_content_read":false})
+        }
         "content-contract-capture" => {
             let request: Capture = serde_json::from_slice(bytes)?;
             schema(request.schema_version)?;

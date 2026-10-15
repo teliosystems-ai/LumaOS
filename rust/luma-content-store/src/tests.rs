@@ -95,7 +95,7 @@ impl Boundary for Guard {
             || budget.memory_bytes > 256 * 1024 * 1024
             || budget.tasks != 1
             || budget.read_bytes > 256 * 1024 * 1024
-            || budget.additional_storage_bytes > 8 * 1024 * 1024
+            || budget.additional_storage_bytes > MAX_SOURCE + MAX_PAYLOAD + 2 * MAX_RECORD
         {
             return Err("fixture resource lease admission refused".into());
         }
@@ -618,3 +618,5 @@ fn unsupported_storage_and_symlink_namespaces_are_not_followed() {
     assert!(Repository::open_at(&f.path, &binding(), &mut Guard::read()).is_err());
     assert!(Repository::create_at(&f.path, &plan, &mut Guard::write(&plan)).is_err());
 }
+
+mod managed;

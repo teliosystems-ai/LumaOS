@@ -630,11 +630,7 @@ impl Admission {
         let process = Path::new("/proc").join(self.peer.pid.to_string());
         client_status(&kernel_text(&process.join("status"), 65_536, 0x9fa0)?)?;
         if let Some(profile) = &self.acquisition_profile {
-            acquisition_arguments(
-                self.peer.pid,
-                profile,
-                self.audit.as_ref().map(|audit| audit.grant_id.as_str()),
-            )?;
+            acquisition_arguments(self.peer.pid, profile, self.audit.as_ref())?;
         }
         let group = kernel_text(&process.join("cgroup"), 4096, 0x9fa0)?;
         let unit = group
@@ -742,7 +738,8 @@ impl Admission {
             );
         }
         acquisition_arguments(credentials(socket)?.pid, profile, None)?;
-        let purpose = if profile.starts_with("generated-v1-") {
+        let purpose = if profile.starts_with("generated-v1-") || profile.starts_with("content-v1-")
+        {
             BrokerPurpose::Standard
         } else if profile.starts_with("qa-v1-") {
             BrokerPurpose::ModelQa
@@ -796,7 +793,11 @@ impl Admission {
     }
 }
 
-fn acquisition_arguments(pid: i32, profile: &str, grant: Option<&str>) -> Result<()> {
+fn acquisition_arguments(
+    pid: i32,
+    profile: &str,
+    audit: Option<&crate::finite_grants::Audit>,
+) -> Result<()> {
     if pid <= 0 {
         return Err("acquisition principal peer is not live".into());
     }
@@ -806,6 +807,10 @@ fn acquisition_arguments(pid: i32, profile: &str, grant: Option<&str>) -> Result
         0x9fa0,
     )?;
     let args = raw.split('\0').collect::<Vec<_>>();
+    if profile.starts_with("content-v1-") {
+        return crate::content_governed::check_client_arguments(&args, profile, audit);
+    }
+    let grant = audit.map(|value| value.grant_id.as_str());
     if profile.starts_with("qa-v1-") {
         let (model, scenario) = crate::model::qa::parse_profile(profile)?;
         if args.len() != 7
@@ -885,7 +890,11 @@ pub(crate) fn acquisition_proof(
         .into(),
         nonce: challenge.nonce,
         job: job.into(),
-        audit: boundary.audit()?,
+        audit: if usage.selector.id == "native-content-store-v1" {
+            boundary.audit_for_acquisition(usage)?
+        } else {
+            boundary.audit()?
+        },
         purpose: challenge.purpose,
     })?)
 }
@@ -1203,13 +1212,17 @@ fn bounded_json_input(path: &str) -> Result<Vec<u8>> {
 }
 impl InputStage {
     fn capture(bytes: &[u8], leaf: &str) -> Result<Self> {
-        let maximum = if leaf == "generated.json" {
+        let maximum = if leaf == "content.json" {
+            crate::content_governed::MAX_REQUEST
+        } else if leaf == "generated.json" {
             2_228_480
         } else {
             1_048_576
         };
-        if !matches!(leaf, "input.json" | "input.csv" | "generated.json")
-            || bytes.is_empty()
+        if !matches!(
+            leaf,
+            "input.json" | "input.csv" | "generated.json" | "content.json"
+        ) || bytes.is_empty()
             || bytes.len() > maximum
         {
             return Err("invalid bounded inert product input".into());
@@ -1364,6 +1377,9 @@ pub(crate) fn launch(arguments: &[String]) -> Result<()> {
                 | "artifact-owned-retain-proposal"
                 | "artifact-owned-retain"
                 | "artifact-owned-search"
+                | "content-owned-inspection-review"
+                | "content-owned-review"
+                | "content-owned-apply"
                 | "policy-evidence-review"
                 | "policy-evidence-retain"
                 | "policy-evidence-pending-review"
@@ -1397,6 +1413,24 @@ pub(crate) fn launch(arguments: &[String]) -> Result<()> {
     }
     let mut owned = arguments.to_vec();
     let stage = match arguments[0].as_str() {
+        "content-owned-inspection-review" | "content-owned-review" | "content-owned-apply" => {
+            let (count, index) = match arguments[0].as_str() {
+                "content-owned-inspection-review" => (3, 2),
+                "content-owned-review" => (4, 3),
+                _ => (6, 5),
+            };
+            if arguments.len() != count {
+                return Err("content launcher requires its exact finite command shape".into());
+            }
+            let bytes = crate::content_governed::read_request(Path::new(&arguments[index]))?;
+            let stage = InputStage::capture(&bytes, "content.json")?;
+            owned[index] = stage
+                .path
+                .to_str()
+                .ok_or("invalid private content request path")?
+                .into();
+            Some(stage)
+        }
         "model-qualification-review" | "model-qualification-install" => {
             let (count, index) = if arguments[0] == "model-qualification-review" {
                 (3, 2)

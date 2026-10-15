@@ -359,6 +359,7 @@ enum AcquisitionProfile {
     Invoice(String),
     Generated(String),
     Qa(String),
+    Content(String),
 }
 impl AcquisitionProfile {
     fn resolve(id: &str) -> Result<Self> {
@@ -371,6 +372,9 @@ impl AcquisitionProfile {
         } else if id.starts_with("qa-") {
             model::qa::parse_profile(id)?;
             Ok(Self::Qa(id.into()))
+        } else if id.starts_with("content-") {
+            crate::content_governed::source_digest(id)?;
+            Ok(Self::Content(id.into()))
         } else {
             Ok(Self::Model(model::public_profile(id)?))
         }
@@ -381,6 +385,7 @@ impl AcquisitionProfile {
             Self::Invoice(id) => crate::workflow_resource::binding(id, device),
             Self::Generated(id) => crate::generated_runtime::binding(id, device),
             Self::Qa(id) => model::qa::binding(id, device),
+            Self::Content(id) => crate::content_governed::binding(id, device),
         }
     }
     fn memory(&self) -> Result<u64> {
@@ -442,6 +447,7 @@ impl AcquisitionProfile {
             Self::Invoice(id) => crate::workflow_resource::source_digest(id).map(|_| ()),
             Self::Generated(id) => crate::generated_runtime::source_digest(id).map(|_| ()),
             Self::Qa(id) => model::qa::check_worker(id, device, pid),
+            Self::Content(id) => crate::content_governed::check_worker(id, device, pid),
         }
     }
 }
@@ -1067,7 +1073,8 @@ impl Manager {
                         AcquisitionProfile::Model(profile) => profile.resource_binding()?,
                         AcquisitionProfile::Invoice(_)
                         | AcquisitionProfile::Generated(_)
-                        | AcquisitionProfile::Qa(_) => {
+                        | AcquisitionProfile::Qa(_)
+                        | AcquisitionProfile::Content(_) => {
                             return Err("workflow cannot occupy the serving domain".into())
                         }
                     },
@@ -1078,7 +1085,9 @@ impl Manager {
                     if matches!(&profile,AcquisitionProfile::Model(p) if p.governed.is_some())
                         || matches!(
                             &profile,
-                            AcquisitionProfile::Generated(_) | AcquisitionProfile::Qa(_)
+                            AcquisitionProfile::Generated(_)
+                                | AcquisitionProfile::Qa(_)
+                                | AcquisitionProfile::Content(_)
                         )
                     {
                         let authority = self
@@ -1164,7 +1173,9 @@ impl Manager {
                     if matches!(&profile,AcquisitionProfile::Model(p) if p.governed.is_some())
                         || matches!(
                             &profile,
-                            AcquisitionProfile::Generated(_) | AcquisitionProfile::Qa(_)
+                            AcquisitionProfile::Generated(_)
+                                | AcquisitionProfile::Qa(_)
+                                | AcquisitionProfile::Content(_)
                         )
                     {
                         self.acquisition_authority

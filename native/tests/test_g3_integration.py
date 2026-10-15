@@ -53,6 +53,43 @@ class G3IntegrationTests(unittest.TestCase):
         launcher = (RUST / 'service/granted_gateway.rs').read_text()
         self.assertNotIn('content-contract-table-edit', launcher)
 
+    def test_governed_content_dispatch_is_confined_but_worker_is_not_a_client_command(self):
+        main = (RUST / 'main.rs').read_text()
+        allowed = main.split('if confined_client\n', 1)[1].split('if confined_client {', 1)[0]
+        for command in ('content-owned-inspection-review', 'content-owned-review', 'content-owned-apply'):
+            self.assertIn('"' + command + '"', allowed)
+        self.assertNotIn('content-resource-worker', allowed)
+        self.assertIn('=> content_governed::command(&args)', main)
+        manifest = (ROOT / 'rust/luma-platform/Cargo.toml').read_text()
+        self.assertIn('luma-content-store = { path = "../luma-content-store" }', manifest)
+        governed = (RUST / 'content_governed.rs').read_text()
+        self.assertIn('crate::platform::require_laboratory_image()?;', governed)
+        self.assertIn('crate::admin_governance::with_grants', governed)
+        self.assertIn('guard.effect_begin', governed)
+        self.assertIn('guard.effect_complete', governed)
+        self.assertIn('WorkerLease::acquire_acquisition', governed)
+        worker = governed.split('fn worker(', 1)[1].split('fn anonymous(', 1)[0]
+        self.assertNotIn('admin_governance::current_principal', worker)
+
+    def test_product_content_namespace_is_fresh_install_only_and_worker_private(self):
+        platform = (RUST / 'platform.rs').read_text()
+        provision = platform.split('Provision fixed empty owner-domain roots;', 1)[1].split(
+            'for (name, mode)', 1)[0]
+        self.assertIn('"content-store"', provision)
+        policies = ROOT / 'native/image/overlay/etc/apparmor.d'
+        client = (policies / 'luma-granted-client').read_text()
+        worker = (policies / 'luma-acquisition').read_text()
+        self.assertIn('deny /var/lib/luma-os/content-store/** rwklx,', client)
+        self.assertNotIn('\n  /var/lib/luma-os/content-store/** rwk,', client)
+        self.assertIn('/run/luma-granted-client/requests/*/content.json r,', client)
+        self.assertIn('/var/lib/luma-os/content-store/** rwk,', worker)
+        self.assertIn('/memfd:luma-content-request r,', worker)
+        self.assertIn('/memfd:luma-content-output rw,', worker)
+        self.assertIn('/proc/[0-9]*/{stat,status,cgroup,cmdline,limits} r,', worker)
+        broker = (policies / 'luma-broker').read_text()
+        self.assertIn('/run/luma-granted-client/requests/*/content.json r,', broker)
+        self.assertNotIn('/var/lib/luma-os/content-store/** rw', broker)
+
 
 if __name__ == '__main__':
     unittest.main()

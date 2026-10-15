@@ -168,4 +168,120 @@ function Test-LumaWslPackage {
     }
 }
 
-Export-ModuleMember -Function Test-LumaWslPackage
+function Test-LumaWslPackageSignature {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string] $PackageDirectory,
+        [Parameter(Mandatory)][string] $SignaturePath,
+        [Parameter(Mandatory)][string] $AnchorPath,
+        [Parameter(Mandatory)][string] $AnchorSha256,
+        [Parameter(Mandatory)][string] $OpenSslPath,
+        [Parameter(Mandatory)][string] $OpenSslSha256,
+        [Parameter(Mandatory)][string] $WorkRoot
+    )
+    if ($env:OS -ne 'Windows_NT') { throw 'Windows signature inspection requires native Windows.' }
+    foreach ($pin in @($AnchorSha256, $OpenSslSha256)) {
+        if ($pin -cnotmatch '\A[a-f0-9]{64}\z') { throw 'Independent input pins require canonical lowercase SHA256.' }
+    }
+    if (-not ('Luma.Windows.PackageSignature' -as [type])) {
+        Add-Type -Path (Join-Path $PSScriptRoot 'PackageSignature.cs') -ErrorAction Stop
+    }
+    $root = Assert-LumaPackageHostPath $PackageDirectory $true
+    $workBase = Assert-LumaPackageHostPath $WorkRoot $true
+    $rootPrefix = $root.FullName.TrimEnd('\') + '\'
+    if ([string]::Equals($workBase.FullName, $root.FullName, [StringComparison]::OrdinalIgnoreCase) -or
+        $workBase.FullName.StartsWith($rootPrefix, [StringComparison]::OrdinalIgnoreCase)) {
+        throw 'Signature scratch must be separate from the candidate package.'
+    }
+    $paths = @($AnchorPath, $OpenSslPath, $SignaturePath,
+        (Join-Path $root.FullName 'manifest.json'), (Join-Path $root.FullName 'rootfs.tar'))
+    $leases = New-Object 'System.Collections.Generic.List[System.IO.FileStream]'
+    $directoryLeases = New-Object 'System.Collections.Generic.List[System.IDisposable]'
+    $scratchLease = $null
+    try {
+        $workLease = [Luma.Windows.PackageDirectoryLease]::Acquire($workBase.FullName)
+        $directoryLeases.Add($workLease)
+        foreach ($path in $paths) {
+            $file = Assert-LumaPackageHostPath $path $false
+            if ($path -cin @($AnchorPath, $OpenSslPath, $SignaturePath) -and
+                $file.FullName.StartsWith($rootPrefix, [StringComparison]::OrdinalIgnoreCase)) {
+                throw 'Signature, independent anchor and verifier must be outside the candidate package.'
+            }
+            $directoryLeases.Add([Luma.Windows.PackageDirectoryLease]::Acquire($file.Directory.FullName))
+            $leases.Add([IO.File]::Open($file.FullName, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::Read))
+        }
+        if ($leases[0].Length -eq 0 -or $leases[0].Length -gt 65536 -or
+            $leases[1].Length -eq 0 -or $leases[1].Length -gt 64MB -or
+            $leases[2].Length -ne 64 -or [IO.Path]::GetExtension($OpenSslPath) -cne '.exe') {
+            throw 'Anchor, verifier or detached Ed25519 signature has an invalid type or size.'
+        }
+        if ((Get-FileHash -LiteralPath $AnchorPath -Algorithm SHA256).Hash.ToLowerInvariant() -cne $AnchorSha256 -or
+            (Get-FileHash -LiteralPath $OpenSslPath -Algorithm SHA256).Hash.ToLowerInvariant() -cne $OpenSslSha256) {
+            throw 'Independent anchor or verifier SHA256 pin mismatch.'
+        }
+        $anchorBytes = [Luma.Windows.PackageInspector]::ReadManifest($AnchorPath)
+        $anchor = ConvertFrom-LumaPackageJson ((New-Object Text.UTF8Encoding ($false, $true)).GetString($anchorBytes))
+        Assert-LumaPackageRecord $anchor @('schema_version', 'environment', 'purpose', 'public_key_spki_hex',
+            'not_before_ms', 'expires_ms') 'Package public anchor'
+        if ((ConvertTo-LumaPackageInteger $anchor.schema_version 1 'Anchor schema') -ne 1 -or
+            $anchor.environment -isnot [string] -or $anchor.environment -cne 'lab' -or
+            $anchor.purpose -isnot [string] -or $anchor.purpose -cne 'luma-wsl-package-v1' -or
+            $anchor.public_key_spki_hex -isnot [string] -or
+            $anchor.public_key_spki_hex -cnotmatch '\A302a300506032b6570032100[a-f0-9]{64}\z') {
+            throw 'Anchor requires exact lab development package purpose and canonical Ed25519 SPKI.'
+        }
+        $start = ConvertTo-LumaPackageInteger $anchor.not_before_ms 4102444800000 'Anchor not-before'
+        $end = ConvertTo-LumaPackageInteger $anchor.expires_ms 4102444800000 'Anchor expiry'
+        if ($start -eq 0 -or $end -le $start -or $end - $start -gt 31622400000) {
+            throw 'Anchor validity must be positive, finite and at most 366 days.'
+        }
+        $public = [Luma.Windows.PackageSignature]::DecodeHex($anchor.public_key_spki_hex, 44)
+        if ($anchor.public_key_spki_hex.Substring(24) -ceq ('0' * 64)) { throw 'Zero Ed25519 public key is forbidden.' }
+        $content = Test-LumaWslPackage $root.FullName
+        $manifest = [Luma.Windows.PackageInspector]::ReadManifest((Join-Path $root.FullName 'manifest.json'))
+        if ([Luma.Windows.PackageInspector]::Sha256($manifest) -cne $content.manifest_sha256) {
+            throw 'Exact manifest bytes changed across content and signature checks.'
+        }
+        $signature = [Luma.Windows.PackageInspector]::ReadManifest($SignaturePath)
+        $scratchLease = $workLease.CreateScratch()
+        $scratch = $scratchLease.DirectoryPath
+        [IO.File]::WriteAllBytes((Join-Path $scratch 'anchor.der'), $public)
+        [IO.File]::WriteAllBytes((Join-Path $scratch 'signature.bin'), $signature)
+        [IO.File]::WriteAllBytes((Join-Path $scratch 'input.bin'),
+            [Luma.Windows.PackageSignature]::SigningInput($manifest, $anchor.environment))
+        [IO.File]::WriteAllBytes((Join-Path $scratch 'empty.cnf'), [byte[]]@())
+        $version = [Luma.Windows.PackageSignature]::Run($OpenSslPath, $scratch, $true)
+        $null = [Luma.Windows.PackageSignature]::Run($OpenSslPath, $scratch, $false)
+        if ((Get-FileHash -LiteralPath $AnchorPath -Algorithm SHA256).Hash.ToLowerInvariant() -cne $AnchorSha256 -or
+            (Get-FileHash -LiteralPath $OpenSslPath -Algorithm SHA256).Hash.ToLowerInvariant() -cne $OpenSslSha256) {
+            throw 'Independent anchor or verifier changed during cryptographic inspection.'
+        }
+        [pscustomobject]@{
+            schema_version=1; status='cryptographically-valid-lab-inputs-not-installation-authority'
+            release_id=$content.release_id; architecture=$content.architecture; profile=$content.profile
+            manifest_sha256=$content.manifest_sha256; rootfs_sha256=$content.rootfs_sha256
+            anchor_input_sha256=$AnchorSha256; public_key_spki_sha256=[Luma.Windows.PackageInspector]::Sha256($public)
+            signature_sha256=[Luma.Windows.PackageInspector]::Sha256($signature)
+            signature_purpose=$anchor.purpose; environment=$anchor.environment
+            anchor_not_before_ms=$start; anchor_expires_ms=$end
+            verifier_sha256=$OpenSslSha256; verifier_version_observed=$version
+            structure_valid=$true; content_valid=$true; cryptographic_signature_valid=$true
+            independent_input_pins_match=$true; anchor_custody_authenticated=$false
+            verifier_dependencies_authenticated=$false; protected_utc_established=$false
+            anchor_currently_valid=$false; revocation_state_authenticated=$false
+            package_authenticated=$false; product_installation_admitted=$false
+            distribution_imported=$false; runtime_qualified=$false; host_settings_changed=$false
+            production_qualified=$false; gate_closing=$false
+        }
+    } finally {
+        foreach ($lease in $leases) { $lease.Dispose() }
+        try {
+            if ($null -ne $scratchLease) { $scratchLease.RemoveScratch() }
+        } finally {
+            if ($null -ne $scratchLease) { $scratchLease.Dispose() }
+            foreach ($directoryLease in $directoryLeases) { $directoryLease.Dispose() }
+        }
+    }
+}
+
+Export-ModuleMember -Function Test-LumaWslPackage, Test-LumaWslPackageSignature

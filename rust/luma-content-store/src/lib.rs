@@ -28,6 +28,7 @@ pub const MAX_PENDING: usize = 16;
 pub const MAX_DOMAINS: usize = 1024;
 const MAX_RECORD: u64 = 8192;
 const MAX_PAYLOAD: u64 = luma_content::MAX_ENVELOPE_BYTES as u64;
+const MAX_SOURCE: u64 = luma_content::table::MAX_REQUEST_BYTES as u64;
 
 /// A fixed requested budget, not proof that it has been reserved or enforced.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -64,6 +65,14 @@ pub enum DecisionKind {
     Published,
     ConflictRetained,
     NoChangeRetained,
+}
+
+/// Identifies what the retained exact input means, not an execution permission.
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum SourceKind {
+    Content,
+    ManagedTableIntent,
 }
 
 /// Inspect and mutation authority are independent. Mutation checks must also
@@ -116,6 +125,8 @@ struct PlanData {
     source_bytes: u64,
     payload_sha256: String,
     payload_bytes: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    source_kind: Option<SourceKind>,
 }
 
 /// Immutable, source-bound proposal. It is not a grant, lease or commitment.
@@ -217,6 +228,7 @@ impl Plan {
             source_bytes: source.len() as u64,
             payload_sha256: luma_content::sha256(&payload),
             payload_bytes: payload.len() as u64,
+            source_kind: None,
         };
         let bytes = serde_json::to_vec(&data)?;
         if bytes.len() as u64 > MAX_RECORD {
@@ -228,11 +240,112 @@ impl Plan {
             review: luma_content::sha256(&bytes),
         })
     }
+    /// Review a deterministic managed edit without publishing it. The retained
+    /// source is the canonical inert request, not a fabricated external save.
+    pub fn managed_table(
+        current: &ArtifactVersion,
+        request: &luma_content::table::TableEditRequest,
+    ) -> Result<Self> {
+        let source = request.canonical_bytes()?;
+        let (decision, resulting, payload) = match luma_content::table::apply(current, request)? {
+            luma_content::table::Decision::NewVersion { version, .. } => (
+                DecisionKind::Published,
+                version.reference()?,
+                version.canonical_envelope()?,
+            ),
+            luma_content::table::Decision::NoChange {
+                current: reference, ..
+            } => (
+                DecisionKind::NoChangeRetained,
+                reference,
+                current.canonical_envelope()?,
+            ),
+            luma_content::table::Decision::Conflict {
+                current: reference, ..
+            } => (
+                DecisionKind::ConflictRetained,
+                reference,
+                current.canonical_envelope()?,
+            ),
+        };
+        let data = PlanData {
+            schema_version: 2,
+            binding: request.binding.clone(),
+            artifact_id: request.expected.artifact_id.clone(),
+            format: Format::Csv,
+            // This is provenance of the inert intent. Published version receipts
+            // separately bind the exact generated canonical CSV source bytes.
+            provenance: Provenance {
+                request_id: request.metadata.request_id.clone(),
+                workflow_sha256: request.metadata.workflow_sha256.clone(),
+                source_sha256: luma_content::sha256(&source),
+                origin: luma_content::EditOrigin::Managed,
+            },
+            observed: Some(current.reference()?),
+            expected: Some(request.expected.clone()),
+            decision,
+            resulting,
+            source_sha256: luma_content::sha256(&source),
+            source_bytes: source.len() as u64,
+            payload_sha256: luma_content::sha256(&payload),
+            payload_bytes: payload.len() as u64,
+            source_kind: Some(SourceKind::ManagedTableIntent),
+        };
+        let bytes = serde_json::to_vec(&data)?;
+        if bytes.len() as u64 > MAX_RECORD || payload.len() as u64 > MAX_PAYLOAD {
+            return Err("managed-table proposal exceeds fixed bound".into());
+        }
+        Ok(Self {
+            data,
+            payload,
+            review: luma_content::sha256(&bytes),
+        })
+    }
+    fn rebuild(current: Option<&ArtifactVersion>, data: &PlanData, source: &[u8]) -> Result<Self> {
+        match (data.schema_version, data.source_kind) {
+            (1, None) => Self::build(
+                current,
+                data.binding.clone(),
+                &data.artifact_id,
+                data.format,
+                data.expected.clone(),
+                source,
+                data.provenance.clone(),
+            ),
+            (2, Some(SourceKind::ManagedTableIntent)) => {
+                if source.len() as u64 > MAX_SOURCE {
+                    return Err("managed-table intent exceeds fixed bound".into());
+                }
+                let request: luma_content::table::TableEditRequest =
+                    serde_json::from_slice(source)?;
+                if request.canonical_bytes()? != source {
+                    return Err("managed-table intent is not exact canonical input".into());
+                }
+                Self::managed_table(
+                    current.ok_or("managed edit has no prior artifact")?,
+                    &request,
+                )
+            }
+            _ => Err("unsupported content-store plan schema or source kind".into()),
+        }
+    }
     pub fn binding(&self) -> &OwnerBinding {
         &self.data.binding
     }
     pub fn request_id(&self) -> &str {
         &self.data.provenance.request_id
+    }
+    pub fn artifact_id(&self) -> &str {
+        &self.data.artifact_id
+    }
+    pub fn format(&self) -> Format {
+        self.data.format
+    }
+    pub fn provenance(&self) -> &Provenance {
+        &self.data.provenance
+    }
+    pub fn expected(&self) -> Option<&VersionReference> {
+        self.data.expected.as_ref()
     }
     pub fn review_sha256(&self) -> &str {
         &self.review
@@ -246,7 +359,12 @@ impl Plan {
     pub fn source_bytes(&self) -> u64 {
         self.data.source_bytes
     }
+    pub fn source_kind(&self) -> SourceKind {
+        self.data.source_kind.unwrap_or(SourceKind::Content)
+    }
     pub fn storage_bytes(&self) -> u64 {
+        // Conservative logical-file bound including the full record allowance,
+        // not an ext4 block reservation or a claim of exact physical usage.
         self.data.source_bytes + self.data.payload_bytes + MAX_RECORD
     }
     pub fn access(&self) -> Access<'_> {
@@ -278,6 +396,7 @@ pub struct Outcome {
     pub decision: DecisionKind,
     pub resulting: VersionReference,
     pub source_sha256: String,
+    pub source_kind: SourceKind,
     pub replayed: bool,
 }
 
@@ -330,6 +449,7 @@ fn outcome(record: &Record, replayed: bool) -> Outcome {
         decision: record.plan.decision,
         resulting: record.plan.resulting.clone(),
         source_sha256: record.plan.source_sha256.clone(),
+        source_kind: record.plan.source_kind.unwrap_or(SourceKind::Content),
         replayed,
     }
 }
@@ -470,8 +590,11 @@ impl Repository {
             total += record_bytes.len() as u64;
             let record: Record = serde_json::from_slice(&record_bytes)?;
             if serde_json::to_vec(&record)? != record_bytes
-                || record.schema_version != 1
-                || record.plan.schema_version != 1
+                || record.schema_version != record.plan.schema_version
+                || !matches!(
+                    (record.plan.schema_version, record.plan.source_kind),
+                    (1, None) | (2, Some(SourceKind::ManagedTableIntent))
+                )
                 || record.plan.binding != self.binding
                 || name != luma_content::sha256(record.plan.provenance.request_id.as_bytes())
             {
@@ -487,7 +610,14 @@ impl Repository {
             let source = storage::read(
                 &dir,
                 "source.bin",
-                (luma_content::MAX_CONTENT_BYTES as u64).min(MAX_REPOSITORY_BYTES - total),
+                (match record.plan.source_kind {
+                    None => luma_content::MAX_CONTENT_BYTES as u64,
+                    Some(SourceKind::ManagedTableIntent) => MAX_SOURCE,
+                    Some(SourceKind::Content) => {
+                        return Err("explicit legacy source kind forbidden".into())
+                    }
+                })
+                .min(MAX_REPOSITORY_BYTES - total),
                 &mut check,
             )?;
             total += source.len() as u64;
@@ -515,7 +645,7 @@ impl Repository {
                 let limit = match member.as_str() {
                     "record.json" => MAX_RECORD,
                     "payload.json" => MAX_PAYLOAD,
-                    "source.bin" => luma_content::MAX_CONTENT_BYTES as u64,
+                    "source.bin" => MAX_SOURCE,
                     _ => return Err("unknown pending content member; preserve state".into()),
                 };
                 total += storage::read(
@@ -541,15 +671,7 @@ impl Repository {
             if prior.map(ArtifactVersion::reference).transpose()? != record.plan.observed {
                 return Err("content outcome does not extend its exact observed base".into());
             }
-            let rebuilt = Plan::build(
-                prior,
-                self.binding.clone(),
-                &record.plan.artifact_id,
-                record.plan.format,
-                record.plan.expected.clone(),
-                &source,
-                record.plan.provenance.clone(),
-            )?;
+            let rebuilt = Plan::rebuild(prior, &record.plan, &source)?;
             if rebuilt.data != record.plan
                 || rebuilt.payload != payload
                 || rebuilt.review != record.review_sha256
@@ -614,6 +736,35 @@ impl Repository {
         })
     }
 
+    /// Recover a fully reconstructed immutable proposal for exact-input replay.
+    /// The caller must also compare its operation's artifact, format, expected
+    /// reference and provenance before reuse. This inspection does not restore
+    /// a session, grant, resource lease, or permission to redispatch an effect.
+    pub fn replay_plan(
+        &self,
+        request: &str,
+        source: &[u8],
+        boundary: &mut impl Boundary,
+    ) -> Result<Option<Plan>> {
+        boundary.admit(&self.binding, ResourceBudget::inspection())?;
+        let prior = self
+            .snapshot(None, boundary)?
+            .records
+            .into_iter()
+            .find(|(record, _, _)| record.plan.provenance.request_id == request);
+        let plan = match prior {
+            Some((_, plan, prior_source)) => {
+                if prior_source != source {
+                    return Err("content request replay changed exact retained input".into());
+                }
+                Some(plan)
+            }
+            None => None,
+        };
+        storage::repository_check(self, None, boundary)?;
+        Ok(plan)
+    }
+
     pub fn plan_external_edit(
         &self,
         artifact: &str,
@@ -632,6 +783,22 @@ impl Repository {
             source,
             provenance,
         )?;
+        storage::repository_check(self, None, boundary)?;
+        Ok(plan)
+    }
+
+    /// Review positional operations against the live immutable CSV version.
+    /// A stale request is retained as a conflict, never replayed on new rows.
+    pub fn plan_table_edit(
+        &self,
+        request: &luma_content::table::TableEditRequest,
+        boundary: &mut impl Boundary,
+    ) -> Result<Plan> {
+        if request.binding != self.binding {
+            return Err("managed-table request owner mismatch".into());
+        }
+        let current = self.current(&request.expected.artifact_id, boundary)?;
+        let plan = Plan::managed_table(&current, request)?;
         storage::repository_check(self, None, boundary)?;
         Ok(plan)
     }
@@ -700,14 +867,10 @@ impl Repository {
         if snapshot.records.len() == MAX_OUTCOMES {
             return Err("content outcome capacity exhausted; no automatic eviction".into());
         }
-        let rebuilt = Plan::build(
+        let rebuilt = Plan::rebuild(
             snapshot.current.get(&plan.data.artifact_id),
-            self.binding.clone(),
-            &plan.data.artifact_id,
-            plan.data.format,
-            plan.data.expected.clone(),
+            &plan.data,
             source,
-            plan.data.provenance.clone(),
         )?;
         if &rebuilt != plan {
             return Err("content base changed since exact proposal review".into());
@@ -717,7 +880,7 @@ impl Repository {
             return Err("another content preparation requires recovery; preserve it".into());
         }
         let record = Record {
-            schema_version: 1,
+            schema_version: plan.data.schema_version,
             sequence: snapshot.records.len() as u64 + 1,
             review_sha256: plan.review.clone(),
             plan: plan.data.clone(),

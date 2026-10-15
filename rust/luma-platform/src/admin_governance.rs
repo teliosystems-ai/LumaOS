@@ -1127,6 +1127,189 @@ struct GrantCapture {
     credential_refusal: Option<crate::policy_decisions::Reason>,
 }
 
+// Only the content controller may attribute one effect from its closed pair of
+// independently admitted scopes. This selects historical evidence; it never
+// authorizes a subset in place of GrantBoundary::check's full live scope set.
+fn content_acquisition_scope(
+    uses: &[(String, crate::finite_grants::Use)],
+    requested: &crate::finite_grants::Use,
+    purpose: authentication::SessionPurpose,
+) -> Result<usize> {
+    use crate::finite_grants::{Action, Kind};
+    if purpose != authentication::SessionPurpose::Standard
+        || uses.len() != 2
+        || uses[0].0 == uses[1].0
+    {
+        return Err(
+            "content acquisition needs independent standard-session Read/effect scopes".into(),
+        );
+    }
+    for (grant, usage) in uses {
+        usage.validate()?;
+        if !crate::admin_roles::identifier(grant)
+            || usage.input_bytes != crate::content_governed::MAX_REQUEST as u64
+            || usage.output_bytes != 65536
+            || usage.units != 1
+        {
+            return Err("content acquisition attribution exceeds its fixed scope".into());
+        }
+    }
+    let reader = uses
+        .iter()
+        .position(|(_, usage)| {
+            usage.action == Action::Read
+                && usage.selector.kind == Kind::File
+                && usage.selector.id == "native-content-inspect-v1"
+        })
+        .ok_or("content acquisition lacks its independent Read scope")?;
+    let effect = 1 - reader;
+    let read = &uses[reader].1;
+    let write = &uses[effect].1;
+    if !matches!(write.action, Action::Write | Action::Retain)
+        || write.selector.kind != Kind::Artifact
+        || write.selector.id != "native-content-store-v1"
+        || read.selector.generation != write.selector.generation
+        || read.selector.digest != write.selector.digest
+        || requested != write
+    {
+        return Err(
+            "content acquisition attribution does not match its complete admitted pair".into(),
+        );
+    }
+    Ok(effect)
+}
+
+#[cfg(test)]
+mod content_acquisition_tests {
+    use super::*;
+    use crate::finite_grants::{Action, Kind, Selector, Use};
+
+    fn pair(action: Action) -> Vec<(String, Use)> {
+        let read = Use {
+            action: Action::Read,
+            selector: Selector {
+                kind: Kind::File,
+                id: "native-content-inspect-v1".into(),
+                generation: 7,
+                digest: "a".repeat(64),
+            },
+            input_bytes: crate::content_governed::MAX_REQUEST as u64,
+            output_bytes: 65536,
+            units: 1,
+        };
+        let effect = Use {
+            action,
+            selector: Selector {
+                kind: Kind::Artifact,
+                id: "native-content-store-v1".into(),
+                ..read.selector.clone()
+            },
+            ..read.clone()
+        };
+        vec![("read-grant".into(), read), ("effect-grant".into(), effect)]
+    }
+
+    #[test]
+    fn closed_content_pair_attributes_only_its_exact_effect_in_either_order() {
+        for action in [Action::Write, Action::Retain] {
+            let mut uses = pair(action);
+            let requested = uses[1].1.clone();
+            assert_eq!(
+                content_acquisition_scope(
+                    &uses,
+                    &requested,
+                    authentication::SessionPurpose::Standard
+                )
+                .unwrap(),
+                1
+            );
+            uses.reverse();
+            assert_eq!(
+                content_acquisition_scope(
+                    &uses,
+                    &requested,
+                    authentication::SessionPurpose::Standard
+                )
+                .unwrap(),
+                0
+            );
+            assert!(content_acquisition_scope(
+                &uses,
+                &uses[1].1,
+                authentication::SessionPurpose::Standard
+            )
+            .is_err());
+        }
+    }
+
+    #[test]
+    fn compound_attribution_cannot_borrow_export_or_model_sessions() {
+        let uses = pair(Action::Write);
+        for purpose in [
+            authentication::SessionPurpose::Export,
+            authentication::SessionPurpose::ModelImport,
+            authentication::SessionPurpose::ModelActivation,
+            authentication::SessionPurpose::ModelQa,
+        ] {
+            assert!(content_acquisition_scope(&uses, &uses[1].1, purpose).is_err());
+        }
+        for count in [0, 1, 3] {
+            let mut altered = uses.clone();
+            altered.resize(count, uses[0].clone());
+            assert!(content_acquisition_scope(
+                &altered,
+                &uses[1].1,
+                authentication::SessionPurpose::Standard
+            )
+            .is_err());
+        }
+    }
+
+    #[test]
+    fn independent_scope_identity_generation_and_full_bounds_cannot_be_substituted() {
+        let original = pair(Action::Write);
+        for change in 0..11 {
+            let mut uses = original.clone();
+            match change {
+                0 => uses[0].0 = uses[1].0.clone(),
+                1 => uses[0].1.selector.digest = "b".repeat(64),
+                2 => uses[0].1.selector.generation += 1,
+                3 => uses[0].1.selector.id = "catalog-inspect".into(),
+                4 => uses[1].1.selector.id = "different-effect".into(),
+                5 => uses[1].1.action = Action::Delete,
+                6 => uses[0].1.input_bytes -= 1,
+                7 => uses[1].1.output_bytes += 1,
+                8 => uses[1].1.units = 2,
+                9 => uses[0].0.clear(),
+                10 => uses[0].1.selector.kind = Kind::Resource,
+                _ => unreachable!(),
+            }
+            assert!(
+                content_acquisition_scope(
+                    &uses,
+                    &uses[1].1,
+                    authentication::SessionPurpose::Standard
+                )
+                .is_err(),
+                "substitution {change}"
+            );
+        }
+    }
+
+    #[test]
+    fn matching_part_of_an_admitted_effect_is_not_exact_attribution() {
+        let uses = pair(Action::Write);
+        let mut requested = uses[1].1.clone();
+        requested.input_bytes -= 1;
+        assert!(content_acquisition_scope(
+            &uses,
+            &requested,
+            authentication::SessionPurpose::Standard
+        )
+        .is_err());
+    }
+}
+
 impl GrantBoundary<'_> {
     pub(crate) fn require_admin(&mut self) -> Result<()> {
         let purpose = self.session.account.purpose();
@@ -1202,6 +1385,29 @@ impl GrantBoundary<'_> {
             checkpoint_head: self.session.binding.checkpoint_head.clone(),
             operation_id: Some(self.operation.id().into()),
             usage: self.uses[0].1.clone(),
+        };
+        record.validate()?;
+        Ok(record)
+    }
+    pub(crate) fn audit_for_acquisition(
+        &self,
+        requested: &crate::finite_grants::Use,
+    ) -> Result<crate::finite_grants::Audit> {
+        if self.fenced || requested.selector.generation != self.subject_generation()? {
+            return Err(
+                "content acquisition attribution is fenced or its owner generation changed".into(),
+            );
+        }
+        let selected =
+            content_acquisition_scope(&self.uses, requested, self.session.account.purpose())?;
+        let record = crate::finite_grants::Audit {
+            subject: self.subject()?.into(),
+            subject_generation: self.subject_generation()?,
+            grant_id: self.uses[selected].0.clone(),
+            grant_version: 1,
+            checkpoint_head: self.session.binding.checkpoint_head.clone(),
+            operation_id: Some(self.operation.id().into()),
+            usage: requested.clone(),
         };
         record.validate()?;
         Ok(record)

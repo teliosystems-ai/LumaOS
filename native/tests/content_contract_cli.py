@@ -209,6 +209,32 @@ class ContentContractCli(unittest.TestCase):
         self.invoke('table-edit', self.table_request(text,
                     [dict(op='set-cell', row=0, column=0, value='ok')]), valid=False)
 
+    def test_native_content_request_preparation_is_unprivileged_exact_data_not_admission(self):
+        content = 'Manual document\r\n'
+        request = dict(schema_version=1, login='human', binding=self.binding(),
+            operation=dict(kind='capture', artifact_id='manual-document', format='utf8-text',
+                content=content, provenance=self.provenance(content)))
+        prepared = self.invoke('native-request', request)
+        canonical = prepared['canonical_request']
+        self.assertEqual(json.loads(canonical), request)
+        self.assertEqual(prepared['request_sha256'], hashlib.sha256(canonical.encode()).hexdigest())
+        self.assertEqual(self.invoke('native-request', json.loads(canonical)), prepared)
+        self.assertIs(prepared['private_content_read'], False)
+        self.invoke('native-request', dict(request, grant='not-authority'), valid=False)
+        bad = dict(request, operation=dict(request['operation'], content='Changed'))
+        self.invoke('native-request', bad, valid=False)
+
+    def test_unprivileged_callers_cannot_enter_native_content_effect_or_worker_paths(self):
+        for command in ('content-owned-inspection-review', 'content-owned-review',
+                        'content-owned-apply', 'content-resource-worker'):
+            result = subprocess.run([str(self.binary), command], stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=10,
+                user=65534, group=65534, extra_groups=[], umask=0o077)
+            self.assertEqual(result.returncode, 1)
+            self.assertEqual(result.stdout, b'')
+            self.assertEqual(result.stderr,
+                b'luma-platform: this operation requires a local administrator\n')
+
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)

@@ -2157,6 +2157,7 @@ fn install_mode(
         "artifact-catalog-domains",
         "workflow-invoice-domains",
         "workflow-dags",
+        "content-store",
     ] {
         crate::artifacts::mkdir_at(&state, name)?.sync_all()?;
     }

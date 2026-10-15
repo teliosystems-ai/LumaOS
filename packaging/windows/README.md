@@ -145,4 +145,61 @@ The current Home host can support WSL development; the plan requires a separate
 qualified Pro/Enterprise Hyper-V host for the full VM proof. Do not change the
 host edition or enable virtualization features automatically.
 
+## Detached package signature verification
+
+`verify-package-signature.ps1` verifies a lab Ed25519 signature over the exact
+validated manifest bytes. The signature is a separate 64-byte binary file
+outside the two-file candidate directory. The signed input is ASCII
+`luma-wsl-package-v1\nlab\namd64\nW\n` (`\n` denotes one LF byte), followed by
+the original manifest bytes with no JSON reserialization. The manifest binds the rootfs
+archive. Native OS-release signatures and signatures for a different purpose,
+environment, architecture or profile cannot substitute for this input.
+
+The separately supplied public anchor is closed JSON with `schema_version: 1`,
+`environment: "lab"`, `purpose: "luma-wsl-package-v1"`,
+`public_key_spki_hex`, `not_before_ms` and `expires_ms`. The public key must be
+exactly the 44-byte Ed25519 SPKI encoding, in lowercase hexadecimal, beginning
+`302a300506032b6570032100`. Validity bounds must be positive and at most 366
+days apart; verification does not establish whether the anchor is current.
+The present development package format refuses production anchors.
+
+Supply independently obtained SHA256 pins for the anchor file and a known
+local OpenSSL 3 executable. Do not obtain either pin from the candidate package.
+For example, after setting the two pin variables from reviewed inputs:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy RemoteSigned -File .\packaging\windows\verify-package-signature.ps1 -PackageDirectory D:\candidate -SignaturePath D:\reviewed\candidate.sig -AnchorPath D:\reviewed\lab-anchor.json -AnchorSha256 $anchorPin -OpenSslPath 'C:\Program Files\Git\usr\bin\openssl.exe' -OpenSslSha256 $verifierPin -WorkRoot C:\Users\hakim\LumaOS\.luma -CompilerWorkRoot D:\LumaOS-builds
+```
+
+`WorkRoot` must support persistent Windows ACLs. The verifier atomically creates
+a private GUID child for its bounded public signature inputs, checks its owner
+and protected DACL through a pinned handle, and removes only its known files
+before deleting that same directory through the handle. Input ancestors remain
+pinned against rename/delete; reparse points are refused. Existing parent ACLs
+are not changed. **This host's D drive is exFAT**, so it remains suitable for
+bulk archives and compiler fixtures but is refused for private verifier scratch.
+The repository `.luma` directory on NTFS is used only for tiny temporary
+security metadata, not builds, images or caches. `CompilerWorkRoot` keeps
+PowerShell compiler scratch separate; it defaults to `WorkRoot` if omitted.
+
+The result establishes `cryptographic_signature_valid` and matching input pins,
+not managed custody, authenticated revocation, protected UTC freshness or
+trusted deployment of the anchor. Pinning `openssl.exe` does not authenticate
+its DLLs or other runtime dependencies. Consequently `package_authenticated`,
+`product_installation_admitted`, `production_qualified` and `gate_closing`
+remain false. The verifier imports no distribution, executes no package code
+and makes no saved host-policy changes.
+
+Run the complete signature and storage-safety suite with D-backed bulk fixtures
+and the repository's explicit NTFS security-metadata directory:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy RemoteSigned -File .\packaging\windows\test-package.ps1 -WorkRoot D:\LumaOS-builds -SecurityWorkRoot C:\Users\hakim\LumaOS\.luma
+```
+
+Without `SecurityWorkRoot`, the suite reports content and storage-capability
+checks only; it does not claim that the complete signature suite ran. Tests use
+disposable lab keys, genuine valid/invalid signature CLI calls, real subprocess
+timeouts and output bounds, NTFS rename/delete refusal and fixture junctions.
+
 See [the shared implementation plan](../../docs/G3_GWIN0_IMPLEMENTATION.md).

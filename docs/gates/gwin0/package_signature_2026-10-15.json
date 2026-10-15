@@ -1,0 +1,87 @@
+{
+  "schema_version": 1,
+  "recorded_on": "2026-10-15",
+  "branch": "feature/g3-gwin0-beta",
+  "baseline_commit": "0a0dff66514b1fa85bb722519cb57bf091a7b194",
+  "status": "lab-detached-signature-development-checkpoint-passed",
+  "scope": "Exact package content and Ed25519 signature observation, not authenticated installation authority",
+  "source": {
+    "snapshot": "/mnt/luma-build/work/g3-gwin0-governed-content-source-20261015-final-c",
+    "manifest_sha256": "dd75cba6824380cd9a6100320ac4936e2a3d44979a1757eee9c6cb29d588d0f4",
+    "files_verified_against_checkout": 453,
+    "mismatches": 0,
+    "sha256": {
+      "packaging/windows/PackageSignature.cs": "6d1458b9f301cfa1c18773ce72dfd3383c2e522fa3fbd3733f4e662f183931fa",
+      "packaging/windows/verify-package-signature.ps1": "780be7a21310ff793b50ac2a171891c45bb5e1583e8365b553ca0d8655a8360d",
+      "packaging/windows/Luma.Package.psm1": "4fc88fbb8f1fdcf7c7e1388c4e79c4826893be09017d730cc89e8ec7ef486799",
+      "packaging/windows/test-package.ps1": "4dbd4dcf00345a7d77e0ff126fe2a5247b9d7d178a76e2eb1aa2f13ad8eb5f99",
+      "packaging/windows/test-preflight.ps1": "efb06af461dc2f55a27799b45d002bbd1d30c2a5bbaf7d4a3586fe0b2e68b1f4",
+      "packaging/windows/README.md": "e5cae860982c3b7c1159b0d9d911e7c3851ba7be09e7ebcd55264844db2d2680"
+    }
+  },
+  "implemented": [
+    "Purpose-separated Ed25519 over exact original manifest bytes with a detached raw 64-byte signature outside the two-file package",
+    "Closed laboratory anchor schema with exact RFC8410 SPKI and structurally bounded validity; independent SHA256 pins for anchor and operator-selected verifier",
+    "Leased input files and pinned non-reparse directory ancestors refuse write/delete substitution during inspection",
+    "Atomic private persistent-ACL scratch, handle-verified exact owner/protected DACL, real no-delete-share directory pins and nonrecursive same-handle cleanup",
+    "Closed OpenSSL arguments, cleared inherited environment, controlled empty configuration/provider search, bounded output and five-second deadline",
+    "Explicit refusal of production anchors and installation authority in this development format"
+  ],
+  "validation": {
+    "package_command": "powershell.exe -NoProfile -ExecutionPolicy RemoteSigned -File .\\packaging\\windows\\test-package.ps1 -WorkRoot D:\\LumaOS-builds -SecurityWorkRoot C:\\Users\\hakim\\LumaOS\\.luma",
+    "package_exit_code": 0,
+    "package_assertions_passed": 162,
+    "package_assertions_failed": 0,
+    "package_stdout": "Passed 162 Windows package assertions; no archive extraction or distribution import.",
+    "preflight_command": "powershell.exe -NoProfile -ExecutionPolicy RemoteSigned -File .\\packaging\\windows\\test-preflight.ps1",
+    "preflight_exit_code": 0,
+    "preflight_assertions_passed": 154,
+    "preflight_assertions_failed": 0,
+    "preflight_stdout": "Passed 154 PowerShell preflight assertions; no host changes.",
+    "actual_positive_and_negative_signature_cli": true,
+    "actual_subprocess_deadline_and_output_bounds": true,
+    "actual_ntfs_directory_rename_delete_refusal": true,
+    "actual_junction_refusal": true,
+    "non_acl_volume_refused_before_scratch_creation": true,
+    "process_only_remote_signed_approved": true,
+    "persistent_execution_policy_written": false,
+    "policy_observation_caveat": "Sandboxed and escalated registry views differed; this record does not infer a saved-policy transition from those views. No Set-ExecutionPolicy or registry write was performed."
+  },
+  "execution": {
+    "observed_bulk_volume_filesystem": "exFAT",
+    "archives_and_compiler_scratch": "D:\\LumaOS-builds, unique disposable fixture children",
+    "security_metadata": "Tiny ephemeral private GUID children of repository NTFS .luma; no builds/images/caches moved to C",
+    "existing_directory_acls_changed": false,
+    "retained_security_fixture_children": 0,
+    "keys": "Disposable laboratory test keys only; no production custody generated",
+    "observed_openssl_executable": "C:\\Program Files\\Git\\usr\\bin\\openssl.exe",
+    "observed_openssl_sha256": "063e62dcc027fc5dbb1343de631f02a9291f8b1df0b4e37012e49a03d525aad4",
+    "observed_openssl_version": "3.5.6"
+  },
+  "cross_review_fixes": [
+    "Replaced inherited-then-modified pathname ACL setup with atomic private creation and handle-based security verification",
+    "Metadata-only directory handles did not actually block rename; FILE_LIST_DIRECTORY participates in share arbitration and real rename/delete tests now pass",
+    "Removed recursive pathname scratch deletion in favor of fixed known files and same-handle empty-directory deletion; unknown contents are retained/refused",
+    "D is exFAT and cannot enforce persistent ACLs; the verifier refuses it instead of accepting synthetic ACL observations"
+  ],
+  "remaining_development": [
+    "Managed independent custody, authenticated verifier dependencies, protected time/current validity and revocation delivery",
+    "Populated runnable WSL product root filesystem and authenticated installation/update/rollback",
+    "Hosted Admin/checkpoint authority, authenticated SID bridge and ACL-aware file ingestion",
+    "Effective confinement/resources, compact inference, lifecycle coexistence and complete separate Hyper-V desktop proof"
+  ],
+  "cryptographic_signature_valid_for_disposable_positive_fixture": true,
+  "anchor_custody_authenticated": false,
+  "verifier_dependencies_authenticated": false,
+  "protected_utc_established": false,
+  "anchor_currently_valid": false,
+  "revocation_state_authenticated": false,
+  "package_authenticated": false,
+  "product_installation_admitted": false,
+  "distribution_imported": false,
+  "existing_distributions_changed": false,
+  "sequence14_g2_image_changed": false,
+  "production_qualified": false,
+  "gwin0_closed": false,
+  "gate_closing": false
+}

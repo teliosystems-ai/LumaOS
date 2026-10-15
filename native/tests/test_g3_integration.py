@@ -114,6 +114,22 @@ class G3IntegrationTests(unittest.TestCase):
         self.assertNotIn('std::process', engine)
         self.assertNotIn('std::fs', engine)
 
+    def test_document_diagram_animation_are_data_only_bounded_renderers(self):
+        main = (RUST / 'main.rs').read_text()
+        allowed = main.split('if confined_client\n', 1)[1].split('if confined_client {', 1)[0]
+        source = (RUST / 'content_contract.rs').read_text()
+        for engine in ('document', 'diagram', 'animation'):
+            command = 'content-contract-' + engine
+            self.assertIn('| "' + command + '"', main)
+            self.assertNotIn(command, allowed)
+            self.assertIn('luma_content::' + engine + '::render(bytes)?', source)
+            implementation = (ROOT / 'rust/luma-content/src' / (engine + '.rs')).read_text()
+            self.assertIn('canonical_source', implementation)
+            self.assertIn('sha256', implementation)
+            self.assertNotIn('std::process', implementation)
+            self.assertNotIn('std::fs', implementation)
+        self.assertIn('"playback_started":false', source)
+
 
 if __name__ == '__main__':
     unittest.main()

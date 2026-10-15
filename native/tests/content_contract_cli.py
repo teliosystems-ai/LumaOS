@@ -13,6 +13,8 @@ import shutil
 import subprocess
 import tempfile
 import unittest
+import xml.etree.ElementTree as ET
+from html.parser import HTMLParser
 
 
 class ContentContractCli(unittest.TestCase):
@@ -94,6 +96,90 @@ class ContentContractCli(unittest.TestCase):
             dict(kind='text', value='=IMPORTDATA("https://example.invalid")'))
         self.assertEqual(output['calculation']['canonical_csv'],
             '"=IMPORTDATA(""https://example.invalid"")"\n')
+
+    def test_document_html_escapes_source_and_reopens_from_stored_json(self):
+        source = dict(schema_version=1, title='Editable', blocks=[dict(kind='paragraph',
+            runs=[dict(kind='text', text='<script src="https://example.invalid">é</script>')])])
+        output = self.invoke('document', source)
+        rendered = output['rendering']
+        html = rendered['canonical_html']
+        self.assertNotIn('<script', html)
+        self.assertIn('&lt;script', html)
+        self.assertEqual(hashlib.sha256(html.encode()).hexdigest(), rendered['html_sha256'])
+        parser = HTMLParser(convert_charrefs=True)
+        parser.feed(html)
+        parser.close()
+        version = self.capture(rendered['canonical_source'], 'json')
+        stored = json.loads(version['canonical_envelope'])['content']
+        self.assertEqual(self.invoke('document', json.loads(stored)), output)
+        self.assertIs(output['scripts_executed'], False)
+        self.assertIs(output['external_resources_loaded'], False)
+
+    def test_diagram_outputs_well_formed_svg_and_reopens_editable_geometry(self):
+        source = dict(schema_version=1, title='Diagram', width=320, height=240,
+            nodes=[dict(id='node-one', x=10, y=20, width=80, height=40,
+                shape='rounded-rectangle', fill='blue', label='<safe>')], edges=[])
+        output = self.invoke('diagram', source)
+        rendered = output['rendering']
+        root = ET.fromstring(rendered['canonical_svg'])
+        self.assertEqual(root.tag, '{http://www.w3.org/2000/svg}svg')
+        self.assertEqual(root.attrib['role'], 'img')
+        self.assertEqual(hashlib.sha256(rendered['canonical_svg'].encode()).hexdigest(), rendered['svg_sha256'])
+        self.assertEqual(self.invoke('diagram', json.loads(rendered['canonical_source'])), output)
+
+    def test_diagram_refuses_xml_forbidden_unicode_instead_of_emitting_invalid_svg(self):
+        for character in ('\ufffe', '\uffff'):
+            self.invoke('diagram', dict(schema_version=1, title=character, width=100,
+                height=100, nodes=[], edges=[]), valid=False)
+
+    def test_animation_frames_are_real_svg_with_exact_positions_without_playback(self):
+        source = dict(schema_version=1, width=100, height=100, frames_per_second=30,
+            frame_count=3, background='#ffffff', sprites=[dict(id='box',
+                shape=dict(kind='rectangle', width=10, height=10), fill='#000000',
+                keyframes=[dict(frame=0, x=0, y=0), dict(frame=2, x=3, y=-3)])])
+        output = self.invoke('animation', source)
+        self.assertIs(output['playback_started'], False)
+        self.assertIs(output['scripts_executed'], False)
+        frames = output['rendering']['frames']
+        self.assertEqual(len(frames), 3)
+        for index, frame in enumerate(frames):
+            self.assertEqual(frame['index'], index)
+            root = ET.fromstring(frame['canonical_svg'])
+            sprite = next(node for node in root if node.attrib.get('id') == 'box')
+            self.assertEqual(sprite.attrib['x'], str([0, 1, 3][index]))
+            self.assertEqual(sprite.attrib['y'], str([0, -2, -3][index]))
+            self.assertEqual(hashlib.sha256(frame['canonical_svg'].encode()).hexdigest(), frame['svg_sha256'])
+        self.assertEqual(output, self.invoke('animation', json.loads(output['rendering']['canonical_source'])))
+
+    def test_renderers_refuse_active_unknown_or_invalid_structures_without_partial_output(self):
+        self.invoke('document', dict(schema_version=1, title='x', blocks=[
+            dict(kind='rule', onclick='launch')]), valid=False)
+        self.invoke('diagram', dict(schema_version=1, title='x', width=100,
+            height=100, nodes=[], edges=[dict(id='e', **{'from':'missing'}, from_port='east',
+                to='also-missing', to_port='west', arrow='none', label='')]), valid=False)
+        self.invoke('animation', dict(schema_version=1, width=100, height=100,
+            frames_per_second=30, frame_count=1, background='url(https://example.invalid)', sprites=[]), valid=False)
+
+    def test_renderers_support_blank_outputs_and_delete_all_sources(self):
+        self.assertIn('<main>\n</main>', self.invoke('document', dict(schema_version=1,
+            title='Blank', blocks=[]))['rendering']['canonical_html'])
+        self.assertNotIn('data-node-id', self.invoke('diagram', dict(schema_version=1,
+            title='Blank', width=100, height=100, nodes=[], edges=[]))['rendering']['canonical_svg'])
+        output = self.invoke('animation', dict(schema_version=1, width=100, height=100,
+            frames_per_second=1, frame_count=1, background='#ffffff', sprites=[]))
+        self.assertEqual(len(output['rendering']['frames']), 1)
+
+    def test_managed_render_native_request_retains_exact_source_without_claiming_publication(self):
+        source = '{ "schema_version":1, "rows":[[{"kind":"number","value":"2"}]] }\n'
+        request = dict(schema_version=1, login='alice', binding=self.binding(), operation=dict(kind='render',
+            request=dict(binding=self.binding(), artifact_id='sheet-one', expected=None,
+                metadata=dict(request_id='render-one', workflow_sha256='c'*64),
+                engine='spreadsheet', source=source)))
+        output = self.invoke('native-request', request)
+        self.assertEqual(json.loads(output['canonical_request']), request)
+        self.assertIs(output['private_content_read'], False)
+        request['operation']['request']['binding']['owner_generation'] = 8
+        self.invoke('native-request', request, valid=False)
 
     def test_native_read_queries_are_inert_canonical_requests_not_apply_authority(self):
         reference = dict(artifact_id='document-one', version=1,

@@ -10,6 +10,10 @@ use sha2::{Digest, Sha256};
 use std::fmt;
 
 mod canonical;
+pub mod animation;
+pub mod diagram;
+pub mod document;
+pub mod rendered;
 pub mod spreadsheet;
 pub mod table;
 

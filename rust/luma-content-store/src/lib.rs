@@ -78,6 +78,7 @@ pub enum DecisionKind {
 pub enum SourceKind {
     Content,
     ManagedTableIntent,
+    ManagedRenderIntent,
 }
 
 /// Inspect and mutation authority are independent. Mutation checks must also
@@ -132,6 +133,8 @@ struct PlanData {
     payload_bytes: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     source_kind: Option<SourceKind>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    derivation: Option<luma_content::rendered::Derivation>,
 }
 
 /// Immutable, source-bound proposal. It is not a grant, lease or commitment.
@@ -234,6 +237,7 @@ impl Plan {
             payload_sha256: luma_content::sha256(&payload),
             payload_bytes: payload.len() as u64,
             source_kind: None,
+            derivation: None,
         };
         let bytes = serde_json::to_vec(&data)?;
         if bytes.len() as u64 > MAX_RECORD {
@@ -295,10 +299,69 @@ impl Plan {
             payload_sha256: luma_content::sha256(&payload),
             payload_bytes: payload.len() as u64,
             source_kind: Some(SourceKind::ManagedTableIntent),
+            derivation: None,
         };
         let bytes = serde_json::to_vec(&data)?;
         if bytes.len() as u64 > MAX_RECORD || payload.len() as u64 > MAX_PAYLOAD {
             return Err("managed-table proposal exceeds fixed bound".into());
+        }
+        Ok(Self {
+            data,
+            payload,
+            review: luma_content::sha256(&bytes),
+        })
+    }
+    /// Recalculate a managed source under the exact versioned engine contract.
+    /// The immutable JSON version stores the editable source; source.bin retains
+    /// the complete submitted intent, and the review binds the generated result.
+    pub fn managed_render(
+        current: Option<&ArtifactVersion>,
+        request: &luma_content::rendered::Request,
+    ) -> Result<Self> {
+        let source = request.canonical_bytes()?;
+        let (decision, derivation) = luma_content::rendered::apply(current, request)?;
+        let (decision, resulting, payload) = match decision {
+            luma_content::rendered::Decision::Published(version) => (
+                DecisionKind::Published,
+                version.reference()?,
+                version.canonical_envelope()?,
+            ),
+            luma_content::rendered::Decision::NoChange(reference) => (
+                DecisionKind::NoChangeRetained,
+                reference,
+                current.ok_or("missing render base")?.canonical_envelope()?,
+            ),
+            luma_content::rendered::Decision::Conflict(reference) => (
+                DecisionKind::ConflictRetained,
+                reference,
+                current.ok_or("missing render base")?.canonical_envelope()?,
+            ),
+        };
+        let data = PlanData {
+            schema_version: 3,
+            binding: request.binding.clone(),
+            artifact_id: request.artifact_id.clone(),
+            format: Format::Json,
+            provenance: Provenance {
+                request_id: request.metadata.request_id.clone(),
+                workflow_sha256: request.metadata.workflow_sha256.clone(),
+                source_sha256: luma_content::sha256(&source),
+                origin: luma_content::EditOrigin::Managed,
+            },
+            observed: current.map(ArtifactVersion::reference).transpose()?,
+            expected: request.expected.clone(),
+            decision,
+            resulting,
+            source_sha256: luma_content::sha256(&source),
+            source_bytes: source.len() as u64,
+            payload_sha256: luma_content::sha256(&payload),
+            payload_bytes: payload.len() as u64,
+            source_kind: Some(SourceKind::ManagedRenderIntent),
+            derivation: Some(derivation),
+        };
+        let bytes = serde_json::to_vec(&data)?;
+        if bytes.len() as u64 > MAX_RECORD || payload.len() as u64 > MAX_PAYLOAD {
+            return Err("managed render proposal exceeds fixed bound".into());
         }
         Ok(Self {
             data,
@@ -330,6 +393,13 @@ impl Plan {
                     current.ok_or("managed edit has no prior artifact")?,
                     &request,
                 )
+            }
+            (3, Some(SourceKind::ManagedRenderIntent)) => {
+                let request: luma_content::rendered::Request = serde_json::from_slice(source)?;
+                if request.canonical_bytes()? != source {
+                    return Err("render intent is not exact canonical input".into());
+                }
+                Self::managed_render(current, &request)
             }
             _ => Err("unsupported content-store plan schema or source kind".into()),
         }
@@ -366,6 +436,9 @@ impl Plan {
     }
     pub fn source_kind(&self) -> SourceKind {
         self.data.source_kind.unwrap_or(SourceKind::Content)
+    }
+    pub fn derivation(&self) -> Option<&luma_content::rendered::Derivation> {
+        self.data.derivation.as_ref()
     }
     pub fn storage_bytes(&self) -> u64 {
         // Conservative logical-file bound including the full record allowance,
@@ -598,7 +671,9 @@ impl Repository {
                 || record.schema_version != record.plan.schema_version
                 || !matches!(
                     (record.plan.schema_version, record.plan.source_kind),
-                    (1, None) | (2, Some(SourceKind::ManagedTableIntent))
+                    (1, None)
+                        | (2, Some(SourceKind::ManagedTableIntent))
+                        | (3, Some(SourceKind::ManagedRenderIntent))
                 )
                 || record.plan.binding != self.binding
                 || name != luma_content::sha256(record.plan.provenance.request_id.as_bytes())
@@ -617,7 +692,9 @@ impl Repository {
                 "source.bin",
                 (match record.plan.source_kind {
                     None => luma_content::MAX_CONTENT_BYTES as u64,
-                    Some(SourceKind::ManagedTableIntent) => MAX_SOURCE,
+                    Some(SourceKind::ManagedTableIntent | SourceKind::ManagedRenderIntent) => {
+                        MAX_SOURCE
+                    }
                     Some(SourceKind::Content) => {
                         return Err("explicit legacy source kind forbidden".into())
                     }
@@ -804,6 +881,21 @@ impl Repository {
         }
         let current = self.current(&request.expected.artifact_id, boundary)?;
         let plan = Plan::managed_table(&current, request)?;
+        storage::repository_check(self, None, boundary)?;
+        Ok(plan)
+    }
+
+    pub fn plan_render(
+        &self,
+        request: &luma_content::rendered::Request,
+        boundary: &mut impl Boundary,
+    ) -> Result<Plan> {
+        if request.binding != self.binding {
+            return Err("managed render request owner mismatch".into());
+        }
+        boundary.admit(&self.binding, ResourceBudget::inspection())?;
+        let snapshot = self.snapshot(None, boundary)?;
+        let plan = Plan::managed_render(snapshot.current.get(&request.artifact_id), request)?;
         storage::repository_check(self, None, boundary)?;
         Ok(plan)
     }

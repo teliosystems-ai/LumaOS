@@ -49,6 +49,9 @@ enum Operation {
     Table {
         request: luma_content::table::TableEditRequest,
     },
+    Render {
+        request: luma_content::rendered::Request,
+    },
     Current {
         artifact_id: String,
     },
@@ -86,6 +89,7 @@ impl Input {
                 content.as_bytes().to_vec()
             }
             Operation::Table { request } => request.canonical_bytes()?,
+            Operation::Render { request } => request.canonical_bytes()?,
             Operation::Current { .. }
             | Operation::Historical { .. }
             | Operation::Page { .. }
@@ -193,6 +197,12 @@ impl Input {
             if request.binding != self.binding {
                 return Err("managed table request substitutes the admitted owner binding".into());
             }
+        }
+        if let Operation::Render { request } = &self.operation {
+            if request.binding != self.binding {
+                return Err("managed render request substitutes the admitted owner binding".into());
+            }
+            luma_content::rendered::prepare(request)?;
         }
         Ok(())
     }
@@ -676,6 +686,7 @@ fn plan(
                 provenance.request_id.as_str()
             }
             Operation::Table { request } => request.metadata.request_id.as_str(),
+            Operation::Render { request } => request.metadata.request_id.as_str(),
             Operation::Current { .. }
             | Operation::Historical { .. }
             | Operation::Page { .. }
@@ -718,6 +729,10 @@ fn plan(
         Operation::Table { request } => repository
             .ok_or("managed table edit requires an existing owner repository")?
             .plan_table_edit(request, boundary)?,
+        Operation::Render { request } => match repository {
+            Some(repository) => repository.plan_render(request, boundary)?,
+            None => Plan::managed_render(None, request)?,
+        },
         Operation::Current { .. }
         | Operation::Historical { .. }
         | Operation::Page { .. }
@@ -764,6 +779,14 @@ fn validate_replay(input: &Input, prior: &Plan) -> Result<()> {
                 && prior.expected() == Some(&request.expected)
                 && prior.provenance().request_id == request.metadata.request_id
                 && prior.provenance().workflow_sha256 == request.metadata.workflow_sha256
+        }
+        Operation::Render { request } => {
+            prior.source_kind() == luma_content_store::SourceKind::ManagedRenderIntent
+                && prior.artifact_id() == request.artifact_id
+                && prior.expected() == request.expected.as_ref()
+                && prior.provenance().request_id == request.metadata.request_id
+                && prior.provenance().workflow_sha256 == request.metadata.workflow_sha256
+                && prior.derivation().map(|d| d.engine) == Some(request.engine)
         }
         Operation::Current { .. }
         | Operation::Historical { .. }
@@ -959,7 +982,7 @@ fn worker(id: &str) -> Result<()> {
         if p.mode == Mode::Read {
             let effect_mode = Mode::decision(proposal.decision());
             let effect_profile = profile_id(effect_mode, &input, &bytes, proposal.review_sha256())?;
-            serde_json::json!({"schema_version":1,"approval":format!("{}:{}",effect_mode.name(),proposal.review_sha256()),"review_sha256":proposal.review_sha256(),"decision":proposal.decision(),"resulting":proposal.resulting(),"source_bytes":proposal.source_bytes(),"storage_bytes":proposal.storage_bytes(),"inspection_usage":inspection_usage(&effect_profile)?,"effect_usage":acquisition_usage(&effect_profile)?,"committed":false,"authority_returned":false,"provenance_authority":false,"workflow_executed":false})
+            serde_json::json!({"schema_version":1,"approval":format!("{}:{}",effect_mode.name(),proposal.review_sha256()),"review_sha256":proposal.review_sha256(),"decision":proposal.decision(),"resulting":proposal.resulting(),"derivation":proposal.derivation(),"source_bytes":proposal.source_bytes(),"storage_bytes":proposal.storage_bytes(),"inspection_usage":inspection_usage(&effect_profile)?,"effect_usage":acquisition_usage(&effect_profile)?,"committed":false,"authority_returned":false,"provenance_authority":false,"workflow_executed":false})
         } else {
             if p.mode != Mode::decision(proposal.decision()) || p.review != proposal.review_sha256()
             {
@@ -980,7 +1003,7 @@ fn worker(id: &str) -> Result<()> {
                 .apply(&proposal, &input.source()?, &mut boundary)?;
             // The storage transaction is real. Supplied workflow/provenance hashes
             // remain descriptions, not authenticated workflow execution evidence.
-            serde_json::json!({"schema_version":1,"outcome":outcome,"committed":true,"authority_returned":false,"provenance_authority":false,"workflow_executed":false})
+            serde_json::json!({"schema_version":1,"outcome":outcome,"derivation":proposal.derivation(),"committed":true,"authority_returned":false,"provenance_authority":false,"workflow_executed":false})
         }
     };
     boundary.current(&input.binding)?;
@@ -1519,6 +1542,44 @@ mod tests {
             operation,
             ..input()
         }
+    }
+
+    #[test]
+    fn managed_render_prevalidation_and_replay_bind_owner_engine_and_exact_request() {
+        let mut value = input();
+        let request = luma_content::rendered::Request {
+            binding: value.binding.clone(),
+            artifact_id: "sheet-one".into(),
+            expected: None,
+            metadata: luma_content::table::EditMetadata {
+                request_id: "render-one".into(),
+                workflow_sha256: "c".repeat(64),
+            },
+            engine: luma_content::rendered::Engine::Spreadsheet,
+            source: r#"{"schema_version":1,"rows":[[{"kind":"number","value":"2"}]]}"#.into(),
+        };
+        let prior = Plan::managed_render(None, &request).unwrap();
+        value.operation = Operation::Render {
+            request: request.clone(),
+        };
+        let bytes = canonical_request(&serde_json::to_vec(&value).unwrap()).unwrap();
+        let parsed = parse(&bytes).unwrap();
+        assert!(!parsed.is_query());
+        assert_eq!(parsed.source().unwrap(), request.canonical_bytes().unwrap());
+        validate_replay(&parsed, &prior).unwrap();
+        assert_eq!(
+            prior.derivation().unwrap().output_sha256,
+            io::digest(b"2\n")
+        );
+        let mut substitute = value;
+        substitute.binding.owner_generation += 1;
+        assert!(canonical_request(&serde_json::to_vec(&substitute).unwrap()).is_err());
+        substitute.binding = request.binding.clone();
+        if let Operation::Render { request } = &mut substitute.operation {
+            request.engine = luma_content::rendered::Engine::Document;
+            request.source = r#"{"schema_version":1,"title":"x","blocks":[]}"#.into();
+        }
+        assert!(validate_replay(&substitute, &prior).is_err());
     }
 
     #[test]

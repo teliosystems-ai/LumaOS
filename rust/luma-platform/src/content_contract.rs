@@ -66,6 +66,22 @@ fn process(command: &str, bytes: &[u8]) -> Result<Value> {
         return Err("editable-content request exceeds fixed transport bound".into());
     }
     let result = match command {
+        "content-contract-document" => {
+            let rendering = luma_content::document::render(bytes)?;
+            json!({"operation":"document","rendering":rendering,
+                "scripts_executed":false,"external_resources_loaded":false,"source_retained":false})
+        }
+        "content-contract-diagram" => {
+            let rendering = luma_content::diagram::render(bytes)?;
+            json!({"operation":"diagram","rendering":rendering,
+                "scripts_executed":false,"external_resources_loaded":false,"source_retained":false})
+        }
+        "content-contract-animation" => {
+            let rendering = luma_content::animation::render(bytes)?;
+            json!({"operation":"animation","rendering":rendering,
+                "scripts_executed":false,"external_resources_loaded":false,
+                "playback_started":false,"source_retained":false})
+        }
         "content-contract-spreadsheet" => {
             let calculation = luma_content::spreadsheet::calculate(bytes)?;
             json!({"operation":"spreadsheet","calculation":calculation,

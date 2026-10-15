@@ -19,8 +19,8 @@ authorized these named new tracks separately.
 | Shared control | Native account lifecycle, finite grants, protected UTC, resource generations, workflow journal and recovery | Integrate each new effect through those boundaries; no Python MVP or UI success flag substitutes for native enforcement |
 | Artifacts | Native ext4/WAL catalogs, immutable invoice versions, per-principal domains, retention/export and recovery | General content types, governed discovery, semantic collections/indexes, external-edit conflicts and complete backup/restore journeys |
 | User interface | Model-independent reference workspace and candidate native GNOME/Wayland edition | Accessible conversational/manual shell, progress/cancellation, grounded references and qualified capture/input |
-| Content and adapters | Deterministic invoice and typed exact-decimal spreadsheet calculation, editable JSON/CSV sources and fixed generated KVM runtime | Document/diagram/animation engines, named LibreOffice/browser adapters, governed engine/workflow completion and exact output/build/test receipts |
-| Windows development | Source-run WSL launchers, model smoke, platform/package observations and explicit ordinary-user scoped-file reads | Separate signed product distribution, authenticated companion/file bridge, SID mapping, ACL-aware broker, WSL-specific lifecycle and confinement |
+| Content and adapters | Deterministic invoice, spreadsheet, document, diagram and sampled-animation engines; editable JSON sources with laboratory governed publication and reconstructed result commitments; fixed generated KVM runtime | Named LibreOffice/browser adapters, authenticated workflow completion, UI rendering and exact external output/build/test receipts |
+| Windows development | Source-run WSL launchers, model smoke, package observations, signed laboratory policy/revocation evaluation and explicit ordinary-user scoped-file reads | Separate signed product distribution, authenticated companion/file bridge, SID mapping, ACL-aware broker, WSL-specific lifecycle and confinement |
 | Windows desktop | No qualified complete VM product proof | Hyper-V Gen2 image/template, identity, storage, resource limits and recovery proof; no acceleration claim from display availability |
 
 ## Initial implementation checkpoint
@@ -237,10 +237,83 @@ are bounded independently.
 The result binds canonical editable JSON source and canonical CSV by separate
 SHA256 digests and includes typed computed values. Source reopened as a generic
 JSON artifact recalculates to the same output. This is a data engine, not a
-governed execution receipt or native publication command. CSV formula-looking
+workflow completion receipt. The laboratory managed-render path below supplies
+native publication independently of the pure calculation command. CSV formula-looking
 text remains inert inside Luma but is not sanitized for automatic interpretation
 by external spreadsheet applications; qualified Office adapters/export remain
 separate work.
+
+### Editable document diagram and animation engines
+
+`content-contract-document` renders a closed editable JSON document into escaped
+standalone HTML. The source supports headings, styled inline text, paragraphs,
+ordered/unordered lists, rectangular tables, code blocks and rules. Source and
+output are independently bounded to 1 MiB; block, run, list, table-cell, text and
+work limits apply before a complete result is returned. Empty documents and
+empty text support delete-all edits. Source text cannot introduce active markup,
+links, scripts, styles or embedded resources.
+
+`content-contract-diagram` renders explicit integer canvas geometry into SVG.
+It supports rectangles, rounded rectangles, ellipses, a fixed palette, bounded
+multiline labels and straight edges with explicit cardinal ports and arrowheads.
+Node identities and edge references are checked; missing endpoints, duplicate
+identifiers, overlapping node bounds and out-of-canvas geometry are refused.
+An empty diagram is a real blank canvas. Escaped labels never become markup or
+external references. Automatic layout and cross-viewer pixel equivalence are
+not part of this engine.
+
+`content-contract-animation` returns ordered sampled SVG frames, not executable
+animation or automatic playback. A closed source names a canvas, frame rate,
+frame count, background and rectangular/circular sprites with position keyframes.
+Limits are 120 frames, 32 sprites, 64 keyframes per sprite, 4,096 canvas units per
+dimension and 1 MiB of serialized frame records. Keyframes cover the exact
+timeline in strictly increasing order. Integer linear interpolation rounds down
+for both signs; source order defines layering. Colors and identifiers use closed
+grammars, so frames contain no scripts, external resources or dynamic CSS.
+
+Each command returns canonical editable JSON, its SHA256 digest, deterministic
+rendered bytes and output digests. Reopening the retained source reproduces the
+same bytes. These pure stdin/stdout commands do not launch a browser, write a
+file, authenticate an owner or publish a version. Actual CLI tests parse returned
+SVG as XML and check exact frame positions; pixel rendering and accessibility in
+the installed viewer remain qualification work.
+
+### Managed render publication and reconstruction
+
+Native schema-1 requests add `operation.kind:render` with a closed request:
+`binding`, `artifact_id`, nullable `expected`, descriptive `metadata`, `engine`
+and exact submitted JSON `source`. Engine is one of `spreadsheet`, `document`,
+`diagram` or `animation`. Initial capture uses `expected:null`; subsequent edits
+require the complete current immutable reference. The ordinary
+`content-owned-inspection-review`, `content-owned-review` and
+`content-owned-apply` path supplies the existing current principal/generation,
+finite Read/effect pair, protected UTC and resource-generation checks. Production
+images continue to refuse this laboratory path.
+
+Schema-3 storage outcomes atomically retain the full canonical request, including
+the exact submitted source text, and an immutable JSON artifact containing the
+engine discriminator and canonical editable source. The plan/review separately
+binds the versioned engine implementation, canonical-source digest, derived-output
+digest, byte count and media type. Spreadsheet output is CSV, document output is
+HTML, diagram output is SVG and animation output is the ordered JSON frame records.
+Review/apply responses include that derivation; it is not workflow authority.
+For a conflict, the derivation describes the submitted candidate, while
+`resulting` identifies the unchanged current artifact, not that candidate.
+
+History reconstruction reruns the engine from retained intent against the exact
+prior artifact and compares the complete plan, payload and review. A modified
+output digest cannot pass merely by recomputing a record hash. Source or formula
+changes create a new version even if rendered bytes stay identical. Canonically
+unchanged source retains a no-op intent; a stale reference retains a conflict
+without overwriting the current head. Engine substitution is refused. Exact old
+retries acknowledge their original outcome without rolling a newer head back.
+Existing schema-1 and schema-2 records retain their serialization.
+
+Authorized envelope pages reopen the editable wrapper; its `source` value is
+input to the corresponding pure engine. The derived output is reproducible, not
+a second independently mutable file. UI recalculation, generated-output export,
+production rollback/recovery authority and authenticated workflow completion
+remain separate development work.
 
 ## Windows detached signature primitive
 
@@ -265,6 +338,57 @@ scratch, Linux ext4 build storage and evidence stay on D, while these security
 tests use only tiny ephemeral metadata in the repository's NTFS `.luma` directory.
 No existing directory ACL is changed and cleanup never recursively deletes an
 unverified path. These primitives do not import or update a WSL distribution.
+
+### Signed laboratory release policy evaluation
+
+`packaging/windows/verify-release-policy.ps1` joins the real detached package
+signature verifier to an independently pinned laboratory authority, a signed
+release policy and a separately signed clock interval. `Luma.Trust.psm1`
+implements evaluation; `TrustInputs.cs` holds bounded final-file handles during
+capture and verification. This evaluates signed data at its attested interval,
+not current production admission. The `production` mode refuses explicitly.
+
+The authority is a closed schema-1 laboratory record with purpose
+`luma-wsl-trust-policy-v1`, an Ed25519 SPKI key and a finite lifetime of at most
+366 days. Its exact bytes need the independently supplied `AuthoritySha256` pin.
+That pin is a selection constraint, not authenticated deployed custody.
+
+The signed policy has purpose `luma-wsl-release-policy-v1`. It binds a positive
+sequence, exact previous-policy digest, validity of at most seven days, package
+anchor digest, verifier executable digest, independent clock SPKI key and exact
+authorized release ID/manifest/rootfs digests. Separate revocation arrays name
+anchor, manifest and rootfs digests; each is sorted, unique and limited to 64
+entries. The caller supplies the exact predecessor and minimum sequence. The
+public command accepts only canonical positive decimal sequence text up to
+9,007,199,254,740,991; decimals, exponents, signs, whitespace and leading zeros
+are refused before coercion.
+
+The clock record has purpose `luma-wsl-clock-interval-v1` and binds the exact
+policy digest/sequence, manifest digest, independently supplied nonzero 32-byte
+challenge nonce and lower/upper millisecond bounds. The entire closed interval
+must lie inside the policy and package anchor's half-open lifetimes; uncertainty
+is at most 60 seconds. Package, policy and clock signing keys must be mutually
+distinct. Policy and clock signatures are raw 64-byte Ed25519 signatures over
+their respective purpose followed by `\nlab\namd64\nW\n` and the exact input
+JSON bytes. Unknown/duplicate fields, substitutions and revoked releases refuse.
+
+Each trust input is at most 65,536 bytes. Final-file handles request no-reparse
+and no-recall behavior, verify exact local path/identity, refuse hardlinks,
+offline files and observed placeholder attributes, and retain read-only sharing.
+They check metadata before reading bytes and after capture/final verification.
+This is not the scoped reader's metadata-only double-open design and does not
+qualify cloud-provider no-hydration behavior or a hard kernel-call deadline.
+Private signature scratch uses tiny owned NTFS fixtures; compiler/package
+scratch stays on D. The command imports no distribution and changes no host
+policy or account.
+
+The output separately reports valid cryptographic signatures, exact policy
+binding and validity at the attested interval. Custody, dependency authentication,
+fresh protected UTC, current revocation state, durable rollback protection and
+installation/production admission remain false. A caller-supplied nonce, floor
+or predecessor is not a durable or fresh authority. Deployment of those genuine
+authorities, a populated root filesystem and safe lifecycle integration remain
+GWIN0 development work.
 
 ### Explicit Windows scoped file reads
 
@@ -316,10 +440,10 @@ Requirement mapping remains partial:
 
 | Requirement | Development contribution | Still required for acceptance |
 | --- | --- | --- |
-| A063, T33 | Immutable generic content/storage, laboratory governed publication and managed-intent retention, plus lexical invoice index rebuild | Production head/rollback and recovery integration, generic discovery, collections and installed recovery/rebuild tests |
+| A063, T33 | Immutable generic content/storage, laboratory governed publication, managed render-intent/result reconstruction and owner-local lexical discovery | Production head/rollback and recovery integration, collections and installed recovery/rebuild tests |
 | A060, T20 | Current owner-generation/Read grants for verified invoice and generic-content search, exact historical pages and generation-fenced delivery | General per-result access policy, semantic collections/search and installed revocation qualification |
 | W005, V01 | Read-only platform observations, calculated storage and exact supplied release-tuple comparison | Authenticated release policy, encryption and enterprise policy checks |
-| W006, V01/V03 | Collision refusal, unchanged distributions, normalized package validation and a lab detached-signature primitive | Qualified custody/dependencies/time/revocation, authenticated populated root filesystem, safe import/rollback and first-user/Admin setup |
+| W006, V01/V03 | Collision refusal, unchanged distributions, normalized package validation, package signatures and signed laboratory release-policy/revocation evaluation | Qualified custody/dependencies, fresh protected time/current revocation, durable rollback protection, authenticated populated root filesystem, safe import/rollback and first-user/Admin setup |
 | W009, V04/T13 | Observed free-memory planning check with an explicit Windows reserve | Effective guest limits, other guest workloads, measured host coexistence and installed worker cgroups |
 
 No requirement in this table is marked complete by these development slices.
@@ -329,12 +453,12 @@ No requirement in this table is marked complete by these development slices.
    Extend owner-domain discovery
    with collections and per-result access policy before embeddings or automatic
    organization; pure data inspection is not storage publication.
-2. Build the shared accessible manual/conversational shell and remaining
-   document/diagram/animation engines on those contracts. Join the typed
-   spreadsheet engine to governed workflow completion and UI recalculation.
+2. Build the shared accessible manual/conversational shell on the deterministic
+   content contracts. Join the four managed-render engines to authenticated
+   workflow completion, UI rendering and recalculation.
    Add adapters and capture only
    with explicit permissions and real completion receipts.
-3. Join the purpose-separated Windows signature primitive to authenticated
+3. Join purpose-separated Windows package/policy/clock verification to authenticated
    custody, protected time/revocation and a populated uniquely named WSL root
    filesystem. Preserve existing
    distributions/defaults. Introduce the authenticated SID/principal bridge
@@ -358,8 +482,9 @@ The checkpoints above do not complete the following implementation work:
   owner's lexical search; usable UI integration for paged reads and recalculation.
 - Accessible manual/conversational shell, progress/cancellation, grounded references,
   explicit speech/image/screen/video capture and visible capture controls.
-- Deterministic document, diagram and animation engines, named/versioned
-  LibreOffice/browser and allowlisted hardware adapters with actual receipts.
+- Installed viewer integration and authenticated completion for the deterministic
+  engines, named/versioned LibreOffice/browser and allowlisted hardware adapters
+  with actual external completion receipts.
 - Authenticated Windows companion, trusted dependency/custody/time/revocation
   delivery, populated runnable WSL package, SID/principal bridge and persistent
   scoped ingestion with product grants.
@@ -511,5 +636,38 @@ authenticated Windows/Linux product bridge.
 
 The [query and spreadsheet record](gates/g3/query_spreadsheet_2026-10-15.json)
 and [Windows scoped-read record](gates/gwin0/scoped_read_2026-10-15.json) bind
-the exact snapshots, results and remaining work. G3/GWIN0 remain open for the development and
-qualification listed above; the frozen G2 image remains unchanged.
+the exact snapshots, results and remaining work. G3/GWIN0 remain open for the
+development and qualification listed above; the frozen G2 image remains unchanged.
+
+### Managed render and signed policy verification
+
+The final frozen 473-file snapshot passes warnings-denied all-target compilation
+and the complete 1,179-test Rust suite, including 97 shared-content tests, 50
+storage tests, 1,031 platform tests and one compile-fail documentation test. The
+same 42 existing fixture-only entries remain excluded from the broad unit run;
+no new test is ignored. All 26 actual unprivileged CLI cases and 470 native-source
+tests pass without skips. The complete pinned UTC source fixture is supplied,
+so the two initially unavailable source cases execute. OS/model authentication
+(13 each), UTC authentication (8), policy parses (19), disposable PAM (6) and
+resource software-TPM cases (4) also pass.
+
+The initial integrated attempt failed a new test that incorrectly required
+automatic retry success after every cancelled write. The corrected test verifies
+the exact separate-recovery refusal and byte-identical preservation of partial
+preparations, or exact replay of a complete outcome. Production recovery behavior
+is unchanged. Independent review also found and corrected forbidden XML
+characters in diagram text, added exact animation work accounting, and expanded
+concurrency, schema-downgrade and durable-phase coverage. The final snapshot
+receives a fresh full sweep rather than inheriting the failed attempt's result.
+
+The Windows signed-policy suite passes 94 actual assertions in both its agent
+run and independent parent rerun, with no skips. Real signatures, revocations,
+bindings, malformed public-command sequence floors and production refusal run
+on the ordinary host-user process. The verified Windows stage is pushed as
+`0e49cd9`. Its inputs remain byte-identical in the final integrated snapshot.
+
+The [managed-render record](gates/g3/render_engines_2026-10-15.json) and
+[signed-policy record](gates/gwin0/release_policy_2026-10-15.json) retain exact
+hashes, the earlier failure and qualification boundaries. These complete the
+named deterministic engine and laboratory policy components, not all G3/GWIN0
+development or installed acceptance. The frozen G2 image remains unchanged.

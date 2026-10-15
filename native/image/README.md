@@ -126,6 +126,43 @@ These source changes are not in the delivered sequence-14 image, which retains
 its recorded 30-second session and 25-second runtime. A subsequent identified
 image is needed to test the extension.
 
+## Beta artifact discovery and editable content
+
+The beta branch adds `sudo luma-platform granted-run artifact-owned-search
+LOGIN READ-GRANT QUERY LIMIT`. Obtain the exact independent inspection scope
+from `granted-run artifact-gc-inspection-review LOGIN`, then issue the finite
+Read grant through the existing Admin process. Search opens only that current
+principal's catalog, verifies content in bounded blocks and rechecks account,
+generation and grant during rebuilding and delivery. It returns deterministic
+latest-version references for the current generation, not private cross-owner
+results, stale authority, a semantic-search claim or permission to export/write.
+
+The shared `luma-content` contract library supports bounded UTF-8 text, JSON
+and rectangular CSV. `content-contract-capture`, `content-contract-reopen` and
+`content-contract-compare` accept schema-1 JSON on stdin without root or an
+installed product. The data-only CLI returns canonical envelopes/references or
+explicit no-change/new-version/conflict decisions. Supplied owner/provenance
+fields are untrusted data: outputs explicitly return no authenticated owner,
+grant, durable commit or certificate. No file is opened or overwritten. Storage
+integration still needs the current product principal, finite grants, resource
+admission and transactional publication.
+
+Capture input has `schema_version`, `binding` (`installation`, `owner`,
+`owner_generation`), `artifact_id`, `format` (`utf8-text`, `json`, `csv`),
+`content` and `provenance` (`request_id`, `workflow_sha256`, `source_sha256`,
+`origin`). The source SHA256 must match the exact original UTF-8 input.
+Reopen input has `schema_version`, `binding` and the exact canonical `envelope`
+string returned by capture. Compare input has `schema_version`, `binding`,
+`current_envelope`, the exported base `expected` reference, new `content` and
+external-origin `provenance`. Stale bases retain a bound candidate as a conflict;
+they never overwrite the current version or automatically merge.
+
+Each original/canonical document is at most one MiB. JSON rejects duplicate
+keys and overflowing integer literals; decimal/exponent values use pinned
+serde/IEEE-754 semantics, not exact-decimal arithmetic or RFC8785. CSV is data,
+not a spreadsheet formula engine or an Office adapter. These beta changes are
+not in the frozen sequence-14 image; use a separately identified future build.
+
 ## Candidate Wayland desktop edition
 
 The `desktop` build uses pinned Ubuntu GNOME/GDM packages, Files, Console,

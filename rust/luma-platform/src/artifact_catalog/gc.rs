@@ -103,15 +103,25 @@ fn canonical<T: Serialize + for<'a> Deserialize<'a>>(
     dir: &File,
     name: &str,
 ) -> Result<(T, Vec<u8>)> {
+    canonical_checked(dir, name, &mut || Ok(()))
+}
+
+fn canonical_checked<T: Serialize + for<'a> Deserialize<'a>>(
+    dir: &File,
+    name: &str,
+    check: &mut impl FnMut() -> Result<()>,
+) -> Result<(T, Vec<u8>)> {
+    check()?;
     let file = io::open_at(dir, name, libc::O_RDONLY, 0)?;
     if file.metadata()?.mode() & 0o7777 != 0o400 {
         return Err("artifact GC evidence lost immutable permissions".into());
     }
-    let bytes = io::read_member(dir, name, MAX_EVIDENCE)?;
+    let bytes = io::read_member_checked(dir, name, MAX_EVIDENCE, &mut *check)?;
     let value: T = serde_json::from_slice(&bytes)?;
     if serde_json::to_vec(&value)? != bytes {
         return Err("noncanonical artifact GC evidence; retain it".into());
     }
+    check()?;
     Ok((value, bytes))
 }
 fn publish<T: Serialize>(dir: &File, prefix: &str, value: &T) -> Result<String> {
@@ -646,11 +656,20 @@ impl Catalog {
 }
 
 pub(super) fn validate_sidecar(directory: &File) -> Result<()> {
+    validate_sidecar_checked(directory, &mut || Ok(()))
+}
+
+pub(super) fn validate_sidecar_checked(
+    directory: &File,
+    check: &mut impl FnMut() -> Result<()>,
+) -> Result<()> {
+    check()?;
     let names = io::names(directory, MAX_MARKS * 3)?;
     let mut marks: std::collections::BTreeMap<String, Mark> = std::collections::BTreeMap::new();
     let mut intents: std::collections::BTreeMap<String, Intent> = std::collections::BTreeMap::new();
     let mut outcomes = Vec::new();
     for name in names {
+        check()?;
         let (kind, id) = name
             .strip_suffix(".json")
             .and_then(|n| n.split_once('-'))
@@ -660,7 +679,7 @@ pub(super) fn validate_sidecar(directory: &File) -> Result<()> {
         }
         match kind {
             "mark" => {
-                let (record, bytes): (Mark, _) = canonical(directory, &name)?;
+                let (record, bytes): (Mark, _) = canonical_checked(directory, &name, check)?;
                 record.validate()?;
                 if io::digest(&bytes) != id {
                     return Err("artifact GC mark digest mismatch".into());
@@ -668,7 +687,7 @@ pub(super) fn validate_sidecar(directory: &File) -> Result<()> {
                 marks.insert(id.into(), record);
             }
             "intent" => {
-                let (record, bytes): (Intent, _) = canonical(directory, &name)?;
+                let (record, bytes): (Intent, _) = canonical_checked(directory, &name, check)?;
                 record.validate()?;
                 if io::digest(&bytes) != id {
                     return Err("artifact GC intent digest mismatch".into());
@@ -676,7 +695,7 @@ pub(super) fn validate_sidecar(directory: &File) -> Result<()> {
                 intents.insert(id.into(), record);
             }
             "outcome" => {
-                let (record, bytes): (Outcome, _) = canonical(directory, &name)?;
+                let (record, bytes): (Outcome, _) = canonical_checked(directory, &name, check)?;
                 if io::digest(&bytes) != id || record.schema_version != 1 || !record.deleted {
                     return Err("artifact GC outcome digest/schema mismatch".into());
                 }
@@ -689,6 +708,7 @@ pub(super) fn validate_sidecar(directory: &File) -> Result<()> {
         return Err("artifact GC audit capacity exhausted".into());
     }
     for intent in intents.values() {
+        check()?;
         let mark = marks
             .get(&intent.proposal.mark_sha256)
             .ok_or("artifact GC intent has no exact grace mark")?;
@@ -704,6 +724,7 @@ pub(super) fn validate_sidecar(directory: &File) -> Result<()> {
     }
     let mut completed = BTreeSet::new();
     for outcome in outcomes {
+        check()?;
         let intent = intents
             .get(&outcome.intent_sha256)
             .ok_or("artifact GC outcome has no exact deletion intent")?;
@@ -715,7 +736,7 @@ pub(super) fn validate_sidecar(directory: &File) -> Result<()> {
             return Err("artifact GC outcome changed or duplicated its exact intent".into());
         }
     }
-    Ok(())
+    check()
 }
 
 #[cfg(test)]

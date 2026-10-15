@@ -154,6 +154,18 @@ pub(crate) fn names(dir: &File, max: usize) -> Result<Vec<String>> {
 }
 
 pub(crate) fn read_member(dir: &File, name: &str, limit: u64) -> Result<Vec<u8>> {
+    read_member_checked(dir, name, limit, || Ok(()))
+}
+
+/// Revalidate the caller's current authority between fixed-size private reads.
+/// Metadata, no-follow and mutation checks are identical to ordinary reads.
+pub(crate) fn read_member_checked(
+    dir: &File,
+    name: &str,
+    limit: u64,
+    mut check: impl FnMut() -> Result<()>,
+) -> Result<Vec<u8>> {
+    check()?;
     let mut file = open_at(dir, name, libc::O_RDONLY, 0)?;
     let before = file.metadata()?;
     if !before.is_file()
@@ -165,7 +177,23 @@ pub(crate) fn read_member(dir: &File, name: &str, limit: u64) -> Result<Vec<u8>>
         return Err("unsafe or oversized native artifact member".into());
     }
     let mut bytes = Vec::new();
-    (&mut file).take(limit + 1).read_to_end(&mut bytes)?;
+    let mut block = [0_u8; 32 * 1024];
+    loop {
+        check()?;
+        let capacity = limit
+            .saturating_sub(bytes.len() as u64)
+            .saturating_add(1)
+            .min(block.len() as u64) as usize;
+        let count = file.read(&mut block[..capacity])?;
+        check()?;
+        if count == 0 {
+            break;
+        }
+        if bytes.len() as u64 + count as u64 > limit {
+            return Err("native artifact member exceeds read bound".into());
+        }
+        bytes.extend_from_slice(&block[..count]);
+    }
     let after = file.metadata()?;
     if bytes.len() as u64 != before.len()
         || (
@@ -188,6 +216,7 @@ pub(crate) fn read_member(dir: &File, name: &str, limit: u64) -> Result<Vec<u8>>
     {
         return Err("native artifact member changed during read".into());
     }
+    check()?;
     Ok(bytes)
 }
 

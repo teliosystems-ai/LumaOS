@@ -18,10 +18,12 @@ mod domains;
 mod gc;
 mod gc_cli;
 mod owned_effects;
+mod owned_search;
 mod search;
 pub(crate) use domains::{commit_owned_invoice, committed_owned_invoice, owned_invoice_receipt};
 pub(crate) use gc_cli::command as gc_command;
 pub(crate) use owned_effects::command as owned_effects_command;
+pub(crate) use owned_search::command as owned_search_command;
 pub(crate) use search::command as search_command;
 const MAX_CONTENT: u64 = 2 * 1024 * 1024;
 const MAX_BYTES: u64 = 64 * 1024 * 1024;
@@ -136,7 +138,8 @@ pub(crate) fn safe_path(path: &Path) -> Result<()> {
     Ok(())
 }
 
-fn layout(root: &File) -> Result<()> {
+fn layout_checked(root: &File, check: &mut impl FnMut() -> Result<()>) -> Result<()> {
+    check()?;
     let names = io::names(root, 7)?;
     for required in ["metadata.sqlite3", "objects", "pending", "retained"] {
         if !names.iter().any(|n| n == required) {
@@ -144,6 +147,7 @@ fn layout(root: &File) -> Result<()> {
         }
     }
     for name in names {
+        check()?;
         match name.as_str() {
             "objects" | "pending" | "retained" => {}
             "gc" => {
@@ -151,13 +155,13 @@ fn layout(root: &File) -> Result<()> {
                 if directory.metadata()?.dev() != root.metadata()?.dev() {
                     return Err("artifact GC must share the catalog filesystem".into());
                 }
-                gc::validate_sidecar(&directory)?;
+                gc::validate_sidecar_checked(&directory, check)?;
             }
             "metadata.sqlite3" | "metadata.sqlite3-wal" => {
-                io::read_member(root, &name, 16 * 1024 * 1024)?;
+                io::read_member_checked(root, &name, 16 * 1024 * 1024, &mut *check)?;
             }
             "metadata.sqlite3-shm" => {
-                io::read_member(root, &name, 65536)?;
+                io::read_member_checked(root, &name, 65536, &mut *check)?;
             }
             _ => return Err("unknown artifact catalog member; preserve state".into()),
         }
@@ -355,6 +359,16 @@ impl Catalog {
     }
 
     fn open_domain(path: &Path, installation: &str, owner: &str) -> Result<Self> {
+        Self::open_domain_checked(path, installation, owner, &mut || Ok(()))
+    }
+
+    fn open_domain_checked(
+        path: &Path,
+        installation: &str,
+        owner: &str,
+        check: &mut impl FnMut() -> Result<()>,
+    ) -> Result<Self> {
+        check()?;
         safe_path(path)?;
         let root = scoped_read::open_directory(path)?;
         io::private_directory(&root)?;
@@ -362,7 +376,7 @@ impl Catalog {
         if unsafe { libc::flock(root.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
             return Err("artifact catalog is busy".into());
         }
-        layout(&root)?;
+        layout_checked(&root, check)?;
         let objects = io::child_directory(&root, "objects")?;
         let pending = io::child_directory(&root, "pending")?;
         let retained = io::child_directory(&root, "retained")?;
@@ -372,6 +386,7 @@ impl Catalog {
             }
         }
         let db = Connection::open(&path.join("metadata.sqlite3"))?;
+        check()?;
         if db.query("PRAGMA journal_mode", &[], 1)? != [vec!["wal".to_owned()]]
             || db.query("PRAGMA page_size", &[], 1)? != [vec!["4096".to_owned()]]
             || db.query("PRAGMA application_id", &[], 1)? != [vec!["1280658753".to_owned()]]
@@ -420,6 +435,7 @@ impl Catalog {
             return Err("artifact catalog schema or integrity failure".into());
         }
         db.exec("PRAGMA max_page_count=4096;")?;
+        check()?;
         let result = Self {
             db,
             root,
@@ -429,14 +445,23 @@ impl Catalog {
             installation: installation.into(),
             owner: owner.into(),
         };
-        result.inventory()?;
+        result.inventory_checked(check)?;
         Ok(result)
     }
 
     fn inventory(&self) -> Result<(Vec<(u64, Receipt)>, Vec<String>, u64)> {
+        self.inventory_checked(&mut || Ok(()))
+    }
+
+    fn inventory_checked(
+        &self,
+        check: &mut impl FnMut() -> Result<()>,
+    ) -> Result<(Vec<(u64, Receipt)>, Vec<String>, u64)> {
+        check()?;
         let rows = self.db.query("SELECT r.sequence,r.request_id,r.artifact_id,r.version,r.canonical,v.content_sha256,v.content_bytes FROM receipts r JOIN versions v ON r.artifact_id=v.artifact_id AND r.version=v.version ORDER BY r.sequence", &[], MAX_RECORDS)?;
         let mut receipts = Vec::new();
         for row in rows {
+            check()?;
             let receipt: Receipt = serde_json::from_str(&row[4])?;
             receipt.validate_owner(&self.installation, &self.owner)?;
             if serde_json::to_string(&receipt)? != row[4]
@@ -469,6 +494,7 @@ impl Catalog {
             &[],
             MAX_RECORDS,
         )? {
+            check()?;
             let versions = receipts
                 .iter()
                 .filter(|(_, r)| r.artifact_id == row[0])
@@ -483,10 +509,11 @@ impl Catalog {
         let mut orphans = Vec::new();
         let names = io::names(&self.objects, MAX_FILES)?;
         for name in &names {
+            check()?;
             if !io::hash(name) {
                 return Err("invalid artifact object identity".into());
             }
-            let bytes = io::read_member(&self.objects, name, MAX_CONTENT)?;
+            let bytes = io::read_member_checked(&self.objects, name, MAX_CONTENT, &mut *check)?;
             total += bytes.len() as u64;
             if total > MAX_BYTES || io::digest(&bytes) != *name {
                 return Err("artifact object integrity or capacity failure".into());
@@ -496,9 +523,15 @@ impl Catalog {
             }
         }
         for (_, receipt) in &receipts {
+            check()?;
             if !names.contains(&receipt.content_sha256)
-                || io::read_member(&self.objects, &receipt.content_sha256, MAX_CONTENT)?.len()
-                    as u64
+                || io::read_member_checked(
+                    &self.objects,
+                    &receipt.content_sha256,
+                    MAX_CONTENT,
+                    &mut *check,
+                )?
+                .len() as u64
                     != receipt.content_bytes
             {
                 return Err("committed artifact object is missing or invalid".into());
@@ -508,13 +541,15 @@ impl Catalog {
         let mut preparation_ids = BTreeSet::new();
         for dir in [&self.pending, &self.retained] {
             for request in io::names(dir, MAX_FILES)? {
+                check()?;
                 if !io::identifier(&request)
                     || !preparation_ids.insert(request.clone())
                     || receipts.iter().any(|(_, r)| r.request_id == request)
                 {
                     return Err("invalid artifact preparation identity".into());
                 }
-                total += io::read_member(dir, &request, MAX_CONTENT)?.len() as u64;
+                total +=
+                    io::read_member_checked(dir, &request, MAX_CONTENT, &mut *check)?.len() as u64;
                 preparations += 1;
                 if total > MAX_BYTES {
                     return Err("artifact preparation capacity failure".into());
@@ -524,6 +559,7 @@ impl Catalog {
         if names.len() + preparations > MAX_FILES {
             return Err("artifact file capacity exhausted".into());
         }
+        check()?;
         Ok((receipts, orphans, total))
     }
 

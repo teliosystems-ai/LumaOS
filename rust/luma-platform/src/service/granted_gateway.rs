@@ -1363,6 +1363,7 @@ pub(crate) fn launch(arguments: &[String]) -> Result<()> {
                 | "artifact-owned-export"
                 | "artifact-owned-retain-proposal"
                 | "artifact-owned-retain"
+                | "artifact-owned-search"
                 | "policy-evidence-review"
                 | "policy-evidence-retain"
                 | "policy-evidence-pending-review"
@@ -1914,6 +1915,7 @@ mod tests {
             "workflow-dag-advance",
             "MODEL-ACTIVATE",
             "model-activate-extra",
+            "artifact-owned-search",
         ] {
             assert!(!extended_client_command(command));
         }

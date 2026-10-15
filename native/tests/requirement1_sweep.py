@@ -51,7 +51,7 @@ def executed_tests(name, output):
         if not summaries or counts['passed'] + counts['failed'] == 0:
             raise ValueError('Rust lane did not execute any recognized tests')
         return counts
-    if name in ('native-source-tests', 'utc-release-authentication', 'public-trust-authentication', 'model-public-authentication'):
+    if name in ('native-source-tests', 'utc-release-authentication', 'public-trust-authentication', 'model-public-authentication', 'content-contract-cli'):
         summaries = re.findall(r'^Ran (\d+) tests? in .+$', output, re.MULTILINE)
         if len(summaries) != 1 or int(summaries[0]) == 0:
             raise ValueError('native lane did not execute a recognized nonempty suite')
@@ -64,7 +64,7 @@ def executed_tests(name, output):
         discovered = int(summaries[0])
         failed = details.get('failures', 0) + details.get('errors', 0)
         skipped = details.get('skipped', 0)
-        if name in ('utc-release-authentication', 'public-trust-authentication', 'model-public-authentication') and any(details.values()):
+        if name in ('utc-release-authentication', 'public-trust-authentication', 'model-public-authentication', 'content-contract-cli') and any(details.values()):
             raise ValueError('public authentication requires every test to pass without skips')
         return {'discovered': discovered, 'passed': discovered - failed - skipped
                 - details.get('expected failures', 0) - details.get('unexpected successes', 0),
@@ -82,6 +82,8 @@ def main():
     parser.add_argument('--deny-warnings', action='store_true')
     parser.add_argument('--apparmor-parse', action='store_true',
                         help='parse shipped profiles without kernel loading or policy caching')
+    parser.add_argument('--content-cli-fixture', action='store_true',
+                        help='build actual platform CLI and execute content contracts as a disposable unprivileged UID')
     parser.add_argument('--pam-fixture', action='store_true',
                         help='also run the real PAM fixture in this disposable container')
     parser.add_argument('--resource-tpm-fixture', action='store_true',
@@ -153,6 +155,14 @@ def main():
     ]
     cases.extend(('rust-tests-' + value.replace(':', '-'), rust_command(value),
                   repository / 'rust', 1800) for value in args.extra_rust_filter)
+    if args.content_cli_fixture:
+        cases.extend([
+            ('content-contract-build', ['cargo', 'build', '--offline', '--locked',
+                '--bin', 'luma-platform', '--target-dir', '/cache/target'], repository / 'rust', 600),
+            ('content-contract-cli', ['/usr/bin/python3', '-B',
+                str(repository / 'native/tests/content_contract_cli.py'),
+                '--binary', '/cache/target/debug/luma-platform'], repository, 180),
+        ])
     cases.extend([
         ('native-source-tests', ['/usr/bin/python3', '-B', '-m', 'unittest', 'discover',
                                  '-s', 'native/tests', '-p', 'test_*.py', '-v'], repository, 600),
@@ -226,6 +236,7 @@ def main():
               'rust_filter': args.rust_filter, 'warnings_denied': args.deny_warnings,
               'extra_rust_filters': args.extra_rust_filter,
               'real_pam_fixture_requested': args.pam_fixture,
+              'content_cli_fixture_requested': args.content_cli_fixture,
               'resource_software_tpm_requested': args.resource_tpm_fixture,
               'admin_software_tpm_requested': args.admin_tpm_fixture,
               'utc_release_authentication_requested': args.utc_release_archive is not None,

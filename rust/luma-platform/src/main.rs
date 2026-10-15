@@ -17,6 +17,7 @@ mod authentication;
 mod broker_effects;
 mod bundle;
 mod calculation;
+mod content_contract;
 mod credential_observer;
 mod disk;
 mod finite_grants;
@@ -216,6 +217,7 @@ fn dispatch() -> Result<()> {
                     | "artifact-owned-export"
                     | "artifact-owned-retain-proposal"
                     | "artifact-owned-retain"
+                    | "artifact-owned-search"
             )
         )
     {
@@ -302,6 +304,12 @@ fn dispatch() -> Result<()> {
             | "workflow-recovery-reconcile",
         ) => workflow_runs::recovery::command(&args),
         Some("granted-run") => service::granted_gateway::launch(&args[1..]),
+        Some(
+            "content-contract-capture" | "content-contract-reopen" | "content-contract-compare",
+        ) if args.len() == 1 => content_contract::stdin(&args[0]),
+        Some("artifact-owned-search") if args.len() == 5 => {
+            artifact_catalog::owned_search_command(&args)
+        }
         Some("generated-resource-worker" | "generated-review" | "generated-execute") => {
             generated_runtime::command(&args)
         }
@@ -765,6 +773,8 @@ fn dispatch() -> Result<()> {
             println!("Managed laboratory invoice artifacts (installed root only): artifact-store-init (explicit older-install setup; refuses existing state) | artifact-store-status | artifact-publish-invoice REQUEST-ID (CSV stdin; signed workflow and broker-leased calculation) | artifact-read REQUEST-ID | artifact-reconcile REQUEST-ID REVIEW-SHA256 (publish a complete reviewed preparation only with valid broker result provenance; committed acknowledgements are read-only) | artifact-abort REQUEST-ID ABORT-REVIEW-SHA256 (retain reviewed partial bytes; never reuse the request). Missing/fenced preparation provenance requires retention and a new request with source input. Root-owned storage; product Admin, folder grants and TPM rollback protection remain pending.");
             println!("Native ADR-0003 catalog (installed root only, ext4): artifact-catalog-init | artifact-catalog-status | artifact-catalog-publish-invoice REQUEST-ID ARTIFACT-ID EXPECTED-VERSION (CSV stdin; broker-leased calculation; 0 creates version 1) | artifact-catalog-read ARTIFACT-ID VERSION | artifact-catalog-retain REQUEST-ID RETAIN-REVIEW-SHA256. WAL metadata and append-only generation receipts commit after synchronized content objects and a fresh result recheck. No automatic migration/deletion, product Admin grants or rollback protection.");
             println!("Laboratory catalog discovery: artifact-catalog-search QUERY LIMIT. Rebuilds a bounded lexical index over verified current versions; exact all-term matching, deterministic ordering, no model or durable index. Installed laboratory root only, unavailable after Admin bootstrap. Not governed or semantic search.");
+            println!("Owned catalog discovery: granted-run artifact-gc-inspection-review LOGIN returns the exact independent Read scope; granted-run artifact-owned-search LOGIN READ-GRANT QUERY LIMIT uses current principal/grant checks during verified rebuild and bounded delivery. Current-generation, latest-version lexical references only; no semantic model or cross-owner lookup.");
+            println!("Editable-content contracts: content-contract-capture | content-contract-reopen | content-contract-compare take bounded schema-1 JSON on stdin. UTF8 text/JSON/CSV only; immutable version references, canonical reopen and explicit external-edit conflict decisions. Pure data inspection, not authenticated ownership, a file grant, durable publication, automatic merge or certification.");
             println!("Explicit legacy copy import (installed root only): artifact-catalog-legacy-inspect LEGACY-REQUEST-ID | artifact-catalog-import-legacy LEGACY-REQUEST-ID REVIEW-SHA256. Review binds the complete source receipt; fixed source/catalog locks and current signed workflow checks span publication. Stable mapped IDs provide exact replay. Original data/receipts and retained preparations are preserved; no automatic migration or format downgrade.");
             println!("Model operations: models | model-install-check MODEL-ID | model-install MODEL-ID | model-chat [--timeout-seconds 1..1800] [--max-tokens 1..128] (prompt on stdin).\nInstaller accepts --model MODEL-ID or --model manual-only; otherwise prompts.\nPreflight does not change model configuration or reserve future serving capacity; cached verification uses a temporary acquisition lease. Activation rechecks after stopping the worker. Weights are acquired from pinned HTTPS publisher URLs after hardware admission.");
             println!("Governed model distribution: admin-model-command LOGIN REQUEST FILE [--commit REVIEW-SHA256] (trust publication/catalog admission only); admin-model-custodian-command LOGIN REQUEST FILE [--commit REVIEW-SHA256] (closed approve/sign intent, actual scoped PAM, server-derived UTC and event receipt). Sign only the canonical statement returned after its committed signing authorization; private signing custody remains external. model-pack-import-review MODEL-ID | model-pack-import LOGIN GRANT MODEL-ID (pack preparation only, never catalog/serving activation).");

@@ -1,5 +1,5 @@
 [workspace]
-members = ["luma-platform"]
+members = ["luma-platform", "luma-content"]
 resolver = "2"
 
 [profile.release]

@@ -49,6 +49,15 @@ class SweepExecutionTests(unittest.TestCase):
                         text.replace('OK', 'OK (expected failures=1)')):
             with self.assertRaises(ValueError):
                 SWEEP.executed_tests('public-trust-authentication', invalid)
+
+    def test_actual_content_cli_lane_requires_nonempty_unskipped_execution(self):
+        text = 'Ran 9 tests in 0.1s\n\nOK\n'
+        self.assertEqual(SWEEP.executed_tests('content-contract-cli', text)['passed'], 9)
+        for invalid in ('', text.replace('9 tests', '0 tests'), text + text,
+                        text.replace('OK', 'OK (skipped=1)'),
+                        text.replace('OK', 'OK (expected failures=1)')):
+            with self.assertRaises(ValueError):
+                SWEEP.executed_tests('content-contract-cli', invalid)
     def test_utc_crypto_lane_requires_nonempty_all_passing_tests(self):
         text = 'Ran 7 tests in 0.1s\n\nOK\n'
         self.assertEqual(SWEEP.executed_tests('utc-release-authentication', text)['passed'], 7)

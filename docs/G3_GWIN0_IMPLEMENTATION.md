@@ -23,7 +23,7 @@ authorized these named new tracks separately.
 | Windows development | Source-run WSL launchers, native Windows/WSL model smoke and platform observations | Separate signed product distribution, authenticated companion/file bridge, SID mapping, ACL-aware broker, WSL-specific lifecycle and confinement |
 | Windows desktop | No qualified complete VM product proof | Hyper-V Gen2 image/template, identity, storage, resource limits and recovery proof; no acceleration claim from display availability |
 
-## First implemented slices
+## Initial implementation checkpoint
 
 The native `artifact-catalog-search QUERY LIMIT` command rebuilds a bounded
 in-memory lexical index from verified current catalog versions. It normalizes
@@ -60,6 +60,51 @@ The approved QA-only extension is implemented independently in native source.
 It does not alter the frozen sequence-14 image or broaden another session's
 purpose. See [the approval](gates/g2/qa_session_approval_2026-10-15.json).
 
+## Principal discovery and shared content integration
+
+The next checkpoint adds `granted-run artifact-owned-search LOGIN READ-GRANT
+QUERY LIMIT`. It uses the existing independent `catalog-inspect` Read scope
+returned by `granted-run artifact-gc-inspection-review LOGIN`. Current human
+account, principal generation and grant checks span owner-domain admission,
+verified 32-KiB private reads, bounded index work and result delivery. Only the
+current generation's latest versions are returned, in deterministic order.
+Revocation checks occur at bounded delivery boundaries; already-delivered
+partial bytes cannot be recalled. This is owner-domain lexical discovery,
+not semantic search, a cross-user corpus or a replacement for export grants.
+
+The cross-platform `luma-content` Rust library adds immutable, owner/generation
+and provenance-bound contracts for UTF-8 text, JSON and rectangular CSV.
+Exact original and canonical byte digests remain distinct. Canonical reopen
+checks content and metadata; optimistic external-edit comparison returns
+no-change, a proposed next version or a retained conflict candidate. A stale
+base never overwrites current content or automatically merges. Blank text and
+delete-all text edits are supported. JSON duplicate keys, oversized structures,
+overflowing integers and unsupported controls are refused. Floating-point JSON
+uses the pinned parser's round-trip feature, not exact-decimal arithmetic or
+RFC8785.
+
+The real `luma-platform content-contract-capture`, `content-contract-reopen`
+and `content-contract-compare` commands accept bounded schema-1 JSON on stdin
+without root. They return inert data, explicitly without authenticated
+ownership, grants, committed storage or certification. Generic content
+publication into the protected catalog still needs finite write authority,
+resource leases and transactional integration. These commands do not open
+files, launch Office adapters or execute CSV formulas.
+
+Windows planning now accepts a closed seven-component storage budget: active
+and candidate images, model packs, migration copies, user quota, backup staging
+and recovery reserve. Checked UInt64 arithmetic and exact selected-drive binding
+compare the total with observed free capacity, without a fixed 80-GiB pass
+floor. A separate exact Windows edition/build/WSL runtime tuple comparison
+checks supplied review data. Bounded strict JSON refuses duplicate, escaped,
+unknown or invalid fields and excessive nesting. Matching supplied data is not
+authenticated release qualification or an installation permit. Host encryption,
+enterprise policy, effective guest limits and actual confinement remain separate
+prerequisites. See [Windows planning commands](../packaging/windows/README.md).
+
+The sequence-14 G2 image remains frozen. These source additions need a later,
+separately identified image before native acceptance.
+
 ## Next integrated work
 
 Requirement mapping for this first slice is deliberately partial:
@@ -74,10 +119,11 @@ Requirement mapping for this first slice is deliberately partial:
 
 No requirement in this table is marked complete by the first slice.
 
-1. Define reviewed artifact-discovery grants and effect-time access checks, then
-   integrate rebuildable search with principal domains before exposing product
-   search. Add generic immutable content/version contracts and external-edit
-   conflict handling before embeddings or automatic organization.
+1. Publish the shared immutable content/version contracts through governed
+   catalog transactions, with finite write grants, resource admission and
+   durable external-edit conflict retention. Extend owner-domain discovery
+   with collections and per-result access policy before embeddings or automatic
+   organization; pure data inspection is not storage publication.
 2. Build the shared accessible manual/conversational shell and deterministic
    editable-content engines on those contracts. Add adapters and capture only
    with explicit permissions and real completion receipts.
@@ -108,15 +154,15 @@ global WSL shutdown or memory configuration change is included in this first
 slice. Production signing uses genuine external custody; these tools never
 manufacture qualification evidence.
 
-The read-only host probe on 2026-10-15 observed Windows 11 Home, amd64 and WSL2
+The initial read-only host probe on 2026-10-15 observed Windows 11 Home, amd64 and WSL2
 with `Ubuntu` still the default distribution. The proposed `LumaOS-Dev` name was
 unoccupied. The 12-GiB guest plus 8-GiB host planning reserve was refused on the
 approximately 16-GiB host; no allocation or configuration change followed.
-Windows development tests passed 26 assertions under the approved process-only
+Initial Windows development tests passed 26 assertions under the approved process-only
 RemoteSigned setting, with saved policy unchanged. See
 [the exact Windows evidence](gates/gwin0/preflight_2026-10-15.json).
 
-The immutable native snapshot passes warnings-denied all-target checks and
+The initial immutable native snapshot passes warnings-denied all-target checks and
 985 Rust tests; 42 existing fixture-only entries remain excluded. A follow-up
 using the same snapshot and the retained UTC source/archive passes all 458
 native-source tests without skips, thirteen OS and thirteen model
@@ -126,3 +172,29 @@ These are software checks, not an installed-image or complete fixture/hardware
 qualification. The failed no-exec test invocation and the initial two
 unavailable-fixture skips are retained in
 [the checkpoint record](gates/g3/development_2026-10-15.json).
+
+### Integrated checkpoint verification
+
+The next immutable 429-file native/Rust snapshot passes warnings-denied
+all-target checks and 1,027 Rust tests, with the same 42 existing fixture-only
+entries excluded from the unit suite. All 462 native-source tests and nine
+actual CLI cases pass without skips. The CLI cases run as UID/GID 65534 with
+supplementary groups removed, and cover real capture/reopen/conflict behavior,
+blank and maximum-size documents, malformed input and numeric round trips.
+Crashes are not counted as valid input refusal.
+
+Thirteen OS and thirteen model public-authentication cases, eight UTC source
+authentication cases, nineteen policy parses, six disposable PAM cases and
+four resource software-TPM cases pass in the same serialized offline sweep.
+This is not the complete final fixture matrix or installed/native qualification.
+The [integration record](gates/g3/integration_2026-10-15.json) retains exact
+snapshot/results hashes, cross-review findings, the numeric reproducer and
+the corrected provenance-fixture failure. No production assertion or test was
+weakened to obtain a pass.
+
+The expanded Windows stage passes 154 actual PowerShell assertions and is
+committed as `dc07f18`. The [current planning record](gates/gwin0/planning_2026-10-15.json)
+binds its source hashes and read-only host observation. It still refuses the
+proposed 12-GiB guest plus 8-GiB host reserve, and missing reviewed plan/policy
+inputs do not become product installation authority. No host settings or
+existing distributions changed.

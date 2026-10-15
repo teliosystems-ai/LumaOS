@@ -31,6 +31,7 @@ pub(super) fn open_at_base(
     create: bool,
     mut check: impl FnMut() -> Result<()>,
 ) -> Result<Catalog> {
+    check()?;
     safe_path(base)?;
     let directory = scoped_read::open_directory(base)?;
     io::private_directory(&directory)?;
@@ -54,7 +55,7 @@ pub(super) fn open_at_base(
         directory.sync_all()?;
         check()?;
     }
-    let result = Catalog::open_domain(&path, installation, principal)?;
+    let result = Catalog::open_domain_checked(&path, installation, principal, &mut check)?;
     check()?;
     Ok(result)
 }

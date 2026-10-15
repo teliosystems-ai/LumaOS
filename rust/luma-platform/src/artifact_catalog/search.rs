@@ -8,25 +8,60 @@ const MAX_QUERY_BYTES: usize = 512;
 const MAX_QUERY_TERMS: usize = 8;
 const MAX_RESULTS: usize = 100;
 
-fn terms(text: &str, mut accept: impl FnMut(String) -> Result<()>) -> Result<()> {
-    for word in text.split(|c: char| !c.is_alphanumeric()) {
-        if word.is_empty() {
-            continue;
+struct Checkpoint<'a> {
+    check: &'a mut dyn FnMut() -> Result<()>,
+    work: usize,
+}
+
+impl Checkpoint<'_> {
+    fn advance(&mut self, count: usize) -> Result<()> {
+        self.work += count;
+        if self.work >= 8192 {
+            (self.check)()?;
+            self.work = 0;
         }
-        // Oversized terms are rejected, not truncated to another identity.
-        if word.len() > MAX_TERM_BYTES {
-            return Err("search term exceeds byte bound".into());
+        Ok(())
+    }
+}
+
+fn terms_checked(
+    text: &str,
+    mut accept: impl FnMut(String) -> Result<()>,
+    checkpoint: &mut Checkpoint<'_>,
+) -> Result<()> {
+    let mut word = String::new();
+    for character in text.chars().chain(std::iter::once(' ')) {
+        checkpoint.advance(character.len_utf8())?;
+        if character.is_alphanumeric() {
+            word.push(character);
+            // Reject, never truncate a term into a different identity.
+            if word.len() > MAX_TERM_BYTES {
+                return Err("search term exceeds byte bound".into());
+            }
+        } else if !word.is_empty() {
+            let normalized = word.to_lowercase();
+            if normalized.len() > MAX_TERM_BYTES {
+                return Err("normalized search term exceeds byte bound".into());
+            }
+            accept(normalized)?;
+            word.clear();
         }
-        let normalized = word.to_lowercase();
-        if normalized.len() > MAX_TERM_BYTES {
-            return Err("normalized search term exceeds byte bound".into());
-        }
-        accept(normalized)?;
     }
     Ok(())
 }
 
-fn query(text: &str, limit: &str) -> Result<(BTreeSet<String>, usize)> {
+fn terms(text: &str, accept: impl FnMut(String) -> Result<()>) -> Result<()> {
+    terms_checked(
+        text,
+        accept,
+        &mut Checkpoint {
+            check: &mut || Ok(()),
+            work: 0,
+        },
+    )
+}
+
+pub(super) fn query(text: &str, limit: &str) -> Result<(BTreeSet<String>, usize)> {
     if text.is_empty() || text.len() > MAX_QUERY_BYTES || text.chars().any(char::is_control) {
         return Err("search query exceeds the closed text contract".into());
     }
@@ -75,22 +110,35 @@ impl Index {
         Ok(())
     }
 
-    fn value(&mut self, id: &str, value: &serde_json::Value) -> Result<()> {
+    fn value(
+        &mut self,
+        id: &str,
+        value: &serde_json::Value,
+        checkpoint: &mut Checkpoint<'_>,
+    ) -> Result<()> {
+        // Even arrays of null/boolean values are bounded authorization work.
+        checkpoint.advance(32)?;
         match value {
             serde_json::Value::Object(fields) => {
                 for (key, value) in fields {
-                    terms(key, |term| self.add_term(id, term))?;
-                    self.value(id, value)?;
+                    terms_checked(key, |term| self.add_term(id, term), checkpoint)?;
+                    self.value(id, value, checkpoint)?;
                 }
             }
             serde_json::Value::Array(values) => {
                 for value in values {
-                    self.value(id, value)?;
+                    self.value(id, value, checkpoint)?;
                 }
             }
-            serde_json::Value::String(text) => terms(text, |term| self.add_term(id, term))?,
+            serde_json::Value::String(text) => {
+                terms_checked(text, |term| self.add_term(id, term), checkpoint)?
+            }
             serde_json::Value::Number(number) => {
-                terms(&number.to_string(), |term| self.add_term(id, term))?;
+                terms_checked(
+                    &number.to_string(),
+                    |term| self.add_term(id, term),
+                    checkpoint,
+                )?;
             }
             serde_json::Value::Bool(value) => self.add_term(id, value.to_string())?,
             serde_json::Value::Null => (),
@@ -98,7 +146,13 @@ impl Index {
         Ok(())
     }
 
-    fn add(&mut self, receipt: &Receipt, bytes: &[u8]) -> Result<()> {
+    fn add(
+        &mut self,
+        receipt: &Receipt,
+        bytes: &[u8],
+        check: &mut impl FnMut() -> Result<()>,
+    ) -> Result<()> {
+        check()?;
         if self.documents.len() >= MAX_RECORDS
             || self.documents.contains_key(&receipt.artifact_id)
             || bytes.len() as u64 != receipt.content_bytes
@@ -107,10 +161,15 @@ impl Index {
             return Err("search document is duplicated, altered or exceeds capacity".into());
         }
         let value: serde_json::Value = serde_json::from_slice(bytes)?;
-        terms(&receipt.filename, |term| {
-            self.add_term(&receipt.artifact_id, term)
-        })?;
-        self.value(&receipt.artifact_id, &value)?;
+        check()?;
+        let mut checkpoint = Checkpoint { check, work: 0 };
+        terms_checked(
+            &receipt.filename,
+            |term| self.add_term(&receipt.artifact_id, term),
+            &mut checkpoint,
+        )?;
+        self.value(&receipt.artifact_id, &value, &mut checkpoint)?;
+        (checkpoint.check)()?;
         self.documents
             .insert(receipt.artifact_id.clone(), receipt.clone());
         Ok(())
@@ -132,8 +191,22 @@ impl Index {
 }
 
 fn search(catalog: &Catalog, text: &str, limit: &str) -> Result<serde_json::Value> {
+    search_checked(catalog, text, limit, None, &mut || Ok(()))
+}
+
+pub(super) fn search_checked(
+    catalog: &Catalog,
+    text: &str,
+    limit: &str,
+    generation: Option<u64>,
+    check: &mut impl FnMut() -> Result<()>,
+) -> Result<serde_json::Value> {
     let (wanted, limit) = query(text, limit)?;
-    let (records, _, _) = catalog.inventory()?;
+    if (catalog.owner == "local-root") != generation.is_none() || generation == Some(0) {
+        return Err("search requires an exact current owner generation".into());
+    }
+    check()?;
+    let (records, _, _) = catalog.inventory_checked(check)?;
     let snapshot = io::digest(&serde_json::to_vec(&records)?);
     let mut latest = BTreeMap::<String, &Receipt>::new();
     for (_, receipt) in &records {
@@ -144,10 +217,21 @@ fn search(catalog: &Catalog, text: &str, limit: &str) -> Result<serde_json::Valu
     }
     let mut index = Index::new();
     for receipt in latest.values() {
-        let bytes = io::read_member(&catalog.objects, &receipt.content_sha256, MAX_CONTENT)?;
-        index.add(receipt, &bytes)?;
+        check()?;
+        // Choose the latest version before generation filtering: a previous
+        // incarnation's artifact must never resurrect an earlier version.
+        if receipt.owner_generation != generation {
+            continue;
+        }
+        let bytes = io::read_member_checked(
+            &catalog.objects,
+            &receipt.content_sha256,
+            MAX_CONTENT,
+            &mut *check,
+        )?;
+        index.add(receipt, &bytes, check)?;
     }
-    if io::digest(&serde_json::to_vec(&catalog.inventory()?.0)?) != snapshot {
+    if io::digest(&serde_json::to_vec(&catalog.inventory_checked(check)?.0)?) != snapshot {
         return Err("catalog changed while rebuilding search; retry without cached results".into());
     }
     let hits: Vec<_> = index
@@ -158,9 +242,10 @@ fn search(catalog: &Catalog, text: &str, limit: &str) -> Result<serde_json::Valu
             "content_sha256":r.content_sha256,"filename":r.filename,"media_type":r.media_type})
         })
         .collect();
+    check()?;
     Ok(
         serde_json::json!({"schema_version":1,"mode":"lexical-all-terms-v1",
-        "environment":"lab","owner":catalog.owner,"installation":catalog.installation,
+        "environment":if generation.is_none(){"lab"}else{"installed"},"owner":catalog.owner,"owner_generation":generation,"installation":catalog.installation,
         "catalog_snapshot_sha256":snapshot,"terms":wanted,"current_documents":index.documents.len(),
         "hits":hits,"index_persisted":false,"semantic_search":false,"gate_closing":false}),
     )
@@ -251,9 +336,9 @@ mod tests {
     fn altered_objects_and_index_exhaustion_are_refused_without_results() {
         let (receipt, bytes) = super::super::tests::proposal("one", "alpha", 0);
         let mut index = Index::new();
-        assert!(index.add(&receipt, b"altered").is_err());
-        index.add(&receipt, &bytes).unwrap();
-        assert!(index.add(&receipt, &bytes).is_err());
+        assert!(index.add(&receipt, b"altered", &mut || Ok(())).is_err());
+        index.add(&receipt, &bytes, &mut || Ok(())).unwrap();
+        assert!(index.add(&receipt, &bytes, &mut || Ok(())).is_err());
         index.posting_count = MAX_POSTINGS;
         assert!(index.add_term("beta", "new".into()).is_err());
     }

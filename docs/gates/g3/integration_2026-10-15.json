@@ -1,0 +1,344 @@
+{
+  "schema_version": 1,
+  "recorded_on": "2026-10-15",
+  "branch": "feature/g3-gwin0-beta",
+  "baseline_commit": "7bb3d60",
+  "windows_stage_commit": "dc07f18",
+  "status": "integrated-development-checkpoint-passed",
+  "implemented": [
+    {
+      "area": "G3 owner discovery",
+      "entrypoint": "granted-run artifact-owned-search LOGIN READ-GRANT QUERY LIMIT",
+      "scope": "Existing independent Read/catalog-inspect scope; current principal/generation, checked owner-domain inventory, 32-KiB private reads, 8-KiB index checkpoints and bounded result delivery",
+      "semantic_search": false,
+      "whole_response_atomic_revocation": false
+    },
+    {
+      "area": "G3 content contracts",
+      "crate": "rust/luma-content",
+      "formats": [
+        "utf8-text",
+        "json",
+        "csv"
+      ],
+      "scope": "Immutable owner/generation/provenance bindings; canonical reopen; checked exact-base no-change/new-version/conflict decisions, blank text and delete-all edits",
+      "filesystem_or_grant_authority": false,
+      "durable_generic_publication": false,
+      "exact_decimal_arithmetic": false
+    },
+    {
+      "area": "G3 actual data CLI",
+      "entrypoints": [
+        "content-contract-capture",
+        "content-contract-reopen",
+        "content-contract-compare"
+      ],
+      "scope": "Bounded schema-1 stdin inspection, explicitly no authenticated owner, effect authority, commit or certificate"
+    },
+    {
+      "area": "GWIN0 planning",
+      "record": "docs/gates/gwin0/planning_2026-10-15.json",
+      "scope": "Strict complete storage budget and exact Windows/WSL tuple comparison; supplied policy remains unauthenticated; product setup remains unadmitted"
+    }
+  ],
+  "source": {
+    "snapshot": "/mnt/luma-build/work/g3-gwin0-integrated-source-20261015-d",
+    "files_verified": 429,
+    "mismatches": 0,
+    "manifest_sha256": "cf2df6723358d2ce53ad3946274e8cfdf51c77a2a7c408a4745b88012290b9d7",
+    "windows_sources_tracked_separately": true
+  },
+  "execution": {
+    "tools_image": "sha256:819dfe7772da1e3c76ffdc8f9ea4a1fa44c7c549bd4fa988e35d9397d87924b2",
+    "network": "none",
+    "memory_gib": 4,
+    "cpus": 2,
+    "build_cache_evidence": "D-backed-ext4",
+    "temporary_mount": "512-MiB-executable-nosuid-nodev-container-only-tmpfs",
+    "physical_tpm_attached": false,
+    "host_accounts_or_clock_changed": false
+  },
+  "validation": {
+    "rust_all_targets_warnings_denied": "passed",
+    "rust_workspace": {
+      "passed": 1027,
+      "failed": 0,
+      "ignored": 42
+    },
+    "native_source": {
+      "passed": 462,
+      "failed": 0,
+      "skipped": 0
+    },
+    "actual_content_cli": {
+      "passed": 9,
+      "failed": 0,
+      "skipped": 0,
+      "uid": 65534,
+      "gid": 65534,
+      "supplementary_groups": [],
+      "negative_case_requires": "Exit 1 plus actual platform error prefix; crashes are failures"
+    },
+    "os_public_authentication": {
+      "passed": 13,
+      "failed": 0
+    },
+    "model_public_authentication": {
+      "passed": 13,
+      "failed": 0
+    },
+    "utc_release_authentication": {
+      "passed": 8,
+      "failed": 0
+    },
+    "apparmor_profiles_parsed_without_loading": 19,
+    "disposable_pam_cases": 6,
+    "disposable_resource_software_tpm_cases": 4,
+    "windows_powershell_assertions_passed": 154,
+    "complete_final_26_lane_fixture_sweep": false
+  },
+  "review": {
+    "parallel_implementation_tracks": 3,
+    "independent_cross_reviews": 3,
+    "resolved_findings": [
+      "Negative actual-CLI tests require ordinary error exit instead of accepting crashes",
+      "Blank UTF8 document capture and delete-all edits now have library and actual CLI tests",
+      "Pinned default JSON parser's finite-float non-idempotence reproduced; enabled existing float_roundtrip feature with no new dependency/version and added library/actual CLI regressions",
+      "Owned-search fixtures now carry required source provenance; no catalog validation weakened"
+    ],
+    "limits": [
+      "Source cross-review and offline software fixtures are not installed AppArmor/PAM/TPM or native qualification",
+      "Partial delivery cannot be recalled after a later revocation",
+      "JSON decimals/exponents use finite IEEE-754 semantics, not exact decimal/RFC8785"
+    ]
+  },
+  "failed_attempts_preserved": {
+    "initial_compile_snapshot": "/mnt/luma-build/work/g3-gwin0-integrated-source-20261015-a",
+    "actual_float_reproducer_snapshot": "/mnt/luma-build/work/g3-gwin0-integrated-source-20261015-b",
+    "float_reproducer": {
+      "test": "tests::finite_decimal_canonicalization_reopens_without_a_second_numeric_change",
+      "passed": 0,
+      "failed": 1,
+      "result": "NonCanonical with pinned default parser"
+    },
+    "first_integration_snapshot": "/mnt/luma-build/work/g3-gwin0-integrated-source-20261015-c",
+    "first_integration_resolution": "Only three owned-search tests lacked required fixture source_sha256. Corrected fixtures, retained authority/provenance checks and reran the entire final suite."
+  },
+  "runs": [
+    {
+      "path": "/mnt/luma-build/work/g3-gwin0-integrated-evidence-20261015-c/sweep/result.json",
+      "sha256": "ffb51972f9d68401f8f3dd20a7ff0f1f88acff5a12c55048035c1a3321bc47b0",
+      "result": "failed",
+      "source_manifest_sha256": "bb0550dd1ac23e65a88236fbc282c6e13617f02787ce2bc51f8426b9cfaa674f",
+      "cases": [
+        {
+          "name": "rust-all-targets-check",
+          "exit_code": 0,
+          "counts": null,
+          "transcript_sha256": "ed6dff6c2daf786c9d28ba62afbda6264a9c8762efdd29dc11aaa54c2324e8e8"
+        },
+        {
+          "name": "rust-tests",
+          "exit_code": 101,
+          "counts": null,
+          "transcript_sha256": "324d6c975170dcb840b0f7cec8a15effc6ebd1104e92a193934dac6e227e449c"
+        },
+        {
+          "name": "content-contract-build",
+          "exit_code": 0,
+          "counts": null,
+          "transcript_sha256": "36a03bb4832886edb2b70f987bf8b80b6727cbf940d26412d5d6d4f61f70a39b"
+        },
+        {
+          "name": "content-contract-cli",
+          "exit_code": 0,
+          "counts": {
+            "discovered": 9,
+            "failed": 0,
+            "passed": 9,
+            "skipped": 0
+          },
+          "transcript_sha256": "76f251583179ee10dc97ae307bacf44a913121c85a2d26109cfc9a25cf7f91b4"
+        },
+        {
+          "name": "native-source-tests",
+          "exit_code": 0,
+          "counts": {
+            "discovered": 462,
+            "failed": 0,
+            "passed": 462,
+            "skipped": 0
+          },
+          "transcript_sha256": "d62f93f875c2a8d8185da997c87de3160f90f18eb13c8878969c7b3fe9129754"
+        },
+        {
+          "name": "public-trust-authentication",
+          "exit_code": 0,
+          "counts": {
+            "discovered": 13,
+            "failed": 0,
+            "passed": 13,
+            "skipped": 0
+          },
+          "transcript_sha256": "876ae8697c50c4298576a6d13b2e627230c807d92ca69353b9bc2f850f12e64c"
+        },
+        {
+          "name": "model-public-authentication",
+          "exit_code": 0,
+          "counts": {
+            "discovered": 13,
+            "failed": 0,
+            "passed": 13,
+            "skipped": 0
+          },
+          "transcript_sha256": "3cb2e158e584a88c18105d0c5e5ebae403ea48e6fcab632097124db7b5a54dec"
+        },
+        {
+          "name": "utc-release-authentication",
+          "exit_code": 0,
+          "counts": {
+            "discovered": 8,
+            "failed": 0,
+            "passed": 8,
+            "skipped": 0
+          },
+          "transcript_sha256": "50c6198415793b863cff2246104022813abef297575837e0f17312e1c9cad39c"
+        },
+        {
+          "name": "real-pam-fixture",
+          "exit_code": 0,
+          "counts": null,
+          "transcript_sha256": "c339ae8637320f2d9b872aa463037dd184f3f0178d37cca1a14fdd7707ccde1f"
+        },
+        {
+          "name": "resource-software-tpm",
+          "exit_code": 0,
+          "counts": null,
+          "transcript_sha256": "0c79686e75731a116087bdb4c49f8edaeb89cbecdbb70167bf6870447ff4ce79"
+        }
+      ],
+      "parsed_profiles": 19
+    },
+    {
+      "path": "/mnt/luma-build/work/g3-gwin0-integrated-evidence-20261015-d/sweep/result.json",
+      "sha256": "8aa623e12a1f24b2cf2d76d2d512b3f57eff0cc33b5ab27dd5181b09e6e63f2e",
+      "result": "passed",
+      "source_manifest_sha256": "cf2df6723358d2ce53ad3946274e8cfdf51c77a2a7c408a4745b88012290b9d7",
+      "cases": [
+        {
+          "name": "rust-all-targets-check",
+          "exit_code": 0,
+          "counts": null,
+          "transcript_sha256": "a638ff857a904c6dc9b883708968aa0e575e0c4605f80325438f22e61bf771e8"
+        },
+        {
+          "name": "rust-tests",
+          "exit_code": 0,
+          "counts": {
+            "failed": 0,
+            "filtered_out": 0,
+            "ignored": 42,
+            "measured": 0,
+            "passed": 1027
+          },
+          "transcript_sha256": "369a9bd914abd954f9898f371ff6ba10b5e7b08c6e86d8cb03fc25818219552d"
+        },
+        {
+          "name": "content-contract-build",
+          "exit_code": 0,
+          "counts": null,
+          "transcript_sha256": "96835cfde75ff7f1144959994262ea0550771edd36d2ee7662613cc68b7fb836"
+        },
+        {
+          "name": "content-contract-cli",
+          "exit_code": 0,
+          "counts": {
+            "discovered": 9,
+            "failed": 0,
+            "passed": 9,
+            "skipped": 0
+          },
+          "transcript_sha256": "b1f3979c314c5d51673f3344beacfa20e042c4aa610f21174a2652ad799adab0"
+        },
+        {
+          "name": "native-source-tests",
+          "exit_code": 0,
+          "counts": {
+            "discovered": 462,
+            "failed": 0,
+            "passed": 462,
+            "skipped": 0
+          },
+          "transcript_sha256": "f66eef902d224618dd503a03e2412b1ae01de671c544766532a08555a331702b"
+        },
+        {
+          "name": "public-trust-authentication",
+          "exit_code": 0,
+          "counts": {
+            "discovered": 13,
+            "failed": 0,
+            "passed": 13,
+            "skipped": 0
+          },
+          "transcript_sha256": "a86deefdd4c6892b9b72d27ab6b346a4c97d3a179870c1221bfd34eb7bebfff7"
+        },
+        {
+          "name": "model-public-authentication",
+          "exit_code": 0,
+          "counts": {
+            "discovered": 13,
+            "failed": 0,
+            "passed": 13,
+            "skipped": 0
+          },
+          "transcript_sha256": "932d3ab7f5ea6cb3d72495428fad8c2f9af8b03e21c3fa2647ac4e4252ba7122"
+        },
+        {
+          "name": "utc-release-authentication",
+          "exit_code": 0,
+          "counts": {
+            "discovered": 8,
+            "failed": 0,
+            "passed": 8,
+            "skipped": 0
+          },
+          "transcript_sha256": "c71d292d65051b726f76f2e0d970b94315fbb6f101f238b1161926067662c5e9"
+        },
+        {
+          "name": "real-pam-fixture",
+          "exit_code": 0,
+          "counts": null,
+          "transcript_sha256": "759d6dd84b86c0f6906913386806de5cb8e4d67a10d6d02e2d0205ad51b1b525"
+        },
+        {
+          "name": "resource-software-tpm",
+          "exit_code": 0,
+          "counts": null,
+          "transcript_sha256": "90fe26f5e88f140540b0d3922842118aa75ad7a40362dce7f3f33accb845914b"
+        }
+      ],
+      "parsed_profiles": 19
+    }
+  ],
+  "qualification": {
+    "delivered_g2_image_changed": false,
+    "new_image_built": false,
+    "host_settings_changed": false,
+    "existing_distributions_changed": false,
+    "g2_closed": false,
+    "g3_complete": false,
+    "gwin0_complete": false,
+    "requirement_1_closed": false,
+    "requirement_2_closed": false,
+    "production_qualified": false,
+    "gate_closing": false
+  },
+  "next_work": [
+    "Governed transactional publication and durable conflict retention for generic editable content",
+    "Collections/current per-result policy and semantic indexing after protected storage integration",
+    "Accessible shared shell and deterministic Office/content adapters",
+    "Signed independent WSL root filesystem, hosted Admin/checkpoint adaptation and authenticated SID/principal/ACL bridge",
+    "Actual WSL confinement/resource/lifecycle proof and separate qualified Hyper-V desktop",
+    "Native G2 acceptance and genuine production custody/qualification"
+  ]
+}

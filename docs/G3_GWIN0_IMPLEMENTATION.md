@@ -105,31 +105,85 @@ prerequisites. See [Windows planning commands](../packaging/windows/README.md).
 The sequence-14 G2 image remains frozen. These source additions need a later,
 separately identified image before native acceptance.
 
+## Editable tables and durable content storage
+
+`content-contract-table-edit` accepts an exact current envelope and a typed
+batch of cell, row and column edits. Positions are zero-based, sequential and
+include the first row; there is no inferred header. A valid batch proposes one
+immutable CSV version, while a no-op keeps the original reference. Stale bases
+return a conflict before interpreting positions against changed content. The
+response includes the canonical edit request and its digest so a storage caller
+can preserve the actual conflict intent. The command itself does not retain
+the request or publish content.
+
+All intermediate tables must remain within the existing content, field, row
+and column bounds. Unknown operations, ragged insertions, unsupported controls,
+exhausted versions and batches over 256 operations are refused. Cell values are
+strings: formula-like text is never evaluated. This is an editable table-data
+engine, not a spreadsheet calculation engine or an Office adapter.
+
+The Linux `luma-content-store` library provides a separate versioned ext4
+namespace for generic content, without changing invoice catalog validation.
+Each installation, owner and account generation gets its own locked domain.
+Publication retains the canonical version and exact original source together;
+conflict and no-change outcomes retain their source without advancing the
+artifact. Immutable transaction directories are synchronized before a
+no-replace rename. Exact retries acknowledge a matching outcome, resume complete
+matching preparations, or refuse and preserve mismatching partial bytes.
+
+The storage API requires an explicit caller-supplied authorization and resource
+boundary before private I/O and between bounded reads, writes and commit steps.
+It supplies no default authority implementation. Product use still requires the
+native adapter that joins actual finite Read/write grants, current principal,
+protected UTC and broker resource leases. No generic product publication command
+is enabled by this library, and its journal is not TPM rollback protection.
+
+## Windows package content validation
+
+`packaging/windows/validate-package.ps1` inspects a separate manifest and
+uncompressed POSIX USTAR root filesystem without extraction or distribution
+import. It binds the archive and required files to exact hashes and byte counts,
+checks declared amd64/profile-W identity and rejects native disk images presented
+as WSL archives. The normalized format excludes links, special files, archive
+extensions, ambiguous paths and unsafe ownership or permissions. It requires
+explicit parent directories and the exact development configuration disabling
+WSL interoperation, Windows PATH inheritance and automatic drive mounts.
+
+This restricted format is not an arbitrary Ubuntu tar importer. Its ELF-header
+and embedded identity checks establish content consistency, not a runnable
+Windows product. Genuine package authentication, a populated bootable userland,
+hosted custody, safe import/update and actual confinement still need integration
+and qualification. A passing result never admits installation or executable
+skills.
+
 ## Next integrated work
 
-Requirement mapping for this first slice is deliberately partial:
+Requirement mapping remains partial:
 
 | Requirement | Development contribution | Still required for acceptance |
 | --- | --- | --- |
-| A063, T33 | Disposable index rebuild from verified authoritative current versions, stable IDs and deterministic results | General content types, governed principal access and installed recovery/rebuild tests |
-| A060, T20 | Laboratory discovery cannot enter private product domains | Current per-result authorization and revocation during indexing/delivery; lexical lookup is not semantic search |
-| W005, V01 | Read-only edition/build/architecture/virtualization/WSL observations | Exact supported-release policy, calculated storage, encryption and enterprise policy checks |
-| W006, V01/V03 | Collision refusal and preservation of current distributions/defaults | Signed independent root filesystem, safe import/rollback and explicit first-user/Admin setup |
+| A063, T33 | Immutable generic content/storage APIs and disposable lexical index rebuild from verified current invoice versions | Governed generic publication and discovery, collections and installed recovery/rebuild tests |
+| A060, T20 | Current owner-generation and Read-grant checks during verified invoice indexing and bounded result delivery | General per-result access policy, semantic search and installed revocation qualification |
+| W005, V01 | Read-only platform observations, calculated storage and exact supplied release-tuple comparison | Authenticated release policy, encryption and enterprise policy checks |
+| W006, V01/V03 | Collision refusal, unchanged existing distributions and read-only normalized package validation | Authenticated populated root filesystem, safe import/rollback and explicit first-user/Admin setup |
 | W009, V04/T13 | Observed free-memory planning check with an explicit Windows reserve | Effective guest limits, other guest workloads, measured host coexistence and installed worker cgroups |
 
-No requirement in this table is marked complete by the first slice.
+No requirement in this table is marked complete by these development slices.
 
 1. Publish the shared immutable content/version contracts through governed
    catalog transactions, with finite write grants, resource admission and
-   durable external-edit conflict retention. Extend owner-domain discovery
+   durable external-edit conflict retention. Connect the new storage library to
+   actual native authority and resource leases; library boundary callbacks alone
+   do not close this work. Extend owner-domain discovery
    with collections and per-result access policy before embeddings or automatic
    organization; pure data inspection is not storage publication.
 2. Build the shared accessible manual/conversational shell and deterministic
    editable-content engines on those contracts. Add adapters and capture only
    with explicit permissions and real completion receipts.
 3. Build purpose-separated signed Windows packaging and a uniquely named WSL
-   root filesystem. Preserve existing distributions/defaults. Introduce the
-   authenticated SID/principal bridge and a read-only enrolled-file path before
+   root filesystem using the new content validator. Preserve existing
+   distributions/defaults. Introduce the authenticated SID/principal bridge
+   and a read-only enrolled-file path before
    any host-file write capability.
 4. Qualify WSL confinement, effective budgets and host reserve, lifecycle,
    manual/model-disabled controls and actual compact inference. Implement the
@@ -198,3 +252,30 @@ binds its source hashes and read-only host observation. It still refuses the
 proposed 12-GiB guest plus 8-GiB host reserve, and missing reviewed plan/policy
 inputs do not become product installation authority. No host settings or
 existing distributions changed.
+
+### Table storage and package checkpoint
+
+The next offline sweep passes 1,067 Rust checks, including 24 new table tests,
+15 content-store tests and an exclusive-mutation compile-fail check. The 42
+existing fixture-only exclusions are unchanged. All 465 native-source tests
+and 13 actual unprivileged CLI cases pass without skips. Public OS/model trust,
+UTC authentication, nineteen policy parses, six disposable PAM cases and four
+resource software-TPM cases also pass. Storage tests cover interrupted
+preparation/rename/acknowledgement, exact replay, stale conflicts, namespace
+capacity/concurrency, source substitution and revocation at every observed
+private-read and mutation checkpoint.
+
+The final Windows package suite passes 105 assertions, including real wrapper
+execution and explicit junction refusal; the existing preflight suite passes
+154. A new failing reproducer exposed newline-suffixed release identifiers;
+absolute string-end validation now refuses them. The final source snapshot
+differs from the native-tested snapshot only in that Windows validator, its
+tests and README. Every native/Rust input remains byte-identical, so the native
+sweep is retained without repeating it for a Windows-only correction.
+
+The [content/storage record](gates/g3/content_storage_2026-10-15.json) and
+[Windows package record](gates/gwin0/package_content_2026-10-15.json) bind the
+two immutable snapshots and exact results. These checks qualify development
+primitives, not installed product enforcement, a Windows installation image,
+the complete final fixture matrix or native/production acceptance. G3 and
+GWIN0 remain open for the integration and user journeys listed above.

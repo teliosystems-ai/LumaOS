@@ -222,6 +222,10 @@ fn row(rows: &mut Vec<Vec<String>>, value: &mut Vec<String>) -> Result<()> {
 }
 
 fn csv(source: &str) -> Result<String> {
+    csv_bytes(&csv_rows(source)?)
+}
+
+pub(crate) fn csv_rows(source: &str) -> Result<Vec<Vec<String>>> {
     let mut rows = Vec::new();
     let mut record = Vec::new();
     let mut value = String::new();
@@ -268,9 +272,26 @@ fn csv(source: &str) -> Result<String> {
     if rows.is_empty() {
         return Err(Error::InvalidCsv);
     }
+    Ok(rows)
+}
+
+pub(crate) fn csv_bytes(rows: &[Vec<String>]) -> Result<String> {
+    if rows.is_empty() || rows.len() > MAX_CSV_ROWS {
+        return Err(Error::Bounds);
+    }
+    let columns = rows[0].len();
+    if columns == 0 || columns > MAX_CSV_COLUMNS {
+        return Err(Error::Bounds);
+    }
     let mut output = String::new();
     for record in rows {
-        for (index, value) in record.into_iter().enumerate() {
+        if record.len() != columns {
+            return Err(Error::InvalidCsv);
+        }
+        for (index, value) in record.iter().enumerate() {
+            if value.len() > MAX_CSV_FIELD_BYTES {
+                return Err(Error::Bounds);
+            }
             if index > 0 {
                 output.push(',');
             }
@@ -286,6 +307,9 @@ fn csv(source: &str) -> Result<String> {
             }
         }
         output.push('\n');
+        if output.len() > MAX_CONTENT_BYTES {
+            return Err(Error::Bounds);
+        }
     }
     Ok(output)
 }

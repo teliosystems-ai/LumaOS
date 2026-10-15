@@ -47,6 +47,12 @@ class ContentContractCli(unittest.TestCase):
             artifact_id='fixture-document', format=format, content=content,
             provenance=self.provenance(content)))['proposed']
 
+    def table_request(self, version, operations):
+        return dict(schema_version=1, current_envelope=version['canonical_envelope'],
+            edit=dict(binding=self.binding(), expected=version['reference'],
+                metadata=dict(request_id='table-edit', workflow_sha256='c' * 64),
+                operations=operations))
+
     def test_unprivileged_capture_reopen_and_identity_are_deterministic(self):
         version = self.capture('Example\r\n')
         self.assertEqual(version, self.capture('Example\r\n'))
@@ -132,6 +138,76 @@ class ContentContractCli(unittest.TestCase):
             result = self.invoke('reopen', dict(schema_version=1, binding=self.binding(),
                 envelope=version['canonical_envelope']))
             self.assertEqual(result['validated'], version)
+
+    def test_table_edits_publish_one_immutable_proposal_with_exact_request_digest(self):
+        initial = self.capture('Name,Value\nA,1\n', 'csv')
+        operations = [dict(op='set-cell', row=1, column=1, value='2'),
+            dict(op='insert-row', index=2, values=['B', '=SUM(A1)']),
+            dict(op='insert-column', index=2, values=['Note', 'a,b', 'plain']),
+            dict(op='delete-column', index=0), dict(op='delete-row', index=1)]
+        request = self.table_request(initial, operations)
+        result = self.invoke('table-edit', request)
+        self.assertEqual(result, self.invoke('table-edit', request))
+        outcome = result['outcome']
+        self.assertEqual(outcome['decision'], 'new-version')
+        proposed = outcome['proposed']
+        self.assertEqual(json.loads(proposed['canonical_envelope'])['content'],
+                         'Value,Note\n=SUM(A1),plain\n')
+        self.assertEqual(proposed['receipt']['version'], 2)
+        self.assertEqual(proposed['receipt']['previous'], initial['reference'])
+        self.assertEqual(proposed['receipt']['provenance']['origin'], 'managed')
+        self.assertEqual(proposed['receipt']['provenance']['source_sha256'],
+                         hashlib.sha256(b'Value,Note\n=SUM(A1),plain\n').hexdigest())
+        self.assertEqual(outcome['edit_sha256'],
+                         hashlib.sha256(result['canonical_edit'].encode()).hexdigest())
+        self.assertEqual(json.loads(result['canonical_edit']), request['edit'])
+        self.assertIs(result['formulas_executed'], False)
+        self.assertIs(result['request_retained'], False)
+        self.assertEqual(self.invoke('reopen', dict(schema_version=1, binding=self.binding(),
+                         envelope=initial['canonical_envelope']))['validated'], initial)
+
+    def test_stale_table_edits_are_not_reinterpreted_against_changed_positions(self):
+        initial = self.capture('A,B\nx,1\n', 'csv')
+        request = self.table_request(initial, [dict(op='delete-row', index=1)])
+        changed = self.invoke('table-edit', request)['outcome']['proposed']
+        stale = self.table_request(initial, [dict(op='set-cell', row=1, column=1, value='2')])
+        stale['current_envelope'] = changed['canonical_envelope']
+        result = self.invoke('table-edit', stale)
+        self.assertEqual(result['outcome']['decision'], 'conflict')
+        self.assertEqual(result['outcome']['expected'], initial['reference'])
+        self.assertEqual(result['outcome']['current'], changed['reference'])
+        self.assertNotIn('proposed', result['outcome'])
+        self.assertIs(result['outcome']['automatically_merged'], False)
+        self.assertEqual(json.loads(result['canonical_edit']), stale['edit'])
+
+    def test_table_noops_and_reversals_do_not_increment_versions(self):
+        initial = self.capture('A,B\nx,1\n', 'csv')
+        for operations in ([dict(op='set-cell', row=1, column=1, value='1')],
+                           [dict(op='insert-row', index=2, values=['y', '2']),
+                            dict(op='delete-row', index=2)]):
+            result = self.invoke('table-edit', self.table_request(initial, operations))
+            self.assertEqual(result['outcome']['decision'], 'no-change')
+            self.assertEqual(result['outcome']['current'], initial['reference'])
+            self.assertNotIn('proposed', result['outcome'])
+
+    def test_table_invalid_batches_and_wrong_bindings_refuse_without_partial_output(self):
+        initial = self.capture('A,B\nx,1\n', 'csv')
+        for operations in ([], [dict(op='delete-row', index=-1)],
+                [dict(op='insert-row', index=1, values=['ragged'])],
+                [dict(op='set-cell', row=1, column=1, value='changed'),
+                 dict(op='set-cell', row=99, column=0, value='invalid')],
+                [dict(op='set-cell', row=1, column=1, value='x', authority=True)],
+                [dict(op='set-cell', row=1, column=1, value='\x00')],
+                [dict(op='set-cell', row=1, column=1, value='x' * 4097)],
+                [dict(op='delete-column', index=0)] * 2,
+                [dict(op='set-cell', row=1, column=1, value='x')] * 257):
+            self.invoke('table-edit', self.table_request(initial, operations), valid=False)
+        request = self.table_request(initial, [dict(op='set-cell', row=0, column=0, value='ok')])
+        request['edit']['binding']['owner_generation'] += 1
+        self.invoke('table-edit', request, valid=False)
+        text = self.capture('not a table')
+        self.invoke('table-edit', self.table_request(text,
+                    [dict(op='set-cell', row=0, column=0, value='ok')]), valid=False)
 
 
 def main():

@@ -10,6 +10,7 @@ use sha2::{Digest, Sha256};
 use std::fmt;
 
 mod canonical;
+pub mod table;
 
 pub const MAX_CONTENT_BYTES: usize = 1024 * 1024;
 pub const MAX_ENVELOPE_BYTES: usize = MAX_CONTENT_BYTES * 6 + 8192;
@@ -26,6 +27,7 @@ pub enum Error {
     InvalidText,
     InvalidJson,
     InvalidCsv,
+    InvalidEdit,
     InvalidBinding,
     InvalidIdentifier,
     InvalidProvenance,
@@ -45,6 +47,7 @@ impl fmt::Display for Error {
             Self::InvalidText => "unsupported text control, BOM or line ending",
             Self::InvalidJson => "invalid, duplicate-key or unsupported JSON",
             Self::InvalidCsv => "invalid, ragged or unsupported CSV",
+            Self::InvalidEdit => "invalid table edit, position, shape or format",
             Self::InvalidBinding => "invalid installation, owner or generation binding",
             Self::InvalidIdentifier => "invalid stable artifact identifier",
             Self::InvalidProvenance => "invalid provenance or original byte digest",

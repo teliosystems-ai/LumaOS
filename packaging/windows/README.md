@@ -109,6 +109,35 @@ duplicate or escaped property names are refused before accepting a record.
 Storage capacity and release tuple comparison are not encryption, enterprise
 authorization, effective guest-limit, other-workload or confinement proofs.
 
+## Offline package content validation
+
+`validate-package.ps1 -PackageDirectory D:\path\to\candidate` inspects a
+directory containing exactly `manifest.json` and `rootfs.tar`. It does not
+extract files, import a distribution, execute package binaries or authenticate
+a signer. It accepts only the normalized symlink-free POSIX USTAR development
+format, not arbitrary Ubuntu archives or the native G2 disk image.
+
+The closed manifest binds archive bytes/hash, member count, content size and
+4 to 64 required-file descriptors. Mandatory members include Ubuntu 24.04
+identity, exact WSL configuration, the matching amd64/profile-W release marker
+and an executable ELF header. Every member is checked for safe canonical paths,
+explicit parents, ownership, modes, archive checksums and padding. Links,
+extensions, special files, aliases and trailing archives are refused. The
+configuration disables automatic drive mounts, executable interoperation and
+Windows PATH inheritance. These are declared bytes, not effective confinement
+or bootability evidence.
+
+Run the disposable fixture suite on D with the approved process-only policy:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy RemoteSigned -File .\packaging\windows\test-package.ps1 -WorkRoot D:\LumaOS-builds
+```
+
+Fixture archives include a header-only ELF; they are not runnable product
+images. Passing reports keep authentication, runtime qualification and
+installation admission false. See the
+[package checkpoint](../../docs/gates/gwin0/package_content_2026-10-15.json).
+
 GWIN0 still needs signed independent packaging, authenticated launcher/bridge,
 scoped Windows ACL-aware ingestion, actual compact inference and confinement,
 resource/lifecycle coexistence and a complete qualified VM desktop proof.

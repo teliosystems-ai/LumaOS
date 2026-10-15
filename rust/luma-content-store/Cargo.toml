@@ -1,0 +1,12 @@
+[package]
+name = "luma-content-store"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+publish = false
+
+[dependencies]
+luma-content = { path = "../luma-content" }
+libc = "0.2"
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["float_roundtrip"] }

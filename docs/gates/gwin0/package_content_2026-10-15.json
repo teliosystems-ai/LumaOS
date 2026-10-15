@@ -1,0 +1,90 @@
+{
+  "schema_version": 1,
+  "recorded_on": "2026-10-15",
+  "branch": "feature/g3-gwin0-beta",
+  "baseline_commit": "9c9e27c",
+  "status": "offline-package-content-checkpoint-passed",
+  "scope": "Read-only normalized WSL package content inspection, not authenticated installation or runtime qualification",
+  "source": {
+    "snapshot": "/mnt/luma-build/work/g3-gwin0-content-store-source-20261015-b",
+    "manifest_sha256": "b94523b52ac94045844491e598ca743233b2ad9e27f96459321cef5a7cf7474c",
+    "checkout_files_verified": 449,
+    "mismatches": 0,
+    "sha256": {
+      "packaging/windows/Luma.Package.psm1": "ca6d5e70c837177c8f0903c27477fd349633782fe34b6b6bbf5ed8a3fe578baf",
+      "packaging/windows/PackageInspector.cs": "3843d5a44dedca83ffaf693515f8dd908e79c4619edf14807e263768819e70bb",
+      "packaging/windows/test-package.ps1": "12702e9efcbccf48a320764d888673457ad9f7cd699173b093dd1ad0368ed33d",
+      "packaging/windows/validate-package.ps1": "bf072b083e0be609aa3463dfde24998c6509ecc639c6361ca5f13114761ba632",
+      "packaging/windows/README.md": "54fe095294d76f4ca58e18a067df7a86a7adb172b2797df931c578d72309895d"
+    }
+  },
+  "implemented": [
+    "Closed bounded UTF8 manifest, exact archive/member hashes, sizes and required-file descriptors",
+    "Streaming uncompressed USTAR validation without extraction; maximum16GiB,200000 members and300-second inspection deadline",
+    "Canonical paths, explicit parents, case-alias and duplicate refusal, octal metadata/checksums/padding/end markers, safe ownership and permission checks",
+    "Link, extension, sparse, special-file, traversal, native disk-image and compressed-image refusal",
+    "Exact embedded Ubuntu24.04/amd64/profile-W identity and development wsl.conf disabling automount, interop and Windows PATH inheritance",
+    "Local input paths reject observed reparse points; measured hashes bind inspected bytes rather than authenticating a signer"
+  ],
+  "validation": {
+    "package_command": "powershell.exe -NoProfile -ExecutionPolicy RemoteSigned -File .\\packaging\\windows\\test-package.ps1 -WorkRoot D:\\LumaOS-builds",
+    "package_exit_code": 0,
+    "package_assertions_passed": 105,
+    "package_assertions_failed": 0,
+    "package_stdout": "Passed 105 Windows package assertions; no archive extraction or distribution import.",
+    "preflight_command": "powershell.exe -NoProfile -ExecutionPolicy RemoteSigned -File .\\packaging\\windows\\test-preflight.ps1",
+    "preflight_exit_code": 0,
+    "preflight_assertions_passed": 154,
+    "preflight_assertions_failed": 0,
+    "skipped": 0,
+    "actual_wrapper_positive_and_explicit_negative_refusal": true,
+    "actual_windows_junction_refused": true,
+    "fixture_elf_is_header_only_not_a_runnable_product": true,
+    "test_data_and_compiler_scratch": "Unique disposable GUID child on D; cleaned only its exact validated generated path",
+    "process_only_remote_signed_approved": true,
+    "persistent_execution_policy_changed": false,
+    "execution_policy_scopes_after_test": {
+      "MachinePolicy": "Undefined",
+      "UserPolicy": "Undefined",
+      "Process": "Undefined",
+      "CurrentUser": "Undefined",
+      "LocalMachine": "Undefined"
+    }
+  },
+  "cross_review": [
+    "Case-insensitive OS-release key recognition corrected to exact uppercase keys and recomputed lower/mixed-case tamper fixtures",
+    "Streaming deadline also checked during final parent-namespace validation",
+    "Actual wrapper refusal requires exit1, empty stdout and the expected validation error; crashes do not count as intended refusal",
+    "An actual failing newline-suffixed release-identity reproducer led to absolute string-end anchors; LF, CR and CRLF suffixes now refused even with matching recomputed embedded identity and hashes"
+  ],
+  "earlier_verification": {
+    "snapshot": "/mnt/luma-build/work/g3-gwin0-content-store-source-20261015-a",
+    "manifest_sha256": "17d67e98898268c2bce80b9bca6b6d9afec67df6e312f2508a58febca2c0c4d3",
+    "package_assertions_passed_before_new_regression": 102,
+    "module_sha256_before_fix": "76dfc155a3433717411bff6652997b192d93da0f8789266c4c894b79a10fa02b",
+    "new_regression_before_fix_exit_code": 1,
+    "new_regression_before_fix_error": "Newline-suffixed release identity admitted.",
+    "final_snapshot_changes": [
+      "packaging/windows/Luma.Package.psm1",
+      "packaging/windows/README.md",
+      "packaging/windows/test-package.ps1"
+    ],
+    "native_or_rust_source_changes": 0
+  },
+  "not_delivered_by_this_checkpoint": [
+    "Populated or boot-tested Windows WSL product root filesystem",
+    "External package signatures and production custody",
+    "Hosted Admin/checkpoint authority, authenticated SID bridge and ACL-aware file ingestion",
+    "Safe import/update/rollback, effective resource limits, compact inference or Hyper-V desktop proof"
+  ],
+  "archive_extracted": false,
+  "package_authenticated": false,
+  "product_installation_admitted": false,
+  "executable_skills_enabled": false,
+  "distribution_imported": false,
+  "existing_distributions_changed": false,
+  "host_settings_changed": false,
+  "sequence14_g2_image_changed": false,
+  "production_qualified": false,
+  "gate_closing": false
+}

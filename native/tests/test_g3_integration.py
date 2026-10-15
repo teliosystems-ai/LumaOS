@@ -41,6 +41,18 @@ class G3IntegrationTests(unittest.TestCase):
         self.assertIn('luma-content = { path = "../luma-content" }',
                       (ROOT / 'rust/luma-platform/Cargo.toml').read_text())
 
+    def test_table_edit_is_an_inert_data_command_not_a_confined_effect(self):
+        main = (RUST / 'main.rs').read_text()
+        source = (RUST / 'content_contract.rs').read_text()
+        self.assertIn('| "content-contract-table-edit"', main)
+        self.assertIn('luma_content::table::apply', source)
+        self.assertIn('request.edit.canonical_bytes()', source)
+        self.assertIn('"request_retained":false', source)
+        allowed = main.split('if confined_client\n', 1)[1].split('if confined_client {', 1)[0]
+        self.assertNotIn('content-contract-table-edit', allowed)
+        launcher = (RUST / 'service/granted_gateway.rs').read_text()
+        self.assertNotIn('content-contract-table-edit', launcher)
+
 
 if __name__ == '__main__':
     unittest.main()

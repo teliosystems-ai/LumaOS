@@ -1,0 +1,111 @@
+{
+  "schema_version": 1,
+  "recorded_on": "2026-10-15",
+  "branch": "feature/g3-gwin0-beta",
+  "baseline_commit": "9c9e27c",
+  "status": "content-storage-and-table-development-checkpoint-passed",
+  "implemented": [
+    {
+      "area": "Deterministic CSV table-data editing",
+      "crate": "rust/luma-content",
+      "entrypoint": "luma-platform content-contract-table-edit",
+      "scope": "Five zero-based typed operations, bounded atomic batches, exact owner/generation/base, immutable proposal, explicit no-change/conflict and canonical edit request digest",
+      "formulas_executed": false,
+      "durable_publication_by_cli": false
+    },
+    {
+      "area": "Durable generic-content primitives",
+      "crate": "rust/luma-content-store",
+      "scope": "Separate Linux/ext4 owner-generation domains; mandatory authorization/resource Boundary; exact-source retention for publication/conflict/no-change; append-only atomic outcomes and explicit exact retry",
+      "invoice_catalog_schema_changed": false,
+      "native_product_grant_or_lease_adapter_enabled": false,
+      "rollback_resistant_authority": false
+    },
+    {
+      "area": "Cross-platform source evidence",
+      "entrypoint": "native/image/snapshot.py --include-tests --include-windows",
+      "scope": "Optional Windows packaging closure with unchanged native-release default closure"
+    }
+  ],
+  "native_verification": {
+    "snapshot": "/mnt/luma-build/work/g3-gwin0-content-store-source-20261015-a",
+    "manifest_sha256": "17d67e98898268c2bce80b9bca6b6d9afec67df6e312f2508a58febca2c0c4d3",
+    "files": 449,
+    "result": "/mnt/luma-build/work/g3-gwin0-content-store-evidence-20261015-a/sweep/result.json",
+    "result_sha256": "851043c7d53f919a3208a6658af38eb6c4f5414a3df062737abef4479395b776",
+    "status": "passed",
+    "elapsed_seconds": 440.067,
+    "all_targets_warnings_denied": true,
+    "rust_passed": 1067,
+    "rust_failed": 0,
+    "existing_fixture_only_ignored": 42,
+    "content_library_tests": 57,
+    "new_table_library_tests": 24,
+    "content_store_tests": 15,
+    "content_store_exclusive_mutation_compile_fail_tests": 1,
+    "actual_cli_passed": 13,
+    "actual_cli_failed": 0,
+    "actual_cli_skipped": 0,
+    "actual_cli_uid": 65534,
+    "actual_cli_gid": 65534,
+    "actual_cli_supplementary_groups": [],
+    "native_source_passed": 465,
+    "native_source_failed": 0,
+    "native_source_skipped": 0,
+    "os_public_authentication_passed": 13,
+    "model_public_authentication_passed": 13,
+    "utc_release_authentication_passed": 8,
+    "apparmor_profiles_parsed_without_loading": 19,
+    "disposable_pam_cases_passed": 6,
+    "resource_disposable_software_tpm_cases_passed": 4,
+    "complete_final_fixture_matrix_executed": false
+  },
+  "final_source": {
+    "snapshot": "/mnt/luma-build/work/g3-gwin0-content-store-source-20261015-b",
+    "manifest_sha256": "b94523b52ac94045844491e598ca743233b2ad9e27f96459321cef5a7cf7474c",
+    "files_verified_against_checkout": 449,
+    "mismatches": 0,
+    "changes_from_native_tested_snapshot": [
+      "packaging/windows/Luma.Package.psm1",
+      "packaging/windows/README.md",
+      "packaging/windows/test-package.ps1"
+    ],
+    "native_or_rust_input_changes": 0,
+    "windows_package_assertions_passed_after_fix": 105,
+    "windows_preflight_assertions_passed": 154,
+    "windows_record": "docs/gates/gwin0/package_content_2026-10-15.json"
+  },
+  "execution": {
+    "tools_image": "sha256:819dfe7772da1e3c76ffdc8f9ea4a1fa44c7c549bd4fa988e35d9397d87924b2",
+    "network": "none",
+    "memory_gib": 4,
+    "cpus": 2,
+    "build_cache_evidence": "D-backed-ext4",
+    "temporary_mount": "512-MiB executable nosuid/nodev container-only tmpfs",
+    "physical_tpm_attached": false,
+    "host_accounts_or_clock_changed": false,
+    "wsl_configuration_changed": false
+  },
+  "cross_review_fixes": [
+    "Domain admission serializes count/create under a base flock and refuses exact maximum capacity; base flock released after creation while each domain keeps its own lock",
+    "Exclusive mutable publication API prevents multiple threads publishing competing next sequences through a shared handle",
+    "Matching prepared transactions count only missing bytes; incompatible partial preparations remain preserved",
+    "Uncertain post-rename replay synchronizes retained files and both affected directory namespaces before acknowledgement",
+    "Pinned namespace identities and pre-rename payload/source rereads reject substitution",
+    "Disposable fixtures revoke authorization at every observed private-read and mutation checkpoint; no refusal is reported as completion"
+  ],
+  "remaining_development": [
+    "Native generic-content adapter joining real current principals, protected UTC, finite Read/effect grants, policy evidence and broker resource leases",
+    "Governed generic discovery, collections/per-result policies, managed-edit workflow integration, retention/export and complete backup/restore journeys",
+    "Accessible manual/conversational shell, deterministic calculation/document/diagram/animation engines, qualified capture and named application adapters",
+    "Authenticated populated Windows rootfs, hosted custody/SID and ACL bridge, safe lifecycle/update, effective confinement/resources, compact inference and complete VM desktop proof"
+  ],
+  "sequence14_g2_image_changed": false,
+  "installed_image_tested": false,
+  "physical_qualification": false,
+  "production_authorization_qualified": false,
+  "g2_closed": false,
+  "g3_closed": false,
+  "gwin0_closed": false,
+  "gate_closing": false
+}

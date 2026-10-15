@@ -39,6 +39,14 @@ struct Compare {
     provenance: Provenance,
 }
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct TableEdit {
+    schema_version: u32,
+    current_envelope: String,
+    edit: luma_content::table::TableEditRequest,
+}
+
 fn schema(version: u32) -> Result<()> {
     if version != 1 {
         return Err("unsupported editable-content request schema".into());
@@ -108,6 +116,40 @@ fn process(command: &str, bytes: &[u8]) -> Result<Value> {
                         "current":current,"candidate":candidate,"automatically_merged":false})
                 }
             }
+        }
+        "content-contract-table-edit" => {
+            let request: TableEdit = serde_json::from_slice(bytes)?;
+            schema(request.schema_version)?;
+            let current =
+                luma_content::reopen(request.current_envelope.as_bytes(), &request.edit.binding)?;
+            // Return the canonical edit input as well as its digest. A caller that
+            // retains a conflict must preserve these actual bytes, not just a hash.
+            let canonical_edit = String::from_utf8(request.edit.canonical_bytes()?)?;
+            let decision = match luma_content::table::apply(&current, &request.edit)? {
+                luma_content::table::Decision::NoChange {
+                    current,
+                    edit_sha256,
+                } => {
+                    json!({"decision":"no-change","current":current,"edit_sha256":edit_sha256})
+                }
+                luma_content::table::Decision::NewVersion {
+                    version,
+                    edit_sha256,
+                } => {
+                    json!({"decision":"new-version","proposed":rendered(&version)?,
+                        "edit_sha256":edit_sha256})
+                }
+                luma_content::table::Decision::Conflict {
+                    expected,
+                    current,
+                    edit_sha256,
+                } => {
+                    json!({"decision":"conflict","expected":expected,"current":current,
+                        "edit_sha256":edit_sha256,"automatically_merged":false})
+                }
+            };
+            json!({"operation":"table-edit","outcome":decision,"canonical_edit":canonical_edit,
+                "formulas_executed":false,"request_retained":false})
         }
         _ => return Err("unsupported editable-content operation".into()),
     };

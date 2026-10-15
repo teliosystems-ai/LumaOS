@@ -23,7 +23,12 @@ def identity(metadata):
             metadata.st_mtime_ns, metadata.st_ctime_ns)
 
 
-def inventory(repository, include_tests=False):
+def source_folders(include_tests=False, include_windows=False):
+    return (FOLDERS + (('native/tests',) if include_tests else ())
+            + (('packaging/windows',) if include_windows else ()))
+
+
+def inventory(repository, include_tests=False, include_windows=False):
     files = {}
     def visit(path):
         relative = path.relative_to(repository).as_posix()
@@ -40,7 +45,7 @@ def inventory(repository, include_tests=False):
             files[relative] = identity(metadata)
         else:
             raise ValueError('source snapshot refuses links and special files: '+relative)
-    folders = FOLDERS + (('native/tests',) if include_tests else ())
+    folders = source_folders(include_tests, include_windows)
     for name in folders:
         path = repository/name
         for parent in (path, *path.parents):
@@ -55,16 +60,16 @@ def inventory(repository, include_tests=False):
     return files
 
 
-def capture(repository, output, include_tests=False):
+def capture(repository, output, include_tests=False, include_windows=False):
     repository = repository.resolve(strict=True)
     if output.is_symlink() or output.exists():
         raise ValueError('source snapshot destination must be new')
     output = output.resolve()
-    folders = FOLDERS + (('native/tests',) if include_tests else ())
+    folders = source_folders(include_tests, include_windows)
     for name in folders:
         if output.is_relative_to(repository/name):
             raise ValueError('snapshot output cannot be inside a captured source tree')
-    before = inventory(repository, include_tests=include_tests)
+    before = inventory(repository, include_tests=include_tests, include_windows=include_windows)
     output.mkdir(parents=True, mode=0o700)
     records = []
     for relative, expected in sorted(before.items()):
@@ -89,7 +94,7 @@ def capture(repository, output, include_tests=False):
         # executable bit, not writable or special permission bits.
         target.chmod(0o555 if expected[2] & 0o111 else 0o444)
         records.append({'path':relative, 'bytes':total, 'sha256':digest.hexdigest()})
-    if inventory(repository, include_tests=include_tests) != before:
+    if inventory(repository, include_tests=include_tests, include_windows=include_windows) != before:
         raise ValueError('source inventory changed during capture')
     manifest = {'schema_version':1, 'files':records}
     with (output/'build-inputs.json').open('x') as stream:
@@ -105,8 +110,11 @@ def main():
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--include-tests', action='store_true',
                         help='capture native fixtures and the offline development sweep')
+    parser.add_argument('--include-windows', action='store_true',
+                        help='also bind Windows packaging sources for cross-platform development evidence')
     args = parser.parse_args()
-    manifest = capture(args.repository, args.output, include_tests=args.include_tests)
+    manifest = capture(args.repository, args.output, include_tests=args.include_tests,
+                       include_windows=args.include_windows)
     print(f"Captured {len(manifest['files'])} source files at {args.output}", flush=True)
 
 

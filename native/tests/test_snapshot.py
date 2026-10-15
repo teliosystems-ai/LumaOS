@@ -98,10 +98,10 @@ class SnapshotTests(unittest.TestCase):
 
     def test_mutation_during_capture_cannot_publish_completion_manifest(self):
         real_inventory = snapshot.inventory
-        def changed(repository, include_tests=False):
+        def changed(repository, include_tests=False, include_windows=False):
             if self.output.exists():
                 (repository/'src/new-file').write_text('concurrent edit')
-            return real_inventory(repository, include_tests=include_tests)
+            return real_inventory(repository, include_tests=include_tests, include_windows=include_windows)
         with mock.patch.object(snapshot, 'inventory', side_effect=changed):
             with self.assertRaisesRegex(ValueError, 'inventory changed'):
                 snapshot.capture(self.repository, self.output)
@@ -128,6 +128,30 @@ class SnapshotTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     snapshot.capture(self.repository, self.output)
             self.assertFalse(self.output.exists())
+
+    def test_optional_windows_sources_join_manifest_without_changing_native_closure(self):
+        packaging = self.repository/'packaging/windows'
+        packaging.mkdir(parents=True)
+        script = packaging/'preflight.ps1'
+        script.write_bytes(b'Windows fixture\r\n')
+        self.assertNotIn('packaging/windows/preflight.ps1', snapshot.inventory(self.repository))
+        record = snapshot.capture(self.repository, self.output, include_windows=True)
+        item = next(item for item in record['files']
+                    if item['path'] == 'packaging/windows/preflight.ps1')
+        self.assertEqual(item['sha256'], hashlib.sha256(script.read_bytes()).hexdigest())
+        self.assertEqual((self.output/item['path']).read_bytes(), script.read_bytes())
+        with self.assertRaises(ValueError):
+            snapshot.capture(self.repository, packaging/'recursive', include_windows=True)
+
+    def test_optional_windows_capture_refuses_redirected_root(self):
+        packaging = self.repository/'packaging'
+        packaging.mkdir()
+        original = self.root/'external-windows'
+        original.mkdir()
+        (original/'input.ps1').write_text('not source')
+        (packaging/'windows').symlink_to(original, target_is_directory=True)
+        with self.assertRaises(ValueError):
+            snapshot.capture(self.repository, self.output, include_windows=True)
 
 
 if __name__ == '__main__':

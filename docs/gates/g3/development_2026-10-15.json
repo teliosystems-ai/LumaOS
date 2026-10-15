@@ -1,0 +1,290 @@
+{
+  "schema_version": 1,
+  "recorded_on": "2026-10-15",
+  "branch": "feature/g3-gwin0-beta",
+  "baseline_commit": "ddbd321",
+  "status": "first-development-slices-implemented-and-software-verified",
+  "implemented": [
+    {
+      "stage": "G2",
+      "item": "Approved purpose-separated nonrenewable thirty-minute QA session, 1770-second runtime and 1800-second systemd ceiling; time bounds included in resource/review identities",
+      "approval": "docs/gates/g2/qa_session_approval_2026-10-15.json"
+    },
+    {
+      "stage": "G3",
+      "item": "Bounded rebuilt lexical search over verified current laboratory catalog versions; deterministic all-term matches and version/hash references",
+      "product_principal_search_available": false,
+      "semantic_search_available": false
+    },
+    {
+      "stage": "GWIN0",
+      "item": "Read-only native Windows/WSL prerequisites, distribution collision checks and host-reserve planning; no setup/worker authority",
+      "evidence": "docs/gates/gwin0/preflight_2026-10-15.json"
+    }
+  ],
+  "source": {
+    "snapshot": "/mnt/luma-build/work/g3-gwin0-source-20261015-a",
+    "manifest_sha256": "7d814f76665f9031e5e6b295d6287d71a09c445fc246bcdaf482f4ac5b5e0d68",
+    "files_verified_against_checkout": 421,
+    "mismatches": 0,
+    "windows_sources_tracked_separately": true
+  },
+  "tooling": {
+    "tools_image": "sha256:819dfe7772da1e3c76ffdc8f9ea4a1fa44c7c549bd4fa988e35d9397d87924b2",
+    "network": "none",
+    "memory_gib": 4,
+    "cpus": 2,
+    "work_and_cache": "D-backed-ext4",
+    "disposable_tmpfs": "512-MiB-executable-nosuid-nodev-no-host-mount"
+  },
+  "validation": {
+    "rust_all_targets_warnings_denied": "passed",
+    "full_rust": {
+      "passed": 985,
+      "failed": 0,
+      "ignored": 42
+    },
+    "final_native_source": {
+      "passed": 458,
+      "failed": 0,
+      "skipped": 0
+    },
+    "os_public_authentication": {
+      "passed": 13,
+      "failed": 0
+    },
+    "model_public_authentication": {
+      "passed": 13,
+      "failed": 0
+    },
+    "utc_release_authentication": {
+      "passed": 8,
+      "failed": 0
+    },
+    "apparmor_profiles_parsed_without_loading": 19,
+    "windows_powershell_assertions": {
+      "passed": 26,
+      "failed": 0
+    },
+    "native_windows_probe": "completed-proposed-12-GiB-guest-budget-refused",
+    "complete_final_fixture_sweep": false,
+    "physical_hardware_qualified": false
+  },
+  "runs": [
+    {
+      "path": "/mnt/luma-build/work/g3-gwin0-evidence-20261015-a/sweep/result.json",
+      "sha256": "41e86113e1a617f860ce1fecd80cdb1afccf9855cf7f8b2b34a3d4899f7dfc82",
+      "result": "failed",
+      "source_manifest_sha256": "7d814f76665f9031e5e6b295d6287d71a09c445fc246bcdaf482f4ac5b5e0d68",
+      "cases": [
+        {
+          "name": "rust-all-targets-check",
+          "exit_code": 0,
+          "counts": null
+        },
+        {
+          "name": "rust-tests",
+          "exit_code": 101,
+          "counts": null
+        },
+        {
+          "name": "native-source-tests",
+          "exit_code": 1,
+          "counts": null
+        },
+        {
+          "name": "public-trust-authentication",
+          "exit_code": 0,
+          "counts": {
+            "discovered": 13,
+            "failed": 0,
+            "passed": 13,
+            "skipped": 0
+          }
+        },
+        {
+          "name": "model-public-authentication",
+          "exit_code": 0,
+          "counts": {
+            "discovered": 13,
+            "failed": 0,
+            "passed": 13,
+            "skipped": 0
+          }
+        }
+      ],
+      "parsed_profiles": 19
+    },
+    {
+      "path": "/mnt/luma-build/work/g3-gwin0-evidence-20261015-b/sweep/result.json",
+      "sha256": "416771bf282c42439bc0c6b423056e0671f43cf2b45d7a1e90cf589cfe414fda",
+      "result": "passed",
+      "source_manifest_sha256": "7d814f76665f9031e5e6b295d6287d71a09c445fc246bcdaf482f4ac5b5e0d68",
+      "cases": [
+        {
+          "name": "rust-all-targets-check",
+          "exit_code": 0,
+          "counts": null
+        },
+        {
+          "name": "rust-tests",
+          "exit_code": 0,
+          "counts": {
+            "failed": 0,
+            "filtered_out": 0,
+            "ignored": 42,
+            "measured": 0,
+            "passed": 985
+          }
+        },
+        {
+          "name": "native-source-tests",
+          "exit_code": 0,
+          "counts": {
+            "discovered": 458,
+            "failed": 0,
+            "passed": 456,
+            "skipped": 2
+          }
+        },
+        {
+          "name": "public-trust-authentication",
+          "exit_code": 0,
+          "counts": {
+            "discovered": 13,
+            "failed": 0,
+            "passed": 13,
+            "skipped": 0
+          }
+        },
+        {
+          "name": "model-public-authentication",
+          "exit_code": 0,
+          "counts": {
+            "discovered": 13,
+            "failed": 0,
+            "passed": 13,
+            "skipped": 0
+          }
+        }
+      ],
+      "parsed_profiles": 19
+    },
+    {
+      "path": "/mnt/luma-build/work/g3-gwin0-evidence-20261015-c/sweep/result.json",
+      "sha256": "93282118734718159f80b94d57b4b9132d6a25e39805acd8c8a280f3ed18d64d",
+      "result": "passed",
+      "source_manifest_sha256": "7d814f76665f9031e5e6b295d6287d71a09c445fc246bcdaf482f4ac5b5e0d68",
+      "cases": [
+        {
+          "name": "rust-all-targets-check",
+          "exit_code": 0,
+          "counts": null
+        },
+        {
+          "name": "rust-tests",
+          "exit_code": 0,
+          "counts": {
+            "failed": 0,
+            "filtered_out": 995,
+            "ignored": 0,
+            "measured": 0,
+            "passed": 32
+          }
+        },
+        {
+          "name": "rust-tests-authentication",
+          "exit_code": 0,
+          "counts": {
+            "failed": 0,
+            "filtered_out": 999,
+            "ignored": 1,
+            "measured": 0,
+            "passed": 27
+          }
+        },
+        {
+          "name": "rust-tests-model--qa",
+          "exit_code": 0,
+          "counts": {
+            "failed": 0,
+            "filtered_out": 1021,
+            "ignored": 0,
+            "measured": 0,
+            "passed": 6
+          }
+        },
+        {
+          "name": "rust-tests-admin_governance",
+          "exit_code": 0,
+          "counts": {
+            "failed": 0,
+            "filtered_out": 924,
+            "ignored": 1,
+            "measured": 0,
+            "passed": 102
+          }
+        },
+        {
+          "name": "native-source-tests",
+          "exit_code": 0,
+          "counts": {
+            "discovered": 458,
+            "failed": 0,
+            "passed": 458,
+            "skipped": 0
+          }
+        },
+        {
+          "name": "public-trust-authentication",
+          "exit_code": 0,
+          "counts": {
+            "discovered": 13,
+            "failed": 0,
+            "passed": 13,
+            "skipped": 0
+          }
+        },
+        {
+          "name": "model-public-authentication",
+          "exit_code": 0,
+          "counts": {
+            "discovered": 13,
+            "failed": 0,
+            "passed": 13,
+            "skipped": 0
+          }
+        },
+        {
+          "name": "utc-release-authentication",
+          "exit_code": 0,
+          "counts": {
+            "discovered": 8,
+            "failed": 0,
+            "passed": 8,
+            "skipped": 0
+          }
+        }
+      ],
+      "parsed_profiles": 19
+    }
+  ],
+  "run_resolution": "Run a used a non-executable disposable /tmp, causing seven compiled worker-fixture Rust failures and eight native subtest failures. No source or assertion changed. Run b used executable disposable tmpfs and passed all 985 Rust tests; two UTC source-dependent native cases skipped because their retained input was not mounted. Run c used the same immutable snapshot plus the retained pinned upstream source/archive, passed all 458 native tests with no skips and reran focused catalog/authentication/QA/Admin and real UTC signature regressions. Existing ignored Rust fixture entries are not counted as passes.",
+  "qualification": {
+    "g2_image_changed": false,
+    "new_branch_image_built": false,
+    "production_signed": false,
+    "g3_complete": false,
+    "gwin0_complete": false,
+    "requirement_1_closed": false,
+    "requirement_2_closed": false,
+    "gate_closing": false
+  },
+  "next_work": [
+    "Governed current-authorization principal-domain discovery and generic immutable content contracts",
+    "Accessible shared shell and deterministic editable content engines",
+    "Signed separate Windows distribution and authenticated SID/principal/ACL bridge",
+    "Qualified WSL confinement/lifecycle/resource coexistence and separate Hyper-V desktop proof",
+    "Native G2 acceptance and genuine production custody/qualification"
+  ]
+}

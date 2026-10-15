@@ -16,6 +16,8 @@ use std::time::{Duration, Instant};
 const PROFILE: &[u8] = include_bytes!("../../../native/image/overlay/etc/pam.d/luma-admin");
 const HELPER: &str = "/usr/libexec/luma-os/luma-auth-helper";
 const LIMIT: usize = 1024;
+// Owner-approved 2026-10-15, isolated QA only; never a caller-selected duration.
+pub(crate) const MODEL_QA_SESSION_SECONDS: u64 = 30 * 60;
 pub(crate) const PASSWORD_FRAME: usize = LIMIT + 1;
 mod session;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

@@ -18,9 +18,11 @@ mod domains;
 mod gc;
 mod gc_cli;
 mod owned_effects;
+mod search;
 pub(crate) use domains::{commit_owned_invoice, committed_owned_invoice, owned_invoice_receipt};
 pub(crate) use gc_cli::command as gc_command;
 pub(crate) use owned_effects::command as owned_effects_command;
+pub(crate) use search::command as search_command;
 const MAX_CONTENT: u64 = 2 * 1024 * 1024;
 const MAX_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_RECORDS: usize = 1024;
@@ -1169,7 +1171,7 @@ mod tests {
             fs::remove_dir_all(&self.parent).unwrap();
         }
     }
-    fn proposal(request: &str, artifact: &str, expected: u64) -> (Receipt, Vec<u8>) {
+    pub(super) fn proposal(request: &str, artifact: &str, expected: u64) -> (Receipt, Vec<u8>) {
         let source = include_bytes!("../../../examples/invoices.csv");
         let bytes = calculation::report_bytes(source).unwrap();
         (

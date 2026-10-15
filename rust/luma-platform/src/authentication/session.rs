@@ -12,6 +12,7 @@ const EXPORT_WINDOW_NS: u64 = 1_800_000_000_000;
 // Independently approved typed operations, never selected by caller duration.
 const MODEL_IMPORT_WINDOW_NS: u64 = 1_800_000_000_000;
 const MODEL_ACTIVATION_WINDOW_NS: u64 = 1_800_000_000_000;
+const MODEL_QA_WINDOW_NS: u64 = super::MODEL_QA_SESSION_SECONDS * 1_000_000_000;
 // Approved independently of export. No caller duration, renewal or PAM purpose.
 const REPAIR_WINDOW_NS: u64 = 1_800_000_000_000;
 impl SessionPurpose {
@@ -21,7 +22,7 @@ impl SessionPurpose {
             Self::Export => EXPORT_WINDOW_NS,
             Self::ModelImport => MODEL_IMPORT_WINDOW_NS,
             Self::ModelActivation => MODEL_ACTIVATION_WINDOW_NS,
-            Self::ModelQa => WINDOW_NS,
+            Self::ModelQa => MODEL_QA_WINDOW_NS,
         }
     }
 }
@@ -670,7 +671,11 @@ mod tests {
     }
     #[test]
     fn model_operation_purposes_have_independent_fixed_nonrenewable_thirty_minute_deadlines() {
-        for purpose in [SessionPurpose::ModelImport, SessionPurpose::ModelActivation] {
+        for purpose in [
+            SessionPurpose::ModelImport,
+            SessionPurpose::ModelActivation,
+            SessionPurpose::ModelQa,
+        ] {
             let operation = Lifetime::at_purpose(clock(7), purpose).unwrap();
             assert_eq!(operation.purpose(), purpose);
             assert_eq!(operation.deadline_ns, 7 + 1_800_000_000_000);

@@ -42,6 +42,16 @@ Version `0.1.0` is a developer MVP and a useful input to G0. It currently demons
 
 It has **not** passed formal G0 or G1. Their repository/local development scope is recorded as **complete with deferrals**, while formal certification remains **blocked**. Repository-local G1 prototypes now cover purpose/lifecycle-bound signed model-pack contracts, checked resource admission, deny-by-default policy and Admin delegation, a typed DAG, deterministic fake inference, real loopback inference, local-gateway fencing, platform-adapter scaffolding, and state recovery. It still does not provide a signed certified 4–6B model pack, qualified two-board model runtime, signed skills, worker sandboxing, semantic indexing, multimodal interaction, a bootable image, A/B updates, hardware certification, a Windows file broker, VM or dual-boot lifecycle, 400–405B qualification, or cluster execution. Existing simulator, fake-backend, WSL, one-laptop real-model, and MVP results are development evidence only.
 
+**2026-10-15 native checkpoint:** A fresh sequence-14 laboratory Ubuntu image
+was built and exported on 2026-10-14; see
+`native/evidence/G2_TEST_IMAGE_2026-10-14.md` and the native software register.
+It has not yet passed native installation/boot or production qualification.
+The owner authorized G3/GWIN0 development overlap on a separate branch and
+independently approved a thirty-minute QA-only session in subsequent source.
+That approval does not modify the frozen image or close any inherited gate.
+The early Python-contract checkpoint below is historical, not the scope of
+the later native image.
+
 G2 repository development is **in progress** and formal G2 certification is
 **blocked**. The G2 work at
 `4ec25b849b3db4363191532bdb06f42894e11253` models installer authorization,
@@ -66,9 +76,10 @@ laptop, not the two required A1 boards.
 | --- | --- |
 | G0 | **Development complete with deferrals; formal certification blocked.** Governing source ingestion and 288-ID traceability are verified; the development baseline, decisions including Admin governance, registers, current Windows/WSL inventory, checks, and source-package evidence exist. Two designated physical boards, the Ubuntu 24.04/E8 baselines, disposable disks, protected production signing custody, and complete qualification evidence are deferred in `docs/gates/g0/blockers.json` and `docs/gates/final_certification_deferrals.json`. |
 | G1 | **Development complete with deferrals; formal certification blocked.** Contract evidence covers resources, policy/Admin delegation, typed DAG, model-pack trust lifecycle, fake and real inference, authenticated gateway, cancellation/concurrency/revocation fencing, state transfer, telemetry, and platform adapters. Qwen3-4B passed bounded native Windows CUDA and Ubuntu WSL CPU/gateway development smoke, but the external artifact is unsigned and not a certified pack. Signed candidate comparison, two-board workflows, boot/recovery, full security/performance evidence, and the real 400–405B experiment are deferred. No deferral waives G0 or G1 exit criteria. |
-| G2 | **Development in progress; formal certification blocked.** The evolving repository-local suites exercise non-destructive installer authorization, exact multi-model/hardware selection, pure A/B boot-state transitions, typed helper/confinement boundaries, durable request/effect and Admin-event coordination, signed trust/catalog admission, offline-source revalidation, and read-only Ubuntu host admission on native Windows and Ubuntu WSL under normal and optimized Python. No production Admin/HSM/anchor service, governed release source, real disk, boot, cryptographic boot chain, encryption, kernel control, VM, native ACL/DACL, or peer-credential enforcement has been exercised. |
-| G3, G4, G5 | **Not started.** |
-| GWIN0, GWIN1, GWIN2 | **Not started.** |
+| G2 | **Lab image built; native and production qualification open.** The sequence-14 desktop candidate includes native installer/boot/security/recovery implementations and passed its recorded software/build checks. See `native/evidence/G2_TEST_IMAGE_2026-10-14.md` and `native/G2_SOFTWARE_STATUS.md`. Actual installation, boot, enforcing security/recovery, E1/E2 and genuine production custody/signing/model qualification remain open; software fixtures are not physical qualification. |
+| G3 | **Development started, 2026-10-15; not qualified.** Owner-approved overlap on `feature/g3-gwin0-beta` while native G2 acceptance remains pending. See `docs/G3_GWIN0_IMPLEMENTATION.md` for scope and implementation slices. |
+| GWIN0 | **Development started, 2026-10-15; not qualified.** Read-only Windows/WSL prerequisites begin the hosted-platform track; product packaging, authenticated host integration, confinement and VM proof remain open. |
+| G4, G5, GWIN1, GWIN2 | **Not started.** |
 | G6, G7 | **Not started and separately capacity-gated.** |
 | RX | **Not started and not yet authorized.** |
 

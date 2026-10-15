@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "recorded_on": "2026-10-15",
+  "decision": "approved-by-owner",
+  "purpose": "model.qa",
+  "session_seconds": 1800,
+  "worker_runtime_milliseconds": 1770000,
+  "systemd_runtime_ceiling_seconds": 1800,
+  "renewable": false,
+  "caller_selectable_duration": false,
+  "review_and_resource_binding_include_time_bounds": true,
+  "retained_checks": ["Original Admin and current usable account", "Purpose-bound fresh authentication", "Protected UTC", "Exact finite grants", "Resource leases/generations", "Continuous revocation/expiry and cancellation", "Owned worker drain", "Inert observations without serving or certification"],
+  "unaffected_purposes": ["standard", "export", "model-import", "model-activation", "repair"],
+  "implementation_branch": "feature/g3-gwin0-beta",
+  "delivered_sequence_14_image_changed": false,
+  "new_image_required_for_extension": true,
+  "native_qualification_claimed": false,
+  "gate_closing": false
+}

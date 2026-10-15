@@ -16,7 +16,9 @@ const ROOT: &str = "/run/luma-model-qa";
 const REPORTS: &str = "/var/lib/luma-os/model-qa";
 const MAX_REPORT: usize = 65536;
 const CORPUS: &str = "Return exactly the single word LUMA.\n";
-const BUDGET_MS: u64 = 25_000;
+// Leave thirty seconds of the independently approved session for final checks
+// and cleanup. Time spent authenticating/preparing is never added back.
+const BUDGET_MS: u64 = (crate::authentication::MODEL_QA_SESSION_SECONDS - 30) * 1000;
 
 fn json<T: serde::de::DeserializeOwned>(raw: &[u8]) -> Result<T> {
     if raw.is_empty() || raw.len() > MAX_REPORT {
@@ -82,6 +84,8 @@ pub(crate) fn binding(id: &str, device: &str) -> Result<String> {
         device,
         memory(id)?,
         TASKS,
+        crate::authentication::MODEL_QA_SESSION_SECONDS,
+        BUDGET_MS,
     ))?)))
 }
 pub(crate) fn restored_memory(value: &str, device: &str) -> Result<Option<u64>> {
@@ -116,6 +120,8 @@ pub(crate) fn usage(id: &str) -> Result<Use> {
         machine_digest()?,
         memory(id)?,
         TASKS,
+        crate::authentication::MODEL_QA_SESSION_SECONDS,
+        BUDGET_MS,
         crate::resource_manager::storage_device(Path::new(VAR))?,
     ))?));
     let usage = Use {
@@ -373,7 +379,10 @@ fn launch_arguments(qa: &str, job: &str, model_fd: i32) -> Result<Vec<String>> {
             .into(),
         "IOReadBandwidthMax=/var 64M".into(),
         "IOWriteBandwidthMax=/var 64M".into(),
-        "RuntimeMaxSec=40".into(),
+        format!(
+            "RuntimeMaxSec={}",
+            crate::authentication::MODEL_QA_SESSION_SECONDS
+        ),
     ] {
         args.push(format!("--property={property}"));
     }
@@ -1295,6 +1304,8 @@ mod tests {
         let id = profile_id("qwen3-4b-q4-k-m", "execution").unwrap();
         let args = launch_arguments(&id, &"ab".repeat(16), 7).unwrap();
         assert!(args.contains(&"--property=TasksMax=64".into()));
+        assert!(args.contains(&"--property=RuntimeMaxSec=1800".into()));
+        assert_eq!(BUDGET_MS, 1_770_000);
         assert!(args.iter().any(|arg| arg
             == &format!(
                 "--property=StandardInputFile=/proc/{}/fd/7",

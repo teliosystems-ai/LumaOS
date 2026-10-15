@@ -116,10 +116,15 @@ preparation metadata and actual release activation.
 QA reports contain factual execution or cancellation observations and exact
 tuple digests under `/var/lib/luma-os/model-qa`. They never certify a pass or
 alter ordinary selection, credentials or serving. The current QA session has
-the existing nonrenewable 30-second lifetime and a 25-second runtime budget;
-cold 4B loading can safely refuse within these bounds. A separate proposed
-30-minute QA-only session still requires explicit owner approval and is not
-borrowed from the approved import, activation, export or repair purposes.
+an independently owner-approved, nonrenewable 30-minute lifetime, with a
+29-minute-30-second worker runtime budget and a 30-minute systemd ceiling.
+Authentication, preparation and final authorization checks consume the same
+session; they never renew it. The approval was given on 2026-10-15 for QA only,
+not borrowed from import, activation, export or repair. QA time limits are bound
+into review/resource identities, so old reviews cannot silently gain time.
+These source changes are not in the delivered sequence-14 image, which retains
+its recorded 30-second session and 25-second runtime. A subsequent identified
+image is needed to test the extension.
 
 ## Candidate Wayland desktop edition
 

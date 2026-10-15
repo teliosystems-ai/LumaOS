@@ -1,6 +1,6 @@
 # G2 software completion register
 
-Updated 2026-10-14. **The compact-profile software candidate passes integrated software verification; G2 is not closed.** This register separates
+Updated 2026-10-15. **The delivered compact-profile software candidate passes integrated software verification; G2 is not closed.** This register separates
 work that can be executed in the current Windows/Ubuntu WSL/VM environment
 from production deployment decisions and physical qualification. It does not
 change the frozen reference release, governing requirements, or exit criteria.
@@ -12,6 +12,29 @@ unit test, default-deny placeholder, or smaller model cannot close a different
 requirement.
 
 ## Current software inventory and work still required
+
+### Approved QA session extension and beta development branch
+
+On 2026-10-15 the owner approved a separate nonrenewable thirty-minute QA-only
+session and starting G3/GWIN0 development on `feature/g3-gwin0-beta`. Current
+source uses that session, a twenty-nine-minute-thirty-second worker budget and
+a thirty-minute systemd ceiling. Review and resource identities include the
+time bounds. Existing purpose, principal, protected UTC, finite-grant, lease,
+expiry and revocation checks remain in force; no serving/certification or
+other purpose gains the longer session.
+
+The delivered sequence-14 image and its historical evidence remain unchanged;
+they still contain the original short QA budget. Its native qualification is
+separate from the new branch. See the
+[approval record](../docs/gates/g2/qa_session_approval_2026-10-15.json) and
+[G3 and GWIN0 implementation plan](../docs/G3_GWIN0_IMPLEMENTATION.md).
+
+The new-branch native snapshot passes 985 Rust tests, warnings-denied all-target
+checks and the fixture-complete 458-test native-source confirmation without
+skips. Forty-two existing Rust fixture-only entries remain excluded. Focused
+session-purpose/QA/Admin tests and public OS/model/UTC signature regressions
+pass; this is not installed QA or native qualification. See the
+[new-branch verification record](../docs/gates/g3/development_2026-10-15.json).
 
 ### Isolated QA and inert installer model staging, 2026-10-14
 

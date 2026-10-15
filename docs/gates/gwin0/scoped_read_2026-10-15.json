@@ -1,0 +1,96 @@
+{
+  "schema_version": 1,
+  "recorded_on": "2026-10-15",
+  "branch": "feature/g3-gwin0-beta",
+  "baseline_commit": "c2c4b01cf5ba7022ab020d654af23a97471ac361",
+  "status": "ordinary-user-scoped-file-read-development-checkpoint-passed",
+  "scope": "Explicit standalone NTFS read with actual caller ACL checks, not an authenticated Windows/Linux product bridge",
+  "source": {
+    "snapshot": "/mnt/luma-build/work/g3-gwin0-query-spreadsheet-source-20261015-c",
+    "manifest_sha256": "81d39d4f2f1b97210c47de3b165449cde062094d6a117c47c4a8163b9d5744f3",
+    "files_verified_against_checkout": 461,
+    "mismatches": 0,
+    "sha256": {
+      "packaging/windows/Ingestion.cs": "d780919420e6425eebede8645c6a5daf61602269303f5be8f9bae417b15dcaa1",
+      "packaging/windows/Luma.Ingestion.psm1": "a3cf16c4040ec9091c014fabf9dc59dc2abaf4a7eedcec472c0025f1a145c058",
+      "packaging/windows/inspect-enrolled-file.ps1": "915850eadc8d81751977a05a0bbb356d79a845c62c20ec22b2776b0e573263ac",
+      "packaging/windows/test-ingestion.ps1": "30b54ce0587f611c3c4a9c1172287e4cb38323e4c772c6052152eff61b851d35",
+      "packaging/windows/README.md": "d9a78768735149838388673af14d951bb4a4a8d5d0621d4cc9de1a115f8ad570"
+    }
+  },
+  "implemented": [
+    "Closed bounded seven-field unsigned enrollment and purpose-separated review/confirmation binding actual Windows SID, exact root/relative path, byte limit and expected SHA256",
+    "Actual non-elevated interactive primary token, no active impersonation or enabled debug/backup/restore/ownership bypass privileges; repeated token identity checks",
+    "Ordinary-caller kernel access plus repeated AccessCheck against current handle DACLs, including while an existing read handle remains open",
+    "Pinned ancestors/source with write/delete sharing refused, exact NTFS file identity and canonical final path, metadata-first no-recall/no-reparse opens",
+    "No namespace enumeration, writes or hydration authority; device/traversal/ADS/aliases/reparse/hardlink/offline/observed-placeholder refusal",
+    "Combined component count checked before source handles open, source maximum1MiB, enrollment8192bytes, repeated complete32KiB-block reads and exact expected hash before returning hex",
+    "Bounded enrollment-file capture uses the same real-token, pinned-handle and ACL checks; input remains inert and unsigned"
+  ],
+  "validation": {
+    "command": "powershell.exe -NoProfile -ExecutionPolicy RemoteSigned -File .\\packaging\\windows\\test-ingestion.ps1 -CompilerWorkRoot D:\\LumaOS-builds -SecurityWorkRoot C:\\Users\\hakim\\LumaOS\\.luma",
+    "exit_code": 0,
+    "assertions_passed": 85,
+    "assertions_failed": 0,
+    "skipped": 0,
+    "actual_review_and_read_cli_child_processes": true,
+    "actual_ordinary_interactive_token": true,
+    "actual_acl_read_denial": true,
+    "actual_acl_revocation_with_live_pinned_handle": true,
+    "same_handle_read_restored_after_owned_fixture_dacl_restore": true,
+    "actual_ntfs_hardlink_junction_offline_and_writer_refusals": true,
+    "actual_empty_and_32kib_binary_reads": true,
+    "oversized_source_uses_sparse_fixture_not_bulk_c_storage": true,
+    "actual_handle_safe_control_input_capture": true,
+    "actual_cloud_provider_tested": false,
+    "second_windows_user_provisioned_or_tested": false,
+    "package_regression_assertions_passed": 162,
+    "preflight_regression_assertions_passed": 154,
+    "process_only_remote_signed_approved": true,
+    "persistent_execution_policy_written": false
+  },
+  "cross_review": [
+    "Replaced race-prone control-file pathname reads with the same bounded ordinary-caller pinned-handle capture",
+    "Inspect metadata and ACL before acquiring data/list access; request OPEN_NO_RECALL and OPEN_REPARSE_POINT without claiming universal cloud-provider qualification",
+    "Enforce combined path-component bounds before opening any source handles",
+    "Production code has no test hook; a test-only reflection helper revokes the ACL of an owned fixture under its real live lease and requires exact UnauthorizedAccessException",
+    "Fixture ACL restoration explicitly marks the DACL modified and proves that the same live lease/read succeeds after restore; no naive unmodified security snapshot is treated as restored"
+  ],
+  "execution": {
+    "compiler_scratch": "D:\\LumaOS-builds, disposable GUID child",
+    "security_fixtures": "Tiny disposable NTFS GUID child of repository .luma; sparse overlength metadata fixture",
+    "existing_user_files_or_acls_changed": false,
+    "owned_fixture_acls_restored_before_cleanup": true,
+    "retained_fixture_children": 0,
+    "distributions_imported_or_changed": false,
+    "host_accounts_or_policy_changed": false,
+    "observation_window_ms": 5000,
+    "hard_deadline_enforced": false
+  },
+  "limits": [
+    "Synchronous kernel opens, metadata operations, storage/filter drivers and disposal are not covered by a hard process deadline",
+    "Cloud no-hydration behavior, two-user isolation and declared platform tuples still need actual qualification",
+    "Stable ancestor identity/write times are conservatively required; unrelated namespace changes can refuse without automatic retry",
+    "Returned bytes are untrusted data; neither unsigned enrollment nor confirmation is managed custody, a product grant or an authenticated guest identity",
+    "Stdout can deliver a prefix if the process or consumer stops; this is not a finite product export session"
+  ],
+  "remaining_development": [
+    "Signed companion and qualified verifier dependencies/custody/time/revocation delivery",
+    "Authenticated SID/principal IPC bridge, persistent enrollment and finite product grants",
+    "Populated runnable WSL rootfs, safe install/update/rollback and hosted lifecycle",
+    "Effective confinement/resources, real compact inference and separate complete Hyper-V desktop proof"
+  ],
+  "primary_references": [
+    "https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-createfilew",
+    "https://learn.microsoft.com/en-us/windows/win32/fileio/file-attribute-constants"
+  ],
+  "input_authenticated": false,
+  "product_grants": false,
+  "authenticated_linux_bridge": false,
+  "confidentiality_established": false,
+  "cloud_provider_qualified": false,
+  "production_qualified": false,
+  "sequence14_g2_image_changed": false,
+  "gwin0_closed": false,
+  "gate_closing": false
+}

@@ -202,4 +202,62 @@ checks only; it does not claim that the complete signature suite ran. Tests use
 disposable lab keys, genuine valid/invalid signature CLI calls, real subprocess
 timeouts and output bounds, NTFS rename/delete refusal and fixture junctions.
 
+## Explicit ordinary user scoped file reads
+
+`inspect-enrolled-file.ps1` reads one exact explicitly reviewed local NTFS file.
+It is not the authenticated Windows-to-Linux product bridge. Its unsigned
+schema-1 enrollment has exactly seven fields: `schema_version`,
+`enrollment_id` (32 lowercase hex characters), `windows_sid` (the actual ordinary
+interactive caller), `root` (an absolute NTFS directory), `relative_path`,
+`max_bytes` (1 through 1,048,576) and `expected_sha256` (64 lowercase hex digits).
+No directory is enumerated. Both the enrollment input file and the selected
+source use pinned no-follow handles and ordinary-caller access checks.
+
+After preparing the enrollment file and setting `$enrollmentFile` to its
+absolute NTFS path, request the inert review:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy RemoteSigned -File .\packaging\windows\inspect-enrolled-file.ps1 -EnrollmentPath $enrollmentFile -CompilerWorkRoot D:\LumaOS-builds -ReviewOnly
+```
+
+Check the SID, directory, exact relative path, size and expected hash. Copy the
+returned `read-exact-file:HASH` confirmation only after reviewing those fields:
+
+```powershell
+$confirmation = Read-Host 'Enter the reviewed exact read confirmation'
+powershell.exe -NoProfile -ExecutionPolicy RemoteSigned -File .\packaging\windows\inspect-enrolled-file.ps1 -EnrollmentPath $enrollmentFile -CompilerWorkRoot D:\LumaOS-builds -Confirmation $confirmation
+```
+
+The reader refuses elevated/service/impersonated tokens and enabled bypass
+privileges. It pins ancestors and the source against write/delete substitution,
+rechecks token and ordinary-caller ACL access, and compares complete bytes twice
+with the expected digest before returning hex data. Root/relative paths must be
+canonical and bounded; device aliases, alternate streams, traversal, reparse
+points, hard links, offline and observed placeholder attributes are refused.
+Metadata-first opens request the [documented no-recall and reparse-point flags](https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-createfilew).
+Cloud-provider behavior is still unqualified; this does not authorize hydration.
+
+There is a five-second cooperative observation window, not a hard deadline for
+synchronous kernel/filter operations or disposal. The source's broader sharing
+permissions are not changed. `input_authenticated`, `product_grants`,
+`authenticated_linux_bridge`, `confidentiality_established`,
+`cloud_provider_qualified`, `hard_deadline_enforced`, `production_qualified` and
+`gate_closing` remain false. Serialization can deliver a prefix if the process or
+consumer stops; this is not a product export session or persistent enrollment.
+
+Run the actual ordinary-user NTFS fixtures with compiler scratch on D:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy RemoteSigned -File .\packaging\windows\test-ingestion.ps1 -CompilerWorkRoot D:\LumaOS-builds -SecurityWorkRoot C:\Users\hakim\LumaOS\.luma
+```
+
+Only new disposable fixture children are created. ACL-denial tests change the
+ACL of their own tiny fixture file, never an existing user file or directory.
+The large-length refusal uses a sparse file; fixtures do not move image or build
+storage to C. An elevated caller causes a fixture failure, not a simulated pass.
+The suite also revokes read permission while an actual source lease is open,
+requires an explicit ACL refusal from that same lease, then restores its own
+fixture DACL and verifies the same handle works again. No production test hook
+or existing user's ACL is involved.
+
 See [the shared implementation plan](../../docs/G3_GWIN0_IMPLEMENTATION.md).

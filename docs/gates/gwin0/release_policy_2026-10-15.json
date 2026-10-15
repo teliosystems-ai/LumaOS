@@ -1,0 +1,85 @@
+{
+  "schema_version": 1,
+  "recorded_on": "2026-10-15",
+  "branch": "feature/g3-gwin0-beta",
+  "baseline_commit": "969c2085abbfcf25c3fd7c80bbd861fbbadf4173",
+  "status": "signed-laboratory-release-policy-development-checkpoint-passed",
+  "scope": "Cryptographic release-policy evaluation at an authenticated interval, not current production or installation admission",
+  "source": {
+    "snapshot": "/mnt/luma-build/work/g3-renderers-source-20261015-c",
+    "manifest_sha256": "c4550c3a699e16064201ca573cd9989cf763baf8ebcdcabf17c963f193e21716",
+    "snapshot_files": 473,
+    "native_verification_recorded_separately": true,
+    "sha256": {
+      "packaging/windows/Luma.Trust.psm1": "afadda38a00e5fd8cc3adf8b4f9e6822c27c345fa88da5088576c0b066f82cea",
+      "packaging/windows/TrustInputs.cs": "b6db9464c34e606b2bf9e3088b1747cde0e11c32c5f010a011113c03763efe38",
+      "packaging/windows/verify-release-policy.ps1": "d8af8d73245ceffe97737a9576d332d27cfe6d721d71f8b3a562d60d7b82372d",
+      "packaging/windows/test-release-policy.ps1": "27343215e9f857dfab0e312d96ff0ee6af59d956005f5de11ca68eb962ba725a"
+    }
+  },
+  "implemented": [
+    "Actual existing detached package verification joined to an independently SHA256-pinned laboratory policy authority",
+    "Purpose-separated Ed25519 signatures over exact closed policy and clock-interval JSON; mutually independent package, policy and clock keys",
+    "Exact release ID, manifest, rootfs, package anchor and verifier executable digest binding",
+    "Finite authority/policy lifetimes, complete attested interval containment, sorted unique bounded revocation lists and exact nonce/sequence/predecessor constraints",
+    "Strict public CLI sequence grammar refuses decimal/exponent/sign/whitespace/leading-zero coercion and values above 9007199254740991",
+    "Bounded final-file handle capture, exact local final path/identity, metadata checks, no-reparse/no-recall flags and hardlink/offline/observed-placeholder refusal",
+    "Explicit production refusal and separate false custody, current-time, rollback, revocation freshness and installation authority claims"
+  ],
+  "validation": {
+    "command": "powershell.exe -NoProfile -ExecutionPolicy RemoteSigned -File .\\packaging\\windows\\test-release-policy.ps1 -WorkRoot D:\\LumaOS-builds -SecurityWorkRoot C:\\Users\\hakim\\LumaOS\\.luma",
+    "agent_run_assertions_passed": 94,
+    "independent_parent_rerun_assertions_passed": 94,
+    "exit_code": 0,
+    "assertions_failed": 0,
+    "skipped": 0,
+    "actual_host_user_process": true,
+    "actual_independent_ed25519_signatures": true,
+    "actual_public_cli_success_and_production_refusal": true,
+    "actual_cli_malformed_sequence_floor_cases": 9,
+    "signed_invalid_revocation_binding_nonce_sequence_and_lifetime_cases": true,
+    "actual_ntfs_hardlink_offline_and_writer_refusals": true,
+    "duplicate_document_refusal": true,
+    "process_only_remote_signed": true,
+    "saved_execution_policy_changed": false,
+    "owned_fixture_cleanup_verified": true,
+    "retained_full_console_transcript_file": false
+  },
+  "bounds": {
+    "trust_input_bytes_each": 65536,
+    "raw_signature_bytes": 64,
+    "authority_lifetime_days_maximum": 366,
+    "policy_lifetime_days_maximum": 7,
+    "attested_interval_width_ms_maximum": 60000,
+    "revocations_each_array_maximum": 64
+  },
+  "execution": {
+    "compiler_and_package_scratch": "Disposable owned GUID children on D:\\LumaOS-builds",
+    "security_scratch": "Tiny owned NTFS children under C:\\Users\\hakim\\LumaOS\\.luma",
+    "existing_directory_acls_changed": false,
+    "host_accounts_firmware_firewall_changed": false,
+    "wsl_settings_or_distributions_changed": false,
+    "production_signing_keys_used": false,
+    "test_private_keys_are_disposable_laboratory_fixtures": true
+  },
+  "qualification_limits": [
+    "Independently supplied pins select laboratory inputs; they are not deployed authenticated custody",
+    "A signed clock interval and nonce do not establish freshness or current protected UTC; no host wall clock is queried as authority",
+    "Caller-selected floor and predecessor constrain this evaluation, not durable rollback-resistant state",
+    "Signed revocations are evaluated exactly as supplied, not a proof of the current complete revocation state",
+    "Pinned executable bytes do not authenticate all verifier DLL/runtime dependencies",
+    "Trust capture is a single GENERIC_READ no-recall/no-reparse handle with metadata checks before bytes, not the ingestion reader's metadata-only double-open design",
+    "Cloud-provider no-hydration behavior and hard kernel-call deadlines are not qualified",
+    "No populated rootfs, distribution installation/update/rollback, product SID bridge, confinement or VM proof is supplied by this component"
+  ],
+  "anchor_custody_authenticated": false,
+  "verifier_dependencies_authenticated": false,
+  "protected_utc_established": false,
+  "attestation_freshness_established": false,
+  "durable_rollback_protection_established": false,
+  "current_revocation_state_established": false,
+  "product_installation_admitted": false,
+  "production_qualified": false,
+  "gate_closing": false,
+  "gwin0_complete": false
+}

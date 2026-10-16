@@ -17,10 +17,10 @@ authorized these named new tracks separately.
 | Area | Existing implementation to retain | Work for the new tracks |
 | --- | --- | --- |
 | Shared control | Native account lifecycle, finite grants, protected UTC, resource generations, workflow journal and recovery | Integrate each new effect through those boundaries; no Python MVP or UI success flag substitutes for native enforcement |
-| Artifacts | Native ext4/WAL catalogs, immutable invoice versions, per-principal domains, retention/export and recovery | General content types, governed discovery, semantic collections/indexes, external-edit conflicts and complete backup/restore journeys |
+| Artifacts | Native ext4/WAL catalogs, immutable versions, owner-local typed collections, reviewed partial-preparation quarantine and governed lexical discovery | Production generic-content authority, semantic collections/indexes, retention/export and complete backup/restore journeys |
 | User interface | Model-independent reference workspace and candidate native GNOME/Wayland edition | Accessible conversational/manual shell, progress/cancellation, grounded references and qualified capture/input |
 | Content and adapters | Deterministic invoice, spreadsheet, document, diagram and sampled-animation engines; editable JSON sources with laboratory governed publication and reconstructed result commitments; fixed generated KVM runtime | Named LibreOffice/browser adapters, authenticated workflow completion, UI rendering and exact external output/build/test receipts |
-| Windows development | Source-run WSL launchers, model smoke, package observations, signed laboratory policy/revocation evaluation and explicit ordinary-user scoped-file reads | Separate signed product distribution, authenticated companion/file bridge, SID mapping, ACL-aware broker, WSL-specific lifecycle and confinement |
+| Windows development | Source-run launchers, populated minimal Ubuntu package builder, real userland smoke, signed laboratory policy/revocation evaluation and ordinary-user scoped-file reads | Separate signed complete product distribution, authenticated companion/file bridge, SID mapping, ACL-aware broker, WSL-specific lifecycle and confinement |
 | Windows desktop | No qualified complete VM product proof | Hyper-V Gen2 image/template, identity, storage, resource limits and recovery proof; no acceleration claim from display availability |
 
 ## Initial implementation checkpoint
@@ -315,6 +315,58 @@ a second independently mutable file. UI recalculation, generated-output export,
 production rollback/recovery authority and authenticated workflow completion
 remain separate development work.
 
+### Exact owner local collections
+
+`content-contract-collection` prepares a closed schema-1 collection source without
+opening private storage. A collection has a stable `collection.ID` artifact,
+a name and at most 64 exact immutable member references, sorted by artifact ID.
+Canonical source is bounded to 32 KiB. Membership is neither a grant nor an
+automatic, transitive or semantic classification.
+
+Native `collection` requests publish schema-4 `CollectionIntent` transactions
+through the existing laboratory Read/effect pair. Reconstruction and precommit
+validation require genuine earlier published members and an exact collection
+base. A first empty collection may initialize a repository; nonempty membership
+requires verified existing history. Emptying membership retains the collection
+identity and earlier versions. Stale edits retain conflicts instead of changing
+the current head. Ordinary JSON with a similar artifact ID cannot forge typed
+membership or overwrite an existing typed collection through a generic edit.
+
+`collection-current`, `collection-page` and `collections-for-member` use the
+read-only query profile. Pages contain at most 32 references. Reverse membership
+is reconstructed from verified current collections rather than a trusted mutable
+index. Exact historical member references remain historical; publishing a newer
+member version does not silently update a collection. All operations remain
+owner-generation-local and continuously checked; per-result cross-user policy
+and semantic indexing are separate work.
+
+### Reviewed preparation quarantine
+
+The read-only `preparation` query reviews one exact pending request hash together
+with committed history and every pending/quarantined directory, file identity,
+byte length and digest. It does not interpret incomplete bytes as a valid plan.
+The review is bounded to 32 KiB and is descriptive, not authorization.
+
+A `recovery` request carrying that review first receives a `recover:SHA256`
+proposal. Apply requires independent current Read and Retain grants, with the
+Retain scope fixed to `native-content-recovery-v1`. Ordinary write/retention
+grants cannot substitute for it. The worker rechecks the complete pair, owner,
+generation, protected time and lease throughout inspection, rename, fsync and
+delivery. Standard authentication sessions remain 30 seconds.
+
+Recovery moves the exact reviewed directory into an optional pinned quarantine
+with a no-replace rename. It publishes no content, deletes no evidence and never
+changes a committed version. At most 16 quarantined preparations are retained;
+the separate pending namespace also holds at most 16. All retained bytes
+remain charged against repository capacity. There is no automatic eviction.
+The retired request ID cannot publish again; a new operation needs a fresh ID.
+Immediate interruption retries recognize the exact retired directory without
+restoring an old grant. An unrelated committed-head or inventory change refuses
+the old review rather than acknowledging it against changed state. Unknown
+members, substitution or damaged committed history also refuse with state
+preserved. This is partial-preparation retirement, not committed-authority repair,
+backup restore or TPM rollback protection.
+
 ## Windows detached signature primitive
 
 `verify-package-signature.ps1` joins the normalized package inspector to a
@@ -387,7 +439,7 @@ binding and validity at the attested interval. Custody, dependency authenticatio
 fresh protected UTC, current revocation state, durable rollback protection and
 installation/production admission remain false. A caller-supplied nonce, floor
 or predecessor is not a durable or fresh authority. Deployment of those genuine
-authorities, a populated root filesystem and safe lifecycle integration remain
+authorities, an authenticated complete product root filesystem and safe lifecycle integration remain
 GWIN0 development work.
 
 ### Explicit Windows scoped file reads
@@ -434,13 +486,57 @@ hosted custody, safe import/update and actual confinement still need integration
 and qualification. A passing result never admits installation or executable
 skills.
 
+### Populated Windows development package
+
+`native/image/windows_stage.py` captures a fixed minimal Ubuntu 24.04 development
+userland from an independently pinned offline tools image. It copies genuine
+shell/systemd binaries, selected helpers, units, loader configuration, CA bundle
+and their checked ELF dependencies, plus the caller's actual compiled Luma CLI.
+It does not execute those inputs. Source accounts, passwords, host keys, machine
+identity and resolver configuration are never copied. Generated development root
+is locked and is not an enrolled Luma Admin.
+
+`native/image/windows_package.py` builds the existing normalized profile-W USTAR
+format from that staged source. Its closed plan lists exact exclusions and an
+explicit privileged-mode normalization choice; neither is an implicit repair.
+Pinned root-relative resolution, exact byte/identity checks, finite input bounds,
+case/path collision refusal and new-output-only construction preserve source
+and prior packages. The builder never downloads dependencies or imports a guest.
+It checks real ELF load segments and the bounded dependency closure, including
+Ubuntu systemd's private RUNPATH and already-loaded sibling libraries. Loaded
+bindings remain separate for each executable; differing soname candidates refuse.
+Optional dynamically loaded modules are not covered by this static closure.
+
+The dated lab package is `D:\LumaOS-builds\gwin0-candidate-20261016-a`, containing
+exactly `manifest.json` and `rootfs.tar`. The archive is unsigned and has no model
+runtime, admitted product installation or configured Luma services. Real shell,
+systemd-version and pure Luma-contract execution are userland smoke checks, not
+a systemd boot or WSL confinement result. Package custody, complete service/unit
+and dynamically loaded dependency configuration, first-user/Admin enrollment,
+protected time, authenticated host bridge and safe import/update/rollback remain
+development and qualification work.
+
+Rebuild only inside the declared offline tools container, with the source
+snapshot mounted read-only at `/repo`, the compiled binary cache read-only at
+`/cache`, and an explicitly verified D-backed work mount at `/work`:
+
+```sh
+python3 -B /repo/native/image/windows_stage.py --root / --platform /cache/target/debug/luma-platform --work-root /work --output-name gwin0-populated-NEW
+python3 -B /repo/native/image/windows_package.py --root /work/gwin0-populated-NEW/rootfs --platform /cache/target/debug/luma-platform --plan /work/gwin0-populated-NEW/plan.json --output /work/gwin0-candidate-NEW --release-id luma-wsl-dev-NEW
+```
+
+Both names must be unused. Verify the source image pin independently; the
+stager does not attest its own container or mount backing. Keep compiler scratch
+on D when running the existing Windows `validate-package.ps1` command under
+process-only RemoteSigned. Structural success never authorizes `wsl --import`.
+
 ## Next integrated work
 
 Requirement mapping remains partial:
 
 | Requirement | Development contribution | Still required for acceptance |
 | --- | --- | --- |
-| A063, T33 | Immutable generic content/storage, laboratory governed publication, managed render-intent/result reconstruction and owner-local lexical discovery | Production head/rollback and recovery integration, collections and installed recovery/rebuild tests |
+| A063, T33 | Immutable generic content/storage, laboratory governed publication, managed render reconstruction, exact typed collections and reviewed partial-preparation quarantine | Production head/rollback and damaged-authority recovery, retention/backup/restore and installed recovery/rebuild tests |
 | A060, T20 | Current owner-generation/Read grants for verified invoice and generic-content search, exact historical pages and generation-fenced delivery | General per-result access policy, semantic collections/search and installed revocation qualification |
 | W005, V01 | Read-only platform observations, calculated storage and exact supplied release-tuple comparison | Authenticated release policy, encryption and enterprise policy checks |
 | W006, V01/V03 | Collision refusal, unchanged distributions, normalized package validation, package signatures and signed laboratory release-policy/revocation evaluation | Qualified custody/dependencies, fresh protected time/current revocation, durable rollback protection, authenticated populated root filesystem, safe import/rollback and first-user/Admin setup |
@@ -450,8 +546,8 @@ No requirement in this table is marked complete by these development slices.
 
 1. Finish production catalog head/rollback, recovery, retention/export and
    workflow linkage for the laboratory governed content adapter described above.
-   Extend owner-domain discovery
-   with collections and per-result access policy before embeddings or automatic
+   Extend explicit owner-local collections and discovery
+   with per-result access policy before embeddings or automatic
    organization; pure data inspection is not storage publication.
 2. Build the shared accessible manual/conversational shell on the deterministic
    content contracts. Join the four managed-render engines to authenticated
@@ -671,3 +767,46 @@ The [managed-render record](gates/g3/render_engines_2026-10-15.json) and
 hashes, the earlier failure and qualification boundaries. These complete the
 named deterministic engine and laboratory policy components, not all G3/GWIN0
 development or installed acceptance. The frozen G2 image remains unchanged.
+
+### Collections recovery and populated package verification
+
+The next immutable snapshot passes warnings-denied all-target compilation and
+the full 1,215-test Rust workspace suite: 97 shared-content, 80 storage, 1,037
+platform and one compile-fail documentation test. The same 42 existing
+fixture-only entries remain excluded from the broad unit run; no new test is
+ignored. All 30 actual unprivileged CLI cases pass. OS/model public authentication
+(13 each), UTC authentication (8), nineteen policy parses and four independent
+resource software-TPM cases pass too.
+
+The original combined invocation failed only its PAM fixture: global
+`TMPDIR=/evidence` conflicted with the fixture's required `/tmp/luma-tpm-*`
+namespace. A separate setup attempt also omitted the D-backed Cargo target and
+correctly refused writes to the read-only source tree. A fresh container with
+canonical private `/tmp` and explicit `/cache/target` passes all six real PAM
+cases. No product or safety assertion changes. The original failed result and
+both setup logs remain retained.
+
+The final 481-file snapshot differs only in strengthened Windows builder tests;
+all 132 Rust inputs and all production/CLI inputs remain byte-identical. Its
+complete native-source rerun passes 506 tests without skips. This is composed
+verification, not a passing full-sweep invocation on the final snapshot or a
+claim that the complete final fixture matrix ran. The new coverage includes
+exact historical collection membership, generic-source forgery refusal,
+preparation identity/byte substitution, every recovery authorization checkpoint,
+durable interruption phases and the exact independent recovery grant pair.
+
+The genuine populated Windows lab package passes the unchanged native Windows
+validator and three isolated actual-archive userland checks as UID/GID 65534:
+shell/id/uname, systemd version and the real Luma collection contract. The
+packaged CLI matches the full-sweep rebuilt CLI byte for byte. The archive is
+100,579,840 bytes with 166 members and 37 required runtime files, retained on D.
+It is unsigned, not imported or booted, and is not an admitted installer.
+The verified Windows stage is pushed as `13ca3df`.
+
+The [collections and recovery record](gates/g3/collections_recovery_2026-10-16.json)
+and [populated package record](gates/gwin0/populated_package_2026-10-16.json) bind
+exact snapshots, result/log hashes, scope and remaining work. Production content
+authority/workflow/backup integration, semantic/per-result policy, UI/capture/
+adapters and complete secure Windows deployment remain development work.
+Installed/native and declared Windows-tuple acceptance remain separate. G3 and
+GWIN0 are open; the frozen G2 image is unchanged.

@@ -242,5 +242,19 @@ pub(super) fn repository_check(
             return Err("content-store namespace changed during operation".into());
         }
     }
+    crate::recovery::layout(&repository.root)?;
+    if let Some(pinned) = &repository.quarantine {
+        check_private(pinned, true)?;
+        let actual = directory(&repository.root, "quarantine")?.metadata()?;
+        let expected = pinned.metadata()?;
+        if (actual.dev(), actual.ino()) != (expected.dev(), expected.ino()) {
+            return Err("content-store quarantine namespace changed during operation".into());
+        }
+    } else if names(&repository.root, 4)?
+        .iter()
+        .any(|name| name == "quarantine")
+    {
+        return Err("content-store gained an unreviewed quarantine namespace".into());
+    }
     Ok(())
 }

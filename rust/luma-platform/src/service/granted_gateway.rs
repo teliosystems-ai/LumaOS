@@ -856,6 +856,20 @@ fn acquisition_arguments(
     Ok(())
 }
 
+// These exact effect selectors require attribution from the complete live
+// Read/effect pair. An invalid pair must fail there, never fall back to a
+// singleton audit. The selector chooses the verifier, not authority itself.
+fn acquisition_audit(
+    usage: &Use,
+    singleton: impl FnOnce() -> Result<crate::finite_grants::Audit>,
+    content_pair: impl FnOnce(&Use) -> Result<crate::finite_grants::Audit>,
+) -> Result<crate::finite_grants::Audit> {
+    match usage.selector.id.as_str() {
+        "native-content-store-v1" | "native-content-recovery-v1" => content_pair(usage),
+        _ => singleton(),
+    }
+}
+
 pub(crate) fn acquisition_proof(
     raw: &[u8],
     job: &str,
@@ -890,11 +904,11 @@ pub(crate) fn acquisition_proof(
         .into(),
         nonce: challenge.nonce,
         job: job.into(),
-        audit: if usage.selector.id == "native-content-store-v1" {
-            boundary.audit_for_acquisition(usage)?
-        } else {
-            boundary.audit()?
-        },
+        audit: acquisition_audit(
+            usage,
+            || boundary.audit(),
+            |requested| boundary.audit_for_acquisition(requested),
+        )?,
         purpose: challenge.purpose,
     })?)
 }
@@ -1728,6 +1742,123 @@ pub(crate) fn launch(arguments: &[String]) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn content_and_recovery_proofs_use_the_complete_pair_without_singleton_fallback() {
+        use std::cell::Cell;
+        for (id, action) in [
+            ("native-content-store-v1", Action::Write),
+            ("native-content-store-v1", Action::Retain),
+            ("native-content-recovery-v1", Action::Retain),
+        ] {
+            let usage = Use {
+                action,
+                selector: Selector {
+                    kind: Kind::Artifact,
+                    id: id.into(),
+                    generation: 7,
+                    digest: "ab".repeat(32),
+                },
+                input_bytes: crate::content_governed::MAX_REQUEST as u64,
+                output_bytes: 65536,
+                units: 1,
+            };
+            usage.validate().unwrap();
+            let selected = crate::finite_grants::Audit {
+                subject: "cd".repeat(32),
+                subject_generation: 7,
+                grant_id: "exact-effect".into(),
+                grant_version: 1,
+                checkpoint_head: "ef".repeat(32),
+                operation_id: Some("ab".repeat(16)),
+                usage: usage.clone(),
+            };
+            selected.validate().unwrap();
+            let singleton_calls = Cell::new(0);
+            let pair_calls = Cell::new(0);
+            let returned = acquisition_audit(
+                &usage,
+                || {
+                    singleton_calls.set(singleton_calls.get() + 1);
+                    Err("fixture singleton cannot attribute two scopes".into())
+                },
+                |requested| {
+                    pair_calls.set(pair_calls.get() + 1);
+                    assert_eq!(requested, &usage);
+                    Ok(selected.clone())
+                },
+            )
+            .unwrap();
+            assert_eq!(returned, selected);
+            assert_eq!(singleton_calls.get(), 0);
+            assert_eq!(pair_calls.get(), 1);
+            assert!(acquisition_audit(
+                &usage,
+                || {
+                    singleton_calls.set(singleton_calls.get() + 1);
+                    Ok(selected.clone())
+                },
+                |_| Err("fixture original complete pair revoked".into()),
+            )
+            .is_err());
+            assert_eq!(
+                singleton_calls.get(),
+                0,
+                "pair refusal never tries weaker attribution"
+            );
+        }
+    }
+
+    #[test]
+    fn acquisition_audit_routing_uses_exact_selector_ids_and_never_grants_by_id() {
+        use std::cell::Cell;
+        let mut usage = Use {
+            action: Action::Read,
+            selector: Selector {
+                kind: Kind::File,
+                id: "native-content-inspect-v1".into(),
+                generation: 1,
+                digest: "ab".repeat(32),
+            },
+            input_bytes: 1,
+            output_bytes: 1,
+            units: 1,
+        };
+        for id in [
+            "native-content-inspect-v1",
+            "native-content-query-v1",
+            "native-content-recovery-v10",
+            "native-content-recovery-v1 ",
+            "Native-content-recovery-v1",
+            "native-content-recovery-v1-extra",
+        ] {
+            usage.selector.id = id.into();
+            let singleton_called = Cell::new(false);
+            assert!(acquisition_audit(
+                &usage,
+                || {
+                    singleton_called.set(true);
+                    Err("fixture singleton refuses".into())
+                },
+                |_| panic!("nonmatching selector must not reach content pair attribution"),
+            )
+            .is_err());
+            assert!(singleton_called.get());
+        }
+        // Even a wrong action/kind with the reserved ID reaches the strict
+        // pair verifier for refusal; it cannot borrow the singleton route.
+        usage.selector.id = "native-content-recovery-v1".into();
+        usage.action = Action::Write;
+        assert!(acquisition_audit(
+            &usage,
+            || panic!("malformed recovery must not fall back to singleton attribution"),
+            |requested| {
+                assert_eq!(requested, &usage);
+                Err("fixture strict recovery pair validator refuses Write/File".into())
+            },
+        )
+        .is_err());
+    }
     #[test]
     fn framed_export_preserves_binary_bytes_and_acknowledges_actual_delivery() {
         let (sender, mut receiver) = UnixStream::pair().unwrap();

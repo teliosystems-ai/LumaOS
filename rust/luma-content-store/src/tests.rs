@@ -1,4 +1,5 @@
 use super::*;
+mod collections;
 use luma_content::EditOrigin;
 use std::fs;
 use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
@@ -621,4 +622,5 @@ fn unsupported_storage_and_symlink_namespaces_are_not_followed() {
 
 mod managed;
 mod queries;
+mod recovery;
 mod rendered;

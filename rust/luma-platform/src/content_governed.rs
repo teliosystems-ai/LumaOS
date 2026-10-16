@@ -52,6 +52,30 @@ enum Operation {
     Render {
         request: luma_content::rendered::Request,
     },
+    Preparation {
+        target: String,
+    },
+    Recovery {
+        review: luma_content_store::PreparationReview,
+    },
+    Collection {
+        source: luma_content_store::CollectionSource,
+        expected: Option<VersionReference>,
+        provenance: Provenance,
+    },
+    CollectionCurrent {
+        collection_id: String,
+    },
+    CollectionPage {
+        expected: VersionReference,
+        offset: usize,
+        limit: usize,
+    },
+    CollectionsForMember {
+        member: VersionReference,
+        offset: usize,
+        limit: usize,
+    },
     Current {
         artifact_id: String,
     },
@@ -77,6 +101,10 @@ impl Input {
                 | Operation::Historical { .. }
                 | Operation::Page { .. }
                 | Operation::Search { .. }
+                | Operation::Preparation { .. }
+                | Operation::CollectionCurrent { .. }
+                | Operation::CollectionPage { .. }
+                | Operation::CollectionsForMember { .. }
         )
     }
 
@@ -90,10 +118,16 @@ impl Input {
             }
             Operation::Table { request } => request.canonical_bytes()?,
             Operation::Render { request } => request.canonical_bytes()?,
+            Operation::Recovery { review } => serde_json::to_vec(review)?,
+            Operation::Collection { source, .. } => source.canonical_bytes()?,
             Operation::Current { .. }
             | Operation::Historical { .. }
             | Operation::Page { .. }
-            | Operation::Search { .. } => {
+            | Operation::Search { .. }
+            | Operation::Preparation { .. }
+            | Operation::CollectionCurrent { .. }
+            | Operation::CollectionPage { .. }
+            | Operation::CollectionsForMember { .. } => {
                 return Err("native content query has no mutation source".into());
             }
         })
@@ -115,6 +149,81 @@ impl Input {
             self.source()?;
         }
         match &self.operation {
+            Operation::Preparation { target } => {
+                if !io::hash(target) {
+                    return Err("content recovery requires an exact preparation hash".into());
+                }
+            }
+            Operation::Recovery { review } => {
+                review.validate()?;
+                if review.binding != self.binding {
+                    return Err("content recovery substitutes its owner binding".into());
+                }
+            }
+            Operation::Collection {
+                source,
+                expected,
+                provenance,
+            } => {
+                let bytes = source.canonical_bytes()?;
+                if provenance.origin != luma_content::EditOrigin::External {
+                    return Err(
+                        "explicit collection source requires external descriptive provenance"
+                            .into(),
+                    );
+                }
+                let artifact = source.artifact_id()?;
+                if let Some(expected) = expected {
+                    validate_reference(expected)?;
+                    if expected.artifact_id != artifact {
+                        return Err("collection base retargets its stable ID".into());
+                    }
+                }
+                Plan::capture(
+                    self.binding.clone(),
+                    &artifact,
+                    Format::Json,
+                    &bytes,
+                    provenance.clone(),
+                )?;
+            }
+            Operation::CollectionCurrent { collection_id } => {
+                if collection_id.is_empty()
+                    || collection_id.len() > 64
+                    || !collection_id.as_bytes()[0].is_ascii_alphanumeric()
+                    || !collection_id
+                        .bytes()
+                        .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_'))
+                {
+                    return Err("invalid bounded native collection ID".into());
+                }
+            }
+            Operation::CollectionPage {
+                expected,
+                offset,
+                limit,
+            } => {
+                validate_reference(expected)?;
+                if *offset > luma_content_store::MAX_COLLECTION_MEMBERS
+                    || *limit == 0
+                    || *limit > luma_content_store::MAX_COLLECTION_PAGE
+                {
+                    return Err("collection page exceeds its fixed bounds".into());
+                }
+            }
+            Operation::CollectionsForMember {
+                member,
+                offset,
+                limit,
+            } => {
+                validate_reference(member)?;
+                if *offset > luma_content_store::MAX_OUTCOMES
+                    || *limit == 0
+                    || *limit > luma_content_store::MAX_COLLECTION_PAGE
+                {
+                    return Err("collection membership page exceeds its fixed bounds".into());
+                }
+            }
             Operation::Current { artifact_id } => validate_artifact_id(artifact_id)?,
             Operation::Historical { expected } => validate_reference(expected)?,
             Operation::Page {
@@ -312,6 +421,7 @@ enum Mode {
     Query,
     Write,
     Retain,
+    Recover,
 }
 impl Mode {
     fn name(self) -> &'static str {
@@ -320,6 +430,7 @@ impl Mode {
             Self::Query => "query",
             Self::Write => "write",
             Self::Retain => "retain",
+            Self::Recover => "recover",
         }
     }
     fn decision(decision: DecisionKind) -> Self {
@@ -346,6 +457,7 @@ fn profile(value: &str) -> Result<Profile<'_>> {
         Some("query") => Mode::Query,
         Some("write") => Mode::Write,
         Some("retain") => Mode::Retain,
+        Some("recover") => Mode::Recover,
         _ => return Err("unknown native content effect mode".into()),
     };
     let generation = parts.next().ok_or("missing native content generation")?;
@@ -428,7 +540,9 @@ fn usage_at(id: &str, digest: String, inspect: bool) -> Result<grants::Use> {
             } else {
                 grants::Kind::Artifact
             },
-            id: if p.mode == Mode::Query {
+            id: if p.mode == Mode::Recover && !read {
+                "native-content-recovery-v1"
+            } else if p.mode == Mode::Query {
                 "native-content-query-v1"
             } else if read {
                 "native-content-inspect-v1"
@@ -657,6 +771,23 @@ impl Boundary for LiveBoundary<'_> {
                 }
                 self.current(binding)
             }
+            Access::Recover {
+                binding,
+                review_sha256,
+                retained_bytes,
+            } => {
+                self.current(binding)?;
+                if self.mode != Mode::Recover
+                    || self.review != review_sha256
+                    || retained_bytes > MAX_STORAGE
+                {
+                    return Err(
+                        "native content recovery differs from its exact finite retention scope"
+                            .into(),
+                    );
+                }
+                self.current(binding)
+            }
         }
     }
 }
@@ -687,10 +818,18 @@ fn plan(
             }
             Operation::Table { request } => request.metadata.request_id.as_str(),
             Operation::Render { request } => request.metadata.request_id.as_str(),
+            Operation::Collection { provenance, .. } => provenance.request_id.as_str(),
+            Operation::Recovery { .. } => {
+                return Err("content recovery uses its dedicated review path".into())
+            }
             Operation::Current { .. }
             | Operation::Historical { .. }
             | Operation::Page { .. }
-            | Operation::Search { .. } => {
+            | Operation::Search { .. }
+            | Operation::Preparation { .. }
+            | Operation::CollectionCurrent { .. }
+            | Operation::CollectionPage { .. }
+            | Operation::CollectionsForMember { .. } => {
                 return Err("native content query cannot construct a mutation plan".into());
             }
         };
@@ -733,10 +872,35 @@ fn plan(
             Some(repository) => repository.plan_render(request, boundary)?,
             None => Plan::managed_render(None, request)?,
         },
+        Operation::Recovery { .. } => {
+            return Err("content recovery uses its dedicated review path".into())
+        }
+        Operation::Collection {
+            source,
+            expected,
+            provenance,
+        } => match repository {
+            Some(repository) => repository.plan_collection(
+                source,
+                expected.clone(),
+                provenance.clone(),
+                boundary,
+            )?,
+            None => {
+                if expected.is_some() {
+                    return Err("initial collection cannot have a stored base".into());
+                }
+                Plan::collection_capture(input.binding.clone(), source, provenance.clone())?
+            }
+        },
         Operation::Current { .. }
         | Operation::Historical { .. }
         | Operation::Page { .. }
-        | Operation::Search { .. } => {
+        | Operation::Search { .. }
+        | Operation::Preparation { .. }
+        | Operation::CollectionCurrent { .. }
+        | Operation::CollectionPage { .. }
+        | Operation::CollectionsForMember { .. } => {
             return Err("native content query cannot construct a mutation plan".into());
         }
     })
@@ -788,10 +952,25 @@ fn validate_replay(input: &Input, prior: &Plan) -> Result<()> {
                 && prior.provenance().workflow_sha256 == request.metadata.workflow_sha256
                 && prior.derivation().map(|d| d.engine) == Some(request.engine)
         }
+        Operation::Collection {
+            source,
+            expected,
+            provenance,
+        } => {
+            prior.source_kind() == luma_content_store::SourceKind::CollectionIntent
+                && prior.artifact_id() == source.artifact_id()?
+                && prior.expected() == expected.as_ref()
+                && prior.provenance() == provenance
+        }
         Operation::Current { .. }
         | Operation::Historical { .. }
         | Operation::Page { .. }
-        | Operation::Search { .. } => false,
+        | Operation::Search { .. }
+        | Operation::Preparation { .. }
+        | Operation::Recovery { .. } => false,
+        Operation::CollectionCurrent { .. }
+        | Operation::CollectionPage { .. }
+        | Operation::CollectionsForMember { .. } => false,
     };
     if !matches {
         return Err("native content replay substitutes its immutable operation metadata".into());
@@ -849,6 +1028,34 @@ fn query(
     boundary: &mut impl Boundary,
 ) -> Result<serde_json::Value> {
     let result = match &input.operation {
+        Operation::Preparation { target } => serde_json::json!({
+            "schema_version":1,"review":repository.review_preparation(target, boundary)?,
+            "committed":false,"authority_returned":false,"workflow_executed":false,
+            "production_qualified":false
+        }),
+        Operation::CollectionCurrent { collection_id } => serde_json::json!({
+            "schema_version":1,"collection":repository.collection_current(collection_id, boundary)?,
+            "committed":false,"authority_returned":false,"semantic_classification":false,
+            "membership_is_authority":false,"production_qualified":false
+        }),
+        Operation::CollectionPage {
+            expected,
+            offset,
+            limit,
+        } => serde_json::json!({
+            "schema_version":1,"page":repository.collection_page(expected, *offset, *limit, boundary)?,
+            "committed":false,"authority_returned":false,"membership_is_authority":false,
+            "production_qualified":false
+        }),
+        Operation::CollectionsForMember {
+            member,
+            offset,
+            limit,
+        } => serde_json::json!({
+            "schema_version":1,"memberships":repository.collections_for_member(member, *offset, *limit, boundary)?,
+            "committed":false,"authority_returned":false,"membership_is_authority":false,
+            "production_qualified":false
+        }),
         Operation::Current { artifact_id } => {
             version_result(&repository.current(artifact_id, boundary)?, None)?
         }
@@ -969,7 +1176,30 @@ fn worker(id: &str) -> Result<()> {
     } else {
         None
     };
-    let result = if p.mode == Mode::Query {
+    let result = if let Operation::Recovery { review } = &input.operation {
+        let repository = repository
+            .as_mut()
+            .ok_or("content recovery requires an existing owner repository")?;
+        if p.mode == Mode::Read {
+            repository.check_preparation_review(review, &mut boundary)?;
+            let effect_profile = profile_id(Mode::Recover, &input, &bytes, &review.review_sha256)?;
+            serde_json::json!({"schema_version":1,"approval":format!("recover:{}",review.review_sha256),
+                "review_sha256":review.review_sha256,"inspection_usage":inspection_usage(&effect_profile)?,
+                "effect_usage":acquisition_usage(&effect_profile)?,"committed":false,
+                "authority_returned":false,"workflow_executed":false,"production_qualified":false})
+        } else {
+            if p.mode != Mode::Recover || p.review != review.review_sha256 {
+                return Err(
+                    "content preparation retirement requires its exact reviewed recovery scope"
+                        .into(),
+                );
+            }
+            let outcome = repository.recover_preparation(review, &mut boundary)?;
+            serde_json::json!({"schema_version":1,"recovery":outcome,"committed":true,
+                "committed_catalog_changed":false,"authority_returned":false,
+                "workflow_executed":false,"production_qualified":false})
+        }
+    } else if p.mode == Mode::Query {
         query(
             &input,
             repository
@@ -997,10 +1227,15 @@ fn worker(id: &str) -> Result<()> {
                     &mut boundary,
                 )?);
             }
-            let outcome = repository
+            let repository = repository
                 .as_mut()
-                .ok_or("missing native content repository")?
-                .apply(&proposal, &input.source()?, &mut boundary)?;
+                .ok_or("missing native content repository")?;
+            let source = input.source()?;
+            let outcome = if matches!(input.operation, Operation::Collection { .. }) {
+                repository.apply_collection(&proposal, &source, &mut boundary)?
+            } else {
+                repository.apply(&proposal, &source, &mut boundary)?
+            };
             // The storage transaction is real. Supplied workflow/provenance hashes
             // remain descriptions, not authenticated workflow execution evidence.
             serde_json::json!({"schema_version":1,"outcome":outcome,"derivation":proposal.derivation(),"committed":true,"authority_returned":false,"provenance_authority":false,"workflow_executed":false})
@@ -1488,10 +1723,11 @@ pub(crate) fn command(args: &[String]) -> Result<()> {
 fn approval(value: &str) -> Result<(Mode, &str)> {
     let (mode, digest) = value
         .split_once(':')
-        .ok_or("native content apply requires exact write:SHA256 or retain:SHA256 approval")?;
+        .ok_or("native content apply requires exact write:SHA256, retain:SHA256 or recover:SHA256 approval")?;
     let mode = match mode {
         "write" => Mode::Write,
         "retain" => Mode::Retain,
+        "recover" => Mode::Recover,
         _ => return Err("native content approval effect is not closed".into()),
     };
     if !io::hash(digest) {
@@ -1542,6 +1778,161 @@ mod tests {
             operation,
             ..input()
         }
+    }
+
+    #[test]
+    fn collection_and_preparation_requests_are_bounded_read_only_selectors() {
+        for operation in [
+            Operation::CollectionCurrent {
+                collection_id: "work-items".into(),
+            },
+            Operation::CollectionPage {
+                expected: reference(),
+                offset: 0,
+                limit: 32,
+            },
+            Operation::CollectionsForMember {
+                member: reference(),
+                offset: 0,
+                limit: 32,
+            },
+            Operation::Preparation {
+                target: "e".repeat(64),
+            },
+        ] {
+            let input = query_input(operation);
+            let canonical = canonical_request(&serde_json::to_vec(&input).unwrap()).unwrap();
+            let parsed = parse(&canonical).unwrap();
+            assert!(parsed.is_query());
+            assert!(parsed.source().is_err());
+            let id = profile_id(Mode::Query, &parsed, &canonical, &io::digest(&canonical)).unwrap();
+            assert!(query_profile(&id).unwrap());
+            assert_eq!(
+                usage_at(&id, "f".repeat(64), false).unwrap().action,
+                grants::Action::Read
+            );
+        }
+        for operation in [
+            Operation::CollectionCurrent {
+                collection_id: "../escape".into(),
+            },
+            Operation::CollectionPage {
+                expected: reference(),
+                offset: 0,
+                limit: 33,
+            },
+            Operation::CollectionsForMember {
+                member: reference(),
+                offset: 0,
+                limit: 0,
+            },
+            Operation::Preparation {
+                target: "unbounded-name".into(),
+            },
+        ] {
+            assert!(query_input(operation).validate().is_err());
+        }
+    }
+
+    #[test]
+    fn recovery_retention_cannot_substitute_normal_retention_scope_or_read_profile() {
+        let input = input();
+        let bytes = serde_json::to_vec(&input).unwrap();
+        let digest = "d".repeat(64);
+        let recovery = profile_id(Mode::Recover, &input, &bytes, &digest).unwrap();
+        let retain = profile_id(Mode::Retain, &input, &bytes, &digest).unwrap();
+        let recovered_scope = usage_at(&recovery, "e".repeat(64), false).unwrap();
+        let retained_scope = usage_at(&retain, "e".repeat(64), false).unwrap();
+        assert_eq!(recovered_scope.action, grants::Action::Retain);
+        assert_ne!(recovered_scope, retained_scope);
+        assert_ne!(recovered_scope.selector.id, retained_scope.selector.id);
+        assert_eq!(
+            usage_at(&recovery, "e".repeat(64), true).unwrap().action,
+            grants::Action::Read
+        );
+        assert!(!query_profile(&recovery).unwrap());
+        assert_eq!(
+            approval(&format!("recover:{digest}")).unwrap().0,
+            Mode::Recover
+        );
+        assert!(approval(&format!("Recover:{digest}")).is_err());
+    }
+
+    #[test]
+    fn collection_replay_joins_exact_base_provenance_generation_and_typed_source() {
+        let mut request = input();
+        let source = luma_content_store::CollectionSource {
+            schema_version: 1,
+            kind: "luma-explicit-collection-v1".into(),
+            collection_id: "work-items".into(),
+            name: "Work items".into(),
+            members: vec![],
+        };
+        let source_bytes = source.canonical_bytes().unwrap();
+        let provenance = Provenance {
+            request_id: "collection-one".into(),
+            workflow_sha256: "c".repeat(64),
+            source_sha256: io::digest(&source_bytes),
+            origin: luma_content::EditOrigin::External,
+        };
+        let prior =
+            Plan::collection_capture(request.binding.clone(), &source, provenance.clone()).unwrap();
+        request.operation = Operation::Collection {
+            source: source.clone(),
+            expected: None,
+            provenance: provenance.clone(),
+        };
+        let bytes = canonical_request(&serde_json::to_vec(&request).unwrap()).unwrap();
+        let fresh = || parse(&bytes).unwrap();
+        assert_eq!(fresh().source().unwrap(), source_bytes);
+        validate_replay(&fresh(), &prior).unwrap();
+
+        let mut changed = fresh();
+        if let Operation::Collection { expected, .. } = &mut changed.operation {
+            *expected = Some(prior.resulting().clone());
+        }
+        // A genuine reference still cannot replace the exact original None base.
+        changed.validate().unwrap();
+        assert!(validate_replay(&changed, &prior).is_err());
+
+        for field in 0..4 {
+            let mut changed = fresh();
+            if let Operation::Collection { provenance, .. } = &mut changed.operation {
+                match field {
+                    0 => provenance.request_id = "another-request".into(),
+                    1 => provenance.workflow_sha256 = "d".repeat(64),
+                    2 => provenance.source_sha256 = "e".repeat(64),
+                    _ => provenance.origin = luma_content::EditOrigin::Managed,
+                }
+            }
+            assert!(validate_replay(&changed, &prior).is_err());
+        }
+        let mut changed = fresh();
+        changed.binding.owner_generation += 1;
+        assert!(validate_replay(&changed, &prior).is_err());
+        let mut changed = fresh();
+        if let Operation::Collection { source, .. } = &mut changed.operation {
+            source.collection_id = "other-items".into();
+        }
+        assert!(validate_replay(&changed, &prior).is_err());
+
+        // Identical JSON, immutable receipt and descriptive provenance are not
+        // sufficient: an ordinary capture is not a typed collection transaction.
+        let generic = Plan::capture(
+            request.binding.clone(),
+            &source.artifact_id().unwrap(),
+            Format::Json,
+            &source_bytes,
+            provenance,
+        )
+        .unwrap();
+        assert_eq!(generic.resulting(), prior.resulting());
+        assert_eq!(
+            generic.source_kind(),
+            luma_content_store::SourceKind::Content
+        );
+        assert!(validate_replay(&fresh(), &generic).is_err());
+        validate_replay(&fresh(), &prior).unwrap();
     }
 
     #[test]
@@ -2449,6 +2840,7 @@ mod tests {
         for (mode, action) in [
             (Mode::Write, grants::Action::Write),
             (Mode::Retain, grants::Action::Retain),
+            (Mode::Recover, grants::Action::Retain),
         ] {
             let id = profile_id(mode, &input, &bytes, &"d".repeat(64)).unwrap();
             let effect = usage_at(&id, "e".repeat(64), false).unwrap();
@@ -2460,6 +2852,10 @@ mod tests {
             assert_eq!(effect.selector.digest, read.selector.digest);
             assert_eq!(effect.selector.generation, 3);
             assert_ne!(effect, read);
+            if mode == Mode::Recover {
+                assert_eq!(effect.selector.id, "native-content-recovery-v1");
+                assert_ne!(effect.selector.id, "native-content-store-v1");
+            }
         }
         assert_eq!(Mode::decision(DecisionKind::Published), Mode::Write);
         assert_eq!(Mode::decision(DecisionKind::ConflictRetained), Mode::Retain);
@@ -2476,6 +2872,10 @@ mod tests {
         assert_eq!(
             approval(&format!("retain:{digest}")).unwrap(),
             (Mode::Retain, digest.as_str())
+        );
+        assert_eq!(
+            approval(&format!("recover:{digest}")).unwrap(),
+            (Mode::Recover, digest.as_str())
         );
         for bad in [
             digest.clone(),

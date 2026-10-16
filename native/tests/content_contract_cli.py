@@ -181,6 +181,56 @@ class ContentContractCli(unittest.TestCase):
         request['operation']['request']['binding']['owner_generation'] = 8
         self.invoke('native-request', request, valid=False)
 
+    def test_explicit_collection_source_prepares_exact_bytes_without_membership_authority(self):
+        source = dict(schema_version=1, kind='luma-explicit-collection-v1',
+            collection_id='work-items', name='Work items', members=[])
+        result = self.invoke('collection', source)
+        self.assertEqual(result['artifact_id'], 'collection.work-items')
+        canonical = result['canonical_source']
+        self.assertEqual(json.loads(canonical), source)
+        self.assertEqual(result['source_sha256'], hashlib.sha256(canonical.encode()).hexdigest())
+        self.assertIs(result['membership_is_authority'], False)
+        self.assertIs(result['membership_validated_against_private_history'], False)
+        request = dict(schema_version=1, login='alice', binding=self.binding(), operation=dict(
+            kind='collection', source=source, expected=None, provenance=self.provenance(canonical, 'external')))
+        prepared = self.invoke('native-request', request)
+        self.assertEqual(json.loads(prepared['canonical_request']), request)
+        self.assertIs(prepared['private_content_read'], False)
+
+    def test_collection_and_preparation_queries_are_closed_data_not_grants(self):
+        reference = dict(artifact_id='collection.work-items', version=1,
+            content_sha256='a'*64, receipt_sha256='b'*64)
+        operations = [dict(kind='collection-current', collection_id='work-items'),
+            dict(kind='collection-page', expected=reference, offset=0, limit=32),
+            dict(kind='collections-for-member', member=reference, offset=0, limit=32),
+            dict(kind='preparation', target='a'*64)]
+        for operation in operations:
+            request = dict(schema_version=1, login='alice', binding=self.binding(), operation=operation)
+            result = self.invoke('native-request', request)
+            self.assertEqual(json.loads(result['canonical_request']), request)
+            self.assertIs(result['private_content_read'], False)
+        for operation in [dict(kind='collection-current', collection_id='../escape'),
+                dict(kind='collection-page', expected=reference, offset=0, limit=33),
+                dict(kind='collections-for-member', member=reference, offset=0, limit=0),
+                dict(kind='preparation', target='not-a-hash')]:
+            self.invoke('native-request', dict(schema_version=1, login='alice',
+                binding=self.binding(), operation=operation), valid=False)
+
+    def test_collection_sources_refuse_forged_shape_unknown_fields_and_unsorted_members(self):
+        source = dict(schema_version=1, kind='luma-explicit-collection-v1',
+            collection_id='work', name='Work', members=[])
+        for modification in [dict(approved=True), dict(kind='automatic-collection'), dict(name='')]:
+            self.invoke('collection', dict(source, **modification), valid=False)
+        reference = dict(artifact_id='z', version=1, content_sha256='a'*64, receipt_sha256='b'*64)
+        source['members'] = [reference, dict(reference, artifact_id='a')]
+        self.invoke('collection', source, valid=False)
+
+    def test_recovery_preparation_review_json_cannot_create_authority_or_skip_integrity(self):
+        review = dict(schema_version=1, binding=self.binding(), outcome_count=0,
+            outcome_head_sha256='c'*64, target='a'*64, pending=[], quarantined=[], review_sha256='b'*64)
+        self.invoke('native-request', dict(schema_version=1, login='alice', binding=self.binding(),
+            operation=dict(kind='recovery', review=review)), valid=False)
+
     def test_native_read_queries_are_inert_canonical_requests_not_apply_authority(self):
         reference = dict(artifact_id='document-one', version=1,
             content_sha256='a' * 64, receipt_sha256='b' * 64)

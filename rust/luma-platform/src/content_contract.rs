@@ -66,6 +66,15 @@ fn process(command: &str, bytes: &[u8]) -> Result<Value> {
         return Err("editable-content request exceeds fixed transport bound".into());
     }
     let result = match command {
+        "content-contract-collection" => {
+            let source: luma_content_store::CollectionSource = serde_json::from_slice(bytes)?;
+            let canonical = source.canonical_bytes()?;
+            json!({"operation":"collection-source","artifact_id":source.artifact_id()?,
+                "canonical_source":String::from_utf8(canonical.clone())?,
+                "source_sha256":luma_content::sha256(&canonical),
+                "membership_validated_against_private_history":false,"membership_is_authority":false,
+                "semantic_classification":false,"source_retained":false})
+        }
         "content-contract-document" => {
             let rendering = luma_content::document::render(bytes)?;
             json!({"operation":"document","rendering":rendering,

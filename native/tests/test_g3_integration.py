@@ -130,6 +130,31 @@ class G3IntegrationTests(unittest.TestCase):
             self.assertNotIn('std::fs', implementation)
         self.assertIn('"playback_started":false', source)
 
+    def test_recovery_is_separately_scoped_and_quarantine_is_accounted_not_deleted(self):
+        governed = (RUST / 'content_governed.rs').read_text()
+        for required in ('Mode::Recover', 'Access::Recover', 'native-content-recovery-v1',
+                         'check_preparation_review', 'review_preparation', 'recover_preparation'):
+            self.assertIn(required, governed)
+        recovery = (ROOT / 'rust/luma-content-store/src/recovery.rs').read_text()
+        self.assertIn('RENAME_NOREPLACE', recovery)
+        self.assertNotIn('remove_dir', recovery)
+        self.assertNotIn('unlink', recovery)
+        store = (ROOT / 'rust/luma-content-store/src/lib.rs').read_text()
+        self.assertIn('recovery::validate_quarantine', store)
+        self.assertIn('recovery::is_quarantined', store)
+
+    def test_collection_types_are_not_inferred_from_ordinary_json_or_membership_authority(self):
+        governed = (RUST / 'content_governed.rs').read_text()
+        self.assertIn('repository.apply_collection', governed)
+        self.assertIn('"membership_is_authority":false', governed)
+        store = (ROOT / 'rust/luma-content-store/src/lib.rs').read_text()
+        self.assertIn('CollectionIntent', store)
+        self.assertIn('collection_history.observe', store)
+        main = (RUST / 'main.rs').read_text()
+        allowed = main.split('if confined_client\n', 1)[1].split('if confined_client {', 1)[0]
+        self.assertIn('| "content-contract-collection"', main)
+        self.assertNotIn('content-contract-collection', allowed)
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -7,7 +7,7 @@
 //! A repository is exclusively locked for its lifetime. Immutable outcomes are
 //! committed by a no-replace directory rename, with their exact source retained.
 //! Partial preparation is never erased or overwritten; an incompatible partial
-//! write requires separately authorized operator recovery outside this API.
+//! write requires separately authorized, exact reviewed quarantine recovery.
 #![cfg(target_os = "linux")]
 
 use luma_content::{
@@ -19,11 +19,22 @@ use std::fs::File;
 use std::os::fd::AsRawFd;
 use std::path::Path;
 
+mod collections;
 mod queries;
+mod recovery;
 mod storage;
+pub use collections::{
+    CollectionMemberships, CollectionPage, CollectionSource, CollectionVersion,
+    MAX_COLLECTION_MEMBERS, MAX_COLLECTION_PAGE, MAX_COLLECTION_SOURCE_BYTES,
+};
 pub use queries::{
     canonical_search_query, SearchHit, SearchResults, TermMatch, MAX_SEARCH_QUERY_BYTES,
     MAX_SEARCH_RESPONSE_BYTES, MAX_SEARCH_RESULTS, MAX_SEARCH_TERMS, MAX_SEARCH_TERM_BYTES,
+};
+pub use recovery::{
+    PreparationDirectory, PreparationDirectoryIdentity, PreparationFileIdentity, PreparationMember,
+    PreparationRecoveryOutcome, PreparationReview, MAX_PREPARATION_REVIEW_BYTES,
+    MAX_QUARANTINED_PREPARATIONS,
 };
 
 pub type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
@@ -79,6 +90,7 @@ pub enum SourceKind {
     Content,
     ManagedTableIntent,
     ManagedRenderIntent,
+    CollectionIntent,
 }
 
 /// Inspect and mutation authority are independent. Mutation checks must also
@@ -94,6 +106,11 @@ pub enum Access<'a> {
         decision: DecisionKind,
         source_bytes: u64,
         storage_bytes: u64,
+    },
+    Recover {
+        binding: &'a OwnerBinding,
+        review_sha256: &'a str,
+        retained_bytes: u64,
     },
 }
 
@@ -401,6 +418,16 @@ impl Plan {
                 }
                 Self::managed_render(current, &request)
             }
+            (4, Some(SourceKind::CollectionIntent)) => {
+                let collection = CollectionSource::from_canonical(source)?;
+                Self::collection(
+                    current,
+                    data.binding.clone(),
+                    &collection,
+                    data.expected.clone(),
+                    data.provenance.clone(),
+                )
+            }
             _ => Err("unsupported content-store plan schema or source kind".into()),
         }
     }
@@ -500,6 +527,7 @@ pub struct Repository {
     root: File,
     pending: File,
     outcomes: File,
+    quarantine: Option<File>,
     binding: OwnerBinding,
 }
 
@@ -596,6 +624,7 @@ impl Repository {
             root,
             pending,
             outcomes,
+            quarantine: None,
             binding: initial.binding().clone(),
         })
     }
@@ -612,9 +641,15 @@ impl Repository {
         let name = domain_name(binding)?;
         let root = storage::directory(&base, &name)?;
         lock(&root)?;
-        if storage::names(&root, 3)? != ["identity.json", "outcomes", "pending"] {
-            return Err("incomplete or unknown content-store layout; preserve state".into());
-        }
+        recovery::layout(&root)?;
+        let quarantine = if storage::names(&root, 4)?
+            .iter()
+            .any(|name| name == "quarantine")
+        {
+            Some(storage::directory(&root, "quarantine")?)
+        } else {
+            None
+        };
         let bytes = storage::read(&root, "identity.json", MAX_RECORD, &mut || {
             boundary.check(Access::Inspect { binding })
         })?;
@@ -624,6 +659,7 @@ impl Repository {
         let result = Self {
             pending: storage::directory(&root, "pending")?,
             outcomes: storage::directory(&root, "outcomes")?,
+            quarantine,
             base,
             name,
             root,
@@ -634,11 +670,10 @@ impl Repository {
     }
 
     fn snapshot(&self, plan: Option<&Plan>, boundary: &mut impl Boundary) -> Result<Snapshot> {
+        let quarantined_bytes = recovery::validate_quarantine(self, plan, boundary)?;
         let mut check = || storage::repository_check(self, plan, boundary);
         check()?;
-        if storage::names(&self.root, 3)? != ["identity.json", "outcomes", "pending"] {
-            return Err("content-store layout changed; preserve state".into());
-        }
+        recovery::layout(&self.root)?;
         let identity_bytes = storage::read(&self.root, "identity.json", MAX_RECORD, &mut check)?;
         if identity_bytes != serde_json::to_vec(&identity(&self.binding))? {
             return Err("content-store identity changed".into());
@@ -651,7 +686,7 @@ impl Repository {
         if pending.iter().any(|n| names.contains(n)) {
             return Err("content outcome also exists in preparation; preserve evidence".into());
         }
-        let mut total = 0_u64;
+        let mut total = quarantined_bytes;
         let mut raw = BTreeMap::new();
         for name in names {
             check()?;
@@ -674,6 +709,7 @@ impl Repository {
                     (1, None)
                         | (2, Some(SourceKind::ManagedTableIntent))
                         | (3, Some(SourceKind::ManagedRenderIntent))
+                        | (4, Some(SourceKind::CollectionIntent))
                 )
                 || record.plan.binding != self.binding
                 || name != luma_content::sha256(record.plan.provenance.request_id.as_bytes())
@@ -695,6 +731,7 @@ impl Repository {
                     Some(SourceKind::ManagedTableIntent | SourceKind::ManagedRenderIntent) => {
                         MAX_SOURCE
                     }
+                    Some(SourceKind::CollectionIntent) => MAX_COLLECTION_SOURCE_BYTES as u64,
                     Some(SourceKind::Content) => {
                         return Err("explicit legacy source kind forbidden".into())
                     }
@@ -742,6 +779,7 @@ impl Repository {
         let mut current = BTreeMap::new();
         let mut records = Vec::new();
         let mut requests = BTreeSet::new();
+        let mut collection_history = collections::CollectionHistory::new();
         for (index, (sequence, (record, payload, source))) in raw.into_iter().enumerate() {
             check()?;
             if sequence != index as u64 + 1
@@ -762,6 +800,7 @@ impl Repository {
                     "content outcome provenance or decision cannot be reconstructed".into(),
                 );
             }
+            collection_history.observe(&rebuilt, &source, &mut check)?;
             if rebuilt.decision() == DecisionKind::Published {
                 current.insert(
                     record.plan.artifact_id.clone(),
@@ -972,7 +1011,19 @@ impl Repository {
         if &rebuilt != plan {
             return Err("content base changed since exact proposal review".into());
         }
+        let mut collection_history = collections::CollectionHistory::new();
+        for (_, prior, prior_source) in &snapshot.records {
+            collection_history.observe(prior, prior_source, &mut || {
+                storage::repository_check(self, Some(plan), boundary)
+            })?;
+        }
+        collection_history.observe(plan, source, &mut || {
+            storage::repository_check(self, Some(plan), boundary)
+        })?;
         let name = luma_content::sha256(plan.request_id().as_bytes());
+        if recovery::is_quarantined(self, &name, Some(plan), boundary)? {
+            return Err("content request was explicitly retired; use a fresh request ID".into());
+        }
         if snapshot.pending.iter().any(|p| p != &name) {
             return Err("another content preparation requires recovery; preserve it".into());
         }

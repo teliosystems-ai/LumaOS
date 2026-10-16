@@ -1165,9 +1165,13 @@ fn content_acquisition_scope(
     let effect = 1 - reader;
     let read = &uses[reader].1;
     let write = &uses[effect].1;
-    if !matches!(write.action, Action::Write | Action::Retain)
+    let effect_scope = matches!(
+        (write.action, write.selector.id.as_str()),
+        (Action::Write | Action::Retain, "native-content-store-v1")
+            | (Action::Retain, "native-content-recovery-v1")
+    );
+    if !effect_scope
         || write.selector.kind != Kind::Artifact
-        || write.selector.id != "native-content-store-v1"
         || read.selector.generation != write.selector.generation
         || read.selector.digest != write.selector.digest
         || requested != write
@@ -1259,6 +1263,66 @@ mod content_acquisition_tests {
             assert!(content_acquisition_scope(
                 &altered,
                 &uses[1].1,
+                authentication::SessionPurpose::Standard
+            )
+            .is_err());
+        }
+    }
+
+    #[test]
+    fn recovery_pair_is_exact_independent_retention_and_never_write_authority() {
+        let mut uses = pair(Action::Retain);
+        uses[1].1.selector.id = "native-content-recovery-v1".into();
+        let requested = uses[1].1.clone();
+        assert_eq!(
+            content_acquisition_scope(&uses, &requested, authentication::SessionPurpose::Standard)
+                .unwrap(),
+            1
+        );
+        uses.reverse();
+        assert_eq!(
+            content_acquisition_scope(&uses, &requested, authentication::SessionPurpose::Standard)
+                .unwrap(),
+            0
+        );
+        for action in [Action::Write, Action::Delete, Action::Read] {
+            let mut altered = uses.clone();
+            altered[0].1.action = action;
+            assert!(content_acquisition_scope(
+                &altered,
+                &altered[0].1,
+                authentication::SessionPurpose::Standard
+            )
+            .is_err());
+        }
+        let mut ordinary = requested.clone();
+        ordinary.selector.id = "native-content-store-v1".into();
+        assert!(content_acquisition_scope(
+            &uses,
+            &ordinary,
+            authentication::SessionPurpose::Standard
+        )
+        .is_err());
+        for purpose in [
+            authentication::SessionPurpose::Export,
+            authentication::SessionPurpose::ModelQa,
+            authentication::SessionPurpose::ModelImport,
+            authentication::SessionPurpose::ModelActivation,
+        ] {
+            assert!(content_acquisition_scope(&uses, &requested, purpose).is_err());
+        }
+        for change in 0..4 {
+            let mut altered = uses.clone();
+            match change {
+                0 => altered[1].0 = altered[0].0.clone(),
+                1 => altered[1].1.selector.generation += 1,
+                2 => altered[1].1.selector.digest = "b".repeat(64),
+                3 => altered[0].1.selector.kind = Kind::File,
+                _ => unreachable!(),
+            }
+            assert!(content_acquisition_scope(
+                &altered,
+                &requested,
                 authentication::SessionPurpose::Standard
             )
             .is_err());

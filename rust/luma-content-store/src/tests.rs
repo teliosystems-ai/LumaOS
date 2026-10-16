@@ -620,6 +620,121 @@ fn unsupported_storage_and_symlink_namespaces_are_not_followed() {
     assert!(Repository::create_at(&f.path, &plan, &mut Guard::write(&plan)).is_err());
 }
 
+#[test]
+fn shared_history_reconstruction_fences_failed_or_repeated_observations() {
+    let first = capture("first", "document", b"first");
+    let second = capture("second", "other", b"second");
+    let record = |plan: &Plan, sequence| Record {
+        schema_version: plan.data.schema_version,
+        sequence,
+        review_sha256: plan.review.clone(),
+        plan: plan.data.clone(),
+    };
+    let mut history = HistoryReconstruction::new();
+    assert_eq!(
+        history
+            .observe(
+                &binding(),
+                &record(&first, 1),
+                &first.payload,
+                b"first",
+                &mut || Ok(())
+            )
+            .unwrap(),
+        first
+    );
+    assert!(history
+        .observe(
+            &binding(),
+            &record(&first, 1),
+            &first.payload,
+            b"first",
+            &mut || Ok(())
+        )
+        .is_err());
+    assert!(history
+        .observe(
+            &binding(),
+            &record(&second, 2),
+            &second.payload,
+            b"second",
+            &mut || Ok(())
+        )
+        .is_err());
+    assert_eq!(history.count, 1);
+    assert_eq!(history.current.len(), 1);
+    let mut fresh = HistoryReconstruction::new();
+    for (plan, source, sequence) in [
+        (&first, b"first".as_slice(), 1),
+        (&second, b"second".as_slice(), 2),
+    ] {
+        fresh
+            .observe(
+                &binding(),
+                &record(plan, sequence),
+                &plan.payload,
+                source,
+                &mut || Ok(()),
+            )
+            .unwrap();
+    }
+    assert_eq!(fresh.count, 2);
+    assert_eq!(fresh.current.len(), 2);
+}
+
+#[test]
+fn shared_history_reconstruction_never_skips_bad_binding_bytes_or_authority_refusal() {
+    let plan = capture("first", "document", b"first");
+    for change in 0..7 {
+        let mut record = Record {
+            schema_version: plan.data.schema_version,
+            sequence: 1,
+            review_sha256: plan.review.clone(),
+            plan: plan.data.clone(),
+        };
+        let mut payload = plan.payload.clone();
+        let mut source = b"first".to_vec();
+        match change {
+            0 => record.schema_version = 4,
+            1 => record.plan.binding.owner_generation += 1,
+            2 => record.sequence = 2,
+            3 => record.review_sha256 = "f".repeat(64),
+            4 => payload[0] ^= 1,
+            5 => source[0] ^= 1,
+            6 => (),
+            _ => unreachable!(),
+        }
+        let mut history = HistoryReconstruction::new();
+        let mut check = || -> Result<()> {
+            if change == 6 {
+                Err("fixture authority refusal".into())
+            } else {
+                Ok(())
+            }
+        };
+        assert!(history
+            .observe(&binding(), &record, &payload, &source, &mut check)
+            .is_err());
+        assert!(history
+            .observe(
+                &binding(),
+                &Record {
+                    schema_version: plan.data.schema_version,
+                    sequence: 1,
+                    review_sha256: plan.review.clone(),
+                    plan: plan.data.clone(),
+                },
+                &plan.payload,
+                b"first",
+                &mut || Ok(())
+            )
+            .is_err());
+        assert_eq!(history.count, 0);
+        assert!(history.current.is_empty());
+    }
+}
+
+mod backup;
 mod managed;
 mod queries;
 mod recovery;

@@ -49,6 +49,12 @@ It has not yet passed native installation/boot or production qualification.
 The owner authorized G3/GWIN0 development overlap on a separate branch and
 independently approved a thirty-minute QA-only session in subsequent source.
 That approval does not modify the frozen image or close any inherited gate.
+On 2026-10-16 the owner also approved separate content checkpoint custody,
+encrypted owner backups with offline Admin recovery, and TPM2/CNG Windows custody;
+see the [decision record](gates/g3/custody_recovery_approval_2026-10-16.json).
+These approvals authorize software implementation, not host provisioning or a
+production-readiness claim. The [G3/GWIN0 plan](G3_GWIN0_IMPLEMENTATION.md#approved-custody-and-recovery-design)
+separates the remaining integration from physical and installed qualification.
 The early Python-contract checkpoint below is historical, not the scope of
 the later native image.
 

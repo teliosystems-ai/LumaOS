@@ -810,3 +810,47 @@ authority/workflow/backup integration, semantic/per-result policy, UI/capture/
 adapters and complete secure Windows deployment remain development work.
 Installed/native and declared Windows-tuple acceptance remain separate. G3 and
 GWIN0 are open; the frozen G2 image is unchanged.
+
+### Approved custody and recovery design
+
+The owner approved the [content, backup and Windows custody design](gates/g3/custody_recovery_approval_2026-10-16.json)
+on 2026-10-16. Production content authority remains development work: a separate
+Admin-provisioned TPM2 checkpoint authority must commit the exact content head
+through a fixed-scope coordinator, reconcile interrupted publication, and refuse
+rollback. It must not append every content event to the shared Admin journal,
+reuse resource custody, or grant TPM access to ordinary content workers.
+
+Backups will use per-owner encryption with an offline Admin recovery recipient.
+Clean-machine recovery must explicitly bind restored data to a fresh installation
+and principal; archived credentials, grants, sessions and TPM blobs cannot become
+authority. The new backup-data library supplies exact Read reviews and independently
+authorized Export capture, but encryption, recipient custody, delivery and restored
+publication still require integration.
+
+Windows deployment will use a distinct TPM2/CNG-backed hosted authority, explicit
+SID and first-Admin enrollment, and private NTFS live state. D remains the bulk
+build/archive destination; its current exFAT filesystem is not the protected live
+authority store. The new in-process signature primitive passes 98 actual Windows
+assertions, including child-CLI and NTFS link checks; the
+[component record](gates/gwin0/platform_signature_2026-10-16.json) pins those inputs.
+That result does not supply
+custody, current time/revocation, rollback resistance or installation permission.
+
+The [backup-data and native-preview record](gates/g3/backup_preview_2026-10-16.json)
+binds a passing immutable-source run: 103 storage tests, one documentation test,
+warnings-denied checks for all Rust targets, 16 GI-free host tests, nine snapshot
+tests and thirteen desktop-policy tests. The real CLI exercises eight engines,
+three exact envelope reopens and two malformed-source refusals as UID/GID 65534,
+with all capabilities dropped and no new privileges. The initial invocations
+exposed test-helper shadowing, omitted fixture-root configuration and Cargo's
+multiply linked executable; the corrected run preserves the product checks.
+
+The manual native preview has a separate GTK/WebKit launcher. The cached desktop
+image lacks the required WebKit2 introspection binding; the updated package
+inputs need a fresh build and actual graphical testing. Authenticated workflows,
+encrypted backup/restore and named external adapters remain development work.
+
+Physical TPM provisioning, native boot, power-loss recovery, offline recipient
+custody and declared Windows-environment acceptance belong to the final test
+phase after those enforcement paths are implemented. The approval itself is
+not implementation or qualification evidence. The frozen G2 image is unchanged.

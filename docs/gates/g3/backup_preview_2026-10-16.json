@@ -1,0 +1,69 @@
+{
+  "schema_version": 1,
+  "recorded_on": "2026-10-16",
+  "branch": "feature/g3-gwin0-beta",
+  "status": "backup-data-and-manual-native-preview-components-passed",
+  "snapshot": {
+    "path": "/mnt/luma-build/work/g3-integrated-foundations-source-20261016-b",
+    "files": 493,
+    "manifest_sha256": "ceebd3587b32755504c1015615b0e6660b33e5f7b1bbe60647bb08b1f068e52c"
+  },
+  "verification": {
+    "directory": "/mnt/luma-build/work/g3-integrated-foundations-checks-20261016-c",
+    "tools_image": "sha256:819dfe7772da1e3c76ffdc8f9ea4a1fa44c7c549bd4fa988e35d9397d87924b2",
+    "network": "none",
+    "maximum_memory_gib": 4,
+    "maximum_cpus": 2,
+    "private_ext4_fixture_root": "/evidence",
+    "content_store_unit_passed": 103,
+    "content_store_unit_failed": 0,
+    "content_store_ignored": 0,
+    "content_store_doc_tests_passed": 1,
+    "content_store_log_sha256": "59bef27f2a7b56df4bf6fb73b0b7ae136a41a32cf4ec0cce807214daa21861ea",
+    "all_workspace_targets_warnings_denied": true,
+    "all_targets_log_sha256": "2955376482db0f6adc7815c0b2f17d9f9c3676d08eb5280aa6806c77e0c1f7a1",
+    "workspace_host_tests_passed": 16,
+    "workspace_host_log_sha256": "dc755a7c07f8c18cd3990ef80b6c8ad7c2031d436156c4c81d27a2295df0867a",
+    "snapshot_tests_passed": 9,
+    "desktop_policy_tests_passed": 13,
+    "actual_native_preview_engines": ["text", "csv", "json", "spreadsheet", "document", "diagram", "animation", "collection"],
+    "actual_exact_reopen_formats": ["text", "csv", "json"],
+    "actual_native_malformed_sources_refused": ["document", "spreadsheet"],
+    "actual_native_cli_sha256": "849ae402c78feeff81e633b44dc76c9cfc4b607bc1593265799c6b4ac5fc0c10",
+    "actual_native_cli_uid": 65534,
+    "actual_native_cli_gid": 65534,
+    "actual_native_cli_capabilities_dropped": true,
+    "actual_native_cli_no_new_privileges": true,
+    "actual_native_cli_log": "workspace-real-cli-unprivileged.log",
+    "actual_native_cli_log_sha256": "a398f7316c85ac5ef32a3b6e4868df12d3f8180edf794a7407f5e90dbc37e53f",
+    "whole_workspace_unit_suite_rerun": false
+  },
+  "implemented": [
+    "Shared sticky-fenced live and portable history reconstruction for schemas one through four",
+    "Read-only exact backup metadata reviews bounded to 8192 bytes",
+    "Exact reviewed backup-data capture requiring independent continuously checked Read and Export boundaries",
+    "Closed canonical manifest and bounded raw member payload without pathname extraction",
+    "Original sources, retained conflicts and pending/quarantined forensic bytes preserved",
+    "Ephemeral fixed-command native preview host with bounded streams, observed cancellation and owned-process cleanup",
+    "Exact source, content, receipt, envelope and generated-result digest checks before manual display",
+    "Separate ordinary-user GTK/WebKit launcher and scriptless opaque preview frames",
+    "Desktop source closure, fixed asset installation and pinned-snapshot runtime package declarations"
+  ],
+  "earlier_failures": [
+    "Test-only local VersionReference shadowed the backup member helper; renamed without product changes",
+    "An invocation omitted required LUMA_STORAGE_TEST_ROOT; all private fixtures refused instead of falling back",
+    "The first real-CLI attempt refused Cargo's multiply linked executable; a fresh exact single-link runtime copy passed"
+  ],
+  "remaining_development": [
+    "Production checkpoint authority and publication reconciliation",
+    "Native finite-grant backup export, encryption, custody receipts, delivery and restored publication",
+    "Authenticated persistent UI and broader workflow completion",
+    "Named external adapters and qualified capture/input"
+  ],
+  "gtk_webkit_execution_tested": false,
+  "cached_desktop_runtime_probe": "Existing cached image lacks WebKit2 4.1 introspection; updated desktop package inputs require a new build before graphical testing",
+  "new_image_produced": false,
+  "delivered_sequence_14_image_changed": false,
+  "production_qualified": false,
+  "gate_closing": false
+}

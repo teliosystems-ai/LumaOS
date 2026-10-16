@@ -39,6 +39,16 @@ class DesktopPolicyTests(unittest.TestCase):
         policy.configure(self.root, 'headless')
         self.assertFalse((self.root/'etc/gdm3').exists())
         self.assertFalse((self.root/'usr/share/luma-os/desktop-profile').exists())
+        self.assertFalse((self.root/'usr/share/applications/luma-native-preview.desktop').exists())
+
+    def test_native_preview_launcher_is_separate_and_has_no_mvp_or_authority_claim(self):
+        policy.configure(self.root, 'desktop')
+        launcher = (self.root/'usr/share/applications/luma-native-preview.desktop').read_text()
+        self.assertIn('Exec=/usr/bin/python3 -I /usr/libexec/luma-os/workspace_app.py\n', launcher)
+        self.assertIn('no account, publication or workflow authority', launcher)
+        self.assertNotIn('http:', launcher)
+        reference = (self.root/'usr/share/applications/luma-workspace.desktop').read_text()
+        self.assertIn('http://127.0.0.1:8765', reference)
 
     def test_production_launcher_does_not_claim_lab_or_certification(self):
         report = policy.configure(self.root, 'desktop', 'production')

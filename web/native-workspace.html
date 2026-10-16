@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src luma-workspace:; style-src luma-workspace:; frame-src about:; img-src 'none'; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <title>Luma manual native preview</title>
+  <link rel="stylesheet" href="native-workspace.css">
+  <script src="native-workspace.js" defer></script>
+</head>
+<body>
+  <a class="skip" href="#editor">Skip to editor</a>
+  <header><h1>Manual native preview</h1><p>Deterministic local engines. Model disabled. No account, grant, repository, publication or external application authority.</p></header>
+  <main>
+    <section aria-labelledby="edit-heading">
+      <h2 id="edit-heading">Editable source</h2>
+      <label for="engine">Format or engine</label>
+      <select id="engine"><option value="text">Text</option><option value="csv">CSV</option><option value="json">JSON</option><option value="spreadsheet">Exact spreadsheet</option><option value="document">Document</option><option value="diagram">Diagram</option><option value="animation">Animation frames</option><option value="collection">Explicit collection source</option></select>
+      <button id="example" type="button">Load example (replaces editor)</button>
+      <label for="editor">Source text or closed engine JSON (up to 1 MiB)</label>
+      <textarea id="editor" rows="18" spellcheck="false" aria-describedby="source-help"></textarea>
+      <p id="source-help">Source stays in this ephemeral session. Preview does not save or publish it. Formula-looking CSV text is never executed here.</p>
+      <div class="actions"><button id="preview" type="button">Run native preview</button><button id="cancel" type="button" disabled>Cancel active preview</button></div>
+      <progress id="progress" aria-label="Native preview running" hidden></progress>
+      <p id="status" role="status" aria-live="polite" aria-atomic="true">Waiting for installed native host.</p>
+    </section>
+    <section aria-labelledby="result-heading">
+      <h2 id="result-heading">Verified preview</h2>
+      <p id="result-note">No result yet. A completed preview is not a committed artifact or workflow completion.</p>
+      <div id="preview-output"></div>
+      <fieldset id="animation-controls" hidden><legend>Manual animation frames — no autoplay</legend><button id="previous-frame" type="button">Previous frame</button><label for="frame">Frame</label><input id="frame" type="range" min="0" max="0" value="0"><button id="next-frame" type="button">Next frame</button><output id="frame-label" for="frame"></output></fieldset>
+      <details><summary>Canonical source / result data and digests</summary><pre id="result-data" tabindex="0"></pre></details>
+    </section>
+    <section aria-labelledby="reopen-heading">
+      <h2 id="reopen-heading">Reopen an exact complete envelope</h2>
+      <p>Paste a complete content envelope and independently selected SHA256. These bytes are untrusted data, not proof of ownership, publication or rollback authority.</p>
+      <label for="envelope">Complete envelope</label><textarea id="envelope" rows="7" spellcheck="false"></textarea>
+      <label for="envelope-hash">Expected whole-envelope SHA256</label><input id="envelope-hash" type="text" pattern="[0-9a-f]{64}" maxlength="64" spellcheck="false">
+      <button id="reopen" type="button">Verify and reopen envelope</button>
+      <button id="reuse-source" type="button" disabled>Use reopened source in editor</button>
+    </section>
+  </main>
+</body>
+</html>

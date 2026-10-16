@@ -19,10 +19,16 @@ use std::fs::File;
 use std::os::fd::AsRawFd;
 use std::path::Path;
 
+mod backup;
 mod collections;
 mod queries;
 mod recovery;
 mod storage;
+pub use backup::{
+    inspect_backup_data, BackupArea, BackupAreaReview, BackupBoundary, BackupBudget,
+    BackupDirectory, BackupInspection, BackupManifest, BackupMember, BackupNamespace, BackupReview,
+    ContentBackup, MAX_BACKUP_MANIFEST_BYTES, MAX_BACKUP_REVIEW_BYTES, MAX_CONTENT_BACKUP_BYTES,
+};
 pub use collections::{
     CollectionMemberships, CollectionPage, CollectionSource, CollectionVersion,
     MAX_COLLECTION_MEMBERS, MAX_COLLECTION_PAGE, MAX_COLLECTION_SOURCE_BYTES,
@@ -520,6 +526,97 @@ struct Snapshot {
     bytes: u64,
 }
 
+/// Shared reconstruction for live storage and portable backup data. A failed
+/// observation poisons this instance; callers cannot skip a damaged record and
+/// continue a different history using the same partially observed state.
+struct HistoryReconstruction {
+    current: BTreeMap<String, ArtifactVersion>,
+    requests: BTreeSet<String>,
+    collection_history: collections::CollectionHistory,
+    count: u64,
+    poisoned: bool,
+}
+
+impl HistoryReconstruction {
+    fn new() -> Self {
+        Self {
+            current: BTreeMap::new(),
+            requests: BTreeSet::new(),
+            collection_history: collections::CollectionHistory::new(),
+            count: 0,
+            poisoned: false,
+        }
+    }
+
+    fn observe(
+        &mut self,
+        binding: &OwnerBinding,
+        record: &Record,
+        payload: &[u8],
+        source: &[u8],
+        check: &mut impl FnMut() -> Result<()>,
+    ) -> Result<Plan> {
+        if self.poisoned {
+            return Err("content history reconstruction is fenced after a refused record".into());
+        }
+        self.poisoned = true;
+        check()?;
+        binding.validate()?;
+        let source_limit = match (record.schema_version, record.plan.source_kind) {
+            (1, None) => luma_content::MAX_CONTENT_BYTES as u64,
+            (2, Some(SourceKind::ManagedTableIntent))
+            | (3, Some(SourceKind::ManagedRenderIntent)) => MAX_SOURCE,
+            (4, Some(SourceKind::CollectionIntent)) => MAX_COLLECTION_SOURCE_BYTES as u64,
+            _ => return Err("content history schema or source kind mismatch".into()),
+        };
+        if record.schema_version != record.plan.schema_version
+            || record.plan.binding != *binding
+            || self.count >= MAX_OUTCOMES as u64
+            || record.sequence != self.count + 1
+            || self.requests.contains(&record.plan.provenance.request_id)
+            || serde_json::to_vec(record)?.len() as u64 > MAX_RECORD
+        {
+            return Err("content outcome sequence, request or canonical identity mismatch".into());
+        }
+        if payload.len() as u64 > MAX_PAYLOAD
+            || source.len() as u64 > source_limit
+            || record.plan.payload_bytes != payload.len() as u64
+            || record.plan.source_bytes != source.len() as u64
+            || record.plan.payload_sha256 != luma_content::sha256(payload)
+            || record.plan.source_sha256 != luma_content::sha256(source)
+        {
+            return Err(
+                "content outcome payload or exact original-source integrity mismatch".into(),
+            );
+        }
+        check()?;
+        let prior = self.current.get(&record.plan.artifact_id);
+        if prior.map(ArtifactVersion::reference).transpose()? != record.plan.observed {
+            return Err("content outcome does not extend its exact observed base".into());
+        }
+        let rebuilt = Plan::rebuild(prior, &record.plan, source)?;
+        if rebuilt.data != record.plan
+            || rebuilt.payload != payload
+            || rebuilt.review != record.review_sha256
+        {
+            return Err("content outcome provenance or decision cannot be reconstructed".into());
+        }
+        self.collection_history.observe(&rebuilt, source, check)?;
+        check()?;
+        if rebuilt.decision() == DecisionKind::Published {
+            self.current.insert(
+                record.plan.artifact_id.clone(),
+                luma_content::reopen(payload, binding)?,
+            );
+        }
+        self.requests
+            .insert(record.plan.provenance.request_id.clone());
+        self.count += 1;
+        self.poisoned = false;
+        Ok(rebuilt)
+    }
+}
+
 /// One owner-generation namespace. No cross-owner deduplication or fallback.
 pub struct Repository {
     base: File,
@@ -776,43 +873,16 @@ impl Repository {
                 .len() as u64;
             }
         }
-        let mut current = BTreeMap::new();
         let mut records = Vec::new();
-        let mut requests = BTreeSet::new();
-        let mut collection_history = collections::CollectionHistory::new();
-        for (index, (sequence, (record, payload, source))) in raw.into_iter().enumerate() {
-            check()?;
-            if sequence != index as u64 + 1
-                || !requests.insert(record.plan.provenance.request_id.clone())
-            {
-                return Err("content outcome sequence or request identity discontinuity".into());
-            }
-            let prior = current.get(&record.plan.artifact_id);
-            if prior.map(ArtifactVersion::reference).transpose()? != record.plan.observed {
-                return Err("content outcome does not extend its exact observed base".into());
-            }
-            let rebuilt = Plan::rebuild(prior, &record.plan, &source)?;
-            if rebuilt.data != record.plan
-                || rebuilt.payload != payload
-                || rebuilt.review != record.review_sha256
-            {
-                return Err(
-                    "content outcome provenance or decision cannot be reconstructed".into(),
-                );
-            }
-            collection_history.observe(&rebuilt, &source, &mut check)?;
-            if rebuilt.decision() == DecisionKind::Published {
-                current.insert(
-                    record.plan.artifact_id.clone(),
-                    luma_content::reopen(&payload, &self.binding)?,
-                );
-            }
+        let mut history = HistoryReconstruction::new();
+        for (_, (record, payload, source)) in raw {
+            let rebuilt = history.observe(&self.binding, &record, &payload, &source, &mut check)?;
             records.push((record, rebuilt, source));
         }
         check()?;
         Ok(Snapshot {
             records,
-            current,
+            current: history.current,
             pending,
             bytes: total,
         })

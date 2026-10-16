@@ -1,0 +1,49 @@
+{
+  "schema_version": 1,
+  "recorded_on": "2026-10-16",
+  "decision": "approved-by-owner",
+  "branch": "feature/g3-gwin0-beta",
+  "owner_instruction": "for the required approvals related to: trust and recovery, separate Admin-provisioned content custody, encrypted owner backups with offline Admin recovery, and TPM/CNG-backed Windows custody. you can proceed with these recommendations as needed.",
+  "approved_design": {
+    "content_authority": {
+      "custody": "separate-Admin-provisioned-TPM2-checkpoint-authority",
+      "isolated_from": ["shared-Admin-journal", "resource-checkpoint-authority"],
+      "publication": "fixed-scope-coordinator-with-exact-preparation-and-checkpoint-reconciliation",
+      "ordinary_content_worker_gets_tpm_access": false,
+      "checksum_or_unanchored_journal_is_authority": false
+    },
+    "backup_recovery": {
+      "confidentiality": "encrypted-per-owner-backups",
+      "recovery_recipient": "offline-Admin-recovery-recipient",
+      "clean_machine_restore": "explicit-rebind-to-fresh-installation-and-principal",
+      "archived_credentials_grants_sessions_or_tpm_blobs_restore_authority": false
+    },
+    "windows_authority": {
+      "custody": "separate-TPM2-CNG-backed-hosted-authority",
+      "identity": "explicit-SID-and-first-Admin-enrollment",
+      "live_state": "private-NTFS-protected-product-state",
+      "bulk_builds_and_archives": "D-drive",
+      "signature_validity_alone_admits_installation": false,
+      "signing_key_alone_establishes_rollback_protection": false
+    }
+  },
+  "current_execution_scope": "software-development-and-isolated-disposable-fixture-tests",
+  "separate_test_phase": [
+    "physical-existing-owner-TPM-provisioning-without-clearing-or-taking-ownership",
+    "native-content-publication-and-power-loss-reconciliation",
+    "offline-recovery-recipient-custody-and-clean-machine-restore",
+    "declared-Windows-tuple-hosted-authority-and-NTFS-qualification"
+  ],
+  "not_authorized_by_this_record": [
+    "host-TPM-or-firmware-mutation",
+    "host-service-installation-or-account-change",
+    "WSL-restart-import-unregister-or-default-distribution-change",
+    "selection-or-migration-of-existing-user-data-to-a-live-product-state-volume",
+    "deletion-of-builds-images-caches-or-test-evidence"
+  ],
+  "delivered_sequence_14_image_changed": false,
+  "implementation_complete": false,
+  "native_qualification_claimed": false,
+  "production_qualification_claimed": false,
+  "gate_closing": false
+}

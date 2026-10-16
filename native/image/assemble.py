@@ -231,7 +231,7 @@ def main() -> None:
     inputs=[]
     snapshot=WORK/'source'
     snapshot.mkdir()
-    for folder in ('rust','native/image','src','web','schemas','examples','docs/adr','scripts'):
+    for folder in ('rust','native/image','native/desktop','src','web','schemas','examples','docs/adr','scripts'):
         for source in sorted((REPO/folder).rglob('*')):
             if source.is_file() and not any(p in ('target','__pycache__') for p in source.relative_to(REPO).parts):
                 if source.is_symlink():raise SystemExit('source snapshot refuses symbolic links')
@@ -297,6 +297,17 @@ def main() -> None:
     reference = ROOT/'usr/share/luma-os/reference'
     for name in ('src','web','schemas','examples'):
         shutil.copytree(REPO/name,reference/name,ignore=shutil.ignore_patterns('__pycache__','*.pyc'))
+    if args.edition == 'desktop':
+        for name in ('workspace_host.py', 'workspace_app.py'):
+            target = binary.parent/name
+            shutil.copy2(REPO/'native/desktop'/name, target)
+            target.chmod(0o644)
+        workspace = ROOT/'usr/share/luma-os/workspace'
+        workspace.mkdir(parents=True, exist_ok=True)
+        for name in ('native-workspace.html', 'native-workspace.js', 'native-workspace.css'):
+            target = workspace/name
+            shutil.copy2(REPO/'web'/name, target)
+            target.chmod(0o644)
     put('usr/share/luma-os/release-id',release+'\n')
     put('usr/share/luma-os/release-identity.json', json.dumps({
         'schema_version': 1, 'release': release, 'sequence': args.sequence,

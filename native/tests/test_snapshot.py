@@ -23,6 +23,7 @@ class AssemblySourceClosureTests(unittest.TestCase):
         self.assertEqual(len(loops), 1)
         self.assertEqual(ast.literal_eval(loops[0].iter), snapshot.FOLDERS)
         self.assertIn('docs/adr', snapshot.FOLDERS)
+        self.assertIn('native/desktop', snapshot.FOLDERS)
         repository = image.parents[1]
         policy = repository / 'docs/adr/0004-policy-model.md'
         self.assertTrue(policy.is_file())

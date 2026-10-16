@@ -8,6 +8,10 @@ REQUIRED = (
     'usr/bin/gnome-control-center', 'usr/bin/epiphany',
     'usr/share/gnome-session/sessions/gnome.session',
     'usr/lib/systemd/system/gdm.service',
+    'usr/libexec/luma-os/workspace_host.py', 'usr/libexec/luma-os/workspace_app.py',
+    'usr/share/luma-os/workspace/native-workspace.html',
+    'usr/share/luma-os/workspace/native-workspace.js',
+    'usr/share/luma-os/workspace/native-workspace.css',
 )
 SESSION = '''#!/bin/sh
 set -eu
@@ -129,6 +133,16 @@ Type=Application
 Name={workspace_name}
 Comment=Local reference workspace; files and desktop remain available independently
 Exec=epiphany http://127.0.0.1:8765
+Icon=utilities-terminal
+Terminal=false
+Categories=Utility;
+''')
+    put(root, 'usr/share/applications/luma-native-preview.desktop', '''[Desktop Entry]
+Type=Application
+Name=Luma Manual Native Preview
+Comment=Ephemeral native-engine preview; no account, publication or workflow authority
+Exec=/usr/bin/python3 -I /usr/libexec/luma-os/workspace_app.py
+TryExec=/usr/bin/python3
 Icon=utilities-terminal
 Terminal=false
 Categories=Utility;

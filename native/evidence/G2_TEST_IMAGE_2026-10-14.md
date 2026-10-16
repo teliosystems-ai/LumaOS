@@ -40,8 +40,11 @@ claim that installed confinement, actual model QA or physical TPM checks passed.
 See the [machine-readable delivery record](G2_TEST_IMAGE_2026-10-14.json) and
 [readiness record](../../docs/gates/g2/production_readiness_2026-10-14.json).
 
-The earlier sequence-13 image and failed development attempts are preserved.
-Use sequence 14 for testing these new changes, not the older image.
+Use sequence 14 for testing these new changes, not the older image. On
+2026-10-16 the owner authorized [retirement of superseded assembly disks](ASSEMBLY_RETIREMENT_2026-10-16.json).
+Old work/VM disks and work-copy images were removed; historical logs, manifests,
+source archives and the separate export directories remain. The sequence-14
+delivery and its D-backed Linux artifacts were not changed.
 
 ## Prepare media on the separate Ubuntu machine
 

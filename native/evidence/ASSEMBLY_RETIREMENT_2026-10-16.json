@@ -1,0 +1,47 @@
+{
+  "schema_version": 1,
+  "recorded_on": "2026-10-16",
+  "status": "owner-authorized-superseded-assembly-disks-deleted",
+  "owner_instruction": "so you can delete Old assembly folders at this stage. and complete pending items for the development",
+  "root": "D:\\LumaOS-builds\\work",
+  "reviewed_folders": [
+    "20260928T124255Z-headless", "20260929T170514Z-headless",
+    "20260929T175214Z-headless", "20260929T194815Z-headless",
+    "20260929T195529Z-headless", "20260929T221048Z-headless",
+    "20260930T073705Z-headless", "20261001T072028Z-desktop",
+    "20261001T090338Z-desktop", "20261010T210838Z-desktop",
+    "20261011T062224Z-desktop", "20261012T174442Z-desktop",
+    "20261012T180018Z-desktop"
+  ],
+  "execution": {
+    "script": "scripts/retire_assembly_disks.ps1",
+    "dry_run_passed": true,
+    "exclusive_open_preflight_passed": true,
+    "redirected_paths_refused": true,
+    "exact_closed_file_names_only": true,
+    "recursive_folder_deletion_used": false,
+    "deleted_files": 98,
+    "deleted_bytes": 284830597783,
+    "retained_evidence_files": 320,
+    "original_evidence_paths_preserved": true,
+    "post_cleanup_drive_free_bytes": 360182972416
+  },
+  "deleted_kinds": [
+    "superseded-sequence-4-through-13-raw-and-work-copy-compressed-images",
+    "old-root-payload-ESP-filesystem-and-verity-intermediates",
+    "old-UKI-work-copies",
+    "old-disposable-VM-target-disks"
+  ],
+  "retained": [
+    "original-log-result-manifest-lock-and-source-archive-files",
+    "all-native-export-directories-including-sequence-14",
+    "current-GWIN0-candidate",
+    "build-backing-stores-and-Docker-caches",
+    "D-backed-Linux-source-snapshots-and-test-evidence"
+  ],
+  "recovery": "Deleted intermediates are not in the Recycle Bin and require rebuilding; surviving exported images remain separate.",
+  "historical_evidence_interpretation": "Recorded observations are retained; the retired work/VM disks are no longer available to resume those historical instances.",
+  "delivered_sequence_14_image_changed": false,
+  "qualification_claimed": false,
+  "gate_closing": false
+}

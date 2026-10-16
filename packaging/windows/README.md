@@ -260,4 +260,28 @@ requires an explicit ACL refusal from that same lease, then restores its own
 fixture DACL and verifies the same handle works again. No production test hook
 or existing user's ACL is involved.
 
+## In process platform signature component
+
+`verify-platform-signature.ps1` verifies the separate schema-2 laboratory
+platform-statement format using the explicit Microsoft BCrypt primitive
+provider. It accepts only P256 CNG public-key blobs and fixed 64-byte P1363
+signatures over SHA256. Canonical public-key and statement records bind exact
+independent key, statement and payload hashes, nonce and sequence. Held input
+and ancestor handles fence observed replacement and writes during verification.
+It does not invoke OpenSSL, create persistent keys, or replace the existing
+Ed25519 package-signature format.
+
+A cryptographically valid statement is not installation authorization. The
+component does not establish TPM custody, fresh protected time, current
+revocation, a durable sequence floor, SID enrollment or product grants.
+Synchronous OS operations have no hard-deadline qualification. See the
+[98-assertion native test record](../../docs/gates/gwin0/platform_signature_2026-10-16.json).
+
+The isolated test generates only ephemeral software keys. Compiler and public
+fixtures use D; tiny owned NTFS fixtures exercise hard links and reparse paths:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy RemoteSigned -File .\packaging\windows\test-platform-signature.ps1 -WorkRoot D:\LumaOS-builds -SecurityWorkRoot C:\Users\hakim\LumaOS\.luma
+```
+
 See [the shared implementation plan](../../docs/G3_GWIN0_IMPLEMENTATION.md).

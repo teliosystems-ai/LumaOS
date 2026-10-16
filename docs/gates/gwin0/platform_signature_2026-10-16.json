@@ -1,0 +1,54 @@
+{
+  "schema_version": 1,
+  "recorded_on": "2026-10-16",
+  "branch": "feature/g3-gwin0-beta",
+  "baseline_commit": "2f4e9e19e0be46c90c52121053810232d234f6d9",
+  "status": "in-process-laboratory-platform-signature-component-passed",
+  "inputs": [
+    {"path": "packaging/windows/PlatformSignature.cs", "sha256": "4d8939e875a895e93b6ccfbeefc6275f38d9d4ff4c01e97e84c7180c1a158d91"},
+    {"path": "packaging/windows/Luma.PlatformSignature.psm1", "sha256": "0672045f36735291da5b2b4f3258a43b9645ae284a7df49855974ead3dc01676"},
+    {"path": "packaging/windows/verify-platform-signature.ps1", "sha256": "2db3982f5acad44aa70840cefcf192d8640a703a90f21b8e76d340312ee000a1"},
+    {"path": "packaging/windows/test-platform-signature.ps1", "sha256": "0458b347700ebfa6bd6308adda42bfe2d3bc0460fc834749ea896b08740d6cc1"}
+  ],
+  "verification": {
+    "execution": "actual-native-Windows-PowerShell",
+    "command": "powershell.exe -NoProfile -ExecutionPolicy RemoteSigned -File .\\packaging\\windows\\test-platform-signature.ps1 -WorkRoot D:\\LumaOS-builds -SecurityWorkRoot C:\\Users\\hakim\\LumaOS\\.luma",
+    "assertions_passed": 98,
+    "skipped": 0,
+    "exit_code": 0,
+    "powershell_syntax_errors": 0,
+    "actual_bcrypt_sign_verify": true,
+    "ephemeral_software_keys_only": true,
+    "actual_child_cli_tested": true,
+    "actual_ntfs_reparse_hardlink_fixture_tested": true,
+    "held_write_and_rename_refusal_tested": true,
+    "compiler_and_bulk_fixtures": "D-drive",
+    "ntfs_fixture_scope": "tiny-new-owned-repository-fixtures-only",
+    "result_source": "foreground-command-output-retained-in-session",
+    "standalone_result_log_created": false
+  },
+  "earlier_failure": {
+    "scope": "test-only-child-process-argument-construction",
+    "cause": "PowerShell-expression-precedence-combined-parameter-name-and-value",
+    "correction": "append-each-argument-as-a-separate-array-scalar",
+    "production_checks_weakened": false,
+    "passing_result_from_fresh_rerun": true
+  },
+  "authority_not_established": [
+    "TPM-or-CNG-persistent-key-custody",
+    "protected-UTC-and-fresh-attestation",
+    "current-revocation-state",
+    "durable-rollback-resistant-sequence",
+    "SID-or-first-Admin-enrollment",
+    "product-installation-admission",
+    "cloud-provider-no-hydration-qualification",
+    "hard-kernel-operation-deadline"
+  ],
+  "host_settings_changed": false,
+  "persistent_key_created": false,
+  "physical_tpm_used": false,
+  "distribution_imported": false,
+  "complete_windows_deployment_implemented": false,
+  "production_qualified": false,
+  "gate_closing": false
+}

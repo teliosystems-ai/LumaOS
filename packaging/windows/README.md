@@ -284,4 +284,23 @@ fixtures use D; tiny owned NTFS fixtures exercise hard links and reparse paths:
 powershell.exe -NoProfile -ExecutionPolicy RemoteSigned -File .\packaging\windows\test-platform-signature.ps1 -WorkRoot D:\LumaOS-builds -SecurityWorkRoot C:\Users\hakim\LumaOS\.luma
 ```
 
+## Existing custody object inspection
+
+`PlatformCustody.cs` inspects an already commissioned hardware key and fixed
+TPM NV object from the exact hosted-authority service identity. It checks the
+service token/PID, key properties/DACL and repeated bounded TPM2 read responses.
+It cannot create keys, provision or extend NV, establish commissioning provenance,
+or admit an installation. CNG signing is not a substitute for a durable NV writer
+and recovery protocol.
+
+The [component record](../../docs/gates/gwin0/custody_inspection_2026-10-17.json)
+binds 105 passing native software-key/protocol assertions. Physical CNG/TBS paths
+remain qualification work after the enrollment and writer integrations exist.
+The record also preserves the earlier empty-name software fixture key incident
+and its fingerprint-pinned deletion and verified absence.
+
+```powershell
+powershell.exe -NoProfile -NonInteractive -ExecutionPolicy RemoteSigned -File .\packaging\windows\test-platform-custody.ps1 -WorkRoot D:\LumaOS-builds
+```
+
 See [the shared implementation plan](../../docs/G3_GWIN0_IMPLEMENTATION.md).

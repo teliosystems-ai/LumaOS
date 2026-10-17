@@ -1,0 +1,64 @@
+{
+  "schema_version": 1,
+  "recorded_on": "2026-10-17",
+  "branch": "feature/g3-gwin0-beta",
+  "status": "existing-object-custody-inspection-component-tests-passed",
+  "inputs": [
+    {"path": "packaging/windows/PlatformCustody.cs", "sha256": "a96a5198d2a432d1b5722bd0d8c196bddea70d4f690efae2ec3bbde8d1fabc05"},
+    {"path": "packaging/windows/test-platform-custody.ps1", "sha256": "c9ed107bcc97bf4364bb4f360413b3a206624db752187cdbf30a5dd5a5d65bd8"}
+  ],
+  "implemented": [
+    "Fixed Microsoft Platform Crypto Provider existing-machine-key inspection and purpose-bound signature",
+    "Actual LocalSystem token, enabled fixed service SID, non-impersonation and SCM own-process identity checks",
+    "Exact key name, public blob, hardware/sign-only/nonexportable properties and restricted key DACL checks",
+    "Private TPM2-only TBS transport with an exact read-only command allowlist",
+    "Bounded capability, NV-public, Name, policy and current-head response parsing",
+    "Separate Windows host index 0x01804c57 and hosted-content index 0x01804c58",
+    "Repeated observed head/public/key/service checks and domain-separated inspection proof"
+  ],
+  "verification": {
+    "execution": "actual-native-Windows-PowerShell",
+    "command": "powershell.exe -NoProfile -NonInteractive -ExecutionPolicy RemoteSigned -File .\\packaging\\windows\\test-platform-custody.ps1 -WorkRoot D:\\LumaOS-builds",
+    "assertions_passed": 105,
+    "skipped": 0,
+    "exit_code": 0,
+    "ephemeral_software_p256_tested": true,
+    "strict_tpm_wire_vectors_tested": true,
+    "in_memory_key_policy_and_dacl_validation_tested": true,
+    "live_platform_provider_exercised": false,
+    "live_tbs_exercised": false,
+    "physical_tpm_used": false,
+    "service_installed": false,
+    "result_source": "foreground-command-output-retained-in-session"
+  },
+  "earlier_fixture_incident": {
+    "failed_assertion": "Fixture key unexpectedly persisted",
+    "cause": "PowerShell null-to-string binding supplied an empty key name instead of actual managed null",
+    "persistent_current_user_software_fixture_key_created": true,
+    "physical_tpm_or_product_key_created": false,
+    "provider": "Microsoft Software Key Storage Provider",
+    "key_name": "",
+    "public_blob_sha256": "c988f5e7898e379a63ac60e59c031c6a0ea00368f178069ef09b2273ef947b55",
+    "ownership_basis": "The successful fixture creation used default None creation options without the separate overwrite-existing-key flag",
+    "remediation": "Reopened only the exact empty-name current-user software key, checked algorithm/name/public fingerprint, and deleted only that match",
+    "unrelated_keys_enumerated_or_deleted": false,
+    "post_cleanup_key_found": false,
+    "post_cleanup_status": "0x80090016",
+    "factory_correction": "Create ephemeral key entirely in C# using actual managed null; preserve all ephemeral-key assertions",
+    "post_corrected_test_key_found": false,
+    "fixture_key_recoverable": false
+  },
+  "remaining_development": [
+    "Authenticated commissioning and explicit first-Admin/SID enrollment",
+    "Durable TPM NV writer, prepared-closure commit and lost-reply reconciliation",
+    "Protected UTC/current-revocation delivery and commissioning provenance",
+    "Private installed NTFS state and transactional named distribution install/update/rollback",
+    "Authenticated guest bridge and finite workflow/recovery admission"
+  ],
+  "inspection_config_pins_alone_are_authority": false,
+  "complete_hosted_authority_enrollment": false,
+  "durable_rollback_protection_established": false,
+  "product_installation_admitted": false,
+  "production_qualified": false,
+  "gate_closing": false
+}

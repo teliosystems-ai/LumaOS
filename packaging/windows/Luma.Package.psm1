@@ -138,11 +138,17 @@ function Test-LumaWslPackage {
     $content = [Luma.Windows.PackageInspector]::Validate($archiveFile.FullName, $archiveBytes, $contentBytes,
         [int]$memberCount, $manifest.rootfs.sha256, $files.ToArray())
     $identity = ConvertFrom-LumaPackageJson $content.PlatformIdentity
-    Assert-LumaPackageRecord $identity @('schema_version', 'release_id', 'architecture', 'profile') 'Embedded platform identity'
-    if ((ConvertTo-LumaPackageInteger $identity.schema_version 1 'Platform schema') -ne 1 -or
-        $identity.release_id -isnot [string] -or $identity.release_id -cne $manifest.release_id -or
+    $platformSchema = ConvertTo-LumaPackageInteger $identity.schema_version 2 'Platform schema'
+    $hostedCompute = $platformSchema -eq 2
+    $identityFields = @('schema_version', 'release_id', 'architecture', 'profile')
+    if ($hostedCompute) { $identityFields += 'runtime_profile' }
+    Assert-LumaPackageRecord $identity $identityFields 'Embedded platform identity'
+    if ($platformSchema -lt 1 -or $identity.release_id -isnot [string] -or $identity.release_id -cne $manifest.release_id -or
         $identity.architecture -isnot [string] -or $identity.architecture -cne 'amd64' -or
         $identity.profile -isnot [string] -or $identity.profile -cne 'W') { throw 'Embedded platform identity differs from package manifest.' }
+    if ($hostedCompute -and ($identity.runtime_profile -isnot [string] -or $identity.runtime_profile -cne 'luma-windows-hosted-compute-v1')) {
+        throw 'Unsupported hosted compute profile.'
+    }
     $osKeys = @{}
     foreach ($line in ($content.OsRelease -split '\r?\n')) {
         if ($line -cmatch '^(?<key>ID|VERSION_ID)=(?:"(?<quoted>[A-Za-z0-9.]+)"|(?<plain>[A-Za-z0-9.]+))$') {
@@ -154,10 +160,67 @@ function Test-LumaWslPackage {
         throw 'WSL rootfs must declare Ubuntu 24.04 userland.'
     }
     $requiredWsl = "[boot]`nsystemd=true`n[automount]`nenabled=false`n[interop]`nenabled=false`nappendWindowsPath=false`n"
+    if ($hostedCompute) {
+        $requiredWsl += "[user]`ndefault=nobody`n"
+        $configuration = @{
+            'etc/passwd'="root:x:0:0:Locked guest root:/root:/bin/bash`nnobody:x:65534:65534:Inert compute:/nonexistent:/bin/false`n"
+            'etc/group'="root:x:0:`nnogroup:x:65534:`n"
+            'etc/shadow'="root:!:0:0:99999:7:::`nnobody:!:0:0:99999:7:::`n"
+            'etc/gshadow'="root:!::`nnogroup:!::`n"
+        }
+        $confinementUnit = @'
+[Unit]
+Description=Luma hosted inert compute confinement
+DefaultDependencies=no
+After=systemd-remount-fs.service
+Before=multi-user.target
+ConditionSecurity=apparmor
+
+[Service]
+Type=oneshot
+ExecStart=/usr/sbin/apparmor_parser --add --skip-cache /etc/apparmor.d/luma-hosted-compute
+RemainAfterExit=yes
+TimeoutStartSec=15
+UMask=0077
+NoNewPrivileges=yes
+CapabilityBoundingSet=CAP_MAC_ADMIN
+AmbientCapabilities=
+ProtectHome=yes
+PrivateTmp=yes
+ProtectSystem=strict
+RestrictAddressFamilies=AF_UNIX
+
+[Install]
+WantedBy=multi-user.target
+'@
+        $confinementUnit = ($confinementUnit -replace "`r`n", "`n") + "`n"
+        $configuration['etc/systemd/system/luma-hosted-confinement.service']=$confinementUnit
+        $configuration['etc/systemd/system/multi-user.target.wants/luma-hosted-confinement.service']=$confinementUnit
+        foreach ($path in $configuration.Keys) {
+            if (-not $paths.Contains($path) -or -not $content.HostedConfiguration.ContainsKey($path) -or
+                $content.HostedConfiguration[$path] -cne $configuration[$path]) { throw 'Hosted guest fixed account or confinement configuration differs.' }
+        }
+        foreach ($path in @('usr/bin/systemd-run','usr/bin/systemctl','usr/sbin/apparmor_parser','usr/libexec/luma-os/luma-platform')) {
+            $selected=@($files | Where-Object {$_.Path -ceq $path})
+            if ($selected.Count -ne 1 -or -not $selected[0].Executable -or $selected[0].Bytes -lt 64 -or $selected[0].Bytes -gt 64MB) {
+                throw 'Hosted guest fixed executable is missing or exceeds bounds.'
+            }
+        }
+        $first=@($files | Where-Object {$_.Path -ceq 'usr/bin/luma-platform'})[0]
+        $alias=@($files | Where-Object {$_.Path -ceq 'usr/libexec/luma-os/luma-platform'})[0]
+        if ($first.Bytes -ne $alias.Bytes -or $first.Sha256 -cne $alias.Sha256) { throw 'Hosted platform alias differs from exact compiled binary.' }
+        $policy='etc/apparmor.d/luma-hosted-compute'
+        if (-not $paths.Contains($policy) -or -not $content.HostedConfiguration.ContainsKey($policy) -or
+            $content.HostedConfiguration[$policy] -cmatch '(?m)^[ \t]*(?:#[ \t]*)?include(?:[ \t]|$)' -or
+            -not $content.HostedConfiguration[$policy].Contains('profile luma-hosted-compute ') -or
+            -not $content.HostedConfiguration[$policy].Contains('deny network,')) { throw 'Hosted policy is missing or not completely preprocessed.' }
+        [Luma.Windows.PackageInspector]::ValidateHostedProfile($content, $files.ToArray())
+    }
     if ($content.WslConfiguration -cne $requiredWsl) { throw 'WSL configuration is not the exact confined development baseline.' }
     [pscustomobject]@{
         schema_version=1; status='content-validated-not-authenticated'; package_type=$manifest.package_type
         release_id=$manifest.release_id; architecture='amd64'; profile='W'
+        hosted_compute_profile=$hostedCompute
         manifest_sha256=[Luma.Windows.PackageInspector]::Sha256($manifestBytes)
         rootfs_sha256=$content.ArchiveSha256; rootfs_bytes=$content.ArchiveBytes
         archive_member_count=$content.MemberCount; content_bytes=$content.ContentBytes

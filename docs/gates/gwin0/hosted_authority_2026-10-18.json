@@ -1,0 +1,49 @@
+{
+  "schema_version": 1,
+  "recorded_on": "2026-10-18",
+  "branch": "feature/g3-gwin0-beta",
+  "status": "hosted-compute-custody-and-lifecycle-software-verified",
+  "scope": "Windows hosted compute deployment, not a complete Windows Luma product",
+  "implemented": [
+    "Separate fixed TPM/CNG authority with original interactive first-Admin SID, protected NTFS state and bounded authenticated named-pipe ceremonies",
+    "Durable signed deployment history, owned controller identity and observed exit/drain before import or activation completion",
+    "Ambiguous NV writes retain exact evidence and never automatically repeat dispatch; reviewed abort requires actual TPM reset and changed kernel boot generation",
+    "Publisher and UTC key lineage, revocation and two-phase UTC handoff with new effects fenced while prepared",
+    "Signed complete runtime-bundle successor, immutable new staging slot, explicit SCM switch and actual post-restart image verification before finalize",
+    "Installed file identity/content/ACL leases that tolerate legitimate child-generation creation without borrowing public input-lease semantics",
+    "Service lifecycle supervision reports unexpected worker termination as failure and refuses a false stopped state when owned work does not drain"
+  ],
+  "verification": {
+    "source_snapshot": "/mnt/luma-build/work/g3-integrated-source-20261018-m",
+    "source_files": 583,
+    "source_manifest_sha256": "a346fac8358c43eeb293aa2e7949904c721a4f2a0581113786b0a8e94fee90aa",
+    "windows_source_pins_independently_matched": 42,
+    "report": "D:\\LumaOS-builds\\g3-windows-verification-20261018-m\\verification.json",
+    "report_sha256": "e6beb0159eb166d4bfa5e898fd493e5bed624d2b7e843f45fbab326344b3a208",
+    "test_report_sha256": "e1a9e040379fb5aa8b54a8280681da12543d7ff74d04a2c8f4a407b69db427c4",
+    "actual_windows_assertions_passed": 215,
+    "actual_ephemeral_bcrypt_signatures": true,
+    "actual_current_user_ntfs_fixture": true,
+    "actual_threaded_service_lifecycle_tests": true,
+    "full_service_executable_warnings_as_errors": true,
+    "executable_bundle_sha256": "5889e37e6533011acb55a3913d973b4736c15f57aef1f12222b53892678e2090",
+    "installer": "review-only; exact bundle generated in the same software verification, not independent production approval",
+    "execution_policy": "child PowerShell RemoteSigned only; saved policy unchanged",
+    "service_installed_or_started": false,
+    "host_tpm_mutated": false,
+    "wsl_distribution_imported": false
+  },
+  "remaining_development": [
+    "TPM authority-key and NV successor custody migration",
+    "Full SID-owned content, finite-grant and host-file effect/application integration",
+    "Complete Hyper-V Generation 2 desktop product proof and its deployment integration"
+  ],
+  "remaining_qualification": [
+    "Installed LocalSystem/service-SID ACL, SCM stop, process termination and NTFS durability behavior",
+    "Actual TPM/CNG provisioning, rollback refusal and reset/drain reconciliation",
+    "Declared Windows tuple, real WSL confined compute/inference and cross-user denied-file journeys"
+  ],
+  "production_qualified": false,
+  "gate_closing": false,
+  "frozen_g2_image_changed": false
+}

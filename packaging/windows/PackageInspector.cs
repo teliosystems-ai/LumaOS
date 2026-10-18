@@ -25,6 +25,8 @@ namespace Luma.Windows
         public string OsRelease;
         public string WslConfiguration;
         public string PlatformIdentity;
+        public readonly Dictionary<string, string> HostedConfiguration = new Dictionary<string, string>(StringComparer.Ordinal);
+        internal string ValidatedBinding;
     }
 
     // No archive is extracted and no member name is passed to filesystem APIs.
@@ -41,10 +43,12 @@ namespace Luma.Windows
         private readonly HashSet<string> exactMembers = new HashSet<string>(StringComparer.Ordinal);
         private readonly Dictionary<string, RequiredFile> required = new Dictionary<string, RequiredFile>(StringComparer.Ordinal);
         private readonly HashSet<string> observedRequired = new HashSet<string>(StringComparer.Ordinal);
+        private readonly Action continuous;
 
-        private PackageInspector(FileStream source, RequiredFile[] expected)
+        private PackageInspector(FileStream source, RequiredFile[] expected, Action continuous)
         {
             input = source;
+            this.continuous = continuous;
             foreach (RequiredFile file in expected) required.Add(file.Path, file);
         }
 
@@ -95,11 +99,13 @@ namespace Luma.Windows
             int position = 0;
             while (position < count)
             {
+                if (continuous != null) continuous();
                 if (elapsed.Elapsed.TotalSeconds > 300) throw new InvalidDataException("Archive inspection exceeds fixed time bound.");
                 int read = input.Read(bytes, position, count - position);
                 if (read == 0) throw new EndOfStreamException("Truncated archive member or padding.");
                 archiveHash.TransformBlock(bytes, position, read, bytes, position);
                 position += read;
+                if (continuous != null) continuous();
             }
         }
 
@@ -219,7 +225,9 @@ namespace Luma.Windows
                 bool selected = required.TryGetValue(path, out expectation);
                 if (selected && (directory || expectation.Bytes != size || expectation.Executable != ((mode & 73) != 0)))
                     throw new InvalidDataException("Required member type, byte size or executable status differs.");
-                int captureBound = path == "usr/bin/luma-platform" ? 64 : 16384;
+                bool platformElf = path == "usr/bin/luma-platform" || path == "usr/libexec/luma-os/luma-platform";
+                int captureBound = platformElf ? 64 : 16384;
+                if (selected && path == "etc/apparmor.d/luma-hosted-compute") captureBound = 1024 * 1024;
                 if (selected && path == "usr/lib/luma/platform.json") captureBound = 4096;
                 MemoryStream captured = selected ? new MemoryStream() : null;
                 using (SHA256 memberHash = selected ? SHA256.Create() : null)
@@ -243,10 +251,20 @@ namespace Luma.Windows
                         if (Hex(memberHash.Hash) != expectation.Sha256) throw new InvalidDataException("Required member SHA256 mismatch.");
                         observedRequired.Add(path);
                         byte[] bytes = captured.ToArray();
-                        if (path == "usr/bin/luma-platform") CheckPlatformElf(bytes);
+                        if (platformElf) CheckPlatformElf(bytes);
                         else if (path == "etc/os-release") result.OsRelease = Utf8(bytes);
                         else if (path == "etc/wsl.conf") result.WslConfiguration = Utf8(bytes);
                         else if (path == "usr/lib/luma/platform.json") result.PlatformIdentity = Utf8(bytes);
+                        else if (path == "etc/passwd" || path == "etc/group" || path == "etc/shadow" || path == "etc/gshadow" ||
+                            path == "etc/systemd/system/luma-hosted-confinement.service" ||
+                            path == "etc/systemd/system/multi-user.target.wants/luma-hosted-confinement.service" ||
+                            path == "etc/apparmor.d/luma-hosted-compute")
+                        {
+                            int wantedMode = path == "etc/shadow" || path == "etc/gshadow" ? 384 : 420;
+                            if (mode != wantedMode) throw new InvalidDataException("Hosted configuration permissions differ from the closed profile.");
+                            if (size > captureBound) throw new InvalidDataException("Hosted configuration exceeds its capture bound.");
+                            result.HostedConfiguration.Add(path, Utf8(bytes));
+                        }
                     }
                 }
                 if (captured != null) captured.Dispose();
@@ -258,6 +276,7 @@ namespace Luma.Windows
                 observedRequired.Count != required.Count) throw new InvalidDataException("Archive termination, counts, content size or required members differ.");
             foreach (string path in members.Keys)
             {
+                if (continuous != null) continuous();
                 if (elapsed.Elapsed.TotalSeconds > 300) throw new InvalidDataException("Archive inspection exceeds fixed time bound.");
                 int slash = path.LastIndexOf('/');
                 while (slash >= 0)
@@ -275,14 +294,110 @@ namespace Luma.Windows
             result.ArchiveSha256 = Hex(archiveHash.Hash);
             result.ArchiveBytes = input.Length;
             if (result.ArchiveSha256 != expectedSha) throw new InvalidDataException("Archive SHA256 differs from the exact manifest bytes.");
+            result.ValidatedBinding = ContentBinding(result, new List<RequiredFile>(required.Values).ToArray());
+            if (continuous != null) continuous();
             return result;
+        }
+
+        private static string ContentBinding(PackageContent content, RequiredFile[] files)
+        {
+            if (content == null || files == null || files.Length < 4 || files.Length > 64) throw new InvalidDataException("Actual bounded package inspection is required.");
+            foreach (RequiredFile file in files)
+                if (file == null || String.IsNullOrEmpty(file.Path) || file.Bytes < 0 ||
+                    file.Sha256 == null || !Regex.IsMatch(file.Sha256, "\\A[a-f0-9]{64}\\z", RegexOptions.CultureInvariant))
+                    throw new InvalidDataException("Package inspection binding has an invalid required-file record.");
+            using (MemoryStream stream = new MemoryStream())
+            using (BinaryWriter writer = new BinaryWriter(stream, new UTF8Encoding(false, true)))
+            {
+                writer.Write("luma-inspected-package-binding-v1");
+                writer.Write(content.ArchiveSha256 ?? ""); writer.Write(content.ArchiveBytes);
+                writer.Write(content.ContentBytes); writer.Write(content.MemberCount);
+                writer.Write(content.PlatformIdentity ?? ""); writer.Write(content.OsRelease ?? ""); writer.Write(content.WslConfiguration ?? "");
+                List<string> names = new List<string>(content.HostedConfiguration.Keys); names.Sort(StringComparer.Ordinal);
+                foreach (string name in names) { writer.Write(name); writer.Write(content.HostedConfiguration[name]); }
+                List<RequiredFile> sorted = new List<RequiredFile>(files); sorted.Sort((a, b) => String.CompareOrdinal(a.Path, b.Path));
+                foreach (RequiredFile file in sorted)
+                {
+                    writer.Write(file.Path); writer.Write(file.Bytes); writer.Write(file.Sha256); writer.Write(file.Executable);
+                }
+                writer.Flush(); return Sha256(stream.ToArray());
+            }
+        }
+
+        // This validates an already inspected compute composition. It supplies
+        // neither release-signature authority nor a live runtime/TPM permit.
+        public static void ValidateHostedProfile(PackageContent content, RequiredFile[] files)
+        {
+            if (content == null || String.IsNullOrEmpty(content.ValidatedBinding) ||
+                content.ValidatedBinding != ContentBinding(content, files))
+                throw new InvalidDataException("Hosted validation requires the unchanged actual archive inspection.");
+            const string identity = "\\A\\{\"architecture\":\"amd64\",\"profile\":\"W\",\"release_id\":\"luma-wsl-dev-[A-Za-z0-9][A-Za-z0-9.-]{0,63}\",\"runtime_profile\":\"luma-windows-hosted-compute-v1\",\"schema_version\":2\\}\\n\\z";
+            if (!Regex.IsMatch(content.PlatformIdentity, identity, RegexOptions.CultureInvariant))
+                throw new InvalidDataException("Hosted identity must be the exact schema-2 compute package identity.");
+            const string wsl = "[boot]\nsystemd=true\n[automount]\nenabled=false\n[interop]\nenabled=false\nappendWindowsPath=false\n[user]\ndefault=nobody\n";
+            if (content.WslConfiguration != wsl) throw new InvalidDataException("Hosted WSL configuration differs.");
+            Dictionary<string, string> os = new Dictionary<string, string>(StringComparer.Ordinal);
+            foreach (string line in content.OsRelease.Split('\n'))
+            {
+                if (!line.StartsWith("ID=", StringComparison.Ordinal) && !line.StartsWith("VERSION_ID=", StringComparison.Ordinal)) continue;
+                Match match = Regex.Match(line, "\\A(ID|VERSION_ID)=(?:\"([A-Za-z0-9.]+)\"|([A-Za-z0-9.]+))\\z", RegexOptions.CultureInvariant);
+                if (!match.Success || os.ContainsKey(match.Groups[1].Value)) throw new InvalidDataException("Hosted Ubuntu identity is ambiguous.");
+                os.Add(match.Groups[1].Value, match.Groups[2].Success ? match.Groups[2].Value : match.Groups[3].Value);
+            }
+            if (os.Count != 2 || os["ID"] != "ubuntu" || os["VERSION_ID"] != "24.04") throw new InvalidDataException("Hosted runtime requires actual Ubuntu 24.04 identity.");
+            const string unit = "[Unit]\nDescription=Luma hosted inert compute confinement\nDefaultDependencies=no\nAfter=systemd-remount-fs.service\nBefore=multi-user.target\nConditionSecurity=apparmor\n\n[Service]\nType=oneshot\nExecStart=/usr/sbin/apparmor_parser --add --skip-cache /etc/apparmor.d/luma-hosted-compute\nRemainAfterExit=yes\nTimeoutStartSec=15\nUMask=0077\nNoNewPrivileges=yes\nCapabilityBoundingSet=CAP_MAC_ADMIN\nAmbientCapabilities=\nProtectHome=yes\nPrivateTmp=yes\nProtectSystem=strict\nRestrictAddressFamilies=AF_UNIX\n\n[Install]\nWantedBy=multi-user.target\n";
+            Dictionary<string, string> configuration = new Dictionary<string, string>(StringComparer.Ordinal) {
+                {"etc/passwd", "root:x:0:0:Locked guest root:/root:/bin/bash\nnobody:x:65534:65534:Inert compute:/nonexistent:/bin/false\n"},
+                {"etc/group", "root:x:0:\nnogroup:x:65534:\n"},
+                {"etc/shadow", "root:!:0:0:99999:7:::\nnobody:!:0:0:99999:7:::\n"},
+                {"etc/gshadow", "root:!::\nnogroup:!::\n"},
+                {"etc/systemd/system/luma-hosted-confinement.service", unit},
+                {"etc/systemd/system/multi-user.target.wants/luma-hosted-confinement.service", unit}
+            };
+            Dictionary<string, RequiredFile> selected = new Dictionary<string, RequiredFile>(StringComparer.Ordinal);
+            foreach (RequiredFile file in files) selected.Add(file.Path, file);
+            foreach (KeyValuePair<string, string> pair in configuration)
+            {
+                string actual; RequiredFile file;
+                if (!content.HostedConfiguration.TryGetValue(pair.Key, out actual) || actual != pair.Value ||
+                    !selected.TryGetValue(pair.Key, out file) || file.Executable)
+                    throw new InvalidDataException("Hosted fixed account or service configuration differs.");
+            }
+            foreach (string path in new string[] {"usr/bin/luma-platform", "usr/libexec/luma-os/luma-platform", "usr/bin/systemd-run", "usr/bin/systemctl", "usr/sbin/apparmor_parser"})
+            {
+                RequiredFile file;
+                if (!selected.TryGetValue(path, out file) || !file.Executable || file.Bytes < 64 || file.Bytes > 64 * 1024 * 1024)
+                    throw new InvalidDataException("Hosted fixed executable is missing or exceeds bounds.");
+            }
+            if (selected["usr/bin/luma-platform"].Sha256 != selected["usr/libexec/luma-os/luma-platform"].Sha256 ||
+                selected["usr/bin/luma-platform"].Bytes != selected["usr/libexec/luma-os/luma-platform"].Bytes)
+                throw new InvalidDataException("Hosted platform executable aliases differ.");
+            const string policyPath = "etc/apparmor.d/luma-hosted-compute";
+            string policy; RequiredFile policyFile;
+            if (!selected.TryGetValue(policyPath, out policyFile) || policyFile.Executable || policyFile.Bytes < 1 || policyFile.Bytes > 1024 * 1024 ||
+                !content.HostedConfiguration.TryGetValue(policyPath, out policy) ||
+                Regex.IsMatch(policy, "(?m)^[ \\t]*(?:#[ \\t]*)?include(?:[ \\t]|$)", RegexOptions.CultureInvariant) ||
+                !policy.Contains("profile luma-hosted-compute ") || !policy.Contains("deny network,"))
+                throw new InvalidDataException("Hosted policy is missing, unresolved or outside the closed compute profile.");
         }
 
         public static PackageContent Validate(string path, long bytes, long contentBytes, int memberCount, string sha256, RequiredFile[] expected)
         {
+            return ValidateCore(path, bytes, contentBytes, memberCount, sha256, expected, null);
+        }
+
+        public static PackageContent Validate(string path, long bytes, long contentBytes, int memberCount, string sha256, RequiredFile[] expected, Action continuous)
+        {
+            if (continuous == null) throw new ArgumentNullException("continuous");
+            continuous();
+            return ValidateCore(path, bytes, contentBytes, memberCount, sha256, expected, continuous);
+        }
+
+        private static PackageContent ValidateCore(string path, long bytes, long contentBytes, int memberCount, string sha256, RequiredFile[] expected, Action continuous)
+        {
             using (FileStream stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read))
             {
-                PackageInspector inspector = new PackageInspector(stream, expected);
+                PackageInspector inspector = new PackageInspector(stream, expected, continuous);
                 try { return inspector.Inspect(bytes, contentBytes, memberCount, sha256); }
                 finally { inspector.archiveHash.Dispose(); }
             }

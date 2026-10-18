@@ -875,3 +875,35 @@ restore-review regression run. This verifies storage and pure planning. The
 original-Admin decrypt/restore journey, damaged-batch disposition and broader
 deployment integration remain separate development work. No new image or
 native qualification is claimed.
+
+### Windows hosted authority and service lifecycle
+
+The hosted compute deployment now has a separate TPM/CNG authority, an original
+interactive Admin ceremony, protected NTFS history and an authenticated local
+pipe. Import and activation retain the actual owned controller identity and
+require observed exit and drainage. An uncertain TPM write preserves its signed
+intent instead of retrying dispatch. Reviewed abandonment requires a real TPM
+reset and a different kernel boot generation.
+
+Publisher and UTC changes replay from the protected history. UTC rotation uses
+an explicit prepare and finalize handoff; prepared state fences new effects.
+Runtime updates stage a complete signed executable and DLL bundle in a new
+immutable slot. Finalization requires the service to run the exact new bundle
+after an explicit restart. Installed input leases hold file identity, bytes and
+ACLs while allowing legitimate child-directory generation changes.
+
+The service now reports an unexpected worker exit as failure. Stop closes its
+owned endpoint and waits for drainage; unsuccessful drainage terminates the
+service process instead of reporting an orphan as stopped.
+
+The [Windows component record](gates/gwin0/hosted_authority_2026-10-18.json)
+binds 215 passing actual Windows software assertions, current-user NTFS identity
+and ACL fixtures, threaded lifecycle tests, a warnings-as-errors executable
+build and an installer review-only run. All 42 Windows input pins match the
+immutable source snapshot. No service was installed, TPM changed or WSL
+distribution imported.
+
+This remains compute-only deployment. TPM authority-key migration, governed
+Windows content and effects, and the complete Hyper-V desktop remain development
+work. Installed LocalSystem, actual TPM, SCM and durability acceptance remain
+separate qualification. GWIN0 is open and the frozen G2 image is unchanged.

@@ -88,6 +88,38 @@ struct ReviewData<'a> {
 }
 
 impl PreparationReview {
+    /// Expected data only; a review/checksum does not establish custody.
+    pub fn base_state(&self) -> Result<crate::VerifiedState> {
+        self.validate()?;
+        let state = crate::VerifiedState {
+            binding: self.binding.clone(),
+            outcome_count: self.outcome_count,
+            head_sha256: self.outcome_head_sha256.clone(),
+            quarantine_sha256: inventory_digest(&self.binding, &self.quarantined)?,
+        };
+        state.validate()?;
+        Ok(state)
+    }
+    /// Exact candidate retirement data, never permission to perform the rename.
+    pub fn retired_state(&self) -> Result<crate::VerifiedState> {
+        self.validate()?;
+        let target = self
+            .pending
+            .iter()
+            .find(|entry| entry.name == self.target)
+            .ok_or("reviewed retirement target missing")?;
+        let mut entries = self.quarantined.clone();
+        entries.push(target.clone());
+        entries.sort_by(|a, b| a.name.cmp(&b.name));
+        let state = crate::VerifiedState {
+            binding: self.binding.clone(),
+            outcome_count: self.outcome_count,
+            head_sha256: self.outcome_head_sha256.clone(),
+            quarantine_sha256: inventory_digest(&self.binding, &entries)?,
+        };
+        state.validate()?;
+        Ok(state)
+    }
     fn digest(&self) -> Result<String> {
         Ok(luma_content::sha256(&serde_json::to_vec(&ReviewData {
             purpose: "luma-content-preparation-quarantine-v1",
@@ -442,10 +474,11 @@ pub(super) fn validate_quarantine(
     repository: &Repository,
     plan: Option<&Plan>,
     boundary: &mut impl Boundary,
-) -> Result<u64> {
-    quarantine_inventory(repository, plan, boundary)?
+) -> Result<(u64, String, Vec<String>)> {
+    let inventory = quarantine_inventory(repository, plan, boundary)?;
+    let bytes = inventory
         .iter()
-        .try_fold(0_u64, |total, entry| {
+        .try_fold(0_u64, |total, entry| -> Result<u64> {
             if storage::names(&repository.pending, crate::MAX_PENDING)?.contains(&entry.name)
                 || storage::names(&repository.outcomes, crate::MAX_OUTCOMES)?.contains(&entry.name)
             {
@@ -455,19 +488,24 @@ pub(super) fn validate_quarantine(
                 .checked_add(directory_bytes(entry)?)
                 .filter(|value| *value <= crate::MAX_REPOSITORY_BYTES)
                 .ok_or_else(|| "quarantine byte capacity exhausted".into())
-        })
+        })?;
+    let digest = inventory_digest(&repository.binding, &inventory)?;
+    Ok((
+        bytes,
+        digest,
+        inventory.iter().map(|entry| entry.name.clone()).collect(),
+    ))
 }
 
-/// A retired request identifier is not available for a fresh publication.
-pub(super) fn is_quarantined(
-    repository: &Repository,
-    name: &str,
-    plan: Option<&Plan>,
-    boundary: &mut impl Boundary,
-) -> Result<bool> {
-    Ok(quarantine_inventory(repository, plan, boundary)?
-        .iter()
-        .any(|entry| entry.name == name))
+pub(super) fn inventory_digest(
+    binding: &OwnerBinding,
+    inventory: &[PreparationDirectory],
+) -> Result<String> {
+    Ok(luma_content::sha256(&serde_json::to_vec(&(
+        "luma-content-verified-quarantine-inventory-v1",
+        binding,
+        inventory,
+    ))?))
 }
 
 struct RecoveryBoundary<'a, B> {
@@ -496,12 +534,40 @@ impl Repository {
         &self,
         review: &PreparationReview,
         boundary: &mut impl Boundary,
+        candidate_transition: bool,
     ) -> Result<bool> {
         review.validate()?;
         if review.binding != self.binding {
             return Err("preparation review cannot cross owner or generation".into());
         }
-        let snapshot = self.snapshot(None, boundary)?;
+        // Only the actual Recover path can compare this reviewed candidate
+        // transition. Ordinary read-only previews retain their selected cut.
+        let pending = inventory(self, &self.pending, crate::MAX_PENDING, None, boundary)?;
+        let quarantined = quarantine_inventory(self, None, boundary)?;
+        let before = pending == review.pending && quarantined == review.quarantined;
+        let expected_candidate = if before {
+            review.base_state()?
+        } else {
+            review.retired_state()?
+        };
+        if candidate_transition {
+            let base = review.base_state()?;
+            let retired = review.retired_state()?;
+            if self
+                .expected_state
+                .as_ref()
+                .is_some_and(|cut| cut != &base && cut != &retired)
+            {
+                return Err(
+                    "selected content state is outside exact reviewed recovery transition".into(),
+                );
+            }
+        }
+        let snapshot = if candidate_transition {
+            self.snapshot_for_state(None, boundary, Some(&expected_candidate))?
+        } else {
+            self.snapshot(None, boundary)?
+        };
         let records: Vec<_> = snapshot
             .records
             .iter()
@@ -516,8 +582,6 @@ impl Repository {
         {
             return Err("committed content head changed since preparation review".into());
         }
-        let pending = inventory(self, &self.pending, crate::MAX_PENDING, None, boundary)?;
-        let quarantined = quarantine_inventory(self, None, boundary)?;
         if pending == review.pending && quarantined == review.quarantined {
             return Ok(false);
         }
@@ -546,7 +610,7 @@ impl Repository {
     ) -> Result<()> {
         review.validate()?;
         boundary.admit(&self.binding, ResourceBudget::inspection())?;
-        self.preparation_review_state(review, boundary)?;
+        self.preparation_review_state(review, boundary, false)?;
         storage::repository_check(self, None, boundary)
     }
 
@@ -624,7 +688,7 @@ impl Repository {
             retained_bytes,
         };
         storage::repository_check(self, None, &mut guarded)?;
-        let replayed = self.preparation_review_state(review, &mut guarded)?;
+        let replayed = self.preparation_review_state(review, &mut guarded, true)?;
         let mut expected_pending = review.pending.clone();
         let target_position = expected_pending
             .iter()
@@ -662,6 +726,13 @@ impl Repository {
             }
             Ok(())
         };
+        check()?;
+        // Establish the new destination namespace durably before removing a
+        // source entry. Syncing only after rename could lose the new parent
+        // link while retaining removal from the old directory after power loss.
+        quarantine.sync_all()?;
+        check()?;
+        self.root.sync_all()?;
         check()?;
         if !replayed {
             let target = storage::directory(&self.pending, &review.target)?;
@@ -718,7 +789,8 @@ impl Repository {
         {
             return Err("recovery evidence changed before durable acknowledgment".into());
         }
-        let snapshot = self.snapshot(None, &mut guarded)?;
+        let wanted = review.retired_state()?;
+        let snapshot = self.snapshot_for_state(None, &mut guarded, Some(&wanted))?;
         if snapshot.records.len() as u64 != review.outcome_count {
             return Err("committed content history changed during recovery".into());
         }

@@ -424,18 +424,18 @@ fn validate_manifest(manifest: &BackupManifest) -> Result<()> {
     Ok(())
 }
 
-struct BorrowedOutcome<'a> {
-    record: Record,
-    payload: &'a [u8],
-    source: &'a [u8],
+pub(super) struct BorrowedOutcome<'a> {
+    pub(super) record: Record,
+    pub(super) payload: &'a [u8],
+    pub(super) source: &'a [u8],
 }
 
-fn reconstructed(
+fn reconstructed<'a>(
     manifest: &BackupManifest,
-    bytes: &[u8],
+    bytes: &'a [u8],
     offset: usize,
     check: &mut impl FnMut() -> Result<()>,
-) -> Result<(String, Vec<VersionReference>)> {
+) -> Result<(String, Vec<VersionReference>, Vec<BorrowedOutcome<'a>>)> {
     let mut at = offset;
     let mut raw = BTreeMap::new();
     for directory in &manifest.directories {
@@ -523,7 +523,7 @@ fn reconstructed(
         .map(|version| version.reference())
         .collect::<luma_content::Result<Vec<_>>>()?;
     check()?;
-    Ok((head, current))
+    Ok((head, current, raw.into_values().collect()))
 }
 
 /// Strict pure inspection of an already supplied archive. Successful parsing
@@ -532,10 +532,30 @@ pub fn inspect_backup_data(bytes: &[u8]) -> Result<BackupInspection> {
     inspect_checked(bytes, &mut || Ok(()))
 }
 
+/// Inspection with live caller-owned cancellation/authorization checkpoints.
+/// The callback grants no restoration authority, and no permissive adapter is
+/// supplied. Both pure and governed inspection use the same reconstruction.
+pub fn inspect_backup_data_checked(
+    bytes: &[u8],
+    check: &mut impl FnMut() -> Result<()>,
+) -> Result<BackupInspection> {
+    check()?;
+    let inspection = inspect_checked(bytes, check)?;
+    check()?;
+    Ok(inspection)
+}
+
 fn inspect_checked(
     bytes: &[u8],
     check: &mut impl FnMut() -> Result<()>,
 ) -> Result<BackupInspection> {
+    Ok(inspect_parts(bytes, check)?.0)
+}
+
+pub(super) fn inspect_parts<'a>(
+    bytes: &'a [u8],
+    check: &mut impl FnMut() -> Result<()>,
+) -> Result<(BackupInspection, Vec<BorrowedOutcome<'a>>)> {
     if bytes.len() < PREFIX_BYTES
         || bytes.len() > MAX_CONTENT_BACKUP_BYTES
         || &bytes[..MAGIC.len()] != MAGIC
@@ -557,7 +577,7 @@ fn inspect_checked(
     if serde_json::to_vec(&manifest)? != encoded {
         return Err("content backup manifest is not exact canonical typed JSON".into());
     }
-    let (head, current) = reconstructed(&manifest, bytes, data_at, check)?;
+    let (head, current, outcomes) = reconstructed(&manifest, bytes, data_at, check)?;
     if head != manifest.committed_head_sha256 {
         return Err("content backup reconstructed committed head mismatch".into());
     }
@@ -573,7 +593,7 @@ fn inspect_checked(
         restore_permitted: false,
     };
     check()?;
-    Ok(result)
+    Ok((result, outcomes))
 }
 
 struct ExportBoundary<'a, R, E> {
@@ -926,6 +946,35 @@ fn capture_backup(
     bytes[PREFIX_BYTES..data_at].copy_from_slice(&encoded);
     let inspection = inspect_checked(&bytes, &mut || {
         storage::repository_check(repository, None, boundary)
+    })?;
+    let quarantined = inspection
+        .manifest
+        .directories
+        .iter()
+        .filter(|directory| directory.area == BackupArea::Quarantined)
+        .map(|directory| crate::PreparationDirectory {
+            name: directory.name.clone(),
+            identity: directory.source_identity.clone(),
+            members: directory
+                .members
+                .iter()
+                .map(|member| crate::PreparationMember {
+                    name: member.name.clone(),
+                    bytes: member.bytes,
+                    sha256: member.sha256.clone(),
+                    identity: member.source_identity.clone(),
+                })
+                .collect(),
+        })
+        .collect::<Vec<_>>();
+    repository.check_selected_state(&crate::VerifiedState {
+        binding: inspection.manifest.binding.clone(),
+        outcome_count: inspection.manifest.committed_outcomes,
+        head_sha256: inspection.manifest.committed_head_sha256.clone(),
+        quarantine_sha256: crate::recovery::inventory_digest(
+            &inspection.manifest.binding,
+            &quarantined,
+        )?,
     })?;
     if let Some(expected) = expected {
         if &BackupReview::from_inspection(&inspection)? != expected {

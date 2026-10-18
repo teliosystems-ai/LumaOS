@@ -736,6 +736,8 @@ fn shared_history_reconstruction_never_skips_bad_binding_bytes_or_authority_refu
 
 mod backup;
 mod managed;
+mod publication;
 mod queries;
 mod recovery;
 mod rendered;
+mod restore;

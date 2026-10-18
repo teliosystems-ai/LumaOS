@@ -98,6 +98,82 @@ fn review(repository: &Repository) -> PreparationReview {
 }
 
 #[test]
+fn selected_recovery_candidate_is_exact_and_never_clears_the_ordinary_read_cut() {
+    let (_fixture, mut repository, _) = prepared();
+    let reviewed = review(&repository);
+    let base = reviewed.base_state().unwrap();
+    let retired = reviewed.retired_state().unwrap();
+    assert_eq!(
+        base,
+        repository
+            .verified_state(&mut RecoveryGuard::read())
+            .unwrap()
+    );
+    assert_eq!(base.outcome_count, retired.outcome_count);
+    assert_eq!(base.head_sha256, retired.head_sha256);
+    assert_ne!(base.quarantine_sha256, retired.quarantine_sha256);
+    repository
+        .require_state(&base, &mut RecoveryGuard::read())
+        .unwrap();
+    repository
+        .recover_preparation(&reviewed, &mut RecoveryGuard::recover(&reviewed))
+        .unwrap();
+    // Recovery's private candidate comparison does not replace the independently
+    // selected ordinary query state; the caller must obtain a fresh C cut.
+    assert!(repository
+        .verified_state(&mut RecoveryGuard::read())
+        .is_err());
+    repository
+        .require_state(&retired, &mut RecoveryGuard::read())
+        .unwrap();
+    assert_eq!(
+        repository
+            .verified_state(&mut RecoveryGuard::read())
+            .unwrap(),
+        retired
+    );
+    assert!(
+        repository
+            .recover_preparation(&reviewed, &mut RecoveryGuard::recover(&reviewed))
+            .unwrap()
+            .replayed
+    );
+}
+
+#[test]
+fn already_anchored_candidate_can_finish_only_the_exact_review_with_recover_authority() {
+    let (_fixture, mut repository, _) = prepared();
+    let reviewed = review(&repository);
+    let retired = reviewed.retired_state().unwrap();
+    // Simulate delivery of a genuine wanted-state cut before the directory
+    // rename: ordinary reads fail, but exact authorized recovery can finish.
+    assert!(repository
+        .require_state(&retired, &mut RecoveryGuard::read())
+        .is_err());
+    assert!(repository
+        .check_preparation_review(&reviewed, &mut RecoveryGuard::read())
+        .is_err());
+    assert!(repository
+        .recover_preparation(&reviewed, &mut RecoveryGuard::read())
+        .is_err());
+    repository
+        .recover_preparation(&reviewed, &mut RecoveryGuard::recover(&reviewed))
+        .unwrap();
+    assert_eq!(
+        repository
+            .verified_state(&mut RecoveryGuard::read())
+            .unwrap(),
+        retired
+    );
+    let mut actual = RecoveryGuard::recover(&reviewed);
+    let mut substituted = reviewed;
+    substituted.target = "f".repeat(64);
+    assert!(repository
+        .recover_preparation(&substituted, &mut actual)
+        .is_err());
+}
+
+#[test]
 fn exact_review_is_read_only_and_covers_pending_bytes_and_identity() {
     let (fixture, repository, _) = prepared();
     let root = fixture.root(&binding());

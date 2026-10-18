@@ -66,7 +66,7 @@ fn repository() -> (Fixture, Repository) {
         .unwrap();
     (fixture, repository)
 }
-fn backup(repository: &Repository) -> ContentBackup {
+pub(super) fn backup(repository: &Repository) -> ContentBackup {
     let reviewed = repository.review_backup_data(&mut Guard::read()).unwrap();
     repository
         .backup_data(&reviewed, &mut Guard::read(), &mut ExportGuard::new())
@@ -105,6 +105,38 @@ fn member<'a>(
         }
     }
     panic!("fixture exact backup member missing");
+}
+
+#[test]
+fn checked_backup_inspection_refuses_every_live_checkpoint_and_never_returns_authority() {
+    let (_fixture, repository) = repository();
+    let captured = backup(&repository);
+    let mut checks = 0;
+    let inspected = inspect_backup_data_checked(captured.bytes(), &mut || {
+        checks += 1;
+        Ok(())
+    })
+    .unwrap();
+    assert_eq!(&inspected, captured.inspection());
+    assert!(checks > 10);
+    for refuse_at in 1..=checks {
+        let mut observed = 0;
+        assert!(inspect_backup_data_checked(captured.bytes(), &mut || {
+            observed += 1;
+            if observed == refuse_at {
+                Err("fixture live inspection revoked".into())
+            } else {
+                Ok(())
+            }
+        })
+        .is_err());
+        assert_eq!(observed, refuse_at);
+    }
+    assert!(
+        !inspected.authority_returned
+            && !inspected.restore_permitted
+            && !inspected.filesystem_changed
+    );
 }
 
 #[test]

@@ -854,3 +854,24 @@ Physical TPM provisioning, native boot, power-loss recovery, offline recipient
 custody and declared Windows-environment acceptance belong to the final test
 phase after those enforcement paths are implemented. The approval itself is
 not implementation or qualification evidence. The frozen G2 image is unchanged.
+
+### Held publication and fresh owner restore planning
+
+The shared content store now holds an exact synchronized preparation until its
+caller explicitly publishes it. Reads and mutations compare the selected state
+inside the same verified snapshot. Replaced inodes, changed quarantine evidence
+and failed checks fence the held preparation without deleting its bytes.
+
+Fresh-owner restore planning validates the complete archive and rebuilds every
+published historical version under new installation and owner identifiers.
+It reruns table edits and render engines, remaps exact historical collection
+members, and commits the ordered new proposal hashes in a bounded review.
+Archived conflicts, no-change outcomes and forensic bytes remain inert evidence;
+accounts, grants, sessions and TPM authority are not restored.
+
+The [component verification record](gates/g3/content_publication_restore_2026-10-18.json)
+binds 121 passing storage tests, three compile-fail checks and the later two-test
+restore-review regression run. This verifies storage and pure planning. The
+original-Admin decrypt/restore journey, damaged-batch disposition and broader
+deployment integration remain separate development work. No new image or
+native qualification is claimed.

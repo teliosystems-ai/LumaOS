@@ -285,6 +285,28 @@ impl Repository {
         source: &[u8],
         boundary: &mut impl Boundary,
     ) -> Result<Outcome> {
+        self.check_collection_publication(plan, source, boundary)?;
+        self.apply(plan, source, boundary)
+    }
+
+    /// The same collection validation as apply_collection, followed by a held,
+    /// synchronized preparation. This does not publish or establish custody.
+    pub fn prepare_collection<'repository>(
+        &'repository mut self,
+        plan: &Plan,
+        source: &[u8],
+        boundary: &mut impl Boundary,
+    ) -> Result<crate::PreparedPublication<'repository>> {
+        self.check_collection_publication(plan, source, boundary)?;
+        self.prepare(plan, source, boundary)
+    }
+
+    fn check_collection_publication(
+        &self,
+        plan: &Plan,
+        source: &[u8],
+        boundary: &mut impl Boundary,
+    ) -> Result<()> {
         let collection = CollectionSource::from_canonical(source)?;
         if plan.binding() != &self.binding
             || plan.artifact_id() != collection.artifact_id()?
@@ -300,21 +322,12 @@ impl Repository {
             &self.binding,
             ResourceBudget::mutation(plan.storage_bytes()),
         )?;
-        let state = self.collection_state(Some(plan), boundary)?;
-        check_members(&collection, &state.published, &mut || {
-            storage::repository_check(self, Some(plan), boundary)
-        })?;
-        if let Some(base) = plan.expected() {
-            if base.artifact_id != plan.artifact_id()
-                || !state.versions.iter().any(|v| v.reference == *base)
-            {
-                return Err(
-                    "collection proposal base is not a genuine published collection".into(),
-                );
-            }
-        }
+        // The shared preparation algorithm reconstructs CollectionHistory
+        // from its SAME verified Snapshot and calls observe on this candidate.
+        // That performs exact published-member, observed/expected collection
+        // base and collision validation without a redundant full private read.
         storage::repository_check(self, Some(plan), boundary)?;
-        self.apply(plan, source, boundary)
+        Ok(())
     }
 
     pub fn collection_current(

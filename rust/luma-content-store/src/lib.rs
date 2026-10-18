@@ -21,17 +21,24 @@ use std::path::Path;
 
 mod backup;
 mod collections;
+mod publication;
 mod queries;
 mod recovery;
+mod restore;
+mod state;
 mod storage;
 pub use backup::{
-    inspect_backup_data, BackupArea, BackupAreaReview, BackupBoundary, BackupBudget,
-    BackupDirectory, BackupInspection, BackupManifest, BackupMember, BackupNamespace, BackupReview,
-    ContentBackup, MAX_BACKUP_MANIFEST_BYTES, MAX_BACKUP_REVIEW_BYTES, MAX_CONTENT_BACKUP_BYTES,
+    inspect_backup_data, inspect_backup_data_checked, BackupArea, BackupAreaReview, BackupBoundary,
+    BackupBudget, BackupDirectory, BackupInspection, BackupManifest, BackupMember, BackupNamespace,
+    BackupReview, ContentBackup, MAX_BACKUP_MANIFEST_BYTES, MAX_BACKUP_REVIEW_BYTES,
+    MAX_CONTENT_BACKUP_BYTES,
 };
 pub use collections::{
     CollectionMemberships, CollectionPage, CollectionSource, CollectionVersion,
     MAX_COLLECTION_MEMBERS, MAX_COLLECTION_PAGE, MAX_COLLECTION_SOURCE_BYTES,
+};
+pub use publication::{
+    canonical_record_history_head, PreparedPublication, PublicationCommitment, PublicationMember,
 };
 pub use queries::{
     canonical_search_query, SearchHit, SearchResults, TermMatch, MAX_SEARCH_QUERY_BYTES,
@@ -42,6 +49,11 @@ pub use recovery::{
     PreparationRecoveryOutcome, PreparationReview, MAX_PREPARATION_REVIEW_BYTES,
     MAX_QUARANTINED_PREPARATIONS,
 };
+pub use restore::{
+    plan_restore_data_checked, RestoreMapping, RestorePlan, RestoreReview, RestoreStepReview,
+    MAX_RESTORE_REVIEW_BYTES,
+};
+pub use state::VerifiedState;
 
 pub type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 pub const MAX_REPOSITORY_BYTES: u64 = 64 * 1024 * 1024;
@@ -524,6 +536,8 @@ struct Snapshot {
     current: BTreeMap<String, ArtifactVersion>,
     pending: Vec<String>,
     bytes: u64,
+    quarantine_sha256: String,
+    quarantined: Vec<String>,
 }
 
 /// Shared reconstruction for live storage and portable backup data. A failed
@@ -626,6 +640,7 @@ pub struct Repository {
     outcomes: File,
     quarantine: Option<File>,
     binding: OwnerBinding,
+    expected_state: Option<VerifiedState>,
 }
 
 pub fn domain_name(binding: &OwnerBinding) -> Result<String> {
@@ -723,6 +738,7 @@ impl Repository {
             outcomes,
             quarantine: None,
             binding: initial.binding().clone(),
+            expected_state: None,
         })
     }
 
@@ -761,13 +777,24 @@ impl Repository {
             name,
             root,
             binding: binding.clone(),
+            expected_state: None,
         };
         result.snapshot(None, boundary)?;
         Ok(result)
     }
 
     fn snapshot(&self, plan: Option<&Plan>, boundary: &mut impl Boundary) -> Result<Snapshot> {
-        let quarantined_bytes = recovery::validate_quarantine(self, plan, boundary)?;
+        self.snapshot_for_state(plan, boundary, self.expected_state.as_ref())
+    }
+
+    fn snapshot_for_state(
+        &self,
+        plan: Option<&Plan>,
+        boundary: &mut impl Boundary,
+        expected_state: Option<&VerifiedState>,
+    ) -> Result<Snapshot> {
+        let (quarantined_bytes, quarantine_sha256, quarantined) =
+            recovery::validate_quarantine(self, plan, boundary)?;
         let mut check = || storage::repository_check(self, plan, boundary);
         check()?;
         recovery::layout(&self.root)?;
@@ -880,12 +907,19 @@ impl Repository {
             records.push((record, rebuilt, source));
         }
         check()?;
-        Ok(Snapshot {
+        let snapshot = Snapshot {
             records,
             current: history.current,
             pending,
             bytes: total,
-        })
+            quarantine_sha256,
+            quarantined,
+        };
+        state::check_expected(
+            expected_state,
+            &VerifiedState::from_snapshot(&self.binding, &snapshot)?,
+        )?;
+        Ok(snapshot)
     }
 
     pub fn current(&self, artifact: &str, boundary: &mut impl Boundary) -> Result<ArtifactVersion> {
@@ -1034,6 +1068,29 @@ impl Repository {
         boundary: &mut impl Boundary,
         mut hook: impl FnMut(Phase) -> Result<()>,
     ) -> Result<Outcome> {
+        let prepared = self.prepare_with_hook(plan, source, boundary, &mut hook)?;
+        prepared.publish_with_hook(boundary, &mut hook)
+    }
+
+    /// Synchronize an exact immutable preparation while retaining this
+    /// repository's exclusive borrow and lock. This is data, never custody
+    /// authorization. Dropping the returned handle retains bytes unmodified.
+    pub fn prepare<'repository>(
+        &'repository mut self,
+        plan: &Plan,
+        source: &[u8],
+        boundary: &mut impl Boundary,
+    ) -> Result<PreparedPublication<'repository>> {
+        self.prepare_with_hook(plan, source, boundary, |_| Ok(()))
+    }
+
+    fn prepare_with_hook<'repository>(
+        &'repository mut self,
+        plan: &Plan,
+        source: &[u8],
+        boundary: &mut impl Boundary,
+        mut hook: impl FnMut(Phase) -> Result<()>,
+    ) -> Result<PreparedPublication<'repository>> {
         if plan.binding() != &self.binding
             || source.len() as u64 != plan.source_bytes()
             || luma_content::sha256(source) != plan.data.source_sha256
@@ -1068,7 +1125,16 @@ impl Repository {
             self.pending.sync_all()?;
             self.root.sync_all()?;
             storage::repository_check(self, Some(plan), boundary)?;
-            return Ok(outcome(record, true));
+            return PreparedPublication::capture(
+                self,
+                plan,
+                source,
+                record.clone(),
+                directory,
+                &snapshot,
+                true,
+                boundary,
+            );
         }
         if snapshot.records.len() == MAX_OUTCOMES {
             return Err("content outcome capacity exhausted; no automatic eviction".into());
@@ -1091,7 +1157,7 @@ impl Repository {
             storage::repository_check(self, Some(plan), boundary)
         })?;
         let name = luma_content::sha256(plan.request_id().as_bytes());
-        if recovery::is_quarantined(self, &name, Some(plan), boundary)? {
+        if snapshot.quarantined.contains(&name) {
             return Err("content request was explicitly retired; use a fresh request ID".into());
         }
         if snapshot.pending.iter().any(|p| p != &name) {
@@ -1173,23 +1239,9 @@ impl Repository {
         dir.sync_all()?;
         self.pending.sync_all()?;
         hook(Phase::Prepared)?;
-        for (member, bytes) in [
-            ("record.json", record_bytes.as_slice()),
-            ("payload.json", plan.payload.as_slice()),
-            ("source.bin", source),
-        ] {
-            if storage::read(&dir, member, bytes.len() as u64, &mut check)? != bytes {
-                return Err("prepared content changed before atomic commit".into());
-            }
-        }
         check()?;
-        storage::rename(&self.pending, &self.outcomes, &name, &mut check, || {
-            hook(Phase::Renamed)
-        })?;
-        self.root.sync_all()?;
-        hook(Phase::Committed)?;
-        check()?;
-        Ok(outcome(&record, false))
+        drop(check);
+        PreparedPublication::capture(self, plan, source, record, dir, &snapshot, false, boundary)
     }
 }
 

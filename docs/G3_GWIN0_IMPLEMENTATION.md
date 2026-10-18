@@ -17,10 +17,10 @@ authorized these named new tracks separately.
 | Area | Existing implementation to retain | Work for the new tracks |
 | --- | --- | --- |
 | Shared control | Native account lifecycle, finite grants, protected UTC, resource generations, workflow journal and recovery | Integrate each new effect through those boundaries; no Python MVP or UI success flag substitutes for native enforcement |
-| Artifacts | Native ext4/WAL catalogs, immutable versions, owner-local typed collections, reviewed partial-preparation quarantine and governed lexical discovery | Production generic-content authority, semantic collections/indexes, retention/export and complete backup/restore journeys |
+| Artifacts | Native ext4/WAL catalogs, held immutable publication, independent C custody, owner-local typed collections, reviewed quarantine, encrypted backup and fresh-owner restore integration | Custody lifecycle and installed recovery qualification; general per-result access policy and semantic collections/indexes |
 | User interface | Model-independent reference workspace and candidate native GNOME/Wayland edition | Accessible conversational/manual shell, progress/cancellation, grounded references and qualified capture/input |
-| Content and adapters | Deterministic invoice, spreadsheet, document, diagram and sampled-animation engines; editable JSON sources with laboratory governed publication and reconstructed result commitments; fixed generated KVM runtime | Named LibreOffice/browser adapters, authenticated workflow completion, UI rendering and exact external output/build/test receipts |
-| Windows development | Source-run launchers, populated minimal Ubuntu package builder, real userland smoke, signed laboratory policy/revocation evaluation and ordinary-user scoped-file reads | Separate signed complete product distribution, authenticated companion/file bridge, SID mapping, ACL-aware broker, WSL-specific lifecycle and confinement |
+| Content and adapters | Deterministic content engines, C-backed workflow commitments, scoped LibreOffice export and ephemeral browser adapter source; fixed generated KVM runtime | Installed adapter/UI qualification, complete accessible journeys and exact external build/test receipts |
+| Windows development | Populated compute-only package, separate hosted TPM/CNG custody source, signed trust/runtime lifecycle, original Admin pipe and held NTFS input leases | Authenticated complete product distribution, SID-owned content/grant bridge, enrolled-file effects, authority-key migration and installed WSL confinement/inference |
 | Windows desktop | No qualified complete VM product proof | Hyper-V Gen2 image/template, identity, storage, resource limits and recovery proof; no acceleration claim from display availability |
 
 ## Initial implementation checkpoint
@@ -536,16 +536,16 @@ Requirement mapping remains partial:
 
 | Requirement | Development contribution | Still required for acceptance |
 | --- | --- | --- |
-| A063, T33 | Immutable generic content/storage, laboratory governed publication, managed render reconstruction, exact typed collections and reviewed partial-preparation quarantine | Production head/rollback and damaged-authority recovery, retention/backup/restore and installed recovery/rebuild tests |
+| A063, T33 | Held generic-content publication, independent C-protected head, managed render reconstruction, typed collections, quarantine and encrypted fresh-owner restore integration | Custody lifecycle, installed head/rollback and recovery/rebuild tests, and complete application journeys |
 | A060, T20 | Current owner-generation/Read grants for verified invoice and generic-content search, exact historical pages and generation-fenced delivery | General per-result access policy, semantic collections/search and installed revocation qualification |
 | W005, V01 | Read-only platform observations, calculated storage and exact supplied release-tuple comparison | Authenticated release policy, encryption and enterprise policy checks |
-| W006, V01/V03 | Collision refusal, unchanged distributions, normalized package validation, package signatures and signed laboratory release-policy/revocation evaluation | Qualified custody/dependencies, fresh protected time/current revocation, durable rollback protection, authenticated populated root filesystem, safe import/rollback and first-user/Admin setup |
+| W006, V01/V03 | Collision refusal, compute archive validation, separate TPM/CNG custody source, protected UTC protocol, durable signed deployment/trust/runtime histories and original Admin ceremonies | Installed custody/dependency and recovery qualification; authenticated complete product root filesystem, SID-owned content/effect integration and real inference |
 | W009, V04/T13 | Observed free-memory planning check with an explicit Windows reserve | Effective guest limits, other guest workloads, measured host coexistence and installed worker cgroups |
 
 No requirement in this table is marked complete by these development slices.
 
-1. Finish production catalog head/rollback, recovery, retention/export and
-   workflow linkage for the laboratory governed content adapter described above.
+1. Complete custody lifecycle and installed recovery acceptance for the
+   integrated C-backed content, workflow, encrypted export and restore paths.
    Extend explicit owner-local collections and discovery
    with per-result access policy before embeddings or automatic
    organization; pure data inspection is not storage publication.
@@ -554,11 +554,10 @@ No requirement in this table is marked complete by these development slices.
    workflow completion, UI rendering and recalculation.
    Add adapters and capture only
    with explicit permissions and real completion receipts.
-3. Join purpose-separated Windows package/policy/clock verification to authenticated
-   custody, protected time/revocation and a populated uniquely named WSL root
-   filesystem. Preserve existing
-   distributions/defaults. Introduce the authenticated SID/principal bridge
-   and a read-only enrolled-file path before
+3. Extend the purpose-separated Windows hosted compute deployment into a complete
+   authenticated product distribution. Complete authority-key migration and
+   the authenticated SID/principal content bridge. Preserve existing
+   distributions/defaults. Introduce a read-only enrolled-file path before
    any host-file write capability.
 4. Qualify WSL confinement, effective budgets and host reserve, lifecycle,
    manual/model-disabled controls and actual compact inference. Implement the
@@ -570,10 +569,10 @@ No requirement in this table is marked complete by these development slices.
 
 ### Remaining development and qualification
 
-The checkpoints above do not complete the following implementation work:
+The current integrated sources still leave the following development work:
 
-- Production generic-content head/rollback authority, damaged-authority recovery,
-  governed workflow execution linkage, retention/export and clean-machine backup/restore.
+- Content custody lifecycle, bounded-journal succession/compaction and complete
+  application recovery journeys beyond the implemented C-backed primitives.
 - Semantic collections/indexes and per-result access policy beyond the current
   owner's lexical search; usable UI integration for paged reads and recalculation.
 - Accessible manual/conversational shell, progress/cancellation, grounded references,
@@ -581,11 +580,12 @@ The checkpoints above do not complete the following implementation work:
 - Installed viewer integration and authenticated completion for the deterministic
   engines, named/versioned LibreOffice/browser and allowlisted hardware adapters
   with actual external completion receipts.
-- Authenticated Windows companion, trusted dependency/custody/time/revocation
-  delivery, populated runnable WSL package, SID/principal bridge and persistent
-  scoped ingestion with product grants.
-- Windows import/update/rollback, effective resources/confinement, manual/model-disabled
-  controls, real compact inference and the complete separate Hyper-V desktop proof.
+- Windows authority-key succession, SID/principal content and finite-grant bridge,
+  persistent scoped ingestion and a complete authenticated product distribution
+  beyond the compute-only package and hosted service implementation.
+- Complete Windows inference/lifecycle integration and manual/model-disabled
+  controls, plus the separate Hyper-V desktop implementation. Effective resources,
+  confinement and recovery then require installed qualification.
 
 Installed/native and declared Windows-tuple qualification remain separate from
 that development: loaded confinement, revocation and recovery journeys;
@@ -814,27 +814,28 @@ GWIN0 are open; the frozen G2 image is unchanged.
 ### Approved custody and recovery design
 
 The owner approved the [content, backup and Windows custody design](gates/g3/custody_recovery_approval_2026-10-16.json)
-on 2026-10-16. Production content authority remains development work: a separate
-Admin-provisioned TPM2 checkpoint authority must commit the exact content head
-through a fixed-scope coordinator, reconcile interrupted publication, and refuse
-rollback. It must not append every content event to the shared Admin journal,
-reuse resource custody, or grant TPM access to ordinary content workers.
+on 2026-10-16. The independent C implementation commits the exact content head
+through a fixed-scope coordinator, reconciles interrupted publication and refuses
+rollback. It does not append every content event to the shared Admin journal,
+reuse resource custody or grant TPM access to ordinary content workers. Custody
+lifecycle and installed acceptance remain open.
 
-Backups will use per-owner encryption with an offline Admin recovery recipient.
+Backups use per-owner encryption with an offline Admin recovery recipient.
 Clean-machine recovery must explicitly bind restored data to a fresh installation
 and principal; archived credentials, grants, sessions and TPM blobs cannot become
 authority. The new backup-data library supplies exact Read reviews and independently
-authorized Export capture, but encryption, recipient custody, delivery and restored
-publication still require integration.
+authorized Export capture. Native encryption, recipient custody, acknowledged
+delivery and restored publication are now integrated in source; installed
+acceptance remains separate.
 
-Windows deployment will use a distinct TPM2/CNG-backed hosted authority, explicit
+Windows deployment uses a distinct TPM2/CNG-backed hosted authority, explicit
 SID and first-Admin enrollment, and private NTFS live state. D remains the bulk
 build/archive destination; its current exFAT filesystem is not the protected live
 authority store. The new in-process signature primitive passes 98 actual Windows
-assertions, including child-CLI and NTFS link checks; the
+assertions at its initial checkpoint, including child-CLI and NTFS link checks; the
 [component record](gates/gwin0/platform_signature_2026-10-16.json) pins those inputs.
-That result does not supply
-custody, current time/revocation, rollback resistance or installation permission.
+That primitive result is distinct from the later hosted authority implementation
+and does not itself supply custody or installation permission.
 
 The [backup-data and native-preview record](gates/g3/backup_preview_2026-10-16.json)
 binds a passing immutable-source run: 103 storage tests, one documentation test,
@@ -847,8 +848,9 @@ multiply linked executable; the corrected run preserves the product checks.
 
 The manual native preview has a separate GTK/WebKit launcher. The cached desktop
 image lacks the required WebKit2 introspection binding; the updated package
-inputs need a fresh build and actual graphical testing. Authenticated workflows,
-encrypted backup/restore and named external adapters remain development work.
+inputs need a fresh build and actual graphical testing. Integrated workflow,
+encrypted backup/restore and named adapter sources require installed testing;
+complete accessible journeys remain development work.
 
 Physical TPM provisioning, native boot, power-loss recovery, offline recipient
 custody and declared Windows-environment acceptance belong to the final test
@@ -872,9 +874,9 @@ accounts, grants, sessions and TPM authority are not restored.
 The [component verification record](gates/g3/content_publication_restore_2026-10-18.json)
 binds 121 passing storage tests, three compile-fail checks and the later two-test
 restore-review regression run. This verifies storage and pure planning. The
-original-Admin decrypt/restore journey, damaged-batch disposition and broader
-deployment integration remain separate development work. No new image or
-native qualification is claimed.
+native integration below adds original-Admin decryption, restore publication and
+damaged-batch disposition; that component record is not retroactively treated as
+an installed restore test. No native qualification is claimed.
 
 ### Windows hosted authority and service lifecycle
 
@@ -907,3 +909,58 @@ This remains compute-only deployment. TPM authority-key migration, governed
 Windows content and effects, and the complete Hyper-V desktop remain development
 work. Installed LocalSystem, actual TPM, SCM and durability acceptance remain
 separate qualification. GWIN0 is open and the frozen G2 image is unchanged.
+
+### Native custody UTC and encrypted recovery
+
+The native integration separates Admin, resource, content and Windows UTC
+checkpoint domains. C and U enrollment retain the original genesis descriptor
+whose digest is protected by their own TPM checkpoint. Coordinated changes to
+mutable installation headers cannot replace that original proof. Ordinary
+content workers have no TPM access; their exact held publication is committed
+through C before its filesystem rename and reopened against the protected head.
+
+Encrypted backup requires the current separately enrolled owner and offline
+Admin recipient certificates, independent public-key pins, finite Read and
+Export grants, and the original purpose-separated Export session. Delivery is
+acknowledged ciphertext framing with a signed receipt over the measured output.
+Neither encryption nor a supplied receipt key authenticates an origin by itself.
+
+Restore verifies an independently selected origin pin, decrypts through a locked
+private-key descriptor and rebuilds the complete archive under a fresh
+installation and owner. The original live Admin, account generation, protected
+UTC, finite grants and resource generation remain checked throughout. Restore
+does not create accounts or reactivate archived credentials, grants, sessions or
+TPM authority. Its current Standard session remains thirty seconds; a separate
+thirty-minute Restore purpose awaits owner approval and is not borrowed from
+Export.
+
+The approved batch anchors each exact chronological publication in C. A fresh
+authorized session can resume its verified prefix without repeating a TPM
+extend. For a damaged or abandoned batch, separate Read inspection and reviewed
+Admin recovery can retire only the exact owner-generation. Retirement preserves
+committed records, damaged pending bytes and the original encrypted evidence;
+it does not heal data or provision a successor. The rootless
+`content-restore-retire-request` command only canonicalizes public phase/scope
+data. A supplied review digest never becomes authority.
+
+The U publisher signs exact installation, purpose, source, nonce and protected
+time bounds. Its HTTPS frontend is a separately confined transport, not time
+authority, and does not listen automatically. Explicit transport configuration,
+certificates and key commissioning are required. The resource reserve accounts
+for the separate C, U and HTTPS processes before acquisition admission.
+
+Secret-bearing client and helper profiles now override inherited same-label and
+unconfined process-inspection permissions across execution. Offline policy
+compilation does not qualify the loaded kernel policy; native negative tests
+must exercise those boundaries on the actual image.
+
+The [native integration record](gates/g3/native_custody_recovery_2026-10-18.json)
+binds the source, exact software results and retained failures. C journal
+compaction/custody succession, complete application journeys and installed
+acceptance remain open. This is not a claim that all G3/GWIN0 development or
+qualification is complete.
+
+The [compute package record](gates/gwin0/hosted_compute_package_2026-10-18.json)
+identifies the real Windows-validated archive on D. It is an unsigned,
+compute-only development package, not a new native boot image or authenticated
+Windows product installer. The G2 sequence-14 image remains unchanged.

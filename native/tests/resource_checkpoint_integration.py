@@ -1,11 +1,14 @@
 #!/usr/bin/env python3
 """Independent resource authority tests on fresh disposable software TPMs only."""
 import base64
+from contextlib import contextmanager
+import ctypes
 import hashlib
 import json
 import os
 from pathlib import Path
 import re
+import stat
 import subprocess
 import tempfile
 import time
@@ -29,8 +32,48 @@ def require_single_execution(test, output):
         raise RuntimeError('expected exactly one executed and passed named resource TPM test: ' + test)
 
 
+@contextmanager
+def fixture_parent():
+    """A real private ext4 test root, never a substitute for production pins."""
+    supplied = os.environ.get('LUMA_STORAGE_TEST_ROOT')
+    if not supplied or os.name != 'posix':
+        raise RuntimeError('explicit private Linux ext4 LUMA_STORAGE_TEST_ROOT required')
+    path = Path(supplied)
+    if not path.is_absolute() or path == Path('/') or '..' in path.parts:
+        raise RuntimeError('fixture root must be a narrow absolute directory')
+    for ancestor in reversed((path, *path.parents)):
+        metadata = ancestor.lstat()
+        if (not stat.S_ISDIR(metadata.st_mode) or metadata.st_uid != 0
+                or stat.S_IMODE(metadata.st_mode) & 0o022):
+            raise RuntimeError('fixture root has a symlink, unowned or writable ancestor')
+    descriptor = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
+    try:
+        metadata = os.fstat(descriptor)
+        if metadata.st_uid != 0 or stat.S_IMODE(metadata.st_mode) != 0o700:
+            raise RuntimeError('fixture root must be root-owned mode0700')
+        volume = ctypes.create_string_buffer(256)
+        library = ctypes.CDLL(None, use_errno=True)
+        if library.fstatfs(descriptor, volume) != 0:
+            raise OSError(ctypes.get_errno(), 'fixture fstatfs failed')
+        if ctypes.c_long.from_buffer(volume).value != 0xef53 or os.fstatvfs(descriptor).f_flag & os.ST_RDONLY:
+            raise RuntimeError('fixture root requires actual writable ext4, not tmpfs/overlay/DrvFS')
+        def recheck():
+            named = path.lstat()
+            current = os.fstat(descriptor)
+            pin = lambda item: (item.st_dev, item.st_ino, item.st_uid, item.st_gid, item.st_mode)
+            if pin(named) != pin(metadata) or pin(current) != pin(metadata):
+                raise RuntimeError('fixture parent identity or permissions changed')
+        recheck()
+        try:
+            yield path
+        finally:
+            recheck()
+    finally:
+        os.close(descriptor)
+
+
 def run_case(test):
-    with tempfile.TemporaryDirectory(prefix='luma-tpm-resource-', dir='/tmp') as folder:
+    with fixture_parent() as parent, tempfile.TemporaryDirectory(prefix='luma-tpm-resource-', dir=parent) as folder:
         root = Path(folder)
         (root / 'state').mkdir(mode=0o700)
         owner = os.urandom(32)

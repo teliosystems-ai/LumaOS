@@ -1,0 +1,56 @@
+[Unit]
+Description=Luma independent protected content custody
+After=apparmor.service local-fs.target luma-broker.service
+Requires=apparmor.service luma-broker.service
+ConditionPathExists=/var/lib/luma-os/content-checkpoint/sealed/anchor.json
+ConditionPathExists=/var/lib/luma-os/content-checkpoint/genesis.json
+ConditionPathExists=/var/lib/luma-os/content-checkpoint/history.json
+
+[Service]
+Type=simple
+ExecStart=/usr/libexec/luma-os/luma-platform content-custody-service
+User=root
+Group=root
+RuntimeDirectory=luma-content-custody
+RuntimeDirectoryMode=0700
+RuntimeDirectoryPreserve=no
+UMask=0077
+Environment=PATH=/usr/sbin:/usr/bin:/sbin:/bin LANG=C LC_ALL=C OPENSSL_CONF=/dev/null
+UnsetEnvironment=LD_PRELOAD LD_LIBRARY_PATH LD_AUDIT OPENSSL_MODULES SSLKEYLOGFILE PYTHONHOME PYTHONPATH
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=no
+DevicePolicy=closed
+DeviceAllow=/dev/tpmrm0 rw
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+# Preserve actual child/parent ext4 mount identity; LSM restricts writes to C.
+ReadWritePaths=/var/lib/luma-os
+ReadWritePaths=/run/luma-content-checkpoint/authority.lock
+RestrictAddressFamilies=AF_UNIX
+RestrictNamespaces=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service @memlock
+SystemCallFilter=~@mount @raw-io @reboot @swap @obsolete @debug
+CapabilityBoundingSet=
+AmbientCapabilities=
+AppArmorProfile=luma-content-custody
+MemoryMax=128M
+MemorySwapMax=0
+LimitMEMLOCK=100663296
+LimitCORE=0
+TasksMax=2
+CPUQuota=25%
+CPUQuotaPeriodSec=100ms
+OOMPolicy=kill
+TimeoutStopSec=5
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

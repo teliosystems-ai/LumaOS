@@ -141,7 +141,10 @@ class G3IntegrationTests(unittest.TestCase):
         self.assertNotIn('unlink', recovery)
         store = (ROOT / 'rust/luma-content-store/src/lib.rs').read_text()
         self.assertIn('recovery::validate_quarantine', store)
-        self.assertIn('recovery::is_quarantined', store)
+        # Mutation must consult quarantine selected by the very same verified
+        # Snapshot, not reopen mutable directory state through a second scan.
+        self.assertIn('snapshot.quarantined.contains(&name)', store)
+        self.assertNotIn('recovery::is_quarantined', store)
 
     def test_collection_types_are_not_inferred_from_ordinary_json_or_membership_authority(self):
         governed = (RUST / 'content_governed.rs').read_text()

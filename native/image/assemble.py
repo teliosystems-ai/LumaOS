@@ -16,6 +16,7 @@ import shutil
 import stat
 import subprocess
 import sys
+import tempfile
 
 # Imports run from the captured source tree. Interpreter caches are not product
 # inputs and must never appear in its corresponding source archive.
@@ -231,7 +232,7 @@ def main() -> None:
     inputs=[]
     snapshot=WORK/'source'
     snapshot.mkdir()
-    for folder in ('rust','native/image','native/desktop','src','web','schemas','examples','docs/adr','scripts'):
+    for folder in ('rust','native/image','native/desktop','native/utc','src','web','schemas','examples','docs/adr','scripts'):
         for source in sorted((REPO/folder).rglob('*')):
             if source.is_file() and not any(p in ('target','__pycache__') for p in source.relative_to(REPO).parts):
                 if source.is_symlink():raise SystemExit('source snapshot refuses symbolic links')
@@ -252,6 +253,7 @@ def main() -> None:
     sys.path.insert(0, str(REPO/'native/image'))
     import boot_policy
     import desktop_policy
+    import office_policy
     source_lock=json.dumps({'schema_version':1,'files':inputs},sort_keys=True,indent=2)+'\n'
     (OUT/'source-lock.json').write_text(source_lock)
     put('usr/share/luma-os/source-lock.json',source_lock)
@@ -282,6 +284,44 @@ def main() -> None:
     recovery_supervisor = binary.parent/'luma-utc-recovery-restart'
     shutil.copy2(recovery_supervisors[0], recovery_supervisor)
     recovery_supervisor.chmod(0o700)
+    crypto_helpers = list((WORK/'cargo/release/build').glob(
+        'luma-platform-*/out/luma-backup-crypto'))
+    if len(crypto_helpers) != 1:
+        raise SystemExit('expected one freshly compiled fixed backup crypto helper')
+    crypto_helper = binary.parent/'luma-backup-crypto'
+    shutil.copy2(crypto_helpers[0], crypto_helper)
+    crypto_helper.chmod(0o755)
+    receipt_helpers = list((WORK/'cargo/release/build').glob(
+        'luma-platform-*/out/luma-receipt-signer'))
+    if len(receipt_helpers) != 1:
+        raise SystemExit('expected one freshly compiled fixed content receipt signer')
+    receipt_helper = binary.parent/'luma-receipt-signer'
+    shutil.copy2(receipt_helpers[0], receipt_helper)
+    receipt_helper.chmod(0o755)
+    utc_crypto_helpers = list((WORK/'cargo/release/build').glob(
+        'luma-platform-*/out/luma-utc-windows-crypto'))
+    if len(utc_crypto_helpers) != 1:
+        raise SystemExit('expected one freshly compiled fixed Windows UTC crypto helper')
+    utc_crypto_helper = binary.parent/'luma-utc-windows-crypto'
+    shutil.copy2(utc_crypto_helpers[0], utc_crypto_helper)
+    utc_crypto_helper.chmod(0o755)
+    utc_front = binary.parent/'utc-windows-front.py'
+    shutil.copy2(REPO/'native/utc/windows_front.py', utc_front)
+    utc_front.chmod(0o644)
+    # Pin the actual assembled interpreter and SSL runtime, not the builder's
+    # possibly different Python/OpenSSL version or an unexecuted metadata claim.
+    with tempfile.TemporaryDirectory(prefix='luma-utc-policy-', dir=ROOT/'tmp') as temporary:
+        policy_directory = Path(temporary)
+        for name in ('windows_utc_policy.py', 'office_policy.py'):
+            shutil.copy2(REPO/'native/image'/name, policy_directory/name)
+            (policy_directory/name).chmod(0o644)
+        policy_path = '/'+policy_directory.relative_to(ROOT).as_posix()
+        transport_manifest = run('chroot', ROOT, '/usr/bin/python3', '-I', '-S', '-B', '-c',
+            f'import sys; sys.path.insert(0,{policy_path!r}); import windows_utc_policy; '
+            'sys.stdout.buffer.write(windows_utc_policy.canonical_manifest("/"))')
+    put('usr/share/luma-os/utc/windows-transport.json', transport_manifest)
+    put('usr/share/luma-os/adapters/office-pdf-v1.json',
+        office_policy.canonical_manifest(ROOT).decode('utf-8'))
     (ROOT/'usr/bin/luma-platform').symlink_to('/usr/libexec/luma-os/luma-platform')
     shutil.copytree(REPO/'native/image/overlay',ROOT,dirs_exist_ok=True)
     # WSL Windows-mounted source files often report 0777. Never propagate those
@@ -298,10 +338,13 @@ def main() -> None:
     for name in ('src','web','schemas','examples'):
         shutil.copytree(REPO/name,reference/name,ignore=shutil.ignore_patterns('__pycache__','*.pyc'))
     if args.edition == 'desktop':
-        for name in ('workspace_host.py', 'workspace_app.py'):
+        import browser_policy
+        for name in ('workspace_host.py', 'workspace_auth.py', 'workspace_app.py', 'browser_adapter.py'):
             target = binary.parent/name
             shutil.copy2(REPO/'native/desktop'/name, target)
             target.chmod(0o644)
+        put('usr/share/luma-os/adapters/browser-presentation-v1.json',
+            browser_policy.canonical_manifest(ROOT).decode('utf-8'))
         workspace = ROOT/'usr/share/luma-os/workspace'
         workspace.mkdir(parents=True, exist_ok=True)
         for name in ('native-workspace.html', 'native-workspace.js', 'native-workspace.css'):
@@ -388,7 +431,7 @@ def main() -> None:
     run('chroot',ROOT,'groupadd','--gid','990','luma-control')
     run('chroot',ROOT,'useradd','--uid','990','--gid','990','--system','--no-create-home',
         '--home-dir','/var/lib/luma-os/reference','--shell','/usr/sbin/nologin','luma-control')
-    for uid,name in ((989,'luma-model'),(988,'luma-fetch'),(987,'luma-utc-producer')):
+    for uid,name in ((989,'luma-model'),(988,'luma-fetch'),(987,'luma-utc-producer'),(986,'luma-office'),(985,'luma-utc-front')):
         run('chroot',ROOT,'groupadd','--gid',str(uid),name)
         run('chroot',ROOT,'useradd','--uid',str(uid),'--gid',str(uid),'--system','--no-create-home',
             '--home-dir','/nonexistent','--shell','/usr/sbin/nologin',name)
@@ -449,7 +492,7 @@ def main() -> None:
     put('etc/systemd/system/sleep.target.d/luma.conf',
         '[Unit]\nConflicts=luma-reference.service luma-model.service\n')
     put('etc/systemd/system/hibernate.target','[Unit]\nDescription=Hibernation is unqualified and disabled\nRefuseManualStart=yes\n')
-    for unit in ('luma-broker.service','luma-reference.service','luma-model.service','luma-staging-clean.service','luma-peer-observer.service','luma-admin.service'):
+    for unit in ('luma-broker.service','luma-reference.service','luma-model.service','luma-staging-clean.service','luma-peer-observer.service','luma-admin.service','luma-content-custody.service','luma-content-custody.path'):
         enable(unit)
     # Explicitly activate the packaged measured-UKI userspace phase barriers.
     # They do not activate Admin or make a missing TPM a general boot dependency.

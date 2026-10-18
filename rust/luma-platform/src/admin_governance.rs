@@ -1462,8 +1462,26 @@ impl GrantBoundary<'_> {
                 "content acquisition attribution is fenced or its owner generation changed".into(),
             );
         }
-        let selected =
-            content_acquisition_scope(&self.uses, requested, self.session.account.purpose())?;
+        let selected = if matches!(
+            requested.selector.id.as_str(),
+            "native-content-restore-review-v1" | "native-content-restore-write-v1"
+        ) {
+            crate::content_restore::pair(&self.uses, requested, self.session.account.purpose())?
+        } else if requested.selector.id == "native-content-office-export-v1" {
+            crate::office_export::export_pair(
+                &self.uses,
+                requested,
+                self.session.account.purpose(),
+            )?
+        } else if requested.selector.id == "native-content-backup-export-v1" {
+            crate::content_backup::export_pair(
+                &self.uses,
+                requested,
+                self.session.account.purpose(),
+            )?
+        } else {
+            content_acquisition_scope(&self.uses, requested, self.session.account.purpose())?
+        };
         let record = crate::finite_grants::Audit {
             subject: self.subject()?.into(),
             subject_generation: self.subject_generation()?,
@@ -1540,7 +1558,17 @@ impl GrantBoundary<'_> {
             .operation
             .effect_begin(effect_id, kind, &self.decision_ids)?;
         if kind == crate::policy_decisions::EffectKind::ArtifactExport {
-            pending.bind_export(&self.audit()?)?;
+            let audit = if self.uses.len() == 2 {
+                let export = self
+                    .uses
+                    .iter()
+                    .find(|(_, usage)| usage.action == crate::finite_grants::Action::Export)
+                    .ok_or("backup export lacks its finite Export scope")?;
+                self.audit_for_acquisition(&export.1)?
+            } else {
+                self.audit()?
+            };
+            pending.bind_export(&audit)?;
         }
         self.check()?;
         Ok(pending)
@@ -2119,11 +2147,17 @@ fn stream_binding_matches(
     if identity["principal"].as_str() != Some(admission.subject.as_str())
         || identity["generation"].as_u64() != Some(admission.subject_generation)
         || head != admission.checkpoint_head
-        || uses.len() != 1
     {
         return Err("ongoing export actor or authority changed".into());
     }
-    let (grant, usage) = &uses[0];
+    let selected = if uses.len() == 1 {
+        0
+    } else if admission.usage.selector.id == "native-content-office-export-v1" {
+        crate::office_export::pair(uses, &admission.usage)?
+    } else {
+        crate::content_backup::pair(uses, &admission.usage)?
+    };
+    let (grant, usage) = &uses[selected];
     let valid = match usage.action {
         Action::Export => {
             admission.operation_id.as_deref() == Some(operation)
@@ -2280,6 +2314,34 @@ pub(crate) fn with_export_grant<T>(
         authentication::SessionPurpose::Export,
         effect,
     )
+}
+
+/// Closed two-scope backup export. Neither a generic Read pair nor a caller
+/// selected lifetime can enter this separate thirty-minute Export purpose.
+pub(crate) fn with_office_export_grants<T>(
+    login: &str,
+    uses: &[(String, crate::finite_grants::Use)],
+    effect: impl FnOnce(&mut GrantBoundary<'_>) -> Result<T>,
+) -> Result<T> {
+    let requested = uses
+        .iter()
+        .find(|(_, usage)| usage.action == crate::finite_grants::Action::Export)
+        .ok_or("Office export requires independent Export grant")?;
+    crate::office_export::export_pair(uses, &requested.1, authentication::SessionPurpose::Export)?;
+    with_grants_for(login, uses, authentication::SessionPurpose::Export, effect)
+}
+
+pub(crate) fn with_backup_export_grants<T>(
+    login: &str,
+    uses: &[(String, crate::finite_grants::Use)],
+    effect: impl FnOnce(&mut GrantBoundary<'_>) -> Result<T>,
+) -> Result<T> {
+    let requested = uses
+        .iter()
+        .find(|(_, usage)| usage.action == crate::finite_grants::Action::Export)
+        .ok_or("backup export requires its independent Export grant")?;
+    crate::content_backup::export_pair(uses, &requested.1, authentication::SessionPurpose::Export)?;
+    with_grants_for(login, uses, authentication::SessionPurpose::Export, effect)
 }
 
 /// Only this typed installed CAS import can select the independently approved
@@ -2847,6 +2909,27 @@ pub(crate) fn release_authority_optional() -> Result<
 /// networks/keeper are unavailable; it cannot admit a new release effect.
 pub(crate) fn release_state_optional() -> Result<Option<crate::release_trust::State>> {
     Ok(catalog_state_optional()?.and_then(|catalog| catalog.release))
+}
+
+/// Machine-local protected-time observation for the fixed broker publisher
+/// IPC. The publisher receives neither A authentication nor a portable floor.
+/// This opens the existing A owner only on the broker side, semantically
+/// replays its current history, and projects the SAME observed sample after
+/// the final history check. No journal event, seed or clock setter is used.
+pub(crate) fn publisher_time_observation() -> Result<(crate::utc_stream::Observation, String)> {
+    crate::require_root()?;
+    platform::require_installed()?;
+    let directory = Path::new(DIRECTORY);
+    let mut store = Store::open(
+        tpm::LocalAnchor::installed()?,
+        &directory.join("journal.json"),
+    )?;
+    let history = HistoryReader::new(&mut store, directory).read()?;
+    let mut client = crate::utc_provider::Client::installed()?;
+    let observation = client.current(&history)?;
+    history.recheck(&mut HistoryReader::new(&mut store, directory))?;
+    let observation = client.project_after_checks(&history, &observation, |_| Ok(()))?;
+    Ok((observation, history.checkpoint_head))
 }
 
 pub(crate) fn skill_trust_present() -> Result<bool> {
@@ -10933,6 +11016,101 @@ pub(crate) fn fixture_governed_projection_interruption(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn backup_stream_admission_retains_both_exact_scopes_and_original_actor() {
+        use crate::finite_grants::{Action, Audit, Kind, Selector, Use};
+        let mut read = Use {
+            action: Action::Read,
+            selector: Selector {
+                kind: Kind::File,
+                id: "native-content-backup-read-v1".into(),
+                generation: 7,
+                digest: "ab".repeat(32),
+            },
+            input_bytes: 21,
+            output_bytes: 8192,
+            units: 1,
+        };
+        let export = Use {
+            action: Action::Export,
+            selector: Selector {
+                kind: Kind::Artifact,
+                id: "native-content-backup-export-v1".into(),
+                ..read.selector.clone()
+            },
+            input_bytes: 21,
+            output_bytes: crate::content_backup::MAX_EXPORT_BYTES,
+            units: 1,
+        };
+        let uses = vec![
+            ("backup-read".into(), read.clone()),
+            ("backup-export".into(), export.clone()),
+        ];
+        let admission = Audit {
+            subject: "cd".repeat(32),
+            subject_generation: 7,
+            grant_id: "backup-export".into(),
+            grant_version: 1,
+            checkpoint_head: "ef".repeat(32),
+            operation_id: Some("12".repeat(16)),
+            usage: export.clone(),
+        };
+        let actor = serde_json::json!({"principal":admission.subject,"generation":7});
+        stream_binding_matches(
+            &admission,
+            &actor,
+            &admission.checkpoint_head,
+            &uses,
+            &"12".repeat(16),
+        )
+        .unwrap();
+        assert!(stream_binding_matches(
+            &admission,
+            &actor,
+            &admission.checkpoint_head,
+            &uses,
+            &"34".repeat(16)
+        )
+        .is_err());
+        assert!(stream_binding_matches(
+            &admission,
+            &actor,
+            &"ab".repeat(32),
+            &uses,
+            &"12".repeat(16)
+        )
+        .is_err());
+        let mut changed = actor.clone();
+        changed["generation"] = 8.into();
+        assert!(stream_binding_matches(
+            &admission,
+            &changed,
+            &admission.checkpoint_head,
+            &uses,
+            &"12".repeat(16)
+        )
+        .is_err());
+        read.selector.digest = "90".repeat(32);
+        let altered = vec![
+            ("backup-read".into(), read),
+            ("backup-export".into(), export),
+        ];
+        assert!(stream_binding_matches(
+            &admission,
+            &actor,
+            &admission.checkpoint_head,
+            &altered,
+            &"12".repeat(16)
+        )
+        .is_err());
+        assert!(crate::content_backup::export_pair(
+            &uses,
+            &admission.usage,
+            authentication::SessionPurpose::Standard
+        )
+        .is_err());
+    }
     use crate::tpm::Clock;
     use std::os::unix::fs::{symlink, DirBuilderExt, PermissionsExt};
     use std::{cell::RefCell, path::PathBuf, rc::Rc};

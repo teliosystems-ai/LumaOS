@@ -160,6 +160,15 @@ fn target_context(target: &Path, controller: bool) -> Result<()> {
 }
 
 pub(crate) fn arguments(target: &Path, profile: &str, action: &str) -> Result<Vec<String>> {
+    if action == "content-restore" {
+        return restore_arguments(target, profile);
+    }
+    if action == "office-export" {
+        return office_arguments(target, profile);
+    }
+    if action == "backup-export" {
+        return backup_arguments(target, profile);
+    }
     let text = target
         .to_str()
         .ok_or("invalid acquisition target encoding")?;
@@ -287,6 +296,141 @@ pub(crate) fn arguments(target: &Path, profile: &str, action: &str) -> Result<Ve
         action.into(),
         profile.into(),
         text.into(),
+    ]);
+    Ok(args)
+}
+
+fn office_arguments(target: &Path, profile: &str) -> Result<Vec<String>> {
+    if target != Path::new("/var") {
+        return Err("Office export requires fixed installed block-backed data mount".into());
+    }
+    crate::office_export::source_digest(profile)?;
+    let mut args = vec![
+        "--quiet".into(),
+        "--no-ask-password".into(),
+        "--wait".into(),
+        "--collect".into(),
+        "--pipe".into(),
+        "--service-type=exec".into(),
+        "--expand-environment=no".into(),
+        format!("--unit={UNIT}"),
+        "--slice=lumaacquisition.slice".into(),
+    ];
+    for property in ["User=root","Group=root","UMask=0077","NoNewPrivileges=yes","ProtectSystem=strict","ProtectHome=yes",
+        "PrivateTmp=yes","PrivateDevices=yes","ProtectKernelTunables=yes","ProtectKernelModules=yes","ProtectControlGroups=yes",
+        "RestrictNamespaces=user mnt pid net ipc uts cgroup","LockPersonality=yes","MemoryDenyWriteExecute=yes","SystemCallArchitectures=native",
+        "AppArmorProfile=luma-office-export","MemoryHigh=896M","MemoryMax=1024M","MemorySwapMax=0","OOMPolicy=kill","TasksMax=32",
+        "CPUQuota=200%","LimitCORE=0","LimitFSIZE=17M","DevicePolicy=closed","KillMode=control-group",
+        "TimeoutStopSec=15","Restart=no","RuntimeMaxSec=1800","Requires=luma-broker.service","After=luma-broker.service","BindsTo=luma-broker.service",
+        "Conflicts=sleep.target","Before=sleep.target","CapabilityBoundingSet=CAP_CHOWN CAP_SETUID CAP_SETGID CAP_KILL",
+        "RestrictAddressFamilies=AF_UNIX","SystemCallFilter=~ptrace process_vm_readv process_vm_writev",
+        "RuntimeDirectory=luma-office-export","RuntimeDirectoryMode=0711","ReadWritePaths=/run/luma-office-export",
+        "ReadOnlyPaths=/var/lib/luma-os/content-store /var/lib/luma-os/principals",
+        "InaccessiblePaths=/var/lib/luma-broker /var/lib/luma-os/admin /var/lib/luma-os/identity /var/lib/luma-os/models /var/lib/luma-os/model-packs /var/lib/luma-os/resource-checkpoint /var/lib/luma-os/content-checkpoint /run/luma-admin /run/luma-resource-checkpoint /run/luma-content-checkpoint",
+        "IOReadBandwidthMax=/var 64M","IOWriteBandwidthMax=/var 64M"] {args.push(format!("--property={property}"));}
+    args.push(format!(
+        "--property=LimitMEMLOCK={}",
+        crate::office_export::LOCKED
+    ));
+    args.extend([
+        "--".into(),
+        "/usr/libexec/luma-os/luma-platform".into(),
+        "content-office-resource-worker".into(),
+        profile.into(),
+    ]);
+    Ok(args)
+}
+
+fn restore_arguments(target: &Path, profile: &str) -> Result<Vec<String>> {
+    if target != Path::new("/var") {
+        return Err("restore requires the fixed installed encrypted data mount".into());
+    }
+    let (mode, _, _, _, _, _) = crate::content_restore::parse_profile(profile)?;
+    let mut args = vec![
+        "--quiet".into(),
+        "--no-ask-password".into(),
+        "--wait".into(),
+        "--collect".into(),
+        "--pipe".into(),
+        "--service-type=exec".into(),
+        "--expand-environment=no".into(),
+        format!("--unit={UNIT}"),
+        "--slice=lumaacquisition.slice".into(),
+    ];
+    for property in [
+        "User=root", "Group=root", "UMask=0077", "NoNewPrivileges=yes",
+        "ProtectSystem=strict", "ProtectHome=yes", "PrivateTmp=yes", "PrivateDevices=yes",
+        "ProtectKernelTunables=yes", "ProtectKernelModules=yes", "ProtectControlGroups=yes",
+        "RestrictNamespaces=yes", "LockPersonality=yes", "MemoryDenyWriteExecute=yes",
+        "SystemCallArchitectures=native", "AppArmorProfile=luma-content-restore",
+        "Environment=PATH=/usr/bin LANG=C LC_ALL=C OPENSSL_CONF=/dev/null",
+        "UnsetEnvironment=LD_PRELOAD LD_LIBRARY_PATH LD_AUDIT OPENSSL_MODULES SSLKEYLOGFILE PYTHONHOME PYTHONPATH",
+        "MemoryHigh=896M", "MemoryMax=960M", "MemorySwapMax=0", "OOMPolicy=kill",
+        "TasksMax=4", "CPUQuota=200%", "LimitMEMLOCK=640M", "LimitCORE=0",
+        "LimitFSIZE=66M", "DevicePolicy=closed", "KillMode=control-group",
+        "TimeoutStopSec=15", "Restart=no", "RuntimeMaxSec=1800",
+        "Requires=luma-broker.service", "After=luma-broker.service", "BindsTo=luma-broker.service",
+        "Conflicts=sleep.target", "Before=sleep.target", "CapabilityBoundingSet=",
+        "RestrictAddressFamilies=AF_UNIX", "SystemCallFilter=~ptrace process_vm_readv process_vm_writev",
+        "ReadOnlyPaths=/var/lib/luma-os/principals",
+        "InaccessiblePaths=/var/lib/luma-broker /var/lib/luma-os/admin /var/lib/luma-os/identity /var/lib/luma-os/models /var/lib/luma-os/model-packs /var/lib/luma-os/resource-checkpoint /var/lib/luma-os/content-checkpoint /var/lib/luma-os/utc-windows /var/lib/luma-os/utc-windows-checkpoint /run/luma-admin /run/luma-resource-checkpoint /run/luma-content-checkpoint /run/luma-utc-windows-checkpoint",
+        "IOReadBandwidthMax=/var 64M", "IOWriteBandwidthMax=/var 64M",
+    ] { args.push(format!("--property={property}")); }
+    args.push(if mode == 'r' {
+        "--property=ReadOnlyPaths=/var/lib/luma-os/content-store".into()
+    } else {
+        "--property=ReadWritePaths=/var/lib/luma-os/content-store".into()
+    });
+    args.extend([
+        "--".into(),
+        "/usr/libexec/luma-os/luma-platform".into(),
+        "content-restore-resource-worker".into(),
+        profile.into(),
+    ]);
+    // The caller adds only its exact pinned public InputStage path. Secret
+    // PKCS8 bytes travel through locked stdin, never argv or a staged file.
+    Ok(args)
+}
+
+fn backup_arguments(target: &Path, profile: &str) -> Result<Vec<String>> {
+    if target != Path::new("/var") {
+        return Err("encrypted backup requires the fixed installed data mount".into());
+    }
+    crate::content_backup::source_digest(profile)?;
+    let mut args = vec![
+        "--quiet".into(),
+        "--no-ask-password".into(),
+        "--wait".into(),
+        "--collect".into(),
+        "--pipe".into(),
+        "--service-type=exec".into(),
+        "--expand-environment=no".into(),
+        format!("--unit={UNIT}"),
+        "--slice=lumaacquisition.slice".into(),
+    ];
+    for property in [
+        "User=root", "Group=root", "UMask=0077", "NoNewPrivileges=yes",
+        "ProtectSystem=strict", "ProtectHome=yes", "PrivateTmp=yes", "PrivateDevices=yes",
+        "ProtectKernelTunables=yes", "ProtectKernelModules=yes", "ProtectControlGroups=yes",
+        "RestrictNamespaces=yes", "LockPersonality=yes", "MemoryDenyWriteExecute=yes",
+        "SystemCallArchitectures=native", "AppArmorProfile=luma-content-backup",
+        "MemoryHigh=896M", "MemoryMax=960M", "MemorySwapMax=0", "OOMPolicy=kill",
+        "TasksMax=4", "CPUQuota=200%", "LimitMEMLOCK=640M", "LimitCORE=0",
+        "LimitFSIZE=66M", "DevicePolicy=closed", "KillMode=control-group",
+        "TimeoutStopSec=15", "Restart=no", "RuntimeMaxSec=1800",
+        "Requires=luma-broker.service", "After=luma-broker.service", "BindsTo=luma-broker.service",
+        "Conflicts=sleep.target", "Before=sleep.target", "CapabilityBoundingSet=",
+        "RestrictAddressFamilies=AF_UNIX",
+        "SystemCallFilter=~ptrace process_vm_readv process_vm_writev",
+        "ReadOnlyPaths=/var/lib/luma-os/content-store /var/lib/luma-os/principals",
+        "InaccessiblePaths=/var/lib/luma-broker /var/lib/luma-os/admin /var/lib/luma-os/identity /var/lib/luma-os/models /var/lib/luma-os/model-packs /var/lib/luma-os/resource-checkpoint /run/luma-admin /run/luma-resource-checkpoint",
+        "IOReadBandwidthMax=/var 64M", "IOWriteBandwidthMax=/var 64M",
+    ] { args.push(format!("--property={property}")); }
+    args.extend([
+        "--".into(),
+        "/usr/libexec/luma-os/luma-platform".into(),
+        "content-backup-resource-worker".into(),
+        profile.into(),
     ]);
     Ok(args)
 }
@@ -625,6 +769,105 @@ mod tests {
             .iter()
             .any(|arg| arg == "--property=RestrictAddressFamilies=AF_UNIX"));
         assert!(arguments(Path::new("/tmp"), &profile, "content").is_err());
+    }
+
+    #[test]
+    fn encrypted_backup_has_its_own_exact_locked_read_only_finite_worker_plan() {
+        let id = format!("backup-export-v1-7-4096-{}", "a".repeat(64));
+        let args = arguments(Path::new("/var"), &id, "backup-export").unwrap();
+        for expected in [
+            "--property=MemoryMax=960M",
+            "--property=TasksMax=4",
+            "--property=LimitMEMLOCK=640M",
+            "--property=RuntimeMaxSec=1800",
+            "--property=MemorySwapMax=0",
+            "--property=CapabilityBoundingSet=",
+            "--property=PrivateDevices=yes",
+            "--property=DevicePolicy=closed",
+            "--property=RestrictAddressFamilies=AF_UNIX",
+            "--property=LimitFSIZE=66M",
+            "--property=AppArmorProfile=luma-content-backup",
+            "--property=ReadOnlyPaths=/var/lib/luma-os/content-store /var/lib/luma-os/principals",
+        ] {
+            assert!(args.iter().any(|value| value == expected), "{expected}");
+        }
+        assert_eq!(
+            &args[args.len() - 3..],
+            [
+                "/usr/libexec/luma-os/luma-platform",
+                "content-backup-resource-worker",
+                &id,
+            ]
+        );
+        assert!(!args
+            .iter()
+            .any(|value| value.starts_with("--property=ReadWritePaths=")
+                || value.contains("CAP_")
+                || value.contains("AF_INET")
+                || value.starts_with("--property=DeviceAllow=")));
+        assert!(arguments(Path::new("/tmp"), &id, "backup-export").is_err());
+        for invalid in [
+            id.replace("-4096-", "-0-"),
+            id.replace("-7-", "-07-"),
+            "qwen3-4b-q4-k-m".into(),
+            format!("{id}-extra"),
+        ] {
+            assert!(arguments(Path::new("/var"), &invalid, "backup-export").is_err());
+        }
+        assert!(arguments(Path::new("/var"), &id, "content").is_err());
+    }
+
+    #[test]
+    fn restore_modes_have_exact_capability_free_budgets_and_only_write_can_mutate_content() {
+        for (mode, steps) in [('r', 0), ('w', 2)] {
+            let id = format!(
+                "content-restore-v1-{mode}-7-8-4096-{steps}-{}",
+                "a".repeat(64)
+            );
+            let args = arguments(Path::new("/var"), &id, "content-restore").unwrap();
+            for property in [
+                "--property=MemoryMax=960M",
+                "--property=TasksMax=4",
+                "--property=LimitMEMLOCK=640M",
+                "--property=MemorySwapMax=0",
+                "--property=CapabilityBoundingSet=",
+                "--property=PrivateDevices=yes",
+                "--property=DevicePolicy=closed",
+                "--property=RestrictAddressFamilies=AF_UNIX",
+                "--property=AppArmorProfile=luma-content-restore",
+            ] {
+                assert!(args.iter().any(|arg| arg == property), "{property}");
+            }
+            let effect = if mode == 'r' {
+                "ReadOnlyPaths"
+            } else {
+                "ReadWritePaths"
+            };
+            assert!(args.contains(&format!(
+                "--property={effect}=/var/lib/luma-os/content-store"
+            )));
+            assert_eq!(
+                &args[args.len() - 3..],
+                [
+                    "/usr/libexec/luma-os/luma-platform",
+                    "content-restore-resource-worker",
+                    &id
+                ]
+            );
+            assert!(!args.iter().any(|arg| arg.contains("CAP_")
+                || arg.contains("AF_INET")
+                || arg.starts_with("--property=DeviceAllow=")));
+            assert!(arguments(Path::new("/tmp"), &id, "content-restore").is_err());
+            assert!(arguments(Path::new("/var"), &id, "backup-export").is_err());
+            assert!(arguments(Path::new("/var"), &id, "content").is_err());
+        }
+        for id in [
+            format!("content-restore-v1-r-7-8-4096-1-{}", "a".repeat(64)),
+            format!("content-restore-v1-w-7-8-4096-0-{}", "a".repeat(64)),
+            format!("content-restore-v1-w-7-8-4096-257-{}", "a".repeat(64)),
+        ] {
+            assert!(arguments(Path::new("/var"), &id, "content-restore").is_err());
+        }
     }
 
     #[test]

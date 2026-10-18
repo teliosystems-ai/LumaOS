@@ -9,6 +9,13 @@ case "${1:-}" in
     admin-skill-trust-publish|admin-skill-registry-admit) ;;
     admin-model-command|admin-model-custodian-command) ;;
     resource-checkpoint-prepare-review|resource-checkpoint-prepare|resource-checkpoint-enroll-review|resource-checkpoint-enroll|resource-checkpoint-parent-review|resource-checkpoint-parent-continue|resource-checkpoint-pending-review|resource-checkpoint-finalize|resource-checkpoint-recovery-review|resource-checkpoint-recover|resource-checkpoint-gc-review|resource-checkpoint-gc) ;;
+    content-checkpoint-enroll-review|content-checkpoint-enroll|content-checkpoint-parent-review|content-checkpoint-parent-continue|content-checkpoint-pending-review|content-checkpoint-finalize|content-checkpoint-status-review|content-checkpoint-status) ;;
+    content-custody-inspect-proposal|content-custody-inspect|content-custody-reconcile) ;;
+    content-custody-bootstrap-proposal|content-custody-bootstrap-review|content-custody-bootstrap) ;;
+    utc-windows-checkpoint-enroll-review|utc-windows-checkpoint-enroll|utc-windows-checkpoint-parent-review|utc-windows-checkpoint-parent-continue|utc-windows-checkpoint-pending-review|utc-windows-checkpoint-finalize|utc-windows-checkpoint-status-review|utc-windows-checkpoint-status) ;;
+    utc-windows-key-draft-review|utc-windows-key-draft-inspect|utc-windows-key-draft|utc-windows-key-commission-review|utc-windows-key-commission-inspect|utc-windows-key-commission|utc-windows-key-revoke-review|utc-windows-key-revoke-inspect|utc-windows-key-revoke|utc-windows-key-reconcile-review|utc-windows-key-reconcile-inspect|utc-windows-key-reconcile) ;;
+    utc-windows-key-authorize-review|utc-windows-key-authorize-inspect|utc-windows-key-authorize) ;;
+    content-custody-bootstrap-proposal|content-custody-bootstrap-review|content-custody-bootstrap) ;;
     utc-seed|utc-seed-recovery|utc-query|utc-history|utc-reacquire|utc-reacquire-recovery|admin-account-activate|admin-account-renew|admin-account-recover|admin-account-recover-publish|admin-account-recover-complete|admin-account-create|admin-account-create-permit|admin-account-create-file|admin-account-create-complete|admin-account-delete|admin-account-delete-permit|admin-account-delete-file|admin-account-delete-complete|admin-account-password|admin-account-lock|admin-account-publish|admin-account-complete|admin-catalog|admin-governance-status|admin-principals-adopt|admin-accounts-checkpoint|admin-activity-register|admin-role-define|admin-principal-advance|admin-principal-rotate|admin-custody-recover) ;;
     *) echo 'Choose a supported typed local Admin control command; no shell or general executor is provided.' >&2; exit 2 ;;
 esac

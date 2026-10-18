@@ -77,7 +77,11 @@ impl Authority {
             None
         } else if request.profile.starts_with("qa-v1-") {
             None
-        } else if request.profile.starts_with("content-v1-") {
+        } else if request.profile.starts_with("content-v1-")
+            || request.profile.starts_with(crate::content_backup::PREFIX)
+            || request.profile.starts_with(crate::office_export::PREFIX)
+            || request.profile.starts_with(crate::content_restore::PREFIX)
+        {
             None
         } else {
             Some(crate::model::pack_completion(
@@ -97,13 +101,21 @@ impl Authority {
     pub(crate) fn matches(&self, profile: &str, device: &str) -> bool {
         self.profile == profile && self.device == device
     }
+    pub(crate) fn restore_target_binding(&mut self) -> Result<Option<luma_content::OwnerBinding>> {
+        self.admission.restore_target_binding()
+    }
     pub(crate) fn check(&mut self) -> Result<()> {
         self.admission.acquisition_liveness()?;
         let now = crate::resource_manager::now()?;
         // Content storage calls renew at every bounded I/O/commit checkpoint.
         // It requires a fresh original PAM/grant/UTC proof there, not the
         // model-controller's permitted 500ms cached sampling window.
-        if !self.profile.starts_with("content-v1-") && now < self.next_check {
+        if !self.profile.starts_with("content-v1-")
+            && !self.profile.starts_with(crate::content_backup::PREFIX)
+            && !self.profile.starts_with(crate::office_export::PREFIX)
+            && !self.profile.starts_with(crate::content_restore::PREFIX)
+            && now < self.next_check
+        {
             return Ok(());
         }
         self.admission.check()?;
@@ -114,6 +126,10 @@ impl Authority {
     }
     pub(crate) fn token(&self) -> Option<&Token> {
         self.token.as_ref()
+    }
+    pub(crate) fn attribution(&mut self) -> Result<crate::finite_grants::Audit> {
+        self.check()?;
+        Ok(self.admission.attribution()?.clone())
     }
     pub(crate) fn completed(&self) -> bool {
         self.admission.acquisition_completed()
@@ -146,6 +162,12 @@ pub(crate) fn usage(profile: &str) -> Result<Use> {
         crate::model::qa::usage(profile)
     } else if profile.starts_with("content-v1-") {
         crate::content_governed::acquisition_usage(profile)
+    } else if profile.starts_with(crate::content_backup::PREFIX) {
+        crate::content_backup::acquisition_usage(profile)
+    } else if profile.starts_with(crate::office_export::PREFIX) {
+        crate::office_export::acquisition_usage(profile)
+    } else if profile.starts_with(crate::content_restore::PREFIX) {
+        crate::content_restore::acquisition_usage(profile)
     } else {
         crate::model::pack_import_usage(profile)
     }
@@ -176,7 +198,7 @@ pub(crate) fn run(
     boundary: &mut crate::admin_governance::GrantBoundary<'_>,
 ) -> Result<()> {
     let profile = profile.clone();
-    run_controller(&profile.id.clone(), usage, boundary, move |cancel| {
+    run_controller(&profile.id.clone(), usage, boundary, None, move |cancel| {
         crate::acquisition::run_checked(Path::new("/var"), &profile, "prepare", || {
             if cancel.load(Ordering::Acquire) {
                 Err("original finite acquisition client fenced".into())
@@ -196,7 +218,7 @@ pub(crate) fn run_generated<T: Send>(
     if !profile.starts_with("generated-v1-") {
         return Err("generated acquisition profile is not closed".into());
     }
-    run_controller(profile, usage, boundary, move |cancel| {
+    run_controller(profile, usage, boundary, None, move |cancel| {
         controller(&mut || {
             if cancel.load(Ordering::Acquire) {
                 Err("original generated principal fenced".into())
@@ -219,7 +241,7 @@ pub(crate) fn run_qa<T: Send>(
     {
         return Err("QA controller cannot borrow normal serving/import authority".into());
     }
-    run_controller(profile, usage, boundary, move |cancel| {
+    run_controller(profile, usage, boundary, None, move |cancel| {
         controller(&mut || {
             if cancel.load(Ordering::Acquire) {
                 Err("original QA Admin/UTC/grant connection fenced".into())
@@ -242,7 +264,7 @@ pub(crate) fn run_content<T: Send>(
     {
         return Err("content controller cannot borrow another purpose or finite scope".into());
     }
-    run_controller(profile, usage, boundary, move |cancel| {
+    run_controller(profile, usage, boundary, None, move |cancel| {
         controller(&mut || {
             if cancel.load(Ordering::Acquire) {
                 Err("original content principal fenced".into())
@@ -253,13 +275,105 @@ pub(crate) fn run_content<T: Send>(
     })
 }
 
+pub(crate) fn run_office<T: Send>(
+    profile: &str,
+    usage: &Use,
+    boundary: &mut crate::admin_governance::GrantBoundary<'_>,
+    pending: &crate::policy_decisions::PendingEffect,
+    controller: impl FnOnce(&mut dyn FnMut() -> Result<()>) -> Result<T> + Send,
+) -> Result<T> {
+    crate::office_export::source_digest(profile)?;
+    if boundary.session_purpose() != crate::authentication::SessionPurpose::Export
+        || usage != &crate::office_export::acquisition_usage(profile)?
+    {
+        return Err(
+            "Office controller requires its original purpose-separated Read/Export pair".into(),
+        );
+    }
+    boundary.audit_for_acquisition(usage)?;
+    run_controller(profile, usage, boundary, Some(pending), move |cancel| {
+        controller(&mut || {
+            if cancel.load(Ordering::Acquire) {
+                Err("original Office Export principal fenced".into())
+            } else {
+                Ok(())
+            }
+        })
+    })
+}
+
+pub(crate) fn run_restore<T: Send>(
+    profile: &str,
+    usage: &Use,
+    boundary: &mut crate::admin_governance::GrantBoundary<'_>,
+    controller: impl FnOnce(&mut dyn FnMut() -> Result<()>) -> Result<T> + Send,
+) -> Result<T> {
+    crate::content_restore::source_digest(profile)?;
+    if boundary.session_purpose() != crate::authentication::SessionPurpose::Standard
+        || usage != &crate::content_restore::acquisition_usage(profile)?
+    {
+        return Err(
+            "restore requires original standard Admin session and exact reviewed scope".into(),
+        );
+    }
+    boundary.require_admin()?;
+    boundary.audit_for_acquisition(usage)?;
+    run_controller(profile, usage, boundary, None, move |cancel| {
+        controller(&mut || {
+            if cancel.load(Ordering::Acquire) {
+                Err("original restore Admin authorization fenced".into())
+            } else {
+                Ok(())
+            }
+        })
+    })
+}
+
+pub(crate) fn run_backup<T: Send>(
+    profile: &str,
+    usage: &Use,
+    boundary: &mut crate::admin_governance::GrantBoundary<'_>,
+    pending: &crate::policy_decisions::PendingEffect,
+    controller: impl FnOnce(&mut dyn FnMut() -> Result<()>) -> Result<T> + Send,
+) -> Result<T> {
+    crate::content_backup::source_digest(profile)?;
+    if boundary.session_purpose() != crate::authentication::SessionPurpose::Export
+        || usage != &crate::content_backup::acquisition_usage(profile)?
+    {
+        return Err(
+            "backup controller refuses standard sessions or substituted Export scope".into(),
+        );
+    }
+    boundary.audit_for_acquisition(usage)?;
+    run_controller(profile, usage, boundary, Some(pending), move |cancel| {
+        controller(&mut || {
+            if cancel.load(Ordering::Acquire) {
+                Err("original backup Export principal fenced".into())
+            } else {
+                Ok(())
+            }
+        })
+    })
+}
+
+fn check_authority(
+    boundary: &mut crate::admin_governance::GrantBoundary<'_>,
+    pending: Option<&crate::policy_decisions::PendingEffect>,
+) -> Result<()> {
+    match pending {
+        Some(pending) => boundary.stream_check(pending),
+        None => boundary.check(),
+    }
+}
+
 fn run_controller<T: Send>(
     profile: &str,
     usage: &Use,
     boundary: &mut crate::admin_governance::GrantBoundary<'_>,
+    pending: Option<&crate::policy_decisions::PendingEffect>,
     controller: impl FnOnce(Arc<AtomicBool>) -> Result<T> + Send,
 ) -> Result<T> {
-    boundary.check()?;
+    check_authority(boundary, pending)?;
     let deadline = Instant::now() + Duration::from_secs(4);
     let mut socket = connect_local(SOCKET, deadline)?;
     if peer(&socket)? != 0 {
@@ -292,6 +406,7 @@ fn run_controller<T: Send>(
                 &request.input_sha256,
                 boundary,
                 false,
+                pending,
             )?;
             write_frame_until(&mut socket, &proof, deadline)?;
         } else {
@@ -326,7 +441,7 @@ fn run_controller<T: Send>(
             let mut next_guard = Instant::now();
             loop {
                 if Instant::now() >= next_guard {
-                    boundary.check()?;
+                    check_authority(boundary, pending)?;
                     next_guard = Instant::now() + Duration::from_millis(500);
                 }
                 let mut poll = libc::pollfd {
@@ -350,7 +465,7 @@ fn run_controller<T: Send>(
                     if frame.get("kind").and_then(|value| value.as_str())
                         == Some("acquisition-completed")
                     {
-                        boundary.check()?;
+                        check_authority(boundary, pending)?;
                         return terminal_ack(&frame, &job, &mut completed);
                     }
                     let proof = granted_gateway::acquisition_proof(
@@ -360,6 +475,7 @@ fn run_controller<T: Send>(
                         &request.input_sha256,
                         boundary,
                         completed.is_some(),
+                        pending,
                     )?;
                     write_frame_until(&mut socket, &proof, deadline)?;
                 }
@@ -368,7 +484,7 @@ fn run_controller<T: Send>(
                 }
                 match receiver.try_recv() {
                     Ok(Ok(value)) => {
-                        boundary.check()?;
+                        check_authority(boundary, pending)?;
                         completed = Some(value);
                     }
                     Ok(Err(error)) => return Err(error.into()),

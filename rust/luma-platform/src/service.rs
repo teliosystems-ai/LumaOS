@@ -12,6 +12,7 @@ const SOCKET: &str = "/run/luma-broker/control.sock";
 const MAX_FRAME: usize = 16384;
 const FRAME_TIMEOUT: Duration = Duration::from_secs(2);
 
+pub(crate) mod content_admin;
 pub(crate) mod granted_acquisition;
 pub(crate) mod granted_gateway;
 mod ingress;
@@ -159,7 +160,7 @@ fn write_frame(stream: &mut UnixStream, bytes: &[u8]) -> Result<()> {
     write_frame_until(stream, bytes, Instant::now() + FRAME_TIMEOUT)
 }
 
-fn credentials(stream: &UnixStream) -> Result<libc::ucred> {
+pub(crate) fn credentials(stream: &UnixStream) -> Result<libc::ucred> {
     let mut credentials: libc::ucred = unsafe { std::mem::zeroed() };
     let mut len = std::mem::size_of::<libc::ucred>() as libc::socklen_t;
     let result = unsafe {
@@ -382,6 +383,60 @@ pub fn serve() -> Result<()> {
                     let result = (|| -> Result<serde_json::Value> {
                         let peer = credentials(&incoming.stream)?;
                         let envelope: serde_json::Value = serde_json::from_slice(&incoming.bytes)?;
+                        if envelope.get("action").and_then(|value| value.as_str())
+                            == Some("resource-windows-utc-observe")
+                        {
+                            return crate::utc_windows::broker_time(
+                                &incoming.stream,
+                                &incoming.bytes,
+                            );
+                        }
+                        if envelope.get("action").and_then(|v| v.as_str())
+                            == Some("resource-content-admin-open")
+                        {
+                            let request: content_admin::Request =
+                                serde_json::from_slice(&incoming.bytes)?;
+                            let authority =
+                                content_admin::Authority::capture(&incoming.stream, &request)?;
+                            return manager
+                                .as_mut()
+                                .ok_or("resource manager unavailable in this session")?
+                                .register_content_admin(&request, authority);
+                        }
+                        if envelope.get("action").and_then(|v| v.as_str())
+                            == Some("resource-content-admin-guard")
+                        {
+                            let request: content_admin::Guard =
+                                serde_json::from_slice(&incoming.bytes)?;
+                            let audit = manager
+                                .as_mut()
+                                .ok_or("resource manager unavailable in this session")?
+                                .content_admin_guard(
+                                    &request,
+                                    peer,
+                                    peer_pidfd(&incoming.stream)?,
+                                )?;
+                            return Ok(
+                                serde_json::json!({"schema_version":1,"result":"ok","request_id":request.request_id,"audit":audit}),
+                            );
+                        }
+                        if envelope.get("action").and_then(|v| v.as_str())
+                            == Some("resource-content-custody-guard")
+                        {
+                            let request: crate::content_checkpoint::custody::GuardRequest =
+                                serde_json::from_slice(&incoming.bytes)?;
+                            let audit = manager
+                                .as_mut()
+                                .ok_or("resource manager unavailable in this session")?
+                                .content_custody_guard(
+                                    &request,
+                                    peer,
+                                    peer_pidfd(&incoming.stream)?,
+                                )?;
+                            return Ok(
+                                serde_json::json!({"schema_version":1,"result":"ok","request_id":request.request_id,"audit":audit}),
+                            );
+                        }
                         if envelope.get("action").and_then(|v| v.as_str())
                             == Some("resource-granted-acquisition")
                         {
@@ -578,6 +633,35 @@ pub(crate) fn resource_exchange(
     resource_exchange_on(&mut socket, request, deadline)
 }
 
+pub(crate) fn content_custody_guard(
+    request: &crate::content_checkpoint::custody::GuardRequest,
+) -> Result<crate::finite_grants::Audit> {
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct GuardReply {
+        schema_version: u32,
+        result: String,
+        request_id: String,
+        audit: crate::finite_grants::Audit,
+    }
+    request.validate()?;
+    let deadline = Instant::now() + Duration::from_secs(3);
+    let mut socket = connect_local(SOCKET, deadline)?;
+    if credentials(&socket)?.uid != 0 {
+        return Err("content custody proof broker is not root".into());
+    }
+    crate::content_checkpoint::custody::verify_broker(&socket)?;
+    write_frame_until(&mut socket, &serde_json::to_vec(request)?, deadline)?;
+    let reply: GuardReply = serde_json::from_slice(&read_frame_until(&mut socket, deadline)?)?;
+    if reply.schema_version != 1 || reply.result != "ok" || reply.request_id != request.request_id {
+        return Err("content custody live original proof was refused or changed".into());
+    }
+    reply.audit.validate()?;
+    request.validate()?;
+    crate::content_checkpoint::custody::verify_broker(&socket)?;
+    Ok(reply.audit)
+}
+
 fn resource_exchange_on(
     socket: &mut UnixStream,
     request: &resource_manager::Request,
@@ -685,7 +769,7 @@ fn exchange(socket: &mut UnixStream, request: &Request, deadline: Instant) -> Re
     validate_response(&read_frame_until(socket, deadline)?, request)
 }
 
-fn connect_local(path: &str, deadline: Instant) -> io::Result<UnixStream> {
+pub(crate) fn connect_local(path: &str, deadline: Instant) -> io::Result<UnixStream> {
     remaining(deadline)?;
     // Linux pathname sockets only; never accept an abstract/truncated name.
     let mut address: libc::sockaddr_un = unsafe { std::mem::zeroed() };

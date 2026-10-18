@@ -1,0 +1,53 @@
+{
+  "schema_version": 1,
+  "recorded_on": "2026-10-18",
+  "status": "real-hosted-compute-archive-built-and-windows-content-validated",
+  "scope": "unsigned compute-only development archive; not a full native OS image or authenticated product installer",
+  "release_id": "luma-wsl-dev-hosted-compute-20261018-i",
+  "package_directory": "D:\\LumaOS-builds\\g3-hosted-compute-package-20261018-i-public\\package",
+  "source_snapshot": "/mnt/luma-build/work/g3-integrated-native-source-20261018-i",
+  "source_files": 531,
+  "source_manifest_sha256": "08bff7d6c3e3677c83b8466773896efb42f798e741d2d26592ba1477328e1358",
+  "tools_image": "sha256:819dfe7772da1e3c76ffdc8f9ea4a1fa44c7c549bd4fa988e35d9397d87924b2",
+  "network": "none",
+  "platform_elf": {
+    "built_bytes": 210429864,
+    "built_sha256": "144461a79ac7fe662b0f99280dc3071d21bb59b3382f593da111a07d003f75bb",
+    "normalization": "objcopy --strip-debug into a new copied artifact after the unstripped image exceeded the fixed 64-MiB admission bound",
+    "normalized_bytes": 52752752,
+    "normalized_sha256": "3f5b921c0a3271d03546adc51247eaba0bc9a3c6af5f0ee00a358287eebfb493",
+    "actual_program_headers_allocated_sections_and_dynamic_dependency_dump_unchanged": true,
+    "whole_load_segment_bytes_claimed_identical": false,
+    "normalization_report_sha256": "71c8884b7f06413cca17962ed6db0fa29e4f8443aa87f15ae624347a6dde2dbc"
+  },
+  "archive": {
+    "bytes": 152408576,
+    "sha256": "5c825efb3a4ee26f5460e5ca1f1d41ffc78c8e8bbbc0ecd28124ccf194830f8d",
+    "manifest_sha256": "34907049d18456af404bf64b96a9ac7b32a72c2a5014a9338fffffdd2fd80bf9",
+    "members": 177,
+    "required_runtime_files": 48,
+    "staged_files": 136,
+    "staged_content_bytes": 152275918
+  },
+  "windows_validation": {
+    "actual_native_windows_validator_used": true,
+    "powershell_version": "5.1.26100.9444",
+    "clr_version": "4.0.30319.42000",
+    "hosted_compute_profile": true,
+    "structure_valid": true,
+    "content_valid": true,
+    "report": "D:\\LumaOS-builds\\g3-hosted-compute-package-20261018-i-public\\windows-validation\\validation.json",
+    "report_sha256": "5aa82a25d3a2fcef1d714133ea085e2009fe325c4c16c03c4cc86c74af3efe82",
+    "validator_inputs_sha256": "bdc2f40c809cf723b64b77b122a69f38f2563362d5f6fed4b33664d855283229"
+  },
+  "retained_initial_refusals": [
+    "Unstripped ELF exceeded the fixed stage input bound before output creation",
+    "Initial caller-selected release identifier lacked the required luma-wsl-dev prefix"
+  ],
+  "distribution_imported": false,
+  "actual_guest_runtime_tested": false,
+  "release_authenticated": false,
+  "production_qualified": false,
+  "gate_closing": false,
+  "frozen_g2_image_changed": false
+}

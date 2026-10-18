@@ -1,0 +1,81 @@
+#include <tunables/global>
+
+profile luma-content-backup flags=(attach_disconnected,mediate_deleted) {
+  #include <abstractions/base>
+  deny ptrace (trace, tracedby),
+  deny ptrace (readby) peer=luma-content-backup,
+  deny ptrace (readby) peer=unconfined,
+
+  ptrace (readby) peer=luma-broker,
+  signal (receive) peer=luma-broker,
+  signal (receive) peer=unconfined,
+  signal (send, receive) set=(kill) peer=luma-content-backup,
+  # The helper uses an anonymous same-profile socketpair. The only external
+  # endpoints are the fixed broker and separate C custody sockets below.
+  unix (create) type=stream,
+  unix (getattr, getopt, setopt, shutdown) type=stream addr=none,
+  unix (send, receive) type=stream addr=none peer=(addr=none, label=luma-content-backup),
+  unix (connect, send, receive) type=stream addr=none peer=(label=luma-broker),
+  unix (connect, send, receive) type=stream addr=none peer=(label=luma-content-custody),
+  # Override abstractions/base, including its same-profile abstract permissions.
+  # ** also covers '/' inside abstract addresses; a single * would not.
+  deny unix (bind, listen, accept) addr=@**,
+  deny unix (connect, send, receive) peer=(addr=@**),
+  deny network inet,
+  deny network inet6,
+
+  /usr/libexec/luma-os/luma-platform mrix,
+  /usr/libexec/luma-os/luma-backup-crypto mrix,
+  /usr/lib/** mr,
+  /lib/** mr,
+  /lib64/** mr,
+  /usr/share/luma-os/ r,
+  /usr/share/luma-os/release-identity.json r,
+  /proc/cmdline r,
+  /proc/meminfo r,
+  /proc/sys/kernel/random/boot_id r,
+  /proc/[0-9]*/{stat,status,cgroup,cmdline,limits} r,
+  /proc/[0-9]*/fd/ r,
+  /proc/[0-9]*/fd/[0-9]* r,
+  /proc/[0-9]*/attr/current r,
+  /sys/fs/cgroup/** r,
+  / r,
+  /sys/ r,
+  /sys/kernel/ r,
+  /sys/kernel/security/ r,
+  /sys/kernel/security/apparmor/ r,
+  /sys/kernel/security/apparmor/features/ r,
+  /sys/kernel/security/apparmor/features/network/ r,
+  /sys/kernel/security/apparmor/features/network/af_unix r,
+  /sys/devices/** r,
+  /sys/dev/block/** r,
+  /run/luma-broker/control.sock rw,
+  /run/luma-content-custody/control.sock rw,
+  /memfd:luma-content-backup-request r,
+  /memfd:luma-content-backup-output rw,
+  /memfd:luma-private-credential rwkm,
+
+  /var/ r,
+  /var/lib/ r,
+  /var/lib/luma-os/ r,
+  /var/lib/luma-os/content-store/ rk,
+  /var/lib/luma-os/content-store/** rk,
+  /var/lib/luma-os/principals/ r,
+  /var/lib/luma-os/principals/registry.json r,
+  /dev/{null,zero} rw,
+  /dev/{random,urandom} r,
+
+  # No plaintext logging or UUID daemon IPC inherited from abstractions/base.
+  deny /dev/log rw,
+  deny /{,var/}run/uuidd/request rw,
+  deny /{,var/}run/systemd/journal/{dev-log,socket,stdout} rw,
+
+  deny /var/lib/luma-os/content-store/** wlx,
+  deny /var/lib/luma-os/{admin,identity,models,model-packs,resource-checkpoint,content-checkpoint}/** rwklmx,
+  deny /var/lib/luma-broker/** rwklx,
+  deny /run/{luma-admin,luma-resource-checkpoint,luma-content-checkpoint}/** rwklmx,
+  deny /etc/{passwd,group,shadow,gshadow} rwklx,
+  deny /efi/** rwklx,
+  deny /boot/** rwklx,
+  deny /dev/{tpm*,mem,kmem,port,kvm,dxg,nvidia*,dri/**} rw,
+}

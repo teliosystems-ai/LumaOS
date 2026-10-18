@@ -102,7 +102,78 @@ fn qa_status(status: &str, uid: u32, cmdline: &str) -> Result<()> {
     )
 }
 
+fn backup_status(status: &str, uid: u32, cmdline: &str) -> Result<()> {
+    let parts = cmdline.split('\0').collect::<Vec<_>>();
+    if uid != 0
+        || parts.len() != 4
+        || parts[0] != "/usr/libexec/luma-os/luma-platform"
+        || parts[1] != "content-backup-resource-worker"
+        || !parts[3].is_empty()
+        || crate::content_backup::source_digest(parts[2]).is_err()
+    {
+        return Err("locked backup memory requires the exact capability-free export worker".into());
+    }
+    confined_status(status, uid, 0)
+}
+
+fn office_status(status: &str, uid: u32, cmdline: &str) -> Result<()> {
+    let parts = cmdline.split('\0').collect::<Vec<_>>();
+    if uid != 0
+        || parts.len() != 4
+        || parts[0] != "/usr/libexec/luma-os/luma-platform"
+        || parts[1] != "content-office-resource-worker"
+        || !parts[3].is_empty()
+        || crate::office_export::source_digest(parts[2]).is_err()
+    {
+        return Err(
+            "Office credential-drop capabilities require its exact fixed export supervisor".into(),
+        );
+    }
+    confined_status(
+        status,
+        uid,
+        (1u64 << 0) | (1u64 << 7) | (1u64 << 6) | (1u64 << 5),
+    )
+}
+
+fn restore_status(status: &str, uid: u32, cmdline: &str) -> Result<()> {
+    let parts = cmdline.split('\0').collect::<Vec<_>>();
+    if uid != 0
+        || parts.len() != 5
+        || parts[0] != "/usr/libexec/luma-os/luma-platform"
+        || parts[1] != "content-restore-resource-worker"
+        || crate::content_restore::source_digest(parts[2]).is_err()
+        || !parts[4].is_empty()
+    {
+        return Err("restore requires exact capability-free worker and staged request".into());
+    }
+    let suffix = parts[3]
+        .strip_prefix("/run/luma-granted-client/requests/")
+        .and_then(|s| s.strip_suffix("/content-restore.json"))
+        .ok_or("restore request is outside fixed original-client staging")?;
+    crate::tpm::decode::<16>(suffix)?;
+    confined_status(status, uid, 0)
+}
+
+fn content_status(status: &str, uid: u32, cmdline: &str) -> Result<()> {
+    let parts = cmdline.split('\0').collect::<Vec<_>>();
+    if uid != 0
+        || parts.len() != 4
+        || parts[0] != "/usr/libexec/luma-os/luma-platform"
+        || parts[1] != "content-resource-worker"
+        || !parts[3].is_empty()
+        || crate::content_governed::source_digest(parts[2]).is_err()
+    {
+        return Err("zero-capability content admission requires the exact governed worker".into());
+    }
+    confined_status(status, uid, 0)
+}
+
 fn locked_memory(limits: &str) -> Result<()> {
+    locked_memory_bound(limits, 0)
+}
+
+fn locked_memory_bound(limits: &str, expected: u64) -> Result<()> {
     let mut lines = limits
         .lines()
         .filter(|line| line.starts_with("Max locked memory"));
@@ -110,11 +181,11 @@ fn locked_memory(limits: &str) -> Result<()> {
     let fields: Vec<_> = line.split_whitespace().collect();
     if lines.next().is_some()
         || fields.len() != 6
-        || fields[3] != "0"
-        || fields[4] != "0"
+        || fields[3] != expected.to_string()
+        || fields[4] != expected.to_string()
         || fields[5] != "bytes"
     {
-        return Err("CPU worker pinned memory is not disabled".into());
+        return Err("worker pinned memory differs from its exact execution ceiling".into());
     }
     Ok(())
 }
@@ -130,14 +201,24 @@ pub(super) fn worker_generation(
     let start = start_ticks(&read("stat", 4096)?)?;
     let initial_profile = read("attr/current", 128)?;
     let qa = kind == Kind::Acquisition && initial_profile == "luma-qa-supervisor (enforce)\n";
+    let backup = kind == Kind::Acquisition && initial_profile == "luma-content-backup (enforce)\n";
+    let office = kind == Kind::Acquisition && initial_profile == "luma-office-export (enforce)\n";
+    let restore =
+        kind == Kind::Acquisition && initial_profile == "luma-content-restore (enforce)\n";
     let normal = match kind {
         Kind::Model => "luma-model (enforce)\n",
         Kind::Acquisition => "luma-acquisition (enforce)\n",
     };
-    if !qa && initial_profile != normal {
+    if !qa && !backup && !office && !restore && initial_profile != normal {
         return Err("initial worker confinement observation is unsupported or changed".into());
     }
-    let profile = if qa {
+    let profile = if restore {
+        "luma-content-restore (enforce)\n"
+    } else if office {
+        "luma-office-export (enforce)\n"
+    } else if backup {
+        "luma-content-backup (enforce)\n"
+    } else if qa {
         "luma-qa-supervisor (enforce)\n"
     } else {
         match kind {
@@ -152,14 +233,28 @@ pub(super) fn worker_generation(
             return Err("worker group or enforcing AppArmor generation differs".into());
         }
         let status = read("status", STATUS_BYTES)?;
-        if qa {
+        if restore {
+            restore_status(&status, uid, &read("cmdline", 4096)?)?;
+        } else if office {
+            office_status(&status, uid, &read("cmdline", 4096)?)?;
+        } else if backup {
+            backup_status(&status, uid, &read("cmdline", 4096)?)?;
+        } else if qa {
             qa_status(&status, uid, &read("cmdline", 4096)?)?;
         } else if kind == Kind::Acquisition && field(&status, "CapBnd")? == "00000000000001e0" {
             generated_status(&status, uid, &read("cmdline", 4096)?)?;
+        } else if kind == Kind::Acquisition && field(&status, "CapBnd")? == "0000000000000000" {
+            content_status(&status, uid, &read("cmdline", 4096)?)?;
         } else {
             worker_status(&status, kind, uid)?;
         }
-        locked_memory(&read("limits", 8192)?)?;
+        if restore {
+            locked_memory_bound(&read("limits", 8192)?, crate::content_restore::LOCKED)?;
+        } else if backup {
+            locked_memory_bound(&read("limits", 8192)?, crate::content_backup::LOCKED)?;
+        } else {
+            locked_memory(&read("limits", 8192)?)?;
+        }
         if start_ticks(&read("stat", 4096)?)? != start {
             return Err("worker process generation changed during observation".into());
         }
@@ -179,6 +274,25 @@ fn reference_generation(mut read: impl FnMut(&str, u64) -> Result<String>) -> Re
         locked_memory(&read("limits", 8192)?)?;
         if start_ticks(&read("stat", 4096)?)? != start {
             return Err("reference caller process generation changed during observation".into());
+        }
+    }
+    Ok(start)
+}
+
+pub(super) fn custody_generation(mut read: impl FnMut(&str, u64) -> Result<String>) -> Result<u64> {
+    let start = start_ticks(&read("stat", 4096)?)?;
+    for _ in 0..2 {
+        if read("cgroup", 4096)? != "0::/system.slice/luma-content-custody.service\n"
+            || read("attr/current", 128)? != "luma-content-custody (enforce)\n"
+            || read("cmdline", 4096)?
+                != "/usr/libexec/luma-os/luma-platform\0content-custody-service\0"
+        {
+            return Err("content custody guard caller is not the fixed enforcing service".into());
+        }
+        confined_status(&read("status", STATUS_BYTES)?, 0, 0)?;
+        locked_memory_bound(&read("limits", 8192)?, 96 * 1024 * 1024)?;
+        if start_ticks(&read("stat", 4096)?)? != start {
+            return Err("content custody service generation changed".into());
         }
     }
     Ok(start)
@@ -224,6 +338,29 @@ pub(super) fn live_generation(peer: libc::ucred, pin: &File) -> Result<(u64, Str
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn capability_free_content_worker_cannot_borrow_model_or_generic_acquisition_identity() {
+        let status = status(Kind::Model, 0);
+        let id = format!("content-v1-write-1-{}-{}", "a".repeat(64), "b".repeat(64));
+        let exact = format!("/usr/libexec/luma-os/luma-platform\0content-resource-worker\0{id}\0");
+        content_status(&status, 0, &exact).unwrap();
+        for invalid in [
+            exact.replace("content-resource-worker", "model-acquisition-worker"),
+            exact.replace("/usr/libexec/luma-os/luma-platform", "/tmp/luma-platform"),
+            format!("{exact}extra\0"),
+            exact.replace("content-v1-write-1", "content-v1-write-0"),
+            exact.trim_end_matches('\0').to_string(),
+        ] {
+            assert!(content_status(&status, 0, &invalid).is_err());
+        }
+        assert!(content_status(
+            &status.replace("0000000000000000", "00000000000000e0"),
+            0,
+            &exact
+        )
+        .is_err());
+        assert!(content_status(&status, 988, &exact).is_err());
+    }
     #[test]
     fn generated_extra_capability_requires_exact_closed_supervisor_argv() {
         let status = status(Kind::Acquisition, 0).replace("00000000000000e0", "00000000000001e0");
@@ -299,6 +436,166 @@ mod tests {
             assert!(value.len() as u64 <= maximum);
             Ok(value)
         })
+    }
+
+    fn backup(mut mutate: impl FnMut(&str, usize, &mut String)) -> Result<u64> {
+        let mut counts = BTreeMap::<String, usize>::new();
+        let id = format!("backup-export-v1-7-4096-{}", "a".repeat(64));
+        worker_generation(Kind::Acquisition, 0, |name, maximum| {
+            let mut value = match name {
+                "stat" => stat(7),
+                "status" => status(Kind::Model, 0),
+                "cgroup" => format!("0::{}\n", Kind::Acquisition.leaf()),
+                "attr/current" => "luma-content-backup (enforce)\n".into(),
+                "cmdline" => format!(
+                    "/usr/libexec/luma-os/luma-platform\0content-backup-resource-worker\0{id}\0"
+                ),
+                "limits" => format!(
+                    "Max locked memory {} {} bytes\n",
+                    crate::content_backup::LOCKED,
+                    crate::content_backup::LOCKED
+                ),
+                _ => panic!("unexpected backup kernel observation"),
+            };
+            let count = counts.entry(name.into()).or_default();
+            mutate(name, *count, &mut value);
+            *count += 1;
+            assert!(value.len() as u64 <= maximum);
+            Ok(value)
+        })
+    }
+
+    fn restore(mut mutate: impl FnMut(&str, usize, &mut String)) -> Result<u64> {
+        let mut counts = BTreeMap::<String, usize>::new();
+        let id = format!("content-restore-v1-r-7-8-4096-0-{}", "a".repeat(64));
+        let stage = format!(
+            "/run/luma-granted-client/requests/{}/content-restore.json",
+            "b".repeat(32)
+        );
+        worker_generation(Kind::Acquisition, 0, |name, maximum| {
+            let mut value = match name {
+                "stat" => stat(7),
+                "status" => status(Kind::Model, 0),
+                "cgroup" => format!("0::{}\n", Kind::Acquisition.leaf()),
+                "attr/current" => "luma-content-restore (enforce)\n".into(),
+                "cmdline" => format!("/usr/libexec/luma-os/luma-platform\0content-restore-resource-worker\0{id}\0{stage}\0"),
+                "limits" => format!("Max locked memory {} {} bytes\n", crate::content_restore::LOCKED, crate::content_restore::LOCKED),
+                _ => panic!("unexpected restore kernel observation"),
+            };
+            let count = counts.entry(name.into()).or_default();
+            mutate(name, *count, &mut value);
+            *count += 1;
+            assert!(value.len() as u64 <= maximum);
+            Ok(value)
+        })
+    }
+
+    #[test]
+    fn restore_private_key_budget_requires_exact_worker_stage_and_continuously_pinned_generation() {
+        assert_eq!(restore(|_, _, _| ()).unwrap(), 7);
+        let id = format!("content-restore-v1-r-7-8-4096-0-{}", "a".repeat(64));
+        let stage = format!(
+            "/run/luma-granted-client/requests/{}/content-restore.json",
+            "b".repeat(32)
+        );
+        let exact = format!(
+            "/usr/libexec/luma-os/luma-platform\0content-restore-resource-worker\0{id}\0{stage}\0"
+        );
+        for changed in [
+            exact.replace("content-restore-resource-worker", "content-resource-worker"),
+            exact.replace("/usr/libexec/luma-os/luma-platform", "/tmp/luma-platform"),
+            exact.replace(&stage, "/tmp/content-restore.json"),
+            exact.replace("content-restore.json", "content-restore.cms"),
+            exact.replace(&"b".repeat(32), &"b".repeat(31)),
+            format!("{exact}private-key-path\0"),
+            exact.trim_end_matches('\0').into(),
+        ] {
+            assert!(restore_status(&status(Kind::Model, 0), 0, &changed).is_err());
+        }
+        assert!(restore_status(&status(Kind::Acquisition, 0), 0, &exact).is_err());
+        assert!(restore_status(&status(Kind::Model, 989), 989, &exact).is_err());
+        for (name, changed) in [
+            ("attr/current", "luma-content-restore (complain)\n".into()),
+            ("status", status(Kind::Acquisition, 0)),
+            ("limits", "Max locked memory 0 0 bytes\n".into()),
+            (
+                "cmdline",
+                exact.replace("content-restore.json", "arbitrary.json"),
+            ),
+            (
+                "cgroup",
+                "0::/other.slice/luma-acquisition.service\n".into(),
+            ),
+        ] {
+            for round in 0..2 {
+                assert!(
+                    restore(|field, observed, value| {
+                        if field == name && observed == round {
+                            *value = changed.clone();
+                        }
+                    })
+                    .is_err(),
+                    "{name} round {round}"
+                );
+            }
+        }
+        assert!(restore(|name, observed, value| {
+            if name == "stat" && observed > 0 {
+                *value = stat(8);
+            }
+        })
+        .is_err());
+    }
+
+    #[test]
+    fn backup_locked_memory_is_exclusive_to_exact_zero_capability_export_worker() {
+        assert_eq!(backup(|_, _, _| ()).unwrap(), 7);
+        let limit = crate::content_backup::LOCKED;
+        assert!(observe(Kind::Acquisition, 0, |name, _, value| {
+            if name == "limits" {
+                *value = format!("Max locked memory {limit} {limit} bytes\n");
+            }
+        })
+        .is_err());
+        let id = format!("backup-export-v1-7-4096-{}", "a".repeat(64));
+        let exact =
+            format!("/usr/libexec/luma-os/luma-platform\0content-backup-resource-worker\0{id}\0");
+        for changed in [
+            exact.replace("content-backup-resource-worker", "content-resource-worker"),
+            exact.replace("content-backup-resource-worker", "luma-backup-crypto"),
+            exact.replace("/usr/libexec/luma-os/luma-platform", "/tmp/luma-platform"),
+            exact.replace(&id, "backup-export-v1-7-0-invalid"),
+            exact.trim_end_matches('\0').into(),
+            format!("{exact}extra\0"),
+        ] {
+            assert!(backup_status(&status(Kind::Model, 0), 0, &changed).is_err());
+        }
+        assert!(backup_status(&status(Kind::Acquisition, 0), 0, &exact).is_err());
+        assert!(backup_status(&status(Kind::Model, 989), 989, &exact).is_err());
+        for (name, changed) in [
+            ("attr/current", "luma-content-backup (complain)\n".into()),
+            ("attr/current", "luma-acquisition (enforce)\n".into()),
+            ("status", status(Kind::Acquisition, 0)),
+            ("limits", "Max locked memory 0 0 bytes\n".into()),
+            ("limits", format!("Max locked memory {limit} {} bytes\n", limit + 1)),
+            ("limits", format!("Max locked memory 0{limit} {limit} bytes\n")),
+            ("limits", format!("Max locked memory {limit} {limit} bytes\nMax locked memory {limit} {limit} bytes\n")),
+            ("cgroup", "0::/other.slice/luma-acquisition.service\n".into()),
+        ] {
+            for round in 0..2 {
+                assert!(backup(|field, count, value| {
+                    if field == name && count == round { *value = changed.clone(); }
+                }).is_err(), "{name} round {round}");
+            }
+        }
+        for round in 0..2 {
+            assert!(backup(|field, count, value| {
+                if field == "cmdline" && count == round {
+                    *value = format!("{exact}extra\0");
+                }
+            })
+            .is_err());
+        }
     }
 
     #[test]

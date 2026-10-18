@@ -10,6 +10,7 @@ import argparse
 from contextlib import contextmanager
 import hashlib
 import io
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -333,7 +334,7 @@ def elf(data, require_entry=False, object_path=None, details=False):
     return (interpreter, needed, search) if details else (interpreter, needed)
 
 
-def build(root, platform, plan_path, output, release):
+def build(root, platform, plan_path, output, release, hosted_compute=False):
     if not re.fullmatch(r'luma-wsl-dev-[A-Za-z0-9][A-Za-z0-9.-]{0,63}', release):
         raise ValueError('release ID is outside the existing development schema')
     plan = plan_input(plan_path)
@@ -358,11 +359,19 @@ def build(root, platform, plan_path, output, release):
                 keys[match[1]] = match[2] or match[3]
         if keys != {'ID': 'ubuntu', 'VERSION_ID': '24.04'}:
             raise ValueError('source must identify actual Ubuntu 24.04 userland')
+        embedded_identity = {'schema_version': 1, 'release_id': release, 'architecture': 'amd64', 'profile': 'W'}
+        wsl = WSL
+        hosted = None
+        if hosted_compute:
+            spec = importlib.util.spec_from_file_location('luma_windows_hosted_package', Path(__file__).with_name('windows_hosted.py'))
+            hosted = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(hosted)
+            embedded_identity.update(schema_version=2, runtime_profile=hosted.PROFILE)
+            wsl += b'[user]\ndefault=nobody\n'
         replacements = {
             'usr/bin/luma-platform': (binary, 0o755),
-            'etc/wsl.conf': (WSL, 0o644),
-            'usr/lib/luma/platform.json': (canonical({'schema_version': 1, 'release_id': release,
-                                                     'architecture': 'amd64', 'profile': 'W'}), 0o644)}
+            'etc/wsl.conf': (wsl, 0o644),
+            'usr/lib/luma/platform.json': (canonical(embedded_identity), 0o644)}
         entries, folded, excluded, normalizations, directories = {}, {}, set(), [], {}
         def add(path, directory, mode, size, source):
             archive_path(path)
@@ -433,9 +442,16 @@ def build(root, platform, plan_path, output, release):
             return tree.read(path, MAX_ELF)
         required = {'etc/os-release', 'etc/wsl.conf', 'usr/lib/luma/platform.json',
                     'usr/bin/luma-platform', 'bin/sh', 'usr/lib/systemd/systemd'}
+        roots = ('usr/bin/luma-platform', 'bin/sh', 'usr/lib/systemd/systemd')
+        if hosted_compute:
+            required.update((*hosted.GENERATED, hosted.PLATFORM, hosted.POLICY, *hosted.BINARIES,
+                             'usr/bin/systemctl'))
+            if not required.issubset(entries):
+                raise ValueError('hosted compute composition lacks mandatory fixed runtime files')
+            hosted.validate(data_at, entries, binary)
+            roots += (*hosted.BINARIES, hosted.PLATFORM, 'usr/bin/systemctl')
         if not required.issubset(entries):
             raise ValueError('explicit exclusions removed mandatory runtime content')
-        roots = ('usr/bin/luma-platform', 'bin/sh', 'usr/lib/systemd/systemd')
         todo = [(path, (), path) for path in roots]
         loaded = {path: {} for path in roots}
         checked = set()
@@ -447,9 +463,8 @@ def build(root, platform, plan_path, output, release):
             checked.add(key)
             if len(checked) > 256 or len({item[0] for item in checked}) > 60:
                 raise ValueError('runtime dependency closure exceeds manifest bounds')
-            interp, needed, search = elf(data_at(path), require_entry=path in (
-                'usr/bin/luma-platform', 'bin/sh', 'usr/lib/systemd/systemd'), object_path=path, details=True)
-            if path in ('usr/bin/luma-platform', 'bin/sh', 'usr/lib/systemd/systemd') and not entries[path][1] & 0o111:
+            interp, needed, search = elf(data_at(path), require_entry=path in roots, object_path=path, details=True)
+            if path in roots and not entries[path][1] & 0o111:
                 raise ValueError('required ELF is not executable: ' + path)
             dependencies = []
             inherited_next = tuple(dict.fromkeys((*search['rpath'], *inherited)))
@@ -599,5 +614,7 @@ if __name__ == '__main__':
     parser.add_argument('--plan', type=Path, required=True)
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--release-id', required=True)
+    parser.add_argument('--hosted-compute', action='store_true')
     args = parser.parse_args()
-    print(canonical(build(args.root, args.platform, args.plan, args.output, args.release_id)).decode(), end='')
+    print(canonical(build(args.root, args.platform, args.plan, args.output, args.release_id,
+                         hosted_compute=args.hosted_compute)).decode(), end='')

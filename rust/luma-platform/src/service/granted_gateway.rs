@@ -32,11 +32,20 @@ fn payload_command(command: &str) -> bool {
             | "artifact-governed-export"
             | "policy-archive-export"
             | "workflow-history-export"
+            | "content-backup-export"
+            | "content-office-export"
     )
 }
 
 fn extended_client_command(command: &str) -> bool {
-    payload_command(command) || matches!(command, "model-pack-import" | "model-activate")
+    payload_command(command)
+        || matches!(
+            command,
+            "model-pack-import"
+                | "model-activate"
+                | "content-restore-review"
+                | "content-restore-apply"
+        )
 }
 
 /// Internal fixed-launcher transport, never a serialized grant or arbitrary
@@ -116,6 +125,110 @@ pub(crate) fn export_writer() -> Result<Box<dyn Write>> {
     })
 }
 
+/// This effect has no direct-stdout fallback: delivery must retain the original
+/// fixed launcher's acknowledged, bounded binary transport.
+pub(crate) fn required_export_writer() -> Result<CheckedPayload> {
+    if !PAYLOAD_SELECTED.with(|selected| selected.get()) {
+        return Err("backup export requires its original acknowledged payload relay".into());
+    }
+    PAYLOAD.with(|slot| -> Result<CheckedPayload> {
+        let writer = slot
+            .borrow_mut()
+            .take()
+            .ok_or("backup payload relay already consumed")?;
+        writer.socket.set_nonblocking(true)?;
+        Ok(CheckedPayload(writer))
+    })
+}
+
+pub(crate) struct CheckedPayload(PayloadWriter);
+impl CheckedPayload {
+    fn transfer(&mut self, bytes: &[u8], check: &mut dyn FnMut() -> Result<()>) -> Result<()> {
+        let deadline = Instant::now() + PAYLOAD_TIMEOUT;
+        let mut sent = 0;
+        while sent < bytes.len() {
+            check()?;
+            if Instant::now() >= deadline {
+                return Err("backup relay write deadline expired".into());
+            }
+            match self.0.socket.write(&bytes[sent..]) {
+                Ok(0) => return Err("backup relay closed during write".into()),
+                Ok(count) => sent += count,
+                Err(error) if error.kind() == std::io::ErrorKind::Interrupted => (),
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    let mut poll = libc::pollfd {
+                        fd: self.0.socket.as_raw_fd(),
+                        events: libc::POLLOUT,
+                        revents: 0,
+                    };
+                    if unsafe { libc::poll(&mut poll, 1, 100) } < 0 {
+                        return Err(std::io::Error::last_os_error().into());
+                    }
+                }
+                Err(error) => return Err(error.into()),
+            }
+        }
+        Ok(())
+    }
+    fn acknowledge(&mut self, check: &mut dyn FnMut() -> Result<()>) -> Result<()> {
+        let deadline = Instant::now() + PAYLOAD_TIMEOUT;
+        let mut ack = [0u8; 40];
+        let mut received = 0;
+        while received < ack.len() {
+            check()?;
+            if Instant::now() >= deadline {
+                return Err("backup relay acknowledgement deadline expired".into());
+            }
+            match self.0.socket.read(&mut ack[received..]) {
+                Ok(0) => return Err("backup relay closed before acknowledgement".into()),
+                Ok(count) => received += count,
+                Err(error) if error.kind() == std::io::ErrorKind::Interrupted => (),
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    let mut poll = libc::pollfd {
+                        fd: self.0.socket.as_raw_fd(),
+                        events: libc::POLLIN,
+                        revents: 0,
+                    };
+                    if unsafe { libc::poll(&mut poll, 1, 100) } < 0 {
+                        return Err(std::io::Error::last_os_error().into());
+                    }
+                }
+                Err(error) => return Err(error.into()),
+            }
+        }
+        if ack[..8] != self.0.bytes.to_be_bytes()
+            || ack[8..] != self.0.digest.clone().finalize()[..]
+        {
+            return Err("backup relay exact delivery acknowledgement differs".into());
+        }
+        check()
+    }
+    pub(crate) fn write_checked(
+        &mut self,
+        bytes: &[u8],
+        check: &mut dyn FnMut() -> Result<()>,
+    ) -> Result<()> {
+        if bytes.is_empty() || bytes.len() > PAYLOAD_BLOCK {
+            return Err("backup relay block outside fixed bound".into());
+        }
+        let next = self
+            .0
+            .bytes
+            .checked_add(bytes.len() as u64)
+            .filter(|count| *count <= PAYLOAD_MAX)
+            .ok_or("backup relay exceeds finite delivery bound")?;
+        self.transfer(&(bytes.len() as u32).to_be_bytes(), check)?;
+        self.transfer(bytes, check)?;
+        self.0.bytes = next;
+        self.0.digest.update(bytes);
+        self.acknowledge(check)
+    }
+    pub(crate) fn finish_checked(&mut self, check: &mut dyn FnMut() -> Result<()>) -> Result<()> {
+        self.transfer(&0u32.to_be_bytes(), check)?;
+        self.acknowledge(check)
+    }
+}
+
 struct PayloadWriter {
     socket: UnixStream,
     bytes: u64,
@@ -170,6 +283,7 @@ struct PayloadListener {
     unit: String,
     directory: fs::File,
     socket_identity: (u64, u64),
+    backup: bool,
 }
 impl PayloadListener {
     fn create(arguments: &[String], unit: &str) -> Result<Self> {
@@ -202,6 +316,10 @@ impl PayloadListener {
             unit: unit.into(),
             directory,
             socket_identity: (socket_meta.dev(), socket_meta.ino()),
+            backup: matches!(
+                arguments.first().map(String::as_str),
+                Some("content-backup-export" | "content-office-export")
+            ),
         })
     }
     fn relay(&self, child: &mut Child) -> Result<()> {
@@ -250,7 +368,19 @@ impl PayloadListener {
         if header[..16] != PAYLOAD_MAGIC[..] || header[16..] != self.command_hash {
             return Err("export payload command binding differs".into());
         }
-        relay_payload(&mut socket, &mut std::io::stdout().lock(), deadline)
+        if self.backup {
+            // Encryption can legitimately spend the full live Export window
+            // before producing any bytes. No heartbeat/empty success frame is
+            // manufactured while the actual worker/controller is still busy.
+            relay_payload_timed(
+                &mut socket,
+                &mut std::io::stdout().lock(),
+                deadline,
+                PAYLOAD_RUNTIME,
+            )
+        } else {
+            relay_payload(&mut socket, &mut std::io::stdout().lock(), deadline)
+        }
     }
 }
 impl Drop for PayloadListener {
@@ -279,6 +409,15 @@ fn relay_payload(
     output: &mut impl Write,
     deadline: Instant,
 ) -> Result<()> {
+    relay_payload_timed(socket, output, deadline, PAYLOAD_TIMEOUT)
+}
+
+fn relay_payload_timed(
+    socket: &mut UnixStream,
+    output: &mut impl Write,
+    deadline: Instant,
+    idle_timeout: Duration,
+) -> Result<()> {
     let mut digest = Sha256::new();
     let mut total = 0u64;
     let mut flushed = false;
@@ -290,7 +429,7 @@ fn relay_payload(
         if remaining.is_zero() {
             return Err("export payload exhausted its runtime budget".into());
         }
-        socket.set_read_timeout(Some(PAYLOAD_TIMEOUT.min(remaining)))?;
+        socket.set_read_timeout(Some(idle_timeout.min(remaining)))?;
         socket.set_write_timeout(Some(PAYLOAD_TIMEOUT.min(remaining)))?;
         let mut size = [0u8; 4];
         let count = socket.read(&mut size[..1])?;
@@ -331,15 +470,21 @@ fn relay_payload(
 #[serde(rename_all = "kebab-case")]
 enum BrokerPurpose {
     Standard,
+    ContentRestoreAdmin,
+    ContentCustodyAdmin,
     ModelImport,
     ModelQa,
+    Export,
 }
 impl BrokerPurpose {
     fn require(self, actual: crate::authentication::SessionPurpose) -> Result<()> {
         let expected = match self {
-            Self::Standard => crate::authentication::SessionPurpose::Standard,
+            Self::Standard | Self::ContentCustodyAdmin | Self::ContentRestoreAdmin => {
+                crate::authentication::SessionPurpose::Standard
+            }
             Self::ModelImport => crate::authentication::SessionPurpose::ModelImport,
             Self::ModelQa => crate::authentication::SessionPurpose::ModelQa,
+            Self::Export => crate::authentication::SessionPurpose::Export,
         };
         if actual != expected {
             return Err("broker challenge cannot convert the original session purpose".into());
@@ -557,6 +702,7 @@ pub(crate) struct Admission {
     fenced: bool,
     audit: Option<crate::finite_grants::Audit>,
     acquisition_profile: Option<String>,
+    custody_command: Option<String>,
     acquisition_completed: bool,
     purpose: BrokerPurpose,
 }
@@ -574,6 +720,7 @@ impl Admission {
             input_sha256,
             BrokerPurpose::Standard,
             None,
+            None,
         )
     }
     fn capture_for(
@@ -583,6 +730,7 @@ impl Admission {
         input_sha256: String,
         purpose: BrokerPurpose,
         acquisition_profile: Option<String>,
+        custody_command: Option<String>,
     ) -> Result<Self> {
         usage.validate()?;
         crate::tpm::decode::<32>(&input_sha256)?;
@@ -614,6 +762,7 @@ impl Admission {
             fenced: false,
             audit: None,
             acquisition_profile,
+            custody_command,
             acquisition_completed: false,
             purpose,
         };
@@ -631,6 +780,11 @@ impl Admission {
         client_status(&kernel_text(&process.join("status"), 65_536, 0x9fa0)?)?;
         if let Some(profile) = &self.acquisition_profile {
             acquisition_arguments(self.peer.pid, profile, self.audit.as_ref())?;
+        }
+        if let Some(command) = &self.custody_command {
+            custody_arguments(self.peer.pid, command, &self.usage, self.audit.as_ref())?;
+        } else if self.purpose == BrokerPurpose::ContentCustodyAdmin {
+            return Err("custody Admin proof has no exact original command".into());
         }
         let group = kernel_text(&process.join("cgroup"), 4096, 0x9fa0)?;
         let unit = group
@@ -725,6 +879,30 @@ impl Admission {
             .filter(|_| !self.fenced)
             .ok_or_else(|| "missing current granted subject attribution".into())
     }
+    pub(crate) fn restore_target_binding(&mut self) -> Result<Option<luma_content::OwnerBinding>> {
+        if self.purpose != BrokerPurpose::ContentRestoreAdmin {
+            return Ok(None);
+        }
+        self.check()?;
+        let profile = self
+            .acquisition_profile
+            .as_ref()
+            .ok_or("restore original profile absent")?;
+        let raw = kernel_text(
+            &Path::new("/proc")
+                .join(self.peer.pid.to_string())
+                .join("cmdline"),
+            4096,
+            0x9fa0,
+        )?;
+        let target = crate::content_restore::original_target(
+            &raw.split('\0').collect::<Vec<_>>(),
+            profile,
+            self.attribution()?,
+        )?;
+        self.peer_check()?;
+        Ok(Some(target))
+    }
     pub(crate) fn capture_acquisition(
         socket: &UnixStream,
         job: &str,
@@ -738,9 +916,14 @@ impl Admission {
             );
         }
         acquisition_arguments(credentials(socket)?.pid, profile, None)?;
-        let purpose = if profile.starts_with("generated-v1-") || profile.starts_with("content-v1-")
-        {
+        let purpose = if profile.starts_with(crate::content_restore::PREFIX) {
+            BrokerPurpose::ContentRestoreAdmin
+        } else if profile.starts_with("generated-v1-") || profile.starts_with("content-v1-") {
             BrokerPurpose::Standard
+        } else if profile.starts_with(crate::content_backup::PREFIX)
+            || profile.starts_with(crate::office_export::PREFIX)
+        {
+            BrokerPurpose::Export
         } else if profile.starts_with("qa-v1-") {
             BrokerPurpose::ModelQa
         } else {
@@ -753,6 +936,7 @@ impl Admission {
             input_sha256,
             purpose,
             Some(profile.into()),
+            None,
         )?;
         result.peer_check()?;
         Ok(result)
@@ -774,6 +958,24 @@ impl Admission {
             return Err("acquisition original client disconnected or sent unsolicited data".into());
         }
         Ok(())
+    }
+    pub(crate) fn capture_custody_admin(
+        socket: &UnixStream,
+        job: &str,
+        command: &str,
+        usage: Use,
+    ) -> Result<Self> {
+        crate::content_checkpoint::custody::admin_scope(command, &usage)?;
+        custody_arguments(credentials(socket)?.pid, command, &usage, None)?;
+        Self::capture_for(
+            socket,
+            job,
+            usage.clone(),
+            usage.selector.digest,
+            BrokerPurpose::ContentCustodyAdmin,
+            None,
+            Some(command.into()),
+        )
     }
     pub(crate) fn acquisition_completed(&self) -> bool {
         self.acquisition_completed
@@ -809,6 +1011,15 @@ fn acquisition_arguments(
     let args = raw.split('\0').collect::<Vec<_>>();
     if profile.starts_with("content-v1-") {
         return crate::content_governed::check_client_arguments(&args, profile, audit);
+    }
+    if profile.starts_with(crate::content_restore::PREFIX) {
+        return crate::content_restore::check_client_arguments(&args, profile, audit);
+    }
+    if profile.starts_with(crate::content_backup::PREFIX) {
+        return crate::content_backup::check_client_arguments(&args, profile, audit);
+    }
+    if profile.starts_with(crate::office_export::PREFIX) {
+        return crate::office_export::check_client_arguments(&args, profile, audit);
     }
     let grant = audit.map(|value| value.grant_id.as_str());
     if profile.starts_with("qa-v1-") {
@@ -856,6 +1067,61 @@ fn acquisition_arguments(
     Ok(())
 }
 
+fn custody_arguments(
+    pid: i32,
+    command: &str,
+    usage: &Use,
+    audit: Option<&crate::finite_grants::Audit>,
+) -> Result<()> {
+    crate::content_checkpoint::custody::admin_scope(command, usage)?;
+    if pid <= 0 {
+        return Err("custody Admin original process is not live".into());
+    }
+    let raw = kernel_text(
+        &Path::new("/proc").join(pid.to_string()).join("cmdline"),
+        4096,
+        0x9fa0,
+    )?;
+    let args = raw.split('\0').collect::<Vec<_>>();
+    let count = if command == "content-backup-signer-prepare" {
+        5
+    } else {
+        6
+    };
+    if args.len() != count
+        || args[0] != IMAGE_EXE
+        || args[1] != command
+        || args.last() != Some(&"")
+        || args[2].is_empty()
+        || args[2].len() > 32
+        || !crate::admin_roles::identifier(args[3])
+        || audit.is_some_and(|value| value.grant_id != args[3] || value.usage != *usage)
+        || (count == 6
+            && command != "content-backup-recipients-enroll"
+            && !matches!(
+                command,
+                "content-restore-retire-inspect" | "content-restore-retire"
+            )
+            && args[4] != usage.selector.digest)
+    {
+        return Err("custody Admin proof requires its exact original signed executable and reviewed command".into());
+    }
+    if command == "content-backup-recipients-enroll" {
+        crate::content_checkpoint::custody::verify_recipient_stage(Path::new(args[4]), usage)?;
+    }
+    if matches!(
+        command,
+        "content-restore-retire-inspect" | "content-restore-retire"
+    ) {
+        crate::content_checkpoint::custody::verify_retirement_stage(
+            Path::new(args[4]),
+            command,
+            usage,
+        )?;
+    }
+    Ok(())
+}
+
 // These exact effect selectors require attribution from the complete live
 // Read/effect pair. An invalid pair must fail there, never fall back to a
 // singleton audit. The selector chooses the verifier, not authority itself.
@@ -865,7 +1131,13 @@ fn acquisition_audit(
     content_pair: impl FnOnce(&Use) -> Result<crate::finite_grants::Audit>,
 ) -> Result<crate::finite_grants::Audit> {
     match usage.selector.id.as_str() {
-        "native-content-store-v1" | "native-content-recovery-v1" => content_pair(usage),
+        "native-content-store-v1"
+        | "native-content-recovery-v1"
+        | "native-content-backup-export-v1" => content_pair(usage),
+        "native-content-office-export-v1" => content_pair(usage),
+        "native-content-restore-review-v1" | "native-content-restore-write-v1" => {
+            content_pair(usage)
+        }
         _ => singleton(),
     }
 }
@@ -877,6 +1149,7 @@ pub(crate) fn acquisition_proof(
     input_sha256: &str,
     boundary: &mut crate::admin_governance::GrantBoundary<'_>,
     complete: bool,
+    pending: Option<&crate::policy_decisions::PendingEffect>,
 ) -> Result<Vec<u8>> {
     if raw.len() > CHALLENGE_LIMIT {
         return Err("acquisition challenge exceeds bound".into());
@@ -892,7 +1165,38 @@ pub(crate) fn acquisition_proof(
     {
         return Err("acquisition challenge substituted its exact task/scope/input".into());
     }
-    boundary.check()?;
+    if let Some(pending) = pending {
+        if challenge.purpose != BrokerPurpose::Export
+            || !matches!(
+                usage.selector.id.as_str(),
+                "native-content-backup-export-v1" | "native-content-office-export-v1"
+            )
+        {
+            return Err("backup streaming proof cannot cross purpose or effect scope".into());
+        }
+        boundary.stream_check(pending)?;
+    } else {
+        boundary.check()?;
+    }
+    if challenge.purpose == BrokerPurpose::ContentRestoreAdmin {
+        if pending.is_some()
+            || !matches!(
+                usage.selector.id.as_str(),
+                "native-content-restore-review-v1" | "native-content-restore-write-v1"
+            )
+        {
+            return Err(
+                "restore Admin proof cannot borrow Export or another finite operation".into(),
+            );
+        }
+        boundary.require_admin()?;
+    }
+    if challenge.purpose == BrokerPurpose::ContentCustodyAdmin {
+        if complete || pending.is_some() {
+            return Err("custody Admin proof cannot borrow an acquisition or Export effect".into());
+        }
+        boundary.require_admin()?;
+    }
     challenge.purpose.require(boundary.session_purpose())?;
     Ok(serde_json::to_vec(&Proof {
         schema_version: 1,
@@ -1228,6 +1532,16 @@ impl InputStage {
     fn capture(bytes: &[u8], leaf: &str) -> Result<Self> {
         let maximum = if leaf == "content.json" {
             crate::content_governed::MAX_REQUEST
+        } else if leaf == "content-backup.json" {
+            crate::content_backup::MAX_REQUEST
+        } else if leaf == "content-backup-recipients.json" {
+            crate::content_checkpoint::custody::MAX_RECIPIENT_REQUEST
+        } else if matches!(leaf, "content-restore.json" | "content-restore-retire.json") {
+            crate::content_restore::MAX_REQUEST
+        } else if leaf == "content-restore.cms" {
+            crate::content_backup::MAX_EXPORT_BYTES as usize
+        } else if leaf == "content-office.json" {
+            crate::office_export::MAX_REQUEST
         } else if leaf == "generated.json" {
             2_228_480
         } else {
@@ -1235,7 +1549,16 @@ impl InputStage {
         };
         if !matches!(
             leaf,
-            "input.json" | "input.csv" | "generated.json" | "content.json"
+            "input.json"
+                | "input.csv"
+                | "generated.json"
+                | "content.json"
+                | "content-backup.json"
+                | "content-backup-recipients.json"
+                | "content-office.json"
+                | "content-restore.json"
+                | "content-restore-retire.json"
+                | "content-restore.cms"
         ) || bytes.is_empty()
             || bytes.len() > maximum
         {
@@ -1394,6 +1717,21 @@ pub(crate) fn launch(arguments: &[String]) -> Result<()> {
                 | "content-owned-inspection-review"
                 | "content-owned-review"
                 | "content-owned-apply"
+                | "content-backup-export-proposal"
+                | "content-backup-export"
+                | "content-restore-proposal"
+                | "content-restore-review"
+                | "content-restore-apply"
+                | "content-restore-retire-proposal"
+                | "content-restore-retire-inspect"
+                | "content-restore-retire"
+                | "content-office-export-proposal"
+                | "content-office-export"
+                | "content-backup-signer-prepare-proposal"
+                | "content-backup-signer-prepare"
+                | "content-backup-signer-enroll"
+                | "content-backup-recipients-proposal"
+                | "content-backup-recipients-enroll"
                 | "policy-evidence-review"
                 | "policy-evidence-retain"
                 | "policy-evidence-pending-review"
@@ -1426,7 +1764,113 @@ pub(crate) fn launch(arguments: &[String]) -> Result<()> {
         return Err("granted client launcher accepts only fixed protected product commands".into());
     }
     let mut owned = arguments.to_vec();
+    let mut restore_capsule_stage = None;
     let stage = match arguments[0].as_str() {
+        "content-restore-retire-proposal"
+        | "content-restore-retire-inspect"
+        | "content-restore-retire" => {
+            let index = if arguments[0] == "content-restore-retire-proposal" {
+                2
+            } else {
+                3
+            };
+            if arguments.len() != index + 1 {
+                return Err("retirement launcher requires its exact finite command shape".into());
+            }
+            let bytes = crate::content_checkpoint::custody::read_retirement_request(Path::new(
+                &arguments[index],
+            ))?;
+            let stage = InputStage::capture(&bytes, "content-restore-retire.json")?;
+            owned[index] = stage
+                .path
+                .to_str()
+                .ok_or("retirement stage encoding")?
+                .into();
+            Some(stage)
+        }
+        "content-restore-proposal" | "content-restore-review" | "content-restore-apply" => {
+            let index = if arguments[0] == "content-restore-proposal" {
+                2
+            } else {
+                4
+            };
+            if arguments.len() != index + 1 {
+                return Err("restore launcher requires its exact original command shape".into());
+            }
+            let bytes = crate::content_restore::read_request(Path::new(&arguments[index]))?;
+            let mut input = crate::content_restore::parse(&bytes)?;
+            let capsule = crate::content_restore::read_capsule_for_stage(&input)?;
+            let capsule_stage = InputStage::capture(&capsule, "content-restore.cms")?;
+            input.capsule_path = capsule_stage
+                .path
+                .to_str()
+                .ok_or("restore ciphertext stage encoding")?
+                .into();
+            let stage = InputStage::capture(&serde_json::to_vec(&input)?, "content-restore.json")?;
+            owned[index] = stage
+                .path
+                .to_str()
+                .ok_or("restore request stage encoding")?
+                .into();
+            restore_capsule_stage = Some(capsule_stage);
+            Some(stage)
+        }
+        "content-office-export-proposal" | "content-office-export" => {
+            let (count, index) = if arguments[0] == "content-office-export-proposal" {
+                (3, 2)
+            } else {
+                (5, 4)
+            };
+            if arguments.len() != count {
+                return Err("Office launcher requires exact finite command shape".into());
+            }
+            let bytes = crate::office_export::read_request(Path::new(&arguments[index]))?;
+            let stage = InputStage::capture(&bytes, "content-office.json")?;
+            owned[index] = stage
+                .path
+                .to_str()
+                .ok_or("Office private request path encoding")?
+                .into();
+            Some(stage)
+        }
+        "content-backup-recipients-proposal" | "content-backup-recipients-enroll" => {
+            let (count, index) = if arguments[0] == "content-backup-recipients-proposal" {
+                (3, 2)
+            } else {
+                (4, 3)
+            };
+            if arguments.len() != count {
+                return Err("recipient launcher requires exact finite command shape".into());
+            }
+            let bytes = crate::content_checkpoint::custody::read_recipient_request(Path::new(
+                &arguments[index],
+            ))?;
+            let stage = InputStage::capture(&bytes, "content-backup-recipients.json")?;
+            owned[index] = stage
+                .path
+                .to_str()
+                .ok_or("invalid private recipient request path")?
+                .into();
+            Some(stage)
+        }
+        "content-backup-export-proposal" | "content-backup-export" => {
+            let (count, index) = if arguments[0] == "content-backup-export-proposal" {
+                (3, 2)
+            } else {
+                (5, 4)
+            };
+            if arguments.len() != count {
+                return Err("backup launcher requires its exact finite command shape".into());
+            }
+            let bytes = crate::content_backup::read_request(Path::new(&arguments[index]))?;
+            let stage = InputStage::capture(&bytes, "content-backup.json")?;
+            owned[index] = stage
+                .path
+                .to_str()
+                .ok_or("invalid private backup request path")?
+                .into();
+            Some(stage)
+        }
         "content-owned-inspection-review" | "content-owned-review" | "content-owned-apply" => {
             let (count, index) = match arguments[0].as_str() {
                 "content-owned-inspection-review" => (3, 2),
@@ -1693,6 +2137,9 @@ pub(crate) fn launch(arguments: &[String]) -> Result<()> {
     if let Some(stage) = &stage {
         stage.check()?;
     }
+    if let Some(stage) = &restore_capsule_stage {
+        stage.check()?;
+    }
     let successful = if let Some(payload) = &payload {
         let mut child = command.spawn()?;
         if let Err(error) = payload.relay(&mut child) {
@@ -1736,6 +2183,9 @@ pub(crate) fn launch(arguments: &[String]) -> Result<()> {
     if let Some(stage) = &stage {
         stage.check()?;
     }
+    if let Some(stage) = &restore_capsule_stage {
+        stage.check()?;
+    }
     Ok(())
 }
 
@@ -1744,12 +2194,101 @@ mod tests {
     use super::*;
 
     #[test]
+    fn backup_checked_relay_preserves_ciphertext_and_checks_every_transfer_and_ack() {
+        let (sender, mut receiver) = UnixStream::pair().unwrap();
+        sender.set_nonblocking(true).unwrap();
+        let data = vec![0, 255, 13, 10, 128, 27]
+            .into_iter()
+            .cycle()
+            .take(90_001)
+            .collect::<Vec<_>>();
+        let expected = data.clone();
+        let producer = std::thread::spawn(move || {
+            let mut writer = CheckedPayload(PayloadWriter {
+                socket: sender,
+                bytes: 0,
+                digest: Sha256::new(),
+            });
+            let mut checks = 0;
+            let mut check = || {
+                checks += 1;
+                Ok(())
+            };
+            for chunk in data.chunks(PAYLOAD_BLOCK) {
+                writer.write_checked(chunk, &mut check).unwrap();
+            }
+            writer.finish_checked(&mut check).unwrap();
+            assert!(checks >= 15);
+        });
+        let mut output = Vec::new();
+        relay_payload(
+            &mut receiver,
+            &mut output,
+            Instant::now() + Duration::from_secs(5),
+        )
+        .unwrap();
+        producer.join().unwrap();
+        assert_eq!(output, expected);
+    }
+    #[test]
+    fn backup_checked_relay_refuses_before_bytes_and_while_consumer_stalls() {
+        let (sender, mut receiver) = UnixStream::pair().unwrap();
+        sender.set_nonblocking(true).unwrap();
+        receiver.set_nonblocking(true).unwrap();
+        let mut writer = CheckedPayload(PayloadWriter {
+            socket: sender,
+            bytes: 0,
+            digest: Sha256::new(),
+        });
+        assert!(writer
+            .write_checked(b"secret-ciphertext", &mut || Err(
+                "revoked before header".into()
+            ))
+            .is_err());
+        let mut byte = [0u8; 1];
+        assert_eq!(
+            receiver.read(&mut byte).unwrap_err().kind(),
+            std::io::ErrorKind::WouldBlock
+        );
+        let start = Instant::now();
+        let mut calls = 0;
+        assert!(writer
+            .write_checked(b"ciphertext", &mut || {
+                calls += 1;
+                if calls >= 4 {
+                    Err("expired during stalled acknowledgement".into())
+                } else {
+                    Ok(())
+                }
+            })
+            .is_err());
+        assert!(calls >= 4);
+        assert!(start.elapsed() < Duration::from_secs(3));
+    }
+    #[test]
+    fn backup_cannot_fall_back_to_stdout_or_share_an_extended_non_export_command() {
+        assert!(required_export_writer().is_err());
+        assert!(payload_command("content-backup-export"));
+        assert!(extended_client_command("content-backup-export"));
+        for command in [
+            "content-backup-request",
+            "content-backup-export-proposal",
+            "content-backup-resource-worker",
+            "content-backup-restore",
+        ] {
+            assert!(!payload_command(command));
+            assert!(!extended_client_command(command));
+        }
+    }
+
+    #[test]
     fn content_and_recovery_proofs_use_the_complete_pair_without_singleton_fallback() {
         use std::cell::Cell;
         for (id, action) in [
             ("native-content-store-v1", Action::Write),
             ("native-content-store-v1", Action::Retain),
             ("native-content-recovery-v1", Action::Retain),
+            ("native-content-backup-export-v1", Action::Export),
         ] {
             let usage = Use {
                 action,
@@ -2027,7 +2566,7 @@ mod tests {
         let mut value = serde_json::to_value(&proof).unwrap();
         value["utc_override"] = 1000.into();
         assert!(serde_json::from_value::<Proof>(value).is_err());
-        for unsupported in ["export", "model-activation", "admin", "Standard"] {
+        for unsupported in ["model-activation", "admin", "Standard"] {
             let mut value = serde_json::to_value(&proof).unwrap();
             value["purpose"] = unsupported.into();
             assert!(serde_json::from_value::<Proof>(value).is_err());
@@ -2043,6 +2582,7 @@ mod tests {
             BrokerPurpose::Standard,
             BrokerPurpose::ModelImport,
             BrokerPurpose::ModelQa,
+            BrokerPurpose::Export,
         ] {
             for actual in [
                 SessionPurpose::Standard,
@@ -2058,6 +2598,7 @@ mod tests {
                         (BrokerPurpose::Standard, SessionPurpose::Standard)
                             | (BrokerPurpose::ModelImport, SessionPurpose::ModelImport)
                             | (BrokerPurpose::ModelQa, SessionPurpose::ModelQa)
+                            | (BrokerPurpose::Export, SessionPurpose::Export)
                     )
                 );
             }

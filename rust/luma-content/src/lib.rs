@@ -9,8 +9,8 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::fmt;
 
-mod canonical;
 pub mod animation;
+mod canonical;
 pub mod diagram;
 pub mod document;
 pub mod rendered;

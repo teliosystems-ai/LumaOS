@@ -23,6 +23,7 @@ struct luma_tpm {
     ESYS_CONTEXT *esys;
     ESYS_TR nv;
     ESYS_TR session;
+    uint8_t checkpoint_failed;
     uint32_t checkpoint_index;
     uint32_t credential_parent_handle;
     ESYS_TR prepared_parent;
@@ -71,6 +72,22 @@ uint32_t luma_tpm_resource_open(const char *transport, struct luma_tpm **result)
         (*result)->checkpoint_index = 0x01804c52;
         (*result)->credential_parent_handle = 0x81004c52;
     }
+    return rc;
+}
+
+/* Independent content authority. Handles and primary-key domain are fixed;
+ * this does not expose a caller-selected TPM namespace. */
+uint32_t luma_tpm_content_open(const char *transport, struct luma_tpm **result) {
+    TSS2_RC rc = luma_tpm_open(transport, result);
+    if (!rc) {
+        (*result)->checkpoint_index = 0x01804c43;
+        (*result)->credential_parent_handle = 0x81004c43;
+    }
+    return rc;
+}
+uint32_t luma_tpm_utc_open(const char *transport, struct luma_tpm **result) {
+    TSS2_RC rc=luma_tpm_open(transport,result);
+    if(!rc) {(*result)->checkpoint_index=0x01804c55;(*result)->credential_parent_handle=0x81004c55;}
     return rc;
 }
 
@@ -158,32 +175,63 @@ uint32_t luma_tpm_index(struct luma_tpm *ctx, uint32_t index, const uint8_t auth
     memcpy(secret.buffer, auth, 32);
     if (!rc) rc = Esys_TR_SetAuth(ctx->esys, ctx->nv, &secret);
     explicit_bzero(&secret, sizeof(secret));
+    return rc;
+}
+
+/* Idle namespace objects retain no loaded authorization sessions. A/R/C/U may
+ * coexist on a TPM with only three loaded-session slots, including a separate
+ * salted PCR-unseal policy session. Never evict another context's handles or
+ * fall back to password authorization when a slot is unavailable. */
+static TSS2_RC checkpoint_session(struct luma_tpm *ctx) {
+    if (!ctx || ctx->checkpoint_failed || ctx->nv == ESYS_TR_NONE ||
+        ctx->session != ESYS_TR_NONE) return TSS2_ESYS_RC_BAD_SEQUENCE;
     TPMT_SYM_DEF symmetric = {.algorithm = TPM2_ALG_NULL};
-    if (!rc) rc = Esys_StartAuthSession(ctx->esys, ESYS_TR_NONE, ESYS_TR_NONE,
+    TSS2_RC rc = Esys_StartAuthSession(ctx->esys, ESYS_TR_NONE, ESYS_TR_NONE,
         ESYS_TR_NONE, ESYS_TR_NONE, ESYS_TR_NONE, NULL, TPM2_SE_HMAC,
         &symmetric, TPM2_ALG_SHA256, &ctx->session);
     if (!rc) rc = Esys_TRSess_SetAttributes(ctx->esys, ctx->session,
         TPMA_SESSION_CONTINUESESSION, TPMA_SESSION_CONTINUESESSION);
+    if (rc) ctx->checkpoint_failed = 1;
+    return rc;
+}
+
+static TSS2_RC checkpoint_finish(struct luma_tpm *ctx, TSS2_RC rc) {
+    if (ctx->session != ESYS_TR_NONE) {
+        TSS2_RC cleanup = Esys_FlushContext(ctx->esys, ctx->session);
+        if (!cleanup) ctx->session = ESYS_TR_NONE;
+        if (!rc) rc = cleanup;
+    }
+    /* A failed cleanup after NV_Extend is an uncertain mutation, not a retry
+     * permit. The Rust journal retains its already durable pending evidence. */
+    if (rc) ctx->checkpoint_failed = 1;
     return rc;
 }
 
 uint32_t luma_tpm_read(struct luma_tpm *ctx, uint8_t output[32]) {
+    if (!ctx || !output) return TSS2_ESYS_RC_BAD_VALUE;
+    memset(output, 0, 32);
     TPM2B_MAX_NV_BUFFER *value = NULL;
-    TSS2_RC rc = Esys_NV_Read(ctx->esys, ctx->nv, ctx->nv, ctx->session,
+    TSS2_RC rc = checkpoint_session(ctx);
+    if (!rc) rc = Esys_NV_Read(ctx->esys, ctx->nv, ctx->nv, ctx->session,
                             ESYS_TR_NONE, ESYS_TR_NONE, 32, 0, &value);
     if (!rc) {
         if (value->size != 32) rc = TSS2_ESYS_RC_BAD_VALUE;
         else memcpy(output, value->buffer, 32);
     }
     Esys_Free(value);
+    rc = checkpoint_finish(ctx, rc);
+    if (rc) memset(output, 0, 32);
     return rc;
 }
 
 uint32_t luma_tpm_extend(struct luma_tpm *ctx, const uint8_t digest[32]) {
+    if (!ctx || !digest) return TSS2_ESYS_RC_BAD_VALUE;
     TPM2B_MAX_NV_BUFFER value = {.size = 32};
     memcpy(value.buffer, digest, 32);
-    return Esys_NV_Extend(ctx->esys, ctx->nv, ctx->nv, ctx->session,
+    TSS2_RC rc = checkpoint_session(ctx);
+    if (!rc) rc = Esys_NV_Extend(ctx->esys, ctx->nv, ctx->nv, ctx->session,
                          ESYS_TR_NONE, ESYS_TR_NONE, &value);
+    return checkpoint_finish(ctx, rc);
 }
 
 /* Caller must durably retain its sealed enrollment proposal before entry.
@@ -354,6 +402,19 @@ static uint32_t prepare_parent_existing(struct luma_tpm *ctx,
                     template.publicArea.unique.rsa.buffer) && !rc)
             rc = TSS2_ESYS_RC_BAD_VALUE;
     }
+    if (ctx->credential_parent_handle == 0x81004c43) {
+        static const uint8_t domain[] = "luma-content-credential-parent-v1";
+        template.publicArea.unique.rsa.size = 32;
+        if (!SHA256(domain, sizeof(domain) - 1,
+                    template.publicArea.unique.rsa.buffer) && !rc)
+            rc = TSS2_ESYS_RC_BAD_VALUE;
+    }
+    if (ctx->credential_parent_handle == 0x81004c55) {
+        static const uint8_t domain[] = "luma-windows-utc-credential-parent-v1";
+        template.publicArea.unique.rsa.size = 32;
+        if (!SHA256(domain, sizeof(domain)-1, template.publicArea.unique.rsa.buffer) && !rc)
+            rc=TSS2_ESYS_RC_BAD_VALUE;
+    }
     if (!rc) rc = Esys_CreatePrimary(ctx->esys, ESYS_TR_RH_OWNER, session,
         ESYS_TR_NONE, ESYS_TR_NONE, &sensitive, &template, &outside, &pcrs,
         &primary, NULL, NULL, NULL, NULL);
@@ -430,6 +491,18 @@ uint32_t luma_tpm_resource_prepare_parent(struct luma_tpm *ctx,
     return prepare_parent_existing(ctx, owner, owner_size, name_out, 0);
 }
 
+uint32_t luma_tpm_content_prepare_parent(struct luma_tpm *ctx,
+    const uint8_t *owner, uint16_t owner_size, uint8_t name_out[34]) {
+    if (!ctx || ctx->credential_parent_handle != 0x81004c43)
+        return TSS2_ESYS_RC_BAD_VALUE;
+    return prepare_parent_existing(ctx, owner, owner_size, name_out, 0);
+}
+uint32_t luma_tpm_utc_prepare_parent(struct luma_tpm *ctx,
+    const uint8_t *owner,uint16_t owner_size,uint8_t name_out[34]) {
+    if(!ctx||ctx->credential_parent_handle!=0x81004c55)return TSS2_ESYS_RC_BAD_VALUE;
+    return prepare_parent_existing(ctx,owner,owner_size,name_out,0);
+}
+
 /* Credential operations are restricted to the parent reserved by enrollment.
  * The Name is supplied from a durable enrollment record, not from the handle
  * itself. A replaced or malformed persistent object is never used. */
@@ -475,15 +548,17 @@ uint32_t luma_tpm_credential_parent_matches(struct luma_tpm *ctx,
 
 /* Exact one-shot persistence AFTER the caller fsyncs expected Name and phase
  * fence. A failed reply is reconciled with ReadPublic, never repeated here. */
-uint32_t luma_tpm_resource_persist_parent(struct luma_tpm *ctx,
+static uint32_t persist_independent_parent(struct luma_tpm *ctx,
     const uint8_t *owner, uint16_t owner_size, const uint8_t expected_name[34]) {
-    if (!ctx || ctx->credential_parent_handle != 0x81004c52 || !owner ||
+    if (!ctx || (ctx->credential_parent_handle != 0x81004c52 &&
+                 ctx->credential_parent_handle != 0x81004c43 &&
+                 ctx->credential_parent_handle != 0x81004c55) || !owner ||
         !owner_size || owner_size > 64 || !expected_name || ctx->parent_dispatched ||
         ctx->prepared_parent == ESYS_TR_NONE || ctx->prepared_parent_session == ESYS_TR_NONE ||
         CRYPTO_memcmp(ctx->prepared_parent_name, expected_name, 34))
         return TSS2_ESYS_RC_BAD_VALUE;
     uint8_t occupied = 1;
-    TSS2_RC rc = luma_tpm_index_exists(ctx, 0x81004c52, &occupied);
+    TSS2_RC rc = luma_tpm_index_exists(ctx, ctx->credential_parent_handle, &occupied);
     if (rc) return rc;
     if (occupied) return TSS2_ESYS_RC_BAD_VALUE;
     TPM2B_AUTH owner_auth = {.size = owner_size};
@@ -496,7 +571,7 @@ uint32_t luma_tpm_resource_persist_parent(struct luma_tpm *ctx,
     if (!rc) {
         ctx->parent_dispatched = 1;
         rc = Esys_EvictControl(ctx->esys, ESYS_TR_RH_OWNER, ctx->prepared_parent,
-            ctx->prepared_parent_session, ESYS_TR_NONE, ESYS_TR_NONE, 0x81004c52, &persistent);
+            ctx->prepared_parent_session, ESYS_TR_NONE, ESYS_TR_NONE, ctx->credential_parent_handle, &persistent);
     }
     /* FromTPMPublic may reuse an existing ESAPI metadata handle. Release the
      * EvictControl result before the independently scoped verifier opens and
@@ -519,6 +594,23 @@ uint32_t luma_tpm_resource_persist_parent(struct luma_tpm *ctx,
     if (!rc) rc = cleanup;
     explicit_bzero(&owner_auth, sizeof(owner_auth));
     return rc;
+}
+
+uint32_t luma_tpm_resource_persist_parent(struct luma_tpm *ctx,
+    const uint8_t *owner, uint16_t owner_size, const uint8_t expected_name[34]) {
+    if (!ctx || ctx->credential_parent_handle != 0x81004c52) return TSS2_ESYS_RC_BAD_VALUE;
+    return persist_independent_parent(ctx, owner, owner_size, expected_name);
+}
+
+uint32_t luma_tpm_content_persist_parent(struct luma_tpm *ctx,
+    const uint8_t *owner, uint16_t owner_size, const uint8_t expected_name[34]) {
+    if (!ctx || ctx->credential_parent_handle != 0x81004c43) return TSS2_ESYS_RC_BAD_VALUE;
+    return persist_independent_parent(ctx, owner, owner_size, expected_name);
+}
+uint32_t luma_tpm_utc_persist_parent(struct luma_tpm *ctx,
+    const uint8_t *owner,uint16_t owner_size,const uint8_t expected_name[34]) {
+    if(!ctx||ctx->credential_parent_handle!=0x81004c55)return TSS2_ESYS_RC_BAD_VALUE;
+    return persist_independent_parent(ctx,owner,owner_size,expected_name);
 }
 
 /* Import exactly an RSA-2048/e65537 PEM verifier; never a private signer.

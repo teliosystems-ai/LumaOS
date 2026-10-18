@@ -1,0 +1,45 @@
+[Unit]
+Description=Unprivileged HTTPS transport for signed Windows UTC challenges
+After=apparmor.service luma-utc-windows.service
+Requires=apparmor.service luma-utc-windows.service
+ConditionPathExists=/etc/luma-os/utc-windows/transport.json
+ConditionPathExists=/etc/luma-os/utc-windows/certificate.pem
+ConditionPathExists=/etc/luma-os/utc-windows/private-key.pem
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 -I -S -B /usr/libexec/luma-os/utc-windows-front.py
+User=luma-utc-front
+Group=luma-utc-front
+UMask=0077
+Environment=PATH=/usr/bin:/bin LANG=C LC_ALL=C OPENSSL_CONF=/dev/null
+UnsetEnvironment=LD_PRELOAD LD_LIBRARY_PATH LD_AUDIT OPENSSL_MODULES SSLKEYLOGFILE PYTHONHOME PYTHONPATH
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_UNIX
+RestrictNamespaces=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@mount @raw-io @reboot @swap @obsolete @debug @memlock
+CapabilityBoundingSet=
+AmbientCapabilities=
+AppArmorProfile=luma-utc-windows-front
+MemoryMax=128M
+MemorySwapMax=0
+LimitMEMLOCK=0
+LimitCORE=0
+TasksMax=1
+CPUQuota=50%
+CPUQuotaPeriodSec=100ms
+OOMPolicy=kill
+TimeoutStopSec=5
+Restart=on-failure
+RestartSec=2

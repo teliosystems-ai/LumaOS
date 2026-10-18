@@ -360,6 +360,9 @@ enum AcquisitionProfile {
     Generated(String),
     Qa(String),
     Content(String),
+    Backup(String),
+    Office(String),
+    Restore(String),
 }
 impl AcquisitionProfile {
     fn resolve(id: &str) -> Result<Self> {
@@ -372,6 +375,15 @@ impl AcquisitionProfile {
         } else if id.starts_with("qa-") {
             model::qa::parse_profile(id)?;
             Ok(Self::Qa(id.into()))
+        } else if id.starts_with(crate::content_restore::PREFIX) {
+            crate::content_restore::source_digest(id)?;
+            Ok(Self::Restore(id.into()))
+        } else if id.starts_with(crate::office_export::PREFIX) {
+            crate::office_export::source_digest(id)?;
+            Ok(Self::Office(id.into()))
+        } else if id.starts_with("backup-") {
+            crate::content_backup::source_digest(id)?;
+            Ok(Self::Backup(id.into()))
         } else if id.starts_with("content-") {
             crate::content_governed::source_digest(id)?;
             Ok(Self::Content(id.into()))
@@ -386,20 +398,40 @@ impl AcquisitionProfile {
             Self::Generated(id) => crate::generated_runtime::binding(id, device),
             Self::Qa(id) => model::qa::binding(id, device),
             Self::Content(id) => crate::content_governed::binding(id, device),
+            Self::Backup(id) => crate::content_backup::binding(id, device),
+            Self::Office(id) => crate::office_export::binding(id, device),
+            Self::Restore(id) => crate::content_restore::binding(id, device),
         }
     }
     fn memory(&self) -> Result<u64> {
         match self {
             Self::Qa(id) => model::qa::memory(id),
+            Self::Backup(_) => Ok(crate::content_backup::MEMORY),
+            Self::Office(_) => Ok(crate::office_export::MEMORY),
+            Self::Restore(_) => Ok(crate::content_restore::MEMORY),
             _ => Ok(ACQUISITION_MEMORY),
         }
     }
     fn tasks(&self) -> u64 {
-        if matches!(self, Self::Qa(_)) {
-            model::qa::TASKS
-        } else {
-            Kind::Acquisition.tasks()
+        match self {
+            Self::Qa(_) => model::qa::TASKS,
+            Self::Backup(_) => crate::content_backup::TASKS,
+            Self::Office(_) => crate::office_export::TASKS,
+            Self::Restore(_) => crate::content_restore::TASKS,
+            _ => Kind::Acquisition.tasks(),
         }
+    }
+    fn requires_original_authority(&self) -> bool {
+        matches!(self, Self::Model(profile) if profile.governed.is_some())
+            || matches!(
+                self,
+                Self::Generated(_)
+                    | Self::Qa(_)
+                    | Self::Content(_)
+                    | Self::Backup(_)
+                    | Self::Office(_)
+                    | Self::Restore(_)
+            )
     }
     fn current(&self, device: &str, pid: u32) -> Result<()> {
         match self {
@@ -448,6 +480,9 @@ impl AcquisitionProfile {
             Self::Generated(id) => crate::generated_runtime::source_digest(id).map(|_| ()),
             Self::Qa(id) => model::qa::check_worker(id, device, pid),
             Self::Content(id) => crate::content_governed::check_worker(id, device, pid),
+            Self::Backup(id) => crate::content_backup::check_worker(id, device, pid),
+            Self::Office(id) => crate::office_export::check_worker(id, device, pid),
+            Self::Restore(id) => crate::content_restore::check_worker(id, device, pid),
         }
     }
 }
@@ -604,6 +639,20 @@ fn native_outstanding(ledger: &resources::Ledger) -> Result<()> {
                     .loading;
                 if charged == ACQUISITION_MEMORY {
                     (ACQUISITION_MEMORY, kind.tasks())
+                } else if charged == crate::content_backup::MEMORY {
+                    // A signed historical backup/restore owner can only be drained
+                    // with its full original tuple, never resized to a model
+                    // or reconstituted into a new session/profile authority.
+                    (crate::content_backup::MEMORY, crate::content_backup::TASKS)
+                } else if charged == crate::office_export::MEMORY
+                    && lease.reservations
+                        == reservation_plan_for(
+                            kind,
+                            crate::office_export::MEMORY,
+                            crate::office_export::TASKS,
+                        )
+                {
+                    (crate::office_export::MEMORY, crate::office_export::TASKS)
                 } else {
                     let device = storage_device(Path::new("/var"))?;
                     (
@@ -622,7 +671,13 @@ fn native_outstanding(ledger: &resources::Ledger) -> Result<()> {
 }
 
 fn protected_reserve(total: u64) -> u64 {
-    (total / 5).max(1024 * 1024 * 1024)
+    // Independent C128MiB, U256MiB (including its isolated64MiB helper), and
+    // unprivileged TLS128MiB remain outside job workers. Reserve their complete
+    // fixed budgets even before optional UTC transport is commissioned.
+    (total / 5)
+        .max(1024 * 1024 * 1024)
+        .saturating_add(128 * 1024 * 1024)
+        .saturating_add(384 * 1024 * 1024)
 }
 
 pub(crate) fn check_loading(total: u64, available: u64, peak: u64, owned: u64) -> Result<()> {
@@ -650,6 +705,7 @@ pub(crate) struct Manager {
     owners: BTreeMap<String, File>,
     acquisition_bindings: BTreeMap<String, (AcquisitionProfile, String)>,
     acquisition_authority: Option<crate::service::granted_acquisition::Authority>,
+    content_admin: Option<crate::service::content_admin::Authority>,
     requests: requests::Gate,
     gateway: Option<requests::gateway::Job>,
     gateway_ready: Option<Token>,
@@ -675,7 +731,209 @@ pub(crate) fn fence_unavailable() -> Result<()> {
     Ok(())
 }
 
+pub(crate) fn content_client_generation(peer: libc::ucred, pin: &File) -> Result<u64> {
+    if peer.uid != 0 || peer.gid != 0 || peer.pid <= 0 {
+        return Err("content custody original client credentials differ".into());
+    }
+    Ok(peer::live_generation(peer, pin)?.0)
+}
+
+fn custody_controls(mut read: impl FnMut(&str) -> Result<String>) -> Result<()> {
+    for (name, wanted) in [
+        ("memory.max", "134217728"),
+        ("memory.swap.max", "0"),
+        ("pids.max", "2"),
+        ("cpu.max", "25000 100000"),
+        ("memory.oom.group", "1"),
+    ] {
+        if read(name)?.trim() != wanted {
+            return Err("independent content custody resource ceiling changed".into());
+        }
+    }
+    if number(&read("pids.current")?)? > 2 || number(&read("memory.current")?)? > 128 * 1024 * 1024
+    {
+        return Err("content custody current physical charges exceed its reserved budget".into());
+    }
+    Ok(())
+}
+fn custody_unit() -> Result<()> {
+    let path = Path::new("/sys/fs/cgroup/system.slice/luma-content-custody.service");
+    let directory = OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC)
+        .open(path)?;
+    let mut filesystem: libc::statfs = unsafe { std::mem::zeroed() };
+    let metadata = directory.metadata()?;
+    if unsafe { libc::fstatfs(directory.as_raw_fd(), &mut filesystem) } != 0
+        || filesystem.f_type != 0x63677270
+        || metadata.uid() != 0
+        || metadata.mode() & 0o022 != 0
+    {
+        return Err("content custody budget requires genuine protected cgroup2 evidence".into());
+    }
+    custody_controls(|name| {
+        let mut text = String::new();
+        descriptor(&directory, name, false, false)?
+            .take(4097)
+            .read_to_string(&mut text)?;
+        if text.len() > 4096 {
+            return Err("oversized content custody cgroup evidence".into());
+        }
+        Ok(text)
+    })?;
+    let current = fs::symlink_metadata(path)?;
+    if !current.is_dir()
+        || current.dev() != metadata.dev()
+        || current.ino() != metadata.ino()
+        || current.uid() != 0
+        || current.mode() & 0o022 != 0
+    {
+        return Err("content custody budget namespace changed".into());
+    }
+    Ok(())
+}
+
 impl Manager {
+    pub(crate) fn register_content_admin(
+        &mut self,
+        request: &crate::service::content_admin::Request,
+        authority: crate::service::content_admin::Authority,
+    ) -> Result<serde_json::Value> {
+        request.validate()?;
+        if self
+            .content_admin
+            .as_mut()
+            .is_some_and(|current| current.check().is_err())
+        {
+            self.content_admin = None;
+        }
+        if self.content_admin.is_some() {
+            return Err("a content custody Admin original operation is already live".into());
+        }
+        self.content_admin = Some(authority);
+        Ok(
+            serde_json::json!({"schema_version":1,"result":"ok","request_id":request.request_id,"job":request.job}),
+        )
+    }
+    pub(crate) fn content_admin_guard(
+        &mut self,
+        request: &crate::service::content_admin::Guard,
+        peer: libc::ucred,
+        pin: File,
+    ) -> Result<crate::finite_grants::Audit> {
+        request.validate()?;
+        custody_unit()?;
+        if peer.uid != 0 || peer.gid != 0 || peer.pid <= 0 {
+            return Err("content Admin guard requires fixed custody service".into());
+        }
+        let initial = peer::live_generation(peer, &pin)?;
+        let path = Path::new("/proc").join(peer.pid.to_string());
+        let start = peer::custody_generation(|name, maximum| safe_text(&path.join(name), maximum))?;
+        if initial.0 != start {
+            return Err("custody Admin service generation differs".into());
+        }
+        let audit = self
+            .content_admin
+            .as_mut()
+            .ok_or("content custody original Admin operation is absent")?
+            .guard(request)?;
+        if peer::live_generation(peer, &pin)? != initial
+            || peer::custody_generation(|name, maximum| safe_text(&path.join(name), maximum))?
+                != start
+        {
+            return Err("custody Admin service changed before proof acknowledgment".into());
+        }
+        request.validate()?;
+        Ok(audit)
+    }
+    pub(crate) fn content_custody_guard(
+        &mut self,
+        request: &crate::content_checkpoint::custody::GuardRequest,
+        peer: libc::ucred,
+        pin: File,
+    ) -> Result<crate::finite_grants::Audit> {
+        request.validate()?;
+        custody_unit()?;
+        if peer.uid != 0 || peer.pid <= 0 {
+            return Err("content custody guard requires its fixed service peer".into());
+        }
+        let initial = peer::live_generation(peer, &pin)?;
+        let path = Path::new("/proc").join(peer.pid.to_string());
+        let service_start =
+            peer::custody_generation(|name, maximum| safe_text(&path.join(name), maximum))?;
+        if initial.0 != service_start {
+            return Err("content custody service handle generation differs".into());
+        }
+        self.maintain()?;
+        let ledger = self.store.read()?;
+        let lease = ledger
+            .leases
+            .iter()
+            .find(|lease| lease.token == request.lease)
+            .ok_or("content custody guard lease is not retained")?;
+        if lease.state != State::Active
+            || lease.owner.uid != 0
+            || lease.owner.pid != request.worker_pid
+            || lease.owner.start_ticks != request.worker_start
+            || lease.deadline_ms <= now()?
+            || lease.output_fenced
+        {
+            return Err("content custody worker lease is not currently active".into());
+        }
+        let worker = self
+            .owners
+            .get(&request.lease.lease_id)
+            .ok_or("content custody worker kernel handle missing")?;
+        if !pidfd_alive(worker)? {
+            return Err("content custody worker exited".into());
+        }
+        let (profile, device) = self
+            .acquisition_bindings
+            .get(&request.lease.lease_id)
+            .ok_or("content custody worker profile is not current")?;
+        let expected = match profile {
+            AcquisitionProfile::Content(id) => id,
+            AcquisitionProfile::Office(id) => id,
+            AcquisitionProfile::Restore(id) => id,
+            AcquisitionProfile::Backup(id) => id,
+            _ => return Err("non-content worker cannot use content custody".into()),
+        };
+        if expected != &request.profile || device != &request.storage_device {
+            return Err("content custody exact worker profile changed".into());
+        }
+        profile.current(device, request.worker_pid)?;
+        if owner(request.worker_pid, 0, &self.acquisition)? != lease.owner {
+            return Err("content custody worker owner generation changed".into());
+        }
+        let authority = self
+            .acquisition_authority
+            .as_mut()
+            .ok_or("content custody original principal is absent")?;
+        if !authority.matches(expected, device) || authority.token() != Some(&request.lease) {
+            return Err(
+                "content custody original finite authority belongs to another worker".into(),
+            );
+        }
+        let audit = authority.attribution()?;
+        let owner_matches = if expected.starts_with(crate::content_restore::PREFIX) {
+            authority.restore_target_binding()?.as_ref() == Some(&request.binding)
+        } else {
+            audit.subject == request.binding.owner
+                && audit.subject_generation == request.binding.owner_generation
+        };
+        if !owner_matches || audit.usage != crate::service::granted_acquisition::usage(expected)? {
+            return Err("content custody owner differs from current original grant".into());
+        }
+        if peer::live_generation(peer, &pin)? != initial
+            || peer::custody_generation(|name, maximum| safe_text(&path.join(name), maximum))?
+                != service_start
+        {
+            return Err("content custody guard peer changed before acknowledgment".into());
+        }
+        request.validate()?;
+        Ok(audit)
+    }
+
     pub(crate) fn register_acquisition(
         &mut self,
         request: &crate::service::granted_acquisition::Request,
@@ -738,6 +996,7 @@ impl Manager {
             owners: BTreeMap::new(),
             acquisition_bindings: BTreeMap::new(),
             acquisition_authority: None,
+            content_admin: None,
             requests,
             gateway: None,
             gateway_ready: None,
@@ -747,6 +1006,13 @@ impl Manager {
     }
 
     pub(crate) fn maintain(&mut self) -> Result<()> {
+        if self
+            .content_admin
+            .as_mut()
+            .is_some_and(|authority| authority.check().is_err())
+        {
+            self.content_admin = None;
+        }
         if self
             .acquisition_authority
             .as_mut()
@@ -1074,7 +1340,10 @@ impl Manager {
                         AcquisitionProfile::Invoice(_)
                         | AcquisitionProfile::Generated(_)
                         | AcquisitionProfile::Qa(_)
-                        | AcquisitionProfile::Content(_) => {
+                        | AcquisitionProfile::Content(_)
+                        | AcquisitionProfile::Office(_)
+                        | AcquisitionProfile::Restore(_)
+                        | AcquisitionProfile::Backup(_) => {
                             return Err("workflow cannot occupy the serving domain".into())
                         }
                     },
@@ -1082,14 +1351,7 @@ impl Manager {
                 };
                 if kind == Kind::Acquisition {
                     profile.current(&storage, peer.pid.try_into()?)?;
-                    if matches!(&profile,AcquisitionProfile::Model(p) if p.governed.is_some())
-                        || matches!(
-                            &profile,
-                            AcquisitionProfile::Generated(_)
-                                | AcquisitionProfile::Qa(_)
-                                | AcquisitionProfile::Content(_)
-                        )
-                    {
+                    if profile.requires_original_authority() {
                         let authority = self
                             .acquisition_authority
                             .as_mut()
@@ -1170,14 +1432,7 @@ impl Manager {
                 let admitted = token.as_ref().ok_or("missing admitted resource token")?;
                 self.owners.insert(admitted.lease_id.clone(), pin);
                 if kind == Kind::Acquisition {
-                    if matches!(&profile,AcquisitionProfile::Model(p) if p.governed.is_some())
-                        || matches!(
-                            &profile,
-                            AcquisitionProfile::Generated(_)
-                                | AcquisitionProfile::Qa(_)
-                                | AcquisitionProfile::Content(_)
-                        )
-                    {
+                    if profile.requires_original_authority() {
                         self.acquisition_authority
                             .as_mut()
                             .ok_or("finite acquisition connection lost before lease publication")?
@@ -1851,6 +2106,57 @@ pub(crate) fn migrate_reviewed(review: &str) -> Result<()> {
 mod tests {
     use super::*;
     #[test]
+    fn restore_profile_cannot_fall_through_to_generic_content_or_reuse_serving_budget() {
+        for (mode, steps) in [('r', 0), ('w', 2)] {
+            let id = format!(
+                "content-restore-v1-{mode}-7-8-4096-{steps}-{}",
+                "a".repeat(64)
+            );
+            let profile = AcquisitionProfile::resolve(&id).unwrap();
+            assert!(matches!(profile, AcquisitionProfile::Restore(_)));
+            assert_eq!(profile.memory().unwrap(), 960 * 1024 * 1024);
+            assert_eq!(profile.tasks(), 4);
+            assert!(profile.requires_original_authority());
+            // An uninstalled tools container cannot establish a production
+            // installation binding or be admitted as the fixed restore worker.
+            assert!(profile.binding("8:1").is_err());
+            assert!(profile.current("8:1", std::process::id()).is_err());
+        }
+        for invalid in [
+            format!("content-restore-v1-r-07-8-4096-0-{}", "a".repeat(64)),
+            format!("content-restore-v1-x-7-8-4096-0-{}", "a".repeat(64)),
+        ] {
+            assert!(AcquisitionProfile::resolve(&invalid).is_err());
+        }
+        // The equal budget permits only historical drainage, not new authority.
+        assert_eq!(
+            (
+                crate::content_restore::MEMORY,
+                crate::content_restore::TASKS
+            ),
+            (crate::content_backup::MEMORY, crate::content_backup::TASKS)
+        );
+    }
+    #[test]
+    fn backup_profile_requires_original_finite_authority_and_distinct_full_budget() {
+        let id = format!("backup-export-v1-7-4096-{}", "a".repeat(64));
+        let backup = AcquisitionProfile::resolve(&id).unwrap();
+        assert!(matches!(backup, AcquisitionProfile::Backup(_)));
+        assert_eq!(backup.memory().unwrap(), 960 * 1024 * 1024);
+        assert_eq!(backup.tasks(), 4);
+        assert!(backup.requires_original_authority());
+        assert_eq!(ACQUISITION_MEMORY, 512 * 1024 * 1024);
+        assert_eq!(Kind::Acquisition.tasks(), 16);
+        for invalid in [
+            id.replace("-4096-", "-0-"),
+            id.replace("-7-", "-07-"),
+            "backup-export-v2-7-4096-invalid".into(),
+            format!("{id}-extra"),
+        ] {
+            assert!(AcquisitionProfile::resolve(&invalid).is_err());
+        }
+    }
+    #[test]
     fn recovery_envelopes_require_exact_root_review_and_no_unrelated_authority() {
         let time = now().unwrap();
         for action in ["resource-recovery-status", "resource-recover"] {
@@ -2005,6 +2311,24 @@ mod tests {
         )
         .unwrap();
         native_outstanding(&l).unwrap();
+        let mut backup = l.clone();
+        backup.leases[0].reservations = reservation_plan_for(
+            Kind::Acquisition,
+            crate::content_backup::MEMORY,
+            crate::content_backup::TASKS,
+        );
+        for state in [State::Active, State::Draining] {
+            backup.leases[0].state = state;
+            let preserved = backup.clone();
+            native_outstanding(&backup).unwrap();
+            assert_eq!(backup, preserved);
+            for tasks in [3, 5, 16] {
+                let mut altered = backup.clone();
+                altered.leases[0].reservations =
+                    reservation_plan_for(Kind::Acquisition, crate::content_backup::MEMORY, tasks);
+                assert!(native_outstanding(&altered).is_err());
+            }
+        }
         for draining in [false, true] {
             let mut changed = l.clone();
             if draining {
@@ -2234,6 +2558,18 @@ mod tests {
         );
     }
 
+    #[test]
+    fn protected_reserve_includes_both_optional_utc_processes_before_admission() {
+        let mib = 1024 * 1024;
+        assert_eq!(
+            protected_reserve(4 * 1024 * mib),
+            (1024 + 128 + 256 + 128) * mib
+        );
+        assert_eq!(
+            protected_reserve(20 * 1024 * mib),
+            4 * 1024 * mib + (128 + 256 + 128) * mib
+        );
+    }
     #[test]
     fn physical_loading_checks_preserve_reserve_and_do_not_count_owned_cache_twice() {
         let gib = 1024 * 1024 * 1024;

@@ -1,0 +1,16 @@
+[Unit]
+Description=Explicitly commissioned Luma Windows protected UTC HTTPS endpoint
+After=apparmor.service local-fs.target
+Requires=apparmor.service
+ConditionPathExists=/etc/luma-os/utc-windows/transport.json
+ConditionPathExists=/etc/luma-os/utc-windows/certificate.pem
+ConditionPathExists=/etc/luma-os/utc-windows/private-key.pem
+ConditionPathExists=/var/lib/luma-os/utc-windows/journal.json
+
+[Socket]
+ListenStream=8443
+Accept=no
+Backlog=4
+Service=luma-utc-windows-front.service
+NoDelay=yes
+FlushPending=yes

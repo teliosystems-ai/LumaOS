@@ -2,6 +2,11 @@
 profile luma-granted-client flags=(attach_disconnected) {
   ptrace (readby) peer=luma-broker,
   #include <abstractions/base>
+  # Exec may reset dumpability while systemd-run holds the private credential
+  # descriptor. Override inherited same-label and unconfined observation.
+  deny ptrace (trace, tracedby),
+  deny ptrace (readby) peer=luma-granted-client,
+  deny ptrace (readby) peer=unconfined,
   / r,
   /usr/ r,
   /usr/{lib,libexec,share}/ r,
@@ -83,6 +88,7 @@ profile luma-granted-client flags=(attach_disconnected) {
   /run/luma-admin/** rwk,
   /run/systemd/tpm2-pcr-signature.json r,
   /run/luma-broker/control.sock rw,
+  /run/luma-content-custody/control.sock rw,
   /run/luma-broker/ r,
   /run/luma-resource-checkpoint/ r,
   /run/luma-resource-checkpoint/authority.lock rwk,
@@ -98,7 +104,13 @@ profile luma-granted-client flags=(attach_disconnected) {
   /run/luma-granted-client/requests/*/input.{json,csv} r,
   /run/luma-granted-client/requests/*/generated.json r,
   /run/luma-granted-client/requests/*/content.json r,
+  /run/luma-granted-client/requests/*/content-backup.json r,
+  /run/luma-granted-client/requests/*/content-office.json r,
+  /run/luma-granted-client/requests/*/{content-restore.json,content-restore.cms,content-restore-retire.json} r,
   /memfd:luma-content-{request,output} rw,
+  /memfd:luma-content-backup-{request,output} rw,
+  /memfd:luma-content-office-{request,output} rw,
+  /memfd:luma-content-restore-output rw,
   /memfd:luma-generated-{request,output} rw,
   /run/luma-granted-client/payloads/ r,
   /run/luma-granted-client/payloads/*/ r,

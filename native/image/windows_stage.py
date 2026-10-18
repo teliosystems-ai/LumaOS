@@ -15,6 +15,10 @@ from pathlib import Path
 import re
 import stat
 
+HOSTED_SPEC = importlib.util.spec_from_file_location('luma_windows_hosted', Path(__file__).with_name('windows_hosted.py'))
+hosted = importlib.util.module_from_spec(HOSTED_SPEC)
+HOSTED_SPEC.loader.exec_module(hosted)
+
 SPEC = importlib.util.spec_from_file_location('luma_windows_package', Path(__file__).with_name('windows_package.py'))
 package = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(package)
@@ -77,7 +81,7 @@ def capture(tree, path, maximum):
         return bytes(value), mode, package.identity(metadata)
 
 
-def stage(root, platform, work_root, output_name):
+def stage(root, platform, work_root, output_name, hosted_compute=False):
     if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._-]{0,95}', output_name):
         raise ValueError('stage output name must be one bounded new directory component')
     work_root = Path(os.path.abspath(work_root))
@@ -134,7 +138,8 @@ def stage(root, platform, work_root, output_name):
                 source('etc/ld.so.conf.d/' + name, 16384)
         for name in UNITS:
             source('usr/lib/systemd/system/' + name, 65536)
-        for path in BINARIES:
+        binaries = (*BINARIES, *hosted.BINARIES) if hosted_compute else BINARIES
+        for path in binaries:
             source(path)
         platform_path = Path(os.path.abspath(platform))
         platform_tree = package.Tree(platform_path.parent)
@@ -142,8 +147,13 @@ def stage(root, platform, work_root, output_name):
         package.elf(value, require_entry=True, object_path='usr/bin/luma-platform')
         add('usr/bin/luma-platform', value, 0o755,
             {'kind': 'caller-compiled-platform', 'sha256': hashlib.sha256(value).hexdigest()})
+        if hosted_compute:
+            add(hosted.PLATFORM, value, 0o755,
+                {'kind': 'explicit-flattened-alias', 'path': 'usr/bin/luma-platform'})
+            add(hosted.POLICY, hosted.preprocess_policy(), 0o644,
+                {'kind': 'pinned-build-parser-preprocessed-policy', 'profile': hosted.PROFILE})
         platform_metadata = metadata
-        roots = (*BINARIES, 'usr/bin/luma-platform')
+        roots = (*binaries, 'usr/bin/luma-platform')
         todo = [(path, (), path) for path in roots]
         loaded = {path: {} for path in roots}
         checked = set()
@@ -156,7 +166,7 @@ def stage(root, platform, work_root, output_name):
             if len(checked) > 4096:
                 raise ValueError('staging dependency graph exceeds fixed bound')
             interpreter, needed, search = package.elf(data[path][0], object_path=path,
-                require_entry=path in BINARIES or path == 'usr/bin/luma-platform', details=True)
+                require_entry=path in binaries or path == 'usr/bin/luma-platform', details=True)
             next_inherited = tuple(dict.fromkeys((*search['rpath'], *inherited)))
             private = search['runpath'] if search['runpath'] is not None else next_inherited
             folders = tuple(dict.fromkeys((*private, *package.LIB_DIRS)))
@@ -189,8 +199,12 @@ def stage(root, platform, work_root, output_name):
         for path, original in ALIASES.items():
             value, mode = data[original]
             add(path, value, mode, {'kind': 'explicit-flattened-alias', 'path': original})
-        for path, (value, mode) in GENERATED.items():
-            add(path, value, mode, {'kind': 'fixed-locked-development-profile', 'profile': PROFILE})
+        generated = dict(GENERATED)
+        if hosted_compute:
+            generated.update(hosted.GENERATED)
+        for path, (value, mode) in generated.items():
+            add(path, value, mode, {'kind': 'fixed-locked-development-profile',
+                                  'profile': hosted.PROFILE if hosted_compute else PROFILE})
         # Recheck every captured source object, not just the source root inode.
         for path, expected in source_metadata.items():
             with tree.opened(path) as (_, metadata):
@@ -262,6 +276,10 @@ def stage(root, platform, work_root, output_name):
                   'model_runtime_installed': False, 'package_authenticated': False,
                   'product_installation_admitted': False, 'distribution_imported': False,
                   'host_settings_changed': False, 'production_qualified': False, 'gate_closing': False}
+        if hosted_compute:
+            report.update(profile=hosted.PROFILE, status='confined-compute-userland-staged-not-runtime-qualified',
+                          service_enablement_configured=True, confinement_policy_preprocessed=True,
+                          guest_authority_implemented=False)
         for name, value in (('plan.json', plan), ('stage.json', report)):
             with os.fdopen(os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
                                    0o600, dir_fd=output_fd), 'wb') as stream:
@@ -287,6 +305,8 @@ if __name__ == '__main__':
     parser.add_argument('--platform', type=Path, required=True)
     parser.add_argument('--work-root', type=Path, required=True)
     parser.add_argument('--output-name', required=True)
+    parser.add_argument('--hosted-compute', action='store_true')
     arguments = parser.parse_args()
-    result = stage(arguments.root, arguments.platform, arguments.work_root, arguments.output_name)
+    result = stage(arguments.root, arguments.platform, arguments.work_root, arguments.output_name,
+                   hosted_compute=arguments.hosted_compute)
     print(package.canonical({key: value for key, value in result.items() if key != 'files'}).decode(), end='')

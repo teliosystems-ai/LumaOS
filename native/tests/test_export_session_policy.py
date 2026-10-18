@@ -17,7 +17,8 @@ class ExportSessionPolicyTests(unittest.TestCase):
         routes = launcher.split('fn payload_command(', 1)[1].split('\n}', 1)[0]
         self.assertEqual(set(re.findall(r'"([a-z-]+)"', routes)), {
             'artifact-owned-export', 'artifact-governed-export',
-            'policy-archive-export', 'workflow-history-export'})
+            'policy-archive-export', 'workflow-history-export', 'content-backup-export',
+            'content-office-export'})
         self.assertIn('PAYLOAD_RUNTIME: Duration = Duration::from_secs(1800)', launcher)
         self.assertIn('"--property=RuntimeMaxSec=60"', launcher)
 

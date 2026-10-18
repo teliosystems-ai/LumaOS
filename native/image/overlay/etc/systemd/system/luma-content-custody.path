@@ -1,0 +1,10 @@
+[Unit]
+Description=Start content custody only after explicit durable enrollment
+After=local-fs.target
+
+[Path]
+PathExists=/var/lib/luma-os/content-checkpoint/history.json
+Unit=luma-content-custody.service
+
+[Install]
+WantedBy=multi-user.target

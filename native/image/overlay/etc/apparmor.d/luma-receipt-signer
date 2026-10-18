@@ -1,0 +1,31 @@
+#include <tunables/global>
+
+profile luma-receipt-signer flags=(attach_disconnected,mediate_deleted) {
+  #include <abstractions/base>
+  deny ptrace (trace, tracedby),
+  deny ptrace (readby) peer=luma-receipt-signer,
+  deny ptrace (readby) peer=unconfined,
+  /usr/libexec/luma-os/luma-receipt-signer mr,
+  /usr/lib/** mr,
+  /lib/** mr,
+  /lib64/** mr,
+  /dev/{null,zero} rw,
+  /dev/{random,urandom} r,
+  /memfd:luma-private-credential rwkm,
+  unix (getattr,getopt,setopt,shutdown) type=stream addr=none,
+  unix (send,receive) type=stream addr=none peer=(addr=none,label=luma-content-custody),
+  unix (send,receive) type=stream addr=none peer=(addr=none,label=luma-content-restore),
+  signal (receive) set=(kill) peer=luma-content-custody,
+  signal (receive) set=(kill) peer=luma-content-restore,
+  signal (receive) peer=unconfined,
+  deny unix (bind,listen,accept,connect),
+  deny unix (send,receive) peer=(addr=@**),
+  deny network inet,
+  deny network inet6,
+  deny /var/** rwklmx,
+  deny /run/** rwklmx,
+  deny /proc/** rwklmx,
+  deny /sys/** rwklmx,
+  deny /dev/{tpm*,mem,kmem,port,kvm,dxg,nvidia*,dri/**} rw,
+  deny /dev/log rw,
+}

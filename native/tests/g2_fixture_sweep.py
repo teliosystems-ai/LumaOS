@@ -19,6 +19,7 @@ import stat
 import subprocess
 import tarfile
 import time
+from requirement1_sweep import source_target
 
 IMAGE = 'luma-native-tools:20260927'
 BUILD_ROOTS = (Path('/mnt/luma-build'), Path('/mnt/d/LumaOS-builds'))
@@ -308,7 +309,7 @@ def inside(lane_name):
     lane = LANES[lane_name]
     if lane_name == 'pam-catalog' and os.stat('/tmp').st_dev != os.stat('/etc').st_dev:
         raise ValueError('disposable PAM account and registry staging must share a filesystem')
-    environment = dict(os.environ, CARGO_TARGET_DIR='/cache/target', CARGO_INCREMENTAL='0',
+    environment = dict(os.environ, CARGO_TARGET_DIR=source_target(identity), CARGO_INCREMENTAL='0',
                        CARGO_PROFILE_TEST_DEBUG='0', CARGO_PROFILE_DEV_DEBUG='0',
                        RUSTFLAGS='-Dwarnings', PYTHONDONTWRITEBYTECODE='1', TMPDIR='/tmp',
                        LUMA_STORAGE_TEST_ROOT=str(output), TSS2_LOG='all+NONE')
@@ -338,7 +339,7 @@ def inside(lane_name):
         run(['cargo', 'test', '--offline', '--locked', 'model::validation::tests::', '--', '--nocapture', '--test-threads=1'], timeout=900)
     elif lane_name in ('broker-cli', 'resource-history-cli', 'model-chat-cli', 'storage'):
         run(['cargo', 'build', '--offline', '--locked'])
-        binary = Path('/cache/target/debug/luma-platform')
+        binary = Path(environment['CARGO_TARGET_DIR']) / 'debug/luma-platform'
         Path('/usr/libexec/luma-os').mkdir(parents=True)
         run(['install', '-m', '0755', binary, '/usr/libexec/luma-os/luma-platform'], repo)
         script = repo / 'native/tests' / lane['script']

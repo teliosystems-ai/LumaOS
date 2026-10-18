@@ -51,6 +51,69 @@ fn main() {
         .success());
     println!("cargo:rustc-link-lib=static=luma_password");
     println!("cargo:rustc-link-lib=crypt");
+    println!("cargo:rerun-if-changed=src/backup_crypto.c");
+    println!("cargo:rerun-if-changed=src/receipt_signer.c");
+    println!("cargo:rerun-if-changed=src/utc_windows_crypto.c");
+    assert!(Command::new("cc")
+        .args([
+            "-std=c11",
+            "-O2",
+            "-Wall",
+            "-Wextra",
+            "-Werror",
+            "-fstack-protector-strong",
+            "-D_FORTIFY_SOURCE=3",
+            "-fPIE",
+            "-pie",
+            "-Wl,-z,relro,-z,now",
+            "src/utc_windows_crypto.c",
+            "-lcrypto",
+            "-o",
+        ])
+        .arg(out.join("luma-utc-windows-crypto"))
+        .status()
+        .expect("fixed Windows UTC crypto helper compiler")
+        .success());
+    assert!(Command::new("cc")
+        .args([
+            "-std=c11",
+            "-O2",
+            "-Wall",
+            "-Wextra",
+            "-Werror",
+            "-fstack-protector-strong",
+            "-D_FORTIFY_SOURCE=3",
+            "-fPIE",
+            "-pie",
+            "-Wl,-z,relro,-z,now",
+            "src/receipt_signer.c",
+            "-lcrypto",
+            "-o"
+        ])
+        .arg(out.join("luma-receipt-signer"))
+        .status()
+        .expect("fixed receipt signer compiler")
+        .success());
+    assert!(Command::new("cc")
+        .args([
+            "-std=c11",
+            "-O2",
+            "-Wall",
+            "-Wextra",
+            "-Werror",
+            "-fstack-protector-strong",
+            "-D_FORTIFY_SOURCE=3",
+            "-fPIE",
+            "-pie",
+            "-Wl,-z,relro,-z,now",
+            "src/backup_crypto.c",
+            "-lcrypto",
+            "-o",
+        ])
+        .arg(out.join("luma-backup-crypto"))
+        .status()
+        .expect("isolated backup crypto helper compiler")
+        .success());
     println!("cargo:rerun-if-changed=src/auth_pam.c");
     assert!(Command::new("cc")
         .args([

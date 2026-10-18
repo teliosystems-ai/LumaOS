@@ -17,6 +17,10 @@ const INDEX: u32 = 0x01804c41;
 const CREDENTIAL_PARENT: u32 = 0x81004c41;
 pub(crate) const RESOURCE_INDEX: u32 = 0x01804c52;
 pub(crate) const RESOURCE_PARENT: u32 = 0x81004c52;
+pub(crate) const CONTENT_INDEX: u32 = 0x01804c43;
+pub(crate) const CONTENT_PARENT: u32 = 0x81004c43;
+pub(crate) const UTC_INDEX: u32 = 0x01804c55;
+pub(crate) const UTC_PARENT: u32 = 0x81004c55;
 // AUTHWRITE | TPM_NT_EXTEND | AUTHREAD | NO_DA | WRITTEN. In particular no
 // OWNERWRITE, ordinary NV_Write, POLICYWRITE, WRITE_STCLEAR or ORDERLY.
 const ATTRIBUTES: u32 = 0x22040044;
@@ -24,6 +28,8 @@ const ATTRIBUTES: u32 = 0x22040044;
 extern "C" {
     fn luma_tpm_open(transport: *const c_char, context: *mut *mut c_void) -> u32;
     fn luma_tpm_resource_open(transport: *const c_char, context: *mut *mut c_void) -> u32;
+    fn luma_tpm_content_open(transport: *const c_char, context: *mut *mut c_void) -> u32;
+    fn luma_tpm_utc_open(transport: *const c_char, context: *mut *mut c_void) -> u32;
     fn luma_tpm_close(context: *mut c_void);
     fn luma_tpm_clock(
         context: *mut c_void,
@@ -66,6 +72,30 @@ extern "C" {
         name: *mut u8,
     ) -> u32;
     fn luma_tpm_resource_persist_parent(
+        context: *mut c_void,
+        owner: *const u8,
+        owner_size: u16,
+        name: *const u8,
+    ) -> u32;
+    fn luma_tpm_content_prepare_parent(
+        context: *mut c_void,
+        owner: *const u8,
+        owner_size: u16,
+        name: *mut u8,
+    ) -> u32;
+    fn luma_tpm_content_persist_parent(
+        context: *mut c_void,
+        owner: *const u8,
+        owner_size: u16,
+        name: *const u8,
+    ) -> u32;
+    fn luma_tpm_utc_prepare_parent(
+        context: *mut c_void,
+        owner: *const u8,
+        owner_size: u16,
+        name: *mut u8,
+    ) -> u32;
+    fn luma_tpm_utc_persist_parent(
         context: *mut c_void,
         owner: *const u8,
         owner_size: u16,
@@ -119,7 +149,32 @@ fn check(code: u32) -> Result<()> {
     Ok(())
 }
 
-struct Context(*mut c_void, bool);
+#[derive(Clone, Copy)]
+enum Namespace {
+    Admin,
+    Resource,
+    Content,
+    Utc,
+}
+impl Namespace {
+    fn index(self) -> u32 {
+        match self {
+            Self::Admin => INDEX,
+            Self::Resource => RESOURCE_INDEX,
+            Self::Content => CONTENT_INDEX,
+            Self::Utc => UTC_INDEX,
+        }
+    }
+    fn parent(self) -> u32 {
+        match self {
+            Self::Admin => CREDENTIAL_PARENT,
+            Self::Resource => RESOURCE_PARENT,
+            Self::Content => CONTENT_PARENT,
+            Self::Utc => UTC_PARENT,
+        }
+    }
+}
+struct Context(*mut c_void, Namespace);
 impl Drop for Context {
     fn drop(&mut self) {
         unsafe { luma_tpm_close(self.0) };
@@ -262,11 +317,7 @@ impl Context {
             return Err("existing nonempty TPM owner authorization required".into());
         }
         let mut occupied = 1;
-        let handle = if self.1 {
-            RESOURCE_PARENT
-        } else {
-            CREDENTIAL_PARENT
-        };
+        let handle = self.1.parent();
         check(unsafe { luma_tpm_index_exists(self.0, handle, &mut occupied) })?;
         if occupied != 0 {
             return Err("credential parent handle occupied; preserve existing state".into());
@@ -318,7 +369,7 @@ impl Context {
         if raw.is_null() {
             return Err("TPM library returned no context".into());
         }
-        Ok(Self(raw, false))
+        Ok(Self(raw, Namespace::Admin))
     }
 
     fn resource_open(transport: &str) -> Result<Self> {
@@ -328,7 +379,41 @@ impl Context {
         if raw.is_null() {
             return Err("TPM library returned no resource context".into());
         }
-        Ok(Self(raw, true))
+        Ok(Self(raw, Namespace::Resource))
+    }
+
+    fn content_open(transport: &str) -> Result<Self> {
+        let transport = CString::new(transport)?;
+        let mut raw = std::ptr::null_mut();
+        check(unsafe { luma_tpm_content_open(transport.as_ptr(), &mut raw) })?;
+        if raw.is_null() {
+            return Err("TPM library returned no content context".into());
+        }
+        Ok(Self(raw, Namespace::Content))
+    }
+
+    fn content_local() -> Result<Self> {
+        let metadata = fs::symlink_metadata(DEVICE)?;
+        if !metadata.file_type().is_char_device() || metadata.uid() != 0 {
+            return Err("local TPM2 resource-manager character device required".into());
+        }
+        Self::content_open("device:/dev/tpmrm0")
+    }
+    fn utc_open(transport: &str) -> Result<Self> {
+        let transport = CString::new(transport)?;
+        let mut raw = std::ptr::null_mut();
+        check(unsafe { luma_tpm_utc_open(transport.as_ptr(), &mut raw) })?;
+        if raw.is_null() {
+            return Err("TPM library returned no UTC context".into());
+        }
+        Ok(Self(raw, Namespace::Utc))
+    }
+    fn utc_local() -> Result<Self> {
+        let metadata = fs::symlink_metadata(DEVICE)?;
+        if !metadata.file_type().is_char_device() || metadata.uid() != 0 {
+            return Err("fixed local TPM2 resource-manager character device required".into());
+        }
+        Self::utc_open("device:/dev/tpmrm0")
     }
 
     fn local() -> Result<Self> {
@@ -373,7 +458,7 @@ impl Context {
 
     fn admission(&mut self) -> Result<Admission> {
         let mut occupied = 1;
-        let index = if self.1 { RESOURCE_INDEX } else { INDEX };
+        let index = self.1.index();
         check(unsafe { luma_tpm_index_exists(self.0, index, &mut occupied) })?;
         if occupied != 0 {
             return Err("local TPM2 checkpoint index is occupied; preserve existing state; no automatic overwrite or recovery".into());
@@ -403,6 +488,169 @@ pub(crate) fn credential_fingerprint(public_pem: &[u8]) -> Result<[u8; 32]> {
     Ok(digest)
 }
 
+// This entire fixture admission path is absent from production builds.
+#[cfg(test)]
+fn fixture_runtime() -> Result<()> {
+    if unsafe { libc::geteuid() } != 0
+        || !Path::new("/.dockerenv").is_file()
+        || [
+            "/dev/tpm0",
+            "/dev/tpmrm0",
+            "/var/run/docker.sock",
+            "/run/docker.sock",
+            "/run/luma-build-docker.sock",
+        ]
+        .iter()
+        .any(|path| fs::symlink_metadata(path).is_ok())
+    {
+        return Err("isolated root container without host TPM or Docker socket required".into());
+    }
+    Ok(())
+}
+#[cfg(test)]
+fn fixture_identity(metadata: &fs::Metadata) -> (u64, u64, u32, u32, u32) {
+    (
+        metadata.dev(),
+        metadata.ino(),
+        metadata.uid(),
+        metadata.gid(),
+        metadata.mode(),
+    )
+}
+#[cfg(test)]
+struct IsolatedFixture {
+    directory: std::path::PathBuf,
+    parent: std::path::PathBuf,
+    held: File,
+    held_parent: File,
+    identity: (u64, u64, u32, u32, u32),
+    parent_identity: (u64, u64, u32, u32, u32),
+}
+#[cfg(test)]
+impl IsolatedFixture {
+    fn capture(directory: &Path, configured: Option<&Path>) -> Result<Self> {
+        fixture_runtime()?;
+        let text = directory
+            .to_str()
+            .ok_or("fixture path must be bounded ASCII")?;
+        if !directory.is_absolute()
+            || text.len() > 96
+            || directory
+                .components()
+                .collect::<std::path::PathBuf>()
+                .as_os_str()
+                != directory.as_os_str()
+            || text
+                .bytes()
+                .any(|byte| !byte.is_ascii_alphanumeric() && !b"/._-".contains(&byte))
+            || directory.components().any(|part| {
+                matches!(
+                    part,
+                    std::path::Component::ParentDir | std::path::Component::CurDir
+                )
+            })
+            || !directory
+                .file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.starts_with("luma-tpm-") && name.len() > 9)
+        {
+            return Err(
+                "isolated fixture needs one bounded canonical luma-tpm- child directory".into(),
+            );
+        }
+        let parent = directory.parent().ok_or("fixture parent absent")?;
+        let legacy = parent == Path::new("/tmp");
+        if !legacy && configured.map(Path::as_os_str) != Some(parent.as_os_str()) {
+            return Err("fixture parent differs from explicit LUMA_STORAGE_TEST_ROOT".into());
+        }
+        if !legacy
+            && (parent == Path::new("/")
+                || parent.components().any(|part| {
+                    matches!(
+                        part,
+                        std::path::Component::ParentDir | std::path::Component::CurDir
+                    )
+                }))
+        {
+            return Err("fixture storage root must be narrow and canonical".into());
+        }
+        for ancestor in directory.ancestors() {
+            let metadata = fs::symlink_metadata(ancestor)?;
+            let sticky_legacy =
+                legacy && ancestor == Path::new("/tmp") && metadata.mode() & 0o1000 != 0;
+            if !metadata.is_dir()
+                || metadata.uid() != 0
+                || (metadata.mode() & 0o022 != 0 && !sticky_legacy)
+            {
+                return Err("fixture has unowned, linked or writable ancestor".into());
+            }
+        }
+        let open = |path: &Path| -> Result<File> {
+            Ok(OpenOptions::new()
+                .read(true)
+                .custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW | libc::O_DIRECTORY)
+                .open(path)?)
+        };
+        let held = open(directory)?;
+        let held_parent = open(parent)?;
+        let metadata = held.metadata()?;
+        let parent_metadata = held_parent.metadata()?;
+        if metadata.mode() & 0o7777 != 0o700
+            || (!legacy && parent_metadata.mode() & 0o7777 != 0o700)
+        {
+            return Err("fixture and explicit storage root must be private mode0700".into());
+        }
+        if !legacy {
+            for file in [&held, &held_parent] {
+                let mut filesystem: libc::statfs = unsafe { std::mem::zeroed() };
+                let mut volume: libc::statvfs = unsafe { std::mem::zeroed() };
+                if unsafe { libc::fstatfs(file.as_raw_fd(), &mut filesystem) } != 0
+                    || unsafe { libc::fstatvfs(file.as_raw_fd(), &mut volume) } != 0
+                {
+                    return Err(std::io::Error::last_os_error().into());
+                }
+                if filesystem.f_type != 0xef53 || volume.f_flag & libc::ST_RDONLY != 0 {
+                    return Err("explicit fixture root must be actual writable ext4".into());
+                }
+            }
+            if metadata.dev() != parent_metadata.dev() {
+                return Err("fixture child changed storage volume".into());
+            }
+        }
+        let pin = Self {
+            directory: directory.to_path_buf(),
+            parent: parent.to_path_buf(),
+            identity: fixture_identity(&metadata),
+            parent_identity: fixture_identity(&parent_metadata),
+            held,
+            held_parent,
+        };
+        pin.recheck()?;
+        Ok(pin)
+    }
+    fn configured(directory: &Path) -> Result<Self> {
+        let supplied = std::env::var_os("LUMA_STORAGE_TEST_ROOT");
+        Self::capture(directory, supplied.as_deref().map(Path::new))
+    }
+    fn recheck(&self) -> Result<()> {
+        fixture_runtime()?;
+        if fixture_identity(&self.held.metadata()?) != self.identity
+            || fixture_identity(&fs::symlink_metadata(&self.directory)?) != self.identity
+            || fixture_identity(&self.held_parent.metadata()?) != self.parent_identity
+            || fixture_identity(&fs::symlink_metadata(&self.parent)?) != self.parent_identity
+        {
+            return Err("isolated TPM fixture directory or parent identity changed".into());
+        }
+        Ok(())
+    }
+    fn transport(&self) -> String {
+        format!("swtpm:path={}/tpm.sock", self.directory.display())
+    }
+}
+#[cfg(test)]
+pub(crate) fn validate_fixture_directory(directory: &Path) -> Result<()> {
+    IsolatedFixture::configured(directory)?.recheck()
+}
 /// Sealed-child operations use the fixed local TPM transport in the product.
 /// The fixture constructor is private to isolated software-TPM tests.
 pub(crate) struct CredentialDevice(Context);
@@ -420,22 +668,10 @@ impl CredentialDevice {
     }
     #[cfg(test)]
     pub(crate) fn fixture(directory: &Path) -> Result<Self> {
-        if !Path::new("/.dockerenv").is_file()
-            || Path::new("/dev/tpm0").exists()
-            || Path::new("/dev/tpmrm0").exists()
-            || directory.parent() != Some(Path::new("/tmp"))
-            || !directory
-                .file_name()
-                .and_then(|name| name.to_str())
-                .unwrap_or("")
-                .starts_with("luma-tpm-")
-        {
-            return Err("isolated software TPM credential fixture required".into());
-        }
-        Ok(Self(Context::open(&format!(
-            "swtpm:path={}/tpm.sock",
-            directory.display()
-        ))?))
+        let fixture = IsolatedFixture::configured(directory)?;
+        let device = Self(Context::open(&fixture.transport())?);
+        fixture.recheck()?;
+        Ok(device)
     }
     pub(crate) fn current_policy11(&mut self) -> Result<[u8; 32]> {
         self.0.current_policy11()
@@ -490,22 +726,10 @@ impl ResourceDevice {
     }
     #[cfg(test)]
     pub(crate) fn fixture(directory: &Path) -> Result<Self> {
-        if !Path::new("/.dockerenv").is_file()
-            || Path::new("/dev/tpm0").exists()
-            || Path::new("/dev/tpmrm0").exists()
-            || directory.parent() != Some(Path::new("/tmp"))
-            || !directory
-                .file_name()
-                .and_then(|n| n.to_str())
-                .unwrap_or("")
-                .starts_with("luma-tpm-")
-        {
-            return Err("isolated software TPM resource fixture required".into());
-        }
-        Ok(Self(Context::resource_open(&format!(
-            "swtpm:path={}/tpm.sock",
-            directory.display()
-        ))?))
+        let fixture = IsolatedFixture::configured(directory)?;
+        let device = Self(Context::resource_open(&fixture.transport())?);
+        fixture.recheck()?;
+        Ok(device)
     }
     pub(crate) fn vacant(&mut self) -> Result<Admission> {
         if self.0.handle_exists(RESOURCE_PARENT)? {
@@ -662,6 +886,345 @@ impl ResourceDevice {
     }
 }
 
+/// Closed, independent content checkpoint transport. The caller owns durable
+/// preparation and authenticated Admin admission; this adapter has no CLI,
+/// credential prompting, shared Admin journal access, clearing or retry path.
+pub(crate) struct ContentDevice(Context);
+impl ContentDevice {
+    pub(crate) fn local() -> Result<Self> {
+        crate::require_root()?;
+        crate::platform::require_installed()?;
+        Ok(Self(Context::content_local()?))
+    }
+    #[cfg(test)]
+    pub(crate) fn fixture(directory: &Path) -> Result<Self> {
+        let fixture = IsolatedFixture::configured(directory)?;
+        let device = Self(Context::content_open(&fixture.transport())?);
+        fixture.recheck()?;
+        Ok(device)
+    }
+    pub(crate) fn vacant(&mut self) -> Result<Admission> {
+        if self.0.handle_exists(CONTENT_PARENT)? {
+            return Err(
+                "content credential parent occupied; preserve enrollment, never overwrite".into(),
+            );
+        }
+        self.0.admission()
+    }
+    pub(crate) fn observation(&mut self) -> Result<Admission> {
+        let mut pcrs = [0u8; 64];
+        check(unsafe { luma_tpm_pcrs(self.0 .0, pcrs.as_mut_ptr()) })?;
+        Ok(Admission {
+            clock: self.0.clock()?,
+            pcr7_sha256: bundle::hex(&pcrs[..32]),
+            pcr11_sha256: bundle::hex(&pcrs[32..]),
+        })
+    }
+    pub(crate) fn recheck(&mut self, admission: &Admission) -> Result<()> {
+        let current = self.observation()?;
+        admission.compare(&current)?;
+        if current.clock.elapsed_since(admission.clock)? > 300_000 {
+            return Err(
+                "content enrollment admission exceeded five-minute protected budget".into(),
+            );
+        }
+        Ok(())
+    }
+    pub(crate) fn prepare_parent(
+        &mut self,
+        owner: &crate::sealed_credential::PrivateBuffer,
+    ) -> Result<[u8; 34]> {
+        if owner.bytes().is_empty() || owner.bytes().len() > 64 {
+            return Err("existing nonempty TPM owner authorization required".into());
+        }
+        let mut name = [0u8; 34];
+        check(unsafe {
+            luma_tpm_content_prepare_parent(
+                self.0 .0,
+                owner.bytes().as_ptr(),
+                owner.bytes().len() as u16,
+                name.as_mut_ptr(),
+            )
+        })?;
+        if name[..2] != [0, 0xb] {
+            return Err("content prepared primary Name algorithm changed".into());
+        }
+        Ok(name)
+    }
+    pub(crate) fn persist_parent(
+        &mut self,
+        owner: &crate::sealed_credential::PrivateBuffer,
+        name: &[u8; 34],
+    ) -> Result<()> {
+        if owner.bytes().is_empty() || owner.bytes().len() > 64 {
+            return Err("existing nonempty TPM owner authorization required".into());
+        }
+        check(unsafe {
+            luma_tpm_content_persist_parent(
+                self.0 .0,
+                owner.bytes().as_ptr(),
+                owner.bytes().len() as u16,
+                name.as_ptr(),
+            )
+        })
+    }
+    pub(crate) fn parent_matches(&mut self, name: &[u8; 34]) -> Result<()> {
+        self.0.parent_matches(name)
+    }
+    pub(crate) fn nv_absent(&mut self) -> Result<()> {
+        if self.0.handle_exists(CONTENT_INDEX)? {
+            return Err("content NV exists; refuse pre-NV phase continuation".into());
+        }
+        Ok(())
+    }
+    pub(crate) fn provision(
+        &mut self,
+        owner: &crate::sealed_credential::PrivateBuffer,
+        secret: &crate::sealed_credential::Secret,
+        genesis: [u8; 32],
+    ) -> Result<()> {
+        self.0.provision_existing(owner, secret, genesis)
+    }
+    pub(crate) fn seal(
+        &mut self,
+        parent: &[u8; 34],
+        public: &[u8],
+        secret: &crate::sealed_credential::Secret,
+    ) -> Result<(Vec<u8>, Vec<u8>)> {
+        self.0.seal_child(parent, public, secret)
+    }
+    pub(crate) fn unseal(
+        &mut self,
+        parent: &[u8; 34],
+        public: &[u8],
+        public_blob: &[u8],
+        private_blob: &[u8],
+        policy: &[u8; 32],
+        signature: &[u8; 256],
+    ) -> Result<crate::sealed_credential::Secret> {
+        Ok(crate::sealed_credential::Secret::from_buffer(
+            self.0
+                .unseal_child(parent, public, public_blob, private_blob, policy, signature)?,
+        ))
+    }
+    pub(crate) fn verify_boot(
+        &mut self,
+        public: &[u8],
+        policy: &[u8; 32],
+        signature: &[u8; 256],
+    ) -> Result<()> {
+        self.0.verify_policy11(public, policy, signature)
+    }
+    pub(crate) fn current_policy11(&mut self) -> Result<[u8; 32]> {
+        self.0.current_policy11()
+    }
+    pub(crate) fn connect(&mut self, secret: &crate::sealed_credential::Secret) -> Result<()> {
+        let mut name = [0u8; 34];
+        let (mut attributes, mut size, mut algorithm, mut policy_size) = (0, 0, 0, 0);
+        check(unsafe {
+            luma_tpm_index(
+                self.0 .0,
+                CONTENT_INDEX,
+                secret.bytes().as_ptr(),
+                name.as_mut_ptr(),
+                &mut attributes,
+                &mut size,
+                &mut algorithm,
+                &mut policy_size,
+            )
+        })?;
+        if name != content_checkpoint_name()
+            || attributes != ATTRIBUTES
+            || size != 32
+            || algorithm != 0xb
+            || policy_size != 0
+        {
+            return Err("content checkpoint Name or closed extend-only profile changed".into());
+        }
+        self.0.clock()?;
+        self.read()?;
+        Ok(())
+    }
+    pub(crate) fn read(&mut self) -> Result<[u8; 32]> {
+        let mut value = [0u8; 32];
+        check(unsafe { luma_tpm_read(self.0 .0, value.as_mut_ptr()) })?;
+        Ok(value)
+    }
+    pub(crate) fn extend(&mut self, event: [u8; 32]) -> Result<()> {
+        check(unsafe { luma_tpm_extend(self.0 .0, event.as_ptr()) })
+    }
+    pub(crate) fn clock(&mut self) -> Result<Clock> {
+        self.0.clock()
+    }
+}
+
+pub(crate) struct UtcDevice(Context);
+impl UtcDevice {
+    pub(crate) fn local() -> Result<Self> {
+        crate::require_root()?;
+        crate::platform::require_installed()?;
+        Ok(Self(Context::utc_local()?))
+    }
+    #[cfg(test)]
+    pub(crate) fn fixture(directory: &Path) -> Result<Self> {
+        let fixture = IsolatedFixture::configured(directory)?;
+        let device = Self(Context::utc_open(&fixture.transport())?);
+        fixture.recheck()?;
+        Ok(device)
+    }
+    pub(crate) fn vacant(&mut self) -> Result<Admission> {
+        if self.0.handle_exists(UTC_PARENT)? {
+            return Err(
+                "UTC credential parent occupied; preserve enrollment, never overwrite".into(),
+            );
+        }
+        self.0.admission()
+    }
+    pub(crate) fn observation(&mut self) -> Result<Admission> {
+        let mut pcrs = [0u8; 64];
+        check(unsafe { luma_tpm_pcrs(self.0 .0, pcrs.as_mut_ptr()) })?;
+        Ok(Admission {
+            clock: self.0.clock()?,
+            pcr7_sha256: bundle::hex(&pcrs[..32]),
+            pcr11_sha256: bundle::hex(&pcrs[32..]),
+        })
+    }
+    pub(crate) fn recheck(&mut self, admission: &Admission) -> Result<()> {
+        let current = self.observation()?;
+        admission.compare(&current)?;
+        if current.clock.elapsed_since(admission.clock)? > 300_000 {
+            return Err("UTC enrollment admission exceeded five-minute protected budget".into());
+        }
+        Ok(())
+    }
+    pub(crate) fn prepare_parent(
+        &mut self,
+        owner: &crate::sealed_credential::PrivateBuffer,
+    ) -> Result<[u8; 34]> {
+        if owner.bytes().is_empty() || owner.bytes().len() > 64 {
+            return Err("existing nonempty TPM owner authorization required".into());
+        }
+        let mut name = [0u8; 34];
+        check(unsafe {
+            luma_tpm_utc_prepare_parent(
+                self.0 .0,
+                owner.bytes().as_ptr(),
+                owner.bytes().len() as u16,
+                name.as_mut_ptr(),
+            )
+        })?;
+        if name[..2] != [0, 0xb] {
+            return Err("UTC prepared primary Name algorithm changed".into());
+        }
+        Ok(name)
+    }
+    pub(crate) fn persist_parent(
+        &mut self,
+        owner: &crate::sealed_credential::PrivateBuffer,
+        name: &[u8; 34],
+    ) -> Result<()> {
+        if owner.bytes().is_empty() || owner.bytes().len() > 64 {
+            return Err("existing nonempty TPM owner authorization required".into());
+        }
+        check(unsafe {
+            luma_tpm_utc_persist_parent(
+                self.0 .0,
+                owner.bytes().as_ptr(),
+                owner.bytes().len() as u16,
+                name.as_ptr(),
+            )
+        })
+    }
+    pub(crate) fn parent_matches(&mut self, name: &[u8; 34]) -> Result<()> {
+        self.0.parent_matches(name)
+    }
+    pub(crate) fn nv_absent(&mut self) -> Result<()> {
+        if self.0.handle_exists(UTC_INDEX)? {
+            return Err("UTC NV exists; refuse pre-NV phase continuation".into());
+        }
+        Ok(())
+    }
+    pub(crate) fn provision(
+        &mut self,
+        owner: &crate::sealed_credential::PrivateBuffer,
+        secret: &crate::sealed_credential::Secret,
+        genesis: [u8; 32],
+    ) -> Result<()> {
+        self.0.provision_existing(owner, secret, genesis)
+    }
+    pub(crate) fn seal(
+        &mut self,
+        parent: &[u8; 34],
+        public: &[u8],
+        secret: &crate::sealed_credential::Secret,
+    ) -> Result<(Vec<u8>, Vec<u8>)> {
+        self.0.seal_child(parent, public, secret)
+    }
+    pub(crate) fn unseal(
+        &mut self,
+        parent: &[u8; 34],
+        public: &[u8],
+        public_blob: &[u8],
+        private_blob: &[u8],
+        policy: &[u8; 32],
+        signature: &[u8; 256],
+    ) -> Result<crate::sealed_credential::Secret> {
+        Ok(crate::sealed_credential::Secret::from_buffer(
+            self.0
+                .unseal_child(parent, public, public_blob, private_blob, policy, signature)?,
+        ))
+    }
+    pub(crate) fn verify_boot(
+        &mut self,
+        public: &[u8],
+        policy: &[u8; 32],
+        signature: &[u8; 256],
+    ) -> Result<()> {
+        self.0.verify_policy11(public, policy, signature)
+    }
+    pub(crate) fn current_policy11(&mut self) -> Result<[u8; 32]> {
+        self.0.current_policy11()
+    }
+    pub(crate) fn connect(&mut self, secret: &crate::sealed_credential::Secret) -> Result<()> {
+        let mut name = [0u8; 34];
+        let (mut attributes, mut size, mut algorithm, mut policy_size) = (0, 0, 0, 0);
+        check(unsafe {
+            luma_tpm_index(
+                self.0 .0,
+                UTC_INDEX,
+                secret.bytes().as_ptr(),
+                name.as_mut_ptr(),
+                &mut attributes,
+                &mut size,
+                &mut algorithm,
+                &mut policy_size,
+            )
+        })?;
+        if name != utc_checkpoint_name()
+            || attributes != ATTRIBUTES
+            || size != 32
+            || algorithm != 0xb
+            || policy_size != 0
+        {
+            return Err("UTC checkpoint Name or closed extend-only profile changed".into());
+        }
+        self.0.clock()?;
+        self.read()?;
+        Ok(())
+    }
+    pub(crate) fn read(&mut self) -> Result<[u8; 32]> {
+        let mut value = [0u8; 32];
+        check(unsafe { luma_tpm_read(self.0 .0, value.as_mut_ptr()) })?;
+        Ok(value)
+    }
+    pub(crate) fn extend(&mut self, event: [u8; 32]) -> Result<()> {
+        check(unsafe { luma_tpm_extend(self.0 .0, event.as_ptr()) })
+    }
+    pub(crate) fn clock(&mut self) -> Result<Clock> {
+        self.0.clock()
+    }
+}
+
 /// Read-only admission observation, NOT enrollment, attestation or NV reservation.
 #[derive(Clone, Debug, Serialize)]
 pub struct Admission {
@@ -725,6 +1288,12 @@ pub(crate) fn checkpoint_name() -> [u8; 34] {
 pub(crate) fn resource_checkpoint_name() -> [u8; 34] {
     name_for_index(RESOURCE_INDEX)
 }
+pub(crate) fn content_checkpoint_name() -> [u8; 34] {
+    name_for_index(CONTENT_INDEX)
+}
+pub(crate) fn utc_checkpoint_name() -> [u8; 34] {
+    name_for_index(UTC_INDEX)
+}
 
 /// Read-only fixed-handle observation for enrollment inspection. This does
 /// not prove the origin of an occupied handle or authorize retry/removal.
@@ -753,22 +1322,10 @@ pub(crate) struct Provisioner {
 impl Provisioner {
     #[cfg(test)]
     pub(crate) fn fixture(directory: &Path) -> Result<Self> {
-        if !Path::new("/.dockerenv").is_file()
-            || Path::new("/dev/tpm0").exists()
-            || Path::new("/dev/tpmrm0").exists()
-            || directory.parent() != Some(Path::new("/tmp"))
-            || !directory
-                .file_name()
-                .and_then(|n| n.to_str())
-                .unwrap_or("")
-                .starts_with("luma-tpm-")
-        {
-            return Err("isolated software TPM fixture required".into());
-        }
-        Self::from_context(Context::open(&format!(
-            "swtpm:path={}/tpm.sock",
-            directory.display()
-        ))?)
+        let fixture = IsolatedFixture::configured(directory)?;
+        let provisioner = Self::from_context(Context::open(&fixture.transport())?)?;
+        fixture.recheck()?;
+        Ok(provisioner)
     }
     pub(crate) fn local() -> Result<Self> {
         crate::require_root()?;
@@ -1083,6 +1640,79 @@ mod tests {
     use crate::admin_journal::{Entry, Store};
 
     #[test]
+    fn fixture_transport_root_is_explicit_private_ext4_or_exact_legacy_tmp_only() {
+        use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
+        fixture_runtime().unwrap();
+        let storage = std::path::PathBuf::from(
+            std::env::var_os("LUMA_STORAGE_TEST_ROOT")
+                .expect("actual private ext4 fixture root required"),
+        );
+        let root = storage.join(format!("fixture-guard-{}", std::process::id()));
+        fs::DirBuilder::new().mode(0o700).create(&root).unwrap();
+        let child = root.join("luma-tpm-good");
+        fs::DirBuilder::new().mode(0o700).create(&child).unwrap();
+        let pin = IsolatedFixture::capture(&child, Some(&root)).unwrap();
+        assert_eq!(
+            pin.transport(),
+            format!("swtpm:path={}/tpm.sock", child.display())
+        );
+        pin.recheck().unwrap();
+        assert!(IsolatedFixture::capture(&child, None).is_err());
+        assert!(IsolatedFixture::capture(&child, Some(&storage)).is_err());
+        assert!(IsolatedFixture::capture(&root.join("luma-tpm-missing"), Some(&root)).is_err());
+        assert!(
+            IsolatedFixture::capture(&root.join("luma-tpm-injected,port=2321"), Some(&root))
+                .is_err()
+        );
+        fs::set_permissions(&child, fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(IsolatedFixture::capture(&child, Some(&root)).is_err());
+        assert!(pin.recheck().is_err());
+        fs::set_permissions(&child, fs::Permissions::from_mode(0o700)).unwrap();
+        fs::set_permissions(&root, fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(IsolatedFixture::capture(&child, Some(&root)).is_err());
+        assert!(pin.recheck().is_err());
+        fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).unwrap();
+        pin.recheck().unwrap();
+        let alias = root.join("luma-tpm-alias");
+        std::os::unix::fs::symlink(&child, &alias).unwrap();
+        assert!(IsolatedFixture::capture(&alias, Some(&root)).is_err());
+        fs::remove_file(&alias).unwrap();
+        let ancestor = root.join("linked-parent");
+        std::os::unix::fs::symlink(&root, &ancestor).unwrap();
+        assert!(
+            IsolatedFixture::capture(&ancestor.join("luma-tpm-good"), Some(&ancestor)).is_err()
+        );
+        fs::remove_file(&ancestor).unwrap();
+        let moved = root.join("luma-tpm-retained");
+        fs::rename(&child, &moved).unwrap();
+        fs::DirBuilder::new().mode(0o700).create(&child).unwrap();
+        assert!(pin.recheck().is_err());
+        fs::remove_dir(&child).unwrap();
+        fs::rename(&moved, &child).unwrap();
+        pin.recheck().unwrap();
+        drop(pin);
+        fs::remove_dir(&child).unwrap();
+        fs::remove_dir(&root).unwrap();
+        let legacy = Path::new("/tmp").join(format!("luma-tpm-legacy-{}", std::process::id()));
+        fs::DirBuilder::new().mode(0o700).create(&legacy).unwrap();
+        IsolatedFixture::capture(&legacy, None)
+            .unwrap()
+            .recheck()
+            .unwrap();
+        fs::remove_dir(legacy).unwrap();
+        let foreign = Path::new("/dev").join(format!("fixture-guard-{}", std::process::id()));
+        fs::DirBuilder::new().mode(0o700).create(&foreign).unwrap();
+        let child = foreign.join("luma-tpm-not-ext4");
+        fs::DirBuilder::new().mode(0o700).create(&child).unwrap();
+        let error = IsolatedFixture::capture(&child, Some(&foreign))
+            .err()
+            .expect("actual tmpfs must refuse");
+        assert!(error.to_string().contains("actual writable ext4"));
+        fs::remove_dir(child).unwrap();
+        fs::remove_dir(foreign).unwrap();
+    }
+
+    #[test]
     #[ignore = "requires fresh disposable existing-owner swtpm without host devices"]
     fn emulator_admin_and_resource_authorities_have_independent_handles_and_secrets() {
         use crate::sealed_credential::{PrivateBuffer, Secret};
@@ -1134,6 +1764,9 @@ mod tests {
         );
         let mut wrong = ResourceDevice::fixture(&directory).unwrap();
         assert!(wrong.connect(&admin_secret).is_err());
+        // Release this deliberately failed authorization's owned session before
+        // exercising the third independent authority on minimum-size TPMs.
+        drop(wrong);
         let mut name = [0u8; 34];
         let (mut attributes, mut size, mut algorithm, mut policy_size) = (0, 0, 0, 0);
         let crossed = ResourceDevice::fixture(&directory).unwrap();
@@ -1150,10 +1783,45 @@ mod tests {
             )
         })
         .is_err());
+        drop(crossed);
         assert!(resource.prepare_parent(&owner).is_err());
         assert!(resource
             .provision(&owner, &resource_secret, [0xb3; 32])
             .is_err());
+        let before_admin = admin.read().unwrap();
+        let before_resource = resource.read().unwrap();
+        let (content_parent, content_secret) = crate::content_checkpoint::tests::exercise_emulator(
+            &std::env::var("LUMA_CONTENT_TPM_MODE").unwrap_or_else(|_| "normal".into()),
+            admin_parent,
+            resource_parent,
+            &admin_secret,
+            &resource_secret,
+        );
+        crate::utc_windows_checkpoint::emulator::exercise_emulator(
+            &std::env::var("LUMA_CONTENT_TPM_MODE").unwrap_or_else(|_| "normal".into()),
+            admin_parent,
+            resource_parent,
+            content_parent,
+            &admin_secret,
+            &resource_secret,
+            &content_secret,
+        );
+        assert_eq!(admin.read().unwrap(), before_admin);
+        assert_eq!(resource.read().unwrap(), before_resource);
+        let crossed = ContentDevice::fixture(&directory).unwrap();
+        assert!(check(unsafe {
+            luma_tpm_index(
+                crossed.0 .0,
+                RESOURCE_INDEX,
+                resource_secret.bytes().as_ptr(),
+                name.as_mut_ptr(),
+                &mut attributes,
+                &mut size,
+                &mut algorithm,
+                &mut policy_size,
+            )
+        })
+        .is_err());
         assert_eq!(
             resource.read().unwrap(),
             extend_value(original_resource, [0xb2; 32])

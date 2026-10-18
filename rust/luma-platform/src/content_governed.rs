@@ -17,6 +17,7 @@ pub(crate) const DIRECTORY: &str = "/var/lib/luma-os/content-store";
 pub(crate) const MAX_REQUEST: usize = 16 * 1024 * 1024 + 32768;
 const MAX_OUTPUT: u64 = 65536;
 const MAX_STORAGE: u64 = 24 * 1024 * 1024;
+const INTEGRATED_READ_BYTES: u64 = 1024 * 1024 * 1024;
 const MAX_PAGE_BYTES: u32 = 16384;
 const MAX_QUERY_RESULTS: usize = 32;
 const PREFIX: &str = "content-v1-";
@@ -52,6 +53,9 @@ enum Operation {
     Render {
         request: luma_content::rendered::Request,
     },
+    Workflow {
+        request: crate::content_workflow::Request,
+    },
     Preparation {
         target: String,
     },
@@ -76,6 +80,10 @@ enum Operation {
         offset: usize,
         limit: usize,
     },
+    BackupReview {},
+    OfficeReview {
+        expected: VersionReference,
+    },
     Current {
         artifact_id: String,
     },
@@ -94,6 +102,17 @@ enum Operation {
 }
 
 impl Input {
+    fn publication_request_id(&self) -> Result<&str> {
+        match &self.operation {
+            Operation::Capture { provenance, .. }
+            | Operation::External { provenance, .. }
+            | Operation::Collection { provenance, .. } => Ok(&provenance.request_id),
+            Operation::Table { request } => Ok(&request.metadata.request_id),
+            Operation::Render { request } => Ok(&request.metadata.request_id),
+            Operation::Workflow { request } => Ok(&request.request_id),
+            _ => Err("operation has no governed publication request identity".into()),
+        }
+    }
     fn is_query(&self) -> bool {
         matches!(
             self.operation,
@@ -105,6 +124,8 @@ impl Input {
                 | Operation::CollectionCurrent { .. }
                 | Operation::CollectionPage { .. }
                 | Operation::CollectionsForMember { .. }
+                | Operation::BackupReview {}
+                | Operation::OfficeReview { .. }
         )
     }
 
@@ -118,6 +139,7 @@ impl Input {
             }
             Operation::Table { request } => request.canonical_bytes()?,
             Operation::Render { request } => request.canonical_bytes()?,
+            Operation::Workflow { request } => request.intent(&self.binding)?.canonical_bytes()?,
             Operation::Recovery { review } => serde_json::to_vec(review)?,
             Operation::Collection { source, .. } => source.canonical_bytes()?,
             Operation::Current { .. }
@@ -129,6 +151,9 @@ impl Input {
             | Operation::CollectionPage { .. }
             | Operation::CollectionsForMember { .. } => {
                 return Err("native content query has no mutation source".into());
+            }
+            Operation::BackupReview {} | Operation::OfficeReview { .. } => {
+                return Err("backup metadata review has no mutation or export source".into());
             }
         })
     }
@@ -147,6 +172,17 @@ impl Input {
         }
         if !self.is_query() {
             self.source()?;
+        }
+        let descriptive_workflow = match &self.operation {
+            Operation::Capture { provenance, .. }
+            | Operation::External { provenance, .. }
+            | Operation::Collection { provenance, .. } => Some(provenance.workflow_sha256.as_str()),
+            Operation::Table { request } => Some(request.metadata.workflow_sha256.as_str()),
+            Operation::Render { request } => Some(request.metadata.workflow_sha256.as_str()),
+            _ => None,
+        };
+        if descriptive_workflow == Some(crate::content_workflow::graph_sha256().as_str()) {
+            return Err("image-defined workflow identity is reserved for the actual closed Workflow operation".into());
         }
         match &self.operation {
             Operation::Preparation { target } => {
@@ -226,6 +262,7 @@ impl Input {
             }
             Operation::Current { artifact_id } => validate_artifact_id(artifact_id)?,
             Operation::Historical { expected } => validate_reference(expected)?,
+            Operation::OfficeReview { expected } => validate_reference(expected)?,
             Operation::Page {
                 expected,
                 offset,
@@ -312,6 +349,9 @@ impl Input {
                 return Err("managed render request substitutes the admitted owner binding".into());
             }
             luma_content::rendered::prepare(request)?;
+        }
+        if let Operation::Workflow { request } = &self.operation {
+            luma_content::rendered::prepare(&request.intent(&self.binding)?)?;
         }
         Ok(())
     }
@@ -569,6 +609,47 @@ pub(crate) fn acquisition_usage(id: &str) -> Result<grants::Use> {
     )
 }
 
+/// Pure validation of a historical broker-bound scope. The caller must still
+/// obtain a live original-client proof; reconstructing this data grants nothing.
+pub(crate) fn custody_usage(
+    id: &str,
+    device: &str,
+    owner: &OwnerBinding,
+    review: &str,
+) -> Result<grants::Use> {
+    owner.validate()?;
+    let selected = profile(id)?;
+    if selected.generation != owner.owner_generation
+        || selected.review != review
+        || !matches!(
+            selected.mode,
+            Mode::Read | Mode::Query | Mode::Write | Mode::Retain | Mode::Recover
+        )
+    {
+        return Err("content custody profile differs from owner/review or closed operation".into());
+    }
+    let (major, minor) = device
+        .split_once(':')
+        .ok_or("invalid content custody storage identity")?;
+    if major == "0"
+        || [major, minor]
+            .iter()
+            .any(|v| v.parse::<u32>().map_or(true, |n| n.to_string() != *v))
+    {
+        return Err("noncanonical content custody storage identity".into());
+    }
+    usage_at(
+        id,
+        io::digest(&serde_json::to_vec(&(
+            "luma-native-content-acquisition-v1",
+            &owner.installation,
+            id,
+            device,
+        ))?),
+        false,
+    )
+}
+
 fn inspection_usage(id: &str) -> Result<grants::Use> {
     usage_at(
         id,
@@ -722,6 +803,7 @@ struct LiveBoundary<'a> {
     lease: &'a resource_manager::WorkerLease,
     mode: Mode,
     review: &'a str,
+    custody: Option<(&'a str, luma_content_store::VerifiedState)>,
 }
 
 impl LiveBoundary<'_> {
@@ -735,6 +817,13 @@ impl LiveBoundary<'_> {
         }
         self.lease.check()?;
         self.registry.current()?;
+        if let Some((profile, expected)) = &self.custody {
+            if crate::content_checkpoint::custody::selected(profile, binding, self.lease.token())?
+                != *expected
+            {
+                return Err("native content current protected owner cut changed".into());
+            }
+        }
         Ok(())
     }
 }
@@ -795,7 +884,7 @@ impl Boundary for LiveBoundary<'_> {
 fn validate_budget(mode: Mode, budget: ResourceBudget) -> Result<()> {
     if budget.memory_bytes > 256 * 1024 * 1024
         || budget.tasks != 1
-        || budget.read_bytes > 256 * 1024 * 1024
+        || budget.read_bytes > INTEGRATED_READ_BYTES
         || budget.write_bytes > MAX_STORAGE
         || budget.additional_storage_bytes > MAX_STORAGE
         || (matches!(mode, Mode::Read | Mode::Query)
@@ -818,6 +907,7 @@ fn plan(
             }
             Operation::Table { request } => request.metadata.request_id.as_str(),
             Operation::Render { request } => request.metadata.request_id.as_str(),
+            Operation::Workflow { request } => request.request_id.as_str(),
             Operation::Collection { provenance, .. } => provenance.request_id.as_str(),
             Operation::Recovery { .. } => {
                 return Err("content recovery uses its dedicated review path".into())
@@ -831,6 +921,9 @@ fn plan(
             | Operation::CollectionPage { .. }
             | Operation::CollectionsForMember { .. } => {
                 return Err("native content query cannot construct a mutation plan".into());
+            }
+            Operation::BackupReview {} | Operation::OfficeReview { .. } => {
+                return Err("backup review cannot construct a mutation or export plan".into());
             }
         };
         if let Some(prior) = repository.replay_plan(request_id, &input.source()?, boundary)? {
@@ -872,6 +965,13 @@ fn plan(
             Some(repository) => repository.plan_render(request, boundary)?,
             None => Plan::managed_render(None, request)?,
         },
+        Operation::Workflow { request } => {
+            let intent = request.intent(&input.binding)?;
+            match repository {
+                Some(repository) => repository.plan_render(&intent, boundary)?,
+                None => Plan::managed_render(None, &intent)?,
+            }
+        }
         Operation::Recovery { .. } => {
             return Err("content recovery uses its dedicated review path".into())
         }
@@ -902,6 +1002,9 @@ fn plan(
         | Operation::CollectionPage { .. }
         | Operation::CollectionsForMember { .. } => {
             return Err("native content query cannot construct a mutation plan".into());
+        }
+        Operation::BackupReview {} | Operation::OfficeReview { .. } => {
+            return Err("backup review cannot construct a mutation or export plan".into());
         }
     })
 }
@@ -952,6 +1055,15 @@ fn validate_replay(input: &Input, prior: &Plan) -> Result<()> {
                 && prior.provenance().workflow_sha256 == request.metadata.workflow_sha256
                 && prior.derivation().map(|d| d.engine) == Some(request.engine)
         }
+        Operation::Workflow { request } => {
+            let intent = request.intent(&input.binding)?;
+            prior.source_kind() == luma_content_store::SourceKind::ManagedRenderIntent
+                && prior.artifact_id() == intent.artifact_id
+                && prior.expected() == intent.expected.as_ref()
+                && prior.provenance().request_id == intent.metadata.request_id
+                && prior.provenance().workflow_sha256 == crate::content_workflow::graph_sha256()
+                && prior.derivation().map(|d| d.engine) == Some(intent.engine)
+        }
         Operation::Collection {
             source,
             expected,
@@ -971,6 +1083,7 @@ fn validate_replay(input: &Input, prior: &Plan) -> Result<()> {
         Operation::CollectionCurrent { .. }
         | Operation::CollectionPage { .. }
         | Operation::CollectionsForMember { .. } => false,
+        Operation::BackupReview {} | Operation::OfficeReview { .. } => false,
     };
     if !matches {
         return Err("native content replay substitutes its immutable operation metadata".into());
@@ -1028,6 +1141,23 @@ fn query(
     boundary: &mut impl Boundary,
 ) -> Result<serde_json::Value> {
     let result = match &input.operation {
+        Operation::BackupReview {} => {
+            let review = repository.review_backup_data(boundary)?;
+            review.validate()?;
+            if review.binding != input.binding
+                || serde_json::to_vec(&review)?.len() > luma_content_store::MAX_BACKUP_REVIEW_BYTES
+            {
+                return Err(
+                    "backup metadata review changed owner or exceeded its exact bound".into(),
+                );
+            }
+            serde_json::json!({
+                "schema_version":1,"backup_review":review,"content_delivered":false,
+                "archive_delivered":false,"export_authorized":false,"restore_permitted":false,
+                "filesystem_changed":false,"committed":false,"authority_returned":false,
+                "provenance_authority":false,"workflow_executed":false,"production_qualified":false
+            })
+        }
         Operation::Preparation { target } => serde_json::json!({
             "schema_version":1,"review":repository.review_preparation(target, boundary)?,
             "committed":false,"authority_returned":false,"workflow_executed":false,
@@ -1102,6 +1232,7 @@ fn worker(id: &str) -> Result<()> {
     crate::require_root()?;
     crate::platform::require_installed()?;
     let p = profile(id)?;
+    let production = crate::platform::production_image()?;
     if std::fs::read_to_string("/proc/self/cgroup")?
         != "0::/lumaacquisition.slice/luma-acquisition.service\n"
         || std::fs::read_to_string("/proc/self/attr/current")? != "luma-acquisition (enforce)\n"
@@ -1124,6 +1255,13 @@ fn worker(id: &str) -> Result<()> {
         .take(MAX_REQUEST as u64 + 1)
         .read_to_end(&mut bytes)?;
     let input = parse(&bytes)?;
+    if matches!(
+        input.operation,
+        Operation::Workflow { .. } | Operation::OfficeReview { .. }
+    ) && !production
+    {
+        return Err("managed workflow completion requires independently enrolled current content custody, not a laboratory file commit".into());
+    }
     if io::digest(&bytes) != p.source
         || input.binding.owner_generation != p.generation
         || input.is_query() != (p.mode == Mode::Query)
@@ -1149,6 +1287,36 @@ fn worker(id: &str) -> Result<()> {
     {
         return Err("native content input is not the current installed principal".into());
     }
+    let cut = if production {
+        Some(if matches!(p.mode, Mode::Write | Mode::Retain) {
+            crate::content_checkpoint::custody::preparation_cut(
+                id,
+                &input.binding,
+                lease.token(),
+                input.publication_request_id()?,
+                p.review,
+            )?
+        } else if p.mode == Mode::Recover {
+            let review = match &input.operation {
+                Operation::Recovery { review } => review,
+                _ => {
+                    return Err("recovery profile requires exact reviewed preparation input".into())
+                }
+            };
+            crate::content_checkpoint::custody::recovery_cut(id, lease.token(), review)?
+        } else {
+            crate::content_checkpoint::custody::PreparationCut {
+                current: crate::content_checkpoint::custody::selected(
+                    id,
+                    &input.binding,
+                    lease.token(),
+                )?,
+                prior_base: None,
+            }
+        })
+    } else {
+        None
+    };
     let mut boundary = LiveBoundary {
         binding: &input.binding,
         registry,
@@ -1156,8 +1324,25 @@ fn worker(id: &str) -> Result<()> {
         lease: &lease,
         mode: p.mode,
         review: p.review,
+        custody: cut.as_ref().map(|cut| (id, cut.current.clone())),
     };
     boundary.current(&input.binding)?;
+    if production {
+        // The integrated chain includes at most twelve full 64MiB history
+        // inventories plus bounded candidate/source rechecks, including actual
+        // workflow reopen. Reserve that read ceiling explicitly; memory stays
+        // 256MiB and source/effect grants and cgroup IO bandwidth are unchanged.
+        boundary.admit(
+            &input.binding,
+            ResourceBudget {
+                memory_bytes: 256 * 1024 * 1024,
+                tasks: 1,
+                read_bytes: INTEGRATED_READ_BYTES,
+                write_bytes: 0,
+                additional_storage_bytes: 0,
+            },
+        )?;
+    }
     // This existence observation occurs only after real admission. A missing
     // repository is not repaired by inspection; only exact initial publication
     // may create it. All other storage errors preserve the original state.
@@ -1176,6 +1361,24 @@ fn worker(id: &str) -> Result<()> {
     } else {
         None
     };
+    if let Some(selected) = boundary.custody.as_ref().map(|(_, state)| state.clone()) {
+        if let Some(repository) = repository.as_mut() {
+            let actual = if let Some(base) = cut.as_ref().and_then(|cut| cut.prior_base.as_ref()) {
+                let actual = repository.verified_state(&mut boundary)?;
+                if actual != selected && actual != *base {
+                    return Err("actual preparation retry is neither exact anchored outcome nor its approved prior base".into());
+                }
+                actual
+            } else {
+                selected
+            };
+            repository.require_state(&actual, &mut boundary)?;
+        } else if selected.outcome_count != 0 {
+            return Err(
+                "protected content history is present but its exact repository is missing".into(),
+            );
+        }
+    }
     let result = if let Operation::Recovery { review } = &input.operation {
         let repository = repository
             .as_mut()
@@ -1194,11 +1397,44 @@ fn worker(id: &str) -> Result<()> {
                         .into(),
                 );
             }
+            if production {
+                repository.check_preparation_review(review, &mut boundary)?;
+                let wanted = review.retired_state()?;
+                if crate::content_checkpoint::custody::quarantine(id, lease.token(), review)?
+                    != wanted
+                {
+                    return Err(
+                        "independent content custody acknowledged a different exact retirement"
+                            .into(),
+                    );
+                }
+                boundary.custody = Some((id, wanted));
+            }
             let outcome = repository.recover_preparation(review, &mut boundary)?;
             serde_json::json!({"schema_version":1,"recovery":outcome,"committed":true,
                 "committed_catalog_changed":false,"authority_returned":false,
                 "workflow_executed":false,"production_qualified":false})
         }
+    } else if p.mode == Mode::Query && matches!(input.operation, Operation::OfficeReview { .. }) {
+        let expected = match &input.operation {
+            Operation::OfficeReview { expected } => expected,
+            _ => return Err("Office query operation changed".into()),
+        };
+        let selected = boundary
+            .custody
+            .as_ref()
+            .ok_or("Office review requires independently selected current C state")?
+            .1
+            .clone();
+        let version = repository
+            .as_ref()
+            .ok_or("Office source repository missing")?
+            .historical(expected, &mut boundary)?;
+        let review = crate::office_export::review(&version, &selected, &mut || {
+            boundary.current(&input.binding)
+        })?;
+        serde_json::json!({"schema_version":1,"office_review":review,"pdf_delivered":false,"export_authorized":false,
+            "private_source_delivered":false,"committed":false,"authority_returned":false,"workflow_executed":false})
     } else if p.mode == Mode::Query {
         query(
             &input,
@@ -1220,25 +1456,100 @@ fn worker(id: &str) -> Result<()> {
                     "native content base/decision differs from its exact reviewed effect".into(),
                 );
             }
-            if repository.is_none() {
+            let created = repository.is_none();
+            if created {
                 repository = Some(Repository::create_at(
                     Path::new(DIRECTORY),
                     &proposal,
                     &mut boundary,
                 )?);
             }
-            let repository = repository
+            let execution = match &input.operation {
+                Operation::Workflow { request } => {
+                    Some(crate::content_workflow::Execution::verify(
+                        request,
+                        &input.binding,
+                        &proposal,
+                        &mut boundary,
+                    )?)
+                }
+                _ => None,
+            };
+            let owner_repository = repository
                 .as_mut()
                 .ok_or("missing native content repository")?;
             let source = input.source()?;
-            let outcome = if matches!(input.operation, Operation::Collection { .. }) {
-                repository.apply_collection(&proposal, &source, &mut boundary)?
+            let (outcome, held_workflow) = if production {
+                let selected = boundary
+                    .custody
+                    .as_ref()
+                    .ok_or("content protected selector missing")?
+                    .1
+                    .clone();
+                if created {
+                    owner_repository.require_state(&selected, &mut boundary)?;
+                }
+                let mut prepared = if matches!(input.operation, Operation::Collection { .. }) {
+                    owner_repository.prepare_collection(&proposal, &source, &mut boundary)?
+                } else {
+                    owner_repository.prepare(&proposal, &source, &mut boundary)?
+                };
+                prepared.recheck(&mut boundary)?;
+                let workflow = execution
+                    .map(|execution| execution.bind(&prepared))
+                    .transpose()?;
+                let commitment = prepared.commitment().canonical_bytes()?;
+                let wanted = prepared.commitment().outcome_state();
+                let actual = crate::content_checkpoint::custody::publish(
+                    id,
+                    &input.binding,
+                    lease.token(),
+                    &commitment,
+                    prepared.record_bytes(),
+                )?;
+                if actual != wanted {
+                    return Err("content custody acknowledged a different exact publication".into());
+                }
+                boundary.custody = Some((id, wanted));
+                (prepared.publish(&mut boundary)?, workflow)
+            } else if matches!(input.operation, Operation::Collection { .. }) {
+                (
+                    owner_repository.apply_collection(&proposal, &source, &mut boundary)?,
+                    None,
+                )
             } else {
-                repository.apply(&proposal, &source, &mut boundary)?
+                (
+                    owner_repository.apply(&proposal, &source, &mut boundary)?,
+                    None,
+                )
             };
-            // The storage transaction is real. Supplied workflow/provenance hashes
-            // remain descriptions, not authenticated workflow execution evidence.
-            serde_json::json!({"schema_version":1,"outcome":outcome,"derivation":proposal.derivation(),"committed":true,"authority_returned":false,"provenance_authority":false,"workflow_executed":false})
+            if let Some(workflow) = held_workflow {
+                // The checkpoint was in the exact canonical Record BEFORE C
+                // anchoring. Reopen actual storage under a fresh genuine C cut;
+                // an in-memory output hash or a caller state never substitutes.
+                drop(repository.take());
+                let selected = crate::content_checkpoint::custody::selected(
+                    id,
+                    &input.binding,
+                    lease.token(),
+                )?;
+                if boundary.custody.as_ref().map(|(_, cut)| cut) != Some(&selected) {
+                    return Err(
+                        "content workflow checkpoint changed before authenticated reopen".into(),
+                    );
+                }
+                let mut reopened =
+                    Repository::open_at(Path::new(DIRECTORY), &input.binding, &mut boundary)?;
+                reopened.require_state(&selected, &mut boundary)?;
+                let completion = workflow.completion(&outcome, &selected)?;
+                boundary.current(&input.binding)?;
+                serde_json::json!({"schema_version":1,"outcome":outcome,"derivation":proposal.derivation(),
+                    "workflow_checkpoint":completion,"committed":true,"authority_returned":false,
+                    "provenance_authority":false,"workflow_executed":true})
+            } else {
+                // Supplied descriptive workflow/provenance hashes remain data.
+                serde_json::json!({"schema_version":1,"outcome":outcome,"derivation":proposal.derivation(),"committed":true,"authority_returned":false,"provenance_authority":false,"workflow_executed":false})
+            }
         }
     };
     boundary.current(&input.binding)?;
@@ -1640,11 +1951,14 @@ fn deliver_result(result: &serde_json::Value, mut check: impl FnMut() -> Result<
 pub(crate) fn command(args: &[String]) -> Result<()> {
     crate::require_root()?;
     crate::platform::require_installed()?;
-    // This beta integration is not production catalog rollback/recovery
-    // qualification. An immutable production release cannot opt into it.
-    crate::platform::require_laboratory_image()?;
+    let production = crate::platform::production_image()?;
     if args.first().map(String::as_str) == Some("content-resource-worker") && args.len() == 2 {
         return worker(&args[1]);
+    }
+    if production {
+        crate::platform::require_production_activation()?;
+    } else {
+        crate::platform::require_laboratory_image()?;
     }
     let (login, path) = match args.first().map(String::as_str) {
         Some("content-owned-inspection-review") if args.len() == 3 => (&args[1], &args[2]),
@@ -1657,6 +1971,13 @@ pub(crate) fn command(args: &[String]) -> Result<()> {
     }
     let bytes = read_request(Path::new(path))?;
     let input = parse(&bytes)?;
+    if matches!(
+        input.operation,
+        Operation::Workflow { .. } | Operation::OfficeReview { .. }
+    ) && !production
+    {
+        return Err("managed workflow requires independent current C custody; laboratory-only publication cannot supply it".into());
+    }
     if input.login != *login {
         return Err("native content request login differs from exact command".into());
     }
@@ -1778,6 +2099,289 @@ mod tests {
             operation,
             ..input()
         }
+    }
+
+    #[test]
+    fn native_workflow_selects_reserved_image_identity_and_exact_retained_intent() {
+        let mut value = input();
+        value.operation = Operation::Workflow {
+            request: crate::content_workflow::Request {
+                schema_version: 1,
+                request_id: "workflow-native".into(),
+                artifact_id: "sheet-native".into(),
+                expected: None,
+                engine: luma_content::rendered::Engine::Spreadsheet,
+                source: r#"{"schema_version":1,"rows":[[{"kind":"number","value":"2"}]]}"#.into(),
+            },
+        };
+        let bytes = canonical_request(&serde_json::to_vec(&value).unwrap()).unwrap();
+        let fresh = || parse(&bytes).unwrap();
+        let intent = match &value.operation {
+            Operation::Workflow { request } => request.intent(&value.binding).unwrap(),
+            _ => unreachable!(),
+        };
+        assert_eq!(fresh().source().unwrap(), intent.canonical_bytes().unwrap());
+        let prior = Plan::managed_render(None, &intent).unwrap();
+        validate_replay(&fresh(), &prior).unwrap();
+        let mut changed = fresh();
+        changed.binding.owner_generation += 1;
+        assert!(validate_replay(&changed, &prior).is_err());
+        let mut changed = fresh();
+        if let Operation::Workflow { request } = &mut changed.operation {
+            request.request_id = "another".into();
+        }
+        assert!(validate_replay(&changed, &prior).is_err());
+        // A caller cannot impersonate the exact durable workflow checkpoint by
+        // entering the publicly known image graph hash into a generic renderer.
+        let generic = Input {
+            operation: Operation::Render { request: intent },
+            ..input()
+        };
+        assert!(generic.validate().is_err());
+        let mut generic = input();
+        if let Operation::Capture { provenance, .. } = &mut generic.operation {
+            provenance.workflow_sha256 = crate::content_workflow::graph_sha256();
+        }
+        assert!(generic.validate().is_err());
+        let mut supplied: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        supplied["operation"]["request"]["workflow_sha256"] =
+            serde_json::Value::String("a".repeat(64));
+        assert!(canonical_request(&serde_json::to_vec(&supplied).unwrap()).is_err());
+    }
+
+    #[test]
+    fn backup_review_is_a_closed_read_only_request_without_effect_or_path_selectors() {
+        let input = query_input(Operation::BackupReview {});
+        let bytes = canonical_request(&serde_json::to_vec(&input).unwrap()).unwrap();
+        let parsed = parse(&bytes).unwrap();
+        assert!(parsed.is_query());
+        assert!(parsed.source().is_err());
+        let prior = plan(&self::input(), None, &mut NoAuthority).unwrap();
+        assert!(plan(&parsed, None, &mut NoAuthority).is_err());
+        assert!(validate_replay(&parsed, &prior).is_err());
+        for field in [
+            "path",
+            "target",
+            "owner",
+            "expected",
+            "export_grant",
+            "archive",
+            "restore",
+        ] {
+            let mut extra: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+            extra["operation"][field] = serde_json::json!("caller-selected");
+            assert!(canonical_request(&serde_json::to_vec(&extra).unwrap()).is_err());
+        }
+        let mut extra: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        extra["operation"]["kind"] = serde_json::json!("backup-export");
+        assert!(canonical_request(&serde_json::to_vec(&extra).unwrap()).is_err());
+    }
+
+    #[test]
+    fn backup_review_has_exact_current_read_attribution_and_read_only_acquisition_profile() {
+        let input = query_input(Operation::BackupReview {});
+        let bytes = serde_json::to_vec(&input).unwrap();
+        let digest = io::digest(&bytes);
+        let id = profile_id(Mode::Query, &input, &bytes, &digest).unwrap();
+        assert!(query_profile(&id).unwrap());
+        let usage = usage_at(&id, "d".repeat(64), false).unwrap();
+        assert_eq!(usage.action, grants::Action::Read);
+        assert_eq!(usage.selector.kind, grants::Kind::File);
+        assert_eq!(usage.selector.id, "native-content-query-v1");
+        assert_eq!(usage.selector.generation, input.binding.owner_generation);
+        assert_eq!(usage.output_bytes, MAX_OUTPUT);
+        let audit = grants::Audit {
+            subject: input.binding.owner.clone(),
+            subject_generation: input.binding.owner_generation,
+            grant_id: "backup-read".into(),
+            grant_version: 1,
+            checkpoint_head: "e".repeat(64),
+            operation_id: Some("f".repeat(32)),
+            usage,
+        };
+        check_attribution(&input.binding, "backup-read", &audit).unwrap();
+        for altered in [
+            grants::Audit {
+                subject: "a".repeat(64),
+                ..audit.clone()
+            },
+            grants::Audit {
+                subject_generation: audit.subject_generation + 1,
+                ..audit.clone()
+            },
+            grants::Audit {
+                grant_id: "unrelated-read".into(),
+                ..audit.clone()
+            },
+        ] {
+            assert!(check_attribution(&input.binding, "backup-read", &altered).is_err());
+        }
+        let args = crate::acquisition::arguments(Path::new("/var"), &id, "content").unwrap();
+        assert!(args
+            .iter()
+            .any(|v| v == "--property=ReadOnlyPaths=/var/lib/luma-os/content-store"));
+        assert!(!args
+            .iter()
+            .any(|v| v == "--property=ReadWritePaths=/var/lib/luma-os/content-store"));
+        let mut changed = query_input(Operation::BackupReview {});
+        changed.binding.owner_generation += 1;
+        let changed_bytes = serde_json::to_vec(&changed).unwrap();
+        let changed_id = profile_id(
+            Mode::Query,
+            &changed,
+            &changed_bytes,
+            &io::digest(&changed_bytes),
+        )
+        .unwrap();
+        assert_ne!(id, changed_id);
+        assert!(profile_id(Mode::Query, &input, &bytes, &"a".repeat(64)).is_err());
+    }
+
+    // Only a disposable native test implements this fixture authority. The
+    // installed query continues to require the genuine live PAM/grant adapter.
+    struct BackupQueryBoundary {
+        binding: OwnerBinding,
+        review: Option<String>,
+        checks: usize,
+        refuse_at: usize,
+    }
+    impl Boundary for BackupQueryBoundary {
+        fn admit(
+            &mut self,
+            binding: &OwnerBinding,
+            budget: ResourceBudget,
+        ) -> luma_content_store::Result<()> {
+            if binding != &self.binding {
+                return Err("fixture backup owner/generation mismatch".into());
+            }
+            validate_budget(
+                if self.review.is_some() {
+                    Mode::Write
+                } else {
+                    Mode::Query
+                },
+                budget,
+            )
+        }
+        fn check(&mut self, access: Access<'_>) -> luma_content_store::Result<()> {
+            self.checks += 1;
+            if self.checks >= self.refuse_at {
+                return Err("fixture current backup Read authority revoked".into());
+            }
+            match access {
+                Access::Inspect { binding } if binding == &self.binding => Ok(()),
+                Access::Mutate {
+                    binding,
+                    review_sha256,
+                    ..
+                } if binding == &self.binding && self.review.as_deref() == Some(review_sha256) => {
+                    Ok(())
+                }
+                _ => Err("fixture backup scope substitution".into()),
+            }
+        }
+    }
+
+    #[test]
+    fn backup_query_reads_real_catalog_returns_compact_metadata_and_joins_resource_receipt() {
+        use std::os::unix::fs::DirBuilderExt;
+        struct Directory(std::path::PathBuf);
+        impl Drop for Directory {
+            fn drop(&mut self) {
+                std::fs::remove_dir_all(&self.0).unwrap();
+            }
+        }
+        let root = std::env::var_os("LUMA_STORAGE_TEST_ROOT")
+            .expect("native backup query requires disposable private ext4 storage");
+        let directory = Directory(std::path::PathBuf::from(root).join(format!(
+            "luma-native-backup-query-{}-{}",
+            std::process::id(),
+            crate::resources::random_id().unwrap()
+        )));
+        std::fs::DirBuilder::new()
+            .mode(0o700)
+            .create(&directory.0)
+            .unwrap();
+        let input = query_input(Operation::BackupReview {});
+        let private = b"Private source bytes must never appear in backup-review output";
+        let initial = Plan::capture(
+            input.binding.clone(),
+            "private-document",
+            Format::Utf8Text,
+            private,
+            Provenance {
+                request_id: "backup-source".into(),
+                workflow_sha256: "c".repeat(64),
+                source_sha256: io::digest(private),
+                origin: luma_content::EditOrigin::Managed,
+            },
+        )
+        .unwrap();
+        let mut writer = BackupQueryBoundary {
+            binding: input.binding.clone(),
+            review: Some(initial.review_sha256().into()),
+            checks: 0,
+            refuse_at: usize::MAX,
+        };
+        let mut repository = Repository::create_at(&directory.0, &initial, &mut writer).unwrap();
+        repository.apply(&initial, private, &mut writer).unwrap();
+        let mut reader = BackupQueryBoundary {
+            binding: input.binding.clone(),
+            review: None,
+            checks: 0,
+            refuse_at: usize::MAX,
+        };
+        let result = query(&input, &repository, &mut reader).unwrap();
+        assert!(reader.checks > 10);
+        let reviewed: luma_content_store::BackupReview =
+            serde_json::from_value(result["backup_review"].clone()).unwrap();
+        reviewed.validate().unwrap();
+        assert_eq!(reviewed.binding, input.binding);
+        assert_eq!(reviewed.committed_outcomes, 1);
+        assert!(serde_json::to_vec(&reviewed).unwrap().len() <= 8192);
+        let encoded = serde_json::to_vec(&result).unwrap();
+        assert!(encoded.len() < MAX_OUTPUT as usize);
+        assert!(!String::from_utf8(encoded)
+            .unwrap()
+            .contains(std::str::from_utf8(private).unwrap()));
+        for flag in [
+            "content_delivered",
+            "archive_delivered",
+            "export_authorized",
+            "restore_permitted",
+            "filesystem_changed",
+            "committed",
+            "authority_returned",
+            "provenance_authority",
+            "workflow_executed",
+            "production_qualified",
+        ] {
+            assert_eq!(result[flag], false);
+        }
+        let (mut response, mut receipt) = resource_response();
+        response.result = result;
+        receipt["output_sha256"] =
+            serde_json::json!(io::digest(&serde_json::to_vec(&response.result).unwrap()));
+        verify_resource(
+            &response,
+            &response.binding,
+            &response.request_sha256,
+            receipt.clone(),
+        )
+        .unwrap();
+        response.result["backup_review"]["archive_sha256"] = serde_json::json!("e".repeat(64));
+        assert!(verify_resource(
+            &response,
+            &response.binding,
+            &response.request_sha256,
+            receipt
+        )
+        .is_err());
+        reader.checks = 0;
+        reader.refuse_at = 4;
+        assert!(query(&input, &repository, &mut reader).is_err());
+        assert_eq!(reader.checks, 4);
+        drop(repository);
     }
 
     #[test]
@@ -1976,6 +2580,7 @@ mod tests {
     #[test]
     fn query_requests_are_closed_canonical_data_with_no_mutation_source() {
         for operation in [
+            Operation::BackupReview {},
             Operation::Current {
                 artifact_id: "notes-one".into(),
             },
@@ -2218,6 +2823,7 @@ mod tests {
         let capture = input();
         let prior = plan(&capture, None, &mut NoAuthority).unwrap();
         for operation in [
+            Operation::BackupReview {},
             Operation::Current {
                 artifact_id: "notes-one".into(),
             },
@@ -2914,7 +3520,7 @@ mod tests {
             },
             ResourceBudget { tasks: 2, ..read },
             ResourceBudget {
-                read_bytes: read.read_bytes + 1,
+                read_bytes: INTEGRATED_READ_BYTES + 1,
                 ..read
             },
             ResourceBudget {

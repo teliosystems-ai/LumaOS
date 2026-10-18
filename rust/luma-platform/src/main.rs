@@ -14,24 +14,33 @@ mod admin_service;
 mod artifact_catalog;
 mod artifacts;
 mod authentication;
+mod backup_crypto;
 mod broker_effects;
 mod bundle;
 mod calculation;
+mod content_backup;
+mod content_checkpoint;
 mod content_contract;
 mod content_governed;
+mod content_restore;
+mod content_workflow;
 mod credential_observer;
 mod disk;
 mod finite_grants;
 mod generated_runtime;
+mod hosted_windows;
 mod model;
 mod model_qualification;
 mod model_trust;
+mod office_adapter;
+mod office_export;
 mod owner_credential;
 mod platform;
 mod policy_decisions;
 mod principal;
 #[cfg(test)]
 mod publication_fixture;
+mod receipt_signer;
 mod recovery_export;
 mod release_trust;
 mod resource_checkpoint;
@@ -55,6 +64,9 @@ mod utc_receiver;
 mod utc_runtime;
 mod utc_step_watch;
 mod utc_stream;
+mod utc_windows;
+mod utc_windows_checkpoint;
+mod utc_windows_crypto;
 pub(crate) use utc_stream::provider as utc_provider;
 mod workflow;
 mod workflow_inputs;
@@ -222,6 +234,21 @@ fn dispatch() -> Result<()> {
                     | "content-owned-inspection-review"
                     | "content-owned-review"
                     | "content-owned-apply"
+                    | "content-backup-export-proposal"
+                    | "content-backup-export"
+                    | "content-restore-proposal"
+                    | "content-restore-review"
+                    | "content-restore-apply"
+                    | "content-restore-retire-proposal"
+                    | "content-restore-retire-inspect"
+                    | "content-restore-retire"
+                    | "content-office-export-proposal"
+                    | "content-office-export"
+                    | "content-backup-signer-prepare-proposal"
+                    | "content-backup-signer-prepare"
+                    | "content-backup-signer-enroll"
+                    | "content-backup-recipients-proposal"
+                    | "content-backup-recipients-enroll"
             )
         )
     {
@@ -256,6 +283,43 @@ fn dispatch() -> Result<()> {
         admin_governance::reject_laboratory_effects_after_bootstrap()?;
     }
     match args.first().map(String::as_str) {
+        Some("utc-windows-serve") if args.len() == 1 => utc_windows::serve(),
+        Some(
+            "utc-windows-checkpoint-enroll-review"
+            | "utc-windows-checkpoint-enroll"
+            | "utc-windows-checkpoint-parent-review"
+            | "utc-windows-checkpoint-parent-continue"
+            | "utc-windows-checkpoint-pending-review"
+            | "utc-windows-checkpoint-finalize"
+            | "utc-windows-checkpoint-status-review"
+            | "utc-windows-checkpoint-status",
+        ) => utc_windows_checkpoint::command(&args),
+        Some(
+            "utc-windows-key-draft-review"
+            | "utc-windows-key-authorize-review"
+            | "utc-windows-key-authorize-inspect"
+            | "utc-windows-key-authorize"
+            | "utc-windows-key-draft-inspect"
+            | "utc-windows-key-draft"
+            | "utc-windows-key-commission-review"
+            | "utc-windows-key-commission-inspect"
+            | "utc-windows-key-commission"
+            | "utc-windows-key-revoke-review"
+            | "utc-windows-key-revoke-inspect"
+            | "utc-windows-key-revoke"
+            | "utc-windows-key-reconcile-review"
+            | "utc-windows-key-reconcile-inspect"
+            | "utc-windows-key-reconcile",
+        ) => utc_windows::command(&args),
+        Some("content-office-request") if args.len() == 1 => office_export::prepare_stdin(),
+        Some(
+            "content-office-export-proposal"
+            | "content-office-export"
+            | "content-office-resource-worker",
+        ) => office_export::command(&args),
+        Some("hosted-windows-compute") if args.len() == 1 => hosted_windows::worker(),
+        Some("hosted-windows-compute-launch") if args.len() == 1 => hosted_windows::launch(),
+        Some("hosted-windows-compute-drain") if args.len() == 1 => hosted_windows::drain(),
         Some(
             "resource-checkpoint-prepare-review"
             | "resource-checkpoint-prepare"
@@ -308,6 +372,62 @@ fn dispatch() -> Result<()> {
             | "workflow-recovery-reconcile",
         ) => workflow_runs::recovery::command(&args),
         Some("granted-run") => service::granted_gateway::launch(&args[1..]),
+        Some("content-custody-service") if args.len() == 1 => content_checkpoint::custody::run(),
+        Some(
+            "content-custody-bootstrap-proposal"
+            | "content-custody-bootstrap-review"
+            | "content-custody-bootstrap",
+        ) => content_checkpoint::custody::bootstrap_command(&args),
+        Some("content-backup-recipients-proposal" | "content-backup-recipients-enroll") => {
+            content_checkpoint::custody::recipients_command(&args)
+        }
+        Some(
+            "content-backup-signer-prepare-proposal"
+            | "content-backup-signer-prepare"
+            | "content-backup-signer-enroll",
+        ) => content_checkpoint::custody::signer_command(&args),
+        Some(
+            "content-custody-inspect-proposal"
+            | "content-custody-inspect"
+            | "content-custody-reconcile",
+        ) => content_checkpoint::custody::command(&args),
+        Some("content-backup-request") if args.len() == 1 => content_backup::prepare_stdin(),
+        Some("content-restore-request") if args.len() == 1 => content_restore::prepare_stdin(),
+        Some("content-restore-retire-request") if args.len() == 1 => {
+            content_checkpoint::custody::prepare_retirement_stdin()
+        }
+        Some(
+            "content-restore-retire-proposal"
+            | "content-restore-retire-inspect"
+            | "content-restore-retire",
+        ) => content_checkpoint::custody::retire_command(&args),
+        Some(
+            "content-restore-proposal"
+            | "content-restore-review"
+            | "content-restore-apply"
+            | "content-restore-resource-worker",
+        ) => content_restore::command(&args),
+        Some("content-backup-receipt-verify") if args.len() == 2 => {
+            content_checkpoint::custody::verify_backup_receipt_stdin(&args[1])
+        }
+        Some("content-backup-capsule-verify") if args.len() == 2 => {
+            content_backup::verify_capsule_stdin(&args[1])
+        }
+        Some(
+            "content-backup-export-proposal"
+            | "content-backup-export"
+            | "content-backup-resource-worker",
+        ) => content_backup::command(&args),
+        Some(
+            "content-checkpoint-enroll-review"
+            | "content-checkpoint-enroll"
+            | "content-checkpoint-parent-review"
+            | "content-checkpoint-parent-continue"
+            | "content-checkpoint-pending-review"
+            | "content-checkpoint-finalize"
+            | "content-checkpoint-status-review"
+            | "content-checkpoint-status",
+        ) => content_checkpoint::command(&args),
         Some(
             "content-owned-inspection-review"
             | "content-owned-review"
@@ -794,6 +914,16 @@ fn dispatch() -> Result<()> {
             println!("Laboratory catalog discovery: artifact-catalog-search QUERY LIMIT. Rebuilds a bounded lexical index over verified current versions; exact all-term matching, deterministic ordering, no model or durable index. Installed laboratory root only, unavailable after Admin bootstrap. Not governed or semantic search.");
             println!("Owned catalog discovery: granted-run artifact-gc-inspection-review LOGIN returns the exact independent Read scope; granted-run artifact-owned-search LOGIN READ-GRANT QUERY LIMIT uses current principal/grant checks during verified rebuild and bounded delivery. Current-generation, latest-version lexical references only; no semantic model or cross-owner lookup.");
             println!("Editable-content contracts: content-contract-capture | content-contract-reopen | content-contract-compare | content-contract-table-edit | content-contract-native-request take bounded schema-1 JSON on stdin. UTF8 text/JSON/CSV only; immutable version references, canonical reopen, explicit external-edit conflicts and exact inert native request preparation. Table edits are atomic zero-based cell/row/column data proposals, never formula execution. Pure data inspection, not authenticated ownership, a file grant, durable publication, automatic merge or certification.");
+            println!(concat!(
+                "Encrypted backup: content-backup-request canonicalizes an exact prior backup-review and two public recipient certificates/pins. ",
+                "Explicit laboratory manual custody remains separate; governed-content-custody-v1-GENERATION requires current separately enrolled C recipient custody, protected same-Snapshot source selection and an actual measured-ciphertext origin receipt. ",
+                "granted-run content-backup-export-proposal LOGIN REQUEST returns exact finite Read/Export scopes; content-backup-export LOGIN READ-GRANT EXPORT-GRANT REQUEST retains the original thirty-minute Export session and acknowledged binary relay. ",
+                "Governed output is LUMACMSFRAME01 framing with public signed metadata and CMS, not raw CMS. ",
+                "content-backup-receipt-verify EXPECTED-ORIGIN-SPKI-SHA256 accepts canonical detached custody receipt JSON on stdin and verifies only the independently selected origin signature; never infers current custody, archive validity or restore permission. ",
+                "content-restore-request prepares public restore input. content-restore-retire-request canonicalizes an explicit retirement wrapper on stdin and returns only phase/scope data, never authenticated review or grants. granted-run content-restore-proposal LOGIN REQUEST returns exact finite scopes; content-restore-review LOGIN READ-GRANT EFFECT-GRANT REQUEST and content-restore-apply LOGIN READ-GRANT EFFECT-GRANT REQUEST require the original Admin session, finite Read plus Recover or batch Write grants, a private PKCS8 credential on locked memfd stdin and an independently pinned origin. ",
+                "Ordered C-checkpoint publication supports reviewed prefix resumption. content-restore-retire-proposal LOGIN REQUEST, content-restore-retire-inspect LOGIN READ-GRANT REQUEST and content-restore-retire LOGIN RECOVER-GRANT REQUEST preserve forensic bytes and disable only the exact damaged owner generation. ",
+                "Restore uses the standard thirty-second session; there is no plaintext fallback or automatic authority/account restoration."
+            ));
             println!("Governed content beta (installed laboratory image only): granted-run content-owned-inspection-review LOGIN REQUEST returns an exact finite Read scope without private content access. granted-run content-owned-review LOGIN READ-GRANT REQUEST uses a fresh broker lease and returns the exact apply Read/effect scopes and write:SHA256 or retain:SHA256 approval. granted-run content-owned-apply LOGIN READ-GRANT EFFECT-GRANT APPROVAL REQUEST rechecks both grants, protected UTC, actual owner generation and resource fencing before immutable publication or intent retention. Capture, external saves and managed CSV intents are supported; exact replay preserves current versions. Requests must use the canonical JSON returned by content-contract-native-request. No unleased or root-bypass path, production-image admission, workflow execution or rollback certification.");
             println!("Governed content reads: Current, Historical, Page and Search request operations use content-owned-inspection-review followed by content-owned-review with the returned independent query Read scope. Exact-version pages are at most 16384 bytes encoded as hex, bound to the full immutable envelope SHA256; every page is independently admitted. Latest-version owner-local lexical search is bounded, not semantic search. Query workers mount the store read-only and never initialize or repair it. Results require a pipe, socket or terminal with continuous authority/resource checks, not direct file export.");
             println!("Deterministic spreadsheet data: content-contract-spreadsheet takes a schema-1 typed source with 1..64 rows and 1..32 columns. Explicit decimal/ref/negate/binary/sum/minimum/maximum/average expressions use exact six-place decimal arithmetic; overflow, cycles, zero division and required rounding are refused. Returns canonical editable JSON source and CSV digests. CSV formula-looking text stays inert. This pure command establishes no ownership, storage publication or workflow authority.");

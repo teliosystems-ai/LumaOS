@@ -1,6 +1,10 @@
 import importlib.util
+import json
 import os
 from pathlib import Path
+import hashlib
+import subprocess
+import tempfile
 import unittest
 from unittest.mock import patch
 
@@ -11,6 +15,40 @@ SPEC.loader.exec_module(SWEEP)
 
 
 class SweepExecutionTests(unittest.TestCase):
+    def test_actual_cargo_build_scripts_cannot_cross_source_cuts_with_older_mtimes(self):
+        with tempfile.TemporaryDirectory(prefix='luma-cargo-source-cache-') as temporary:
+            root = Path(temporary)
+            project = root / 'project'
+            (project / 'src').mkdir(parents=True)
+            (project / 'Cargo.toml').write_text('[package]\nname="luma-cache-source-fixture"\nversion="0.0.0"\nedition="2021"\n')
+            (project / 'src/main.rs').write_text('include!(concat!(env!("OUT_DIR"),"/marker.rs")); fn main(){println!("{}",MARKER);}\n')
+            def run(marker):
+                # JSON quoting is also a valid Rust string for these fixed ASCII
+                # inputs; no shell or external dependency participates.
+                source = 'fn main(){std::fs::write(std::path::Path::new(&std::env::var("OUT_DIR").unwrap()).join("marker.rs"), ' + json.dumps('pub const MARKER: &str = "' + marker + '";') + ').unwrap();println!("cargo:rerun-if-changed=build.rs");}\n'
+                (project / 'build.rs').write_text(source)
+                os.utime(project / 'build.rs', (1, 1))
+                identity = hashlib.sha256(source.encode()).hexdigest()
+                target = root / Path(SWEEP.source_target(identity)).relative_to('/cache')
+                completed = subprocess.run(['cargo', 'run', '--offline', '--quiet', '--target-dir', str(target)],
+                    cwd=project, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                    env={**os.environ, 'CARGO_INCREMENTAL': '0'}, timeout=60, check=True)
+                self.assertEqual(completed.stdout, (marker + '\n').encode())
+                return target
+            first = run('first')
+            later = run('later')
+            self.assertNotEqual(first, later)
+            self.assertEqual(run('first'), first)
+
+    def test_cargo_targets_are_separate_for_every_exact_source_cut(self):
+        first, later = '1' * 64, '2' * 64
+        self.assertEqual(SWEEP.source_target(first), '/cache/target-by-source/' + first)
+        self.assertNotEqual(SWEEP.source_target(first), SWEEP.source_target(later))
+        self.assertEqual(SWEEP.source_target(first), SWEEP.source_target(first))
+        for invalid in ('', first.upper().replace('1', 'A'), '0' * 63, '../target', None):
+            with self.assertRaises(ValueError):
+                SWEEP.source_target(invalid)
+
     def test_apparmor_cases_parse_each_shipped_profile_without_loading_or_cache(self):
         repository = Path(__file__).resolve().parents[2]
         cases = SWEEP.apparmor_cases(repository)
@@ -19,7 +57,8 @@ class SweepExecutionTests(unittest.TestCase):
         self.assertGreater(len(cases), 0)
         for (name, command, directory, timeout), profile in zip(cases, profiles):
             self.assertEqual(name, 'apparmor-parse-' + profile.name)
-            self.assertEqual(command, ['/usr/sbin/apparmor_parser', '-Q', '-K', str(profile)])
+            self.assertEqual(command, ['/usr/sbin/apparmor_parser', '-Q', '-K',
+                                       '-j1', '--max-jobs', '1', str(profile)])
             self.assertEqual(directory, repository)
             self.assertEqual(timeout, 60)
 
@@ -31,6 +70,23 @@ class SweepExecutionTests(unittest.TestCase):
         self.assertEqual(environment['RUSTFLAGS'], '-Dwarnings')
         self.assertEqual(environment['CARGO_INCREMENTAL'], '0')
         self.assertEqual(environment['PYTHONDONTWRITEBYTECODE'], '1')
+
+    def test_content_tpm_requires_all_real_scenarios_without_qualification_claims(self):
+        from content_checkpoint_integration import CASE, MODES
+        record = {'schema_version': 1, 'status': 'CONTENT_CHECKPOINT_SOFTWARE_TPM_PASSED',
+                  'physical_tpm_used': False, 'physical_qualification': False,
+                  'production_publication_enabled': False,
+                  'cases': [{'test': CASE, 'passed': True, 'transport': 'disposable-swtpm',
+                             'content_scenario': mode} for mode in MODES]}
+        text = json.dumps(record) + '\n'
+        self.assertEqual(SWEEP.executed_tests('content-software-tpm', text),
+                         {'passed': 3, 'failed': 0, 'skipped': 0})
+        for invalid in ('', text + text, text.replace('true', 'false'),
+                        text.replace('lost-parent', 'normal'),
+                        text.replace('"physical_tpm_used": false', '"physical_tpm_used": true'),
+                        json.dumps({**record, 'cases': record['cases'][:2]})):
+            with self.assertRaises(ValueError):
+                SWEEP.executed_tests('content-software-tpm', invalid)
 
     def test_model_public_lane_requires_actual_unskipped_crypto_cases(self):
         text = 'Ran 10 tests in 0.1s\n\nOK\n'

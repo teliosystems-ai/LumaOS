@@ -43,4 +43,5 @@ RUN \
 # Keep the fixed KVM dependency separate so adding it does not invalidate the
 # large, already pinned firmware and desktop package layers.
 RUN apt-get install -y --no-install-recommends --snapshot=${SNAPSHOT} qemu-system-x86
+RUN apt-get install -y --no-install-recommends --snapshot=${SNAPSHOT} libreoffice-writer bubblewrap
 CMD ["/sbin/init"]

@@ -61,7 +61,7 @@ fn rendered(version: &ArtifactVersion) -> Result<Value> {
     )
 }
 
-fn process(command: &str, bytes: &[u8]) -> Result<Value> {
+pub(crate) fn process(command: &str, bytes: &[u8]) -> Result<Value> {
     if bytes.is_empty() || bytes.len() > MAX_REQUEST {
         return Err("editable-content request exceeds fixed transport bound".into());
     }

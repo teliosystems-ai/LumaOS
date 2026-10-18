@@ -92,6 +92,42 @@ class WindowsStageTests(unittest.TestCase):
         self.assertEqual((self.base / 'baseline/stage.json').read_bytes(),
                          (self.base / 'repeated/stage.json').read_bytes())
 
+    def test_hosted_compute_uses_actual_parser_systemd_and_closed_configuration(self):
+        report = stage.stage(Path('/'), self.platform, self.base, 'hosted', hosted_compute=True)
+        root = self.base / 'hosted/rootfs'
+        self.assertEqual(report['profile'], stage.hosted.PROFILE)
+        self.assertTrue(report['service_enablement_configured'])
+        self.assertFalse(report['guest_confinement_qualified'])
+        for path in stage.hosted.BINARIES:
+            self.assertEqual((root / path).read_bytes(), (Path('/') / path).read_bytes())
+        for path, (value, mode) in stage.hosted.GENERATED.items():
+            self.assertEqual((root / path).read_bytes(), value)
+            self.assertEqual(stat.S_IMODE((root / path).stat().st_mode), mode)
+        policy = (root / stage.hosted.POLICY).read_bytes()
+        self.assertFalse(stage.hosted.unresolved_includes(policy))
+        self.assertIn(b'deny network,', policy)
+        output = self.base / 'hosted-package'
+        stage.package.build(root, self.platform, self.base / 'hosted/plan.json', output,
+                            'luma-wsl-dev-hosted-stage-test', hosted_compute=True)
+        import tarfile
+        with tarfile.open(output / 'rootfs.tar') as archive:
+            embedded = json.load(archive.extractfile('usr/lib/luma/platform.json'))
+            self.assertEqual(embedded['schema_version'], 2)
+            self.assertEqual(embedded['runtime_profile'], stage.hosted.PROFILE)
+            self.assertTrue(archive.extractfile('etc/wsl.conf').read().endswith(b'[user]\ndefault=nobody\n'))
+        records = json.loads((output / 'manifest.json').read_bytes())['required_files']
+        self.assertTrue({stage.hosted.POLICY, stage.hosted.PLATFORM, *stage.hosted.GENERATED,
+                         *stage.hosted.BINARIES}.issubset({entry['path'] for entry in records}))
+        for changed in ('etc/passwd', stage.hosted.PLATFORM):
+            path = root / changed
+            original = path.read_bytes()
+            path.write_bytes(b'not the selected input')
+            with self.assertRaises(ValueError):
+                stage.package.build(root, self.platform, self.base / 'hosted/plan.json',
+                                    self.base / ('bad-hosted-' + path.name),
+                                    'luma-wsl-dev-hosted-stage-test', hosted_compute=True)
+            path.write_bytes(original)
+
     def test_new_output_only_and_no_follow_work_ancestors(self):
         before = (self.base / 'baseline/stage.json').read_bytes()
         with self.assertRaises(FileExistsError):

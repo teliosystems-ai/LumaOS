@@ -21,6 +21,13 @@ def digest(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def source_target(source_manifest_sha256):
+    """Prevent older snapshot mtimes from reusing a later build-script binary."""
+    if not isinstance(source_manifest_sha256, str) or not re.fullmatch('[0-9a-f]{64}', source_manifest_sha256):
+        raise ValueError('Cargo cache requires the verified exact source manifest digest')
+    return '/cache/target-by-source/' + source_manifest_sha256
+
+
 def fixture_environment(output, deny_warnings):
     environment = dict(os.environ, PYTHONDONTWRITEBYTECODE='1', CARGO_INCREMENTAL='0',
                        LUMA_STORAGE_TEST_ROOT=str(output))
@@ -35,12 +42,38 @@ def apparmor_cases(repository):
             or not re.fullmatch(r'luma-[a-z0-9-]{1,64}', path.name) for path in profiles):
         raise ValueError('invalid closed AppArmor parser input group')
     # -Q prevents kernel loading; -K prevents reading or writing policy caches.
-    return [('apparmor-parse-' + path.name, ['/usr/sbin/apparmor_parser', '-Q', '-K', str(path)],
+    return [('apparmor-parse-' + path.name, ['/usr/sbin/apparmor_parser', '-Q', '-K',
+             '-j1', '--max-jobs', '1', str(path)],
              repository, 60) for path in profiles]
 
 
 def executed_tests(name, output):
     """An empty or unrecognized test invocation cannot qualify a lane."""
+    if name == 'content-software-tpm':
+        records = []
+        for line in output.splitlines():
+            if line.startswith('{'):
+                try:
+                    records.append(json.loads(line))
+                except ValueError:
+                    continue
+        if len(records) != 1:
+            raise ValueError('content TPM lane requires one complete result record')
+        record = records[0]
+        modes = ('normal', 'lost-publication', 'lost-parent')
+        test = 'tpm::tests::emulator_admin_and_resource_authorities_have_independent_handles_and_secrets'
+        if (type(record.get('schema_version')) is not int or record['schema_version'] != 1
+                or record.get('status') != 'CONTENT_CHECKPOINT_SOFTWARE_TPM_PASSED'
+                or any(record.get(key) is not False for key in
+                       ('physical_tpm_used', 'physical_qualification', 'production_publication_enabled'))
+                or not isinstance(record.get('cases'), list)
+                or len(record['cases']) != len(modes)
+                or any(not isinstance(case, dict) or case.get('passed') is not True
+                       or case != {'test': test, 'passed': True,
+                                'transport': 'disposable-swtpm', 'content_scenario': mode}
+                       for case, mode in zip(record['cases'], modes))):
+            raise ValueError('content TPM lane lacks exact independent scenario coverage')
+        return {'passed': len(modes), 'failed': 0, 'skipped': 0}
     if name == 'rust-tests' or name.startswith('rust-tests-'):
         summaries = re.findall(
             r'^test result: (?:ok|FAILED)\. (\d+) passed; (\d+) failed; '
@@ -90,6 +123,8 @@ def main():
                         help='run four independent resource authority cases on fresh software TPMs')
     parser.add_argument('--admin-tpm-fixture', action='store_true',
                         help='regression-test existing-owner Admin enrollment on a fresh software TPM')
+    parser.add_argument('--content-tpm-fixture', action='store_true',
+                        help='run independent content enrollment and interrupted-publication/parent cases on fresh software TPMs')
     parser.add_argument('--utc-release-archive', type=Path,
                         help='run mandatory real upstream signature/source authentication tests')
     parser.add_argument('--utc-release-build', action='store_true',
@@ -141,15 +176,17 @@ def main():
         raise SystemExit('evidence directory must be new')
     args.output.mkdir(mode=0o700, parents=True)
     environment = fixture_environment(args.output, args.deny_warnings)
+    target = source_target(digest(manifest))
+    environment['CARGO_TARGET_DIR'] = target
     results = []
     def rust_command(value):
-        command = ['cargo', 'test', '--offline', '--locked', '--target-dir', '/cache/target']
+        command = ['cargo', 'test', '--offline', '--locked', '--target-dir', target]
         if value:
             command.append(value)
         return command + ['--', '--test-threads=1']
     cases = [
         ('rust-all-targets-check', ['cargo', 'check', '--offline', '--locked',
-                                  '--all-targets', '--target-dir', '/cache/target'],
+                                  '--all-targets', '--target-dir', target],
                                  repository / 'rust', 600),
         ('rust-tests', rust_command(args.rust_filter), repository / 'rust', 1800),
     ]
@@ -158,10 +195,10 @@ def main():
     if args.content_cli_fixture:
         cases.extend([
             ('content-contract-build', ['cargo', 'build', '--offline', '--locked',
-                '--bin', 'luma-platform', '--target-dir', '/cache/target'], repository / 'rust', 600),
+                '--bin', 'luma-platform', '--target-dir', target], repository / 'rust', 600),
             ('content-contract-cli', ['/usr/bin/python3', '-B',
                 str(repository / 'native/tests/content_contract_cli.py'),
-                '--binary', '/cache/target/debug/luma-platform'], repository, 180),
+                '--binary', target + '/debug/luma-platform'], repository, 180),
         ])
     cases.extend([
         ('native-source-tests', ['/usr/bin/python3', '-B', '-m', 'unittest', 'discover',
@@ -186,12 +223,9 @@ def main():
                           str(args.output / 'utc-build'), str(args.output / 'utc-package')],
                           repository, 600))
     if args.pam_fixture:
-        environment['CARGO_TARGET_DIR'] = '/cache/target'
         cases.append(('real-pam-fixture', ['/usr/bin/python3', '-B',
                       str(repository / 'native/tests/principal_pam_integration.py')],
                       repository / 'rust', 600))
-    if args.resource_tpm_fixture or args.admin_tpm_fixture:
-        environment['CARGO_TARGET_DIR'] = '/cache/target'
     if args.resource_tpm_fixture:
         cases.append(('resource-software-tpm', ['/usr/bin/python3', '-B',
                       str(repository / 'native/tests/resource_checkpoint_integration.py')],
@@ -200,6 +234,10 @@ def main():
         cases.append(('admin-software-tpm-regression', ['/usr/bin/python3', '-B',
                       str(repository / 'native/tests/admin_enrollment_integration.py')],
                       repository / 'rust', 1500))
+    if args.content_tpm_fixture:
+        cases.append(('content-software-tpm', ['/usr/bin/python3', '-B',
+                      str(repository / 'native/tests/content_checkpoint_integration.py')],
+                      repository / 'rust/luma-platform', 1500))
     started = time.monotonic()
     for name, command, directory, timeout in cases:
         log = args.output / (name + '.log')
@@ -239,6 +277,7 @@ def main():
               'content_cli_fixture_requested': args.content_cli_fixture,
               'resource_software_tpm_requested': args.resource_tpm_fixture,
               'admin_software_tpm_requested': args.admin_tpm_fixture,
+              'content_software_tpm_requested': args.content_tpm_fixture,
               'utc_release_authentication_requested': args.utc_release_archive is not None,
               'utc_release_build_requested': args.utc_release_build,
               'chrony_fixture': 'release-4.9-pinned' if environment.get('LUMA_CHRONY_RELEASE_UPSTREAM')
@@ -250,6 +289,7 @@ def main():
                                        for item in results) else 'failed',
               'kernel': platform.release(), 'source_manifest_sha256': digest(manifest),
               'runner_sha256': digest(Path(__file__)), 'cases': results,
+              'cargo_target_directory': target,
               'elapsed_seconds': round(time.monotonic()-started, 3),
               'physical_tpm_tested': False, 'installed_image_tested': False,
               'production_authorization_qualified': False, 'gate_closing': False}

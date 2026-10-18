@@ -30,7 +30,37 @@ def response(data):
 def document():
     return dict(operation='document', rendering=dict(schema_version=1, engine='luma-static-document-v1',
                 canonical_source='{}', source_sha256=host.digest('{}'), canonical_html='<p>Safe</p>',
-                html_sha256=host.digest('<p>Safe</p>')))
+                html_sha256=host.digest('<p>Safe</p>'), work_units=0), scripts_executed=False,
+                external_resources_loaded=False, source_retained=False)
+
+
+def capture_fixture(text='Manual text\n'):
+    receipt = dict(schema_version=1, binding=host.PREVIEW_BINDING, artifact_id='manual-preview', version=1,
+                   previous=None, format='utf8-text', media_type='text/plain; charset=utf-8',
+                   content_sha256=host.digest(text), content_bytes=len(text.encode()), original_bytes=len(text.encode()),
+                   provenance=dict(request_id='request-1', workflow_sha256=host.digest('unexecuted-manual-preview-v1'),
+                                   source_sha256=host.digest(text), origin='managed'))
+    return capture_receipt(receipt, text)
+
+
+def capture_receipt(receipt, text):
+    receipt_hash = host.digest(host.encode(receipt))
+    reference = dict(artifact_id=receipt['artifact_id'], version=receipt['version'],
+                     content_sha256=receipt['content_sha256'], receipt_sha256=receipt_hash)
+    envelope = host.encode(dict(receipt=receipt, receipt_sha256=receipt_hash, content=text)).decode()
+    return dict(operation='capture', proposed=dict(receipt=receipt, reference=reference, canonical_envelope=envelope))
+
+
+def spreadsheet_fixture():
+    rows = [[dict(kind='text', value='Quoted, field'), dict(kind='blank'), dict(kind='number', value='2'),
+             dict(kind='formula', expression=dict(op='number', value='6'))]]
+    source = host.encode(dict(schema_version=1, rows=rows)).decode()
+    csv = '"Quoted, field",,2,6\n'
+    values = [[dict(kind='text', value='Quoted, field'), dict(kind='blank'), dict(kind='number', value='2'), dict(kind='number', value='6')]]
+    return source, dict(operation='spreadsheet', typed_expressions_evaluated=True, csv_formula_text_executed=False,
+                        source_retained=False, calculation=dict(schema_version=1, engine='luma-exact-spreadsheet-v1',
+                        canonical_source=source, source_sha256=host.digest(source), values=values,
+                        canonical_csv=csv, csv_sha256=host.digest(csv), evaluation_steps=2))
 
 
 class Pin:
@@ -156,17 +186,127 @@ class WorkspaceHostTests(unittest.TestCase):
 
     def test_animation_validates_each_frame_and_exact_ordered_frame_commitment(self):
         frame = dict(index=0, canonical_svg='<svg/>', svg_sha256=host.digest('<svg/>'))
-        rendering = dict(schema_version=1, engine='luma-sampled-animation-v1', canonical_source='{}',
-                         source_sha256=host.digest('{}'), frames=[frame], frames_per_second=1,
-                         frames_sha256=host.digest(host.encode([frame])))
-        data = dict(operation='animation', rendering=rendering)
-        host.validate_result(preview('animation'), response(data))
+        source = '{"frames_per_second":1,"frame_count":1}'
+        rendering = dict(schema_version=1, engine='luma-sampled-animation-v1', canonical_source=source,
+                         source_sha256=host.digest(source), frames=[frame], frames_per_second=1,
+                         frames_sha256=host.digest(host.encode([frame])), work_units=0)
+        data = dict(operation='animation', rendering=rendering, scripts_executed=False,
+                    external_resources_loaded=False, source_retained=False, playback_started=False)
+        host.validate_result(preview('animation', source), response(data))
         for field, value in [('frames_sha256', 'f' * 64), ('frames', []), ('frames', [dict(frame, index=1)]),
                              ('frames', [dict(frame, svg_sha256='f' * 64)])]:
             bad = copy.deepcopy(data)
             bad['rendering'][field] = value
             with self.assertRaises(ValueError):
-                host.validate_result(preview('animation'), response(bad))
+                host.validate_result(preview('animation', source), response(bad))
+
+    def test_closed_native_result_schema_refuses_additional_flags_and_boolean_integers(self):
+        good = json.loads(response(document()))
+        for path in [('schema_version',), ('result', 'rendering', 'schema_version'), ('result', 'rendering', 'work_units')]:
+            bad = copy.deepcopy(good)
+            parent = bad
+            for key in path[:-1]:
+                parent = parent[key]
+            parent[path[-1]] = True
+            with self.assertRaises(ValueError):
+                host.validate_result(preview(), host.encode(bad))
+        for path in [(), ('result',), ('result', 'rendering')]:
+            bad = copy.deepcopy(good)
+            parent = bad
+            for key in path:
+                parent = parent[key]
+            parent['grant_issued'] = False
+            with self.assertRaises(ValueError):
+                host.validate_result(preview(), host.encode(bad))
+        with self.assertRaises(ValueError):
+            host.validate_result(preview(), b' ' * (host.MAX_OUTPUT + 1))
+
+    def test_capture_rejects_consistently_rehashed_wrong_intent_not_only_bad_hashes(self):
+        text = 'Manual text\n'
+        good = capture_fixture(text)
+        host.validate_result(preview('text', text), response(copy.deepcopy(good)))
+        receipt = good['proposed']['receipt']
+        for field, replacement in [('artifact_id', 'other-source'), ('version', True), ('original_bytes', len(text.encode()) + 1),
+                                   ('format', 'csv'), ('previous', {'artifact_id': 'forged'})]:
+            changed = copy.deepcopy(receipt)
+            changed[field] = replacement
+            if field == 'format':
+                changed['media_type'] = 'text/csv; charset=utf-8'
+            with self.assertRaises(ValueError):
+                host.validate_result(preview('text', text), response(capture_receipt(changed, text)))
+        changed = copy.deepcopy(receipt)
+        changed['content_sha256'] = host.digest('Substituted\n')
+        changed['content_bytes'] = len('Substituted\n'.encode())
+        with self.assertRaises(ValueError):
+            host.validate_result(preview('text', text), response(capture_receipt(changed, 'Substituted\n')))
+        for field in ('request_id', 'workflow_sha256', 'source_sha256', 'origin'):
+            changed = copy.deepcopy(receipt)
+            changed['provenance'][field] = 'external' if field == 'origin' else 'other' if field == 'request_id' else 'ab' * 32
+            with self.assertRaises(ValueError):
+                host.validate_result(preview('text', text), response(capture_receipt(changed, text)))
+
+    def test_capture_comparison_preserves_native_crlf_and_quoted_csv_semantics(self):
+        self.assertEqual(host.csv_values('Name,Value\r\n"Quoted, field\r\nline",2\r\n'),
+                         [['Name', 'Value'], ['Quoted, field\nline', '2']])
+        source, data = spreadsheet_fixture()
+        parsed = json.loads(source)
+        parsed['rows'][0][0]['value'] = 'First\r\nSecond'
+        source = host.encode(parsed).decode()
+        data['calculation']['canonical_source'] = source
+        data['calculation']['source_sha256'] = host.digest(source)
+        data['calculation']['values'][0][0]['value'] = 'First\nSecond'
+        data['calculation']['canonical_csv'] = '"First\nSecond",,2,6\n'
+        data['calculation']['csv_sha256'] = host.digest(data['calculation']['canonical_csv'])
+        host.validate_result(preview('spreadsheet', source), response(data))
+
+    def test_rendering_refuses_scripts_resources_retention_and_autoplay_even_with_matching_digests(self):
+        for field in ('scripts_executed', 'external_resources_loaded', 'source_retained'):
+            changed = document()
+            changed[field] = True
+            with self.assertRaises(ValueError):
+                host.validate_result(preview(), response(changed))
+        source = '{"frames_per_second":1,"frame_count":1}'
+        frame = dict(index=0, canonical_svg='<svg/>', svg_sha256=host.digest('<svg/>'))
+        data = dict(operation='animation', scripts_executed=False, external_resources_loaded=False,
+                    source_retained=False, playback_started=False, rendering=dict(schema_version=1,
+                    engine='luma-sampled-animation-v1', canonical_source=source, source_sha256=host.digest(source),
+                    frames_per_second=1, frames=[frame], frames_sha256=host.digest(host.encode([frame])), work_units=0))
+        for field, replacement in [('playback_started', True), ('frames_per_second', 2), ('frames_per_second', True)]:
+            changed = copy.deepcopy(data)
+            if field == 'playback_started':
+                changed[field] = replacement
+            else:
+                changed['rendering'][field] = replacement
+            with self.assertRaises(ValueError):
+                host.validate_result(preview('animation', source), response(changed))
+
+    def test_spreadsheet_display_is_bound_to_exact_digest_verified_csv_and_source_shape(self):
+        source, good = spreadsheet_fixture()
+        host.validate_result(preview('spreadsheet', source), response(copy.deepcopy(good)))
+        for change in ('value', 'type', 'unknown', 'ragged', 'extra-row', 'formula-execution', 'evaluation-bool'):
+            changed = copy.deepcopy(good)
+            calculation = changed['calculation']
+            if change == 'value':
+                calculation['values'][0][3]['value'] = '9'
+            elif change == 'type':
+                calculation['values'][0][3]['kind'] = 'text'
+            elif change == 'unknown':
+                calculation['values'][0][1]['ignored_value'] = 'forged'
+            elif change == 'ragged':
+                calculation['values'][0].pop()
+            elif change == 'extra-row':
+                calculation['values'].append(copy.deepcopy(calculation['values'][0]))
+            elif change == 'formula-execution':
+                changed['csv_formula_text_executed'] = True
+            else:
+                calculation['evaluation_steps'] = True
+            with self.assertRaises(ValueError):
+                host.validate_result(preview('spreadsheet', source), response(changed))
+
+    def test_json_source_comparison_distinguishes_nested_booleans_from_integers(self):
+        self.assertFalse(host.same_json({'schema_version': True}, {'schema_version': 1}))
+        self.assertFalse(host.same_json([{'count': 1}], [{'count': 1.0}]))
+        self.assertTrue(host.same_json({'one': [1, False]}, {'one': [1, False]}))
 
     def test_pinned_executable_refuses_mutable_noncanonical_and_relative_paths(self):
         for path in ('relative', '/tmp/../tmp/not-a-platform'):
@@ -289,9 +429,10 @@ def real_cli_fixture(path):
         'csv': 'Name,Value\n"Quoted, field",2\n',
         'json': '{"schema_version":1,"value":"Exact editable JSON"}',
         'spreadsheet': host.encode(dict(schema_version=1, rows=[[
+            dict(kind='text', value='Quoted, field\r\nline'), dict(kind='blank'),
             dict(kind='number', value='2'),
             dict(kind='formula', expression=dict(op='binary', operator='multiply',
-                left=dict(op='cell', row=0, column=0), right=dict(op='number', value='3')))
+                left=dict(op='cell', row=0, column=2), right=dict(op='number', value='3')))
         ]])).decode(),
         'document': host.encode(dict(schema_version=1, title='Actual native document', blocks=[
             dict(kind='heading', level=1, text='Native preview'),
@@ -327,7 +468,7 @@ def real_cli_fixture(path):
                 if verified['validated']['canonical_envelope'] != envelope:
                     raise AssertionError('actual native reopen substituted selected bytes')
                 reopened.append(engine)
-            if engine == 'spreadsheet' and result['calculation']['canonical_csv'] != '2,6\n':
+            if engine == 'spreadsheet' and result['calculation']['canonical_csv'] != '"Quoted, field\nline",,2,6\n':
                 raise AssertionError('actual native exact calculation differs')
             if engine == 'document' and '<script>' in result['rendering']['canonical_html']:
                 raise AssertionError('actual native document failed to escape text')

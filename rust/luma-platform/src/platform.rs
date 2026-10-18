@@ -257,6 +257,19 @@ pub(crate) fn require_laboratory_image() -> Result<()> {
     require_laboratory_environment(&identity.environment)
 }
 
+/// An image classification is available only after the immutable identity has
+/// passed its complete structural validation. A missing or malformed identity
+/// is never evidence that laboratory admission is permitted.
+pub(crate) fn production_image() -> Result<bool> {
+    let identity: RunningIdentity =
+        serde_json::from_slice(&crate::admin_credentials::public_input(
+            Path::new("/usr/share/luma-os/release-identity.json"),
+            4096,
+        )?)?;
+    validate_image_identity(&identity)?;
+    Ok(identity.environment == "production")
+}
+
 fn require_laboratory_environment(environment: &str) -> Result<()> {
     if environment != "lab" {
         return Err("static laboratory signatures require an immutable laboratory image; production cannot downgrade before enrollment".into());
@@ -2158,6 +2171,7 @@ fn install_mode(
         "workflow-invoice-domains",
         "workflow-dags",
         "content-store",
+        "content-checkpoint",
     ] {
         crate::artifacts::mkdir_at(&state, name)?.sync_all()?;
     }

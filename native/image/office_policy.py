@@ -60,22 +60,54 @@ def read(root, relative, maximum, *, elf=False):
         os.close(descriptor)
 
 
+def package_stanzas(status):
+    """Parse dpkg's UTF-8 deb822 status data without dropping continuations.
+
+    Dpkg writes multiline fields such as ``Conffiles:`` with no first-line
+    value. A colon, not the conventional colon-plus-space, separates a field.
+    Field names are case insensitive; the authority-bearing simple fields may
+    not acquire a hidden second line. Every stanza is parsed, including those
+    for packages unrelated to this adapter.
+    """
+    text = status.decode('utf-8')
+    if re.search(r'[\x00-\x08\x0b-\x1f\x7f]', text):
+        raise ValueError('invalid control character in package metadata')
+    fields = {}
+    previous = None
+    simple = {'package', 'status', 'architecture', 'version'}
+    for line in text.split('\n'):
+        if not line.strip(' \t'):
+            if fields:
+                yield fields
+            fields = {}
+            previous = None
+            continue
+        if line.startswith((' ', '\t')):
+            if previous is None or previous in simple:
+                raise ValueError('invalid package metadata continuation')
+            fields[previous] += '\n' + line[1:]
+            continue
+        key, separator, value = line.partition(':')
+        if not separator or not re.fullmatch(r'[!-9;-~]+', key) or key.startswith(('#', '-')):
+            raise ValueError('malformed package metadata field')
+        key = key.lower()
+        if key in fields:
+            raise ValueError('ambiguous package metadata')
+        fields[key] = value.strip(' \t')
+        previous = key
+    if fields:
+        yield fields
+
+
 def manifest(root):
     _, status = read(root, 'var/lib/dpkg/status', 16 * 1024 * 1024)
     installed = {}
-    for stanza in status.decode('utf-8').split('\n\n'):
-        fields = {}
-        for line in stanza.splitlines():
-            if line and not line.startswith((' ', '\t')):
-                key, separator, value = line.partition(': ')
-                if not separator or key in fields:
-                    raise ValueError('ambiguous package metadata')
-                fields[key] = value
-        if fields.get('Package') in PACKAGES:
-            name = fields['Package']
-            if name in installed or fields.get('Status') != 'install ok installed' or fields.get('Architecture') != 'amd64' or not re.fullmatch(r'[0-9][A-Za-z0-9.+:~_-]{0,127}', fields.get('Version', '')):
+    for fields in package_stanzas(status):
+        if fields.get('package') in PACKAGES:
+            name = fields['package']
+            if name in installed or fields.get('status') != 'install ok installed' or fields.get('architecture') != 'amd64' or not re.fullmatch(r'[0-9][A-Za-z0-9.+:~_-]{0,127}', fields.get('version', '')):
                 raise ValueError('Office dependency package tuple refused')
-            installed[name] = fields['Version']
+            installed[name] = fields['version']
     if set(installed) != set(PACKAGES):
         raise ValueError('actual pinned image lacks required Office dependencies')
     files = [read(root, name, MAX_FILE, elf=True)[0] for name in FILES]

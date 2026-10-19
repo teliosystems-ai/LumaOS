@@ -9,19 +9,12 @@ def canonical_manifest(root):
     root = Path(root).resolve(strict=True)
     _, data = office_policy.read(root, 'var/lib/dpkg/status', 16*1024*1024)
     matches = []
-    for stanza in data.decode('utf-8').split('\n\n'):
-        fields = {}
-        for line in stanza.splitlines():
-            if line and not line.startswith((' ', '\t')):
-                key, separator, value = line.partition(': ')
-                if not separator or key in fields:
-                    raise ValueError('ambiguous browser package metadata')
-                fields[key] = value
-        if fields.get('Package') == 'libwebkit2gtk-4.1-0':
+    for fields in office_policy.package_stanzas(data):
+        if fields.get('package') == 'libwebkit2gtk-4.1-0':
             matches.append(fields)
-    if len(matches) != 1 or matches[0].get('Status') != 'install ok installed' or matches[0].get('Architecture') != 'amd64':
+    if len(matches) != 1 or matches[0].get('status') != 'install ok installed' or matches[0].get('architecture') != 'amd64':
         raise ValueError('actual installed WebKitGTK 4.1 package absent/ambiguous')
-    version = matches[0].get('Version', '')
+    version = matches[0].get('version', '')
     parsed = re.fullmatch(r'(?:[0-9]+:)?(2)\.([0-9]+)\.([0-9]+)[A-Za-z0-9.+:~_-]*', version)
     if not parsed or len(version) > 128:
         raise ValueError('actual WebKit package/runtime tuple refused')

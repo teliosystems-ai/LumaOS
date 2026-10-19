@@ -87,6 +87,67 @@ class OfficePolicyTests(unittest.TestCase):
         path.write_text(original)
         self.assertEqual(len(policy.manifest(self.root)['files']), 3)
 
+    def test_accepts_real_dpkg_empty_multiline_headers_and_unrelated_packages(self):
+        path = self.root / 'var/lib/dpkg/status'
+        original = path.read_text()
+        unrelated = ('Package: isolated-unrelated\nStatus: install ok installed\n'
+                     'Architecture: all\nVersion: 2.0\nConffiles:\n'
+                     ' /etc/isolated.conf 0123456789abcdef0123456789abcdef\n'
+                     '\t/etc/second.conf fedcba9876543210fedcba9876543210\n'
+                     'Description: isolated Unicode description \N{SNOWMAN}\n'
+                     ' continued value: not another field\n .\n final paragraph\n\n')
+        before = policy.canonical_manifest(self.root)
+        path.write_text(unrelated + original)
+        self.assertEqual(before, policy.canonical_manifest(self.root))
+        parsed = list(policy.package_stanzas(unrelated.encode()))[0]
+        self.assertEqual(parsed['conffiles'], '\n/etc/isolated.conf 0123456789abcdef0123456789abcdef\n/etc/second.conf fedcba9876543210fedcba9876543210')
+        self.assertEqual(parsed['description'], 'isolated Unicode description \N{SNOWMAN}\ncontinued value: not another field\n.\nfinal paragraph')
+
+    def test_accepts_deb822_colon_separator_horizontal_whitespace_and_case(self):
+        path = self.root / 'var/lib/dpkg/status'
+        original = path.read_text()
+        expected = policy.canonical_manifest(self.root)
+        changed = original.replace('Package: ', 'pAcKaGe:\t').replace('Status: ', 'STATUS:')
+        changed = changed.replace('Architecture: amd64', 'architecture: \tamd64\t ')
+        changed = changed.replace('Version: ', 'VERSION:').replace('\n\n', '\n \t\n')
+        path.write_text(changed.rstrip(' \t\n'))
+        self.assertEqual(expected, policy.canonical_manifest(self.root))
+
+    def test_rejects_duplicate_case_variants_and_malformed_unrelated_stanzas(self):
+        path = self.root / 'var/lib/dpkg/status'
+        original = path.read_text()
+        bad = ('Package: unrelated\npAcKaGe: other\n\n',
+               'Package: unrelated\nVersion: 1\nversion: 2\n\n',
+               'Package: unrelated\nConffiles:\nCONFFILES:\n\n',
+               ' orphan continuation\n\n',
+               'Package: unrelated\n\n\torphan continuation\n\n',
+               'Package: unrelated\nno separator\n\n',
+               'Package: unrelated\nBad Key: value\n\n',
+               'Package: unrelated\n#Comment: value\n\n',
+               'Package: unrelated\n-Private: value\n\n',
+               'Package: unrelated\n\N{SNOWMAN}: value\n\n',
+               'Package: unrelated\nDescription: bad\x00value\n\n',
+               'Package: unrelated\nDescription: bad\x0bvalue\n\n')
+        for prefix in bad:
+            with self.subTest(prefix=repr(prefix)):
+                path.write_text(prefix + original)
+                with self.assertRaises(ValueError):
+                    policy.manifest(self.root)
+
+    def test_rejects_empty_or_continued_authority_bearing_simple_fields(self):
+        path = self.root / 'var/lib/dpkg/status'
+        original = path.read_text()
+        for field, value in (('Package', policy.PACKAGES[0]), ('Status', 'install ok installed'),
+                             ('Architecture', 'amd64'), ('Version', '1.0+isolated-test')):
+            for replacement in (field + ':', field + ': ' + value + '\n hidden suffix'):
+                with self.subTest(field=field, replacement=replacement):
+                    path.write_text(original.replace(field + ': ' + value, replacement, 1))
+                    with self.assertRaises(ValueError):
+                        policy.manifest(self.root)
+        path.write_bytes(original.encode() + b'Package: unrelated\nDescription: invalid \xff\n\n')
+        with self.assertRaises(ValueError):
+            policy.manifest(self.root)
+
 
 if __name__ == '__main__':
     unittest.main()

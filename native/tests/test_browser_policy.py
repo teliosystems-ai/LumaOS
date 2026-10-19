@@ -128,6 +128,31 @@ class BrowserPolicyTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 policy.canonical_manifest(self.root)
 
+    def test_shared_dpkg_parser_accepts_empty_headers_and_preserves_browser_pins(self):
+        original = self.status.read_text()
+        expected = policy.canonical_manifest(self.root)
+        unrelated = ('Package: isolated-unrelated\nConffiles:\n'
+                     ' /etc/isolated.conf 0123456789abcdef0123456789abcdef\n'
+                     'Description: isolated fixture\n continuation with: colon\n\n')
+        changed = original.replace('Package: ', 'PACKAGE:').replace('Version: ', 'version:\t')
+        self.status.write_text(unrelated + changed.replace('\n\n', '\nConffiles:\n\n'))
+        self.assertEqual(expected, policy.canonical_manifest(self.root))
+
+    def test_shared_dpkg_parser_refuses_malformed_or_duplicate_unrelated_metadata(self):
+        original = self.status.read_text()
+        for prefix in (' orphan\n\n', 'Package: unrelated\nBroken field\n\n',
+                       'Package: unrelated\nConffiles:\nconffiles:\n\n',
+                       'Package: unrelated\nVersion: 1\n unexpected continuation\n\n'):
+            with self.subTest(prefix=prefix):
+                self.status.write_text(prefix + original)
+                with self.assertRaises(ValueError):
+                    policy.canonical_manifest(self.root)
+        for field in ('Package', 'Status', 'Architecture', 'Version'):
+            line = next(line for line in original.splitlines() if line.startswith(field + ':'))
+            self.status.write_text(original.replace(line, line + '\n' + line.lower(), 1))
+            with self.assertRaises(ValueError):
+                policy.canonical_manifest(self.root)
+
 
 if __name__ == '__main__':
     unittest.main()

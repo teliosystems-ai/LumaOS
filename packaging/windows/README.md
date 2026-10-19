@@ -49,6 +49,95 @@ still require native qualification. Software/NTFS fixtures do not qualify the
 installed authenticated service or complete GWIN0. The standalone unsigned
 `inspect-enrolled-file.ps1` remains a distinct non-authoritative inspection tool.
 
+## Persistent first-Admin exact-file policies
+
+Persistent enrollment is a separate command family. The existing
+`read-enrolled-file` remains a single-session ephemeral read and creates no
+persistent policy. Neither an enrollment ID nor a caller-supplied policy/hash
+authorizes access.
+
+The protected W journal records typed create/supersede/revoke events binding the
+actual commissioned installation and first-Admin SID, an exact file intent,
+held NTFS object/ancestor/ACL observation, per-ID generation, previous entry,
+registry source, actual journal parent, reviewed UTC lifetime, fresh nonce-signed
+UTC proof and original interactive review. There is no separate mutable head or
+index. New events are checked during signed-history reconstruction before other
+consumers receive the history. Old signed records and the ephemeral v1 wire
+remain canonical and unchanged.
+
+The conservative software caps are64 lifetime IDs,256 controls,64 generations
+per ID,1 MiB exact nonempty file content and a maximum30-day reviewed interval.
+Active policies use generations1–63; generation64 is reserved for revocation.
+Every active policy reserves one future revocation control. Revoked IDs remain
+tombstones; unchanged supersessions and stale/replayed generations refuse.
+
+Inspect an explicit ID, including an unused proposed ID, to obtain current pins
+without opening any source:
+
+```powershell
+.\Luma.HostedAuthority.exe file-enrollment-status ENROLLMENT_ID
+```
+
+This original-first-Admin metadata inspection grants no source read or session.
+It reports policy counts/caps, registry/current journal pins, enrolled UTC
+interval, revocation and any uncertain-write fence. It does not infer current
+UTC validity from the Windows clock. Prepare a pure control intent:
+
+```powershell
+.\Luma.HostedAuthority.exe enrollment-intent create ENROLLMENT_ID 1 ZERO_PREVIOUS_ENTRY REGISTRY_SOURCE JOURNAL_HEAD NOT_BEFORE_UTC_MS EXPIRES_UTC_MS INSTALLATION C:\Users\OWNER\Documents source.txt EXACT_BYTES SHA256
+```
+
+`ZERO_PREVIOUS_ENTRY` is exactly64 zero hexadecimal digits; other pins are exact
+lowercase64-digit values. Decimal fields are canonical. Review millisecond
+bounds against genuine protected UTC, not local wall-clock assumptions. The
+command prints intent hex and its SHA256 without accessing the file. The native
+U Admin must separately approve that exact installation/hash under the closed
+`host-file-enrollment` purpose. This approval commits no policy and admits no
+read. Submit the exact printed intent:
+
+```powershell
+.\Luma.HostedAuthority.exe file-enrollment-change INTENT_HEX
+```
+
+The actual original first Admin freshly confirms the exact policy/object review
+within the standard30-second action. Create and supersede open under the
+original token, check actual owner/ACLs, verify complete bytes after confirmation
+and use the existing durable signed/NV writer. Supersession uses `supersede`,
+the next generation and exact current entry/registry/journal pins. It may
+explicitly replace an object observation or UTC interval; nothing is adopted
+implicitly.
+
+Revocation uses `revoke`, the next generation, the exact current file intent and
+previous pins, with both UTC bounds0. It grants no new file lifetime and opens
+no source, so it works even if the file/source volume is missing or its old
+interval expired. Fresh independent UTC and original-Admin review remain
+mandatory. All policy writes share the existing uncertain-NV recovery fence:
+never resend an uncertain extend or adopt an uncommitted policy. Outstanding
+journal/abort intents block both persistent and ephemeral reads until exact
+existing recovery.
+
+Select one current nonrevoked generation for a fresh read:
+
+```powershell
+.\Luma.HostedAuthority.exe read-persistent-file ENROLLMENT_ID GENERATION ENTRY_SHA256 REGISTRY_SOURCE JOURNAL_HEAD INSTALLATION C:\Users\OWNER\Documents source.txt EXACT_BYTES SHA256
+```
+
+Every invocation needs its own original30-second interactive session, fresh
+independent UTC inside the enrolled half-open interval and exact object review.
+It retains the separate `host-file-read` source approval. Current protected pins,
+actual original token/session/account/owner/ACL and exact source are checked
+before and after bounded reads and every acknowledged delivery. Replacement,
+ACL/byte changes, expiry, supersession, revocation and stale selectors refuse.
+Distinct persistent review/results cannot substitute for ephemeral receipts.
+Bytes remain inert in original-client ephemeral memory; reading creates/changes
+no enrollment, publishes no content and grants no source write or Linux
+principal/grant authority.
+
+Signed-history and disposable current-user NTFS fixtures do not qualify installed
+LocalSystem, actual protected journal/NV durability, custody recovery or the
+deployed bridge. Ordinary-user/product-principal mapping, background ingestion,
+host-file writes and complete GWIN0 remain outside this capability.
+
 This new product-development lane is separate from the historical
 `packaging/wsl` source-MVP launchers. It does not install a WSL distribution,
 change the default distribution, edit global WSL settings, enable Hyper-V,

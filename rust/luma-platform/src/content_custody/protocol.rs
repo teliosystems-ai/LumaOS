@@ -15,6 +15,10 @@ const SOCKET: &str = "/run/luma-content-custody/control.sock";
 const MAX_FRAME: usize = 256 * 1024;
 const DEADLINE: Duration = Duration::from_secs(25);
 
+#[path = "output.rs"]
+mod output;
+pub(crate) use output::exchange as check_output;
+
 #[path = "../backup_confinement.rs"]
 mod confinement;
 
@@ -626,7 +630,17 @@ pub(crate) fn restore_publish(
 fn handle(stream: &mut UnixStream) -> Result<()> {
     let confinement = confinement::KernelUnix::capture()?;
     if peer_label(stream, "luma-granted-client (enforce)").is_ok() {
-        return handle_admin(stream, confinement);
+        let bytes = read(stream, Instant::now() + Duration::from_secs(3))?;
+        let discriminator: serde_json::Value = serde_json::from_slice(&bytes)?;
+        // Presence of a channel discriminator never falls through into Admin.
+        // Each selected parser still enforces its complete canonical schema.
+        if let Some(purpose) = discriminator.get("purpose") {
+            if purpose.as_str() != Some(output::PURPOSE) {
+                return Err("unknown closed content controller purpose".into());
+            }
+            return output::handle(stream, confinement, &bytes);
+        }
+        return handle_admin(stream, confinement, &bytes);
     }
     let mut deadline = Instant::now() + DEADLINE;
     let peer = crate::service::credentials(stream)?;
@@ -1075,7 +1089,11 @@ fn admin_exchange_request(
     }
     Ok(response.value)
 }
-fn handle_admin(stream: &mut UnixStream, confinement: confinement::KernelUnix) -> Result<()> {
+fn handle_admin(
+    stream: &mut UnixStream,
+    confinement: confinement::KernelUnix,
+    bytes: &[u8],
+) -> Result<()> {
     let deadline = Instant::now() + Duration::from_secs(120);
     let peer = crate::service::credentials(stream)?;
     if peer.uid != 0 || peer.gid != 0 || peer.pid <= 0 {
@@ -1085,8 +1103,7 @@ fn handle_admin(stream: &mut UnixStream, confinement: confinement::KernelUnix) -
     let pin = crate::service::peer_pidfd(stream)?;
     let client_start = start(peer.pid as u32)?;
     pidfd_alive(&pin)?;
-    let bytes = read(stream, deadline)?;
-    let request: AdminRequest = canonical(&bytes, MAX_FRAME)?;
+    let request: AdminRequest = canonical(bytes, MAX_FRAME)?;
     if request.schema_version != 1 {
         return Err("unsupported content Admin protocol".into());
     }
@@ -1152,7 +1169,7 @@ fn handle_admin(stream: &mut UnixStream, confinement: confinement::KernelUnix) -
     let response = AdminResponse {
         schema_version: 1,
         result: "ok".into(),
-        request_sha256: hash(&bytes),
+        request_sha256: hash(bytes),
         value,
     };
     let bytes = serde_json::to_vec(&response)?;

@@ -192,7 +192,11 @@ impl Configuration {
             let key = (source.installation.as_str(), source.sha256.as_str());
             if !matches!(
                 source.purpose.as_str(),
-                "release" | "trust-change" | "runtime-update" | "host-file-read"
+                "release"
+                    | "trust-change"
+                    | "runtime-update"
+                    | "host-file-read"
+                    | "host-file-enrollment"
             ) || self
                 .windows_installations
                 .binary_search(&source.installation)
@@ -1898,6 +1902,10 @@ mod tests {
         assert!(changed.permits_source(&[0x11; 32], &[0x44; 32]));
         assert!(!changed.permits_source(&[0x12; 32], &[0x44; 32]));
         assert!(!changed.permits_source(&[0x11; 32], &[0x45; 32]));
+        changed.authorized_sources[0].purpose = "host-file-enrollment".into();
+        changed.validate().unwrap();
+        validate_policy_amendment(&config, &changed).unwrap();
+        assert!(changed.permits_source(&[0x11; 32], &[0x44; 32]));
         changed.authorized_sources[0].purpose = "any-caller-digest".into();
         assert!(changed.validate().is_err());
         let mut changed = config.clone();

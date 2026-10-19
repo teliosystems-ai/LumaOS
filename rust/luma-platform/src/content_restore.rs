@@ -1061,6 +1061,7 @@ fn worker(id: &str, path: &Path) -> Result<()> {
             return Err("restore batch final independently protected count differs".into());
         }
         serde_json::json!({"schema_version":1,"restore_review_sha256":review.review_sha256,"published_outcomes":completed,
+            "custody_capacity_policy":crate::content_checkpoint::custody::restore_capacity_policy(),
             "current_state":final_cut,"origin_signature_valid":true,"credentials_restored":false,"grants_restored":false,"TPM_state_restored":false,
             "original_encrypted_evidence_must_be_retained":true,"encrypted_evidence_sha256":input.capsule_sha256,
             "authority_returned":false,"production_qualified":false})
@@ -1079,6 +1080,7 @@ fn worker(id: &str, path: &Path) -> Result<()> {
             r.require_state(&selected, &mut guard)?;
         }
         serde_json::json!({"schema_version":1,"restore_review":planner.review(),"origin_signature_valid":true,
+            "custody_capacity_policy":crate::content_checkpoint::custody::restore_capacity_policy(),
             "archive_validated":true,"decrypted_data_delivered":false,"target_content_changed":false,"restore_permitted":false,
             "authority_returned":false,"credentials_restored":false,"encrypted_evidence_must_be_retained":true})
     };

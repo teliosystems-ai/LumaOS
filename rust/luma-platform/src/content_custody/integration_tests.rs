@@ -273,8 +273,14 @@ fn prepared(fixture: &Fixture, plan: &Plan) -> (Repository, Vec<u8>, Vec<u8>, St
     (repository, commitment, record, profile, audit)
 }
 
-#[test]
-fn fresh_restore_real_history_resumes_after_c_before_rename_and_retires_without_erasing_bytes() {
+fn restore_fixture(
+    steps: usize,
+) -> (
+    Fixture,
+    crate::content_restore::Input,
+    backup::Receipt,
+    Vec<(Plan, Vec<u8>)>,
+) {
     let mut origin = Fixture::new();
     origin.binding = OwnerBinding {
         installation: "ab".repeat(32),
@@ -291,6 +297,25 @@ fn fresh_restore_real_history_resumes_after_c_before_rename_and_retires_without_
             &mut Guard::write(&source_plan),
         )
         .unwrap();
+    for index in 1..steps {
+        let source = b"original governed fixture source";
+        let plan = Plan::capture(
+            origin.binding.clone(),
+            &format!("document.{index}"),
+            Format::Utf8Text,
+            source,
+            Provenance {
+                request_id: format!("source.fixture.{index}"),
+                workflow_sha256: "44".repeat(32),
+                source_sha256: hash(source),
+                origin: EditOrigin::Managed,
+            },
+        )
+        .unwrap();
+        source_repository
+            .apply(&plan, source, &mut Guard::write(&plan))
+            .unwrap();
+    }
     let backup_review = source_repository
         .review_backup_data(&mut Guard::read(&origin.binding))
         .unwrap();
@@ -317,7 +342,7 @@ fn fresh_restore_real_history_resumes_after_c_before_rename_and_retires_without_
     )
     .unwrap();
     let receipt = backup::test_receipt_for_review(&backup_review);
-    let mut input = crate::content_restore::Input {
+    let input = crate::content_restore::Input {
         schema_version: 1,
         login: "admin".into(),
         admin: OwnerBinding {
@@ -337,6 +362,16 @@ fn fresh_restore_real_history_resumes_after_c_before_rename_and_retires_without_
         capsule_sha256: hash(b"explicit synthetic ciphertext framing; real CMS tested separately"),
         review: Some(planner.review().clone()),
     };
+    let plans = planner
+        .steps()
+        .map(|(plan, source)| (plan.clone(), source.to_vec()))
+        .collect();
+    (target, input, receipt, plans)
+}
+
+#[test]
+fn fresh_restore_real_history_resumes_after_c_before_rename_and_retires_without_erasing_bytes() {
+    let (target, mut input, receipt, plans) = restore_fixture(1);
     let profile =
         crate::content_restore::profile(&input, &serde_json::to_vec(&input).unwrap()).unwrap();
     let mut audit = target.audit(
@@ -349,11 +384,37 @@ fn fresh_restore_real_history_resumes_after_c_before_rename_and_retires_without_
     assert!(!store
         .restore_status(&input, &profile, "8:1", &audit, &mut || Ok(()))
         .unwrap());
+    target.memory.lose_reply.set(true);
+    assert!(store
+        .start_restore(&input, &receipt, &profile, "8:1", &audit, &mut || Ok(()))
+        .is_err());
+    assert_eq!(target.memory.advances.get(), 1);
+    drop(store);
+    let (pending, _) =
+        admin::pending_review(&mut target.memory.clone(), &target.files(), &mut || Ok(())).unwrap();
+    admin::reconcile(
+        &mut target.memory.clone(),
+        &target.files(),
+        &pending,
+        &mut || Ok(()),
+    )
+    .unwrap();
+    let mut store = target.store();
     store
         .start_restore(&input, &receipt, &profile, "8:1", &audit, &mut || Ok(()))
         .unwrap();
     assert_eq!(target.memory.advances.get(), 1);
-    let (plan, source) = planner.steps().next().unwrap();
+    let tail = capacity::remaining(&store.state).unwrap();
+    assert_eq!(tail.reserved_event_slots, 2);
+    assert_eq!(
+        tail.reserved_journal_bytes,
+        capacity::PUBLICATION_BYTES + capacity::TERMINAL_BYTES
+    );
+    assert_eq!(
+        serde_json::to_value(&store.journal.events[0]).unwrap()["entry"]["schema_version"],
+        2
+    );
+    let (plan, source) = &plans[0];
     let mut repository =
         Repository::create_at(&target.data, plan, &mut Guard::write(plan)).unwrap();
     let token = repository
@@ -373,6 +434,12 @@ fn fresh_restore_real_history_resumes_after_c_before_rename_and_retires_without_
         )
         .unwrap();
     drop(token);
+    assert_eq!(
+        capacity::remaining(&store.state)
+            .unwrap()
+            .reserved_journal_bytes,
+        capacity::TERMINAL_BYTES
+    );
     drop(store);
     assert_eq!(target.memory.advances.get(), 2);
     // A new genuinely authorized controller may resume; historical operation
@@ -518,6 +585,72 @@ fn fresh_restore_real_history_resumes_after_c_before_rename_and_retires_without_
     };
     let mut retire_audit = audit.clone();
     retire_audit.usage = request.usage(retire::RETIRE).unwrap();
+    // The worker is gone and its genuine physical output receipt remains
+    // valid. Neither that receipt nor unchanged historical grant data may keep
+    // private delivery alive after current C retires the owner generation.
+    let mut output_ledger = crate::resources::Ledger::fresh_for_test();
+    let domains: BTreeMap<_, _> = crate::resource_manager::invoice_output_domains()
+        .into_iter()
+        .map(|name| {
+            (
+                name.to_string(),
+                crate::resources::Domain::new(1000, 100, 950, 800).unwrap(),
+            )
+        })
+        .collect();
+    output_ledger.restart("a".repeat(32), domains).unwrap();
+    let output_owner = crate::resources::Owner {
+        uid: 0,
+        pid: 1,
+        start_ticks: 1,
+        boot: "fixture".into(),
+        cgroup_device: 1,
+        cgroup_inode: 1,
+    };
+    let output_token = output_ledger
+        .admit(
+            output_owner.clone(),
+            "completed-content".into(),
+            "c".repeat(64),
+            crate::resource_manager::invoice_output_domains()
+                .into_iter()
+                .map(|name| crate::resources::Reservation {
+                    domain: name.into(),
+                    loading: 40,
+                    serving: 40,
+                })
+                .collect(),
+            1,
+            100,
+        )
+        .unwrap();
+    output_ledger
+        .complete_output(&output_token, &output_owner, 2, &"d".repeat(64))
+        .unwrap();
+    output_ledger.revoke(&output_token, "owner-lost").unwrap();
+    output_ledger
+        .finish_draining(
+            &output_token,
+            &crate::resource_manager::invoice_output_domains()
+                .into_iter()
+                .map(|name| (name.to_string(), 7))
+                .collect(),
+        )
+        .unwrap();
+    let output_receipt =
+        crate::workflow_resource::committed_receipt(&output_ledger, &output_token).unwrap();
+    let mut explicitly_revoked = output_ledger.clone();
+    explicitly_revoked
+        .revoke(&output_token, "operator-revoked")
+        .unwrap();
+    assert!(
+        crate::workflow_resource::committed_receipt(&explicitly_revoked, &output_token).is_err()
+    );
+    let original_grant = audit.clone();
+    let mut delivered = Vec::new();
+    store.selected(&target.binding, &mut || Ok(())).unwrap();
+    delivered.extend_from_slice(b"first bounded chunk");
+    let delivered_before_retirement = delivered.clone();
     assert!(store
         .execute_retirement(&request, retire::RETIRE, &retire_audit, &mut || Err(
             "fixture revocation".into()
@@ -529,7 +662,25 @@ fn fresh_restore_real_history_resumes_after_c_before_rename_and_retires_without_
     assert_eq!(retired["owner_marked_unavailable"], true);
     assert_eq!(fs::read(&pending).unwrap(), before);
     assert_eq!(target.memory.advances.get(), 3);
+    assert_eq!(
+        capacity::remaining(&store.state)
+            .unwrap()
+            .reserved_event_slots,
+        0
+    );
     assert!(store.selected(&target.binding, &mut || Ok(())).is_err());
+    let next_chunk = (|| -> Result<()> {
+        store.selected(&target.binding, &mut || Ok(()))?;
+        delivered.extend_from_slice(b"forbidden next chunk");
+        Ok(())
+    })();
+    assert!(next_chunk.is_err());
+    assert_eq!(delivered, delivered_before_retirement);
+    assert_eq!(audit, original_grant);
+    assert_eq!(
+        crate::workflow_resource::committed_receipt(&output_ledger, &output_token).unwrap(),
+        output_receipt
+    );
     store
         .execute_retirement(&request, retire::RETIRE, &retire_audit, &mut || Ok(()))
         .unwrap();
@@ -545,6 +696,337 @@ fn fresh_restore_real_history_resumes_after_c_before_rename_and_retires_without_
     assert!(reopened.selected(&target.binding, &mut || Ok(())).is_err());
     assert_eq!(fs::read(&pending).unwrap(), before);
     assert_eq!(fs::read(&committed_record).unwrap(), committed_bytes);
+}
+
+fn sibling_restore_start(template: &restore::Start, serial: u64, legacy: bool) -> restore::Start {
+    let mut encoded = serde_json::to_value(template).unwrap();
+    let mut input = template.input.clone();
+    input.target.owner = format!("{serial:064x}");
+    let review = input.review.as_mut().unwrap();
+    review.target = input.target.clone();
+    review.review_sha256.clear();
+    review.review_sha256 = hash(&serde_json::to_vec(review).unwrap());
+    let profile =
+        crate::content_restore::profile(&input, &serde_json::to_vec(&input).unwrap()).unwrap();
+    encoded["input"] = serde_json::to_value(&input).unwrap();
+    encoded["profile"] = profile.clone().into();
+    encoded["original_authority"]["usage"] = serde_json::to_value(
+        crate::content_restore::custody_usage(&profile, "8:1", &input.target.installation).unwrap(),
+    )
+    .unwrap();
+    if legacy {
+        encoded["schema_version"] = 1.into();
+        encoded.as_object_mut().unwrap().remove("capacity");
+    }
+    let entry: restore::Start = serde_json::from_value(encoded).unwrap();
+    entry.validate(&input.target.installation).unwrap();
+    entry
+}
+
+// Seed an explicitly synthetic historical cut into owned disposable files and
+// the in-memory Checkpoint fixture; this is never an installed authority path.
+fn fixture_history(fixture: &Fixture, journal: &Journal) {
+    let state = journal.validate().unwrap();
+    fs::write(fixture.authority.join(JOURNAL), journal.bytes().unwrap()).unwrap();
+    fixture.memory.head.set(state.checkpoint);
+}
+
+#[test]
+fn restore_reservations_survive_restart_and_admit_no_overcommitted_start_or_nv_dispatch() {
+    let (target, input, receipt, plans) = restore_fixture(2);
+    let profile =
+        crate::content_restore::profile(&input, &serde_json::to_vec(&input).unwrap()).unwrap();
+    let mut audit = target.audit(
+        crate::content_restore::custody_usage(&profile, "8:1", &target.binding.installation)
+            .unwrap(),
+    );
+    audit.subject = input.admin.owner.clone();
+    audit.subject_generation = input.admin.owner_generation;
+    let mut store = target.store();
+    store
+        .start_restore(&input, &receipt, &profile, "8:1", &audit, &mut || Ok(()))
+        .unwrap();
+    let template = match &store.journal.events[0] {
+        Event::RestoreStart(value) => value.clone(),
+        _ => panic!("actual protected start missing"),
+    };
+    let mut altered = serde_json::to_value(&template).unwrap();
+    altered["capacity"]["publication_event_maximum_bytes"] = 1.into();
+    let altered: restore::Start = serde_json::from_value(altered).unwrap();
+    assert!(altered.validate(&target.binding.installation).is_err());
+    let mut journal = store.journal.clone();
+    let mut serial = 1000;
+    loop {
+        let mut next = journal.clone();
+        next.events.push(Event::RestoreStart(sibling_restore_start(
+            &template, serial, false,
+        )));
+        if capacity::admit(&next, &next.validate().unwrap()).is_err() {
+            break;
+        }
+        journal = next;
+        serial += 1;
+        assert!(serial < 1100);
+    }
+    drop(store);
+    fixture_history(&target, &journal);
+    let before = fs::read(target.authority.join(JOURNAL)).unwrap();
+    let advances = target.memory.advances.get();
+    let mut store = target.store();
+    let tail = capacity::remaining(&store.state).unwrap();
+    assert!(tail.outstanding_restore_batches > 1);
+    tail.require_fit(store.bytes.len(), store.journal.events.len())
+        .unwrap();
+    let excess = sibling_restore_start(&template, serial, false);
+    let excess_profile =
+        crate::content_restore::profile(&excess.input, &serde_json::to_vec(&excess.input).unwrap())
+            .unwrap();
+    let mut excess_audit = audit.clone();
+    excess_audit.usage =
+        crate::content_restore::custody_usage(&excess_profile, "8:1", &target.binding.installation)
+            .unwrap();
+    assert!(store
+        .start_restore(
+            &excess.input,
+            &receipt,
+            &excess_profile,
+            "8:1",
+            &excess_audit,
+            &mut || Ok(())
+        )
+        .is_err());
+    assert_eq!(target.memory.advances.get(), advances);
+    assert_eq!(fs::read(target.authority.join(JOURNAL)).unwrap(), before);
+    assert!(!target.authority.join(PREPARED).exists());
+    assert!(!target.authority.join(PUBLISHED).exists());
+    // The admitted original batch can still consume its own promised slots.
+    let (plan, source) = &plans[0];
+    let mut repository =
+        Repository::create_at(&target.data, plan, &mut Guard::write(plan)).unwrap();
+    let token = repository
+        .prepare(plan, source, &mut Guard::write(plan))
+        .unwrap();
+    let ordinary_profile = format!(
+        "content-v1-write-{}-{}-{}",
+        target.binding.owner_generation,
+        "77".repeat(32),
+        plan.review_sha256()
+    );
+    let ordinary_audit = target.audit(
+        crate::content_governed::custody_usage(
+            &ordinary_profile,
+            "8:1",
+            &target.binding,
+            plan.review_sha256(),
+        )
+        .unwrap(),
+    );
+    assert!(store
+        .publish(
+            &token.commitment().canonical_bytes().unwrap(),
+            token.record_bytes(),
+            &ordinary_profile,
+            "8:1",
+            &ordinary_audit,
+            &mut || Ok(())
+        )
+        .is_err());
+    assert_eq!(target.memory.advances.get(), advances);
+    assert_eq!(capacity::remaining(&store.state).unwrap(), tail);
+    assert!(!target.authority.join(PREPARED).exists());
+    store
+        .publish_restore(
+            &input,
+            &token.commitment().canonical_bytes().unwrap(),
+            token.record_bytes(),
+            &profile,
+            "8:1",
+            &audit,
+            &mut || Ok(()),
+        )
+        .unwrap();
+    token.publish(&mut Guard::write(plan)).unwrap();
+    assert_eq!(
+        capacity::remaining(&store.state)
+            .unwrap()
+            .reserved_event_slots,
+        tail.reserved_event_slots - 1
+    );
+    drop(store);
+    let mut reopened = target.store();
+    assert_eq!(
+        capacity::remaining(&reopened.state)
+            .unwrap()
+            .reserved_event_slots,
+        tail.reserved_event_slots - 1
+    );
+    let (plan, source) = &plans[1];
+    let token = repository
+        .prepare(plan, source, &mut Guard::write(plan))
+        .unwrap();
+    target.memory.lose_reply.set(true);
+    assert!(reopened
+        .publish_restore(
+            &input,
+            &token.commitment().canonical_bytes().unwrap(),
+            token.record_bytes(),
+            &profile,
+            "8:1",
+            &audit,
+            &mut || Ok(())
+        )
+        .is_err());
+    let dispatches = target.memory.advances.get();
+    drop(reopened);
+    let (pending, _) =
+        admin::pending_review(&mut target.memory.clone(), &target.files(), &mut || Ok(())).unwrap();
+    admin::reconcile(
+        &mut target.memory.clone(),
+        &target.files(),
+        &pending,
+        &mut || Ok(()),
+    )
+    .unwrap();
+    let mut reopened = target.store();
+    reopened
+        .publish_restore(
+            &input,
+            &token.commitment().canonical_bytes().unwrap(),
+            token.record_bytes(),
+            &profile,
+            "8:1",
+            &audit,
+            &mut || Ok(()),
+        )
+        .unwrap();
+    assert_eq!(target.memory.advances.get(), dispatches);
+    token.publish(&mut Guard::write(plan)).unwrap();
+    assert_eq!(
+        capacity::remaining(&reopened.state)
+            .unwrap()
+            .reserved_event_slots,
+        tail.reserved_event_slots - 2
+    );
+    // Downgrading a reservation in a canonical file is still an NV rollback /
+    // substitution, not an implicit release or legacy-format migration.
+    let mut changed = reopened.journal.clone();
+    let entry = match &changed.events[0] {
+        Event::RestoreStart(value) => value,
+        _ => unreachable!(),
+    };
+    let mut downgrade = serde_json::to_value(entry).unwrap();
+    downgrade["schema_version"] = 1.into();
+    downgrade.as_object_mut().unwrap().remove("capacity");
+    changed.events[0] = Event::RestoreStart(serde_json::from_value(downgrade).unwrap());
+    changed.validate().unwrap();
+    let original = reopened.bytes.clone();
+    drop(reopened);
+    fs::write(target.authority.join(JOURNAL), changed.bytes().unwrap()).unwrap();
+    assert!(Store::open(target.memory.clone(), target.files(), &mut || Ok(())).is_err());
+    fs::write(target.authority.join(JOURNAL), original).unwrap();
+    reopened = target.store();
+    reopened.live(&mut || Ok(())).unwrap();
+}
+
+#[test]
+fn legacy_deficient_restore_capacity_preserves_reads_and_terminal_release_but_refuses_unrelated_writes(
+) {
+    let (target, input, receipt, _) = restore_fixture(1);
+    let profile =
+        crate::content_restore::profile(&input, &serde_json::to_vec(&input).unwrap()).unwrap();
+    let mut audit = target.audit(
+        crate::content_restore::custody_usage(&profile, "8:1", &target.binding.installation)
+            .unwrap(),
+    );
+    audit.subject = input.admin.owner.clone();
+    audit.subject_generation = input.admin.owner_generation;
+    let mut store = target.store();
+    store
+        .start_restore(&input, &receipt, &profile, "8:1", &audit, &mut || Ok(()))
+        .unwrap();
+    let template = match &store.journal.events[0] {
+        Event::RestoreStart(value) => value.clone(),
+        _ => unreachable!(),
+    };
+    let mut journal = Journal::empty(&target.binding.installation, [3; 32]).unwrap();
+    for serial in 1000..1080 {
+        journal
+            .events
+            .push(Event::RestoreStart(sibling_restore_start(
+                &template, serial, true,
+            )));
+    }
+    let canonical_legacy = journal.bytes().unwrap();
+    assert!(!String::from_utf8(canonical_legacy.clone())
+        .unwrap()
+        .contains("\"capacity\""));
+    drop(store);
+    fixture_history(&target, &journal);
+    let mut store = target.store();
+    assert_eq!(store.bytes, canonical_legacy);
+    let status = store.status_data(&mut || Ok(())).unwrap();
+    assert_eq!(
+        status["lifecycle_assessment"]["capacity"]["legacy_restore_capacity_deficient"],
+        true
+    );
+    assert_eq!(
+        store.selected(&target.binding, &mut || Ok(())).unwrap(),
+        VerifiedState::empty(&target.binding).unwrap()
+    );
+    let plan = target.plan();
+    let (_repository, commitment, record, write_profile, write_audit) = prepared(&target, &plan);
+    let advances = target.memory.advances.get();
+    assert!(store
+        .publish(
+            &commitment,
+            &record,
+            &write_profile,
+            "8:1",
+            &write_audit,
+            &mut || Ok(())
+        )
+        .is_err());
+    assert_eq!(target.memory.advances.get(), advances);
+    assert!(!target.authority.join(PREPARED).exists());
+    let entry = match &store.journal.events[0] {
+        Event::RestoreStart(value) => value,
+        _ => unreachable!(),
+    };
+    let request = retire::Request {
+        input: entry.input.clone(),
+        expected_review_sha256: None,
+    };
+    let mut inspect_audit = audit.clone();
+    inspect_audit.usage = request.usage(retire::INSPECT).unwrap();
+    let review = store
+        .execute_retirement(&request, retire::INSPECT, &inspect_audit, &mut || Ok(()))
+        .unwrap();
+    let request = retire::Request {
+        expected_review_sha256: Some(review["review_sha256"].as_str().unwrap().into()),
+        ..request
+    };
+    let mut retire_audit = audit;
+    retire_audit.usage = request.usage(retire::RETIRE).unwrap();
+    let tail = capacity::remaining(&store.state).unwrap();
+    store
+        .execute_retirement(&request, retire::RETIRE, &retire_audit, &mut || Ok(()))
+        .unwrap();
+    assert_eq!(target.memory.advances.get(), advances + 1);
+    let after = capacity::remaining(&store.state).unwrap();
+    assert_eq!(after.reserved_event_slots, tail.reserved_event_slots - 2);
+    assert!(after
+        .require_fit(store.bytes.len(), store.journal.events.len())
+        .is_err());
+    store
+        .execute_retirement(&request, retire::RETIRE, &retire_audit, &mut || Ok(()))
+        .unwrap();
+    assert_eq!(target.memory.advances.get(), advances + 1);
+    drop(store);
+    let mut reopened = target.store();
+    assert_eq!(capacity::remaining(&reopened.state).unwrap(), after);
+    assert!(reopened
+        .selected(&request.input.target, &mut || Ok(()))
+        .is_err());
 }
 
 #[test]

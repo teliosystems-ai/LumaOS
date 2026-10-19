@@ -26,6 +26,10 @@ struct Capacity {
     at_event_limit: bool,
     next_transition_must_pass_exact_commit_checks: bool,
     remaining_capacity_is_not_reserved_or_authorized: bool,
+    restore_capacity: capacity::Tail,
+    unreserved_journal_bytes: usize,
+    unreserved_event_slots: usize,
+    legacy_restore_capacity_deficient: bool,
 }
 impl Capacity {
     fn capture(bytes: usize, events: usize) -> Result<Self> {
@@ -43,6 +47,10 @@ impl Capacity {
             at_event_limit: events == MAX_EVENTS,
             next_transition_must_pass_exact_commit_checks: true,
             remaining_capacity_is_not_reserved_or_authorized: true,
+            restore_capacity: capacity::Tail::default(),
+            unreserved_journal_bytes: MAX_JOURNAL - bytes,
+            unreserved_event_slots: MAX_EVENTS - events,
+            legacy_restore_capacity_deficient: false,
         })
     }
 }
@@ -73,7 +81,7 @@ impl Assessment {
     /// Store::status_data brackets this computation with its original live
     /// callback, exact held journal comparison and actual checkpoint read.
     pub(super) fn capture(journal: &Journal, bytes: &[u8], state: &Validated) -> Result<Self> {
-        let capacity = Capacity::capture(bytes.len(), journal.events.len())?;
+        let mut capacity = Capacity::capture(bytes.len(), journal.events.len())?;
         digest(&journal.installation)?;
         digest(&journal.genesis_event)?;
         digest(&bundle::hex(&state.checkpoint))?;
@@ -96,6 +104,18 @@ impl Assessment {
                 "lifecycle assessment current state and exact journal checkpoint differ".into(),
             );
         }
+        let tail = capacity::remaining(state)?;
+        capacity.remaining_capacity_is_not_reserved_or_authorized =
+            tail.outstanding_restore_batches == 0;
+        capacity.unreserved_journal_bytes = capacity
+            .remaining_journal_bytes
+            .saturating_sub(tail.reserved_journal_bytes);
+        capacity.unreserved_event_slots = capacity
+            .remaining_event_slots
+            .saturating_sub(tail.reserved_event_slots);
+        capacity.legacy_restore_capacity_deficient =
+            tail.require_fit(bytes.len(), journal.events.len()).is_err();
+        capacity.restore_capacity = tail;
         Ok(Self {
             schema_version: 1,
             purpose: "luma-content-custody-read-only-lifecycle-assessment-v1",

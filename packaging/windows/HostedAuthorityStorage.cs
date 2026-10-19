@@ -283,11 +283,15 @@ namespace Luma.Windows.Hosted
         private static string AbandonedLeaf(string digest) {Wire.Bytes(digest,32,true);return "ticket-a-"+digest+".bin";}
         internal DispatchTicket PrepareDispatch(JournalEntry entry,Action check)
         {
-            check();byte[] input=DispatchTicket.SigningInput(identity,entry,HostedHostResources.BootCreation(),nv.ReadEpoch());
-            DispatchTicket ticket=DispatchTicket.Signed(identity,input,key.Sign(input));check();state.WriteNew(DispatchLeaf(entry.RecordSha256),ticket.Encode());check();return ticket;
+            check();JournalHistory history=Read(check);if(history.Sequence!=0) history.Reconcile(identity,null,nv.ReadHead());
+            return HostedJournalCapacity.BeforeStage(identity,history,entry,delegate {
+                check();byte[] input=DispatchTicket.SigningInput(identity,entry,HostedHostResources.BootCreation(),nv.ReadEpoch());
+                DispatchTicket ticket=DispatchTicket.Signed(identity,input,key.Sign(input));check();state.WriteNew(DispatchLeaf(entry.RecordSha256),ticket.Encode());check();return ticket;
+            });
         }
         internal void DispatchFirst(JournalEntry entry,DispatchTicket ticket,Action check)
         {
+            check();JournalHistory capacity=Read(check);capacity.Reconcile(identity,null,nv.ReadHead());HostedJournalCapacity.Require(identity,capacity,entry);
             ticket.Matches(entry);Action dispatch=delegate {
                 check();if(HostedHostResources.BootCreation()!=ticket.Boot || !nv.ReadEpoch().SameEpoch(ticket.Epoch)) throw new SecurityException("Host/TPM epoch changed after durable dispatch preparation; preserve the pending fence.");
             };
@@ -328,6 +332,7 @@ namespace Luma.Windows.Hosted
             if(state.Exists("abort.intent")) {
                 prepared=JournalEntry.Decode(identity,state.Read("abort.intent",1,20000));NvAbortEvent prior=AbortedEvent(prepared);prior.Matches(prepared);
                 old=JournalEntry.Decode(identity,state.Read(state.Exists("pending.bin")?"pending.bin":AbandonedLeaf(prior.Abandoned.RecordSha256),1,20000));prior.Abandoned.Matches(old);
+                HostedJournalCapacity.Require(identity,history,prepared);check();
                 DispatchTicket dispatch=DispatchTicket.Decode(identity,state.Read(DispatchLeaf(prepared.RecordSha256),1,2048));dispatch.Matches(prepared);
                 if(dispatch.Boot!=HostedHostResources.BootCreation() || !dispatch.Epoch.SameEpoch(nv.ReadEpoch())) {
                     // abort.intent has never been placed in pending.bin, so
@@ -346,6 +351,7 @@ namespace Luma.Windows.Hosted
             }
             // The replacement remains non-dispatched while abort.intent
             // exists. The atomic rename below is its one first-dispatch gate.
+            HostedJournalCapacity.Require(identity,history,prepared);check();
             if(state.Exists("pending.bin")) {
                 if(!Wire.Equal(state.Read("pending.bin",1,20000),old.Bytes)) throw new SecurityException("Abandoned pending event changed.");
                 string archive=AbandonedLeaf(old.RecordSha256);check();

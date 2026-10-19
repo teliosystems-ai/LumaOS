@@ -20,7 +20,7 @@ authorized these named new tracks separately.
 | Artifacts | Native ext4/WAL catalogs, held immutable publication, independent C custody, owner-local typed collections, reviewed quarantine, encrypted backup and fresh-owner restore integration | Custody lifecycle and installed recovery qualification; general per-result access policy and semantic collections/indexes |
 | User interface | Model-independent reference workspace and candidate native GNOME/Wayland edition | Accessible conversational/manual shell, progress/cancellation, grounded references and qualified capture/input |
 | Content and adapters | Deterministic content engines, C-backed workflow commitments, scoped LibreOffice export and ephemeral browser adapter source; fixed generated KVM runtime | Installed adapter/UI qualification, complete accessible journeys and exact external build/test receipts |
-| Windows development | Populated compute-only package, separate hosted TPM/CNG custody source, signed trust/runtime lifecycle, original Admin pipe, held NTFS input leases and ephemeral first-Admin exact-file reads | Authenticated complete product distribution, ordinary-user content/grant bridge, persistent scoped enrollment, authority-key migration and installed WSL confinement/inference |
+| Windows development | Populated compute-only package, separate hosted TPM/CNG custody source, signed trust/runtime lifecycle, original Admin pipe, held NTFS input leases, ephemeral reads and persistent first-Admin exact-file enrollment | Authenticated complete product distribution, ordinary-user content/grant bridge, broader scoped ingestion, authority-key migration and installed WSL confinement/inference |
 | Windows desktop | No qualified complete VM product proof | Hyper-V Gen2 image/template, identity, storage, resource limits and recovery proof; no acceleration claim from display availability |
 
 ## Initial implementation checkpoint
@@ -616,6 +616,85 @@ assertions. All current source records match the final snapshot; the Windows
 input bytes are identical across the composed verification cuts. No new native
 image, installed-service qualification or gate closure is claimed.
 
+### Integrated workflow and enrollment development
+
+The native terminal journey now connects actual deterministic-engine preflight,
+private workflow review, independently selected Read/effect grants, exact human
+approval and C-backed apply. It distinguishes publication, retained conflict and
+retained no-change. Interruptions after dispatch report an uncertain outcome;
+they never claim rollback or automatically retry. A subsequent read requires
+fresh authorization, reopens the exact complete envelope and can recalculate its
+editable source. Every additional edit uses a new request ID and new review and
+grant selections. Private bytes, passwords and grant IDs stay outside WebKit.
+
+A separate `native-content-envelope-v1` selector admits one bounded whole-envelope
+Read under the existing 30-second Standard session. It does not extend ordinary
+64-KiB query output, borrow an Export session or authorize publication. Both the
+controller and worker require activated production C custody. After the worker
+exits, a new proof phase binds the still-live original controller, immutable
+request, exact owner, original grants and physical output receipt. Delivery
+rechecks current C availability and resource generations at every 4-KiB write
+and flush boundary, so retirement stops buffered output even when the completed
+worker's receipt remains valid. Only the immutable body hash is reused; live
+authorization is not cached. Loaded confinement and performance within the
+unchanged session bound remain installed qualification.
+
+Fresh-owner restores now reserve capacity durably in the protected C start:
+64 KiB per remaining publication plus 8 KiB for one terminal disposition. Every
+new mutation must preserve outstanding promises. Actual publication and terminal
+event sizes are checked before preparation or NV extension. Completion preserves
+the terminal reservation until reviewed retirement. Historical starts retain
+their original canonical bytes. Capacity-deficient histories remain readable,
+but new publications and unrelated writes refuse; fitting reviewed retirement
+can release a tail, and known committed recovery still finalizes without another
+NV extension. These fixed reservations do not raise journal
+limits or guarantee that the nominal 256-step maximum fits. Authenticated paged
+journal succession remains development work.
+
+Windows adds persistent exact-file enrollment, explicit supersession, revocation
+and generation-selected reads through the existing signed W journal and NV
+recovery lifecycle. Reviewed control intents pin the genuine first Admin,
+installation, exact source, prior entry, registry source and current journal
+head. The independent U source purpose is `host-file-enrollment`. Enrollment
+lifetime is at most 30 days; each read still requires a fresh 30-second original
+session and current UTC, token, NTFS object, owner and ACL checks. Revocation can
+complete without opening a missing or expired source. The 64-ID, 256-control and
+64-generation limits reserve revocation capacity; generation 64 is revoke-only.
+Ephemeral reads remain a separate protocol. This is not an ordinary-user/Linux
+principal bridge or background folder ingestion. Deploy the enrollment-capable
+runtime before committing new journal kinds: an older binary intentionally
+refuses those histories instead of adopting or resetting custody.
+
+Shared-journal admission preserves logical space for active enrollments to be
+revoked, including a finite recovery-spare budget reconstructed from committed
+history. A prepared revocation does not release that reservation. The admission
+check covers ordinary appends, dispatch preparation and abort replacements;
+already committed recovery still finalizes without another NV extension.
+Exhausting the spare budget does not block a fitting healthy final revocation,
+but an additional uncertain previous-head write may have to remain fenced when
+an abort cannot fit. No finite journal promises unlimited interrupted attempts.
+The reservation covers signed-journal slots and encoded bytes, not NTFS free
+space or the separate 4,096-file private-state namespace. Physical allocation,
+namespace-safe continuation and complete journal succession remain open.
+
+The [workflow and enrollment verification record](gates/g3/workflow_enrollment_integration_2026-10-19.json)
+pins 610 passing native-source tests, 142 focused Rust tests, three actual
+disposable-TPM scenarios, 30 unprivileged CLI tests, four actual engine/reopen/
+recalculation journeys, 337 Windows assertions and 31 production-JavaScript
+assertions. All 596 final source records match the verified native and Windows
+inputs. The actual native workflow UI mechanism tests use inert authority
+fixtures; the four-engine CLI lane does not authenticate an owner or publish.
+No new bootable image, installed confinement qualification or gate closure is
+claimed.
+
+Repository metadata, all 288 pinned source requirements and the explicit release
+inventory also validate. The source-release manifest lists all 259 tracked files in
+its existing scope, including 83 previously omitted entries; its developer-MVP
+boundary is unchanged. The legacy suite passes on Linux with its existing one
+Windows-only junction case skipped, and that unchanged case passes separately on
+genuine Windows/NTFS without a skip. D is exFAT, so this small disposable junction
+fixture uses the C workspace; bulk build outputs and evidence remain on D.
+
 ### Remaining development and qualification
 
 The current integrated sources still leave the following development work:
@@ -624,15 +703,17 @@ The current integrated sources still leave the following development work:
   application recovery journeys beyond the implemented C-backed primitives.
 - Semantic collections/indexes and per-result access policy beyond the current
   owner's lexical search, including its exact historical collection selector;
-  complete paged-read and recalculation user journeys beyond the terminal bridge.
+  graphical read/edit/recalculation journeys beyond the implemented private
+  terminal workflow bridge.
 - Accessible manual/conversational shell, progress/cancellation, grounded references,
   explicit speech/image/screen/video capture and visible capture controls.
 - Installed viewer integration and authenticated completion for the deterministic
   engines, named/versioned LibreOffice/browser and allowlisted hardware adapters
   with actual external completion receipts.
 - Windows authority-key succession, SID/principal content and finite-grant bridge,
-  persistent scoped ingestion and a complete authenticated product distribution
-  beyond the compute-only package and hosted service implementation.
+  broader scoped ingestion beyond first-Admin exact-file enrollment and a
+  complete authenticated product distribution beyond the compute-only package
+  and hosted service implementation.
 - Complete Windows inference/lifecycle integration and manual/model-disabled
   controls, plus the separate Hyper-V desktop implementation. Effective resources,
   confinement and recovery then require installed qualification.

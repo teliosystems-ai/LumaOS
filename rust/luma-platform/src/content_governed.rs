@@ -16,6 +16,7 @@ use std::process::{Command, Stdio};
 pub(crate) const DIRECTORY: &str = "/var/lib/luma-os/content-store";
 pub(crate) const MAX_REQUEST: usize = 16 * 1024 * 1024 + 32768;
 const MAX_OUTPUT: u64 = 65536;
+const MAX_ENVELOPE_OUTPUT: u64 = 2 * luma_content::MAX_ENVELOPE_BYTES as u64 + 16384;
 const MAX_STORAGE: u64 = 24 * 1024 * 1024;
 const INTEGRATED_READ_BYTES: u64 = 1024 * 1024 * 1024;
 const MAX_PAGE_BYTES: u32 = 16384;
@@ -90,6 +91,9 @@ enum Operation {
     Historical {
         expected: VersionReference,
     },
+    Envelope {
+        expected: VersionReference,
+    },
     Page {
         expected: VersionReference,
         offset: u64,
@@ -123,6 +127,7 @@ impl Input {
             self.operation,
             Operation::Current { .. }
                 | Operation::Historical { .. }
+                | Operation::Envelope { .. }
                 | Operation::Page { .. }
                 | Operation::Search { .. }
                 | Operation::CollectionSearch { .. }
@@ -133,6 +138,21 @@ impl Input {
                 | Operation::BackupReview {}
                 | Operation::OfficeReview { .. }
         )
+    }
+
+    fn read_mode(&self) -> Mode {
+        if matches!(self.operation, Operation::Envelope { .. }) {
+            Mode::Envelope
+        } else if self.is_query() {
+            Mode::Query
+        } else {
+            Mode::Read
+        }
+    }
+
+    fn matches_mode(&self, mode: Mode) -> bool {
+        self.is_query() == mode.is_query()
+            && matches!(self.operation, Operation::Envelope { .. }) == (mode == Mode::Envelope)
     }
 
     fn source(&self) -> Result<Vec<u8>> {
@@ -150,6 +170,7 @@ impl Input {
             Operation::Collection { source, .. } => source.canonical_bytes()?,
             Operation::Current { .. }
             | Operation::Historical { .. }
+            | Operation::Envelope { .. }
             | Operation::Page { .. }
             | Operation::Search { .. }
             | Operation::CollectionSearch { .. }
@@ -268,7 +289,9 @@ impl Input {
                 }
             }
             Operation::Current { artifact_id } => validate_artifact_id(artifact_id)?,
-            Operation::Historical { expected } => validate_reference(expected)?,
+            Operation::Historical { expected } | Operation::Envelope { expected } => {
+                validate_reference(expected)?
+            }
             Operation::OfficeReview { expected } => validate_reference(expected)?,
             Operation::Page {
                 expected,
@@ -470,6 +493,7 @@ fn identity(m: &std::fs::Metadata) -> (u64, u64, u64, u32, u32, u32, u64, i64, i
 enum Mode {
     Read,
     Query,
+    Envelope,
     Write,
     Retain,
     Recover,
@@ -479,9 +503,23 @@ impl Mode {
         match self {
             Self::Read => "read",
             Self::Query => "query",
+            Self::Envelope => "envelope",
             Self::Write => "write",
             Self::Retain => "retain",
             Self::Recover => "recover",
+        }
+    }
+    fn is_query(self) -> bool {
+        matches!(self, Self::Query | Self::Envelope)
+    }
+    fn is_read(self) -> bool {
+        self == Self::Read || self.is_query()
+    }
+    fn output_limit(self) -> u64 {
+        if self == Self::Envelope {
+            MAX_ENVELOPE_OUTPUT
+        } else {
+            MAX_OUTPUT
         }
     }
     fn decision(decision: DecisionKind) -> Self {
@@ -506,6 +544,7 @@ fn profile(value: &str) -> Result<Profile<'_>> {
     let mode = match parts.next() {
         Some("read") => Mode::Read,
         Some("query") => Mode::Query,
+        Some("envelope") => Mode::Envelope,
         Some("write") => Mode::Write,
         Some("retain") => Mode::Retain,
         Some("recover") => Mode::Recover,
@@ -524,7 +563,7 @@ fn profile(value: &str) -> Result<Profile<'_>> {
         || !io::hash(source)
         || !io::hash(review)
         || parts.next().is_some()
-        || (matches!(mode, Mode::Read | Mode::Query) && source != review)
+        || (mode.is_read() && source != review)
     {
         return Err("invalid native content profile binding".into());
     }
@@ -541,7 +580,7 @@ pub(crate) fn source_digest(value: &str) -> Result<&str> {
 }
 
 pub(crate) fn query_profile(value: &str) -> Result<bool> {
-    Ok(profile(value)?.mode == Mode::Query)
+    Ok(profile(value)?.mode.is_query())
 }
 fn profile_id(mode: Mode, input: &Input, bytes: &[u8], review: &str) -> Result<String> {
     let id = format!(
@@ -576,7 +615,7 @@ pub(crate) fn binding(id: &str, device: &str) -> Result<String> {
 
 fn usage_at(id: &str, digest: String, inspect: bool) -> Result<grants::Use> {
     let p = profile(id)?;
-    let read = inspect || matches!(p.mode, Mode::Read | Mode::Query);
+    let read = inspect || p.mode.is_read();
     let usage = grants::Use {
         action: if read {
             grants::Action::Read
@@ -593,6 +632,8 @@ fn usage_at(id: &str, digest: String, inspect: bool) -> Result<grants::Use> {
             },
             id: if p.mode == Mode::Recover && !read {
                 "native-content-recovery-v1"
+            } else if p.mode == Mode::Envelope {
+                "native-content-envelope-v1"
             } else if p.mode == Mode::Query {
                 "native-content-query-v1"
             } else if read {
@@ -605,7 +646,7 @@ fn usage_at(id: &str, digest: String, inspect: bool) -> Result<grants::Use> {
             digest,
         },
         input_bytes: MAX_REQUEST as u64,
-        output_bytes: MAX_OUTPUT,
+        output_bytes: p.mode.output_limit(),
         units: 1,
     };
     usage.validate()?;
@@ -634,7 +675,7 @@ pub(crate) fn custody_usage(
         || selected.review != review
         || !matches!(
             selected.mode,
-            Mode::Read | Mode::Query | Mode::Write | Mode::Retain | Mode::Recover
+            Mode::Read | Mode::Query | Mode::Envelope | Mode::Write | Mode::Retain | Mode::Recover
         )
     {
         return Err("content custody profile differs from owner/review or closed operation".into());
@@ -716,7 +757,7 @@ pub(crate) fn verify_client_request(path: &Path, id: &str, login: &str) -> Resul
     if io::digest(&bytes) != p.source
         || input.binding.owner_generation != p.generation
         || input.login != login
-        || input.is_query() != (p.mode == Mode::Query)
+        || !input.matches_mode(p.mode)
         || identity(&before) != identity(&std::fs::symlink_metadata(path)?)
     {
         return Err("native content snapshot differs from its exact original command".into());
@@ -740,7 +781,7 @@ pub(crate) fn check_client_arguments(
     audit: Option<&grants::Audit>,
 ) -> Result<()> {
     let p = profile(id)?;
-    let (path, effect_grant) = if matches!(p.mode, Mode::Read | Mode::Query) {
+    let (path, effect_grant) = if p.mode.is_read() {
         if args.len() != 6 || args[1] != "content-owned-review" {
             return Err("native content review command shape differs".into());
         }
@@ -898,8 +939,7 @@ fn validate_budget(mode: Mode, budget: ResourceBudget) -> Result<()> {
         || budget.read_bytes > INTEGRATED_READ_BYTES
         || budget.write_bytes > MAX_STORAGE
         || budget.additional_storage_bytes > MAX_STORAGE
-        || (matches!(mode, Mode::Read | Mode::Query)
-            && (budget.write_bytes != 0 || budget.additional_storage_bytes != 0))
+        || (mode.is_read() && (budget.write_bytes != 0 || budget.additional_storage_bytes != 0))
     {
         return Err("native content operation exceeds the fixed acquisition profile".into());
     }
@@ -925,6 +965,7 @@ fn plan(
             }
             Operation::Current { .. }
             | Operation::Historical { .. }
+            | Operation::Envelope { .. }
             | Operation::Page { .. }
             | Operation::Search { .. }
             | Operation::CollectionSearch { .. }
@@ -1007,6 +1048,7 @@ fn plan(
         },
         Operation::Current { .. }
         | Operation::Historical { .. }
+        | Operation::Envelope { .. }
         | Operation::Page { .. }
         | Operation::Search { .. }
         | Operation::CollectionSearch { .. }
@@ -1089,6 +1131,7 @@ fn validate_replay(input: &Input, prior: &Plan) -> Result<()> {
         }
         Operation::Current { .. }
         | Operation::Historical { .. }
+        | Operation::Envelope { .. }
         | Operation::Page { .. }
         | Operation::Search { .. }
         | Operation::CollectionSearch { .. }
@@ -1135,6 +1178,17 @@ fn version_result(
         result["eof"] = serde_json::json!(end == envelope.len());
         result["slice_hex"] = serde_json::json!(encode_hex(&envelope[start..end]));
         result["content_delivered"] = serde_json::json!(end > start);
+    }
+    Ok(result)
+}
+
+fn envelope_result(version: &ArtifactVersion) -> Result<serde_json::Value> {
+    let mut result = version_result(version, None)?;
+    result["canonical_envelope"] =
+        serde_json::Value::String(String::from_utf8(version.canonical_envelope()?)?);
+    result["content_delivered"] = serde_json::Value::Bool(true);
+    if serde_json::to_vec(&result)?.len() as u64 >= MAX_ENVELOPE_OUTPUT {
+        return Err("exact immutable envelope exceeds its finite output allowance".into());
     }
     Ok(result)
 }
@@ -1206,6 +1260,10 @@ fn query(
         Operation::Historical { expected } => {
             version_result(&repository.historical(expected, boundary)?, None)?
         }
+        Operation::Envelope { expected } => {
+            let version = repository.historical(expected, boundary)?;
+            envelope_result(&version)?
+        }
         Operation::Page {
             expected,
             offset,
@@ -1237,7 +1295,7 @@ fn query(
         }),
         _ => return Err("native content query profile cannot inspect a mutation plan".into()),
     };
-    if serde_json::to_vec(&result)?.len() as u64 >= MAX_OUTPUT {
+    if serde_json::to_vec(&result)?.len() as u64 >= input.read_mode().output_limit() {
         return Err("native content query exceeds its finite output allowance".into());
     }
     Ok(result)
@@ -1282,14 +1340,14 @@ fn worker(id: &str) -> Result<()> {
     let input = parse(&bytes)?;
     if matches!(
         input.operation,
-        Operation::Workflow { .. } | Operation::OfficeReview { .. }
+        Operation::Workflow { .. } | Operation::OfficeReview { .. } | Operation::Envelope { .. }
     ) && !production
     {
-        return Err("managed workflow completion requires independently enrolled current content custody, not a laboratory file commit".into());
+        return Err("managed workflow or whole-envelope delivery requires independently enrolled current content custody, not a laboratory file commit".into());
     }
     if io::digest(&bytes) != p.source
         || input.binding.owner_generation != p.generation
-        || input.is_query() != (p.mode == Mode::Query)
+        || !input.matches_mode(p.mode)
     {
         return Err("native content worker input differs from its admitted profile".into());
     }
@@ -1460,7 +1518,7 @@ fn worker(id: &str) -> Result<()> {
         })?;
         serde_json::json!({"schema_version":1,"office_review":review,"pdf_delivered":false,"export_authorized":false,
             "private_source_delivered":false,"committed":false,"authority_returned":false,"workflow_executed":false})
-    } else if p.mode == Mode::Query {
+    } else if p.mode.is_query() {
         query(
             &input,
             repository
@@ -1588,7 +1646,7 @@ fn worker(id: &str) -> Result<()> {
         result,
     };
     let output = serde_json::to_vec(&response)?;
-    if output.len() as u64 >= MAX_OUTPUT {
+    if output.len() as u64 >= p.mode.output_limit() {
         return Err("native content response exceeds its exact bound".into());
     }
     lease.check_local()?;
@@ -1622,10 +1680,27 @@ struct ResourceReceipt {
     state: crate::resources::State,
     physical_release_granted: bool,
 }
+#[cfg(test)]
 fn verify_resource(
     response: &Response,
     expected_binding: &str,
     source: &str,
+    value: serde_json::Value,
+) -> Result<()> {
+    verify_resource_output(
+        response,
+        expected_binding,
+        source,
+        &io::digest(&serde_json::to_vec(&response.result)?),
+        value,
+    )
+}
+
+fn verify_resource_output(
+    response: &Response,
+    expected_binding: &str,
+    source: &str,
+    output_sha256: &str,
     value: serde_json::Value,
 ) -> Result<()> {
     let receipt: ResourceReceipt = serde_json::from_value(value)?;
@@ -1635,7 +1710,8 @@ fn verify_resource(
         || !crate::workflow_resource::token_valid(&response.lease)
         || receipt.binding != response.binding
         || receipt.lease != response.lease
-        || receipt.output_sha256 != io::digest(&serde_json::to_vec(&response.result)?)
+        || !io::hash(output_sha256)
+        || receipt.output_sha256 != output_sha256
         || receipt.physical_release_granted
         || receipt
             .output_domain_epochs
@@ -1659,16 +1735,25 @@ fn verify_resource(
 }
 
 fn check_response(response: &Response, id: &str) -> Result<()> {
+    check_response_output(
+        response,
+        id,
+        &io::digest(&serde_json::to_vec(&response.result)?),
+    )
+}
+
+fn check_response_output(response: &Response, id: &str, output_sha256: &str) -> Result<()> {
     let scope = acquisition_usage(id)?;
     let mut request = resource_manager::request("resource-output-receipt")?;
     request.lease = Some(response.lease.clone());
     let receipt = crate::service::resource_exchange(&request)?
         .status
         .ok_or("native content resource receipt missing")?;
-    verify_resource(
+    verify_resource_output(
         response,
         &scope.selector.digest,
         source_digest(id)?,
+        output_sha256,
         receipt,
     )
 }
@@ -1679,6 +1764,7 @@ fn run(
     guard: &mut crate::admin_governance::GrantBoundary<'_>,
 ) -> Result<Response> {
     let scope = acquisition_usage(id)?;
+    let output_limit = profile(id)?.mode.output_limit();
     crate::acquisition::await_drainage()?;
     guard.check()?;
     let encoded = crate::service::granted_acquisition::run_content(id, &scope, guard, |check| {
@@ -1703,7 +1789,7 @@ fn run(
             .ok_or("native content controller deadline overflow")?;
         crate::model::supervise_owned_controller(&mut command, || {
             check()?;
-            if resource_manager::now()? >= deadline || output.metadata()?.len() >= MAX_OUTPUT {
+            if resource_manager::now()? >= deadline || output.metadata()?.len() >= output_limit {
                 return Err("native content controller authority/output deadline lost".into());
             }
             Ok(())
@@ -1712,8 +1798,8 @@ fn run(
         check()?;
         output.seek(SeekFrom::Start(0))?;
         let mut encoded = Vec::new();
-        output.take(MAX_OUTPUT + 1).read_to_end(&mut encoded)?;
-        if encoded.is_empty() || encoded.len() as u64 >= MAX_OUTPUT {
+        output.take(output_limit + 1).read_to_end(&mut encoded)?;
+        if encoded.is_empty() || encoded.len() as u64 >= output_limit {
             return Err("native content controller response exceeds its exact bound".into());
         }
         Ok(encoded)
@@ -1907,15 +1993,18 @@ fn write_pipe(destination: i32, bytes: &[u8]) -> std::io::Result<usize> {
     }
 }
 
-fn deliver_checked(
+fn deliver_checked_limited(
     result: &serde_json::Value,
+    output_limit: u64,
     output: &mut impl Write,
     mut check: impl FnMut() -> Result<()>,
     mut wait: impl FnMut() -> Result<()>,
 ) -> Result<()> {
     let mut bytes = serde_json::to_vec(result)?;
     bytes.push(b'\n');
-    if bytes.len() as u64 >= MAX_OUTPUT {
+    if !matches!(output_limit, MAX_OUTPUT | MAX_ENVELOPE_OUTPUT)
+        || bytes.len() as u64 >= output_limit
+    {
         return Err("native content delivery exceeds its finite output allowance".into());
     }
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
@@ -1948,13 +2037,27 @@ fn deliver_checked(
     check()
 }
 
-fn deliver_result(result: &serde_json::Value, mut check: impl FnMut() -> Result<()>) -> Result<()> {
+#[cfg(test)]
+fn deliver_checked(
+    result: &serde_json::Value,
+    output: &mut impl Write,
+    check: impl FnMut() -> Result<()>,
+    wait: impl FnMut() -> Result<()>,
+) -> Result<()> {
+    deliver_checked_limited(result, MAX_OUTPUT, output, check, wait)
+}
+
+fn deliver_result(
+    result: &serde_json::Value,
+    output_limit: u64,
+    mut check: impl FnMut() -> Result<()>,
+) -> Result<()> {
     // Hold the ordinary stdout lock while using its unbuffered descriptor.
     let stdout = std::io::stdout();
     let _held = stdout.lock();
     let mut output = NonblockingOutput::duplicate(1)?;
     let fd = output.file.as_raw_fd();
-    deliver_checked(result, &mut output, &mut check, || {
+    deliver_checked_limited(result, output_limit, &mut output, &mut check, || {
         let mut descriptor = libc::pollfd {
             fd,
             events: libc::POLLOUT,
@@ -1998,10 +2101,10 @@ pub(crate) fn command(args: &[String]) -> Result<()> {
     let input = parse(&bytes)?;
     if matches!(
         input.operation,
-        Operation::Workflow { .. } | Operation::OfficeReview { .. }
+        Operation::Workflow { .. } | Operation::OfficeReview { .. } | Operation::Envelope { .. }
     ) && !production
     {
-        return Err("managed workflow requires independent current C custody; laboratory-only publication cannot supply it".into());
+        return Err("managed workflow or whole-envelope delivery requires independent current C custody; laboratory-only publication cannot supply it".into());
     }
     if input.login != *login {
         return Err("native content request login differs from exact command".into());
@@ -2009,16 +2112,7 @@ pub(crate) fn command(args: &[String]) -> Result<()> {
     if input.is_query() && args[0] == "content-owned-apply" {
         return Err("native content query cannot be applied as a mutation or retention".into());
     }
-    let read_profile = profile_id(
-        if input.is_query() {
-            Mode::Query
-        } else {
-            Mode::Read
-        },
-        &input,
-        &bytes,
-        &io::digest(&bytes),
-    )?;
+    let read_profile = profile_id(input.read_mode(), &input, &bytes, &io::digest(&bytes))?;
     if args[0] == "content-owned-inspection-review" {
         println!(
             "{}",
@@ -2032,7 +2126,16 @@ pub(crate) fn command(args: &[String]) -> Result<()> {
             check_subject(&input, guard)?;
             let response = run(&read_profile, &bytes, guard)?;
             check_subject(&input, guard)?;
-            deliver_result(&response.result, || {
+            if production {
+                return deliver_protected(
+                    &input,
+                    &response,
+                    &read_profile,
+                    input.read_mode().output_limit(),
+                    guard,
+                );
+            }
+            deliver_result(&response.result, input.read_mode().output_limit(), || {
                 check_subject(&input, guard)?;
                 check_response(&response, &read_profile)?;
                 check_subject(&input, guard)
@@ -2058,12 +2161,43 @@ pub(crate) fn command(args: &[String]) -> Result<()> {
         let response = run(&id, &bytes, guard)?;
         check_subject(&input, guard)?;
         guard.effect_complete(pending, &io::digest(&serde_json::to_vec(&response)?))?;
-        deliver_result(&response.result, || {
+        if production {
+            return deliver_protected(&input, &response, &id, mode.output_limit(), guard);
+        }
+        deliver_result(&response.result, mode.output_limit(), || {
             check_subject(&input, guard)?;
             check_response(&response, &id)?;
             check_subject(&input, guard)
         })
     })
+}
+
+fn deliver_protected(
+    input: &Input,
+    response: &Response,
+    id: &str,
+    output_limit: u64,
+    guard: &mut crate::admin_governance::GrantBoundary<'_>,
+) -> Result<()> {
+    check_subject(input, guard)?;
+    // Only immutable result bytes are prehashed. All current grant, resource
+    // epoch and C-availability proofs remain fresh at every delivery fence.
+    let output_sha256 = io::digest(&serde_json::to_vec(&response.result)?);
+    check_response_output(response, id, &output_sha256)?;
+    crate::service::content_output::run(
+        id,
+        &input.binding,
+        &response.lease,
+        &output_sha256,
+        guard,
+        |proof| {
+            deliver_result(&response.result, output_limit, || {
+                proof.check()?;
+                check_response_output(response, id, &output_sha256)?;
+                proof.check()
+            })
+        },
+    )
 }
 
 fn approval(value: &str) -> Result<(Mode, &str)> {
@@ -2869,6 +3003,235 @@ mod tests {
     }
 
     #[test]
+    fn envelope_has_an_exact_read_only_scope_and_cannot_borrow_query_or_mutation_profiles() {
+        let input = query_input(Operation::Envelope {
+            expected: reference(),
+        });
+        let bytes = canonical_request(&serde_json::to_vec(&input).unwrap()).unwrap();
+        let digest = io::digest(&bytes);
+        let id = profile_id(input.read_mode(), &input, &bytes, &digest).unwrap();
+        assert!(input.is_query());
+        assert!(input.source().is_err());
+        assert!(query_profile(&id).unwrap());
+        assert!(input.matches_mode(Mode::Envelope));
+        for mode in [
+            Mode::Read,
+            Mode::Query,
+            Mode::Write,
+            Mode::Retain,
+            Mode::Recover,
+        ] {
+            assert!(!input.matches_mode(mode));
+        }
+        let ordinary = query_input(Operation::Historical {
+            expected: reference(),
+        });
+        assert!(!ordinary.matches_mode(Mode::Envelope));
+        assert!(ordinary.matches_mode(Mode::Query));
+        let scope = usage_at(&id, "e".repeat(64), false).unwrap();
+        assert_eq!(scope.action, grants::Action::Read);
+        assert_eq!(scope.selector.kind, grants::Kind::File);
+        assert_eq!(scope.selector.id, "native-content-envelope-v1");
+        assert_eq!(scope.input_bytes, MAX_REQUEST as u64);
+        assert_eq!(scope.output_bytes, 12_615_680);
+        assert_eq!(scope.units, 1);
+        assert!(approval(&format!("envelope:{digest}")).is_err());
+        let query = profile_id(
+            Mode::Query,
+            &ordinary,
+            &serde_json::to_vec(&ordinary).unwrap(),
+            &io::digest(&serde_json::to_vec(&ordinary).unwrap()),
+        )
+        .unwrap();
+        assert_eq!(
+            usage_at(&query, "e".repeat(64), false)
+                .unwrap()
+                .output_bytes,
+            MAX_OUTPUT
+        );
+        let args = crate::acquisition::arguments(Path::new("/var"), &id, "content").unwrap();
+        assert!(args
+            .iter()
+            .any(|arg| arg == "--property=ReadOnlyPaths=/var/lib/luma-os/content-store"));
+        assert!(!args
+            .iter()
+            .any(|arg| arg == "--property=ReadWritePaths=/var/lib/luma-os/content-store"));
+        let read = ResourceBudget {
+            memory_bytes: 256 * 1024 * 1024,
+            tasks: 1,
+            read_bytes: 256 * 1024 * 1024,
+            write_bytes: 0,
+            additional_storage_bytes: 0,
+        };
+        validate_budget(Mode::Envelope, read).unwrap();
+        assert!(validate_budget(
+            Mode::Envelope,
+            ResourceBudget {
+                write_bytes: 1,
+                ..read
+            }
+        )
+        .is_err());
+        let wrong = profile_id(Mode::Envelope, &input, &bytes, &"f".repeat(64));
+        assert!(wrong.is_err());
+    }
+
+    #[test]
+    fn maximum_exact_envelope_reopens_without_weakening_the_ordinary_output_bound() {
+        let content = "\\".repeat(luma_content::MAX_CONTENT_BYTES);
+        let version = version(content.as_bytes());
+        let result = envelope_result(&version).unwrap();
+        assert!(serde_json::to_vec(&result).unwrap().len() as u64 > MAX_OUTPUT);
+        assert!((serde_json::to_vec(&result).unwrap().len() as u64) < MAX_ENVELOPE_OUTPUT);
+        let envelope = result["canonical_envelope"].as_str().unwrap();
+        assert_eq!(io::digest(envelope.as_bytes()), result["envelope_sha256"]);
+        assert_eq!(result["envelope_bytes"], envelope.len());
+        assert_eq!(
+            luma_content::reopen(envelope.as_bytes(), &input().binding).unwrap(),
+            version
+        );
+        assert_eq!(result["content_delivered"], true);
+        for flag in [
+            "committed",
+            "authority_returned",
+            "provenance_authority",
+            "workflow_executed",
+            "production_qualified",
+        ] {
+            assert_eq!(result[flag], false);
+        }
+        for key in [
+            "approval",
+            "inspection_usage",
+            "effect_usage",
+            "slice_hex",
+            "next_offset",
+        ] {
+            assert!(result.get(key).is_none());
+        }
+    }
+
+    #[test]
+    fn exact_envelope_query_uses_real_history_and_refuses_revocation_or_reference_substitution() {
+        use std::os::unix::fs::DirBuilderExt;
+        struct Directory(std::path::PathBuf);
+        impl Drop for Directory {
+            fn drop(&mut self) {
+                std::fs::remove_dir_all(&self.0).unwrap();
+            }
+        }
+        let root = std::env::var_os("LUMA_STORAGE_TEST_ROOT")
+            .expect("native envelope query requires private disposable ext4");
+        let directory = Directory(std::path::PathBuf::from(root).join(format!(
+            "native-envelope-{}",
+            crate::resources::random_id().unwrap()
+        )));
+        std::fs::DirBuilder::new()
+            .mode(0o700)
+            .create(&directory.0)
+            .unwrap();
+        let version = version(b"Private exact source\n");
+        let initial = Plan::capture(
+            input().binding,
+            "notes-one",
+            Format::Utf8Text,
+            version.content(),
+            version.receipt().provenance.clone(),
+        )
+        .unwrap();
+        let mut boundary = BackupQueryBoundary {
+            binding: initial.binding().clone(),
+            review: Some(initial.review_sha256().into()),
+            checks: 0,
+            refuse_at: usize::MAX,
+        };
+        let mut repository = Repository::create_at(&directory.0, &initial, &mut boundary).unwrap();
+        let outcome = repository
+            .apply(&initial, version.content(), &mut boundary)
+            .unwrap();
+        boundary.review = None;
+        let input = query_input(Operation::Envelope {
+            expected: outcome.resulting.clone(),
+        });
+        boundary.checks = 0;
+        let result = query(&input, &repository, &mut boundary).unwrap();
+        assert_eq!(result, envelope_result(&version).unwrap());
+        let total = boundary.checks;
+        for point in 1..=total {
+            boundary.checks = 0;
+            boundary.refuse_at = point;
+            assert!(
+                query(&input, &repository, &mut boundary).is_err(),
+                "live boundary {point}"
+            );
+            assert_eq!(boundary.checks, point);
+        }
+        boundary.refuse_at = usize::MAX;
+        let mut forged = outcome.resulting;
+        forged.receipt_sha256 = "e".repeat(64);
+        assert!(query(
+            &query_input(Operation::Envelope { expected: forged }),
+            &repository,
+            &mut boundary
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn whole_envelope_delivery_remains_bounded_and_rechecks_every_chunk_and_blocked_retry() {
+        let value = serde_json::json!({"canonical_envelope":"x".repeat(100_000)});
+        let mut normal = sink();
+        assert!(deliver_checked(&value, &mut normal, || Ok(()), || Ok(())).is_err());
+        assert!(normal.bytes.is_empty());
+        let mut output = sink();
+        let checks = std::cell::Cell::new(0);
+        deliver_checked_limited(
+            &value,
+            MAX_ENVELOPE_OUTPUT,
+            &mut output,
+            || {
+                checks.set(checks.get() + 1);
+                Ok(())
+            },
+            || panic!("writable sink must not wait"),
+        )
+        .unwrap();
+        assert!(output.bytes.len() > MAX_OUTPUT as usize);
+        assert_eq!(checks.get(), output.writes + 2);
+        for point in [1, 2, 4] {
+            let mut output = sink();
+            output.blocked = point == 4;
+            let checks = std::cell::Cell::new(0);
+            assert!(deliver_checked_limited(
+                &value,
+                MAX_ENVELOPE_OUTPUT,
+                &mut output,
+                || {
+                    checks.set(checks.get() + 1);
+                    if checks.get() == point {
+                        Err("current original Read or resource generation revoked".into())
+                    } else {
+                        Ok(())
+                    }
+                },
+                || Ok(())
+            )
+            .is_err());
+            assert!(output.bytes.len() <= (point - 1) * 4096);
+        }
+        let mut output = sink();
+        assert!(deliver_checked_limited(
+            &value,
+            MAX_ENVELOPE_OUTPUT + 1,
+            &mut output,
+            || Ok(()),
+            || Ok(())
+        )
+        .is_err());
+        assert!(output.bytes.is_empty());
+    }
+
+    #[test]
     fn immutable_metadata_does_not_return_content_or_advertise_approval() {
         let version = version(b"private unique content\n");
         let value = version_result(&version, None).unwrap();
@@ -2962,6 +3325,9 @@ mod tests {
         let capture = input();
         let prior = plan(&capture, None, &mut NoAuthority).unwrap();
         for operation in [
+            Operation::Envelope {
+                expected: reference(),
+            },
             Operation::CollectionSearch {
                 expected: reference(),
                 query: "word".into(),

@@ -706,6 +706,7 @@ pub(crate) struct Manager {
     acquisition_bindings: BTreeMap<String, (AcquisitionProfile, String)>,
     acquisition_authority: Option<crate::service::granted_acquisition::Authority>,
     content_admin: Option<crate::service::content_admin::Authority>,
+    content_output: Option<crate::service::content_output::Authority>,
     requests: requests::Gate,
     gateway: Option<requests::gateway::Job>,
     gateway_ready: Option<Token>,
@@ -794,6 +795,60 @@ fn custody_unit() -> Result<()> {
 }
 
 impl Manager {
+    pub(crate) fn register_content_output(
+        &mut self,
+        request: &crate::service::content_output::Request,
+        authority: crate::service::content_output::Authority,
+    ) -> Result<serde_json::Value> {
+        request.validate()?;
+        request.descriptor.ledger(&self.store.read()?)?;
+        if self
+            .content_output
+            .as_mut()
+            .is_some_and(|value| value.check().is_err())
+        {
+            self.content_output = None;
+        }
+        if self.content_output.is_some() {
+            return Err("a private content output original operation is already live".into());
+        }
+        self.content_output = Some(authority);
+        Ok(
+            serde_json::json!({"schema_version":1,"result":"ok","request_id":request.request_id,"job":request.job}),
+        )
+    }
+    pub(crate) fn content_output_guard(
+        &mut self,
+        request: &crate::service::content_output::Guard,
+        peer: libc::ucred,
+        pin: File,
+    ) -> Result<crate::finite_grants::Audit> {
+        request.validate()?;
+        custody_unit()?;
+        if peer.uid != 0 || peer.gid != 0 || peer.pid <= 0 {
+            return Err("content output guard requires fixed custody service".into());
+        }
+        let generation = peer::live_generation(peer, &pin)?;
+        let path = Path::new("/proc").join(peer.pid.to_string());
+        let start = peer::custody_generation(|name, bound| safe_text(&path.join(name), bound))?;
+        if generation.0 != start {
+            return Err("content output custody generation differs".into());
+        }
+        request.descriptor.ledger(&self.store.read()?)?;
+        let audit = self
+            .content_output
+            .as_mut()
+            .ok_or("private content output original operation absent")?
+            .guard(request)?;
+        request.descriptor.ledger(&self.store.read()?)?;
+        if peer::live_generation(peer, &pin)? != generation
+            || peer::custody_generation(|name, bound| safe_text(&path.join(name), bound))? != start
+        {
+            return Err("content output custody service changed during original proof".into());
+        }
+        request.validate()?;
+        Ok(audit)
+    }
     pub(crate) fn register_content_admin(
         &mut self,
         request: &crate::service::content_admin::Request,
@@ -997,6 +1052,7 @@ impl Manager {
             acquisition_bindings: BTreeMap::new(),
             acquisition_authority: None,
             content_admin: None,
+            content_output: None,
             requests,
             gateway: None,
             gateway_ready: None,
@@ -1006,6 +1062,13 @@ impl Manager {
     }
 
     pub(crate) fn maintain(&mut self) -> Result<()> {
+        if self
+            .content_output
+            .as_mut()
+            .is_some_and(|value| value.check().is_err())
+        {
+            self.content_output = None;
+        }
         if self
             .content_admin
             .as_mut()

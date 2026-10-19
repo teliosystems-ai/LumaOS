@@ -13,6 +13,7 @@ const MAX_FRAME: usize = 16384;
 const FRAME_TIMEOUT: Duration = Duration::from_secs(2);
 
 pub(crate) mod content_admin;
+pub(crate) mod content_output;
 pub(crate) mod granted_acquisition;
 pub(crate) mod granted_gateway;
 mod ingress;
@@ -389,6 +390,35 @@ pub fn serve() -> Result<()> {
                             return crate::utc_windows::broker_time(
                                 &incoming.stream,
                                 &incoming.bytes,
+                            );
+                        }
+                        if envelope.get("action").and_then(|v| v.as_str())
+                            == Some("resource-content-output-open")
+                        {
+                            let request: content_output::Request =
+                                serde_json::from_slice(&incoming.bytes)?;
+                            let authority =
+                                content_output::Authority::capture(&incoming.stream, &request)?;
+                            return manager
+                                .as_mut()
+                                .ok_or("resource manager unavailable in this session")?
+                                .register_content_output(&request, authority);
+                        }
+                        if envelope.get("action").and_then(|v| v.as_str())
+                            == Some("resource-content-output-guard")
+                        {
+                            let request: content_output::Guard =
+                                serde_json::from_slice(&incoming.bytes)?;
+                            let audit = manager
+                                .as_mut()
+                                .ok_or("resource manager unavailable in this session")?
+                                .content_output_guard(
+                                    &request,
+                                    peer,
+                                    peer_pidfd(&incoming.stream)?,
+                                )?;
+                            return Ok(
+                                serde_json::json!({"schema_version":1,"result":"ok","request_id":request.request_id,"audit":audit}),
                             );
                         }
                         if envelope.get("action").and_then(|v| v.as_str())

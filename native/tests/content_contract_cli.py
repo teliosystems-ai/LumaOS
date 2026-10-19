@@ -239,6 +239,7 @@ class ContentContractCli(unittest.TestCase):
             content_sha256='a' * 64, receipt_sha256='b' * 64)
         for operation in [dict(kind='current', artifact_id='document-one'),
                 dict(kind='historical', expected=reference),
+                dict(kind='envelope', expected=reference),
                 dict(kind='page', expected=reference, offset=0, bytes=16384),
                 dict(kind='search', query='fox blue', limit=32)]:
             request = dict(schema_version=1, login='alice', binding=self.binding(), operation=operation)
@@ -248,6 +249,8 @@ class ContentContractCli(unittest.TestCase):
             self.assertEqual(output['request_sha256'],
                 hashlib.sha256(output['canonical_request'].encode()).hexdigest())
         for operation in [dict(kind='page', expected=reference, offset=0, bytes=16385),
+                dict(kind='envelope', expected=dict(reference, version=0)),
+                dict(kind='envelope', expected=reference, output_bytes=12615680),
                 dict(kind='search', query='fox', limit=33),
                 dict(kind='search', query='https://example.invalid', limit=1)]:
             self.invoke('native-request', dict(schema_version=1, login='alice',

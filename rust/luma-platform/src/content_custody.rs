@@ -33,6 +33,9 @@ mod admin;
 mod backup;
 #[path = "content_custody/bootstrap.rs"]
 mod bootstrap;
+#[path = "content_custody/capacity.rs"]
+mod capacity;
+pub(crate) use capacity::policy as restore_capacity_policy;
 #[path = "content_custody/genesis.rs"]
 mod genesis;
 #[path = "content_custody/lifecycle.rs"]
@@ -59,7 +62,7 @@ pub(crate) use backup::Receipt as BackupReceipt;
 pub(crate) use bootstrap::command as bootstrap_command;
 pub(crate) use genesis::{retain_genesis_statement, validate_genesis_at};
 pub(crate) use protocol::{
-    backup_cut, backup_receipt, preparation_cut, publish, quarantine, recovery_cut,
+    backup_cut, backup_receipt, check_output, preparation_cut, publish, quarantine, recovery_cut,
     restore_preparation_cut, restore_publish, restore_start, restore_status, run, selected,
     GuardRequest,
 };
@@ -1092,6 +1095,9 @@ impl<A: Checkpoint> Store<A> {
         next.events.push(entry);
         let next_bytes = next.bytes()?;
         let next_state = next.validate()?;
+        // Promises are reconstructed from the same protected candidate cut.
+        // Refuse before creating PREPARED or attempting any TPM dispatch.
+        capacity::admit(&next, &next_state)?;
         let prepared = Prepared {
             schema_version: 1,
             purpose: "luma-content-custody-prepared-v1".into(),

@@ -156,7 +156,7 @@ namespace Luma.Windows.Hosted
         }
     }
 
-    public enum JournalKind : byte { Commission=1,ImportPrepared=2,Imported=3,ActivationPrepared=4,Activated=5,UpdatePrepared=6,RollbackPrepared=7,Cancelled=8,ControllerStarted=9,ControllerCompleted=10,NvWriteAborted=11,TrustChanged=12,TrustPrepared=13,TrustCancelled=14,RuntimePrepared=15,RuntimeActivated=16,RuntimeCancelled=17 }
+    public enum JournalKind : byte { Commission=1,ImportPrepared=2,Imported=3,ActivationPrepared=4,Activated=5,UpdatePrepared=6,RollbackPrepared=7,Cancelled=8,ControllerStarted=9,ControllerCompleted=10,NvWriteAborted=11,TrustChanged=12,TrustPrepared=13,TrustCancelled=14,RuntimePrepared=15,RuntimeActivated=16,RuntimeCancelled=17,FileEnrolled=18,FileEnrollmentRevoked=19 }
     public sealed class JournalEntry
     {
         public ulong Sequence {get;private set;}
@@ -178,6 +178,7 @@ namespace Luma.Windows.Hosted
             if(actorSid!=identity.FirstAdminSid || (sequence==1)!=(kind==JournalKind.Commission) ||
                 (sequence==1 && (previousHead!=new string('0',64) || previousRecord!=new string('0',64))))
                 throw new SecurityException("Hosted journal actor/genesis differs from explicit commissioning.");
+            if(kind==JournalKind.FileEnrolled || kind==JournalKind.FileEnrollmentRevoked) FileEnrollmentRecord.Decode(payload).Envelope(identity,kind,previousHead);
             JournalEntry result=new JournalEntry {Sequence=sequence,Kind=kind,PreviousHead=previousHead,PreviousRecord=previousRecord,
                 ActorSid=actorSid,payload=Wire.Copy(payload,1,4096)};
             using(Wire.Writer writer=new Wire.Writer("luma-windows-hosted-journal-v1")) {
@@ -215,6 +216,7 @@ namespace Luma.Windows.Hosted
         public string Head {get;private set;}
         public string Record {get;private set;}
         public JournalEntry Last {get;private set;}
+        public EnrolledFileRegistry FileEnrollments {get;private set;}
         private readonly List<JournalEntry> entries=new List<JournalEntry>();
         public JournalEntry[] Entries {get{return entries.ToArray();}}
         private JournalHistory() {Head=new string('0',64);Record=new string('0',64);}
@@ -234,7 +236,7 @@ namespace Luma.Windows.Hosted
                 if(entry.Kind==JournalKind.NvWriteAborted) NvAbortEvent.Decode(identity,entry.Payload).Matches(entry);
                 result.entries.Add(entry);result.Last=entry;result.Sequence=entry.Sequence;result.Record=entry.RecordSha256;result.Head=entry.NextHead;
             }
-            check();return result;
+            result.FileEnrollments=EnrolledFileRegistry.Replay(identity,result,check);check();return result;
         }
         public RecoveryPhase Reconcile(AuthorityIdentity identity,byte[] pending,string observedHead)
         {

@@ -7,6 +7,7 @@ no GNOME Console early-return/DBus handoff is mistaken for command completion.
 """
 from __future__ import annotations
 
+from contextlib import contextmanager
 import json
 import hashlib
 import importlib.util
@@ -30,6 +31,8 @@ NATIVE = '/usr/libexec/luma-os/luma-platform'
 PAGE_BYTES = 16384
 MAX_ENVELOPE = 6 * 1024 * 1024 + 8192
 MAX_QUERY_OUTPUT = 65536
+MAX_ENVELOPE_OUTPUT = 2*MAX_ENVELOPE + 16384
+ENGINES = ('spreadsheet', 'document', 'diagram', 'animation')
 
 
 def encoded(value):
@@ -67,7 +70,7 @@ def proposal(value):
         if not isinstance(value[field], str) or (value[field] and not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.-]{0,127}', value[field])):
             raise ValueError('invalid finite grant identifier')
     operation = value['operation']
-    if operation in ('inspection', 'office-proposal', 'paged-read'):
+    if operation in ('inspection', 'office-proposal', 'paged-read', 'envelope-read', 'workflow-journey'):
         if any(value[field] for field in ('read_grant', 'effect_grant', 'approval')):
             raise ValueError('inspection cannot select effect authority')
     elif operation == 'review':
@@ -92,28 +95,94 @@ def proposal(value):
         raise ValueError('request and original human login differ')
     if operation == 'paged-read':
         page_request(source)
+    elif operation == 'envelope-read':
+        envelope_request(source)
+    elif operation == 'workflow-journey':
+        workflow_request(source)
     return value
 
 
-def page_request(source):
-    """Closed data selector only; current owner/grant checks remain native."""
+def owner_request(source):
+    """Validate descriptive identity syntax without establishing an account."""
     if not isinstance(source, dict) or set(source) != {'schema_version', 'login', 'binding', 'operation'} or type(source['schema_version']) is not int or source['schema_version'] != 1:
         raise ValueError('exact native page request required')
     if not isinstance(source['login'], str) or not re.fullmatch(r'[a-z][a-z0-9_-]{0,31}', source['login']):
         raise ValueError('explicit native human login required')
-    binding, operation = source['binding'], source['operation']
+    binding = source['binding']
     if not isinstance(binding, dict) or set(binding) != {'installation', 'owner', 'owner_generation'}:
         raise ValueError('exact owner generation required')
     if any(not isinstance(binding[key], str) or not re.fullmatch(r'[0-9a-f]{64}', binding[key]) or binding[key] == '0'*64 for key in ('installation', 'owner')) or type(binding['owner_generation']) is not int or not 1 <= binding['owner_generation'] <= 2**64-1:
         raise ValueError('invalid owner binding')
-    if not isinstance(operation, dict) or set(operation) != {'kind', 'expected', 'offset', 'bytes'} or operation['kind'] != 'page' or type(operation['offset']) is not int or operation['offset'] != 0 or type(operation['bytes']) is not int or operation['bytes'] != PAGE_BYTES:
-        raise ValueError('paged journey starts at zero with the fixed 16-KiB page bound')
-    reference = operation['expected']
+    return source
+
+
+def reference_data(reference):
     if not isinstance(reference, dict) or set(reference) != {'artifact_id', 'version', 'content_sha256', 'receipt_sha256'} or not isinstance(reference['artifact_id'], str) or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.-]{0,127}', reference['artifact_id']) or type(reference['version']) is not int or not 1 <= reference['version'] <= 2**64-1:
         raise ValueError('exact grounded immutable reference required')
     if any(not isinstance(reference[key], str) or not re.fullmatch(r'[0-9a-f]{64}', reference[key]) or reference[key] == '0'*64 for key in ('content_sha256', 'receipt_sha256')):
         raise ValueError('immutable reference requires exact content and receipt digests')
+    return reference
+
+
+def page_request(source):
+    """Closed data selector only; current owner/grant checks remain native."""
+    owner_request(source)
+    operation = source['operation']
+    if not isinstance(operation, dict) or set(operation) != {'kind', 'expected', 'offset', 'bytes'} or operation['kind'] != 'page' or type(operation['offset']) is not int or operation['offset'] != 0 or type(operation['bytes']) is not int or operation['bytes'] != PAGE_BYTES:
+        raise ValueError('paged journey starts at zero with the fixed 16-KiB page bound')
+    reference_data(operation['expected'])
     return source
+
+
+def envelope_request(source):
+    owner_request(source)
+    operation = source['operation']
+    if not isinstance(operation, dict) or set(operation) != {'kind', 'expected'} or operation['kind'] != 'envelope':
+        raise ValueError('exact complete-envelope selector required')
+    reference_data(operation['expected'])
+    return source
+
+
+def workflow_request(source):
+    owner_request(source)
+    operation = source['operation']
+    if not isinstance(operation, dict) or set(operation) != {'kind', 'request'} or operation['kind'] != 'workflow':
+        raise ValueError('only the fixed image managed workflow is supported')
+    value = operation['request']
+    if not isinstance(value, dict) or set(value) != {'schema_version', 'request_id', 'artifact_id', 'expected', 'engine', 'source'} or type(value['schema_version']) is not int or value['schema_version'] != 1:
+        raise ValueError('closed managed workflow request required')
+    for field in ('request_id', 'artifact_id'):
+        if not isinstance(value[field], str) or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.-]{0,127}', value[field]):
+            raise ValueError('explicit bounded artifact and stable request identifiers required')
+    if value['expected'] is not None:
+        reference_data(value['expected'])
+        if value['expected']['artifact_id'] != value['artifact_id']:
+            raise ValueError('managed workflow base belongs to another artifact')
+    if value['engine'] not in ENGINES or not isinstance(value['source'], str) or not 0 < len(value['source'].encode('utf-8')) <= 1024*1024:
+        raise ValueError('bounded deterministic engine source required')
+    if not isinstance(strict_json(value['source']), dict):
+        raise ValueError('engine source must be a closed native JSON object')
+    return source
+
+
+def exact_sha(value):
+    return isinstance(value, str) and re.fullmatch(r'[0-9a-f]{64}', value) is not None and value != '0'*64
+
+
+def checked_envelope(data, source, commitment):
+    """Self-consistent selected DATA, never fresh ownership or permission."""
+    if len(data) != commitment[0] or hashlib.sha256(data).hexdigest() != commitment[1]:
+        raise ValueError('assembled whole-envelope digest differs')
+    envelope = strict_json(data)
+    if not isinstance(envelope, dict) or set(envelope) != {'receipt', 'receipt_sha256', 'content'} or not isinstance(envelope['receipt'], dict):
+        raise ValueError('complete envelope schema differs')
+    receipt, reference = envelope['receipt'], source['operation']['expected']
+    if not same_data(receipt.get('binding'), source['binding']) or receipt.get('artifact_id') != reference['artifact_id'] or type(receipt.get('version')) is not int or receipt['version'] != reference['version'] or receipt.get('content_sha256') != reference['content_sha256'] or envelope['receipt_sha256'] != reference['receipt_sha256'] or receipt.get('format') != commitment[2]:
+        raise ValueError('whole-envelope owner/reference differs from the selected generation')
+    content = envelope['content']
+    if not isinstance(content, str) or len(content.encode('utf-8')) > 1024*1024 or type(receipt.get('content_bytes')) is not int or receipt['content_bytes'] != len(content.encode('utf-8')) or hashlib.sha256(content.encode('utf-8')).hexdigest() != reference['content_sha256'] or hashlib.sha256(encoded(receipt)).hexdigest() != reference['receipt_sha256']:
+        raise ValueError('whole-envelope content or exact receipt digest differs')
+    return data
 
 
 class PagedEnvelope:
@@ -163,19 +232,7 @@ class PagedEnvelope:
         if self.failed or not self.eof or self.commitment is None:
             raise ValueError('no complete verified envelope')
         try:
-            if len(self.data) != self.commitment[0] or hashlib.sha256(self.data).hexdigest() != self.commitment[1]:
-                raise ValueError('assembled whole-envelope digest differs')
-            envelope = strict_json(bytes(self.data))
-            if not isinstance(envelope, dict) or set(envelope) != {'receipt', 'receipt_sha256', 'content'} or not isinstance(envelope['receipt'], dict):
-                raise ValueError('complete envelope schema differs')
-            receipt = envelope['receipt']
-            reference = self.source['operation']['expected']
-            if not same_data(receipt.get('binding'), self.source['binding']) or receipt.get('artifact_id') != reference['artifact_id'] or type(receipt.get('version')) is not int or receipt['version'] != reference['version'] or receipt.get('content_sha256') != reference['content_sha256'] or envelope['receipt_sha256'] != reference['receipt_sha256'] or receipt.get('format') != self.commitment[2]:
-                raise ValueError('whole-envelope owner/reference differs from the selected generation')
-            content = envelope['content']
-            if not isinstance(content, str) or len(content.encode('utf-8')) > 1024*1024 or type(receipt.get('content_bytes')) is not int or receipt['content_bytes'] != len(content.encode('utf-8')) or hashlib.sha256(content.encode('utf-8')).hexdigest() != reference['content_sha256'] or hashlib.sha256(encoded(receipt)).hexdigest() != reference['receipt_sha256']:
-                raise ValueError('whole-envelope content or exact receipt digest differs')
-            return bytes(self.data)
+            return checked_envelope(bytes(self.data), self.source, self.commitment)
         except BaseException:
             self.failed = True
             self.data.clear()
@@ -191,6 +248,13 @@ def capture_query(arguments, *, maximum=MAX_QUERY_OUTPUT, timeout=40):
     prefix = ['/usr/bin/sudo', '--', NATIVE, 'granted-run']
     if arguments[:4] != prefix or len(arguments) not in (7, 8) or arguments[4] not in ('content-owned-inspection-review', 'content-owned-review') or (arguments[4] == 'content-owned-inspection-review') != (len(arguments) == 7) or maximum != MAX_QUERY_OUTPUT or type(timeout) not in (int, float) or not 0 < timeout <= 40:
         raise ValueError('only the closed native paged-read commands can be captured')
+    return _capture_native(arguments, maximum, timeout)
+
+
+def _capture_native(arguments, maximum, timeout=40):
+    """Private transport; callers select closed native commands before entry."""
+    if maximum not in (MAX_QUERY_OUTPUT, MAX_ENVELOPE_OUTPUT) or type(timeout) not in (int, float) or not 0 < timeout <= 40:
+        raise ValueError('native response exceeds the fixed terminal observation budget')
     selector = selectors.DefaultSelector()
     process = None
     data = bytearray()
@@ -266,8 +330,8 @@ def protected(path, maximum, *, sudo=False):
 
 def terminal_arguments(value, path):
     value = proposal(value)
-    if value['operation'] == 'paged-read':
-        raise ValueError('paged read requires independent per-page inspection and grant selection')
+    if value['operation'] in ('paged-read', 'envelope-read', 'workflow-journey'):
+        raise ValueError('managed journeys require their explicit review and fresh grant steps')
     prefix = ['/usr/bin/sudo', '--', NATIVE, 'granted-run']
     if value['operation'] == 'office-proposal':
         return prefix + ['content-office-export-proposal', value['login'], str(path)]
@@ -310,6 +374,395 @@ def canonical_native_request(value):
     if state != 'completed' or not output:
         raise ValueError('native canonical request did not complete')
     return canonical_response(value, output), host
+
+
+@contextmanager
+def request_stage(directory, canonical):
+    """One exact inert request, removed only if its inode was not substituted."""
+    path = directory / (uuid.uuid4().hex + '.request')
+    identity = None
+    try:
+        descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
+        with os.fdopen(descriptor, 'wb') as output:
+            data = canonical.encode('utf-8')
+            if not 0 < len(data) <= MAX_REQUEST:
+                raise ValueError('exact terminal request exceeds bound')
+            output.write(data)
+            output.flush()
+            os.fsync(output.fileno())
+            item = os.fstat(output.fileno())
+            identity = item.st_dev, item.st_ino
+        yield path
+    finally:
+        try:
+            item = path.lstat()
+            if identity == (item.st_dev, item.st_ino):
+                path.unlink()
+        except FileNotFoundError:
+            pass
+
+
+def finite_scope(value, source, action, kind, identifier, output_bytes=MAX_QUERY_OUTPUT):
+    if not isinstance(value, dict) or set(value) != {'action', 'selector', 'input_bytes', 'output_bytes', 'units'} or value['action'] != action or type(value['input_bytes']) is not int or value['input_bytes'] != MAX_REQUEST or type(value['output_bytes']) is not int or value['output_bytes'] != output_bytes or type(value['units']) is not int or value['units'] != 1:
+        raise ValueError('native scope differs from the exact finite operation')
+    selector = value['selector']
+    if not isinstance(selector, dict) or set(selector) != {'kind', 'id', 'generation', 'digest'} or selector['kind'] != kind or selector['id'] != identifier or type(selector['generation']) is not int or selector['generation'] != source['binding']['owner_generation'] or not exact_sha(selector['digest']):
+        raise ValueError('native scope substitutes its principal generation or selector')
+    return value
+
+
+def owner_inspection(output, source, *, envelope=False):
+    value = strict_json(output)
+    if not isinstance(value, dict) or set(value) != {'schema_version', 'inspection_usage', 'query_only', 'private_content_read', 'grant_issued', 'committed'} or type(value['schema_version']) is not int or value['schema_version'] != 1 or value['query_only'] is not envelope or any(value[key] is not False for key in ('private_content_read', 'grant_issued', 'committed')):
+        raise ValueError('native owner inspection response differs')
+    return finite_scope(value['inspection_usage'], source, 'file.read', 'file',
+                        'native-content-envelope-v1' if envelope else 'native-content-inspect-v1',
+                        MAX_ENVELOPE_OUTPUT if envelope else MAX_QUERY_OUTPUT)
+
+
+def native_calculation(engine, source, host):
+    """Actually run the pinned deterministic engine; never claim publication."""
+    value = host.request(dict(schema_version=1, id='terminal-native-calculation', operation='preview', engine=engine, source=source))
+    command, payload = host.invocation(value)
+    binary = host.PinnedExecutable(Path(NATIVE))
+    try:
+        state, output = host.run_process(binary, command, payload, threading.Event(), lambda _: None)
+    finally:
+        binary.close()
+    if state != 'completed' or not output:
+        raise ValueError('actual deterministic recalculation did not complete')
+    result = host.validate_result(value, output)
+    rendered = result['calculation' if engine == 'spreadsheet' else 'rendering']
+    if engine == 'animation':
+        content = encoded([dict(index=frame['index'], canonical_svg=frame['canonical_svg'], svg_sha256=frame['svg_sha256']) for frame in rendered['frames']])
+        digest = rendered['frames_sha256']
+        media_type = 'application/vnd.luma.sampled-svg-frames+json'
+    else:
+        key, sha, media_type = {'spreadsheet': ('canonical_csv', 'csv_sha256', 'text/csv; charset=utf-8'),
+            'document': ('canonical_html', 'html_sha256', 'text/html; charset=utf-8'),
+            'diagram': ('canonical_svg', 'svg_sha256', 'image/svg+xml')}[engine]
+        content, digest = rendered[key].encode('utf-8'), rendered[sha]
+    derivation = dict(engine=engine, implementation=rendered['engine'], canonical_source_sha256=rendered['source_sha256'],
+                      output_sha256=digest, output_bytes=len(content), media_type=media_type)
+    return result, derivation
+
+
+def reviewed_workflow(source, calculation, output):
+    """Check DATA relationships from the actual live native review pipe."""
+    value = strict_json(output)
+    fields = {'schema_version', 'approval', 'review_sha256', 'decision', 'resulting', 'derivation', 'source_bytes', 'storage_bytes',
+              'inspection_usage', 'effect_usage', 'committed', 'authority_returned', 'provenance_authority', 'workflow_executed'}
+    if not isinstance(value, dict) or set(value) != fields or type(value['schema_version']) is not int or value['schema_version'] != 1 or any(value[key] is not False for key in ('committed', 'authority_returned', 'provenance_authority', 'workflow_executed')):
+        raise ValueError('native workflow review schema or authority claims differ')
+    decision = value['decision']
+    if decision not in ('published', 'conflict-retained', 'no-change-retained') or not exact_sha(value['review_sha256']) or value['approval'] != ('write:' if decision == 'published' else 'retain:') + value['review_sha256'] or not same_data(value['derivation'], calculation):
+        raise ValueError('workflow review differs from the actual engine or exact effect decision')
+    request = source['operation']['request']
+    reference = reference_data(value['resulting'])
+    if reference['artifact_id'] != request['artifact_id'] or (decision == 'published' and reference['version'] != (1 if request['expected'] is None else request['expected']['version']+1)) or (decision == 'no-change-retained' and not same_data(reference, request['expected'])) or (decision == 'conflict-retained' and (request['expected'] is None or same_data(reference, request['expected']))):
+        raise ValueError('workflow review substitutes its exact expected version or conflict')
+    if type(value['source_bytes']) is not int or not 0 < value['source_bytes'] <= MAX_REQUEST or type(value['storage_bytes']) is not int or not 8192 <= value['storage_bytes'] <= 24*1024*1024:
+        raise ValueError('workflow reviewed storage/source exceeds the native admission bound')
+    finite_scope(value['inspection_usage'], source, 'file.read', 'file', 'native-content-inspect-v1')
+    finite_scope(value['effect_usage'], source, 'artifact.write' if decision == 'published' else 'resource.retention', 'artifact', 'native-content-store-v1')
+    if value['inspection_usage']['selector']['digest'] != value['effect_usage']['selector']['digest']:
+        raise ValueError('workflow Read/effect pair binds different acquisitions')
+    return value
+
+
+def completed_workflow(source, review, output):
+    """Validate a compact actual-command result, not a portable authority token."""
+    value = strict_json(output)
+    if not isinstance(value, dict) or set(value) != {'schema_version', 'outcome', 'derivation', 'workflow_checkpoint', 'committed', 'authority_returned', 'provenance_authority', 'workflow_executed'} or type(value['schema_version']) is not int or value['schema_version'] != 1 or value['committed'] is not True or value['workflow_executed'] is not True or value['authority_returned'] is not False or value['provenance_authority'] is not False:
+        raise ValueError('no exact C-backed native workflow completion was observed')
+    request, outcome, checkpoint = source['operation']['request'], value['outcome'], value['workflow_checkpoint']
+    if not isinstance(outcome, dict) or set(outcome) != {'sequence', 'request_id', 'review_sha256', 'decision', 'resulting', 'source_sha256', 'source_kind', 'replayed'} or type(outcome['sequence']) is not int or not 1 <= outcome['sequence'] <= 256 or type(outcome['replayed']) is not bool or outcome['request_id'] != request['request_id'] or outcome['review_sha256'] != review['review_sha256'] or outcome['decision'] != review['decision'] or not same_data(outcome['resulting'], review['resulting']) or outcome['source_kind'] != 'managed-render-intent':
+        raise ValueError('native workflow outcome substitutes the actual reviewed request')
+    if outcome['sequence'] < review['resulting']['version'] + (0 if outcome['decision'] == 'published' else 1):
+        raise ValueError('native workflow ordinal precedes its required published history')
+    checkpoint_fields = {'schema_version', 'profile', 'workflow_sha256', 'binding', 'request_id', 'review_sha256',
+                         'original_intent_sha256', 'derivation', 'record_sha256', 'protected_outcome', 'outcome'}
+    if not isinstance(checkpoint, dict) or set(checkpoint) != checkpoint_fields or type(checkpoint['schema_version']) is not int or checkpoint['schema_version'] != 1 or checkpoint['profile'] != 'native-content-engine-v1' or not exact_sha(checkpoint['workflow_sha256']) or not exact_sha(checkpoint['record_sha256']) or not same_data(checkpoint['binding'], source['binding']) or checkpoint['request_id'] != request['request_id'] or checkpoint['review_sha256'] != review['review_sha256'] or not same_data(checkpoint['outcome'], outcome) or not same_data(checkpoint['derivation'], review['derivation']) or not same_data(value['derivation'], review['derivation']):
+        raise ValueError('native compact checkpoint is not bound to its reviewed engine and outcome')
+    intent = dict(binding=source['binding'], artifact_id=request['artifact_id'], expected=request['expected'],
+                  metadata=dict(request_id=request['request_id'], workflow_sha256=checkpoint['workflow_sha256']),
+                  engine=request['engine'], source=request['source'])
+    intent_sha = hashlib.sha256(encoded(intent)).hexdigest()
+    if checkpoint['original_intent_sha256'] != intent_sha or outcome['source_sha256'] != intent_sha:
+        raise ValueError('native checkpoint substitutes exact original workflow source')
+    protected = checkpoint['protected_outcome']
+    if not isinstance(protected, dict) or set(protected) != {'binding', 'outcome_count', 'head_sha256', 'quarantine_sha256'} or not same_data(protected['binding'], source['binding']) or type(protected['outcome_count']) is not int or not outcome['sequence'] <= protected['outcome_count'] <= 256 or not exact_sha(protected['head_sha256']) or not exact_sha(protected['quarantine_sha256']):
+        raise ValueError('native checkpoint substitutes protected owner/history/retirement data')
+    return value
+
+
+def capture_workflow(value, path):
+    value = proposal(value)
+    if value['operation'] != 'apply' or value['read_grant'] == value['effect_grant']:
+        raise ValueError('workflow effect requires independent explicit Read and effect grants')
+    workflow_request(strict_json(value['request']))
+    return _capture_native(terminal_arguments(value, path), MAX_QUERY_OUTPUT)
+
+
+def capture_envelope(value, path):
+    value = proposal(value)
+    if value['operation'] != 'review':
+        raise ValueError('complete envelope requires original finite Read only')
+    envelope_request(strict_json(value['request']))
+    return _capture_native(terminal_arguments(value, path), MAX_ENVELOPE_OUTPUT)
+
+
+def whole_envelope_response(source, output):
+    if not isinstance(output, bytes) or not 0 < len(output) < MAX_ENVELOPE_OUTPUT:
+        raise ValueError('whole-envelope response exceeds its finite native allowance')
+    value = strict_json(output)
+    fields = {'schema_version', 'reference', 'format', 'envelope_bytes', 'envelope_sha256', 'canonical_envelope',
+              'content_delivered', 'committed', 'authority_returned', 'provenance_authority', 'workflow_executed', 'production_qualified'}
+    if not isinstance(value, dict) or set(value) != fields or type(value['schema_version']) is not int or value['schema_version'] != 1 or value['content_delivered'] is not True or any(value[key] is not False for key in ('committed', 'authority_returned', 'provenance_authority', 'workflow_executed', 'production_qualified')) or not same_data(value['reference'], source['operation']['expected']):
+        raise ValueError('whole-envelope response substitutes the exact reference or claims authority')
+    if type(value['envelope_bytes']) is not int or not 0 < value['envelope_bytes'] <= MAX_ENVELOPE or value['format'] not in ('utf8-text', 'csv', 'json') or not exact_sha(value['envelope_sha256']) or not isinstance(value['canonical_envelope'], str):
+        raise ValueError('whole-envelope metadata exceeds its exact bound')
+    return checked_envelope(value['canonical_envelope'].encode('utf-8'), source,
+                            (value['envelope_bytes'], value['envelope_sha256'], value['format']))
+
+
+def native_reopen(envelope, host):
+    value = dict(schema_version=1, id='owner-terminal-reopen', operation='reopen', source=envelope.decode('utf-8'),
+                 expected_envelope_sha256=hashlib.sha256(envelope).hexdigest())
+    command, payload = host.invocation(host.request(value))
+    binary = host.PinnedExecutable(Path(NATIVE))
+    try:
+        state, output = host.run_process(binary, command, payload, threading.Event(), lambda _: None)
+    finally:
+        binary.close()
+    if state != 'completed' or not output:
+        raise ValueError('complete native envelope reopen did not finish')
+    return host.validate_result(value, output)
+
+
+def terminal_line(prompt, maximum=128):
+    """Bound human control input; passwords remain entirely with native PAM."""
+    print(prompt, end='', flush=True)
+    text = sys.stdin.readline(maximum+1)
+    if not text:
+        raise EOFError()
+    if len(text.encode('utf-8')) > maximum or not text.endswith('\n'):
+        raise ValueError('terminal selection exceeds its explicit byte bound')
+    return text[:-1].removesuffix('\r').strip()
+
+
+def grant_selection(prompt):
+    value = terminal_line(prompt)
+    if value == 'q':
+        return None
+    if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.-]{0,127}', value):
+        raise ValueError('explicit finite grant ID required; no grant is inferred or cached')
+    return value
+
+
+def envelope_read(value, directory):
+    """Single exact native Read, including fresh current owner/C/output checks."""
+    value = proposal(value)
+    source = envelope_request(strict_json(value['request']))
+    inspect = dict(value, operation='inspection')
+    canonical, host = canonical_native_request(inspect)
+    inspect['request'] = canonical
+    source = envelope_request(strict_json(canonical))
+    with request_stage(directory, canonical) as path:
+        protected(NATIVE, 128*1024*1024)
+        scope = owner_inspection(capture_query(terminal_arguments(inspect, path)), source, envelope=True)
+        print('Exact immutable-envelope Read scope. The native command authenticates current owner and authority continuously during delivery:', flush=True)
+        print(json.dumps(scope, ensure_ascii=True, indent=2), flush=True)
+        grant = grant_selection('Finite Read grant ID for this exact envelope, or q to stop: ')
+        if grant is None:
+            print('Read stopped before private delivery. No publication or export requested.', flush=True)
+            return None
+        protected(NATIVE, 128*1024*1024)
+        result = capture_envelope(dict(inspect, operation='review', read_grant=grant), path)
+        envelope = whole_envelope_response(source, result)
+    reopened = native_reopen(envelope, host)
+    print('Fresh exact native read and complete-envelope reopen observed. The result is already delivered data, not permission for another read.', flush=True)
+    print(json.dumps(dict(binding=source['binding'], reference=source['operation']['expected'],
+        envelope_sha256=hashlib.sha256(envelope).hexdigest(), content=reopened['preview_content'],
+        publication_requested=False, export_requested=False, authority_returned=False), ensure_ascii=True, indent=2), flush=True)
+    return source, reopened, host
+
+
+def recalculate_owner(reopened, host):
+    if reopened['preview_format'] != 'json':
+        raise ValueError('recalculation requires a typed managed-engine JSON wrapper')
+    wrapper = strict_json(reopened['preview_content'])
+    if not isinstance(wrapper, dict) or set(wrapper) != {'schema_version', 'engine', 'source'} or type(wrapper['schema_version']) is not int or wrapper['schema_version'] != 1 or wrapper['engine'] not in ENGINES or not isinstance(wrapper['source'], dict):
+        raise ValueError('committed data is not an exact supported editable engine wrapper')
+    result, derivation = native_calculation(wrapper['engine'], encoded(wrapper['source']).decode('utf-8'), host)
+    print('Actual native deterministic recalculation from the freshly reopened source completed. This does not publish a version or execute another workflow.', flush=True)
+    print(json.dumps(dict(derivation=derivation, result=result, publication_requested=False,
+                         workflow_executed=False, authority_returned=False), ensure_ascii=True, indent=2), flush=True)
+    return wrapper, derivation
+
+
+def revised_source():
+    print('Enter revised engine JSON in this terminal. Finish with a line containing only END; q alone before any source cancels. Maximum 1 MiB and 16,384 lines.', flush=True)
+    lines, used = [], 0
+    for _ in range(16384):
+        line = sys.stdin.readline(1024*1024-used+1)
+        if not line:
+            raise EOFError()
+        if line.rstrip('\r\n') == 'END':
+            if not lines:
+                raise ValueError('empty engine JSON is not a valid recalculation request')
+            return ''.join(lines)
+        if not lines and line.rstrip('\r\n') == 'q':
+            return None
+        used += len(line.encode('utf-8'))
+        if used > 1024*1024:
+            raise ValueError('revised engine source exceeds the fixed byte bound')
+        lines.append(line)
+    raise ValueError('revised source exceeds the fixed line bound')
+
+
+def workflow_journey(value, directory):
+    """Reachable original-PAM review/approval/apply/read/recalculation journey.
+
+    Each command starts its own native session and finite grant checks. No
+    receipt supplied by the GUI or a prior invocation is accepted as authority.
+    """
+    value = proposal(value)
+    used_requests = set()
+    completed = None
+    effect_started = False
+    try:
+        for _ in range(16):
+            effect_started, completed = False, None
+            canonical, host = canonical_native_request(value)
+            value = dict(value, request=canonical)
+            source = workflow_request(strict_json(canonical))
+            request = source['operation']['request']
+            if request['request_id'] in used_requests:
+                raise ValueError('each additional edit requires its own explicitly selected request ID')
+            used_requests.add(request['request_id'])
+            _, calculation = native_calculation(request['engine'], request['source'], host)
+            print('Actual native engine preflight completed; no effect submitted. Source/output commitments:', flush=True)
+            print(json.dumps(calculation, ensure_ascii=True, indent=2), flush=True)
+            with request_stage(directory, canonical) as path:
+                inspect = dict(value, operation='inspection')
+                protected(NATIVE, 128*1024*1024)
+                scope = owner_inspection(capture_query(terminal_arguments(inspect, path)), source)
+                print('Initial finite Read scope for exact private workflow review:', flush=True)
+                print(json.dumps(scope, ensure_ascii=True, indent=2), flush=True)
+                grant = grant_selection('Review Read grant ID, or q before any effect: ')
+                if grant is None:
+                    print('Workflow round stopped before apply. No effect requested for this round; any earlier observed completions remain.', flush=True)
+                    return 130
+                protected(NATIVE, 128*1024*1024)
+                review = reviewed_workflow(source, calculation,
+                    capture_query(terminal_arguments(dict(inspect, operation='review', read_grant=grant), path)))
+                print('Exact native review, decision, separate apply Read/effect scopes and approval:', flush=True)
+                print(json.dumps(review, ensure_ascii=True, indent=2), flush=True)
+                read_grant = grant_selection('Apply Read grant ID for this reviewed pair, or q: ')
+                if read_grant is None:
+                    print('Workflow round stopped before apply. No effect requested for this round; any earlier observed completions remain.', flush=True)
+                    return 130
+                effect_grant = grant_selection('Independent finite effect grant ID for this pair, or q: ')
+                if effect_grant is None:
+                    print('Workflow round stopped before apply. No effect requested for this round; any earlier observed completions remain.', flush=True)
+                    return 130
+                if read_grant == effect_grant:
+                    raise ValueError('Read and effect grants must be explicitly independent')
+                approval = terminal_line('Type the exact displayed write:/retain:SHA approval, or q: ')
+                if approval == 'q':
+                    print('Workflow round stopped before apply. No effect requested for this round; any earlier observed completions remain.', flush=True)
+                    return 130
+                if approval != review['approval']:
+                    raise ValueError('approval differs from the actual exact native review')
+                print('Applying the exact reviewed intent. Interruption from this point may leave an anchored or partially published checkpoint; never assume rollback or auto-retry.', flush=True)
+                print(json.dumps(dict(request_id=request['request_id'], request_sha256=hashlib.sha256(canonical.encode('utf-8')).hexdigest(),
+                                     review_sha256=review['review_sha256'], expected=request['expected']), ensure_ascii=True, indent=2), flush=True)
+                apply = dict(inspect, operation='apply', read_grant=read_grant, effect_grant=effect_grant, approval=approval)
+                protected(NATIVE, 128*1024*1024)
+                effect_started = True
+                completed = completed_workflow(source, review, capture_workflow(apply, path))
+            decision = completed['outcome']['decision']
+            messages = {'published': 'Published: the actual native C-backed workflow completed and its exact version was reopened by the native worker.',
+                'conflict-retained': 'Conflict retained: the native workflow completed and retained the exact attempted intent. The current version was NOT replaced or automatically merged.',
+                'no-change-retained': 'No version change: the native workflow completed and retained this exact no-change intent; the immutable artifact reference remains unchanged.'}
+            print(messages[decision], flush=True)
+            print(json.dumps(completed, ensure_ascii=True, indent=2), flush=True)
+            choice = terminal_line('Type r for a separately granted fresh exact read/recalculation of the committed reference, or q to finish: ')
+            if choice == 'q':
+                return 0
+            if choice != 'r':
+                raise ValueError('explicit r or q selection required; no read inferred')
+            read_source = dict(schema_version=1, login=source['login'], binding=source['binding'],
+                               operation=dict(kind='envelope', expected=completed['outcome']['resulting']))
+            read_value = dict(value, operation='envelope-read', request=encoded(read_source).decode('utf-8'))
+            actual = envelope_read(read_value, directory)
+            if actual is None:
+                print('The workflow completion above remains observed; the separate private read was stopped.', flush=True)
+                return 0
+            actual_source, reopened, actual_host = actual
+            wrapper, derivation = recalculate_owner(reopened, actual_host)
+            if decision != 'conflict-retained' and not same_data(derivation, completed['derivation']):
+                raise ValueError('fresh published/no-change source recalculation differs from its native workflow commitment')
+            if decision == 'conflict-retained':
+                print('This recalculation is of the genuinely committed reference, not the retained unpublished conflicting candidate.', flush=True)
+            choice = terminal_line('Type e to enter a revised source for a NEW separately reviewed workflow, or q to finish: ')
+            if choice == 'q':
+                return 0
+            if choice != 'e':
+                raise ValueError('explicit e or q selection required; no edit inferred')
+            content = revised_source()
+            if content is None:
+                return 0
+            request_id = terminal_line('New stable request ID (retain it for reconciliation; never reuse a previous edit ID): ')
+            updated = dict(schema_version=1, request_id=request_id, artifact_id=actual_source['operation']['expected']['artifact_id'],
+                           expected=actual_source['operation']['expected'], engine=wrapper['engine'], source=content)
+            next_source = dict(schema_version=1, login=source['login'], binding=source['binding'], operation=dict(kind='workflow', request=updated))
+            value = dict(value, request=encoded(workflow_request(next_source)).decode('utf-8'))
+        print('Sixteen explicitly reviewed workflow rounds completed. Open a new terminal journey for further edits; no session/grant was retained.', flush=True)
+        return 0
+    except (KeyboardInterrupt, EOFError):
+        if completed is not None:
+            print('\nNative workflow completion was already observed. Subsequent read/recalculation/edit input stopped; no additional effect is inferred.', file=sys.stderr, flush=True)
+        elif effect_started:
+            print('\nApply interrupted: effect outcome is UNCERTAIN, possibly partially or fully committed. Inspect the exact original request/checkpoint before retry; no rollback or completion is claimed.', file=sys.stderr, flush=True)
+        else:
+            print('\nWorkflow round stopped before apply. No effect requested for this round; any earlier observed completions remain.', file=sys.stderr, flush=True)
+        return 130
+    except Exception:
+        if completed is not None:
+            print('Native workflow completion was already observed, but subsequent read/recalculation/input failed. Do not reapply as a substitute for inspecting that exact checkpoint.', file=sys.stderr, flush=True)
+        elif effect_started:
+            print('Native apply did not produce a validated complete result: outcome is UNCERTAIN, possibly partially or fully committed. Inspect the exact original request/checkpoint; no auto-retry, rollback or success is claimed.', file=sys.stderr, flush=True)
+        else:
+            print('Workflow review/input refused before apply. No effect requested for this round; any earlier observed completions remain.', file=sys.stderr, flush=True)
+        return 1
+
+
+def owner_read_journey(value, directory):
+    read_observed = False
+    try:
+        actual = envelope_read(value, directory)
+        if actual is None:
+            return 130
+        read_observed = True
+        _, reopened, host = actual
+        if reopened['preview_format'] == 'json':
+            wrapper = strict_json(reopened['preview_content'])
+            if isinstance(wrapper, dict) and wrapper.get('engine') in ENGINES:
+                choice = terminal_line('Type r to recalculate these already delivered editable source bytes without publication, or q to finish: ')
+                if choice == 'r':
+                    recalculate_owner(reopened, host)
+                elif choice != 'q':
+                    raise ValueError('explicit r or q required')
+        return 0
+    except (KeyboardInterrupt, EOFError):
+        print('Read journey interrupted. No publication or export requested. Already observed delivery, if any, cannot be recalled.', file=sys.stderr, flush=True)
+        return 130
+    except Exception:
+        print('Read/recalculation refused. No publication or export requested. ' +
+              ('The exact read was already observed; later calculation did not complete.' if read_observed else 'No complete verified read is claimed.'), file=sys.stderr, flush=True)
+        return 1
 
 
 def paged_read(value, directory):
@@ -522,6 +975,11 @@ def terminal(path):
     protected(NATIVE, 128 * 1024 * 1024)
     request_path = directory / (uuid.uuid4().hex + '.request')
     try:
+        if value['operation'] == 'workflow-journey':
+            print('Luma native managed workflow. Passwords remain with original PAM in this terminal; no session, grant or supplied receipt is imported.', flush=True)
+            return workflow_journey(value, directory)
+        if value['operation'] == 'envelope-read':
+            return owner_read_journey(value, directory)
         if value['operation'] == 'paged-read':
             print('Luma exact owner read. Passwords belong only to original native PAM in this terminal. Each page needs its own exact finite Read grant; q stops before that page.', flush=True)
             return paged_read(value, directory)

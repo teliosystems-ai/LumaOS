@@ -70,7 +70,8 @@ namespace Luma.Windows.Hosted
             for(int index=1;index<records.Length;index++) {
                 check();
                 if(records[index].Kind==JournalKind.NvWriteAborted || records[index].Kind==JournalKind.TrustChanged || records[index].Kind==JournalKind.TrustPrepared || records[index].Kind==JournalKind.TrustCancelled ||
-                    records[index].Kind==JournalKind.RuntimePrepared || records[index].Kind==JournalKind.RuntimeActivated || records[index].Kind==JournalKind.RuntimeCancelled) continue;
+                    records[index].Kind==JournalKind.RuntimePrepared || records[index].Kind==JournalKind.RuntimeActivated || records[index].Kind==JournalKind.RuntimeCancelled ||
+                    records[index].Kind==JournalKind.FileEnrolled || records[index].Kind==JournalKind.FileEnrollmentRevoked) continue;
                 JournalEntry record=records[index];DeploymentEvent value=DeploymentEvent.Decode(record.Payload);bool empty=value.Controller==0 && value.ObservationSha256==new string('0',64);
                 switch(record.Kind) {
                     case JournalKind.ImportPrepared:

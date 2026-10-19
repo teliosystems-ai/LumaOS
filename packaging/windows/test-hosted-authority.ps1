@@ -417,9 +417,9 @@ public static class LumaHostedLifecycleFixture {
     $serviceAssertions=[LumaHostedLifecycleFixture]::RunServiceLifetime()
     Assert-Hosted ($serviceAssertions -ge 18) 'Complete actual threaded service lifecycle software regressions did not run.'
     $script:HostedAssertions+=$serviceAssertions
-    Add-Type -ReferencedAssemblies @((Join-Path $build.work_directory 'Luma.HostedAuthority.Library.dll'),'System.dll','System.Core.dll','System.Security.dll') -Path (Join-Path $PSScriptRoot 'HostedAuthorityReadFixture.cs')
-    $readAssertions=[LumaHostedReadFixture]::Run([IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..')),$identity,$timeSigner)
-    Assert-Hosted ($readAssertions -ge 35) 'Complete actual read-only NTFS/session/wire mechanism regressions did not run.'
+    Add-Type -ReferencedAssemblies @((Join-Path $build.work_directory 'Luma.HostedAuthority.Library.dll'),'System.dll','System.Core.dll','System.Security.dll') -Path @((Join-Path $PSScriptRoot 'HostedAuthorityReadFixture.cs'),(Join-Path $PSScriptRoot 'HostedAuthorityEnrollmentFixture.cs'))
+    $readAssertions=[LumaHostedReadFixture]::Run([IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..')),$identity,$timeSigner,$fixtureSigner,$publisherSigner)
+    Assert-Hosted ($readAssertions -ge 80) 'Complete actual read-only NTFS/session/wire/persistent-enrollment mechanism regressions did not run.'
     $script:HostedAssertions+=$readAssertions
     $entry=[Luma.Windows.Hosted.JournalEntry]::Prepare($identity,1,[Luma.Windows.Hosted.JournalKind]::Commission,$zero,$zero,$sid,$identity.Encode())
     $entry=$entry.Signed($identity,$keys[2].Sign($entry.SigningInput))
@@ -583,7 +583,7 @@ public static class LumaHostedFrameFixture {
         build_directory=$build.work_directory;actual_ephemeral_bcrypt_signatures=$true;hardware_custody_invoked=$false;
         live_service_installed=$false;host_tpm_mutated=$false;distribution_imported=$false;actual_current_user_ntfs_identity_lease_fixture=$true;actual_threaded_service_lifecycle_software_tests=$true;
         installed_scm_stop_qualified=$false;installed_system_acl_qualified=$false;ntfs_durability_qualified=$false;
-        actual_read_only_ntfs_and_wire_mechanism_tests=$true;installed_authenticated_read_bridge_qualified=$false;persistent_file_enrollment=$false;linux_principal_mapping=$false;
+        actual_read_only_ntfs_and_wire_mechanism_tests=$true;signed_persistent_enrollment_software_tests=$true;installed_authenticated_read_bridge_qualified=$false;installed_persistent_enrollment_qualified=$false;linux_principal_mapping=$false;
         production_qualified=$false;gate_closing=$false} | ConvertTo-Json -Depth 8
 } finally {
     foreach ($key in $keys) {if ($null -ne $key) {$key.Dispose()}}

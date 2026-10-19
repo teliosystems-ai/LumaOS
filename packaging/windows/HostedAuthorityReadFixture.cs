@@ -44,7 +44,7 @@ public static class LumaHostedReadFixture
         byte[] hash;using(SHA256 sha=SHA256.Create()) hash=sha.ComputeHash(data,0,(int)offset);using(Wire.Writer writer=new Wire.Writer("luma-windows-hosted-read-ack-v1")) {writer.Fixed(Wire.Bytes(review,32,true),32);writer.Fixed(Wire.Bytes(source,32,true),32);writer.U32(offset);writer.Fixed(hash,32);return writer.Bytes();}
     }
     private static string[] Arguments(EnrolledReadIntent intent) {return new string[]{"read-enrolled-file",intent.Installation,intent.Root,intent.RelativePath,intent.Bytes.ToString(System.Globalization.CultureInfo.InvariantCulture),intent.Sha256};}
-    public static int Run(string workspace,AuthorityIdentity identity,Func<byte[],byte[]> timeSign)
+    public static int Run(string workspace,AuthorityIdentity identity,Func<byte[],byte[]> timeSign,Func<byte[],byte[]> authoritySign,Func<byte[],byte[]> publisherSign)
     {
         int assertions=0;string sid;using(WindowsIdentity current=WindowsIdentity.GetCurrent()) sid=current.User.Value;
         string parent=Path.Combine(Path.GetFullPath(workspace),".luma"),root=Path.Combine(parent,"windows-read-fixtures-"+Guid.NewGuid().ToString("N"));Directory.CreateDirectory(parent);
@@ -131,6 +131,7 @@ public static class LumaHostedReadFixture
             using(IDisposable client=(IDisposable)Create("HostedReadInputs",Arguments(intent),false)) {
                 Refuse(delegate {Call(client,"Reviewed",Review(intent,Wire.Join(snapshot,new byte[]{0})),review);});assertions++;
             }
+            stage="persistent enrollment history and actual missing/replaced source";assertions+=LumaHostedEnrollmentFixture.Run(workspace,identity,authoritySign,publisherSign,timeSign,intent,snapshot,content);
             Array.Clear(content,0,content.Length);return assertions;
         }catch(Exception error) {throw new Exception("Read fixture stage "+stage+": "+error.Message,error);}finally {
             string resolved=Path.GetFullPath(root);if(Path.GetDirectoryName(resolved)!=parent || !System.Text.RegularExpressions.Regex.IsMatch(Path.GetFileName(resolved),"\\Awindows-read-fixtures-[0-9a-f]{32}\\z")) throw new Exception("Refuse cleanup outside the exact disposable read fixture.");Directory.Delete(resolved,true);

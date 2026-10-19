@@ -14,6 +14,8 @@ pub(super) struct Start {
     profile: String,
     storage_device: String,
     original_authority: Audit,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    capacity: Option<super::capacity::Reservation>,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -34,7 +36,12 @@ impl Start {
         let review = self.review()?;
         self.receipt
             .check_data(&self.receipt.body.input, &self.receipt.body.encryption)?;
-        if self.schema_version != 1
+        let capacity_valid = match (self.schema_version, &self.capacity) {
+            (1, None) => true,
+            (2, Some(value)) => value == &super::capacity::Reservation::fixed(),
+            _ => false,
+        };
+        if !capacity_valid
             || self.purpose != "luma-content-fresh-owner-restore-start-v1"
             || self.input.target.installation != installation
             || review.target != self.input.target
@@ -251,13 +258,14 @@ impl<A: Checkpoint> Store<A> {
     ) -> Result<VerifiedState> {
         self.live(check)?;
         let entry = Start {
-            schema_version: 1,
+            schema_version: 2,
             purpose: "luma-content-fresh-owner-restore-start-v1".into(),
             input: input.clone(),
             receipt: receipt.clone(),
             profile: profile.into(),
             storage_device: device.into(),
             original_authority: audit.clone(),
+            capacity: Some(super::capacity::Reservation::fixed()),
         };
         entry.validate(&self.journal.installation)?;
         receipt.verify_origin(&input.independently_selected_origin_spki_sha256, check)?;

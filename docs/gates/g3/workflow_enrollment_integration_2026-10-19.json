@@ -1,0 +1,199 @@
+{
+  "schema_version": 1,
+  "recorded_on": "2026-10-19",
+  "branch": "feature/g3-gwin0-beta",
+  "status": "workflow-envelope-enrollment-and-logical-capacity-software-verified",
+  "implemented": [
+    "Native terminal workflow review, independent Read/effect selection, exact approval, C-backed completion, fresh read/reopen/recalculation and separately reviewed subsequent edits",
+    "Distinct published, conflict-retained, no-change, pre-dispatch cancellation and uncertain post-dispatch outcomes without automatic retry",
+    "Separate finite whole-envelope Read selector under the unchanged Standard 30-second session; ordinary queries remain bounded to 65536 bytes",
+    "Fresh original-controller broker admission and current C availability at each private delivery boundary after worker completion, without requiring Admin or reusing a dead worker's admission",
+    "Capability-free C service delegates current original-task credential observation to each fresh broker proof; no new ptrace permission or custody capability",
+    "Durable C restore reservations of 65536 bytes per remaining publication plus 8192 bytes for terminal disposition, enforced before preparation/NV extension",
+    "Persistent first-Admin Windows exact-file enrollment, supersession, missing-source revocation and current generation-selected acknowledged reads",
+    "Closed host-file-enrollment U source purpose; fresh original read sessions retain current UTC, token, NTFS object, owner and ACL checks",
+    "Shared Windows signed-journal admission preserves active revocation tails and history-derived finite abort spares across append, dispatch preparation and abort replacement"
+  ],
+  "source": {
+    "snapshot": "/mnt/luma-build/work/g3-integrated-source-20261019-h",
+    "files": 596,
+    "manifest_sha256": "071852af8ca8f23fd5960cdfc7d09719e3a39bb039499c174521010be9a3fc07",
+    "composed_verification": true,
+    "all_current_source_records_match": true,
+    "native_snapshot": "/mnt/luma-build/work/g3-integrated-source-20261019-g",
+    "native_files": 544,
+    "native_manifest_sha256": "f5a6d86970ae07d3b99fdadcc4f048c465bf521850d9c4ca0c7f955a65b571e8",
+    "native_records_identical_to_final_snapshot": true,
+    "windows_input_files": 52,
+    "windows_before_after_pins_unchanged": true,
+    "windows_records_identical_to_final_snapshot": true,
+    "unverified_final_source_records": 0
+  },
+  "native_verification": {
+    "evidence": "/mnt/luma-build/work/g3-native-verify-20261019-g",
+    "tools_image": "sha256:819dfe7772da1e3c76ffdc8f9ea4a1fa44c7c549bd4fa988e35d9397d87924b2",
+    "network": "none",
+    "maximum_memory_gib": 4,
+    "maximum_cpus": 2,
+    "fixture_storage": "private disposable ext4 on D-backed build volume",
+    "warnings_denied_workspace_all_targets_passed": true,
+    "check_log_sha256": "57c9649475ed85723ee579ac3362b042f519f6de57d087500771610709e03826",
+    "focused_groups": {
+      "content_checkpoint": 40,
+      "content_restore": 7,
+      "utc_windows": 9,
+      "content_governed": 44,
+      "content_workflow": 2,
+      "hosted_windows": 3,
+      "content_output": 2,
+      "resource_manager": 18,
+      "granted_gateway": 12,
+      "content_acquisition": 5
+    },
+    "focused_passed": 142,
+    "focused_failed": 0,
+    "focused_ignored": 0,
+    "whole_workspace_unit_suite_executed": false,
+    "unchanged_content_store_groups_rerun": false,
+    "offline_apparmor_policy_parse_passed": true,
+    "loaded_confinement_tested": false,
+    "actual_disposable_tpm_scenarios_passed": 3,
+    "tpm_scenarios": ["normal", "lost-publication", "lost-parent"],
+    "tpm_log_sha256": "52f9510cf651ddd851d393b966b204599f7ee5cbe4175c319196cb5451e2c722",
+    "actual_unprivileged_cli_passed": 30,
+    "cli_log_sha256": "8035d310efb4b6d544822d53b00f36b4e4476746183bb1a6bb2529657b70beae",
+    "actual_engine_reopen_recalculation_cases": 4,
+    "engines": ["spreadsheet", "document", "diagram", "animation"],
+    "workflow_cli_log": "workflow-cli-installed.log",
+    "workflow_cli_log_sha256": "b173fa612b97c6793867bda1450155e08e6bcaed240de1e6b9b44edee6ee4448",
+    "workflow_cli_owner_authenticated": false,
+    "workflow_cli_effects_executed": false,
+    "platform_binary_sha256": "a306389846be1b83293a16f37741104c8e79fb9f2ea1c78fe6c57ea241a69620",
+    "test_executable_is_single_link_root_protected_exact_byte_copy": true,
+    "build_log_sha256": "511da792738183f3759fb26ef82d8a10fc8f6345faf14f711186b201e8e109f9",
+    "logs_manifest_sha256": "214a76ac5208e9bbc00b1bfc8cd81416aef4cd40f9325d9d5a13cd80017701d9"
+  },
+  "native_source_verification": {
+    "evidence": "/mnt/luma-build/work/g3-native-source-20261019-g",
+    "passed": 610,
+    "failed": 0,
+    "skipped": 0,
+    "warnings_are_errors": true,
+    "log_sha256": "6260334cc37f78dba09ae8b35838239074b74f235d0b98047e31be7d284f5624",
+    "lane_sha256": "259c44533dbda67dac701992125163da5fda5ddd6c30a2db480d1e7e40f39179"
+  },
+  "repository_verification": {
+    "evidence": "/mnt/luma-build/work/g3-repository-verify-20261019-b/check.log",
+    "log_sha256": "6a4e1d4750717325c4270e2650d505c2ca2411fca85fe1bddc71bafa0ced0010",
+    "metadata_governing_sources_gate_and_repository_checks_passed": true,
+    "source_traced_requirements_verified": 288,
+    "release_inventory_files": 259,
+    "missing_tracked_release_inventory_entries_added": 83,
+    "release_inputs_and_developer_mvp_boundary_unchanged": true,
+    "release_manifest_worktree_sha256": "6c9cc024e24cf94997ce56f190f9fc79b41d84b662b5d5273cbc46b9f3f17463",
+    "linux_unit_tests_run": 320,
+    "linux_unit_tests_passed": 319,
+    "linux_unit_tests_failed": 0,
+    "linux_existing_windows_only_case_skipped": 1,
+    "same_windows_only_junction_case_executed_natively": true,
+    "native_windows_junction_case_passed": 1,
+    "native_windows_junction_case_skipped": 0,
+    "native_windows_junction_log": "D:\\LumaOS-builds\\g3-windows-junction-20261019-c\\test.log",
+    "native_windows_junction_log_sha256": "be7d522f5a2c0915a0fd22c1458cdd2404a4c4155f94876b3be0afd3f39508a8",
+    "junction_fixture_storage": "disposable current-workspace C NTFS fixture; D exFAT is unsuitable for junction semantics; build outputs/evidence remain D-backed"
+  },
+  "windows_verification": {
+    "report": "D:\\LumaOS-builds\\windows-journal-capacity-a2012c8cf30c4859b91e56e835853934\\verification.json",
+    "report_sha256": "e4c9c69b65b9e255a5c87b64f25250cef17dd286f9c2b70b11f436e41410070a",
+    "actual_assertions_passed": 337,
+    "tests_sha256": "b0b799db5f923a71ce47d7d416a128aa53dce84985116a20c23b9e0bbd527bd2",
+    "before_inputs_sha256": "4f672b156d2423d9cb85aaf46dc938504eda4d2cae49bf6d8656f15e801dd27d",
+    "warnings_as_errors_full_executable_build_passed": true,
+    "bundle_sha256": "c37327d126664b4242ce429d78418a30cbf4dc057991067698d63d8cfa2a209a",
+    "installer_review_only_passed": true,
+    "production_javascript_assertions_passed": 31,
+    "javascript_report": "D:\\LumaOS-builds\\g3-windows-verification-20261019-b\\verification.json",
+    "javascript_report_sha256": "663656d45082d9a8497360d95e2f48a471bfc2b206df6befe50d73f2c07c5a2c",
+    "all_three_javascript_input_records_match_final_snapshot": true,
+    "installed_persistent_enrollment_qualified": false,
+    "physical_space_reserved": false,
+    "private_namespace_capacity_reserved": false,
+    "unlimited_fault_recovery": false
+  },
+  "initial_failures": [
+    {
+      "evidence": "/mnt/luma-build/work/g3-repository-verify-20261019-a/check.log",
+      "sha256": "cdaeb7980ec2d698058a681d151bd9a1e485c4f8ffab76efdb3ded7c35e35035",
+      "cause": "Explicit source-release inventory omitted tracked G3/GWIN0 development files",
+      "resolution": "Add 83 missing tracked entries within the existing release-input/exclusion scope; preserve developer-MVP release boundary"
+    },
+    {
+      "evidence": "conversation tool transcript only; initial -c Windows junction harness invocation did not execute a test",
+      "cause": "PowerShell argument quoting removed Python string delimiters",
+      "resolution": "Invoke the file-based fixture; no production or test condition changed"
+    },
+    {
+      "evidence": "D:\\LumaOS-builds\\g3-windows-junction-20261019-b\\test.log",
+      "cause": "Existing junction case skipped on D exFAT because junctions are unavailable there",
+      "resolution": "Execute the unchanged case with disposable C-workspace NTFS fixtures; actual pass with zero skips"
+    },
+    {
+      "evidence": "/mnt/luma-build/work/g3-native-verify-20261019-d/check.log",
+      "sha256": "9d7f3a44461c1d1e0a9ce0d13f205270a501f6026b2568246c85726dc2803168",
+      "cause": "New test called private ResourceBudget inspection constructor",
+      "resolution": "Construct the public typed fixture explicitly; no production API or check changed"
+    },
+    {
+      "evidence": "/mnt/luma-build/work/g3-native-verify-20261019-e/check.log",
+      "sha256": "6f9acaed7f0bbcda73472fe325b25cf9a19c8dc6f349fac8109c74eaed4fa546",
+      "cause": "Capacity size fixture constructed a private restore Publication field",
+      "resolution": "Deserialize the closed typed fixture instead of widening production visibility"
+    },
+    {
+      "evidence": "/mnt/luma-build/work/g3-native-verify-20261019-f/focused-content_checkpoint--.log",
+      "sha256": "fbe263c2d0e761dabcd3d0afa34b9e4907ff6b20a327703ead48902dffdcead5",
+      "cause": "Worker-exit fixture used an explicit-revocation reason and correctly fenced its output",
+      "resolution": "Use the actual owner-lost exit lifecycle and separately assert explicit operator revocation still refuses"
+    },
+    {
+      "evidence": "/mnt/luma-build/work/g3-native-verify-20261019-g/workflow-cli.log",
+      "sha256": "6fea62f8007baee33072c69d57b6ef66e381c5a5b37b367e0f9646d218d0b793",
+      "cause": "Actual UI executable pin correctly refused Cargo's two-link binary",
+      "resolution": "Use a single-link root-protected fixture copy and verify byte equality; production pin checks unchanged"
+    },
+    {
+      "evidence": "D:\\LumaOS-builds\\windows-persistent-enrollment-2f2b1cea359d41b2924ded3f0598dae1\\software-tests.log",
+      "sha256": "dec540ef762d87a8db9d761d6dca50bdeb552866e584940896f736ba5da8f49c",
+      "cause": "Reflection test flattened its one string-array constructor argument",
+      "resolution": "Explicit object cast in test fixture only"
+    },
+    {
+      "evidence": "conversation tool transcript only; D:\\LumaOS-builds\\windows-journal-capacity-15ca9d66f2d4495ab5a534efe045644b retains only inputs-before.json",
+      "cause": "Near-capacity test padded history with an invalid cancellation event; full deployment replay refused it",
+      "resolution": "Use a valid public typed cancellation observation; no production replay check relaxed"
+    },
+    {
+      "evidence": "conversation tool transcript only; D:\\LumaOS-builds\\windows-journal-capacity-907eaac942dd4b93abcbfb4f0ceb7557 retains only inputs-before.json",
+      "cause": "Revised separate test fixture tried an internal production factory",
+      "resolution": "Use the existing public typed event constructor; production visibility unchanged"
+    }
+  ],
+  "remaining_development": [
+    "Authenticated bounded journal succession, physical storage/retained-attempt bounds and namespace-safe continuation; complete custody lifecycle and recovery journeys",
+    "Semantic collections/indexes and current per-result access policy beyond owner-local lexical discovery",
+    "Complete graphical/manual/conversational, accessibility, capture, edit/recalculation and recovery journeys beyond the terminal bridge",
+    "Named/versioned adapter and sandboxed external build/test completion integrations",
+    "Windows authority-key succession, ordinary-user SID/principal and finite-grant content bridge, and broader scoped ingestion",
+    "Complete authenticated Windows distribution, inference/lifecycle controls and separate Hyper-V desktop implementation"
+  ],
+  "host_service_installed_or_started": false,
+  "host_tpm_mutated": false,
+  "existing_distribution_imported_or_replaced": false,
+  "host_wsl_settings_or_memory_changed": false,
+  "physical_hardware_tested": false,
+  "native_installed_image_qualified": false,
+  "new_image_produced": false,
+  "production_qualified": false,
+  "gate_closing": false,
+  "frozen_g2_sequence_14_changed": false
+}

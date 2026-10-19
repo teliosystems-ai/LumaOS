@@ -173,18 +173,26 @@ def main():
     window = Gtk.Window(title='Luma manual native preview — no publication authority')
     window.set_default_size(1100, 820)
     layout = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
-    toolbar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+    toolbar = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+    owner_actions = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+    engine_actions = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+    toolbar.pack_start(owner_actions, False, False, 0)
+    toolbar.pack_start(engine_actions, False, False, 0)
     authority_button = Gtk.Button(label='Authenticated native owner operation…')
     authority_note = Gtk.Label(label='Private results and passwords stay in the separate native terminal.')
     authority_note.set_line_wrap(True)
-    toolbar.pack_start(authority_button, False, False, 4)
+    authority_note.set_selectable(True)
+    owner_actions.pack_start(authority_button, False, False, 4)
     toolbar.pack_start(authority_note, True, True, 4)
     read_button = Gtk.Button.new_with_mnemonic('_Read exact owner artifact…')
     read_button.set_tooltip_text('Open a native terminal for independently granted pages of one exact immutable reference. Private content never enters this browser.')
-    toolbar.pack_start(read_button, False, False, 4)
+    owner_actions.pack_start(read_button, False, False, 4)
+    workflow_button = Gtk.Button.new_with_mnemonic('_Managed engine workflow…')
+    workflow_button.set_tooltip_text('Review, approve and apply an image-defined deterministic engine workflow in the original native PAM terminal; reopen and recalculate under fresh Read authority.')
+    engine_actions.pack_start(workflow_button, False, False, 4)
     presentation_button = Gtk.Button(label='Present verified document…')
     presentation_button.set_sensitive(False)
-    toolbar.pack_start(presentation_button, False, False, 4)
+    engine_actions.pack_start(presentation_button, False, False, 4)
     layout.pack_start(toolbar, False, False, 4)
     layout.pack_start(view, True, True, 0)
     window.add(layout)
@@ -260,7 +268,7 @@ def main():
         dialog.add_buttons('Cancel', Gtk.ResponseType.CANCEL, 'Open read terminal', Gtk.ResponseType.OK)
         dialog.set_default_size(820, 430)
         area = dialog.get_content_area()
-        note = Gtk.Label(label='Select the full installation / owner / account generation and immutable reference obtained from native review. These fields are data, not authority. Every 16-KiB page needs original PAM and its own exact finite Read grant in the terminal. No content is returned to this browser. Stop with q before a page, or Ctrl+C during the read; no publication or export is requested.')
+        note = Gtk.Label(label='Select the full installation / owner / account generation and immutable reference obtained from native review. These fields are data, not authority. Complete-envelope delivery uses one exact finite Read grant and continuous native owner, C-state and output checks. Advanced paging requires a separately granted 16-KiB page each time. No private content enters this browser. Stop with q before a read or Ctrl+C during it; no publication or export is requested.')
         note.set_line_wrap(True)
         area.pack_start(note, False, False, 8)
         entries = {}
@@ -278,20 +286,26 @@ def main():
         help_text = Gtk.Label(label='Binding keys: installation, owner, owner_generation. Reference keys: artifact_id, version, content_sha256, receipt_sha256. Paste complete exact values; there are no assumed identities or grants.')
         help_text.set_line_wrap(True)
         area.pack_start(help_text, False, False, 8)
+        mode = Gtk.ComboBoxText()
+        mode.append('envelope-read', 'Complete exact envelope — one fresh finite Read grant')
+        mode.append('paged-read', 'Advanced: independently granted 16-KiB pages')
+        mode.set_active_id('envelope-read')
+        area.pack_start(mode, False, False, 4)
         error = Gtk.Label()
         error.set_line_wrap(True)
         area.pack_start(error, False, False, 4)
         dialog.show_all()
         while dialog.run() == Gtk.ResponseType.OK:
             try:
+                operation = dict(kind='envelope', expected=auth_module.strict_json(entries['reference'].get_text()))
+                if mode.get_active_id() == 'paged-read':
+                    operation = dict(kind='page', expected=operation['expected'], offset=0, bytes=auth_module.PAGE_BYTES)
                 source = dict(schema_version=1, login=entries['login'].get_text(),
-                    binding=auth_module.strict_json(entries['binding'].get_text()),
-                    operation=dict(kind='page', expected=auth_module.strict_json(entries['reference'].get_text()),
-                                   offset=0, bytes=auth_module.PAGE_BYTES))
-                value = dict(schema_version=1, operation='paged-read', login=source['login'],
+                    binding=auth_module.strict_json(entries['binding'].get_text()), operation=operation)
+                value = dict(schema_version=1, operation=mode.get_active_id(), login=source['login'],
                              read_grant='', effect_grant='', approval='', request=auth_module.encoded(source).decode('utf-8'))
                 auth_module.launch(value)
-                authority_note.set_text('Exact-reference read terminal launched. Each page independently checks current owner and finite Read authority. Private results and observed completion remain there; no GUI completion is inferred.')
+                authority_note.set_text('Exact-reference read terminal launched. Native delivery checks the current owner, exact finite Read, C-state and output generation. Private results and observed completion remain there; no GUI completion is inferred.')
                 break
             except Exception:
                 error.set_text('Read not launched. Enter a valid human login and complete exact owner/reference JSON. No identity, authority or completion was inferred.')
@@ -299,6 +313,67 @@ def main():
         dialog.destroy()
 
     read_button.connect('clicked', grounded_read)
+
+    def managed_workflow(_button):
+        dialog = Gtk.Dialog(title='Native managed workflow — review before effect', transient_for=window, modal=True)
+        dialog.add_buttons('Cancel', Gtk.ResponseType.CANCEL, 'Open workflow terminal', Gtk.ResponseType.OK)
+        dialog.set_default_size(900, 740)
+        area = dialog.get_content_area()
+        note = Gtk.Label(label='Model-independent deterministic workflow. The image selects the workflow graph. Enter only exact source and identity data here; native PAM, separate finite Read/effect grants and exact approval stay in the terminal. Actual C-backed published, conflict-retained and no-change outcomes are shown there. Interruption after apply starts may leave a checkpoint; it is never treated as rollback or automatic retry. Fresh reopen/recalculation and subsequent edits require explicit new selections.')
+        note.set_line_wrap(True)
+        area.pack_start(note, False, False, 8)
+        entries = {}
+        for key, text, maximum in [('login', '_Human login', 32), ('binding', 'Exact _owner binding JSON', 1024),
+            ('artifact_id', '_Artifact ID', 128), ('request_id', 'Stable _request ID (retain for reconciliation)', 128),
+            ('expected', '_Expected immutable reference JSON; explicitly enter null for a NEW artifact', 2048)]:
+            label = Gtk.Label.new_with_mnemonic(text)
+            label.set_xalign(0)
+            entry = Gtk.Entry()
+            entry.set_max_length(maximum)
+            label.set_mnemonic_widget(entry)
+            entries[key] = entry
+            area.pack_start(label, False, False, 2)
+            area.pack_start(entry, False, False, 2)
+        engine_label = Gtk.Label.new_with_mnemonic('_Deterministic engine')
+        engine = Gtk.ComboBoxText()
+        for name in auth_module.ENGINES:
+            engine.append(name, name.capitalize())
+        engine.set_active_id('document')
+        engine_label.set_mnemonic_widget(engine)
+        area.pack_start(engine_label, False, False, 3)
+        area.pack_start(engine, False, False, 3)
+        source_label = Gtk.Label.new_with_mnemonic('Exact editable engine _source JSON (up to 1 MiB)')
+        source = Gtk.TextView()
+        source.set_wrap_mode(Gtk.WrapMode.CHAR)
+        source_label.set_mnemonic_widget(source)
+        area.pack_start(source_label, False, False, 3)
+        scroll = Gtk.ScrolledWindow()
+        scroll.set_min_content_height(180)
+        scroll.add(source)
+        area.pack_start(scroll, True, True, 4)
+        error = Gtk.Label()
+        error.set_line_wrap(True)
+        area.pack_start(error, False, False, 4)
+        dialog.show_all()
+        while dialog.run() == Gtk.ResponseType.OK:
+            try:
+                buffer = source.get_buffer()
+                text = buffer.get_text(buffer.get_start_iter(), buffer.get_end_iter(), False)
+                request = dict(schema_version=1, request_id=entries['request_id'].get_text(), artifact_id=entries['artifact_id'].get_text(),
+                    expected=auth_module.strict_json(entries['expected'].get_text()), engine=engine.get_active_id(), source=text)
+                native = dict(schema_version=1, login=entries['login'].get_text(),
+                    binding=auth_module.strict_json(entries['binding'].get_text()), operation=dict(kind='workflow', request=request))
+                value = dict(schema_version=1, operation='workflow-journey', login=native['login'],
+                    read_grant='', effect_grant='', approval='', request=auth_module.encoded(native).decode('utf-8'))
+                auth_module.launch(value)
+                authority_note.set_text('Native workflow terminal launched. Exact review, independent finite grants, approval, actual C-backed outcome and fresh reopen/recalculation are observed only there. No GUI success or current permission is inferred.')
+                break
+            except Exception:
+                error.set_text('Workflow not launched. Supply a valid exact owner binding, identifiers, explicit expected reference or null, and bounded engine JSON. No account, graph, grant or completion was assumed.')
+                entries['request_id'].grab_focus()
+        dialog.destroy()
+
+    workflow_button.connect('clicked', managed_workflow)
 
     presentations = []
 

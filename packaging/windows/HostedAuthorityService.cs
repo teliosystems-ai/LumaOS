@@ -310,6 +310,9 @@ namespace Luma.Windows.Hosted
                         case "runtime-finalize":RuntimeCommand(pipe,actor,request,running,"runtime-finalize");break;
                         case "runtime-cancel":RuntimeCommand(pipe,actor,request,running,"runtime-cancel");break;
                         case "read-enrolled-file":ReadEnrolledFile(pipe,actor,request,running);break;
+                        case "file-enrollment-change":ChangeFileEnrollment(pipe,actor,request,running);break;
+                        case "file-enrollment-status":FileEnrollmentStatus(pipe,actor,request,running);break;
+                        case "read-persistent-file":ReadPersistentFile(pipe,actor,request,running);break;
                         default:throw new InvalidDataException("Hosted service command is not in the closed protocol.");
                     }
                 }} finally {Array.Clear(frame,0,frame.Length);}
@@ -425,21 +428,28 @@ namespace Luma.Windows.Hosted
             if(arguments.Length<2) throw new InvalidDataException("Usage: commission DOMAIN ENV RELEASEKEYHEX TIMEKEYHEX HTTPS_TIME_ENDPOINT | commission-resume DOMAIN | commission-abort DOMAIN | status DOMAIN | recover DOMAIN | recover-abort DOMAIN | release-review DESCRIPTION_FILE SIGNATURE_FILE | import DESCRIPTION_FILE SIGNATURE_FILE ARCHIVE_FILE | activate DESCRIPTION_FILE SIGNATURE_FILE | reconcile DESCRIPTION_FILE SIGNATURE_FILE | abandon DESCRIPTION_FILE SIGNATURE_FILE | trust|trust-prepare|trust-finalize|trust-cancel|trust-quarantine DESCRIPTION_FILE OLD_PUBLISHER_SIGNATURE_FILE NEW_PUBLISHER_ACCEPTANCE_FILE");
             string command=arguments[0];bool trustCommand=command=="trust" || command=="trust-prepare" || command=="trust-finalize" || command=="trust-cancel" || command=="trust-quarantine";
             bool readCommand=command=="read-enrolled-file";
+            bool persistentReadCommand=command=="read-persistent-file",enrollmentCommand=command=="file-enrollment-change",enrollmentStatus=command=="file-enrollment-status";
             bool runtimeCommand=command=="runtime-prepare" || command=="runtime-switch" || command=="runtime-finalize" || command=="runtime-cancel";
-            if(command!="commission" && command!="commission-resume" && command!="commission-abort" && command!="status" && command!="recover" && command!="recover-abort" && command!="release-review" && command!="import" && command!="activate" && command!="reconcile" && command!="abandon" && !trustCommand && !runtimeCommand && !readCommand) throw new InvalidDataException("Client operation is not allowlisted.");
+            if(command!="commission" && command!="commission-resume" && command!="commission-abort" && command!="status" && command!="recover" && command!="recover-abort" && command!="release-review" && command!="import" && command!="activate" && command!="reconcile" && command!="abandon" && !trustCommand && !runtimeCommand && !readCommand && !persistentReadCommand && !enrollmentCommand && !enrollmentStatus) throw new InvalidDataException("Client operation is not allowlisted.");
             bool deploymentCommand=command=="release-review" || command=="import" || command=="activate" || command=="reconcile" || command=="abandon";
-            if(arguments.Length!=(command=="commission" || readCommand?6:command=="import" || command=="runtime-prepare" || trustCommand?4:deploymentCommand || runtimeCommand?3:2)) throw new InvalidDataException("Exact client argument count differs.");
-            if(!deploymentCommand && !trustCommand && !runtimeCommand && !readCommand) PlatformCustodyProtocol.Index(arguments[1]);
+            if(arguments.Length!=(persistentReadCommand?11:command=="commission" || readCommand?6:command=="import" || command=="runtime-prepare" || trustCommand?4:deploymentCommand || runtimeCommand?3:2)) throw new InvalidDataException("Exact client argument count differs.");
+            if(!deploymentCommand && !trustCommand && !runtimeCommand && !readCommand && !persistentReadCommand && !enrollmentCommand && !enrollmentStatus) PlatformCustodyProtocol.Index(arguments[1]);
+            HostedEnrollmentInputs enrollment=enrollmentCommand?new HostedEnrollmentInputs(arguments[1]):null;
+            if(enrollmentStatus) Wire.Bytes(arguments[1],32,true);
+            using(HostedPersistentReadInputs persistent=persistentReadCommand?new HostedPersistentReadInputs(arguments):null)
             using(HostedReadInputs read=readCommand?new HostedReadInputs(arguments,true):null)
             using(HostedRuntimeInputs runtime=runtimeCommand?new HostedRuntimeInputs(arguments,command=="runtime-prepare"):null)
             using(HostedClientInputs inputs=new HostedClientInputs(command,arguments))
             using(NamedPipeClientStream pipe=new NamedPipeClientStream(".",HostedPipe.Name,PipeDirection.InOut,PipeOptions.Asynchronous,TokenImpersonationLevel.Impersonation)) {
                 pipe.Connect(3000);Stopwatch clientAge=Stopwatch.StartNew();TimeSpan clientPurpose=TimeSpan.FromSeconds(command=="import" || command=="activate" || command=="reconcile" || command=="runtime-prepare"?1800:30);
-                Action check=delegate {HostedPipe.CheckServer(pipe);if(read!=null) read.Check();if(clientAge.Elapsed>=clientPurpose) throw new SecurityException("Exact original client purpose deadline expired; partial transfer is possible and no complete read/publication is inferred.");};check();
+                Action check=delegate {HostedPipe.CheckServer(pipe);if(read!=null) read.Check();if(persistent!=null) persistent.Read.Check();if(clientAge.Elapsed>=clientPurpose) throw new SecurityException("Exact original client purpose deadline expired; partial transfer is possible and no complete read/publication is inferred.");};check();
                 using(Wire.Writer hello=new Wire.Writer("luma-windows-hosted-hello-v1")) {hello.U32(1);HostedPipe.Write(pipe,hello.Bytes(),check,TimeSpan.FromSeconds(30));}
                 using(Wire.Writer request=new Wire.Writer("luma-windows-hosted-request-v1")) {
                     request.Text(command,32);
-                    if(readCommand) request.Blob(read.Intent.Encode(),2048);
+                    if(enrollmentCommand) request.Blob(enrollment.Intent.Encode(),2048);
+                    else if(enrollmentStatus) request.Fixed(Wire.Bytes(arguments[1],32,true),32);
+                    else if(persistentReadCommand) {request.Blob(persistent.Selection.Encode(),512);request.Blob(persistent.Read.Intent.Encode(),2048);}
+                    else if(readCommand) request.Blob(read.Intent.Encode(),2048);
                     else if(runtimeCommand) {request.Blob(runtime.Description,2048);request.Fixed(runtime.Signature,64);}
                     else if(trustCommand) {request.Blob(inputs.Description,3072);request.Fixed(inputs.Signature,64);request.Fixed(inputs.Acceptance,64);}
                     else if(deploymentCommand) {
@@ -455,7 +465,9 @@ namespace Luma.Windows.Hosted
                         string kind=reader.Text(32);byte[] payload=reader.Blob(60000);reader.End();
                         try {
                         if(kind=="refused") throw new SecurityException(new UTF8Encoding(false,true).GetString(payload));
-                        if(kind=="utc-challenge") {if(!deploymentCommand && !trustCommand && !runtimeCommand && !readCommand) throw new SecurityException("UTC relay cannot cross into another client purpose.");HostedTimeEndpoint.Deliver(pipe,payload,Wire.Hash(readCommand?read.Intent.Encode():runtimeCommand?runtime.Description:inputs.Description),check);continue;}
+                        if(kind=="utc-challenge") {if(!deploymentCommand && !trustCommand && !runtimeCommand && !readCommand && !persistentReadCommand && !enrollmentCommand) throw new SecurityException("UTC relay cannot cross into another client purpose.");HostedTimeEndpoint.Deliver(pipe,payload,Wire.Hash(enrollmentCommand?enrollment.Intent.Encode():persistentReadCommand?persistent.Read.Intent.Encode():readCommand?read.Intent.Encode():runtimeCommand?runtime.Description:inputs.Description),check);continue;}
+                        if(kind=="persistent-read-chunk") {if(!persistentReadCommand) throw new SecurityException("Persistent-source bytes crossed into another original-client purpose.");byte[] ack=persistent.Read.Part(payload);try {HostedPipe.Write(pipe,ack,check,TimeSpan.FromSeconds(30));}finally {Array.Clear(ack,0,ack.Length);}continue;}
+                        if(kind=="persistent-read-completed") {if(!persistentReadCommand) throw new SecurityException("Persistent read receipt crossed into another original-client purpose.");persistent.Complete(payload);Console.WriteLine(persistent.Summary());return 0;}
                         if(kind=="read-chunk") {if(!readCommand) throw new SecurityException("Source bytes crossed into another original-client purpose.");byte[] ack=read.Part(payload);try {HostedPipe.Write(pipe,ack,check,TimeSpan.FromSeconds(30));}finally {Array.Clear(ack,0,ack.Length);}continue;}
                         if(kind=="read-completed") {if(!readCommand) throw new SecurityException("Read receipt crossed into another original-client purpose.");read.Completed(payload);Console.WriteLine(read.Summary());return 0;}
                         if(kind=="runtime-next") {if(command!="runtime-prepare") throw new SecurityException("Runtime transfer crossed its separate original-client preparation purpose.");HostedPipe.Write(pipe,runtime.Part(payload),check,TimeSpan.FromSeconds(30));continue;}
@@ -463,7 +475,7 @@ namespace Luma.Windows.Hosted
                         if(kind=="review") {
                             string hash=Wire.Hash(payload);using(Wire.Reader review=new Wire.Reader(payload,"luma-windows-hosted-reviewed-action-v1")) {
                                 string action=review.Text(32);review.Fixed(32);byte[] exact=review.Blob(8192);string detail=review.Text(16000);review.End();
-                                if(action!=command) throw new SecurityException("Service review substituted the requested command.");if(readCommand) read.Reviewed(exact,hash);else if(runtimeCommand) runtime.Reviewed(exact);else if(deploymentCommand || trustCommand) inputs.Reviewed(command,exact);
+                                if(action!=command) throw new SecurityException("Service review substituted the requested command.");if(enrollmentCommand) enrollment.Reviewed(exact);else if(persistentReadCommand) persistent.Reviewed(exact,hash);else if(readCommand) read.Reviewed(exact,hash);else if(runtimeCommand) runtime.Reviewed(exact);else if(deploymentCommand || trustCommand) inputs.Reviewed(command,exact);
                                 else if(command=="commission" || command=="commission-resume") {
                                     CommissionIntent proposed=CommissionIntent.Decode(exact);if(proposed.Domain!=arguments[1]) throw new SecurityException("Commissioning review changed its selected domain.");
                                     if(command=="commission" && (proposed.Environment!=arguments[2] || !Wire.Equal(proposed.ReleaseKey,Wire.Bytes(arguments[3],72,true)) || !Wire.Equal(proposed.TimeKey,Wire.Bytes(arguments[4],72,true)) || proposed.TimeEndpoint!=HostedTimeEndpoint.Validate(arguments[5]))) throw new SecurityException("Commissioning review substituted the exact original-client environment/key pins/UTC endpoint.");
@@ -483,6 +495,19 @@ namespace Luma.Windows.Hosted
                         if(kind=="commissioned") {
                             if(command!="commission" && command!="commission-resume" && command!="commission-abort") throw new SecurityException("Commissioning result crossed its original client purpose.");
                             AuthorityIdentity identity=AuthorityIdentity.Decode(payload);Console.WriteLine("Commissioned exact "+identity.Domain+" identity "+Wire.Hash(payload)+"; no guest activated; production qualification false.");return 0;
+                        }
+                        if(kind=="file-enrollment-changed") {
+                            if(!enrollmentCommand) throw new SecurityException("Persistent enrollment completion crossed its original-client command.");
+                            using(Wire.Reader changed=new Wire.Reader(payload,"luma-windows-hosted-file-enrollment-result-v1")) {if(Wire.Hex(changed.Fixed(32))!=Wire.Hash(enrollment.Intent.Encode())) throw new SecurityException("File enrollment receipt substituted original exact policy.");string entry=Wire.Hex(changed.Fixed(32)),registry=Wire.Hex(changed.Fixed(32)),head=Wire.Hex(changed.Fixed(32));Wire.Bytes(entry,32,true);Wire.Bytes(head,32,true);
+                                if(registry!=entry || changed.U8()!=(enrollment.Intent.Action==FileEnrollmentAction.Revoke?1:0) || changed.U8()!=0) throw new SecurityException("File enrollment result changed registry/revocation or claimed qualification.");changed.End();Console.WriteLine("Protected exact-file policy "+enrollment.Intent.Action+" committed: ID "+enrollment.Intent.Enrollment+" generation "+enrollment.Intent.Generation+"; entry/registry "+entry+"; actual journal head "+head+". Every actual read still needs fresh30-second original-session authorization. No source write, Linux grant or qualification.");return 0;}
+                        }
+                        if(kind=="file-enrollment-status") {
+                            if(!enrollmentStatus) throw new SecurityException("File enrollment metadata crossed its selected inspection purpose.");
+                            using(Wire.Reader status=new Wire.Reader(payload,"luma-windows-hosted-file-enrollment-status-v2")) {if(Wire.Hex(status.Fixed(32))!=arguments[1]) throw new SecurityException("File enrollment inspection changed its selected ID.");string registry=Wire.Hex(status.Fixed(32)),head=Wire.Hex(status.Fixed(32));Wire.Bytes(registry,32,true);Wire.Bytes(head,32,true);uint identities=status.U32(),active=status.U32(),controls=status.U32();
+                                if(identities>64 || active>identities || controls>256 || status.U32()!=64 || status.U32()!=256 || status.U32()!=64 || status.U32()!=1048576 || status.U64()!=FileEnrollmentIntent.MaximumLifetimeMilliseconds || status.U32()!=30) throw new SecurityException("File enrollment inspection changed its closed finite caps.");uint credits=status.U32();if(credits>active || status.U32()!=HostedJournalCapacity.ReservedEventBytes || status.U8()!=1 || status.U8()!=0 || status.U8()!=0 || status.U8()!=0) throw new SecurityException("File policy capacity metadata claimed another bound, physical/namespace reservation or unlimited recovery.");byte exists=status.U8();if(exists>1) throw new SecurityException("File enrollment existence flag differs.");
+                                Console.WriteLine("Registry source: "+registry+"\nCurrent journal head: "+head+"\nLifetime IDs: "+identities+"/64; active policies: "+active+"; controls: "+controls+"/256. Max64 generations (64 revoke only),1MiB exact bytes,30-day TTL, fresh30-second reads.\nLogical signed-journal tail: "+active+" healthy revocations + "+credits+" finite uncertain-write recovery spares,8192 bytes each. Zero-spare terminal revocation may succeed, but a further uncertain write remains globally fenced when a reviewed abort cannot fit. Physical free space, private namespace capacity and unlimited faults are NOT reserved or qualified; full journal continuation remains open.");
+                                if(exists==1) {FileEnrollmentIntent policy=FileEnrollmentIntent.Decode(status.Blob(2048));string entry=Wire.Hex(status.Fixed(32)),snapshot=Wire.Hex(status.Fixed(32));Wire.Bytes(entry,32,true);Wire.Bytes(snapshot,32,true);ulong start=status.U64(),end=status.U64();byte revoked=status.U8();if(policy.Enrollment!=arguments[1] || revoked>1 || (revoked==1)!=(policy.Action==FileEnrollmentAction.Revoke) || start==0 || end<=start || end-start>FileEnrollmentIntent.MaximumLifetimeMilliseconds) throw new SecurityException("File enrollment inspection changed policy identity, revocation or finite interval.");Console.WriteLine("Generation: "+policy.Generation+"\nEntry SHA256: "+entry+"\nRevoked: "+(revoked==1)+"\nObject fingerprint: "+snapshot+"\nOwner/source: "+policy.Read.Owner+" / "+policy.Read.Path+"\nRead bytes/SHA256: "+policy.Read.Bytes+" / "+policy.Read.Sha256+"\nUTC half-open interval: ["+start+", "+end+")");}
+                                byte uncertain=status.U8();if(uncertain>1 || status.U8()!=0 || status.U8()!=0) throw new SecurityException("Metadata inspection claims read admission or qualification.");status.End();Console.WriteLine("Uncertain write fence: "+(uncertain==1)+". Metadata only; no source accessed, fresh file-read session admitted or production qualification.");return 0;}
                         }
                         if(kind=="status") {
                             if(command!="status" && command!="recover") throw new SecurityException("Status result crossed its original client purpose.");
@@ -575,6 +600,7 @@ namespace Luma.Windows.Hosted
         {
             try {
                 if(arguments.Length>0 && arguments[0]=="read-intent") return HostedReadInputs.Describe(arguments);
+                if(arguments.Length>0 && arguments[0]=="enrollment-intent") return HostedEnrollmentInputs.Describe(arguments);
                 if(arguments.Length==1 && arguments[0]=="service") {if(System.Environment.UserInteractive) throw new SecurityException("Service entrypoint requires actual SCM launch.");using(HostedAuthorityWindowsService service=new HostedAuthorityWindowsService()) {ServiceBase.Run(service);return service.ExitCode;}}
                 return Client(arguments);
             } catch(Exception error) {

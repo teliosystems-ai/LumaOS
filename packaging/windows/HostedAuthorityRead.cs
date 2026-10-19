@@ -13,6 +13,7 @@ using System.Security.Principal;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
+using System.Text.RegularExpressions;
 using Microsoft.Win32.SafeHandles;
 
 namespace Luma.Windows.Hosted
@@ -28,9 +29,15 @@ namespace Luma.Windows.Hosted
         public EnrolledReadIntent(string installation,string owner,string root,string relative,int bytes,string sha256) {
             Wire.Bytes(installation,32,true);Wire.Sid(owner);Wire.Bytes(sha256,32,false);
             if(bytes<1 || bytes>MaximumBytes || root==null || root.Length<4 || root.EndsWith("\\",StringComparison.Ordinal) || relative==null || relative.Length==0 || System.IO.Path.IsPathRooted(relative)) throw new SecurityException("Read intent requires one exact nonempty bounded file under a named directory.");
-            PlatformInputLease.ValidatePath(root);string full=System.IO.Path.Combine(root,relative);PlatformInputLease.ValidatePath(full);
+            ValidateSelectedPath(root);string full=System.IO.Path.Combine(root,relative);ValidateSelectedPath(full);
             if(!String.Equals(full,root+"\\"+relative,StringComparison.Ordinal) || !String.Equals(System.IO.Path.GetFullPath(full),full,StringComparison.Ordinal) || full.Substring(3).Split('\\').Length>32) throw new SecurityException("Read intent changed the exact canonical path or exceeded its held ancestor bound.");
             Installation=installation;Owner=owner;Root=root;RelativePath=relative;Bytes=bytes;Sha256=sha256;
+        }
+        private static void ValidateSelectedPath(string path) {
+            // Canonical records must remain decodable when a source volume is
+            // absent. Actual local NTFS is checked only by the live read lease.
+            if(String.IsNullOrEmpty(path) || path.Length>240 || !Regex.IsMatch(path,"\\A[A-Za-z]:\\\\") || path.IndexOf('/')>=0 || path.IndexOf(':',2)>=0 || !String.Equals(path,System.IO.Path.GetFullPath(path),StringComparison.OrdinalIgnoreCase)) throw new InvalidDataException("Read requires bounded canonical absolute local path syntax.");
+            foreach(string part in path.Substring(3).Split('\\')) if(part.Length==0 || part=="." || part==".." || part.EndsWith(".",StringComparison.Ordinal) || part.EndsWith(" ",StringComparison.Ordinal) || part.IndexOf('~')>=0 || !Regex.IsMatch(part,"\\A[A-Za-z0-9_. -]+\\z") || Regex.IsMatch(part,"\\A(?:CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(?:\\.|\\z)",RegexOptions.IgnoreCase)) throw new InvalidDataException("Read path has an unsupported or ambiguous component.");
         }
         public byte[] Encode() {using(Wire.Writer writer=new Wire.Writer("luma-windows-hosted-read-intent-v1")) {writer.Text("read-exact-file",32);writer.Fixed(Wire.Bytes(Installation,32,true),32);writer.Text(Owner,184);writer.Text(Root,240);writer.Text(RelativePath,240);writer.U32((uint)Bytes);writer.Fixed(Wire.Bytes(Sha256,32,false),32);return writer.Bytes();}}
         public static EnrolledReadIntent Decode(byte[] bytes) {using(Wire.Reader reader=new Wire.Reader(bytes,"luma-windows-hosted-read-intent-v1")) {
@@ -110,7 +117,7 @@ namespace Luma.Windows.Hosted
         internal EnrolledReadSource(EnrolledReadIntent intent,SafeAccessTokenHandle primary,Action original) {
             if(intent==null || primary==null || primary.IsInvalid || original==null) throw new ArgumentNullException("read source");this.intent=intent;this.primary=primary;this.original=original;
             try {
-                original();initialToken=TokenStatistics(primary);RequireToken();if(!DuplicateToken(primary,2,out access)) throw new Win32Exception(Marshal.GetLastWin32Error());
+                original();DriveType drive=new DriveInfo(System.IO.Path.GetPathRoot(intent.Path)).DriveType;if(drive!=DriveType.Fixed && drive!=DriveType.Removable) throw new SecurityException("Actual source must be fixed/removable local storage, never a mapped network volume.");initialToken=TokenStatistics(primary);RequireToken();if(!DuplicateToken(primary,2,out access)) throw new Win32Exception(Marshal.GetLastWin32Error());
                 string current=intent.Path.Substring(0,3);Open(current,true);string[] pieces=intent.Path.Substring(3).Split('\\');
                 for(int index=0;index<pieces.Length-1;index++) {current=System.IO.Path.Combine(current,pieces[index]);Open(current,true);}SafeFileHandle file=Open(intent.Path,false);
                 stream=new FileStream(file,FileAccess.Read,32768,true);if(stream.Length!=intent.Bytes) throw new SecurityException("Actual enrolled object length differs from exact reviewed bytes.");Check();
@@ -214,7 +221,9 @@ namespace Luma.Windows.Hosted
             }
             using(SHA256 hash=SHA256.Create()) if(Wire.Hex(hash.ComputeHash(content))!=Intent.Sha256) throw new SecurityException("Client full source hash differs from actual received bytes.");completed=true;
         }
-        internal string Summary() {if(!completed) throw new SecurityException("Read did not complete.");return "Received "+received+" exact inert bytes in original-client ephemeral memory; SHA256 "+Intent.Sha256+". No file saved, persistent enrollment, content publication, Linux authority, write or production qualification.";}
+        internal string Summary() {return SummaryText(false);}
+        internal string SummaryForPersistent() {return SummaryText(true);}
+        private string SummaryText(bool persistent) {if(!completed) throw new SecurityException("Read did not complete.");return "Received "+received+" exact inert bytes in original-client ephemeral memory; SHA256 "+Intent.Sha256+(persistent?". The existing persistent enrollment was selected, not created or changed; no source file saved, content publication, Linux authority, write or production qualification.":". No file saved, persistent enrollment, content publication, Linux authority, write or production qualification.");}
         public void Dispose() {if(cancel!=null) Console.CancelKeyPress-=cancel;if(content!=null) {Array.Clear(content,0,content.Length);content=null;}}
         internal static int Describe(string[] arguments) {
             using(HostedReadInputs input=new HostedReadInputs(arguments,false)) {Console.WriteLine("Purpose: host-file-read (read-exact-file)\nActual input SID (not authority): "+input.Intent.Owner+"\nIntent SHA256 for separate native U-source review: "+Wire.Hash(input.Intent.Encode())+"\nIntent bytes (hex): "+Wire.Hex(input.Intent.Encode())+"\nNo source accessed, session admitted, persistent enrollment or product/Linux authority.");return 0;}
@@ -224,17 +233,21 @@ namespace Luma.Windows.Hosted
     internal static partial class HostedCoordinator
     {
         private static LiveUtcWindow ReadTime(PipeStream pipe,NativeAuthority authority,EnrolledReadIntent intent,Action original) {
+            return SourceTime(pipe,authority,intent.Installation,Wire.Hash(intent.Encode()),1,4102444800000UL,original);
+        }
+        private static LiveUtcWindow SourceTime(PipeStream pipe,NativeAuthority authority,string installation,string source,ulong start,ulong end,Action original) {
             if(authority.Trust.TimeRevoked || authority.Trust.Pending!=null) throw new SecurityException("Read requires current non-revoked independent UTC, never a prepared handoff or local time.");
-            LiveUtcWindow live=new LiveUtcWindow(authority.Trust.CurrentIdentity,Wire.Hash(intent.Encode()),1,4102444800000UL);byte[] challenge;
-            using(Wire.Writer writer=new Wire.Writer("luma-windows-hosted-utc-challenge-v1")) {writer.Fixed(Wire.Bytes(intent.Installation,32,true),32);writer.Fixed(Wire.Bytes(live.Nonce,32,true),32);writer.Fixed(Wire.HashBytes(intent.Encode()),32);challenge=writer.Bytes();}
+            LiveUtcWindow live=new LiveUtcWindow(authority.Trust.CurrentIdentity,source,start,end);byte[] challenge;
+            using(Wire.Writer writer=new Wire.Writer("luma-windows-hosted-utc-challenge-v1")) {writer.Fixed(Wire.Bytes(installation,32,true),32);writer.Fixed(Wire.Bytes(live.Nonce,32,true),32);writer.Fixed(Wire.Bytes(source,32,true),32);challenge=writer.Bytes();}
             using(Wire.Writer writer=new Wire.Writer("luma-windows-hosted-time-relay-v1")) {writer.Text(authority.Trust.Endpoint,2048);writer.Blob(challenge,1024);Reply(pipe,"utc-challenge",writer.Bytes(),original);}
             byte[] delivery=HostedPipe.Read(pipe,original,Standard);try {using(Wire.Reader reader=new Wire.Reader(delivery,"luma-windows-hosted-utc-delivery-v1")) {live.Accept(reader.Blob(8192),reader.Fixed(64));reader.End();}}finally {Array.Clear(delivery,0,delivery.Length);}original();return live;
         }
         private static void ReadEnrolledFile(NamedPipeServerStream pipe,HostedActor actor,Wire.Reader request,Action running) {
             EnrolledReadIntent intent=EnrolledReadIntent.Decode(request.Blob(2048));request.End();Stopwatch age=Stopwatch.StartNew();Action original=Live(actor,running,age);
             using(NativeAuthority authority=new NativeAuthority("host-deployment",actor)) {
+                NoUncertainFileAuthority(authority);
                 intent.Match(authority.Identity,actor.Sid);JournalHistory history=authority.Journal.Read(original);history.Reconcile(authority.Identity,null,authority.Nv.ReadHead());LiveUtcWindow utc=ReadTime(pipe,authority,intent,original);
-                Action check=delegate {original();authority.State.Check();utc.Check();if(authority.Nv.ReadHead()!=history.Head) throw new SecurityException("Actual read authority changed during its finite original session.");original();};
+                Action check=delegate {original();authority.State.Check();NoUncertainFileAuthority(authority);utc.Check();if(authority.Nv.ReadHead()!=history.Head) throw new SecurityException("Actual read authority changed during its finite original session.");original();};
                 using(EnrolledReadSource source=new EnrolledReadSource(intent,actor.Token,check)) {
                     byte[] snapshot=source.Snapshot(),review;using(Wire.Writer exact=new Wire.Writer("luma-windows-hosted-read-review-v1")) {exact.Blob(intent.Encode(),2048);exact.Blob(snapshot,4096);
                         review=Review(pipe,"read-enrolled-file",exact.Bytes(),"Single-use first-Admin-owned READ only; 30-second original-client purpose.\nSource: "+intent.Path+"\nActual owner: "+actor.Sid+"\nExact bytes: "+intent.Bytes+"\nExpected SHA256: "+intent.Sha256+"\nHeld object/ancestor/ACL fingerprint: "+Wire.Hash(snapshot)+"\nNo folder enumeration, write, persistent enrollment, product content publication, ordinary-user mapping, Linux grant or automatic background ingestion. Source read requests no-recall but cloud-provider/no-hydration qualification and synchronous kernel hard deadlines are not claimed. Cancellation/refusal may leave partial bytes delivered to this same original client.",check);}

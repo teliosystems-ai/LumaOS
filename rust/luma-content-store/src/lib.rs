@@ -41,8 +41,9 @@ pub use publication::{
     canonical_record_history_head, PreparedPublication, PublicationCommitment, PublicationMember,
 };
 pub use queries::{
-    canonical_search_query, SearchHit, SearchResults, TermMatch, MAX_SEARCH_QUERY_BYTES,
-    MAX_SEARCH_RESPONSE_BYTES, MAX_SEARCH_RESULTS, MAX_SEARCH_TERMS, MAX_SEARCH_TERM_BYTES,
+    canonical_search_query, CollectionSearchResults, SearchHit, SearchResults, TermMatch,
+    MAX_SEARCH_QUERY_BYTES, MAX_SEARCH_RESPONSE_BYTES, MAX_SEARCH_RESULTS, MAX_SEARCH_TERMS,
+    MAX_SEARCH_TERM_BYTES,
 };
 pub use recovery::{
     PreparationDirectory, PreparationDirectoryIdentity, PreparationFileIdentity, PreparationMember,

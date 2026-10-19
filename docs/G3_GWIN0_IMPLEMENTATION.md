@@ -20,7 +20,7 @@ authorized these named new tracks separately.
 | Artifacts | Native ext4/WAL catalogs, held immutable publication, independent C custody, owner-local typed collections, reviewed quarantine, encrypted backup and fresh-owner restore integration | Custody lifecycle and installed recovery qualification; general per-result access policy and semantic collections/indexes |
 | User interface | Model-independent reference workspace and candidate native GNOME/Wayland edition | Accessible conversational/manual shell, progress/cancellation, grounded references and qualified capture/input |
 | Content and adapters | Deterministic content engines, C-backed workflow commitments, scoped LibreOffice export and ephemeral browser adapter source; fixed generated KVM runtime | Installed adapter/UI qualification, complete accessible journeys and exact external build/test receipts |
-| Windows development | Populated compute-only package, separate hosted TPM/CNG custody source, signed trust/runtime lifecycle, original Admin pipe and held NTFS input leases | Authenticated complete product distribution, SID-owned content/grant bridge, enrolled-file effects, authority-key migration and installed WSL confinement/inference |
+| Windows development | Populated compute-only package, separate hosted TPM/CNG custody source, signed trust/runtime lifecycle, original Admin pipe, held NTFS input leases and ephemeral first-Admin exact-file reads | Authenticated complete product distribution, ordinary-user content/grant bridge, persistent scoped enrollment, authority-key migration and installed WSL confinement/inference |
 | Windows desktop | No qualified complete VM product proof | Hyper-V Gen2 image/template, identity, storage, resource limits and recovery proof; no acceleration claim from display availability |
 
 ## Initial implementation checkpoint
@@ -557,8 +557,8 @@ No requirement in this table is marked complete by these development slices.
 3. Extend the purpose-separated Windows hosted compute deployment into a complete
    authenticated product distribution. Complete authority-key migration and
    the authenticated SID/principal content bridge. Preserve existing
-   distributions/defaults. Introduce a read-only enrolled-file path before
-   any host-file write capability.
+   distributions/defaults. Extend the first-Admin ephemeral exact-file read into
+   persistent scoped user enrollment before any host-file write capability.
 4. Qualify WSL confinement, effective budgets and host reserve, lifecycle,
    manual/model-disabled controls and actual compact inference. Implement the
    complete Hyper-V desktop proof as a separate profile; do not assume nested
@@ -567,6 +567,55 @@ No requirement in this table is marked complete by these development slices.
    journeys/held-out quality corpus and GWIN0 V-series proof on declared tuples.
    Keep GWIN1/GWIN2 dependencies and native G2 acceptance separate.
 
+### Exact collection search and bounded read journeys
+
+The native `collection-search` operation takes one exact published collection
+reference, a lexical query and a result limit. The store verifies membership
+and member bytes from the same complete snapshot and searches the collection's
+exact historical versions, not newer versions or unrelated artifacts. Generic
+JSON, conflict candidates and forged references cannot become collections.
+The original owner's current finite Read grant and resource generation remain
+necessary throughout reconstruction, scanning and delivery. Membership is not
+authority. Results contain exact references and term offsets, not snippets or
+content. This is bounded lexical search, not semantic retrieval or a general
+cross-owner access policy.
+
+The manual workspace adds an exact-reference native terminal paging journey.
+Every 16-KiB page exposes its own native inspection scope and requires an
+explicit finite Read grant through the original PAM ceremony. Private pages
+remain outside WebKit. The terminal checks the full envelope digest, owner and
+immutable reference, then reopens the complete envelope through the native
+content engine before displaying escaped content. Stopping discards partial
+assembly; it cannot recall bytes already delivered. The browser's ephemeral
+preview has keyboard cancellation, explicit errors, focus restoration and
+grounded source metadata; none of these UI observations grants publication.
+
+Windows adds a single-use, first-Admin-owned exact-file read over the original
+client pipe. A separately reviewed `host-file-read` UTC source intent binds the
+commissioned installation, genuine SID, canonical path, exact byte count and
+complete hash. That source approval does not start a session or grant a read.
+A fresh 30-second original-client session observes the actual token, NTFS
+object identity and ACLs before and during bounded byte delivery. The service
+opens source data under the original token; it does not use System access to
+bypass file permission checks. Exact-prefix acknowledgements and a complete
+hash distinguish partial transfer from completed delivery. This path neither
+persists enrollment nor creates a Linux principal, content publication or
+finite grant. Ordinary-user mapping and persistent ingestion remain development
+work.
+
+Existing Admin custody inspection also reports journal capacity bound to the
+original genesis, exact journal hash and actual protected checkpoint. It does
+not reserve capacity, truncate history, change keys or activate rollover. Safe
+continuation still requires authenticated paged state and enforced physical
+storage bounds, including bytes retained after interrupted attempts.
+
+The [integrated software verification record](gates/g3/bounded_read_integration_2026-10-19.json)
+pins 593 passing native-source tests, 126 focused Rust tests, three disposable-TPM
+scenarios, 30 actual CLI tests, 260 Windows assertions and 31 production-JavaScript
+assertions. All current source records match the final snapshot; the Windows
+input bytes are identical across the composed verification cuts. No new native
+image, installed-service qualification or gate closure is claimed.
+
 ### Remaining development and qualification
 
 The current integrated sources still leave the following development work:
@@ -574,7 +623,8 @@ The current integrated sources still leave the following development work:
 - Content custody lifecycle, bounded-journal succession/compaction and complete
   application recovery journeys beyond the implemented C-backed primitives.
 - Semantic collections/indexes and per-result access policy beyond the current
-  owner's lexical search; usable UI integration for paged reads and recalculation.
+  owner's lexical search, including its exact historical collection selector;
+  complete paged-read and recalculation user journeys beyond the terminal bridge.
 - Accessible manual/conversational shell, progress/cancellation, grounded references,
   explicit speech/image/screen/video capture and visible capture controls.
 - Installed viewer integration and authenticated completion for the deterministic
@@ -592,7 +642,7 @@ that development: loaded confinement, revocation and recovery journeys;
 two-user/ACL and cloud-provider tests; real inference, accessibility and capture;
 host coexistence and Hyper-V behavior; the held-out quality corpus; and final
 image/native acceptance. A software or structural test alone closes none of
-those qualification gates.
+  those qualification gates.
 
 ## Verification and host safety
 

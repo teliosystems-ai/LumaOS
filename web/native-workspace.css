@@ -10,6 +10,9 @@ textarea, input[type=text], select { box-sizing: border-box; width: 100%; paddin
 textarea { font-family: monospace; resize: vertical; }
 button { font: inherit; padding: .65rem .9rem; margin: .65rem .4rem .2rem 0; cursor: pointer; }
 button:disabled { cursor: default; }
+button:disabled, textarea:disabled, input:disabled, select:disabled { opacity: .7; }
+nav { margin: .8rem 0; } nav a { display: inline-block; padding: .35rem; }
+#error:not(:empty) { border-inline-start: .35rem solid #b64a3b; padding: .7rem; font-weight: 600; }
 :focus-visible { outline: 3px solid #348bd0; outline-offset: 3px; }
 pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 32rem; overflow: auto; }
 iframe { width: 100%; height: 25rem; border: 1px solid #7b8a86; background: white; }
@@ -19,4 +22,5 @@ table { width: 100%; border-collapse: collapse; } th, td { border: 1px solid #7b
 [hidden] { display: none !important; }
 #status { min-height: 3rem; font-weight: 600; } progress { width: 100%; }
 @media (max-width: 800px) { main { grid-template-columns: 1fr; } body { padding: .7rem; } }
-@media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto !important; } }
+@media (prefers-reduced-motion: reduce) { *, *::before, *::after { scroll-behavior: auto !important; animation: none !important; transition: none !important; } }
+@media (forced-colors: active) { :focus-visible { outline-color: Highlight; } section, iframe, th, td { border-color: CanvasText; } }

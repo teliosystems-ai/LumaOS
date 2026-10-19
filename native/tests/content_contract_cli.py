@@ -201,6 +201,7 @@ class ContentContractCli(unittest.TestCase):
         reference = dict(artifact_id='collection.work-items', version=1,
             content_sha256='a'*64, receipt_sha256='b'*64)
         operations = [dict(kind='collection-current', collection_id='work-items'),
+            dict(kind='collection-search', expected=reference, query='exact words', limit=32),
             dict(kind='collection-page', expected=reference, offset=0, limit=32),
             dict(kind='collections-for-member', member=reference, offset=0, limit=32),
             dict(kind='preparation', target='a'*64)]
@@ -210,6 +211,8 @@ class ContentContractCli(unittest.TestCase):
             self.assertEqual(json.loads(result['canonical_request']), request)
             self.assertIs(result['private_content_read'], False)
         for operation in [dict(kind='collection-current', collection_id='../escape'),
+                dict(kind='collection-search', expected=reference, query='exact', limit=33),
+                dict(kind='collection-search', expected=reference, query='https://invalid', limit=1),
                 dict(kind='collection-page', expected=reference, offset=0, limit=33),
                 dict(kind='collections-for-member', member=reference, offset=0, limit=0),
                 dict(kind='preparation', target='not-a-hash')]:

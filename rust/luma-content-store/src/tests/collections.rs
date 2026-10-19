@@ -642,3 +642,182 @@ fn every_read_and_write_boundary_can_refuse_without_committing_or_mutating() {
     assert!(repo.collection_current("work", &mut no_budget).is_err());
     assert_eq!(before, disk(&f.path));
 }
+
+#[test]
+fn collection_search_pins_historical_members_and_never_expands_to_current_or_unrelated_content() {
+    let f = Fixture::new();
+    let mut repo = repository(&f);
+    let alpha = repo.current_reference("alpha", &mut Guard::read()).unwrap();
+    let first = publish(
+        &mut repo,
+        "collection",
+        &source("work", vec![alpha.clone()]),
+        None,
+    );
+    let bytes = b"Replacement current";
+    let edit = repo
+        .plan_external_edit(
+            "alpha",
+            alpha.clone(),
+            bytes,
+            provenance("replacement", bytes, EditOrigin::External),
+            &mut Guard::read(),
+        )
+        .unwrap();
+    repo.apply(&edit, bytes, &mut Guard::write(&edit)).unwrap();
+    let other = capture("other", "zulu", b"Original unrelated");
+    repo.apply(&other, b"Original unrelated", &mut Guard::write(&other))
+        .unwrap();
+    let empty = publish(
+        &mut repo,
+        "empty",
+        &source("work", vec![]),
+        Some(first.resulting.clone()),
+    );
+    let before = disk(&f.path);
+    let result = repo
+        .search_collection(&first.resulting, "ORIGINAL", 64, &mut Guard::read())
+        .unwrap();
+    assert_eq!(result.collection, first.resulting);
+    assert_eq!(result.search.total_matches, 1);
+    assert_eq!(result.search.matches[0].reference, alpha);
+    assert_eq!(result.search.matches[0].terms[0].byte_offset, 0);
+    assert_eq!(
+        repo.search_collection(&first.resulting, "replacement", 64, &mut Guard::read())
+            .unwrap()
+            .search
+            .total_matches,
+        0
+    );
+    assert_eq!(
+        repo.search_collection(&empty.resulting, "original", 64, &mut Guard::read())
+            .unwrap()
+            .search
+            .total_matches,
+        0
+    );
+    drop(repo);
+    let repo = Repository::open_at(&f.path, &binding(), &mut Guard::read()).unwrap();
+    assert_eq!(
+        repo.search_collection(&first.resulting, "original", 64, &mut Guard::read())
+            .unwrap(),
+        result
+    );
+    assert_eq!(before, disk(&f.path));
+}
+
+#[test]
+fn collection_search_refuses_forged_generic_and_conflict_selectors_before_delivery() {
+    let f = Fixture::new();
+    let mut repo = repository(&f);
+    let alpha = repo.current_reference("alpha", &mut Guard::read()).unwrap();
+    let first = publish(
+        &mut repo,
+        "collection",
+        &source("work", vec![alpha.clone()]),
+        None,
+    );
+    let mut changed = source("work", vec![alpha.clone()]);
+    changed.name = "Changed".into();
+    publish(
+        &mut repo,
+        "changed",
+        &changed,
+        Some(first.resulting.clone()),
+    );
+    changed.name = "Conflict".into();
+    let conflict = publish(
+        &mut repo,
+        "conflict",
+        &changed,
+        Some(first.resulting.clone()),
+    );
+    assert_eq!(conflict.decision, DecisionKind::ConflictRetained);
+    // A retained conflict reports the genuine unchanged current reference;
+    // that reference remains readable. Its candidate bytes are NOT a version.
+    assert_eq!(
+        repo.search_collection(&conflict.resulting, "original", 64, &mut Guard::read())
+            .unwrap()
+            .search
+            .total_matches,
+        1
+    );
+    let retained = repo.retained("conflict", &mut Guard::read()).unwrap();
+    let candidate: luma_content::CapturedContent =
+        serde_json::from_slice(&retained.payload).unwrap();
+    let mut unpublished = conflict.resulting.clone();
+    unpublished.content_sha256 = candidate.content_sha256;
+    let fake_source = source("fake", vec![alpha.clone()])
+        .canonical_bytes()
+        .unwrap();
+    let fake = Plan::capture(
+        binding(),
+        "collection.fake",
+        Format::Json,
+        &fake_source,
+        provenance("fake", &fake_source, EditOrigin::External),
+    )
+    .unwrap();
+    let fake = repo
+        .apply(&fake, &fake_source, &mut Guard::write(&fake))
+        .unwrap();
+    let mut forged = first.resulting.clone();
+    forged.receipt_sha256 = "e".repeat(64);
+    for reference in [alpha, unpublished, fake.resulting, forged] {
+        assert!(repo
+            .search_collection(&reference, "original", 64, &mut Guard::read())
+            .is_err());
+    }
+    for (query, limit) in [("", 1), ("valid", 0), ("valid", 65), ("not-a-word", 1)] {
+        let mut guard = Guard::read();
+        assert!(repo
+            .search_collection(&first.resulting, query, limit, &mut guard)
+            .is_err());
+        assert_eq!(guard.admissions, 0);
+        assert_eq!(guard.checks, 0);
+    }
+}
+
+#[test]
+fn collection_search_checks_live_authority_at_every_boundary_and_preserves_the_selected_cut() {
+    let f = Fixture::new();
+    let mut repo = repository(&f);
+    let alpha = repo.current_reference("alpha", &mut Guard::read()).unwrap();
+    let collection = publish(&mut repo, "collection", &source("work", vec![alpha]), None);
+    let state = repo.verified_state(&mut Guard::read()).unwrap();
+    repo.require_state(&state, &mut Guard::read()).unwrap();
+    let before = disk(&f.path);
+    let mut baseline = Guard::read();
+    repo.search_collection(&collection.resulting, "original", 1, &mut baseline)
+        .unwrap();
+    for check in 1..=baseline.checks {
+        let mut revoked = Guard::read();
+        revoked.refuse_at = check;
+        assert!(
+            repo.search_collection(&collection.resulting, "original", 1, &mut revoked)
+                .is_err(),
+            "boundary {check}"
+        );
+        assert_eq!(revoked.checks, check);
+    }
+    let mut wrong = Guard::read();
+    wrong.binding.owner_generation += 1;
+    assert!(repo
+        .search_collection(&collection.resulting, "original", 1, &mut wrong)
+        .is_err());
+    let mut exhausted = Guard::read();
+    exhausted.refuse_resources = true;
+    assert!(repo
+        .search_collection(&collection.resulting, "original", 1, &mut exhausted)
+        .is_err());
+    assert_eq!(before, disk(&f.path));
+    drop(repo);
+    let mut repo = Repository::open_at(&f.path, &binding(), &mut Guard::read()).unwrap();
+    let extra = capture("extra", "extra", b"Original extra");
+    repo.apply(&extra, b"Original extra", &mut Guard::write(&extra))
+        .unwrap();
+    assert!(repo.require_state(&state, &mut Guard::read()).is_err());
+    assert!(repo
+        .search_collection(&collection.resulting, "original", 1, &mut Guard::read())
+        .is_err());
+}

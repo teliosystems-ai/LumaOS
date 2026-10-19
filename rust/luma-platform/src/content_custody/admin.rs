@@ -252,17 +252,15 @@ pub(crate) fn command(args: &[String]) -> Result<()> {
                 Ok(
                     serde_json::json!({"schema_version":1,"pending":review,"review_sha256":sha,
                     "reconciliation_usage":scope(Action::RecoverResource,"content-custody-reconcile-v1",1,&sha)?,
+                    "lifecycle_assessment":null,"lifecycle_assessment_unavailable":"pending-protected-transition",
                     "content_bytes_changed":false,"production_qualified":false}),
                 )
             } else {
                 files.absent(PUBLISHED)?;
                 let mut store = Store::from_anchor(anchor, files, &mut check)?;
-                store.live(&mut check)?;
-                Ok(
-                    serde_json::json!({"schema_version":1,"installation":installation,"pending":null,
-                    "checkpoint_head":bundle::hex(&store.state.checkpoint),"events":store.journal.events.len(),
-                    "content_bytes_changed":false,"production_qualified":false}),
-                )
+                let mut status = store.status_data(&mut check)?;
+                status["pending"] = serde_json::Value::Null;
+                Ok(status)
             }
         } else {
             let (review, _) = installed_pending_review(&mut anchor, &files, &mut check)?;

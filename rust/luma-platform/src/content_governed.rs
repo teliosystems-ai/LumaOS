@@ -99,6 +99,11 @@ enum Operation {
         query: String,
         limit: usize,
     },
+    CollectionSearch {
+        expected: VersionReference,
+        query: String,
+        limit: usize,
+    },
 }
 
 impl Input {
@@ -120,6 +125,7 @@ impl Input {
                 | Operation::Historical { .. }
                 | Operation::Page { .. }
                 | Operation::Search { .. }
+                | Operation::CollectionSearch { .. }
                 | Operation::Preparation { .. }
                 | Operation::CollectionCurrent { .. }
                 | Operation::CollectionPage { .. }
@@ -146,6 +152,7 @@ impl Input {
             | Operation::Historical { .. }
             | Operation::Page { .. }
             | Operation::Search { .. }
+            | Operation::CollectionSearch { .. }
             | Operation::Preparation { .. }
             | Operation::CollectionCurrent { .. }
             | Operation::CollectionPage { .. }
@@ -276,7 +283,11 @@ impl Input {
                     return Err("native content page exceeds its fixed envelope bounds".into());
                 }
             }
-            Operation::Search { query, limit } => {
+            Operation::Search { query, limit }
+            | Operation::CollectionSearch { query, limit, .. } => {
+                if let Operation::CollectionSearch { expected, .. } = &self.operation {
+                    validate_reference(expected)?;
+                }
                 if *limit > MAX_QUERY_RESULTS {
                     return Err("native content query exceeds its response result bound".into());
                 }
@@ -916,6 +927,7 @@ fn plan(
             | Operation::Historical { .. }
             | Operation::Page { .. }
             | Operation::Search { .. }
+            | Operation::CollectionSearch { .. }
             | Operation::Preparation { .. }
             | Operation::CollectionCurrent { .. }
             | Operation::CollectionPage { .. }
@@ -997,6 +1009,7 @@ fn plan(
         | Operation::Historical { .. }
         | Operation::Page { .. }
         | Operation::Search { .. }
+        | Operation::CollectionSearch { .. }
         | Operation::Preparation { .. }
         | Operation::CollectionCurrent { .. }
         | Operation::CollectionPage { .. }
@@ -1078,6 +1091,7 @@ fn validate_replay(input: &Input, prior: &Plan) -> Result<()> {
         | Operation::Historical { .. }
         | Operation::Page { .. }
         | Operation::Search { .. }
+        | Operation::CollectionSearch { .. }
         | Operation::Preparation { .. }
         | Operation::Recovery { .. } => false,
         Operation::CollectionCurrent { .. }
@@ -1209,6 +1223,17 @@ fn query(
             "provenance_authority":false,
             "workflow_executed":false,
             "production_qualified":false
+        }),
+        Operation::CollectionSearch {
+            expected,
+            query,
+            limit,
+        } => serde_json::json!({
+            "schema_version":1,
+            "collection_search":repository.search_collection(expected, query, *limit, boundary)?,
+            "content_delivered":false,"committed":false,"authority_returned":false,
+            "semantic_classification":false,"membership_is_authority":false,
+            "provenance_authority":false,"workflow_executed":false,"production_qualified":false
         }),
         _ => return Err("native content query profile cannot inspect a mutation plan".into()),
     };
@@ -2385,8 +2410,117 @@ mod tests {
     }
 
     #[test]
+    fn exact_collection_search_joins_real_store_query_profile_and_resource_receipt() {
+        use std::os::unix::fs::DirBuilderExt;
+        struct Directory(std::path::PathBuf);
+        impl Drop for Directory {
+            fn drop(&mut self) {
+                std::fs::remove_dir_all(&self.0).unwrap();
+            }
+        }
+        let root = std::env::var_os("LUMA_STORAGE_TEST_ROOT")
+            .expect("native collection search requires private disposable ext4 storage");
+        let directory = Directory(std::path::PathBuf::from(root).join(format!(
+            "native-collection-search-{}",
+            crate::resources::random_id().unwrap()
+        )));
+        std::fs::DirBuilder::new()
+            .mode(0o700)
+            .create(&directory.0)
+            .unwrap();
+        let binding = input().binding;
+        let source = luma_content_store::CollectionSource {
+            schema_version: 1,
+            kind: "luma-explicit-collection-v1".into(),
+            collection_id: "work".into(),
+            name: "Exact work".into(),
+            members: vec![],
+        };
+        let bytes = source.canonical_bytes().unwrap();
+        let initial = Plan::collection_capture(
+            binding.clone(),
+            &source,
+            Provenance {
+                request_id: "collection-search-source".into(),
+                workflow_sha256: "c".repeat(64),
+                source_sha256: io::digest(&bytes),
+                origin: luma_content::EditOrigin::External,
+            },
+        )
+        .unwrap();
+        let mut boundary = BackupQueryBoundary {
+            binding,
+            review: Some(initial.review_sha256().into()),
+            checks: 0,
+            refuse_at: usize::MAX,
+        };
+        let mut repository = Repository::create_at(&directory.0, &initial, &mut boundary).unwrap();
+        let published = repository
+            .apply_collection(&initial, &bytes, &mut boundary)
+            .unwrap();
+        boundary.review = None;
+        let request = query_input(Operation::CollectionSearch {
+            expected: published.resulting.clone(),
+            query: "work".into(),
+            limit: 1,
+        });
+        let canonical = canonical_request(&serde_json::to_vec(&request).unwrap()).unwrap();
+        let profile =
+            profile_id(Mode::Query, &request, &canonical, &io::digest(&canonical)).unwrap();
+        assert!(query_profile(&profile).unwrap());
+        assert_eq!(
+            usage_at(&profile, "f".repeat(64), false).unwrap().action,
+            grants::Action::Read
+        );
+        let result = query(&request, &repository, &mut boundary).unwrap();
+        assert_eq!(
+            result["collection_search"]["collection"],
+            serde_json::to_value(published.resulting).unwrap()
+        );
+        assert_eq!(result["collection_search"]["search"]["total_matches"], 0);
+        for flag in [
+            "content_delivered",
+            "committed",
+            "authority_returned",
+            "semantic_classification",
+            "membership_is_authority",
+            "workflow_executed",
+            "production_qualified",
+        ] {
+            assert_eq!(result[flag], false);
+        }
+        let (mut response, mut receipt) = resource_response();
+        response.result = result;
+        receipt["output_sha256"] =
+            serde_json::json!(io::digest(&serde_json::to_vec(&response.result).unwrap()));
+        verify_resource(
+            &response,
+            &response.binding,
+            &response.request_sha256,
+            receipt.clone(),
+        )
+        .unwrap();
+        response.result["collection_search"]["search"]["total_matches"] = serde_json::json!(1);
+        assert!(verify_resource(
+            &response,
+            &response.binding,
+            &response.request_sha256,
+            receipt
+        )
+        .is_err());
+        boundary.checks = 0;
+        boundary.refuse_at = 4;
+        assert!(query(&request, &repository, &mut boundary).is_err());
+    }
+
+    #[test]
     fn collection_and_preparation_requests_are_bounded_read_only_selectors() {
         for operation in [
+            Operation::CollectionSearch {
+                expected: reference(),
+                query: "original".into(),
+                limit: MAX_QUERY_RESULTS,
+            },
             Operation::CollectionCurrent {
                 collection_id: "work-items".into(),
             },
@@ -2417,6 +2551,11 @@ mod tests {
             );
         }
         for operation in [
+            Operation::CollectionSearch {
+                expected: reference(),
+                query: "original".into(),
+                limit: MAX_QUERY_RESULTS + 1,
+            },
             Operation::CollectionCurrent {
                 collection_id: "../escape".into(),
             },
@@ -2823,6 +2962,11 @@ mod tests {
         let capture = input();
         let prior = plan(&capture, None, &mut NoAuthority).unwrap();
         for operation in [
+            Operation::CollectionSearch {
+                expected: reference(),
+                query: "word".into(),
+                limit: 1,
+            },
             Operation::BackupReview {},
             Operation::Current {
                 artifact_id: "notes-one".into(),

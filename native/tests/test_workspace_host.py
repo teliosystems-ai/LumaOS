@@ -401,6 +401,24 @@ class WorkspaceHostTests(unittest.TestCase):
             service.close()
             self.assertTrue(binary.closed)
 
+    def test_observed_exit_validation_and_completion_are_distinct_without_authority(self):
+        binary, events = Pin(), []
+        service = host.Host(binary, events.append)
+        def run(_binary, _command, _payload, _cancel, observe):
+            observe(1)
+            return 'completed', response(document())
+        try:
+            with patch.object(host, 'run_process', run):
+                service.work(preview(), 'content-contract-document', b'{}', threading.Event())
+            self.assertEqual([event['state'] for event in events], ['started', 'validating', 'completed'])
+            self.assertTrue(all(event['committed'] is False and event['authority_returned'] is False for event in events))
+            events.clear()
+            with patch.object(host, 'run_process', return_value=('completed', b'{}')):
+                service.work(preview(), 'content-contract-document', b'{}', threading.Event())
+            self.assertEqual([event['state'] for event in events], ['validating', 'failed'])
+        finally:
+            service.close()
+
     def test_ui_is_separate_ephemeral_scriptless_manual_surface(self):
         app = (ROOT / 'native/desktop/workspace_app.py').read_text()
         js = (ROOT / 'web/native-workspace.js').read_text()

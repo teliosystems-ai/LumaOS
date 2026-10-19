@@ -1,0 +1,114 @@
+{
+  "schema_version": 1,
+  "recorded_on": "2026-10-19",
+  "branch": "feature/g3-gwin0-beta",
+  "status": "bounded-read-and-custody-assessment-software-verified",
+  "implemented": [
+    "Exact typed collection search from one verified snapshot, retaining historical membership without expanding access",
+    "Native collection query joined to the original finite Read profile, current owner/resource/custody checks and exact output receipt",
+    "Terminal-only exact-reference paging with independent native page inspection and Read grants, bounded assembly and native complete-envelope reopen",
+    "Production preview JavaScript keyboard cancellation, live errors, focus restoration and grounded source metadata without private-read authority",
+    "First-Admin-only ephemeral Windows exact-file read under the actual original token with current NTFS identity/owner/ACL, UTC and session checks",
+    "Closed host-file-read UTC source purpose and acknowledged bounded original-client delivery with exact complete hash",
+    "Read-only Admin custody capacity assessment bound to original genesis, canonical journal and actual protected checkpoint"
+  ],
+  "source": {
+    "snapshot": "/mnt/luma-build/work/g3-integrated-source-20261019-c",
+    "files": 589,
+    "manifest_sha256": "b28eee0cbd46e18b8297a9a94de719d44af7512299b95d8285a50c5b841305d6",
+    "all_current_source_records_match": true,
+    "windows_verification_snapshot_manifest_sha256": "31d98757a4820d363f1e3d9e6badc978f13410c17e38fe7a9544aa9ea69d69bf",
+    "composed_verification": true,
+    "windows_input_files_identical_to_final_snapshot": 44
+  },
+  "native_verification": {
+    "evidence": "/mnt/luma-build/work/g3-native-verify-20261019-c",
+    "tools_image": "sha256:819dfe7772da1e3c76ffdc8f9ea4a1fa44c7c549bd4fa988e35d9397d87924b2",
+    "network": "none",
+    "maximum_memory_gib": 4,
+    "maximum_cpus": 2,
+    "fixture_storage": "private disposable ext4 on the D-backed build volume",
+    "fresh_workspace_all_targets_warnings_denied": true,
+    "check_log_sha256": "834930851877ba5599d05bc7b7c10ab943dfcd35846efc3bbca483e128ccd6ba",
+    "focused_groups": {
+      "content_checkpoint": 35,
+      "content_governed": 40,
+      "content_restore": 7,
+      "content_workflow": 2,
+      "hosted_windows": 3,
+      "utc_windows": 9,
+      "content_store_scanner": 2,
+      "content_store_collections": 16,
+      "content_store_queries": 12
+    },
+    "focused_passed": 126,
+    "focused_failed": 0,
+    "focused_ignored": 0,
+    "whole_workspace_unit_suite_executed": false,
+    "offline_apparmor_policy_parse_passed": true,
+    "loaded_confinement_tested": false,
+    "actual_software_tpm_scenarios_passed": 3,
+    "software_tpm_scenarios": ["normal", "lost-publication", "lost-parent"],
+    "software_tpm_log_sha256": "37fe537168bd7a77c522f60684338d15e508412d9cd36a70586c3051d19bccbf",
+    "actual_unprivileged_cli_passed": 30,
+    "cli_log_sha256": "f91a0b015a07f8daf535ff97d7e8d04c28e48b74844455712f963d87c0d20a41",
+    "production_mode_binary_sha256": "ca1b07c0bda622f87c8e28763ce37ff38c6ed78608819bd138e6a8d20b86b409",
+    "build_log_sha256": "61112ab908c64bd8d2d404c8a7a31813e1a3ee4db05c3e4528dcb0b7a29390f0",
+    "logs_manifest_sha256": "4dabf9cd4524f92e5df78be0ee5dfa122bd523490e78f68dbad273acb9957e55"
+  },
+  "native_source_verification": {
+    "evidence": "/mnt/luma-build/work/g3-native-source-20261019-c",
+    "passed": 593,
+    "failed": 0,
+    "skipped": 0,
+    "warnings_are_errors": true,
+    "log_sha256": "42b548e9a09ae52cd9c90f9c938561db3c804f0d7797879328b69b846eb882a2",
+    "lane_sha256": "212ae2ba72c6ab4a3bceab7a55ec3973bbaa6b7fbd87a4b52b28005eb74d4b7d"
+  },
+  "windows_verification": {
+    "report": "D:\\LumaOS-builds\\g3-windows-verification-20261019-a\\verification.json",
+    "report_sha256": "8969ce5b8309ebd50bf13b212c1f202856fc1ab0db3a3a5e6c222840ae8c0701",
+    "actual_assertions_passed": 260,
+    "production_javascript_assertions_passed": 31,
+    "executable_warnings_as_errors": true,
+    "bundle_sha256": "d5adf2c3c2891b3e59d32264e03d5cec1da65439b0d8e8a2d63670ad08ede93c",
+    "installer_result": "review-only",
+    "service_installed": false,
+    "service_started": false,
+    "physical_tpm_mutated": false,
+    "distribution_imported": false,
+    "installed_authenticated_read_bridge_qualified": false,
+    "graphical_webkit_accessibility_qualified": false
+  },
+  "initial_failures": [
+    {
+      "evidence": "/mnt/luma-build/work/g3-native-verify-20261019-a/check.log",
+      "cause": "New collection iterator returned the content-engine error type instead of the store error type",
+      "resolution": "Explicit fallible conversion; fresh final-source all-target check passed"
+    },
+    {
+      "evidence": "/mnt/luma-build/work/g3-native-verify-20261019-b/store-tests--collections--.log",
+      "cause": "New negative test confused a conflict outcome's genuine unchanged current reference with its unpublished candidate",
+      "resolution": "Assert the genuine current reference remains readable and reject the actual candidate content hash; authorization behavior unchanged"
+    },
+    {
+      "evidence": "conversation tool outputs only; no verified saved failure transcript",
+      "cause": "Windows fixture attempted ACL restoration with an unmodified security object, leaving its own fixture ACL altered",
+      "resolution": "Restore exact sections through a fresh security object; final actual ACL, owner and revocation tests passed without weakening checks"
+    }
+  ],
+  "remaining_development": [
+    "Authenticated paged custody state and enforced physical storage quotas before journal continuation or key succession",
+    "Semantic collections/indexes and general current per-result access policy beyond owner-local lexical search",
+    "Complete accessible conversational/manual, capture, recalculation and recovery journeys beyond the implemented bounded terminal and preview paths",
+    "Complete named adapter and sandboxed external build/test completion integrations",
+    "Ordinary-user Windows SID/principal and finite-grant content bridge, persistent scoped enrollment and authority-key succession",
+    "Complete authenticated Windows product distribution, inference/lifecycle controls and separate Hyper-V desktop implementation"
+  ],
+  "physical_hardware_tested": false,
+  "native_installed_image_qualified": false,
+  "new_image_produced": false,
+  "production_qualified": false,
+  "gate_closing": false,
+  "frozen_g2_sequence_14_changed": false
+}

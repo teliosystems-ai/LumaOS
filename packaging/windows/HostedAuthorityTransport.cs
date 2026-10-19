@@ -188,7 +188,16 @@ namespace Luma.Windows.Hosted
             FixedServiceIdentity.Require();if(age.Elapsed.TotalSeconds>=1800 || !pipe.IsConnected || WaitForSingleObject(process,0)!=0x102)
                 throw new SecurityException("Original Windows client process/pipe or finite session expired.");
             Statistics now=Stats();if(now.TokenType!=1 || !Same(now.TokenId,original.TokenId) || !Same(now.AuthenticationId,original.AuthenticationId) ||
-                !Same(now.ModifiedId,original.ModifiedId) || Number(12)!=Session) throw new SecurityException("Original Windows primary token or logon generation changed.");
+                    !Same(now.ModifiedId,original.ModifiedId) || Number(12)!=Session) throw new SecurityException("Original Windows primary token or logon generation changed.");
+            // Re-open the live original process token, not merely the captured
+            // handle. A replacement primary token must invalidate old sessions.
+            SafeAccessTokenHandle current;if(!OpenProcessToken(process,8,out current)) throw new Win32Exception(Marshal.GetLastWin32Error());
+            using(current) {
+                uint needed;int length=Marshal.SizeOf(typeof(Statistics));IntPtr data=Marshal.AllocHGlobal(length);
+                try {if(!GetTokenInformation(current,10,data,(uint)length,out needed) || needed>length) throw new Win32Exception(Marshal.GetLastWin32Error());Statistics live=(Statistics)Marshal.PtrToStructure(data,typeof(Statistics));
+                    if(live.TokenType!=1 || !Same(live.TokenId,original.TokenId) || !Same(live.AuthenticationId,original.AuthenticationId) || !Same(live.ModifiedId,original.ModifiedId)) throw new SecurityException("Actual original process replaced its authenticated primary token.");
+                }finally {Marshal.FreeHGlobal(data);}
+            }
             using(WindowsIdentity identity=new WindowsIdentity(token.DangerousGetHandle())) {
                 if(identity.User==null || identity.User.Value!=Sid || !identity.IsAuthenticated ||
                     !new WindowsPrincipal(identity).IsInRole(new SecurityIdentifier("S-1-5-4")) || new WindowsPrincipal(identity).IsInRole(WindowsBuiltInRole.Administrator)!=Administrator)

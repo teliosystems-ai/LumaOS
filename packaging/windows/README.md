@@ -1,5 +1,54 @@
 # Windows GWIN0 prerequisite observations
 
+## Authenticated first-Admin-only ephemeral file read
+
+The separate hosted authority now exposes `read-enrolled-file` through its
+existing original-client authenticated pipe. This is a new, single-use,
+30-second session enrollment, not saved folder enrollment or a product-content
+import. The separately commissioned first Admin must be the actual current
+interactive caller and the actual NTFS file owner. No ordinary-user registry,
+Linux principal, Linux grant or guest access is inferred from a SID record.
+
+Using the built `Luma.HostedAuthority.exe`, prepare the stable source intent
+without accessing the source:
+
+```powershell
+.\Luma.HostedAuthority.exe read-intent INSTALLATION C:\Users\OWNER\Documents source.txt EXACT_BYTES SHA256
+```
+
+Have the native UTC Admin explicitly authorize that exact installation and
+intent SHA256 under the closed `host-file-read` source-policy purpose. This
+source approval alone permits no read. It does not begin a session deadline or
+replace fresh independent UTC, actual caller authentication, ACL checks or the
+new exact interactive confirmation. Then use the same arguments:
+
+```powershell
+.\Luma.HostedAuthority.exe read-enrolled-file INSTALLATION C:\Users\OWNER\Documents source.txt EXACT_BYTES SHA256
+```
+
+The byte count must be exact, nonzero and at most 1 MiB. The caller reviews the
+held object/ancestor/ACL fingerprint before any source data is read. Source
+opens run under the actual original token, not System; each read and delivery
+rechecks the original process/token/logon/account/session, independent UTC,
+live commissioned authority, held NTFS identity and effective caller ACL.
+Metadata-only no-recall inspection precedes data opens. Reparse points, hard
+links, offline/cloud attributes, wrong owner, changed ACLs, wrong bytes or hash
+refuse. Folder enumeration and all source writes are absent.
+
+The original client receives inert bytes in bounded, acknowledged 32-KiB chunks,
+checks the complete hash and retains them only in ephemeral memory. Its final
+receipt does not claim a saved file, publication, persistent enrollment, Linux
+authority, another effect or qualification. Ctrl+C cancels the local read;
+cancellation, expiry or refusal can occur after partial bytes have reached the
+same original client. No complete receipt is inferred from partial transfer.
+No automatic retry, indexing, organization or background ingestion is enabled.
+
+Synchronous kernel/filter opens and disposal are not a hard wall-clock bound;
+provider-specific no-hydration and installed LocalSystem/SCM/TPM/ACL acceptance
+still require native qualification. Software/NTFS fixtures do not qualify the
+installed authenticated service or complete GWIN0. The standalone unsigned
+`inspect-enrolled-file.ps1` remains a distinct non-authoritative inspection tool.
+
 This new product-development lane is separate from the historical
 `packaging/wsl` source-MVP launchers. It does not install a WSL distribution,
 change the default distribution, edit global WSL settings, enable Hyper-V,

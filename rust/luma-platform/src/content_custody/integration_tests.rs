@@ -589,7 +589,51 @@ fn protected_publication_acknowledges_exact_pending_and_published_retries_withou
         )
         .unwrap();
     token.publish(&mut Guard::write(&plan)).unwrap();
+    let retained_history = fixture.files().read(JOURNAL, &mut check).unwrap();
     let status = store.status_data(&mut check).unwrap();
+    let lifecycle = &status["lifecycle_assessment"];
+    assert_eq!(lifecycle["installation"], fixture.binding.installation);
+    assert_eq!(lifecycle["original_genesis_event"], "03".repeat(32));
+    assert_eq!(
+        lifecycle["protected_checkpoint_head"],
+        bundle::hex(&fixture.memory.head.get())
+    );
+    assert_eq!(lifecycle["journal_sha256"], hash(&retained_history));
+    assert_eq!(
+        lifecycle["capacity"]["journal_bytes"],
+        retained_history.len()
+    );
+    assert_eq!(lifecycle["capacity"]["event_count"], 1);
+    assert_eq!(
+        lifecycle["capacity"]["remaining_event_slots"],
+        MAX_EVENTS - 1
+    );
+    assert_eq!(
+        lifecycle["capacity"]["remaining_journal_bytes"],
+        MAX_JOURNAL - retained_history.len()
+    );
+    for field in [
+        "history_continuation_implemented",
+        "event_or_byte_limits_changed",
+        "history_truncated",
+        "epoch_created",
+        "keys_changed",
+        "checkpoint_extended",
+        "content_bytes_changed",
+        "authority_returned",
+        "production_qualified",
+    ] {
+        assert_eq!(lifecycle[field], false);
+    }
+    assert_eq!(
+        status["lifecycle_assessment_sha256"],
+        hash(&serde_json::to_vec(lifecycle).unwrap())
+    );
+    assert!(serde_json::to_vec(&status).unwrap().len() <= 8192);
+    assert_eq!(
+        fixture.files().read(JOURNAL, &mut check).unwrap(),
+        retained_history
+    );
     assert_eq!(status["events"], 1);
     assert_eq!(status["owner_domains"], 1);
     assert_eq!(
@@ -641,6 +685,52 @@ fn protected_publication_acknowledges_exact_pending_and_published_retries_withou
         .publish(&replay, &substituted, &profile, "8:1", &audit, &mut check)
         .is_err());
     assert_eq!(fixture.memory.advances.get(), 1);
+}
+
+#[test]
+fn lifecycle_assessment_refuses_damaged_rollback_and_pending_authority_without_writing() {
+    use std::os::unix::fs::PermissionsExt;
+    let fixture = Fixture::new();
+    let original = fixture.files().read(JOURNAL, &mut || Ok(())).unwrap();
+    let path = fixture.authority.join(JOURNAL);
+    let mut store = fixture.store();
+    let initial = store.status_data(&mut || Ok(())).unwrap();
+    assert_eq!(
+        initial["lifecycle_assessment"]["capacity"]["event_count"],
+        0
+    );
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+    fs::write(&path, b"{}").unwrap();
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o400)).unwrap();
+    assert!(store.status_data(&mut || Ok(())).is_err());
+    assert!(Store::open(fixture.memory.clone(), fixture.files(), &mut || Ok(())).is_err());
+    assert_eq!(fs::read(&path).unwrap(), b"{}");
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+    fs::write(&path, &original).unwrap();
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o400)).unwrap();
+    // Restored bytes do not unpoison the refused reader or create authority.
+    assert!(store.status_data(&mut || Ok(())).is_err());
+    let mut store = fixture.store();
+    let actual = fixture.memory.head.get();
+    fixture.memory.head.set([0xee; 32]);
+    assert!(store.status_data(&mut || Ok(())).is_err());
+    assert!(Store::open(fixture.memory.clone(), fixture.files(), &mut || Ok(())).is_err());
+    fixture.memory.head.set(actual);
+    let mut store = fixture.store();
+    fixture
+        .files()
+        .create(PREPARED, b"retained pending fixture evidence", &mut || {
+            Ok(())
+        })
+        .unwrap();
+    assert!(store.status_data(&mut || Ok(())).is_err());
+    assert!(Store::open(fixture.memory.clone(), fixture.files(), &mut || Ok(())).is_err());
+    assert_eq!(fs::read(&path).unwrap(), original);
+    assert_eq!(
+        fixture.files().read(PREPARED, &mut || Ok(())).unwrap(),
+        b"retained pending fixture evidence"
+    );
+    assert_eq!(fixture.memory.advances.get(), 0);
 }
 
 #[test]

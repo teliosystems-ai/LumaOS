@@ -35,6 +35,8 @@ mod backup;
 mod bootstrap;
 #[path = "content_custody/genesis.rs"]
 mod genesis;
+#[path = "content_custody/lifecycle.rs"]
+mod lifecycle;
 #[path = "content_custody/protocol.rs"]
 mod protocol;
 #[path = "content_custody/recipients.rs"]
@@ -841,11 +843,17 @@ impl Store<super::ContentAnchor> {
 impl<A: Checkpoint> Store<A> {
     fn status_data(&mut self, check: &mut impl FnMut() -> Result<()>) -> Result<serde_json::Value> {
         self.live(check)?;
+        let lifecycle = lifecycle::Assessment::capture(&self.journal, &self.bytes, &self.state)?;
+        let lifecycle_sha256 = lifecycle.sha256()?;
         let status = serde_json::json!({"schema_version":1,"installation":self.journal.installation,
             "genesis_event":self.journal.genesis_event,"checkpoint_head":bundle::hex(&self.state.checkpoint),
             "events":self.journal.events.len(),"owner_domains":self.state.owners.len(),
             "journal_sha256":hash(&self.bytes),"pending":false,"content_bytes_changed":false,
+            "lifecycle_assessment":lifecycle,"lifecycle_assessment_sha256":lifecycle_sha256,
             "authority_returned":false,"production_qualified":false});
+        if serde_json::to_vec(&status)?.len() > 8192 {
+            return Err("custody status exceeds its existing finite Admin output bound".into());
+        }
         self.live(check)?;
         Ok(status)
     }

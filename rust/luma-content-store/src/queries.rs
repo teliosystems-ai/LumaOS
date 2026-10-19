@@ -45,6 +45,15 @@ pub struct SearchResults {
     pub truncated: bool,
 }
 
+/// An exact immutable collection selection. Membership narrows a search; it
+/// never grants access or upgrades a historical member to its current version.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct CollectionSearchResults {
+    pub collection: VersionReference,
+    pub search: SearchResults,
+}
+
 /// Pure public prevalidation: no filesystem access, authority, or private data.
 /// ASCII case/whitespace/order aliases normalize to one sorted unique query.
 /// Raw term count is bounded before deduplication to bound parsing work too.
@@ -133,15 +142,102 @@ impl Repository {
         boundary: &mut impl Boundary,
     ) -> Result<SearchResults> {
         let canonical_query = canonical_search_query(query, limit)?;
-        let terms: Vec<_> = canonical_query.split(' ').collect();
         boundary.admit(&self.binding, ResourceBudget::inspection())?;
         let snapshot = self.snapshot(None, boundary)?;
+        self.search_versions(
+            canonical_query,
+            limit,
+            snapshot.current.into_values().map(Ok),
+            boundary,
+        )
+    }
+
+    /// Search only exact published versions in one genuine typed collection.
+    /// A single verified snapshot supplies both membership and member bytes;
+    /// forged JSON collections, conflict candidates and latest-version aliases
+    /// cannot enlarge that selection. The ordinary live owner Read boundary
+    /// remains mandatory throughout reconstruction, scanning and delivery.
+    pub fn search_collection(
+        &self,
+        expected: &VersionReference,
+        query: &str,
+        limit: usize,
+        boundary: &mut impl Boundary,
+    ) -> Result<CollectionSearchResults> {
+        crate::collections::reference(expected)?;
+        let canonical_query = canonical_search_query(query, limit)?;
+        boundary.admit(&self.binding, ResourceBudget::inspection())?;
+        let snapshot = self.snapshot(None, boundary)?;
+        let source = snapshot
+            .records
+            .iter()
+            .find(|(record, plan, _)| {
+                record.plan.decision == DecisionKind::Published
+                    && plan.source_kind() == crate::SourceKind::CollectionIntent
+                    && plan.resulting() == expected
+            })
+            .map(|(_, _, source)| crate::CollectionSource::from_canonical(source))
+            .transpose()?
+            .ok_or("exact published typed collection unavailable")?;
+        storage::repository_check(self, None, boundary)?;
+        let mut selected = std::collections::BTreeMap::new();
+        for (record, plan, _) in &snapshot.records {
+            storage::repository_check(self, None, boundary)?;
+            if record.plan.decision == DecisionKind::Published
+                && source
+                    .members
+                    .iter()
+                    .any(|member| member == plan.resulting())
+                && selected
+                    .insert(plan.artifact_id(), plan.payload.as_slice())
+                    .is_some()
+            {
+                return Err("ambiguous exact collection search member".into());
+            }
+        }
+        if selected.len() != source.members.len() {
+            return Err("published collection search member unavailable".into());
+        }
+        let search = self.search_versions(
+            canonical_query,
+            limit,
+            selected
+                .into_values()
+                .map(|payload| -> Result<ArtifactVersion> {
+                    Ok(luma_content::reopen(payload, &self.binding)?)
+                }),
+            boundary,
+        )?;
+        let result = CollectionSearchResults {
+            collection: expected.clone(),
+            search,
+        };
+        if serde_json::to_vec(&result)?.len() > MAX_SEARCH_RESPONSE_BYTES {
+            return Err("collection search response byte bound exceeded".into());
+        }
+        storage::repository_check(self, None, boundary)?;
+        Ok(result)
+    }
+
+    fn search_versions(
+        &self,
+        canonical_query: String,
+        limit: usize,
+        versions: impl IntoIterator<Item = Result<ArtifactVersion>>,
+        boundary: &mut impl Boundary,
+    ) -> Result<SearchResults> {
+        let terms: Vec<_> = canonical_query.split(' ').collect();
         let mut matches = Vec::new();
         let mut total_matches = 0;
         let mut hit_bytes = 0;
         let mut delivery_full = false;
-        for version in snapshot.current.into_values() {
+        let mut versions = versions.into_iter();
+        loop {
             storage::repository_check(self, None, boundary)?;
+            let Some(version) = versions.next() else {
+                break;
+            };
+            let version = version?;
             let positions = scan(version.content(), &terms, &mut || {
                 storage::repository_check(self, None, boundary)
             })?;

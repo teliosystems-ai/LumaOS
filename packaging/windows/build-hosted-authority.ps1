@@ -28,7 +28,7 @@ $package=Join-Path $output 'Luma.PackageInspector.dll'
 Compile-Hosted @((Join-Path $PSScriptRoot 'PlatformSignature.cs')) $signature @('System.dll','System.Core.dll','System.Security.dll') 'library'
 Compile-Hosted @((Join-Path $PSScriptRoot 'PlatformCustody.cs')) $custody @('System.dll','System.Core.dll','System.Security.dll') 'library'
 Compile-Hosted @((Join-Path $PSScriptRoot 'PackageInspector.cs')) $package @('System.dll','System.Core.dll') 'library'
-$names=@('HostedAuthorityProtocol.cs','HostedAuthorityCustody.cs','HostedAuthorityStorage.cs','HostedAuthorityRelease.cs','HostedAuthorityTransport.cs','HostedAuthorityDeployment.cs','HostedAuthorityService.cs','HostedAuthorityTime.cs','HostedAuthorityLifecycle.cs','HostedAuthorityImport.cs','HostedAuthorityRecovery.cs','HostedAuthorityTrust.cs','HostedAuthorityRuntime.cs','HostedAuthorityRuntimeService.cs','HostedAuthorityInstalledInput.cs')
+$names=@('HostedAuthorityProtocol.cs','HostedAuthorityCustody.cs','HostedAuthorityStorage.cs','HostedAuthorityRelease.cs','HostedAuthorityTransport.cs','HostedAuthorityDeployment.cs','HostedAuthorityService.cs','HostedAuthorityTime.cs','HostedAuthorityLifecycle.cs','HostedAuthorityImport.cs','HostedAuthorityRecovery.cs','HostedAuthorityTrust.cs','HostedAuthorityRuntime.cs','HostedAuthorityRuntimeService.cs','HostedAuthorityInstalledInput.cs','HostedAuthorityRead.cs')
 $inputs=@($names | ForEach-Object {Join-Path $PSScriptRoot $_})
 foreach ($sourceInput in $inputs) { if (-not (Test-Path -LiteralPath $sourceInput -PathType Leaf)) { throw ('Hosted build source missing: '+$sourceInput) } }
 $target=if ($LibraryOnly) {'library'} else {'exe'}

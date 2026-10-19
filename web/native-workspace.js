@@ -7,6 +7,7 @@
   let sequence = 0;
   let frames = [];
   let reopened = null;
+  let cancelRequested = false;
   const bridge = window.webkit?.messageHandlers?.workspace;
   const examples = {
     text: 'Manual source. No model or storage publication.\n',
@@ -20,17 +21,22 @@
   };
 
   function announce(message) { byId('status').textContent = message; }
+  function refuse(message) { announce(message); byId('error').textContent = message; }
   function busy(value) {
     byId('preview').disabled = value || !bridge;
     byId('reopen').disabled = value || !bridge;
-    byId('cancel').disabled = !value;
+    byId('cancel').disabled = !value || cancelRequested;
     byId('progress').hidden = !value;
     byId('editor').setAttribute('aria-busy', String(value));
+    byId('preview-output').setAttribute('aria-busy', String(value));
+    ['editor', 'engine', 'example', 'envelope', 'envelope-hash'].forEach(id => { byId(id).disabled = value; });
+    byId('reuse-source').disabled = value || reopened === null;
   }
   function clearPreview() {
     frames = [];
     byId('animation-controls').hidden = true;
     byId('preview-output').replaceChildren();
+    byId('source-grounding').textContent = '';
   }
   function textPreview(text) {
     const pre = document.createElement('pre');
@@ -78,6 +84,7 @@
     byId('preview-output').replaceChildren();
     isolatedPreview(frames[bounded].canonical_svg, `Animation frame ${bounded + 1} of ${frames.length}`);
     byId('frame-label').textContent = `${bounded + 1} / ${frames.length}`;
+    byId('frame').setAttribute('aria-valuetext', `Frame ${bounded + 1} of ${frames.length}`);
     byId('previous-frame').disabled = bounded === 0;
     byId('next-frame').disabled = bounded === frames.length - 1;
   }
@@ -88,6 +95,8 @@
     if (result.operation === 'capture' || result.operation === 'reopen') {
       textPreview(result.preview_content);
       const artifact = result.validated || result.proposed;
+      byId('source-grounding').textContent = JSON.stringify({binding: artifact.receipt.binding, reference: artifact.reference,
+        envelope_sha256: result.envelope_sha256, authenticated_owner: false, publication_proved: false}, null, 2);
       // Keep the exact full envelope, never a reconstructed partial object.
       byId('envelope').value = artifact.canonical_envelope;
       byId('envelope-hash').value = result.envelope_sha256;
@@ -124,7 +133,7 @@
     if (!bridge || active !== null) return;
     const source = byId(operation === 'reopen' ? 'envelope' : 'editor').value;
     if (encoder.encode(source).length > (operation === 'reopen' ? maximum * 6 + 8192 : maximum)) {
-      announce('Input exceeds the exact byte bound. Nothing was executed.');
+      refuse('Input exceeds the exact byte bound. Nothing was executed.');
       return;
     }
     const id = 'manual-' + (++sequence);
@@ -132,37 +141,54 @@
     if (operation === 'preview') value.engine = byId('engine').value;
     else value.expected_envelope_sha256 = byId('envelope-hash').value;
     active = id;
+    cancelRequested = false;
+    reopened = null;
+    byId('error').textContent = '';
     busy(true);
     clearPreview();
     byId('result-data').textContent = '';
+    byId('result-note').textContent = 'No current result. Waiting for observed native exit and digest validation; nothing is saved or published.';
     announce('Request submitted. Waiting for native process observation.');
     try { bridge.postMessage(JSON.stringify(value)); }
-    catch { active = null; busy(false); announce('Native host transport refused; no completion is claimed.'); }
+    catch { refuse('Native host transport failed; completion is unknown. Wait for native observation, request cancellation, or close the workspace.'); }
+  }
+  function requestCancel() {
+    if (active === null || cancelRequested || !bridge) return;
+    cancelRequested = true;
+    byId('cancel').disabled = true;
+    announce('Cancellation submitted; waiting for native acknowledgement and process exit. No completion is inferred.');
+    try { bridge.postMessage(JSON.stringify({schema_version: 1, id: active, operation: 'cancel'})); }
+    catch {
+      cancelRequested = false;
+      byId('cancel').disabled = false;
+      refuse('Cancellation transport failed. The request may still run; no cancellation or completion is claimed.');
+    }
   }
   window.LumaWorkspace = Object.freeze({receive(event) {
-    if (event.schema_version !== 1 || event.authority_returned !== false || event.committed !== false || event.owner_authenticated !== false || event.workflow_executed !== false || event.gate_closing !== false) {
-      announce('Invalid native host response; result not displayed.');
+    if (event === null || typeof event !== 'object' || event.schema_version !== 1 || event.authority_returned !== false || event.committed !== false || event.owner_authenticated !== false || event.workflow_executed !== false || event.gate_closing !== false) {
+      refuse('Invalid native host response; result not displayed. Active work is not assumed stopped.');
       return;
     }
     if (event.id === 'protocol' && event.state === 'refused') {
-      active = null; busy(false); announce('Closed preview protocol refused; no result accepted.'); return;
+      refuse(active === null ? 'Closed preview protocol refused; no result accepted.' : 'Closed preview protocol refused. Active work is not assumed stopped; cancel or wait for its observed exit.'); return;
     }
     if (event.id !== active) return;
     if (event.state === 'started') announce('Native engine process started. Progress is observed state, not an estimated percentage.');
-    else if (event.state === 'cancel-requested') { byId('cancel').disabled = true; announce('Cancellation requested; waiting for the process to exit.'); }
+    else if (event.state === 'validating') announce('Native process exited; validating exact source, engine, complete bytes and digests before display. No completion yet.');
+    else if (event.state === 'cancel-requested') { cancelRequested = true; byId('cancel').disabled = true; announce('Native cancellation acknowledged; waiting for the process to exit.'); }
     else if (['completed', 'cancelled', 'failed'].includes(event.state)) {
-      active = null; busy(false);
+      active = null; cancelRequested = false; busy(false);
+      byId('error').textContent = '';
       if (event.state === 'completed') {
-        try { display(event.result); announce('Native preview completed and digests verified. Nothing was saved or published.'); }
-        catch { clearPreview(); announce('Native preview display refused. No result accepted.'); }
-      } else announce(event.state === 'cancelled' ? 'Native process exited after cancellation. Nothing was saved or published.' : 'Native input, runtime, deadline or result refused. No completion is claimed.');
+        try { display(event.result); announce('Native preview completed and digests verified. Nothing was saved or published.'); byId('result-heading').focus(); }
+        catch { clearPreview(); byId('result-data').textContent = ''; refuse('Native preview display refused. No result accepted.'); }
+      } else if (event.state === 'cancelled') announce('Native process exited after cancellation. Nothing was saved or published.');
+      else refuse('Native input, runtime, deadline or result refused. No completion is claimed.');
     }
   }});
   byId('preview').addEventListener('click', () => submit('preview'));
   byId('reopen').addEventListener('click', () => submit('reopen'));
-  byId('cancel').addEventListener('click', () => {
-    if (active !== null) bridge.postMessage(JSON.stringify({schema_version: 1, id: active, operation: 'cancel'}));
-  });
+  byId('cancel').addEventListener('click', requestCancel);
   byId('example').addEventListener('click', () => { byId('editor').value = examples[byId('engine').value]; byId('editor').focus(); });
   byId('reuse-source').addEventListener('click', () => {
     if (reopened) { byId('editor').value = reopened.source; byId('engine').value = reopened.engine; byId('editor').focus(); announce('Exact reopened source copied to the editor. Recalculate explicitly; nothing is published.'); }
@@ -170,7 +196,16 @@
   byId('frame').addEventListener('input', () => showFrame(Number(byId('frame').value)));
   byId('previous-frame').addEventListener('click', () => showFrame(Number(byId('frame').value) - 1));
   byId('next-frame').addEventListener('click', () => showFrame(Number(byId('frame').value) + 1));
-  document.querySelector('.skip').addEventListener('click', event => { event.preventDefault(); byId('editor').focus(); });
+  document.querySelectorAll('a[href^="#"]').forEach(link => link.addEventListener('click', event => {
+    event.preventDefault(); const target = byId(link.getAttribute('href').slice(1));
+    if (target && !target.disabled) target.focus();
+  }));
+  document.addEventListener('keydown', event => {
+    if (event.key === 'Escape' && active !== null) { event.preventDefault(); requestCancel(); }
+    else if (event.key === 'Enter' && event.ctrlKey && !event.altKey && !event.metaKey && !event.isComposing) {
+      event.preventDefault(); submit(['envelope', 'envelope-hash', 'reopen'].includes(document.activeElement?.id) ? 'reopen' : 'preview');
+    }
+  });
   byId('editor').value = examples.text;
   busy(false);
   announce(bridge ? 'Manual native preview ready. No model, grants or private storage access.' : 'Installed native host unavailable. Preview execution is disabled; no browser substitute engine is used.');

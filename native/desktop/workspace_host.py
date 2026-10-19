@@ -494,6 +494,7 @@ class Host:
             status, output = run_process(self.binary, command, payload, cancel,
                 lambda _: self.event(value['id'], 'started', engine=value.get('engine', 'reopen')))
             if status == 'completed':
+                self.event(value['id'], 'validating', engine=value.get('engine', 'reopen'))
                 data = validate_result(value, output)
                 with self.lock:
                     # Cancellation racing with successful exit is not a claim

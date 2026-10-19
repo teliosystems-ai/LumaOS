@@ -309,6 +309,7 @@ namespace Luma.Windows.Hosted
                         case "runtime-switch":RuntimeCommand(pipe,actor,request,running,"runtime-switch");break;
                         case "runtime-finalize":RuntimeCommand(pipe,actor,request,running,"runtime-finalize");break;
                         case "runtime-cancel":RuntimeCommand(pipe,actor,request,running,"runtime-cancel");break;
+                        case "read-enrolled-file":ReadEnrolledFile(pipe,actor,request,running);break;
                         default:throw new InvalidDataException("Hosted service command is not in the closed protocol.");
                     }
                 }} finally {Array.Clear(frame,0,frame.Length);}
@@ -423,20 +424,23 @@ namespace Luma.Windows.Hosted
             if(Console.IsInputRedirected || Console.IsOutputRedirected) throw new SecurityException("The original interactive client must review and confirm directly.");
             if(arguments.Length<2) throw new InvalidDataException("Usage: commission DOMAIN ENV RELEASEKEYHEX TIMEKEYHEX HTTPS_TIME_ENDPOINT | commission-resume DOMAIN | commission-abort DOMAIN | status DOMAIN | recover DOMAIN | recover-abort DOMAIN | release-review DESCRIPTION_FILE SIGNATURE_FILE | import DESCRIPTION_FILE SIGNATURE_FILE ARCHIVE_FILE | activate DESCRIPTION_FILE SIGNATURE_FILE | reconcile DESCRIPTION_FILE SIGNATURE_FILE | abandon DESCRIPTION_FILE SIGNATURE_FILE | trust|trust-prepare|trust-finalize|trust-cancel|trust-quarantine DESCRIPTION_FILE OLD_PUBLISHER_SIGNATURE_FILE NEW_PUBLISHER_ACCEPTANCE_FILE");
             string command=arguments[0];bool trustCommand=command=="trust" || command=="trust-prepare" || command=="trust-finalize" || command=="trust-cancel" || command=="trust-quarantine";
+            bool readCommand=command=="read-enrolled-file";
             bool runtimeCommand=command=="runtime-prepare" || command=="runtime-switch" || command=="runtime-finalize" || command=="runtime-cancel";
-            if(command!="commission" && command!="commission-resume" && command!="commission-abort" && command!="status" && command!="recover" && command!="recover-abort" && command!="release-review" && command!="import" && command!="activate" && command!="reconcile" && command!="abandon" && !trustCommand && !runtimeCommand) throw new InvalidDataException("Client operation is not allowlisted.");
+            if(command!="commission" && command!="commission-resume" && command!="commission-abort" && command!="status" && command!="recover" && command!="recover-abort" && command!="release-review" && command!="import" && command!="activate" && command!="reconcile" && command!="abandon" && !trustCommand && !runtimeCommand && !readCommand) throw new InvalidDataException("Client operation is not allowlisted.");
             bool deploymentCommand=command=="release-review" || command=="import" || command=="activate" || command=="reconcile" || command=="abandon";
-            if(arguments.Length!=(command=="commission"?6:command=="import" || command=="runtime-prepare" || trustCommand?4:deploymentCommand || runtimeCommand?3:2)) throw new InvalidDataException("Exact client argument count differs.");
-            if(!deploymentCommand && !trustCommand && !runtimeCommand) PlatformCustodyProtocol.Index(arguments[1]);
+            if(arguments.Length!=(command=="commission" || readCommand?6:command=="import" || command=="runtime-prepare" || trustCommand?4:deploymentCommand || runtimeCommand?3:2)) throw new InvalidDataException("Exact client argument count differs.");
+            if(!deploymentCommand && !trustCommand && !runtimeCommand && !readCommand) PlatformCustodyProtocol.Index(arguments[1]);
+            using(HostedReadInputs read=readCommand?new HostedReadInputs(arguments,true):null)
             using(HostedRuntimeInputs runtime=runtimeCommand?new HostedRuntimeInputs(arguments,command=="runtime-prepare"):null)
             using(HostedClientInputs inputs=new HostedClientInputs(command,arguments))
             using(NamedPipeClientStream pipe=new NamedPipeClientStream(".",HostedPipe.Name,PipeDirection.InOut,PipeOptions.Asynchronous,TokenImpersonationLevel.Impersonation)) {
                 pipe.Connect(3000);Stopwatch clientAge=Stopwatch.StartNew();TimeSpan clientPurpose=TimeSpan.FromSeconds(command=="import" || command=="activate" || command=="reconcile" || command=="runtime-prepare"?1800:30);
-                Action check=delegate {HostedPipe.CheckServer(pipe);if(clientAge.Elapsed>=clientPurpose) throw new SecurityException("Exact original client purpose deadline expired.");};check();
+                Action check=delegate {HostedPipe.CheckServer(pipe);if(read!=null) read.Check();if(clientAge.Elapsed>=clientPurpose) throw new SecurityException("Exact original client purpose deadline expired; partial transfer is possible and no complete read/publication is inferred.");};check();
                 using(Wire.Writer hello=new Wire.Writer("luma-windows-hosted-hello-v1")) {hello.U32(1);HostedPipe.Write(pipe,hello.Bytes(),check,TimeSpan.FromSeconds(30));}
                 using(Wire.Writer request=new Wire.Writer("luma-windows-hosted-request-v1")) {
                     request.Text(command,32);
-                    if(runtimeCommand) {request.Blob(runtime.Description,2048);request.Fixed(runtime.Signature,64);}
+                    if(readCommand) request.Blob(read.Intent.Encode(),2048);
+                    else if(runtimeCommand) {request.Blob(runtime.Description,2048);request.Fixed(runtime.Signature,64);}
                     else if(trustCommand) {request.Blob(inputs.Description,3072);request.Fixed(inputs.Signature,64);request.Fixed(inputs.Acceptance,64);}
                     else if(deploymentCommand) {
                         request.Blob(inputs.Description,60000);request.Fixed(inputs.Signature,64);
@@ -447,16 +451,19 @@ namespace Luma.Windows.Hosted
                 }
                 while(true) {
                     byte[] response=HostedPipe.Read(pipe,check,clientPurpose);
-                    using(Wire.Reader reader=new Wire.Reader(response,"luma-windows-hosted-response-v1")) {
+                    try {using(Wire.Reader reader=new Wire.Reader(response,"luma-windows-hosted-response-v1")) {
                         string kind=reader.Text(32);byte[] payload=reader.Blob(60000);reader.End();
+                        try {
                         if(kind=="refused") throw new SecurityException(new UTF8Encoding(false,true).GetString(payload));
-                        if(kind=="utc-challenge") {if(!deploymentCommand && !trustCommand && !runtimeCommand) throw new SecurityException("UTC relay cannot cross into another client purpose.");HostedTimeEndpoint.Deliver(pipe,payload,Wire.Hash(runtimeCommand?runtime.Description:inputs.Description),check);continue;}
+                        if(kind=="utc-challenge") {if(!deploymentCommand && !trustCommand && !runtimeCommand && !readCommand) throw new SecurityException("UTC relay cannot cross into another client purpose.");HostedTimeEndpoint.Deliver(pipe,payload,Wire.Hash(readCommand?read.Intent.Encode():runtimeCommand?runtime.Description:inputs.Description),check);continue;}
+                        if(kind=="read-chunk") {if(!readCommand) throw new SecurityException("Source bytes crossed into another original-client purpose.");byte[] ack=read.Part(payload);try {HostedPipe.Write(pipe,ack,check,TimeSpan.FromSeconds(30));}finally {Array.Clear(ack,0,ack.Length);}continue;}
+                        if(kind=="read-completed") {if(!readCommand) throw new SecurityException("Read receipt crossed into another original-client purpose.");read.Completed(payload);Console.WriteLine(read.Summary());return 0;}
                         if(kind=="runtime-next") {if(command!="runtime-prepare") throw new SecurityException("Runtime transfer crossed its separate original-client preparation purpose.");HostedPipe.Write(pipe,runtime.Part(payload),check,TimeSpan.FromSeconds(30));continue;}
                         if(kind=="package-next") {if(command!="import") throw new SecurityException("Archive transfer crossed its separately reviewed import purpose.");HostedPipe.Write(pipe,inputs.PackagePart(payload),check,TimeSpan.FromSeconds(30));continue;}
                         if(kind=="review") {
                             string hash=Wire.Hash(payload);using(Wire.Reader review=new Wire.Reader(payload,"luma-windows-hosted-reviewed-action-v1")) {
                                 string action=review.Text(32);review.Fixed(32);byte[] exact=review.Blob(8192);string detail=review.Text(16000);review.End();
-                                if(action!=command) throw new SecurityException("Service review substituted the requested command.");if(runtimeCommand) runtime.Reviewed(exact);else if(deploymentCommand || trustCommand) inputs.Reviewed(command,exact);
+                                if(action!=command) throw new SecurityException("Service review substituted the requested command.");if(readCommand) read.Reviewed(exact,hash);else if(runtimeCommand) runtime.Reviewed(exact);else if(deploymentCommand || trustCommand) inputs.Reviewed(command,exact);
                                 else if(command=="commission" || command=="commission-resume") {
                                     CommissionIntent proposed=CommissionIntent.Decode(exact);if(proposed.Domain!=arguments[1]) throw new SecurityException("Commissioning review changed its selected domain.");
                                     if(command=="commission" && (proposed.Environment!=arguments[2] || !Wire.Equal(proposed.ReleaseKey,Wire.Bytes(arguments[3],72,true)) || !Wire.Equal(proposed.TimeKey,Wire.Bytes(arguments[4],72,true)) || proposed.TimeEndpoint!=HostedTimeEndpoint.Validate(arguments[5]))) throw new SecurityException("Commissioning review substituted the exact original-client environment/key pins/UTC endpoint.");
@@ -559,13 +566,15 @@ namespace Luma.Windows.Hosted
                             }
                         }
                         throw new InvalidDataException("Unexpected closed service response.");
-                    }
+                        }finally {Array.Clear(payload,0,payload.Length);}
+                    }}finally {Array.Clear(response,0,response.Length);}
                 }
             }
         }
         public static int Main(string[] arguments)
         {
             try {
+                if(arguments.Length>0 && arguments[0]=="read-intent") return HostedReadInputs.Describe(arguments);
                 if(arguments.Length==1 && arguments[0]=="service") {if(System.Environment.UserInteractive) throw new SecurityException("Service entrypoint requires actual SCM launch.");using(HostedAuthorityWindowsService service=new HostedAuthorityWindowsService()) {ServiceBase.Run(service);return service.ExitCode;}}
                 return Client(arguments);
             } catch(Exception error) {

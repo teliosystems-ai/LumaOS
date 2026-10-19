@@ -467,7 +467,7 @@ fn identifier(value: &str) -> Result<()> {
     Ok(())
 }
 
-fn reference(value: &VersionReference) -> Result<()> {
+pub(crate) fn reference(value: &VersionReference) -> Result<()> {
     if value.artifact_id.is_empty()
         || value.artifact_id.len() > 128
         || !value.artifact_id.as_bytes()[0].is_ascii_alphanumeric()

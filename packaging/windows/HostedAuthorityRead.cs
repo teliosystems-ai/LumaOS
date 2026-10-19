@@ -245,7 +245,7 @@ namespace Luma.Windows.Hosted
         private static void ReadEnrolledFile(NamedPipeServerStream pipe,HostedActor actor,Wire.Reader request,Action running) {
             EnrolledReadIntent intent=EnrolledReadIntent.Decode(request.Blob(2048));request.End();Stopwatch age=Stopwatch.StartNew();Action original=Live(actor,running,age);
             using(NativeAuthority authority=new NativeAuthority("host-deployment",actor)) {
-                NoUncertainFileAuthority(authority);
+                NoUncertainFileAuthority(authority);authority.State.RequireReadableTail();
                 intent.Match(authority.Identity,actor.Sid);JournalHistory history=authority.Journal.Read(original);history.Reconcile(authority.Identity,null,authority.Nv.ReadHead());LiveUtcWindow utc=ReadTime(pipe,authority,intent,original);
                 Action check=delegate {original();authority.State.Check();NoUncertainFileAuthority(authority);utc.Check();if(authority.Nv.ReadHead()!=history.Head) throw new SecurityException("Actual read authority changed during its finite original session.");original();};
                 using(EnrolledReadSource source=new EnrolledReadSource(intent,actor.Token,check)) {

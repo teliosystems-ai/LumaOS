@@ -134,6 +134,200 @@ fn exact_historical_versions_survive_newer_conflict_and_no_change_outcomes() {
 }
 
 #[test]
+fn selected_search_scans_only_exact_published_versions_and_never_counts_outside_hits() {
+    let f = Fixture::new();
+    let mut store = repository(&f);
+    let first = store
+        .current_reference("alpha", &mut Guard::read())
+        .unwrap();
+    external(&mut store, "new-alpha", first.clone(), b"Newer delta");
+    publish(
+        &mut store,
+        "outside",
+        "beta",
+        b"fox secret outside selected version",
+    );
+    let before = disk(&f.path);
+    let selection = vec![first.clone()];
+    let result = store
+        .search_selected(&selection, "FOX", 64, &mut Guard::read())
+        .unwrap();
+    assert_eq!(result.selected_versions, 1);
+    assert_eq!(
+        result.selection_sha256,
+        luma_content::sha256(&canonical_search_selection(&selection).unwrap())
+    );
+    assert_eq!(result.search.canonical_query, "fox");
+    assert_eq!(result.search.total_matches, 1);
+    assert_eq!(result.search.matches[0].reference, first);
+    assert!(!result.search.truncated);
+    for term in ["delta", "secret", "outside"] {
+        let result = store
+            .search_selected(&selection, term, 1, &mut Guard::read())
+            .unwrap();
+        assert_eq!(result.search.total_matches, 0);
+        assert!(result.search.matches.is_empty());
+    }
+    assert_eq!(
+        store.search("fox", 1, &mut Guard::read()).unwrap().matches[0]
+            .reference
+            .artifact_id,
+        "beta"
+    );
+    assert_eq!(disk(&f.path), before);
+    drop(store);
+    let reopened = Repository::open_at(&f.path, &binding(), &mut Guard::read()).unwrap();
+    assert_eq!(
+        reopened
+            .search_selected(&selection, "fox", 64, &mut Guard::read())
+            .unwrap(),
+        result
+    );
+}
+
+#[test]
+fn selected_search_refuses_any_forged_absent_or_retained_conflict_reference() {
+    let f = Fixture::new();
+    let mut store = repository(&f);
+    let first = store
+        .current_reference("alpha", &mut Guard::read())
+        .unwrap();
+    let source = b"Unpublished secret fox";
+    let candidate_provenance = provenance("conflict-selected", source, EditOrigin::External);
+    let unpublished_plan = store
+        .plan_external_edit(
+            "alpha",
+            first.clone(),
+            source,
+            candidate_provenance.clone(),
+            &mut Guard::read(),
+        )
+        .unwrap();
+    assert_eq!(unpublished_plan.data.decision, DecisionKind::Published);
+    let unpublished = luma_content::reopen(&unpublished_plan.payload, &binding())
+        .unwrap()
+        .reference()
+        .unwrap();
+    let current = external(&mut store, "current", first.clone(), b"Current delta");
+    let conflict_plan = store
+        .plan_external_edit(
+            "alpha",
+            first.clone(),
+            source,
+            candidate_provenance.clone(),
+            &mut Guard::read(),
+        )
+        .unwrap();
+    let retained: luma_content::CapturedContent =
+        serde_json::from_slice(&conflict_plan.payload).unwrap();
+    assert_eq!(retained.canonical_bytes().unwrap(), conflict_plan.payload);
+    assert_eq!(retained.content.as_bytes(), source);
+    assert_eq!(retained.content_sha256, unpublished.content_sha256);
+    assert_eq!(retained.provenance, candidate_provenance);
+    let conflict = store
+        .apply(&conflict_plan, source, &mut Guard::write(&conflict_plan))
+        .unwrap();
+    assert_eq!(conflict.decision, DecisionKind::ConflictRetained);
+    assert_eq!(conflict.resulting, current.resulting);
+    assert_eq!(
+        store
+            .current_reference("alpha", &mut Guard::read())
+            .unwrap(),
+        current.resulting
+    );
+    assert_eq!(
+        store
+            .historical(&conflict.resulting, &mut Guard::read())
+            .unwrap()
+            .content(),
+        b"Current delta"
+    );
+    let selected = store
+        .search_selected(&[conflict.resulting], "delta", 1, &mut Guard::read())
+        .unwrap();
+    assert_eq!(selected.search.total_matches, 1);
+    assert_eq!(selected.search.matches[0].reference, current.resulting);
+    let mut invalid = vec![unpublished];
+    for field in 0..4 {
+        let mut reference = first.clone();
+        match field {
+            0 => reference.artifact_id = "absent".into(),
+            1 => reference.version += 20,
+            2 => reference.content_sha256 = "e".repeat(64),
+            _ => reference.receipt_sha256 = "e".repeat(64),
+        }
+        invalid.push(reference);
+    }
+    let before = disk(&f.path);
+    for reference in invalid {
+        assert!(store
+            .search_selected(&[reference], "fox", 1, &mut Guard::read())
+            .is_err());
+    }
+    assert_eq!(disk(&f.path), before);
+}
+
+#[test]
+fn selected_search_structure_and_resources_refuse_before_private_reads() {
+    let f = Fixture::new();
+    let store = repository(&f);
+    let first = store
+        .current_reference("alpha", &mut Guard::read())
+        .unwrap();
+    let mut later = first.clone();
+    later.artifact_id = "beta".into();
+    let mut malformed = first.clone();
+    malformed.receipt_sha256 = "0".repeat(64);
+    for selection in [
+        vec![],
+        vec![first.clone(), first.clone()],
+        vec![later, first.clone()],
+        vec![malformed],
+        vec![first.clone(); MAX_SEARCH_SELECTION + 1],
+    ] {
+        let mut boundary = Guard::read();
+        assert!(store
+            .search_selected(&selection, "fox", 1, &mut boundary)
+            .is_err());
+        assert_eq!(boundary.admissions, 0);
+        assert_eq!(boundary.checks, 0);
+    }
+    let mut wrong = Guard::read();
+    wrong.binding.owner_generation += 1;
+    assert!(store
+        .search_selected(&[first.clone()], "fox", 1, &mut wrong)
+        .is_err());
+    let mut refused = Guard::read();
+    refused.refuse_resources = true;
+    assert!(store
+        .search_selected(&[first], "fox", 1, &mut refused)
+        .is_err());
+    assert_eq!(refused.checks, 0);
+}
+
+#[test]
+fn selected_search_continuous_revocation_refuses_every_compute_and_delivery_cut() {
+    let f = Fixture::new();
+    let store = repository(&f);
+    let first = store
+        .current_reference("alpha", &mut Guard::read())
+        .unwrap();
+    let before = disk(&f.path);
+    let mut baseline = Guard::read();
+    store
+        .search_selected(&[first.clone()], "fox", 1, &mut baseline)
+        .unwrap();
+    for refuse_at in 1..=baseline.checks {
+        let mut boundary = Guard::read();
+        boundary.refuse_at = refuse_at;
+        assert!(store
+            .search_selected(&[first.clone()], "fox", 1, &mut boundary)
+            .is_err());
+    }
+    assert_eq!(disk(&f.path), before);
+}
+
+#[test]
 fn historical_lookup_refuses_every_reference_substitution_and_never_falls_back() {
     let f = Fixture::new();
     let store = repository(&f);
@@ -326,6 +520,12 @@ fn all_history_integrity_is_required_even_when_limit_is_already_satisfied() {
     let reference = store.inventory(&mut Guard::read());
     assert!(reference.is_err());
     assert!(store.search("fox", 1, &mut Guard::read()).is_err());
+    let selected = capture("initial", "alpha", b"Alpha fox FOX, beta.")
+        .resulting()
+        .clone();
+    assert!(store
+        .search_selected(&[selected], "fox", 1, &mut Guard::read())
+        .is_err());
     assert!(store.current("alpha", &mut Guard::read()).is_err());
     assert_eq!(disk(&f.path), before);
 }
@@ -417,6 +617,17 @@ fn response_byte_budget_keeps_a_deterministic_prefix_with_exact_total() {
     assert_eq!(small.matches, result.matches[..32]);
     assert_eq!(small.total_matches, 64);
     assert!(small.truncated);
+    let selection = complete
+        .matches
+        .iter()
+        .map(|hit| hit.reference.clone())
+        .collect::<Vec<_>>();
+    let selected = store
+        .search_selected(&selection, &query, 64, &mut Guard::read())
+        .unwrap();
+    assert_eq!(selected.search, result);
+    assert_eq!(selected.selected_versions, 64);
+    assert!(serde_json::to_vec(&selected).unwrap().len() <= MAX_SEARCH_RESPONSE_BYTES);
 }
 
 #[test]

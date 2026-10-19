@@ -103,6 +103,11 @@ enum Operation {
         query: String,
         limit: usize,
     },
+    SearchSelected {
+        references: Vec<VersionReference>,
+        query: String,
+        limit: usize,
+    },
     CollectionSearch {
         expected: VersionReference,
         query: String,
@@ -130,6 +135,7 @@ impl Input {
                 | Operation::Envelope { .. }
                 | Operation::Page { .. }
                 | Operation::Search { .. }
+                | Operation::SearchSelected { .. }
                 | Operation::CollectionSearch { .. }
                 | Operation::Preparation { .. }
                 | Operation::CollectionCurrent { .. }
@@ -173,6 +179,7 @@ impl Input {
             | Operation::Envelope { .. }
             | Operation::Page { .. }
             | Operation::Search { .. }
+            | Operation::SearchSelected { .. }
             | Operation::CollectionSearch { .. }
             | Operation::Preparation { .. }
             | Operation::CollectionCurrent { .. }
@@ -307,9 +314,13 @@ impl Input {
                 }
             }
             Operation::Search { query, limit }
+            | Operation::SearchSelected { query, limit, .. }
             | Operation::CollectionSearch { query, limit, .. } => {
                 if let Operation::CollectionSearch { expected, .. } = &self.operation {
                     validate_reference(expected)?;
+                }
+                if let Operation::SearchSelected { references, .. } = &self.operation {
+                    luma_content_store::canonical_search_selection(references)?;
                 }
                 if *limit > MAX_QUERY_RESULTS {
                     return Err("native content query exceeds its response result bound".into());
@@ -968,6 +979,7 @@ fn plan(
             | Operation::Envelope { .. }
             | Operation::Page { .. }
             | Operation::Search { .. }
+            | Operation::SearchSelected { .. }
             | Operation::CollectionSearch { .. }
             | Operation::Preparation { .. }
             | Operation::CollectionCurrent { .. }
@@ -1051,6 +1063,7 @@ fn plan(
         | Operation::Envelope { .. }
         | Operation::Page { .. }
         | Operation::Search { .. }
+        | Operation::SearchSelected { .. }
         | Operation::CollectionSearch { .. }
         | Operation::Preparation { .. }
         | Operation::CollectionCurrent { .. }
@@ -1134,6 +1147,7 @@ fn validate_replay(input: &Input, prior: &Plan) -> Result<()> {
         | Operation::Envelope { .. }
         | Operation::Page { .. }
         | Operation::Search { .. }
+        | Operation::SearchSelected { .. }
         | Operation::CollectionSearch { .. }
         | Operation::Preparation { .. }
         | Operation::Recovery { .. } => false,
@@ -1281,6 +1295,17 @@ fn query(
             "provenance_authority":false,
             "workflow_executed":false,
             "production_qualified":false
+        }),
+        Operation::SearchSelected {
+            references,
+            query,
+            limit,
+        } => serde_json::json!({
+            "schema_version":1,
+            "selected_search":repository.search_selected(references, query, *limit, boundary)?,
+            "content_delivered":false,"committed":false,"authority_returned":false,
+            "semantic_classification":false,"selection_is_authority":false,
+            "provenance_authority":false,"workflow_executed":false,"production_qualified":false
         }),
         Operation::CollectionSearch {
             expected,
@@ -2646,6 +2671,185 @@ mod tests {
         boundary.checks = 0;
         boundary.refuse_at = 4;
         assert!(query(&request, &repository, &mut boundary).is_err());
+    }
+
+    #[test]
+    fn selected_search_binds_every_exact_reference_to_the_closed_read_request() {
+        let first = reference();
+        let mut second = first.clone();
+        second.artifact_id = "notes-two".into();
+        let value = query_input(Operation::SearchSelected {
+            references: vec![first.clone(), second.clone()],
+            query: "original".into(),
+            limit: 2,
+        });
+        let bytes = canonical_request(&serde_json::to_vec(&value).unwrap()).unwrap();
+        let digest = io::digest(&bytes);
+        let id = profile_id(Mode::Query, &value, &bytes, &digest).unwrap();
+        assert!(value.is_query());
+        assert!(value.source().is_err());
+        assert_eq!(profile(&id).unwrap().source, digest);
+        assert_eq!(profile(&id).unwrap().review, digest);
+        assert_eq!(
+            usage_at(&id, "f".repeat(64), false).unwrap().action,
+            grants::Action::Read
+        );
+        for field in 0..6 {
+            let mut changed = parse(&bytes).unwrap();
+            let Operation::SearchSelected { references, .. } = &mut changed.operation else {
+                panic!("exact query variant changed")
+            };
+            match field {
+                0 => references[1].artifact_id = "notes-z".into(),
+                1 => references[1].version += 1,
+                2 => references[1].content_sha256 = "a".repeat(64),
+                3 => references[1].receipt_sha256 = "a".repeat(64),
+                4 => {
+                    references.pop();
+                }
+                _ => changed.binding.owner_generation += 1,
+            }
+            let other = canonical_request(&serde_json::to_vec(&changed).unwrap()).unwrap();
+            let other_id = profile_id(Mode::Query, &changed, &other, &io::digest(&other)).unwrap();
+            assert_ne!(bytes, other);
+            assert_ne!(id, other_id);
+            assert!(profile_id(Mode::Query, &changed, &other, &digest).is_err());
+        }
+        for selection in [
+            vec![],
+            vec![first.clone(), first.clone()],
+            vec![second, first],
+            vec![reference(); 65],
+        ] {
+            assert!(query_input(Operation::SearchSelected {
+                references: selection,
+                query: "word".into(),
+                limit: 1
+            })
+            .validate()
+            .is_err());
+        }
+        let mut unknown: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        unknown["operation"]["references"][0]["grant"] =
+            serde_json::json!("forged-per-result-authority");
+        assert!(parse(&serde_json::to_vec(&unknown).unwrap()).is_err());
+    }
+
+    #[test]
+    fn selected_search_joins_actual_versions_exact_result_receipt_and_continuous_read_refusal() {
+        use std::os::unix::fs::DirBuilderExt;
+        struct Directory(std::path::PathBuf);
+        impl Drop for Directory {
+            fn drop(&mut self) {
+                std::fs::remove_dir_all(&self.0).unwrap();
+            }
+        }
+        let root = std::env::var_os("LUMA_STORAGE_TEST_ROOT")
+            .expect("selected native search requires private disposable ext4 storage");
+        let directory = Directory(std::path::PathBuf::from(root).join(format!(
+            "native-selected-search-{}",
+            crate::resources::random_id().unwrap()
+        )));
+        std::fs::DirBuilder::new()
+            .mode(0o700)
+            .create(&directory.0)
+            .unwrap();
+        let binding = input().binding;
+        let source = b"Selected fox";
+        let initial = Plan::capture(
+            binding.clone(),
+            "alpha",
+            Format::Utf8Text,
+            source,
+            Provenance {
+                request_id: "selected-alpha".into(),
+                workflow_sha256: "c".repeat(64),
+                source_sha256: io::digest(source),
+                origin: luma_content::EditOrigin::Managed,
+            },
+        )
+        .unwrap();
+        let mut boundary = BackupQueryBoundary {
+            binding: binding.clone(),
+            review: Some(initial.review_sha256().into()),
+            checks: 0,
+            refuse_at: usize::MAX,
+        };
+        let mut repository = Repository::create_at(&directory.0, &initial, &mut boundary).unwrap();
+        let published = repository.apply(&initial, source, &mut boundary).unwrap();
+        let outside = b"Outside fox secret";
+        let other = Plan::capture(
+            binding,
+            "beta",
+            Format::Utf8Text,
+            outside,
+            Provenance {
+                request_id: "outside-beta".into(),
+                workflow_sha256: "c".repeat(64),
+                source_sha256: io::digest(outside),
+                origin: luma_content::EditOrigin::Managed,
+            },
+        )
+        .unwrap();
+        boundary.review = Some(other.review_sha256().into());
+        repository.apply(&other, outside, &mut boundary).unwrap();
+        boundary.review = None;
+        let request = query_input(Operation::SearchSelected {
+            references: vec![published.resulting.clone()],
+            query: "fox".into(),
+            limit: 1,
+        });
+        let result = query(&request, &repository, &mut boundary).unwrap();
+        assert_eq!(result["selected_search"]["selected_versions"], 1);
+        assert_eq!(result["selected_search"]["search"]["total_matches"], 1);
+        assert_eq!(
+            result["selected_search"]["search"]["matches"][0]["reference"],
+            serde_json::to_value(published.resulting).unwrap()
+        );
+        assert!(!serde_json::to_string(&result).unwrap().contains("beta"));
+        for flag in [
+            "content_delivered",
+            "committed",
+            "authority_returned",
+            "semantic_classification",
+            "selection_is_authority",
+            "workflow_executed",
+            "production_qualified",
+        ] {
+            assert_eq!(result[flag], false);
+        }
+        let (mut response, mut receipt) = resource_response();
+        response.result = result;
+        receipt["output_sha256"] =
+            serde_json::json!(io::digest(&serde_json::to_vec(&response.result).unwrap()));
+        verify_resource(
+            &response,
+            &response.binding,
+            &response.request_sha256,
+            receipt.clone(),
+        )
+        .unwrap();
+        response.result["selected_search"]["search"]["total_matches"] = serde_json::json!(2);
+        assert!(verify_resource(
+            &response,
+            &response.binding,
+            &response.request_sha256,
+            receipt
+        )
+        .is_err());
+        boundary.checks = 0;
+        query(&request, &repository, &mut boundary).unwrap();
+        let checkpoints = boundary.checks;
+        for at in 1..=checkpoints {
+            boundary.checks = 0;
+            boundary.refuse_at = at;
+            assert!(query(&request, &repository, &mut boundary).is_err());
+        }
+        boundary.checks = 0;
+        boundary.refuse_at = usize::MAX;
+        boundary.binding.owner_generation += 1;
+        assert!(query(&request, &repository, &mut boundary).is_err());
+        assert_eq!(boundary.checks, 0);
     }
 
     #[test]

@@ -171,6 +171,16 @@ namespace Luma.Windows.Hosted
         public static T BeforeStage<T>(AuthorityIdentity identity,JournalHistory history,JournalEntry candidate,Func<T> stage) {
             if(stage==null) throw new ArgumentNullException("stage");Require(identity,history,candidate);return stage();
         }
+        public static HostedPhysicalTail ProjectedPhysicalTail(AuthorityIdentity identity,JournalHistory history,JournalEntry candidate) {
+            Require(identity,history,candidate);
+            int active=history.FileEnrollments.ActiveCount,credits=history.FileEnrollments.AbortReserveCredits;
+            if(candidate.Kind==JournalKind.FileEnrolled || candidate.Kind==JournalKind.FileEnrollmentRevoked) {
+                FileEnrollmentAction action=FileEnrollmentRecord.Decode(candidate.Payload).Intent.Action;
+                if(action==FileEnrollmentAction.Create) {active++;credits++;}
+                else if(action==FileEnrollmentAction.Revoke) {active--;credits=Math.Min(credits,active);}
+            } else if(candidate.Kind==JournalKind.NvWriteAborted && credits>0) credits--;
+            return HostedPhysicalTail.ForEnrollments(active,credits);
+        }
     }
 
     public sealed class PersistentReadSelection
@@ -244,7 +254,7 @@ namespace Luma.Windows.Hosted
         private static void ReadPersistentFile(NamedPipeServerStream pipe,HostedActor actor,Wire.Reader request,Action running) {
             PersistentReadSelection selected=PersistentReadSelection.Decode(request.Blob(512));EnrolledReadIntent intent=EnrolledReadIntent.Decode(request.Blob(2048));request.End();Stopwatch age=Stopwatch.StartNew();Action original=Live(actor,running,age);
             using(NativeAuthority authority=new NativeAuthority("host-deployment",actor)) {
-                NoUncertainFileAuthority(authority);intent.Match(authority.Identity,actor.Sid);JournalHistory history=authority.Journal.Read(original);history.Reconcile(authority.Identity,null,authority.Nv.ReadHead());EnrolledFileEntry entry=selected.Match(history.FileEnrollments,history.Head,intent);
+                NoUncertainFileAuthority(authority);authority.State.RequireReadableTail();intent.Match(authority.Identity,actor.Sid);JournalHistory history=authority.Journal.Read(original);history.Reconcile(authority.Identity,null,authority.Nv.ReadHead());EnrolledFileEntry entry=selected.Match(history.FileEnrollments,history.Head,intent);
                 LiveUtcWindow utc=SourceTime(pipe,authority,intent.Installation,Wire.Hash(intent.Encode()),entry.NotBefore,entry.Expires,original);Action check=delegate {original();authority.State.Check();NoUncertainFileAuthority(authority);utc.Check();if(authority.Nv.ReadHead()!=history.Head) throw new SecurityException("Persistent enrollment authority changed during read.");original();};
                 using(EnrolledReadSource source=new EnrolledReadSource(intent,actor.Token,check)) {
                     byte[] snapshot=source.Snapshot();entry.RequireSnapshot(snapshot);byte[] review;

@@ -1,5 +1,10 @@
 # G3 and GWIN0 implementation plan
 
+Current delivery work targets [complete native G3 and Windows deployments](G3_GWIN0_DELIVERY.md).
+The latest produced image is the [sequence-16 native Ubuntu candidate](../native/evidence/G2_NATIVE_DESKTOP_CANDIDATE_16_2026-10-19.md),
+not a Windows image or a complete G3 release. Dated checkpoints below retain
+their original source and execution scope.
+
 G3 functional-beta development and the GWIN0 Windows foundation start on
 `feature/g3-gwin0-beta`, authorized on 2026-10-15. G2 remains open for native
 and production qualification. The delivered sequence-14 laboratory image and
@@ -1182,3 +1187,58 @@ attempts and remaining boundaries. Native installed/graphical, physical TPM,
 security/recovery and production custody acceptance remain open. Bounded C
 journal continuation/succession and broader G3/GWIN0 development are not
 reclassified as testing or closed by producing this laboratory candidate.
+
+### Integrated G3 and Windows delivery development, 2026-10-19
+
+The owner requested complete native G3 and Windows deployments. The
+[delivery register](G3_GWIN0_DELIVERY.md) separates the native image/ISO,
+authenticated WSL product and Hyper-V desktop/ISO, including remaining
+implementation work rather than treating it as final testing.
+
+This batch adds exact selected-version lexical search under the existing
+finite Read authorization. A canonical selection binds at most 64 unique
+artifacts to genuine published immutable references; forged, absent and
+unpublished conflict candidates refuse without broadening the search. All
+selected references are resolved from one verified snapshot. This is not a
+semantic index or a general per-result ACL implementation.
+
+The accessible spreadsheet grid emits the native typed expression format;
+only the actual native engine calculates and validates results. Keyboard
+navigation, explicit draft handling, safe resizing, observed progress and
+cancellation remain independent of model availability. This does not bring
+private content, passwords or grants into the graphical WebKit boundary or
+qualify installed graphical accessibility.
+
+Windows storage now accounts for bounded retained files and physically
+allocates new authority files before publication. Signed history derives
+finite terminal revocation/abort capacity; grouped dispatch writes cannot
+borrow another operation's allowance. Actual allocation preserves an empty
+logical file until data is written. Available future tail space is an
+observation, not a volume reservation against other trusted Windows writers.
+Installed SYSTEM/service ACLs, hardware custody and power-loss durability
+remain separate acceptance work.
+
+The offline converter holds independently pinned raw-image and tool handles,
+compares actual guest bytes and creates new VHDX output only inside protected
+D-backed ext4 staging. Descriptor-relative output construction rejects public
+directories and substitution races. The Windows planner validates bounded,
+pinned data in a fresh process without invoking VM or TPM operations. Neither
+component creates an installed desktop, supplies optical boot, establishes
+firmware trust or reconciles VM checkpoint/clone rollback. Full-sized
+conversion and a safe Windows-readable export remain unexecuted/open.
+
+The [execution record](gates/g3/integrated_delivery_2026-10-19.json) binds all
+613 final source files and exact logs: warnings-denied workspace checking,
+four selected-search tests, 120 focused Rust tests, 668 native-source tests,
+26 public-trust/model-input tests, three disposable-TPM scenarios and the real
+CLI checks. Windows passed 89 capacity, 337 authority and 53 planner assertions;
+the production JavaScript harness passed 93 assertions. Python regression passed
+315 tests with five reported skips. These groups overlap and are not a summed
+unique-test total.
+
+The record preserves the earlier full-store run's 127 passes and one corrected
+test-fixture failure; unchanged Rust production bytes join that run to the
+final successful selected-search rerun, not to an invented fresh full-suite
+pass. It also retains wrapper failures and the explicit NTFS fixture correction.
+No new full G3 image, Windows bootable product, installed GUI qualification or
+production acceptance is claimed by this development checkpoint.

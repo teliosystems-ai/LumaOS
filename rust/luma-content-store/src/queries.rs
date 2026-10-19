@@ -13,6 +13,7 @@ pub const MAX_SEARCH_TERMS: usize = 8;
 pub const MAX_SEARCH_TERM_BYTES: usize = 64;
 pub const MAX_SEARCH_RESULTS: usize = 64;
 pub const MAX_SEARCH_RESPONSE_BYTES: usize = 65_536;
+pub const MAX_SEARCH_SELECTION: usize = 64;
 const CHECK_INTERVAL: usize = 32 * 1024;
 
 /// An exact occurrence in canonical content bytes. This is not provenance or
@@ -52,6 +53,35 @@ pub struct SearchResults {
 pub struct CollectionSearchResults {
     pub collection: VersionReference,
     pub search: SearchResults,
+}
+
+/// A caller-selected exact historical set, not an ACL or a capability. The
+/// digest binds the complete canonical selection; counters include only that
+/// selection, never other current versions or retained conflict candidates.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct SelectedSearchResults {
+    pub selection_sha256: String,
+    pub selected_versions: usize,
+    pub search: SearchResults,
+}
+
+/// Pure validation/canonicalization for binding a finite Read request before
+/// any private I/O. References must be sorted by artifact ID, with exactly one
+/// version per artifact. This does not prove publication or grant visibility.
+pub fn canonical_search_selection(references: &[VersionReference]) -> Result<Vec<u8>> {
+    if references.is_empty() || references.len() > MAX_SEARCH_SELECTION {
+        return Err("exact search selection exceeds its bounded reference count".into());
+    }
+    let mut previous: Option<&str> = None;
+    for reference in references {
+        crate::collections::reference(reference)?;
+        if previous.is_some_and(|id| id >= reference.artifact_id.as_str()) {
+            return Err("exact search references must be unique and sorted by artifact ID".into());
+        }
+        previous = Some(&reference.artifact_id);
+    }
+    Ok(serde_json::to_vec(&serde_json::to_value(references)?)?)
 }
 
 /// Pure public prevalidation: no filesystem access, authority, or private data.
@@ -150,6 +180,61 @@ impl Repository {
             snapshot.current.into_values().map(Ok),
             boundary,
         )
+    }
+
+    /// Search only an explicit exact set admitted by the caller's live Read
+    /// boundary. Resolve all references from one verified snapshot before
+    /// scanning anything; absent, forged and conflict references refuse the
+    /// complete request. Newer versions are never substituted. No index or
+    /// policy is persisted and no other owner namespace is opened.
+    pub fn search_selected(
+        &self,
+        references: &[VersionReference],
+        query: &str,
+        limit: usize,
+        boundary: &mut impl Boundary,
+    ) -> Result<SelectedSearchResults> {
+        let selection = canonical_search_selection(references)?;
+        let canonical_query = canonical_search_query(query, limit)?;
+        boundary.admit(&self.binding, ResourceBudget::inspection())?;
+        let snapshot = self.snapshot(None, boundary)?;
+        let mut selected = std::collections::BTreeMap::new();
+        for (record, plan, _) in &snapshot.records {
+            storage::repository_check(self, None, boundary)?;
+            if record.plan.decision == DecisionKind::Published
+                && references
+                    .iter()
+                    .any(|reference| reference == plan.resulting())
+                && selected
+                    .insert(plan.artifact_id(), plan.payload.as_slice())
+                    .is_some()
+            {
+                return Err("ambiguous exact selected search version".into());
+            }
+        }
+        if selected.len() != references.len() {
+            return Err("exact selected published search version unavailable".into());
+        }
+        let search = self.search_versions(
+            canonical_query,
+            limit,
+            selected
+                .into_values()
+                .map(|payload| -> Result<ArtifactVersion> {
+                    Ok(luma_content::reopen(payload, &self.binding)?)
+                }),
+            boundary,
+        )?;
+        let result = SelectedSearchResults {
+            selection_sha256: luma_content::sha256(&selection),
+            selected_versions: references.len(),
+            search,
+        };
+        if serde_json::to_vec(&result)?.len() > MAX_SEARCH_RESPONSE_BYTES {
+            return Err("exact selected search response byte bound exceeded".into());
+        }
+        storage::repository_check(self, None, boundary)?;
+        Ok(result)
     }
 
     /// Search only exact published versions in one genuine typed collection.

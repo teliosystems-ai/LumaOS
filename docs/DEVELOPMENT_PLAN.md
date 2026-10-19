@@ -82,12 +82,18 @@ laptop, not the two required A1 boards.
 | --- | --- |
 | G0 | **Development complete with deferrals; formal certification blocked.** Governing source ingestion and 288-ID traceability are verified; the development baseline, decisions including Admin governance, registers, current Windows/WSL inventory, checks, and source-package evidence exist. Two designated physical boards, the Ubuntu 24.04/E8 baselines, disposable disks, protected production signing custody, and complete qualification evidence are deferred in `docs/gates/g0/blockers.json` and `docs/gates/final_certification_deferrals.json`. |
 | G1 | **Development complete with deferrals; formal certification blocked.** Contract evidence covers resources, policy/Admin delegation, typed DAG, model-pack trust lifecycle, fake and real inference, authenticated gateway, cancellation/concurrency/revocation fencing, state transfer, telemetry, and platform adapters. Qwen3-4B passed bounded native Windows CUDA and Ubuntu WSL CPU/gateway development smoke, but the external artifact is unsigned and not a certified pack. Signed candidate comparison, two-board workflows, boot/recovery, full security/performance evidence, and the real 400–405B experiment are deferred. No deferral waives G0 or G1 exit criteria. |
-| G2 | **Lab image built; native and production qualification open.** The sequence-14 desktop candidate includes native installer/boot/security/recovery implementations and passed its recorded software/build checks. See `native/evidence/G2_TEST_IMAGE_2026-10-14.md` and `native/G2_SOFTWARE_STATUS.md`. Actual installation, boot, enforcing security/recovery, E1/E2 and genuine production custody/signing/model qualification remain open; software fixtures are not physical qualification. |
+| G2 | **Sequence-16 lab image built; installed/native and production qualification open.** The 2026-10-19 desktop candidate passed thirteen offline image checks and a software-emulated Secure Boot live-system/final-storage-teardown smoke test. See `native/evidence/G2_NATIVE_DESKTOP_CANDIDATE_16_2026-10-19.md`. Actual installation, installed graphical/security/recovery acceptance, E1/E2 and genuine production custody/signing/model qualification remain open; live VM smoke is not installation or physical qualification. |
 | G3 | **Development started, 2026-10-15; not qualified.** Owner-approved overlap on `feature/g3-gwin0-beta` while native G2 acceptance remains pending. See `docs/G3_GWIN0_IMPLEMENTATION.md` for scope and implementation slices. |
 | GWIN0 | **Development started, 2026-10-15; not qualified.** Preflight, laboratory signature/policy checks, ordinary-user scoped reads and a populated minimal Ubuntu package builder are implemented. Complete authenticated product deployment, host integration, confinement and VM proof remain open. See `docs/G3_GWIN0_IMPLEMENTATION.md`. |
 | G4, G5, GWIN1, GWIN2 | **Not started.** |
 | G6, G7 | **Not started and separately capacity-gated.** |
 | RX | **Not started and not yet authorized.** |
+
+The owner requested continued G3 and GWIN0 implementation toward both native
+Ubuntu G3 media and the Windows deployment on 2026-10-19. The
+[delivery workstreams](G3_GWIN0_DELIVERY.md) distinguish the native disk image,
+Windows-hosted WSL package, full Hyper-V desktop and required ISO. Those new
+deliverables do not change the existing sequence-16 image or waive acceptance.
 
 ## Program sequence
 

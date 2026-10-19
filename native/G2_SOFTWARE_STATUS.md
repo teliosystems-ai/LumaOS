@@ -1,6 +1,6 @@
 # G2 software completion register
 
-Updated 2026-10-15. **The delivered compact-profile software candidate passes integrated software verification; G2 is not closed.** This register separates
+Updated 2026-10-19. **The delivered compact-profile software candidate passes its recorded software verification; G2 is not closed.** This register separates
 work that can be executed in the current Windows/Ubuntu WSL/VM environment
 from production deployment decisions and physical qualification. It does not
 change the frozen reference release, governing requirements, or exit criteria.
@@ -12,6 +12,19 @@ unit test, default-deny placeholder, or smaller model cannot close a different
 requirement.
 
 ## Current software inventory and work still required
+
+### Current image and continued G3 development
+
+The [sequence-16 desktop handoff](evidence/G2_NATIVE_DESKTOP_CANDIDATE_16_2026-10-19.md)
+is the current native Ubuntu candidate, exported on 2026-10-19. Its offline image
+verification and Secure Boot live-system/final-storage-teardown VM smoke passed;
+installation, graphical/installed security/recovery, physical TPM and production
+qualification did not run. See the exact
+[execution record](evidence/candidate16_execution_2026-10-19.json).
+
+Later G3/GWIN0 work targets [distinct final deployments](../docs/G3_GWIN0_DELIVERY.md).
+It does not turn sequence 16 into a Windows image or a complete G3 release.
+The dated checkpoints below retain their original source and test scope.
 
 ### Approved QA session extension and beta development branch
 

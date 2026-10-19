@@ -1,0 +1,200 @@
+{
+  "schema_version": 1,
+  "recorded_on": "2026-10-19",
+  "branch": "feature/g3-gwin0-beta",
+  "status": "integrated-development-checkpoint-software-verified",
+  "scope": "G3 workspace and Windows storage/media foundations; neither G3 nor GWIN0 complete",
+  "implemented": [
+    "Finite Read-bound canonical exact-version selected lexical search over at most 64 unique artifacts, resolving all genuine published references before search",
+    "Typed keyboard-accessible spreadsheet editing, explicit draft handling, bounded observed progress and cancellation; native-only calculation and result verification",
+    "Windows held physical allocation and retained-file accounting with signed-history-derived finite revocation/abort tails and exact grouped dispatch admission",
+    "Offline independently pinned raw-to-VHDX conversion in held private ext4 output directories with actual guest-byte comparison",
+    "Strict read-only Windows Hyper-V deployment planning, fresh-process public loading and partial-type-family refusal"
+  ],
+  "verification": {
+    "source_snapshot": "/mnt/luma-build/work/g3-functional-source-20261019-c",
+    "source_files": 613,
+    "source_manifest_sha256": "68472f72adfa023c5f9c5e654904b840fd035eca498344592e36b5607ce58874",
+    "every_source_record_matches_current_bytes": true,
+    "windows_source_records_joined": 58,
+    "tools_image": "sha256:819dfe7772da1e3c76ffdc8f9ea4a1fa44c7c549bd4fa988e35d9397d87924b2",
+    "network": "none",
+    "container_memory_gib": 4,
+    "container_memory_swap_gib": 4,
+    "container_cpus": 2,
+    "container_memlock_bytes": 671088640,
+    "observed_host_memory_reserve_gib": 1,
+    "host_or_wsl_memory_configuration_changed": false,
+    "evidence_directory": "/mnt/luma-build/work/g3-functional-verify-20261019-c",
+    "all_log_hashes_file_sha256": "8a4ea2b2859267fb307fafbea910fca9431961c6546db3f86b70305745432b8f",
+    "log_sha256": {
+      "apparmor.log": "45bd9940df71498a9ead2fa0552fda8abe23c0fcf930109a60c62bba11a4a389",
+      "build.log": "d7c87d7578001539fa9518f38c3b9d0c0baac071775f24e45503716dd2890e39",
+      "check.log": "821df13df3026d45b917f8ad173ddfef0cbf9778bfae5374e4ddc5d0def99410",
+      "command-000.log": "1530909953638a217fcf5874dfd2549bae58e0721e4c13ecb904629da2bd6f55",
+      "content-cli.log": "28b3d6e0f5971a8e29b2a8a6522f3f055069ecabf18a342bb33a0f32fcfcfc3f",
+      "content-store-selected.log": "020ac07335802e4707939b94e10a9872c70d5ccbb82ce9d9b7fe72aad9924649",
+      "focused-content_backup--.log": "234c9dadd4d5368d7011057258e210883617e2b86b58828f651d07d3eb175b6b",
+      "focused-content_checkpoint--.log": "7f87e0b4a610e93e6dca3d566f3681065365f1d270c028392477b1e74d10a916",
+      "focused-content_governed--tests--.log": "9d67db8b46c82c1ffe3f924f1e80c83a880ed99a30e3c73f994ad98826e3b050",
+      "focused-content_restore--.log": "a2c13562b2475b188789df7e99e3ad15b907f6b8e62c9d3ec0b1ed552fe4224b",
+      "focused-content_workflow--.log": "aa9283327d801655fb7c6c33649dcc6e54899b86ea2e46b6b29d3e6abb0877e6",
+      "focused-platform--content_custody_policy_tests--.log": "3fe0a820404d9e2c8362a9af8515d0fb8233b5357705bdf19e47f0c21b76cdaf",
+      "focused-service--content_output--.log": "5a664970038ee07417266b943b64b6e874b477eb48e9778dd7639427f8ae4bbe",
+      "model-inputs.log": "bd6f31ea37ca1983edaa250baff2da336ccfa72fc71e9ec86a6a43730c2bc20c",
+      "native-source.log": "bc818b11bc6f98603712e00c3fc620c0488905c738f60a632630d526da3fcd72",
+      "public-trust.log": "5c65880627345d4d8cba04d8d840485596b08b22f4e15571d5d39bbb41f973c6",
+      "recovery-cli.log": "da7140ac60c5015ee022d493c10829f7beeb8f1460117521bff891605508e043",
+      "software-tpm.log": "e77d8e386757cf75f13ba77f1e85bfabff4bd1d73603c69095cc106fb1bf5653",
+      "spreadsheet-actual-cli.log": "df3bc8a55da4f1add059f0210cb083c250111a5056b0334bcd034e02670635a5",
+      "workflow-cli.log": "b173fa612b97c6793867bda1450155e08e6bcaed240de1e6b9b44edee6ee4448"
+    },
+    "fresh_workspace_all_targets_warnings_denied": true,
+    "selected_search_rust_tests": {
+      "passed": 4,
+      "failed": 0,
+      "ignored": 0
+    },
+    "focused_rust_groups": {
+      "focused-content_backup--.log": 13,
+      "focused-content_checkpoint--.log": 47,
+      "focused-content_governed--tests--.log": 46,
+      "focused-content_restore--.log": 7,
+      "focused-content_workflow--.log": 2,
+      "focused-platform--content_custody_policy_tests--.log": 3,
+      "focused-service--content_output--.log": 2
+    },
+    "focused_rust_passed": 120,
+    "focused_rust_failed": 0,
+    "focused_rust_ignored": 0,
+    "native_source": {
+      "passed": 668,
+      "failed": 0,
+      "skipped": 0
+    },
+    "public_trust": {
+      "passed": 13,
+      "failed": 0,
+      "skipped": 0
+    },
+    "model_inputs": {
+      "passed": 13,
+      "failed": 0,
+      "skipped": 0
+    },
+    "disposable_tpm_scenarios": [
+      "normal",
+      "lost-publication",
+      "lost-parent"
+    ],
+    "disposable_tpm_actual_named_executions": 3,
+    "actual_native_cli": {
+      "content_contract_cases": 30,
+      "workflow_engine_cases": 4,
+      "recovery_data_canonicalizer_cases": 4,
+      "production_js_spreadsheet_cases": 4,
+      "production_js_exact_clean_refusals": 2
+    },
+    "actual_native_cli_sha256": "7790cfeccc896601b06cd9621174d3a86a2d70292f45cbeb01cc133eb635c9d9",
+    "cli_cases_establish_pam_or_installed_workflow_authority": false,
+    "full_workspace_rust_suite_run": false,
+    "counts_are_overlapping_groups_not_a_unique_test_total": true
+  },
+  "retained_full_suite_join": {
+    "source_snapshot": "/mnt/luma-build/work/g3-functional-source-20261019-a",
+    "source_manifest_sha256": "232eca62748c38e326bb9b75eaf0f7a46bdf7080572c6b044fea50289598d05a",
+    "evidence_directory": "/mnt/luma-build/work/g3-functional-verify-20261019-a",
+    "content": {
+      "passed": 97,
+      "failed": 0,
+      "ignored": 0,
+      "log_sha256": "ddc2a1075f5f04f8bc2f48a1eba298525e72f365e69642ac5122951325527c5a"
+    },
+    "content_store": {
+      "passed": 127,
+      "failed": 1,
+      "ignored": 0,
+      "log_sha256": "a11dfb6e23539ea6e2dc4078bcbf1f4acc7390a1f95356d31c7fd5ace20f9cd5"
+    },
+    "failure": "New selected-search fixture incorrectly treated ConflictRetained.resulting as unpublished although it is the genuine published current reference.",
+    "correction": "Test-only candidate construction now derives the genuine unpublished proposal before advancing current, binds its source/provenance to retained conflict bytes, and positively checks readable published conflict.resulting.",
+    "rust_production_bytes_identical_to_final_source": true,
+    "only_changed_rust_test_file": [
+      "rust/luma-content-store/src/tests/queries.rs"
+    ],
+    "all_four_selected_search_tests_rerun_on_final_source": true,
+    "fresh_full_128_test_store_suite_claimed": false
+  },
+  "windows": {
+    "record": "D:/LumaOS-builds/g3-windows-integrated-1e898a1cbfa848659fb08c7294169873/verification.json",
+    "record_sha256": "c58f6ac1ad24f33d7225f4e5a959a0dfc3fbd8fad2d3f0abbbc7d8579da8981d",
+    "capacity_assertions": 89,
+    "hosted_authority_assertions": 337,
+    "hyperv_planner_assertions": 53,
+    "actual_ntfs_allocation_and_eof_observed": true,
+    "actual_ephemeral_bcrypt_signed_dispatch_tests": true,
+    "fresh_public_planner_child_test": true,
+    "hyperv_cmdlets_invoked": false,
+    "full_exe_build_and_review_record": "D:/LumaOS-builds/luma-hosted-build-e2b88ce9ad8144c2a82fe1f737bffe43/exe-review-verification.json",
+    "full_exe_build_and_review_record_sha256": "16ff9efd23231de77a96d5b5b5baf730be045f67f256b25476d261ce278e1556",
+    "actual_redirected_original_client_refusal": true,
+    "installer_review_only": true,
+    "review_is_independent_production_trust": false,
+    "saved_execution_policy_changed": false
+  },
+  "ui_and_python": {
+    "record": "D:/LumaOS-builds/g3-general-verify-a1ea16464ef14b728d08b9c2cc0a3d86/verification.json",
+    "record_sha256": "fe29956097e3f4c202e45b25817d557bfca62b2e2654be1bb3c498f8cc544d8a",
+    "production_javascript_dom_assertions": 93,
+    "ui_contract_unit_tests": 4,
+    "python_regression_ran": 320,
+    "python_regression_passed": 315,
+    "python_regression_skipped": 5,
+    "tiny_windows_filesystem_fixtures": "separate owned NTFS directory beneath repository .luma; bulk evidence on D",
+    "graphical_webkit_or_screen_reader_qualified": false
+  },
+  "converter": {
+    "final_separate_linux_test_log": "/mnt/luma-build/work/hyperv-image-tests-20261019-e/test.log",
+    "final_separate_linux_test_log_sha256": "522fe016703fa35cd5be8bebb50f3dbe659313ab4768925fd237c4de8f7a0b08",
+    "final_tests_passed": 23,
+    "final_tests_skipped": 0,
+    "also_included_in_final_668_native_source_tests": true,
+    "actual_tiny_qemu_vhdx_conversions": 2,
+    "adversarial_unprivileged_directory_substitution_tests": true,
+    "full_desktop_raw_converted": false,
+    "full_conversion_requires_observed_space_for_raw_plus_128mib_plus_2gib": true,
+    "private_ext4_staging_only": true,
+    "safe_public_windows_readable_export_implemented": false,
+    "vm_created": false,
+    "installed_desktop": false,
+    "iso_produced": false
+  },
+  "retained_failed_attempts": [
+    "Native A full store run retained its 127 passes and one test-fixture failure; the set-e sweep did not execute subsequent lanes.",
+    "Converter earlier test cuts and independently reproduced output-construction races remain retained; final security fixes pass actual 23-case tests and constructor substitution review.",
+    "First Windows integrated wrapper failed parsing extra hash-table stdout after successful test execution; public test output now contains a single JSON record and final integrated wrapper passed.",
+    "First Windows EXE harness expected a usage error, but production correctly refuses a redirected original client earlier; final harness checks that exact clean refusal without weakening production.",
+    "First final-C snapshot invocation lacked permission to create the private root-owned build child; rerun used the existing root build identity without changing directory permissions.",
+    "General D-temporary-fixture wrapper exceeded its 120-second deadline; retained record D:/LumaOS-builds/g3-general-verify-6516fd0b51fe4c6c8bfd20c1c0d4be78/verification.json SHA256 bf1ecc7982f96504157df08c9bf60f6b3eb3456959e12e5412088c0f93e571db. A separate verbose diagnostic was stopped by exact owned PID; the isolated release fixture reproduced git config exit128 on the exFAT temporary path. The full unchanged suite passed on explicit NTFS fixtures, retaining bulk logs on D."
+  ],
+  "remaining_development_register": "../../G3_GWIN0_DELIVERY.md",
+  "remaining_development": [
+    "Content bounded-journal continuation/compaction, custody-key succession and broader forensic damaged-history recovery",
+    "Real semantic retrieval, rebuildable indexes and general per-result access policy",
+    "Complete conversational/private accessible application journeys, real inference integration, capture permissions and adapters",
+    "Windows SID/product-principal finite grants, ordinary-user bridge, authority-key migration and authenticated complete product distribution",
+    "Actual Hyper-V deployment, guest custody/identity/recovery, verified-boot trust and checkpoint/clone rollback reconciliation",
+    "Actual native and Hyper-V optical ISO boot support; safe full-sized VHDX public export and complete distinct image/package assembly"
+  ],
+  "existing_sequence16_image_bytes_changed": false,
+  "new_full_g3_native_image_produced": false,
+  "new_windows_bootable_product_produced": false,
+  "host_tpm_mutated": false,
+  "physical_disk_installation_performed": false,
+  "vm_created": false,
+  "installed_or_hardware_acceptance_completed": false,
+  "production_qualified": false,
+  "g3_complete": false,
+  "gwin0_complete": false,
+  "gate_closing": false
+}

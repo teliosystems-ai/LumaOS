@@ -4,6 +4,7 @@ header { border-bottom: 2px solid #537b70; margin-bottom: 1.5rem; }
 main { display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem; }
 section { min-width: 0; padding: 1rem; border: 1px solid #7b8a86; border-radius: .5rem; }
 section:last-child { grid-column: 1 / -1; }
+.wide { grid-column: 1 / -1; }
 h1 { line-height: 1.2; } h2 { margin-top: 0; }
 label { display: block; margin-top: .8rem; font-weight: 600; }
 textarea, input[type=text], select { box-sizing: border-box; width: 100%; padding: .7rem; font: inherit; }
@@ -21,6 +22,14 @@ table { width: 100%; border-collapse: collapse; } th, td { border: 1px solid #7b
 .skip { position: absolute; top: -8rem; } .skip:focus { top: 0; }
 [hidden] { display: none !important; }
 #status { min-height: 3rem; font-weight: 600; } progress { width: 100%; }
+#progress-events { max-height: 9rem; overflow: auto; padding-inline-start: 1.5rem; }
+.sheet-scroll { overflow: auto; max-height: 30rem; border: 1px solid #7b8a86; margin-block: .8rem; }
+#sheet-grid { width: max-content; min-width: 100%; }
+#sheet-grid button { display: block; min-width: 7rem; max-width: 14rem; width: 100%; margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; text-align: start; }
+#sheet-grid button[aria-current=true] { outline: 3px solid #348bd0; outline-offset: 0; }
+#sheet-dimensions { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; }
+#sheet-dimensions label { margin: 0; } #sheet-dimensions input { width: 5rem; font: inherit; padding: .5rem; }
+#sheet-fields { min-width: 0; } #sheet-status { min-height: 2rem; }
 @media (max-width: 800px) { main { grid-template-columns: 1fr; } body { padding: .7rem; } }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { scroll-behavior: auto !important; animation: none !important; transition: none !important; } }
-@media (forced-colors: active) { :focus-visible { outline-color: Highlight; } section, iframe, th, td { border-color: CanvasText; } }
+@media (forced-colors: active) { :focus-visible, #sheet-grid button[aria-current=true] { outline-color: Highlight; } section, iframe, th, td, .sheet-scroll { border-color: CanvasText; } }

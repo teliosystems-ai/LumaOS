@@ -12,8 +12,10 @@ image and Rust platform implementation. It is outside the historical Python
 - [Exact-image native Ubuntu test handoff](evidence/TEST_IMAGE_2026-09-28.md)
 - [Implementation plan](image/BUILD_PLAN.md)
 - [Current G2 software completion register](G2_SOFTWARE_STATUS.md)
-- [Current sequence-13 image assembly resume](evidence/G2_IMAGE_RESUME_2026-10-13.md)
-- [Current sequence-13 native Ubuntu test image](evidence/G2_TEST_IMAGE_2026-10-13.md)
+- [Current sequence-16 native Ubuntu test image and installation guide](evidence/G2_NATIVE_DESKTOP_CANDIDATE_16_2026-10-19.md)
+- [Current sequence-16 build, offline verification and live Secure Boot VM evidence](evidence/candidate16_execution_2026-10-19.json)
+- [G3 and Windows delivery development](../docs/G3_GWIN0_DELIVERY.md)
+- [Historical sequence-13 assembly resume](evidence/G2_IMAGE_RESUME_2026-10-13.md)
 - [Selected local TPM2 Admin design and future external installer](LOCAL_TPM2_ADMIN.md)
 - [Native TPM checkpoint evaluation](evidence/NATIVE_TPM_STATUS_2026-09-28.md)
 - [Installer TPM admission and VM-fixture evaluation](evidence/NATIVE_TPM_ADMISSION_2026-09-28.md)
@@ -23,11 +25,13 @@ image and Rust platform implementation. It is outside the historical Python
 G2 remains in progress. Headless and candidate GNOME/Wayland desktop images are
 laboratory-signed, not a complete production OS or hardware certification.
 Bulk builds, images and VM disks are on the owner-designated D: drive; source
-stays on C:. The [current image handoff](evidence/G2_TEST_IMAGE_2026-10-13.md)
-identifies the built and checksum-verified sequence-13 desktop candidate,
-native-media preparation and pending qualification. The
-[assembly checkpoint](evidence/G2_IMAGE_RESUME_2026-10-13.md) preserves the
-explicit source-archive correction. This image has not yet been boot-tested. The
+stays on C:. The [current image handoff](evidence/G2_NATIVE_DESKTOP_CANDIDATE_16_2026-10-19.md)
+identifies the sequence-16 desktop candidate exported on 2026-10-19. Its thirteen
+offline image checks and software-emulated Secure Boot live-startup/final-storage
+teardown test passed. Installation, graphical/installed security and recovery,
+physical TPM and production qualification remain open. It is native Ubuntu
+media, not a Windows image or complete G3 release. Subsequent G3/GWIN0 source
+changes require their own identified builds and tests. The
 [historical export checkpoint](evidence/G2_BROKER_CLIENT_2026-10-01.md)
 identifies the earlier sequence-11 candidate and its source/image differences.
 Desktop and fresh 4B model acceptance remain pending. Earlier sequence-4 model

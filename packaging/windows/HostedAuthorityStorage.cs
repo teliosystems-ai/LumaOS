@@ -36,6 +36,47 @@ namespace Luma.Windows.Hosted
         private readonly string directory,ownerSid,serviceSid;
         private FileStream mutex;
         private Action runtimeIntegrity;
+        private HostedPhysicalTail physicalTail=HostedPhysicalTail.ForEnrollments(64,64);
+        private PhysicalStage physicalStage;
+        private sealed class PlannedFile {
+            internal readonly long Bytes;internal readonly string Sha256;
+            internal PlannedFile(byte[] bytes) {Bytes=bytes.Length;Sha256=Wire.Hash(bytes);}
+        }
+        private sealed class PhysicalStage {
+            internal readonly ulong Sequence;internal readonly string Record;
+            internal readonly HostedPhysicalTail Tail;
+            internal readonly Dictionary<string,PlannedFile> Files=new Dictionary<string,PlannedFile>(StringComparer.Ordinal);
+            internal PhysicalStage(JournalEntry entry,HostedPhysicalTail tail) {Sequence=entry.Sequence;Record=entry.RecordSha256;Tail=tail;}
+        }
+        internal void BindPhysicalHistory(JournalHistory history)
+        {
+            if(history==null || history.FileEnrollments==null) throw new SecurityException("Verified history is required for the physical terminal tail.");
+            physicalTail=HostedPhysicalTail.ForEnrollments(history.FileEnrollments.ActiveCount,history.FileEnrollments.AbortReserveCredits);
+            if(physicalStage!=null && history.Sequence>=physicalStage.Sequence) {
+                if(history.Sequence==physicalStage.Sequence && history.Record!=physicalStage.Record) throw new SecurityException("Completed physical group differs from its exact signed journal candidate.");
+                physicalStage=null;
+            }
+        }
+        internal void BeginPhysicalStage(AuthorityIdentity identity,JournalHistory history,JournalEntry entry,DispatchTicket ticket,string pendingLeaf)
+        {
+            if(physicalStage!=null || (pendingLeaf!="pending.bin" && pendingLeaf!="abort.intent")) throw new SecurityException("Only one exact two-file journal stage may borrow physical tail capacity.");
+            ticket.Matches(entry);HostedPhysicalTail tail=HostedJournalCapacity.ProjectedPhysicalTail(identity,history,entry);
+            string dispatch="ticket-d-"+entry.RecordSha256+".bin";
+            if(Exists(dispatch) || Exists(pendingLeaf)) throw new SecurityException("A physical journal group cannot adopt existing or partial files.");
+            PhysicalStage stage=new PhysicalStage(entry,tail);stage.Files.Add(dispatch,new PlannedFile(ticket.Encode()));stage.Files.Add(pendingLeaf,new PlannedFile(entry.Bytes));
+            physicalStage=stage;
+            try {
+                Capacity(null,null,0,false,true);
+                RequireFree(checked(ticket.Encode().Length+entry.Bytes.Length+2*65536L+tail.AllocatedBytes));
+            } catch {physicalStage=null;throw;}
+        }
+        internal void RequireCandidateTail(AuthorityIdentity identity,JournalHistory history,JournalEntry entry)
+        {
+            HostedPhysicalTail tail=HostedJournalCapacity.ProjectedPhysicalTail(identity,history,entry);
+            Capacity(null,null,0,false,true,tail);if(tail.AllocatedBytes>0) RequireFree(tail.AllocatedBytes);
+        }
+        internal void RequireReadableTail()
+        {Capacity(null,null,0,false,true,physicalTail);}
         internal void AttachRuntimeIntegrity(Action check) {if(check==null || runtimeIntegrity!=null) throw new SecurityException("Runtime integrity boundary cannot be absent or replaced.");runtimeIntegrity=check;check();}
         internal string DirectoryPath {get{return directory;}}
         private PrivateState(string directory,string ownerSid,string serviceSid) {this.directory=directory;this.ownerSid=ownerSid;this.serviceSid=serviceSid;}
@@ -58,7 +99,7 @@ namespace Luma.Windows.Hosted
         private Information Inspect(SafeFileHandle handle,bool isDirectory,bool requirePrivate)
         {
             Information information;if(!GetFileInformationByHandle(handle,out information)) throw new Win32Exception(Marshal.GetLastWin32Error());
-            if(((information.Attributes&0x10)!=0)!=isDirectory || (information.Attributes&(0x400|0x1000|0x40000|0x400000))!=0 || (!isDirectory && information.Links!=1))
+            if(((information.Attributes&0x10)!=0)!=isDirectory || (information.Attributes&(0x200|0x400|0x800|0x1000|0x4000|0x40000|0x400000))!=0 || (!isDirectory && information.Links!=1))
                 throw new SecurityException("Private state link/type/offline/cloud attributes refused.");
             if(requirePrivate) {
                 IntPtr owner,group,dacl,sacl,descriptor;uint result=GetSecurityInfo(handle,1,7,out owner,out group,out dacl,out sacl,out descriptor);
@@ -147,7 +188,14 @@ namespace Luma.Windows.Hosted
         }
         internal void WriteNew(string leaf,byte[] bytes)
         {
-            Check();Name(leaf);Wire.Copy(bytes,1,Wire.MaximumFrame);byte[] descriptor=Descriptor();GCHandle pin=GCHandle.Alloc(descriptor,GCHandleType.Pinned);
+            Check();Name(leaf);Wire.Copy(bytes,1,Wire.MaximumFrame);
+            if(physicalStage!=null) {
+                PlannedFile planned;
+                if(!physicalStage.Files.TryGetValue(leaf,out planned) || planned.Bytes!=bytes.Length || planned.Sha256!=Wire.Hash(bytes))
+                    throw new SecurityException("Unrelated immutable write cannot consume a protected journal group.");
+            }
+            Capacity(null,null,bytes.Length,false,true);RequireFree(checked(bytes.Length+(physicalStage==null?physicalTail:physicalStage.Tail).AllocatedBytes));
+            byte[] descriptor=Descriptor();GCHandle pin=GCHandle.Alloc(descriptor,GCHandleType.Pinned);
             try {
                 Attributes attributes=new Attributes {Length=Marshal.SizeOf(typeof(Attributes)),Descriptor=pin.AddrOfPinnedObject(),Inherit=0};
                 IntPtr native=Marshal.AllocHGlobal(attributes.Length);
@@ -156,7 +204,9 @@ namespace Luma.Windows.Hosted
                     SafeFileHandle handle=CreateFile(Path.Combine(directory,leaf),0xc0020080,0,native,1,0x80300000,IntPtr.Zero);
                     if(handle.IsInvalid) {int error=Marshal.GetLastWin32Error();handle.Dispose();throw new Win32Exception(error);}
                     using(FileStream stream=new FileStream(handle,FileAccess.ReadWrite,4096,false)) {
-                        Inspect(stream.SafeFileHandle,false,true);stream.Write(bytes,0,bytes.Length);stream.Flush(true);Inspect(stream.SafeFileHandle,false,true);
+                        Inspect(stream.SafeFileHandle,false,true);HostedFileAllocation.ReserveEmpty(stream.SafeFileHandle,bytes.Length);
+                        Capacity(leaf,stream.SafeFileHandle,0,false,true);Check();stream.Write(bytes,0,bytes.Length);stream.Flush(true);
+                        Inspect(stream.SafeFileHandle,false,true);Capacity(leaf,stream.SafeFileHandle,0,false,true);
                     }
                 } finally {Marshal.FreeHGlobal(native);}
             } finally {pin.Free();}
@@ -164,10 +214,10 @@ namespace Luma.Windows.Hosted
         }
         internal StagedPackage CapturePackage(string leaf,long bytes,string expectedSha256,Func<long,byte[]> next,Action check)
         {
-            Name(leaf);if(!leaf.StartsWith("ticket-package-",StringComparison.Ordinal) || !leaf.EndsWith(".tar",StringComparison.Ordinal) ||
+            Name(leaf);if(!HostedStateCapacity.IsPackage(leaf) ||
                 bytes<1024 || bytes>PackageInspector.MaximumArchiveBytes || next==null || check==null) throw new SecurityException("Closed package capture shape differs.");
-            Wire.Bytes(expectedSha256,32,true);check();Check();ulong available,total,free;
-            if(!GetDiskFreeSpaceEx(directory,out available,out total,out free) || available<(ulong)bytes+1024UL*1024*1024) throw new IOException("Native NTFS package spool capacity is insufficient.");
+            Wire.Bytes(expectedSha256,32,true);check();Check();if(physicalStage!=null) throw new SecurityException("Package capture cannot borrow a journal stage.");
+            Capacity(null,null,bytes,true,true);RequireFree(checked(bytes+physicalTail.AllocatedBytes));
             byte[] descriptor=Descriptor();GCHandle pin=GCHandle.Alloc(descriptor,GCHandleType.Pinned);string destination=Path.Combine(directory,leaf);
             try {
                 Attributes attributes=new Attributes {Length=Marshal.SizeOf(typeof(Attributes)),Descriptor=pin.AddrOfPinnedObject(),Inherit=0};IntPtr native=Marshal.AllocHGlobal(attributes.Length);
@@ -175,7 +225,8 @@ namespace Luma.Windows.Hosted
                     Marshal.StructureToPtr(attributes,native,false);SafeFileHandle handle=CreateFile(destination,0xc0020080,0,native,1,0x80300000,IntPtr.Zero);
                     if(handle.IsInvalid) {int error=Marshal.GetLastWin32Error();handle.Dispose();throw new Win32Exception(error);}
                     using(FileStream output=new FileStream(handle,FileAccess.ReadWrite,32768,false)) using(SHA256 hash=SHA256.Create()) {
-                        Inspect(output.SafeFileHandle,false,true);long at=0;
+                        Inspect(output.SafeFileHandle,false,true);HostedFileAllocation.ReserveEmpty(output.SafeFileHandle,bytes);
+                        Capacity(leaf,output.SafeFileHandle,0,true,true);check();Check();long at=0;
                         while(at<bytes) {
                             check();Check();byte[] part=next(at);
                             if(part==null || part.Length<1 || part.Length>32768 || part.Length>bytes-at) throw new InvalidDataException("Exact bounded package stream differs.");
@@ -183,7 +234,7 @@ namespace Luma.Windows.Hosted
                         }
                         hash.TransformFinalBlock(new byte[0],0,0);
                         if(Wire.Hex(hash.Hash)!=expectedSha256 || output.Length!=bytes) throw new SecurityException("Complete signed package SHA256 or length differs.");
-                        check();output.Flush(true);Inspect(output.SafeFileHandle,false,true);
+                        check();output.Flush(true);Inspect(output.SafeFileHandle,false,true);Capacity(leaf,output.SafeFileHandle,0,true,true);
                     }
                 } finally {Marshal.FreeHGlobal(native);}
             } finally {pin.Free();}
@@ -202,14 +253,73 @@ namespace Luma.Windows.Hosted
         }
         internal string[] Leaves()
         {
-            Check();string[] paths=System.IO.Directory.GetFiles(directory,"*",SearchOption.TopDirectoryOnly);
-            if(paths.Length>4096 || System.IO.Directory.GetDirectories(directory).Length!=0) throw new SecurityException("Private authority namespace exceeds closed file layout.");
-            List<string> names=new List<string>();foreach(string path in paths) names.Add(Name(Path.GetFileName(path)));names.Sort(StringComparer.Ordinal);Check();return names.ToArray();
+            Check();string[] names=Names();Capacity(null,null,0,false);Check();return names;
+        }
+        private string[] Names()
+        {
+            // Enumerate lazily: a damaged namespace must not allocate an
+            // unbounded GetFiles/GetDirectories result before its count check.
+            return HostedStateCapacity.BoundedNames(LeafNames());
+        }
+        private IEnumerable<string> LeafNames()
+        {
+            foreach(string path in System.IO.Directory.EnumerateFileSystemEntries(directory,"*",SearchOption.TopDirectoryOnly))
+                yield return Path.GetFileName(path);
+        }
+        private void RequireFree(long bytes)
+        {
+            ulong available,total,free;
+            if(bytes<1 || !GetDiskFreeSpaceEx(directory,out available,out total,out free) ||
+                available<(ulong)bytes+(ulong)HostedStateCapacity.HostFreeReserveBytes+65536UL)
+                throw new IOException("Native NTFS immutable-state allocation lacks the separate 1-GiB host reserve.");
+        }
+        private void Capacity(string activeLeaf,SafeFileHandle active,long appendBytes,bool package,bool reserve=false,HostedPhysicalTail exactTail=null)
+        {
+            Check();string[] names=Names();long metadata=0,packages=0,allocated=0;
+            int newFiles=0;long newMetadata=0,newPackages=0,newAllocated=0;
+            PhysicalStage stage=reserve && exactTail==null?physicalStage:null;
+            if(stage!=null) foreach(PlannedFile value in stage.Files.Values) {newFiles++;newMetadata=checked(newMetadata+value.Bytes);newAllocated=checked(newAllocated+value.Bytes+65536);}
+            List<SafeFileHandle> held=new List<SafeFileHandle>();
+            try {
+                foreach(string leaf in names) {
+                    Check();SafeFileHandle handle;
+                    if(leaf==activeLeaf) handle=active;
+                    else if(leaf=="authority.lock" && mutex!=null) handle=mutex.SafeFileHandle;
+                    else {handle=Open(Path.Combine(directory,leaf),false,0x80020080,1,3,true);held.Add(handle);}
+                    Inspect(handle,false,true);HostedFileAllocation value=HostedFileAllocation.Observe(handle);
+                    if(HostedStateCapacity.IsPackage(leaf)) {
+                        if(value.LogicalBytes>PackageInspector.MaximumArchiveBytes) throw new SecurityException("Retained package exceeds its file bound.");
+                        packages=checked(packages+value.LogicalBytes);
+                    } else {
+                        if(value.LogicalBytes>Wire.MaximumFrame) throw new SecurityException("Retained metadata exceeds its file bound.");
+                        metadata=checked(metadata+value.LogicalBytes);
+                    }
+                    allocated=checked(allocated+value.AllocatedBytes);
+                    PlannedFile planned;
+                    if(stage!=null && stage.Files.TryGetValue(leaf,out planned)) {
+                        if(value.LogicalBytes>planned.Bytes || value.AllocatedBytes<planned.Bytes) throw new SecurityException("Journal group file lost its exact preallocated bound.");
+                        newFiles--;newMetadata=checked(newMetadata-value.LogicalBytes);newAllocated=checked(newAllocated-planned.Bytes-65536);
+                    }
+                }
+                HostedStateCapacity.Require(names.Length,metadata,packages,allocated,0,package);
+                if(reserve) {
+                    if(stage==null && appendBytes>0) {newFiles=1;if(package) newPackages=appendBytes;else newMetadata=appendBytes;newAllocated=checked(appendBytes+65536);}
+                    HostedStateCapacity.RequireProjected(names.Length,metadata,packages,allocated,newFiles,newMetadata,newPackages,newAllocated,exactTail??(stage==null?physicalTail:stage.Tail));
+                } else if(appendBytes!=0) throw new SecurityException("A new private file requires physical-tail admission.");
+                string[] after=Names();if(names.Length!=after.Length) throw new SecurityException("Private state inventory changed during capture.");
+                for(int index=0;index<names.Length;index++) if(names[index]!=after[index]) throw new SecurityException("Private state inventory changed during capture.");
+                // The exclusive writer mutex and retained file handles keep
+                // ordinary competing writers/renames out; root remains trusted.
+                Check();
+            } finally {foreach(SafeFileHandle handle in held) handle.Dispose();}
         }
         internal void Publish(string source,string destination)
         {
             Check();Name(source);Name(destination);Read(source,1,Wire.MaximumFrame);
             if(!MoveFileEx(Path.Combine(directory,source),Path.Combine(directory,destination),8)) throw new Win32Exception(Marshal.GetLastWin32Error());
+            if(physicalStage!=null && physicalStage.Files.ContainsKey(source)) {
+                PlannedFile moved=physicalStage.Files[source];physicalStage.Files.Remove(source);physicalStage.Files.Add(destination,moved);
+            }
             FlushVolume();Read(destination,1,Wire.MaximumFrame);Check();
         }
         internal void RemovePublishedDuplicate(string leaf,string expectedSha256)
@@ -240,6 +350,7 @@ namespace Luma.Windows.Hosted
     internal sealed class DurableJournal
     {
         private readonly PrivateState state;private readonly AuthorityIdentity identity;private readonly HardwareKey key;private readonly FixedNvAuthority nv;
+        private int currentDispatchAttempts;
         internal DurableJournal(PrivateState state,AuthorityIdentity identity,HardwareKey key,FixedNvAuthority nv) {this.state=state;this.identity=identity;this.key=key;this.nv=nv;}
         internal JournalHistory Read(Action check)
         {
@@ -253,7 +364,10 @@ namespace Luma.Windows.Hosted
                 } else if(leaf!="authority.lock" && leaf!="identity.bin" && leaf!="identity.pending" && leaf!="commission.intent" && leaf!="pending.bin" && leaf!="abort.intent" && !leaf.StartsWith("ticket-",StringComparison.Ordinal))
                     throw new SecurityException("Unknown private hosted-authority state file.");
             }
-            return JournalHistory.Replay(identity,records.ToArray(),check);
+            JournalHistory history=JournalHistory.Replay(identity,records.ToArray(),check);
+            state.BindPhysicalHistory(history);
+            currentDispatchAttempts=HostedDispatchInventory.Validate(identity,history,state.Leaves(),delegate(string leaf) {check();return state.Read(leaf,1,20000);});
+            check();return history;
         }
         internal JournalHistory Recover(Action check)
         {
@@ -281,12 +395,15 @@ namespace Luma.Windows.Hosted
         }
         private static string DispatchLeaf(string digest) {Wire.Bytes(digest,32,true);return "ticket-d-"+digest+".bin";}
         private static string AbandonedLeaf(string digest) {Wire.Bytes(digest,32,true);return "ticket-a-"+digest+".bin";}
-        internal DispatchTicket PrepareDispatch(JournalEntry entry,Action check)
+        internal DispatchTicket PrepareDispatch(JournalEntry entry,Action check,bool replacement=false)
         {
             check();JournalHistory history=Read(check);if(history.Sequence!=0) history.Reconcile(identity,null,nv.ReadHead());
+            HostedDispatchInventory.RequireNext(currentDispatchAttempts,replacement);
             return HostedJournalCapacity.BeforeStage(identity,history,entry,delegate {
                 check();byte[] input=DispatchTicket.SigningInput(identity,entry,HostedHostResources.BootCreation(),nv.ReadEpoch());
-                DispatchTicket ticket=DispatchTicket.Signed(identity,input,key.Sign(input));check();state.WriteNew(DispatchLeaf(entry.RecordSha256),ticket.Encode());check();return ticket;
+                DispatchTicket ticket=DispatchTicket.Signed(identity,input,key.Sign(input));check();
+                state.BeginPhysicalStage(identity,history,entry,ticket,replacement?"abort.intent":"pending.bin");
+                state.WriteNew(DispatchLeaf(entry.RecordSha256),ticket.Encode());check();return ticket;
             });
         }
         internal void DispatchFirst(JournalEntry entry,DispatchTicket ticket,Action check)
@@ -297,6 +414,7 @@ namespace Luma.Windows.Hosted
             };
             dispatch();if(!Wire.Equal(state.Read("pending.bin",1,20000),entry.Bytes) || !Wire.Equal(state.Read(DispatchLeaf(entry.RecordSha256),1,2048),ticket.Encode()))
                 throw new SecurityException("Exact first-dispatch record or signed metadata changed.");
+            state.RequireCandidateTail(identity,capacity,entry);dispatch();
             nv.Extend(entry.PreviousHead,entry.RecordSha256,dispatch);dispatch();
         }
         internal byte[] ReviewAbort(Action check)
@@ -347,7 +465,7 @@ namespace Luma.Windows.Hosted
                 NvAbortEvent value=new NvAbortEvent(abandoned,HostedHostResources.BootCreation(),nv.ReadEpoch(),Wire.Random(32));
                 byte[] payload=genesis?CommissionIntent.Decode(state.Read("commission.intent",1,4096)).RecoveredGenesisPayload(identity,value):value.Encode();
                 prepared=JournalEntry.Prepare(identity,old.Sequence,genesis?JournalKind.Commission:JournalKind.NvWriteAborted,history.Head,history.Record,identity.FirstAdminSid,payload);prepared=prepared.Signed(identity,key.Sign(prepared.SigningInput));
-                PrepareDispatch(prepared,check);check();state.WriteNew("abort.intent",prepared.Bytes);
+                PrepareDispatch(prepared,check,true);check();state.WriteNew("abort.intent",prepared.Bytes);
             }
             // The replacement remains non-dispatched while abort.intent
             // exists. The atomic rename below is its one first-dispatch gate.

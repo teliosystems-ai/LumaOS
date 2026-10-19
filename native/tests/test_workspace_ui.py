@@ -3,8 +3,12 @@
 This suite has no optional-engine skip and makes no installed graphical claim.
 """
 import ast
+import importlib.util
+import json
 from html.parser import HTMLParser
 from pathlib import Path
+import subprocess
+import sys
 import unittest
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -21,6 +25,16 @@ class Elements(HTMLParser):
 
 
 class WorkspaceUiTests(unittest.TestCase):
+    def test_native_refusal_is_not_a_crash_loader_failure_or_partial_result(self):
+        genuine = subprocess.CompletedProcess([], 1, b'', b'luma-platform: spreadsheet contains a reference cycle\n')
+        native_refusal(genuine, 'cycle', 'spreadsheet contains a reference cycle')
+        for code, stdout, stderr in ((0, b'', genuine.stderr), (-11, b'', genuine.stderr),
+                                     (127, b'', b'loader failed'), (1, b'partial', genuine.stderr),
+                                     (1, b'', b''), (1, b'', b'luma-platform: wrong error\n')):
+            with self.subTest(code=code, stdout=stdout, stderr=stderr), self.assertRaises(AssertionError):
+                native_refusal(subprocess.CompletedProcess([], code, stdout, stderr), 'cycle',
+                               'spreadsheet contains a reference cycle')
+
     def test_labeled_navigation_live_errors_and_keyboard_targets_exist(self):
         parsed = Elements((ROOT / 'web/native-workspace.html').read_text(encoding='utf-8'))
         ids = [attrs['id'] for _, attrs in parsed.nodes if 'id' in attrs]
@@ -40,6 +54,16 @@ class WorkspaceUiTests(unittest.TestCase):
         self.assertEqual(nodes['preview'][1]['aria-keyshortcuts'], 'Control+Enter')
         self.assertEqual(nodes['cancel'][1]['aria-keyshortcuts'], 'Escape')
         self.assertIn('source-grounding', nodes)
+        for key in ('sheet-heading', 'sheet-rows', 'sheet-columns', 'sheet-kind', 'sheet-value',
+                    'sheet-second', 'sheet-grid', 'sheet-status', 'progress-events'):
+            self.assertIn(key, nodes)
+        self.assertEqual(nodes['sheet-heading'][1]['tabindex'], '-1')
+        self.assertEqual(nodes['sheet-status'][1]['aria-live'], 'polite')
+        self.assertEqual(nodes['sheet-grid'][0], 'table')
+        self.assertIn('sheet-keyboard', nodes['sheet-grid'][1]['aria-describedby'].split())
+        self.assertEqual(nodes['sheet-rows'][1]['max'], '64')
+        self.assertEqual(nodes['sheet-columns'][1]['max'], '32')
+        self.assertEqual(nodes['error'][1]['tabindex'], '-1')
 
     def test_private_read_is_native_control_not_a_web_message_route(self):
         app = (ROOT / 'native/desktop/workspace_app.py').read_text(encoding='utf-8')
@@ -74,6 +98,10 @@ class WorkspaceUiTests(unittest.TestCase):
         self.assertLessEqual(len(app.encode('utf-8')), 128*1024)
         self.assertNotIn('innerHTML', js)
         self.assertNotIn('fetch(', js)
+        self.assertNotIn('eval(', js)
+        self.assertNotIn('new Function', js)
+        for name in ('native-workspace.js', 'native-workspace.css', 'native-workspace.html'):
+            self.assertLessEqual((ROOT/'web'/name).stat().st_size, 256*1024)
 
     def test_reduced_motion_forced_color_and_non_fabricated_progress_contracts(self):
         css = (ROOT / 'web/native-workspace.css').read_text(encoding='utf-8')
@@ -91,5 +119,48 @@ class WorkspaceUiTests(unittest.TestCase):
         self.assertIn('graphical_webkit_qualified: false', harness)
 
 
+def native_refusal(completed, name, expected_error):
+    if (not isinstance(expected_error, str) or not expected_error or
+            completed.returncode != 1 or completed.stdout != b'' or
+            completed.stderr != ('luma-platform: ' + expected_error + '\n').encode()):
+        raise AssertionError('actual engine did not produce the exact clean required refusal: ' + name)
+
+
+def actual_spreadsheet_cases(binary, cases_path):
+    """Run production-JS-generated DATA through the actual Rust CLI, not PAM."""
+    binary = Path(binary).resolve(strict=True)
+    with Path(cases_path).open('rb') as stream:
+        raw = stream.read(1024*1024+1)
+    if len(raw) > 1024*1024:
+        raise ValueError('bounded DOM fixture exceeded')
+    spec = importlib.util.spec_from_file_location('luma_workspace_sheet_actual_host', ROOT/'native/desktop/workspace_host.py')
+    host = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(host)
+    fixture = host.strict_json(raw)
+    cases = fixture['spreadsheet_cases']
+    if fixture['production_javascript_executed'] is not True or fixture['authority_returned'] is not False or fixture['graphical_webkit_qualified'] is not False or not isinstance(cases, list) or not 1 <= len(cases) <= 16:
+        raise ValueError('real production-JS bounded fixture required')
+    passed = refused = 0
+    for index, case in enumerate(cases):
+        request = host.request(dict(schema_version=1, id='actual-sheet-'+str(index), operation='preview', engine='spreadsheet', source=case['source']))
+        completed = subprocess.run([str(binary), 'content-contract-spreadsheet'], input=request['source'].encode(),
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=20, check=False)
+        if case.get('native_refusal_required') is True:
+            native_refusal(completed, case['name'], case.get('expected_native_error'))
+            refused += 1
+        else:
+            if completed.returncode != 0:
+                raise AssertionError('actual Rust engine refused generated source: '+case['name']+' '+completed.stderr.decode(errors='replace'))
+            verified = host.validate_result(request, completed.stdout)
+            if verified['calculation']['values'][0] != case['expected_first_row']:
+                raise AssertionError('actual Rust values differ for '+case['name'])
+            passed += 1
+    print(json.dumps(dict(actual_rust_spreadsheet_cases_passed=passed, actual_rust_refusals_passed=refused,
+        graphical_webkit_qualified=False, owner_authenticated=False, workflow_executed=False, authority_returned=False)))
+
+
 if __name__ == '__main__':
-    unittest.main()
+    if len(sys.argv) == 5 and sys.argv[1] == '--native-cli' and sys.argv[3] == '--spreadsheet-cases':
+        actual_spreadsheet_cases(sys.argv[2], sys.argv[4])
+    else:
+        unittest.main()

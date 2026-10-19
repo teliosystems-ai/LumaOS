@@ -1,5 +1,34 @@
 # Windows GWIN0 prerequisite observations
 
+## Windows image delivery
+
+The [shared delivery workstreams](../../docs/G3_GWIN0_DELIVERY.md) distinguish
+the separately named WSL distribution from the full Hyper-V Generation 2 desktop
+and required ISO. Neither the compute-only guest archive nor a converted native
+live-installer VHDX is that completed desktop deployment.
+
+`native/image/hyperv_image.py` performs offline, independently pinned raw-to-VHDX
+conversion with held read-only inputs, exact guest-byte comparison and new
+output files. It does not execute the guest, establish firmware trust, create a
+VM or provide an installed clone. `plan-hyperv.ps1` is a read-only planner over
+pinned public media and explicit resource observations; even a structurally
+valid plan does not authorize deployment. Current lab-certificate trust,
+per-VM TPM/key-protector commissioning, target installation/recovery and ISO
+boot support remain separate implementation and acceptance work.
+
+The physical-capacity tests compile the real hosted authority and exercise
+small ordinary-user NTFS fixtures; they do not provision the System-owned
+authority or mutate host TPM custody:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy RemoteSigned -File .\packaging\windows\test-hosted-capacity.ps1 -BuildRoot D:\LumaOS-builds -FixtureRoot C:\Users\hakim\LumaOS\.luma
+powershell.exe -NoProfile -ExecutionPolicy RemoteSigned -File .\packaging\windows\test-hyperv-plan.ps1 -WorkRoot D:\LumaOS-builds
+```
+
+Use an existing local NTFS fixture directory inside the development workspace;
+the test creates a unique small subdirectory. Compiler and bulk outputs remain
+on D. Process-only RemoteSigned does not change saved execution policy.
+
 ## Authenticated first-Admin-only ephemeral file read
 
 The separate hosted authority now exposes `read-enrolled-file` through its

@@ -11,7 +11,7 @@
 <body>
   <a class="skip" href="#editor">Skip to editor</a>
   <header><h1>Manual native preview</h1><p>Deterministic local engines. Model disabled. No account, grant, repository, publication or external application authority.</p></header>
-  <nav aria-label="Workspace sections"><a href="#editor">Editor</a> · <a href="#result-heading">Result</a> · <a href="#envelope">Reopen exact envelope</a></nav>
+  <nav aria-label="Workspace sections"><a href="#editor">Source editor</a> · <a href="#result-heading">Result</a> · <a href="#sheet-heading">Spreadsheet cells</a> · <a href="#envelope">Reopen exact envelope</a></nav>
   <p id="keyboard-help">Keyboard: Control+Enter runs the selected preview or envelope reopen. Escape requests cancellation and waits for observed native exit. Private owner reads and managed engine workflows use the separate native controls and original PAM terminal, never this page. That terminal performs exact review, independent grants and approval, reports the actual C-backed outcome, and offers a separately granted fresh reopen/recalculation.</p>
   <main id="workspace" aria-describedby="keyboard-help">
     <section aria-labelledby="edit-heading">
@@ -25,7 +25,8 @@
       <div class="actions"><button id="preview" type="button" aria-keyshortcuts="Control+Enter">Run native preview</button><button id="cancel" type="button" aria-keyshortcuts="Escape" disabled>Cancel active preview</button></div>
       <progress id="progress" aria-label="Native preview running" hidden></progress>
       <p id="status" role="status" aria-live="polite" aria-atomic="true">Waiting for installed native host.</p>
-      <p id="error" role="alert" aria-atomic="true"></p>
+      <ol id="progress-events" aria-label="Observed native request states"></ol>
+      <p id="error" role="alert" aria-atomic="true" tabindex="-1"></p>
     </section>
     <section aria-labelledby="result-heading">
       <h2 id="result-heading" tabindex="-1">Verified preview</h2>
@@ -35,7 +36,29 @@
       <fieldset id="animation-controls" hidden><legend>Manual animation frames — no autoplay</legend><button id="previous-frame" type="button">Previous frame</button><label for="frame">Frame</label><input id="frame" type="range" min="0" max="0" value="0" aria-describedby="frame-label"><button id="next-frame" type="button">Next frame</button><output id="frame-label" for="frame" aria-live="polite" aria-atomic="true"></output></fieldset>
       <details><summary>Canonical source / result data and digests</summary><pre id="result-data" tabindex="0"></pre></details>
     </section>
-    <section aria-labelledby="reopen-heading">
+    <section id="sheet-section" class="wide" aria-labelledby="sheet-heading">
+      <h2 id="sheet-heading" tabindex="-1">Editable spreadsheet cells</h2>
+      <p id="sheet-help">A source editor, not a browser calculation engine. Explicit types keep text beginning with = inert. Apply a cell, then copy the grid to the source editor and run the actual native engine. References use A1 notation; the submitted typed source uses zero-based coordinates. Native code alone evaluates formulas and rejects cycles, non-exact arithmetic, or other invalid data. Nothing is saved, published or exported.</p>
+      <fieldset id="sheet-dimensions"><legend>Exact rectangular dimensions</legend>
+        <label for="sheet-rows">Rows (1–64)</label><input id="sheet-rows" type="number" min="1" max="64" step="1" value="3">
+        <label for="sheet-columns">Columns (1–32)</label><input id="sheet-columns" type="number" min="1" max="32" step="1" value="3">
+        <button id="sheet-resize" type="button">Resize without discarding nonblank cells</button>
+      </fieldset>
+      <p id="sheet-keyboard">Tab enters the selected cell once; arrow keys move between cells. Home/End move to row boundaries; Control+Home/End move to grid boundaries. Enter or F2 focuses the cell inspector. Apply or discard pending inspector edits before changing cells or dimensions. Control+Enter here focuses the explicit Copy grid action; it never runs stale raw-editor source instead of your pending cells.</p>
+      <div class="sheet-scroll"><table id="sheet-grid" aria-describedby="sheet-help sheet-keyboard"><caption>Spreadsheet source cells; not calculated values</caption></table></div>
+      <fieldset id="sheet-fields"><legend>Selected cell: <span id="sheet-location">A1</span></legend>
+        <label for="sheet-kind">Explicit cell type or operation</label>
+        <select id="sheet-kind"><option value="blank">Blank</option><option value="text">Literal text (never a formula)</option><option value="number">Exact decimal number</option><option value="reference">Reference another cell</option><option value="add">Add two operands</option><option value="subtract">Subtract two operands</option><option value="multiply">Multiply two operands</option><option value="divide">Divide two operands</option><option value="sum">Sum rectangular range</option><option value="minimum">Minimum rectangular range</option><option value="maximum">Maximum rectangular range</option><option value="average">Average rectangular range</option><option value="preserve">Preserve existing native typed formula</option></select>
+        <label for="sheet-value">Text, decimal, reference, first operand, or range start</label><textarea id="sheet-value" rows="3" maxlength="4096" spellcheck="false" aria-describedby="sheet-value-help"></textarea>
+        <p id="sheet-value-help">Text: up to 4096 UTF-8 bytes. Decimals: at most six fractional digits and magnitude 10^24. Formula operands: exact decimals or cell references A1–AF64, inside the current grid. Ranges require top-left and bottom-right references. Existing nested formulas load read-only until explicitly replaced by a selected operation.</p>
+        <div id="sheet-second-field"><label for="sheet-second">Second operand or range end</label><input id="sheet-second" type="text" maxlength="40" spellcheck="false"></div>
+        <button id="sheet-cell-apply" type="button">Apply cell to source grid</button><button id="sheet-cell-discard" type="button">Discard pending inspector edits</button>
+      </fieldset>
+      <p id="sheet-status" role="status" aria-live="polite" aria-atomic="true"></p>
+      <button id="sheet-use" type="button">Copy grid to source editor (replaces editor)</button>
+      <button id="sheet-load" type="button" disabled>Load last native-verified spreadsheet source (replaces grid)</button>
+    </section>
+    <section class="wide" aria-labelledby="reopen-heading">
       <h2 id="reopen-heading">Reopen an exact complete envelope</h2>
       <p>Paste a complete content envelope and independently selected SHA256. These bytes are untrusted data, not proof of ownership, publication or rollback authority.</p>
       <label for="envelope">Complete envelope</label><textarea id="envelope" rows="7" spellcheck="false"></textarea>

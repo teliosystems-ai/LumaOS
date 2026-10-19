@@ -467,15 +467,18 @@ and [committed outcome acknowledgement](../evidence/G2_WORKFLOW_RECONCILIATION_2
 Run `luma-platform models` for this image's exact options. The installer prompts
 for a model ID unless `--model` is supplied:
 
-| Profile | CPU admission floor | Download | Context |
+| Profile | CPU serving admission floor | Download | Context |
 | --- | --- | --- | --- |
-| `qwen3-4b-q4-k-m` | 6,000,000,000 bytes total RAM, 4,000,000,000 available, two CPUs | 2,497,280,256 bytes | 2,048 tokens |
-| `qwen3-1-7b-q4-k-m` | 3,000,000,000 bytes total RAM, 2,000,000,000 available, two CPUs | 1,107,408,544 bytes | 2,048 tokens |
+| `qwen3-4b-q4-k-m` | 6,100,000,000 bytes total RAM, 4,831,838,208 available (4.5 GiB), two CPUs | 2,497,280,256 bytes | 2,048 tokens |
+| `qwen3-1-7b-q4-k-m` | 4,000,000,000 bytes total RAM, 2,684,354,560 available (2.5 GiB), two CPUs | 1,107,408,544 bytes | 2,048 tokens |
 | `manual-only` | OS requirements only | None | None |
 
 Both model profiles require their download size plus 2 GiB of free encrypted
 storage. These are conservative development admission limits, not performance
 certification. The 1.7B option does not meet the governed 4–6B compact-model tier.
+Inert installer staging retains the total-RAM, two-CPU and storage checks but
+requires at least 1 GiB available for its bounded staging worker; that does not
+establish the separate serving admission or authorize model activation.
 GPU support and larger parameter tiers cannot be selected without a supported,
 pinned runtime/profile and passing admission/evaluation. Unknown IDs are denied.
 
@@ -933,7 +936,9 @@ Run from this repository:
 bash native/image/build.sh headless NEXT_SEQUENCE
 ```
 
-Build containers are limited to 4 GiB RAM, no additional swap and two CPUs.
+Tools/package-build and export containers are limited to 4 GiB RAM, no additional
+swap and two CPUs. Assembly defaults to the same bounds; the guarded 5 GiB
+option is described below.
 Assembly uses one Cargo compiler job with warnings denied; release LTO and
 optimization remain unchanged. Run the source sweep before the image build,
 not concurrently with compilation, a qualification VM or a loaded model. These

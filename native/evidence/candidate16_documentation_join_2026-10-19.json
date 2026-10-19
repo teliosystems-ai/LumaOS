@@ -1,0 +1,53 @@
+{
+  "schema_version": 1,
+  "date": "2026-10-19",
+  "status": "documentation-only-source-identity-verified",
+  "scope": "Native Ubuntu 24.04 amd64 desktop laboratory candidate, sequence 16; independent read-only source D to E comparison",
+  "source_d": {
+    "snapshot": "/mnt/luma-build/work/candidate16-source-20261019-d",
+    "manifest_sha256": "61ceba22699af2604f713a82a4fd99f2ce54ee87fd04c0dab9eb65f3f529eb0e",
+    "actual_files_verified": 553
+  },
+  "source_e": {
+    "snapshot": "/mnt/luma-build/work/candidate16-source-20261019-e",
+    "manifest_sha256": "8c0eb344e66db6087568b2fa9b3c8e0c3829293eed5bdffc1fb2d5b450d24363",
+    "actual_files_verified": 553
+  },
+  "identity": {
+    "exact_manifest_and_physical_file_membership_identical": true,
+    "changed_paths": ["native/image/README.md"],
+    "unchanged_actual_file_bytes_and_hashes": 552,
+    "runtime_policy_tests_catalog_rust_cargo_tpm_and_cli_sources_unchanged": true,
+    "documentation_changes": [
+      "Correct CPU serving RAM and available-memory floors to the unchanged pinned model catalog.",
+      "Distinguish inert installer staging admission from serving admission and activation authority.",
+      "Distinguish unchanged 4-GiB tools/export limits from default 4-GiB assembly and its guarded 5-GiB option."
+    ]
+  },
+  "independent_generated_evidence": {
+    "path": "/mnt/luma-build/work/candidate16-documentation-join-20261019-f/verification.json",
+    "bytes": 203655,
+    "sha256": "0aba33ab43fef2a69321b59cb973588aced880079be295f9b121ada668faf675",
+    "contains_all_553_independently_verified_d_and_e_file_records": true,
+    "contains_exact_documentation_diff_and_catalog_row_checks": true,
+    "created_in_fresh_exclusive_directory": true
+  },
+  "test_evidence_join": {
+    "prior_record": "assembly_memory_preparation_2026-10-19.json",
+    "source_d_actual_tests": {
+      "native_source_passed": 638,
+      "public_trust_passed": 13,
+      "model_public_inputs_passed": 13,
+      "failed": 0,
+      "skipped": 0
+    },
+    "scope": "Prior source-D executions are referenced through independently verified identity of all 552 non-README files. This documentation-only comparison did not rerun runtime, trust, Rust, TPM or CLI tests.",
+    "new_runtime_tests_executed_by_this_record": false
+  },
+  "image_assembled_by_this_record": false,
+  "boot_or_installation_executed_by_this_record": false,
+  "loaded_policy_or_gui_qualified_by_this_record": false,
+  "production_custody_or_native_hardware_qualified": false,
+  "g2_closed": false,
+  "g3_or_gwin0_closed": false
+}

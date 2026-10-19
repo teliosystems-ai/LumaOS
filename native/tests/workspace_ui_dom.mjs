@@ -9,6 +9,7 @@ const source = readFileSync(fileURLToPath(new URL('../../web/native-workspace.js
 const html = readFileSync(fileURLToPath(new URL('../../web/native-workspace.html', import.meta.url)), 'utf8');
 let assertions = 0;
 const spreadsheetCases = [];
+const engineCases = [];
 const check = (value, message) => { assertions++; assert.ok(value, message); };
 
 function fixture(available = true) {
@@ -67,7 +68,17 @@ function fixture(available = true) {
     byId('sheet-cell-apply').dispatch('click');
   }
   function copy() { byId('sheet-use').dispatch('click'); return JSON.parse(byId('editor').value); }
-  return {byId, sent, document, receive, links, window, cells, edit, copy, fail(value) { failTransport = value; }};
+  function composerNodes() { const collect = element => [element, ...element.children.flatMap(collect)]; return collect(byId('composer-form')); }
+  function composedField(path) { const node = composerNodes().find(item => item.getAttribute('data-composer-path') === path); assert.ok(node, 'actual composer field ' + path); return node; }
+  function composeEdit(path, value) { const field = composedField(path); field.value = value; field.dispatch(field.tagName === 'select' ? 'change' : 'input'); }
+  function composeAction(title, index = 0) { const action = composerNodes().filter(item => item.tagName === 'button' && item.textContent === title)[index]; assert.ok(action, 'actual composer action ' + title); action.dispatch('click'); }
+  function composeVariant(title, variant, index = 0) {
+    const action = composerNodes().filter(item => item.tagName === 'button' && item.textContent === 'Replace ' + title + ' with selected type (discards its fields)')[index];
+    const parent = composerNodes().find(item => item.children.includes(action));
+    assert.ok(parent, 'typed variant parent ' + title); parent.children.find(item => item.tagName === 'select').value = variant; action.dispatch('click');
+  }
+  function composeCopy() { byId('composer-use').dispatch('click'); return JSON.parse(byId('editor').value); }
+  return {byId, sent, document, receive, links, window, cells, edit, copy, composerNodes, composedField, composeEdit, composeAction, composeVariant, composeCopy, fail(value) { failTransport = value; }};
 }
 
 {
@@ -267,12 +278,106 @@ function fixture(available = true) {
   f.receive(f.sent.at(-1).id, 'cancelled');
   check(f.document.activeElement.id === 'preview', 'observed cancellation restores source action keyboard target');
 }
+{
+  const f = fixture();
+  check(f.byId('composer-load').disabled, 'unverified raw source is not silently imported into a typed composer');
+  const dynamicAction = f.composerNodes().find(item => item.tagName === 'button' && item.textContent === 'Append blocks item');
+  dynamicAction.focus(); f.document.dispatch('keydown', {key: 'Enter', ctrlKey: true});
+  check(f.sent.length === 0 && f.document.activeElement.id === 'composer-use', 'dynamic composer action shortcut cannot run stale raw source');
+  f.composeAction('Append blocks item');
+  check(f.document.activeElement.id === 'composer-apply', 'explicit structural rerender restores a stable keyboard target');
+  f.composeEdit('blocks.0.text', '<script>literal & inert</script>');
+  f.composeEdit('title', 'Accessible complete typed document');
+  f.composeAction('Append blocks item');
+  check(f.byId('composer-status').textContent.includes('Apply or discard') && f.composerNodes().filter(item => item.getAttribute('data-composer-path') === 'blocks.1.text').length === 0, 'structural changes never discard pending scalar drafts');
+  f.byId('composer-apply').dispatch('click');
+  for (const [index, kind] of ['paragraph', 'list', 'table', 'code', 'rule'].entries()) {
+    f.composeAction('Append blocks item'); f.composeVariant('blocks item ' + (index + 2), kind);
+  }
+  f.composeVariant('runs item 1', 'strong');
+  f.composeEdit('blocks.1.runs.0.text', 'Strong literal'); f.byId('composer-apply').dispatch('click');
+  for (const kind of ['emphasis', 'code', 'line-break', 'text']) {
+    f.composeAction('Append runs item', 0);
+    const count = f.composeCopy().blocks[1].runs.length;
+    f.composeVariant('runs item ' + count, kind);
+  }
+  f.composeEdit('blocks.2.ordered', 'true'); f.composeEdit('blocks.2.items.0.0.text', 'List item');
+  f.composeEdit('blocks.3.header.0', 'Header'); f.composeEdit('blocks.4.text', 'const inert = "<tag>";'); f.byId('composer-apply').dispatch('click');
+  f.composeAction('Append rows item'); f.composeEdit('blocks.3.rows.0.0', '=never-evaluate'); f.byId('composer-apply').dispatch('click');
+  const source = f.composeCopy();
+  check(source.blocks.map(item => item.kind).join(',') === 'heading,paragraph,list,table,code,rule', 'all native document block variants editable without raw JSON');
+  check(source.blocks[1].runs.map(item => item.kind).join(',') === 'strong,emphasis,code,line-break,text', 'all native inline run variants preserved and independently editable');
+  check(source.blocks[3].rows[0][0] === '=never-evaluate' && source.blocks[0].text.startsWith('<script>'), 'table cells and markup-looking document text remain inert data');
+  check(f.sent.length === 0, 'composing complete documents never claims execution or publication');
+  engineCases.push({name: 'all-document-variants', engine: 'document', source: JSON.stringify(source)});
+  f.byId('preview').dispatch('click'); check(f.sent[0].source === JSON.stringify(source) && f.sent[0].engine === 'document', 'complete composed document follows existing actual native request path');
+  check(f.byId('composer-fields').disabled && f.byId('composer-use').disabled, 'source composer freezes while exact native input is active');
+  f.receive(f.sent[0].id, 'completed', {result: {operation: 'document', rendering: {canonical_source: JSON.stringify(source), canonical_html: '<p>fixture result</p>'}}});
+  f.byId('composer-load').dispatch('click'); check(f.byId('composer-status').textContent.includes('actual native-verified'), 'host-verified complete source can be explicitly loaded back for editing');
+  check(JSON.stringify(f.composeCopy()) === JSON.stringify(source), 'all nested document source variants survive exact composer reload');
+}
+{
+  const f = fixture(); f.byId('composer-engine').value = 'diagram'; f.byId('composer-new').dispatch('click');
+  f.composeAction('Append nodes item'); f.composeEdit('nodes.0.id', 'left'); f.composeEdit('nodes.0.fill', 'blue'); f.byId('composer-apply').dispatch('click');
+  f.composeAction('Append nodes item'); f.composeEdit('nodes.1.id', 'right'); f.composeEdit('nodes.1.x', '120'); f.composeEdit('nodes.1.shape', 'ellipse'); f.byId('composer-apply').dispatch('click');
+  f.composeAction('Append edges item');
+  f.composeEdit('edges.0.from', 'left'); f.composeEdit('edges.0.to', 'right'); f.composeEdit('edges.0.from_port', 'east'); f.composeEdit('edges.0.to_port', 'west'); f.composeEdit('edges.0.arrow', 'end'); f.composeEdit('edges.0.label', '<literal & link>'); f.byId('composer-apply').dispatch('click');
+  const source = f.composeCopy();
+  check(source.nodes.length === 2 && source.edges[0].from === 'left' && source.edges[0].to === 'right', 'native diagram nodes and explicit cardinal edges editable');
+  engineCases.push({name: 'explicit-two-node-diagram', engine: 'diagram', source: JSON.stringify(source)});
+  f.composeAction('Move nodes item 2 up'); const moved = f.composeCopy();
+  check(moved.nodes[0].id === 'right' && moved.edges[0].from === 'left', 'explicit reordering preserves stable identifier references');
+  f.composeAction('Remove nodes item 1 (discards source)');
+  check(f.composeCopy().nodes.length === 1 && f.composeCopy().edges.length === 1, 'removal does not silently rewrite or delete dangling edges; native must refuse');
+  engineCases.push({name: 'absent-diagram-endpoint', engine: 'diagram', source: JSON.stringify(f.composeCopy()), native_refusal_required: true,
+    expected_native_error: 'diagram edge has an absent or identical endpoint'});
+}
+{
+  const f = fixture(); f.byId('composer-engine').value = 'animation'; f.byId('composer-new').dispatch('click');
+  f.composeAction('Append sprites item'); f.composeVariant('shape', 'circle');
+  f.composeEdit('frame_count', '3'); f.composeEdit('frames_per_second', '2'); f.composeEdit('sprites.0.keyframes.0.x', '-10'); f.byId('composer-apply').dispatch('click');
+  f.composeAction('Append keyframes item'); f.composeEdit('sprites.0.keyframes.1.frame', '2'); f.composeEdit('sprites.0.keyframes.1.x', '40'); f.composeEdit('sprites.0.keyframes.1.y', '20'); f.byId('composer-apply').dispatch('click');
+  const source = f.composeCopy();
+  check(source.sprites[0].shape.kind === 'circle' && source.sprites[0].keyframes[1].frame === 2, 'typed animation shapes, timing and exact signed keyframes editable');
+  engineCases.push({name: 'circle-three-sampled-frames', engine: 'animation', source: JSON.stringify(source)});
+  f.composeEdit('width', '1e2'); f.composeEdit('height', '240'); f.byId('composer-apply').dispatch('click');
+  check(f.byId('composer-status').textContent.includes('exact decimal integer') && JSON.stringify(f.composeCopy()) === JSON.stringify(source), 'invalid scalar batch refuses atomically with source unchanged');
+  f.byId('composer-discard').dispatch('click');
+  check(f.composedField('height').value === '180' && f.composedField('width').value === '320', 'explicit pending-field discard restores all retained values');
+  f.composeEdit('sprites.0.keyframes.1.frame', '1'); f.byId('composer-apply').dispatch('click');
+  engineCases.push({name: 'missing-final-animation-keyframe', engine: 'animation', source: JSON.stringify(f.composeCopy()), native_refusal_required: true,
+    expected_native_error: 'invalid serialized artifact envelope'});
+  f.composedField('sprites.0.keyframes.1.frame').focus(); f.document.dispatch('keydown', {key: 'Enter', ctrlKey: true});
+  check(f.sent.length === 0 && f.document.activeElement.id === 'composer-use', 'composer shortcut cannot execute stale raw source');
+}
+{
+  const f = fixture();
+  f.composeEdit('title', 'Unapplied retained composer draft');
+  f.byId('example').dispatch('click'); f.byId('preview').dispatch('click');
+  check(f.byId('composer-fields').disabled && f.composedField('title').value === 'Unapplied retained composer draft', 'explicit raw source preview freezes but never replaces pending composer drafts');
+  f.byId('cancel').dispatch('click'); f.receive(f.sent[0].id, 'cancelled');
+  f.byId('composer-apply').dispatch('click');
+  check(f.composeCopy().title === 'Unapplied retained composer draft', 'observed cancellation preserves independently edited composer fields');
+  const before = JSON.stringify(f.composeCopy());
+  const malformed = [
+    {schema_version: 1, title: 'Untrusted extra field', blocks: [], bypass: true},
+    {schema_version: true, title: 'Type substitution', blocks: []},
+    {schema_version: 1, title: 'Large field tree', blocks: Array.from({length: 128}, () => ({kind: 'paragraph', runs: Array.from({length: 32}, () => ({kind: 'text', text: ''}))}))},
+  ];
+  for (const source of malformed) {
+    f.byId('preview').dispatch('click'); f.receive(f.sent.at(-1).id, 'completed', {result: {operation: 'document', rendering: {canonical_source: JSON.stringify(source), canonical_html: '<p>fixture</p>'}}});
+    f.byId('composer-load').dispatch('click');
+    check(f.byId('composer-status').textContent.startsWith('Composer unchanged:') && JSON.stringify(f.composeCopy()) === before, 'unknown/typed/over-budget canonical source import is atomic and leaves applied source intact');
+  }
+  const labels = f.composerNodes().filter(item => item.tagName === 'label');
+  check(labels.length > 0 && labels.every(label => f.composerNodes().some(item => item.id === label.htmlFor)), 'all actual dynamically generated scalar/variant controls have exact associated labels');
+}
 const args = process.argv.slice(2);
-assert.ok(args.length === 0 || ((args.length === 1 || args.length === 2) && args[0] === '--emit-spreadsheet-cases'), 'closed fixture arguments required');
+assert.ok(args.length === 0 || ((args.length === 1 || args.length === 2) && ['--emit-spreadsheet-cases', '--emit-engine-cases'].includes(args[0])), 'closed fixture arguments required');
 const output = JSON.stringify({schema_version: 1, assertions, production_javascript_executed: true,
   graphical_webkit_qualified: false, authority_returned: false,
-  ...(args.length ? {spreadsheet_cases: spreadsheetCases} : {})});
+  ...(args[0] === '--emit-spreadsheet-cases' ? {spreadsheet_cases: spreadsheetCases} : args[0] === '--emit-engine-cases' ? {engine_cases: engineCases} : {})});
 if (args.length === 2) {
   writeFileSync(args[1], output + '\n', {encoding: 'utf8', flag: 'wx', mode: 0o600});
-  console.log(JSON.stringify({assertions, spreadsheet_cases: spreadsheetCases.length, output: args[1], authority_returned: false}));
+  console.log(JSON.stringify({assertions, spreadsheet_cases: spreadsheetCases.length, engine_cases: engineCases.length, output: args[1], authority_returned: false}));
 } else console.log(output);

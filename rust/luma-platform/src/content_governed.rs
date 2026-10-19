@@ -108,10 +108,22 @@ enum Operation {
         query: String,
         limit: usize,
     },
+    SearchSemanticSelected {
+        references: Vec<VersionReference>,
+        query: String,
+        limit: usize,
+        dimensions: usize,
+    },
     CollectionSearch {
         expected: VersionReference,
         query: String,
         limit: usize,
+    },
+    CollectionSearchSemantic {
+        expected: VersionReference,
+        query: String,
+        limit: usize,
+        dimensions: usize,
     },
 }
 
@@ -136,7 +148,9 @@ impl Input {
                 | Operation::Page { .. }
                 | Operation::Search { .. }
                 | Operation::SearchSelected { .. }
+                | Operation::SearchSemanticSelected { .. }
                 | Operation::CollectionSearch { .. }
+                | Operation::CollectionSearchSemantic { .. }
                 | Operation::Preparation { .. }
                 | Operation::CollectionCurrent { .. }
                 | Operation::CollectionPage { .. }
@@ -180,7 +194,9 @@ impl Input {
             | Operation::Page { .. }
             | Operation::Search { .. }
             | Operation::SearchSelected { .. }
+            | Operation::SearchSemanticSelected { .. }
             | Operation::CollectionSearch { .. }
+            | Operation::CollectionSearchSemantic { .. }
             | Operation::Preparation { .. }
             | Operation::CollectionCurrent { .. }
             | Operation::CollectionPage { .. }
@@ -315,12 +331,23 @@ impl Input {
             }
             Operation::Search { query, limit }
             | Operation::SearchSelected { query, limit, .. }
+            | Operation::SearchSemanticSelected { query, limit, .. }
+            | Operation::CollectionSearchSemantic { query, limit, .. }
             | Operation::CollectionSearch { query, limit, .. } => {
-                if let Operation::CollectionSearch { expected, .. } = &self.operation {
+                if let Operation::CollectionSearch { expected, .. }
+                | Operation::CollectionSearchSemantic { expected, .. } = &self.operation
+                {
                     validate_reference(expected)?;
                 }
-                if let Operation::SearchSelected { references, .. } = &self.operation {
+                if let Operation::SearchSelected { references, .. }
+                | Operation::SearchSemanticSelected { references, .. } = &self.operation
+                {
                     luma_content_store::canonical_search_selection(references)?;
+                }
+                if let Operation::SearchSemanticSelected { dimensions, .. }
+                | Operation::CollectionSearchSemantic { dimensions, .. } = &self.operation
+                {
+                    luma_content_store::validate_semantic_query(query, *limit, *dimensions)?;
                 }
                 if *limit > MAX_QUERY_RESULTS {
                     return Err("native content query exceeds its response result bound".into());
@@ -980,7 +1007,9 @@ fn plan(
             | Operation::Page { .. }
             | Operation::Search { .. }
             | Operation::SearchSelected { .. }
+            | Operation::SearchSemanticSelected { .. }
             | Operation::CollectionSearch { .. }
+            | Operation::CollectionSearchSemantic { .. }
             | Operation::Preparation { .. }
             | Operation::CollectionCurrent { .. }
             | Operation::CollectionPage { .. }
@@ -1064,7 +1093,9 @@ fn plan(
         | Operation::Page { .. }
         | Operation::Search { .. }
         | Operation::SearchSelected { .. }
+        | Operation::SearchSemanticSelected { .. }
         | Operation::CollectionSearch { .. }
+        | Operation::CollectionSearchSemantic { .. }
         | Operation::Preparation { .. }
         | Operation::CollectionCurrent { .. }
         | Operation::CollectionPage { .. }
@@ -1148,7 +1179,9 @@ fn validate_replay(input: &Input, prior: &Plan) -> Result<()> {
         | Operation::Page { .. }
         | Operation::Search { .. }
         | Operation::SearchSelected { .. }
+        | Operation::SearchSemanticSelected { .. }
         | Operation::CollectionSearch { .. }
+        | Operation::CollectionSearchSemantic { .. }
         | Operation::Preparation { .. }
         | Operation::Recovery { .. } => false,
         Operation::CollectionCurrent { .. }
@@ -1305,6 +1338,30 @@ fn query(
             "selected_search":repository.search_selected(references, query, *limit, boundary)?,
             "content_delivered":false,"committed":false,"authority_returned":false,
             "semantic_classification":false,"selection_is_authority":false,
+            "provenance_authority":false,"workflow_executed":false,"production_qualified":false
+        }),
+        Operation::SearchSemanticSelected {
+            references,
+            query,
+            limit,
+            dimensions,
+        } => serde_json::json!({
+            "schema_version":1,
+            "semantic_search":repository.semantic_search_selected(references,query,*limit,*dimensions,boundary)?,
+            "content_delivered":false,"committed":false,"authority_returned":false,
+            "selection_is_authority":false,"similarity_is_authority":false,
+            "provenance_authority":false,"workflow_executed":false,"production_qualified":false
+        }),
+        Operation::CollectionSearchSemantic {
+            expected,
+            query,
+            limit,
+            dimensions,
+        } => serde_json::json!({
+            "schema_version":1,
+            "semantic_collection_search":repository.semantic_search_collection(expected,query,*limit,*dimensions,boundary)?,
+            "content_delivered":false,"committed":false,"authority_returned":false,
+            "selection_is_authority":false,"similarity_is_authority":false,
             "provenance_authority":false,"workflow_executed":false,"production_qualified":false
         }),
         Operation::CollectionSearch {
@@ -2736,6 +2793,59 @@ mod tests {
     }
 
     #[test]
+    fn semantic_search_binds_dimensions_and_exact_selection_to_finite_read_not_effects() {
+        let request = query_input(Operation::SearchSemanticSelected {
+            references: vec![reference()],
+            query: "original".into(),
+            limit: 1,
+            dimensions: 2,
+        });
+        request.validate().unwrap();
+        assert!(request.is_query());
+        assert!(request.source().is_err());
+        assert!(plan(&request, None, &mut NoAuthority).is_err());
+        let bytes = canonical_request(&serde_json::to_vec(&request).unwrap()).unwrap();
+        let digest = io::digest(&bytes);
+        let id = profile_id(Mode::Query, &request, &bytes, &digest).unwrap();
+        // Profile strings describe scopes; they never grant their effects.
+        // Both command and worker admission use this actual mode predicate.
+        assert!(!request.matches_mode(Mode::Write));
+        assert!(!request.matches_mode(Mode::Retain));
+        assert!(!request.matches_mode(Mode::Recover));
+        assert!(request.matches_mode(Mode::Query));
+        let effect_id = profile_id(Mode::Write, &request, &bytes, &digest).unwrap();
+        assert_ne!(effect_id, id);
+        assert!(!query_profile(&effect_id).unwrap());
+        for dimensions in [1, 3, 8] {
+            let changed = query_input(Operation::SearchSemanticSelected {
+                references: vec![reference()],
+                query: "original".into(),
+                limit: 1,
+                dimensions,
+            });
+            let other = canonical_request(&serde_json::to_vec(&changed).unwrap()).unwrap();
+            assert_ne!(
+                id,
+                profile_id(Mode::Query, &changed, &other, &io::digest(&other)).unwrap()
+            );
+            assert!(profile_id(Mode::Query, &changed, &other, &digest).is_err());
+        }
+        for dimensions in [0, 9, usize::MAX] {
+            assert!(query_input(Operation::SearchSemanticSelected {
+                references: vec![reference()],
+                query: "original".into(),
+                limit: 1,
+                dimensions
+            })
+            .validate()
+            .is_err());
+        }
+        let mut unknown: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        unknown["operation"]["grant"] = serde_json::json!("not-per-result-authority");
+        assert!(parse(&serde_json::to_vec(&unknown).unwrap()).is_err());
+    }
+
+    #[test]
     fn selected_search_joins_actual_versions_exact_result_receipt_and_continuous_read_refusal() {
         use std::os::unix::fs::DirBuilderExt;
         struct Directory(std::path::PathBuf);
@@ -2847,14 +2957,78 @@ mod tests {
         }
         boundary.checks = 0;
         boundary.refuse_at = usize::MAX;
+        let Operation::SearchSelected { references, .. } = &request.operation else {
+            panic!("expected fixed selected search request");
+        };
+        let semantic = query_input(Operation::SearchSemanticSelected {
+            references: references.clone(),
+            query: "fox".into(),
+            limit: 1,
+            dimensions: 2,
+        });
+        let result = query(&semantic, &repository, &mut boundary).unwrap();
+        assert_eq!(result["semantic_search"]["selected_versions"], 1);
+        assert_eq!(result["semantic_search"]["total_matches"], 1);
+        assert_eq!(
+            result["semantic_search"]["algorithm"],
+            "tfidf-lsa-jacobi-v1"
+        );
+        assert!(!serde_json::to_string(&result).unwrap().contains("beta"));
+        for flag in [
+            "content_delivered",
+            "committed",
+            "authority_returned",
+            "selection_is_authority",
+            "similarity_is_authority",
+            "workflow_executed",
+            "production_qualified",
+        ] {
+            assert_eq!(result[flag], false);
+        }
+        let (mut response, mut receipt) = resource_response();
+        response.result = result;
+        receipt["output_sha256"] =
+            serde_json::json!(io::digest(&serde_json::to_vec(&response.result).unwrap()));
+        verify_resource(
+            &response,
+            &response.binding,
+            &response.request_sha256,
+            receipt.clone(),
+        )
+        .unwrap();
+        response.result["semantic_search"]["matches"][0]["cosine_millionths"] =
+            serde_json::json!(0);
+        assert!(verify_resource(
+            &response,
+            &response.binding,
+            &response.request_sha256,
+            receipt
+        )
+        .is_err());
+        boundary.checks = 0;
+        query(&semantic, &repository, &mut boundary).unwrap();
+        for at in 1..=boundary.checks {
+            boundary.checks = 0;
+            boundary.refuse_at = at;
+            assert!(query(&semantic, &repository, &mut boundary).is_err());
+        }
+        boundary.checks = 0;
+        boundary.refuse_at = usize::MAX;
         boundary.binding.owner_generation += 1;
         assert!(query(&request, &repository, &mut boundary).is_err());
+        assert!(query(&semantic, &repository, &mut boundary).is_err());
         assert_eq!(boundary.checks, 0);
     }
 
     #[test]
     fn collection_and_preparation_requests_are_bounded_read_only_selectors() {
         for operation in [
+            Operation::CollectionSearchSemantic {
+                expected: reference(),
+                query: "original".into(),
+                limit: MAX_QUERY_RESULTS,
+                dimensions: 2,
+            },
             Operation::CollectionSearch {
                 expected: reference(),
                 query: "original".into(),

@@ -73,10 +73,11 @@ namespace Luma.Windows.Hosted
     }
     public sealed class HostedRuntimeState
     {
+        private readonly AuthorityIdentity commissioned;
         public RuntimeBundle Current {get;private set;}public string WslSha256 {get;private set;}public string Slot {get;private set;}
         public string SourceSha256 {get;private set;}public ulong Generation {get;private set;}public RuntimePreparation Pending {get;private set;}
         private readonly HashSet<string> slots=new HashSet<string>(StringComparer.Ordinal);
-        private HostedRuntimeState(AuthorityIdentity identity,RuntimeBundle baseline) {if(baseline==null || baseline.ServiceSha256!=identity.ServiceSha256) throw new SecurityException("Commissioned full runtime baseline is missing or mismatched.");Current=baseline;WslSha256=identity.WslSha256;Slot="";
+        private HostedRuntimeState(AuthorityIdentity identity,RuntimeBundle baseline) {if(baseline==null || baseline.ServiceSha256!=identity.ServiceSha256) throw new SecurityException("Commissioned full runtime baseline is missing or mismatched.");commissioned=identity;Current=baseline;WslSha256=identity.WslSha256;Slot="";
             using(Wire.Writer writer=new Wire.Writer("luma-windows-hosted-runtime-genesis-v1")) {writer.Fixed(Wire.HashBytes(identity.Encode()),32);writer.Fixed(Wire.Bytes(baseline.Sha256,32,true),32);SourceSha256=Wire.Hash(writer.Bytes());}}
         public static HostedRuntimeState Replay(AuthorityIdentity identity,RuntimeBundle baseline,HostedTrustState trust,JournalHistory history,Action check) {
             if(check==null || trust==null || history==null) throw new ArgumentNullException("check");check();HostedRuntimeState state=new HostedRuntimeState(identity,baseline);
@@ -94,6 +95,24 @@ namespace Luma.Windows.Hosted
                 }
             }
             check();return state;
+        }
+        // Execution descriptor only. Custody keys, fixed NV, journal signatures
+        // and commissioning genesis MUST continue using the original identity.
+        // No caller chooses these pins; they come from authenticated replay.
+        public AuthorityIdentity GuestExecutionIdentity {
+            get {
+                if(Pending!=null) throw new SecurityException("Prepared runtime cannot supply guest execution authority before explicit authenticated completion.");
+                return new AuthorityIdentity(commissioned.Domain,commissioned.Installation,commissioned.FirstAdminSid,commissioned.Environment,
+                    commissioned.ReleaseKey,commissioned.TimeKey,commissioned.AuthorityKey,Current.ServiceSha256,WslSha256);
+            }
+        }
+    }
+
+    public static class HostedRuntimeDependencyPolicy
+    {
+        public static void RequireWsl(string committed,string observed) {
+            Wire.Bytes(committed,32,true);Wire.Bytes(observed,32,true);
+            if(committed!=observed) throw new SecurityException("Actual fixed WSL image differs from the authenticated current runtime pin; no commissioned-old-pin or caller-selected dependency fallback.");
         }
     }
 

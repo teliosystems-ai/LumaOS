@@ -1242,3 +1242,90 @@ final successful selected-search rerun, not to an invented fresh full-suite
 pass. It also retains wrapper failures and the explicit NTFS fixture correction.
 No new full G3 image, Windows bootable product, installed GUI qualification or
 production acceptance is claimed by this development checkpoint.
+
+### Semantic retrieval content composers and authenticated Windows compute
+
+Native semantic queries now rebuild a TF-IDF latent semantic index from one
+verified owner-local snapshot. `search-semantic-selected` accepts exact sorted
+`references`, `query`, `limit` and `dimensions`; `collection-search-semantic`
+uses one exact `expected` typed collection reference with the same query
+parameters. Dimensions are 1 through 8, with at most 64 versions, 4,096
+vocabulary terms and 512 learned features. Actual latent projection can match
+an associated document without a literal query term. The same original finite
+Read, protected custody, resource generation and continuous revocation checks
+cover reconstruction, computation and delivery.
+
+The index is rebuilt in memory, not trusted from a mutable cache. Its descriptor
+hash commits the owner-generation, exact references and algorithm parameters;
+it is not a signature over learned floats. Scores are rounded cosine similarity,
+not confidence, truth or authorization. Tokenization uses ASCII alphanumeric
+words in canonical content, including structured-format keys, and excludes
+partial Unicode words and identifiers. Contextual/neural or multilingual
+relevance is not supplied by this statistical implementation. General
+per-result sharing policy and relevance acceptance remain open.
+
+The native workspace now composes every supported document, diagram and
+animation source variant with explicit atomic apply/discard, structural edits,
+source copy and reload from host-verified canonical results. Structural actions
+preserve keyboard focus and reject pending draft loss; invalid imports leave
+the prior draft intact. Actual native engines remain the only rendering and
+calculation authority. These manual editors do not complete conversational
+inference, permissioned capture, private graphical publication or installed
+adapter qualification.
+
+On an explicitly commissioned Windows deployment, the original interactive
+first Admin can invoke `Luma.HostedAuthority.exe compute ACTIVE_RELEASE_SHA256
+OPERATION PAYLOAD_FILE`. The seven allowlisted inert operations are capture,
+reopen, spreadsheet, document, diagram, animation and collection. Each request
+has a fresh nonce, at most 4,096 UTF-8 payload bytes and 8,192 canonical request
+bytes; output is bounded to 16 MiB. Original review, protected UTC, controller
+execution, cancellation and acknowledged result delivery share one 30-second
+purpose. Complete results are hash-verified and printed as inert base64, not
+saved as a content publication or treated as workflow success.
+
+Signed/NV history commits the exact resource generation before execution and
+the actual controller identity before resume. Completion requires original
+controller exit and confined guest drainage. `compute-recover
+ACTIVE_RELEASE_SHA256 REQUEST_GENERATION` requires a separate exact review and
+closes interrupted execution without replay or recovered-result success.
+Current authenticated service/WSL pins now govern guest execution after runtime
+migration; original commissioning, CNG/TPM and journal identities remain
+unchanged. This path does not authenticate an ordinary Linux/product principal,
+issue finite grants or run compact-model inference. Managed-memory clearing on
+every exceptional transfer path is not qualified.
+
+Private VHDX conversion can now be exported with `hyperv_image.py export` using
+independent conversion-record, raw-image and VHDX pins. The exporter exclusively
+creates new public D files through held directory descriptors, reads back the
+complete destination, rechecks source/output witnesses and preserves partial
+failures. Public export receipts are descriptive data. The Windows planner
+independently holds and rehashes media; receipt validation cannot authorize a
+VM, convert an installer into an installed desktop or establish firmware trust.
+Actual tiny cross-OS export is distinct from full-sized desktop conversion.
+
+Optical ISO delivery still needs implementation: a distinct signed optical
+UKI/initrd path, bounded read-only optical discovery, correctly ordered
+verity-backed root and payload mounts, EFI El Torito assembly, and production
+signature/checker integration. The existing GPT partition-label UKI is not an
+optical boot implementation. Installed native/Windows journeys, real compact
+inference, production custody and hardware/profile qualification remain open
+alongside the other development work in the delivery register.
+
+The [execution record](gates/g3/semantic_compute_media_2026-10-19.json) binds
+615 exact final source files to the retained logs. The final native sweep passed
+680 source tests, 121 focused custody/workflow tests, seven semantic-store
+cases, four selected-search regressions, 26 trust/catalog tests, three
+disposable-TPM scenarios and the actual CLI/editor corpora. Windows evidence
+joins 424 authority assertions to 89 capacity and 76 planner assertions through
+unchanged tested-source hashes. Production JavaScript passed 118 assertions;
+Python regression passed 315 tests with five reported skips. These groups
+overlap and are not a summed unique-test total. The full Rust workspace/store
+unit suites were not rerun.
+
+The earlier native run's failed assertion is preserved: it mistakenly treated
+an inert profile-description constructor as the effect-admission gate. The
+test-only correction exercises the actual command/worker mode predicate;
+all production bytes are unchanged between those two snapshots. The complete
+selected integration sweep then passed on the corrected snapshot. No complete
+G3/Windows image, actual installed compute execution or production readiness is
+claimed by these software results.

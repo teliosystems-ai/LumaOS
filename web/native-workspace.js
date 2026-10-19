@@ -14,6 +14,11 @@
   let selectedCell = [0, 0];
   let sheetDirty = false;
   let sheetButtons = [];
+  let composerEngine = 'document';
+  let composer = null;
+  let composerDirty = false;
+  let composerReaders = [];
+  let verifiedComposer = null;
   const bridge = window.webkit?.messageHandlers?.workspace;
   const examples = {
     text: 'Manual source. No model or storage publication.\n',
@@ -28,6 +33,135 @@
 
   const binaryOperations = ['add', 'subtract', 'multiply', 'divide'];
   const aggregates = ['sum', 'minimum', 'maximum', 'average'];
+  // These schemas describe editable DATA only. They do not evaluate content,
+  // render geometry, grant access or replace native complete-source validation.
+  const stringField = (value = '', max = 4096) => ({type: 'text', value, max});
+  const integerField = (value, min, max) => ({type: 'integer', value, min, max});
+  const enumField = values => ({type: 'enum', values});
+  const objectField = fields => ({type: 'object', fields});
+  const arrayField = (item, max, min = 0) => ({type: 'array', item, min, max});
+  const unionField = variants => ({type: 'union', variants});
+  const runSchema = unionField(Object.fromEntries(['text', 'strong', 'emphasis', 'code', 'line-break'].map(kind => [kind,
+    objectField(kind === 'line-break' ? {} : {text: stringField()})])));
+  const runsSchema = arrayField(runSchema, 64, 1);
+  const blockSchema = unionField({
+    heading: objectField({level: integerField(1, 1, 6), text: stringField('Heading')}),
+    paragraph: objectField({runs: runsSchema}),
+    list: objectField({ordered: {type: 'boolean'}, items: arrayField(runsSchema, 128, 1)}),
+    table: objectField({header: arrayField(stringField('Column'), 32, 1), rows: arrayField(arrayField(stringField(), 32, 1), 256)}),
+    code: objectField({text: stringField()}), rule: objectField({}),
+  });
+  const composerSchemas = {
+    document: objectField({schema_version: integerField(1, 1, 1), title: stringField('Untitled document', 256), blocks: arrayField(blockSchema, 256)}),
+    diagram: objectField({schema_version: integerField(1, 1, 1), title: stringField('Untitled diagram', 256), width: integerField(400, 1, 8192), height: integerField(200, 1, 8192),
+      nodes: arrayField(objectField({id: stringField('node', 64), x: integerField(0, 0, 8192), y: integerField(0, 0, 8192), width: integerField(80, 1, 8192), height: integerField(40, 1, 8192), shape: enumField(['rectangle', 'rounded-rectangle', 'ellipse']), fill: enumField(['white', 'gray', 'blue', 'green', 'yellow', 'red']), label: stringField('Node', 256)}), 128),
+      edges: arrayField(objectField({id: stringField('edge', 64), from: stringField('node', 64), from_port: enumField(['north', 'east', 'south', 'west']), to: stringField('other', 64), to_port: enumField(['north', 'east', 'south', 'west']), arrow: enumField(['none', 'end', 'both']), label: stringField('', 256)}), 256)}),
+    animation: objectField({schema_version: integerField(1, 1, 1), width: integerField(320, 1, 4096), height: integerField(180, 1, 4096), frames_per_second: integerField(1, 1, 60), frame_count: integerField(1, 1, 120), background: stringField('#ffffff', 7),
+      sprites: arrayField(objectField({id: stringField('sprite', 64), shape: unionField({rectangle: objectField({width: integerField(40, 1, 4096), height: integerField(40, 1, 4096)}), circle: objectField({radius: integerField(20, 1, 4096)})}), fill: stringField('#000000', 7),
+        keyframes: arrayField(objectField({frame: integerField(0, 0, 119), x: integerField(0, -8192, 8192), y: integerField(0, -8192, 8192)}), 64, 1)}), 32)}),
+  };
+  function clone(value) { return JSON.parse(JSON.stringify(value)); }
+  function initial(schema) {
+    if (schema.type === 'object') return Object.fromEntries(Object.entries(schema.fields).map(([key, child]) => [key, initial(child)]));
+    if (schema.type === 'array') return Array.from({length: schema.min}, () => initial(schema.item));
+    if (schema.type === 'union') { const kind = Object.keys(schema.variants)[0]; return {kind, ...initial(schema.variants[kind])}; }
+    if (schema.type === 'enum') return schema.values[0];
+    if (schema.type === 'boolean') return false;
+    return schema.value;
+  }
+  function composerMessage(message) { byId('composer-status').textContent = message; }
+  function composerFailure(error) { composerMessage('Composer unchanged: ' + error.message); }
+  function composeCheck(value, schema, budget = {nodes: 0}) {
+    if (++budget.nodes > 8192) throw new Error('Composer field budget exceeds 8192; use the raw source editor for this source.');
+    if (schema.type === 'object') {
+      if (!exactFields(value, Object.keys(schema.fields))) throw new Error('Unknown or missing typed source fields.');
+      for (const [key, child] of Object.entries(schema.fields)) composeCheck(value[key], child, budget);
+    } else if (schema.type === 'union') {
+      if (!value || typeof value !== 'object' || !Object.hasOwn(schema.variants, value.kind)) throw new Error('Unknown typed source variant.');
+      const {kind, ...fields} = value; composeCheck(fields, schema.variants[kind], budget);
+    } else if (schema.type === 'array') {
+      if (!Array.isArray(value) || value.length < schema.min || value.length > schema.max) throw new Error('Typed array length is outside its explicit bounds.');
+      for (const item of value) composeCheck(item, schema.item, budget);
+    } else if (schema.type === 'integer') {
+      if (!Number.isSafeInteger(value) || value < schema.min || value > schema.max) throw new Error('Use an exact integer within the displayed bounds.');
+    } else if (schema.type === 'enum') {
+      if (!schema.values.includes(value)) throw new Error('Select an explicit supported value.');
+    } else if (schema.type === 'boolean') {
+      if (typeof value !== 'boolean') throw new Error('Use an explicit boolean value.');
+    } else {
+      textCell(value);
+      if (encoder.encode(value).length > schema.max) throw new Error('Text exceeds the displayed UTF-8 byte bound.');
+    }
+  }
+  function composerCheck(value, engine = composerEngine) {
+    composeCheck(value, composerSchemas[engine]);
+    if (encoder.encode(JSON.stringify(value)).length > maximum) throw new Error('Whole composed source exceeds 1 MiB.');
+    return value;
+  }
+  function composerPending() {
+    if (active !== null) return true;
+    if (!composerDirty) return false;
+    composerMessage('Apply or discard pending field edits before structural changes or copying source.'); byId('composer-apply').focus(); return true;
+  }
+  function atPath(value, path) { return path.reduce((parent, key) => parent[key], value); }
+  function changeComposer(change) {
+    if (composerPending()) return;
+    try { const candidate = clone(composer); change(candidate); composerCheck(candidate); composer = candidate; renderComposer(); composerMessage('Explicit source structure change applied. Native validation and rendering have not run.'); byId('composer-apply').focus(); }
+    catch (error) { composerFailure(error); }
+  }
+  function renderComposer() {
+    const form = byId('composer-form'); form.replaceChildren(); composerReaders = []; composerDirty = false;
+    let serial = 0;
+    function button(parent, title, action, disabled = false) {
+      const element = document.createElement('button'); element.type = 'button'; element.textContent = title; element.disabled = disabled;
+      element.setAttribute('data-composer-control', 'true');
+      element.addEventListener('click', action); parent.append(element); return element;
+    }
+    function field(parent, value, schema, path, title) {
+      const key = path.join('.');
+      if (['object', 'array', 'union'].includes(schema.type)) {
+        const group = document.createElement('fieldset'), legend = document.createElement('legend'); legend.textContent = title; group.append(legend); parent.append(group);
+        if (schema.type === 'object') {
+          for (const [name, child] of Object.entries(schema.fields)) field(group, value[name], child, [...path, name], name.replaceAll('_', ' '));
+        } else if (schema.type === 'union') {
+          const label = document.createElement('label'), select = document.createElement('select'); select.id = 'compose-' + (++serial); label.htmlFor = select.id; label.textContent = title + ' replacement type';
+          for (const kind of Object.keys(schema.variants)) { const option = document.createElement('option'); option.value = kind; option.textContent = kind; select.append(option); }
+          select.value = value.kind; group.append(label); group.append(select);
+          button(group, 'Replace ' + title + ' with selected type (discards its fields)', () => changeComposer(candidate => {
+            const replacement = {kind: select.value, ...initial(schema.variants[select.value])};
+            const parentValue = atPath(candidate, path.slice(0, -1)); parentValue[path.at(-1)] = replacement;
+          }));
+          for (const [name, child] of Object.entries(schema.variants[value.kind].fields)) field(group, value[name], child, [...path, name], name.replaceAll('_', ' '));
+        } else {
+          value.forEach((item, index) => {
+            const entry = document.createElement('div'); entry.className = 'composer-item'; group.append(entry);
+            field(entry, item, schema.item, [...path, index], title + ' item ' + (index + 1));
+            button(entry, 'Move ' + title + ' item ' + (index + 1) + ' up', () => changeComposer(candidate => { const items = atPath(candidate, path); [items[index - 1], items[index]] = [items[index], items[index - 1]]; }), index === 0);
+            button(entry, 'Move ' + title + ' item ' + (index + 1) + ' down', () => changeComposer(candidate => { const items = atPath(candidate, path); [items[index + 1], items[index]] = [items[index], items[index + 1]]; }), index === value.length - 1);
+            button(entry, 'Remove ' + title + ' item ' + (index + 1) + ' (discards source)', () => changeComposer(candidate => atPath(candidate, path).splice(index, 1)), value.length === schema.min);
+          });
+          button(group, 'Append ' + title + ' item', () => changeComposer(candidate => atPath(candidate, path).push(initial(schema.item))), value.length === schema.max);
+        }
+        return;
+      }
+      const label = document.createElement('label'), input = document.createElement(schema.type === 'text' ? 'textarea' : schema.type === 'integer' ? 'input' : 'select');
+      input.id = 'compose-' + (++serial); label.htmlFor = input.id; label.textContent = title + (schema.type === 'text' ? ' (up to ' + schema.max + ' UTF-8 bytes)' : schema.type === 'integer' ? ' (' + schema.min + ' to ' + schema.max + ')' : '');
+      input.setAttribute('data-composer-path', key);
+      if (schema.type === 'integer') { input.type = 'text'; input.inputMode = 'numeric'; }
+      if (schema.type === 'enum' || schema.type === 'boolean') for (const choice of schema.type === 'boolean' ? ['false', 'true'] : schema.values) {
+        const option = document.createElement('option'); option.value = choice; option.textContent = choice; input.append(option);
+      }
+      input.value = String(value); input.addEventListener(schema.type === 'enum' || schema.type === 'boolean' ? 'change' : 'input', () => { composerDirty = true; composerMessage('Pending field edits are not applied to source. Apply or discard explicitly.'); });
+      composerReaders.push(candidate => {
+        let value = input.value;
+        if (schema.type === 'integer') { if (!/^-?(0|[1-9][0-9]*)$/.test(value)) throw new Error(key + ': exact decimal integer required.'); value = Number(value); }
+        else if (schema.type === 'boolean') { if (!['true', 'false'].includes(value)) throw new Error('Explicit boolean required.'); value = value === 'true'; }
+        composeCheck(value, schema); atPath(candidate, path.slice(0, -1))[path.at(-1)] = value;
+      });
+      parent.append(label); parent.append(input);
+    }
+    field(form, composer, composerSchemas[composerEngine], [], composerEngine + ' source');
+  }
   function columnName(column) { return (column >= 26 ? 'A' : '') + String.fromCharCode(65 + column % 26); }
   function cellName(row, column) { return columnName(column) + String(row + 1); }
   function exactFields(value, fields) {
@@ -196,6 +330,9 @@
     byId('reuse-source').disabled = value || reopened === null;
     byId('sheet-fields').disabled = value; byId('sheet-dimensions').disabled = value;
     byId('sheet-use').disabled = value; byId('sheet-load').disabled = value || verifiedSheet === null;
+    byId('composer-fields').disabled = value;
+    ['composer-engine', 'composer-new', 'composer-apply', 'composer-discard', 'composer-use'].forEach(id => { byId(id).disabled = value; });
+    byId('composer-load').disabled = value || verifiedComposer === null;
     sheetButtons.forEach(button => { button.disabled = value; }); inspectorKind();
   }
   function clearPreview() {
@@ -296,6 +433,10 @@
     } else {
       textPreview(result.canonical_source);
     }
+    if (['document', 'diagram', 'animation'].includes(result.operation) && typeof result.rendering.canonical_source === 'string') {
+      verifiedComposer = {engine: result.operation, source: result.rendering.canonical_source};
+      byId('composer-load').disabled = false;
+    }
   }
   function submit(operation) {
     if (!bridge || active !== null) return;
@@ -313,6 +454,7 @@
     cancelRequested = false;
     reopened = null;
     verifiedSheet = null;
+    verifiedComposer = null;
     byId('error').textContent = '';
     busy(true);
     clearPreview();
@@ -384,6 +526,35 @@
     try { const candidate = validateSheet(JSON.parse(verifiedSheet)); sheet = candidate; selectedCell = [0, 0]; renderSheet(); loadInspector(); sheetMessage('Actual native-verified editable source loaded. This is source data, not owner or workflow authority.'); }
     catch (error) { sheetFailure(error); }
   });
+  byId('composer-new').addEventListener('click', () => {
+    if (composerPending()) return;
+    const engine = byId('composer-engine').value;
+    if (!Object.hasOwn(composerSchemas, engine)) { composerMessage('Unknown composer engine refused.'); return; }
+    composerEngine = engine; composer = initial(composerSchemas[engine]); renderComposer(); composerMessage('Composer explicitly replaced with new ' + engine + ' source. Source editor and previous native result unchanged.');
+  });
+  byId('composer-apply').addEventListener('click', () => {
+    if (active !== null) return;
+    try {
+      const candidate = clone(composer); for (const read of composerReaders) read(candidate); composerCheck(candidate);
+      composer = candidate; renderComposer(); composerMessage('All field edits applied atomically to source. Complete native validation and rendering have not run.');
+    } catch (error) { composerFailure(error); }
+  });
+  byId('composer-discard').addEventListener('click', () => { if (active === null) { renderComposer(); composerMessage('Pending field edits explicitly discarded. Applied source unchanged.'); } });
+  byId('composer-use').addEventListener('click', () => {
+    if (composerPending()) return;
+    try {
+      byId('editor').value = JSON.stringify(composerCheck(composer)); byId('engine').value = composerEngine; byId('editor').focus();
+      composerMessage('Exact typed ' + composerEngine + ' source copied. Run native preview explicitly. No rendering, saving or publication ran.');
+    } catch (error) { composerFailure(error); }
+  });
+  byId('composer-load').addEventListener('click', () => {
+    if (composerPending() || verifiedComposer === null) return;
+    try {
+      const candidate = composerCheck(JSON.parse(verifiedComposer.source), verifiedComposer.engine);
+      composerEngine = verifiedComposer.engine; composer = candidate; byId('composer-engine').value = composerEngine; renderComposer();
+      composerMessage('Last actual native-verified canonical source loaded for explicit editing. This is data, not owner, workflow or publication authority.');
+    } catch (error) { composerFailure(error); }
+  });
   document.querySelectorAll('a[href^="#"]').forEach(link => link.addEventListener('click', event => {
     event.preventDefault(); const target = byId(link.getAttribute('href').slice(1));
     if (target && !target.disabled) target.focus();
@@ -393,13 +564,17 @@
     else if (event.key === 'Enter' && event.ctrlKey && !event.altKey && !event.metaKey && !event.isComposing) {
       event.preventDefault();
       const focused = document.activeElement;
-      if (focused?.id.startsWith('sheet-') || focused?.getAttribute('data-sheet-cell') === 'true') {
+      if (focused?.id.startsWith('compose-') || focused?.id.startsWith('composer-') || focused?.getAttribute('data-composer-control') === 'true') {
+        composerMessage('Apply or discard field edits and explicitly copy composed source before running native preview. No stale raw-editor source was executed.'); byId('composer-use').focus();
+      } else if (focused?.id.startsWith('sheet-') || focused?.getAttribute('data-sheet-cell') === 'true') {
         sheetMessage(sheetDirty ? 'Apply or discard pending inspector edits before copying source; no native execution requested.' : 'Copy the grid to the source editor explicitly, then run native preview. No stale raw-editor source was executed.');
         byId('sheet-use').focus();
       } else submit(['envelope', 'envelope-hash', 'reopen'].includes(focused?.id) ? 'reopen' : 'preview');
     }
   });
   byId('editor').value = examples.text;
+  byId('composer-engine').value = composerEngine; composer = initial(composerSchemas[composerEngine]); renderComposer();
+  composerMessage('New document source. Apply edits and copy explicitly; only the native engine validates and renders.');
   renderSheet(); loadInspector(); sheetMessage('3 by 3 blank source grid. Select a cell to edit; only native execution calculates values.');
   busy(false);
   announce(bridge ? 'Manual native preview ready. No model, grants or private storage access.' : 'Installed native host unavailable. Preview execution is disabled; no browser substitute engine is used.');

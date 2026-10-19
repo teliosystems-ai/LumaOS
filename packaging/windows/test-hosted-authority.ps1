@@ -204,9 +204,17 @@ public static class LumaHostedLifecycleFixture {
         byte[] proof=new TimeAttestation(identity.Installation,H('a'),Wire.Hash(update.Encode()),1000,1001).Encode();RuntimePreparation preparation=new RuntimePreparation(update,H('a'),publisherSignature,proof,time(proof));
         JournalHistory prepared=Add(identity,authority,initial,JournalKind.RuntimePrepared,preparation.Encode());state=RuntimeState(identity,intent,prepared);
         Require(state.Pending!=null && state.Current.Sha256==baseline.Sha256 && state.Generation==0);assertions++;
+        Refuse(delegate {Require(state.GuestExecutionIdentity!=null);});assertions++;
         Require(Wire.Equal(RuntimeBundle.Decode(nextBundle.Encode()).Encode(),nextBundle.Encode()) && Wire.Equal(RuntimeUpdate.Decode(update.Encode()).Encode(),update.Encode()) && Wire.Equal(RuntimePreparation.Decode(preparation.Encode()).Encode(),preparation.Encode()));assertions++;
         byte[] completionProof=new TimeAttestation(identity.Installation,H('b'),Wire.Hash(update.Encode()),1000,1001).Encode();RuntimeCompletion completion=new RuntimeCompletion(Wire.Hash(preparation.Encode()),false,publisherSignature,completionProof,time(completionProof));
         JournalHistory active=Add(identity,authority,prepared,JournalKind.RuntimeActivated,completion.Encode());state=RuntimeState(identity,intent,active);Require(state.Pending==null && state.Generation==1 && state.Current.Sha256==nextBundle.Sha256 && state.WslSha256==H('5') && state.Slot==H('a'));assertions++;
+        AuthorityIdentity execution=state.GuestExecutionIdentity;
+        Require(execution.WslSha256==H('5') && execution.WslSha256!=identity.WslSha256 && execution.ServiceSha256==nextBundle.ServiceSha256 &&
+            execution.Installation==identity.Installation && execution.FirstAdminSid==identity.FirstAdminSid && Wire.Equal(execution.AuthorityKey,identity.AuthorityKey));assertions++;
+        HostedRuntimeDependencyPolicy.RequireWsl(execution.WslSha256,H('5'));assertions++;
+        Refuse(delegate {HostedRuntimeDependencyPolicy.RequireWsl(execution.WslSha256,identity.WslSha256);});assertions++;
+        Refuse(delegate {HostedRuntimeDependencyPolicy.RequireWsl(execution.WslSha256,H('6'));});assertions++;
+        Require(identity.WslSha256!=H('5') && identity.ServiceSha256==intent.ServiceSha256 && JournalHistory.Replay(identity,Array.ConvertAll(active.Entries,delegate(JournalEntry value) {return value.Bytes;})).Head==active.Head);assertions++;
         Refuse(delegate {RuntimeState(identity,intent,Add(identity,authority,initial,JournalKind.RuntimeActivated,completion.Encode()));});assertions++;
         Refuse(delegate {RuntimeState(identity,intent,Add(identity,authority,prepared,JournalKind.RuntimePrepared,preparation.Encode()));});assertions++;
         Refuse(delegate {RuntimeState(identity,intent,Add(identity,authority,prepared,JournalKind.RuntimeActivated,new RuntimeCompletion(H('1'),false,publisherSignature,completionProof,time(completionProof)).Encode()));});assertions++;
@@ -315,6 +323,108 @@ public static class LumaHostedLifecycleFixture {
         Refuse(delegate {delayed.Accept(delayedProof.Encode(),time(delayedProof.Encode()));});assertions++;
         return assertions;
     }
+    public static int RunCompute(AuthorityIdentity identity,Func<byte[],byte[]> sign,string workspace) {
+        int assertions=0;
+        foreach(string operation in new string[]{"capture","reopen","spreadsheet","document","diagram","animation","collection"}) {
+            GuestComputeRequest item=new GuestComputeRequest(operation,"{\"text\":\"native \\\"data\\\"\\n\"}");
+            Require(Wire.Equal(HostedComputeContract.Decode(item.Bytes).Bytes,item.Bytes));assertions++;
+        }
+        GuestComputeRequest request=new GuestComputeRequest("capture","{\"text\":\"inert\"}");string raw=System.Text.Encoding.UTF8.GetString(request.Bytes);
+        foreach(string changed in new string[]{raw+" "," "+raw,raw.Replace("\"schema_version\":1","\"schema_version\":true"),raw.Replace("\"schema_version\":1","\"schema_version\":1,\"schema_version\":1"),
+            raw.Replace(GuestComputeRequest.Profile,"untrusted-profile"),raw.Replace(request.PayloadSha256,H('f')),raw.Replace("\"operation\":\"capture\"","\"operation\":\"inference\""),raw.Replace("\"nonce\":\""+request.Nonce+"\"","\"nonce\":\""+Zero+"\"")}) {
+            Refuse(delegate {HostedComputeContract.Decode(System.Text.Encoding.UTF8.GetBytes(changed));});assertions++;
+        }
+        foreach(string denied in new string[]{"inference","shell","execute","publish","hosted-windows-compute-launch"}) {Refuse(delegate {new GuestComputeRequest(denied,"{}");});assertions++;}
+        Refuse(delegate {HostedComputeContract.Decode(new GuestComputeRequest("capture",new string('\u00e9',2049)).Bytes);});assertions++;
+        Refuse(delegate {HostedComputeContract.Decode(new GuestComputeRequest("capture",new string('\u0001',4096)).Bytes);});assertions++;
+        DeploymentEvent admission=new DeploymentEvent(3,H('1'),1,request.RequestSha256,17,"ticket-package-"+new string('b',32)+".tar",0,0,0,Zero);
+        byte[] review=HostedComputeContract.ReviewBytes(admission,request,H('a'));Require(HostedComputeContract.ValidateReview(review,request,H('1')).Generation==request.RequestSha256);assertions++;
+        Refuse(delegate {HostedComputeContract.ValidateReview(review,new GuestComputeRequest("capture","{\"text\":\"inert\"}"),H('1'));});assertions++;
+        Refuse(delegate {HostedComputeContract.ValidateReview(review,request,H('2'));});assertions++;
+        Refuse(delegate {HostedComputeContract.ReviewBytes(Event(2,'1',1,'a','b',0,0,0,'0'),request,H('a'));});assertions++;
+        Transition[] activation={T(JournalKind.ImportPrepared,Event(1,'1',1,'a','b',0,0,0,'0')),T(JournalKind.ControllerStarted,Event(1,'1',1,'a','b',42,99,0,'0')),
+            T(JournalKind.ControllerCompleted,Event(1,'1',1,'a','b',42,99,1,'c')),T(JournalKind.Imported,Event(1,'1',1,'a','b',0,0,1,'c')),
+            T(JournalKind.ActivationPrepared,Event(2,'1',1,'d','b',0,0,0,'0')),T(JournalKind.ControllerStarted,Event(2,'1',1,'d','b',43,100,0,'0')),
+            T(JournalKind.ControllerCompleted,Event(2,'1',1,'d','b',43,100,1,'e')),T(JournalKind.Activated,Event(2,'1',1,'d','b',0,0,1,'e'))};
+        DeploymentEvent prepare=Event(3,'1',1,'e','b',0,0,0,'0'),start=Event(3,'1',1,'e','b',44,101,0,'0'),done=Event(3,'1',1,'e','b',44,101,1,'f'),observed=Event(3,'1',1,'e','b',0,0,1,'f'),cancelled=Event(3,'1',1,'e','b',0,0,2,'c');
+        Func<Transition[],JournalHistory> computeHistory=delegate(Transition[] tail) {List<Transition> list=new List<Transition>(activation);list.AddRange(tail);return History(identity,sign,list.ToArray());};
+        JournalHistory success=computeHistory(new Transition[]{T(JournalKind.ComputePrepared,prepare),T(JournalKind.ControllerStarted,start),T(JournalKind.ControllerCompleted,done),T(JournalKind.ComputeObserved,observed)});
+        DeploymentHistory state=DeploymentHistory.Replay(success);Require(state.Active.Purpose==2 && state.Active.Generation==H('d') && state.Pending==null);assertions++;
+        HostedComputeContract.RequireAdmissionCapacity(success);assertions++;
+        byte[][] originalPrefix=new byte[success.Entries.Length-4][];for(int index=0;index<originalPrefix.Length;index++) originalPrefix[index]=success.Entries[index].Bytes;
+        JournalHistory activeHistory=JournalHistory.Replay(identity,originalPrefix);HostedComputeHead held=new HostedComputeHead(identity,activeHistory,activeHistory.Head);held.Require(activeHistory.Head);assertions++;
+        Refuse(delegate {new HostedComputeHead(identity,activeHistory,H('9'));});assertions++;
+        JournalEntry accepted=success.Entries[activeHistory.Entries.Length];held.Advance(accepted);held.Require(accepted.NextHead);assertions++;
+        Refuse(delegate {held.Require(activeHistory.Head);});assertions++;Refuse(delegate {held.Require(H('9'));});assertions++;
+        Refuse(delegate {held.Advance(accepted);});assertions++;
+        Refuse(delegate {held.Advance(JournalEntry.Prepare(identity,accepted.Sequence+1,JournalKind.ComputeObserved,accepted.NextHead,accepted.RecordSha256,identity.FirstAdminSid,observed.Encode()));});assertions++;
+        held.Advance(success.Entries[activeHistory.Entries.Length+1]);held.Require(success.Entries[activeHistory.Entries.Length+1].NextHead);assertions++;
+        List<Transition> nearLimit=new List<Transition>(activation);
+        for(uint index=0;index<252;index++) {
+            string generation=(index+1).ToString("x64");Func<uint,ulong,byte,string,DeploymentEvent> bound=delegate(uint process,ulong creation,byte outcome,string digest) {return new DeploymentEvent(3,H('1'),1,generation,17,"ticket-package-"+new string('b',32)+".tar",process,creation,outcome,digest);};
+            nearLimit.Add(T(JournalKind.ComputePrepared,bound(0,0,0,Zero)));nearLimit.Add(T(JournalKind.ControllerStarted,bound(1000+index,10000+index,0,Zero)));
+            nearLimit.Add(T(JournalKind.ControllerCompleted,bound(1000+index,10000+index,1,H('f'))));nearLimit.Add(T(JournalKind.ComputeObserved,bound(0,0,1,H('f'))));
+            if(index==250) {JournalHistory available=History(identity,sign,nearLimit.ToArray());Require(DeploymentHistory.Replay(available).Pending==null);HostedComputeContract.RequireAdmissionCapacity(available);assertions++;}
+        }
+        JournalHistory exhausted=History(identity,sign,nearLimit.ToArray());Require(DeploymentHistory.Replay(exhausted).Pending==null);Refuse(delegate {HostedComputeContract.RequireAdmissionCapacity(exhausted);});assertions++;
+        Refuse(delegate {DeploymentHistory.Replay(History(identity,sign,T(JournalKind.ComputePrepared,prepare)));});assertions++;
+        foreach(DeploymentEvent wrong in new DeploymentEvent[]{Event(3,'2',1,'e','b',0,0,0,'0'),Event(3,'1',2,'e','b',0,0,0,'0'),Event(3,'1',1,'e','f',0,0,0,'0'),Event(2,'1',1,'e','b',0,0,0,'0')}) {
+            Refuse(delegate {DeploymentHistory.Replay(computeHistory(new Transition[]{T(JournalKind.ComputePrepared,wrong)}));});assertions++;
+        }
+        foreach(Transition[] invalid in new Transition[][] {
+            new Transition[]{T(JournalKind.ComputePrepared,prepare),T(JournalKind.ComputeObserved,observed)},
+            new Transition[]{T(JournalKind.ComputePrepared,prepare),T(JournalKind.ControllerCompleted,done)},
+            new Transition[]{T(JournalKind.ComputePrepared,prepare),T(JournalKind.ControllerStarted,start),T(JournalKind.Cancelled,cancelled)},
+            new Transition[]{T(JournalKind.ComputePrepared,prepare),T(JournalKind.ControllerStarted,start),T(JournalKind.ControllerCompleted,done),T(JournalKind.ControllerStarted,start)},
+            new Transition[]{T(JournalKind.ComputePrepared,prepare),T(JournalKind.ControllerStarted,start),T(JournalKind.ControllerCompleted,done),T(JournalKind.Activated,observed)},
+            new Transition[]{T(JournalKind.ImportPrepared,prepare)},
+            new Transition[]{T(JournalKind.ComputePrepared,prepare),T(JournalKind.ComputePrepared,prepare)},
+            new Transition[]{T(JournalKind.ComputePrepared,prepare),T(JournalKind.ControllerStarted,start),T(JournalKind.ControllerCompleted,Event(3,'1',1,'e','b',44,102,1,'f'))}}) {
+            Refuse(delegate {DeploymentHistory.Replay(computeHistory(invalid));});assertions++;
+        }
+        JournalHistory recovered=computeHistory(new Transition[]{T(JournalKind.ComputePrepared,prepare),T(JournalKind.ControllerStarted,start),T(JournalKind.ControllerCompleted,Event(3,'1',1,'e','b',44,101,2,'c')),T(JournalKind.Cancelled,cancelled)});
+        Require(DeploymentHistory.Replay(recovered).Pending==null && DeploymentHistory.Replay(recovered).Active.Generation==H('d'));assertions++;
+        JournalHistory pending=computeHistory(new Transition[]{T(JournalKind.ComputePrepared,prepare)});
+        Refuse(delegate {DeploymentHistory.Replay(Add(identity,sign,pending,JournalKind.TrustChanged,new byte[]{1}));});assertions++;
+        Refuse(delegate {DeploymentHistory.Replay(Add(identity,sign,pending,JournalKind.RuntimePrepared,new byte[]{1}));});assertions++;
+        byte[] content=new byte[65537];for(int index=0;index<content.Length;index++) content[index]=unchecked((byte)index);
+        HostedComputeDelivery delivery=new HostedComputeDelivery(H('a'),request.RequestSha256,content);
+        using(HostedComputeReceiver receiver=new HostedComputeReceiver(request.RequestSha256)) {
+            Refuse(delegate {receiver.Part(delivery.Next());});assertions++;
+            delivery.Clear();delivery=new HostedComputeDelivery(H('a'),request.RequestSha256,content);receiver.Reviewed(H('a'));
+            Refuse(delegate {delivery.Receipt(H('b'));});assertions++;Refuse(delegate {receiver.ResultBase64();});assertions++;
+            while(!delivery.Complete) {byte[] chunk=delivery.Next();Refuse(delegate {delivery.Next();});assertions++;byte[] ack=receiver.Part(chunk);byte[] wrong=(byte[])ack.Clone();wrong[wrong.Length-1]^=1;Refuse(delegate {delivery.Acknowledge(wrong);});assertions++;delivery.Acknowledge(ack);assertions++;}
+            byte[] receipt=delivery.Receipt(H('b'));receiver.Finish(receipt);Require(receiver.ResultBase64()==Convert.ToBase64String(content));assertions++;
+            Refuse(delegate {receiver.Finish(receipt);});assertions++;Refuse(delegate {receiver.Reviewed(H('a'));});assertions++;Refuse(delegate {delivery.Next();});assertions++;
+        }delivery.Clear();
+        foreach(int changedOffset in new int[]{0,90,140}) {
+            HostedComputeDelivery candidate=new HostedComputeDelivery(H('a'),request.RequestSha256,new byte[]{1,2,3});using(HostedComputeReceiver receiver=new HostedComputeReceiver(request.RequestSha256)) {
+                receiver.Reviewed(H('a'));byte[] chunk=candidate.Next();chunk[changedOffset]^=1;Refuse(delegate {receiver.Part(chunk);});assertions++;
+            }candidate.Clear();
+        }
+        HostedComputeDelivery authorityClaim=new HostedComputeDelivery(H('a'),request.RequestSha256,new byte[]{1});using(HostedComputeReceiver receiver=new HostedComputeReceiver(request.RequestSha256)) {
+            receiver.Reviewed(H('a'));authorityClaim.Acknowledge(receiver.Part(authorityClaim.Next()));byte[] receipt=authorityClaim.Receipt(H('b'));receipt[receipt.Length-1]=1;Refuse(delegate {receiver.Finish(receipt);});assertions++;
+        }authorityClaim.Clear();
+        string parent=Path.Combine(Path.GetFullPath(workspace),".luma"),root=Path.Combine(parent,"windows-compute-fixtures-"+Guid.NewGuid().ToString("N"));
+        if(new DriveInfo(Path.GetPathRoot(root)).DriveFormat!="NTFS" || (File.GetAttributes(parent)&FileAttributes.ReparsePoint)!=0) throw new Exception("Actual tiny nonlinked NTFS compute fixture required.");
+        Directory.CreateDirectory(root);string file=Path.Combine(root,"payload.json");File.WriteAllText(file,"{\"text\":\"inert\"}",new System.Text.UTF8Encoding(false,true));
+        try {
+            Type type=typeof(HostedComputeContract).Assembly.GetType("Luma.Windows.Hosted.HostedComputeInputs",true);object original=Activator.CreateInstance(type,BindingFlags.NonPublic|BindingFlags.Instance,null,new object[]{new string[]{"compute",H('1'),"capture",file}},null);
+            using((IDisposable)original) {KernelRefuse(delegate {File.WriteAllText(file,"{}");});assertions++;KernelRefuse(delegate {File.Move(file,file+".moved");});assertions++;
+                try {type.GetMethod("Check",BindingFlags.NonPublic|BindingFlags.Instance).Invoke(original,null);}catch(TargetInvocationException error) {throw error.InnerException;}assertions++;
+                FileSecurity before=File.GetAccessControl(file,AccessControlSections.Access);
+                try {
+                    FileSecurity changed=new FileSecurity();changed.SetSecurityDescriptorBinaryForm(before.GetSecurityDescriptorBinaryForm(),AccessControlSections.Access);changed.SetAccessRuleProtection(true,true);changed.AddAccessRule(new FileSystemAccessRule(new SecurityIdentifier("S-1-5-32-545"),FileSystemRights.Read,AccessControlType.Allow));File.SetAccessControl(file,changed);
+                    Refuse(delegate {try {type.GetMethod("Check",BindingFlags.NonPublic|BindingFlags.Instance).Invoke(original,null);}catch(TargetInvocationException error) {throw error.InnerException;}});assertions++;
+                }finally {FileSecurity restored=new FileSecurity();restored.SetSecurityDescriptorBinaryForm(before.GetSecurityDescriptorBinaryForm(),AccessControlSections.Access);File.SetAccessControl(file,restored);}
+                type.GetField("cancelled",BindingFlags.NonPublic|BindingFlags.Instance).SetValue(original,1);bool cancelObserved=false;
+                try {type.GetMethod("Check",BindingFlags.NonPublic|BindingFlags.Instance).Invoke(original,null);}catch(TargetInvocationException error) {if(!(error.InnerException is OperationCanceledException)) throw;cancelObserved=true;}
+                Require(cancelObserved);assertions++;
+            }
+            File.WriteAllBytes(file,new byte[4097]);Refuse(delegate {try {using((IDisposable)Activator.CreateInstance(type,BindingFlags.NonPublic|BindingFlags.Instance,null,new object[]{new string[]{"compute",H('1'),"capture",file}},null)) {}}catch(TargetInvocationException error) {throw error.InnerException;}});assertions++;
+        }finally {string resolved=Path.GetFullPath(root);if(Path.GetDirectoryName(resolved)!=parent || !System.Text.RegularExpressions.Regex.IsMatch(Path.GetFileName(resolved),"\\Awindows-compute-fixtures-[0-9a-f]{32}\\z")) throw new Exception("Refuse cleanup outside exact new compute fixture.");Directory.Delete(resolved,true);}
+        return assertions;
+    }
     public static int Run(AuthorityIdentity identity,Func<byte[],byte[]> sign) {
         int assertions=0;
         DeploymentEvent prepare=Event(1,'1',1,'a','b',0,0,0,'0'),start=Event(1,'1',1,'a','b',42,99,0,'0'),
@@ -323,7 +433,7 @@ public static class LumaHostedLifecycleFixture {
         DeploymentHistory state=DeploymentHistory.Replay(History(identity,sign,import));Require(state.Pending==null && state.Active==null && state.Imported(H('1'))!=null);assertions++;
         Require(Wire.Equal(DeploymentEvent.Decode(prepare.Encode()).Encode(),prepare.Encode()));assertions++;
         byte[] extra=new byte[prepare.Encode().Length+1];Array.Copy(prepare.Encode(),extra,extra.Length-1);Refuse(delegate {DeploymentEvent.Decode(extra);});assertions++;
-        Refuse(delegate {Event(3,'1',1,'a','b',0,0,0,'0');});assertions++;
+        Refuse(delegate {Event(4,'1',1,'a','b',0,0,0,'0');});assertions++;
         Refuse(delegate {Event(1,'1',1,'a','b',42,0,0,'0');});assertions++;
         Refuse(delegate {Event(1,'1',1,'a','b',0,0,1,'0');});assertions++;
         Refuse(delegate {DeploymentHistory.Replay(History(identity,sign,T(JournalKind.ImportPrepared,prepare),T(JournalKind.Imported,imported)));});assertions++;
@@ -398,6 +508,9 @@ public static class LumaHostedLifecycleFixture {
     $lifecycleAssertions=[LumaHostedLifecycleFixture]::Run($identity,$fixtureSigner)
     Assert-Hosted ($lifecycleAssertions -ge 25) 'Complete actual signed lifecycle regression group did not run.'
     $script:HostedAssertions+=$lifecycleAssertions
+    $computeAssertions=[LumaHostedLifecycleFixture]::RunCompute($identity,$fixtureSigner,[IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..')))
+    Assert-Hosted ($computeAssertions -ge 65) 'Complete actual signed compute lifecycle, original-client delivery and held NTFS regressions did not run.'
+    $script:HostedAssertions+=$computeAssertions
     $publisherSigner={param([byte[]]$inputBytes) $keys[0].Sign($inputBytes)}
     $timeSigner={param([byte[]]$inputBytes) $keys[1].Sign($inputBytes)}
     $newPublisherSigner={param([byte[]]$inputBytes) $keys[3].Sign($inputBytes)}
@@ -584,6 +697,7 @@ public static class LumaHostedFrameFixture {
         live_service_installed=$false;host_tpm_mutated=$false;distribution_imported=$false;actual_current_user_ntfs_identity_lease_fixture=$true;actual_threaded_service_lifecycle_software_tests=$true;
         installed_scm_stop_qualified=$false;installed_system_acl_qualified=$false;ntfs_durability_qualified=$false;
         actual_read_only_ntfs_and_wire_mechanism_tests=$true;signed_persistent_enrollment_software_tests=$true;installed_authenticated_read_bridge_qualified=$false;installed_persistent_enrollment_qualified=$false;linux_principal_mapping=$false;
+        signed_compute_lifecycle_and_delivery_tests=$true;held_original_compute_input_ntfs_tests=$true;compute_assertions=$computeAssertions;actual_guest_compute_executed=$false;model_inference_executed=$false;
         production_qualified=$false;gate_closing=$false} | ConvertTo-Json -Depth 8
 } finally {
     foreach ($key in $keys) {if ($null -ne $key) {$key.Dispose()}}

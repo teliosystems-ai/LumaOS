@@ -25,6 +25,7 @@ mod publication;
 mod queries;
 mod recovery;
 mod restore;
+mod semantic;
 mod state;
 mod storage;
 pub use backup::{
@@ -54,6 +55,10 @@ pub use recovery::{
 pub use restore::{
     plan_restore_data_checked, RestoreMapping, RestorePlan, RestoreReview, RestoreStepReview,
     MAX_RESTORE_REVIEW_BYTES,
+};
+pub use semantic::{
+    validate_semantic_query, SemanticCollectionResults, SemanticHit, SemanticResults,
+    MAX_SEMANTIC_DIMENSIONS, MAX_SEMANTIC_FEATURES, MAX_SEMANTIC_VOCABULARY,
 };
 pub use state::VerifiedState;
 

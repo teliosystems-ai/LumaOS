@@ -114,21 +114,50 @@ try {
     $publicManifest=Copy-Data $manifest
     $publicManifest.output_bytes=$bytes.Length
     $publicManifest.output_sha256=$hash
-    $publicManifestPath=Join-Path $scratch 'public-manifest.json'
+    $publicManifestPath=$path+'.conversion.json'
     [byte[]]$publicManifestBytes=[Text.Encoding]::UTF8.GetBytes(($publicManifest | ConvertTo-Json -Depth 10 -Compress))
     [IO.File]::WriteAllBytes($publicManifestPath,$publicManifestBytes)
+    $publicManifestPin=Hash-Data $publicManifestBytes
+    $receipt=[pscustomobject]@{schema_version=1;purpose='luma-hyperv-public-export-v1'
+        output_name=[IO.Path]::GetFileName($path);output_bytes=$bytes.Length;output_sha256=$hash
+        conversion_name=[IO.Path]::GetFileName($publicManifestPath);conversion_sha256=$publicManifestPin
+        source_raw_sha256=$raw;source_conversion_preserved=$true;full_destination_readback=$true
+        public_staging_untrusted=$true;installed_desktop=$false;vm_created=$false;vm_started=$false
+        boot_qualified=$false;production_qualified=$false;gate_closing=$false}
+    $validated=Test-LumaHyperVExportReceipt $receipt $publicManifest $publicManifestPin $publicManifestPath $path $raw $hash
+    Check ($validated.public_staging_untrusted -and -not $validated.production_qualified) 'Receipt became trust authority.'
+    foreach ($row in @(@('output_name','other.vhdx'),@('output_bytes',1048577),@('output_sha256',('0'*64)),
+        @('conversion_name','other.json'),@('conversion_sha256',('0'*64)),@('source_raw_sha256',('0'*64)),
+        @('source_conversion_preserved',$false),@('full_destination_readback',$false),
+        @('public_staging_untrusted',$false),@('installed_desktop',$true),@('vm_created',$true),
+        @('vm_started',$true),@('boot_qualified',$true),@('production_qualified',$true),@('gate_closing',$true),
+        @('schema_version',$true),@('output_bytes',$true),@('full_destination_readback',1))) {
+        $bad=Copy-Data $receipt;$bad.($row[0])=$row[1]
+        Refuses { Test-LumaHyperVExportReceipt $bad $publicManifest $publicManifestPin $publicManifestPath $path $raw $hash } ('Receipt mismatch accepted: '+$row[0])
+    }
+    $bad=Copy-Data $receipt;$bad | Add-Member -NotePropertyName extra -NotePropertyValue 1
+    Refuses { Test-LumaHyperVExportReceipt $bad $publicManifest $publicManifestPin $publicManifestPath $path $raw $hash } 'Unknown export receipt field accepted.'
+    $receiptPath=$path+'.export.json'
+    [byte[]]$receiptBytes=[Text.Encoding]::UTF8.GetBytes(($receipt | ConvertTo-Json -Depth 5 -Compress))
+    [IO.File]::WriteAllBytes($receiptPath,$receiptBytes)
+    $receiptPin=Hash-Data $receiptBytes
+    $readReceipt=Read-LumaHyperVExportReceipt $receiptPath $receiptPin
+    Check ($readReceipt.conversion_sha256 -ceq $publicManifestPin) 'Actual held export receipt parser differs.'
+    Refuses { Read-LumaHyperVExportReceipt $receiptPath ('0'*64) } 'Wrong independent export receipt pin accepted.'
     $observationPath=Join-Path $scratch 'captured-observation.json'
     [byte[]]$observationBytes=[Text.Encoding]::UTF8.GetBytes(($observation | ConvertTo-Json -Depth 8 -Compress))
     [IO.File]::WriteAllBytes($observationPath,$observationBytes)
     $shell=Join-Path $PSHOME 'powershell.exe'
     $publicOutput=@(& $shell -NoLogo -NoProfile -ExecutionPolicy RemoteSigned -File (Join-Path $PSScriptRoot 'plan-hyperv.ps1') `
-        -ManifestPath $publicManifestPath -ManifestSha256 (Hash-Data $publicManifestBytes) -RawSha256 $raw `
-        -VhdxPath $path -VhdxSha256 $hash -ObservationPath $observationPath -ObservationSha256 (Hash-Data $observationBytes))
+        -ManifestPath $publicManifestPath -ManifestSha256 $publicManifestPin -RawSha256 $raw `
+        -VhdxPath $path -VhdxSha256 $hash -ObservationPath $observationPath -ObservationSha256 (Hash-Data $observationBytes) `
+        -ExportReceiptPath $receiptPath -ExportReceiptSha256 $receiptPin)
     Check ($LASTEXITCODE -eq 0) 'Actual fresh public planner process failed.'
     $publicResult=($publicOutput -join "`n") | ConvertFrom-Json
     Check ($publicResult.observation_source -ceq 'pinned-captured-data' -and -not $publicResult.observation_fresh) 'Captured data was misrepresented as a fresh host observation.'
     Check ($publicResult.actual_vhdx_held_and_hashed -and -not $publicResult.vm_created -and
         -not $publicResult.vm_started -and -not $publicResult.deployment_admitted) 'Public planner claimed deployment or skipped the held media check.'
+    Check ($publicResult.export_receipt_join_verified -and -not $publicResult.export_receipt_confers_authority) 'Fresh public planner omitted the export join or conferred authority.'
     # A process with only one old type family loaded must refuse explicitly,
     # rather than compile duplicate types or an empty Assembly.Location.
     function Quote-Script([string]$Value) { return "'"+$Value.Replace("'","''")+"'" }

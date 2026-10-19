@@ -11,7 +11,7 @@
 <body>
   <a class="skip" href="#editor">Skip to editor</a>
   <header><h1>Manual native preview</h1><p>Deterministic local engines. Model disabled. No account, grant, repository, publication or external application authority.</p></header>
-  <nav aria-label="Workspace sections"><a href="#editor">Source editor</a> · <a href="#result-heading">Result</a> · <a href="#sheet-heading">Spreadsheet cells</a> · <a href="#envelope">Reopen exact envelope</a></nav>
+  <nav aria-label="Workspace sections"><a href="#editor">Source editor</a> · <a href="#result-heading">Result</a> · <a href="#sheet-heading">Spreadsheet cells</a> · <a href="#composer-heading">Documents and graphics</a> · <a href="#envelope">Reopen exact envelope</a></nav>
   <p id="keyboard-help">Keyboard: Control+Enter runs the selected preview or envelope reopen. Escape requests cancellation and waits for observed native exit. Private owner reads and managed engine workflows use the separate native controls and original PAM terminal, never this page. That terminal performs exact review, independent grants and approval, reports the actual C-backed outcome, and offers a separately granted fresh reopen/recalculation.</p>
   <main id="workspace" aria-describedby="keyboard-help">
     <section aria-labelledby="edit-heading">
@@ -57,6 +57,17 @@
       <p id="sheet-status" role="status" aria-live="polite" aria-atomic="true"></p>
       <button id="sheet-use" type="button">Copy grid to source editor (replaces editor)</button>
       <button id="sheet-load" type="button" disabled>Load last native-verified spreadsheet source (replaces grid)</button>
+    </section>
+    <section id="composer-section" class="wide" aria-labelledby="composer-heading">
+      <h2 id="composer-heading" tabindex="-1">Editable document, diagram and animation source</h2>
+      <p id="composer-help">Build closed, typed source without writing JSON. This ephemeral composer does not render, calculate, save or publish. Apply field edits before structural changes. Replacing a typed variant, removing an item or loading a new source is explicit. Copy to the source editor, then run the actual native engine. Native code alone validates the complete structure, geometry and rendering. Very large sources remain available in the raw source editor.</p>
+      <label for="composer-engine">Composer engine</label><select id="composer-engine"><option value="document">Document</option><option value="diagram">Diagram</option><option value="animation">Animation</option></select>
+      <button id="composer-new" type="button">Replace composer with a new empty source</button>
+      <fieldset id="composer-fields" aria-describedby="composer-help"><legend>Typed source fields</legend><div id="composer-form"></div></fieldset>
+      <button id="composer-apply" type="button">Apply all pending field edits</button><button id="composer-discard" type="button">Discard pending field edits</button>
+      <p id="composer-status" role="status" aria-live="polite" aria-atomic="true"></p>
+      <button id="composer-use" type="button">Copy composed source to editor (replaces editor)</button>
+      <button id="composer-load" type="button" disabled>Load last native-verified source (replaces composer)</button>
     </section>
     <section class="wide" aria-labelledby="reopen-heading">
       <h2 id="reopen-heading">Reopen an exact complete envelope</h2>

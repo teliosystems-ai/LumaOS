@@ -55,10 +55,14 @@ class WorkspaceUiTests(unittest.TestCase):
         self.assertEqual(nodes['cancel'][1]['aria-keyshortcuts'], 'Escape')
         self.assertIn('source-grounding', nodes)
         for key in ('sheet-heading', 'sheet-rows', 'sheet-columns', 'sheet-kind', 'sheet-value',
-                    'sheet-second', 'sheet-grid', 'sheet-status', 'progress-events'):
+                    'sheet-second', 'sheet-grid', 'sheet-status', 'progress-events', 'composer-heading',
+                    'composer-engine', 'composer-fields', 'composer-form', 'composer-status', 'composer-use',
+                    'composer-load', 'composer-apply', 'composer-discard'):
             self.assertIn(key, nodes)
         self.assertEqual(nodes['sheet-heading'][1]['tabindex'], '-1')
         self.assertEqual(nodes['sheet-status'][1]['aria-live'], 'polite')
+        self.assertEqual(nodes['composer-status'][1]['aria-live'], 'polite')
+        self.assertEqual(nodes['composer-heading'][1]['tabindex'], '-1')
         self.assertEqual(nodes['sheet-grid'][0], 'table')
         self.assertIn('sheet-keyboard', nodes['sheet-grid'][1]['aria-describedby'].split())
         self.assertEqual(nodes['sheet-rows'][1]['max'], '64')
@@ -159,8 +163,55 @@ def actual_spreadsheet_cases(binary, cases_path):
         graphical_webkit_qualified=False, owner_authenticated=False, workflow_executed=False, authority_returned=False)))
 
 
+def actual_engine_cases(binary, cases_path):
+    """Join production composer bytes to native source/render/digest validation."""
+    binary = Path(binary).resolve(strict=True)
+    with Path(cases_path).open('rb') as stream:
+        raw = stream.read(1024*1024+1)
+    if len(raw) > 1024*1024:
+        raise ValueError('bounded production-JS engine fixture exceeded')
+    spec = importlib.util.spec_from_file_location('luma_workspace_composer_actual_host', ROOT/'native/desktop/workspace_host.py')
+    host = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(host)
+    fixture = host.strict_json(raw)
+    cases = fixture['engine_cases']
+    if (fixture['production_javascript_executed'] is not True or fixture['authority_returned'] is not False
+            or fixture['graphical_webkit_qualified'] is not False or not isinstance(cases, list) or not 1 <= len(cases) <= 16):
+        raise ValueError('real production-JS bounded engine fixture required')
+    passed = refused = 0
+    for index, case in enumerate(cases):
+        engine = case['engine']
+        if engine not in ('document', 'diagram', 'animation'):
+            raise ValueError('closed composer engines required')
+        request = host.request(dict(schema_version=1, id='actual-composer-'+str(index), operation='preview', engine=engine, source=case['source']))
+        completed = subprocess.run([str(binary), 'content-contract-' + engine], input=request['source'].encode(),
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=20, check=False)
+        if case.get('native_refusal_required') is True:
+            native_refusal(completed, case['name'], case.get('expected_native_error'))
+            refused += 1
+            continue
+        if completed.returncode != 0 or completed.stderr != b'':
+            raise AssertionError('actual Rust engine refused composed source: ' + case['name'] + ' ' + completed.stderr.decode(errors='replace'))
+        verified = host.validate_result(request, completed.stdout)
+        canonical = verified['rendering']['canonical_source']
+        if not host.same_json(host.strict_json(canonical), host.strict_json(case['source'])):
+            raise AssertionError('actual native engine changed composed editable source: ' + case['name'])
+        # Re-render the exact native canonical source: all output/digests must
+        # match the first actual invocation, not browser-generated expected SVG.
+        repeated = subprocess.run([str(binary), 'content-contract-' + engine], input=canonical.encode(),
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=20, check=False)
+        if repeated.returncode != 0 or repeated.stderr != b'' or repeated.stdout != completed.stdout:
+            raise AssertionError('actual native composed-source rendering is not repeatable: ' + case['name'])
+        passed += 1
+    print(json.dumps(dict(actual_rust_composer_cases_passed=passed, actual_rust_exact_refusals_passed=refused,
+        actual_native_canonical_rerenders_passed=passed, graphical_webkit_qualified=False,
+        owner_authenticated=False, workflow_executed=False, authority_returned=False)))
+
+
 if __name__ == '__main__':
     if len(sys.argv) == 5 and sys.argv[1] == '--native-cli' and sys.argv[3] == '--spreadsheet-cases':
         actual_spreadsheet_cases(sys.argv[2], sys.argv[4])
+    elif len(sys.argv) == 5 and sys.argv[1] == '--native-cli' and sys.argv[3] == '--engine-cases':
+        actual_engine_cases(sys.argv[2], sys.argv[4])
     else:
         unittest.main()

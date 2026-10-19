@@ -73,19 +73,35 @@ namespace Luma.Windows.Hosted
         public string Operation {get;private set;}
         public string Nonce {get;private set;}
         public string PayloadSha256 {get;private set;}
+        public int PayloadBytes {get;private set;}
         private readonly byte[] encoded;
         public byte[] Bytes {get{return (byte[])encoded.Clone();}}
         public string RequestSha256 {get {using(SHA256 hash=SHA256.Create()) return Wire.Hex(hash.ComputeHash(encoded));}}
         public GuestComputeRequest(string operation,string payload)
+            :this(operation,payload,Wire.Hex(Wire.Random(32))) {}
+        private GuestComputeRequest(string operation,string payload,string nonce)
         {
             if(operation!="capture" && operation!="reopen" && operation!="spreadsheet" && operation!="document" && operation!="diagram" && operation!="animation" && operation!="collection")
                 throw new InvalidDataException("Guest compute operation is not allowlisted.");
             byte[] bytes=new UTF8Encoding(false,true).GetBytes(payload??"");
             if(bytes.Length<1 || bytes.Length>2*(1024*1024*6+8192)+8192) throw new InvalidDataException("Guest pure-contract payload exceeds its fixed bound.");
-            Operation=operation;Nonce=Wire.Hex(Wire.Random(32));using(SHA256 hash=SHA256.Create()) PayloadSha256=Wire.Hex(hash.ComputeHash(bytes));
+            Wire.Bytes(nonce,32,true);Operation=operation;Nonce=nonce;PayloadBytes=bytes.Length;using(SHA256 hash=SHA256.Create()) PayloadSha256=Wire.Hex(hash.ComputeHash(bytes));
             string value="{\"schema_version\":1,\"profile\":"+Quote(Profile)+",\"nonce\":"+Quote(Nonce)+",\"operation\":"+Quote(operation)+
                 ",\"payload\":"+Quote(payload)+",\"payload_sha256\":"+Quote(PayloadSha256)+"}";
             encoded=new UTF8Encoding(false,true).GetBytes(value);if(encoded.Length>MaximumEncoded) throw new InvalidDataException("Guest encoded request exceeds fixed transport bound.");
+        }
+        public static GuestComputeRequest Decode(byte[] bytes)
+        {
+            Dictionary<string,object> fields=ObservationJson.Parse(Wire.Copy(bytes,1,8192));
+            string[] names={"schema_version","profile","nonce","operation","payload","payload_sha256"};
+            if(fields.Count!=names.Length) throw new SecurityException("Compute request has missing or unknown fields.");
+            foreach(string name in names) if(!fields.ContainsKey(name)) throw new SecurityException("Compute request omitted a required field.");
+            if(!(fields["schema_version"] is ulong) || (ulong)fields["schema_version"]!=1 || !(fields["profile"] is string) || (string)fields["profile"]!=Profile)
+                throw new SecurityException("Compute request schema/profile differs.");
+            foreach(string name in new string[]{"nonce","operation","payload","payload_sha256"}) if(!(fields[name] is string)) throw new SecurityException("Compute request field type differs.");
+            GuestComputeRequest result=new GuestComputeRequest((string)fields["operation"],(string)fields["payload"],(string)fields["nonce"]);
+            if(result.PayloadSha256!=(string)fields["payload_sha256"] || !Wire.Equal(result.Bytes,bytes)) throw new SecurityException("Compute request is noncanonical or its complete payload hash differs.");
+            return result;
         }
         private static string Quote(string value)
         {
@@ -228,7 +244,7 @@ namespace Luma.Windows.Hosted
             try {
                 if(lease.Length<64 || lease.Length>128*1024*1024) throw new SecurityException("Fixed WSL executable length differs.");
                 Check();string actual;using(SHA256 hash=SHA256.Create()) actual=Wire.Hex(hash.ComputeHash(lease.Rewind()));
-                if(actual!=expected) throw new SecurityException("Commissioned WSL runtime changed; no dependency fallback.");Check();
+                HostedRuntimeDependencyPolicy.RequireWsl(expected,actual);Check();
             }
             catch {lease.Dispose();throw;}
         }

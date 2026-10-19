@@ -180,6 +180,44 @@ function Read-LumaHyperVManifest {
     return Read-LumaHyperVPinnedJson -Path $Path -Sha256 $Sha256
 }
 
+function Test-LumaHyperVExportReceipt {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)] $Receipt,[Parameter(Mandatory)] $Manifest,
+        [Parameter(Mandatory)][string] $ManifestSha256,[Parameter(Mandatory)][string] $ManifestPath,
+        [Parameter(Mandatory)][string] $VhdxPath,[Parameter(Mandatory)][string] $ExpectedRawSha256,
+        [Parameter(Mandatory)][string] $ExpectedVhdxSha256)
+    $null=Test-LumaHyperVMedia $Manifest $ExpectedRawSha256 $ExpectedVhdxSha256
+    if ($ManifestSha256 -cnotmatch '\A[a-f0-9]{64}\z') { throw 'Independent original conversion pin required.' }
+    Assert-HyperVClosed $Receipt @('schema_version','purpose','output_name','output_bytes','output_sha256',
+        'conversion_name','conversion_sha256','source_raw_sha256','source_conversion_preserved',
+        'full_destination_readback','public_staging_untrusted','installed_desktop','vm_created','vm_started',
+        'boot_qualified','production_qualified','gate_closing')
+    Assert-HyperVInteger $Receipt.schema_version 1 1
+    Assert-HyperVInteger $Receipt.output_bytes $Manifest.output_bytes $Manifest.output_bytes
+    foreach ($field in @('purpose','output_name','output_sha256','conversion_name','conversion_sha256','source_raw_sha256')) {
+        if ($Receipt.$field -isnot [string]) { throw 'Export receipt identities must be actual strings.' }
+    }
+    $name=[IO.Path]::GetFileName($VhdxPath)
+    if ($Receipt.purpose -cne 'luma-hyperv-public-export-v1' -or
+        $Receipt.output_name -cne $name -or $Receipt.conversion_name -cne ($name+'.conversion.json') -or
+        [IO.Path]::GetFileName($ManifestPath) -cne $Receipt.conversion_name -or
+        $Receipt.output_sha256 -cne $ExpectedVhdxSha256 -or $Receipt.conversion_sha256 -cne $ManifestSha256 -or
+        $Receipt.source_raw_sha256 -cne $ExpectedRawSha256) { throw 'Export receipt and independently pinned selected media differ.' }
+    foreach ($field in @('source_conversion_preserved','full_destination_readback','public_staging_untrusted')) {
+        if ($Receipt.$field -isnot [bool] -or -not $Receipt.$field) { throw 'Export receipt must retain data-only/untrusted staging scope.' }
+    }
+    foreach ($field in @('installed_desktop','vm_created','vm_started','boot_qualified','production_qualified','gate_closing')) {
+        if ($Receipt.$field -isnot [bool] -or $Receipt.$field) { throw 'Export receipt must not claim deployment or qualification.' }
+    }
+    return $Receipt
+}
+
+function Read-LumaHyperVExportReceipt {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string] $Path,[Parameter(Mandatory)][string] $Sha256)
+    return Read-LumaHyperVPinnedJson -Path $Path -Sha256 $Sha256
+}
+
 function Read-LumaHyperVCapturedObservation {
     [CmdletBinding()]
     param([Parameter(Mandatory)][string] $Path,[Parameter(Mandatory)][string] $Sha256)
@@ -188,4 +226,4 @@ function Read-LumaHyperVCapturedObservation {
 }
 
 Export-ModuleMember -Function Test-LumaHyperVMedia,Test-LumaHyperVPlan,Get-LumaHyperVObservation,
-    Read-LumaHyperVManifest,Read-LumaHyperVCapturedObservation
+    Read-LumaHyperVManifest,Read-LumaHyperVCapturedObservation,Read-LumaHyperVExportReceipt,Test-LumaHyperVExportReceipt

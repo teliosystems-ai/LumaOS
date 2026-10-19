@@ -81,6 +81,46 @@ fn publish(
 }
 
 #[test]
+fn semantic_collection_rebuild_uses_only_exact_typed_members_and_supports_empty_sets() {
+    let f = Fixture::new();
+    let mut repo = repository(&f);
+    let reference = repo.current_reference("alpha", &mut Guard::read()).unwrap();
+    let collection = source("semantic", vec![reference.clone()]);
+    let published = publish(&mut repo, "semantic-collection", &collection, None);
+    let result = repo
+        .semantic_search_collection(&published.resulting, "alpha", 64, 2, &mut Guard::read())
+        .unwrap();
+    assert_eq!(result.collection, published.resulting);
+    assert_eq!(result.search.selected_versions, 1);
+    assert_eq!(result.search.matches[0].reference, reference);
+    let before = disk(&f.path);
+    assert_eq!(
+        repo.semantic_search_collection(&published.resulting, "alpha", 64, 2, &mut Guard::read())
+            .unwrap(),
+        result
+    );
+    assert_eq!(disk(&f.path), before);
+    let empty = publish(&mut repo, "semantic-empty", &source("empty", vec![]), None);
+    let result = repo
+        .semantic_search_collection(&empty.resulting, "alpha", 64, 2, &mut Guard::read())
+        .unwrap();
+    assert_eq!(result.search.selected_versions, 0);
+    assert_eq!(result.search.total_matches, 0);
+    assert_eq!(result.search.effective_dimensions, 0);
+    let bytes = collection.canonical_bytes().unwrap();
+    let fake = capture("semantic-forged", "forged", &bytes);
+    let fake = repo.apply(&fake, &bytes, &mut Guard::write(&fake)).unwrap();
+    assert!(repo
+        .semantic_search_collection(&fake.resulting, "alpha", 64, 2, &mut Guard::read())
+        .is_err());
+    let mut guard = Guard::read();
+    guard.binding.owner_generation += 1;
+    assert!(repo
+        .semantic_search_collection(&published.resulting, "alpha", 1, 1, &mut guard)
+        .is_err());
+}
+
+#[test]
 fn collections_are_typed_immutable_exact_sources_and_rebuild_without_an_index() {
     let f = Fixture::new();
     let mut repo = repository(&f);

@@ -85,6 +85,8 @@ namespace Luma.Windows.Hosted
         internal NativeAuthority(string domain,HostedActor actor)
             :this(domain,actor,RuntimeAccess.Standard) {}
         internal NativeAuthority(string domain,HostedActor actor,RuntimeAccess runtimeAccess)
+            :this(domain,actor,runtimeAccess,false) {}
+        internal NativeAuthority(string domain,HostedActor actor,RuntimeAccess runtimeAccess,bool computeRecovery)
         {
             State=PrivateState.OpenFixed(domain,false);
             try {
@@ -94,6 +96,9 @@ namespace Luma.Windows.Hosted
                 Key=HardwareKey.Open(Identity);Nv=new FixedNvAuthority(Identity,Key);Journal=new DurableJournal(State,Identity,Key,Nv);
                 if(State.Exists("identity.pending")) throw new SecurityException("A published authority has an unexplained pending identity.");
                 JournalHistory history=Journal.Read(delegate {actor.RequireAdmin(Identity.FirstAdminSid);State.Check();});if(history.Entries.Length<1) throw new SecurityException("Commissioning genesis is absent.");
+                DeploymentHistory deployment=DeploymentHistory.Replay(history,delegate {actor.RequireAdmin(Identity.FirstAdminSid);State.Check();});
+                if(deployment.Pending!=null && deployment.Pending.Purpose==3 && !computeRecovery)
+                    throw new SecurityException("Unresolved compute generation fences all new effects and private reads; inspect or explicitly recover the exact original controller, never replay computation.");
                 Intent.ValidateGenesis(Identity,history.Entries[0].Payload);
                 Trust=HostedTrustState.Replay(Identity,Intent,history,delegate {actor.RequireAdmin(Identity.FirstAdminSid);State.Check();});
                 Runtime=HostedRuntimeState.Replay(Identity,Intent.Baseline,Trust,history,delegate {actor.RequireAdmin(Identity.FirstAdminSid);State.Check();});
@@ -201,7 +206,7 @@ namespace Luma.Windows.Hosted
         private static void StatusOrRecover(NamedPipeServerStream pipe,HostedActor actor,Wire.Reader request,Action running,bool recover)
         {
             string domain=request.Text(32);request.End();Stopwatch age=Stopwatch.StartNew();Action check=Live(actor,running,age);
-            using(NativeAuthority authority=new NativeAuthority(domain,actor,RuntimeAccess.Inspect)) {
+            using(NativeAuthority authority=new NativeAuthority(domain,actor,RuntimeAccess.Inspect,true)) {
                 JournalHistory history=authority.Journal.Read(check);string observed=authority.Nv.ReadHead();byte[] pending=authority.State.Exists("pending.bin")?authority.State.Read("pending.bin",1,20000):null;
                 RecoveryPhase phase=history.Reconcile(authority.Identity,pending,observed);
                 if(recover) {
@@ -232,7 +237,7 @@ namespace Luma.Windows.Hosted
         private static void AbortJournal(NamedPipeServerStream pipe,HostedActor actor,Wire.Reader request,Action running)
         {
             string domain=request.Text(32);request.End();Stopwatch age=Stopwatch.StartNew();Action check=Live(actor,running,age);
-            using(NativeAuthority authority=new NativeAuthority(domain,actor,RuntimeAccess.Inspect)) {
+            using(NativeAuthority authority=new NativeAuthority(domain,actor,RuntimeAccess.Inspect,true)) {
                 byte[] exact=authority.Journal.ReviewAbort(check);
                 Review(pipe,"recover-abort",exact,"Abort only the exact uncommitted NV event after independently observed host boot change AND TPM reset count advancement. Never reissue the old extend, reset custody, delete evidence, replay a guest effect or claim resource completion.",check);
                 JournalHistory history=authority.Journal.Abort(exact,check);
@@ -313,6 +318,8 @@ namespace Luma.Windows.Hosted
                         case "file-enrollment-change":ChangeFileEnrollment(pipe,actor,request,running);break;
                         case "file-enrollment-status":FileEnrollmentStatus(pipe,actor,request,running);break;
                         case "read-persistent-file":ReadPersistentFile(pipe,actor,request,running);break;
+                        case "compute":ComputeActive(pipe,actor,request,running);break;
+                        case "compute-recover":RecoverCompute(pipe,actor,request,running);break;
                         default:throw new InvalidDataException("Hosted service command is not in the closed protocol.");
                     }
                 }} finally {Array.Clear(frame,0,frame.Length);}
@@ -425,28 +432,33 @@ namespace Luma.Windows.Hosted
         private static int Client(string[] arguments)
         {
             if(Console.IsInputRedirected || Console.IsOutputRedirected) throw new SecurityException("The original interactive client must review and confirm directly.");
-            if(arguments.Length<2) throw new InvalidDataException("Usage: commission DOMAIN ENV RELEASEKEYHEX TIMEKEYHEX HTTPS_TIME_ENDPOINT | commission-resume DOMAIN | commission-abort DOMAIN | status DOMAIN | recover DOMAIN | recover-abort DOMAIN | release-review DESCRIPTION_FILE SIGNATURE_FILE | import DESCRIPTION_FILE SIGNATURE_FILE ARCHIVE_FILE | activate DESCRIPTION_FILE SIGNATURE_FILE | reconcile DESCRIPTION_FILE SIGNATURE_FILE | abandon DESCRIPTION_FILE SIGNATURE_FILE | trust|trust-prepare|trust-finalize|trust-cancel|trust-quarantine DESCRIPTION_FILE OLD_PUBLISHER_SIGNATURE_FILE NEW_PUBLISHER_ACCEPTANCE_FILE");
+            if(arguments.Length<2) throw new InvalidDataException("Usage: commission DOMAIN ENV RELEASEKEYHEX TIMEKEYHEX HTTPS_TIME_ENDPOINT | commission-resume DOMAIN | commission-abort DOMAIN | status DOMAIN | recover DOMAIN | recover-abort DOMAIN | release-review DESCRIPTION_FILE SIGNATURE_FILE | import DESCRIPTION_FILE SIGNATURE_FILE ARCHIVE_FILE | activate DESCRIPTION_FILE SIGNATURE_FILE | reconcile DESCRIPTION_FILE SIGNATURE_FILE | abandon DESCRIPTION_FILE SIGNATURE_FILE | compute ACTIVE_RELEASE_SHA256 OPERATION PAYLOAD_FILE | compute-recover ACTIVE_RELEASE_SHA256 REQUEST_GENERATION | trust|trust-prepare|trust-finalize|trust-cancel|trust-quarantine DESCRIPTION_FILE OLD_PUBLISHER_SIGNATURE_FILE NEW_PUBLISHER_ACCEPTANCE_FILE");
             string command=arguments[0];bool trustCommand=command=="trust" || command=="trust-prepare" || command=="trust-finalize" || command=="trust-cancel" || command=="trust-quarantine";
             bool readCommand=command=="read-enrolled-file";
+            bool computeCommand=command=="compute",computeRecovery=command=="compute-recover";
             bool persistentReadCommand=command=="read-persistent-file",enrollmentCommand=command=="file-enrollment-change",enrollmentStatus=command=="file-enrollment-status";
             bool runtimeCommand=command=="runtime-prepare" || command=="runtime-switch" || command=="runtime-finalize" || command=="runtime-cancel";
-            if(command!="commission" && command!="commission-resume" && command!="commission-abort" && command!="status" && command!="recover" && command!="recover-abort" && command!="release-review" && command!="import" && command!="activate" && command!="reconcile" && command!="abandon" && !trustCommand && !runtimeCommand && !readCommand && !persistentReadCommand && !enrollmentCommand && !enrollmentStatus) throw new InvalidDataException("Client operation is not allowlisted.");
+            if(command!="commission" && command!="commission-resume" && command!="commission-abort" && command!="status" && command!="recover" && command!="recover-abort" && command!="release-review" && command!="import" && command!="activate" && command!="reconcile" && command!="abandon" && !trustCommand && !runtimeCommand && !readCommand && !persistentReadCommand && !enrollmentCommand && !enrollmentStatus && !computeCommand && !computeRecovery) throw new InvalidDataException("Client operation is not allowlisted.");
             bool deploymentCommand=command=="release-review" || command=="import" || command=="activate" || command=="reconcile" || command=="abandon";
-            if(arguments.Length!=(persistentReadCommand?11:command=="commission" || readCommand?6:command=="import" || command=="runtime-prepare" || trustCommand?4:deploymentCommand || runtimeCommand?3:2)) throw new InvalidDataException("Exact client argument count differs.");
-            if(!deploymentCommand && !trustCommand && !runtimeCommand && !readCommand && !persistentReadCommand && !enrollmentCommand && !enrollmentStatus) PlatformCustodyProtocol.Index(arguments[1]);
+            if(arguments.Length!=(persistentReadCommand?11:command=="commission" || readCommand?6:command=="import" || command=="runtime-prepare" || trustCommand || computeCommand?4:deploymentCommand || runtimeCommand || computeRecovery?3:2)) throw new InvalidDataException("Exact client argument count differs.");
+            if(!deploymentCommand && !trustCommand && !runtimeCommand && !readCommand && !persistentReadCommand && !enrollmentCommand && !enrollmentStatus && !computeCommand && !computeRecovery) PlatformCustodyProtocol.Index(arguments[1]);
+            if(computeRecovery) {Wire.Bytes(arguments[1],32,true);Wire.Bytes(arguments[2],32,true);}
             HostedEnrollmentInputs enrollment=enrollmentCommand?new HostedEnrollmentInputs(arguments[1]):null;
             if(enrollmentStatus) Wire.Bytes(arguments[1],32,true);
             using(HostedPersistentReadInputs persistent=persistentReadCommand?new HostedPersistentReadInputs(arguments):null)
             using(HostedReadInputs read=readCommand?new HostedReadInputs(arguments,true):null)
+            using(HostedComputeInputs compute=computeCommand?new HostedComputeInputs(arguments):null)
             using(HostedRuntimeInputs runtime=runtimeCommand?new HostedRuntimeInputs(arguments,command=="runtime-prepare"):null)
             using(HostedClientInputs inputs=new HostedClientInputs(command,arguments))
             using(NamedPipeClientStream pipe=new NamedPipeClientStream(".",HostedPipe.Name,PipeDirection.InOut,PipeOptions.Asynchronous,TokenImpersonationLevel.Impersonation)) {
                 pipe.Connect(3000);Stopwatch clientAge=Stopwatch.StartNew();TimeSpan clientPurpose=TimeSpan.FromSeconds(command=="import" || command=="activate" || command=="reconcile" || command=="runtime-prepare"?1800:30);
-                Action check=delegate {HostedPipe.CheckServer(pipe);if(read!=null) read.Check();if(persistent!=null) persistent.Read.Check();if(clientAge.Elapsed>=clientPurpose) throw new SecurityException("Exact original client purpose deadline expired; partial transfer is possible and no complete read/publication is inferred.");};check();
+                Action check=delegate {HostedPipe.CheckServer(pipe);if(read!=null) read.Check();if(persistent!=null) persistent.Read.Check();if(compute!=null) compute.Check();if(clientAge.Elapsed>=clientPurpose) throw new SecurityException("Exact original client purpose deadline expired; partial transfer is possible and no complete read/publication is inferred.");};check();
                 using(Wire.Writer hello=new Wire.Writer("luma-windows-hosted-hello-v1")) {hello.U32(1);HostedPipe.Write(pipe,hello.Bytes(),check,TimeSpan.FromSeconds(30));}
                 using(Wire.Writer request=new Wire.Writer("luma-windows-hosted-request-v1")) {
                     request.Text(command,32);
-                    if(enrollmentCommand) request.Blob(enrollment.Intent.Encode(),2048);
+                    if(computeCommand) {request.Fixed(Wire.Bytes(compute.Release,32,true),32);request.Blob(compute.Request.Bytes,HostedComputeContract.MaximumRequestBytes);}
+                    else if(computeRecovery) {request.Fixed(Wire.Bytes(arguments[1],32,true),32);request.Fixed(Wire.Bytes(arguments[2],32,true),32);}
+                    else if(enrollmentCommand) request.Blob(enrollment.Intent.Encode(),2048);
                     else if(enrollmentStatus) request.Fixed(Wire.Bytes(arguments[1],32,true),32);
                     else if(persistentReadCommand) {request.Blob(persistent.Selection.Encode(),512);request.Blob(persistent.Read.Intent.Encode(),2048);}
                     else if(readCommand) request.Blob(read.Intent.Encode(),2048);
@@ -465,7 +477,17 @@ namespace Luma.Windows.Hosted
                         string kind=reader.Text(32);byte[] payload=reader.Blob(60000);reader.End();
                         try {
                         if(kind=="refused") throw new SecurityException(new UTF8Encoding(false,true).GetString(payload));
-                        if(kind=="utc-challenge") {if(!deploymentCommand && !trustCommand && !runtimeCommand && !readCommand && !persistentReadCommand && !enrollmentCommand) throw new SecurityException("UTC relay cannot cross into another client purpose.");HostedTimeEndpoint.Deliver(pipe,payload,Wire.Hash(enrollmentCommand?enrollment.Intent.Encode():persistentReadCommand?persistent.Read.Intent.Encode():readCommand?read.Intent.Encode():runtimeCommand?runtime.Description:inputs.Description),check);continue;}
+                        if(kind=="utc-challenge") {if(!deploymentCommand && !trustCommand && !runtimeCommand && !readCommand && !persistentReadCommand && !enrollmentCommand && !computeCommand && !computeRecovery) throw new SecurityException("UTC relay cannot cross into another client purpose.");HostedTimeEndpoint.Deliver(pipe,payload,computeCommand?compute.Release:computeRecovery?arguments[1]:Wire.Hash(enrollmentCommand?enrollment.Intent.Encode():persistentReadCommand?persistent.Read.Intent.Encode():readCommand?read.Intent.Encode():runtimeCommand?runtime.Description:inputs.Description),check);continue;}
+                        if(kind=="compute-chunk") {if(!computeCommand) throw new SecurityException("Inert compute bytes crossed into another original-client purpose.");byte[] ack=compute.Receiver.Part(payload);try {HostedPipe.Write(pipe,ack,check,TimeSpan.FromSeconds(30));}finally {Array.Clear(ack,0,ack.Length);}continue;}
+                        if(kind=="compute-completed") {if(!computeCommand) throw new SecurityException("Compute receipt crossed into another original-client purpose.");compute.Receiver.Finish(payload);compute.Print(check);return 0;}
+                        if(kind=="compute-recovered") {
+                            if(!computeRecovery) throw new SecurityException("Compute recovery crossed into another original-client purpose.");
+                            using(Wire.Reader receipt=new Wire.Reader(payload,"luma-windows-hosted-compute-recovered-v1")) {
+                                if(Wire.Hex(receipt.Fixed(32))!=arguments[1] || Wire.Hex(receipt.Fixed(32))!=arguments[2]) throw new SecurityException("Compute recovery substituted selected exact release or request generation.");
+                                string head=Wire.Hex(receipt.Fixed(32));Wire.Bytes(head,32,true);if(receipt.U8()!=0 || receipt.U8()!=0) throw new SecurityException("Compute recovery claims unobserved result success or production qualification.");receipt.End();
+                                Console.WriteLine("Closed exact inert compute generation after original-controller exit and confined guest drain; journal head "+head+". No request replay, result recovery/publication or production qualification.");return 0;
+                            }
+                        }
                         if(kind=="persistent-read-chunk") {if(!persistentReadCommand) throw new SecurityException("Persistent-source bytes crossed into another original-client purpose.");byte[] ack=persistent.Read.Part(payload);try {HostedPipe.Write(pipe,ack,check,TimeSpan.FromSeconds(30));}finally {Array.Clear(ack,0,ack.Length);}continue;}
                         if(kind=="persistent-read-completed") {if(!persistentReadCommand) throw new SecurityException("Persistent read receipt crossed into another original-client purpose.");persistent.Complete(payload);Console.WriteLine(persistent.Summary());return 0;}
                         if(kind=="read-chunk") {if(!readCommand) throw new SecurityException("Source bytes crossed into another original-client purpose.");byte[] ack=read.Part(payload);try {HostedPipe.Write(pipe,ack,check,TimeSpan.FromSeconds(30));}finally {Array.Clear(ack,0,ack.Length);}continue;}
@@ -475,7 +497,9 @@ namespace Luma.Windows.Hosted
                         if(kind=="review") {
                             string hash=Wire.Hash(payload);using(Wire.Reader review=new Wire.Reader(payload,"luma-windows-hosted-reviewed-action-v1")) {
                                 string action=review.Text(32);review.Fixed(32);byte[] exact=review.Blob(8192);string detail=review.Text(16000);review.End();
-                                if(action!=command) throw new SecurityException("Service review substituted the requested command.");if(enrollmentCommand) enrollment.Reviewed(exact);else if(persistentReadCommand) persistent.Reviewed(exact,hash);else if(readCommand) read.Reviewed(exact,hash);else if(runtimeCommand) runtime.Reviewed(exact);else if(deploymentCommand || trustCommand) inputs.Reviewed(command,exact);
+                                if(action!=command) throw new SecurityException("Service review substituted the requested command.");if(computeCommand) compute.Reviewed(exact,hash);
+                                else if(computeRecovery) {using(Wire.Reader recovery=new Wire.Reader(exact,"luma-windows-hosted-compute-recovery-v1")) {DeploymentEvent pending=DeploymentEvent.Decode(recovery.Blob(4096));if(pending.Purpose!=3 || pending.ReleaseSha256!=arguments[1] || pending.Generation!=arguments[2] || pending.Controller!=0 || pending.ObservationKind!=0) throw new SecurityException("Compute recovery review substituted the selected exact outstanding request generation.");Wire.Bytes(Wire.Hex(recovery.Fixed(32)),32,true);recovery.End();}}
+                                else if(enrollmentCommand) enrollment.Reviewed(exact);else if(persistentReadCommand) persistent.Reviewed(exact,hash);else if(readCommand) read.Reviewed(exact,hash);else if(runtimeCommand) runtime.Reviewed(exact);else if(deploymentCommand || trustCommand) inputs.Reviewed(command,exact);
                                 else if(command=="commission" || command=="commission-resume") {
                                     CommissionIntent proposed=CommissionIntent.Decode(exact);if(proposed.Domain!=arguments[1]) throw new SecurityException("Commissioning review changed its selected domain.");
                                     if(command=="commission" && (proposed.Environment!=arguments[2] || !Wire.Equal(proposed.ReleaseKey,Wire.Bytes(arguments[3],72,true)) || !Wire.Equal(proposed.TimeKey,Wire.Bytes(arguments[4],72,true)) || proposed.TimeEndpoint!=HostedTimeEndpoint.Validate(arguments[5]))) throw new SecurityException("Commissioning review substituted the exact original-client environment/key pins/UTC endpoint.");
@@ -520,7 +544,7 @@ namespace Luma.Windows.Hosted
                                 if(trustGeneration>1024 || revokedPublisher>1 || revokedTime>1) throw new SecurityException("Trust status generation or revocation flags differ.");Wire.Bytes(trustSource,32,true);
                                 if(preparedTrust.Length!=0) Wire.Bytes(preparedTrust,32,true);
                                 if(runtimeGeneration>1024 || (pendingRuntime.Length==0)!=(pendingSlot.Length==0)) throw new SecurityException("Runtime status generation/pending shape differs.");Wire.Bytes(runtimeSource,32,true);Wire.Bytes(bundle,32,true);Wire.Bytes(wsl,32,true);if(slot.Length!=0) Wire.Bytes(slot,32,true);if(pendingRuntime.Length!=0) {Wire.Bytes(pendingRuntime,32,true);Wire.Bytes(pendingSlot,32,true);}
-                                if(purpose>2 || (pending.Length==0)!=(purpose==0) || (controller==0)!=(creation==0)) throw new SecurityException("Status resource generation shape differs.");if(pending.Length!=0) Wire.Bytes(pending,32,true);
+                                if(purpose>3 || (pending.Length==0)!=(purpose==0) || (controller==0)!=(creation==0)) throw new SecurityException("Status resource generation shape differs.");if(pending.Length!=0) Wire.Bytes(pending,32,true);
                                 Console.WriteLine(identity.Domain+" journal sequence "+sequence+"; phase "+((RecoveryPhase)phase)+"; actual TPM head "+head+
                                     "; compute-only slot active="+(active==1)+"; outstanding generation="+(pending.Length==0?"none":pending)+"; production qualification false.");
                                 Console.WriteLine("Trust generation "+trustGeneration+"; source "+trustSource+"; publisher revoked="+(revokedPublisher==1)+"; UTC revoked="+(revokedTime==1)+"; prepared UTC source="+(preparedTrust.Length==0?"none":preparedTrust)+"\nPublisher public blob: "+Wire.Hex(publisher)+"\nUTC public blob: "+Wire.Hex(time)+"\nUTC endpoint: "+endpoint);

@@ -19,7 +19,7 @@ namespace Luma.Windows.Hosted
         public byte ObservationKind {get;private set;}
         public DeploymentEvent(byte purpose,string release,ulong sequence,string generation,ulong boot,string package,uint controller,ulong creation,byte observationKind,string observation)
         {
-            if((purpose!=1 && purpose!=2) || sequence<1 || sequence>9007199254740991UL || boot<1 || (controller==0)!=(creation==0) || (controller!=0 && controller<4))
+            if((purpose!=1 && purpose!=2 && purpose!=3) || sequence<1 || sequence>9007199254740991UL || boot<1 || (controller==0)!=(creation==0) || (controller!=0 && controller<4))
                 throw new InvalidDataException("Typed deployment purpose, sequence or actual controller binding differs.");
             Wire.Bytes(release,32,true);Wire.Bytes(generation,32,true);Wire.Bytes(observation,32,false);
             if(observationKind>2 || (observationKind==0)!=(observation==new string('0',64))) throw new SecurityException("Typed controller outcome or observation commitment differs.");
@@ -69,6 +69,10 @@ namespace Luma.Windows.Hosted
             DeploymentHistory state=new DeploymentHistory();JournalEntry[] records=history.Entries;
             for(int index=1;index<records.Length;index++) {
                 check();
+                if(state.Pending!=null && state.Pending.Purpose==3 && (records[index].Kind==JournalKind.TrustChanged || records[index].Kind==JournalKind.TrustPrepared || records[index].Kind==JournalKind.TrustCancelled ||
+                    records[index].Kind==JournalKind.RuntimePrepared || records[index].Kind==JournalKind.RuntimeActivated || records[index].Kind==JournalKind.RuntimeCancelled ||
+                    records[index].Kind==JournalKind.FileEnrolled || records[index].Kind==JournalKind.FileEnrollmentRevoked))
+                    throw new SecurityException("Unresolved compute generation cannot be crossed by new trust, runtime or file-policy effects.");
                 if(records[index].Kind==JournalKind.NvWriteAborted || records[index].Kind==JournalKind.TrustChanged || records[index].Kind==JournalKind.TrustPrepared || records[index].Kind==JournalKind.TrustCancelled ||
                     records[index].Kind==JournalKind.RuntimePrepared || records[index].Kind==JournalKind.RuntimeActivated || records[index].Kind==JournalKind.RuntimeCancelled ||
                     records[index].Kind==JournalKind.FileEnrolled || records[index].Kind==JournalKind.FileEnrollmentRevoked) continue;
@@ -76,9 +80,14 @@ namespace Luma.Windows.Hosted
                 switch(record.Kind) {
                     case JournalKind.ImportPrepared:
                     case JournalKind.ActivationPrepared:
+                    case JournalKind.ComputePrepared:
                         if(state.Pending!=null || !empty || !state.generations.Add(value.Generation) ||
-                            (record.Kind==JournalKind.ImportPrepared)!=(value.Purpose==1)) throw new SecurityException("Deployment admission is concurrent, replayed or not exact.");
-                        if(value.ReleaseSequence!=(state.Active==null?1:checked(state.Active.ReleaseSequence+1))) throw new SecurityException("Release does not extend the current activation floor.");
+                            (record.Kind==JournalKind.ImportPrepared)!=(value.Purpose==1) ||
+                            (record.Kind==JournalKind.ComputePrepared)!=(value.Purpose==3)) throw new SecurityException("Deployment admission is concurrent, replayed or not exact.");
+                        if(value.Purpose==3) {
+                            if(state.Active==null || value.ReleaseSequence!=state.Active.ReleaseSequence || value.ReleaseSha256!=state.Active.ReleaseSha256 || value.PackageLeaf!=state.Active.PackageLeaf)
+                                throw new SecurityException("Compute admission requires the exact genuinely activated immutable distribution, not an imported or substituted slot.");
+                        } else if(value.ReleaseSequence!=(state.Active==null?1:checked(state.Active.ReleaseSequence+1))) throw new SecurityException("Release does not extend the current activation floor.");
                         if(value.Purpose==1 && state.imported.ContainsKey(value.ReleaseSha256)) throw new SecurityException("Exact release was already imported.");
                         if(value.Purpose==2) {
                             DeploymentEvent prior=state.Imported(value.ReleaseSha256);
@@ -87,7 +96,7 @@ namespace Luma.Windows.Hosted
                         state.Pending=value;state.CompletedControllers=0;state.SuccessfulControllers=0;state.LastSuccess=null;break;
                     case JournalKind.ControllerStarted:
                         if(state.Pending==null || !state.Pending.SameAdmission(value) || state.Worker!=null || value.Controller<4 || value.ObservationSha256!=new string('0',64) || state.CompletedControllers>=4 ||
-                            (value.Purpose==1 && state.CompletedControllers!=0))
+                            ((value.Purpose==1 || value.Purpose==3) && state.CompletedControllers!=0))
                             throw new SecurityException("Controller start is unadmitted, substituted or exceeds the finite profile.");
                         state.Worker=value;break;
                     case JournalKind.ControllerCompleted:
@@ -96,9 +105,11 @@ namespace Luma.Windows.Hosted
                         state.Worker=null;state.CompletedControllers++;if(value.ObservationKind==1) {state.SuccessfulControllers++;state.LastSuccess=value;}break;
                     case JournalKind.Imported:
                     case JournalKind.Activated:
+                    case JournalKind.ComputeObserved:
                         if(state.Pending==null || !state.Pending.SameAdmission(value) || state.Worker!=null || state.SuccessfulControllers<1 || state.LastSuccess==null || value.Controller!=0 ||
-                            value.ObservationKind!=1 || value.ObservationSha256!=state.LastSuccess.ObservationSha256 || (record.Kind==JournalKind.Imported)!=(value.Purpose==1)) throw new SecurityException("Deployment completion lacks successful observed controllers or the exact admission/result.");
-                        if(value.Purpose==1) state.imported.Add(value.ReleaseSha256,value);else state.Active=value;
+                            value.ObservationKind!=1 || value.ObservationSha256!=state.LastSuccess.ObservationSha256 || (record.Kind==JournalKind.Imported)!=(value.Purpose==1) ||
+                            (record.Kind==JournalKind.ComputeObserved)!=(value.Purpose==3)) throw new SecurityException("Deployment completion lacks successful observed controllers or the exact admission/result.");
+                        if(value.Purpose==1) state.imported.Add(value.ReleaseSha256,value);else if(value.Purpose==2) state.Active=value;
                         state.Pending=null;state.CompletedControllers=0;state.SuccessfulControllers=0;state.LastSuccess=null;break;
                     case JournalKind.Cancelled:
                         if(state.Pending==null || !state.Pending.SameAdmission(value) || state.Worker!=null || value.Controller!=0 || value.ObservationKind!=2)

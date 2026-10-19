@@ -34,7 +34,7 @@ custody remain necessary; Secure Boot will not be silently disabled.
 | Workstream | Implementation to complete before final candidate assembly |
 | --- | --- |
 | Durable content and custody | Authenticated bounded-journal continuation/compaction, custody/key succession and reviewed forensic recovery beyond the current exact-chain recovery; preserve retained interrupted evidence and outstanding restore reservations |
-| Discovery and result policy | Per-result access policy and real semantic collections/rebuildable indexes, with live revocation and owner isolation; exact selected-version lexical search is useful narrowing, not semantic or general ACL completion |
+| Discovery and result policy | General per-result access policy, complete user-facing semantic collection workflows and relevance qualification. Bounded owner-local TF-IDF/LSA indexes now rebuild on demand for exact selections and genuine typed collections; this does not implement cross-owner sharing policy |
 | Accessible workspace | Manual/conversational actions joined to real inference and native workflow authority; private read/edit/recalculation journeys, observed progress/cancellation and keyboard/screen-reader semantics. The typed spreadsheet editor is one component, not the whole shell |
 | Capture and references | Explicit speech/image/screen/video input with real permission, visible active indicators, bounded capture and stop/revocation; grounded-reference ambiguity handling |
 | Engines and adapters | Complete document/table/diagram/animation application journeys, installed viewers, and authenticated receipts for named LibreOffice/browser, generated-code build/test and allowlisted hardware adapters |
@@ -50,19 +50,23 @@ mark these workstreams complete.
 
 ## Current development checkpoint
 
-The current integrated source adds an accessible typed spreadsheet editor,
-exact selected-version search, an offline pinned raw-to-VHDX converter and
-read-only Windows deployment planning. Windows authority storage work adds
-physical allocation and retained-file accounting, including derived capacity
-for finite revocation/recovery tails. Use the dated execution record linked
-from the [implementation register](G3_GWIN0_IMPLEMENTATION.md) for actual
-executions and remaining limitations.
+The integrated source includes typed spreadsheet, document, diagram and
+animation editors, exact-version lexical and latent semantic retrieval,
+independently pinned raw-to-VHDX conversion and public export, and read-only
+Windows deployment planning. Windows authority supports physically admitted
+storage and a separately reviewed first-Admin compute request against its
+authenticated active distribution, including interrupted-controller recovery
+and current authenticated runtime pins. This is inert deterministic compute,
+not compact-model inference or ordinary-user product grants. Use the dated
+execution records linked from the [implementation register](G3_GWIN0_IMPLEMENTATION.md)
+for exact software results and remaining limitations.
 
 The current native boot path uses signed UKIs and named disk partitions; it
 does not supply optical-media discovery merely by wrapping a disk image in an
 ISO. Private converter construction requires protected D-backed ext4 staging;
-public Windows-readable export is a separate step, not an exFAT custody
-boundary. The converter/planner does not install or start Hyper-V, commission a TPM,
+public Windows-readable export is a separate implemented step, not an exFAT custody
+boundary. A real small cross-OS export exercises that mechanism; full desktop
+conversion and optical media remain open. The converter/planner does not install or start Hyper-V, commission a TPM,
 enroll firmware keys, create a distribution or deliver an installed desktop.
 All bulk builds and generated media stay on D; source remains on C. Existing
 images and failed-attempt evidence are preserved unless separately retired

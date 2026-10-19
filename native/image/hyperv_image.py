@@ -33,6 +33,8 @@ MAX_RAW = 64 * 1024**3
 BLOCK = 2 * MIB
 OPTIONS = 'subformat=dynamic,block_size=2097152,log_size=1048576,block_state_zero=on'
 OUTPUT = 'luma-hyperv-live-installer.vhdx'
+PRIVATE_STAGE = Path('/mnt/luma-build/work')
+PUBLIC_EXPORT = Path('/mnt/d/LumaOS-builds')
 
 
 def require(value, message):
@@ -214,10 +216,12 @@ class Held:
                 and witness(self.path.lstat()) == self.initial, 'held input changed')
         check_parents(self.parents)
 
-    def hash(self):
+    def hash(self, deadline=None):
         self.check()
         value, offset = hashlib.sha256(), 0
         while offset < self.initial[6]:
+            if deadline is not None:
+                require(time.monotonic() <= deadline, 'held hashing observation deadline exceeded')
             block = os.pread(self.fd, min(MIB, self.initial[6] - offset), offset)
             require(block, 'held input truncated')
             value.update(block)
@@ -462,7 +466,278 @@ def convert(raw, raw_sha256, destination, qemu, qemu_sha256):
         source.close()
 
 
+class ExportDirectory:
+    """Held existing public parent; no pathname can redirect a child write.
+
+    Public/exFAT storage is untrusted staging, not custody. Other writers may
+    delete or corrupt exports; readers must independently rehash them. Atomic
+    O_EXCL file creation avoids the mkdir/reopen substitution problem. Namespace
+    substitutions refuse success but cannot redirect effects into replacements.
+    """
+    def __init__(self, path, names):
+        self.path, self.names, self.chain = Path(path), frozenset(names), []
+        require(self.path.is_absolute() and str(self.path) == os.path.normpath(self.path)
+                and len(self.path.parts) <= 32, 'canonical bounded export parent required')
+        require(self.names and all(re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._-]{0,159}', name)
+                                   for name in self.names), 'closed export basenames required')
+        try:
+            current = Path('/')
+            for index, part in enumerate(self.path.parts):
+                if index == 0:
+                    fd = os.open('/', os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
+                else:
+                    current /= part
+                    fd = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
+                                 dir_fd=self.chain[-1][1])
+                value = witness(os.fstat(fd))[:5]
+                self.chain.append((current, fd, value))
+            self.fd = self.chain[-1][1]
+            self.check()
+            for name in self.names:
+                require(not os.path.lexists('/proc/self/fd/' + str(self.fd) + '/' + name),
+                        'refusing an existing export member')
+        except BaseException:
+            self.close()
+            raise
+
+    def check(self, named=True):
+        for path, fd, expected in self.chain:
+            require(witness(os.fstat(fd))[:5] == expected, 'held public export directory changed')
+            if named:
+                require(witness(path.lstat())[:5] == expected, 'public export namespace substituted')
+
+    def create(self, name, forensic=False):
+        require(name in self.names, 'unselected export basename refused')
+        self.check(named=not forensic)
+        fd = os.open(name, os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC,
+                     0o600, dir_fd=self.fd)
+        try:
+            value = os.fstat(fd)
+            require(stat.S_ISREG(value.st_mode) and value.st_nlink == 1
+                    and value.st_dev == os.fstat(self.fd).st_dev, 'new export is not an exclusive regular member')
+            return fd
+        except BaseException:
+            os.close(fd)
+            raise
+
+    def check_file(self, name, fd):
+        self.check()
+        require(witness(os.stat(name, dir_fd=self.fd, follow_symlinks=False)) == witness(os.fstat(fd)),
+                'public export member substituted')
+
+    def close(self):
+        for _, fd, _ in reversed(self.chain):
+            os.close(fd)
+        self.chain.clear()
+
+
+def held_bytes(source, maximum):
+    require(source.initial[6] <= maximum, 'record exceeds bound')
+    source.check()
+    data = os.pread(source.fd, maximum + 1, 0)
+    require(len(data) == source.initial[6], 'held record length changed')
+    source.check()
+    return data
+
+
+def closed_json(data):
+    def pairs(values):
+        record = {}
+        for key, value in values:
+            require(key not in record, 'duplicate JSON field')
+            record[key] = value
+        return record
+    return json.loads(data, object_pairs_hook=pairs,
+                      parse_constant=lambda value: require(False, 'nonfinite JSON refused'))
+
+
+def validate_conversion(record, raw_sha256, vhdx_sha256):
+    expected = dict(schema_version=1, purpose='luma-hyperv-live-installer-v1', architecture='amd64',
+        profile='V', media_kind='live-installer-disk', vm_generation=2, source_raw_bytes=DESKTOP_BYTES,
+        source_raw_sha256=raw_sha256, output_name=OUTPUT, output_sha256=vhdx_sha256,
+        raw_preserved=True, raw_vhdx_guest_bytes_compared=True, installed_desktop=False,
+        vm_created=False, vm_started=False, boot_qualified=False, production_qualified=False,
+        secure_boot_trust_established=False, vtpm_commissioned=False, host_settings_changed=False,
+        physical_disk_opened=False, gate_closing=False,
+        geometry=dict(virtual_bytes=DESKTOP_BYTES, block_bytes=BLOCK, logical_sector_bytes=512,
+                      physical_sector_bytes=512, dynamic=True, parent_present=False))
+    require(type(record) is dict and set(record) == set(expected) | {'converter_sha256', 'output_bytes'},
+            'closed conversion record required')
+    for field, value in expected.items():
+        # Python bool/int equality must not admit a claimed qualification or
+        # geometry under a different JSON type.
+        actual = record[field]
+        require(type(actual) is type(value) and actual == value, 'conversion identity or qualification differs')
+    geometry = record['geometry']
+    require(set(geometry) == set(expected['geometry']) and all(type(geometry[key]) is type(value)
+            for key, value in expected['geometry'].items()), 'conversion geometry types differ')
+    pin(record['converter_sha256'])
+    require(type(record['output_bytes']) is int and MIB <= record['output_bytes'] <= DESKTOP_BYTES + 128*MIB,
+            'bounded converted VHDX length required')
+
+
+def copy_export(source, directory, name, expected, deadline):
+    fd = directory.create(name)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        offset, digest = 0, hashlib.sha256()
+        while offset < source.initial[6]:
+            require(time.monotonic() <= deadline, 'export copying observation deadline exceeded')
+            source.check()
+            directory.check_file(name, fd)
+            block = os.pread(source.fd, min(MIB, source.initial[6] - offset), offset)
+            require(block, 'held export source truncated')
+            written = 0
+            while written < len(block):
+                count = os.pwrite(fd, block[written:], offset + written)
+                require(count > 0, 'export write made no progress')
+                written += count
+            digest.update(block)
+            offset += len(block)
+        os.fsync(fd)
+        require(digest.hexdigest() == expected and os.fstat(fd).st_size == offset,
+                'export copy differs from independent pin')
+        before, digest = witness(os.fstat(fd)), hashlib.sha256()
+        offset = 0
+        while offset < before[6]:
+            require(time.monotonic() <= deadline, 'export readback observation deadline exceeded')
+            block = os.pread(fd, min(MIB, before[6] - offset), offset)
+            require(block, 'export truncated during independent readback')
+            digest.update(block)
+            offset += len(block)
+        require(digest.hexdigest() == expected and witness(os.fstat(fd)) == before
+                and not os.pread(fd, 1, offset), 'export full readback differs or changed')
+        source.check()
+        directory.check_file(name, fd)
+        return fd, before
+    except BaseException:
+        os.close(fd)
+        raise
+
+
+def export_record(directory, name, record, forensic=False):
+    data = (json.dumps(record, sort_keys=True, separators=(',', ':'), allow_nan=False) + '\n').encode()
+    require(len(data) <= 65536, 'export record exceeds bound')
+    fd = directory.create(name, forensic=forensic)
+    try:
+        offset = 0
+        while offset < len(data):
+            count = os.pwrite(fd, data[offset:], offset)
+            require(count > 0, 'export record write made no progress')
+            offset += count
+        os.fsync(fd)
+        seal = witness(os.fstat(fd))
+        require(os.pread(fd, len(data)+1, 0) == data and witness(os.fstat(fd)) == seal,
+                'export record readback differs or changed')
+        if not forensic:
+            directory.check_file(name, fd)
+        os.fsync(directory.fd)
+        return fd, seal
+    except BaseException:
+        os.close(fd)
+        raise
+
+
+def export_verified(manifest, manifest_sha256, raw_sha256, vhdx_sha256, destination):
+    """Copy independently pinned private conversion DATA to new public D files."""
+    require(sys.platform == 'linux' and os.geteuid() == 0, 'isolated trusted-root Linux export required')
+    # Local synchronous filesystem calls cannot be forcibly deadline-bounded.
+    # Refuse once30minutes have been observed between calls; never call this a
+    # hard I/O completion deadline or an authenticated authority session.
+    deadline = time.monotonic() + 1800
+    for value in (manifest_sha256, raw_sha256, vhdx_sha256):
+        pin(value)
+    manifest, destination = Path(manifest), Path(destination)
+    require(all(path.is_absolute() and str(path) == os.path.normpath(path)
+                for path in (manifest, destination)), 'canonical absolute export inputs required')
+    require(manifest.name == 'conversion.json' and manifest.is_relative_to(PRIVATE_STAGE),
+            'conversion must originate in private D-backed ext4 staging')
+    require(destination.is_relative_to(PUBLIC_EXPORT) and
+            re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._-]{0,119}\.vhdx', destination.name),
+            'new canonical Windows-readable D build VHDX target required')
+    reserved = {'CON', 'PRN', 'AUX', 'NUL', *(f'COM{i}' for i in range(1,10)), *(f'LPT{i}' for i in range(1,10))}
+    require(all(re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._ -]{0,159}', part)
+                and not part.endswith(('.', ' ')) and part.split('.')[0].upper() not in reserved
+                for part in destination.relative_to(PUBLIC_EXPORT).parts),
+            'export components must be unambiguous ordinary Windows names')
+    names = [destination.name + suffix for suffix in ('', '.conversion.json', '.export.json', '.failure.json')]
+    metadata = source = directory = None
+    outputs = []
+    try:
+        metadata = Held(manifest, 65536)
+        source = Held(manifest.parent / OUTPUT, DESKTOP_BYTES + 128*MIB)
+        for held in (metadata, source):
+            require(held.initial[3] == 0 and not held.initial[2] & 0o077,
+                    'private conversion input must be root-owned and nonpublic')
+            for path, _ in held.parents:
+                info = path.lstat()
+                require(info.st_uid == 0 and not info.st_mode & 0o022, 'private conversion ancestor is writable')
+            writable_ext4(held.fd)
+        require(metadata.hash(deadline) == manifest_sha256, 'independent conversion record SHA256 differs')
+        record = closed_json(held_bytes(metadata, 65536))
+        validate_conversion(record, raw_sha256, vhdx_sha256)
+        require(source.initial[6] == record['output_bytes'] and source.hash(deadline) == vhdx_sha256,
+                'independently pinned private VHDX differs')
+        require(vhdx_geometry(source.fd, DESKTOP_BYTES) == record['geometry'], 'held VHDX geometry differs')
+        directory = ExportDirectory(destination.parent, names)
+        space = os.fstatvfs(directory.fd)
+        require(space.f_bavail * space.f_frsize >= source.initial[6] + 2*1024**3,
+                'observed public export space lacks VHDX plus2GiB headroom; not a reservation')
+        for name, held, digest in ((names[0], source, vhdx_sha256), (names[1], metadata, manifest_sha256)):
+            fd, seal = copy_export(held, directory, name, digest, deadline)
+            outputs.append((name, fd, seal))
+        require(source.hash(deadline) == vhdx_sha256 and metadata.hash(deadline) == manifest_sha256,
+                'private conversion inputs changed across export')
+        receipt = dict(schema_version=1, purpose='luma-hyperv-public-export-v1', output_name=names[0],
+            output_bytes=source.initial[6], output_sha256=vhdx_sha256,
+            conversion_name=names[1], conversion_sha256=manifest_sha256,
+            source_raw_sha256=raw_sha256, source_conversion_preserved=True,
+            full_destination_readback=True, public_staging_untrusted=True,
+            installed_desktop=False, vm_created=False, vm_started=False,
+            boot_qualified=False, production_qualified=False, gate_closing=False)
+        for name, fd, seal in outputs:
+            directory.check_file(name, fd)
+            require(witness(os.fstat(fd)) == seal, 'export member changed after readback')
+        fd, seal = export_record(directory, names[2], receipt)
+        outputs.append((names[2], fd, seal))
+        for name, fd, seal in outputs:
+            directory.check_file(name, fd)
+            require(witness(os.fstat(fd)) == seal, 'export member changed across receipt publication')
+        directory.check()
+        require(time.monotonic() <= deadline, 'export publication observation deadline exceeded')
+        return receipt
+    except BaseException as error:
+        if directory is not None:
+            try:
+                forensic_fd, _ = export_record(directory, names[3], dict(schema_version=1, status='export-failed',
+                    error_type=type(error).__name__, error=str(error)[:4096],
+                    failed_outputs_retained=True, vm_created=False, boot_qualified=False), forensic=True)
+                os.close(forensic_fd)
+            except BaseException as forensic_error:
+                error.add_note('Forensic record could not be created exclusively: ' + str(forensic_error)[:1024])
+        raise
+    finally:
+        for _, fd, _ in reversed(outputs):
+            os.close(fd)
+        if directory is not None:
+            directory.close()
+        for held in (source, metadata):
+            if held is not None:
+                held.close()
+
+
 def main():
+    if len(sys.argv) > 1 and sys.argv[1] == 'export':
+        parser = argparse.ArgumentParser(description='Export verified conversion data to new public D files, never deploy a VM.')
+        parser.add_argument('--manifest', type=Path, required=True)
+        parser.add_argument('--manifest-sha256', required=True)
+        parser.add_argument('--raw-sha256', required=True)
+        parser.add_argument('--vhdx-sha256', required=True)
+        parser.add_argument('--output', type=Path, required=True)
+        args = parser.parse_args(sys.argv[2:])
+        print(json.dumps(export_verified(args.manifest, args.manifest_sha256, args.raw_sha256,
+                                         args.vhdx_sha256, args.output), sort_keys=True))
+        return
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--raw', type=Path, required=True)
     parser.add_argument('--raw-sha256', required=True)

@@ -343,6 +343,198 @@ class HyperVImageTests(unittest.TestCase):
             image.convert(self.raw, 'a'*64, Path('/mnt/d/LumaOS-builds/hyperv-untrusted'),
                           Path('/usr/bin/qemu-img'), 'b'*64)
 
+    def export_fixture(self):
+        output = self.actual_conversion()
+        digest = hashlib.sha256(output.read_bytes()).hexdigest()
+        manifest = output.parent/'conversion.json'
+        record = dict(schema_version=1, purpose='luma-hyperv-live-installer-v1', architecture='amd64',
+            profile='V', media_kind='live-installer-disk', vm_generation=2,
+            source_raw_bytes=8*image.MIB, source_raw_sha256='a'*64, converter_sha256='b'*64,
+            output_name=image.OUTPUT, output_bytes=output.stat().st_size, output_sha256=digest,
+            geometry=dict(virtual_bytes=8*image.MIB, block_bytes=image.BLOCK,
+                logical_sector_bytes=512, physical_sector_bytes=512, dynamic=True, parent_present=False),
+            raw_preserved=True, raw_vhdx_guest_bytes_compared=True, installed_desktop=False,
+            vm_created=False, vm_started=False, boot_qualified=False, production_qualified=False,
+            secure_boot_trust_established=False, vtpm_commissioned=False,
+            host_settings_changed=False, physical_disk_opened=False, gate_closing=False)
+        manifest.write_bytes((json.dumps(record, sort_keys=True)+'\n').encode())
+        manifest.chmod(0o600)
+        public = self.work/'public'
+        public.mkdir(mode=0o777)
+        public.chmod(0o777)
+        self.enterContext(patch.object(image, 'PRIVATE_STAGE', self.work))
+        self.enterContext(patch.object(image, 'PUBLIC_EXPORT', public))
+        # Production stays fixed at16,190,013,440. Exercise the exact exporter
+        # on actual tiny qemu data without manufacturing a desktop/boot claim.
+        self.enterContext(patch.object(image, 'DESKTOP_BYTES', 8*image.MIB))
+        return output, manifest, public/'new.vhdx', digest
+
+    def export(self, fixture):
+        _, manifest, target, digest = fixture
+        return image.export_verified(manifest, hashlib.sha256(manifest.read_bytes()).hexdigest(),
+                                     'a'*64, digest, target)
+
+    def test_actual_public_export_full_readback_and_exact_manifest(self):
+        fixture = self.export_fixture()
+        source, manifest, target, digest = fixture
+        receipt = self.export(fixture)
+        self.assertEqual(target.read_bytes(), source.read_bytes())
+        self.assertEqual(hashlib.sha256(target.read_bytes()).hexdigest(), digest)
+        self.assertEqual(Path(str(target)+'.conversion.json').read_bytes(), manifest.read_bytes())
+        self.assertEqual(json.loads(Path(str(target)+'.export.json').read_bytes()), receipt)
+        self.assertTrue(receipt['full_destination_readback'])
+        self.assertTrue(receipt['public_staging_untrusted'])
+        self.assertFalse(receipt['boot_qualified'])
+        self.assertFalse(Path(str(target)+'.failure.json').exists())
+
+    def test_export_never_overwrites_any_existing_member(self):
+        fixture = self.export_fixture()
+        target = fixture[2]
+        for suffix in ('', '.conversion.json', '.export.json', '.failure.json'):
+            selected = Path(str(target)+suffix)
+            selected.write_bytes(b'preexisting preserved')
+            with self.subTest(suffix=suffix), self.assertRaises(ValueError):
+                self.export(fixture)
+            self.assertEqual(selected.read_bytes(), b'preexisting preserved')
+            self.assertEqual(list(target.parent.iterdir()), [selected])
+            selected.unlink()
+
+    def test_export_refuses_wrong_independent_pins_before_output(self):
+        fixture = self.export_fixture()
+        _, manifest, target, digest = fixture
+        manifest_pin = hashlib.sha256(manifest.read_bytes()).hexdigest()
+        for fields in ((manifest_pin,'c'*64,digest), ('d'*64,'a'*64,digest),
+                       (manifest_pin,'a'*64,'e'*64)):
+            with self.subTest(pins=fields), self.assertRaises(ValueError):
+                image.export_verified(manifest, fields[0], fields[1], fields[2], target)
+            self.assertEqual(list(target.parent.iterdir()), [])
+
+    def test_export_refuses_untrusted_private_source_ancestors(self):
+        fixture = self.export_fixture()
+        fixture[0].parent.chmod(0o777)
+        try:
+            with self.assertRaises(ValueError):
+                self.export(fixture)
+            self.assertEqual(list(fixture[2].parent.iterdir()), [])
+        finally:
+            fixture[0].parent.chmod(0o700)
+
+    def test_export_closed_json_rejects_duplicate_nonfinite_and_type_confusion(self):
+        for value in (b'{"a":1,"a":2}', b'{"a":NaN}', b'{"a":Infinity}'):
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                image.closed_json(value)
+        fixture = self.export_fixture()
+        record = json.loads(fixture[1].read_bytes())
+        for field, value in (('schema_version',True), ('vm_generation',2.0), ('output_bytes',True),
+                             ('boot_qualified',0), ('unexpected',False)):
+            bad = dict(record, **{field:value})
+            with self.subTest(field=field), self.assertRaises(ValueError):
+                image.validate_conversion(bad, 'a'*64, fixture[3])
+        record['geometry']['logical_sector_bytes'] = 512.0
+        with self.assertRaises(ValueError):
+            image.validate_conversion(record, 'a'*64, fixture[3])
+
+    def test_export_refuses_path_escape_symlink_parent_and_symlink_leaf(self):
+        fixture = self.export_fixture()
+        _, manifest, target, digest = fixture
+        manifest_pin = hashlib.sha256(manifest.read_bytes()).hexdigest()
+        for output in (target.parent/'..'/'escape.vhdx', target.parent/'UPPER.VHDX',
+                       self.work/'elsewhere.vhdx', target.parent/'CON.vhdx',
+                       target.parent/'LPT1.nested.vhdx', target.parent/'trailing. '/'new.vhdx'):
+            with self.subTest(output=output), self.assertRaises(ValueError):
+                image.export_verified(manifest, manifest_pin, 'a'*64, digest, output)
+        outside = self.work/'outside'
+        outside.mkdir()
+        linked = target.parent/'linked'
+        linked.symlink_to(outside, target_is_directory=True)
+        with self.assertRaises((ValueError, OSError)):
+            image.export_verified(manifest, manifest_pin, 'a'*64, digest, linked/'new.vhdx')
+        linked.unlink()
+        target.symlink_to(self.raw)
+        before = self.raw.read_bytes()
+        with self.assertRaises(ValueError):
+            self.export(fixture)
+        self.assertEqual(self.raw.read_bytes(), before)
+
+    def test_export_parent_substitution_cannot_redirect_and_retains_failure(self):
+        fixture = self.export_fixture()
+        public, original_open, fired = fixture[2].parent, os.open, []
+        moved = self.work/'retained-public'
+        outside = self.work/'outside'
+        outside.mkdir()
+        sentinel = outside/'new.vhdx'
+        sentinel.write_bytes(b'must never be changed')
+        def racing_open(path, flags, mode=0o777, *, dir_fd=None):
+            if path == 'new.vhdx' and flags & os.O_CREAT and not fired:
+                fired.append(True)
+                public.rename(moved)
+                public.symlink_to(outside, target_is_directory=True)
+            return original_open(path, flags, mode, dir_fd=dir_fd)
+        with patch.object(image.os, 'open', side_effect=racing_open):
+            with self.assertRaises(ValueError):
+                self.export(fixture)
+        self.assertEqual(fired, [True])
+        self.assertEqual(sentinel.read_bytes(), b'must never be changed')
+        self.assertEqual(sorted(p.name for p in outside.iterdir()), ['new.vhdx'])
+        self.assertEqual((moved/'new.vhdx').stat().st_size, 0)
+        self.assertEqual(json.loads((moved/'new.vhdx.failure.json').read_bytes())['status'], 'export-failed')
+
+    def test_export_mutation_after_readback_refuses_receipt_success(self):
+        fixture = self.export_fixture()
+        original_copy = image.copy_export
+        def corrupt_after_copy(source, directory, name, digest, deadline):
+            fd = original_copy(source, directory, name, digest, deadline)
+            if name.endswith('.conversion.json'):
+                with fixture[2].open('r+b') as stream:
+                    stream.write(b'corrupt!')
+            return fd
+        with patch.object(image, 'copy_export', side_effect=corrupt_after_copy):
+            with self.assertRaises(ValueError):
+                self.export(fixture)
+        self.assertFalse(Path(str(fixture[2])+'.export.json').exists())
+        self.assertEqual(json.loads(Path(str(fixture[2])+'.failure.json').read_bytes())['status'], 'export-failed')
+
+    def test_export_short_writes_are_completed_and_no_progress_refuses(self):
+        fixture = self.export_fixture()
+        original_write = os.pwrite
+        def short(fd, data, offset):
+            return original_write(fd, data[:32768], offset)
+        with patch.object(image.os, 'pwrite', side_effect=short):
+            self.export(fixture)
+        self.assertEqual(fixture[2].read_bytes(), fixture[0].read_bytes())
+
+    def test_export_zero_progress_retains_partial_without_success(self):
+        fixture = self.export_fixture()
+        with patch.object(image.os, 'pwrite', return_value=0):
+            with self.assertRaises(ValueError) as failure:
+                self.export(fixture)
+        self.assertIn('export write made no progress', str(failure.exception))
+        self.assertFalse(Path(str(fixture[2])+'.export.json').exists())
+        self.assertEqual(fixture[2].stat().st_size, 0)
+        self.assertTrue(any('Forensic record could not be created' in value
+                            for value in failure.exception.__notes__))
+
+    def test_export_observation_deadline_refuses_before_output(self):
+        fixture = self.export_fixture()
+        now = image.time.monotonic()
+        with patch.object(image.time, 'monotonic', side_effect=[now, now+1801]):
+            with self.assertRaisesRegex(ValueError, 'observation deadline'):
+                self.export(fixture)
+        self.assertEqual(list(fixture[2].parent.iterdir()), [])
+
+    def test_export_mutation_between_validated_readback_and_return_keeps_old_seal(self):
+        fixture = self.export_fixture()
+        original_copy = image.copy_export
+        def corrupt_return(source, directory, name, digest, deadline):
+            result = original_copy(source, directory, name, digest, deadline)
+            if name == fixture[2].name:
+                os.pwrite(result[0], b'corrupt!', 0)
+            return result
+        with patch.object(image, 'copy_export', side_effect=corrupt_return):
+            with self.assertRaisesRegex(ValueError, 'changed after readback'):
+                self.export(fixture)
+        self.assertFalse(Path(str(fixture[2])+'.export.json').exists())
+
 
 if __name__ == '__main__':
     unittest.main()

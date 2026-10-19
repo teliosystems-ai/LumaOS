@@ -328,6 +328,163 @@ fn selected_search_continuous_revocation_refuses_every_compute_and_delivery_cut(
 }
 
 #[test]
+fn semantic_search_rebuilds_real_latent_association_without_expanding_exact_selection() {
+    let f = Fixture::new();
+    let initial = capture("semantic-a", "alpha", b"cat kitten feline");
+    let mut store = Repository::create_at(&f.path, &initial, &mut Guard::write(&initial)).unwrap();
+    let first = store
+        .apply(&initial, b"cat kitten feline", &mut Guard::write(&initial))
+        .unwrap();
+    let mut references = vec![first.resulting.clone()];
+    for (id, source) in [
+        ("beta", "cat dog pet"),
+        ("delta", "dog puppy canine"),
+        ("epsilon", "car motor vehicle"),
+        ("gamma", "car truck road"),
+        ("theta", "truck motor engine"),
+    ] {
+        references
+            .push(publish(&mut store, &format!("semantic-{id}"), id, source.as_bytes()).resulting);
+    }
+    assert_eq!(
+        store
+            .search_selected(&references, "cat", 64, &mut Guard::read())
+            .unwrap()
+            .search
+            .total_matches,
+        2
+    );
+    let before = disk(&f.path);
+    let result = store
+        .semantic_search_selected(&references, "CAT", 64, 2, &mut Guard::read())
+        .unwrap();
+    assert_eq!(result.algorithm, "tfidf-lsa-jacobi-v1");
+    assert_eq!(result.effective_dimensions, 2);
+    assert_eq!(
+        result
+            .matches
+            .iter()
+            .map(|h| h.reference.artifact_id.as_str())
+            .collect::<Vec<_>>(),
+        ["alpha", "beta", "delta"]
+    );
+    assert!(result
+        .matches
+        .iter()
+        .all(|h| h.cosine_millionths > 0 && h.cosine_millionths <= 1_000_000));
+    assert_eq!(disk(&f.path), before);
+    let prefix = store
+        .semantic_search_selected(&references, "cat", 1, 2, &mut Guard::read())
+        .unwrap();
+    assert_eq!(prefix.matches, result.matches[..1]);
+    assert_eq!(prefix.total_matches, result.total_matches);
+    assert!(prefix.truncated);
+    let unknown = store
+        .semantic_search_selected(&references, "unseen", 1, 2, &mut Guard::read())
+        .unwrap();
+    assert_eq!(unknown.effective_dimensions, result.effective_dimensions);
+    assert_eq!(
+        unknown.index_descriptor_sha256,
+        result.index_descriptor_sha256
+    );
+    assert_eq!(unknown.total_matches, 0);
+    publish(
+        &mut store,
+        "semantic-outside",
+        "zeta",
+        b"cat cat cat secret",
+    );
+    external(
+        &mut store,
+        "semantic-newer",
+        first.resulting.clone(),
+        b"car truck secret",
+    );
+    let same = store
+        .semantic_search_selected(&references, "cat", 64, 2, &mut Guard::read())
+        .unwrap();
+    assert_eq!(same, result);
+    drop(store);
+    let reopened = Repository::open_at(&f.path, &binding(), &mut Guard::read()).unwrap();
+    assert_eq!(
+        reopened
+            .semantic_search_selected(&references, "cat", 64, 2, &mut Guard::read())
+            .unwrap(),
+        result
+    );
+    let mut forged = references.clone();
+    forged[0].content_sha256 = "d".repeat(64);
+    assert!(reopened
+        .semantic_search_selected(&forged, "cat", 1, 2, &mut Guard::read())
+        .is_err());
+}
+
+#[test]
+fn semantic_search_prevalidation_resources_and_every_revocation_cut_refuse_without_writes() {
+    let f = Fixture::new();
+    let store = repository(&f);
+    let reference = store
+        .current_reference("alpha", &mut Guard::read())
+        .unwrap();
+    let before = disk(&f.path);
+    for (query, limit, dimensions) in [("fox", 1, 0), ("fox", 1, 9), ("fox", 0, 1), ("café", 1, 1)]
+    {
+        let mut boundary = Guard::read();
+        assert!(store
+            .semantic_search_selected(
+                &[reference.clone()],
+                query,
+                limit,
+                dimensions,
+                &mut boundary
+            )
+            .is_err());
+        assert_eq!(boundary.admissions, 0);
+        assert_eq!(boundary.checks, 0);
+    }
+    let mut denied = Guard::read();
+    denied.refuse_resources = true;
+    assert!(store
+        .semantic_search_selected(&[reference.clone()], "fox", 1, 1, &mut denied)
+        .is_err());
+    assert_eq!(denied.checks, 0);
+    let mut baseline = Guard::read();
+    store
+        .semantic_search_selected(&[reference.clone()], "fox", 1, 1, &mut baseline)
+        .unwrap();
+    for refuse_at in 1..=baseline.checks {
+        let mut boundary = Guard::read();
+        boundary.refuse_at = refuse_at;
+        assert!(store
+            .semantic_search_selected(&[reference.clone()], "fox", 1, 1, &mut boundary)
+            .is_err());
+    }
+    let mut other = Guard::read();
+    other.binding.owner_generation += 1;
+    assert!(store
+        .semantic_search_selected(&[reference], "fox", 1, 1, &mut other)
+        .is_err());
+    assert_eq!(disk(&f.path), before);
+}
+
+#[test]
+fn semantic_search_vocabulary_overflow_refuses_instead_of_using_a_partial_index() {
+    let f = Fixture::new();
+    let mut store = repository(&f);
+    let source = (0..=MAX_SEMANTIC_VOCABULARY)
+        .map(|i| format!("word{i}"))
+        .collect::<Vec<_>>()
+        .join(" ");
+    let published = publish(&mut store, "semantic-many", "beta", source.as_bytes());
+    let before = disk(&f.path);
+    let error = store
+        .semantic_search_selected(&[published.resulting], "word0", 1, 1, &mut Guard::read())
+        .unwrap_err();
+    assert!(error.to_string().contains("vocabulary exceeds"));
+    assert_eq!(disk(&f.path), before);
+}
+
+#[test]
 fn historical_lookup_refuses_every_reference_substitution_and_never_falls_back() {
     let f = Fixture::new();
     let store = repository(&f);

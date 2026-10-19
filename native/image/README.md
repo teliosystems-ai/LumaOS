@@ -976,6 +976,17 @@ to a test machine. Public `secureboot.cer` may be transferred with the image.
 Build volumes are retained for diagnosis and VM testing. They are not silently
 deleted. Repeated builds consume additional storage.
 
+The assembly container defaults to 4 GiB. On a builder with enough current
+physical-memory headroom, `LUMA_NATIVE_ASSEMBLY_MEMORY_GIB=5` selects the sole
+larger supported bound; tools/package builds and export retain their existing
+4 GiB limit. Immediately before assembly, a bounded kernel memory observation
+must leave another 1 GiB for the build host. Swap is not capacity, and the
+observation is not a reservation against competing workloads. This option
+does not change WSL configuration, restart it, or reduce release optimization
+or runtime security checks. The separate VM guest admission still retains its
+2 GiB host reserve. Retain failed build diagnostics before selecting a fresh
+attempt; do not run another large job concurrently to force admission.
+
 ### External build drive (including Windows D: / exFAT)
 
 For this machine's dedicated all-build-storage-on-D: setup, see the

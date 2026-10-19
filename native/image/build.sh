@@ -12,6 +12,11 @@ case "${LUMA_BUILD_PROFILE:-auto}" in
     standard) ;; # Explicit legacy/portable mode; retains its original guards.
     *) echo 'unknown build profile' >&2; exit 2 ;;
 esac
+assembly_memory_gib=${LUMA_NATIVE_ASSEMBLY_MEMORY_GIB-4}
+case "$assembly_memory_gib" in
+    4|5) ;;
+    *) echo 'LUMA_NATIVE_ASSEMBLY_MEMORY_GIB must be exactly 4 or 5; absent defaults to 4' >&2; exit 2 ;;
+esac
 if [ "${1:-}" = production-continue ]; then
     if [ "$#" -ne 5 ]; then
         echo 'usage: build.sh production-continue {pcr|pe|release} VOLUME CAPTURED_SOURCE RESPONSE_DIRECTORY' >&2; exit 2
@@ -82,6 +87,7 @@ tools=luma-native-tools:20260927
 # Compilation and assembly run after the source sweep, not concurrently with it.
 build_limits=(--memory 4g --memory-swap 4g --cpu-period 100000 --cpu-quota 200000)
 run_limits=(--memory 4g --memory-swap 4g --cpus 2)
+assembly_limits=(--memory "${assembly_memory_gib}g" --memory-swap "${assembly_memory_gib}g" --cpus 2)
 base=ubuntu@sha256:008173c23f95b170204355c12626cb5a965d779a7e1283b09e9cffbb1bf33ca3
 runtime_context="${build_root:-$repository/dist}/native-inputs/$run_id-$edition"
 source_context="${build_root:-$repository/dist}/native-sources/$run_id-$edition"
@@ -144,7 +150,10 @@ docker create --name "$export_container" "luma-native-root:20260927-$edition"
 docker export "$export_container" | docker run --rm -i "${run_limits[@]}" --network none --mount "type=volume,src=$volume,dst=/work" "$tools" tar -xpf - -C /work/root
 # Remove only the stopped export container created by this invocation.
 docker rm "$export_container"
-docker run --rm "${run_limits[@]}" --network none \
+# Observe physical RAM immediately before assembly. This is not a reservation;
+# leave the build host 1 GiB and do not count swap or alter WSL/other workloads.
+LUMA_NATIVE_ASSEMBLY_MEMORY_GIB="$assembly_memory_gib" python3 "$source_context/native/image/build_storage.py" assembly-memory
+docker run --rm "${assembly_limits[@]}" --network none \
     -e CARGO_BUILD_JOBS=1 -e RUSTFLAGS=-Dwarnings \
     -e PYTHONDONTWRITEBYTECODE=1 \
     --mount "type=volume,src=$volume,dst=/work" \

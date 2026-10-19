@@ -15,6 +15,56 @@ BACKING = Path('/mnt/d/LumaOS-builds/docker/luma-build-v1.ext4')
 SIZE = 96*1024**3
 ENDPOINT = 'unix:///run/luma-build-docker.sock'
 CONFIG = Path('/etc/luma-build/storage.json')
+GIB = 1024**3
+ASSEMBLY_HOST_RESERVE = GIB
+
+
+def selected_assembly_memory_gib(environment):
+    value = environment.get('LUMA_NATIVE_ASSEMBLY_MEMORY_GIB', '4')
+    if type(value) is not str or value not in ('4', '5'):
+        raise ValueError('LUMA_NATIVE_ASSEMBLY_MEMORY_GIB must be exactly 4 or 5; absent defaults to 4')
+    return int(value)
+
+
+def check_assembly_memory(memory_gib, text):
+    """Physical host observation only, never a reservation or swap capacity."""
+    if type(memory_gib) is not int or memory_gib not in (4, 5):
+        raise ValueError('unsupported assembly memory limit')
+    if not isinstance(text, str) or len(text) > 65536 or not text.isascii():
+        raise ValueError('invalid or oversized assembly host memory observation')
+    fields = {}
+    for line in text.splitlines():
+        key = line.partition(':')[0].strip()
+        if key not in ('MemTotal', 'MemAvailable'):
+            if re.match(r'\s*(MemTotal|MemAvailable)(?:\s|$)', line):
+                raise ValueError('malformed assembly host memory field')
+            continue
+        match = re.fullmatch(r'(MemTotal|MemAvailable):[ \t]+([0-9]{1,20}) kB[ \t]*', line)
+        if match is None or key in fields:
+            raise ValueError('invalid or duplicate assembly host memory field')
+        value = int(match[2])*1024
+        if value > 2**64-1:
+            raise ValueError('assembly host memory observation exceeds bounded byte count')
+        fields[key] = value
+    if set(fields) != {'MemTotal', 'MemAvailable'} or not 0 <= fields['MemAvailable'] <= fields['MemTotal'] or fields['MemTotal'] == 0:
+        raise ValueError('missing or inconsistent assembly host memory observation')
+    memory = memory_gib*GIB
+    available = fields['MemAvailable']
+    if available < memory+ASSEMBLY_HOST_RESERVE:
+        raise RuntimeError(f'Assembly host RAM admission refused: available={available} bytes, '
+            f'assembly={memory} bytes, build_host_reserve={ASSEMBLY_HOST_RESERVE} bytes; '
+            'free physical host RAM or use a larger build host; swap is not capacity')
+    return dict(assembly_memory_gib=memory_gib, assembly_memory_bytes=memory,
+        host_total_bytes=fields['MemTotal'], host_available_bytes=available,
+        build_host_reserve_bytes=ASSEMBLY_HOST_RESERVE,
+        swap_counted_as_capacity=False, reservation=False)
+
+
+def admit_assembly_memory():
+    selected = selected_assembly_memory_gib(os.environ)
+    with Path('/proc/meminfo').open(encoding='ascii') as stream:
+        observed = stream.read(65537)
+    return check_assembly_memory(selected, observed)
 
 
 def command(*args):
@@ -162,7 +212,7 @@ def preflight(repository, external, edition):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('action', choices=('mount', 'verify', 'preflight'))
+    parser.add_argument('action', choices=('mount', 'verify', 'preflight', 'assembly-memory'))
     parser.add_argument('--repository', type=Path)
     parser.add_argument('--external', default='')
     parser.add_argument('--edition', choices=('headless', 'desktop'), default='headless')
@@ -172,6 +222,8 @@ def main():
     elif args.action == 'verify':
         verify_store()
         print('Verified dedicated D:-backed ext4 store.')
+    elif args.action == 'assembly-memory':
+        print('Assembly host memory admission: '+json.dumps(admit_assembly_memory(), separators=(',', ':')), flush=True)
     else:
         if not args.repository:
             parser.error('--repository is required for preflight')

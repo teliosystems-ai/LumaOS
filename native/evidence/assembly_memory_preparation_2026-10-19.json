@@ -1,0 +1,60 @@
+{
+  "schema_version": 1,
+  "date": "2026-10-19",
+  "status": "source-verified-assembly-retry-pending",
+  "scope": "Native Ubuntu 24.04 amd64 desktop laboratory candidate, sequence 16",
+  "failed_assembly": {
+    "build_id": "20261019T125631Z-desktop",
+    "source_commit": "8a997b1",
+    "log": "D:/LumaOS-builds/candidate16-assembly-20261019T125630Z.log",
+    "log_sha256": "de995160f1534bc76e059aaccbff59097cd0fde8468d22e2037033e051b79991",
+    "result": "Cargo release compiler killed by the 4-GiB container memory cgroup",
+    "actual_kernel_oom_constraint": "CONSTRAINT_MEMCG",
+    "actual_kernel_task": "rustc",
+    "container_id": "4550ae6e2ba365122aa9936d9d66ab42f85c35db5f8279c1705695115c7bd29e",
+    "container_state_retained": false,
+    "image_or_signing_outputs_produced": false
+  },
+  "implementation": {
+    "default_assembly_memory_gib": 4,
+    "explicit_supported_assembly_memory_gib": [4, 5],
+    "planned_retry_memory_gib": 5,
+    "host_physical_memory_reserve_gib": 1,
+    "host_observation": "Bounded actual /proc/meminfo immediately before assembly",
+    "swap_counted_as_capacity": false,
+    "memory_reservation": false,
+    "compiler_optimization_or_security_reduced": false,
+    "other_container_limits_changed": false,
+    "wsl_shutdown_or_memory_configuration_changed": false,
+    "native_vm_guest_and_host_reserve_guards_changed": false
+  },
+  "source": {
+    "snapshot": "/mnt/luma-build/work/candidate16-source-20261019-d",
+    "manifest_sha256": "61ceba22699af2604f713a82a4fd99f2ce54ee87fd04c0dab9eb65f3f529eb0e",
+    "files": 553,
+    "prior_snapshot": "/mnt/luma-build/work/candidate16-source-20261019-c",
+    "prior_manifest_sha256": "f4dd5ab8dac4d5c35ac4e7137d6d035059d7818c5421dccb970ace0003dbefc1",
+    "changed_existing": ["native/image/README.md", "native/image/build.sh", "native/image/build_storage.py", "native/tests/test_build_storage.py"],
+    "unchanged_records": 549,
+    "added_or_removed_paths": false,
+    "rust_cargo_runtime_tpm_and_cli_sources_byte_identical": true,
+    "join_evidence_sha256": "6c0df835b946c22b46c1fbe9bbbbea1cbf6a20058797d52169f9f1cece9d1607"
+  },
+  "verification": {
+    "evidence": "/mnt/luma-build/work/candidate16-verify-20261019-e",
+    "log_manifest_sha256": "199cea7fe3b12b93debba2c28f2fb40747328a3217aae8e88f457d07c8a7a836",
+    "native_lane_sha256": "4e08a2f02a72dd2587bd3ae523f95f7531f141eefed093417869ec53201547bd",
+    "native_source": {"passed": 638, "failed": 0, "skipped": 0},
+    "public_trust": {"passed": 13, "failed": 0, "skipped": 0},
+    "model_public_inputs": {"passed": 13, "failed": 0, "skipped": 0},
+    "bash_syntax": "passed",
+    "apparmor_offline_parse": "passed-not-loaded-policy-qualification",
+    "rust_tpm_cli_reexecuted_in_this_cut": false,
+    "prior_exact_code_evidence": "workspace_launch_preparation_2026-10-19.json records the actual full Rust, disposable-TPM, unprivileged CLI and DATA workflow/recovery executions; code identity is separately verified, not a claimed fresh execution"
+  },
+  "image_assembled_by_this_record": false,
+  "boot_or_installation_executed_by_this_record": false,
+  "production_custody_or_native_hardware_qualified": false,
+  "g2_closed": false,
+  "g3_or_gwin0_closed": false
+}

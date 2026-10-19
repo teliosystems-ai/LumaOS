@@ -1,5 +1,6 @@
 """Build-storage admission oracles; no mounting or Docker mutations."""
 import json
+import io
 import os
 from pathlib import Path
 import sys
@@ -11,6 +12,89 @@ import build_storage as storage
 
 
 class BuildStorageTests(unittest.TestCase):
+    def memory_info(self, available, total=8*1024**3):
+        self.assertEqual(available % 1024, 0)
+        return f'MemTotal:       {total//1024} kB\nMemAvailable:   {available//1024} kB\nSwapTotal:     999999999 kB\nSwapFree:      999999999 kB\n'
+
+    def test_assembly_memory_selection_is_closed_with_absent_only_default(self):
+        self.assertEqual(storage.selected_assembly_memory_gib({}), 4)
+        for value in ('4', '5'):
+            self.assertEqual(storage.selected_assembly_memory_gib({'LUMA_NATIVE_ASSEMBLY_MEMORY_GIB': value}), int(value))
+        for value in ('', ' 5', '5 ', '5\n', '4.0', '4.5', '05', '6', '0', '-1', '+5', '5g', '5GiB', True, 5, None):
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                storage.selected_assembly_memory_gib({'LUMA_NATIVE_ASSEMBLY_MEMORY_GIB': value})
+
+    def test_assembly_memory_exact_physical_boundary_and_reserve_ignore_swap(self):
+        for selected in (4, 5):
+            required = (selected+1)*storage.GIB
+            observed = storage.check_assembly_memory(selected, self.memory_info(required))
+            self.assertEqual(observed, dict(assembly_memory_gib=selected,
+                assembly_memory_bytes=selected*storage.GIB, host_total_bytes=8*storage.GIB,
+                host_available_bytes=required, build_host_reserve_bytes=storage.GIB,
+                swap_counted_as_capacity=False, reservation=False))
+            with self.assertRaisesRegex(RuntimeError, 'swap is not capacity'):
+                storage.check_assembly_memory(selected, self.memory_info(required-1024))
+            with self.assertRaises(RuntimeError):
+                storage.check_assembly_memory(selected, self.memory_info(0))
+        for selected in (True, '5', 4.0, 3, 6, None):
+            with self.subTest(selected=selected), self.assertRaises(ValueError):
+                storage.check_assembly_memory(selected, self.memory_info(6*storage.GIB))
+
+    def test_assembly_memory_observation_rejects_duplicate_malformed_or_inconsistent_fields(self):
+        valid = self.memory_info(6*storage.GIB)
+        bad = ['', 'MemTotal: 8388608 kB\n', 'MemAvailable: 6291456 kB\n',
+            valid+'MemTotal: 8388608 kB\n', valid+'MemAvailable: 6291456 kB\n',
+            valid.replace('MemAvailable:', ' MemAvailable:'), valid.replace('MemTotal:', 'MemTotal'),
+            valid.replace('6291456 kB', '6291456 MB'), valid.replace('6291456 kB', '-1 kB'),
+            valid.replace('6291456 kB', '6.0 kB'), valid.replace('8388608 kB', '0 kB'),
+            valid.replace('6291456 kB', '999999999 kB'),
+            valid.replace('6291456 kB', '18446744073709551616 kB'),
+            valid.replace('6291456 kB', '9'*100+' kB'), valid+'x'*65537, valid+'\N{SNOWMAN}', None, valid.encode()]
+        for text in bad:
+            with self.subTest(text=repr(text)[:120]), self.assertRaises(ValueError):
+                storage.check_assembly_memory(5, text)
+
+    def test_assembly_admission_reads_only_bounded_actual_proc_source(self):
+        opened = mock.mock_open(read_data=self.memory_info(6*storage.GIB))
+        with mock.patch.dict(os.environ, {'LUMA_NATIVE_ASSEMBLY_MEMORY_GIB': '5'}, clear=True), \
+                mock.patch.object(Path, 'open', opened):
+            observed = storage.admit_assembly_memory()
+            self.assertEqual(observed['assembly_memory_gib'], 5)
+            opened.assert_called_once_with(encoding='ascii')
+            opened.return_value.read.assert_called_once_with(65537)
+        with mock.patch.dict(os.environ, {'LUMA_NATIVE_ASSEMBLY_MEMORY_GIB': '6'}, clear=True), \
+                mock.patch.object(Path, 'open') as refused:
+            with self.assertRaises(ValueError):
+                storage.admit_assembly_memory()
+            refused.assert_not_called()
+        observed = storage.check_assembly_memory(5, self.memory_info(6*storage.GIB))
+        with mock.patch.object(sys, 'argv', ['build_storage.py', 'assembly-memory']), \
+                mock.patch.object(storage, 'admit_assembly_memory', return_value=observed) as check, \
+                mock.patch('sys.stdout', new_callable=io.StringIO) as output:
+            storage.main()
+            check.assert_called_once_with()
+            printed = output.getvalue()
+            self.assertTrue(printed.startswith('Assembly host memory admission: '))
+            self.assertEqual(json.loads(printed.partition(': ')[2]), observed)
+
+    def test_only_assembly_container_selects_memory_and_actual_admission_is_immediate(self):
+        script = (Path(__file__).resolve().parents[1]/'image/build.sh').read_text(encoding='utf-8')
+        self.assertIn('assembly_memory_gib=${LUMA_NATIVE_ASSEMBLY_MEMORY_GIB-4}', script)
+        self.assertIn('case "$assembly_memory_gib" in\n    4|5) ;;', script)
+        self.assertIn('build_limits=(--memory 4g --memory-swap 4g --cpu-period 100000 --cpu-quota 200000)', script)
+        self.assertIn('run_limits=(--memory 4g --memory-swap 4g --cpus 2)', script)
+        self.assertIn('assembly_limits=(--memory "${assembly_memory_gib}g" --memory-swap "${assembly_memory_gib}g" --cpus 2)', script)
+        guard = 'LUMA_NATIVE_ASSEMBLY_MEMORY_GIB="$assembly_memory_gib" python3 "$source_context/native/image/build_storage.py" assembly-memory'
+        self.assertEqual(script.count(guard), 1)
+        before, after = script.split(guard)
+        self.assertTrue(after.startswith('\ndocker run --rm "${assembly_limits[@]}" --network none \\\n'))
+        self.assertEqual(script.count('"${assembly_limits[@]}"'), 1)
+        assembly, exports = after.split('if [ "$environment" = production ]; then', 1)
+        self.assertIn('"$tools" python3 /repo/native/image/assemble.py', assembly)
+        self.assertIn('-e CARGO_BUILD_JOBS=1 -e RUSTFLAGS=-Dwarnings', assembly)
+        self.assertNotIn('"${assembly_limits[@]}"', before+exports)
+        self.assertNotIn('wsl --shutdown', script)
+
     def daemon_info(self):
         return {'DockerRootDir':str(storage.STORE/'docker'), 'Driver':'overlay2',
                 'Containerd':{'Address':'/run/luma-build-containerd/containerd.sock',

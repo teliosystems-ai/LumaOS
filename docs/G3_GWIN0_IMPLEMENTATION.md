@@ -1143,3 +1143,20 @@ The [compute package record](gates/gwin0/hosted_compute_package_2026-10-18.json)
 identifies the real Windows-validated archive on D. It is an unsigned,
 compute-only development package, not a new native boot image or authenticated
 Windows product installer. The G2 sequence-14 image remains unchanged.
+
+### Sequence-16 assembly retry preparation
+
+The first sequence-16 desktop assembly reached the optimized release compiler
+but its 4-GiB container was killed by its own memory cgroup. No image or signing
+outputs were produced. The build now accepts an explicit 5-GiB assembly-only
+limit after checking actual available physical RAM with a 1-GiB build-host
+reserve. This observation is not a reservation. It changes neither WSL memory
+configuration nor compiler optimization, runtime security, other container
+limits or native VM admission.
+
+The [assembly preparation record](../native/evidence/assembly_memory_preparation_2026-10-19.json)
+binds the final frozen source and its 638 passing native-source tests, 26
+passing public-trust/model-input tests and offline policy parse. The prior
+Rust, disposable-TPM and CLI results are joined only through verified identical
+code. Actual assembly, image verification and boot results must be recorded
+separately; these source results are not a produced or qualified image.

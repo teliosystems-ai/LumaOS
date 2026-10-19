@@ -32,6 +32,8 @@ PAGE_BYTES = 16384
 MAX_ENVELOPE = 6 * 1024 * 1024 + 8192
 MAX_QUERY_OUTPUT = 65536
 MAX_ENVELOPE_OUTPUT = 2*MAX_ENVELOPE + 16384
+MAX_RECOVERY_REQUEST = 96*1024
+MAX_RECOVERY_OUTPUT = 96*1024
 ENGINES = ('spreadsheet', 'document', 'diagram', 'animation')
 
 
@@ -70,7 +72,7 @@ def proposal(value):
         if not isinstance(value[field], str) or (value[field] and not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.-]{0,127}', value[field])):
             raise ValueError('invalid finite grant identifier')
     operation = value['operation']
-    if operation in ('inspection', 'office-proposal', 'paged-read', 'envelope-read', 'workflow-journey'):
+    if operation in ('inspection', 'office-proposal', 'paged-read', 'envelope-read', 'workflow-journey', 'restore-journey', 'retire-journey'):
         if any(value[field] for field in ('read_grant', 'effect_grant', 'approval')):
             raise ValueError('inspection cannot select effect authority')
     elif operation == 'review':
@@ -88,10 +90,12 @@ def proposal(value):
     else:
         raise ValueError('unsupported authenticated terminal operation')
     request = value['request']
-    if not isinstance(request, str) or not 0 < len(request.encode('utf-8')) <= MAX_REQUEST:
+    bound = MAX_RECOVERY_REQUEST if operation in ('restore-journey', 'retire-journey') else MAX_REQUEST
+    if not isinstance(request, str) or not 0 < len(request.encode('utf-8')) <= bound:
         raise ValueError('native request exceeds bound')
     source = strict_json(request)
-    if not isinstance(source, dict) or source.get('login') != value['login']:
+    identity = source.get('input') if isinstance(source, dict) and operation == 'retire-journey' else source
+    if not isinstance(identity, dict) or identity.get('login') != value['login']:
         raise ValueError('request and original human login differ')
     if operation == 'paged-read':
         page_request(source)
@@ -99,6 +103,8 @@ def proposal(value):
         envelope_request(source)
     elif operation == 'workflow-journey':
         workflow_request(source)
+    elif operation in ('restore-journey', 'retire-journey'):
+        recovery_request(source, retirement=operation == 'retire-journey')
     return value
 
 
@@ -253,7 +259,7 @@ def capture_query(arguments, *, maximum=MAX_QUERY_OUTPUT, timeout=40):
 
 def _capture_native(arguments, maximum, timeout=40):
     """Private transport; callers select closed native commands before entry."""
-    if maximum not in (MAX_QUERY_OUTPUT, MAX_ENVELOPE_OUTPUT) or type(timeout) not in (int, float) or not 0 < timeout <= 40:
+    if maximum not in (MAX_QUERY_OUTPUT, MAX_ENVELOPE_OUTPUT, MAX_RECOVERY_OUTPUT) or type(timeout) not in (int, float) or not 0 < timeout <= 40:
         raise ValueError('native response exceeds the fixed terminal observation budget')
     selector = selectors.DefaultSelector()
     process = None
@@ -330,7 +336,7 @@ def protected(path, maximum, *, sudo=False):
 
 def terminal_arguments(value, path):
     value = proposal(value)
-    if value['operation'] in ('paged-read', 'envelope-read', 'workflow-journey'):
+    if value['operation'] in ('paged-read', 'envelope-read', 'workflow-journey', 'restore-journey', 'retire-journey'):
         raise ValueError('managed journeys require their explicit review and fresh grant steps')
     prefix = ['/usr/bin/sudo', '--', NATIVE, 'granted-run']
     if value['operation'] == 'office-proposal':
@@ -366,14 +372,17 @@ def canonical_native_request(value):
     spec.loader.exec_module(host)
     binary = host.PinnedExecutable(Path(NATIVE))
     try:
-        command = 'content-office-request' if value['operation'].startswith('office-') else 'content-contract-native-request'
+        if value['operation'] in ('restore-journey', 'retire-journey'):
+            command = 'content-restore-request' if value['operation'] == 'restore-journey' else 'content-restore-retire-request'
+        else:
+            command = 'content-office-request' if value['operation'].startswith('office-') else 'content-contract-native-request'
         state, output = host.run_process(binary, command, value['request'].encode('utf-8'),
                                          threading.Event(), lambda _: None, maximum=MAX_STAGE)
     finally:
         binary.close()
     if state != 'completed' or not output:
         raise ValueError('native canonical request did not complete')
-    return canonical_response(value, output), host
+    return (recovery_canonical_response(value, output) if value['operation'] in ('restore-journey', 'retire-journey') else canonical_response(value, output)), host
 
 
 @contextmanager
@@ -829,6 +838,385 @@ def paged_read(value, directory):
         assembled.data.clear()
 
 
+def recovery_request(source, *, retirement=False):
+    """Bound public recovery DATA only; actual native canonicalization follows."""
+    if retirement:
+        if not isinstance(source, dict) or set(source) != {'input', 'expected_review_sha256'} or source['expected_review_sha256'] is not None:
+            raise ValueError('retirement journey starts with a fresh protected inspection, not a supplied approval')
+        source = source['input']
+    fields = {'schema_version', 'login', 'admin', 'target_login', 'target',
+        'independently_selected_origin_spki_sha256', 'request_namespace', 'key_role',
+        'capsule_path', 'capsule_bytes', 'capsule_sha256', 'review'}
+    if not isinstance(source, dict) or set(source) != fields or type(source['schema_version']) is not int or source['schema_version'] != 1:
+        raise ValueError('exact native restore data required; no key, password or grant fields')
+    for login, binding in (('login', 'admin'), ('target_login', 'target')):
+        owner_request(dict(schema_version=1, login=source[login], binding=source[binding], operation={}))
+    if source['admin']['installation'] != source['target']['installation']:
+        raise ValueError('receiving Admin and target must select the same installation')
+    if any(not exact_sha(source[key]) for key in ('capsule_sha256', 'independently_selected_origin_spki_sha256')):
+        raise ValueError('independently selected origin and exact encrypted capsule digests required')
+    if not isinstance(source['request_namespace'], str) or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._-]{0,63}', source['request_namespace']) or source['key_role'] not in ('owner', 'offline-admin'):
+        raise ValueError('explicit restore namespace and decryption role required')
+    if not isinstance(source['capsule_path'], str) or not source['capsule_path'].startswith('/') or '\0' in source['capsule_path'] or len(source['capsule_path'].encode()) > 4096 or type(source['capsule_bytes']) is not int or not 20 < source['capsule_bytes'] <= 128*1024*1024:
+        raise ValueError('bounded absolute native capsule path and exact byte count required')
+    if source['review'] is not None:
+        restore_review(source['review'], source)
+    if retirement and source['review'] is None:
+        raise ValueError('retirement requires the original retained batch review')
+    if len(encoded(source)) > MAX_RECOVERY_REQUEST:
+        raise ValueError('restore data exceeds native bound')
+    return source
+
+
+def restore_review(review, source):
+    fields = ('schema_version', 'profile', 'origin', 'target', 'archive_sha256', 'archive_bytes',
+        'manifest_sha256', 'origin_head_sha256', 'workflow_sha256', 'request_namespace',
+        'published_outcomes', 'inert_committed_outcomes', 'inert_pending_directories',
+        'inert_quarantined_directories', 'planned_storage_bytes', 'mappings_sha256', 'steps', 'review_sha256')
+    if not isinstance(review, dict) or set(review) != set(fields) or type(review['schema_version']) is not int or review['schema_version'] != 1 or review['profile'] != 'luma-fresh-owner-content-restore-v1':
+        raise ValueError('closed native restore review required')
+    owner_request(dict(schema_version=1, login=source['target_login'], binding=review['origin'], operation={}))
+    if not same_data(review['target'], source['target']) or review['origin']['installation'] == source['target']['installation'] or review['origin']['owner'] == source['target']['owner'] or review['request_namespace'] != source['request_namespace']:
+        raise ValueError('restore review substitutes origin, fresh target or request namespace')
+    for name in ('archive_sha256', 'manifest_sha256', 'origin_head_sha256', 'workflow_sha256', 'mappings_sha256', 'review_sha256'):
+        if not exact_sha(review[name]):
+            raise ValueError('restore review contains invalid digest')
+    limits = {'archive_bytes': (21, 128*1024*1024), 'published_outcomes': (1, 256),
+        'inert_committed_outcomes': (0, 256), 'inert_pending_directories': (0, 16),
+        'inert_quarantined_directories': (0, 16), 'planned_storage_bytes': (8192, 64*1024*1024)}
+    if any(type(review[key]) is not int or not low <= review[key] <= high for key, (low, high) in limits.items()) or review['published_outcomes']+review['inert_committed_outcomes'] > 256 or review['planned_storage_bytes'] < review['published_outcomes']*8192:
+        raise ValueError('restore review counts exceed fixed native bounds')
+    if not isinstance(review['steps'], list) or len(review['steps']) != review['published_outcomes']:
+        raise ValueError('restore review is missing exact chronological steps')
+    previous = 0
+    prefix = source['request_namespace']+'.'
+    total = review['published_outcomes']+review['inert_committed_outcomes']
+    for step in review['steps']:
+        if not isinstance(step, dict) or set(step) != {'request_id', 'review_sha256'} or not isinstance(step['request_id'], str) or not step['request_id'].startswith(prefix) or not exact_sha(step['review_sha256']):
+            raise ValueError('restore review substitutes a chronological request')
+        suffix = step['request_id'][len(prefix):]
+        if not re.fullmatch(r'[1-9][0-9]{0,2}', suffix):
+            raise ValueError('restore outcome sequence is not canonical bounded decimal')
+        sequence = int(suffix)
+        if not previous < sequence <= total:
+            raise ValueError('restore outcome sequences must increase within published plus inert history')
+        previous = sequence
+    canonical = {key: review[key] for key in fields}
+    canonical['review_sha256'] = ''
+    if len(encoded(review)) > 65536 or hashlib.sha256(encoded(canonical)).hexdigest() != review['review_sha256']:
+        raise ValueError('restore review self-commitment differs; a matching checksum is not authority')
+    return review
+
+
+def recovery_canonical_response(value, output):
+    if not isinstance(output, bytes) or not 0 < len(output) <= 6*MAX_RECOVERY_REQUEST+16384:
+        raise ValueError('public native recovery response exceeds bound')
+    result = strict_json(output)
+    retirement = value['operation'] == 'retire-journey'
+    flags = ('protected_review_authenticated', 'private_authority_read', 'admin_authenticated',
+        'grant_issued', 'owner_marked_unavailable', 'authority_returned') if retirement else (
+        'private_key_read', 'archive_decrypted', 'target_content_changed', 'grant_issued', 'authority_returned')
+    fields = {'schema_version', 'canonical_request', *flags, *({'request_sha256', 'phase', 'usage'} if retirement else {'semantic_request_sha256'})}
+    if not isinstance(result, dict) or set(result) != fields or type(result['schema_version']) is not int or result['schema_version'] != 1 or any(result[key] is not False for key in flags):
+        raise ValueError('public recovery preparation claims authority or unknown fields')
+    canonical = result['canonical_request']
+    if not isinstance(canonical, str) or not 0 < len(canonical.encode()) <= MAX_RECOVERY_REQUEST or not same_data(strict_json(canonical), strict_json(value['request'])):
+        raise ValueError('native recovery canonicalizer substituted original data')
+    source = strict_json(canonical)
+    if retirement:
+        if result['request_sha256'] != hashlib.sha256(canonical.encode()).hexdigest():
+            raise ValueError('retirement request digest differs')
+        phase = 'inspect-protected-retirement' if source['expected_review_sha256'] is None else 'recover-exact-protected-review'
+        if result['phase'] != phase:
+            raise ValueError('retirement preparation changes review phase')
+        retirement_scope(result['usage'], source)
+    else:
+        normalized = dict(source, capsule_path='/runtime-original-snapshot/content-restore.cms')
+        if result['semantic_request_sha256'] != hashlib.sha256(encoded(normalized)).hexdigest():
+            raise ValueError('restore semantic data commitment differs')
+    return canonical
+
+
+def recovery_scope(usage, source, *, effect=False):
+    write = source['review'] is not None
+    expected = dict(action=('artifact.write' if write else 'resource.recover') if effect else 'file.read',
+        selector=dict(kind=('artifact' if write else 'resource') if effect else 'file',
+            id=('native-content-restore-write-v1' if write else 'native-content-restore-review-v1') if effect else 'native-content-restore-read-v1',
+            generation=source['admin']['owner_generation']), input_bytes=source['capsule_bytes'],
+        output_bytes=64*1024*1024 if effect and write else MAX_RECOVERY_OUTPUT,
+        units=source['review']['published_outcomes'] if effect and write else 1)
+    if not isinstance(usage, dict) or set(usage) != set(expected) or not isinstance(usage.get('selector'), dict) or set(usage['selector']) != {'kind', 'id', 'generation', 'digest'} or not exact_sha(usage['selector']['digest']):
+        raise ValueError('closed finite restore scope required')
+    selected = dict(usage, selector={key: item for key, item in usage['selector'].items() if key != 'digest'})
+    if not same_data(selected, expected):
+        raise ValueError('restore scope exceeds or substitutes its exact finite use')
+    return usage
+
+
+def retirement_scope(usage, request):
+    recover = request['expected_review_sha256'] is not None
+    normalized = dict(request['input'], capsule_path='/runtime-original-snapshot/content-restore.cms')
+    wanted = request['expected_review_sha256'] if recover else hashlib.sha256(encoded([
+        'luma-content-restore-retirement-inspection-v1', normalized])).hexdigest()
+    expected = dict(action='resource.recover' if recover else 'file.read', selector=dict(
+        kind='resource' if recover else 'file', id='content-restore-retire-v1' if recover else 'content-restore-retire-read-v1',
+        generation=request['input']['admin']['owner_generation'], digest=wanted), input_bytes=0, output_bytes=8192, units=1)
+    if not same_data(usage, expected):
+        raise ValueError('retirement scope differs from exact original reviewed data')
+    return usage
+
+
+def recovery_arguments(command, login, path, *grants):
+    counts = {'content-restore-proposal': 0, 'content-restore-review': 2, 'content-restore-apply': 2,
+        'content-restore-retire-proposal': 0, 'content-restore-retire-inspect': 1, 'content-restore-retire': 1}
+    if command not in counts or len(grants) != counts[command] or not isinstance(login, str) or not re.fullmatch(r'[a-z][a-z0-9_-]{0,31}', login) or any(not isinstance(g, str) or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.-]{0,127}', g) for g in grants) or len(set(grants)) != len(grants):
+        raise ValueError('only fixed recovery commands with independent exact finite grants are allowed')
+    return ['/usr/bin/sudo', '--', NATIVE, 'granted-run', command, login, *grants, str(path)]
+
+
+def capture_recovery(command, source, path, *grants):
+    return _capture_native(recovery_arguments(command, source['login'], path, *grants), MAX_RECOVERY_OUTPUT)
+
+
+def recovery_proposal(source, output):
+    value = strict_json(output)
+    flags = ('private_key_read', 'archive_decrypted', 'target_content_changed', 'grant_issued', 'authority_returned')
+    if not isinstance(value, dict) or set(value) != {'schema_version', 'request_sha256', 'read_usage', 'effect_usage', *flags} or type(value['schema_version']) is not int or value['schema_version'] != 1 or any(value[key] is not False for key in flags):
+        raise ValueError('restore proposal claims unobserved authentication or mutation')
+    if value['request_sha256'] != hashlib.sha256(encoded(dict(source, capsule_path='/runtime-original-snapshot/content-restore.cms'))).hexdigest():
+        raise ValueError('restore proposal substitutes its canonical request')
+    reader = recovery_scope(value['read_usage'], source)
+    effect = recovery_scope(value['effect_usage'], source, effect=True)
+    if reader['selector']['digest'] != effect['selector']['digest']:
+        raise ValueError('restore Read and effect select different exact requests')
+    return value
+
+
+def recovery_reviewed(source, output):
+    value = strict_json(output)
+    flags = dict(origin_signature_valid=True, archive_validated=True, decrypted_data_delivered=False,
+        target_content_changed=False, restore_permitted=False, authority_returned=False,
+        credentials_restored=False, encrypted_evidence_must_be_retained=True)
+    if not isinstance(value, dict) or set(value) != {'schema_version', 'restore_review', 'custody_capacity_policy', *flags} or type(value['schema_version']) is not int or value['schema_version'] != 1 or any(value[key] is not expected for key, expected in flags.items()) or not isinstance(value['custody_capacity_policy'], dict):
+        raise ValueError('actual native restore review differs or claims an effect')
+    return restore_review(value['restore_review'], source)
+
+
+def recovery_completed(source, output):
+    value = strict_json(output)
+    flags = dict(origin_signature_valid=True, credentials_restored=False, grants_restored=False,
+        TPM_state_restored=False, original_encrypted_evidence_must_be_retained=True,
+        authority_returned=False, production_qualified=False)
+    if not isinstance(value, dict) or set(value) != {'schema_version', 'restore_review_sha256', 'published_outcomes',
+        'custody_capacity_policy', 'current_state', 'encrypted_evidence_sha256', *flags} or type(value['schema_version']) is not int or value['schema_version'] != 1 or any(value[key] is not expected for key, expected in flags.items()):
+        raise ValueError('native restore completion differs; do not infer rollback or success')
+    review = source['review']
+    state = value['current_state']
+    if not isinstance(state, dict) or set(state) != {'binding', 'outcome_count', 'head_sha256', 'quarantine_sha256'} or not same_data(state['binding'], source['target']) or type(state['outcome_count']) is not int or state['outcome_count'] != review['published_outcomes'] or any(not exact_sha(state[key]) for key in ('head_sha256', 'quarantine_sha256')) or value['restore_review_sha256'] != review['review_sha256'] or type(value['published_outcomes']) is not int or value['published_outcomes'] != review['published_outcomes'] or value['encrypted_evidence_sha256'] != source['capsule_sha256'] or not isinstance(value['custody_capacity_policy'], dict):
+        raise ValueError('native restore completion substitutes target, prefix, review or retained evidence')
+    return value
+
+
+def retain_recovery_request(path, canonical):
+    """Durable ordinary-user DATA, no overwrite/secret/authority or auto-retry."""
+    path = Path(path)
+    data = canonical.encode('utf-8')
+    if not path.is_absolute() or len(str(path).encode()) > 4096 or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.-]{0,119}\.json', path.name) or not 0 < len(data) <= MAX_RECOVERY_REQUEST or path.parent.resolve(strict=True) != path.parent:
+        raise ValueError('choose a new explicit canonical .json path for inert recovery data')
+    parent = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
+    try:
+        before = os.fstat(parent)
+        if before.st_uid != os.getuid() or not stat.S_ISDIR(before.st_mode) or before.st_mode & 0o022:
+            raise ValueError('resume data requires a private-owner non-writable-by-others directory')
+        descriptor = os.open(path.name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600, dir_fd=parent)
+        with os.fdopen(descriptor, 'wb') as output:
+            output.write(data)
+            output.flush()
+            os.fsync(output.fileno())
+            held = os.fstat(output.fileno())
+            named = os.stat(path.name, dir_fd=parent, follow_symlinks=False)
+            identity = lambda m: (m.st_dev, m.st_ino, m.st_uid, m.st_nlink, m.st_mode, m.st_size, m.st_mtime_ns, m.st_ctime_ns)
+            if held.st_uid != os.getuid() or held.st_nlink != 1 or stat.S_IMODE(held.st_mode) != 0o600 or held.st_size != len(data) or identity(held) != identity(named):
+                raise ValueError('resume data changed while retaining it')
+        os.fsync(parent)
+        named_parent = path.parent.stat()
+        if (before.st_dev, before.st_ino) != (named_parent.st_dev, named_parent.st_ino) or path.parent.resolve(strict=True) != path.parent:
+            raise ValueError('resume parent changed; effect was not requested')
+    finally:
+        os.close(parent)
+    return path
+
+
+def recovery_grants():
+    reader = grant_selection('Exact current Admin finite Read grant (q cancels): ')
+    if reader is None:
+        return None
+    effect = grant_selection('Independent exact finite Recover/Write grant (q cancels): ')
+    if effect is None:
+        return None
+    if reader == effect:
+        raise ValueError('Read and effect grants must be independent')
+    return reader, effect
+
+
+def restore_journey(value, directory):
+    """Original native Admin guards own decryption/C publication, never Python."""
+    recovery_request(strict_json(value['request']))
+    effect_started = False
+    completion_observed = False
+    retained = None
+    try:
+        print('Encrypted fresh-owner restore / exact-prefix resume. Standard native session remains 30 seconds; no Export or extended-session reuse. No credential, grant or TPM state is restored. Private PKCS8 entry belongs ONLY to native hidden /dev/tty; never paste it here or into the browser.', flush=True)
+        canonical, _ = canonical_native_request(value)
+        source = strict_json(canonical)
+        if source['review'] is None:
+            with request_stage(directory, canonical) as request:
+                info = recovery_proposal(source, capture_recovery('content-restore-proposal', source, request))
+                print('Fresh review requires these exact Admin Read + Recover scopes. They are DATA, not issued grants:\n'+json.dumps(info, ensure_ascii=True), flush=True)
+                grants = recovery_grants()
+                if grants is None:
+                    print('CANCELLED before decryption review. No restore publication was requested.', flush=True)
+                    return 0
+                print('Review running in the original native PAM terminal. Native may request the explicitly selected recipient private key on its hidden terminal input. Ctrl+C stops observation; no publication is requested by this phase.', flush=True)
+                review = recovery_reviewed(source, capture_recovery('content-restore-review', source, request, *grants))
+            source = dict(source, review=review)
+            value = dict(value, request=encoded(source).decode())
+            canonical, _ = canonical_native_request(value)
+            source = strict_json(canonical)
+        else:
+            print('Supplied review is inert resume DATA, not current permission or proof of an intact prefix. Native will rebuild the plan and independently verify the genuine current C-selected prefix before publishing.', flush=True)
+        print('Exact reviewed batch; retained non-publication evidence stays in the original encrypted capsule:\n'+json.dumps(source['review'], ensure_ascii=True), flush=True)
+        with request_stage(directory, canonical) as request:
+            info = recovery_proposal(source, capture_recovery('content-restore-proposal', source, request))
+            print('Apply/resume needs a NEW independently selected Read + exact batch Write pair:\n'+json.dumps(info, ensure_ascii=True), flush=True)
+            grants = recovery_grants()
+            if grants is None:
+                print('CANCELLED before apply. No restore publication was requested by this journey.', flush=True)
+                return 0
+            wanted = 'restore:'+source['review']['review_sha256']
+            if terminal_line('Type '+wanted+' to approve exactly this batch; q cancels: ', 128) != wanted:
+                print('CANCELLED before apply; exact batch approval was not given.', flush=True)
+                return 0
+            save = terminal_line('NEW absolute .json path for durable inert resume/retirement data (q cancels): ', 4096)
+            if save == 'q':
+                print('CANCELLED before apply; no publication requested.', flush=True)
+                return 0
+            print('Saving inert resume DATA before any apply. A failed save may leave an incomplete inert file at the selected path; it is never overwritten or accepted as authority.', flush=True)
+            retained = retain_recovery_request(save, canonical)
+            print('Exact inert resume request synchronized at '+json.dumps(str(retained), ensure_ascii=True)+'. Keep it AND the original encrypted capsule. It contains no key, password, grant or current permission. Native validates every fresh retry; no automatic retry/reset occurs.', flush=True)
+            effect_started = True
+            output = capture_recovery('content-restore-apply', source, request, *grants)
+            completed = recovery_completed(source, output)
+            completion_observed = True
+            effect_started = False
+            print('COMPLETED: actual native C-backed fresh-owner restore/prefix resume observed. Independent native output delivery checked the live session, exact grants, resource receipt and selected C state. This is not ongoing authority or final installed qualification.\n'+json.dumps(completed, ensure_ascii=True), flush=True)
+            return 0
+    except (Exception, KeyboardInterrupt):
+        if completion_observed:
+            print('COMPLETED native restore result was validated before terminal presentation failed/interrupted. Do not reinterpret this as cancellation or rollback. Retain the exact request and encrypted evidence; a fresh separately granted native read is required for current access.', flush=True)
+        elif effect_started:
+            print('UNCERTAIN / POSSIBLY PARTIAL: restore apply started but no complete validated result was observed. Anchored published prefix or pending evidence may remain. Do not infer rollback, reset, or retry automatically. Retained inert request: '+json.dumps(str(retained), ensure_ascii=True)+'. Reopen it explicitly for genuine native exact-prefix resume, or use reviewed protected retirement for a damaged target.', flush=True)
+        else:
+            print('REFUSED / CANCELLED before restore apply. No publication was requested by this journey; pre-existing native state is not inferred or repaired.', flush=True)
+        return 1
+
+
+def retirement_reviewed(source, output):
+    value = strict_json(output)
+    flags = ('owner_marked_unavailable', 'content_bytes_changed', 'TPM_extended', 'authority_returned')
+    fields = ('schema_version', 'purpose', 'installation', 'binding', 'batch_review_sha256',
+        'capsule_sha256', 'origin_spki_sha256', 'start_sha256', 'checkpoint_head', 'state', 'disposition')
+    if not isinstance(value, dict) or set(value) != {'schema_version', 'review', 'review_sha256', *flags} or type(value['schema_version']) is not int or value['schema_version'] != 1 or any(value[key] is not False for key in flags):
+        raise ValueError('protected retirement inspection claims mutation')
+    review = value['review']
+    if not isinstance(review, dict) or set(review) != set(fields) or type(review['schema_version']) is not int or review['schema_version'] != 1 or review['purpose'] != 'luma-content-restore-terminal-disposition-v1' or review['installation'] != source['target']['installation'] or not same_data(review['binding'], source['target']) or review['batch_review_sha256'] != source['review']['review_sha256'] or review['capsule_sha256'] != source['capsule_sha256'] or review['origin_spki_sha256'] != source['independently_selected_origin_spki_sha256'] or review['disposition'] != 'mark-owner-generation-unavailable-preserve-all-published-pending-quarantine-bytes':
+        raise ValueError('protected retirement substitutes the exact target or original batch')
+    state = review['state']
+    if not isinstance(state, dict) or set(state) != {'binding', 'outcome_count', 'head_sha256', 'quarantine_sha256'} or not same_data(state['binding'], source['target']) or type(state['outcome_count']) is not int or not 0 <= state['outcome_count'] <= source['review']['published_outcomes'] or any(not exact_sha(state[key]) for key in ('head_sha256', 'quarantine_sha256')) or any(not exact_sha(review[key]) for key in ('start_sha256', 'checkpoint_head')) or not exact_sha(value['review_sha256']):
+        raise ValueError('protected retirement state or exact review commitment differs')
+    canonical = {key: review[key] for key in fields}
+    canonical['state'] = {key: state[key] for key in ('binding', 'outcome_count', 'head_sha256', 'quarantine_sha256')}
+    if hashlib.sha256(encoded(canonical)).hexdigest() != value['review_sha256']:
+        raise ValueError('protected retirement exact canonical commitment differs')
+    return value
+
+
+def retirement_completed(source, wanted, output):
+    value = strict_json(output)
+    flags = dict(owner_marked_unavailable=True, content_bytes_changed=False, published_records_rolled_back=False,
+        pending_evidence_removed=False, damaged_data_healed=False,
+        new_restore_requires_independently_provisioned_fresh_owner_binding=True, authority_returned=False, production_qualified=False)
+    if not isinstance(value, dict) or set(value) != {'schema_version', 'binding', 'review_sha256', 'checkpoint_head', *flags} or type(value['schema_version']) is not int or value['schema_version'] != 1 or any(value[key] is not expected for key, expected in flags.items()) or not same_data(value['binding'], source['target']) or value['review_sha256'] != wanted or not exact_sha(value['checkpoint_head']):
+        raise ValueError('retirement completion is not the exact preserved owner-generation disposition')
+    return value
+
+
+def retire_journey(value, directory):
+    recovery_request(strict_json(value['request']), retirement=True)
+    effect_started = False
+    completion_observed = False
+    retained = None
+    try:
+        print('Protected restore retirement. This marks ONLY the exact damaged owner-generation unavailable. It does not heal, reset, adopt, delete evidence, roll back published records or provision another account. Original Admin PAM and fresh finite grants remain mandatory.', flush=True)
+        canonical, _ = canonical_native_request(value)
+        request = strict_json(canonical)
+        source = request['input']
+        with request_stage(directory, canonical) as staged:
+            print('Exact inspection scope DATA (not authority):\n'+json.dumps(retirement_scope_data(request), ensure_ascii=True), flush=True)
+            reader = grant_selection('Exact current Admin retirement Read grant (q cancels): ')
+            if reader is None:
+                print('CANCELLED before protected retirement inspection; no disposition requested.', flush=True)
+                return 0
+            checked = retirement_reviewed(source, capture_recovery('content-restore-retire-inspect', source, staged, reader))
+        wanted = checked['review_sha256']
+        print('Actual protected target/prefix review:\n'+json.dumps(checked, ensure_ascii=True), flush=True)
+        request = dict(request, expected_review_sha256=wanted)
+        value = dict(value, request=encoded(request).decode())
+        canonical, _ = canonical_native_request(value)
+        request = strict_json(canonical)
+        print('Separate exact Recover scope DATA:\n'+json.dumps(retirement_scope_data(request), ensure_ascii=True), flush=True)
+        recover = grant_selection('Fresh exact Admin Recover grant (q cancels): ')
+        if recover is None:
+            print('CANCELLED before retirement; no disposition requested.', flush=True)
+            return 0
+        if recover == reader:
+            raise ValueError('retirement Read and Recover grants must be independent')
+        if terminal_line('Type retire:'+wanted+' to mark ONLY this owner-generation unavailable; q cancels: ', 128) != 'retire:'+wanted:
+            print('CANCELLED before retirement; no disposition requested.', flush=True)
+            return 0
+        save = terminal_line('NEW absolute .json path for durable inert exact retirement review (q cancels): ', 4096)
+        if save == 'q':
+            print('CANCELLED before retirement; no disposition requested.', flush=True)
+            return 0
+        print('Saving inert exact retirement DATA before mutation. A failed save may leave an incomplete inert file; it is never overwritten or accepted as authority.', flush=True)
+        retained = retain_recovery_request(save, canonical)
+        with request_stage(directory, canonical) as staged:
+            effect_started = True
+            completed = retirement_completed(source, wanted, capture_recovery('content-restore-retire', source, staged, recover))
+            completion_observed = True
+            effect_started = False
+        print('COMPLETED: genuine protected owner-generation retirement observed; all published/pending/quarantine bytes retained, not healed or rolled back. A new restore requires independently provisioned fresh binding and new grants.\n'+json.dumps(completed, ensure_ascii=True), flush=True)
+        return 0
+    except (Exception, KeyboardInterrupt):
+        if completion_observed:
+            print('COMPLETED protected retirement result was validated before terminal presentation failed/interrupted. The exact owner-generation remains unavailable; this is not cancellation, healing or rollback. All forensic evidence must remain retained.', flush=True)
+        elif effect_started:
+            print('UNCERTAIN: protected retirement started but its complete result was not observed. No automatic retry, reset, healing or evidence deletion. Retained exact inert request: '+json.dumps(str(retained), ensure_ascii=True)+'. Use genuine native protected status/review before further action.', flush=True)
+        else:
+            print('REFUSED / CANCELLED before protected retirement mutation. No disposition was requested by this journey.', flush=True)
+        return 1
+
+
+def retirement_scope_data(request):
+    recover = request['expected_review_sha256'] is not None
+    normalized = dict(request['input'], capsule_path='/runtime-original-snapshot/content-restore.cms')
+    usage = dict(action='resource.recover' if recover else 'file.read', selector=dict(kind='resource' if recover else 'file',
+        id='content-restore-retire-v1' if recover else 'content-restore-retire-read-v1',
+        generation=request['input']['admin']['owner_generation'], digest=request['expected_review_sha256'] if recover else hashlib.sha256(encoded([
+            'luma-content-restore-retirement-inspection-v1', normalized])).hexdigest()), input_bytes=0, output_bytes=8192, units=1)
+    return retirement_scope(usage, request)
+
+
 def launch(value):
     value = proposal(value)
     directory = runtime()
@@ -975,6 +1363,10 @@ def terminal(path):
     protected(NATIVE, 128 * 1024 * 1024)
     request_path = directory / (uuid.uuid4().hex + '.request')
     try:
+        if value['operation'] == 'restore-journey':
+            return restore_journey(value, directory)
+        if value['operation'] == 'retire-journey':
+            return retire_journey(value, directory)
         if value['operation'] == 'workflow-journey':
             print('Luma native managed workflow. Passwords remain with original PAM in this terminal; no session, grant or supplied receipt is imported.', flush=True)
             return workflow_journey(value, directory)

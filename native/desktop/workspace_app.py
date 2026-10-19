@@ -1,5 +1,5 @@
 #!/usr/bin/python3
-"""GTK/WebKit manual native preview. Launch installed with python3 -I.
+"""Native workspace with inert WebKit previews and separate PAM terminals.
 
 WebKitGTK API references:
 https://webkitgtk.org/reference/webkit2gtk/stable/ctor.WebContext.new_ephemeral.html
@@ -170,7 +170,7 @@ def main():
     view.connect('create', lambda *_: None)
     view.connect('permission-request', lambda _view, permission: (permission.deny(), True)[1])
     context.connect('download-started', lambda _context, download: download.cancel())
-    window = Gtk.Window(title='Luma manual native preview — no publication authority')
+    window = Gtk.Window(title='Luma native workspace — authenticated operations in native terminals')
     window.set_default_size(1100, 820)
     layout = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
     toolbar = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
@@ -190,6 +190,9 @@ def main():
     workflow_button = Gtk.Button.new_with_mnemonic('_Managed engine workflow…')
     workflow_button.set_tooltip_text('Review, approve and apply an image-defined deterministic engine workflow in the original native PAM terminal; reopen and recalculate under fresh Read authority.')
     engine_actions.pack_start(workflow_button, False, False, 4)
+    recovery_button = Gtk.Button.new_with_mnemonic('_Admin encrypted recovery…')
+    recovery_button.set_tooltip_text('Open the original native Admin terminal for encrypted fresh-owner restore, exact-prefix resume, or reviewed damaged-batch retirement. No key, password, grant or private result enters WebKit.')
+    engine_actions.pack_start(recovery_button, False, False, 4)
     presentation_button = Gtk.Button(label='Present verified document…')
     presentation_button.set_sensitive(False)
     engine_actions.pack_start(presentation_button, False, False, 4)
@@ -374,6 +377,62 @@ def main():
         dialog.destroy()
 
     workflow_button.connect('clicked', managed_workflow)
+
+    def admin_recovery(_button):
+        dialog = Gtk.Dialog(title='Native Admin recovery — exact reviewed data', transient_for=window, modal=True)
+        dialog.add_buttons('Cancel', Gtk.ResponseType.CANCEL, 'Open Admin terminal', Gtk.ResponseType.OK)
+        dialog.set_default_size(900, 680)
+        area = dialog.get_content_area()
+        note = Gtk.Label(label='Enter public request DATA only. Restore requires an independently selected origin SPKI digest, exact encrypted capsule path/size/digest, current Admin binding, and independently provisioned target binding. Explicit review:null requests a fresh empty-target review; an exact retained review requests native prefix validation/resume. Native PAM, recipient private-key input, finite Read + Recover/Write, exact approval and actual C-backed results remain ONLY in the separate terminal. Never paste a private key, password, grant, decrypted archive or content into this form.')
+        note.set_line_wrap(True)
+        area.pack_start(note, False, False, 8)
+        mode_label = Gtk.Label.new_with_mnemonic('_Recovery action')
+        mode = Gtk.ComboBoxText()
+        mode.append('restore-journey', 'Encrypted fresh-owner restore / exact-prefix resume')
+        mode.append('retire-journey', 'Inspect then retire a damaged restore owner-generation; retain all evidence')
+        mode.set_active_id('restore-journey')
+        mode_label.set_mnemonic_widget(mode)
+        area.pack_start(mode_label, False, False, 3)
+        area.pack_start(mode, False, False, 3)
+        label = Gtk.Label.new_with_mnemonic('Exact restore Input _JSON (up to 96 KiB; DATA, never authority)')
+        source = Gtk.TextView()
+        source.set_wrap_mode(Gtk.WrapMode.CHAR)
+        label.set_mnemonic_widget(source)
+        area.pack_start(label, False, False, 3)
+        scroll = Gtk.ScrolledWindow()
+        scroll.set_min_content_height(280)
+        scroll.add(source)
+        area.pack_start(scroll, True, True, 4)
+        fields = Gtk.Label(label='Required keys: schema_version, login, admin, target_login, target, independently_selected_origin_spki_sha256, request_namespace, key_role (owner or offline-admin), capsule_path, capsule_bytes, capsule_sha256, review. Retain the original encrypted capsule and exact native-reviewed Input for interrupted apply. For retirement paste that original Input with its complete non-null review; fresh protected Read/Recover inspection is mandatory. Retirement marks only that generation unavailable; it never heals, resets, removes evidence or creates an account.')
+        fields.set_line_wrap(True)
+        area.pack_start(fields, False, False, 8)
+        error = Gtk.Label()
+        error.set_line_wrap(True)
+        error.set_selectable(True)
+        area.pack_start(error, False, False, 4)
+        dialog.show_all()
+        while dialog.run() == Gtk.ResponseType.OK:
+            try:
+                buffer = source.get_buffer()
+                text = buffer.get_text(buffer.get_start_iter(), buffer.get_end_iter(), False)
+                if not 0 < len(text.encode('utf-8')) <= auth_module.MAX_RECOVERY_REQUEST:
+                    raise ValueError('bounded explicit recovery data required')
+                request = auth_module.strict_json(text)
+                auth_module.recovery_request(request)
+                action = mode.get_active_id()
+                if action == 'retire-journey':
+                    request = dict(input=request, expected_review_sha256=None)
+                value = dict(schema_version=1, operation=action, login=request['input']['login'] if action == 'retire-journey' else request['login'],
+                    read_grant='', effect_grant='', approval='', request=auth_module.encoded(request).decode('utf-8'))
+                auth_module.launch(value)
+                authority_note.set_text('Admin recovery terminal launched, not completed. Original native PAM/key prompts, exact finite grants, durable inert resume data, approval and observed C-backed results remain there. Interruption after effect starts is uncertain/possibly partial, never automatic rollback or retry.')
+                break
+            except Exception:
+                error.set_text('Recovery not launched. Supply only the complete bounded public Input with explicit current Admin/target bindings, independent origin pin and exact encrypted capsule. Retirement also requires its retained non-null batch review. No key, identity, authority or completion was inferred.')
+                source.grab_focus()
+        dialog.destroy()
+
+    recovery_button.connect('clicked', admin_recovery)
 
     presentations = []
 

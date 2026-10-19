@@ -134,21 +134,22 @@ TimeoutStopSec=30
     put(root, 'usr/share/applications/luma-workspace.desktop', f'''[Desktop Entry]
 Type=Application
 Name={workspace_name}
-Comment=Local reference workspace; files and desktop remain available independently
-Exec=epiphany http://127.0.0.1:8765
-Icon=utilities-terminal
-Terminal=false
-Categories=Utility;
-''')
-    put(root, 'usr/share/applications/luma-native-preview.desktop', '''[Desktop Entry]
-Type=Application
-Name=Luma Manual Native Preview
-Comment=Ephemeral native-engine preview; no account, publication or workflow authority
+Comment=Native workspace; governed content requires independently provisioned custody and grants
 Exec=/usr/bin/python3 -I /usr/libexec/luma-os/workspace_app.py
 TryExec=/usr/bin/python3
 Icon=utilities-terminal
 Terminal=false
 Categories=Utility;
+''')
+    put(root, 'usr/share/applications/luma-reference-workspace.desktop', '''[Desktop Entry]
+Type=Application
+Name=Luma Reference Workspace (developer)
+Comment=Separate reference implementation; not native custody or workflow authority
+Exec=epiphany http://127.0.0.1:8765
+Icon=utilities-terminal
+Terminal=false
+Categories=Utility;
+NoDisplay=true
 ''')
     return {'profile': PROFILE, 'wayland_session_tested': False,
             'model_required_for_login': False, 'live_graphical_login': False}

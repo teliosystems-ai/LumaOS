@@ -30,6 +30,7 @@ profile luma-acquisition flags=(attach_disconnected,mediate_deleted) {
   /usr/share/luma-os/generated/** r,
   /usr/share/luma-os/ r,
   /usr/share/luma-os/release-identity.json r,
+  /usr/share/luma-os/content-custody-policy.json r,
   /usr/share/luma-os/adapters/ r,
   /usr/share/luma-os/adapters/office-pdf-v1.json r,
   /usr/bin/bwrap r,

@@ -40,6 +40,8 @@ pub(crate) use capacity::policy as restore_capacity_policy;
 mod genesis;
 #[path = "content_custody/lifecycle.rs"]
 mod lifecycle;
+#[path = "content_custody/physical.rs"]
+mod physical;
 #[path = "content_custody/protocol.rs"]
 mod protocol;
 #[path = "content_custody/recipients.rs"]
@@ -646,12 +648,25 @@ impl Files {
         }
     }
     fn read(&self, name: &str, check: &mut impl FnMut() -> Result<()>) -> Result<Vec<u8>> {
+        self.read_member(name, false, check)
+    }
+    // A zero-length publication attempt is evidence, never a Journal. Only
+    // explicit pending review may read it for exact uncommitted retirement.
+    fn read_publish_attempt(&self, check: &mut impl FnMut() -> Result<()>) -> Result<Vec<u8>> {
+        self.read_member(PUBLISHED, true, check)
+    }
+    fn read_member(
+        &self,
+        name: &str,
+        allow_empty: bool,
+        check: &mut impl FnMut() -> Result<()>,
+    ) -> Result<Vec<u8>> {
         check()?;
         let path = self.root.join(name);
         let parent = MemberParent::capture(&path)?;
         let mut file = parent.open(&path, libc::O_RDONLY, 0)?;
         let before = parent.member(&file, MAX_FILE as u64)?;
-        if before.len() == 0 {
+        if before.len() == 0 && !allow_empty {
             return Err("empty protected content member".into());
         }
         let mut bytes = Vec::with_capacity(before.len() as usize);
@@ -696,11 +711,13 @@ impl Files {
         if bytes.is_empty() || bytes.len() > MAX_FILE {
             return Err("protected content staging exceeds bound".into());
         }
+        physical::admit(self, name, bytes.len(), check)?;
         check()?;
         let path = self.root.join(name);
         let parent = MemberParent::capture(&path)?;
         let mut file = parent.open(&path, libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL, 0o400)?;
         parent.member(&file, 0)?;
+        physical::allocate(&file, bytes.len(), check)?;
         for chunk in bytes.chunks(32768) {
             check()?;
             parent.check()?;
@@ -714,6 +731,7 @@ impl Files {
         if self.read(name, check)? != bytes {
             return Err("protected content staging readback differs".into());
         }
+        physical::inspect(self, check)?;
         Ok(())
     }
     fn rename(&self, from: &str, to: &str, check: &mut impl FnMut() -> Result<()>) -> Result<()> {
@@ -848,11 +866,13 @@ impl<A: Checkpoint> Store<A> {
         self.live(check)?;
         let lifecycle = lifecycle::Assessment::capture(&self.journal, &self.bytes, &self.state)?;
         let lifecycle_sha256 = lifecycle.sha256()?;
+        let physical_namespace = physical::inspect(&self.files, check)?;
         let status = serde_json::json!({"schema_version":1,"installation":self.journal.installation,
             "genesis_event":self.journal.genesis_event,"checkpoint_head":bundle::hex(&self.state.checkpoint),
             "events":self.journal.events.len(),"owner_domains":self.state.owners.len(),
             "journal_sha256":hash(&self.bytes),"pending":false,"content_bytes_changed":false,
             "lifecycle_assessment":lifecycle,"lifecycle_assessment_sha256":lifecycle_sha256,
+            "physical_namespace":physical_namespace,
             "authority_returned":false,"production_qualified":false});
         if serde_json::to_vec(&status)?.len() > 8192 {
             return Err("custody status exceeds its existing finite Admin output bound".into());
@@ -976,6 +996,7 @@ impl<A: Checkpoint> Store<A> {
     }
     fn open(mut anchor: A, files: Files, check: &mut impl FnMut() -> Result<()>) -> Result<Self> {
         check()?;
+        physical::inspect(&files, check)?;
         files.absent(PREPARED)?;
         files.absent(PUBLISHED)?;
         let bytes = files.read(JOURNAL, check)?;
@@ -1113,9 +1134,15 @@ impl<A: Checkpoint> Store<A> {
         // No later call through this object can repeat a dispatch, even if a
         // readback or fresh principal check refuses after the TPM succeeded.
         self.poisoned = true;
+        // Both exact data files are allocated, synced and read back BEFORE NV.
+        // Reconciliation already distinguishes an uncommitted publish stage
+        // from an advanced cut; no allocation or stage creation follows NV.
+        self.files.create(PUBLISHED, &next_bytes, check)?;
+        physical::inspect(&self.files, check)?;
         check()?;
         if self.files.read(JOURNAL, check)? != self.bytes
             || self.files.read(PREPARED, check)? != bytes
+            || self.files.read(PUBLISHED, check)? != next_bytes
             || self.anchor.read()? != self.state.checkpoint
         {
             return Err("prepared protected cut changed before dispatch".into());
@@ -1127,7 +1154,6 @@ impl<A: Checkpoint> Store<A> {
             );
         }
         check()?;
-        self.files.create(PUBLISHED, &next_bytes, check)?;
         self.files.rename(PUBLISHED, JOURNAL, check)?;
         if self.files.read(JOURNAL, check)? != next_bytes
             || self.anchor.read()? != next_state.checkpoint

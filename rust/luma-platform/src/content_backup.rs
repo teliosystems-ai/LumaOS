@@ -625,9 +625,7 @@ fn worker(id: &str) -> Result<()> {
         .take(MAX_REQUEST as u64 + 1)
         .read_to_end(&mut bytes)?;
     let input = parse(&bytes, true)?;
-    if crate::platform::production_image()? && input.custody_generation()?.is_none() {
-        return Err("production backup requires explicitly governed content custody".into());
-    }
+    require_image_custody(&input, crate::platform::content_checkpoint_required()?)?;
     if profile(&input, &bytes)? != id {
         return Err("backup sealed request differs from exact admission".into());
     }
@@ -914,10 +912,18 @@ fn subject(
     }
 }
 
+fn require_image_custody(input: &Input, checkpoint_required: bool) -> Result<()> {
+    if checkpoint_required && input.custody_generation()?.is_none() {
+        return Err("this image requires explicitly governed content backup custody; laboratory release signing does not permit manual recipient substitution".into());
+    }
+    Ok(())
+}
+
 pub(crate) fn command(args: &[String]) -> Result<()> {
     crate::require_root()?;
     crate::platform::require_installed()?;
     let production = crate::platform::production_image()?;
+    let checkpoint_required = crate::platform::content_checkpoint_required()?;
     if args.first().map(String::as_str) == Some("content-backup-resource-worker") && args.len() == 2
     {
         return worker(&args[1]);
@@ -933,10 +939,8 @@ pub(crate) fn command(args: &[String]) -> Result<()> {
     let input = parse(&bytes, true)?;
     if production {
         crate::platform::require_production_activation()?;
-        if input.custody_generation()?.is_none() {
-            return Err("production export refuses manually selected laboratory recipients".into());
-        }
     }
+    require_image_custody(&input, checkpoint_required)?;
     if input.login != args[1] {
         return Err("backup command login differs from request".into());
     }
@@ -1192,6 +1196,17 @@ mod tests {
         assert!(unhex("0").is_err());
         assert!(unhex(&"00".repeat(8193)).is_err());
     }
+    #[test]
+    fn checkpoint_images_refuse_manual_backup_on_lab_and_production() {
+        let mut input = fixture();
+        assert!(require_image_custody(&input, true).is_err());
+        assert!(require_image_custody(&input, false).is_ok());
+        input.recipient_choice = "governed-content-custody-v1-7".into();
+        assert!(require_image_custody(&input, true).is_ok());
+        input.recipient_choice = "governed-content-custody-v1-0".into();
+        assert!(require_image_custody(&input, true).is_err());
+    }
+
     #[test]
     fn governed_custody_choice_is_exact_positive_generation_not_a_boolean_upgrade() {
         let mut input = fixture();

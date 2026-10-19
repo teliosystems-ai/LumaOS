@@ -41,14 +41,22 @@ class DesktopPolicyTests(unittest.TestCase):
         self.assertFalse((self.root/'usr/share/luma-os/desktop-profile').exists())
         self.assertFalse((self.root/'usr/share/applications/luma-native-preview.desktop').exists())
 
-    def test_native_preview_launcher_is_separate_and_has_no_mvp_or_authority_claim(self):
+    def test_primary_launcher_uses_native_workspace_and_reference_is_hidden(self):
         policy.configure(self.root, 'desktop')
-        launcher = (self.root/'usr/share/applications/luma-native-preview.desktop').read_text()
+        launcher = (self.root/'usr/share/applications/luma-workspace.desktop').read_text()
         self.assertIn('Exec=/usr/bin/python3 -I /usr/libexec/luma-os/workspace_app.py\n', launcher)
-        self.assertIn('no account, publication or workflow authority', launcher)
+        self.assertIn('requires independently provisioned custody and grants', launcher)
         self.assertNotIn('http:', launcher)
-        reference = (self.root/'usr/share/applications/luma-workspace.desktop').read_text()
+        reference = (self.root/'usr/share/applications/luma-reference-workspace.desktop').read_text()
         self.assertIn('http://127.0.0.1:8765', reference)
+        self.assertIn('NoDisplay=true\n', reference)
+        self.assertFalse((self.root/'usr/share/applications/luma-native-preview.desktop').exists())
+
+    def test_packaged_content_policy_requires_real_checkpoint_even_on_lab(self):
+        import json
+        packaged = Path(__file__).resolve().parents[1]/'image/overlay/usr/share/luma-os/content-custody-policy.json'
+        self.assertEqual(json.loads(packaged.read_text()),
+                         {'schema_version': 1, 'authority': 'tpm-checkpoint-v1'})
 
     def test_production_launcher_does_not_claim_lab_or_certification(self):
         report = policy.configure(self.root, 'desktop', 'production')

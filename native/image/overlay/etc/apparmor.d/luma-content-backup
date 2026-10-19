@@ -31,6 +31,7 @@ profile luma-content-backup flags=(attach_disconnected,mediate_deleted) {
   /lib64/** mr,
   /usr/share/luma-os/ r,
   /usr/share/luma-os/release-identity.json r,
+  /usr/share/luma-os/content-custody-policy.json r,
   /proc/cmdline r,
   /proc/meminfo r,
   /proc/sys/kernel/random/boot_id r,

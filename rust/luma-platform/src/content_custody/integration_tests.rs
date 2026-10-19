@@ -5,7 +5,7 @@ use crate::finite_grants::Use;
 use luma_content::{EditOrigin, Format, Provenance};
 use luma_content_store::{Access, Boundary, Plan, Repository, ResourceBudget};
 use std::cell::Cell;
-use std::os::unix::fs::DirBuilderExt;
+use std::os::unix::fs::{DirBuilderExt, MetadataExt};
 use std::rc::Rc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -1233,6 +1233,9 @@ fn uncertain_applied_nv_write_retains_evidence_and_admin_finalize_never_reextend
         )
         .is_err());
     assert_eq!(fixture.memory.advances.get(), 1);
+    // A lost NV reply no longer requires allocation of the next data file.
+    // Its exact synced publication stage was retained before dispatch.
+    assert!(fixture.authority.join(PUBLISHED).is_file());
     assert!(store
         .publish(
             &commitment,
@@ -1257,6 +1260,245 @@ fn uncertain_applied_nv_write_retains_evidence_and_admin_finalize_never_reextend
         1
     );
     assert!(!fixture.authority.join(PREPARED).exists());
+}
+
+#[test]
+fn exact_publish_stage_is_complete_before_any_nv_dispatch_and_uncommitted_recovery_removes_only_stages(
+) {
+    let fixture = Fixture::new();
+    let plan = fixture.plan();
+    let (_repository, commitment, record, profile, audit) = prepared(&fixture, &plan);
+    let mut store = fixture.store();
+    let before = fs::read(fixture.authority.join(JOURNAL)).unwrap();
+    let mut saw_complete_stage = false;
+    let mut check = || -> Result<()> {
+        if fs::read(fixture.authority.join(PUBLISHED))
+            .is_ok_and(|bytes| canonical::<Journal>(&bytes, MAX_JOURNAL).is_ok())
+        {
+            saw_complete_stage = true;
+            return Err("fixture revocation after exact publish stage, before NV".into());
+        }
+        Ok(())
+    };
+    assert!(store
+        .publish(&commitment, &record, &profile, "8:1", &audit, &mut check)
+        .is_err());
+    drop(check);
+    assert!(saw_complete_stage);
+    assert_eq!(fixture.memory.advances.get(), 0);
+    assert_eq!(fs::read(fixture.authority.join(JOURNAL)).unwrap(), before);
+    let inventory = physical::inspect(&fixture.files(), &mut || Ok(())).unwrap();
+    let data = serde_json::to_value(inventory).unwrap();
+    assert_eq!(data["interrupted_members_counted"], true);
+    assert!(data["allocated_bytes"].as_u64().unwrap() > before.len() as u64);
+    let mut anchor = fixture.memory.clone();
+    let (review, _) = admin::pending_review(&mut anchor, &fixture.files(), &mut || Ok(())).unwrap();
+    let reviewed = serde_json::to_value(&review).unwrap();
+    assert_eq!(reviewed["disposition"], "retire-uncommitted-prepared");
+    assert!(reviewed["publish_sha256"].is_string());
+    admin::reconcile(&mut anchor, &fixture.files(), &review, &mut || Ok(())).unwrap();
+    assert!(!fixture.authority.join(PREPARED).exists());
+    assert!(!fixture.authority.join(PUBLISHED).exists());
+    assert_eq!(fixture.memory.advances.get(), 0);
+    assert_eq!(fs::read(fixture.authority.join(JOURNAL)).unwrap(), before);
+}
+
+#[test]
+fn closed_c_namespace_refuses_unknown_links_oversize_and_allocated_past_eof_without_cleanup() {
+    use std::os::unix::fs::{symlink, OpenOptionsExt};
+    let fixture = Fixture::new();
+    let original = fs::read(fixture.authority.join(JOURNAL)).unwrap();
+    let unknown = fixture.authority.join("retained-foreign-attempt");
+    fs::write(&unknown, b"preserve unknown evidence").unwrap();
+    assert!(fixture
+        .files()
+        .create(PREPARED, b"bounded", &mut || Ok(()))
+        .is_err());
+    assert!(!fixture.authority.join(PREPARED).exists());
+    assert_eq!(fs::read(&unknown).unwrap(), b"preserve unknown evidence");
+    fs::remove_file(&unknown).unwrap();
+    let path = fixture.authority.join(PUBLISHED);
+    symlink(fixture.authority.join(JOURNAL), &path).unwrap();
+    assert!(physical::inspect(&fixture.files(), &mut || Ok(())).is_err());
+    assert!(fs::symlink_metadata(&path)
+        .unwrap()
+        .file_type()
+        .is_symlink());
+    fs::remove_file(&path).unwrap();
+    fs::hard_link(fixture.authority.join(JOURNAL), &path).unwrap();
+    assert!(physical::inspect(&fixture.files(), &mut || Ok(())).is_err());
+    assert_eq!(fs::metadata(&path).unwrap().nlink(), 2);
+    fs::remove_file(&path).unwrap();
+    let file = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o400)
+        .open(&path)
+        .unwrap();
+    file.set_len(MAX_JOURNAL as u64 + 1).unwrap();
+    assert!(physical::inspect(&fixture.files(), &mut || Ok(())).is_err());
+    assert_eq!(file.metadata().unwrap().len(), MAX_JOURNAL as u64 + 1);
+    drop(file);
+    fs::remove_file(&path).unwrap();
+    let file = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o400)
+        .open(&path)
+        .unwrap();
+    physical::allocate(&file, 25 * 1024 * 1024, &mut || Ok(())).unwrap();
+    assert_eq!(file.metadata().unwrap().len(), 0);
+    assert!(file.metadata().unwrap().blocks() * 512 >= 25 * 1024 * 1024);
+    assert!(physical::inspect(&fixture.files(), &mut || Ok(())).is_err());
+    assert!(path.exists());
+    assert_eq!(fixture.memory.advances.get(), 0);
+    assert_eq!(fs::read(fixture.authority.join(JOURNAL)).unwrap(), original);
+}
+
+#[test]
+fn interrupted_preallocated_publish_requires_exact_admin_review_before_zero_eof_retirement() {
+    let fixture = Fixture::new();
+    let plan = fixture.plan();
+    let (_repository, commitment, record, profile, audit) = prepared(&fixture, &plan);
+    let mut store = fixture.store();
+    let before = fs::read(fixture.authority.join(JOURNAL)).unwrap();
+    let staged = fixture.authority.join(PUBLISHED);
+    let mut check = || -> Result<()> {
+        if fs::metadata(&staged).is_ok_and(|m| m.len() == 0 && m.blocks() > 0) {
+            return Err("fixture original authority revoked after physical allocation".into());
+        }
+        Ok(())
+    };
+    assert!(store
+        .publish(&commitment, &record, &profile, "8:1", &audit, &mut check)
+        .is_err());
+    assert_eq!(fixture.memory.advances.get(), 0);
+    let retained = fs::metadata(&staged).unwrap();
+    assert_eq!(retained.len(), 0);
+    assert!(retained.blocks() > 0);
+    assert!(physical::inspect(&fixture.files(), &mut || Ok(())).is_ok());
+    let mut anchor = fixture.memory.clone();
+    let (review, _) = admin::pending_review(&mut anchor, &fixture.files(), &mut || Ok(())).unwrap();
+    assert_eq!(
+        serde_json::to_value(&review).unwrap()["publish_sha256"],
+        hash(b"")
+    );
+    assert_eq!(fs::metadata(&staged).unwrap().blocks(), retained.blocks());
+    assert_eq!(fs::read(fixture.authority.join(JOURNAL)).unwrap(), before);
+    assert!(fixture.authority.join(PREPARED).is_file());
+    assert!(
+        admin::reconcile(&mut anchor, &fixture.files(), &review, &mut || {
+            Err("fixture revoked original Admin recovery grant".into())
+        })
+        .is_err()
+    );
+    assert!(staged.exists());
+    admin::reconcile(&mut anchor, &fixture.files(), &review, &mut || Ok(())).unwrap();
+    assert!(!staged.exists());
+    assert!(!fixture.authority.join(PREPARED).exists());
+    assert_eq!(fixture.memory.advances.get(), 0);
+    assert_eq!(fixture.store().state.checkpoint, fixture.memory.head.get());
+}
+
+#[test]
+fn uncommitted_partial_publish_review_refuses_stale_stage_current_and_protected_head() {
+    use std::os::unix::fs::PermissionsExt;
+    let fixture = Fixture::new();
+    let plan = fixture.plan();
+    let (_repository, commitment, record, profile, audit) = prepared(&fixture, &plan);
+    let mut store = fixture.store();
+    let staged = fixture.authority.join(PUBLISHED);
+    let mut check = || -> Result<()> {
+        if fs::metadata(&staged).is_ok_and(|m| m.len() == 0 && m.blocks() > 0) {
+            return Err("fixture cancellation after preallocation".into());
+        }
+        Ok(())
+    };
+    assert!(store
+        .publish(&commitment, &record, &profile, "8:1", &audit, &mut check)
+        .is_err());
+    let mut anchor = fixture.memory.clone();
+    let (review, _) = admin::pending_review(&mut anchor, &fixture.files(), &mut || Ok(())).unwrap();
+    fs::set_permissions(&staged, fs::Permissions::from_mode(0o600)).unwrap();
+    fs::write(&staged, b"different bounded partial bytes").unwrap();
+    fs::set_permissions(&staged, fs::Permissions::from_mode(0o400)).unwrap();
+    assert!(admin::reconcile(&mut anchor, &fixture.files(), &review, &mut || Ok(())).is_err());
+    assert_eq!(
+        fs::read(&staged).unwrap(),
+        b"different bounded partial bytes"
+    );
+    let (fresh, _) = admin::pending_review(&mut anchor, &fixture.files(), &mut || Ok(())).unwrap();
+    let before = fixture.memory.head.get();
+    fixture.memory.head.set([0xcc; 32]);
+    assert!(admin::reconcile(&mut anchor, &fixture.files(), &fresh, &mut || Ok(())).is_err());
+    fixture.memory.head.set(before);
+    let journal = fixture.authority.join(JOURNAL);
+    let previous = fs::read(&journal).unwrap();
+    fs::set_permissions(&journal, fs::Permissions::from_mode(0o600)).unwrap();
+    fs::write(&journal, b"{}").unwrap();
+    fs::set_permissions(&journal, fs::Permissions::from_mode(0o400)).unwrap();
+    assert!(admin::reconcile(&mut anchor, &fixture.files(), &fresh, &mut || Ok(())).is_err());
+    fs::set_permissions(&journal, fs::Permissions::from_mode(0o600)).unwrap();
+    fs::write(&journal, previous).unwrap();
+    fs::set_permissions(&journal, fs::Permissions::from_mode(0o400)).unwrap();
+    assert!(fixture.authority.join(PREPARED).exists());
+    assert!(staged.exists());
+    admin::reconcile(&mut anchor, &fixture.files(), &fresh, &mut || Ok(())).unwrap();
+    assert_eq!(fixture.memory.advances.get(), 0);
+}
+
+#[test]
+fn partial_publish_after_nv_success_never_supplies_authority_or_gets_retired_as_uncommitted() {
+    use std::os::unix::fs::PermissionsExt;
+    let fixture = Fixture::new();
+    let plan = fixture.plan();
+    let (_repository, commitment, record, profile, audit) = prepared(&fixture, &plan);
+    let mut store = fixture.store();
+    fixture.memory.lose_reply.set(true);
+    assert!(store
+        .publish(
+            &commitment,
+            &record,
+            &profile,
+            "8:1",
+            &audit,
+            &mut || Ok(())
+        )
+        .is_err());
+    assert_eq!(fixture.memory.advances.get(), 1);
+    let stage = fixture.authority.join(PUBLISHED);
+    let exact = fs::read(&stage).unwrap();
+    for damaged in [&b""[..], &b"partial next journal"[..]] {
+        fs::set_permissions(&stage, fs::Permissions::from_mode(0o600)).unwrap();
+        fs::write(&stage, damaged).unwrap();
+        fs::set_permissions(&stage, fs::Permissions::from_mode(0o400)).unwrap();
+        assert!(
+            admin::pending_review(
+                &mut fixture.memory.clone(),
+                &fixture.files(),
+                &mut || Ok(())
+            )
+            .is_err()
+        );
+        assert_eq!(fs::read(&stage).unwrap(), damaged);
+        assert!(fixture.authority.join(PREPARED).exists());
+        assert_eq!(fixture.memory.advances.get(), 1);
+    }
+    fs::set_permissions(&stage, fs::Permissions::from_mode(0o600)).unwrap();
+    fs::write(&stage, exact).unwrap();
+    fs::set_permissions(&stage, fs::Permissions::from_mode(0o400)).unwrap();
+    let mut anchor = fixture.memory.clone();
+    let (review, _) = admin::pending_review(&mut anchor, &fixture.files(), &mut || Ok(())).unwrap();
+    admin::reconcile(&mut anchor, &fixture.files(), &review, &mut || Ok(())).unwrap();
+    assert_eq!(fixture.memory.advances.get(), 1);
+    assert_eq!(
+        fixture
+            .store()
+            .selected(&fixture.binding, &mut || Ok(()))
+            .unwrap()
+            .outcome_count,
+        1
+    );
 }
 
 #[test]

@@ -87,25 +87,30 @@ pub(super) fn pending_review<A: Checkpoint>(
     check: &mut impl FnMut() -> Result<()>,
 ) -> Result<(PendingReview, Prepared)> {
     check()?;
+    physical::inspect(files, check)?;
     let current = files.read(JOURNAL, check)?;
     let pending_bytes = files.read(PREPARED, check)?;
     let pending: Prepared = canonical(&pending_bytes, MAX_FILE)?;
     let (before, after) = pending.validate(&current)?;
     let staged = if present(files, PUBLISHED)? {
-        Some(files.read(PUBLISHED, check)?)
+        Some(files.read_publish_attempt(check)?)
     } else {
         None
     };
     let next_bytes = pending.next.bytes()?;
-    if staged.as_ref().is_some_and(|v| *v != next_bytes) {
-        return Err("content publish staging differs from exact prepared next journal".into());
-    }
     check()?;
     let actual = anchor.read()?;
     check()?;
     let disposition = if actual == before && current == pending.previous.bytes()? {
         "retire-uncommitted-prepared"
     } else if actual == after {
+        // Once NV advanced, only the exact prepared next cut may be used as a
+        // publication stage. Partial bytes never stand in for authority.
+        if staged.as_ref().is_some_and(|v| *v != next_bytes) {
+            return Err(
+                "committed content publish staging differs from exact prepared next journal".into(),
+            );
+        }
         "finalize-committed-prepared"
     } else {
         return Err(
@@ -123,8 +128,14 @@ pub(super) fn pending_review<A: Checkpoint>(
         checkpoint_head: bundle::hex(&actual),
         disposition: disposition.into(),
     };
+    let current_stage = if present(files, PUBLISHED)? {
+        Some(files.read_publish_attempt(check)?)
+    } else {
+        None
+    };
     if files.read(JOURNAL, check)? != current
         || files.read(PREPARED, check)? != pending_bytes
+        || current_stage != staged
         || anchor.read()? != actual
     {
         return Err("content pending reconciliation cut changed during inspection".into());
@@ -166,12 +177,21 @@ pub(super) fn reconcile<A: Checkpoint>(
             return Err("content recovery journal readback differs".into());
         }
     } else if current.disposition == "retire-uncommitted-prepared" {
-        if files.read(JOURNAL, check)? != pending.previous.bytes()? {
+        if files.read(JOURNAL, check)? != pending.previous.bytes()?
+            || anchor.read()? != tpm::decode::<32>(&current.checkpoint_head)?
+            || hash(&files.read(PREPARED, check)?) != current.prepared_sha256
+        {
             return Err("uncommitted content cut changed".into());
         }
         if let Some(expected_stage) = &current.publish_sha256 {
-            if hash(&files.read(PUBLISHED, check)?) != *expected_stage {
+            if hash(&files.read_publish_attempt(check)?) != *expected_stage {
                 return Err("uncommitted content staging changed".into());
+            }
+            check()?;
+            if anchor.read()? != tpm::decode::<32>(&current.checkpoint_head)? {
+                return Err(
+                    "uncommitted content head changed before reviewed stage retirement".into(),
+                );
             }
             files.retire(PUBLISHED, check)?;
         }

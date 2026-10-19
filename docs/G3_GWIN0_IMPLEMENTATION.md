@@ -697,10 +697,28 @@ fixture uses the C workspace; bulk build outputs and evidence remain on D.
 
 ### Remaining development and qualification
 
+The [native candidate preparation record](gates/g3/image_candidate_preparation_2026-10-19.json)
+adds the primary native desktop entry, original-Admin terminal restore/resume and
+reviewed damaged-generation retirement. New lab images select genuine TPM-backed
+C through a verity-protected policy; both normal content and backup workers
+enforce it independently of release-signing classification. Private authority
+and results stay outside WebKit. Missing custody is a refusal, not a file-backend
+fallback.
+
+C now admits its closed physical namespace and allocates both transaction data
+files before TPM advancement. Exact reviewed partial-publication retirement is
+available only at the unchanged pre-dispatch cut with canonical preparation.
+Damaged preparation or authoritative history still remains fenced. The frozen
+547-file source passes 118 focused Rust tests, all 620 native-source tests,
+26 public-input cases, three disposable-TPM scenarios, 30 actual CLI cases and
+four each of workflow/reopen and recovery-data compatibility cases. This is
+software verification for a new candidate, not installed or native acceptance.
+
 The current integrated sources still leave the following development work:
 
-- Content custody lifecycle, bounded-journal succession/compaction and complete
-  application recovery journeys beyond the implemented C-backed primitives.
+- Content custody lifecycle, bounded-journal succession/compaction and forensic
+  recovery of damaged preparation/history beyond the implemented exact-chain
+  recovery and application journeys.
 - Semantic collections/indexes and per-result access policy beyond the current
   owner's lexical search, including its exact historical collection selector;
   graphical read/edit/recalculation journeys beyond the implemented private

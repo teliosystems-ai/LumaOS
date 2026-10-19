@@ -39,6 +39,27 @@ GNOME/Wayland profile; it is not yet an installed-image qualification. Consult
 the execution record for the particular image: the old
 image's passing tests do not automatically attest a new build.
 
+## Current native workspace and custody policy
+
+New desktop builds launch the native workspace from the main Luma Workspace
+entry. The older HTTP reference application is a separate hidden developer
+entry, not the authenticated native product interface. Preview remains available
+without a model; owner reads, deterministic workflows and recovery open a
+separate native terminal. Passwords, private results, finite grants and offline
+recovery keys never enter WebKit.
+
+New images include the verity-protected
+`/usr/share/luma-os/content-custody-policy.json`, selecting
+`tpm-checkpoint-v1` independently of laboratory or production release signing.
+A lab-signed test image therefore exercises the actual separately enrolled C
+checkpoint, live authorization and protected output delivery. It does not
+replace C with the laboratory file backend when enrollment, protected UTC or
+grants are missing. Missing or malformed policy refuses admission; production
+also refuses an explicit laboratory-file selection. Commission the original
+Admin and the separate required authorities before testing governed operations.
+This policy neither activates production release trust nor supplies production
+model qualification.
+
 ## Production assembly and external signatures
 
 Production requires three independently prepared public input groups. Keep

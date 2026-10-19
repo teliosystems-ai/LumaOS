@@ -270,6 +270,76 @@ pub(crate) fn production_image() -> Result<bool> {
     Ok(identity.environment == "production")
 }
 
+/// The verity-protected image policy selects content custody independently of
+/// release-signing classification. A lab signing key never supplies content
+/// authority: checkpoint images must enroll and prove the real local C chain.
+pub(crate) fn content_checkpoint_required() -> Result<bool> {
+    let production = production_image()?;
+    let bytes = crate::admin_credentials::public_input(
+        Path::new("/usr/share/luma-os/content-custody-policy.json"),
+        4096,
+    )?;
+    validate_content_custody_policy(&bytes, production)
+}
+
+fn validate_content_custody_policy(bytes: &[u8], production: bool) -> Result<bool> {
+    #[derive(serde::Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Policy {
+        schema_version: u32,
+        authority: String,
+    }
+    let policy: Policy = serde_json::from_slice(bytes)?;
+    if policy.schema_version != 1 {
+        return Err("unsupported immutable content custody policy".into());
+    }
+    match policy.authority.as_str() {
+        "tpm-checkpoint-v1" => Ok(true),
+        "laboratory-file-v1" if !production => Ok(false),
+        _ => Err("immutable content custody policy cannot downgrade production or select an unknown authority".into()),
+    }
+}
+
+#[cfg(test)]
+mod content_custody_policy_tests {
+    use super::validate_content_custody_policy;
+
+    #[test]
+    fn checkpoint_authority_is_independent_of_lab_release_signing() {
+        for production in [false, true] {
+            assert!(validate_content_custody_policy(
+                br#"{"schema_version":1,"authority":"tpm-checkpoint-v1"}"#,
+                production,
+            )
+            .unwrap());
+        }
+    }
+
+    #[test]
+    fn legacy_lab_selection_never_downgrades_production() {
+        let policy = br#"{"schema_version":1,"authority":"laboratory-file-v1"}"#;
+        assert!(!validate_content_custody_policy(policy, false).unwrap());
+        assert!(validate_content_custody_policy(policy, true).is_err());
+    }
+
+    #[test]
+    fn missing_unknown_duplicate_or_malformed_policy_has_no_fallback() {
+        for policy in [
+            "",
+            "{}",
+            "null",
+            r#"{"schema_version":2,"authority":"tpm-checkpoint-v1"}"#,
+            r#"{"schema_version":1,"authority":"available-custody"}"#,
+            r#"{"schema_version":1,"authority":"tpm-checkpoint-v1","fallback":true}"#,
+            r#"{"schema_version":1,"authority":"tpm-checkpoint-v1","authority":"laboratory-file-v1"}"#,
+        ] {
+            for production in [false, true] {
+                assert!(validate_content_custody_policy(policy.as_bytes(), production).is_err());
+            }
+        }
+    }
+}
+
 fn require_laboratory_environment(environment: &str) -> Result<()> {
     if environment != "lab" {
         return Err("static laboratory signatures require an immutable laboratory image; production cannot downgrade before enrollment".into());

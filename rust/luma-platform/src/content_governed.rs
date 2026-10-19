@@ -1315,7 +1315,7 @@ fn worker(id: &str) -> Result<()> {
     crate::require_root()?;
     crate::platform::require_installed()?;
     let p = profile(id)?;
-    let production = crate::platform::production_image()?;
+    let checkpoint_required = crate::platform::content_checkpoint_required()?;
     if std::fs::read_to_string("/proc/self/cgroup")?
         != "0::/lumaacquisition.slice/luma-acquisition.service\n"
         || std::fs::read_to_string("/proc/self/attr/current")? != "luma-acquisition (enforce)\n"
@@ -1341,7 +1341,7 @@ fn worker(id: &str) -> Result<()> {
     if matches!(
         input.operation,
         Operation::Workflow { .. } | Operation::OfficeReview { .. } | Operation::Envelope { .. }
-    ) && !production
+    ) && !checkpoint_required
     {
         return Err("managed workflow or whole-envelope delivery requires independently enrolled current content custody, not a laboratory file commit".into());
     }
@@ -1370,7 +1370,7 @@ fn worker(id: &str) -> Result<()> {
     {
         return Err("native content input is not the current installed principal".into());
     }
-    let cut = if production {
+    let cut = if checkpoint_required {
         Some(if matches!(p.mode, Mode::Write | Mode::Retain) {
             crate::content_checkpoint::custody::preparation_cut(
                 id,
@@ -1410,7 +1410,7 @@ fn worker(id: &str) -> Result<()> {
         custody: cut.as_ref().map(|cut| (id, cut.current.clone())),
     };
     boundary.current(&input.binding)?;
-    if production {
+    if checkpoint_required {
         // The integrated chain includes at most twelve full 64MiB history
         // inventories plus bounded candidate/source rechecks, including actual
         // workflow reopen. Reserve that read ceiling explicitly; memory stays
@@ -1480,7 +1480,7 @@ fn worker(id: &str) -> Result<()> {
                         .into(),
                 );
             }
-            if production {
+            if checkpoint_required {
                 repository.check_preparation_review(review, &mut boundary)?;
                 let wanted = review.retired_state()?;
                 if crate::content_checkpoint::custody::quarantine(id, lease.token(), review)?
@@ -1562,7 +1562,7 @@ fn worker(id: &str) -> Result<()> {
                 .as_mut()
                 .ok_or("missing native content repository")?;
             let source = input.source()?;
-            let (outcome, held_workflow) = if production {
+            let (outcome, held_workflow) = if checkpoint_required {
                 let selected = boundary
                     .custody
                     .as_ref()
@@ -2080,6 +2080,7 @@ pub(crate) fn command(args: &[String]) -> Result<()> {
     crate::require_root()?;
     crate::platform::require_installed()?;
     let production = crate::platform::production_image()?;
+    let checkpoint_required = crate::platform::content_checkpoint_required()?;
     if args.first().map(String::as_str) == Some("content-resource-worker") && args.len() == 2 {
         return worker(&args[1]);
     }
@@ -2102,7 +2103,7 @@ pub(crate) fn command(args: &[String]) -> Result<()> {
     if matches!(
         input.operation,
         Operation::Workflow { .. } | Operation::OfficeReview { .. } | Operation::Envelope { .. }
-    ) && !production
+    ) && !checkpoint_required
     {
         return Err("managed workflow or whole-envelope delivery requires independent current C custody; laboratory-only publication cannot supply it".into());
     }
@@ -2126,7 +2127,7 @@ pub(crate) fn command(args: &[String]) -> Result<()> {
             check_subject(&input, guard)?;
             let response = run(&read_profile, &bytes, guard)?;
             check_subject(&input, guard)?;
-            if production {
+            if checkpoint_required {
                 return deliver_protected(
                     &input,
                     &response,
@@ -2161,7 +2162,7 @@ pub(crate) fn command(args: &[String]) -> Result<()> {
         let response = run(&id, &bytes, guard)?;
         check_subject(&input, guard)?;
         guard.effect_complete(pending, &io::digest(&serde_json::to_vec(&response)?))?;
-        if production {
+        if checkpoint_required {
             return deliver_protected(&input, &response, &id, mode.output_limit(), guard);
         }
         deliver_result(&response.result, mode.output_limit(), || {

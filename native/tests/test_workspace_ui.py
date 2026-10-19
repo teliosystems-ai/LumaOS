@@ -61,6 +61,17 @@ class WorkspaceUiTests(unittest.TestCase):
         self.assertNotIn('paged-read', js)
         self.assertNotIn('content-owned-review', host)
         self.assertNotIn('content-owned-apply', host)
+        self.assertIn("recovery_button.connect('clicked', admin_recovery)", app)
+        self.assertIn("mode.append('restore-journey'", app)
+        self.assertIn("mode.append('retire-journey'", app)
+        self.assertIn('return restore_journey(value, directory)', auth)
+        self.assertIn('return retire_journey(value, directory)', auth)
+        for private_route in ('restore-journey', 'retire-journey', 'content-restore-apply', 'content-restore-retire-inspect'):
+            self.assertNotIn(private_route, js)
+        self.assertNotIn('content-restore-apply', host)
+        self.assertNotIn('content-restore-review', host)
+        self.assertLessEqual(len(auth.encode('utf-8')), 128*1024)
+        self.assertLessEqual(len(app.encode('utf-8')), 128*1024)
         self.assertNotIn('innerHTML', js)
         self.assertNotIn('fetch(', js)
 

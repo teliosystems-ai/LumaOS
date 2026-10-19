@@ -14,7 +14,7 @@ POLICY = ROOT / "native/image/overlay/etc/apparmor.d"
 
 
 class ContentBackupIntegration(unittest.TestCase):
-    def test_production_export_requires_real_custody_not_a_lab_flag_upgrade(self):
+    def test_checkpoint_image_export_requires_real_custody_independent_of_lab_signing(self):
         source = (RUST / "main.rs").read_text()
         backup = (RUST / "content_backup.rs").read_text()
         self.assertIn("mod backup_crypto;", source)
@@ -23,7 +23,14 @@ class ContentBackupIntegration(unittest.TestCase):
         self.assertIn('content_backup::command(&args)', source)
         self.assertIn('production_image()?', backup)
         self.assertIn('require_production_activation()?', backup)
-        self.assertIn('production export refuses manually selected laboratory recipients', backup)
+        self.assertIn('content_checkpoint_required()?', backup)
+        implementation = backup.split('#[cfg(test)]', 1)[0]
+        self.assertEqual(implementation.count('require_image_custody(&input,'), 2)
+        self.assertIn('checkpoint_required && input.custody_generation()?.is_none()', implementation)
+        self.assertIn('laboratory release signing does not permit manual recipient substitution', implementation)
+        for worker in ('luma-acquisition', 'luma-content-backup'):
+            self.assertIn('/usr/share/luma-os/content-custody-policy.json r,',
+                          (POLICY / worker).read_text())
         self.assertIn('governed-content-custody-v1-', backup)
         self.assertIn('custody::backup_cut', backup)
         self.assertIn('repository.require_state', backup)

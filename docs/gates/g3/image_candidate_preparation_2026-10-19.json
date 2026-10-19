@@ -1,0 +1,102 @@
+{
+  "schema_version": 1,
+  "date": "2026-10-19",
+  "status": "software-verification-passed-image-assembly-pending",
+  "scope": "Native Ubuntu desktop candidate preparation; not Windows product deployment or native qualification",
+  "source": {
+    "snapshot": "/mnt/luma-build/work/candidate15-source-20261019-c",
+    "manifest_sha256": "e82e7b2ef1f6f780eb98f8f18d314a7e66094986156485b03b3c85f762046370",
+    "files": 547,
+    "native_tests_included": true,
+    "windows_sources_changed": false,
+    "compiler_cache": "/cache/target-by-source/9bb990bf2160cd708bb2cbdbfb68efdabfc1f0edf0816db8b71a5bbd4017c483",
+    "compiler_cache_is_not_source_or_authority": true
+  },
+  "implemented": [
+    "Primary desktop launcher uses the native workspace; the HTTP reference application has a separate hidden developer entry",
+    "Verity-protected closed content-custody policy requires genuine C on new lab and production images; missing policy refuses and production cannot select laboratory-file custody",
+    "Both governed-content controller and worker use that policy for workflow, envelope, publication, recovery and protected output delivery",
+    "Both backup controller and worker refuse manual non-C recipients on checkpoint images regardless of lab release signing",
+    "Native GTK and original-PAM terminal restore, exact-prefix resume and reviewed damaged-generation retirement with separate finite grants and explicit approvals",
+    "Durable no-overwrite inert resume data before restore or retirement dispatch; interruption does not infer rollback, success or automatic retry",
+    "Restore UI accepts native chronological publication suffix gaps caused by inert archived outcomes and rejects substitutions or reordered steps",
+    "C physical admission counts closed namespace entries, logical bytes and allocated extents including interrupted zero-EOF allocation",
+    "Both canonical PREPARED and exact PUBLISHED data files are allocated, synchronized and read back before TPM advancement",
+    "Existing-schema genuine Admin reconciliation can retire an exact reviewed partial or empty PUBLISHED only with canonical PREPARED, exact previous journal and unchanged pre-dispatch NV head"
+  ],
+  "verification": {
+    "evidence_directory": "/mnt/luma-build/work/candidate15-verify-20261019-c",
+    "log_manifest_sha256": "dbb865e0f869b9eab640b266e793258144cb85429a60970fc480f3219f8cc572",
+    "native_source_lane_sha256": "e8a2f253b8fe5230580890c141a72374198e89948bbb34370bfc27e3507ed673",
+    "warnings_denied_workspace_all_targets": "passed",
+    "focused_rust": {
+      "passed": 118,
+      "failed": 0,
+      "ignored": 0,
+      "groups": {
+        "content_checkpoint": 47,
+        "content_restore": 7,
+        "content_backup": 13,
+        "content_governed": 44,
+        "content_workflow": 2,
+        "content_output": 2,
+        "content_custody_image_policy": 3
+      }
+    },
+    "native_source": {"passed": 620, "failed": 0, "skipped": 0},
+    "public_trust": {"passed": 13, "failed": 0, "skipped": 0},
+    "model_public_inputs": {"passed": 13, "failed": 0, "skipped": 0},
+    "apparmor_offline_parse": "passed-not-loaded-kernel-qualification",
+    "disposable_software_tpm": {"scenarios_passed": 3, "physical_tpm_used": false},
+    "actual_content_cli": {"passed": 30, "failed": 0, "skipped": 0},
+    "actual_deterministic_workflow_reopen_recalculation_cases": 4,
+    "actual_native_recovery_data_canonicalizer_cases": 4,
+    "debug_binary_sha256": "c4c39248f1da4b1fa39aa1b2fad7e2fa2de6e29eafe04c1556826a60b5fb42a9",
+    "repository": {
+      "status": "passed",
+      "evidence": "/mnt/luma-build/work/candidate15-repository-verify-20261019-a/check.log",
+      "sha256": "f77e1500506505c716c42a4be4589a610bfaa8eb2856e5b22d6a9e8c02491737",
+      "legacy_tests_run": 320,
+      "legacy_tests_passed": 319,
+      "legacy_tests_skipped": 1,
+      "skip": "Existing Windows-only junction case; unchanged actual Windows result is retained in workflow_enrollment_integration_2026-10-19.json, not rerun or relabeled here",
+      "governing_source_entries": 288,
+      "release_inventory_files": 260
+    },
+    "cli_workflow_and_canonicalizers_prove_authenticated_effects": false
+  },
+  "retained_intermediate_results": {
+    "first_snapshot": "/mnt/luma-build/work/candidate15-source-20261019-a",
+    "first_evidence": "/mnt/luma-build/work/candidate15-verify-20261019-a",
+    "first_native_source_result": "619 run, one obsolete production-only backup source assertion failed; updated to assert both controller and worker enforce immutable custody policy",
+    "second_snapshot": "/mnt/luma-build/work/candidate15-source-20261019-b",
+    "second_snapshot_is_not_final_verification": true,
+    "restore_review_correction": "Valid native .1,.3 publication suffixes across inert history now pass; reversed, duplicate, noncanonical and out-of-range suffixes refuse"
+  },
+  "build_storage": {
+    "code_tree": "C:/Users/hakim/LumaOS",
+    "bulk_storage": "D:/LumaOS-builds",
+    "dedicated_ext4": "/mnt/luma-build",
+    "retirement_record": "D:/LumaOS-builds/candidate15-intermediates-20261019T112923Z.json",
+    "retirement_record_sha256": "a42c0b1ba2fa5a7a86cb83244459fac2043701fecb686a52165b9743bafa6dd2",
+    "exact_generated_paths_retired": 31,
+    "unique_allocated_bytes_retired": 24921329664,
+    "retired_files_recoverable_by_rebuild_not_recycle_bin": true,
+    "public_exports_sources_logs_keys_caches_and_sequence14_preserved": true,
+    "desktop_32_gib_inner_60_gib_outer_preflight": "passed-after-exact-cleanup",
+    "storage_resized": false,
+    "wsl_shutdown_or_memory_reconfiguration": false
+  },
+  "development_limits": [
+    "C journal remains bounded to its existing 4 MiB and 1024 events; authenticated multi-page continuation is not implemented",
+    "Zero or noncanonical PREPARED or damaged authoritative journal is preserved and refused; partial-PUBLISHED retirement does not reconstruct or adopt damaged C authority",
+    "Restore retains the existing thirty-second Standard session; no unapproved extended Restore session was introduced",
+    "Broader G3 and GWIN0 development remains as recorded in G3_GWIN0_IMPLEMENTATION.md"
+  ],
+  "image_assembled": false,
+  "boot_tested": false,
+  "native_installation_tested": false,
+  "production_signed": false,
+  "physical_hardware_tested": false,
+  "gate_closing": false
+}

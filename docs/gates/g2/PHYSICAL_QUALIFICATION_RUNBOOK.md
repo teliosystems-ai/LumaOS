@@ -7,11 +7,15 @@ handoff. It covers destructive installation and boot evidence, hardware-bound
 security controls, encryption recovery, lifecycle and power-loss testing on
 the exact retained Ubuntu tuples.
 
-The repository does not currently contain a production installer, signed
-Ubuntu image, signed production model catalog, production signing keys, or a
-privileged Linux enforcement service. This runbook therefore defines the lab,
-authorization, execution and evidence contract; it does not claim that those
-missing implementations or their acceptance tests have passed.
+The repository contains the native installer, boot, security and recovery
+implementations, privileged platform services and a separate Ubuntu image
+builder. Laboratory media and image-specific evidence are generated outside
+Git; follow the exact candidate's execution record and the
+[native image guide](../../../native/image/README.md). These implementations
+do not establish a signed production release, production model custody or
+physical acceptance. Production private keys are not repository assets. This
+runbook defines the authorization, execution and evidence contract, not a
+claim that an image or its acceptance tests have passed.
 
 Ubuntu WSL is a useful development lane for source tests, schema validation,
 the non-destructive collector and userspace preflight. It cannot prove UEFI,

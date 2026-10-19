@@ -1,0 +1,193 @@
+{
+  "schema_version": 1,
+  "date": "2026-10-19",
+  "status": "lab-image-produced-offline-verified-and-live-secureboot-vm-smoke-passed",
+  "scope": "Standalone Ubuntu 24.04 amd64 UEFI desktop laboratory installation/recovery disk image; not an ISO or an application installed into existing Ubuntu",
+  "operator_handoff": "G2_NATIVE_DESKTOP_CANDIDATE_16_2026-10-19.md",
+  "source": {
+    "commit": "bc14e7c",
+    "snapshot": "/mnt/luma-build/work/candidate16-source-20261019-f",
+    "frozen_manifest_sha256": "6937771ed5da87cfb811300bd745c0081fb879258bf0e2a6430d013e7437277b",
+    "frozen_files": 553,
+    "product_source_lock_sha256": "cfb596caa33c29c15124d70a2e0bd799b772c5f43fdb76d83e3eee3112cd5740",
+    "product_files": 438
+  },
+  "assembly": {
+    "build_id": "20261019T135331Z-desktop",
+    "volume": "luma-native-build-20261019T135331Z-desktop",
+    "export_directory": "D:/LumaOS-builds/native/20261019T135331Z-desktop",
+    "public_exports": 11,
+    "log": "D:/LumaOS-builds/candidate16-assembly-20261019T135330Z.log",
+    "log_sha256": "764e896b5a830d40d1ff10404c99872942f5fd29e2617b8c8414a78da885ea97",
+    "exit_code": 0,
+    "optimized_release_compile": "passed in 9m 09s, original release optimization retained",
+    "memory_cap_gib": 5,
+    "physical_host_reserve_gib": 1,
+    "dedicated_d_backed_ext4_store_and_daemon_verified": true,
+    "c_drive_bulk_build_fallback": false,
+    "kernel": "6.8.0-142-generic",
+    "verity_root_hash": "8ca3beb4c17a328c1cbdeeb687b192063635ce30ee426a4589a60ee1a109bdaa",
+    "packaged_platform_sha256": "a8bad56d7f1ee779822a669f227921aa0e336cb98f01a2fcab339c74fbb773c4",
+    "model_weights_embedded": false,
+    "model_installation": "Explicit --stage-model downloads pinned supported GGUF bytes with size/digest and resource checks; inert staging is not serving activation",
+    "exported_build_status_preserved": "built-not-yet-boot-tested",
+    "signed_or_exported_files_rewritten_after_testing": false
+  },
+  "artifacts": {
+    "compressed": {
+      "name": "luma-native-lab-20260927-desktop-16.img.zst",
+      "bytes": 3265429446,
+      "sha256": "4884d0e2910c0520723f0f7ea7a1963466ed48b8f098c3227cb9dc08d8923008"
+    },
+    "decompressed_raw": {
+      "name": "luma-native-lab-20260927-desktop-16.img",
+      "bytes": 16190013440,
+      "sha256": "4e844b54036f549b61dc80d315012000e8a20707f006b4592d0faa0a47d45502",
+      "retained_in_d_backed_build_volume": true,
+      "additional_raw_export_copy_created": false
+    },
+    "secureboot_public_cert": {
+      "name": "secureboot.cer",
+      "bytes": 1073,
+      "sha256": "2637785a3cb4798db902bf62732324984d3f2475d7f2eecc318442772d9c06c8"
+    },
+    "release_public_sha256": "62588a16a8901fbdf20cdfee1c1df5c243e85022693f6edb275a51366d01878f",
+    "pcr_public_sha256": "b55221f37d366b64367db37394852d7af70b328a9c8173f5aa2e499762bfad26",
+    "private_keys_exported": false
+  },
+  "source_tests": {
+    "evidence": "package_metadata_preparation_2026-10-19.json",
+    "native_source_passed": 644,
+    "public_trust_passed": 13,
+    "model_public_inputs_passed": 13,
+    "failures": 0,
+    "skips": 0,
+    "native_lane_sha256": "60086a987c1aed329fbbad9ae3fe4155944ca3ea7c7532ed970aec91ffff858e",
+    "log_manifest_sha256": "b99cb224ee50a8cd3fe4b527d3fc2b2f8cd740bb371b34987237fc65956e5050",
+    "bash_syntax_and_offline_apparmor_parse": "passed; offline parsing is not loaded-policy qualification",
+    "previous_rust_and_disposable_tpm_results": "workspace_launch_preparation_2026-10-19.json retains actual prior executions, joined only through verified unchanged code; not reexecuted on source F"
+  },
+  "offline_image_verification": {
+    "status": "passed",
+    "evidence": "/mnt/luma-build/work/candidate16-image-verification-20261019-b/verification.json",
+    "evidence_sha256": "79e3139ab04d127a3f1c326d31f44e3f1efb4484c5b97bd173d80783e6589175",
+    "log": "D:/LumaOS-builds/candidate16-image-verification-20261019T135331Z-desktop-b.log",
+    "log_sha256": "625d8048e9c17a3a065becc86af180bc6febcf1ef4e3b1ff524214584ed65ed6",
+    "executed_verifier": "candidate16_image_verify_2026_10_19.py",
+    "executed_verifier_sha256": "ecb68d3a52523b5b092958579390569719bb110ce8d24b71b854682649a7b2a5",
+    "checks_passed": 13,
+    "checks_failed": 0,
+    "checks": [
+      "Exact selected read-only source/export/build-volume and writable evidence mount identities",
+      "Verifier-only two-fixed-instance-template extraction adapter with ordinary paths unchanged",
+      "All 553 frozen source records",
+      "Eleven public exports and ten checksum rows",
+      "Exact 438-file product subset and complete compressed source archive",
+      "Compressed image stream equals exact raw bytes without another raw copy",
+      "Primary and backup GPT, partition content and zero slack",
+      "Laboratory release signature, verity and three measured signed UKIs",
+      "Exact offline payload and ESP member inventories and bytes",
+      "Browser v2 actual root library, fixed ELF launcher and profile pins",
+      "Eighty exact UI/overlay source members and native primary launcher",
+      "Image QEMU KSM default disabled, boot helper masked/not enabled, QEMU executable retained",
+      "Actual packaged optimized release binary: 30 CLI, four workflow DATA and four recovery DATA cases"
+    ],
+    "actual_packaged_cli": {
+      "contract_passed": 30,
+      "workflow_data_passed": 4,
+      "recovery_data_passed": 4,
+      "skipped": 0,
+      "pam_grants_live_c_authority_effects_or_gui_exercised": false
+    },
+    "verifier_adapter_audit": {
+      "purpose": "Historical extraction path regex rejected @ in two actual getty instance paths; fix remains verifier-only and does not modify signed image or frozen source",
+      "ordinary_paths_delegated_unchanged": true,
+      "exact_special_paths": [
+        "/etc/systemd/system/getty@tty1.service.d/luma-mode.conf",
+        "/etc/systemd/system/serial-getty@ttyS0.service.d/luma-mode.conf"
+      ],
+      "pure_adversarial_cases_passed": 94,
+      "pure_evidence": "/mnt/luma-build/work/candidate16-verifier-descriptor-audit-20261019-b/verification.json",
+      "pure_evidence_sha256": "234e9334579780193c6e90c380f81aadfbaefb1e09457e146a9224040a7f8f7b",
+      "actual_files_extracted_and_compared": 2,
+      "actual_evidence": "/mnt/luma-build/work/candidate16-verifier-descriptor-audit-20261019-b/actual-instance-extraction.json",
+      "actual_evidence_sha256": "d86b6f4e66c8d2c5b8a971cdc176469f4d2057ceaaafa5b88549747ab098e717",
+      "earlier_failed_verifier_evidence_retained": "/mnt/luma-build/work/candidate16-image-verification-20261019-a/verification.json",
+      "earlier_failed_verifier_evidence_sha256": "72c86459ba804aa91ed239418fdebf04754e96a868ea9ca24a0714013cc6d01e"
+    }
+  },
+  "vm_live_smoke": {
+    "result": "passed",
+    "evidence": "/mnt/luma-build/docker/volumes/luma-native-build-20261019T135331Z-desktop/_data/vm-candidate16-20261019-live-secureboot-tcg/result.json",
+    "evidence_sha256": "11a7c2cc6dff1b3fb75cb3b610398b65b788299f47c63156b7f0313eb2c94e3e",
+    "log": "D:/LumaOS-builds/candidate16-vm-smoke-20261019T135331Z-desktop.log",
+    "log_sha256": "ca0ba09c9669fea4e69b238ab08a5e88be1ba480af4d9edc26d61a5e7c2af70b",
+    "serial_log_sha256": "f668a7d0c03126a4fa3f6954a96cb8950a7f0c226340f6e24f7afdfdcd477c7c",
+    "qemu_log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "fixture": "native/image/vm_test.py --smoke-only --secure-boot --require-clean-shutdown --accel tcg",
+    "fixture_sha256": "c9bc8246e8fcb8464959df2a23a2d0577a4bf7bbaefc9532f0650f2a05a048ae",
+    "acceleration": "tcg",
+    "guest_memory_mib": 4096,
+    "host_available_bytes_at_admission": 6586130432,
+    "host_reserve_bytes": 2147483648,
+    "container_memory_gib": 6,
+    "container_swap_additional_bytes": 0,
+    "network": false,
+    "physical_devices_or_kvm_passed_through": false,
+    "fresh_virtual_firmware_and_software_tpm": true,
+    "image_read_only_and_sha256_rechecked_after_test": true,
+    "uefi_boot_tested": true,
+    "actual_guest_secure_boot_enabled": true,
+    "live_inventory_status_broker_reference_media_verity_and_tpm_probe_passed": true,
+    "live_reference_apparmor_enforce_observed": true,
+    "clean_final_storage_teardown_tested": true,
+    "shutdown_marker": "LUMA_SHUTDOWN_STORAGE_CLEAN",
+    "shutdown_warning": "Systemd initially failed unmounting /var; later dracut old-root teardown completed, the required final storage-clean marker appeared and QEMU exited zero. This does not claim warning-free service shutdown or installed encrypted-data recovery.",
+    "reported_stage_name": "install",
+    "reported_stage_name_is_not_installation_evidence": true,
+    "installation_tested": false,
+    "graphical_session_tested": false,
+    "atomic_export_tested": false,
+    "bounded_ipc_tested": false,
+    "gate_closing": false
+  },
+  "preserved_failed_builds": [
+    {
+      "build_id": "20261019T125631Z-desktop",
+      "failure": "Actual 4-GiB compiler memory-cgroup OOM; no image or signing outputs",
+      "retirement_record": "D:/LumaOS-builds/failed-assembly-preserved/20261019T125631Z-desktop/retirement.json",
+      "retirement_record_sha256": "c7706bff5ab776251b5e7bbe1420e44d91ab5a7562bee5a642281b4a3530b16c"
+    },
+    {
+      "build_id": "20261019T132949Z-desktop",
+      "failure": "Optimized compiler passed, then Office package parser refused legitimate empty Conffiles fields; no image or signing outputs",
+      "retirement_record": "D:/LumaOS-builds/failed-assembly-preserved/20261019T132949Z-desktop/retirement.json",
+      "retirement_record_sha256": "65e1be03d55a9d01df6ea849bc318f087ac163d652dc5d42cac3f6fdbcefc353"
+    }
+  ],
+  "remaining": {
+    "native_qualification": [
+      "Reviewed destructive target installation and actual installed boot",
+      "Loaded native security and graphical/Wayland/WebKit sandbox behavior",
+      "Existing-owner physical TPM, independent A/R/C/U custody commissioning and protected UTC dependencies",
+      "Account/session/finite-grant and model admission on the installed target",
+      "Secure Boot and verity rejection, update/fallback, encrypted storage, power-loss and recovery acceptance"
+    ],
+    "development_not_reclassified_as_testing": [
+      "C journal paged continuation/compaction and custody/key succession beyond its bounded 4-MiB/1024-event journal",
+      "Damaged/noncanonical preparation or authoritative-history handling remains fail-closed for forensics, not automatic healing/reset",
+      "Broader G3 application/adapter/capture journeys and GWIN0 principal/grant/inference integration"
+    ],
+    "production_release": "Independent production custody, model catalog/trust and applicable qualification/finalization remain separate from this identified laboratory-signed candidate"
+  },
+  "qualification": {
+    "wsl_restarted_or_memory_configuration_changed": false,
+    "physical_disk_firmware_or_tpm_mutated": false,
+    "native_machine_qualified": false,
+    "installed_security_or_recovery_qualified": false,
+    "production_custody_qualified": false,
+    "g2_closed": false,
+    "g3_closed": false,
+    "gwin0_closed": false
+  }
+}

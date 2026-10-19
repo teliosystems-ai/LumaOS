@@ -1160,3 +1160,25 @@ passing public-trust/model-input tests and offline policy parse. The prior
 Rust, disposable-TPM and CLI results are joined only through verified identical
 code. Actual assembly, image verification and boot results must be recorded
 separately; these source results are not a produced or qualified image.
+
+### Sequence-16 image produced and live Secure Boot smoke passed
+
+Build `20261019T135331Z-desktop` now provides the laboratory-signed standalone
+Ubuntu 24.04 amd64 UEFI desktop image at
+`D:/LumaOS-builds/native/20261019T135331Z-desktop`. This is new sequence-16 media;
+the earlier sequence-14 image and its historical evidence remain unchanged.
+All thirteen offline image checks passed, including the actual optimized
+packaged CLI and exact source/payload/signature/verity checks. A fresh
+software-emulated Secure Boot VM then passed live-system startup, reference
+AppArmor enforcement, verity and final storage teardown. Its `install` stage
+name does not imply installation: the invocation was explicitly smoke-only.
+
+Use the [operator handoff](../native/evidence/G2_NATIVE_DESKTOP_CANDIDATE_16_2026-10-19.md)
+for transfer, independently pinned checksums, disposable USB/target selection,
+public lab-certificate enrollment, model staging and native acceptance. The
+[execution record](../native/evidence/candidate16_execution_2026-10-19.json)
+identifies the source, exact artifacts, actual test logs, retained failed
+attempts and remaining boundaries. Native installed/graphical, physical TPM,
+security/recovery and production custody acceptance remain open. Bounded C
+journal continuation/succession and broader G3/GWIN0 development are not
+reclassified as testing or closed by producing this laboratory candidate.

@@ -1,0 +1,9 @@
+# The fixed ordinary-user entry inherits this named domain through Python and
+# WebKit's bwrap children. It grants userns only; it is not product authority
+# or whole-application confinement. WebKit still constructs its own sandbox.
+abi <abi/4.0>,
+include <tunables/global>
+
+profile luma-workspace /usr/libexec/luma-os/luma-workspace-launch flags=(unconfined) {
+  userns,
+}

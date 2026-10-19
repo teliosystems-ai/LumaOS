@@ -10,6 +10,7 @@ REQUIRED = (
     'usr/lib/systemd/system/gdm.service',
     'usr/libexec/luma-os/workspace_host.py', 'usr/libexec/luma-os/workspace_app.py',
     'usr/libexec/luma-os/workspace_auth.py',
+    'usr/libexec/luma-os/luma-workspace-launch',
     'usr/libexec/luma-os/browser_adapter.py',
     'usr/share/luma-os/adapters/browser-presentation-v1.json',
     'usr/share/luma-os/workspace/native-workspace.html',
@@ -135,8 +136,8 @@ TimeoutStopSec=30
 Type=Application
 Name={workspace_name}
 Comment=Native workspace; governed content requires independently provisioned custody and grants
-Exec=/usr/bin/python3 -I /usr/libexec/luma-os/workspace_app.py
-TryExec=/usr/bin/python3
+Exec=/usr/libexec/luma-os/luma-workspace-launch
+TryExec=/usr/libexec/luma-os/luma-workspace-launch
 Icon=utilities-terminal
 Terminal=false
 Categories=Utility;

@@ -37,6 +37,14 @@ class BrowserPolicyTests(unittest.TestCase):
         self.library.chmod(0o644)
         self.alias = directory / 'libwebkit2gtk-4.1.so.0'
         self.alias.symlink_to(self.library.name)
+        self.launcher = self.root/'usr/libexec/luma-os/luma-workspace-launch'
+        self.launcher.parent.mkdir(parents=True)
+        shutil.copyfile(Path('/usr/bin/true').resolve(strict=True), self.launcher)
+        self.launcher.chmod(0o755)
+        self.profile = self.root/'etc/apparmor.d/luma-workspace'
+        self.profile.parent.mkdir(parents=True)
+        self.profile.write_bytes(b'profile luma-workspace /usr/libexec/luma-os/luma-workspace-launch flags=(unconfined) { userns, }\n')
+        self.profile.chmod(0o644)
 
     def test_manifest_pins_exact_package_runtime_and_actual_elf_bytes(self):
         encoded = policy.canonical_manifest(self.root)
@@ -45,7 +53,47 @@ class BrowserPolicyTests(unittest.TestCase):
         self.assertEqual(value['runtime_version'], [2, 48, 3])
         self.assertEqual(value['library']['path'], '/usr/lib/x86_64-linux-gnu/' + self.library.name)
         self.assertEqual(value['library']['bytes'], self.library.stat().st_size)
+        self.assertEqual(value['schema_version'], 2)
+        self.assertEqual(value['launcher']['path'], '/usr/libexec/luma-os/luma-workspace-launch')
+        self.assertEqual(value['launcher']['bytes'], self.launcher.stat().st_size)
+        self.assertEqual(value['apparmor_profile']['path'], '/etc/apparmor.d/luma-workspace')
+        self.assertEqual(value['apparmor_profile']['bytes'], self.profile.stat().st_size)
+        self.assertEqual(value['apparmor_label'], 'luma-workspace (unconfined)')
         self.assertFalse(value['native_qualified'])
+
+    def test_fixed_launcher_and_profile_pins_change_only_with_actual_protected_bytes(self):
+        original = json.loads(policy.canonical_manifest(self.root))
+        self.profile.write_bytes(self.profile.read_bytes()+b'# actual profile change\n')
+        changed = json.loads(policy.canonical_manifest(self.root))
+        self.assertNotEqual(original['apparmor_profile']['sha256'], changed['apparmor_profile']['sha256'])
+        self.assertEqual(original['launcher'], changed['launcher'])
+        for member in (self.launcher, self.profile):
+            data = member.read_bytes()
+            mode = member.stat().st_mode & 0o777
+            member.unlink()
+            with self.assertRaises(FileNotFoundError):
+                policy.canonical_manifest(self.root)
+            member.write_bytes(data)
+            member.chmod(mode)
+            member.chmod(0o666)
+            with self.assertRaises(ValueError):
+                policy.canonical_manifest(self.root)
+            member.chmod(mode)
+            linked = member.parent/(member.name+'.duplicate')
+            os.link(member, linked)
+            with self.assertRaises(ValueError):
+                policy.canonical_manifest(self.root)
+            linked.unlink()
+            held = member.parent/(member.name+'.held')
+            member.rename(held)
+            member.symlink_to(held.name)
+            with self.assertRaises(ValueError):
+                policy.canonical_manifest(self.root)
+            member.unlink()
+            held.rename(member)
+        self.launcher.write_bytes(b'not a compiled fixed launcher')
+        with self.assertRaises(ValueError):
+            policy.canonical_manifest(self.root)
 
     def test_rejects_external_alias_stub_hardlink_and_writable_library(self):
         for target in (str(self.library), '../x86_64-linux-gnu/' + self.library.name,

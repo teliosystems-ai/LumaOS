@@ -48,6 +48,21 @@ without a model; owner reads, deterministic workflows and recovery open a
 separate native terminal. Passwords, private results, finite grants and offline
 recovery keys never enter WebKit.
 
+The desktop entry executes the fixed nonprivileged ELF
+`/usr/libexec/luma-os/luma-workspace-launch`. Its image-owned named AppArmor
+profile grants the user-namespace compatibility permission required by
+[Ubuntu's restricted-userns policy](https://documentation.ubuntu.com/release-notes/24.04/).
+It does not attach to Python or bubblewrap globally, disable WebKit's sandbox,
+change the global sysctl, or confer whole-application confinement or product
+authority. The launcher requires the exact loaded named profile, ordinary
+unswitched credentials and the owner's actual Wayland/session-bus sockets. It
+closes inherited descriptors and starts only the fixed isolated Python script
+with a closed environment. The schema-2 browser manifest pins the actual
+WebKit library, launcher ELF and profile bytes; bare Python and legacy
+manifests cannot bypass those startup checks. Installed graphical startup,
+the loaded policy and the original PAM terminal transition still require
+image-specific testing.
+
 New images include the verity-protected
 `/usr/share/luma-os/content-custody-policy.json`, selecting
 `tpm-checkpoint-v1` independently of laboratory or production release signing.
@@ -187,7 +202,8 @@ not in the frozen sequence-14 image; use a separately identified future build.
 ## Candidate Wayland desktop edition
 
 The `desktop` build uses pinned Ubuntu GNOME/GDM packages, Files, Console,
-Text Editor, Settings and a browser launcher for the local reference workspace.
+Text Editor, Settings and the fixed native workspace launcher. The local HTTP
+reference workspace has a separate hidden developer entry.
 The installed signed UKI selects `graphical.target`; live installation/recovery
 and the headless edition explicitly select `multi-user.target`. GDM is limited
 to installed boots and requires the installer-created account password. There

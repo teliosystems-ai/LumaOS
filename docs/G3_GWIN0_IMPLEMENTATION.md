@@ -714,6 +714,36 @@ Damaged preparation or authoritative history still remains fenced. The frozen
 four each of workflow/reopen and recovery-data compatibility cases. This is
 software verification for a new candidate, not installed or native acceptance.
 
+The [subsequent candidate-16 preparation](../native/evidence/workspace_launch_preparation_2026-10-19.json)
+replaces the direct Python desktop
+entry with a fixed nonprivileged ELF launcher and its own narrowly attached
+AppArmor user-namespace compatibility profile. Ubuntu's packaged WebKit 4.1
+does not supply that attachment for a custom Python shell. The launcher checks
+the exact loaded named profile, unswitched ordinary-user identities and the
+actual owner Wayland/session-bus sockets, closes inherited descriptors and
+starts only the fixed isolated Python entry with a closed environment. A
+mandatory schema-2 browser manifest pins the actual WebKit library, launcher
+and profile bytes. The named `unconfined` profile grants compatibility for
+WebKit's independently enabled sandbox; it is not whole-application confinement
+or product authority. Installed startup, original PAM transitions and the
+loaded policy still need image-specific qualification. Candidate 15 was paused
+before assembly when this packaging gap was identified; its source and logs
+remain retained, not reported as a produced or accepted image.
+Its corrected executable/test sources pass 118 focused Rust and all 625
+native-source tests, 26 public-input cases, the disposable-TPM and actual CLI
+fixtures. The final cut changes only the packaged README, with an exact
+byte-equality proof and a fresh 625-test/public-input rerun. The quiet Linux
+repository sweep passes 319 cases with one Windows-only skip; that junction
+case passes on Windows. Earlier loaded-I/O deadline failures and harness setup
+failures remain retained rather than overwritten or counted as passes.
+The final image cut additionally disables the packaged QEMU helper's automatic
+global KSM policy, retaining QEMU for explicit use. Its 553-file snapshot passes
+all 633 native-source and 26 public-input tests plus offline policy parsing.
+The exact source comparison retains unchanged Rust and prior native test bytes;
+these image-configuration tests do not claim a loaded kernel state or native
+boot. The production JavaScript also passes 31 actual DOM assertions, not a
+graphical WebKit acceptance test.
+
 The current integrated sources still leave the following development work:
 
 - Content custody lifecycle, bounded-journal succession/compaction and forensic

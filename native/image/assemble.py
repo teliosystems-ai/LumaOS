@@ -253,6 +253,7 @@ def main() -> None:
     sys.path.insert(0, str(REPO/'native/image'))
     import boot_policy
     import desktop_policy
+    import qemu_policy
     import office_policy
     source_lock=json.dumps({'schema_version':1,'files':inputs},sort_keys=True,indent=2)+'\n'
     (OUT/'source-lock.json').write_text(source_lock)
@@ -343,6 +344,14 @@ def main() -> None:
             target = binary.parent/name
             shutil.copy2(REPO/'native/desktop'/name, target)
             target.chmod(0o644)
+        # The named AppArmor userns entry attaches ONLY to this fixed ELF, never
+        # to Python globally. Fingerprint its actual compiled image bytes below.
+        workspace_launcher = binary.parent/'luma-workspace-launch'
+        run('gcc', '-std=c17', '-O2', '-Wall', '-Wextra', '-Wpedantic', '-Werror', '-Wformat=2',
+            '-Wformat-security', '-fstack-protector-strong', '-D_FORTIFY_SOURCE=3',
+            '-fPIE', '-pie', '-Wl,-z,relro,-z,now,-z,noexecstack', '-Wl,--as-needed',
+            REPO/'native/image/workspace_launcher.c', '-o', workspace_launcher)
+        workspace_launcher.chmod(0o755)
         put('usr/share/luma-os/adapters/browser-presentation-v1.json',
             browser_policy.canonical_manifest(ROOT).decode('utf-8'))
         workspace = ROOT/'usr/share/luma-os/workspace'
@@ -445,6 +454,7 @@ def main() -> None:
     if any(1000 <= int(line.split(':')[2]) < 65534
            for line in (ROOT/'etc/passwd').read_text().splitlines()):
         raise SystemExit('unexpected pre-existing interactive identity in base image')
+    qemu_policy.configure(ROOT)
     desktop_profile = desktop_policy.configure(ROOT, args.edition, args.environment)
     root_mib, payload_mib = desktop_policy.geometry(args.edition)
     template = ROOT/'usr/share/luma-os/var-template'

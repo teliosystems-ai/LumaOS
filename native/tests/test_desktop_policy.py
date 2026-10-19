@@ -44,7 +44,7 @@ class DesktopPolicyTests(unittest.TestCase):
     def test_primary_launcher_uses_native_workspace_and_reference_is_hidden(self):
         policy.configure(self.root, 'desktop')
         launcher = (self.root/'usr/share/applications/luma-workspace.desktop').read_text()
-        self.assertIn('Exec=/usr/bin/python3 -I /usr/libexec/luma-os/workspace_app.py\n', launcher)
+        self.assertIn('Exec=/usr/libexec/luma-os/luma-workspace-launch\n', launcher)
         self.assertIn('requires independently provisioned custody and grants', launcher)
         self.assertNotIn('http:', launcher)
         reference = (self.root/'usr/share/applications/luma-reference-workspace.desktop').read_text()

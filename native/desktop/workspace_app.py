@@ -71,17 +71,21 @@ def main():
     browser_spec = importlib.util.spec_from_file_location('luma_native_browser_adapter', browser_path)
     browser_module = importlib.util.module_from_spec(browser_spec)
     browser_spec.loader.exec_module(browser_module)
+    # The fixed ELF attachment is essential on restricted-userns Ubuntu. Bare
+    # Python, generic unconfined, complain/enforce substitutions and stacked
+    # labels are not a launcher bypass. This named userns permission is NOT a
+    # claim of whole-app confinement or independently measured loaded policy.
+    with open('/proc/self/attr/current', 'rb', buffering=0) as label:
+        browser_module.require_workspace_label(label.read(257))
     import gi
     gi.require_version('Gtk', '3.0')
     gi.require_version('WebKit2', '4.1')
     from gi.repository import Gio, GLib, Gtk, WebKit2
     browser_version = (WebKit2.get_major_version(), WebKit2.get_minor_version(), WebKit2.get_micro_version())
     browser_manifest = protected_file(Path('/usr/share/luma-os/adapters/browser-presentation-v1.json'), 65536)
-    browser_pin = browser_module.runtime_manifest(browser_manifest, browser_version)
-    library = protected_file(Path(browser_pin['path']), 256*1024*1024)
-    if len(library) != browser_pin['bytes'] or hashlib.sha256(library).hexdigest() != browser_pin['sha256']:
-        raise ValueError('actual WebKit library differs from the fixed image dependency pin')
-    del library
+    browser_policy = browser_module.runtime_manifest(browser_manifest, browser_version)
+    browser_module.verify_runtime_files(browser_policy, lambda path, maximum: protected_file(Path(path), maximum))
+    browser_pin = browser_policy['library']
     Gtk.init([])
 
     # Capture the fixed trusted UI before enabling script messaging; arbitrary

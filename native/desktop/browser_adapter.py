@@ -12,6 +12,18 @@ import time
 
 MAX_HTML = 1024 * 1024
 SECONDS = 15
+WORKSPACE_LABEL = b'luma-workspace (unconfined)\n'
+
+
+def require_workspace_label(data):
+    """Exact kernel observation, not a claim of whole-app MAC confinement.
+
+    This Ubuntu-style NAMED unconfined profile supplies only the fixed
+    launcher's userns compatibility permission. WebKit's own sandbox remains
+    independently required; generic unconfined or a stacked label is refused.
+    """
+    if not isinstance(data, bytes) or data != WORKSPACE_LABEL:
+        raise ValueError('workspace requires its exact image-installed named AppArmor userns profile')
 
 
 def runtime_manifest(data, version):
@@ -25,8 +37,8 @@ def runtime_manifest(data, version):
             result[key] = value
         return result
     value = json.loads(data.decode('utf-8'), object_pairs_hook=pairs, parse_constant=lambda _: (_ for _ in ()).throw(ValueError('nonfinite browser manifest')))
-    fields = {'schema_version','profile','api_version','package_version','runtime_version','library','max_html_bytes','timeout_seconds','native_qualified'}
-    if not isinstance(value,dict) or set(value)!=fields or type(value['schema_version']) is not int or value['schema_version']!=1 or value['profile']!='webkitgtk-native-document-presentation-v1' or value['api_version']!='4.1':
+    fields = {'schema_version','profile','api_version','package_version','runtime_version','library','launcher','apparmor_profile','apparmor_label','max_html_bytes','timeout_seconds','native_qualified'}
+    if not isinstance(value,dict) or set(value)!=fields or type(value['schema_version']) is not int or value['schema_version']!=2 or value['profile']!='webkitgtk-native-document-presentation-v1' or value['api_version']!='4.1':
         raise ValueError('browser image manifest closed profile refused')
     if not isinstance(version,tuple) or len(version)!=3 or any(type(item) is not int or not 0<=item<=65535 for item in version) or version[0]!=2:
         raise ValueError('actual WebKitGTK runtime version refused')
@@ -43,7 +55,31 @@ def runtime_manifest(data, version):
         raise ValueError('browser library path outside fixed versioned SONAME profile')
     if type(pin['bytes']) is not int or not 0<pin['bytes']<=256*1024*1024 or not isinstance(pin['sha256'],str) or not re.fullmatch(r'[0-9a-f]{64}',pin['sha256']):
         raise ValueError('browser library pin bounds refused')
-    return pin
+    for name, path, maximum in (('launcher', '/usr/libexec/luma-os/luma-workspace-launch', 1024*1024),
+                                ('apparmor_profile', '/etc/apparmor.d/luma-workspace', 65536)):
+        fixed = value[name]
+        if not isinstance(fixed, dict) or set(fixed) != {'path', 'bytes', 'sha256'} or fixed['path'] != path or type(fixed['bytes']) is not int or not 0 < fixed['bytes'] <= maximum or not isinstance(fixed['sha256'], str) or not re.fullmatch(r'[0-9a-f]{64}', fixed['sha256']):
+            raise ValueError('fixed workspace launcher/userns profile pin refused')
+    if value['apparmor_label'] != WORKSPACE_LABEL[:-1].decode('ascii'):
+        raise ValueError('workspace AppArmor named userns label substituted')
+    return value
+
+
+def verify_runtime_files(manifest, read_protected):
+    """Hash actual protected installed inputs; never infer the loaded DFA.
+
+    The caller supplies its existing no-alias/root-owned bounded file reader.
+    Loaded-label observation is required separately from these source pins.
+    """
+    for key, maximum in (('library', 256*1024*1024), ('launcher', 1024*1024), ('apparmor_profile', 65536)):
+        pin = manifest[key]
+        data = read_protected(pin['path'], maximum)
+        if not isinstance(data, bytes) or len(data) != pin['bytes'] or hashlib.sha256(data).hexdigest() != pin['sha256']:
+            raise ValueError('actual installed browser/launcher/userns profile differs from fixed image pin')
+        if key in ('library', 'launcher') and (len(data) < 64 or data[:7] != b'\x7fELF\x02\x01\x01'
+                or int.from_bytes(data[16:18], 'little') not in (2, 3)
+                or int.from_bytes(data[18:20], 'little') != 62 or int.from_bytes(data[20:24], 'little') != 1):
+            raise ValueError('actual installed dependency is not a compiled x86-64 ELF')
 
 
 class Presentation:

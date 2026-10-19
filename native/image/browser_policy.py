@@ -1,4 +1,4 @@
-"""Actual desktop image WebKit tuple and ELF pin; no runtime qualification."""
+"""Actual WebKit, fixed launcher and named userns profile pins; no qualification."""
 import json
 from pathlib import Path
 import re
@@ -31,7 +31,10 @@ def canonical_manifest(root):
     if not re.fullmatch(r'libwebkit2gtk-4\.1\.so\.0\.[0-9]+\.[0-9]+', target):
         raise ValueError('browser SONAME alias must resolve to exact same-directory versioned library')
     pin, _ = office_policy.read(root, str(relative.parent / target), 256*1024*1024, elf=True)
-    value = dict(schema_version=1, profile='webkitgtk-native-document-presentation-v1', api_version='4.1',
+    launcher, _ = office_policy.read(root, 'usr/libexec/luma-os/luma-workspace-launch', 1024*1024, elf=True)
+    apparmor_profile, _ = office_policy.read(root, 'etc/apparmor.d/luma-workspace', 65536)
+    value = dict(schema_version=2, profile='webkitgtk-native-document-presentation-v1', api_version='4.1',
                  package_version=version, runtime_version=[int(item) for item in parsed.groups()], library=pin,
+                 launcher=launcher, apparmor_profile=apparmor_profile, apparmor_label='luma-workspace (unconfined)',
                  max_html_bytes=1024*1024, timeout_seconds=15, native_qualified=False)
     return json.dumps(value, ensure_ascii=False, separators=(',', ':'), allow_nan=False).encode('utf-8')

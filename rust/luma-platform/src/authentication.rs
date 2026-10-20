@@ -20,6 +20,7 @@ const LIMIT: usize = 1024;
 pub(crate) const MODEL_QA_SESSION_SECONDS: u64 = 30 * 60;
 pub(crate) const PASSWORD_FRAME: usize = LIMIT + 1;
 mod session;
+pub(crate) use session::EditorCutoff;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum SessionPurpose {
     Standard,
@@ -208,6 +209,9 @@ impl ExchangeBoundary {
 }
 
 impl AuthenticatedAccount {
+    pub(crate) fn editor_cutoff(&self) -> Result<EditorCutoff> {
+        self.lifetime.editor_cutoff()
+    }
     pub(crate) fn check_projection(
         &self,
         clock: &crate::utc_provider::ProjectionClock,

@@ -26,6 +26,7 @@ mod content_restore;
 mod content_workflow;
 mod credential_observer;
 mod disk;
+mod editor_session;
 mod finite_grants;
 mod generated_runtime;
 mod hardware_policy;
@@ -170,6 +171,8 @@ fn dispatch() -> Result<()> {
                     | "generated-execute"
                     | "speech-review"
                     | "speech-transcribe"
+                    | "editor-review"
+                    | "editor-run"
                     | "model-pack-import-review"
                     | "model-pack-import"
                     | "model-pack-pending-review"
@@ -347,9 +350,21 @@ fn dispatch() -> Result<()> {
         Some("hosted-windows-workspace-contract") if args.len() == 1 => {
             hosted_workspace::contract()
         }
-        Some("hosted-windows-workspace-drain") if args.len() == 2 => hosted_workspace::drain(&args[1]),
-        Some("speech-resource-worker" | "speech-import-resource-worker" | "speech-review") if args.len() == 2 => speech::command(&args),
+        Some("hosted-windows-workspace-drain") if args.len() == 2 => {
+            hosted_workspace::drain(&args[1])
+        }
+        Some("speech-resource-worker" | "speech-import-resource-worker" | "speech-review")
+            if args.len() == 2 =>
+        {
+            speech::command(&args)
+        }
         Some("speech-transcribe") if args.len() == 4 => speech::command(&args),
+        Some("editor-resource-worker") if args.len() == 2 => editor_session::command(&args),
+        Some("editor-review") if args.len() == 3 => editor_session::command(&args),
+        Some("editor-run") if args.len() == 5 => editor_session::command(&args),
+        Some("editor-request" | "editor-checkpoint-request") if args.len() == 1 => {
+            editor_session::stdin(&args[0])
+        }
         Some("hardware-run") if args.len() == 2 => hardware_policy::console::launch(&args[1]),
         Some("hardware-console") if args.len() == 2 => hardware_policy::console::run(&args[1]),
         Some("hardware-cleanup") if args.len() == 2 => hardware_policy::console::cleanup(&args[1]),

@@ -103,6 +103,9 @@ enum Operation {
     Envelope {
         expected: VersionReference,
     },
+    EditorCheckpoint {
+        expected: VersionReference,
+    },
     Page {
         expected: VersionReference,
         offset: u64,
@@ -137,6 +140,29 @@ enum Operation {
 }
 
 impl Input {
+    fn requires_independent_c(&self) -> bool {
+        matches!(
+            self.operation,
+            Operation::Workflow { .. }
+                | Operation::OfficeReview { .. }
+                | Operation::Envelope { .. }
+                | Operation::EditorCheckpoint { .. }
+                | Operation::Lifecycle { .. }
+                | Operation::LifecycleStatus { .. }
+                | Operation::TrashVersion { .. }
+        ) || match &self.operation {
+            Operation::Capture { content, .. } | Operation::External { content, .. } => {
+                serde_json::from_str::<serde_json::Value>(content)
+                    .ok()
+                    .is_some_and(|value| {
+                        value.get("profile").and_then(serde_json::Value::as_str)
+                            == Some("luma-editor-document-v1")
+                    })
+            }
+            _ => false,
+        }
+    }
+
     fn publication_request_id(&self) -> Result<&str> {
         match &self.operation {
             Operation::Capture { provenance, .. }
@@ -155,6 +181,7 @@ impl Input {
             Operation::Current { .. }
                 | Operation::Historical { .. }
                 | Operation::Envelope { .. }
+                | Operation::EditorCheckpoint { .. }
                 | Operation::Page { .. }
                 | Operation::Search { .. }
                 | Operation::SearchSelected { .. }
@@ -178,7 +205,10 @@ impl Input {
             Operation::LifecycleStatus { .. } | Operation::TrashVersion { .. }
         ) {
             Mode::TrashQuery
-        } else if matches!(self.operation, Operation::Envelope { .. }) {
+        } else if matches!(
+            self.operation,
+            Operation::Envelope { .. } | Operation::EditorCheckpoint { .. }
+        ) {
             Mode::Envelope
         } else if self.is_query() {
             Mode::Query
@@ -189,7 +219,10 @@ impl Input {
 
     fn matches_mode(&self, mode: Mode) -> bool {
         self.is_query() == mode.is_query()
-            && matches!(self.operation, Operation::Envelope { .. }) == (mode == Mode::Envelope)
+            && matches!(
+                self.operation,
+                Operation::Envelope { .. } | Operation::EditorCheckpoint { .. }
+            ) == (mode == Mode::Envelope)
             && matches!(
                 self.operation,
                 Operation::LifecycleStatus { .. } | Operation::TrashVersion { .. }
@@ -224,6 +257,7 @@ impl Input {
             Operation::Current { .. }
             | Operation::Historical { .. }
             | Operation::Envelope { .. }
+            | Operation::EditorCheckpoint { .. }
             | Operation::Page { .. }
             | Operation::Search { .. }
             | Operation::SearchSelected { .. }
@@ -361,9 +395,9 @@ impl Input {
                 }
             }
             Operation::Current { artifact_id } => validate_artifact_id(artifact_id)?,
-            Operation::Historical { expected } | Operation::Envelope { expected } => {
-                validate_reference(expected)?
-            }
+            Operation::Historical { expected }
+            | Operation::Envelope { expected }
+            | Operation::EditorCheckpoint { expected } => validate_reference(expected)?,
             Operation::OfficeReview { expected } => validate_reference(expected)?,
             Operation::Page {
                 expected,
@@ -530,6 +564,45 @@ pub(crate) fn canonical_request(bytes: &[u8]) -> Result<Vec<u8>> {
         return Err("canonical native content request exceeds its bound".into());
     }
     Ok(canonical)
+}
+
+/// Pure, canonical data for the narrow editor resume Read. Neither a selected
+/// version nor these bytes carry a grant, a lease, or resume authority.
+pub(crate) fn editor_checkpoint_input(
+    login: &str,
+    binding: &OwnerBinding,
+    expected: &VersionReference,
+) -> Result<Vec<u8>> {
+    let input = Input {
+        schema_version: 1,
+        login: login.into(),
+        binding: binding.clone(),
+        operation: Operation::EditorCheckpoint {
+            expected: expected.clone(),
+        },
+    };
+    input.validate()?;
+    Ok(serde_json::to_vec(&input)?)
+}
+
+pub(crate) fn editor_checkpoint_profile(bytes: &[u8]) -> Result<String> {
+    let input = parse(bytes)?;
+    if !matches!(input.operation, Operation::EditorCheckpoint { .. }) {
+        return Err("editor resume requires its closed current-checkpoint Read operation".into());
+    }
+    profile_id(Mode::Envelope, &input, bytes, &io::digest(bytes))
+}
+
+/// Inert launcher framing bound, rebuilt from its immutable input. It grants
+/// neither private access nor permission to publish or export a result.
+pub(crate) fn content_response_limit(command: &str, bytes: &[u8]) -> Result<u64> {
+    let input = parse(bytes)?;
+    match command {
+        "content-owned-inspection-review" => Ok(MAX_OUTPUT),
+        "content-owned-review" => Ok(input.read_mode().output_limit()),
+        "content-owned-apply" if !input.is_query() => Ok(MAX_OUTPUT),
+        _ => Err("content response requires an exact closed review/apply command".into()),
+    }
 }
 
 /// Inert, bounded capture performed by the launcher before PAM or private IO.
@@ -941,6 +1014,9 @@ pub(crate) fn check_client_arguments(
     id: &str,
     audit: Option<&grants::Audit>,
 ) -> Result<()> {
+    if args.get(1) == Some(&"editor-run") {
+        return crate::editor_session::check_checkpoint_client_arguments(args, id, audit);
+    }
     let p = profile(id)?;
     let (path, effect_grant) = if p.mode.is_read() {
         if args.len() != 6 || args[1] != "content-owned-review" {
@@ -1128,6 +1204,7 @@ fn plan(
             Operation::Current { .. }
             | Operation::Historical { .. }
             | Operation::Envelope { .. }
+            | Operation::EditorCheckpoint { .. }
             | Operation::Page { .. }
             | Operation::Search { .. }
             | Operation::SearchSelected { .. }
@@ -1220,6 +1297,7 @@ fn plan(
         Operation::Current { .. }
         | Operation::Historical { .. }
         | Operation::Envelope { .. }
+        | Operation::EditorCheckpoint { .. }
         | Operation::Page { .. }
         | Operation::Search { .. }
         | Operation::SearchSelected { .. }
@@ -1315,6 +1393,7 @@ fn validate_replay(input: &Input, prior: &Plan) -> Result<()> {
         Operation::Current { .. }
         | Operation::Historical { .. }
         | Operation::Envelope { .. }
+        | Operation::EditorCheckpoint { .. }
         | Operation::Page { .. }
         | Operation::Search { .. }
         | Operation::SearchSelected { .. }
@@ -1464,6 +1543,15 @@ fn query(
             let version = repository.historical(expected, boundary)?;
             envelope_result(&version)?
         }
+        Operation::EditorCheckpoint { expected } => {
+            if repository.current_reference(&expected.artifact_id, boundary)? != *expected {
+                return Err(
+                    "editor resume checkpoint is not the exact live current version".into(),
+                );
+            }
+            let version = repository.historical(expected, boundary)?;
+            envelope_result(&version)?
+        }
         Operation::Page {
             expected,
             offset,
@@ -1573,17 +1661,8 @@ fn worker(id: &str) -> Result<()> {
         .take(MAX_REQUEST as u64 + 1)
         .read_to_end(&mut bytes)?;
     let input = parse(&bytes)?;
-    if matches!(
-        input.operation,
-        Operation::Workflow { .. }
-            | Operation::OfficeReview { .. }
-            | Operation::Envelope { .. }
-            | Operation::Lifecycle { .. }
-            | Operation::LifecycleStatus { .. }
-            | Operation::TrashVersion { .. }
-    ) && !checkpoint_required
-    {
-        return Err("managed workflow or whole-envelope delivery requires independently enrolled current content custody, not a laboratory file commit".into());
+    if input.requires_independent_c() && !checkpoint_required {
+        return Err("managed workflow, editor checkpoint or whole-envelope delivery requires independently enrolled current content custody, not a laboratory file commit".into());
     }
     if io::digest(&bytes) != p.source
         || input.binding.owner_generation != p.generation
@@ -2255,6 +2334,7 @@ fn write_pipe(destination: i32, bytes: &[u8]) -> std::io::Result<usize> {
     }
 }
 
+#[cfg(test)]
 fn deliver_checked_limited(
     result: &serde_json::Value,
     output_limit: u64,
@@ -2312,30 +2392,52 @@ fn deliver_checked(
 fn deliver_result(
     result: &serde_json::Value,
     output_limit: u64,
+    check: impl FnMut() -> Result<()>,
+) -> Result<()> {
+    let output = crate::service::granted_gateway::required_export_writer()?;
+    deliver_payload_result(result, output_limit, output, check)
+}
+
+fn deliver_payload_result(
+    result: &serde_json::Value,
+    output_limit: u64,
+    mut output: crate::service::granted_gateway::CheckedPayload,
     mut check: impl FnMut() -> Result<()>,
 ) -> Result<()> {
-    // Hold the ordinary stdout lock while using its unbuffered descriptor.
-    let stdout = std::io::stdout();
-    let _held = stdout.lock();
-    let mut output = NonblockingOutput::duplicate(1)?;
-    let fd = output.file.as_raw_fd();
-    deliver_checked_limited(result, output_limit, &mut output, &mut check, || {
-        let mut descriptor = libc::pollfd {
-            fd,
-            events: libc::POLLOUT,
-            revents: 0,
-        };
-        let status = unsafe { libc::poll(&mut descriptor, 1, 100) };
-        if status < 0 {
-            let error = std::io::Error::last_os_error();
-            if error.kind() != std::io::ErrorKind::Interrupted {
-                return Err(error.into());
-            }
-        } else if descriptor.revents & (libc::POLLERR | libc::POLLHUP | libc::POLLNVAL) != 0 {
-            return Err("native content consumer closed its bounded output".into());
-        }
-        Ok(())
-    })
+    check()?;
+    let mut bytes = serde_json::to_vec(result)?;
+    bytes.push(b'\n');
+    if !matches!(output_limit, MAX_OUTPUT | MAX_ENVELOPE_OUTPUT)
+        || bytes.len() as u64 >= output_limit
+    {
+        return Err("content result exceeds its finite acknowledged handoff bound".into());
+    }
+    for chunk in bytes.chunks(4096) {
+        check()?;
+        output.write_checked(chunk, &mut check)?;
+        check()?;
+    }
+    output.finish_checked(&mut check)?;
+    check()
+}
+
+/// Bounded original-controller handoff through the acknowledged private relay
+/// only. The caller supplies fresh original grant, principal, encrypted-data
+/// and physical-output-generation checks; there is no direct stdout fallback.
+pub(crate) fn deliver_editor_result(
+    result: &serde_json::Value,
+    check: impl FnMut() -> Result<()>,
+) -> Result<()> {
+    deliver_result(result, MAX_OUTPUT, check)
+}
+
+/// Fixed outer-editor destination only: preserve the inherited descriptor's
+/// flags while rejecting regular files and devices before any private work.
+/// This observation supplies no content, export, grant or resource authority.
+pub(crate) fn editor_relay_destination() -> Result<(impl Write, i32)> {
+    let output = NonblockingOutput::duplicate(1)?;
+    let descriptor = output.file.as_raw_fd();
+    Ok((output, descriptor))
 }
 
 pub(crate) fn command(args: &[String]) -> Result<()> {
@@ -2362,17 +2464,8 @@ pub(crate) fn command(args: &[String]) -> Result<()> {
     }
     let bytes = read_request(Path::new(path))?;
     let input = parse(&bytes)?;
-    if matches!(
-        input.operation,
-        Operation::Workflow { .. }
-            | Operation::OfficeReview { .. }
-            | Operation::Envelope { .. }
-            | Operation::Lifecycle { .. }
-            | Operation::LifecycleStatus { .. }
-            | Operation::TrashVersion { .. }
-    ) && !checkpoint_required
-    {
-        return Err("managed workflow or whole-envelope delivery requires independent current C custody; laboratory-only publication cannot supply it".into());
+    if input.requires_independent_c() && !checkpoint_required {
+        return Err("managed workflow, editor checkpoint or whole-envelope delivery requires independent current C custody; laboratory-only publication cannot supply it".into());
     }
     if input.login != *login {
         return Err("native content request login differs from exact command".into());
@@ -2382,11 +2475,11 @@ pub(crate) fn command(args: &[String]) -> Result<()> {
     }
     let read_profile = profile_id(input.read_mode(), &input, &bytes, &io::digest(&bytes))?;
     if args[0] == "content-owned-inspection-review" {
-        println!(
-            "{}",
-            serde_json::json!({"schema_version":1,"inspection_usage":acquisition_usage(&read_profile)?,"query_only":input.is_query(),"private_content_read":false,"grant_issued":false,"committed":false})
+        return deliver_result(
+            &serde_json::json!({"schema_version":1,"inspection_usage":acquisition_usage(&read_profile)?,"query_only":input.is_query(),"private_content_read":false,"grant_issued":false,"committed":false}),
+            MAX_OUTPUT,
+            || Ok(()),
         );
-        return Ok(());
     }
     if args[0] == "content-owned-review" {
         let usage = acquisition_usage(&read_profile)?;
@@ -2454,6 +2547,10 @@ fn deliver_protected(
     // epoch and C-availability proofs remain fresh at every delivery fence.
     let output_sha256 = io::digest(&serde_json::to_vec(&response.result)?);
     check_response_output(response, id, &output_sha256)?;
+    // The payload is thread-local to the original confined client. Move its
+    // checked writer into the scoped C proof callback before it changes thread;
+    // that callback must never acquire a fresh stdout fallback.
+    let output = crate::service::granted_gateway::required_export_writer()?;
     crate::service::content_output::run(
         id,
         &input.binding,
@@ -2461,13 +2558,87 @@ fn deliver_protected(
         &output_sha256,
         guard,
         |proof| {
-            deliver_result(&response.result, output_limit, || {
+            deliver_payload_result(&response.result, output_limit, output, || {
                 proof.check()?;
                 check_response_output(response, id, &output_sha256)?;
                 proof.check()
             })
         },
     )
+}
+
+/// Resolve one selected current checkpoint through the original human's fresh
+/// finite Read and independently enrolled C authority. The return value is
+/// private data, not permission to start or publish an editor session.
+pub(crate) fn editor_checkpoint_read(
+    login: &str,
+    binding: &OwnerBinding,
+    expected: &VersionReference,
+    read_grant: &str,
+    derived_content_path: &Path,
+) -> Result<ArtifactVersion> {
+    crate::require_root()?;
+    crate::platform::require_installed()?;
+    let encrypted_data = crate::platform::InstalledDataClaim::capture()?;
+    if crate::platform::production_image()? {
+        crate::platform::require_production_activation()?;
+    } else {
+        crate::platform::require_laboratory_image()?;
+    }
+    if !crate::platform::content_checkpoint_required()? {
+        return Err("editor resume requires independent current content custody".into());
+    }
+    let bytes = editor_checkpoint_input(login, binding, expected)?;
+    let id = editor_checkpoint_profile(&bytes)?;
+    if read_request(derived_content_path)? != bytes
+        || verify_client_request(derived_content_path, &id, login)? != *binding
+    {
+        return Err("editor resume query differs from its protected derived snapshot".into());
+    }
+    let input = parse(&bytes)?;
+    let usage = acquisition_usage(&id)?;
+    crate::admin_governance::with_grant(login, read_grant, &usage, |guard| {
+        encrypted_data.recheck()?;
+        check_subject(&input, guard)?;
+        let response = run(&id, &bytes, guard)?;
+        check_subject(&input, guard)?;
+        let output_sha256 = io::digest(&serde_json::to_vec(&response.result)?);
+        check_response_output(&response, &id, &output_sha256)?;
+        let version = crate::service::content_output::run(
+            &id,
+            binding,
+            &response.lease,
+            &output_sha256,
+            guard,
+            |proof| {
+                proof.check()?;
+                encrypted_data.recheck()?;
+                check_response_output(&response, &id, &output_sha256)?;
+                let envelope = response
+                    .result
+                    .get("canonical_envelope")
+                    .and_then(serde_json::Value::as_str)
+                    .ok_or("editor checkpoint Read omitted its exact immutable envelope")?;
+                let version = luma_content::reopen(envelope.as_bytes(), binding)?;
+                if version.reference()? != *expected
+                    || response.result != envelope_result(&version)?
+                {
+                    return Err(
+                        "editor checkpoint Read returned a substituted version or result".into(),
+                    );
+                }
+                proof.check()?;
+                check_response_output(&response, &id, &output_sha256)?;
+                proof.check()?;
+                Ok(version)
+            },
+        )?;
+        check_subject(&input, guard)?;
+        encrypted_data.recheck()?;
+        crate::acquisition::await_drainage()?;
+        check_subject(&input, guard)?;
+        Ok(version)
+    })
 }
 
 fn approval(value: &str) -> Result<(Mode, &str)> {
@@ -3917,6 +4088,148 @@ mod tests {
     }
 
     #[test]
+    fn editor_checkpoint_query_binds_current_reference_and_cannot_reuse_historical_profile() {
+        let owner = input();
+        let expected = reference();
+        let bytes = editor_checkpoint_input(&owner.login, &owner.binding, &expected).unwrap();
+        let parsed = parse(&bytes).unwrap();
+        assert!(parsed.matches_mode(Mode::Envelope));
+        assert!(parsed.source().is_err());
+        let id = editor_checkpoint_profile(&bytes).unwrap();
+        let scope = usage_at(&id, "e".repeat(64), false).unwrap();
+        assert_eq!(scope.action, grants::Action::Read);
+        assert_eq!(scope.selector.id, "native-content-envelope-v1");
+        assert_eq!(scope.selector.generation, owner.binding.owner_generation);
+        assert_eq!(scope.output_bytes, MAX_ENVELOPE_OUTPUT);
+        for operation in [
+            Operation::Historical {
+                expected: expected.clone(),
+            },
+            Operation::Envelope {
+                expected: expected.clone(),
+            },
+            Operation::Current {
+                artifact_id: expected.artifact_id.clone(),
+            },
+        ] {
+            let other = serde_json::to_vec(&query_input(operation)).unwrap();
+            assert!(editor_checkpoint_profile(&other).is_err());
+            assert_ne!(source_digest(&id).unwrap(), io::digest(&other));
+        }
+        let mut changed = expected;
+        changed.version += 1;
+        let other = editor_checkpoint_input(&owner.login, &owner.binding, &changed).unwrap();
+        assert_ne!(editor_checkpoint_profile(&other).unwrap(), id);
+        for mode in [
+            Mode::Query,
+            Mode::Read,
+            Mode::Write,
+            Mode::Retain,
+            Mode::Recover,
+            Mode::Trash,
+            Mode::Restore,
+            Mode::TrashQuery,
+        ] {
+            assert!(!parsed.matches_mode(mode));
+        }
+        assert!(editor_checkpoint_input("root/alias", &owner.binding, &changed).is_err());
+    }
+
+    #[test]
+    fn structured_response_bound_is_exact_and_cannot_turn_a_query_into_an_effect() {
+        for operation in [
+            Operation::Envelope {
+                expected: reference(),
+            },
+            Operation::EditorCheckpoint {
+                expected: reference(),
+            },
+        ] {
+            let bytes = serde_json::to_vec(&query_input(operation)).unwrap();
+            assert_eq!(
+                content_response_limit("content-owned-review", &bytes).unwrap(),
+                MAX_ENVELOPE_OUTPUT
+            );
+            assert_eq!(
+                content_response_limit("content-owned-inspection-review", &bytes).unwrap(),
+                MAX_OUTPUT
+            );
+            assert!(content_response_limit("content-owned-apply", &bytes).is_err());
+        }
+        for input in [
+            input(),
+            query_input(Operation::Historical {
+                expected: reference(),
+            }),
+            lifecycle_input(luma_content_store::LifecycleOperation::Trash),
+        ] {
+            let bytes = serde_json::to_vec(&input).unwrap();
+            assert_eq!(
+                content_response_limit("content-owned-review", &bytes).unwrap(),
+                MAX_OUTPUT
+            );
+            assert_eq!(
+                content_response_limit("content-owned-apply", &bytes).is_ok(),
+                !input.is_query()
+            );
+            for command in [
+                "editor-run",
+                "content-backup-export",
+                "content-resource-worker",
+                "anything",
+            ] {
+                assert!(content_response_limit(command, &bytes).is_err());
+            }
+        }
+        assert!(content_response_limit("content-owned-review", b"{}").is_err());
+    }
+
+    #[test]
+    fn editor_checkpoint_publication_cannot_use_the_laboratory_custody_fallback() {
+        for kind in ["capture", "external"] {
+            let content = "{\"profile\":\"luma-editor-document-v1\"}";
+            let provenance = Provenance {
+                request_id: "explicit-editor-checkpoint".into(),
+                workflow_sha256: "d".repeat(64),
+                source_sha256: io::digest(content.as_bytes()),
+                origin: luma_content::EditOrigin::External,
+            };
+            let mut input = input();
+            input.operation = if kind == "capture" {
+                Operation::Capture {
+                    artifact_id: "checkpoint-one".into(),
+                    format: Format::Json,
+                    content: content.into(),
+                    provenance,
+                }
+            } else {
+                let mut expected = reference();
+                expected.artifact_id = "checkpoint-one".into();
+                Operation::External {
+                    artifact_id: "checkpoint-one".into(),
+                    expected,
+                    content: content.into(),
+                    provenance,
+                }
+            };
+            input.validate().unwrap();
+            assert!(input.requires_independent_c());
+            match &mut input.operation {
+                Operation::Capture { content, .. } | Operation::External { content, .. } => {
+                    *content = "{\"profile\":\"ordinary-literal-data\"}".into()
+                }
+                _ => unreachable!(),
+            }
+            assert!(!input.requires_independent_c());
+        }
+        assert!(!input().requires_independent_c());
+        assert!(query_input(Operation::EditorCheckpoint {
+            expected: reference()
+        })
+        .requires_independent_c());
+    }
+
+    #[test]
     fn maximum_exact_envelope_reopens_without_weakening_the_ordinary_output_bound() {
         let content = "\\".repeat(luma_content::MAX_CONTENT_BYTES);
         let version = version(content.as_bytes());
@@ -4015,6 +4328,47 @@ mod tests {
             &mut boundary
         )
         .is_err());
+
+        let expected = version.reference().unwrap();
+        let current_only = query_input(Operation::EditorCheckpoint {
+            expected: expected.clone(),
+        });
+        boundary.checks = 0;
+        assert_eq!(
+            query(&current_only, &repository, &mut boundary).unwrap(),
+            result
+        );
+        let total = boundary.checks;
+        for point in 1..=total {
+            boundary.checks = 0;
+            boundary.refuse_at = point;
+            assert!(
+                query(&current_only, &repository, &mut boundary).is_err(),
+                "editor Read fence {point}"
+            );
+            assert_eq!(boundary.checks, point);
+        }
+        boundary.refuse_at = usize::MAX;
+        let next = b"New current source\n";
+        let change = repository
+            .plan_external_edit(
+                &expected.artifact_id,
+                expected.clone(),
+                next,
+                Provenance {
+                    request_id: "editor-query-concurrent-change".into(),
+                    workflow_sha256: "c".repeat(64),
+                    source_sha256: io::digest(next),
+                    origin: luma_content::EditOrigin::External,
+                },
+                &mut boundary,
+            )
+            .unwrap();
+        boundary.review = Some(change.review_sha256().into());
+        repository.apply(&change, next, &mut boundary).unwrap();
+        boundary.review = None;
+        assert!(query(&current_only, &repository, &mut boundary).is_err());
+        assert_eq!(query(&input, &repository, &mut boundary).unwrap(), result);
     }
 
     #[test]
@@ -4166,6 +4520,9 @@ mod tests {
         let prior = plan(&capture, None, &mut NoAuthority).unwrap();
         for operation in [
             Operation::Envelope {
+                expected: reference(),
+            },
+            Operation::EditorCheckpoint {
                 expected: reference(),
             },
             Operation::CollectionSearch {

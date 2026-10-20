@@ -77,7 +77,7 @@ def proposal(value):
     if not isinstance(value['approval'], str):
         raise ValueError('explicit approval text or an empty string required')
     operation = value['operation']
-    if operation in ('inspection', 'office-proposal', 'paged-read', 'envelope-read', 'search-journey', 'conversation-journey', 'workflow-journey', 'collection-journey', 'speech-journey', 'capture-reference-journey', 'restore-journey', 'retire-journey', 'lifecycle-journey'):
+    if operation in ('inspection', 'office-proposal', 'paged-read', 'envelope-read', 'search-journey', 'conversation-journey', 'workflow-journey', 'collection-journey', 'speech-journey', 'capture-reference-journey', 'restore-journey', 'retire-journey', 'lifecycle-journey', 'editor-journey'):
         if any(value[field] for field in ('read_grant', 'effect_grant', 'approval')):
             raise ValueError('inspection cannot select effect authority')
     elif operation == 'review':
@@ -122,6 +122,8 @@ def proposal(value):
         workspace_controller('grounding').request(source)
     elif operation == 'lifecycle-journey':
         workspace_controller('lifecycle').request(types.SimpleNamespace(**globals()), source)
+    elif operation == 'editor-journey':
+        workspace_controller('editor').request(types.SimpleNamespace(**globals()), source)
     elif operation in ('restore-journey', 'retire-journey'):
         recovery_request(source, retirement=operation == 'retire-journey')
     return value
@@ -259,7 +261,7 @@ def conversation_capture(command, path, maximum, login=None, grant=None, review_
 
 
 def workspace_controller(name):
-    if name not in ('draft', 'collections', 'speech', 'grounding', 'lifecycle'):
+    if name not in ('draft', 'collections', 'speech', 'grounding', 'lifecycle', 'editor'):
         raise ValueError('fixed protected workspace controller required')
     path = Path('/usr/libexec/luma-os/workspace_'+name+'.py')
     protected(path, 128*1024)
@@ -612,7 +614,7 @@ def protected(path, maximum, *, sudo=False):
 
 def terminal_arguments(value, path):
     value = proposal(value)
-    if value['operation'] in ('paged-read', 'envelope-read', 'search-journey', 'conversation-journey', 'workflow-journey', 'collection-journey', 'speech-journey', 'capture-reference-journey', 'restore-journey', 'retire-journey', 'lifecycle-journey'):
+    if value['operation'] in ('paged-read', 'envelope-read', 'search-journey', 'conversation-journey', 'workflow-journey', 'collection-journey', 'speech-journey', 'capture-reference-journey', 'restore-journey', 'retire-journey', 'lifecycle-journey', 'editor-journey'):
         raise ValueError('managed journeys require their explicit review and fresh grant steps')
     prefix = ['/usr/bin/sudo', '--', NATIVE, 'granted-run']
     if value['operation'] == 'office-proposal':
@@ -1764,6 +1766,8 @@ def terminal(path):
             return workspace_controller('grounding').journey(types.SimpleNamespace(**globals()), value, directory)
         if value['operation'] == 'lifecycle-journey':
             return workspace_controller('lifecycle').journey(types.SimpleNamespace(**globals()), value, directory)
+        if value['operation'] == 'editor-journey':
+            return workspace_controller('editor').journey(types.SimpleNamespace(**globals()), value, directory)
         if value['operation'] == 'restore-journey':
             return restore_journey(value, directory)
         if value['operation'] == 'retire-journey':

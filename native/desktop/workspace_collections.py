@@ -134,6 +134,17 @@ def completed(auth, source, review, output):
     return value
 
 
+def capture_apply(auth, value, path):
+    """Closed collection effect transport; read-only capture_query stays closed."""
+    value = auth.proposal(value)
+    request(auth, auth.strict_json(value['request']))
+    if (value['operation'] != 'apply' or value['read_grant'] == value['effect_grant']
+            or not re.fullmatch(r'(?:write|retain):[0-9a-f]{64}', value['approval'])):
+        raise ValueError('collection apply requires exact source, independent grants and review approval')
+    auth.protected(auth.NATIVE, 128*1024*1024)
+    return auth._capture_native(auth.terminal_arguments(value, path), auth.MAX_QUERY_OUTPUT)
+
+
 def journey(auth, value, directory):
     started, observed = False, False
     try:
@@ -170,7 +181,7 @@ def journey(auth, value, directory):
             print('Submitting this exact collection transaction; interruption may be uncertain, never assume rollback or automatically retry:\n'+json.dumps(dict(request_id=source['operation']['provenance']['request_id'],
                 request_sha256=hashlib.sha256(canonical_request.encode()).hexdigest(), review_sha256=review['review_sha256']), ensure_ascii=True), flush=True)
             started = True
-            outcome = completed(auth, source, review, auth.capture_query(arguments))
+            outcome = completed(auth, source, review, capture_apply(auth, apply, path))
             observed = True
         print('OBSERVED native collection '+outcome['outcome']['decision']+'. Exact membership metadata only; no file move, model authority, automatic merge or engine workflow claimed.\n'+json.dumps(outcome, ensure_ascii=True), flush=True)
         choice = auth.terminal_line('r separately granted complete Read of this exact reference; q finish: ', 8)

@@ -175,6 +175,17 @@ impl Drop for Observation<'_> {
 }
 
 impl Lifetime {
+    pub(super) fn editor_cutoff(&self) -> Result<EditorCutoff> {
+        self.check()?;
+        if self.purpose != SessionPurpose::Standard {
+            return Err("editor cutoff requires original standard PAM purpose".into());
+        }
+        Ok(EditorCutoff {
+            issued: self.issued,
+            deadline_ns: self.deadline_ns,
+            last_ns: Cell::new(self.last_ns.get()),
+        })
+    }
     pub(super) fn start() -> Result<Self> {
         Self::at(Clock::read()?)
     }
@@ -291,6 +302,77 @@ impl Lifetime {
         let mut lifetime = Self::start()?;
         lifetime.deadline_ns = lifetime.issued.boottime_ns;
         Ok(lifetime)
+    }
+}
+
+/// Local deadline restriction only. It does not project authentication,
+/// principal identity, UTC, grant validity or resource ownership into a thread.
+/// The original live authorization channel must continue checking all of those.
+pub(crate) struct EditorCutoff {
+    issued: Clock,
+    deadline_ns: u64,
+    last_ns: Cell<u64>,
+}
+impl EditorCutoff {
+    fn check_at(&self, now: Clock) -> Result<()> {
+        if now.boot != self.issued.boot
+            || now.process != self.issued.process
+            || now.uid != self.issued.uid
+            || now.boottime_ns < self.last_ns.get()
+            || now.boottime_ns >= self.deadline_ns
+        {
+            return Err(
+                "original editor PAM cutoff/context reached; no draft delivery or renewal".into(),
+            );
+        }
+        self.last_ns.set(now.boottime_ns);
+        Ok(())
+    }
+    pub(crate) fn check(&self) -> Result<()> {
+        self.check_at(Clock::read()?)
+    }
+}
+
+#[cfg(test)]
+mod editor_cutoff_tests {
+    use super::*;
+    fn clock(ns: u64) -> Clock {
+        Clock {
+            boot: [1; 16],
+            process: 42,
+            uid: 0,
+            boottime_ns: ns,
+        }
+    }
+    #[test]
+    fn cutoff_is_exact_original_standard_deadline_not_capture_time_plus_window() {
+        let lifetime = Lifetime::at(clock(10)).unwrap();
+        let cutoff = EditorCutoff {
+            issued: lifetime.issued,
+            deadline_ns: lifetime.deadline_ns,
+            last_ns: Cell::new(20),
+        };
+        cutoff.check_at(clock(30_000_000_009)).unwrap();
+        assert!(cutoff.check_at(clock(30_000_000_010)).is_err());
+        assert_eq!(cutoff.deadline_ns, 30_000_000_010);
+    }
+    #[test]
+    fn cutoff_refuses_rollback_reboot_credential_or_process_substitution() {
+        for case in 0..4 {
+            let cutoff = EditorCutoff {
+                issued: clock(10),
+                deadline_ns: 100,
+                last_ns: Cell::new(20),
+            };
+            let mut other = clock(30);
+            match case {
+                0 => other.boot = [2; 16],
+                1 => other.process += 1,
+                2 => other.uid = 1,
+                _ => other.boottime_ns = 19,
+            };
+            assert!(cutoff.check_at(other).is_err());
+        }
     }
 }
 

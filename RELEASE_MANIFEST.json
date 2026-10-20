@@ -126,6 +126,7 @@
     "docs/gates/g3/collections_recovery_2026-10-16.json",
     "docs/gates/g3/collection_workspace_integration_2026-10-20.json",
     "docs/gates/g3/content_lifecycle_2026-10-20.json",
+    "docs/gates/g3/editor_sessions_2026-10-20.json",
     "docs/gates/g3/content_publication_restore_2026-10-18.json",
     "docs/gates/g3/content_storage_2026-10-15.json",
     "docs/gates/g3/conversation_capture_inference_2026-10-20.json",

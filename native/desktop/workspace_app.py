@@ -264,6 +264,9 @@ def main():
     lifecycle_button = Gtk.Button.new_with_mnemonic('_Versioned trash…')
     lifecycle_button.set_tooltip_text('Fresh original native lifecycle status, or explicitly reviewed logical trash/restore of an exact reference. Separate Read and Delete/Write grants; no physical purge, automatic undo or inferred latest version.')
     owner_actions.pack_start(lifecycle_button, False, False, 4)
+    editor_button = Gtk.Button.new_with_mnemonic('_Bounded native editor…')
+    editor_button.set_tooltip_text('Real original-PAM 30-second resource-leased edit period. Explicit Freeze drains but is NOT Saved; checkpoint commit and exact reopen require separately reviewed fresh C Read/effect authority. No automatic renewal, save or guessed latest resume.')
+    engine_actions.pack_start(editor_button, False, False, 4)
     recovery_button = Gtk.Button.new_with_mnemonic('_Admin encrypted recovery…')
     recovery_button.set_tooltip_text('Open the original native Admin terminal for encrypted fresh-owner restore, exact-prefix resume, or reviewed damaged-batch retirement. No key, password, grant or private result enters WebKit.')
     engine_actions.pack_start(recovery_button, False, False, 4)
@@ -363,6 +366,14 @@ def main():
         except Exception:
             authority_note.set_text('Lifecycle unavailable or refused; no current status, logical change, purge, restore permission or completion inferred.')
     lifecycle_button.connect('clicked', lifecycle_control)
+
+    def bounded_editor(_button):
+        try:
+            opened = auth_module.workspace_controller('editor').launch_dialog(window, auth_module)
+            authority_note.set_text('Native editor terminal launched, not authenticated, leased, Frozen or Saved here. Actual editing, bounded period, independent checkpoint review and exact reopen remain in the original terminal.' if opened else 'Editor selection cancelled; no edit period, checkpoint Read or publication requested.')
+        except Exception:
+            authority_note.set_text('Editor unavailable or refused; no active lease, Frozen draft, Saved checkpoint, automatic renewal or resume permission inferred.')
+    editor_button.connect('clicked', bounded_editor)
 
     def clarify_capture(_button):
         try:

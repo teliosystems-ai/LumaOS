@@ -187,17 +187,16 @@ fn original_binding(pid: u32, descriptor: &Descriptor, audit: &Audit) -> Result<
     }
     let text = std::str::from_utf8(&raw)?;
     let args: Vec<_> = text.split('\0').collect();
+    let args = crate::service::granted_gateway::short_original_arguments(&args)?;
     crate::content_governed::check_client_arguments(&args, &descriptor.profile, Some(audit))?;
     let path = match args.len() {
-        6 => args[4],
-        8 => args[6],
+        6 => Path::new(args[4]).to_path_buf(),
+        8 => Path::new(args[6]).to_path_buf(),
+        7 if args[1] == "editor-run" => Path::new(args[5]).with_file_name("content.json"),
         _ => return Err("content output command shape differs".into()),
     };
-    if crate::content_governed::verify_client_request(
-        Path::new(path),
-        &descriptor.profile,
-        args[2],
-    )? != descriptor.binding
+    if crate::content_governed::verify_client_request(&path, &descriptor.profile, args[2])?
+        != descriptor.binding
         || audit.subject != descriptor.binding.owner
         || audit.subject_generation != descriptor.binding.owner_generation
     {

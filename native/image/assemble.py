@@ -29,6 +29,13 @@ ROOT = WORK / 'root'
 OUT = WORK / 'artifacts'
 KEYS = Path('/keys')
 
+# The fixed product launcher creates its own confined PAM PTY. A second sudo
+# PTY would replace the original kernel terminal owner before source capture.
+# This command-scoped default adds no command or privilege authorization.
+ORIGINAL_PAM_SUDOERS = '''Cmnd_Alias LUMA_ORIGINAL_PAM = /usr/libexec/luma-os/luma-platform granted-run *
+Defaults!LUMA_ORIGINAL_PAM !use_pty
+'''
+
 
 def run(*args: str | Path, **kwargs) -> str:
     result = subprocess.run([str(a) for a in args], check=True, text=True,
@@ -43,6 +50,10 @@ def put(relative: str, data: str, mode: int = 0o644) -> None:
         destination.unlink()
     destination.write_text(data, encoding='utf-8')
     destination.chmod(mode)
+
+
+def configure_original_pam_sudoers() -> None:
+    put('etc/sudoers.d/luma-original-pam', ORIGINAL_PAM_SUDOERS, 0o440)
 
 
 def digest(path: Path) -> str:
@@ -399,7 +410,7 @@ def main() -> None:
         shutil.copytree(REPO/name,reference/name,ignore=shutil.ignore_patterns('__pycache__','*.pyc'))
     if args.edition == 'desktop':
         import browser_policy
-        for name in ('workspace_host.py', 'workspace_auth.py', 'workspace_app.py', 'workspace_capture.py', 'workspace_draft.py', 'workspace_collections.py', 'workspace_speech.py', 'workspace_grounding.py', 'workspace_lifecycle.py', 'browser_adapter.py'):
+        for name in ('workspace_host.py', 'workspace_auth.py', 'workspace_app.py', 'workspace_capture.py', 'workspace_draft.py', 'workspace_collections.py', 'workspace_speech.py', 'workspace_grounding.py', 'workspace_lifecycle.py', 'workspace_editor.py', 'browser_adapter.py'):
             target = binary.parent/name
             shutil.copy2(REPO/'native/desktop'/name, target)
             target.chmod(0o644)
@@ -569,6 +580,7 @@ def main() -> None:
     (ROOT/'var/lib/dbus/machine-id').symlink_to('../luma-os/identity/machine-id')
     (ROOT/'var/lib/luma-os/sudoers').mkdir()
     put('etc/sudoers.d/luma-admin','#includedir /var/lib/luma-os/sudoers\n',0o440)
+    configure_original_pam_sudoers()
     for path in ('var/home','var/root','var/lib/luma-os/reference','efi','media/luma'):
         (ROOT/path).mkdir(parents=True,exist_ok=True)
     (ROOT/'var/root').chmod(0o700)

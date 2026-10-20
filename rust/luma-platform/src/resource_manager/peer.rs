@@ -168,6 +168,19 @@ fn content_status(status: &str, uid: u32, cmdline: &str) -> Result<()> {
     }
     confined_status(status, uid, 0)
 }
+fn editor_status(status: &str, uid: u32, cmdline: &str) -> Result<()> {
+    let parts = cmdline.split('\0').collect::<Vec<_>>();
+    if uid != 0
+        || parts.len() != 4
+        || parts[0] != "/usr/libexec/luma-os/luma-platform"
+        || parts[1] != "editor-resource-worker"
+        || !parts[3].is_empty()
+        || crate::editor_session::source_digest(parts[2]).is_err()
+    {
+        return Err("editor admission requires its exact capability-free fixed worker".into());
+    }
+    confined_status(status, uid, 0)
+}
 
 fn locked_memory(limits: &str) -> Result<()> {
     locked_memory_bound(limits, 0)
@@ -205,14 +218,17 @@ pub(super) fn worker_generation(
     let office = kind == Kind::Acquisition && initial_profile == "luma-office-export (enforce)\n";
     let restore =
         kind == Kind::Acquisition && initial_profile == "luma-content-restore (enforce)\n";
+    let editor = kind == Kind::Acquisition && initial_profile == "luma-editor (enforce)\n";
     let normal = match kind {
         Kind::Model => "luma-model (enforce)\n",
         Kind::Acquisition => "luma-acquisition (enforce)\n",
     };
-    if !qa && !backup && !office && !restore && initial_profile != normal {
+    if !qa && !backup && !office && !restore && !editor && initial_profile != normal {
         return Err("initial worker confinement observation is unsupported or changed".into());
     }
-    let profile = if restore {
+    let profile = if editor {
+        "luma-editor (enforce)\n"
+    } else if restore {
         "luma-content-restore (enforce)\n"
     } else if office {
         "luma-office-export (enforce)\n"
@@ -233,7 +249,9 @@ pub(super) fn worker_generation(
             return Err("worker group or enforcing AppArmor generation differs".into());
         }
         let status = read("status", STATUS_BYTES)?;
-        if restore {
+        if editor {
+            editor_status(&status, uid, &read("cmdline", 4096)?)?;
+        } else if restore {
             restore_status(&status, uid, &read("cmdline", 4096)?)?;
         } else if office {
             office_status(&status, uid, &read("cmdline", 4096)?)?;
@@ -422,6 +440,23 @@ pub(super) fn hardware_generation(peer: libc::ucred, pin: &File) -> Result<Hardw
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn editor_status_requires_actual_capability_free_fixed_command_and_no_content_impersonation() {
+        let selected = format!("{}{}", crate::editor_session::PREFIX, "1".repeat(64));
+        let exact =
+            format!("/usr/libexec/luma-os/luma-platform\0editor-resource-worker\0{selected}\0");
+        let status = status(Kind::Model, 0);
+        editor_status(&status, 0, &exact).unwrap();
+        for command in [
+            exact.replace("editor-resource-worker", "content-resource-worker"),
+            format!("{exact}extra\0"),
+            exact.replace(&selected, "qwen3-4b-q4-k-m"),
+        ] {
+            assert!(editor_status(&status, 0, &command).is_err());
+        }
+        assert!(editor_status(&status, 988, &exact).is_err());
+        assert!(editor_status(&status.replace("Seccomp:\t2", "Seccomp:\t0"), 0, &exact).is_err());
+    }
     #[test]
     fn capability_free_content_worker_cannot_borrow_model_or_generic_acquisition_identity() {
         let status = status(Kind::Model, 0);

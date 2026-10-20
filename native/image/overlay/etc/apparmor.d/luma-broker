@@ -4,6 +4,7 @@ profile luma-broker flags=(attach_disconnected,mediate_deleted) {
   #include <abstractions/base>
   capability sys_ptrace,
   ptrace (read) peer=luma-acquisition,
+  ptrace (read) peer=luma-editor,
   ptrace (read) peer=luma-office-export,
   ptrace (read) peer=luma-content-backup,
   ptrace (read) peer=luma-content-restore,
@@ -18,6 +19,7 @@ profile luma-broker flags=(attach_disconnected,mediate_deleted) {
   deny ptrace (trace, tracedby),
   signal (receive) peer=unconfined,
   signal (send) set=(kill) peer=luma-acquisition,
+  signal (send) set=(kill) peer=luma-editor,
   signal (send) set=(kill) peer=luma-office-export,
   signal (send) set=(kill) peer=luma-office-convert,
   signal (send) set=(kill) peer=luma-content-backup,

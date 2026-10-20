@@ -1690,3 +1690,50 @@ Windows inspector validated (194 members, 63 required pins). Original unstripped
 and failed runner attempts are retained. No installed account, actual installed
 PAM/TTY, service, distribution, TPM mutation, confinement enforcement, native
 GUI or final G3/GWIN0 qualification is claimed.
+
+### Leased native editor and private structured responses, 20 October 2026
+
+The fixed native editor now holds the real acquisition/resource lease between
+literal typed document edits. A closed initial source, sequence number and
+expected source digest bind each operation; the controller independently
+replays the worker's changes. The original standard thirty-second PAM deadline
+includes setup, edits, Freeze, child exit, drainage and delivery. There are at
+most 64 commands, a 16-KiB document and fixed aggregate wire budgets. Neither
+an idle loop nor a saved receipt renews authorization. Cancellation, expiry,
+process death and unavailable authority discard the unsaved memory draft.
+
+Freeze requires the exact independently reconstructed checkpoint, successful
+child exit, terminal EOF and broker-proven physical drainage. Its result is
+explicitly **not Saved**. A distinct human-reviewed operation uses current
+Read plus Write/Retain and the independent C authority to commit a durable
+checkpoint. The workspace reports historical Saved only after a fresh exact
+Read reopens that committed typed document. Resuming checks its full immutable
+reference, actual JSON format, owner generation, closed document and complete
+source before admitting a new separately authenticated editor period. Pure
+canonicalizers and synthetic Frozen proposals confer no authority.
+
+The editor worker has a separate enforcing-profile contract: no terminal,
+content store, credentials, TPM, general devices or network access. The outer
+controller retains the original PAM terminal. Short editor and structured
+content responses use an acknowledged private channel, not a JSON parser over
+password prompts. Exact original process arguments, protected socket identity,
+mode/link counts, bounded frames, current output epochs and complete EOF are
+checked. These four short commands retain standard authentication limits;
+large-export and five-minute inference purposes are not borrowed.
+
+Caller-provided proposal capture verifies the actual controlling devpts device
+and owner, held private file and parent identities, not an environment UID.
+The native image writes a command-scoped sudoers `!use_pty` rule only for the
+fixed granted launcher, which then creates its own enforcing PAM PTY. It adds
+no privilege or command grant, changes no host policy, and leaves unrelated
+sudo commands on Ubuntu's default PTY policy. A disposable actual-sudo/visudo
+test verifies that distinction.
+
+The [editor execution record](gates/g3/editor_sessions_2026-10-20.json) joins
+strict workspace checking, actual executable construction, scoped native
+tests, 925 native Python tests, 39 image tests, eight actual UTC CLI tests,
+38 offline AppArmor parses and 21 actual pure native CLI cases. It records
+the precise test-only source corrections and retains the original failures.
+No physical TPM, installed PAM/C editing, loaded LSM, GTK input or final image
+qualification is inferred. The NF08 segmented storage/custody/index path
+remains separate development; this editor checkpoint does not close G3.

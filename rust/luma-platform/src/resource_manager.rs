@@ -360,6 +360,7 @@ enum AcquisitionProfile {
     Invoice(String),
     Generated(String),
     Speech(String),
+    Editor(String),
     SpeechImport,
     Qa(String),
     Content(String),
@@ -380,6 +381,8 @@ impl AcquisitionProfile {
             Ok(Self::Generated(id.into()))
         } else if crate::speech::is_profile(id) {
             Ok(Self::Speech(id.into()))
+        } else if crate::editor_session::is_profile(id) {
+            Ok(Self::Editor(id.into()))
         } else if id.starts_with("qa-") {
             model::qa::parse_profile(id)?;
             Ok(Self::Qa(id.into()))
@@ -405,6 +408,7 @@ impl AcquisitionProfile {
             Self::Invoice(id) => crate::workflow_resource::binding(id, device),
             Self::Generated(id) => crate::generated_runtime::binding(id, device),
             Self::Speech(id) => crate::speech::binding(id, device),
+            Self::Editor(id) => crate::editor_session::binding(id, device),
             Self::SpeechImport => Ok(model::speech::import_usage()?.selector.digest),
             Self::Qa(id) => model::qa::binding(id, device),
             Self::Content(id) => crate::content_governed::binding(id, device),
@@ -437,6 +441,7 @@ impl AcquisitionProfile {
                 self,
                 Self::Generated(_)
                     | Self::Speech(_)
+                    | Self::Editor(_)
                     | Self::SpeechImport
                     | Self::Qa(_)
                     | Self::Content(_)
@@ -491,6 +496,7 @@ impl AcquisitionProfile {
             Self::Invoice(id) => crate::workflow_resource::source_digest(id).map(|_| ()),
             Self::Generated(id) => crate::generated_runtime::source_digest(id).map(|_| ()),
             Self::Speech(id) => crate::speech::check_worker(id, device, pid),
+            Self::Editor(id) => crate::editor_session::check_worker(id, device, pid),
             Self::SpeechImport => model::speech::check_import_worker(pid),
             Self::Qa(id) => model::qa::check_worker(id, device, pid),
             Self::Content(id) => crate::content_governed::check_worker(id, device, pid),
@@ -1313,8 +1319,9 @@ impl Manager {
             }
         }
         self.hardware.observe_allocations(&self.store.read()?)?;
-        for (token,reason) in self.hardware.observe_authority()? {
-            self.store.transact(|ledger|ledger.revoke(&token,reason))?;
+        for (token, reason) in self.hardware.observe_authority()? {
+            self.store
+                .transact(|ledger| ledger.revoke(&token, reason))?;
         }
         self.maintain_gateway(now()?)
     }
@@ -1432,6 +1439,7 @@ impl Manager {
                         AcquisitionProfile::Invoice(_)
                         | AcquisitionProfile::Generated(_)
                         | AcquisitionProfile::Speech(_)
+                        | AcquisitionProfile::Editor(_)
                         | AcquisitionProfile::SpeechImport
                         | AcquisitionProfile::Qa(_)
                         | AcquisitionProfile::Content(_)

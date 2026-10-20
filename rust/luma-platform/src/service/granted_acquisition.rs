@@ -73,7 +73,10 @@ impl Authority {
             request.usage.clone(),
             request.input_sha256.clone(),
         )?;
-        let expected_output = if crate::generated_runtime::is_profile(&request.profile) || crate::speech::is_profile(&request.profile) {
+        let expected_output = if crate::generated_runtime::is_profile(&request.profile)
+            || crate::speech::is_profile(&request.profile)
+            || crate::editor_session::is_profile(&request.profile)
+        {
             None
         } else if request.profile.starts_with("qa-v1-") {
             None
@@ -116,6 +119,7 @@ impl Authority {
             && !self.profile.starts_with(crate::content_backup::PREFIX)
             && !self.profile.starts_with(crate::office_export::PREFIX)
             && !self.profile.starts_with(crate::content_restore::PREFIX)
+            && !crate::editor_session::is_profile(&self.profile)
             && now < self.next_check
         {
             return Ok(());
@@ -124,7 +128,9 @@ impl Authority {
         if crate::speech::is_profile(&self.profile) {
             crate::speech::current()?;
         } else if self.profile == crate::model::speech::ID {
-            crate::admin_governance::speech_pack_preparation_authority(&crate::model::speech::public_profile()?)?;
+            crate::admin_governance::speech_pack_preparation_authority(
+                &crate::model::speech::public_profile()?,
+            )?;
         }
         self.next_check = crate::resource_manager::now()?
             .checked_add(500)
@@ -167,6 +173,8 @@ pub(crate) fn usage(profile: &str) -> Result<Use> {
         crate::generated_runtime::acquisition_usage(profile)
     } else if crate::speech::is_profile(profile) {
         crate::speech::acquisition_usage(profile)
+    } else if crate::editor_session::is_profile(profile) {
+        crate::editor_session::acquisition_usage(profile)
     } else if profile.starts_with("qa-v1-") {
         crate::model::qa::usage(profile)
     } else if profile.starts_with("content-v1-") {
@@ -239,17 +247,29 @@ pub(crate) fn run_generated<T: Send>(
 }
 
 pub(crate) fn run_speech_import(
-    usage:&Use,
-    boundary:&mut crate::admin_governance::GrantBoundary<'_>,
+    usage: &Use,
+    boundary: &mut crate::admin_governance::GrantBoundary<'_>,
 ) -> Result<()> {
-    if usage!=&crate::model::speech::import_usage()? || boundary.session_purpose()!=crate::authentication::SessionPurpose::ModelImport {
+    if usage != &crate::model::speech::import_usage()?
+        || boundary.session_purpose() != crate::authentication::SessionPurpose::ModelImport
+    {
         return Err("auxiliary ASR import cannot borrow inference/activation authority".into());
     }
-    run_controller(crate::model::speech::ID,usage,boundary,None,move|cancel| {
-        crate::model::speech::import_controller(&mut || {
-            if cancel.load(Ordering::Acquire) {Err("original auxiliary import Admin grant fenced".into())} else {Ok(())}
-        })
-    })
+    run_controller(
+        crate::model::speech::ID,
+        usage,
+        boundary,
+        None,
+        move |cancel| {
+            crate::model::speech::import_controller(&mut || {
+                if cancel.load(Ordering::Acquire) {
+                    Err("original auxiliary import Admin grant fenced".into())
+                } else {
+                    Ok(())
+                }
+            })
+        },
+    )
 }
 pub(crate) fn run_speech<T: Send>(
     profile: &str,
@@ -263,8 +283,36 @@ pub(crate) fn run_speech<T: Send>(
     crate::speech::current()?;
     run_controller(profile, usage, boundary, None, move |cancel| {
         controller(&mut || {
-            if cancel.load(Ordering::Acquire) {Err("original ASR principal/Infer authorization fenced".into())}
-            else {Ok(())}
+            if cancel.load(Ordering::Acquire) {
+                Err("original ASR principal/Infer authorization fenced".into())
+            } else {
+                Ok(())
+            }
+        })
+    })
+}
+
+pub(crate) fn run_editor<T: Send>(
+    profile: &str,
+    usage: &Use,
+    boundary: &mut crate::admin_governance::GrantBoundary<'_>,
+    controller: impl FnOnce(&mut dyn FnMut() -> Result<()>) -> Result<T> + Send,
+) -> Result<T> {
+    if !crate::editor_session::is_profile(profile)
+        || boundary.session_purpose() != crate::authentication::SessionPurpose::Standard
+        || usage != &crate::editor_session::acquisition_usage(profile)?
+    {
+        return Err("editor requires its original standard finite StartWorker grant".into());
+    }
+    let cutoff = boundary.editor_cutoff()?;
+    run_controller(profile, usage, boundary, None, move |cancel| {
+        controller(&mut || {
+            cutoff.check()?;
+            if cancel.load(Ordering::Acquire) {
+                Err("original editor principal/session/grant fenced; draft not saved".into())
+            } else {
+                Ok(())
+            }
         })
     })
 }

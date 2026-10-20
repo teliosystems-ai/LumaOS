@@ -2411,6 +2411,307 @@ pub(crate) fn require_installed() -> Result<()> {
     Ok(())
 }
 
+/// Read-only proof that this installed namespace's whole /var mount is the
+/// active disk's partition-six LUKS2 mapping. It is neither a content grant nor
+/// a storage lease, and must be rechecked around private checkpoint handoffs.
+pub(crate) struct InstalledDataClaim {
+    directory: File,
+    mount: KernelMount,
+    root: KernelMount,
+    identity: (u64, u64),
+    mapper: PathBuf,
+    uuid: String,
+    backing: PathBuf,
+    root_mapping: InstalledRootMapping,
+}
+#[derive(Debug, PartialEq, Eq)]
+struct InstalledRootMapping {
+    mapper: PathBuf,
+    uuid: String,
+    backings: Vec<PathBuf>,
+}
+fn installed_mapper_backings(device: &str, count: usize) -> Result<(PathBuf, Vec<PathBuf>)> {
+    let parts = device.split(':').collect::<Vec<_>>();
+    if parts.len() != 2
+        || parts
+            .iter()
+            .any(|p| p.is_empty() || p.parse::<u32>().map_or(true, |n| n.to_string() != *p))
+    {
+        return Err("installed mount device is not canonical kernel data".into());
+    }
+    let mapper = fs::canonicalize(Path::new("/sys/dev/block").join(device))?;
+    if !mapper.starts_with("/sys/devices/virtual/block") {
+        return Err("installed data/root requires actual mapped block device".into());
+    }
+    let slaves = fs::read_dir(mapper.join("slaves"))?.collect::<std::io::Result<Vec<_>>>()?;
+    if slaves.len() != count {
+        return Err("installed mapping has ambiguous backing devices".into());
+    }
+    let mut backings = Vec::new();
+    for slave in slaves {
+        let backing = fs::canonicalize(slave.path())?;
+        if !backing.starts_with("/sys/devices") {
+            return Err("installed backing is not kernel block inventory".into());
+        }
+        backings.push(backing);
+    }
+    backings.sort();
+    if backings.windows(2).any(|p| p[0] == p[1]) {
+        return Err("duplicate installed backing device".into());
+    }
+    Ok((mapper, backings))
+}
+fn installed_root_mapping(device: &str) -> Result<InstalledRootMapping> {
+    let (mapper, backings) = installed_mapper_backings(device, 2)?;
+    if fs::read_to_string(mapper.join("dm/name"))?.trim() != "root" {
+        return Err("installed root mapper name differs".into());
+    }
+    let uuid = fs::read_to_string(mapper.join("dm/uuid"))?;
+    if !uuid.trim().starts_with("CRYPT-VERITY-") {
+        return Err("installed root is not the actual kernel verity mapping".into());
+    }
+    Ok(InstalledRootMapping {
+        mapper,
+        uuid,
+        backings,
+    })
+}
+fn check_installed_data_tuple(
+    mount: &KernelMount,
+    root: &KernelMount,
+    uuid: &str,
+    data_parent: &Path,
+    data_partition: &str,
+    root_parts: &[(PathBuf, String)],
+    slot: char,
+) -> Result<()> {
+    let part = if slot == 'a' {
+        ["2", "3"]
+    } else if slot == 'b' {
+        ["4", "5"]
+    } else {
+        return Err("installed root slot invalid".into());
+    };
+    let mut found = root_parts
+        .iter()
+        .map(|(_, number)| number.as_str())
+        .collect::<Vec<_>>();
+    found.sort();
+    let crypt = uuid
+        .trim()
+        .strip_prefix("CRYPT-LUKS2-")
+        .and_then(|s| s.strip_suffix("-luma-data"))
+        .ok_or("installed data lacks exact LUKS2 mapping identity")?;
+    crate::tpm::decode::<16>(crypt)?;
+    if crypt != crypt.to_ascii_lowercase()
+        || crypt == "0".repeat(32)
+        || data_partition != "6"
+        || root_parts.len() != 2
+        || found != part
+        || root_parts.iter().any(|(parent, _)| parent != data_parent)
+        || mount.filesystem != "ext4"
+        || mount.root != "/"
+        || !["nodev", "nosuid"]
+            .iter()
+            .all(|v| mount.options.iter().any(|o| o == v))
+        || !(mount.options.iter().any(|v| v == "rw") ^ mount.options.iter().any(|v| v == "ro"))
+        || !mount.super_options.iter().any(|v| v == "rw")
+        || mount.super_options.iter().any(|v| v == "ro")
+        || root.filesystem != "ext4"
+        || root.root != "/"
+        || !root.options.iter().any(|v| v == "ro")
+        || root.options.iter().any(|v| v == "rw")
+    {
+        return Err(
+            "installed encrypted data/root partition, mode or same-disk tuple differs".into(),
+        );
+    }
+    Ok(())
+}
+impl InstalledDataClaim {
+    pub(crate) fn capture() -> Result<Self> {
+        require_installed()?;
+        let directory = OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC)
+            .open("/var")?;
+        let metadata = directory.metadata()?;
+        let mount = kernel_mount(Path::new("/var"))?;
+        let root = kernel_mount(Path::new("/"))?;
+        let (mapper, mut backings) = installed_mapper_backings(&mount.device, 1)?;
+        let backing = backings.remove(0);
+        let root_mapping = installed_root_mapping(&root.device)?;
+        let uuid = fs::read_to_string(mapper.join("dm/uuid"))?;
+        let result = Self {
+            directory,
+            mount,
+            root,
+            identity: (metadata.dev(), metadata.ino()),
+            mapper,
+            uuid,
+            backing,
+            root_mapping,
+        };
+        result.recheck()?;
+        Ok(result)
+    }
+    pub(crate) fn recheck(&self) -> Result<()> {
+        require_installed()?;
+        let current = kernel_mount(Path::new("/var"))?;
+        let root = kernel_mount(Path::new("/"))?;
+        let metadata = self.directory.metadata()?;
+        let named = fs::symlink_metadata("/var")?;
+        let (mapper, mut backings) = installed_mapper_backings(&current.device, 1)?;
+        let backing = backings.remove(0);
+        let root_mapping = installed_root_mapping(&root.device)?;
+        let mut parts = Vec::new();
+        for at in &root_mapping.backings {
+            parts.push((
+                at.parent()
+                    .ok_or("root backing has no physical parent")?
+                    .to_path_buf(),
+                fs::read_to_string(at.join("partition"))?.trim().to_owned(),
+            ));
+        }
+        check_installed_data_tuple(
+            &current,
+            &root,
+            &self.uuid,
+            backing
+                .parent()
+                .ok_or("data backing has no physical parent")?,
+            fs::read_to_string(backing.join("partition"))?.trim(),
+            &parts,
+            running_slot()?,
+        )?;
+        if current != self.mount
+            || root != self.root
+            || current.filesystem != "ext4"
+            || current.root != "/"
+            || !["nodev", "nosuid"]
+                .iter()
+                .all(|v| current.options.iter().any(|o| o == v))
+            || (metadata.dev(), metadata.ino()) != self.identity
+            || (named.dev(), named.ino()) != self.identity
+            || !named.is_dir()
+            || named.uid() != 0
+            || named.mode() & 0o022 != 0
+            || mapper != self.mapper
+            || backing != self.backing
+            || root_mapping != self.root_mapping
+            || fs::read_to_string(backing.join("partition"))?.trim() != "6"
+            || fs::read_to_string(mapper.join("dm/name"))?.trim() != "luma-data"
+            || fs::read_to_string(mapper.join("dm/uuid"))? != self.uuid
+        {
+            return Err("private editor checkpoint requires exact current encrypted installed /var and active disk tuple".into());
+        }
+        let actual = format!("{}:{}", unsafe { libc::major(metadata.dev()) }, unsafe {
+            libc::minor(metadata.dev())
+        });
+        if actual != current.device {
+            return Err("held /var inode is not backed by the observed encrypted mount".into());
+        }
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod installed_editor_data_tests {
+    use super::*;
+    fn fixture() -> (
+        KernelMount,
+        KernelMount,
+        String,
+        PathBuf,
+        Vec<(PathBuf, String)>,
+    ) {
+        let var = parse_kernel_mount(
+            "42 20 253:1 / /var rw,nodev,nosuid - ext4 /dev/mapper/luma-data rw\n",
+            Path::new("/var"),
+        )
+        .unwrap();
+        let root = parse_kernel_mount(
+            "20 1 253:0 / / ro,nodev,nosuid - ext4 /dev/mapper/root ro\n",
+            Path::new("/"),
+        )
+        .unwrap();
+        let parent = PathBuf::from("/sys/devices/pci0000:00/block/nvme0n1");
+        let parts = vec![(parent.clone(), "2".into()), (parent.clone(), "3".into())];
+        (
+            var,
+            root,
+            format!("CRYPT-LUKS2-{}-luma-data\n", "1".repeat(32)),
+            parent,
+            parts,
+        )
+    }
+    #[test]
+    fn encrypted_var_accepts_genuine_two_slave_verity_a_and_b_not_single_luks_shape() {
+        let (mut var, root, uuid, parent, mut parts) = fixture();
+        check_installed_data_tuple(&var, &root, &uuid, &parent, "6", &parts, 'a').unwrap();
+        var.options.retain(|v| v != "rw");
+        var.options.push("ro".into());
+        check_installed_data_tuple(&var, &root, &uuid, &parent, "6", &parts, 'a').unwrap();
+        parts.reverse();
+        check_installed_data_tuple(&var, &root, &uuid, &parent, "6", &parts, 'a').unwrap();
+        parts[0].1 = "4".into();
+        parts[1].1 = "5".into();
+        check_installed_data_tuple(&var, &root, &uuid, &parent, "6", &parts, 'b').unwrap();
+        assert!(
+            check_installed_data_tuple(&var, &root, &uuid, &parent, "6", &parts[..1], 'b').is_err()
+        );
+    }
+    #[test]
+    fn encrypted_var_refuses_wrong_disk_partition_mapper_format_and_writable_root() {
+        for case in 0..13 {
+            let (mut var, mut root, mut uuid, parent, mut parts) = fixture();
+            let mut data_partition = "6";
+            match case {
+                0 => var.filesystem = "overlay".into(),
+                1 => var.root = "/subtree".into(),
+                2 => var.options.retain(|v| v != "nodev"),
+                3 => root.options = vec!["rw".into()],
+                4 => uuid = "CRYPT-PLAIN-not-luks".into(),
+                5 => parts[0].0 = PathBuf::from("/sys/devices/otherdisk"),
+                6 => parts[0].1 = "3".into(),
+                7 => data_partition = "5",
+                8 => uuid = format!("CRYPT-LUKS2-{}-other", "1".repeat(32)),
+                9 => uuid = format!("CRYPT-LUKS2-{}-luma-data", "0".repeat(32)),
+                10 => root.filesystem = "tmpfs".into(),
+                11 => var.super_options = vec!["ro".into()],
+                _ => var.options.push("ro".into()),
+            }
+            assert!(
+                check_installed_data_tuple(
+                    &var,
+                    &root,
+                    &uuid,
+                    &parent,
+                    data_partition,
+                    &parts,
+                    'a'
+                )
+                .is_err(),
+                "mutation {case}"
+            );
+        }
+    }
+    #[test]
+    fn malformed_kernel_device_coordinates_are_rejected_before_sysfs_access() {
+        for device in [
+            "",
+            "../dm-0",
+            "253:00",
+            "253:-1",
+            "253:0:1",
+            "0253:0",
+            "4294967296:1",
+        ] {
+            assert!(installed_mapper_backings(device, 1).is_err());
+        }
+    }
+}
+
 fn running_slot() -> Result<char> {
     let args = cmdline()?;
     match args

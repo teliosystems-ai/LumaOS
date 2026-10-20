@@ -108,6 +108,7 @@ profile luma-granted-client flags=(attach_disconnected) {
   /run/luma-granted-client/requests/*/input.{json,csv} r,
   /run/luma-granted-client/requests/*/generated.json r,
   /run/luma-granted-client/requests/*/speech.json r,
+  /run/luma-granted-client/requests/*/editor.json r,
   /run/luma-granted-client/requests/*/content.json r,
   /run/luma-granted-client/requests/*/content-backup.json r,
   /run/luma-granted-client/requests/*/content-office.json r,

@@ -497,10 +497,17 @@ class HyperVImageTests(unittest.TestCase):
     def test_export_short_writes_are_completed_and_no_progress_refuses(self):
         fixture = self.export_fixture()
         original_write = os.pwrite
+        short_writes = 0
         def short(fd, data, offset):
+            nonlocal short_writes
+            short_writes += 1
             return original_write(fd, data[:32768], offset)
-        with patch.object(image.os, 'pwrite', side_effect=short):
+        # A recording Mock retains every sliced MiB argument and obscures the
+        # exporter's actual bounded-memory behavior. Retain scalar evidence of
+        # real short writes instead, then compare every resulting byte.
+        with patch.object(image.os, 'pwrite', new=short):
             self.export(fixture)
+        self.assertGreater(short_writes, fixture[0].stat().st_size // image.MIB)
         self.assertEqual(fixture[2].read_bytes(), fixture[0].read_bytes())
 
     def test_export_zero_progress_retains_partial_without_success(self):

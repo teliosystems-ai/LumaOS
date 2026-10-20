@@ -8,6 +8,7 @@ use crate::resource_manager::requests::gateway::{
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt};
+mod source;
 
 const PROFILE: &str = "luma-granted-client (enforce)";
 const CLIENT_PROFILE: &str = "/etc/apparmor.d/luma-granted-client";
@@ -34,11 +35,15 @@ fn payload_command(command: &str) -> bool {
             | "workflow-history-export"
             | "content-backup-export"
             | "content-office-export"
+            | "editor-run"
+            | "content-owned-inspection-review"
+            | "content-owned-review"
+            | "content-owned-apply"
     )
 }
 
 fn extended_client_command(command: &str) -> bool {
-    payload_command(command)
+    (payload_command(command) && !short_response_command(command))
         || matches!(
             command,
             "model-pack-import"
@@ -46,6 +51,72 @@ fn extended_client_command(command: &str) -> bool {
                 | "content-restore-review"
                 | "content-restore-apply"
         )
+}
+fn short_response_command(command: &str) -> bool {
+    matches!(
+        command,
+        "editor-run"
+            | "content-owned-inspection-review"
+            | "content-owned-review"
+            | "content-owned-apply"
+    )
+}
+fn check_short_relay(relay: &Path, root: &Path) -> Result<()> {
+    use std::os::unix::fs::FileTypeExt;
+    let parent = relay.parent().ok_or("short relay parent absent")?;
+    let nonce = parent
+        .file_name()
+        .and_then(|n| n.to_str())
+        .ok_or("short relay namespace encoding")?;
+    crate::tpm::decode::<16>(nonce)?;
+    if relay.file_name().and_then(|n| n.to_str()) != Some("output.sock")
+        || parent.parent() != Some(root)
+        || nonce != nonce.to_ascii_lowercase()
+    {
+        return Err("short response requires its exact private relay namespace".into());
+    }
+    for at in [root, parent] {
+        let m = fs::symlink_metadata(at)?;
+        if !m.is_dir() || m.uid() != 0 || m.gid() != 0 || m.mode() & 0o7777 != 0o700 {
+            return Err("short relay directory is not exact protectedroot0700".into());
+        }
+    }
+    let m = fs::symlink_metadata(relay)?;
+    if !m.file_type().is_socket()
+        || m.uid() != 0
+        || m.gid() != 0
+        || m.nlink() != 1
+        || m.mode() & 0o7777 != 0o600
+    {
+        return Err("short relay is not exact protectedroot0600 socket".into());
+    }
+    Ok(())
+}
+/// Strip only the independently checked short-response transport suffix from
+/// actual kernel argv. The resulting strings remain data, not a peer proof.
+pub(crate) fn short_original_arguments<'a>(args: &[&'a str]) -> Result<Vec<&'a str>> {
+    if args.len() < 2 || !short_response_command(args[1]) {
+        return Ok(args.to_vec());
+    }
+    let logical = match args[1] {
+        "editor-run" => 7,
+        "content-owned-inspection-review" => 5,
+        "content-owned-review" => 6,
+        "content-owned-apply" => 8,
+        _ => return Err("short command shape unavailable".into()),
+    };
+    if args.len() != logical + 2
+        || args[0] != IMAGE_EXE
+        || args.last() != Some(&"")
+        || args[logical - 1] != "--export-channel"
+        || args.iter().filter(|v| **v == "--export-channel").count() != 1
+    {
+        return Err("short response proof requires exact original acknowledged relay argv".into());
+    }
+    check_short_relay(Path::new(args[logical]), Path::new(PAYLOAD_ROOT))?;
+    let mut result = args[..logical - 1].to_vec();
+    result.push("");
+    Ok(result)
 }
 
 /// Internal fixed-launcher transport, never a serialized grant or arbitrary
@@ -284,9 +355,10 @@ struct PayloadListener {
     directory: fs::File,
     socket_identity: (u64, u64),
     backup: bool,
+    short_limit: Option<u64>,
 }
 impl PayloadListener {
-    fn create(arguments: &[String], unit: &str) -> Result<Self> {
+    fn create(arguments: &[String], unit: &str, short_limit: Option<u64>) -> Result<Self> {
         crate::tpm::private_directory(Path::new("/run/luma-granted-client"))?;
         match fs::symlink_metadata(PAYLOAD_ROOT) {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
@@ -320,10 +392,16 @@ impl PayloadListener {
                 arguments.first().map(String::as_str),
                 Some("content-backup-export" | "content-office-export")
             ),
+            short_limit,
         })
     }
     fn relay(&self, child: &mut Child) -> Result<()> {
-        let deadline = Instant::now() + PAYLOAD_RUNTIME + Duration::from_secs(5);
+        let deadline = Instant::now()
+            + if self.short_limit.is_some() {
+                Duration::from_secs(65)
+            } else {
+                PAYLOAD_RUNTIME + Duration::from_secs(5)
+            };
         let (mut socket, _) = loop {
             match self.listener.accept() {
                 Ok(peer) => break peer,
@@ -368,7 +446,10 @@ impl PayloadListener {
         if header[..16] != PAYLOAD_MAGIC[..] || header[16..] != self.command_hash {
             return Err("export payload command binding differs".into());
         }
-        if self.backup {
+        if let Some(limit) = self.short_limit {
+            let (mut output, fd) = crate::content_governed::editor_relay_destination()?;
+            relay_short_response(&mut socket, &mut output, fd, limit, deadline)
+        } else if self.backup {
             // Encryption can legitimately spend the full live Export window
             // before producing any bytes. No heartbeat/empty success frame is
             // manufactured while the actual worker/controller is still busy.
@@ -380,6 +461,166 @@ impl PayloadListener {
             )
         } else {
             relay_payload(&mut socket, &mut std::io::stdout().lock(), deadline)
+        }
+    }
+}
+
+fn short_poll(socket: &UnixStream, output: Option<i32>, deadline: Instant) -> Result<()> {
+    if Instant::now() >= deadline {
+        return Err("short private response deadline expired".into());
+    }
+    let mut polls = [
+        libc::pollfd {
+            fd: socket.as_raw_fd(),
+            events: libc::POLLIN,
+            revents: 0,
+        },
+        libc::pollfd {
+            fd: output.unwrap_or(-1),
+            events: libc::POLLOUT,
+            revents: 0,
+        },
+    ];
+    let result = unsafe { libc::poll(polls.as_mut_ptr(), 2, 0) };
+    if result < 0 {
+        return Err(std::io::Error::last_os_error().into());
+    }
+    if polls[0].revents & (libc::POLLHUP | libc::POLLERR | libc::POLLNVAL) != 0
+        || polls[1].revents & (libc::POLLHUP | libc::POLLERR | libc::POLLNVAL) != 0
+    {
+        return Err("original private producer/destination was lost; response incomplete".into());
+    }
+    Ok(())
+}
+fn short_read(
+    socket: &mut UnixStream,
+    mut bytes: &mut [u8],
+    deadline: Instant,
+    allow_eof: bool,
+) -> Result<bool> {
+    let mut started = false;
+    while !bytes.is_empty() {
+        if Instant::now() >= deadline {
+            return Err("short private response read deadline expired".into());
+        }
+        match socket.read(bytes) {
+            Ok(0) if allow_eof && !started => return Ok(false),
+            Ok(0) => {
+                return Err("private producer ended before complete acknowledged response".into())
+            }
+            Ok(n) => {
+                started = true;
+                bytes = &mut bytes[n..];
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => (),
+            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                let mut poll = libc::pollfd {
+                    fd: socket.as_raw_fd(),
+                    events: libc::POLLIN,
+                    revents: 0,
+                };
+                if unsafe { libc::poll(&mut poll, 1, 100) } < 0 {
+                    let error = std::io::Error::last_os_error();
+                    if error.kind() != std::io::ErrorKind::Interrupted {
+                        return Err(error.into());
+                    }
+                }
+            }
+            Err(e) => return Err(e.into()),
+        }
+    }
+    Ok(true)
+}
+fn relay_short_response(
+    socket: &mut UnixStream,
+    output: &mut impl Write,
+    output_fd: i32,
+    limit: u64,
+    deadline: Instant,
+) -> Result<()> {
+    if limit == 0 || limit > 2 * luma_content::MAX_ENVELOPE_BYTES as u64 + 16384 {
+        return Err("short private response bound is not supported".into());
+    }
+    socket.set_nonblocking(true)?;
+    let mut total = 0u64;
+    let mut digest = Sha256::new();
+    let mut flushed = false;
+    loop {
+        let mut size = [0; 4];
+        if !short_read(socket, &mut size, deadline, flushed)? {
+            return if flushed {
+                Ok(())
+            } else {
+                Err("private response omitted final acknowledgment".into())
+            };
+        }
+        let length = u32::from_be_bytes(size) as usize;
+        if length > 4096 || flushed {
+            return Err("short private response exceeded fixed frame/terminal sequence".into());
+        }
+        total = total
+            .checked_add(length as u64)
+            .filter(|n| *n < limit)
+            .ok_or("short private response exceeded exact whole-output bound")?;
+        let mut bytes = [0u8; 4096];
+        short_read(socket, &mut bytes[..length], deadline, false)?;
+        if length == 0 {
+            if total == 0 {
+                return Err("empty private response is not completion".into());
+            }
+            short_poll(socket, Some(output_fd), deadline)?;
+            output.flush()?;
+            flushed = true;
+        } else {
+            let mut pending = &bytes[..length];
+            while !pending.is_empty() {
+                short_poll(socket, Some(output_fd), deadline)?;
+                match output.write(pending) {
+                    Ok(0) => return Err("private response destination closed".into()),
+                    Ok(n) => pending = &pending[n..],
+                    Err(e) if e.kind() == std::io::ErrorKind::Interrupted => (),
+                    Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                        let mut p = [
+                            libc::pollfd {
+                                fd: socket.as_raw_fd(),
+                                events: 0,
+                                revents: 0,
+                            },
+                            libc::pollfd {
+                                fd: output_fd,
+                                events: libc::POLLOUT,
+                                revents: 0,
+                            },
+                        ];
+                        if unsafe { libc::poll(p.as_mut_ptr(), 2, 100) } < 0 {
+                            let error = std::io::Error::last_os_error();
+                            if error.kind() != std::io::ErrorKind::Interrupted {
+                                return Err(error.into());
+                            }
+                        }
+                    }
+                    Err(e) => return Err(e.into()),
+                }
+            }
+            digest.update(&bytes[..length]);
+        }
+        let ack = [&total.to_be_bytes()[..], &digest.clone().finalize()[..]].concat();
+        let mut pending = ack.as_slice();
+        while !pending.is_empty() {
+            short_poll(socket, None, deadline)?;
+            match socket.write(pending) {
+                Ok(0) => return Err("private response acknowledgment closed".into()),
+                Ok(n) => pending = &pending[n..],
+                Err(e)
+                    if matches!(
+                        e.kind(),
+                        std::io::ErrorKind::WouldBlock | std::io::ErrorKind::Interrupted
+                    ) =>
+                {
+                    std::thread::sleep(Duration::from_millis(1))
+                }
+                Err(e) => return Err(e.into()),
+            }
         }
     }
 }
@@ -1012,8 +1253,12 @@ fn acquisition_arguments(
         0x9fa0,
     )?;
     let args = raw.split('\0').collect::<Vec<_>>();
+    let args = short_original_arguments(&args)?;
     if profile.starts_with("content-v1-") {
         return crate::content_governed::check_client_arguments(&args, profile, audit);
+    }
+    if crate::editor_session::is_profile(profile) {
+        return crate::editor_session::check_client_arguments(&args, profile, audit);
     }
     if profile.starts_with(crate::content_restore::PREFIX) {
         return crate::content_restore::check_client_arguments(&args, profile, audit);
@@ -1623,6 +1868,8 @@ impl InputStage {
             crate::office_export::MAX_REQUEST
         } else if leaf == "speech.json" {
             crate::speech::MAX_REQUEST
+        } else if leaf == "editor.json" {
+            crate::editor_session::MAX_REQUEST
         } else if leaf == "generated.json" {
             2_228_480
         } else {
@@ -1634,6 +1881,7 @@ impl InputStage {
                 | "input.csv"
                 | "generated.json"
                 | "speech.json"
+                | "editor.json"
                 | "content.json"
                 | "content-backup.json"
                 | "content-backup-recipients.json"
@@ -1736,6 +1984,33 @@ impl InputStage {
         }
         Ok(())
     }
+    fn editor_checkpoint(&self, bytes: &[u8]) -> Result<Self> {
+        self.check()?;
+        if self.path.file_name().and_then(|s| s.to_str()) != Some("editor.json")
+            || bytes.is_empty()
+            || bytes.len() > crate::content_governed::MAX_REQUEST
+        {
+            return Err("editor companion requires its exact bounded query snapshot".into());
+        }
+        let path = self.path.with_file_name("content.json");
+        let mut file = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o400)
+            .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
+            .open(&path)?;
+        file.write_all(bytes)?;
+        file.sync_all()?;
+        self.directory.sync_all()?;
+        let stage = Self {
+            path,
+            file,
+            directory: self.directory.try_clone()?,
+        };
+        stage.check()?;
+        self.check()?;
+        Ok(stage)
+    }
 }
 
 /// Closed launcher: no caller-selected systemd property, executable, shell,
@@ -1757,6 +2032,8 @@ pub(crate) fn launch(arguments: &[String]) -> Result<()> {
                 | "generated-execute"
                 | "speech-review"
                 | "speech-transcribe"
+                | "editor-review"
+                | "editor-run"
                 | "model-pack-import-review"
                 | "model-pack-import"
                 | "model-pack-pending-review"
@@ -1849,7 +2126,11 @@ pub(crate) fn launch(arguments: &[String]) -> Result<()> {
         return Err("granted client launcher accepts only fixed protected product commands".into());
     }
     let mut owned = arguments.to_vec();
+    if short_response_command(&arguments[0]) {
+        drop(crate::content_governed::editor_relay_destination()?);
+    }
     let mut restore_capsule_stage = None;
+    let mut editor_checkpoint_stage = None;
     let stage = match arguments[0].as_str() {
         "content-restore-retire-proposal"
         | "content-restore-retire-inspect"
@@ -1965,7 +2246,13 @@ pub(crate) fn launch(arguments: &[String]) -> Result<()> {
             if arguments.len() != count {
                 return Err("content launcher requires its exact finite command shape".into());
             }
-            let bytes = crate::content_governed::read_request(Path::new(&arguments[index]))?;
+            let bytes = source::read(
+                Path::new(&arguments[index]),
+                crate::content_governed::MAX_REQUEST,
+            )?;
+            if crate::content_governed::canonical_request(&bytes)? != bytes {
+                return Err("content source requires exact canonical proposal bytes".into());
+            }
             let stage = InputStage::capture(&bytes, "content.json")?;
             owned[index] = stage
                 .path
@@ -1991,6 +2278,36 @@ pub(crate) fn launch(arguments: &[String]) -> Result<()> {
                 .path
                 .to_str()
                 .ok_or("invalid private qualification request path")?
+                .into();
+            Some(stage)
+        }
+        "editor-review" | "editor-run" => {
+            let (count, index) = if arguments[0] == "editor-review" {
+                (3, 2)
+            } else {
+                (5, 4)
+            };
+            if arguments.len() != count {
+                return Err("editor launcher requires exact finite command shape".into());
+            }
+            let bytes = source::read(
+                Path::new(&arguments[index]),
+                crate::editor_session::MAX_REQUEST,
+            )?;
+            let request = crate::editor_session::parse(&bytes)?;
+            let stage = InputStage::capture(&bytes, "editor.json")?;
+            if let Some(expected) = &request.resume {
+                let query = crate::content_governed::editor_checkpoint_input(
+                    &arguments[1],
+                    &request.binding,
+                    expected,
+                )?;
+                editor_checkpoint_stage = Some(stage.editor_checkpoint(&query)?);
+            }
+            owned[index] = stage
+                .path
+                .to_str()
+                .ok_or("editor snapshot path encoding")?
                 .into();
             Some(stage)
         }
@@ -2152,8 +2469,21 @@ pub(crate) fn launch(arguments: &[String]) -> Result<()> {
     ) {
         writable.push_str(" /var/lib/luma-os/model-qualifications");
     }
+    let short_limit = if owned[0] == "editor-run" {
+        Some(65536)
+    } else if short_response_command(&owned[0]) {
+        let staged = stage
+            .as_ref()
+            .ok_or("short content response requires protected original input")?;
+        Some(crate::content_governed::content_response_limit(
+            &owned[0],
+            &crate::content_governed::read_request(&staged.path)?,
+        )?)
+    } else {
+        None
+    };
     let payload = if payload_command(&owned[0]) {
-        Some(PayloadListener::create(&owned, &unit)?)
+        Some(PayloadListener::create(&owned, &unit, short_limit)?)
     } else {
         None
     };
@@ -2243,6 +2573,9 @@ pub(crate) fn launch(arguments: &[String]) -> Result<()> {
     if let Some(stage) = &restore_capsule_stage {
         stage.check()?;
     }
+    if let Some(stage) = &editor_checkpoint_stage {
+        stage.check()?;
+    }
     let successful = if let Some(payload) = &payload {
         let mut child = command.spawn()?;
         if let Err(error) = payload.relay(&mut child) {
@@ -2289,12 +2622,326 @@ pub(crate) fn launch(arguments: &[String]) -> Result<()> {
     if let Some(stage) = &restore_capsule_stage {
         stage.check()?;
     }
+    if let Some(stage) = &editor_checkpoint_stage {
+        stage.check()?;
+    }
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn filled_socket() -> (UnixStream, UnixStream) {
+        let (mut output, consumer) = UnixStream::pair().unwrap();
+        output.set_nonblocking(true).unwrap();
+        let bytes = [0u8; 4096];
+        loop {
+            match output.write(&bytes) {
+                Ok(_) => (),
+                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
+                Err(e) => panic!("socket fill failed: {e}"),
+            }
+        }
+        (output, consumer)
+    }
+    #[test]
+    fn short_response_actual_acknowledged_socket_preserves_bytes_and_terminal_flush() {
+        let (producer, mut relay) = UnixStream::pair().unwrap();
+        let (mut output, mut consumer) = UnixStream::pair().unwrap();
+        output.set_nonblocking(true).unwrap();
+        let expected = vec![b'x'; 9000];
+        let outgoing = expected.clone();
+        let sender = std::thread::spawn(move || {
+            let mut writer = CheckedPayload(PayloadWriter {
+                socket: producer,
+                bytes: 0,
+                digest: Sha256::new(),
+            });
+            for bytes in outgoing.chunks(4096) {
+                writer.write_checked(bytes, &mut || Ok(())).unwrap();
+            }
+            writer.finish_checked(&mut || Ok(())).unwrap();
+        });
+        let receiver = std::thread::spawn(move || {
+            let mut bytes = Vec::new();
+            consumer.read_to_end(&mut bytes).unwrap();
+            bytes
+        });
+        let fd = output.as_raw_fd();
+        relay_short_response(
+            &mut relay,
+            &mut output,
+            fd,
+            65536,
+            Instant::now() + Duration::from_secs(3),
+        )
+        .unwrap();
+        drop(output);
+        sender.join().unwrap();
+        assert_eq!(receiver.join().unwrap(), expected);
+    }
+    #[test]
+    fn actual_editor_producer_joins_short_relay_and_requires_live_selected_payload() {
+        let (producer, mut relay) = UnixStream::pair().unwrap();
+        let (mut output, mut consumer) = UnixStream::pair().unwrap();
+        output.set_nonblocking(true).unwrap();
+        let value = serde_json::json!({"literal_draft":"x".repeat(9000),"saved":false});
+        let mut expected = serde_json::to_vec(&value).unwrap();
+        expected.push(b'\n');
+        let sender = std::thread::spawn(move || {
+            PAYLOAD_SELECTED.with(|v| v.set(true));
+            PAYLOAD.with(|slot| {
+                *slot.borrow_mut() = Some(PayloadWriter {
+                    socket: producer,
+                    bytes: 0,
+                    digest: Sha256::new(),
+                })
+            });
+            let mut checks = 0;
+            crate::content_governed::deliver_editor_result(&value, || {
+                checks += 1;
+                Ok(())
+            })
+            .unwrap();
+            assert!(checks > 10);
+            PAYLOAD_SELECTED.with(|v| v.set(false));
+            PAYLOAD.with(|slot| *slot.borrow_mut() = None);
+        });
+        let receiver = std::thread::spawn(move || {
+            let mut bytes = Vec::new();
+            consumer.read_to_end(&mut bytes).unwrap();
+            bytes
+        });
+        let fd = output.as_raw_fd();
+        relay_short_response(
+            &mut relay,
+            &mut output,
+            fd,
+            65536,
+            Instant::now() + Duration::from_secs(3),
+        )
+        .unwrap();
+        drop(output);
+        sender.join().unwrap();
+        assert_eq!(receiver.join().unwrap(), expected);
+        assert!(crate::content_governed::deliver_editor_result(
+            &serde_json::json!({"saved":false}),
+            || Ok(())
+        )
+        .is_err());
+    }
+    #[test]
+    fn actual_editor_producer_revocation_closes_without_a_complete_or_saved_response() {
+        let (producer, mut relay) = UnixStream::pair().unwrap();
+        let (mut output, mut consumer) = UnixStream::pair().unwrap();
+        output.set_nonblocking(true).unwrap();
+        let sender = std::thread::spawn(move || {
+            PAYLOAD_SELECTED.with(|v| v.set(true));
+            PAYLOAD.with(|slot| {
+                *slot.borrow_mut() = Some(PayloadWriter {
+                    socket: producer,
+                    bytes: 0,
+                    digest: Sha256::new(),
+                })
+            });
+            let mut checks = 0;
+            let result = crate::content_governed::deliver_editor_result(
+                &serde_json::json!({"draft":"x".repeat(16000),"saved":false}),
+                || {
+                    checks += 1;
+                    if checks >= 12 {
+                        Err("fixture original authorization revoked".into())
+                    } else {
+                        Ok(())
+                    }
+                },
+            );
+            assert!(result.is_err());
+            assert!(checks >= 12);
+            PAYLOAD_SELECTED.with(|v| v.set(false));
+            PAYLOAD.with(|slot| *slot.borrow_mut() = None);
+        });
+        let receiver = std::thread::spawn(move || {
+            let mut bytes = Vec::new();
+            consumer.read_to_end(&mut bytes).unwrap();
+            bytes
+        });
+        let fd = output.as_raw_fd();
+        assert!(relay_short_response(
+            &mut relay,
+            &mut output,
+            fd,
+            65536,
+            Instant::now() + Duration::from_secs(3)
+        )
+        .is_err());
+        drop(output);
+        sender.join().unwrap();
+        assert!(serde_json::from_slice::<serde_json::Value>(&receiver.join().unwrap()).is_err());
+    }
+    #[test]
+    fn blocked_short_response_detects_actual_producer_death_without_flushed_success() {
+        let (mut producer, mut relay) = UnixStream::pair().unwrap();
+        let (mut output, _consumer) = filled_socket();
+        let sender = std::thread::spawn(move || {
+            producer.write_all(&4096u32.to_be_bytes()).unwrap();
+            producer.write_all(&[b'p'; 4096]).unwrap();
+            std::thread::sleep(Duration::from_millis(30));
+            producer.shutdown(std::net::Shutdown::Both).unwrap();
+        });
+        let start = Instant::now();
+        let fd = output.as_raw_fd();
+        assert!(relay_short_response(
+            &mut relay,
+            &mut output,
+            fd,
+            65536,
+            start + Duration::from_secs(2)
+        )
+        .is_err());
+        assert!(start.elapsed() < Duration::from_secs(1));
+        sender.join().unwrap();
+    }
+    #[test]
+    fn blocked_short_response_deadline_is_not_renewed_by_live_socket_or_writable_headers() {
+        let (mut producer, mut relay) = UnixStream::pair().unwrap();
+        let (mut output, _consumer) = filled_socket();
+        producer.write_all(&4096u32.to_be_bytes()).unwrap();
+        producer.write_all(&[b'p'; 4096]).unwrap();
+        let start = Instant::now();
+        let fd = output.as_raw_fd();
+        assert!(relay_short_response(
+            &mut relay,
+            &mut output,
+            fd,
+            65536,
+            start + Duration::from_millis(40)
+        )
+        .is_err());
+        assert!(start.elapsed() < Duration::from_secs(1));
+    }
+    #[test]
+    fn short_response_refuses_empty_oversized_truncated_and_out_of_bound_frames() {
+        for (length, payload, limit) in [
+            (0u32, 0usize, 65536u64),
+            (4097, 0, 65536),
+            (8, 4, 65536),
+            (8, 8, 8),
+        ] {
+            let (mut producer, mut relay) = UnixStream::pair().unwrap();
+            let (mut output, _consumer) = UnixStream::pair().unwrap();
+            output.set_nonblocking(true).unwrap();
+            producer.write_all(&length.to_be_bytes()).unwrap();
+            producer.write_all(&vec![b'x'; payload]).unwrap();
+            producer.shutdown(std::net::Shutdown::Write).unwrap();
+            let fd = output.as_raw_fd();
+            assert!(relay_short_response(
+                &mut relay,
+                &mut output,
+                fd,
+                limit,
+                Instant::now() + Duration::from_secs(1)
+            )
+            .is_err());
+        }
+    }
+    #[test]
+    fn structured_content_and_editor_payload_never_borrow_extended_client_runtime() {
+        for command in [
+            "editor-run",
+            "content-owned-inspection-review",
+            "content-owned-review",
+            "content-owned-apply",
+        ] {
+            assert!(short_response_command(command));
+            assert!(payload_command(command));
+            assert!(!extended_client_command(command));
+        }
+        for command in [
+            "editor-request",
+            "editor-checkpoint-request",
+            "editor-resource-worker",
+            "editor-review",
+        ] {
+            assert!(!payload_command(command));
+        }
+    }
+    #[test]
+    fn short_original_argv_requires_exact_suffix_and_never_strips_another_command() {
+        let normal = [
+            IMAGE_EXE,
+            "speech-transcribe",
+            "admin",
+            "Grant",
+            "/request",
+            "",
+        ];
+        assert_eq!(short_original_arguments(&normal).unwrap(), normal);
+        for args in [
+            vec![
+                IMAGE_EXE,
+                "editor-run",
+                "admin",
+                "Start",
+                "Read",
+                "/input",
+                "",
+            ],
+            vec![
+                IMAGE_EXE,
+                "content-owned-review",
+                "admin",
+                "Read",
+                "/input",
+                "",
+            ],
+            vec![
+                IMAGE_EXE,
+                "editor-run",
+                "admin",
+                "Start",
+                "Read",
+                "/input",
+                "--export-channel",
+                "/tmp/output.sock",
+                "",
+            ],
+        ] {
+            assert!(short_original_arguments(&args).is_err());
+        }
+    }
+    #[test]
+    fn short_relay_checks_real_socket_private_modes_aliases_and_actual_link_count() {
+        use std::os::unix::fs::PermissionsExt;
+        let base = std::path::PathBuf::from(std::env::var_os("LUMA_STORAGE_TEST_ROOT").unwrap());
+        let root = base.join(format!("sr-{}", crate::resources::random_id().unwrap()));
+        fs::DirBuilder::new().mode(0o700).create(&root).unwrap();
+        let parent = root.join("1".repeat(32));
+        fs::DirBuilder::new().mode(0o700).create(&parent).unwrap();
+        let path = parent.join("output.sock");
+        let listener = UnixListener::bind(&path).unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+        check_short_relay(&path, &root).unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
+        assert!(check_short_relay(&path, &root).is_err());
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+        let alias = parent.join("alias.sock");
+        std::os::unix::fs::symlink(&path, &alias).unwrap();
+        assert!(check_short_relay(&alias, &root).is_err());
+        fs::remove_file(alias).unwrap();
+        let link = parent.join("hardlink");
+        fs::hard_link(&path, &link).unwrap();
+        assert!(check_short_relay(&path, &root).is_err());
+        fs::remove_file(link).unwrap();
+        fs::set_permissions(&parent, fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(check_short_relay(&path, &root).is_err());
+        fs::set_permissions(&parent, fs::Permissions::from_mode(0o700)).unwrap();
+        drop(listener);
+        fs::remove_file(path).unwrap();
+        fs::remove_dir(parent).unwrap();
+        fs::remove_dir(root).unwrap();
+    }
 
     fn reviewed_turn_fixture() -> (crate::resources::Token, Use, String) {
         (

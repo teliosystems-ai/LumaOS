@@ -1588,6 +1588,10 @@ impl GrantBoundary<'_> {
     pub(crate) fn session_purpose(&self) -> authentication::SessionPurpose {
         self.session.account.purpose()
     }
+    pub(crate) fn editor_cutoff(&mut self) -> Result<authentication::EditorCutoff> {
+        self.check()?;
+        self.session.account.editor_cutoff()
+    }
 
     pub(crate) fn observation(&mut self) -> Result<crate::utc_stream::Observation> {
         self.check()?;

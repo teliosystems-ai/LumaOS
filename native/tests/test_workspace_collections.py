@@ -153,7 +153,7 @@ class CollectionsTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(dir=os.environ.get('LUMA_STORAGE_TEST_ROOT')) as temporary, \
                 patch.object(auth, 'workspace_controller', return_value=controller), \
                 patch.object(auth, 'canonical_native_request', return_value=(auth.encoded(native).decode(), host)), \
-                patch.object(controller, 'preview'), patch.object(auth, 'capture_query', side_effect=frames) as capture, \
+                patch.object(controller, 'preview'), patch.object(auth, '_capture_native', side_effect=frames) as capture, \
                 patch.object(auth, 'protected'), patch.object(auth, 'grant_selection', side_effect=grants or ['review-read', 'apply-read', 'effect']), \
                 patch.object(auth, 'terminal_line', side_effect=controls or [review['approval'], 'q']), \
                 patch.object(auth, 'owner_read_journey', return_value=19) as reopened, \
@@ -172,6 +172,24 @@ class CollectionsTests(unittest.TestCase):
             self.assertIn('content-owned-review', calls[1].args[0])
             self.assertIn('content-owned-apply', calls[2].args[0])
             self.assertIn('apply-read', calls[2].args[0]); self.assertIn('effect', calls[2].args[0])
+
+    def test_actual_readonly_router_rejects_apply_and_collection_helper_is_closed(self):
+        native = request()
+        value = dict(schema_version=1, operation='apply', login='alice', read_grant='fresh-read',
+            effect_grant='fresh-write', approval='write:'+'4'*64, request=auth.encoded(native).decode())
+        with patch.object(auth, '_capture_native', return_value=b'actual-boundary') as captured, patch.object(auth, 'protected'):
+            with self.assertRaises(ValueError):
+                auth.capture_query(auth.terminal_arguments(value, Path('/exact/collection')))
+            captured.assert_not_called()
+            self.assertEqual(controller.capture_apply(auth, value, Path('/exact/collection')), b'actual-boundary')
+            self.assertEqual(captured.call_args.args[0][4], 'content-owned-apply')
+            self.assertEqual(captured.call_args.args[1], auth.MAX_QUERY_OUTPUT)
+            captured.reset_mock()
+            for changed in (dict(read_grant='fresh-write'), dict(operation='review', effect_grant='', approval=''),
+                    dict(approval='trash:'+'4'*64), dict(request=auth.encoded(dict(native, operation=dict(kind='purge'))).decode())):
+                with self.subTest(changed=changed), self.assertRaises(ValueError):
+                    controller.capture_apply(auth, dict(value, **changed), Path('/exact/collection'))
+            captured.assert_not_called()
 
     def test_cancel_wrong_approval_or_same_grants_never_submit_effect(self):
         for controls, grants in [(['q'], None), (['write:'+'f'*64], None), (None, ['review-read', None]),

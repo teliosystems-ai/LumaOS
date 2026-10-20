@@ -1537,3 +1537,20 @@ and six transport tests, with no skips. The
 [source-bound execution record](gates/g3/capture_revocation_2026-10-20.json)
 retains exact hashes and earlier attempts. These checks do not qualify physical
 devices, installed portal consent or the final enforcing image.
+
+### Reviewed native document handoff, 20 October 2026
+
+An already delivered exact historical envelope can now be explicitly selected
+for a new inference ceremony. Its complete bounded source, owner/reference and
+digest remain data; the Read grant is not reused. A validated observed model
+reply can enter a protected terminal document editor, with literal-text editing,
+actual deterministic rendering and exact draft selection. Publication still
+requires human-selected target/base/request and the existing independent native
+Read/effect grants and approval. Nothing is applied automatically or delivered
+to WebKit. Other engine sources retain their existing manual reviewed controls.
+
+The [execution record](gates/g3/reviewed_draft_2026-10-20.json) joins 150
+workspace/desktop tests, including 18 new draft cases, and six actual native
+document render cases, with no skips. It preserves the failed runner and
+empty-title attempts. These software checks do not establish installed PAM,
+inference, publication, graphical accessibility or final-image qualification.

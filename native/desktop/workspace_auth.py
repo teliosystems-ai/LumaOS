@@ -22,6 +22,7 @@ import subprocess
 import sys
 import threading
 import time
+import types
 import uuid
 
 MAX_REQUEST = 16 * 1024 * 1024 + 32768
@@ -249,6 +250,15 @@ def conversation_capture(command, path, maximum, login=None, grant=None, review_
     return _capture_native(arguments, MAX_QUERY_OUTPUT)
 
 
+def draft_controller():
+    path = Path('/usr/libexec/luma-os/workspace_draft.py')
+    protected(path, 128*1024)
+    spec = importlib.util.spec_from_file_location('luma_terminal_draft', path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 def conversation_manual_workflow(login, directory):
     """Human-authored handoff to the existing independently granted workflow."""
     print('Independent MANUAL workflow. No model reply is reused as source, identity, grant or approval. Enter every exact field explicitly; q cancels before native review. Native still recalculates the selected engine, obtains fresh separate Read/effect grants, reviews the exact intended publication/retention and requires its own approval.', flush=True)
@@ -285,6 +295,7 @@ def conversation_journey(value, directory):
     for round_number in range(8):
         submitted = False
         observed = False
+        result = None
         try:
             conversation_messages(messages)
             print('Exact proposed conversation input (escaped DATA):\n'+json.dumps(messages, ensure_ascii=True, indent=2), flush=True)
@@ -317,10 +328,10 @@ def conversation_journey(value, directory):
             if submitted or observed:
                 return 1
             messages = []
-        if round_number == 7:
-            break
         try:
-            choice = terminal_line('Type n for a follow-up, c to CLEAR history/new prompt, w for an independent manual workflow, m for manual help, or q to finish: ', 8)
+            if round_number == 7:
+                print('Conversation reached its fixed eight-turn limit. No further inference is offered; the last observed reply may still be explicitly selected as draft DATA.', flush=True)
+            choice = terminal_line(('Final turn: d editable document draft; w independent manual workflow; m manual help; q finish: ' if round_number == 7 else 'Type n follow-up; c CLEAR/new prompt; d editable literal-text document draft from this observed reply; w independent manual workflow; m manual help; q finish: '), 8)
             if choice == 'q':
                 return 0
             if choice == 'm':
@@ -328,6 +339,12 @@ def conversation_journey(value, directory):
                 return 0
             if choice == 'w':
                 return conversation_manual_workflow(source['login'], directory)
+            if choice == 'd':
+                if result is None:
+                    raise ValueError('an editable draft requires a complete validated observed reply')
+                return draft_controller().reply_draft(types.SimpleNamespace(**globals()), source['login'], result['text'], directory)
+            if round_number == 7:
+                raise ValueError('eight-turn inference bound reached; only explicit draft/manual/finish actions remain')
             if choice not in ('n', 'c') or (choice == 'n' and not messages):
                 raise ValueError('a follow-up requires an observed native reply; choose explicit new input otherwise')
             prompt = terminal_line('Explicit human prompt (one line, at most 4096 UTF-8 bytes; q cancels): ', 4096)
@@ -1121,26 +1138,32 @@ def workflow_journey(value, directory):
 
 def owner_read_journey(value, directory):
     read_observed = False
+    forwarded = False
     try:
         actual = envelope_read(value, directory)
         if actual is None:
             return 130
         read_observed = True
         _, reopened, host = actual
+        recalculate = False
         if reopened['preview_format'] == 'json':
             wrapper = strict_json(reopened['preview_content'])
             if isinstance(wrapper, dict) and wrapper.get('engine') in ENGINES:
-                choice = terminal_line('Type r to recalculate these already delivered editable source bytes without publication, or q to finish: ')
-                if choice == 'r':
-                    recalculate_owner(reopened, host)
-                elif choice != 'q':
-                    raise ValueError('explicit r or q required')
+                recalculate = True
+        choice = terminal_line('Type i to explicitly forward this historical snapshot into NEW inference; '+('r to recalculate delivered source without publication; ' if recalculate else '')+'q finish: ', 8)
+        if choice == 'i':
+            forwarded = True
+            return draft_controller().forward_snapshot(types.SimpleNamespace(**globals()), actual, directory)
+        if choice == 'r' and recalculate:
+            recalculate_owner(reopened, host)
+        elif choice != 'q':
+            raise ValueError('explicit available action required; no read/inference/effect inferred')
         return 0
     except (KeyboardInterrupt, EOFError):
-        print('Read journey interrupted. No publication or export requested. Already observed delivery, if any, cannot be recalled.', file=sys.stderr, flush=True)
+        print('Exact Read already observed. The separately selected inference/draft handoff was interrupted; inspect any submitted native inference/workflow checkpoint before retry. No rollback, release or further authority is inferred.' if forwarded else 'Read journey interrupted. No publication or export requested. Already observed delivery, if any, cannot be recalled.', file=sys.stderr, flush=True)
         return 130
     except Exception:
-        print('Read/recalculation refused. No publication or export requested. ' +
+        print('Exact Read already observed. The separately selected inference/draft handoff did not return normally; inspect any submitted native inference/workflow checkpoint before retry. No success, rollback or release is inferred.' if forwarded else 'Read/recalculation refused. No publication or export requested. ' +
               ('The exact read was already observed; later calculation did not complete.' if read_observed else 'No complete verified read is claimed.'), file=sys.stderr, flush=True)
         return 1
 

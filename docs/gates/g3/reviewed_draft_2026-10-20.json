@@ -1,0 +1,59 @@
+{
+  "schema_version": 1,
+  "recorded_on": "2026-10-20",
+  "status": "reviewed-native-document-handoff-software-verified",
+  "scope": "Historical snapshot to separately granted inference and human-edited literal document to separately granted workflow; not installed authority qualification",
+  "implemented": [
+    "Explicit complete bounded historical-envelope snapshot forwarding preserves exact owner, reference and source digest; reversible escaping prevents source bytes from introducing literal chat-template delimiters",
+    "Snapshot selection requires exact human approval before a fresh native inference review and finite Infer grant; no Read authority is reused",
+    "A validated observed reply can explicitly enter a protected original-terminal literal-text document editor, with typed title and paragraph editing, actual deterministic rendering and exact draft-digest selection",
+    "Owner, target artifact, new request and expected base are independently human-selected; the existing workflow obtains fresh independent Read/effect grants and approval without automatic publication or retry",
+    "The eighth bounded conversation reply still permits draft or manual controls without enabling a ninth inference turn"
+  ],
+  "proof": {
+    "path": "D:/LumaOS-builds/g3-draft-development-8z61nhtv/verification.json",
+    "sha256": "99ac202671c93399de24958d3153b3ed79b0f888dfd5ed30393fa3bd86b1b32a",
+    "workspace_and_desktop_tests": 150,
+    "new_draft_controller_tests_included": 18,
+    "actual_native_document_render_cases": 6,
+    "skips": 0,
+    "network": "none",
+    "memory_bytes": 536870912,
+    "cpus": 1,
+    "pids": 64,
+    "tools_image": "sha256:819dfe7772da1e3c76ffdc8f9ea4a1fa44c7c549bd4fa988e35d9397d87924b2",
+    "binary_sha256": "7d7ecc81aa2a8c09a1f990d235e290c913fb1f2a03eaa2e1bfab6209f6082016",
+    "stdout_log_sha256": "fb32ea3b9304cc83cc1edfdf15666f3be2ccf71832e21488c3d406b64d73f3d2",
+    "stderr_log_sha256": "b98494e39e04ff7b146f732b6fce5bcb68275e7a0c28150ba68121b1c6f0aacc",
+    "seven_ui_sources_unchanged_before_and_after": true,
+    "engine_source_join": {
+      "snapshot": "/mnt/luma-build/work/gwin-functional-source-20261020-e",
+      "manifest_sha256": "0e6d5aded7a07fe90dae8ead5adf4fe29f114473a0f1319c73844d166a28b314",
+      "unchanged_current_records": 18,
+      "scope": "All rust/luma-content inputs, content_contract.rs, Cargo.toml and Cargo.lock"
+    },
+    "sources": {
+      "native/desktop/workspace_auth.py": "56e9cd3789204020d77aa95c2da91e299cd3c8c6191b9aacef2bccc4291be8b2",
+      "native/desktop/workspace_app.py": "c56117dd1c6de8dc2dece29d6f221a239e35740f3aa2f601bb7cc4c8d553c450",
+      "native/desktop/workspace_draft.py": "eb3aebb4dfee7aba02d8568351cf1cf010bacd0e9bd57d2317aefd652cfeeb44",
+      "native/image/assemble.py": "2da68bb928f66d7c4074922a897565b027b8da424a0b8b5e8fd174a354e5d98d",
+      "native/image/desktop_policy.py": "cd5e41876c39b87bdc26843e7f1acb00d142e22c0533acb648c1e6326a90c133",
+      "native/tests/test_workspace_conversation.py": "94277da62f43a66908494dc0929f1ff782454351e31a26424273bb8656140d0f",
+      "native/tests/test_workspace_draft.py": "33055d94029653a25ebcc5ac8c6b41f829bd1ec86831190b2ff24cd95554e301"
+    }
+  },
+  "retained_attempts": [
+    {"path": "D:/LumaOS-builds/g3-draft-development-9_88zjnt/verification.json", "sha256": "ba049aaafd18bbc430b8c7f6dc770a0aa992f6025af8ba5b6042e8140c083ea9", "reason": "Runner omitted required storage environment: three setup errors, 147 passing tests; only runner corrected"},
+    {"path": "D:/LumaOS-builds/g3-draft-development-f8pzja4j/verification.json", "sha256": "ef890817d24a1abfb2b579004cfdbe1b6bc5c718c40ed12de17378c28fcdbed7", "reason": "150 tests passed, then genuine engine rejected blank title; production editor and fixture corrected to native nonblank-title grammar"},
+    {"path": "conversation tool transcript only", "reason": "Bare WSL could not load the pinned binary's libtss2-esys.so.0, exit127; final genuine engine tests ran in its pinned runtime container without installing host libraries"}
+  ],
+  "limitations": [
+    "This editor deliberately supports literal document drafts; other typed engines retain their explicit manual reviewed controls.",
+    "The integrated controller test uses an actual harmless child and controlled authority fixtures, not real PAM, authenticated model inference or content publication. Six separate cases execute the actual native document engine.",
+    "Installed keyboard, screen-reader, graphical, inference, workflow/recovery and complete-image journeys remain unqualified. No private reply or grant enters WebKit."
+  ],
+  "g3_complete": false,
+  "gwin0_complete": false,
+  "new_bootable_image_produced": false,
+  "production_qualified": false
+}

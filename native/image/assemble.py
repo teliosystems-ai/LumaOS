@@ -399,7 +399,7 @@ def main() -> None:
         shutil.copytree(REPO/name,reference/name,ignore=shutil.ignore_patterns('__pycache__','*.pyc'))
     if args.edition == 'desktop':
         import browser_policy
-        for name in ('workspace_host.py', 'workspace_auth.py', 'workspace_app.py', 'workspace_capture.py', 'browser_adapter.py'):
+        for name in ('workspace_host.py', 'workspace_auth.py', 'workspace_app.py', 'workspace_capture.py', 'workspace_draft.py', 'browser_adapter.py'):
             target = binary.parent/name
             shutil.copy2(REPO/'native/desktop'/name, target)
             target.chmod(0o644)

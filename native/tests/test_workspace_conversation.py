@@ -313,13 +313,14 @@ class WorkspaceConversationTests(unittest.TestCase):
             controls.append('infer:'+auth.conversation_commitment('alice', review([dict(role='user', content=prompt)])))
             if index != 7:
                 controls.extend(['c', 'Prompt '+str(index+1)])
+        controls.append('q')
         with tempfile.TemporaryDirectory(prefix='luma-conversation-', dir=os.environ.get('LUMA_STORAGE_TEST_ROOT')) as directory, \
              patch.object(auth, 'conversation_capture', side_effect=capture), \
              patch.object(auth, 'grant_selection', side_effect=['fresh-'+str(index) for index in range(8)]) as grants, \
              patch.object(auth, 'terminal_line', side_effect=controls) as control, patch('sys.stdout', new_callable=io.StringIO) as output:
             self.assertEqual(auth.conversation_journey(initial('Prompt 0'), Path(directory)), 0)
             self.assertEqual(grants.call_count, 8)
-            self.assertEqual(control.call_count, 22)
+            self.assertEqual(control.call_count, 23)
             self.assertIn('fixed eight-turn limit', output.getvalue())
             self.assertEqual(list(Path(directory).iterdir()), [])
         self.assertEqual(submitted, [[dict(role='user', content='Prompt '+str(index))] for index in range(8)])

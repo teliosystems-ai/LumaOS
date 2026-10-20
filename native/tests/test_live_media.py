@@ -33,7 +33,7 @@ class LiveMediaContractTests(unittest.TestCase):
 @unittest.skipUnless(os.name == 'posix', 'requires Linux shell and symlinks')
 class LiveMediaGeneratorTests(unittest.TestCase):
     def test_mode_specific_dependencies_and_bounded_device_wait(self):
-        for mode in ('live', 'installed', 'unknown'):
+        for mode in ('live', 'live luma.media=optical', 'installed', 'unknown'):
             with self.subTest(mode=mode), tempfile.TemporaryDirectory() as temporary:
                 root = Path(temporary)
                 binary = root/'bin'
@@ -50,11 +50,17 @@ class LiveMediaGeneratorTests(unittest.TestCase):
                 subprocess.run(['/bin/sh', str(GENERATOR), str(output)], env=env, check=True)
                 media = output/'local-fs.target.wants/media-luma.mount'
                 timeout = output/r'dev-disk-by\x2dpartlabel-luma\x2dpayload.device.d/timeout.conf'
-                self.assertEqual(media.is_symlink(), mode == 'live')
-                self.assertEqual(timeout.exists(), mode == 'live')
-                if mode == 'live':
+                live=mode.startswith('live')
+                optical='luma.media=optical' in mode
+                self.assertEqual(media.is_symlink(), live)
+                self.assertEqual(timeout.exists(), live and not optical)
+                if live:
                     self.assertEqual(os.readlink(media), '/etc/systemd/system/media-luma.mount')
-                    self.assertEqual(timeout.read_text(), '[Unit]\nJobRunningTimeoutSec=90s\n')
+                    if optical:
+                        self.assertEqual((output/'media-luma.mount.d/optical.conf').read_text(),
+                            '[Mount]\nWhat=/run/initramfs/luma-optical\nType=none\nOptions=bind,ro,nodev,nosuid,noexec\n')
+                    else:
+                        self.assertEqual(timeout.read_text(), '[Unit]\nJobRunningTimeoutSec=90s\n')
                     for name in ('luma-live-console.service', 'luma-live-vt.service'):
                         self.assertTrue((output/'multi-user.target.wants'/name).is_symlink())
                 self.assertEqual((output/'local-fs.target.wants/efi.mount').is_symlink(), mode == 'installed')

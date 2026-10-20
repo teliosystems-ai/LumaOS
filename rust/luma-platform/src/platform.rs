@@ -1085,7 +1085,24 @@ fn check_recovery_image_claims(
                 .into(),
         );
     }
-    let expected=format!("root=/dev/mapper/root ro roothash={} systemd.verity_root_options=panic-on-corruption systemd.verity_root_data=/dev/disk/by-partlabel/luma-live-root systemd.verity_root_hash=/dev/disk/by-partlabel/luma-live-hash luma.mode=live luma.slot=live systemd.unit=multi-user.target console=tty0 console=ttyS0,115200n8 apparmor=1 security=apparmor systemd.show_status=yes rd.shell=0 panic=10",hash[0]);
+    let (data, hashes, transport) = match values("luma.media=").as_slice() {
+        [] => (
+            "/dev/disk/by-partlabel/luma-live-root",
+            "/dev/disk/by-partlabel/luma-live-hash",
+            "",
+        ),
+        [value] if value == "optical" => (
+            "/dev/luma-optical-root",
+            "/dev/luma-optical-hash",
+            "luma.media=optical ",
+        ),
+        _ => {
+            return Err(
+                "recovery requires one exact authenticated disk or optical transport".into(),
+            )
+        }
+    };
+    let expected=format!("root=/dev/mapper/root ro roothash={} systemd.verity_root_options=panic-on-corruption systemd.verity_root_data={data} systemd.verity_root_hash={hashes} luma.mode=live luma.slot=live {transport}systemd.unit=multi-user.target console=tty0 console=ttyS0,115200n8 apparmor=1 security=apparmor systemd.show_status=yes rd.shell=0 panic=10",hash[0]);
     let words: Vec<_> = args.split_whitespace().collect();
     let actual: std::collections::BTreeSet<_> = words.iter().copied().collect();
     if actual.len() != words.len() || actual != expected.split_whitespace().collect() {
@@ -1181,6 +1198,37 @@ mod recovery_claim_tests {
         let mut i = identity();
         i.environment = "production".into();
         check_recovery_image_claims(&i, &arguments(), &mount()).unwrap();
+    }
+    #[test]
+    fn optical_recovery_is_distinct_exact_transport_without_disk_fallback() {
+        let optical = arguments()
+            .replace(
+                "/dev/disk/by-partlabel/luma-live-root",
+                "/dev/luma-optical-root",
+            )
+            .replace(
+                "/dev/disk/by-partlabel/luma-live-hash",
+                "/dev/luma-optical-hash",
+            )
+            .replace("luma.slot=live ", "luma.slot=live luma.media=optical ");
+        check_recovery_image_claims(&identity(), &optical, &mount()).unwrap();
+        for malformed in [
+            optical.replace(" luma.media=optical", ""),
+            optical.replace(
+                "/dev/luma-optical-root",
+                "/dev/disk/by-partlabel/luma-live-root",
+            ),
+            optical.replace(
+                "/dev/luma-optical-hash",
+                "/dev/disk/by-partlabel/luma-live-hash",
+            ),
+            optical.replace("luma.media=optical", "luma.media=disk"),
+            optical.clone() + " luma.media=optical",
+            optical.clone() + " init=/bin/sh",
+            arguments() + " luma.media=optical",
+        ] {
+            assert!(check_recovery_image_claims(&identity(), &malformed, &mount()).is_err());
+        }
     }
     #[test]
     fn mount_parser_rejects_stacked_missing_malformed_and_hostile_escapes() {

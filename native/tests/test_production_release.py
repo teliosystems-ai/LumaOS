@@ -182,7 +182,7 @@ class ProductionReleaseTests(unittest.TestCase):
                     'osrel': b'ID=disposable\n'}.items():
                     member = base / f'{slot}-{name}'; member.write_bytes(data)
                     run('/usr/bin/objcopy', '--add-section', '.' + name + '=' + str(member), '--set-section-flags', '.' + name + '=contents,alloc,load,readonly,data', image)
-                if slot != 'live':
+                if slot in ('a','b'):
                     run('/usr/bin/objcopy', '--add-section', '.pcrpkey=' + str(self.fixture.keys / 'pcr.pub'), '--set-section-flags', '.pcrpkey=contents,alloc,load,readonly,data', image)
             (unsigned / 'bootloader.efi').write_bytes(minimal_pe())
             request = production.prepare_pcr(out, root)
@@ -203,6 +203,8 @@ class ProductionReleaseTests(unittest.TestCase):
             result = production.accept_pe(out, signed_response)
             self.assertTrue(result['production_signatures_verified']); self.assertFalse(result['custody_verified'])
             self.assertNotIn('.pcrsig', production.boot_policy.read_sections(out / 'slot-live.efi'))
+            self.assertNotIn('.pcrsig', production.boot_policy.read_sections(out / 'slot-optical.efi'))
+            self.assertNotIn('.pcrpkey', production.boot_policy.read_sections(out / 'slot-optical.efi'))
             changed = production.public.document((signed_response / 'pe-response.json').read_bytes()); changed['request_sha256'] = '00' * 32
             (signed_response / 'pe-response.json').write_bytes(production.canonical(changed))
             with self.assertRaises(ValueError): production.accept_pe(out, signed_response)

@@ -1,6 +1,7 @@
 """External artifact staging preserves bytes and never overwrites old output."""
 import errno
 import importlib.util
+import os
 from pathlib import Path
 import tempfile
 import unittest
@@ -12,6 +13,57 @@ assembler=importlib.util.module_from_spec(spec);spec.loader.exec_module(assemble
 
 
 class ExternalStagingTests(unittest.TestCase):
+    @unittest.skipUnless(os.name=='posix' and hasattr(os,'geteuid') and os.geteuid()==0,'native root-owned cleanup contract')
+    def test_verified_payload_staging_releases_only_generated_aliases(self):
+        with tempfile.TemporaryDirectory(dir=os.environ['LUMA_STORAGE_TEST_ROOT']) as folder:
+            root=Path(folder);source=root/'artifacts';source.mkdir();staged=root/'payload';staged.mkdir()
+            original=source/'release.json';original.write_bytes(b'preserved exact signed release bytes')
+            assembler.stage_payload_member(original,staged/'release.json')
+            self.assertEqual(original.stat().st_nlink,2)
+            with patch.object(assembler,'WORK',root),patch.object(assembler,'OUT',source):
+                assembler.release_payload_staging(staged,source,['release.json'])
+            self.assertEqual(original.read_bytes(),b'preserved exact signed release bytes')
+            self.assertEqual(original.stat().st_nlink,1)
+            self.assertFalse(staged.exists())
+
+    @unittest.skipUnless(os.name=='posix' and hasattr(os,'geteuid') and os.geteuid()==0,'native root-owned cleanup contract')
+    def test_payload_cleanup_refuses_unknown_or_changed_staging_before_unlink(self):
+        with tempfile.TemporaryDirectory(dir=os.environ['LUMA_STORAGE_TEST_ROOT']) as folder:
+            root=Path(folder);source=root/'artifacts';source.mkdir();staged=root/'payload';staged.mkdir()
+            (source/'release.json').write_bytes(b'original');(staged/'release.json').write_bytes(b'changed!')
+            with patch.object(assembler,'WORK',root),patch.object(assembler,'OUT',source):
+                with self.assertRaises(ValueError):assembler.release_payload_staging(staged,source,['release.json'])
+                self.assertTrue((staged/'release.json').exists())
+                (staged/'release.json').write_bytes(b'original');(staged/'unknown').write_bytes(b'preserve')
+                with self.assertRaises(ValueError):assembler.release_payload_staging(staged,source,['release.json'])
+            self.assertEqual((staged/'unknown').read_bytes(),b'preserve')
+            self.assertEqual((source/'release.json').read_bytes(),b'original')
+
+    @unittest.skipUnless(os.name=='posix' and hasattr(os,'geteuid') and os.geteuid()==0,'native root-owned cleanup contract')
+    def test_verified_independent_copy_staging_preserves_original_and_refuses_substitution(self):
+        with tempfile.TemporaryDirectory(dir=os.environ['LUMA_STORAGE_TEST_ROOT']) as folder:
+            root=Path(folder);source=root/'artifacts';source.mkdir();staged=root/'payload';staged.mkdir()
+            original=source/'release.json';original.write_bytes(b'exact original')
+            (staged/'release.json').write_bytes(original.read_bytes())
+            with patch.object(assembler,'WORK',root),patch.object(assembler,'OUT',source):
+                assembler.release_payload_staging(staged,source,['release.json'])
+            self.assertEqual(original.read_bytes(),b'exact original');self.assertEqual(original.stat().st_nlink,1)
+            staged.mkdir();(staged/'release.json').write_bytes(original.read_bytes())
+            actual=assembler.hashlib.file_digest;swapped=[];retained=root/'retained'
+            def substitute(stream,algorithm):
+                value=actual(stream,algorithm)
+                if not swapped:
+                    staged.rename(retained);staged.mkdir();(staged/'release.json').write_bytes(b'foreign preserve')
+                    swapped.append(True)
+                return value
+            with patch.object(assembler,'WORK',root),patch.object(assembler,'OUT',source), \
+                 patch.object(assembler.hashlib,'file_digest',side_effect=substitute):
+                with self.assertRaisesRegex(ValueError,'namespace changed'):
+                    assembler.release_payload_staging(staged,source,['release.json'])
+            self.assertEqual((staged/'release.json').read_bytes(),b'foreign preserve')
+            self.assertEqual((retained/'release.json').read_bytes(),b'exact original')
+            self.assertEqual(original.read_bytes(),b'exact original')
+
     def test_cross_device_copy_preserves_size_zeros_and_digest(self):
         with tempfile.TemporaryDirectory() as folder:
             source=Path(folder)/'source';dest=Path(folder)/'dest'

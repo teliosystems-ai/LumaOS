@@ -1,0 +1,336 @@
+{
+  "schema_version": 1,
+  "recorded_on": "2026-10-20",
+  "branch": "feature/g3-gwin0-beta",
+  "status": "native-discovery-and-optical-media-source-software-verified",
+  "scope": "Integrated G3/GWIN0 development checkpoint, not complete stages or produced-image qualification",
+  "previous_checkpoint": "semantic_compute_media_2026-10-19.json",
+  "previous_published_commit": "795cfd27ac7e9c3eafe11ae3cad61f4f229f1ae6",
+  "implemented": [
+    "Trusted native GTK exact-selection or typed-collection discovery with full-u64 references and original-terminal finite Read review",
+    "Closed native semantic-response validation and explicit exact-hit reads through a fresh independent envelope ceremony; no query-grant reuse, automatic opening or scope enlargement",
+    "Atomic typed collection composer, explicit sorting, immutable-reference validation and actual native canonical-source reload; no browser private-data or authority route",
+    "Distinct optical UKI build/signing contract, bounded read-only CD discovery, read-only loop-backed signed verity root and preserved live payload",
+    "Exclusive held-descriptor EFI El Torito ISO construction and independent closed ISO9660 namespace, catalog, geometry, extent and full-byte verification",
+    "Four-UKI plus bootloader custody/finalization checks, ISO checksum/export integration and optical recovery transport validation; only installed A/B receive Admin PCR approvals",
+    "Explicit independently pinned new-build laboratory resume while historical repair remains default",
+    "Full payload-image readback and held exact-inventory release of only fresh verified staging aliases, preserving originals and unknown evidence"
+  ],
+  "verification": {
+    "source_snapshot": "/mnt/luma-build/work/g3-optical-discovery-source-20261020-b",
+    "source_manifest_sha256": "b80b3ce09f90a137c1b317fb84c5604f021db03bc44e70536c62ec702b3aa240",
+    "source_files": 621,
+    "every_current_captured_source_matched": true,
+    "evidence_directory": "/mnt/luma-build/work/g3-optical-discovery-verify-20261020-b",
+    "all_log_hashes_file_sha256": "ba111f3ecf4f8dc0f10effffa7a669d13811ecc78475c31901bb11e7f0ee5f3b",
+    "log_sha256": {
+      "build.log": "62641f9fe02cb49f43f9e96ed6926cfa9e6731c8be4d97b76ce7a0b60254286a",
+      "command-000.log": "ac4f1194be38f9830da4f300f7063b310997851c86ce86e8a8a482976e240781",
+      "composer-actual-cli.log": "de8e167e5d03909553ea26864848a3be1d97257650ec9b99e280fb772fdefee7",
+      "content-cli.log": "da751ecb26b12fb39b1317e9d444aa03db10aef5e922f9871c64e9aeb874aebd",
+      "discovery-cli.log": "8f06147c6454ac16ff6268fe986450c7ab533333485d287d11fda41c44d62b06",
+      "model-inputs.log": "fcafb6db06e80c0e6d175bef6921e9db8bb57965776c3f1adc94985163cb52d7",
+      "native-source.log": "ff8ea11930c17075f7e4344b14c19c62b1cb17bd99f31ac8cd3014ec34c6dcba",
+      "public-trust.log": "42f2d14fb7da5302bac8a4b68bd248f98eefacc71b87304fcb3052daf27f0b84",
+      "recovery-cli.log": "da7140ac60c5015ee022d493c10829f7beeb8f1460117521bff891605508e043",
+      "software-tpm.log": "bfb46540955fde01398574223c52d65bb32de582870ef92de976fc66796c947c",
+      "spreadsheet-actual-cli.log": "df3bc8a55da4f1add059f0210cb083c250111a5056b0334bcd034e02670635a5",
+      "workflow-cli.log": "b173fa612b97c6793867bda1450155e08e6bcaed240de1e6b9b44edee6ee4448"
+    },
+    "actual_cli_sha256": "adc38bafb4435137857a4a5d03d3500df33a997531e7bd53153eaf35716e2dc1",
+    "unchanged_source_join": {
+      "source_snapshot": "/mnt/luma-build/work/g3-optical-discovery-source-20261019-a",
+      "source_manifest_sha256": "2879180f95d7fabab9822beb8a8ccb2df3f503f30a877c16bc8b3f63f5fe98d5",
+      "evidence_directory": "/mnt/luma-build/work/g3-optical-discovery-verify-20261019-a",
+      "only_changed_captured_path": "native/tests/test_boot_policy.py",
+      "production_sources_changed_between_snapshots": false,
+      "reason": "Full Rust and offline profile results completed on A; after the real initrd fixture-only correction, all native-source and remaining integration lanes were rerun on B. The A native-source failure is retained, not a passing result.",
+      "log_sha256": {
+        "apparmor.log": "45bd9940df71498a9ead2fa0552fda8abe23c0fcf930109a60c62bba11a4a389",
+        "check.log": "2690d3c33b12c8bcc7379e0e3bc078cba26e37a4a8b7380c050caf3134ea6497",
+        "command-000.log": "47325bcb24ad46ebab71be60f093766d10d921371b3c0934a7e7cb73c9c1bf9b",
+        "content-engine.log": "ae7ff8b51354d9ca166a4a8838053e6f0c3216c48b33433b3b5e20a1aaca552c",
+        "content-store.log": "2c63d65278b73ee11607fa14206d7f179ffaa86f4d58e19bdd72988ea8975122",
+        "focused-content_backup--.log": "0fe9590ad1185519848f98222aa3f12cc5c24d34046170f216aa104683fdff06",
+        "focused-content_checkpoint--.log": "0cc41dc2fede669f073a529ba8beba586edccf4d8ae158d8fe1ba5aa0a3d88e0",
+        "focused-content_governed--tests--.log": "5b399670c779b63a1d39b7a6657dee0b6f01722bc10f8b5a342c7474ab04eb99",
+        "focused-content_restore--.log": "2fd0997e65c4514774cdb45a84dd1a6cd4de7a50ced810914c176342d081b877",
+        "focused-content_workflow--.log": "0175b13ddc24154e42c9636b2973c1027182897a4118cf014ed0645e2b58a76e",
+        "focused-platform--content_custody_policy_tests--.log": "d70e33a3b8f29dc4ebd6a734656d9013e2b6c426fcd431f89a45d3b1716a4750",
+        "focused-platform--recovery_claim_tests--.log": "ad126b330d7ea059887d23f60e6025a7e1d5a8b41193229438d89160bacdcb81",
+        "focused-service--content_output--.log": "959e1fc4ccaa6363fd86946f55a178d8b9a509d60b4da5a6d42fb95f6e66c0c9",
+        "native-source.log": "5e670b34defc0197146e6edb2ac05e9958a9b42292ca2e47c743e54b191b8c7d"
+      }
+    },
+    "tools_image": "sha256:819dfe7772da1e3c76ffdc8f9ea4a1fa44c7c549bd4fa988e35d9397d87924b2",
+    "network": "none",
+    "container_memory_gib": 4,
+    "container_memory_swap_cap_gib": 4,
+    "container_cpus": 2,
+    "pids_limit": 128,
+    "memlock_bytes": 671088640,
+    "fresh_observed_available_memory_before_final_run_bytes": 6674067456,
+    "minimum_preflight_observed_memory_headroom_required_gib": 1,
+    "observed_memory_is_reserved": false,
+    "host_memory_or_wsl_configuration_changed": false,
+    "workspace_all_targets_offline_locked_warnings_denied": true,
+    "full_content_engine": {
+      "passed": 97,
+      "failed": 0,
+      "ignored": 0
+    },
+    "full_content_store": {
+      "passed": 135,
+      "failed": 0,
+      "ignored": 0,
+      "compile_fail_doctests_passed": 3
+    },
+    "focused_rust_groups": {
+      "focused-content_backup--.log": 13,
+      "focused-content_checkpoint--.log": 47,
+      "focused-content_governed--tests--.log": 47,
+      "focused-content_restore--.log": 7,
+      "focused-content_workflow--.log": 2,
+      "focused-platform--content_custody_policy_tests--.log": 3,
+      "focused-platform--recovery_claim_tests--.log": 5,
+      "focused-service--content_output--.log": 2
+    },
+    "focused_rust_passed": 126,
+    "native_source": {
+      "passed": 717,
+      "failed": 0,
+      "skipped": 0
+    },
+    "public_trust": {
+      "passed": 13,
+      "failed": 0,
+      "skipped": 0
+    },
+    "model_inputs": {
+      "passed": 13,
+      "failed": 0,
+      "skipped": 0
+    },
+    "disposable_tpm_actual_named_executions": 3,
+    "disposable_tpm_scenarios": [
+      "normal",
+      "lost-publication",
+      "lost-parent"
+    ],
+    "actual_native_cli": {
+      "contract_cases": 30,
+      "workflow_engine_cases": 4,
+      "recovery_data_canonicalizer_cases": 4,
+      "discovery_data_canonicalizer_cases": 2,
+      "spreadsheet_positive_cases": 4,
+      "spreadsheet_exact_refusals": 2,
+      "composer_positive_cases": 5,
+      "composer_exact_refusals": 2,
+      "native_canonical_rerenders": 5,
+      "private_pam_or_product_effects_qualified": false,
+      "installed_graphical_qualified": false
+    },
+    "component_fixtures": {
+      "optical": {
+        "tests": 20,
+        "evidence": "/mnt/luma-build/work/optical-media-tests-20261019-f-o1f6vZ42/test.log",
+        "sha256": "5529f252c3612d189c04ce790efa3788a35ce357bf34b9017b00a298002a314a",
+        "actual_xorriso": true,
+        "deliberately_nonbootable_data": true,
+        "actual_optical_boot": false,
+        "repeated_within_native_source_suite": true
+      },
+      "payload_staging": {
+        "tests": 6,
+        "evidence": "/mnt/luma-build/work/optical-resume-approval-tests-20261019-a-iEb7nza9/test.log",
+        "sha256": "8a1b3b8c0442628ef4d4b22ee5083e2066c1910f4dc3c779204312b90dd36166",
+        "repeated_within_native_source_suite": true
+      },
+      "resume_approval": {
+        "tests": 3,
+        "evidence": "/mnt/luma-build/work/optical-resume-approval-tests-20261019-a-iEb7nza9/resume-approval.log",
+        "sha256": "afd103f8243bb9c7a4397406c3fe02667d593485666839991499a2986ce50d34",
+        "repeated_within_native_source_suite": true
+      },
+      "real_initrd": {
+        "tests": 1,
+        "evidence": "/mnt/luma-build/work/optical-initrd-fixture-tests-20261020-a-efSo5PuZ/test.log",
+        "sha256": "5158418c98b9ff491b79970cae9070df472c7eb82f8b689169fc692e2152b6df",
+        "real_dracut_and_cpio": true,
+        "three_optical_member_tampers_refused": true,
+        "missing_optical_service_refused": true,
+        "malformed_archive_refused": true,
+        "inert_elf_dependency_executed": false,
+        "repeated_within_native_source_suite": true
+      }
+    },
+    "pinned_target_optical_driver_resolution": {
+      "record": "/mnt/luma-build/work/optical-dracut-alias-proof-20261020-a-8o9vZDRG/verification.json",
+      "sha256": "9a1fba118877434f6fc9b034d9d2d4046de132101346404c4dc954bab5c9f3f1",
+      "kernel": "6.8.0-142-generic",
+      "actual_dracut_install_aliases": ["iso9660", "isofs", "fs-iso9660"],
+      "each_exit_code": 0,
+      "each_matches_readonly_original_bytes": true,
+      "module_bytes": 28602,
+      "module_sha256": "107c90c291ea8dc9ba26fae717ad66b78f4b95bb846defdcab68f6a767287028",
+      "production_source_changed": false,
+      "module_load_attempted": false,
+      "boot_qualified": false
+    },
+    "production_javascript_and_python": {
+      "record": "D:/LumaOS-builds/g3-discovery-general-3f4551082da44c9b8053c217552cb0aa/verification.json",
+      "sha256": "5f7987b5fbad217622d813b1399fdc0830c4a53ccd4d66c31ba7e1d9f9ba9128",
+      "exact_unchanged_source_pins": 8,
+      "production_javascript_assertions": 128,
+      "ui_contract_tests": 5,
+      "python_tests_run": 320,
+      "python_passed": 315,
+      "python_platform_skips": 5,
+      "bulk_logs_on_d": true,
+      "tiny_windows_filesystem_fixtures_on_c_ntfs": true,
+      "installed_webkit_qualified": false
+    },
+    "unchanged_windows_join": {
+      "record": "D:/LumaOS-builds/g3-next-windows-integrated-21b0470d855b441796ae03e191740f72/verification.json",
+      "sha256": "b05badae5c511d7e454480ae3af876de5829069507c4fd682875eddc8df2b793",
+      "exact_unchanged_source_pins": 59,
+      "authority_assertions": 424,
+      "capacity_assertions": 89,
+      "planner_assertions": 76,
+      "total_assertions": 589,
+      "compute_assertions_already_in_authority_total": 80,
+      "freshly_rerun_in_second_batch": false,
+      "join": "Current C sources and immutable B records equal the original tested source pins; nested records and result logs rehashed.",
+      "actual_installed_hosted_execution_qualified": false
+    },
+    "test_counts_are_not_a_summed_unique_total": true,
+    "source_pins": {
+      "native/desktop/workspace_app.py": "86390bfe2df7694c01ade5d19006dad1205f457c1ea3e281ab37bee3dcfb5a50",
+      "native/desktop/workspace_auth.py": "b69a78f062453ff23531add4de990a997b3b5060442aa4c8187874019d00a20a",
+      "native/image/assemble.py": "d2fbb676f9c2b186f59f38a718ff0f2e6c89a78417ac7255f48c71733d87c59e",
+      "native/image/optical_media.py": "d1a3fa1e3fd832db3c9878359cb391e5dd8203582a992545d14ff600972d0a5f",
+      "native/image/resume.py": "74b6ae8b4bf61a20d5c0858c2be3e040058d0bc97ed2785681964932f86480bd",
+      "native/tests/test_external_storage.py": "f4a13ff9036538517404f8beb3f45166940a4f2fc1a7cfd69980419d5b9ba51a",
+      "native/tests/test_optical_media.py": "9770bfee2ebbd2e19fcab110d25a6fb2e5935e459b7b36c253f72f07e368d1f9",
+      "rust/luma-platform/src/platform.rs": "8176e9763e541f58d6bce8db4cddd89fd827bf47b798a53de900cafe02d6171d",
+      "native/image/boot_policy.py": "e11ed540c3177ac081d2358a6e2cb54b7f93577d5cf1d7ff41fda55a77fe64b1",
+      "native/tests/test_boot_policy.py": "ec251418aaf87630907d9d75bb51b6d75fd4f0d3ac7090ac94fd56417480cc42"
+    }
+  },
+  "retained_attempts": {
+    "initial_integrated_native": {
+      "snapshot": "/mnt/luma-build/work/g3-optical-discovery-source-20261019-a",
+      "tests_run": 717,
+      "errors": 1,
+      "transcript": "/mnt/luma-build/work/g3-optical-discovery-verify-20261019-a/command-000.log",
+      "sha256": "47325bcb24ad46ebab71be60f093766d10d921371b3c0934a7e7cb73c9c1bf9b",
+      "cause": "The pre-existing real dracut fixture built a PCR-only initrd; the strengthened verifier correctly required optical components. Fixture-only correction installs genuine 91luma and 92luma-pcrphase modules in disposable container paths and exercises tampered/missing members. Production verifier unchanged.",
+      "superseded_by_final_native_pass": true
+    },
+    "optical": [
+      {
+        "path": "/mnt/luma-build/work/optical-media-tests-20261019-a-nQcgX3iO/test.log",
+        "sha256": "0b3be6f9c471648ecf930781b57d4b4bdb7e0aae76c63ef2ff114fbbe926688f",
+        "failed_summary": true,
+        "passed_summary": false
+      },
+      {
+        "path": "/mnt/luma-build/work/optical-media-tests-20261019-b-QVAQC9rV/test.log",
+        "sha256": "3f98b1ab3ec589309c35be96e3297171fc83a7715bb5d91c16012872ca4f632b",
+        "failed_summary": true,
+        "passed_summary": false
+      },
+      {
+        "path": "/mnt/luma-build/work/optical-media-tests-20261019-c-ABzhrq3t/test.log",
+        "sha256": "1a7a271a70b10f6e61fe8d725ee463f1ef9002cc57854aea53bc1f4bf0bdcc5f",
+        "failed_summary": true,
+        "passed_summary": false
+      },
+      {
+        "path": "/mnt/luma-build/work/optical-media-tests-20261019-d-gj1J1kjM/test.log",
+        "sha256": "ce8df2ccca2f1b8a48ffd51b5a8d5fb5ffd2eb6c9fc3686716f61c3e5db58ee0",
+        "failed_summary": false,
+        "passed_summary": true
+      },
+      {
+        "path": "/mnt/luma-build/work/optical-media-tests-20261019-e-Xbv3BC3T/test.log",
+        "sha256": "1851514ca366c2508d81dfc59a3f15ceede0089b947b684777728e1f1907b052",
+        "failed_summary": true,
+        "passed_summary": false
+      },
+      {
+        "path": "/mnt/luma-build/work/optical-media-tests-20261019-f-o1f6vZ42/test.log",
+        "sha256": "5529f252c3612d189c04ce790efa3788a35ce357bf34b9017b00a298002a314a",
+        "failed_summary": false,
+        "passed_summary": true
+      }
+    ],
+    "diagnostic_notes": [
+      "Earlier xorriso attempts exposed unsupported proc-FD pathname output and default Rock Ridge. Final implementation writes stdout to its held exclusive descriptor with --norock.",
+      "A later tiny-test root fixture had an off-by-one byte count; the independent parser correctly refused. Corrected fixture and final complete optical suite passed.",
+      "All failed evidence remains retained; no failed log is counted as a passing execution."
+    ]
+  },
+  "observed_windows_platform": {
+    "observed_on": "2026-10-20",
+    "wsl_kernel": "6.18.33.2-microsoft-standard-WSL2",
+    "pid1": "systemd",
+    "apparmor_enabled": false,
+    "security_lsm_interface_present": false,
+    "observation_not_qualification": true,
+    "protected_execution_must_refuse": true,
+    "kernel_or_lsm_settings_changed": false,
+    "cached_runtime_archive": "D:/LumaOS-builds/native-inputs/20261014T170707Z-desktop/llama-runtime.tar.gz",
+    "cached_runtime_archive_sha256": "a836c913236ab4533ef9aaf49f0e1ad2955c8159869d7eec1a9072a92e13d61b",
+    "genuine_cached_qwen_weight_proven_available": false,
+    "cached_runtime_executed_for_inference": false
+  },
+  "pending_decisions": [
+    {
+      "decision": "Separate five-minute compact-inference purpose versus retained thirty-second bound",
+      "scope": "Next actual GWIN0 inference slice",
+      "enabled_by_this_batch": false
+    },
+    {
+      "decision": "Separately commissioned TPM/NV epoch root replacement versus original-root retention with delegated key rotation",
+      "scope": "Later production custody hardening; not a GWIN0 prerequisite while the commissioned root is retained within admitted bounds",
+      "enabled_by_this_batch": false
+    }
+  ],
+  "remaining": {
+    "g3_development": [
+      "Private/conversational inference and governed application journeys",
+      "General per-result access policy and sharing",
+      "Permissioned speech/image/screen/video capture, indicators, revocation and grounded-reference clarification",
+      "Complete installed viewer, LibreOffice/browser, generated-code and hardware-adapter completion flows",
+      "Declared broader durable lifecycle/forensic continuation and accessibility/held-out acceptance"
+    ],
+    "gwin0_development_and_proof": [
+      "Actual compact-inference signed lab profile, streamed verified model/runtime and confined executable worker",
+      "Authenticated scoped host-file ingestion join",
+      "W008 manual/model-disabled, startup/lifetime/restart and resource coexistence",
+      "Qualified enforcement and W022 two-user isolation",
+      "Complete Hyper-V desktop deployment, identity/resources, verified boot, encrypted data and recovery"
+    ],
+    "later_windows_scope": [
+      "GWIN1 general ordinary-user enrollment, finite-grant automation, event queue, adapters, updates, recovery and migration",
+      "GWIN2 W033 checkpoint/clone reconciliation and final all-profile evidence",
+      "Future production custody-root succession"
+    ],
+    "image_and_native_qualification": [
+      "Full optical OS assembly and firmware boot",
+      "Complete new G3 native image and Windows WSL/Hyper-V deliverables",
+      "Installed application journeys and actual native security/recovery acceptance"
+    ]
+  },
+  "g3_complete": false,
+  "gwin0_complete": false,
+  "gate_closing": false,
+  "production_qualified": false,
+  "new_complete_bootable_images_produced": false,
+  "existing_sequence_16_image_modified": false,
+  "host_service_installed": false,
+  "existing_distribution_imported_removed_or_reconfigured": false,
+  "physical_tpm_or_disk_mutated": false,
+  "old_assemblies_or_images_removed": false
+}

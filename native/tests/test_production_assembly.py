@@ -30,6 +30,11 @@ def checkpoint():
 
 
 class ProductionAssemblyTests(unittest.TestCase):
+    def test_final_production_boot_evidence_includes_distinct_optical_uki(self):
+        source=(IMAGE/'production_finalize.py').read_text()
+        self.assertIn("for slot in ('a', 'b', 'live', 'optical')",source)
+        self.assertIn('boot.verify_uki(',source)
+
     def test_checkpoint_is_closed_production_identity_not_native_evidence(self):
         value = checkpoint()
         self.assertEqual(finish.parse_checkpoint(json.dumps(value)), value)

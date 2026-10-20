@@ -59,12 +59,14 @@
       <button id="sheet-load" type="button" disabled>Load last native-verified spreadsheet source (replaces grid)</button>
     </section>
     <section id="composer-section" class="wide" aria-labelledby="composer-heading">
-      <h2 id="composer-heading" tabindex="-1">Editable document, diagram and animation source</h2>
+      <h2 id="composer-heading" tabindex="-1">Editable document, diagram, animation and collection source</h2>
       <p id="composer-help">Build closed, typed source without writing JSON. This ephemeral composer does not render, calculate, save or publish. Apply field edits before structural changes. Replacing a typed variant, removing an item or loading a new source is explicit. Copy to the source editor, then run the actual native engine. Native code alone validates the complete structure, geometry and rendering. Very large sources remain available in the raw source editor.</p>
-      <label for="composer-engine">Composer engine</label><select id="composer-engine"><option value="document">Document</option><option value="diagram">Diagram</option><option value="animation">Animation</option></select>
+      <p id="collection-help">A typed collection contains at most 64 exact immutable references, sorted uniquely by artifact ID. Membership never grants access, automatically follows a newer version, or publishes itself. Empty membership explicitly empties the source without deleting history. This browser composer accepts exact integer versions through 9007199254740991; larger unsigned-64-bit values must use the raw source editor or native controls and are never rounded here. Native collection preview checks source DATA only, not publication or member availability. Owner-local semantic discovery and fresh hit reads use the separate native “Discover owner collections” control and original PAM terminal; no private query or result enters this page.</p>
+      <label for="composer-engine">Composer engine</label><select id="composer-engine"><option value="document">Document</option><option value="diagram">Diagram</option><option value="animation">Animation</option><option value="collection">Explicit typed collection</option></select>
       <button id="composer-new" type="button">Replace composer with a new empty source</button>
       <fieldset id="composer-fields" aria-describedby="composer-help"><legend>Typed source fields</legend><div id="composer-form"></div></fieldset>
       <button id="composer-apply" type="button">Apply all pending field edits</button><button id="composer-discard" type="button">Discard pending field edits</button>
+      <button id="composer-sort" type="button" hidden>Explicitly sort collection members by artifact ID (preserves references)</button>
       <p id="composer-status" role="status" aria-live="polite" aria-atomic="true"></p>
       <button id="composer-use" type="button">Copy composed source to editor (replaces editor)</button>
       <button id="composer-load" type="button" disabled>Load last native-verified source (replaces composer)</button>

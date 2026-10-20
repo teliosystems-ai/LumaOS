@@ -196,7 +196,7 @@ def continue_phase(phase, work, response):
     public = out/'production-public/pcr-policy.pub'
     certificate = out/'production-public/secureboot.pem'
     records = [boot.verify_uki(out/f'slot-{slot}.efi', slot, public.read_bytes(), certificate)
-               for slot in ('a', 'b', 'live')]
+               for slot in ('a', 'b', 'live', 'optical')]
     policy = {'schema_version': 1, 'environment': 'production', 'slots': records,
               'initrd': checkpoint['initrd_policy'], 'enrollment_active': False, 'gate_closing': False}
     with (out/'boot-policy.json').open('x') as stream:

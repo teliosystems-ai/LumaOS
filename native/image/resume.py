@@ -123,14 +123,16 @@ def parse_manifest(raw):
     return value
 
 
-def parse_source_lock(raw, expected_sha):
-    if not hash_value(expected_sha) or sha(raw) != expected_sha:
+def parse_source_lock(raw, expected_sha, source_approval='legacy-repair'):
+    if (source_approval not in ('legacy-repair','independent-build') or not isinstance(raw,bytes)
+            or not 1<=len(raw)<=4*MIB or not hash_value(expected_sha) or sha(raw) != expected_sha):
         raise ValueError('captured source lock differs from independently expected SHA256')
     value = closed_json(raw)
     if (not isinstance(value, dict) or set(value) != {'schema_version', 'files'}
             or type(value['schema_version']) is not int or value['schema_version'] != 1
-            or not isinstance(value['files'], list) or len(value['files']) != 314):
-        raise ValueError('captured source lock must contain the original 314 files')
+            or not isinstance(value['files'], list)
+            or not (len(value['files'])==314 if source_approval=='legacy-repair' else 1<=len(value['files'])<=4096)):
+        raise ValueError('captured source lock violates exact legacy314 or explicitly approved bounded build inventory')
     result = {}
     total = 0
     for entry in value['files']:
@@ -466,8 +468,10 @@ def extract_ext4(image, source, target, maximum):
     return target
 
 
-def verify_payload(previous, scratch):
+def verify_payload(previous, scratch, production=False):
     expected = set(SIGNED) | {'release.json', 'release.sig', 'packages.lock'}
+    if production:
+        expected.add('release-trust.json')
     entries = ext4_entries(previous/'payload.ext4', '/')
     if set(entries) != expected | {'lost+found'} or entries['lost+found'][0] & 0o170000 != stat.S_IFDIR:
         raise ValueError('payload ext4 has undeclared members or missing recovery directory')
@@ -628,8 +632,26 @@ def check_release_identity(raw, release_id, manifest):
         raise ValueError('root embedded release identity differs from signed manifest')
 
 
+def validate_source_approval(mode, expected):
+    fields={'source-lock','release-public','secureboot-cert','pcr-public'}
+    if (mode not in ('legacy-repair','independent-build') or type(expected) is not dict
+            or set(expected)!=fields or not all(hash_value(value) and value!='0'*64 for value in expected.values())):
+        raise ValueError('explicit resume mode and all four independent nonzero source/public custody pins required')
+    if mode=='legacy-repair' and expected['source-lock']!=SOURCE_SHA:
+        raise ValueError('legacy repair cannot approve another source; independent-build requires explicit owner-selected mode')
+
+
+def check_embedded_source_lock(embedded, retained, expected):
+    if (not hash_value(expected) or expected=='0'*64 or not isinstance(embedded,bytes)
+            or not isinstance(retained,bytes) or not 1<=len(embedded)<=16*MIB
+            or embedded!=retained or sha(embedded)!=expected):
+        raise ValueError('immutable root, retained source lock and independent source approval differ')
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--source-approval',choices=('legacy-repair','independent-build'),default='legacy-repair',
+                        help='legacy pin remains default; independent-build explicitly selects all four owner-provided pins for lab packaging only')
     for name in ('source-lock', 'release-public', 'secureboot-cert', 'pcr-public'):
         parser.add_argument('--expected-' + name + '-sha256', required=True)
     parser.add_argument('--rootfs', type=Path, default=Path('/rootfs'),
@@ -638,8 +660,7 @@ def main():
     arguments = parser.parse_args()
     expected = {name: getattr(arguments, 'expected_' + name.replace('-', '_') + '_sha256')
                 for name in ('source-lock', 'release-public', 'secureboot-cert', 'pcr-public')}
-    if expected['source-lock'] != SOURCE_SHA or not all(hash_value(v) for v in expected.values()):
-        raise ValueError('resume requires independently pinned source/key/certificate fingerprints')
+    validate_source_approval(arguments.source_approval,expected)
     previous, repo, out = map(Path, ('/previous', '/repo', '/work/artifacts'))
     root = arguments.rootfs
     if os.name != 'posix' or os.uname().machine != 'x86_64' or os.geteuid() != 0:
@@ -662,10 +683,12 @@ def main():
         release = pins.capture(previous/'release.json', MIB)
         manifest = parse_manifest(release.read_bytes())
         _, total = layout(manifest['edition'])
-        prepare_output(out, total * 2 + 1024 * MIB)
+        has_optical = os.path.lexists(previous/'slot-optical.efi')
+        optical_space = manifest['root_bytes'] + manifest['hash_bytes'] + 512*MIB + 2*1024**3 if has_optical else 0
+        prepare_output(out, total * 2 + 1024 * MIB + optical_space)
         for name in METADATA:
             pins.capture(previous/name, 256 * MIB if name == 'native-source.tar.zst' else 16 * MIB)
-        entries = parse_source_lock((previous/'source-lock.json').read_bytes(), expected['source-lock'])
+        entries = parse_source_lock((previous/'source-lock.json').read_bytes(), expected['source-lock'],arguments.source_approval)
         print('Resume: verifying original captured source and source archive', flush=True)
         check_source_tree(repo, entries, pins, (previous/'source-lock.json').read_bytes())
         verify_compressed_source(previous/'native-source.tar.zst', entries)
@@ -685,6 +708,8 @@ def main():
             path = pins.capture(previous/name, bound)
             if name in ('esp.fat', 'payload.ext4') and path.stat().st_size != bound:
                 raise ValueError('retained filesystem image size differs from partition')
+        if has_optical:
+            pins.capture(previous/'slot-optical.efi',256*MIB)
         if (previous/'release.sig').stat().st_size != 64:
             raise ValueError('Ed25519 release signature must be exactly 64 bytes')
         with tempfile.TemporaryDirectory(prefix='.resume-verification-', dir=out) as temporary:
@@ -697,13 +722,14 @@ def main():
                 if hash_file(path) != fingerprint:
                     raise ValueError('independently pinned public custody fingerprint differs')
             lock = pins.capture(root/'usr/share/luma-os/source-lock.json', 16 * MIB)
-            if lock.read_bytes() != (previous/'source-lock.json').read_bytes():
-                raise ValueError('embedded root source lock differs from independently pinned source')
+            check_embedded_source_lock(lock.read_bytes(),(previous/'source-lock.json').read_bytes(),expected['source-lock'])
             for index, original in enumerate((public, pcr, lock)):
                 extracted = extract_ext4(previous/'root.ext4', '/' + original.relative_to(root).as_posix(),
                                          scratch/f'root-public-{index}', 16 * MIB)
                 if hash_file(extracted) != hash_file(original):
                     raise ValueError('root image embedded public/source identity differs')
+                if original==lock:
+                    check_embedded_source_lock(extracted.read_bytes(),(previous/'source-lock.json').read_bytes(),expected['source-lock'])
             identities = []
             for index, name in enumerate(('release-identity.json', 'release-id')):
                 original = pins.capture(root/'usr/share/luma-os'/name, 16384)
@@ -747,11 +773,11 @@ def main():
             initrd_policy = boot.verify_initrd(initrd)
             initrd_policy['shutdown'] = shutdown.verify_initrd(initrd)
             records = []
-            for slot in ('a', 'b', 'live'):
+            for slot in (('a', 'b', 'live', 'optical') if has_optical else ('a','b','live')):
                 image = previous/f'slot-{slot}.efi'
                 records.append(boot.verify_uki(image, slot, pcr.read_bytes(), certificate))
                 sections = boot.read_sections(image)
-                mode = 'live' if slot == 'live' else 'installed'
+                mode = 'live' if slot in ('live','optical') else 'installed'
                 desktop.verify_boot_target(sections['.cmdline'], manifest['edition'], mode)
                 expected_words = (
                     'root=/dev/mapper/root ro roothash=' + manifest['root_hash'] +
@@ -763,6 +789,8 @@ def main():
                     f' luma.mode={mode} luma.slot={slot} systemd.unit=' + desktop.target(manifest['edition'], mode) +
                     ' console=tty0 console=ttyS0,115200n8 apparmor=1 security=apparmor' +
                     ' systemd.show_status=yes rd.shell=0 panic=10').encode()
+                if slot == 'optical':
+                    expected_words = boot.command_line(manifest['root_hash'],'optical',manifest['edition']).encode()
                 if (sections['.cmdline'].rstrip(b'\0') != expected_words
                         or sections['.linux'] != kernel.read_bytes()
                         or sections['.initrd'] != initrd.read_bytes()
@@ -831,7 +859,14 @@ def main():
                 child.wait()
                 child.stdout.close()
         pins.recheck()
+        optical_report = None
+        if has_optical:
+            optical = load_module(repo,'optical_media')
+            optical_report = optical.create_iso(previous,out,manifest,boot)
+            pins.recheck()
         selected = [image, compressed] + [out/name for name in METADATA]
+        if optical_report is not None:
+            selected += [out/optical_report['image'],out/'optical-media.json']
         with (out/'SHA256SUMS').open('x', encoding='utf-8') as stream:
             stream.write(''.join(f'{hash_file(path)}  {path.name}\n' for path in selected))
             stream.flush()
@@ -846,7 +881,11 @@ def main():
                              'product_rebuilt': False, 'native_qualification_claimed': False,
                              'packager_sha256': hash_file(Path(__file__)),
                              'frozen_assembler_sha256': entries['native/image/assemble.py']['sha256'],
+                             'source_approval':arguments.source_approval,
+                             'production_authority_granted':False,
                              'public_fingerprints': expected}}
+        if optical_report is not None:
+            record['optical'] = optical_report
         with (out/'build.json').open('x', encoding='utf-8') as stream:
             stream.write(json.dumps(record, indent=2) + '\n')
             stream.flush()

@@ -25,6 +25,41 @@ class Elements(HTMLParser):
 
 
 class WorkspaceUiTests(unittest.TestCase):
+    def test_native_discovery_selector_preserves_exact_u64_without_web_authority(self):
+        def load(name, relative):
+            spec = importlib.util.spec_from_file_location(name, ROOT/relative)
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            return module
+        app = load('luma_discovery_app_data', 'native/desktop/workspace_app.py')
+        auth = load('luma_discovery_auth_data', 'native/desktop/workspace_auth.py')
+        maximum = 2**64-1
+        binding = dict(installation='a'*64, owner='b'*64, owner_generation=maximum)
+        reference = dict(artifact_id='artifact-one', version=maximum, content_sha256='c'*64, receipt_sha256='d'*64)
+        for mode, selector in [('search-semantic-selected', [reference]), ('collection-search-semantic', dict(reference, artifact_id='collection.work'))]:
+            prepared = app.discovery_proposal(auth, 'alice', json.dumps(binding), mode, json.dumps(selector), 'Original query', 32, 8)
+            self.assertEqual(prepared['operation'], 'search-journey')
+            self.assertEqual([prepared[key] for key in ('read_grant', 'effect_grant', 'approval')], ['', '', ''])
+            source = auth.strict_json(prepared['request'])
+            self.assertEqual(source['binding']['owner_generation'], maximum)
+            selected = source['operation']['references'][0] if isinstance(selector, list) else source['operation']['expected']
+            self.assertEqual(selected['version'], maximum)
+            self.assertIs(type(selected['version']), int)
+            self.assertEqual(source['operation']['query'], 'Original query')
+        arguments = ['alice', json.dumps(binding), 'search-semantic-selected', json.dumps([reference]), 'exact query', 16, 4]
+        invalid = [(2, 'search'), (3, '[]'), (3, json.dumps([reference, reference])),
+                   (3, json.dumps([reference]*65)), (3, json.dumps([dict(reference, grant='forged')])),
+                   (3, json.dumps([dict(reference, artifact_id='z'), reference])),
+                   (3, json.dumps([dict(reference, version=maximum+1)])),
+                   (3, '{"artifact_id":"one","artifact_id":"two"}'),
+                   (4, 'a'*257), (4, 'a'*65), (4, ' '.join(['term']*9)), (4, 'caf\u00e9'), (4, 'one\x1ctwo'), (4, 'one\x0btwo'),
+                   (5, 0), (5, 33), (5, True), (6, 0), (6, 9), (6, True),
+                   (1, json.dumps(dict(binding, owner_generation=True))), (0, 'root;command')]
+        for index, value in invalid:
+            case = arguments.copy(); case[index] = value
+            with self.subTest(index=index, value=value), self.assertRaises((ValueError, TypeError)):
+                app.discovery_proposal(auth, *case)
+
     def test_native_refusal_is_not_a_crash_loader_failure_or_partial_result(self):
         genuine = subprocess.CompletedProcess([], 1, b'', b'luma-platform: spreadsheet contains a reference cycle\n')
         native_refusal(genuine, 'cycle', 'spreadsheet contains a reference cycle')
@@ -78,6 +113,11 @@ class WorkspaceUiTests(unittest.TestCase):
         ast.parse(auth)
         ast.parse(host)
         self.assertIn("read_button.connect('clicked', grounded_read)", app)
+        self.assertIn("discovery_button.connect('clicked', owner_discovery)", app)
+        self.assertIn("operation='search-journey'", app)
+        self.assertIn('return discovery_journey(value, directory)', auth)
+        self.assertNotIn('search-journey', js)
+        self.assertNotIn('content-owned-review', js)
         self.assertIn("mode.append('paged-read'", app)
         self.assertIn("mode.append('envelope-read'", app)
         self.assertIn('label.set_mnemonic_widget(entry)', app)
@@ -181,7 +221,7 @@ def actual_engine_cases(binary, cases_path):
     passed = refused = 0
     for index, case in enumerate(cases):
         engine = case['engine']
-        if engine not in ('document', 'diagram', 'animation'):
+        if engine not in ('document', 'diagram', 'animation', 'collection'):
             raise ValueError('closed composer engines required')
         request = host.request(dict(schema_version=1, id='actual-composer-'+str(index), operation='preview', engine=engine, source=case['source']))
         completed = subprocess.run([str(binary), 'content-contract-' + engine], input=request['source'].encode(),
@@ -193,7 +233,7 @@ def actual_engine_cases(binary, cases_path):
         if completed.returncode != 0 or completed.stderr != b'':
             raise AssertionError('actual Rust engine refused composed source: ' + case['name'] + ' ' + completed.stderr.decode(errors='replace'))
         verified = host.validate_result(request, completed.stdout)
-        canonical = verified['rendering']['canonical_source']
+        canonical = verified['canonical_source'] if engine == 'collection' else verified['rendering']['canonical_source']
         if not host.same_json(host.strict_json(canonical), host.strict_json(case['source'])):
             raise AssertionError('actual native engine changed composed editable source: ' + case['name'])
         # Re-render the exact native canonical source: all output/digests must

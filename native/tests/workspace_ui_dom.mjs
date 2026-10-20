@@ -372,6 +372,36 @@ function fixture(available = true) {
   const labels = f.composerNodes().filter(item => item.tagName === 'label');
   check(labels.length > 0 && labels.every(label => f.composerNodes().some(item => item.id === label.htmlFor)), 'all actual dynamically generated scalar/variant controls have exact associated labels');
 }
+{
+  const f = fixture(); f.byId('composer-engine').value = 'collection'; f.byId('composer-new').dispatch('click');
+  check(!f.byId('composer-sort').hidden && f.composeCopy().members.length === 0, 'empty typed collection is explicit source, not deletion or inferred membership');
+  engineCases.push({name: 'explicit-empty-collection-source', engine: 'collection', source: JSON.stringify(f.composeCopy())});
+  f.composeAction('Append members item');
+  f.composeEdit('members.0.artifact_id', 'zeta'); f.composeEdit('members.0.version', '7'); f.composeEdit('members.0.content_sha256', 'a'.repeat(64)); f.composeEdit('members.0.receipt_sha256', 'b'.repeat(64)); f.byId('composer-apply').dispatch('click');
+  f.composeAction('Append members item');
+  f.composeEdit('members.1.artifact_id', 'alpha'); f.composeEdit('members.1.version', '2'); f.composeEdit('members.1.content_sha256', 'c'.repeat(64)); f.composeEdit('members.1.receipt_sha256', 'd'.repeat(64)); f.byId('composer-apply').dispatch('click');
+  const before = f.byId('editor').value; f.byId('composer-use').dispatch('click');
+  check(f.byId('editor').value === before && f.byId('composer-status').textContent.includes('Sort explicitly'), 'unsorted exact collection selection is never silently reordered or submitted');
+  f.byId('composer-sort').dispatch('click'); const source = f.composeCopy();
+  check(source.members[0].artifact_id === 'alpha' && source.members[1].version === 7 && source.members[1].content_sha256 === 'a'.repeat(64), 'explicit sorting preserves whole immutable reference fields');
+  check(f.sent.length === 0 && source.kind === 'luma-explicit-collection-v1', 'typed source construction never claims private membership or authority');
+  engineCases.push({name: 'sorted-two-reference-collection-source', engine: 'collection', source: JSON.stringify(source)});
+  f.byId('preview').dispatch('click');
+  check(f.sent[0].engine === 'collection' && f.sent[0].source === JSON.stringify(source), 'composed typed collection follows only the existing inert native source preview');
+  f.receive(f.sent[0].id, 'completed', {result: {operation: 'collection-source', canonical_source: JSON.stringify(source)}});
+  f.byId('composer-load').dispatch('click');
+  check(f.byId('composer-engine').value === 'collection' && JSON.stringify(f.composeCopy()) === JSON.stringify(source), 'native-verified collection source reload preserves every exact member');
+  f.composeEdit('members.0.version', '9007199254740992'); f.byId('composer-apply').dispatch('click');
+  check(f.byId('composer-status').textContent.includes('exact integer'), 'unsafe browser integer version refuses rather than rounding an immutable reference');
+  f.byId('composer-discard').dispatch('click');
+  check(JSON.stringify(f.composeCopy()) === JSON.stringify(source), 'unsafe version batch leaves the exact applied collection intact');
+  f.composeEdit('members.1.artifact_id', 'alpha'); f.byId('composer-apply').dispatch('click'); f.byId('composer-sort').dispatch('click');
+  const retainedEditor = f.byId('editor').value; f.byId('composer-use').dispatch('click');
+  check(f.byId('editor').value === retainedEditor && f.byId('composer-status').textContent.includes('duplicate IDs are never dropped'), 'explicit sort never deduplicates, substitutes or upgrades conflicting artifact IDs');
+  f.composeEdit('members.1.artifact_id', 'zeta'); f.byId('composer-apply').dispatch('click');
+  f.composeEdit('members.0.content_sha256', '0'.repeat(64)); f.byId('composer-apply').dispatch('click'); f.byId('composer-use').dispatch('click');
+  check(f.byId('editor').value === retainedEditor && f.byId('composer-status').textContent.includes('complete explicit immutable reference'), 'empty/zero/forged-shaped digest data cannot be copied as a complete exact collection');
+}
 const args = process.argv.slice(2);
 assert.ok(args.length === 0 || ((args.length === 1 || args.length === 2) && ['--emit-spreadsheet-cases', '--emit-engine-cases'].includes(args[0])), 'closed fixture arguments required');
 const output = JSON.stringify({schema_version: 1, assertions, production_javascript_executed: true,

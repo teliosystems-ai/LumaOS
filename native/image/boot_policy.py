@@ -8,6 +8,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import stat
 import subprocess
 import tempfile
@@ -63,14 +64,34 @@ def prepare_lab_key(directory):
 
 
 def signing_arguments(slot, key, public):
-    if slot not in ('a', 'b', 'live'):
+    if slot not in ('a', 'b', 'live', 'optical'):
         raise ValueError('unknown boot slot')
-    if slot == 'live':
+    if slot in ('live', 'optical'):
         # Installer/recovery media must not implicitly unlock installed Admin.
         return []
     return ['--pcr-private-key', str(key), '--pcr-public-key', str(public),
             '--pcrpkey', str(public), '--pcr-banks', 'sha256',
             '--phases', ','.join(PHASES)]
+
+
+def command_line(root_hash, slot, edition):
+    if (type(root_hash) is not str or not re.fullmatch('[0-9a-f]{64}', root_hash)
+            or slot not in ('a', 'b', 'live', 'optical') or edition not in ('headless', 'desktop')):
+        raise ValueError('closed root, boot slot and edition required')
+    live = slot in ('live', 'optical')
+    mode, actual_slot = ('live', 'live') if live else ('installed', slot)
+    if slot == 'optical':
+        data, hashes, media = '/dev/luma-optical-root', '/dev/luma-optical-hash', 'luma.media=optical '
+    else:
+        data = '/dev/disk/by-partlabel/' + ('luma-live-root' if live else 'luma-root-'+slot)
+        hashes = '/dev/disk/by-partlabel/' + ('luma-live-hash' if live else 'luma-hash-'+slot)
+        media = ''
+    target = 'graphical.target' if edition == 'desktop' and not live else 'multi-user.target'
+    return (f'root=/dev/mapper/root ro roothash={root_hash} systemd.verity_root_options=panic-on-corruption '
+            f'systemd.verity_root_data={data} systemd.verity_root_hash={hashes} '
+            f'luma.mode={mode} luma.slot={actual_slot} {media}systemd.unit={target} '
+            'console=tty0 console=ttyS0,115200n8 apparmor=1 security=apparmor '
+            'systemd.show_status=yes rd.shell=0 panic=10')
 
 
 def verify_initrd(initrd):
@@ -80,12 +101,22 @@ def verify_initrd(initrd):
     required = {'usr/lib/systemd/systemd-pcrextend',
                 'usr/lib/systemd/system/systemd-pcrphase-initrd.service',
                 'usr/lib/systemd/system/initrd.target.wants/systemd-pcrphase-initrd.service',
-                'etc/udev/rules.d/99-luma-tpm.rules'}
+                'etc/udev/rules.d/99-luma-tpm.rules',
+                'usr/lib/luma-optical.sh',
+                'usr/lib/systemd/system/luma-optical.service',
+                'usr/lib/systemd/system/systemd-veritysetup@root.service.requires/luma-optical.service',
+                'etc/udev/rules.d/99-luma-optical.rules'}
     if not required <= paths or not any('/libtss2-esys.so.' in path for path in paths):
         raise ValueError('initrd lacks PCR phase helper, unit, activation, TPM rules or library')
     expected_rules = (Path(__file__).parent/'overlay/etc/udev/rules.d/99-luma-tpm.rules').read_bytes()
     if command('lsinitrd', '--file', 'etc/udev/rules.d/99-luma-tpm.rules', initrd) != expected_rules:
         raise ValueError('initrd TPM ownership rules differ from image policy')
+    optical = Path(__file__).parent/'overlay/usr/lib/dracut/modules.d/91luma'
+    for name,target in [('luma-optical.sh','usr/lib/luma-optical.sh'),
+                        ('luma-optical.service','usr/lib/systemd/system/luma-optical.service'),
+                        ('99-luma-optical.rules','etc/udev/rules.d/99-luma-optical.rules')]:
+        if command('lsinitrd','--file',target,initrd) != (optical/name).read_bytes():
+            raise ValueError('initrd optical discovery differs from signed build policy')
     return {'phase_module': 'luma-pcrphase', 'required_paths': sorted(required)}
 
 
@@ -136,16 +167,18 @@ def verify_uki(image, slot, expected_public, certificate):
     Independently supplied public key/certificate are required. This is a
     builder check, not runtime release/custody admission of arbitrary files.
     """
-    if slot not in ('a', 'b', 'live'):
+    if slot not in ('a', 'b', 'live', 'optical'):
         raise ValueError('unknown boot slot')
     sections = read_sections(image)
     command('sbverify', '--cert', certificate, image)
     cmdline = sections.get('.cmdline', b'').rstrip(b'\0').decode('ascii').split()
-    mode = 'live' if slot == 'live' else 'installed'
-    for prefix, value in [('luma.slot=', slot), ('luma.mode=', mode)]:
+    mode = 'live' if slot in ('live', 'optical') else 'installed'
+    for prefix, value in [('luma.slot=', 'live' if slot == 'optical' else slot), ('luma.mode=', mode)]:
         if [word for word in cmdline if word.startswith(prefix)] != [prefix + value]:
             raise ValueError('UKI command line does not match expected slot/mode')
-    if slot == 'live':
+    if [word for word in cmdline if word.startswith('luma.media=')] != (['luma.media=optical'] if slot == 'optical' else []):
+        raise ValueError('UKI transport does not match exact disk or optical boot mode')
+    if slot in ('live', 'optical'):
         if '.pcrsig' in sections or '.pcrpkey' in sections:
             raise ValueError('live media must not carry installed Admin PCR approval')
         return {'slot': slot, 'pcr_approval': False}

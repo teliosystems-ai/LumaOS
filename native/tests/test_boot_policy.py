@@ -18,6 +18,7 @@ LINUX_TOOLS = (os.name == 'posix' and Path('/.dockerenv').is_file()
 class BootPolicyContractTests(unittest.TestCase):
     def test_live_is_not_an_installed_admin_policy(self):
         self.assertEqual(policy.signing_arguments('live', Path('/key'), Path('/public')), [])
+        self.assertEqual(policy.signing_arguments('optical', Path('/key'), Path('/public')), [])
         for slot in ('a', 'b'):
             args = policy.signing_arguments(slot, Path('/key'), Path('/public'))
             self.assertIn('sha256', args)
@@ -61,10 +62,12 @@ class BootPolicyArtifactTests(unittest.TestCase):
 
     def build(self, slot):
         target = self.root / (slot + '.efi')
-        mode = 'live' if slot == 'live' else 'installed'
+        mode = 'live' if slot in ('live','optical') else 'installed'
+        actual_slot='live' if slot=='optical' else slot
+        optical=' luma.media=optical' if slot=='optical' else ''
         policy.command('/usr/lib/systemd/ukify', 'build', '--config', '/dev/null',
                        '--linux', self.linux, '--initrd', self.initrd, '--uname', 'fixture-1',
-                       '--cmdline', f'luma.slot={slot} luma.mode={mode}',
+                       '--cmdline', f'luma.slot={actual_slot} luma.mode={mode}{optical}',
                        '--os-release', 'ID=luma-test\n', '--no-sign-kernel',
                        '--secureboot-private-key', self.sbkey,
                        '--secureboot-certificate', self.certificate,
@@ -73,10 +76,13 @@ class BootPolicyArtifactTests(unittest.TestCase):
 
     def test_ab_and_live_artifacts_have_exact_policy(self):
         records = [policy.verify_uki(self.build(slot), slot, self.public, self.certificate)
-                   for slot in ('a', 'b', 'live')]
+                   for slot in ('a', 'b', 'live', 'optical')]
         self.assertEqual(records[0]['phases'], list(policy.PHASES))
         self.assertTrue(set(records[0]['policy_digests']).isdisjoint(records[1]['policy_digests']))
         self.assertFalse(records[2]['pcr_approval'])
+        self.assertFalse(records[3]['pcr_approval'])
+        with self.assertRaises(ValueError):
+            policy.verify_uki(self.root/'optical.efi','live',self.public,self.certificate)
         with self.assertRaises(ValueError):
             policy.verify_uki(self.root / 'a.efi', 'b', self.public, self.certificate)
         with self.assertRaises(ValueError):
@@ -127,29 +133,68 @@ class BootPolicyArtifactTests(unittest.TestCase):
 @unittest.skipUnless(LINUX_TOOLS, 'requires isolated Linux UKI tools container')
 class BootPhaseInitrdTests(unittest.TestCase):
     def test_generated_initrd_contains_real_phase_service(self):
-        source = IMAGE / 'overlay/usr/lib/dracut/modules.d/92luma-pcrphase'
-        module = Path('/usr/lib/dracut/modules.d/92luma-pcrphase')
-        # A new, exact container-only module directory, never a host mount.
-        # copytree refuses an existing target; cleanup removes only this copy.
-        shutil.copytree(source, module)
-        self.addCleanup(shutil.rmtree, module)
+        for name in ('91luma','92luma-pcrphase'):
+            source = IMAGE / 'overlay/usr/lib/dracut/modules.d' / name
+            module = Path('/usr/lib/dracut/modules.d') / name
+            # Exact new container-only copies. No host mount or existing
+            # module is adopted; copytree refuses an occupied destination.
+            shutil.copytree(source, module)
+            self.addCleanup(shutil.rmtree, module)
+        runtime = Path('/usr/libexec/luma-os')
+        runtime.mkdir()  # Refuse an existing installation, even in a container.
+        self.addCleanup(runtime.rmdir)
+        fixture = runtime/'luma-platform'
+        # A real inert ELF only satisfies dracut's installation dependency.
+        # It is never executed, booted, or represented as product development.
+        with fixture.open('xb') as stream:
+            stream.write(Path('/usr/bin/true').read_bytes())
+        fixture.chmod(0o755)
+        self.addCleanup(fixture.unlink)
         rules = Path('/etc/udev/rules.d/99-luma-tpm.rules')
         rules.parent.mkdir(parents=True, exist_ok=True)
         with rules.open('xb') as stream:
             self.addCleanup(rules.unlink)
             stream.write((IMAGE/'overlay/etc/udev/rules.d/99-luma-tpm.rules').read_bytes())
         rules.chmod(0o644)
-        with tempfile.TemporaryDirectory(prefix='luma-initrd-policy-') as folder:
+        with tempfile.TemporaryDirectory(prefix='luma-initrd-policy-',
+                                         dir=Path(os.environ['LUMA_STORAGE_TEST_ROOT'])) as folder:
             output = Path(folder) / 'initrd'
             policy.command('dracut', '--force', '--no-kernel', '--no-hostonly',
                            '--no-hostonly-cmdline', '--no-compress',
-                           '--modules', 'systemd systemd-initrd luma-pcrphase', output)
+                           '--modules', 'systemd systemd-initrd luma luma-pcrphase', output)
             result = policy.verify_initrd(output)
             self.assertEqual(result['phase_module'], 'luma-pcrphase')
             unit = policy.command('lsinitrd', '--file',
                                   'usr/lib/systemd/system/systemd-pcrphase-initrd.service', output)
             self.assertIn(b'systemd-pcrextend --graceful enter-initrd', unit)
             self.assertIn(b'systemd-pcrextend --graceful leave-initrd', unit)
+            unpacked = Path(folder)/'unpacked'
+            unpacked.mkdir()
+            policy.command('lsinitrd','--unpack',output,cwd=unpacked)
+            def repack(name):
+                paths = [Path('.')]
+                for directory, directories, files in os.walk(unpacked,followlinks=False):
+                    for member in sorted([*directories,*files]):
+                        paths.append((Path(directory)/member).relative_to(unpacked))
+                entries = b''.join(os.fsencode(path)+b'\0' for path in paths)
+                archive = Path(folder)/name
+                with archive.open('xb') as stream:
+                    subprocess.run(['cpio','--null','--create','--format=newc','--quiet'],
+                        input=entries,stdout=stream,stderr=subprocess.PIPE,cwd=unpacked,
+                        env=policy.ENV,timeout=120,check=True)
+                return archive
+            for index, relative in enumerate(('usr/lib/luma-optical.sh',
+                    'usr/lib/systemd/system/luma-optical.service','etc/udev/rules.d/99-luma-optical.rules')):
+                member = unpacked/relative
+                self.assertTrue(member.is_file() and not member.is_symlink())
+                original = member.read_bytes()
+                member.write_bytes(original+b'\n# Disposable optical-initrd integrity test mutation\n')
+                with self.subTest(tampered=relative), self.assertRaisesRegex(ValueError,'optical discovery differs'):
+                    policy.verify_initrd(repack('tampered-'+str(index)))
+                member.write_bytes(original)
+            (unpacked/'usr/lib/systemd/system/luma-optical.service').unlink()
+            with self.assertRaisesRegex(ValueError,'initrd lacks'):
+                policy.verify_initrd(repack('missing-optical-service'))
             empty = Path(folder) / 'empty'
             empty.write_bytes(b'not an initrd')
             with self.assertRaises((ValueError, subprocess.CalledProcessError)):

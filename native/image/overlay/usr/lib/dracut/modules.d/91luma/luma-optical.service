@@ -1,0 +1,13 @@
+[Unit]
+Description=Luma authenticated optical-mode read-only root discovery
+DefaultDependencies=no
+ConditionKernelCommandLine=luma.media=optical
+Requires=systemd-udev-settle.service
+After=systemd-udev-settle.service
+Before=systemd-veritysetup@root.service
+
+[Service]
+Type=oneshot
+ExecStart=/lib/luma-optical.sh
+RemainAfterExit=yes
+TimeoutStartSec=90

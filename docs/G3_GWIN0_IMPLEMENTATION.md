@@ -1329,3 +1329,130 @@ all production bytes are unchanged between those two snapshots. The complete
 selected integration sweep then passed on the corrected snapshot. No complete
 G3/Windows image, actual installed compute execution or production readiness is
 claimed by these software results.
+
+### Native discovery and optical installer development 20 October 2026
+
+The native workspace now has a trusted GTK discovery control for one exact
+sorted historical selection or one exact typed collection. The original native
+terminal obtains the query's finite Read scope, validates the complete native
+response and displays only bounded references and rounded local TF-IDF/LSA
+similarities. An explicitly selected hit starts a new exact-envelope ceremony;
+the query grant is never passed to that read. Cancellation, an invalid response,
+an empty result or missing permission cannot widen the selection or trigger an
+automatic fallback. Passwords, grants and private results stay outside WebKit.
+
+The discovery request retains the native limits: 256 ASCII query bytes, at most
+eight alphanumeric terms, 1–32 returned hits, 1–8 latent dimensions and at most
+64 exact selected versions. Python preserves full unsigned-64-bit versions and
+owner generations. The browser's typed collection composer explicitly rejects
+integers beyond its exact safe range and directs those references to native
+JSON controls. Membership sorting is explicit; duplicate IDs, missing digests
+and substituted versions are not silently repaired. Actual native collection
+preview and canonical-source reload remain separate from publication through
+the existing native owner review/apply controls.
+
+`native/image/optical_media.py` implements a distinct optical installer build
+path. Its `slot-optical.efi` must be separately signed and select
+`luma.media=optical`, read-only loop-backed root/hash devices and the same signed
+verity root, without installed Admin PCR approval. The dracut service is
+configured to refuse ambiguous
+inserted CDs, unbounded device enumeration, writable media and unsupported
+root/hash geometry. The normal live generator is configured to bind the retained optical
+payload at `/media/luma`; existing disk partition-label boot remains distinct.
+
+The ISO constructor writes through one exclusively created held output
+descriptor. Its independent verifier closes the ISO9660 namespace, root/path
+tables, member inventory, extent order, multi-extent framing and complete file
+hashes. Alternate Rock Ridge/Joliet namespaces, hybrid boot paths, overlapping
+extents, extra catalog entries and substituted EFI extents refuse. EFI load
+geometry uses the full partition size or its defined large-image sentinel,
+not the legacy four-sector BIOS convention. The firmware interpretation is
+specified in [UEFI 2.10 section 13.3.2.1](https://uefi.org/specs/UEFI/2.10/13_Protocols_Media_Access.html#iso-9660-and-el-torito).
+
+Assembly, production signing/finalization, checksums and public artifact export
+are wired to carry the optical ISO and its observational report. The production
+custody request/checker requires four UKIs plus the bootloader; only installed A/B slots receive PCR
+approvals. The signed installed release's six-artifact schema is unchanged.
+ISO construction precedes intentional payload staging hardlinks. After complete
+payload-image readback, a held-descriptor cleanup removes only the known fresh
+staging aliases, verifies that every original survives with one link, and
+preserves unknown/substituted evidence. No old assembly or image was removed.
+
+Laboratory resume retains its historical fixed source pin and exact 314-file
+repair inventory by default. New builds explicitly select
+`--source-approval independent-build` and supply all four nonzero independent
+SHA256 pins for the source lock, release public key, Secure Boot certificate
+and PCR public key. The source inventory is bounded to 1–4096 files, 32 MiB per
+file and 256 MiB total. Exact source-tree/archive reconstruction and joins to
+both the retained and actual immutable-root source locks remain mandatory,
+alongside release/UKI signatures, verity, kernel/initrd and public-custody checks.
+This mode packages already sealed lab inputs; it does not rebuild a product,
+create keys, replace product custody or manufacture an optical UKI for an old
+three-UKI source.
+
+The [discovery and optical execution record](gates/g3/discovery_optical_2026-10-20.json)
+identifies the final 621-file immutable snapshot, actual tool fixtures,
+integrated test logs and retained failed attempts. All 717 native source tests
+passed without skips, alongside 26 trust/catalog cases, three disposable-TPM
+scenarios and 30 actual CLI contracts. Actual native workflow/recovery/discovery
+canonicalizers and JavaScript-generated editor corpora passed independently.
+The complete content-engine and content-store suites passed 97 and 135 tests,
+plus three compile-fail authority-contract doctests; 126 focused Rust cases and
+the offline warnings-denied workspace/all-targets check also passed. These
+Rust results join through unchanged source to the final snapshot: its sole
+change was correcting the real dracut test fixture to include both optical
+and PCR modules. The failed earlier fixture transcript remains retained.
+
+Production JavaScript passed 128 assertions and five UI contracts. Python
+regression passed 315 tests with five platform skips. Previously executed
+Windows results join 589 assertions through 59 exact unchanged source records;
+they were not rerun in this second batch. Component checks overlap the full
+native suite and are not an additional unique-test total. The tiny ISO fixtures deliberately
+contain nonbootable test data: extent/catalog success is not firmware boot or
+a produced OS image. Full optical assembly, installed journeys and final
+profile acceptance remain separate from this source implementation.
+
+### Windows inference and custody decisions 20 October 2026
+
+GWIN0 still needs its actual compact-inference, authenticated scoped host-file,
+enforced-confinement and complete-VM-desktop proof, including the W008 lifetime/
+restart/manual controls, resource coexistence and W022 two-user boundary.
+General enrollment/automation, adapters, updates and product migration belong
+to GWIN1; W033 checkpoint/clone reconciliation and all-profile release evidence
+belong to GWIN2. Those later tasks do not add criteria to the GWIN0 gate. The current
+Windows compute guest has a 512-MiB ceiling, one task and a thirty-second
+purpose, and calls only deterministic content engines. Adding an operation
+name cannot turn it into a Qwen3-4B inference implementation.
+
+The next inference slice needs a distinct signed lab package/profile and an
+actual executable worker. It must stream the verified 2,497,280,256-byte Qwen
+GGUF, pin the CPU runtime and its complete ELF/dlopen closure, use fixed
+context/output/resource bounds, and preserve original-Admin review,
+prepare-before-dispatch, continuous protected UTC/cancellation checks and exact
+uncertain-dispatch recovery. RPC and arbitrary loader paths stay excluded.
+The cached b11100 archive contains `llama-cli`; its CLI implementation also
+needs the server implementation library, even when the server executable is
+excluded. Static inspection does not establish supported flags, CPU backend
+loading or actual inference. A genuine cached model weight has not been
+proven available. A separately reviewed five-minute inference purpose versus
+retaining the existing thirty-second bound awaits the owner's choice; no
+deadline extension is enabled by this batch.
+
+The current WSL kernel, `6.18.33.2-microsoft-standard-WSL2`, reports AppArmor
+disabled and no `/sys/kernel/security/lsm` interface. The enforced worker must
+refuse on this tuple. A supported enforcing kernel/runtime must be qualified;
+no kernel, LSM or WSL setting was changed. Native-source fixtures and offline
+AppArmor parsing do not establish installed WSL confinement.
+
+True Windows custody-root replacement remains a later production design
+decision, not a GWIN0 prerequisite while the commissioned root is retained
+within its admitted bounds. The
+current NV policy binds the original key. A separately commissioned epoch
+authority requires a reviewed new key/NV identity, exact inherited state and
+an irreversible old-root forward commitment before new-root activation.
+Retired histories and uncertain writes must remain fenced and recoverable;
+normal migration cannot recover an already lost or compromised old root.
+Retaining the original hardware root and rotating delegated signing keys is a
+different, narrower contract. Neither design has been enabled without the
+owner's choice, and neither replaces genuine product-principal/finite-grant
+integration with caller-supplied SID metadata.

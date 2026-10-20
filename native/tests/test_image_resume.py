@@ -53,6 +53,58 @@ def archive_bytes(entries, extra=None):
 
 
 class ResumeTests(unittest.TestCase):
+    def test_independent_source_approval_requires_explicit_mode_and_all_four_pins(self):
+        expected={'source-lock':'a'*64,'release-public':'b'*64,'secureboot-cert':'c'*64,'pcr-public':'d'*64}
+        resume.validate_source_approval('independent-build',expected)
+        with self.assertRaisesRegex(ValueError,'legacy repair'):
+            resume.validate_source_approval('legacy-repair',expected)
+        legacy={**expected,'source-lock':resume.SOURCE_SHA}
+        resume.validate_source_approval('legacy-repair',legacy)
+        for mode in ('independent','production','',None,True):
+            with self.subTest(mode=mode),self.assertRaises(ValueError):resume.validate_source_approval(mode,expected)
+        for name in expected:
+            for bad in ('0'*64,'A'*64,'x','',None,True):
+                with self.subTest(name=name,bad=bad),self.assertRaises(ValueError):
+                    resume.validate_source_approval('independent-build',{**expected,name:bad})
+            missing=expected.copy();del missing[name]
+            with self.assertRaises(ValueError):resume.validate_source_approval('independent-build',missing)
+        with self.assertRaises(ValueError):resume.validate_source_approval('independent-build',{**expected,'extra':'e'*64})
+
+    def test_independent_source_approval_does_not_bypass_embedded_lock_join(self):
+        raw=b'{"schema_version":1,"fixture":"not-a-complete-build"}\n'
+        pin=resume.sha(raw)
+        resume.check_embedded_source_lock(raw,raw,pin)
+        for embedded,retained,expected in ((raw+b'x',raw,pin),(raw,raw+b'x',pin),(raw,raw,'f'*64),
+                                         (raw,raw,'0'*64),(b'',b'',resume.sha(b'')),('text',raw,pin)):
+            with self.subTest(embedded=embedded),self.assertRaises(ValueError):
+                resume.check_embedded_source_lock(embedded,retained,expected)
+        source=(Path(__file__).resolve().parents[1]/'image/resume.py').read_text()
+        self.assertIn("choices=('legacy-repair','independent-build'),default='legacy-repair'",source)
+        for required in ('verify_compressed_source(', 'check_source_tree(', 'veritysetup', 'sbverify',
+                         'root image kernel/initrd differs', 'check_embedded_source_lock(extracted.read_bytes()'):
+            self.assertIn(required,source)
+
+    def test_independent_inventory_is_bounded_and_does_not_relax_legacy314(self):
+        for count in (1,444,4096):
+            value={'schema_version':1,'files':sorted(source_entries(count),key=lambda entry:entry['path'])}
+            raw=json.dumps(value).encode();pin=resume.sha(raw)
+            self.assertEqual(len(resume.parse_source_lock(raw,pin,'independent-build')),count)
+            with self.assertRaises(ValueError):resume.parse_source_lock(raw,pin)
+        for count in (0,4097):
+            raw=json.dumps({'schema_version':1,'files':source_entries(count)}).encode()
+            with self.assertRaises(ValueError):resume.parse_source_lock(raw,resume.sha(raw),'independent-build')
+        raw=json.dumps({'schema_version':1,'files':source_entries(2)}).encode()
+        with self.assertRaises(ValueError):resume.parse_source_lock(raw,'f'*64,'independent-build')
+        for change in ('duplicate','order','path','size'):
+            fields=source_entries(2)
+            if change=='duplicate':fields[1]=fields[0].copy()
+            elif change=='order':fields.reverse()
+            elif change=='path':fields[0]['path']='../escape'
+            else:fields[0]['bytes']=256*resume.MIB+1
+            raw=json.dumps({'schema_version':1,'files':fields}).encode()
+            with self.subTest(change=change),self.assertRaises(ValueError):
+                resume.parse_source_lock(raw,resume.sha(raw),'independent-build')
+
     def setUp(self):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)

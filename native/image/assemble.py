@@ -84,6 +84,65 @@ def stage_payload_member(source: Path, destination: Path) -> None:
             raise RuntimeError('payload staging digest mismatch')
 
 
+def release_payload_staging(directory: Path, source: Path, names) -> None:
+    """Unlink only verified generated aliases after payload image verification."""
+    allowed={'root.ext4','root.verity','slot-a.efi','slot-b.efi','bootloader.efi','secureboot.cer',
+             'release.json','release.sig','packages.lock','release-trust.json'}
+    if (os.geteuid()!=0 or directory != WORK/'payload' or source != OUT
+            or not names or not set(names)<=allowed or len(names)!=len(set(names))):
+        raise ValueError('payload cleanup requires the exact generated private staging directory')
+    dirs=[];files=[]
+    def witness(info):
+        return (info.st_dev,info.st_ino,info.st_mode,info.st_uid,info.st_gid,info.st_nlink,
+                info.st_size,info.st_mtime_ns,info.st_ctime_ns)
+    def check_dirs():
+        for path,fd,expected in dirs:
+            if witness(os.fstat(fd))[:5]!=expected or witness(path.lstat())[:5]!=expected:
+                raise ValueError('protected payload staging namespace changed')
+    try:
+        for path in (directory,source):
+            for parent in (path,*path.parents):
+                info=parent.lstat()
+                if not stat.S_ISDIR(info.st_mode) or info.st_uid!=0 or info.st_mode&0o022:
+                    raise ValueError('payload cleanup requires root-owned protected ancestors')
+            fd=os.open(path,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW|os.O_CLOEXEC)
+            dirs.append((path,fd,witness(os.fstat(fd))[:5]))
+        check_dirs();target_fd,source_fd=dirs[0][1],dirs[1][1]
+        if set(os.listdir(target_fd))!=set(names):
+            raise ValueError('payload staging contains an unknown or missing member')
+        for name in names:
+            pair=[]
+            for parent in (source_fd,target_fd):
+                fd=os.open(name,os.O_RDONLY|os.O_NONBLOCK|os.O_NOFOLLOW|os.O_CLOEXEC,dir_fd=parent)
+                info=witness(os.fstat(fd));files.append((name,parent,fd,info));pair.append(files[-1])
+                if not stat.S_ISREG(info[2]) or info[3]!=0 or info[2]&0o022:
+                    raise ValueError('payload cleanup refuses writable, foreign or special members')
+            same=pair[0][3][:2]==pair[1][3][:2]
+            expected_links=2 if same else 1
+            if any(item[3][5]!=expected_links for item in pair) or pair[0][3][6]!=pair[1][3][6]:
+                raise ValueError('payload cleanup refuses unreviewed link aliases or different lengths')
+            hashes=[]
+            for _,_,fd,_ in pair:
+                with os.fdopen(os.dup(fd),'rb') as stream:hashes.append(hashlib.file_digest(stream,'sha256').digest())
+            if hashes[0]!=hashes[1]:raise ValueError('payload staging differs from preserved exact source bytes')
+        check_dirs()
+        if set(os.listdir(target_fd))!=set(names):raise ValueError('payload staging inventory changed before unlink')
+        for name,parent,fd,expected in files:
+            if witness(os.fstat(fd))!=expected or witness(os.stat(name,dir_fd=parent,follow_symlinks=False))!=expected:
+                raise ValueError('payload staged member substituted or changed before unlink')
+        # No recursive deletion; OUT originals and verified payload.ext4 remain.
+        for name in names:
+            check_dirs();os.unlink(name,dir_fd=target_fd)
+        for name,parent,fd,expected in files[::2]:
+            now=witness(os.fstat(fd));named=witness(os.stat(name,dir_fd=parent,follow_symlinks=False))
+            if now!=named or now[:5]!=expected[:5] or now[5]!=1 or now[6:8]!=expected[6:8]:
+                raise ValueError('preserved original payload source did not survive staging release')
+        check_dirs();os.fsync(target_fd);os.fsync(source_fd);directory.rmdir()
+    finally:
+        for _,_,fd,_ in reversed(files):os.close(fd)
+        for _,fd,_ in reversed(dirs):os.close(fd)
+
+
 def package_skill_registry(root: Path, keys: Path) -> None:
     """Package one inert lab registry under a trust root distinct from release."""
     skill_key = keys/'skills-lab.key'
@@ -536,7 +595,7 @@ def main() -> None:
     # into the target and avoids unsupported proc-less chroot generation.
     run('dracut','--sysroot',ROOT,'--force','--no-hostonly','--no-hostonly-cmdline',
         '--add','systemd systemd-initrd systemd-veritysetup crypt luma luma-pcrphase',
-        '--add-drivers','virtio_pci virtio_blk virtio_scsi ext4 dm_verity dm_crypt',
+        '--add-drivers','virtio_pci virtio_blk virtio_scsi ext4 dm_verity dm_crypt loop iso9660 sr_mod cdrom',
         '--kver',version,ROOT/'boot/luma-initrd')
     initrd = ROOT/'boot/luma-initrd'
     initrd_policy = boot_policy.verify_initrd(initrd)
@@ -557,23 +616,14 @@ def main() -> None:
     if args.environment == 'production':
         unsigned.mkdir()
     pcr_records = []
-    for slot in ('a','b','live'):
-        mode = 'live' if slot=='live' else 'installed'
-        data = 'luma-live-root' if slot=='live' else f'luma-root-{slot}'
-        hash_label = 'luma-live-hash' if slot=='live' else f'luma-hash-{slot}'
-        cmdline = (f'root=/dev/mapper/root ro roothash={roothash} '
-                   'systemd.verity_root_options=panic-on-corruption '
-                   f'systemd.verity_root_data=/dev/disk/by-partlabel/{data} '
-                   f'systemd.verity_root_hash=/dev/disk/by-partlabel/{hash_label} '
-                   f'luma.mode={mode} luma.slot={slot} '
-                   f'systemd.unit={desktop_policy.target(args.edition,mode)} '
-                   'console=tty0 console=ttyS0,115200n8 apparmor=1 security=apparmor '
-                   'systemd.show_status=yes rd.shell=0 panic=10')
+    for slot in ('a','b','live','optical'):
+        mode = 'live' if slot in ('live','optical') else 'installed'
+        cmdline = boot_policy.command_line(roothash,slot,args.edition)
         custody_args = (['--secureboot-private-key',KEYS/'secureboot.key',
                          '--secureboot-certificate',KEYS/'secureboot.pem',
                          *boot_policy.signing_arguments(slot,pcr_key,pcr_public_path)]
                         if args.environment == 'lab' else
-                        ['--pcrpkey',pcr_public_path] if slot != 'live' else [])
+                        ['--pcrpkey',pcr_public_path] if slot in ('a','b') else [])
         run('/usr/lib/systemd/ukify','build','--linux',kernel,'--initrd',initrd,
             '--config','/dev/null',
             '--cmdline',cmdline,'--os-release','@'+str(os_release),'--uname',version,
@@ -623,13 +673,22 @@ def seal_media(manifest, desktop_profile, version):
     roothash = manifest['root_hash']
     root_mib, payload_mib = __import__('desktop_policy').geometry(manifest['edition'])
     names=['root.ext4','root.verity','slot-a.efi','slot-b.efi','bootloader.efi','secureboot.cer']
+    # Optical input hashing requires exclusive regular members. Seal it before
+    # stage_payload_member creates the deliberate installed-payload hardlinks.
+    import optical_media
+    optical = optical_media.create_iso(OUT,OUT,manifest)
     payload_tree=WORK/'payload'; payload_tree.mkdir()
-    for name in [*names,'release.json','release.sig','packages.lock',
-                 *(['release-trust.json'] if production else [])]:
+    payload_names=[*names,'release.json','release.sig','packages.lock',
+                   *(['release-trust.json'] if production else [])]
+    for name in payload_names:
         stage_payload_member(OUT/name,payload_tree/name)
     payload=OUT/'payload.ext4'
     with payload.open('xb') as f:f.truncate(payload_mib*MIB)
     run('mkfs.ext4','-F','-L','luma-payload','-d',payload_tree,payload)
+    import resume as image_checks
+    with tempfile.TemporaryDirectory(prefix='.payload-readback-',dir=OUT) as temporary:
+        image_checks.verify_payload(OUT,Path(temporary),production=production)
+    release_payload_staging(payload_tree,OUT,payload_names)
     esp=OUT/'esp.fat'
     with esp.open('xb') as f:f.truncate(1024*MIB)
     run('mkfs.vfat','-F','32','-n','LUMALIVE',esp)
@@ -654,13 +713,12 @@ def seal_media(manifest, desktop_profile, version):
     run(*argv,image)
     for source,offset in zip([esp,root_image,verity,payload],offsets):sparse_copy(source,image,offset)
     run('sgdisk','--verify',image)
-    import resume as image_checks
     image_checks.verify_gpt(image, manifest['edition'])
     partitions, _ = image_checks.layout(manifest['edition'])
     image_checks.verify_ranges(image, [esp,root_image,verity,payload], partitions)
     run('zstd','-T2','-3',image,'-o',str(image)+'.zst')
     run('zstd','-t',str(image)+'.zst')
-    selected=[image,Path(str(image)+'.zst'),OUT/'release.json',OUT/'release.sig',OUT/'secureboot.cer',OUT/'packages.lock',OUT/'source-lock.json',OUT/'toolchain-packages.lock',OUT/'native-source.tar.zst',OUT/'boot-policy.json',
+    selected=[image,Path(str(image)+'.zst'),OUT/optical['image'],OUT/'optical-media.json',OUT/'release.json',OUT/'release.sig',OUT/'secureboot.cer',OUT/'packages.lock',OUT/'source-lock.json',OUT/'toolchain-packages.lock',OUT/'native-source.tar.zst',OUT/'boot-policy.json',
               *([OUT/'release-trust.json'] if production else [])]
     (OUT/'SHA256SUMS').write_text(''.join(f'{digest(p)}  {p.name}\n' for p in selected))
     if production:
@@ -669,6 +727,7 @@ def seal_media(manifest, desktop_profile, version):
             'root_hash':roothash,'image':image.name,'image_sha256':digest(image),
             'source_lock_sha256':digest(OUT/'source-lock.json'),
             'desktop':desktop_profile, 'production_signed':production,'gate_closing':False,
+            'optical':optical,
             'custody_qualified':False, 'native_qualification_claimed':False}
     (OUT/'build.json').write_text(json.dumps(record,indent=2)+'\n')
     print(json.dumps(record,indent=2),flush=True)

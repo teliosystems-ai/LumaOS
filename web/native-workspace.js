@@ -59,6 +59,8 @@
     animation: objectField({schema_version: integerField(1, 1, 1), width: integerField(320, 1, 4096), height: integerField(180, 1, 4096), frames_per_second: integerField(1, 1, 60), frame_count: integerField(1, 1, 120), background: stringField('#ffffff', 7),
       sprites: arrayField(objectField({id: stringField('sprite', 64), shape: unionField({rectangle: objectField({width: integerField(40, 1, 4096), height: integerField(40, 1, 4096)}), circle: objectField({radius: integerField(20, 1, 4096)})}), fill: stringField('#000000', 7),
         keyframes: arrayField(objectField({frame: integerField(0, 0, 119), x: integerField(0, -8192, 8192), y: integerField(0, -8192, 8192)}), 64, 1)}), 32)}),
+    collection: objectField({schema_version: integerField(1, 1, 1), kind: enumField(['luma-explicit-collection-v1']), collection_id: stringField('manual', 64), name: stringField('Manual collection', 256),
+      members: arrayField(objectField({artifact_id: stringField('', 128), version: integerField(1, 1, Number.MAX_SAFE_INTEGER), content_sha256: stringField('', 64), receipt_sha256: stringField('', 64)}), 64)}),
   };
   function clone(value) { return JSON.parse(JSON.stringify(value)); }
   function initial(schema) {
@@ -95,7 +97,17 @@
   }
   function composerCheck(value, engine = composerEngine) {
     composeCheck(value, composerSchemas[engine]);
-    if (encoder.encode(JSON.stringify(value)).length > maximum) throw new Error('Whole composed source exceeds 1 MiB.');
+    if (encoder.encode(JSON.stringify(value)).length > (engine === 'collection' ? 32768 : maximum)) throw new Error(engine === 'collection' ? 'Typed collection source exceeds 32 KiB.' : 'Whole composed source exceeds 1 MiB.');
+    return value;
+  }
+  function collectionData(value) {
+    if (!/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(value.collection_id) || !value.name || value.name.trim() !== value.name || /[\u0000-\u001F\u007F]/.test(value.name)) throw new Error('Collection requires an explicit stable ID and nonblank trimmed display name.');
+    let previous = null;
+    for (const reference of value.members) {
+      if (!/^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/.test(reference.artifact_id) || [reference.content_sha256, reference.receipt_sha256].some(hash => !/^[0-9a-f]{64}$/.test(hash) || /^0+$/.test(hash))) throw new Error('Every member needs a complete explicit immutable reference; no digest or artifact ID is assumed.');
+      if (previous !== null && previous >= reference.artifact_id) throw new Error('Collection members must be unique and sorted by artifact ID. Sort explicitly; duplicate IDs are never dropped or upgraded.');
+      previous = reference.artifact_id;
+    }
     return value;
   }
   function composerPending() {
@@ -111,6 +123,7 @@
   }
   function renderComposer() {
     const form = byId('composer-form'); form.replaceChildren(); composerReaders = []; composerDirty = false;
+    byId('composer-sort').hidden = composerEngine !== 'collection';
     let serial = 0;
     function button(parent, title, action, disabled = false) {
       const element = document.createElement('button'); element.type = 'button'; element.textContent = title; element.disabled = disabled;
@@ -331,7 +344,7 @@
     byId('sheet-fields').disabled = value; byId('sheet-dimensions').disabled = value;
     byId('sheet-use').disabled = value; byId('sheet-load').disabled = value || verifiedSheet === null;
     byId('composer-fields').disabled = value;
-    ['composer-engine', 'composer-new', 'composer-apply', 'composer-discard', 'composer-use'].forEach(id => { byId(id).disabled = value; });
+    ['composer-engine', 'composer-new', 'composer-apply', 'composer-discard', 'composer-use', 'composer-sort'].forEach(id => { byId(id).disabled = value; });
     byId('composer-load').disabled = value || verifiedComposer === null;
     sheetButtons.forEach(button => { button.disabled = value; }); inspectorKind();
   }
@@ -435,6 +448,9 @@
     }
     if (['document', 'diagram', 'animation'].includes(result.operation) && typeof result.rendering.canonical_source === 'string') {
       verifiedComposer = {engine: result.operation, source: result.rendering.canonical_source};
+      byId('composer-load').disabled = false;
+    } else if (result.operation === 'collection-source' && typeof result.canonical_source === 'string') {
+      verifiedComposer = {engine: 'collection', source: result.canonical_source};
       byId('composer-load').disabled = false;
     }
   }
@@ -540,10 +556,15 @@
     } catch (error) { composerFailure(error); }
   });
   byId('composer-discard').addEventListener('click', () => { if (active === null) { renderComposer(); composerMessage('Pending field edits explicitly discarded. Applied source unchanged.'); } });
+  byId('composer-sort').addEventListener('click', () => {
+    if (composerEngine !== 'collection') return;
+    changeComposer(candidate => candidate.members.sort((a, b) => a.artifact_id < b.artifact_id ? -1 : a.artifact_id > b.artifact_id ? 1 : 0));
+  });
   byId('composer-use').addEventListener('click', () => {
     if (composerPending()) return;
     try {
-      byId('editor').value = JSON.stringify(composerCheck(composer)); byId('engine').value = composerEngine; byId('editor').focus();
+      const source = composerCheck(composer);
+      byId('editor').value = JSON.stringify(composerEngine === 'collection' ? collectionData(source) : source); byId('engine').value = composerEngine; byId('editor').focus();
       composerMessage('Exact typed ' + composerEngine + ' source copied. Run native preview explicitly. No rendering, saving or publication ran.');
     } catch (error) { composerFailure(error); }
   });
@@ -551,6 +572,7 @@
     if (composerPending() || verifiedComposer === null) return;
     try {
       const candidate = composerCheck(JSON.parse(verifiedComposer.source), verifiedComposer.engine);
+      if (verifiedComposer.engine === 'collection') collectionData(candidate);
       composerEngine = verifiedComposer.engine; composer = candidate; byId('composer-engine').value = composerEngine; renderComposer();
       composerMessage('Last actual native-verified canonical source loaded for explicit editing. This is data, not owner, workflow or publication authority.');
     } catch (error) { composerFailure(error); }

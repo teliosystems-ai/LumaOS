@@ -1,0 +1,2 @@
+SUBSYSTEM=="block", KERNEL=="loop[0-9]*", ATTR{loop/backing_file}=="/run/initramfs/luma-optical/root.ext4", SYMLINK+="luma-optical-root"
+SUBSYSTEM=="block", KERNEL=="loop[0-9]*", ATTR{loop/backing_file}=="/run/initramfs/luma-optical/root.verity", SYMLINK+="luma-optical-hash"

@@ -34,6 +34,7 @@ MAX_QUERY_OUTPUT = 65536
 MAX_ENVELOPE_OUTPUT = 2*MAX_ENVELOPE + 16384
 MAX_RECOVERY_REQUEST = 96*1024
 MAX_RECOVERY_OUTPUT = 96*1024
+MAX_DISCOVERY_REQUEST = 65536
 ENGINES = ('spreadsheet', 'document', 'diagram', 'animation')
 
 
@@ -71,8 +72,10 @@ def proposal(value):
     for field in ('read_grant', 'effect_grant'):
         if not isinstance(value[field], str) or (value[field] and not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.-]{0,127}', value[field])):
             raise ValueError('invalid finite grant identifier')
+    if not isinstance(value['approval'], str):
+        raise ValueError('explicit approval text or an empty string required')
     operation = value['operation']
-    if operation in ('inspection', 'office-proposal', 'paged-read', 'envelope-read', 'workflow-journey', 'restore-journey', 'retire-journey'):
+    if operation in ('inspection', 'office-proposal', 'paged-read', 'envelope-read', 'search-journey', 'workflow-journey', 'restore-journey', 'retire-journey'):
         if any(value[field] for field in ('read_grant', 'effect_grant', 'approval')):
             raise ValueError('inspection cannot select effect authority')
     elif operation == 'review':
@@ -90,7 +93,8 @@ def proposal(value):
     else:
         raise ValueError('unsupported authenticated terminal operation')
     request = value['request']
-    bound = MAX_RECOVERY_REQUEST if operation in ('restore-journey', 'retire-journey') else MAX_REQUEST
+    bound = (MAX_RECOVERY_REQUEST if operation in ('restore-journey', 'retire-journey')
+             else MAX_DISCOVERY_REQUEST if operation == 'search-journey' else MAX_REQUEST)
     if not isinstance(request, str) or not 0 < len(request.encode('utf-8')) <= bound:
         raise ValueError('native request exceeds bound')
     source = strict_json(request)
@@ -101,6 +105,8 @@ def proposal(value):
         page_request(source)
     elif operation == 'envelope-read':
         envelope_request(source)
+    elif operation == 'search-journey':
+        discovery_request(source)
     elif operation == 'workflow-journey':
         workflow_request(source)
     elif operation in ('restore-journey', 'retire-journey'):
@@ -146,6 +152,45 @@ def envelope_request(source):
     if not isinstance(operation, dict) or set(operation) != {'kind', 'expected'} or operation['kind'] != 'envelope':
         raise ValueError('exact complete-envelope selector required')
     reference_data(operation['expected'])
+    return source
+
+
+def discovery_query(query):
+    """Match the native public term grammar; this does not search anything."""
+    if not isinstance(query, str) or not query.isascii() or len(query) > 256:
+        raise ValueError('discovery requires at most 256 ASCII query bytes')
+    terms = re.findall(r'[^ \t\r\n\f]+', query)
+    if not 1 <= len(terms) <= 8 or any(not re.fullmatch(r'[A-Za-z0-9]{1,64}', term) for term in terms):
+        raise ValueError('discovery requires one to eight bounded alphanumeric terms')
+    return ' '.join(sorted(set(term.lower() for term in terms)))
+
+
+def discovery_request(source):
+    """Exact owner-local selections; membership and similarity grant nothing."""
+    owner_request(source)
+    operation = source['operation']
+    if not isinstance(operation, dict):
+        raise ValueError('closed native semantic operation required')
+    kind = operation.get('kind')
+    selector = 'references' if kind == 'search-semantic-selected' else 'expected' if kind == 'collection-search-semantic' else None
+    if selector is None or set(operation) != {'kind', selector, 'query', 'limit', 'dimensions'}:
+        raise ValueError('select exact versions or one genuine typed collection')
+    discovery_query(operation['query'])
+    if type(operation['limit']) is not int or not 1 <= operation['limit'] <= 32 or type(operation['dimensions']) is not int or not 1 <= operation['dimensions'] <= 8:
+        raise ValueError('native semantic result or dimension bound exceeded')
+    if selector == 'expected':
+        reference_data(operation['expected'])
+    else:
+        references = operation['references']
+        if not isinstance(references, list) or not 1 <= len(references) <= 64:
+            raise ValueError('select one to 64 exact versions')
+        previous = None
+        for reference in references:
+            reference_data(reference)
+            identifier = reference['artifact_id']
+            if previous is not None and previous >= identifier:
+                raise ValueError('selected versions require unique sorted artifact IDs')
+            previous = identifier
     return source
 
 
@@ -336,7 +381,7 @@ def protected(path, maximum, *, sudo=False):
 
 def terminal_arguments(value, path):
     value = proposal(value)
-    if value['operation'] in ('paged-read', 'envelope-read', 'workflow-journey', 'restore-journey', 'retire-journey'):
+    if value['operation'] in ('paged-read', 'envelope-read', 'search-journey', 'workflow-journey', 'restore-journey', 'retire-journey'):
         raise ValueError('managed journeys require their explicit review and fresh grant steps')
     prefix = ['/usr/bin/sudo', '--', NATIVE, 'granted-run']
     if value['operation'] == 'office-proposal':
@@ -567,6 +612,115 @@ def grant_selection(prompt):
     if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.-]{0,127}', value):
         raise ValueError('explicit finite grant ID required; no grant is inferred or cached')
     return value
+
+
+def discovery_response(source, output):
+    """Validate data from the actual native Read pipe, not a portable grant.
+
+    A collection's complete membership is resolved inside the verified native
+    snapshot. This controller never expands it, substitutes current versions,
+    or treats the subset of returned hits as a new authenticated collection.
+    """
+    discovery_request(source)
+    if not isinstance(output, bytes) or not 0 < len(output) < MAX_QUERY_OUTPUT:
+        raise ValueError('discovery output exceeds its finite native allowance')
+    value = strict_json(output)
+    operation = source['operation']
+    selected = operation['kind'] == 'search-semantic-selected'
+    key = 'semantic_search' if selected else 'semantic_collection_search'
+    flags = ('content_delivered', 'committed', 'authority_returned', 'selection_is_authority',
+             'similarity_is_authority', 'provenance_authority', 'workflow_executed', 'production_qualified')
+    if not isinstance(value, dict) or set(value) != {'schema_version', key, *flags} or type(value['schema_version']) is not int or value['schema_version'] != 1 or any(value[flag] is not False for flag in flags):
+        raise ValueError('discovery result substitutes its operation or claims authority')
+    result = value[key]
+    if not selected:
+        if not isinstance(result, dict) or set(result) != {'collection', 'search'} or not same_data(result['collection'], operation['expected']):
+            raise ValueError('discovery substituted its exact typed collection')
+        result = result['search']
+    fields = {'algorithm', 'canonical_query', 'selection_sha256', 'index_descriptor_sha256', 'selected_versions',
+              'vocabulary_terms', 'indexed_features', 'requested_dimensions', 'effective_dimensions',
+              'matches', 'total_matches', 'truncated'}
+    if not isinstance(result, dict) or set(result) != fields or result['algorithm'] != 'tfidf-lsa-jacobi-v1' or result['canonical_query'] != discovery_query(operation['query']):
+        raise ValueError('discovery result substitutes its algorithm or canonical query')
+    bounds = {'selected_versions': (0, 64), 'vocabulary_terms': (0, 4096), 'indexed_features': (0, 512),
+              'requested_dimensions': (1, 8), 'effective_dimensions': (0, 8), 'total_matches': (0, 64)}
+    if any(type(result[name]) is not int or not low <= result[name] <= high for name, (low, high) in bounds.items()):
+        raise ValueError('discovery counters exceed their native bounds')
+    if (result['requested_dimensions'] != operation['dimensions']
+            or result['indexed_features'] != min(result['vocabulary_terms'], 512)
+            or result['effective_dimensions'] > min(result['selected_versions'], result['indexed_features'], operation['dimensions'])
+            or result['total_matches'] > result['selected_versions']
+            or (result['selected_versions'] == 0 and result['vocabulary_terms'] != 0)
+            or (result['effective_dimensions'] == 0 and result['total_matches'] != 0)
+            or not exact_sha(result['selection_sha256']) or not exact_sha(result['index_descriptor_sha256'])):
+        raise ValueError('discovery result changes its selection, projection or descriptor')
+    references = operation['references'] if selected else [] if result['selected_versions'] == 0 else None
+    if references is not None:
+        canonical_selection = json.dumps(references, sort_keys=True, ensure_ascii=False, separators=(',', ':'), allow_nan=False).encode('utf-8')
+        descriptor = dict(schema_version=1, algorithm='tfidf-lsa-jacobi-v1', binding=source['binding'], references=references,
+                          dimensions=operation['dimensions'], maximum_vocabulary=4096, maximum_features=512)
+        canonical_descriptor = json.dumps(descriptor, sort_keys=True, ensure_ascii=False, separators=(',', ':'), allow_nan=False).encode('utf-8')
+        if (result['selected_versions'] != len(references) or result['selection_sha256'] != hashlib.sha256(canonical_selection).hexdigest()
+                or result['index_descriptor_sha256'] != hashlib.sha256(canonical_descriptor).hexdigest()):
+            raise ValueError('discovery result substitutes the complete exact selection or owner generation')
+    matches = result['matches']
+    if not isinstance(matches, list) or len(matches) > min(operation['limit'], result['total_matches']) or result['truncated'] is not (len(matches) < result['total_matches']):
+        raise ValueError('discovery result count or truncation differs')
+    previous, identifiers = None, set()
+    for hit in matches:
+        if not isinstance(hit, dict) or set(hit) != {'reference', 'format', 'cosine_millionths'}:
+            raise ValueError('discovery hit is not a closed native reference result')
+        reference = reference_data(hit['reference'])
+        score = hit['cosine_millionths']
+        if hit['format'] not in ('utf8-text', 'csv', 'json') or type(score) is not int or not 1 <= score <= 1000000:
+            raise ValueError('discovery hit has an invalid format or bounded similarity')
+        order = (-score, reference['artifact_id'])
+        if reference['artifact_id'] in identifiers or (previous is not None and previous >= order):
+            raise ValueError('discovery duplicated or reordered a native hit')
+        if selected and not any(same_data(reference, item) for item in references):
+            raise ValueError('discovery hit enlarges or substitutes the exact selected versions')
+        identifiers.add(reference['artifact_id'])
+        previous = order
+    return result
+
+
+def discovery_journey(value, directory):
+    """One exact semantic query, then explicitly selected fresh native reads."""
+    value = proposal(value)
+    if value['operation'] != 'search-journey':
+        raise ValueError('the original native discovery journey must be selected')
+    canonical, _ = canonical_native_request(value)
+    value = dict(value, request=canonical)
+    source = discovery_request(strict_json(canonical))
+    inspect = dict(value, operation='inspection')
+    with request_stage(directory, canonical) as path:
+        protected(NATIVE, 128*1024*1024)
+        scope = inspection_scope(capture_query(terminal_arguments(inspect, path)), source)
+        print('Exact owner-generation semantic Read scope (DATA, not an issued grant):\n'+json.dumps(scope, ensure_ascii=True, indent=2), flush=True)
+        grant = grant_selection('Finite Read grant ID for this exact query, or q to stop: ')
+        if grant is None:
+            print('Discovery stopped before private query delivery. No content read or effect requested.', flush=True)
+            return 0
+        protected(NATIVE, 128*1024*1024)
+        output = capture_query(terminal_arguments(dict(inspect, operation='review', read_grant=grant), path))
+        result = discovery_response(source, output)
+    print('Actual native semantic results observed. Similarity is not truth, permission, automatic classification or proof of a current version. Results are already delivered data; no content, publication or workflow effect was requested.', flush=True)
+    print(json.dumps(result, ensure_ascii=True, indent=2), flush=True)
+    if not result['matches']:
+        print('No matching exact versions. No scope enlargement or automatic fallback was requested.', flush=True)
+        return 0
+    for _ in range(16):
+        choice = terminal_line('Explicit result number 1-'+str(len(result['matches']))+' for a NEW exact-envelope Read, or q to finish: ', 8)
+        if choice == 'q':
+            return 0
+        if not re.fullmatch(r'[1-9][0-9]?', choice) or int(choice) > len(result['matches']):
+            raise ValueError('select one displayed exact result; no inferred reference')
+        reference = result['matches'][int(choice)-1]['reference']
+        read = dict(source, operation=dict(kind='envelope', expected=reference))
+        print('Selected exact historical reference. This requires independent current PAM, owner/C/resource checks and its own finite Read; the search grant is not reused:\n'+json.dumps(reference, ensure_ascii=True, indent=2), flush=True)
+        envelope_read(dict(value, operation='envelope-read', request=encoded(read).decode('utf-8')), directory)
+    print('Discovery session reached its fixed 16-selection bound. Start a new explicit native journey for further reads.', flush=True)
+    return 0
 
 
 def envelope_read(value, directory):
@@ -1370,6 +1524,9 @@ def terminal(path):
         if value['operation'] == 'workflow-journey':
             print('Luma native managed workflow. Passwords remain with original PAM in this terminal; no session, grant or supplied receipt is imported.', flush=True)
             return workflow_journey(value, directory)
+        if value['operation'] == 'search-journey':
+            print('Luma native discovery. Original PAM, current finite grants and private results remain only in this terminal; search hits never confer another Read.', flush=True)
+            return discovery_journey(value, directory)
         if value['operation'] == 'envelope-read':
             return owner_read_journey(value, directory)
         if value['operation'] == 'paged-read':

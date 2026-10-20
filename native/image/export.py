@@ -15,6 +15,12 @@ names+=['SHA256SUMS','build.json','packages.lock','release.json','release.sig','
         'source-lock.json','toolchain-packages.lock','native-source.tar.zst','boot-policy.json']
 import json
 record = json.loads((source/'build.json').read_text())
+if 'optical' in record:
+    optical=record['optical']
+    if (not isinstance(optical,dict) or optical.get('image') != record['release']+'.iso'
+            or optical.get('boot_qualified') is not False or optical.get('gate_closing') is not False):
+        raise SystemExit('optical build identity or unqualified transport scope differs')
+    names += [optical['image'],'optical-media.json']
 if record.get('production_signed') is True:
     names.append('release-trust.json')
 if len(list(source.glob('*.img.zst'))) != 1:

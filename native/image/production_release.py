@@ -28,7 +28,7 @@ import provision_public_trust as public
 _spec = importlib.util.spec_from_file_location('release_ceremony', Path(__file__).resolve().parents[2] / 'scripts/release_trust_ceremony.py')
 release = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(release)
-SLOTS = ('a', 'b', 'live')
+SLOTS = ('a', 'b', 'live', 'optical')
 PE_NAMES = tuple(f'slot-{slot}.efi' for slot in SLOTS) + ('bootloader.efi',)
 INPUTS = {'production-release-root.pub': 4096, 'release-trust.json': 32768,
           'release-signer.json': 4096, 'secureboot.pem': 16384, 'pcr-policy.pub': 4096}
@@ -278,10 +278,12 @@ def measure(image):
 
 def check_slot(sections, slot, pcr_public):
     cmdline = sections.get('.cmdline', b'').rstrip(b'\0').decode('ascii').split()
-    for prefix, value in [('luma.slot=', slot), ('luma.mode=', 'live' if slot == 'live' else 'installed')]:
+    for prefix, value in [('luma.slot=', 'live' if slot == 'optical' else slot), ('luma.mode=', 'live' if slot in ('live','optical') else 'installed')]:
         if [word for word in cmdline if word.startswith(prefix)] != [prefix + value]:
             raise ValueError('production unsigned UKI slot/mode differs')
-    if slot == 'live':
+    if [word for word in cmdline if word.startswith('luma.media=')] != (['luma.media=optical'] if slot == 'optical' else []):
+        raise ValueError('production unsigned UKI transport differs')
+    if slot in ('live','optical'):
         if '.pcrsig' in sections or '.pcrpkey' in sections:
             raise ValueError('live production media cannot carry installed PCR approval')
     elif sections.get('.pcrpkey') != pcr_public:
@@ -306,17 +308,7 @@ def build_checkpoint(out):
 
 
 def expected_cmdline(checkpoint, slot):
-    mode = 'live' if slot == 'live' else 'installed'
-    data = 'luma-live-root' if slot == 'live' else f'luma-root-{slot}'
-    hashes = 'luma-live-hash' if slot == 'live' else f'luma-hash-{slot}'
-    return (f'root=/dev/mapper/root ro roothash={checkpoint["root_hash"]} '
-            'systemd.verity_root_options=panic-on-corruption '
-            f'systemd.verity_root_data=/dev/disk/by-partlabel/{data} '
-            f'systemd.verity_root_hash=/dev/disk/by-partlabel/{hashes} '
-            f'luma.mode={mode} luma.slot={slot} '
-            f'systemd.unit={desktop_policy.target(checkpoint["identity"]["edition"], mode)} '
-            'console=tty0 console=ttyS0,115200n8 apparmor=1 security=apparmor '
-            'systemd.show_status=yes rd.shell=0 panic=10')
+    return boot_policy.command_line(checkpoint['root_hash'],slot,checkpoint['identity']['edition'])
 
 
 def check_build_sections(sections, checkpoint, slot):
@@ -324,7 +316,7 @@ def check_build_sections(sections, checkpoint, slot):
         raise ValueError('production UKI kernel policy/root/desktop command line differs')
     if sections.get('.uname', b'').rstrip(b'\0') != checkpoint['kernel'].encode('ascii'):
         raise ValueError('production UKI original kernel identity differs')
-    desktop_policy.verify_boot_target(sections['.cmdline'], checkpoint['identity']['edition'], 'live' if slot == 'live' else 'installed')
+    desktop_policy.verify_boot_target(sections['.cmdline'], checkpoint['identity']['edition'], 'live' if slot in ('live','optical') else 'installed')
 
 
 def prepare_pcr(out, root):
@@ -355,7 +347,7 @@ def prepare_pcr(out, root):
             kernel = observed_kernel
             if '.pcrsig' in sections:
                 raise ValueError('initial external PCR request requires unsigned policy inputs')
-            if slot != 'live':
+            if slot in ('a','b'):
                 _, policies[slot] = measure(unsigned / name)
                 for index, policy in enumerate(policies[slot]):
                     files[f'{slot}-{index}.policy'] = bytes.fromhex(policy['policy'])
@@ -381,7 +373,7 @@ def accept_pcr(out, responsedir):
         for slot in SLOTS:
             name = f'slot-{slot}.efi'; image = output / name
             release.exclusive_write(image, files[name])
-            if slot != 'live':
+            if slot in ('a','b'):
                 signatures = response['signatures'][slot]
                 if type(signatures) is not list or len(signatures) != len(request['policies'][slot]):
                     raise ValueError('PCR response has the wrong phase count')
@@ -594,7 +586,7 @@ def verify_complete(out):
                 before = boot_policy.read_sections(out / 'production-pcr-request' / name)
                 after = boot_policy.read_sections(out / name)
                 check_build_sections(after, checkpoint, slot)
-                if slot == 'live':
+                if slot in ('live','optical'):
                     if before != after: raise ValueError('live production UKI measured sections changed')
                 elif set(after) != set(before) | {'.pcrsig'} or any(after[k] != v for k, v in before.items()):
                     raise ValueError('installed production UKI original measured contents changed')

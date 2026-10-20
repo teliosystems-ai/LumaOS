@@ -11,6 +11,7 @@ import importlib.util
 import hashlib
 import json
 import os
+import re
 from pathlib import Path
 import stat
 import sys
@@ -22,6 +23,41 @@ PAGE = 'luma-workspace://manual/native-workspace.html'
 ASSETS = {'/native-workspace.html': ('native-workspace.html', 'text/html'),
           '/native-workspace.js': ('native-workspace.js', 'application/javascript'),
           '/native-workspace.css': ('native-workspace.css', 'text/css')}
+
+
+def discovery_proposal(auth, login, binding_text, mode, selector_text, query, limit, dimensions):
+    """Prepare exact discovery DATA for the separate original native terminal.
+
+    No account, grant, publication or returned hit is established here. Python
+    parses reference integers exactly; these values never pass through JS.
+    """
+    if mode not in ('search-semantic-selected', 'collection-search-semantic'):
+        raise ValueError('select one supported semantic discovery mode')
+    auth.discovery_query(query)
+    if type(limit) is not int or not 1 <= limit <= 32 or type(dimensions) is not int or not 1 <= dimensions <= 8:
+        raise ValueError('select 1 to 32 results and 1 to 8 latent dimensions')
+    if not isinstance(selector_text, str) or not 0 < len(selector_text.encode('utf-8')) <= 32768:
+        raise ValueError('exact reference selector exceeds its 32-KiB bound')
+    if not isinstance(binding_text, str) or not 0 < len(binding_text.encode('utf-8')) <= 1024:
+        raise ValueError('explicit owner binding exceeds its 1024-byte bound')
+    selector = auth.strict_json(selector_text)
+    operation = dict(kind=mode, query=query, limit=limit, dimensions=dimensions)
+    if mode == 'search-semantic-selected':
+        if not isinstance(selector, list) or not 1 <= len(selector) <= 64:
+            raise ValueError('select 1 to 64 explicit exact references')
+        previous = None
+        for reference in selector:
+            auth.reference_data(reference)
+            if previous is not None and previous >= reference['artifact_id']:
+                raise ValueError('references must be unique and sorted by artifact ID; no reference is silently replaced')
+            previous = reference['artifact_id']
+        operation['references'] = selector
+    else:
+        operation['expected'] = auth.reference_data(selector)
+    source = auth.owner_request(dict(schema_version=1, login=login,
+        binding=auth.strict_json(binding_text), operation=operation))
+    return auth.proposal(dict(schema_version=1, operation='search-journey', login=login,
+        read_grant='', effect_grant='', approval='', request=auth.encoded(source).decode('utf-8')))
 
 
 def protected_file(path, maximum):
@@ -191,6 +227,9 @@ def main():
     read_button = Gtk.Button.new_with_mnemonic('_Read exact owner artifact…')
     read_button.set_tooltip_text('Open a native terminal for independently granted pages of one exact immutable reference. Private content never enters this browser.')
     owner_actions.pack_start(read_button, False, False, 4)
+    discovery_button = Gtk.Button.new_with_mnemonic('_Discover owner collections…')
+    discovery_button.set_tooltip_text('Exact-selection or exact typed-collection semantic discovery in the separate native terminal. Each query and selected hit read requires a fresh finite Read grant; similarity never grants access.')
+    owner_actions.pack_start(discovery_button, False, False, 4)
     workflow_button = Gtk.Button.new_with_mnemonic('_Managed engine workflow…')
     workflow_button.set_tooltip_text('Review, approve and apply an image-defined deterministic engine workflow in the original native PAM terminal; reopen and recalculate under fresh Read authority.')
     engine_actions.pack_start(workflow_button, False, False, 4)
@@ -320,6 +359,81 @@ def main():
         dialog.destroy()
 
     read_button.connect('clicked', grounded_read)
+
+    def owner_discovery(_button):
+        dialog = Gtk.Dialog(title='Owner-local semantic discovery — exact selection', transient_for=window, modal=True)
+        dialog.add_buttons('Cancel', Gtk.ResponseType.CANCEL, 'Open discovery terminal', Gtk.ResponseType.OK)
+        dialog.set_default_size(900, 680)
+        area = dialog.get_content_area()
+        note = Gtk.Label(label='Choose one exact sorted selection or one genuine typed collection reference. These are DATA, not membership proof or authority. The separate original PAM terminal obtains a fresh finite Read scope and continuously checks owner, custody, generation and revocation. Results and private content stay ONLY there. A hit is rounded local TF-IDF/LSA similarity, not truth or permission. Reading a hit requires a new explicitly selected exact reference and independently granted Read; nothing opens automatically. Stop with q or Ctrl+C in that terminal.')
+        note.set_line_wrap(True)
+        area.pack_start(note, False, False, 8)
+        entries = {}
+        for key, text, maximum in [('login', '_Human login', 32), ('binding', 'Exact _owner binding JSON', 1024),
+                                   ('query', '_Query: 1–8 ASCII alphanumeric terms; at most 256 bytes', 256)]:
+            label = Gtk.Label.new_with_mnemonic(text)
+            label.set_xalign(0)
+            entry = Gtk.Entry()
+            entry.set_max_length(maximum)
+            label.set_mnemonic_widget(entry)
+            entries[key] = entry
+            area.pack_start(label, False, False, 2)
+            area.pack_start(entry, False, False, 2)
+        mode_label = Gtk.Label.new_with_mnemonic('_Discovery selection')
+        mode = Gtk.ComboBoxText()
+        mode.append('search-semantic-selected', 'Exact sorted references — 1 to 64 unique artifact IDs')
+        mode.append('collection-search-semantic', 'One exact typed collection — current versions are never substituted')
+        mode.set_active_id('search-semantic-selected')
+        mode_label.set_mnemonic_widget(mode)
+        area.pack_start(mode_label, False, False, 3)
+        area.pack_start(mode, False, False, 3)
+        limits = {}
+        for key, text, lower, upper, value in [('limit', '_Maximum returned hits', 1, 32, 16), ('dimensions', '_Latent dimensions (not confidence)', 1, 8, 4)]:
+            label = Gtk.Label.new_with_mnemonic(text + ' (' + str(lower) + '–' + str(upper) + ')')
+            label.set_xalign(0)
+            control = Gtk.Entry()
+            control.set_max_length(2)
+            control.set_text(str(value))
+            label.set_mnemonic_widget(control)
+            limits[key] = control
+            area.pack_start(label, False, False, 2)
+            area.pack_start(control, False, False, 2)
+        selector_label = Gtk.Label.new_with_mnemonic('Exact _references JSON array, or a single typed collection reference object (at most 32 KiB)')
+        selector_label.set_xalign(0)
+        selector = Gtk.TextView()
+        selector.set_wrap_mode(Gtk.WrapMode.CHAR)
+        selector_label.set_mnemonic_widget(selector)
+        area.pack_start(selector_label, False, False, 3)
+        scroll = Gtk.ScrolledWindow()
+        scroll.set_min_content_height(150)
+        scroll.add(selector)
+        area.pack_start(scroll, True, True, 4)
+        help_text = Gtk.Label(label='Binding: installation, owner, owner_generation. Every exact reference: artifact_id, version, content_sha256, receipt_sha256. Paste complete values from native review. Full unsigned-64-bit versions/generations remain exact native integers. Semantic indexing is owner-local, ASCII-token statistical retrieval; it is not neural or multilingual search. To create or edit a typed collection, compose public source separately and use the authenticated native owner review/apply controls; this query dialog cannot publish membership.')
+        help_text.set_line_wrap(True)
+        area.pack_start(help_text, False, False, 6)
+        error = Gtk.Label()
+        error.set_line_wrap(True)
+        error.set_selectable(True)
+        area.pack_start(error, False, False, 4)
+        dialog.show_all()
+        while dialog.run() == Gtk.ResponseType.OK:
+            try:
+                buffer = selector.get_buffer()
+                if any(not re.fullmatch(r'[1-9][0-9]?', control.get_text()) for control in limits.values()):
+                    raise ValueError('exact positive integer limits required; decimals are never rounded')
+                value = discovery_proposal(auth_module, entries['login'].get_text(), entries['binding'].get_text(),
+                    mode.get_active_id(), buffer.get_text(buffer.get_start_iter(), buffer.get_end_iter(), False),
+                    entries['query'].get_text(), int(limits['limit'].get_text()), int(limits['dimensions'].get_text()))
+                auth_module.launch(value)
+                authority_note.set_text('Discovery terminal launched. Original PAM, independently granted finite Read, exact native results and any separately selected fresh hit read are observed only there. No GUI query completion, current permission or publication is inferred.')
+                break
+            except Exception:
+                error.set_text('Discovery not launched. Check the exact owner binding and reference shape/order, ASCII query and numeric limits. No identities, memberships, grants or result authority were assumed.')
+                selector.grab_focus()
+        dialog.destroy()
+        discovery_button.grab_focus()
+
+    discovery_button.connect('clicked', owner_discovery)
 
     def managed_workflow(_button):
         dialog = Gtk.Dialog(title='Native managed workflow — review before effect', transient_for=window, modal=True)

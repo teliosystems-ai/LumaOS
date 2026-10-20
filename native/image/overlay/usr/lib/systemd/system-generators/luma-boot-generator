@@ -15,10 +15,18 @@ case " $cmdline " in
         ;;
     *" luma.mode=live "*)
         mkdir -p "$1/multi-user.target.wants" "$1/local-fs.target.wants"
+        case " $cmdline " in
+            *" luma.media=optical "*)
+                mkdir -p "$1/media-luma.mount.d"
+                printf '[Mount]\nWhat=/run/initramfs/luma-optical\nType=none\nOptions=bind,ro,nodev,nosuid,noexec\n' > "$1/media-luma.mount.d/optical.conf"
+                ;;
+            *)
+                device_timeout="$1/dev-disk-by\\x2dpartlabel-luma\\x2dpayload.device.d"
+                mkdir -p "$device_timeout"
+                printf '[Unit]\nJobRunningTimeoutSec=90s\n' > "$device_timeout/timeout.conf"
+                ;;
+        esac
         ln -s /etc/systemd/system/media-luma.mount "$1/local-fs.target.wants/media-luma.mount"
-        device_timeout="$1/dev-disk-by\\x2dpartlabel-luma\\x2dpayload.device.d"
-        mkdir -p "$device_timeout"
-        printf '[Unit]\nJobRunningTimeoutSec=90s\n' > "$device_timeout/timeout.conf"
         consoles=$(cat /sys/class/tty/console/active)
         case " $consoles " in
             *" ttyS0 "*) ln -s /etc/systemd/system/luma-live-console.service "$1/multi-user.target.wants/luma-live-console.service" ;;

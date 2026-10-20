@@ -24,9 +24,7 @@ RUN apt-get update --snapshot=${SNAPSHOT} -o APT::Update::Error-Mode=any && \
         gdm3 gnome-session gnome-shell gnome-console nautilus gnome-text-editor \
         gnome-control-center network-manager-gnome epiphany-browser \
         xdg-desktop-portal-gnome fonts-dejavu-core \
-        python3-gi gir1.2-gtk-3.0 gir1.2-webkit2-4.1 \
-        gir1.2-gstreamer-1.0 gstreamer1.0-plugins-base gstreamer1.0-plugins-good \
-        gstreamer1.0-pipewire xdg-desktop-portal pipewire-pulse; \
+        python3-gi gir1.2-gtk-3.0 gir1.2-webkit2-4.1; \
     elif [ "$EDITION" != headless ]; then exit 2; fi
 # Image assembly records the exact installed tuple and strips builder/container state.
 RUN apt-get install -y --no-install-recommends --snapshot=${SNAPSHOT} systemd-boot
@@ -45,6 +43,14 @@ RUN \
 # Keep the fixed KVM dependency separate so adding it does not invalidate the
 # large, already pinned firmware and desktop package layers.
 RUN apt-get install -y --no-install-recommends --snapshot=${SNAPSHOT} qemu-system-x86
+RUN apt-get install -y --no-install-recommends --snapshot=${SNAPSHOT} libreoffice-writer bubblewrap
+# Add new desktop dependencies after the existing pinned desktop/root layers.
+# A capture change must not invalidate firmware and all of GNOME acquisition.
+RUN if [ "$EDITION" = desktop ]; then \
+      apt-get install -y --no-install-recommends --snapshot=${SNAPSHOT} \
+        gir1.2-gstreamer-1.0 gstreamer1.0-plugins-base gstreamer1.0-plugins-good \
+        gstreamer1.0-pipewire xdg-desktop-portal pipewire-pulse; \
+    elif [ "$EDITION" != headless ]; then exit 2; fi
 RUN apt-get install -y --no-install-recommends --snapshot=${SNAPSHOT} \
     tcc=0.9.27+git20200814.62c30a4a-1 libtcc-dev=0.9.27+git20200814.62c30a4a-1
 RUN mkdir -p /usr/src/luma-tcc && cd /usr/src/luma-tcc && \
@@ -61,7 +67,6 @@ RUN mkdir -p /usr/src/luma-tcc && cd /usr/src/luma-tcc && \
       '3d211ea8e260e6b846c9a085ea43229c48b20871be7a7ad8f520b2d345587cfd  tcc_0.9.27+git20200814.62c30a4a-1.dsc' \
       'd63c113bcdd657f51c8ee197a0b0a24203603313e19a52b5f678d40ab7f5df35  tcc_0.9.27+git20200814.62c30a4a.orig.tar.bz2' \
       '27036dd5f67b6ce3b8212080d1d6e55b1f7b2e54a23d0f2a4af38090a8d75716  tcc_0.9.27+git20200814.62c30a4a-1.debian.tar.xz' | sha256sum -c -
-RUN apt-get install -y --no-install-recommends --snapshot=${SNAPSHOT} libreoffice-writer bubblewrap
 RUN apt-get install -y --no-install-recommends --snapshot=${SNAPSHOT} power-profiles-daemon=0.21-1ubuntu3
 RUN apt-get install -y --no-install-recommends --snapshot=${SNAPSHOT} g++ cmake \
     libespeak-ng1=1.51+dfsg-12build1 espeak-ng-data=1.51+dfsg-12build1 libespeak-ng-dev=1.51+dfsg-12build1

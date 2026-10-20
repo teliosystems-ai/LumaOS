@@ -12,6 +12,23 @@ import unittest
 
 @unittest.skipUnless(os.name == 'posix' and shutil.which('bash'), 'Linux Bash fixture')
 class BuildDriverTests(unittest.TestCase):
+    def test_capture_dependencies_append_after_the_existing_pinned_desktop_layers(self):
+        recipe = (Path(__file__).resolve().parents[1] / 'image/Dockerfile.root').read_text()
+        runs = [line for line in recipe.replace('\\\n', ' ').splitlines() if line.startswith('RUN ')]
+        base = next(line for line in runs if line.startswith('RUN apt-get update --snapshot='))
+        additions = next(line for line in runs if 'gir1.2-gstreamer-1.0' in line)
+        for package in ('gir1.2-gstreamer-1.0', 'gstreamer1.0-plugins-base',
+                        'gstreamer1.0-plugins-good', 'gstreamer1.0-pipewire', 'pipewire-pulse'):
+            self.assertNotIn(package, base)
+            self.assertIn(package, additions)
+        self.assertIn('if [ "$EDITION" = desktop ]; then', additions)
+        self.assertIn('elif [ "$EDITION" != headless ]; then exit 2; fi', additions)
+        self.assertIn('--snapshot=${SNAPSHOT}', additions)
+        office = 'RUN apt-get install -y --no-install-recommends --snapshot=${SNAPSHOT} libreoffice-writer bubblewrap'
+        self.assertEqual(recipe.count(office), 1)
+        self.assertLess(recipe.index(office), recipe.index(additions.split('  ')[0]))
+        self.assertLess(recipe.index(office), recipe.index('tcc=0.9.27'))
+
     def test_fixed_qemu_dependency_does_not_invalidate_firmware_or_runtime_layers(self):
         recipe = (Path(__file__).resolve().parents[1] / 'image/Dockerfile.root').read_text()
         qemu = 'RUN apt-get install -y --no-install-recommends --snapshot=${SNAPSHOT} qemu-system-x86'

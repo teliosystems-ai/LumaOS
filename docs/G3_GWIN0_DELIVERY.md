@@ -67,6 +67,14 @@ Neither an editor nor the model receives authority to bypass those controls.
 Image assembly follows integration; producing another partial image does not
 mark these workstreams complete.
 
+The [native desktop package prerequisite](gates/g3/native_package_root_2026-10-20.json)
+has now built from the pinned canonical recipe. Its read-only offline check
+confirmed 28 installed package states, nine retained input hashes and actual
+GTK/WebKit/GStreamer typelib imports. This is a cached build prerequisite,
+not the final Luma disk or optical image. The [versioned NF08 design](adr/0014-segmented-content-and-index-generations.md)
+documents the required segmented storage, custody continuation and derived
+index migration; it is explicitly not an implemented 100,000-object path.
+
 ## Current development checkpoint
 
 The integration commit `4b5d23d` is pushed. Its current runtime and tests join
@@ -75,8 +83,11 @@ separate corrected invocation passed all eight UTC release-authentication
 checks; the original misconfigured UTC attempt remains retained as failed.
 All 219 Rust and literal-include inputs match both the strict hardware/speech
 cut and the broader Rust cut. The latter passed 97 content and 135
-content-store tests before its overall timeout during platform tests; those
-platform tests are being rerun separately, not counted as passed. The
+content-store tests before its overall timeout during platform tests. The
+separate platform run then passed 1,279 tests and correctly refused one
+fixture configured with a non-private storage root. That same-source test
+passed after the runner supplied a mode-0700 disposable storage directory;
+the original failed command remains failed in the retained evidence. The
 [integration record](gates/g3/integration_regression_2026-10-20.json) retains
 the exact evidence joins and limitations.
 

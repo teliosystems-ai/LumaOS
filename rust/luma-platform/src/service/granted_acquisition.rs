@@ -73,7 +73,7 @@ impl Authority {
             request.usage.clone(),
             request.input_sha256.clone(),
         )?;
-        let expected_output = if crate::generated_runtime::is_profile(&request.profile) {
+        let expected_output = if crate::generated_runtime::is_profile(&request.profile) || crate::speech::is_profile(&request.profile) {
             None
         } else if request.profile.starts_with("qa-v1-") {
             None
@@ -83,6 +83,8 @@ impl Authority {
             || request.profile.starts_with(crate::content_restore::PREFIX)
         {
             None
+        } else if request.profile == crate::model::speech::ID {
+            Some(crate::model::speech::import_completion()?)
         } else {
             Some(crate::model::pack_completion(
                 &crate::model::public_profile(&request.profile)?,
@@ -119,6 +121,11 @@ impl Authority {
             return Ok(());
         }
         self.admission.check()?;
+        if crate::speech::is_profile(&self.profile) {
+            crate::speech::current()?;
+        } else if self.profile == crate::model::speech::ID {
+            crate::admin_governance::speech_pack_preparation_authority(&crate::model::speech::public_profile()?)?;
+        }
         self.next_check = crate::resource_manager::now()?
             .checked_add(500)
             .ok_or("acquisition check deadline overflow")?;
@@ -158,6 +165,8 @@ impl Authority {
 pub(crate) fn usage(profile: &str) -> Result<Use> {
     if crate::generated_runtime::is_profile(profile) {
         crate::generated_runtime::acquisition_usage(profile)
+    } else if crate::speech::is_profile(profile) {
+        crate::speech::acquisition_usage(profile)
     } else if profile.starts_with("qa-v1-") {
         crate::model::qa::usage(profile)
     } else if profile.starts_with("content-v1-") {
@@ -225,6 +234,37 @@ pub(crate) fn run_generated<T: Send>(
             } else {
                 Ok(())
             }
+        })
+    })
+}
+
+pub(crate) fn run_speech_import(
+    usage:&Use,
+    boundary:&mut crate::admin_governance::GrantBoundary<'_>,
+) -> Result<()> {
+    if usage!=&crate::model::speech::import_usage()? || boundary.session_purpose()!=crate::authentication::SessionPurpose::ModelImport {
+        return Err("auxiliary ASR import cannot borrow inference/activation authority".into());
+    }
+    run_controller(crate::model::speech::ID,usage,boundary,None,move|cancel| {
+        crate::model::speech::import_controller(&mut || {
+            if cancel.load(Ordering::Acquire) {Err("original auxiliary import Admin grant fenced".into())} else {Ok(())}
+        })
+    })
+}
+pub(crate) fn run_speech<T: Send>(
+    profile: &str,
+    usage: &Use,
+    boundary: &mut crate::admin_governance::GrantBoundary<'_>,
+    controller: impl FnOnce(&mut dyn FnMut() -> Result<()>) -> Result<T> + Send,
+) -> Result<T> {
+    if !crate::speech::is_profile(profile) || usage != &crate::speech::acquisition_usage(profile)? {
+        return Err("ASR acquisition requires its exact finite Infer scope".into());
+    }
+    crate::speech::current()?;
+    run_controller(profile, usage, boundary, None, move |cancel| {
+        controller(&mut || {
+            if cancel.load(Ordering::Acquire) {Err("original ASR principal/Infer authorization fenced".into())}
+            else {Ok(())}
         })
     })
 }

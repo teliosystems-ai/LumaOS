@@ -16,6 +16,7 @@ import signal
 import subprocess
 import time
 
+MAX_APPARMOR_PROFILES = 64
 
 def digest(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
@@ -38,7 +39,7 @@ def fixture_environment(output, deny_warnings):
 
 def apparmor_cases(repository):
     profiles = sorted((repository / 'native/image/overlay/etc/apparmor.d').glob('luma-*'))
-    if not 1 <= len(profiles) <= 32 or any(path.is_symlink() or not path.is_file()
+    if not 1 <= len(profiles) <= MAX_APPARMOR_PROFILES or any(path.is_symlink() or not path.is_file()
             or not re.fullmatch(r'luma-[a-z0-9-]{1,64}', path.name) for path in profiles):
         raise ValueError('invalid closed AppArmor parser input group')
     # -Q prevents kernel loading; -K prevents reading or writing policy caches.

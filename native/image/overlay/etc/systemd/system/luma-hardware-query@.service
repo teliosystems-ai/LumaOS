@@ -5,6 +5,7 @@ Requires=apparmor.service
 
 [Service]
 Type=exec
+Slice=system.slice
 ExecStart=/usr/libexec/luma-os/hardware-bpf-query
 User=root
 Group=root

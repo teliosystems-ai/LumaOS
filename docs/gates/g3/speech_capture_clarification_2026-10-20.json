@@ -1,0 +1,271 @@
+{
+  "schema_version": 1,
+  "date": "2026-10-20",
+  "scope": "G3 bounded auxiliary ASR, rule-based speech output, capture consent revocation and explicit human visual-reference clarification",
+  "status": "implemented with source-joined component software and actual engine diagnostics",
+  "claims": {
+    "g3_complete": false,
+    "gwin0_complete": false,
+    "final_image_produced": false,
+    "image_signed_or_installed": false,
+    "native_boot_qualified": false,
+    "authenticated_installed_pam_or_grants_qualified": false,
+    "installed_apparmor_or_cgroup_authorization_qualified": false,
+    "microphone_or_speaker_hardware_qualified": false,
+    "language_accuracy_qualified": false,
+    "verified_pixel_understanding": false,
+    "ocr_performed": false,
+    "capture_to_artifact_semantics_verified": false,
+    "production_qualified": false,
+    "gate_closing": false
+  },
+  "final_controller_sources": {
+    "native/desktop/workspace_capture.py": {
+      "bytes": 59698,
+      "sha256": "96cb0d0b3d289bca8657f96770a2a8062079ea8237291297808e697da5d9e136"
+    },
+    "native/desktop/workspace_speech.py": {
+      "bytes": 36259,
+      "sha256": "cf4b9a6528012a65134c96afb46de0019b774ba16a5e881cfcb4ad42d58b048b"
+    },
+    "native/desktop/workspace_grounding.py": {
+      "bytes": 10504,
+      "sha256": "f746111c90df1a0d00f7bfc2ecd121cabb7df778ea5a2cf17a41134100607fe0"
+    },
+    "native/desktop/workspace_app.py": {
+      "bytes": 56101,
+      "sha256": "c8414ca09ba8adb64d0ce9df98052184c4f0bbda683881bd3fc6c4178045c9c1"
+    }
+  },
+  "software_control_sweep": {
+    "source_scope": "Historical component snapshot: preserve these original controller/C/control proof pins. The subsequent Python3.12 speech-policy comprehension fix and final-installed media identity alias rules are covered by the newer records below, not retrospectively by this 82-test report.",
+    "path": "/mnt/luma-build/work/speech-control-proof-20261020-685lqeja/verification.json",
+    "sha256": "07116bd53ef547a733affa33ba3de0075795ba71d7dcd19a05fd6e83b79dc057",
+    "result": "passed",
+    "tests": 82,
+    "skips": 0,
+    "warnings_denied": true,
+    "source_pins_checked_before_and_after": true,
+    "groups": {
+      "ordered_session_latch": {"tests": 6, "log": "latch.log", "log_sha256": "d2bfb5a2fa39b9002a31ee6e8978baeb6ed9b2b41a87950b7c1efb69487dd165"},
+      "speech_controls_and_actual_owned_children": {"tests": 20, "log": "speech.log", "log_sha256": "9213966eb1915889505f1b9d69e030a579afab563d49e412156200e4ca55cd43"},
+      "capture_bytes_and_actual_owned_children": {"tests": 25, "log": "capture.log", "log_sha256": "5dea7c2dff3b8dab9c7b6a1ce0c7448ed14cecc6e64a069c232bdba1742c9e4c"},
+      "clarification_parser_and_ordered_boundary_join": {"tests": 8, "log": "grounding.log", "log_sha256": "314ba767c044c3e1e35044a4870c6001276aa9fe92e9de6a501578c8c9dc0b4c"},
+      "closed_speech_image_policy_and_real_signed_model_input_transport": {"tests": 23, "log": "image.log", "log_sha256": "a0629ab47399c9cf1f99622bd57d04537747c1a1e5cd21c7267e89ee66beffae"}
+    },
+    "limits_of_evidence": [
+      "Owned-child fixtures use actual disposable processes, pipes, PIDFD cancellation, reap, finite deadlines and refusal of uncertain renewal; substituted fixture commands are not the production audio backend.",
+      "Clarification tests use actual saved PNG envelopes and actual auth/parser validation; Read and Infer callbacks are explicitly ordered software fixtures, not authenticated native execution evidence.",
+      "Signed model-input tests use actual public signatures; their auxiliary metadata fixture does not claim actual model loading or accuracy. Actual weights and inference are separately tested below."
+    ]
+  },
+  "final_installed_media_identity_policy_regression": {
+    "path": "/mnt/luma-build/work/media-identity-proof-20261020-0LL9kLBf/verification.json",
+    "sha256": "6653c559914821e382f8242df6ce18857b577169cfdc1bba88c0421b14fa042a",
+    "result": "passed",
+    "python": "3.12.3",
+    "container_memory_max_bytes": 268435456,
+    "container_cpus": 1,
+    "network": "none",
+    "warnings_denied": true,
+    "source_pins_checked_before_and_after": true,
+    "groups": {
+      "installed_alias_static_inventory": {"tests": 2, "skips": 0, "log_sha256": "6ce1e7dfda678878df8454cb6ac29541630a89ca1c33711cb0d093fb183468be"},
+      "capture_policy": {"tests": 3, "skips": 0, "log_sha256": "0c252743f3ddb046b8386307f1172fec10fa8310deb72dae73c88aeba499c98a"},
+      "speech_policy_python312": {"tests": 6, "skips": 0, "log_sha256": "f9d4fd41082076a7bd9e2ff10479f9a00ed16c917a9ace557878f83329adae21"}
+    },
+    "apparmor_parser": {
+      "profiles": ["luma-workspace-capture", "luma-workspace-speech"],
+      "exit_code_each": 0,
+      "arguments": ["--skip-kernel-load", "--skip-read-cache"],
+      "loaded_on_host": false,
+      "log_sha256_each": "45bd9940df71498a9ead2fa0552fda8abe23c0fcf930109a60c62bba11a4a389"
+    },
+    "source_sha256": {
+      "native/image/overlay/etc/apparmor.d/luma-workspace-capture": "dd5d494934cd61a8f37765a2238c078b9d5f3fbead42c9f5185c24a2f7df0d6f",
+      "native/image/overlay/etc/apparmor.d/luma-workspace-speech": "665c5648fdac3c3da3356b822a455c79174baa82e9238181b46d29099b2277d1",
+      "native/tests/test_media_identity_policy.py": "1706d7faba673d39f2759d09a6653f9d6c4c27ae40bd4364e06c19780133932b",
+      "native/tests/test_capture_policy.py": "986e3e67c85f311b91c42541726247c01ec6e3f8c2a3c488d4b19a7e683b23c9",
+      "native/image/speech_policy.py": "1f6310e0d9a778f7952a3cba450277b454ca30bd62bef9cefd9472faf6794377",
+      "native/image/test_speech_policy.py": "3e83d3d35f1e5fa9edfff259aad30b01ca22a05eb192314116bf2d37d854a530",
+      "native/image/assemble.py": "461f4d1cf57af439f37844cede3757deb345c1095463798ca94254ec31ca9406"
+    },
+    "policy_change": "Only capture audio/video and speech-play may read the exact final-image public identity aliases /var/lib/luma-os/identity/{passwd,group,machine-id}, plus directory ancestors. All product writes remain explicitly denied; shadow/gshadow, Admin/principal/checkpoint/content/model data and broker data remain explicitly denied. Other product reads stay default-denied. ASR and speech-render do not gain identity reads.",
+    "speech_policy_fix": "The input-pin comprehension now uses expected_hash, avoiding Python3.12 PEP709 collision with the digest function. The repeated-call/source-tamper regression executes against the final policy; the historical 82-test report is not relabeled as coverage of this revision.",
+    "audio_or_capture_device_opened": false,
+    "actual_installed_apparmor_qualified": false,
+    "production_qualified": false,
+    "gate_closing": false
+  },
+  "final_image_scope_python312_regression": {
+    "directory": "/mnt/luma-build/work/image-unit-recheck-20261020-1ErVnAcz",
+    "hash_inventory": "SHA256SUMS",
+    "hash_inventory_sha256": "a16a3e1e456abd6fc63ed578ebde125814aae92451d77ec5f0c3e153fae5101e",
+    "result": "passed",
+    "groups": {
+      "image": {"tests": 39, "skips": 0, "log": "image-tests.log", "log_sha256": "7fb444fbdb079f80acd03a1b37017363546607578170449f44fbb836cc0efa47"},
+      "utc": {"tests": 8, "skips": 0, "log": "utc-tests.log", "log_sha256": "0eddde9675d95f666715854cb9b980d3bb717ae3236e1b25cd422f8165d8d5fa"},
+      "speech_input_acquisition": {"tests": 4, "skips": 0, "log": "speech-input-tests.log", "log_sha256": "9a551493fb2ef1c4717459e2aa18a6388923619960bf2d3b2d9f2c27b27779a5"}
+    },
+    "source_before_and_after_sha256": "4a033b270cc1dafb9cdd8609dbe96c031339d1d26b284bfbdc8dd50bf6a63594",
+    "source_scope": "The retained source-before/source-after files pin speech_policy.py, test_speech_policy.py, assemble.py and test_speech_input.py. These are image-policy, authenticated UTC-source and acquisition software checks, not a bootable-image build, installed authorization or physical clock/audio qualification. Groups overlap earlier component checks and are not additive independent qualifications."
+  },
+  "joined_workspace_regression": {
+    "log": "/mnt/luma-build/work/collection-integrated-20261020-vGcXczRR/tests.log",
+    "log_sha256": "f42d9865d54ef49a41e33406512d13fb80a997dd8eb587cf6d2cc84000383873",
+    "result": "passed",
+    "workspace_tests": 176,
+    "desktop_tests": 14,
+    "actual_native_collection_structural_cases": 5,
+    "product_authority_qualified": false,
+    "overlap": "Workspace tests overlap the focused software sweep; these are not additional independent authorization or hardware qualifications."
+  },
+  "actual_private_dbus_session_fence": {
+    "path": "/mnt/luma-build/work/session-permission-proof-20261020-y5NSxonk/verification.json",
+    "sha256": "2b5ce47c6abf3a8f7d5816b36fc7bbd25692bcbd8c8a6bac8b1e825a3e29eb85",
+    "result": "passed",
+    "tests": 3,
+    "skips": 0,
+    "warnings_denied": true,
+    "python": "3.12.3",
+    "runtime": "pinned tools image using read-only cached image GI libraries and exact cached D-Bus executable; offline 256MiB container",
+    "dbus_daemon_sha256": "8c479f1fcddfd6693c736ce541da0955f6752834bdeeef4b928e27f5e974c247",
+    "log_sha256": "f4acbc2e9722ee3ea601490438798e81f135914d2a9775e798a6214b6c6ae818",
+    "source_sha256": {
+      "native/desktop/workspace_capture.py": "96cb0d0b3d289bca8657f96770a2a8062079ea8237291297808e697da5d9e136",
+      "native/desktop/workspace_speech.py": "cf4b9a6528012a65134c96afb46de0019b774ba16a5e881cfcb4ad42d58b048b",
+      "native/tests/session_permission_integration.py": "82e9c956dd5a3644cf75ba570440b650c1702cbab6ac23532a52a71238324a88",
+      "native/tests/test_session_permission.py": "5f78bba490bb908c7b5767718f926b42b1f972a58d854c0ded5ee3fb7007c79e"
+    },
+    "cases": [
+      "An actual locked GetActive result refuses queued renewal and stale modal acceptance before the GLib signal queue is dispatched; later unlock cannot revive the revoked generation.",
+      "Actual service owner loss is refusal, never an unlocked fallback.",
+      "Actual connection closure permanently latches the local permission fence and refuses old and new permissions."
+    ],
+    "product_logic": [
+      "Both speech and capture require fresh bounded unique-owner GetActive=false observations before consent/renewal; unknown state fails closed.",
+      "Capture rechecks after modal consent, file selection and asynchronous portal delivery; stopped, hidden, locked, expired or bus-lost generations cannot be reused.",
+      "Speech separates rendering from explicit Play and revokes/discards on stop, hiding, lock, owner replacement, bus loss and destruction."
+    ],
+    "existing_desktop_bus_accessed": false,
+    "native_gui_or_hardware_qualification": false
+  },
+  "actual_speech_runtime_build": {
+    "path": "/mnt/luma-build/work/speech-package-proof-20261020-SveDcwzf/verification.json",
+    "sha256": "372d1776fc2c1830e954d8cd12348182a61617fad871f4a694db1b9cc87febbd",
+    "result": "passed",
+    "actual_package_runtime_function_executed": true,
+    "network": "none",
+    "compiler_container_memory_max_bytes": 4294967296,
+    "compiler_container_cpus": 2,
+    "compiler_versions": {"cc": "Ubuntu GCC 13.3.0-6ubuntu2~24.04.1", "cxx": "Ubuntu G++ 13.3.0-6ubuntu2~24.04.1", "cmake": "3.28.3"},
+    "builder_source_sha256": "33af620f8d7516f4a0ff93eaa44587496c66d0c95435acf2517adeb501b76b3f",
+    "asr_worker_sha256": "7819edb769076417df6519e43566bce2780976a579cad21004b18451fa877635",
+    "tts_worker_sha256": "0bd82b3dcb41b8a9790d736bf76f93c3516f53afa2ba1a11334aca8ebd544caf",
+    "runtime_manifest_sha256": "0a1f66a2e365bf076881ae17f001d319bfcc18b76e0858e3578b25e5d51d8c9b",
+    "diagnostic_engine_driver_sha256": "04745865b4479d103f3b7f5f224332a40e3c01f5e967a159d89c8402a0fdc784",
+    "controller_sources": {
+      "CMakeLists.txt": "dad63fda29d06ddf00d7883481f398463030bbe54e5132ad01aa693a2a93aff1",
+      "asr_engine.cpp": "d548f9237cff4171fa6de46cba0bd61f7ee08fc53f391508e35c827932e6de95",
+      "asr_engine.h": "89bd363d4b74d5b33d678135d7f232ae8f67630dcf4e6e6226e27a0263f45cd0",
+      "asr_worker.cpp": "a5fe47b539cfa1fa42ec405c13cd78b7d2fc97e34f2be9dada72b87f83c06062",
+      "tts_engine.c": "f932fcaacc9bca47be07b1c130234d9967c20be0c6f4012599d9cec2c264a62e",
+      "tts_engine.h": "f2e90f9d2c5bc7d53d838691bf314415b8f9881c6c2728af7744f0549aa7d74e",
+      "tts_worker.c": "0cc9ca520afb0576aa78a153c7494f22cfd5407480ec94c594440dca1de27732"
+    },
+    "baseline": "amd64/SSE2 CPU only; actual CMakeCache verifies NATIVE, SSE42, AVX, AVX2, FMA, F16C, BMI2, OpenMP and dynamic backend loading disabled; GPU/network backends disabled by the fixed recipe",
+    "real_production_worker_refusal": "Both actual compiled fixed workers were executed as unconfined root and refused with nonzero status and no stdout; exact return/stderr records and readelf output are retained beside the report.",
+    "installed_worker_authorization_qualified": false
+  },
+  "actual_asr_engine_diagnostics": {
+    "path": "/mnt/luma-build/work/speech-asr-runtime-20261020-ghuACfj0/verification.json",
+    "sha256": "e538514a29a3eccc64993655b9e287a1d513af0075ad8f4e7b6a221aedb44c31",
+    "result": "passed",
+    "profile": "whisper-tiny-multilingual-f16-cpu-v1",
+    "initial_language": "en",
+    "multilingual_accuracy_asserted": false,
+    "weight_bytes": 77691713,
+    "weight_sha256": "be07e048e1e599ad46341c8d2a135645097a538221678b7acdd1b1919c6e1b21",
+    "stored_scalar_parameters": 37760640,
+    "model_decoder_context_positions": 448,
+    "independent_output_decoder_token_limit": 128,
+    "maximum_pcm_bytes": 960000,
+    "maximum_audio_seconds": 30,
+    "maximum_text_bytes": 8192,
+    "maximum_decode_wall_seconds": 18,
+    "kernel_observed_limits": {
+      "memory_max_bytes": 536870912,
+      "memory_swap_max_bytes": 0,
+      "pids_max": 16,
+      "cpu_max": "200000 100000",
+      "child_rlimit_as_bytes": 1073741824,
+      "child_rlimit_cpu_seconds": 18,
+      "child_rlimit_nofile": 32,
+      "child_uid": 988
+    },
+    "observed_cgroup_memory_peak_bytes": 343965696,
+    "maximum_child_rss_kib": 218768,
+    "final_sweep_decoder_jobs": 2,
+    "final_sweep_predecoder_refusals": 2,
+    "cases": [
+      {"input": "actual eSpeak-NG English synthesis resampled to16kHz", "samples": 47286, "input_sha256": "424e9404da7b62b7d5bc039050e07771985180cf9e1de5d1f34ac03bf948974e", "exit_code": 0, "seconds": 8.266, "decoder_tokens": 12, "reference": "Hello. This is a bounded offline speech test.", "actual_transcript": " Hello, this is a mountain of light beach test.", "reference_words": 8, "word_edit_distance": 4, "word_error_rate": 0.5, "observed_peak_virtual_address_bytes": 835096576, "stdout_sha256": "2af492fd9dd1ea25fb33504ac5d27a2fc44fc401495a9323851a37a3e9724418"},
+      {"input": "pinned upstream samples/jfk.wav", "wav_sha256": "59dfb9a4acb36fe2a2affc14bacbee2920ff435cb13cc314a08c13f66ba7860e", "samples": 176000, "input_sha256": "a29462b8ebd467318000e683b9117ade46230d3255ed2024e7db894abd9b38c9", "exit_code": 0, "seconds": 8.265, "decoder_tokens": 24, "actual_transcript": " And so my fellow Americans ask not what your country can do for you ask what you can do for your country.", "reference_words": 22, "word_edit_distance": 0, "word_error_rate": 0.0, "observed_peak_virtual_address_bytes": 836513792, "stdout_sha256": "1f6efa2eedc7607a2215e451452ecfce940117c612844aaf32176f40f1bf15d2"},
+      {"input": "one second exact digital-zero PCM", "exit_code": 2, "seconds": 0.005, "transcript_bytes": 0, "meaning": "refusal; no synthetic empty or hallucinated transcript substituted"},
+      {"input": "shorter than minimum supported utterance", "exit_code": 2, "seconds": 0.003, "transcript_bytes": 0}
+    ],
+    "evidence_boundary": "These are genuine same-built engine/weight diagnostics under observed kernel resource limits, not execution through installed AppArmor/PAM/model trust. The production worker intentionally refuses that diagnostic context. No microphone, playback, network, installed model admission or broad language-quality qualification is asserted."
+  },
+  "actual_tts_engine_diagnostics": {
+    "path": "/mnt/luma-build/work/speech-tts-engine-20261020-EfouMVc7/verification.json",
+    "sha256": "0960bd45954347acc3dfbed0a6c1b712b9fe1857bed10bbaac8b38d08146a25b",
+    "result": "passed",
+    "engine_source_join": "tts_engine.c hash f932fcaacc9bca47be07b1c130234d9967c20be0c6f4012599d9cec2c264a62e is unchanged in the final runtime build; the earlier report is an engine proof, not final whole-worker confinement proof",
+    "backend": "eSpeak-NG1.51+dfsg-12build1 synchronous retrieval, English en-us,22050Hz mono S16LE",
+    "maximum_seconds": 30,
+    "maximum_text_bytes": 4096,
+    "actual_audio_device_opened": false,
+    "cases": [
+      {"case": "literal short text", "exit_code": 0, "pcm_bytes": 130334, "sha256": "591bc3f3da376310b9eee6b068716763127ab9fa86a93e1be432e3a8af09f067"},
+      {"case": "audio URL markup treated as literal text", "exit_code": 0, "pcm_bytes": 302720, "sha256": "1f742073d4bcb3e6f711f5963e319c6849555b4a526372cc3fa5b0e0b1cd52e9"},
+      {"case": "invalid UTF8", "exit_code": 1, "pcm_bytes": 0},
+      {"case": "embedded NUL", "exit_code": 1, "pcm_bytes": 0},
+      {"case": "over30second render", "exit_code": 2, "pcm_bytes": 0},
+      {"case": "one completed render then renewal refusal", "exit_code": 0, "pcm_bytes": 130334}
+    ]
+  },
+  "source_model_and_license_closure": {
+    "whisper_version": "v1.9.5",
+    "whisper_source_commit": "d1be6fde11ac6e0407606b4e42fe72d34add8037",
+    "whisper_source_archive": {"name": "whisper-source.tar.gz", "bytes": 9631456, "sha256": "645445da884df6dbd52b30f82d7be7c01d1767c938714e477e786b88d529e9f4", "license": "MIT", "retained_source": "/mnt/luma-build/work/speech-source-audit-20261020-2D32Ljz3"},
+    "model_repository_revision": "5359861c739e955e79d9a303bcbc70fb988958b1",
+    "model_notice": {"bytes": 1063, "sha256": "b5d65a59060e68c4ff940e1eddfa6f94b2d68fdf58ed7f4dd57721c997e35e9d", "license": "OpenAI Whisper MIT", "source": "native/image/speech/WHISPER-MODEL-LICENSE"},
+    "espeak_version": "1.51+dfsg-12build1",
+    "espeak_license": "GPL-3.0-or-later with package-noticed exceptions; corresponding upstream source, Ubuntu patches and fixed renderer recipe retained, not merely a license label",
+    "espeak_source_acquisition": "/mnt/luma-build/work/speech-tts-source-20261020-npr1mge7",
+    "espeak_provenance": "Ubuntu snapshot20260927T000000Z signed InRelease/Sources verification and source package records retained by the acquisition",
+    "espeak_corresponding_sources": [
+      {"name": "espeak-ng_1.51+dfsg-12build1.dsc", "bytes": 2731, "sha256": "7d7e4f7606f1ddf3eb497a4848649eb72fc0acf70caccd9a61987f4d4444d688"},
+      {"name": "espeak-ng_1.51+dfsg.orig.tar.gz", "bytes": 12985129, "sha256": "72242d7c06a4d80f5056335977c5be1ff79ff27bb502d4d054be1803ff787fa9"},
+      {"name": "espeak-ng_1.51+dfsg-12build1.debian.tar.xz", "bytes": 51348, "sha256": "ccd4411d9efe0604030c604bd7369ec19598bc4d2b6435a0782398e174c0ee54"}
+    ],
+    "candidate_packaging_paths": ["/usr/src/luma-speech/inputs", "/usr/src/luma-speech/controller", "/usr/src/luma-speech/whisper", "/usr/src/luma-speech/build"],
+    "source_and_runtime_inventory": "Exact five acquired inputs and seven C/C++/CMake source entries, worker bytes, policy/runtime manifests and complete actual GGML tokenizer/tensor closure are checked by speech_policy.verify; missing subset pins, changed compiler commands and invented qualification flags refuse. The final bootable image itself is not produced by these component proofs."
+  },
+  "authority_and_clarification_contract": [
+    "ASR is a separately typed auxiliary model, not a GGUF/text profile or persistent text selection. Its independently signed model pack/catalog and exact runtime/image/machine qualification use existing model custody, not a new signing root.",
+    "Finite30minute Admin model-import purpose copies the exact image-owned auxiliary bytes inertly; no unsigned/default activation is introduced. Every actual transcription uses fresh finite Infer, exact audio/model/runtime/resource-generation binding and continuous original authorization checks.",
+    "Explicit lab-candidate metadata is an unsigned proposal naming an actual software test-report digest; its intended usable capability declarations need existing custody signatures and execution/interactive certificates. It never creates certificates, admits a model or proves native qualification.",
+    "A transcript is escaped untrusted data. The user must review/correct it before a separate human-authored text prompt enters a newly admitted text-model conversation. No raw PCM is silently forwarded and no model response invokes an effect.",
+    "Saved image/screen/video PNG inputs are parsed without extraction, with strict member order/bounds, actual image validation, exact capture ID/index/digest and no latest-reference inference.",
+    "Human visual clarification explicitly chooses a complete immutable owner/artifact/version and performs a separate actual native Read/reopen. Only a bounded historical text snapshot and human-described sample metadata may enter a fully displayed/digest-confirmed new text-only inference. No pixels, OCR or machine-verified semantic linkage is claimed.",
+    "Speech output is explicit rule-based local output, not neural inference authority. Render opens no audio device; Play is separately consented and bounded; uncertain worker cleanup retains ownership and refuses renewal."
+  ],
+  "retained_superseded_or_failed_attempts": [
+    {"path": "/mnt/luma-build/work/speech-asr-runtime-20261020-k4uK7C7G", "outcome": "actual512MiB RLIMIT_AS allocation failure; retained", "resolution": "separate owner-approved1GiB virtual ceiling, unchanged512MiB physical cgroup/catalog allowance"},
+    {"path": "/mnt/luma-build/work/speech-asr-runtime-20261020-uRxrbzZQ", "outcome": "single-glibc-arena diagnostic still failed512MiB virtual ceiling; retained; allocator workaround not put into production"},
+    {"path": "/mnt/luma-build/work/speech-asr-runtime-20261020-bB7aKmhX", "outcome": "maps observation lacked ptrace permission; retained; no capability escalation; later diagnosis used publicly readable status"},
+    {"path": "/mnt/luma-build/work/speech-asr-runtime-20261020-wOluLUQJ", "outcome": "initial synthetic transcript exact-oracle mismatch; retained; final report exposes actual50percent WER rather than claiming accuracy"},
+    {"path": "/mnt/luma-build/work/speech-asr-runtime-20261020-ITfSWdoZ", "outcome": "successful baseline engine/cgroup-only proof, superseded by final matching virtual/CPU/UID limits; not double-counted as additional unique final jobs"},
+    {"path": "/mnt/luma-build/work/session-permission-proof-20261020-k0XpDuDo", "outcome": "pinned Python fixture initially lacked D-Bus executable; retained; final fixture uses exact cached executable and dedicated private configuration"}
+  ]
+}

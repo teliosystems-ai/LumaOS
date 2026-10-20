@@ -275,6 +275,63 @@ class Capture:
                 'transcribed': False, 'published': False, 'model_submitted': False}
 
 
+def visual_envelope(data):
+    """Reconstruct exact saved visual samples as inert, untrusted local data.
+
+    Parsing does not renew capture permission, verify who captured pixels or
+    prove their semantic relationship to a product artifact/version.
+    """
+    import io
+    import json
+    import zipfile
+    if not isinstance(data, bytes) or not 0 < len(data) <= MAX_BYTES+16384 or len(data) < 22:
+        raise ValueError('saved visual envelope exceeds its fixed byte bound')
+    end = struct.unpack('<4s4H2IH', data[-22:])
+    if end[0] != b'PK\x05\x06' or end[1:3] != (0, 0) or end[3] != end[4] or not 2 <= end[4] <= MAX_FRAMES+1 or end[7] or end[5]+end[6] != len(data)-22:
+        raise ValueError('saved visual envelope has trailing, split, ZIP64 or ambiguous directory data')
+    def pairs(items):
+        result = {}
+        for name, value in items:
+            if name in result:
+                raise ValueError('duplicate saved capture metadata field')
+            result[name] = value
+        return result
+    with zipfile.ZipFile(io.BytesIO(data), 'r') as archive:
+        entries = archive.infolist()
+        names = ['capture.json']+[f'{index:02d}.png' for index in range(len(entries)-1)]
+        if len(entries) != end[4] or [entry.filename for entry in entries] != names or archive.comment:
+            raise ValueError('saved visual envelope must contain only its ordered exact PNG samples')
+        cursor, total = 0, 0
+        for index, entry in enumerate(entries):
+            maximum = 8192 if index == 0 else MAX_IMAGE
+            if entry.header_offset != cursor or not 0 < entry.file_size <= maximum or entry.compress_type != zipfile.ZIP_STORED or entry.compress_size != entry.file_size or entry.flag_bits or entry.extra or entry.comment or entry.extract_version > 20 or entry.is_dir():
+                raise ValueError('saved visual envelope member format, budget or ordering differs')
+            if cursor+30 > end[6]:
+                raise ValueError('saved visual envelope local member header is truncated')
+            header = struct.unpack('<4s5H3I2H', data[cursor:cursor+30])
+            encoded_name = names[index].encode('ascii')
+            if header[0] != b'PK\x03\x04' or header[2] or header[3] or header[6:9] != (entry.CRC, entry.file_size, entry.file_size) or header[9:] != (len(encoded_name), 0) or data[cursor+30:cursor+30+len(encoded_name)] != encoded_name:
+                raise ValueError('saved visual envelope local/central members differ')
+            cursor += 30+len(encoded_name)+entry.file_size
+            if index:
+                total += entry.file_size
+            if cursor > end[6] or total > MAX_BYTES:
+                raise ValueError('saved visual sample extent exceeds its envelope budget')
+        if cursor != end[6]:
+            raise ValueError('saved visual envelope includes undeclared local member bytes')
+        metadata = json.loads(archive.read(entries[0]), object_pairs_hook=pairs,
+            parse_constant=lambda _: (_ for _ in ()).throw(ValueError('nonfinite saved capture metadata')))
+        frames = tuple(archive.read(entry) for entry in entries[1:])
+    fields = {'schema_version', 'capture_id', 'kind', 'elapsed_ms', 'sample_rate', 'channels',
+              'format', 'bytes', 'frames', 'transcribed', 'published', 'model_submitted'}
+    if not isinstance(metadata, dict) or set(metadata) != fields or metadata['kind'] not in ('image', 'screen', 'video') or any(type(metadata[key]) is not int for key in ('schema_version', 'elapsed_ms', 'sample_rate', 'channels', 'bytes')) or metadata['schema_version'] != 1 or not isinstance(metadata['frames'], list) or len(metadata['frames']) != len(frames) or any(not isinstance(frame, dict) or set(frame) != {'index', 'bytes', 'sha256'} or type(frame['index']) is not int or type(frame['bytes']) is not int for frame in metadata['frames']) or any(metadata[key] is not False for key in ('transcribed', 'published', 'model_submitted')):
+        raise ValueError('saved visual metadata is not the exact inert supported schema')
+    result = Capture(metadata['kind'], frames, metadata['elapsed_ms'], metadata['sample_rate'], metadata['capture_id'])
+    if metadata != result.metadata():
+        raise ValueError('saved visual metadata differs from actual PNG bytes and exact sample digests')
+    return result
+
+
 def grounded_sample(captures, selector):
     """Select exact local evidence or demand clarification; never guess latest.
 
@@ -657,6 +714,70 @@ def capture_worker(kind, seconds, deadline_ns, descriptor=None, target=None, *, 
             raise ValueError('capture device closure could not be confirmed')
 
 
+def unlocked_session(bus, Gio, GLib):
+    """Require fresh owner-bound lock-state observations; absence is refusal.
+
+    This is ordinary desktop capture/output consent, never a product grant.
+    Unique-owner calls prevent a replacement service satisfying a stale query.
+    """
+    if bus.is_closed():
+        raise ValueError('session permission bus is closed')
+    owners = []
+    for name, path in (('org.gnome.ScreenSaver', '/org/gnome/ScreenSaver'),
+                       ('org.freedesktop.ScreenSaver', '/org/freedesktop/ScreenSaver')):
+        try:
+            value = bus.call_sync('org.freedesktop.DBus', '/org/freedesktop/DBus',
+                'org.freedesktop.DBus', 'GetNameOwner', GLib.Variant('(s)', (name,)),
+                GLib.VariantType.new('(s)'), Gio.DBusCallFlags.NO_AUTO_START, 500, None).unpack()
+        except GLib.Error:
+            continue
+        if len(value) != 1 or not isinstance(value[0], str) or not re.fullmatch(r':[0-9]+\.[0-9]+', value[0]):
+            raise ValueError('session lock service owner is not exact unique-owner data')
+        owner = value[0]
+        try:
+            active = bus.call_sync(owner, path, name, 'GetActive', None,
+                GLib.VariantType.new('(b)'), Gio.DBusCallFlags.NO_AUTO_START, 500, None).unpack()
+        except GLib.Error as error:
+            raise ValueError('owned session lock state is unavailable') from error
+        if len(active) != 1 or type(active[0]) is not bool or active[0]:
+            raise ValueError('session is locked or its lock state is malformed')
+        owners.append((name, owner))
+    if not owners or bus.is_closed():
+        raise ValueError('no current unlocked session observation is available')
+    return tuple(owners)
+
+
+class SessionPermission:
+    """A revocable local-consent generation, not authentication authority."""
+    def __init__(self, query):
+        self.query, self.generation, self.closed = query, 0, False
+
+    def revoke(self):
+        self.generation += 1
+
+    def close(self):
+        self.closed = True
+        self.revoke()
+
+    def current(self, token):
+        if self.closed or not isinstance(token, tuple) or len(token) != 2 or token[0] != self.generation:
+            raise ValueError('desktop consent generation was revoked')
+
+    def fresh(self):
+        if self.closed:
+            raise ValueError('desktop permission bus is unavailable')
+        generation = self.generation
+        owners = self.query()
+        token = (generation, owners)
+        self.current(token)
+        return token
+
+    def check(self, token):
+        self.current(token)
+        if self.fresh() != token:
+            raise ValueError('desktop consent lock-service owner changed')
+
+
 def launch_capture(parent, on_complete=None):
     """Open independent trusted GTK controls; never callable through WebKit.
 
@@ -697,6 +818,8 @@ def launch_capture(parent, on_complete=None):
     box.pack_start(stop, False, False, 0); box.pack_start(save, False, False, 0)
     state = {'pipeline': None, 'buffer': None, 'portal': None, 'fd': None, 'timer': None, 'result': None, 'generation': 0, 'pending': False, 'closed': False, 'speech_arm': None, 'received': bytearray(), 'stopping': None}
     bus = Gio.bus_get_sync(Gio.BusType.SESSION, None)
+    permission = SessionPermission(lambda: unlocked_session(bus, Gio, GLib))
+    state['permission'] = None
     subscriptions = []
 
     def enabled():
@@ -707,6 +830,7 @@ def launch_capture(parent, on_complete=None):
         stop.set_sensitive(active or state['result'] is not None)
 
     def clear_backend():
+        permission.revoke()
         state['generation'] += 1
         state['speech_arm'] = None
         if state['timer'] is not None:
@@ -727,6 +851,7 @@ def launch_capture(parent, on_complete=None):
         enabled()
 
     def complete(result):
+        permission.check(state['permission'])
         clear_backend()
         state['buffer'] = None
         state['result'] = result
@@ -738,6 +863,11 @@ def launch_capture(parent, on_complete=None):
     def consent(kind):
         if state['closed'] or state['pipeline'] or state['pending'] or not window.get_visible():
             return False
+        try:
+            token = permission.fresh()
+        except Exception:
+            revoke('INACTIVE — capture requires a current unlocked session observation.')
+            return False
         state['speech_arm'] = None
         dialog = Gtk.MessageDialog(transient_for=window, modal=True, message_type=Gtk.MessageType.QUESTION,
             buttons=Gtk.ButtonsType.OK_CANCEL, text=f'Allow one explicit {kind} input?')
@@ -745,10 +875,19 @@ def launch_capture(parent, on_complete=None):
         allowed = dialog.run() == Gtk.ResponseType.OK
         dialog.destroy()
         if allowed:
+            try:
+                permission.check(token)
+                if state['closed'] or not window.get_visible():
+                    raise ValueError('capture controls became unavailable during consent')
+            except Exception:
+                revoke('INACTIVE — consent was revoked while the dialog was open.')
+                return False
+            state['permission'] = token
             state['result'] = None
         return allowed
 
     def start_pipeline(kind, seconds, descriptor=None, target=None):
+        permission.check(state['permission'])
         if state['closed'] or not window.get_visible():
             raise ValueError('visible capture controls required')
         script = str(Path(__file__).resolve(strict=True))
@@ -774,6 +913,7 @@ def launch_capture(parent, on_complete=None):
             if generation != state['generation']:
                 return False
             try:
+                permission.current(state['permission'])
                 if not window.get_visible() or state['closed']:
                     revoke(); return False
                 buffer = state['buffer']
@@ -827,6 +967,8 @@ def launch_capture(parent, on_complete=None):
             state['speech_arm'] = capture_clock()+10
             def expires():
                 if state['generation'] == token and state['pipeline'] is None:
+                    permission.revoke()
+                    state['speech_arm'] = None
                     state['generation'] += 1
                     indicator.set_text('INACTIVE — unused push-to-talk consent expired.')
                 return False
@@ -857,13 +999,15 @@ def launch_capture(parent, on_complete=None):
             if error:
                 revoke('INACTIVE — desktop permission denied, cancelled or unavailable.'); return
             try:
+                if kind == 'video':
+                    state['fd'] = value[0]
+                permission.check(state['permission'])
                 if kind == 'screen':
                     data = private_file(screenshot_path(value.get('uri')))
                     validate_png(data)
                     complete(Capture('screen', (data,), 0))
                 else:
                     descriptor, target = value
-                    state['fd'] = descriptor
                     start_pipeline('video', duration.get_value_as_int(), descriptor, target)
             except Exception:
                 revoke('INACTIVE — selected desktop input failed its exact bounds.')
@@ -881,6 +1025,9 @@ def launch_capture(parent, on_complete=None):
         chooser.set_local_only(True); chooser.set_select_multiple(False)
         try:
             if chooser.run() == Gtk.ResponseType.OK:
+                permission.check(state['permission'])
+                if state['closed'] or not window.get_visible():
+                    raise ValueError('image consent became unavailable')
                 data = private_file(chooser.get_filename())
                 validate_png(data)
                 complete(Capture('image', (data,), 0))
@@ -893,6 +1040,11 @@ def launch_capture(parent, on_complete=None):
         result = state['result']
         if result is None:
             return
+        try:
+            token = permission.fresh()
+        except Exception:
+            revoke('INACTIVE — local save requires a current unlocked session observation.')
+            return
         chooser = Gtk.FileChooserDialog(title='Save input locally, not publication', transient_for=window,
             action=Gtk.FileChooserAction.SAVE)
         chooser.add_buttons('_Cancel', Gtk.ResponseType.CANCEL, '_Save new private file', Gtk.ResponseType.OK)
@@ -900,6 +1052,9 @@ def launch_capture(parent, on_complete=None):
         chooser.set_current_name('explicit-input.luma-capture.zip')
         try:
             if chooser.run() == Gtk.ResponseType.OK:
+                permission.check(token)
+                if state['closed'] or not window.get_visible() or state['result'] is not result:
+                    raise ValueError('saved input was revoked during destination selection')
                 save_new(result, chooser.get_filename())
                 indicator.set_text('INACTIVE — saved exact input to one new private local envelope. Not published, transcribed or sent to a model.')
         except Exception:
@@ -913,6 +1068,12 @@ def launch_capture(parent, on_complete=None):
             revoke('INACTIVE — session locked; permission revoked and samples discarded.')
     for name in ('org.gnome.ScreenSaver', 'org.freedesktop.ScreenSaver'):
         subscriptions.append(bus.signal_subscribe(name, name, 'ActiveChanged', None, None, Gio.DBusSignalFlags.NONE, locked, None))
+        def lock_owner_changed(_connection, _sender, _path, _interface, _member, parameters, _data):
+            _name, old, new = parameters.unpack()
+            if old != new:
+                revoke('INACTIVE — session lock service changed; capture consent revoked.')
+        subscriptions.append(bus.signal_subscribe('org.freedesktop.DBus', 'org.freedesktop.DBus', 'NameOwnerChanged',
+            '/org/freedesktop/DBus', name, Gio.DBusSignalFlags.NONE, lock_owner_changed, None))
     def portal_owner_changed(_connection, _sender, _path, _interface, _member, parameters, _data):
         _name, old, new = parameters.unpack()
         if old and old != new:
@@ -926,7 +1087,10 @@ def launch_capture(parent, on_complete=None):
         for subscription in subscriptions:
             bus.signal_unsubscribe(subscription)
         subscriptions.clear()
-    lock_bus_closed = bus.connect('closed', lambda *_: revoke('INACTIVE — session permission/lock bus was lost; samples discarded.'))
+    def lock_bus_lost(*_):
+        permission.close()
+        revoke('INACTIVE — session permission/lock bus was lost; samples discarded.')
+    lock_bus_closed = bus.connect('closed', lock_bus_lost)
     window.connect('destroy', destroyed)
     window.connect('unmap', lambda *_: revoke())
     window.connect('focus-out-event', lambda *_: released(None) or False)

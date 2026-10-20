@@ -20,6 +20,44 @@ MAX_PARAGRAPHS = 32
 MAX_EDITS = 64
 
 
+def manual_workflow(auth, login, directory):
+    """Human-authored handoff; no model reply or old grant becomes authority."""
+    print('Independent MANUAL workflow. No model reply is reused as source, identity, grant or approval. Enter every exact field explicitly; q cancels before native review. Native still recalculates the selected engine, obtains fresh separate Read/effect grants, reviews the exact intended publication/retention and requires its own approval.', flush=True)
+    fields = {}
+    for name, label, maximum in [('binding', 'Exact owner binding JSON', 1024),
+        ('artifact_id', 'Explicit artifact ID', 128), ('request_id', 'New stable request ID (retain for reconciliation)', 128),
+        ('expected', 'Exact expected immutable reference JSON, or literal null for a NEW artifact', 2048),
+        ('engine', 'Engine: spreadsheet, document, diagram, animation, collection', 32)]:
+        item = auth.terminal_line(label+' (q cancels): ', maximum)
+        if item == 'q':
+            print('Manual handoff cancelled before workflow review; no effect requested.', flush=True)
+            return 0
+        fields[name] = item
+    content = auth.revised_source()
+    if content is None:
+        return 0
+    if fields['engine'] == 'collection':
+        controller = auth.workspace_controller('collections')
+        source = controller.source_data(auth, auth.strict_json(content))
+        if fields['artifact_id'] != 'collection.'+source['collection_id']:
+            raise ValueError('manual collection artifact ID differs from its exact typed stable ID')
+        provenance = dict(request_id=fields['request_id'],
+            workflow_sha256=hashlib.sha256(b'luma-explicit-collection-editor-v1\0'+controller.canonical(source)).hexdigest(),
+            source_sha256=hashlib.sha256(controller.canonical(source)).hexdigest(), origin='external')
+        native = controller.request(auth, dict(schema_version=1, login=login, binding=auth.strict_json(fields['binding']),
+            operation=dict(kind='collection', source=source, expected=auth.strict_json(fields['expected']), provenance=provenance)))
+        value = auth.proposal(dict(schema_version=1, operation='collection-journey', login=login,
+            read_grant='', effect_grant='', approval='', request=auth.encoded(native).decode()))
+        return controller.journey(auth, value, directory)
+    request = dict(schema_version=1, request_id=fields['request_id'], artifact_id=fields['artifact_id'],
+        expected=auth.strict_json(fields['expected']), engine=fields['engine'], source=content)
+    source = auth.workflow_request(dict(schema_version=1, login=login, binding=auth.strict_json(fields['binding']),
+        operation=dict(kind='workflow', request=request)))
+    value = auth.proposal(dict(schema_version=1, operation='workflow-journey', login=login,
+        read_grant='', effect_grant='', approval='', request=auth.encoded(source).decode('utf-8')))
+    return auth.workflow_journey(value, directory)
+
+
 def text(value, maximum, *, empty=True):
     if not isinstance(value, str) or len(value.encode('utf-8')) > maximum or (not empty and not value.strip()):
         raise ValueError('explicit bounded UTF-8 text required; no clipping or normalization')

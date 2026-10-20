@@ -1,0 +1,43 @@
+{
+  "schema_version": 1,
+  "recorded_on": "2026-10-20",
+  "status": "explicit-collection-editor-and-workspace-software-verified",
+  "scope": "Human-controlled collection source editing and exact-version native review/apply orchestration joined to conversation and model-disabled manual controls",
+  "implementation": [
+    "Only an explicit editor selection parses an observed model reply as a complete closed collection source; no automatic parsing, code-fence removal, inferred membership, latest-version resolution or model authority",
+    "Bounded full-source replacement, name/member edits, actual native contract preview, explicit independent owner/base/request selection and conflict-aware publication use the existing typed collection and durable content implementation",
+    "Inspection, review, apply and optional exact-result reopen require separate current native ceremonies and finite grants. The effect approval binds the exact source digest; neither the editor nor a supplied receipt authorizes membership or an effect",
+    "Unknown or interrupted apply outcomes remain uncertain without automatic retry, publication success, rollback or workflow-execution claims. Collection editing never moves member files",
+    "The protected fixed-module loader retains its 128-KiB source bound. Collection, speech and human-described visual-clarification journeys execute in the original terminal, not in WebKit, and cannot be invoked as generic managed terminal arguments",
+    "The text-only model receives no pixels or verified visual semantic mapping. The separate explicit clarification path selects an exact saved sample and requires a fresh exact-artifact Read before any independently reviewed Infer"
+  ],
+  "verification": {
+    "directory": "/mnt/luma-build/work/collection-integrated-20261020-vGcXczRR",
+    "workspace_tests": 176,
+    "log_sha256": "f42d9865d54ef49a41e33406512d13fb80a997dd8eb587cf6d2cc84000383873",
+    "desktop_policy_tests": 14,
+    "actual_native_collection_structural_cases": 5,
+    "skipped_tests": 0,
+    "python_warnings_denied": true,
+    "actual_native_binary_sha256": "7d7ecc81aa2a8c09a1f990d235e290c913fb1f2a03eaa2e1bfab6209f6082016",
+    "native_binary_scope": "Previously built E18 CLI, unchanged pure collection contract; not current dirty-tree authority/worker qualification",
+    "ordered_native_boundary_fixtures": "Read/review/effect/reopen orchestration is tested with ordered observations, not claimed as real PAM, TPM, finite-grant or durable-publication acceptance",
+    "earlier_failed_attempt": "/mnt/luma-build/work/collection-integrated-20261020-X5sYAkOg",
+    "earlier_failure": "One source-inventory assertion still expected the pre-grounding protected-module allowlist. The exact allowlist assertion was updated; no production restriction was loosened"
+  },
+  "source_sha256": {
+    "native/desktop/workspace_auth.py": "dae3d490182898a8508cf622d4450e333f1d622d075a31cea21b52093c4d3221",
+    "native/desktop/workspace_draft.py": "f1e496e829bacc395df6dad0ec27a44b7c75432ca2d8ce868325baf7fcc64b49",
+    "native/desktop/workspace_collections.py": "b20a5bf87c51696a64157fe30cc42a0f6fe66d433e653a3d5a04b8bf24ca0994",
+    "native/desktop/workspace_app.py": "c8414ca09ba8adb64d0ce9df98052184c4f0bbda683881bd3fc6c4178045c9c1",
+    "native/desktop/workspace_speech.py": "cf4b9a6528012a65134c96afb46de0019b774ba16a5e881cfcb4ad42d58b048b",
+    "native/tests/test_workspace_collections.py": "bc59d97ae6b031f8b5533c47469c9bba40b4edabebb51c8c2a51421fc8594cd9",
+    "native/tests/test_workspace_draft.py": "c2af8bfd26e3eacde280b46acf9765be914429118727508baac5a9efcfcd5949",
+    "native/tests/test_workspace_conversation.py": "41eb209dab02115c531829ad25dc0936e110e796c3a0da548a48a9fe3dc82ac5",
+    "native/tests/test_workspace_speech.py": "ec609d4b8e1922cea20accd1aa15da787a2cfc46930d1a68f87f7dc58cb30a19"
+  },
+  "installed_authority_qualified": false,
+  "graphical_accessibility_qualified": false,
+  "production_qualified": false,
+  "gate_closing": false
+}

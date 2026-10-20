@@ -1,5 +1,7 @@
 [Unit]
 Description=Luma bounded model resource domain
+After=local-fs.target
+RequiresMountsFor=/var
 Before=luma-broker.service luma-model.service
 
 [Slice]
@@ -11,3 +13,7 @@ MemoryMax=4831838208
 MemorySwapMax=0
 TasksMax=64
 CPUQuota=200%
+IPAddressDeny=any
+IPAddressAllow=localhost
+IOReadBandwidthMax=/var 64M
+IOWriteBandwidthMax=/var 64M

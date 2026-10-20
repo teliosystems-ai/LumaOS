@@ -50,10 +50,10 @@ this scope decision does not supply its missing implementation or evidence.
 | Workstream | Scope | Remaining implementation or qualification |
 | --- | --- | --- |
 | Durable content and custody | Supported G3 capacity and later production durability | Preserve explicit finite-capacity refusals, interrupted evidence and outstanding restore reservations; continuation/compaction, key succession and forensics beyond the supported exact chain remain recorded production work, not an implied unlimited-history G3 gate |
-| Discovery and result policy | G3 | General per-result access policy, private/conversational collection workflows and relevance qualification. Bounded owner-local TF-IDF/LSA indexes rebuild on demand; native GTK and original-terminal discovery support exact selections and genuine typed collections, with a fresh Read ceremony for every selected hit |
-| Accessible workspace | G3 | Exact historical private-read to fresh inference and observed-reply to human-edited literal document to independently granted workflow are implemented; capture/model integration and installed read/edit/recalculation, cancellation and keyboard/screen-reader journeys remain open. Other typed engines retain explicit manual reviewed controls |
-| Capture and references | G3 | Bounded PNG, PCM audio and sampled portal video capture now have explicit controls, indicators and revocation; installed device/portal enforcement, speech transcription, model consumption and grounded-reference ambiguity handling remain open |
-| Engines and adapters | G3 | Bounded freestanding C99 source-to-KVM-build/test receipts are implemented and software-verified; installed authority/image qualification, LibreOffice/browser journeys and allowlisted hardware-policy adapter integration remain. Existing Office export and WebKit presentation are implementations, not absent components |
+| Discovery and result policy | G3 | Explicit conversation/manual collection editing now joins exact-version native membership review, independent grants and conflict-aware publication; installed custody/journeys, relevance and general per-result policy remain qualification or separately scoped development. Owner-local TF-IDF/LSA remains bounded ASCII retrieval, not neural multilingual search |
+| Accessible workspace | G3 | Exact historical Read, fresh inference, human-edited document and collection handoff, model-disabled manual controls, and human-described visual-reference clarification are implemented. The joined 176 workspace tests pass; installed keyboard/screen-reader, cancellation and read/edit/recalculation acceptance remain open |
+| Capture and references | G3 | Explicit PNG/PCM/sampled-video controls now include latched lock/bus-loss revocation. Auxiliary Whisper ASR and separately rendered/consented offline readback are implemented; signed ASR model admission and actual installed device/authority qualification remain mandatory. Visual clarification uses human descriptions and exact artifact versions; the current text-only model performs no pixel understanding or OCR |
+| Engines and adapters | G3 | Actual bounded C99 build/test receipts, query-only hardware image mediation, typed adapters, original-Admin console, protected dispatch/recovery and active CPU/I/O guards are software-verified: strict all-target check plus 75 hardware and 10 speech tests pass. Installed authority, external application receipts, real hardware effects/recovery and image qualification remain open |
 | Windows hosted proof | Current profile-W GWIN0 | Host-protection/policy gates and a distinct opt-in first-account/PAM bootstrap, exact interruption repair, authenticated health and model-disabled original-Windows-user manual console are implemented and software-verified. Installed first-launch/TTY/PAM/health, protection/provider, inference, scoped ingestion, lifecycle/resource coexistence, confinement and two-user proof remain qualification; no native product-grant bridge or GTK desktop is inferred |
 | Hyper-V deployment | Deferred development | Complete desktop, explicit identity/resources, verified boot, encrypted data and recovery under W030–W032; installer/template, commissioned vTPM and complete VM proof remain unimplemented/unqualified |
 | Windows product integration | GWIN1 | General ordinary-user SID/product-principal and finite-grant integration, enrollment/automation/event queue, adapters, updates, recovery, migration and opt-in background lifecycle beyond the inherited GWIN0 controls |
@@ -101,10 +101,17 @@ closure tar validated on both platforms. That unsigned 127.8-MB workspace-only
 artifact is not the final combined image, an imported distribution, tested
 installed account or production qualification. All gates remain open.
 
-The native workspace now has explicit per-turn conversation review and a fresh
-finite Infer grant. The reviewed worker/model/input commitment is checked
-inside native admission before effect dispatch. Captured PCM/images/video
-remain local data, not transcripts, automatic model input or published content.
+The native workspace has explicit per-turn review and a fresh finite Infer
+grant. Native admission checks the reviewed worker/model/input commitment.
+Capture remains local data: separately admitted ASR may transcribe a selected
+bounded PCM envelope, after which a human reviews/edits the text before any
+fresh text Infer. An explicit visual-reference journey selects an exact sample
+and human description plus a complete immutable artifact version; actual Read
+and later Infer are independent. No pixels, OCR, automatic publication or
+machine-verified visual relationship are inferred. The
+[collection/workspace checkpoint](gates/g3/collection_workspace_integration_2026-10-20.json)
+records 176 workspace, 14 desktop-policy and five actual native structural
+checks; ordered authority fixtures are not installed PAM/TPM qualification.
 
 The build contract retains disk UKIs and named partitions. Its optical path
 defines a separately signed UKI, bounded read-only CD discovery, verity-backed

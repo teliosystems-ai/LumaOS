@@ -71,6 +71,24 @@ class SweepExecutionTests(unittest.TestCase):
         self.assertEqual(environment['CARGO_INCREMENTAL'], '0')
         self.assertEqual(environment['PYTHONDONTWRITEBYTECODE'], '1')
 
+    def test_expanded_profile_group_is_bounded_and_never_ignores_extra_entries(self):
+        with tempfile.TemporaryDirectory() as name:
+            repository = Path(name)
+            profiles = repository / 'native/image/overlay/etc/apparmor.d'
+            profiles.mkdir(parents=True)
+            for index in range(SWEEP.MAX_APPARMOR_PROFILES):
+                (profiles / ('luma-fixture-' + str(index))).write_text('inert parser input')
+            self.assertEqual(len(SWEEP.apparmor_cases(repository)), SWEEP.MAX_APPARMOR_PROFILES)
+            extra = profiles / 'luma-extra'
+            extra.touch()
+            with self.assertRaises(ValueError):
+                SWEEP.apparmor_cases(repository)
+            extra.unlink()
+            (profiles / 'luma-fixture-0').unlink()
+            (profiles / 'luma-fixture-0').symlink_to(profiles / 'luma-fixture-1')
+            with self.assertRaises(ValueError):
+                SWEEP.apparmor_cases(repository)
+
     def test_content_tpm_requires_all_real_scenarios_without_qualification_claims(self):
         from content_checkpoint_integration import CASE, MODES
         record = {'schema_version': 1, 'status': 'CONTENT_CHECKPOINT_SOFTWARE_TPM_PASSED',

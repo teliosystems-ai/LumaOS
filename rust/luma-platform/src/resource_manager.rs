@@ -22,6 +22,7 @@ const PIDS: &str = "worker-processes";
 const LEASE_MS: u64 = 10_000;
 pub(crate) const ACQUISITION_MEMORY: u64 = 512 * 1024 * 1024;
 
+mod hardware;
 pub(crate) mod history;
 mod peer;
 pub(crate) mod recovery;
@@ -358,6 +359,8 @@ enum AcquisitionProfile {
     Model(model::Profile),
     Invoice(String),
     Generated(String),
+    Speech(String),
+    SpeechImport,
     Qa(String),
     Content(String),
     Backup(String),
@@ -366,12 +369,17 @@ enum AcquisitionProfile {
 }
 impl AcquisitionProfile {
     fn resolve(id: &str) -> Result<Self> {
-        if id.starts_with("invoice-") {
+        if id == model::speech::ID {
+            model::speech::public_profile()?;
+            Ok(Self::SpeechImport)
+        } else if id.starts_with("invoice-") {
             crate::workflow_resource::source_digest(id)?;
             Ok(Self::Invoice(id.into()))
         } else if id.starts_with("generated-") {
             crate::generated_runtime::source_digest(id)?;
             Ok(Self::Generated(id.into()))
+        } else if crate::speech::is_profile(id) {
+            Ok(Self::Speech(id.into()))
         } else if id.starts_with("qa-") {
             model::qa::parse_profile(id)?;
             Ok(Self::Qa(id.into()))
@@ -396,6 +404,8 @@ impl AcquisitionProfile {
             Self::Model(profile) => acquisition_binding(profile, device),
             Self::Invoice(id) => crate::workflow_resource::binding(id, device),
             Self::Generated(id) => crate::generated_runtime::binding(id, device),
+            Self::Speech(id) => crate::speech::binding(id, device),
+            Self::SpeechImport => Ok(model::speech::import_usage()?.selector.digest),
             Self::Qa(id) => model::qa::binding(id, device),
             Self::Content(id) => crate::content_governed::binding(id, device),
             Self::Backup(id) => crate::content_backup::binding(id, device),
@@ -426,6 +436,8 @@ impl AcquisitionProfile {
             || matches!(
                 self,
                 Self::Generated(_)
+                    | Self::Speech(_)
+                    | Self::SpeechImport
                     | Self::Qa(_)
                     | Self::Content(_)
                     | Self::Backup(_)
@@ -478,6 +490,8 @@ impl AcquisitionProfile {
             }
             Self::Invoice(id) => crate::workflow_resource::source_digest(id).map(|_| ()),
             Self::Generated(id) => crate::generated_runtime::source_digest(id).map(|_| ()),
+            Self::Speech(id) => crate::speech::check_worker(id, device, pid),
+            Self::SpeechImport => model::speech::check_import_worker(pid),
             Self::Qa(id) => model::qa::check_worker(id, device, pid),
             Self::Content(id) => crate::content_governed::check_worker(id, device, pid),
             Self::Backup(id) => crate::content_backup::check_worker(id, device, pid),
@@ -698,6 +712,7 @@ pub(crate) fn check_loading(total: u64, available: u64, peak: u64, owned: u64) -
 
 pub(crate) struct Manager {
     store: Store,
+    hardware: hardware::Gate,
     group: Group,
     acquisition: Group,
     oom: u64,
@@ -801,6 +816,7 @@ impl Manager {
         authority: crate::service::content_output::Authority,
     ) -> Result<serde_json::Value> {
         request.validate()?;
+        let _hardware = self.hardware.admit(Kind::Acquisition)?;
         request.descriptor.ledger(&self.store.read()?)?;
         if self
             .content_output
@@ -996,6 +1012,7 @@ impl Manager {
         mut authority: crate::service::granted_acquisition::Authority,
     ) -> Result<serde_json::Value> {
         request.validate(peer)?;
+        let _hardware = self.hardware.admit(Kind::Acquisition)?;
         if self.acquisition_authority.is_some()
             || self.acquisition.populated()?
             || self
@@ -1040,10 +1057,12 @@ impl Manager {
         native_outstanding(&store.read()?)?;
         store.transact(|l| l.restart(resources::random_id()?, inventory()?))?;
         let requests = requests::Gate::open(&store)?;
+        let hardware = hardware::Gate::open()?;
         let oom = group.oom()?;
         let acquisition_oom = acquisition.oom()?;
         let mut manager = Self {
             store,
+            hardware,
             group,
             acquisition,
             oom,
@@ -1259,6 +1278,11 @@ impl Manager {
                 // File-cache charges can survive process exit. Keep them explicitly
                 // accounted rather than equating cgroup emptiness with zero bytes.
                 for lease in draining {
+                    let (can_finish, _hardware_drain_guard) =
+                        self.hardware.can_finish_draining(kind, &lease.token)?;
+                    if !can_finish {
+                        continue;
+                    }
                     self.store.transact(|l| {
                         l.finish_draining(
                             &lease.token,
@@ -1287,6 +1311,10 @@ impl Manager {
                         .observe(|l| l.observe(HOST, l.domains[HOST].observed, retained))?;
                 }
             }
+        }
+        self.hardware.observe_allocations(&self.store.read()?)?;
+        for (token,reason) in self.hardware.observe_authority()? {
+            self.store.transact(|ledger|ledger.revoke(&token,reason))?;
         }
         self.maintain_gateway(now()?)
     }
@@ -1365,6 +1393,7 @@ impl Manager {
                     return Err("resource peer has exited".into());
                 }
                 let kind = Kind::peer(peer.uid)?;
+                let _hardware = self.hardware.admit(kind)?;
                 let group = match kind {
                     Kind::Model => &self.group,
                     Kind::Acquisition => &self.acquisition,
@@ -1402,6 +1431,8 @@ impl Manager {
                         AcquisitionProfile::Model(profile) => profile.resource_binding()?,
                         AcquisitionProfile::Invoice(_)
                         | AcquisitionProfile::Generated(_)
+                        | AcquisitionProfile::Speech(_)
+                        | AcquisitionProfile::SpeechImport
                         | AcquisitionProfile::Qa(_)
                         | AcquisitionProfile::Content(_)
                         | AcquisitionProfile::Office(_)

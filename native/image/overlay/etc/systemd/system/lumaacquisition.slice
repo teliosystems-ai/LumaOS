@@ -1,5 +1,7 @@
 [Unit]
 Description=Luma bounded acquisition resource domain
+After=local-fs.target
+RequiresMountsFor=/var
 Before=luma-broker.service
 
 [Slice]
@@ -11,3 +13,7 @@ MemoryMax=512M
 MemorySwapMax=0
 TasksMax=16
 CPUQuota=200%
+IPAddressDeny=any
+IPAddressAllow=localhost
+IOReadBandwidthMax=/var 64M
+IOWriteBandwidthMax=/var 64M

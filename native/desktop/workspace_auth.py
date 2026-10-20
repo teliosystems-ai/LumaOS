@@ -77,7 +77,7 @@ def proposal(value):
     if not isinstance(value['approval'], str):
         raise ValueError('explicit approval text or an empty string required')
     operation = value['operation']
-    if operation in ('inspection', 'office-proposal', 'paged-read', 'envelope-read', 'search-journey', 'conversation-journey', 'workflow-journey', 'restore-journey', 'retire-journey'):
+    if operation in ('inspection', 'office-proposal', 'paged-read', 'envelope-read', 'search-journey', 'conversation-journey', 'workflow-journey', 'collection-journey', 'speech-journey', 'capture-reference-journey', 'restore-journey', 'retire-journey'):
         if any(value[field] for field in ('read_grant', 'effect_grant', 'approval')):
             raise ValueError('inspection cannot select effect authority')
     elif operation == 'review':
@@ -114,6 +114,12 @@ def proposal(value):
         conversation_request(source)
     elif operation == 'workflow-journey':
         workflow_request(source)
+    elif operation == 'collection-journey':
+        workspace_controller('collections').request(types.SimpleNamespace(**globals()), source)
+    elif operation == 'speech-journey':
+        workspace_controller('speech').transcription_request(source)
+    elif operation == 'capture-reference-journey':
+        workspace_controller('grounding').request(source)
     elif operation in ('restore-journey', 'retire-journey'):
         recovery_request(source, retirement=operation == 'retire-journey')
     return value
@@ -250,38 +256,24 @@ def conversation_capture(command, path, maximum, login=None, grant=None, review_
     return _capture_native(arguments, MAX_QUERY_OUTPUT)
 
 
-def draft_controller():
-    path = Path('/usr/libexec/luma-os/workspace_draft.py')
+def workspace_controller(name):
+    if name not in ('draft', 'collections', 'speech', 'grounding'):
+        raise ValueError('fixed protected workspace controller required')
+    path = Path('/usr/libexec/luma-os/workspace_'+name+'.py')
     protected(path, 128*1024)
-    spec = importlib.util.spec_from_file_location('luma_terminal_draft', path)
+    spec = importlib.util.spec_from_file_location('luma_terminal_'+name, path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
 
 
+def draft_controller():
+    return workspace_controller('draft')
+
+
 def conversation_manual_workflow(login, directory):
     """Human-authored handoff to the existing independently granted workflow."""
-    print('Independent MANUAL workflow. No model reply is reused as source, identity, grant or approval. Enter every exact field explicitly; q cancels before native review. Native still recalculates the selected engine, obtains fresh separate Read/effect grants, reviews the exact intended publication/retention and requires its own approval.', flush=True)
-    fields = {}
-    for name, label, maximum in [('binding', 'Exact owner binding JSON', 1024),
-        ('artifact_id', 'Explicit artifact ID', 128), ('request_id', 'New stable request ID (retain for reconciliation)', 128),
-        ('expected', 'Exact expected immutable reference JSON, or literal null for a NEW artifact', 2048),
-        ('engine', 'Engine: spreadsheet, document, diagram, animation', 32)]:
-        item = terminal_line(label+' (q cancels): ', maximum)
-        if item == 'q':
-            print('Manual handoff cancelled before workflow review; no effect requested.', flush=True)
-            return 0
-        fields[name] = item
-    content = revised_source()
-    if content is None:
-        return 0
-    request = dict(schema_version=1, request_id=fields['request_id'], artifact_id=fields['artifact_id'],
-        expected=strict_json(fields['expected']), engine=fields['engine'], source=content)
-    source = workflow_request(dict(schema_version=1, login=login, binding=strict_json(fields['binding']),
-        operation=dict(kind='workflow', request=request)))
-    value = proposal(dict(schema_version=1, operation='workflow-journey', login=login,
-        read_grant='', effect_grant='', approval='', request=encoded(source).decode('utf-8')))
-    return workflow_journey(value, directory)
+    return draft_controller().manual_workflow(types.SimpleNamespace(**globals()), login, directory)
 
 
 def conversation_journey(value, directory):
@@ -331,7 +323,7 @@ def conversation_journey(value, directory):
         try:
             if round_number == 7:
                 print('Conversation reached its fixed eight-turn limit. No further inference is offered; the last observed reply may still be explicitly selected as draft DATA.', flush=True)
-            choice = terminal_line(('Final turn: d editable document draft; w independent manual workflow; m manual help; q finish: ' if round_number == 7 else 'Type n follow-up; c CLEAR/new prompt; d editable literal-text document draft from this observed reply; w independent manual workflow; m manual help; q finish: '), 8)
+            choice = terminal_line(('Final turn: d document draft; k exact collection editor; w manual workflow; m manual help; q finish: ' if round_number == 7 else 'Type n follow-up; c CLEAR/new prompt; d document draft; k exact collection editor; w manual workflow; m manual help; q finish: '), 8)
             if choice == 'q':
                 return 0
             if choice == 'm':
@@ -343,6 +335,9 @@ def conversation_journey(value, directory):
                 if result is None:
                     raise ValueError('an editable draft requires a complete validated observed reply')
                 return draft_controller().reply_draft(types.SimpleNamespace(**globals()), source['login'], result['text'], directory)
+            if choice == 'k':
+                return workspace_controller('collections').editor(types.SimpleNamespace(**globals()), source['login'],
+                    result['text'] if result is not None else None, directory)
             if round_number == 7:
                 raise ValueError('eight-turn inference bound reached; only explicit draft/manual/finish actions remain')
             if choice not in ('n', 'c') or (choice == 'n' and not messages):
@@ -615,7 +610,7 @@ def protected(path, maximum, *, sudo=False):
 
 def terminal_arguments(value, path):
     value = proposal(value)
-    if value['operation'] in ('paged-read', 'envelope-read', 'search-journey', 'conversation-journey', 'workflow-journey', 'restore-journey', 'retire-journey'):
+    if value['operation'] in ('paged-read', 'envelope-read', 'search-journey', 'conversation-journey', 'workflow-journey', 'collection-journey', 'speech-journey', 'capture-reference-journey', 'restore-journey', 'retire-journey'):
         raise ValueError('managed journeys require their explicit review and fresh grant steps')
     prefix = ['/usr/bin/sudo', '--', NATIVE, 'granted-run']
     if value['operation'] == 'office-proposal':
@@ -1759,6 +1754,12 @@ def terminal(path):
     try:
         if value['operation'] == 'conversation-journey':
             return conversation_journey(value, directory)
+        if value['operation'] == 'collection-journey':
+            return workspace_controller('collections').journey(types.SimpleNamespace(**globals()), value, directory)
+        if value['operation'] == 'speech-journey':
+            return workspace_controller('speech').transcription_journey(types.SimpleNamespace(**globals()), value, directory)
+        if value['operation'] == 'capture-reference-journey':
+            return workspace_controller('grounding').journey(types.SimpleNamespace(**globals()), value, directory)
         if value['operation'] == 'restore-journey':
             return restore_journey(value, directory)
         if value['operation'] == 'retire-journey':

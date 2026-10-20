@@ -174,7 +174,7 @@ pub(crate) fn arguments(target: &Path, profile: &str, action: &str) -> Result<Ve
         .ok_or("invalid acquisition target encoding")?;
     if !matches!(
         action,
-        "prepare" | "verify" | "invoice" | "generated" | "content"
+        "prepare" | "verify" | "invoice" | "generated" | "speech" | "speech-import" | "content"
     ) {
         return Err("invalid acquisition action".into());
     }
@@ -227,14 +227,14 @@ pub(crate) fn arguments(target: &Path, profile: &str, action: &str) -> Result<Ve
     ] {
         args.push(format!("--property={property}"));
     }
-    args.push(if action == "content" {
+    args.push(if matches!(action, "content" | "speech-import") {
         "--property=CapabilityBoundingSet=".into()
-    } else if action == "generated" {
+    } else if matches!(action, "generated" | "speech") {
         "--property=CapabilityBoundingSet=CAP_SETUID CAP_SETGID CAP_KILL CAP_SETPCAP".into()
     } else {
         "--property=CapabilityBoundingSet=CAP_SETUID CAP_SETGID CAP_KILL".into()
     });
-    if matches!(action, "invoice" | "generated" | "content") {
+    if matches!(action, "invoice" | "generated" | "speech" | "speech-import" | "content") {
         if target != Path::new("/var") {
             return Err("workflow calculation requires the installed data mount".into());
         }
@@ -244,6 +244,12 @@ pub(crate) fn arguments(target: &Path, profile: &str, action: &str) -> Result<Ve
             crate::generated_runtime::source_digest(profile)?;
             args.push("--property=BindPaths=/dev/kvm".into());
             args.push("--property=DeviceAllow=/dev/kvm rw".into());
+        } else if action == "speech" {
+            crate::speech::source_digest(profile)?;
+        } else if action == "speech-import" {
+            if profile != model::speech::ID {return Err("auxiliary image import accepts only exact ASR profile".into());}
+            model::speech::public_profile()?;
+            args.push("--property=ReadWritePaths=/var/lib/luma-os/model-packs".into());
         } else {
             crate::content_governed::source_digest(profile)?;
             args.push(if crate::content_governed::query_profile(profile)? {
@@ -255,7 +261,9 @@ pub(crate) fn arguments(target: &Path, profile: &str, action: &str) -> Result<Ve
         for property in [
             "RestrictAddressFamilies=AF_UNIX",
             "RuntimeMaxSec=30",
-            if action == "content" {
+            if action == "speech-import" {
+                "LimitFSIZE=128M"
+            } else if action == "content" {
                 "LimitFSIZE=16M"
             } else {
                 "LimitFSIZE=4M"
@@ -274,7 +282,7 @@ pub(crate) fn arguments(target: &Path, profile: &str, action: &str) -> Result<Ve
     ] {
         args.push(format!("--property={property}"));
     }
-    if matches!(action, "invoice" | "generated" | "content") {
+    if matches!(action, "invoice" | "generated" | "speech" | "speech-import" | "content") {
         args.extend([
             "--".into(),
             "/usr/libexec/luma-os/luma-platform".into(),
@@ -282,6 +290,10 @@ pub(crate) fn arguments(target: &Path, profile: &str, action: &str) -> Result<Ve
                 "workflow-resource-worker".into()
             } else if action == "generated" {
                 "generated-resource-worker".into()
+            } else if action == "speech" {
+                "speech-resource-worker".into()
+            } else if action == "speech-import" {
+                "speech-import-resource-worker".into()
             } else {
                 "content-resource-worker".into()
             },
@@ -888,5 +900,23 @@ mod tests {
             .iter()
             .all(|a| !a.contains("/dev/kvm") && !a.contains("SETPCAP")));
         assert!(arguments(Path::new("/tmp"), &profile, "generated").is_err());
+    }
+
+    #[test]
+    fn speech_reuses_fixed_physical_pool_without_network_or_kvm_and_separate_import_scope() {
+        let profile=format!("speech-asr-v1-{}","a".repeat(64));
+        let args=arguments(Path::new("/var"),&profile,"speech").unwrap();
+        for expected in ["--property=MemoryMax=512M","--property=MemorySwapMax=0","--property=TasksMax=16",
+            "--property=CPUQuota=200%","--property=RuntimeMaxSec=30","--property=PrivateDevices=yes",
+            "--property=DevicePolicy=closed","--property=RestrictAddressFamilies=AF_UNIX",
+            "--property=CapabilityBoundingSet=CAP_SETUID CAP_SETGID CAP_KILL CAP_SETPCAP"] {
+            assert!(args.iter().any(|a|a==expected),"{expected}");
+        }
+        assert_eq!(&args[args.len()-3..],["/usr/libexec/luma-os/luma-platform","speech-resource-worker",&profile]);
+        assert!(args.iter().all(|a|!a.contains("/dev/kvm")&&!a.contains("AF_INET")&&!a.starts_with("--property=DeviceAllow=")));
+        assert!(arguments(Path::new("/tmp"),&profile,"speech").is_err());
+        assert!(arguments(Path::new("/var"),&profile,"speech-import").is_err());
+        assert!(arguments(Path::new("/var"),crate::model::speech::ID,"speech").is_err());
+        assert!(arguments(Path::new("/var"),"speech-asr-v1-bad","speech").is_err());
     }
 }

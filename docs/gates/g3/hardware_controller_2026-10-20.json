@@ -1,0 +1,140 @@
+{
+  "schema_version": 1,
+  "recorded_on": "2026-10-20",
+  "status": "integrated-hardware-controller-scoped-software-verified",
+  "scope": "Original-terminal, independently granted native hardware policy with current protected Admin history, real adapters, retained resource exclusion and explicit uncertainty recovery",
+  "implementation": [
+    "Three distinct finite activities hardware.inspect, hardware.apply and hardware.restore use closed versioned hardware selectors. Review data, copied grants, device hashes and old observations are not authorization. The original enrolled Admin independently authenticates through the existing nonrenewable standard 30-second PAM session",
+    "One immutable private request binds an actual luma-hardware transient unit, original controlling terminal, account and closed Task. The fixed native entrypoints hardware-run, hardware-console and hardware-cleanup have no arbitrary path, command, destination, environment or unit-property interface; the installed console requires enforcing AppArmor, zero capabilities, no-new-privileges, seccomp and its exact bounded process generation",
+    "Stable human-reviewed plans bind the exact logical slot, actual device/daemon and boot generation, adapter/source/capability digests, original baseline, changed setting, actor generation, two independent finite grants, expected revision and bounded lifetime. Actual activation stopwatch values are added only inside the authenticated Prepare transition, not borrowed from a serialized receipt",
+    "Prepare durably records exact undo before any physical dispatch. A separate TPM-authenticated DispatchStarted records each one-use Apply or Restore attempt, including an exact unique daemon/process generation for external calls. Applied and Restored require actual exact readback and CAS revision progression; generic Admin catalog submission cannot manufacture hardware events",
+    "CPU quota and weight and exact whole-backing-device I/O limits operate on only the two compiled worker parent slices. Parent ceilings remain within two CPUs and 64 MiB/s, without weakening original leaf memory, pids, CPU or I/O guardians or changing recorded reservations",
+    "The resource Manager retains the original exclusive OFD and exact intent before descriptor delivery, and independently revalidates current TPM history, protected UTC, non-hardware authority fingerprint, finite grant/assignment deadlines, original nonrenewed allocation window, controller pidfd/executable/profile/unit, parent generation and actual scalar readback. Only the first one second of a committed dispatch tolerates before/after transition states. Death, deadline, revocation, drift or unknown observation fences the controller and revokes bound execution while retaining exclusion and physical charges",
+    "Memory changes require complete worker/guardian/request drainage and the same currently admitted compiled model profile. They cannot select weights, switch profiles or expand the envelope; both the original undo baseline and applied envelope remain within the compiled 4,831,838,208-byte parent bound",
+    "Network changes require complete drainage and act only on fixed systemd slice IPAddressAllow between empty and exact IPv4/IPv6 localhost prefixes, while deny-any remains unchanged. Independent query-only helpers verify actual attached/effective ingress and egress BPF programs, retained ancestor filters and replacement of the old own effective program IDs after a changed policy; D-Bus properties alone are not completion",
+    "The fixed Intel i915/eDP backlight adapter checks real protected sysfs/PCI/driver identities and requested versus actual brightness without extinguishing the display. The pinned PPD 0.21-1ubuntu3 adapter permits only actual supported balanced/power-saver profiles with no holds. Unsupported or changed devices refuse instead of selecting a fallback driver",
+    "Immutable image-writer mediation covers both PPD D-Bus aliases, login1 brightness, Polkit and udev inputs. Fresh read-only fixed-role daemon observers verify exact live systemd, system-bus and power-daemon executable generations; the separate SYS_PTRACE observer does not access Admin, resource or TPM state or broaden the existing capability-free credential observer",
+    "A bounded physical callback holds current Admin/NV authority only for one original suspend-aware operation budget of at most one second. Nested observer, bus and BPF calls cannot reset that budget. Neither a read/write API nor these observations is an atomic device CAS against trusted root, firmware or daemon-internal changes; drift remains fenced",
+    "Normal expiry or explicit cancellation attempts a fresh RestoreStarted and exact undo only within the same still-current original PAM session. Precommitted scalar/sysfs cleanup can independently verify current NV and the original same-boot exclusion within the cleanup window, but cannot issue grants, append new Admin signatures, declare a transaction terminal or release physical charges",
+    "An external D-Bus timeout does not cancel queued effects. Fresh-connection automatic cleanup does not replay any external mutation after a dispatch. Ambiguous external Apply/Restore remains a protected obligation until fresh independently granted Admin recovery proves the exact old daemon process generation has exited or the old boot has ended, and re-observes the explicitly reviewed state or qualified kernel-path absence. No guaranteed automatic undo is claimed",
+    "Terminal restored state requires the original baseline, while independently granted reconciliation may explicitly retain reviewed external/new-generation state or qualified absence. A lost finish acknowledgement or old controller death cannot by itself release a resource charge; current protected terminal state permits retirement of only the Manager's configuration reference, and physical drainage remains independently required"
+  ],
+  "verification": {
+    "directory": "/mnt/luma-build/work/hardware-core-check-20261020-KslgBfk4",
+    "workspace_all_targets_check_passed": true,
+    "rust_warnings_denied": true,
+    "production_warning_suppressions_added": false,
+    "final_hardware_test_sweep_completed": true,
+    "hardware_tests": 75,
+    "hardware_failed_tests": 0,
+    "hardware_ignored_tests": 0,
+    "speech_tests_in_same_cut": 10,
+    "speech_failed_tests": 0,
+    "speech_ignored_tests": 0,
+    "check_log_sha256": "04f970d234a547b8f41077744f613cd33ee2b83bd3328e5cc42393621ef77dd5",
+    "hardware_log_sha256": "b9f8f0f0933e9675f1ed60a3c8c65ca58835c479c5cc2efc8840ceb91964eb86",
+    "speech_log_sha256": "c32f00856cc1a6c65f2431770f6e8ec6c5a071aecf64aa16c21f1ac3efae5669",
+    "build_inputs_sha256": "c0dce6e764f8a9e831e78c0d3a7fc660e05160d22b316b1a218038362bcab9ed",
+    "final_integrated_test_status": "Strict whole-workspace/all-targets compilation and the scoped hardware and speech tests passed in this immutable cut. This record does not claim the entire Rust test suite or the separate broad native Python/fixture sweep passed",
+    "final_offline_apparmor_parse_status": "Passed all 37 exact profiles after the final hardware/public-identity policy fixes",
+    "offline_hardware_apparmor_parse_passed": true,
+    "all_native_apparmor_profiles_parsed": 37,
+    "apparmor_verification_file": "/mnt/luma-build/work/all-native-apparmor-20261020-QsfWLmuh/verification.json",
+    "apparmor_verification_sha256": "91c072426dcd18f69c9b57840b99dd86f00d6a549eb22c2eecb30d5fc2cf1e5e",
+    "apparmor_parse_scope": "Pinned offline parser only; policy was not loaded into this host kernel and installed enforcement is not claimed",
+    "component_observations": [
+      "Earlier diagnostic hardware cut PhTmsHnW passed 62 software tests with explicit diagnostic dead-code/unused-import allowances; it predates the final controller/active guard and is not final strict verification",
+      "Actual owned child process/pidfd lifetime, SCM_RIGHTS transfer, exclusive OFD retention after sender death, original allocation deadline, revocation EOF and all-reference drainage fixtures exercise real disposable kernel objects, not real installed PAM/TPM or hardware authorization",
+      "Typed phase/drift and authority-fingerprint tests invoke the same production predicates but do not claim physical cgroup or device qualification",
+      "The isolated image-writer policy proof RMpUVCZo reports 16 unit cases, 28 actual merged-private-bus deliveries/refusals, an isolated verifier CLI and two tamper refusals; this observes transport and immutable policy closure, not real PPD/backlight devices",
+      "The latest independent fixed C helper proof UwM0fF7Y, after the process-exit and actual-image public-passwd-alias corrections, reports 217 BPF/query assertions, 65 ancillary/descriptor assertions and 210 daemon-observer/parser/pidfd/seccomp assertions, including unconfined production-helper refusal; no BPF mutation or host service installation is claimed",
+      "Five warnings-denied static runtime-wiring tests pass after the final helper Slice=system.slice fix. They check exact packaged paths, unit contracts, stable lock files, fixed parent baselines, public identity alias consumers and operator/controller sources. They do not emulate AppArmor permission evaluation or claim installed enforcement"
+    ],
+    "independent_helper_proof": {
+      "directory": "/mnt/luma-build/work/hardware-query-20261020-UwM0fF7Y",
+      "log_sha256": "dbf477d458a687f3c8af4b4dff885c7c3e49c75d17a5cb4731b4543f7c1e7ba1",
+      "bpf_query_assertions": 217,
+      "ancillary_descriptor_assertions": 65,
+      "daemon_observer_assertions": 210,
+      "actual_kernel_bpf_queries": 4,
+      "bpf_mutations": 0,
+      "query_executable_sha256": "c64c643fcd512bd29f88179d2afb93480ec2f153732ef1d683639303344242f8",
+      "daemon_observer_executable_sha256": "fafcd593b981f8228b5649a034aa4ac1a923fe6a07d55fa1bf75f36f25d1cf4a",
+      "installed_qualified": false
+    },
+    "runtime_wiring_audit": {
+      "test_file": "native/tests/test_hardware_runtime_wiring.py",
+      "test_source_sha256": "03d4ca8e4095d3607ee80ed2a053fe16dbda6af682629164cf4e5bc66d6c4516",
+      "command": "python3 -B -W error -m unittest discover -s native/tests -p test_hardware_runtime_wiring.py -v",
+      "tests": 5,
+      "failed": 0,
+      "skipped": 0,
+      "static_inventory_not_permission_evaluator": true,
+      "findings_resolved": [
+        "Added the exact dbus-daemon read needed by the immutable platform closure verifier to the hardware profile",
+        "The daemon observer resolves only the exact installed protected passwd alias with stable root-owned metadata; its profile permits that public target, not private product authority",
+        "Media playback/capture profiles permit only the three final-image public identity alias targets and retain global product-state write denials and explicit private-state denials",
+        "Both socket-activated template helper services explicitly select system.slice to match authenticated response-sender unit prefixes"
+      ],
+      "native_host_mutations": false,
+      "installed_enforcement_qualified": false
+    }
+  },
+  "retained_attempts": [
+    {
+      "directory": "/mnt/luma-build/work/hardware-core-check-20261020-BW586xEd",
+      "outcome": "Source snapshot refused a changing inventory before compilation; retained as an unsuccessful attempt"
+    },
+    {
+      "directory": "/mnt/luma-build/work/hardware-core-check-20261020-L7IKX1NB",
+      "outcome": "Earlier diagnostic passed 40 hardware cases and failed one obsolete memory-profile-switch fixture; the fixture now requires same-profile tightening and explicit switch/expansion refusal"
+    },
+    {
+      "directory": "/mnt/luma-build/work/hardware-core-check-20261020-29rJSQzj",
+      "outcome": "Compilation refused an ambiguous Read/Write by_ref call in the new immutable request reader; fixed using the explicit Read trait"
+    },
+    {
+      "directory": "/mnt/luma-build/work/hardware-core-check-20261020-yhBLcP8m",
+      "outcome": "Strict warnings denied an unused Intent digest and temporarily unused transport members; the reviewed Plan binding now uses the digest in production, and unused transport APIs were removed"
+    },
+    {
+      "directory": "/mnt/luma-build/work/hardware-core-check-20261020-XvL7CxD1",
+      "outcome": "Strict compilation refused an in-transit missing BTreeMap import and missing new Active test-initializer fields; fixed without relaxing warnings or production guards"
+    }
+  ],
+  "source_sha256": {
+    "rust/luma-platform/src/hardware_policy.rs": "4ab255a48d335d3a0fe7171d20ccac73d7f0f72caa9b55b626ae9ccd7ea8ebf3",
+    "rust/luma-platform/src/hardware_policy/console.rs": "9180169ab1c35ce509c5cdf40870c5c329c74db97aba32d095c2fd12e8d9084d",
+    "rust/luma-platform/src/hardware_policy/console_input.rs": "5ed62253288fd176376adcb1ef7adbd36d779ee050b8d22817bfd3a5dffac6ac",
+    "rust/luma-platform/src/hardware_policy/exclusion.rs": "f0f6fc7cc94e6cb1353a916d00c66df89d4cd31b39622b144a03dbe46ddabba3",
+    "rust/luma-platform/src/hardware_policy/handoff.rs": "75d8577d741aa30ca5e37c35c4363f46bc8ba2e1f740be970062254b29ca27c1",
+    "rust/luma-platform/src/hardware_policy/cgroup.rs": "57cd9e9a4f15a01a594ce6ac08c54471c1d0c4da253fcf0005a77e2812d9a58c",
+    "rust/luma-platform/src/hardware_policy/network.rs": "000f62ca7bb83fd073df6b2d324e9314fa694595ac2f9de66607871268646439",
+    "rust/luma-platform/src/hardware_policy/network_query.rs": "ce1e3b846d5943eb4b94a459c0cc34fcac5141b726dce72eee8501f9d189cacd",
+    "rust/luma-platform/src/hardware_policy/daemon_observer.rs": "8238ceb881eb9f601953d558bd44ff9d41c47233183caa46d08237055c634b9d",
+    "rust/luma-platform/src/hardware_policy/sd_bus.rs": "1a426fc5a2127cdd65422bd7828377ba67efdac27d7ef5a412ea798b1efafaf1",
+    "rust/luma-platform/src/hardware_policy/backlight.rs": "80cf2a62d11251ad4f9ba51ff05f693d33df5b710e4361f16e222d7bc02991f1",
+    "rust/luma-platform/src/hardware_policy/power.rs": "827e31a00a44776b7e1c2fbb1bc3aae604a2a9ee2ff210ce9db920bc0a608975",
+    "rust/luma-platform/src/hardware_policy/image.rs": "5fe54c8f8022d078f59e626f2530005e0a61bb5dde798c8367ed3cb3c06ee165",
+    "rust/luma-platform/src/admin_governance/hardware.rs": "ec97746e03ad4a8394361eea167d36a850de6ddd58ea455c954d51708c3228d2",
+    "rust/luma-platform/src/resource_manager/hardware.rs": "2c45c51d5db99584d38322e3b139c63892b8cafe37c551bfb3c8ce7271ef313e",
+    "rust/luma-platform/src/service/hardware.rs": "46f156e65cecbcc7f88b233678154e864abfa179ba537dd2071156f1beabcb5e",
+    "native/image/overlay/etc/apparmor.d/luma-hardware": "7823c302de20617bd625a233db2db499d97c68a82955797377f34844e55ed04a",
+    "native/image/overlay/etc/apparmor.d/luma-hardware-daemon-observer": "123552accf602f85a46a813bff8fa36b91aef4b1e35d3814a17d9b00af80a610",
+    "native/image/overlay/etc/apparmor.d/luma-workspace-capture": "dd5d494934cd61a8f37765a2238c078b9d5f3fbead42c9f5185c24a2f7df0d6f",
+    "native/image/overlay/etc/apparmor.d/luma-workspace-speech": "665c5648fdac3c3da3356b822a455c79174baa82e9238181b46d29099b2277d1",
+    "native/image/overlay/etc/systemd/system/luma-hardware-query@.service": "09609c3cf1985fa82d42883098b74b4a993b2445152339e71a571a507f372281",
+    "native/image/overlay/etc/systemd/system/luma-hardware-daemon-observer@.service": "45f6805f10cac39de7e998bfe7e58dc69673ad6bb09631bac2a5c092053ad8d5",
+    "native/image/hardware_query/daemon.c": "5492fb7548da2633deb3168101caa6ed9d77889ae6822ccf6ac9703e0e88efe8",
+    "native/tests/test_hardware_runtime_wiring.py": "03d4ca8e4095d3607ee80ed2a053fe16dbda6af682629164cf4e5bc66d6c4516",
+    "native/image/hardware_policy.py": "0853e30e878337eae8aaf3de3cf0ace08ded05fe6bbe5de9d2e09e97dc8568b8",
+    "native/image/HARDWARE_POLICY.md": "2d9167419a7f6b8bcc1f7f672fbbecdbb05249f7b973428d791a16a0b64135ff"
+  },
+  "native_hardware_changes_performed_on_development_host": false,
+  "installed_pam_tpm_grant_journey_qualified": false,
+  "installed_apparmor_dbus_enforcement_qualified": false,
+  "physical_driver_and_firmware_tuples_qualified": false,
+  "bootable_image_verified_by_this_record": false,
+  "production_qualified": false,
+  "gate_closing": false
+}

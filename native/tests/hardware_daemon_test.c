@@ -45,8 +45,35 @@ static int private_bus_hash(void) {
     printf("{\"status\":\"passed\",\"actual_private_dbus_executable_sha256\":\"%s\",\"exact_process_inode_checked\":true,\"host_bus_contacted\":false,\"installed_role_qualified\":false}\n",proof.sha);
     return 0;
 }
+static int installed_account_layout(void) {
+    static const char account[]="/var/lib/luma-os/identity/passwd";
+    static const char alias[]="../var/lib/luma-os/identity/passwd";
+    uid_t uid=0;gid_t gid=0;
+    CHECK(messagebus(&uid,&gid)); /* A pre-assembly regular passwd is unsupported. */
+    CHECK(!mkdir("/var/lib/luma-os",0700));
+    CHECK(!mkdir("/var/lib/luma-os/identity",0700));
+    CHECK(!rename("/etc/passwd",account));
+    CHECK(!symlink(alias,"/etc/passwd"));
+    CHECK(!messagebus(&uid,&gid));CHECK(uid>0&&gid>0&&uid<65534&&gid<65534);
+    uid_t expected_uid=uid;gid_t expected_gid=gid;
+    CHECK(!unlink("/etc/passwd"));CHECK(!symlink(account,"/etc/passwd"));
+    CHECK(messagebus(&uid,&gid)); /* Same referent is not the fixed alias. */
+    CHECK(!unlink("/etc/passwd"));CHECK(!symlink(alias,"/etc/passwd"));
+    CHECK(!chmod(account,0666));CHECK(messagebus(&uid,&gid));CHECK(!chmod(account,0644));
+    CHECK(!chmod("/var/lib/luma-os/identity",0777));CHECK(messagebus(&uid,&gid));
+    CHECK(!chmod("/var/lib/luma-os/identity",0700));
+    CHECK(!link(account,"/var/lib/luma-os/identity/passwd-alias"));CHECK(messagebus(&uid,&gid));
+    CHECK(!unlink("/var/lib/luma-os/identity/passwd-alias"));
+    CHECK(!unlink("/etc/passwd"));CHECK(!link(account,"/etc/passwd"));
+    CHECK(messagebus(&uid,&gid));
+    CHECK(!unlink("/etc/passwd"));CHECK(!symlink(alias,"/etc/passwd"));
+    CHECK(!messagebus(&uid,&gid));CHECK(uid==expected_uid&&gid==expected_gid);
+    printf("{\"status\":\"passed\",\"actual_final_account_alias\":true,\"actual_alias_permission_and_link_refusals\":5,\"host_accounts_changed\":false,\"installed_authority_qualified\":false}\n");
+    return 0;
+}
 int main(int argc,char **argv) {
     if(argc==2&&!strcmp(argv[1],"--hash-private-bus"))return private_bus_hash();
+    if(argc==2&&!strcmp(argv[1],"--identity-layout"))return installed_account_layout();
     CHECK(argc==1);
     const char *valid="{\"schema_version\":1,\"nonce\":\"2323232323232323232323232323232323232323232323232323232323232323\",\"boot\":\"12121212121212121212121212121212\",\"deadline_ms\":\"90000\",\"role\":\"system-bus\"}";
     struct request request;CHECK(!parse(valid,strlen(valid),&request));CHECK(request.deadline==90000);

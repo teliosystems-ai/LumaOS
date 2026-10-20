@@ -399,7 +399,7 @@ def main() -> None:
         shutil.copytree(REPO/name,reference/name,ignore=shutil.ignore_patterns('__pycache__','*.pyc'))
     if args.edition == 'desktop':
         import browser_policy
-        for name in ('workspace_host.py', 'workspace_auth.py', 'workspace_app.py', 'workspace_capture.py', 'workspace_draft.py', 'browser_adapter.py'):
+        for name in ('workspace_host.py', 'workspace_auth.py', 'workspace_app.py', 'workspace_capture.py', 'workspace_draft.py', 'workspace_collections.py', 'workspace_speech.py', 'workspace_grounding.py', 'browser_adapter.py'):
             target = binary.parent/name
             shutil.copy2(REPO/'native/desktop'/name, target)
             target.chmod(0o644)
@@ -419,6 +419,21 @@ def main() -> None:
             target = workspace/name
             shutil.copy2(REPO/'web'/name, target)
             target.chmod(0o644)
+    hardware_query = binary.parent/'hardware-bpf-query'
+    run('gcc', '-std=c17', '-O2', '-Wall', '-Wextra', '-Wpedantic', '-Werror', '-Wformat=2',
+        '-Wformat-security', '-fstack-protector-strong', '-D_FORTIFY_SOURCE=3',
+        '-fPIE', '-pie', '-Wl,-z,relro,-z,now,-z,noexecstack', '-Wl,--as-needed',
+        REPO/'native/image/hardware_query/query.c', REPO/'native/image/hardware_query/worker.c',
+        '-o', hardware_query)
+    hardware_query.chmod(0o755)
+    enable('luma-hardware-query.socket', 'sockets.target')
+    hardware_observer = binary.parent/'hardware-daemon-observer'
+    run('gcc', '-std=c17', '-O2', '-Wall', '-Wextra', '-Wpedantic', '-Werror', '-Wformat=2',
+        '-Wformat-security', '-fstack-protector-strong', '-D_FORTIFY_SOURCE=3',
+        '-fPIE', '-pie', '-Wl,-z,relro,-z,now,-z,noexecstack', '-Wl,--as-needed',
+        REPO/'native/image/hardware_query/daemon.c', '-lcrypto', '-o', hardware_observer)
+    hardware_observer.chmod(0o755)
+    enable('luma-hardware-daemon-observer.socket', 'sockets.target')
     put('usr/share/luma-os/release-id',release+'\n')
     put('usr/share/luma-os/release-identity.json', json.dumps({
         'schema_version': 1, 'release': release, 'sequence': args.sequence,
@@ -513,11 +528,26 @@ def main() -> None:
     if any(1000 <= int(line.split(':')[2]) < 65534
            for line in (ROOT/'etc/passwd').read_text().splitlines()):
         raise SystemExit('unexpected pre-existing interactive identity in base image')
+    speech_spec = importlib.util.spec_from_file_location(
+        'luma_speech_package', REPO/'native/image/speech/package_runtime.py')
+    speech_package = importlib.util.module_from_spec(speech_spec)
+    speech_spec.loader.exec_module(speech_package)
+    speech_package.package(ROOT, WORK)
+    put('usr/share/doc/luma-os/speech.md',
+        (REPO/'native/image/speech/README.md').read_text())
+    put('usr/share/doc/luma-os/hardware-policy.md',
+        (REPO/'native/image/HARDWARE_POLICY.md').read_text())
     qemu_policy.configure(ROOT)
     desktop_profile = desktop_policy.configure(ROOT, args.edition, args.environment)
+    import hardware_policy
+    put('usr/libexec/luma-os/hardware_writer_verify.py',
+        (REPO/'native/image/hardware_policy.py').read_text())
+    desktop_profile['hardware_writer_mediation'] = hardware_policy.configure(ROOT, args.edition)
     if args.edition == 'desktop':
         import capture_policy
         desktop_profile['input_capture'] = capture_policy.verify(ROOT)
+        import speech_policy
+        desktop_profile['speech'] = speech_policy.verify(ROOT)
     root_mib, payload_mib = desktop_policy.geometry(args.edition)
     template = ROOT/'usr/share/luma-os/var-template'
     # Fresh build-owned exported filesystem only; no host files are involved.

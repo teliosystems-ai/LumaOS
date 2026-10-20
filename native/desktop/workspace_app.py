@@ -224,8 +224,10 @@ def main():
     toolbar = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
     owner_actions = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
     engine_actions = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+    input_actions = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
     toolbar.pack_start(owner_actions, False, False, 0)
     toolbar.pack_start(engine_actions, False, False, 0)
+    toolbar.pack_start(input_actions, False, False, 0)
     authority_button = Gtk.Button(label='Authenticated native owner operation…')
     authority_note = Gtk.Label(label='Private results and passwords stay in the separate native terminal.')
     authority_note.set_line_wrap(True)
@@ -247,6 +249,18 @@ def main():
     capture_button = Gtk.Button.new_with_mnemonic('_Permission-bound capture…')
     capture_button.set_tooltip_text('Independent visible consent window for selected PNG, portal screenshot/sampled video and short push-to-talk audio. Nothing is automatically sent to a model, published, transcribed or shared.')
     engine_actions.pack_start(capture_button, False, False, 4)
+    speech_button = Gtk.Button.new_with_mnemonic('_Speak reviewed text…')
+    speech_button.set_tooltip_text('Independent local rule-based English output: review literal text, Render, then separately Play. No microphone, model inference or publication; Stop, hiding and session lock revoke output.')
+    input_actions.pack_start(speech_button, False, False, 4)
+    transcription_button = Gtk.Button.new_with_mnemonic('_Transcribe saved audio…')
+    transcription_button.set_tooltip_text('Explicit saved PCM capture to separately qualified auxiliary ASR under a fresh finite Infer grant. Review/correct the observed transcript before a separately granted text-model conversation; never an automatic OS effect.')
+    input_actions.pack_start(transcription_button, False, False, 4)
+    grounding_button = Gtk.Button.new_with_mnemonic('_Clarify captured reference…')
+    grounding_button.set_tooltip_text('Explicit saved visual sample ID/index/digest plus human description and an exact immutable artifact/version. No pixel understanding or OCR. Fresh native Read and later text-only Infer remain independently reviewed and granted.')
+    input_actions.pack_start(grounding_button, False, False, 4)
+    collection_button = Gtk.Button.new_with_mnemonic('_Edit exact collection…')
+    collection_button.set_tooltip_text('Human-authored exact typed collection with fresh original native review and independent Read/effect grants. Model/capture references never confer membership or publication authority.')
+    input_actions.pack_start(collection_button, False, False, 4)
     recovery_button = Gtk.Button.new_with_mnemonic('_Admin encrypted recovery…')
     recovery_button.set_tooltip_text('Open the original native Admin terminal for encrypted fresh-owner restore, exact-prefix resume, or reviewed damaged-batch retirement. No key, password, grant or private result enters WebKit.')
     engine_actions.pack_start(recovery_button, False, False, 4)
@@ -258,6 +272,8 @@ def main():
     window.add(layout)
     capture_windows = []
     capture_module = None
+    speech_windows = []
+    speech_module = None
 
     def permission_capture(_button):
         nonlocal capture_module
@@ -281,6 +297,69 @@ def main():
             authority_note.set_text('Capture unavailable or refused. The installed protected module, enforcing worker confinement and required portal/media runtime must be available. No capture, inference, publication or completion was inferred. Other manual controls remain usable.')
 
     capture_button.connect('clicked', permission_capture)
+
+    def reviewed_speech(_button):
+        nonlocal speech_module
+        if speech_windows:
+            speech_windows[0].present()
+            return
+        try:
+            if speech_module is None:
+                speech_module = auth_module.workspace_controller('speech')
+            child = speech_module.launch_speech(window)
+            speech_windows.append(child)
+            child.connect('destroy', lambda closed: speech_windows.remove(closed) if closed in speech_windows else None)
+            authority_note.set_text('Local speech review window opened. Render does not open audio; Play needs a separate human click. No inference, microphone, publication or audible completion was inferred.')
+        except Exception:
+            authority_note.set_text('Speech output unavailable or refused. No fallback runtime, playback or completion is inferred; other manual controls remain available.')
+    speech_button.connect('clicked', reviewed_speech)
+
+    def transcribe_saved(_button):
+        dialog = Gtk.Dialog(title='Explicit saved speech — fresh native Infer terminal', transient_for=window, modal=True)
+        dialog.add_buttons('Cancel', Gtk.ResponseType.CANCEL, 'Choose saved audio and open terminal', Gtk.ResponseType.OK)
+        area = dialog.get_content_area()
+        note = Gtk.Label(label='First use Permission-bound capture to hold-to-talk, stop and explicitly save audio as a private .luma-capture.zip. Select that one local envelope here. Separate qualified ASR uses current signed model custody, original PAM and a new finite Infer grant, even when the text LLM is unavailable. Tiny ASR can be wrong: review/edit its transcript before any fresh text-model or consequential workflow handoff. No private results or credentials enter WebKit.')
+        note.set_line_wrap(True); area.pack_start(note, False, False, 8)
+        label = Gtk.Label.new_with_mnemonic('_Human login')
+        login = Gtk.Entry(); login.set_max_length(32); label.set_mnemonic_widget(login)
+        area.pack_start(label, False, False, 4); area.pack_start(login, False, False, 4)
+        dialog.show_all()
+        try:
+            if dialog.run() == Gtk.ResponseType.OK:
+                chooser = Gtk.FileChooserDialog(title='Select one explicitly saved speech capture', transient_for=dialog, action=Gtk.FileChooserAction.OPEN)
+                chooser.add_buttons('Cancel', Gtk.ResponseType.CANCEL, 'Select local audio envelope', Gtk.ResponseType.OK)
+                chooser.set_local_only(True); chooser.set_select_multiple(False)
+                try:
+                    if chooser.run() == Gtk.ResponseType.OK:
+                        source = {'schema_version': 1, 'login': login.get_text(), 'capture_path': chooser.get_filename()}
+                        value = {'schema_version': 1, 'operation': 'speech-journey', 'login': source['login'],
+                            'read_grant': '', 'effect_grant': '', 'approval': '', 'request': json.dumps(source, separators=(',', ':'))}
+                        auth_module.launch(value)
+                        authority_note.set_text('Auxiliary ASR terminal launched, not authenticated or completed here. Its exact audio, current signed auxiliary model, fresh finite Infer, original PAM, observed transcript and separate reviewed handoff remain in the native terminal.')
+                finally:
+                    chooser.destroy()
+        except Exception:
+            authority_note.set_text('Saved-audio transcription not launched. Select one explicit local saved PCM capture and valid human login; no inferred ASR/model/effect authority or completion.')
+        finally:
+            dialog.destroy()
+            transcription_button.grab_focus()
+    transcription_button.connect('clicked', transcribe_saved)
+
+    def edit_collection(_button):
+        try:
+            auth_module.workspace_controller('collections').launch_dialog(window, auth_module)
+            authority_note.set_text('Exact collection editor opened. Any native terminal launch is not authentication, membership validation or publication; fresh native review and independent grants remain mandatory.')
+        except Exception:
+            authority_note.set_text('Collection editor unavailable or refused; no collection, membership, grant or publication was inferred.')
+    collection_button.connect('clicked', edit_collection)
+
+    def clarify_capture(_button):
+        try:
+            opened = auth_module.workspace_controller('grounding').launch_dialog(window, auth_module)
+            authority_note.set_text('Human visual clarification terminal launched, not authenticated or completed. Exact sample, actual artifact-version Read and separately reviewed text-only Infer stay private in the native terminal; no pixels, OCR or verified visual citation was inferred.' if opened else 'Visual clarification cancelled before terminal launch; no Read, Infer or effect requested.')
+        except Exception:
+            authority_note.set_text('Visual clarification unavailable or refused. No private Read, model submission, pixel understanding or effect is inferred.')
+    grounding_button.connect('clicked', clarify_capture)
 
     def local_conversation(_button):
         dialog = Gtk.Dialog(title='Local model conversation — separate original native terminal', transient_for=window, modal=True)
@@ -757,6 +836,8 @@ def main():
         closing = True
         for capture_window in list(capture_windows):
             capture_window.destroy()
+        for speech_window in list(speech_windows):
+            speech_window.destroy()
         for document_view, observation in presentations:
             observation.request_stop('window-close')
             document_view.stop_loading()

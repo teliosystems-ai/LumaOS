@@ -75,6 +75,7 @@ pub(crate) enum EffectKind {
     ResourceAdmission,
     ModelQa,
     Inference,
+    HardwarePolicy,
     Recovery,
 }
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]

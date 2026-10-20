@@ -1,0 +1,31 @@
+# Descriptor-only auxiliary ASR. No microphone, speaker, network or OS effect.
+#include <tunables/global>
+profile luma-speech-asr flags=(attach_disconnected,mediate_deleted) {
+  #include <abstractions/base>
+  /usr/libexec/luma-os/speech/luma-asr-worker mr,
+  /usr/lib/** mr,
+  /lib/** mr,
+  /lib64/** mr,
+  /proc/@{pid}/{stat,status,cgroup,limits,maps} r,
+  /proc/@{pid}/attr/current r,
+  /proc/@{pid}/fd/0 r,
+  /memfd:luma-speech-pcm r,
+  /memfd:luma-speech-runtime-{output,errors} rw,
+  /var/lib/luma-os/model-packs/*/blobs/sha256/be07e048e1e599ad46341c8d2a135645097a538221678b7acdd1b1919c6e1b21 r,
+  /dev/{null,zero} rw,
+  /dev/urandom r,
+  signal (receive) peer=luma-acquisition,
+  signal (receive) peer=unconfined,
+  deny network,
+  deny unix,
+  deny dbus,
+  deny /home/** rwklmx,
+  deny /root/** rwklmx,
+  deny /mnt/** rwklmx,
+  deny /run/** rwklmx,
+  deny /var/lib/luma-os/admin/** rwklmx,
+  deny /var/lib/luma-os/content-*/** rwklmx,
+  deny /var/lib/luma-os/principals/** rwklmx,
+  deny /etc/{shadow,gshadow} rwklmx,
+  deny /dev/{tpm*,mem,kmem,port,kvm,dxg,nvidia*,dri/**,video*,snd/**} rw,
+}

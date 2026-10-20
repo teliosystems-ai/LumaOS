@@ -16,6 +16,7 @@ pub(crate) mod content_admin;
 pub(crate) mod content_output;
 pub(crate) mod granted_acquisition;
 pub(crate) mod granted_gateway;
+pub(crate) mod hardware;
 mod ingress;
 
 #[derive(Deserialize, Serialize)]
@@ -350,7 +351,9 @@ pub fn serve() -> Result<()> {
                 if envelope
                     .get("action")
                     .and_then(|v| v.as_str())
-                    .map_or(false, |a| a.starts_with("resource-"))
+                    .map_or(false, |a| {
+                        a.starts_with("resource-") || a.starts_with("hardware-handoff-")
+                    })
                 {
                     return Ok(None);
                 }
@@ -384,6 +387,19 @@ pub fn serve() -> Result<()> {
                     let result = (|| -> Result<serde_json::Value> {
                         let peer = credentials(&incoming.stream)?;
                         let envelope: serde_json::Value = serde_json::from_slice(&incoming.bytes)?;
+                        if matches!(
+                            envelope.get("action").and_then(|value| value.as_str()),
+                            Some("hardware-handoff-open" | "hardware-handoff-finish")
+                        ) {
+                            let request: crate::hardware_policy::handoff::Request =
+                                serde_json::from_slice(&incoming.bytes)?;
+                            return Ok(serde_json::to_value(
+                                manager
+                                    .as_mut()
+                                    .ok_or("resource manager unavailable for hardware handoff")?
+                                    .hardware_handoff(&request, &incoming.stream)?,
+                            )?);
+                        }
                         if envelope.get("action").and_then(|value| value.as_str())
                             == Some("resource-windows-utc-observe")
                         {

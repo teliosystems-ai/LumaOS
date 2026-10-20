@@ -918,7 +918,7 @@ impl Admission {
         acquisition_arguments(credentials(socket)?.pid, profile, None)?;
         let purpose = if profile.starts_with(crate::content_restore::PREFIX) {
             BrokerPurpose::ContentRestoreAdmin
-        } else if crate::generated_runtime::is_profile(profile) || profile.starts_with("content-v1-") {
+        } else if crate::generated_runtime::is_profile(profile) || crate::speech::is_profile(profile) || profile.starts_with("content-v1-") {
             BrokerPurpose::Standard
         } else if profile.starts_with(crate::content_backup::PREFIX)
             || profile.starts_with(crate::office_export::PREFIX)
@@ -1040,6 +1040,14 @@ fn acquisition_arguments(
             );
         }
         return Ok(());
+    }
+    if crate::speech::is_profile(profile) {
+        if args.len()!=6 || args[0]!=IMAGE_EXE || args[1]!="speech-transcribe" || !args[5].is_empty()
+            || args[2].is_empty() || args[2].len()>32 || !crate::admin_roles::identifier(args[3])
+            || grant.is_some_and(|id|args[3]!=id) {
+            return Err("ASR proof requires exact original finite Infer client arguments".into());
+        }
+        return crate::speech::verify_client_request(Path::new(args[4]),profile);
     }
     let generated = crate::generated_runtime::is_profile(profile);
     if args.len() != 6
@@ -1602,6 +1610,8 @@ impl InputStage {
             crate::content_backup::MAX_EXPORT_BYTES as usize
         } else if leaf == "content-office.json" {
             crate::office_export::MAX_REQUEST
+        } else if leaf == "speech.json" {
+            crate::speech::MAX_REQUEST
         } else if leaf == "generated.json" {
             2_228_480
         } else {
@@ -1612,6 +1622,7 @@ impl InputStage {
             "input.json"
                 | "input.csv"
                 | "generated.json"
+                | "speech.json"
                 | "content.json"
                 | "content-backup.json"
                 | "content-backup-recipients.json"
@@ -1733,6 +1744,8 @@ pub(crate) fn launch(arguments: &[String]) -> Result<()> {
                 | "granted-infer-review"
                 | "generated-review"
                 | "generated-execute"
+                | "speech-review"
+                | "speech-transcribe"
                 | "model-pack-import-review"
                 | "model-pack-import"
                 | "model-pack-pending-review"
@@ -1968,6 +1981,14 @@ pub(crate) fn launch(arguments: &[String]) -> Result<()> {
                 .to_str()
                 .ok_or("invalid private qualification request path")?
                 .into();
+            Some(stage)
+        }
+        "speech-review" | "speech-transcribe" => {
+            let (count,index)=if arguments[0]=="speech-review" {(2,1)} else {(4,3)};
+            if arguments.len()!=count {return Err("ASR launcher requires exact finite command shape".into());}
+            let bytes=crate::speech::read_request(&arguments[index])?;
+            let stage=InputStage::capture(&bytes,"speech.json")?;
+            owned[index]=stage.path.to_str().ok_or("invalid private ASR request path")?.into();
             Some(stage)
         }
         "generated-review" | "generated-execute" => {

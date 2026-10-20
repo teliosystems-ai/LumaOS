@@ -100,16 +100,36 @@ static int start_ticks(const char *text,uint64_t *ticks) {
     if(!end||(size_t)(end-at)>=sizeof(number))return -1;
     memcpy(number,at,(size_t)(end-at));number[end-at]=0;return decimal_value(number,ticks);
 }
+static int same_metadata(const struct stat *a,const struct stat *b) {
+    return a->st_dev==b->st_dev&&a->st_ino==b->st_ino&&a->st_mode==b->st_mode&&
+        a->st_uid==b->st_uid&&a->st_gid==b->st_gid&&a->st_nlink==b->st_nlink&&a->st_size==b->st_size&&
+        a->st_mtim.tv_sec==b->st_mtim.tv_sec&&a->st_mtim.tv_nsec==b->st_mtim.tv_nsec&&
+        a->st_ctim.tv_sec==b->st_ctim.tv_sec&&a->st_ctim.tv_nsec==b->st_ctim.tv_nsec;
+}
+static int identity_alias(struct stat *alias) {
+    static const char *directories[]={"/etc","/var","/var/lib","/var/lib/luma-os","/var/lib/luma-os/identity"};
+    for(size_t i=0;i<sizeof(directories)/sizeof(directories[0]);i++) {
+        struct stat item;
+        if(lstat(directories[i],&item)||!S_ISDIR(item.st_mode)||item.st_uid||item.st_gid||(item.st_mode&0022))return -1;
+    }
+    static const char expected[]="../var/lib/luma-os/identity/passwd";
+    char target[sizeof(expected)];
+    ssize_t size=readlink("/etc/passwd",target,sizeof(target));
+    return lstat("/etc/passwd",alias)||!S_ISLNK(alias->st_mode)||alias->st_uid||alias->st_gid||alias->st_nlink!=1||
+        size!=(ssize_t)(sizeof(expected)-1)||memcmp(target,expected,sizeof(expected)-1)?-1:0;
+}
 static int messagebus(uid_t *uid,gid_t *gid) {
-    int fd=open("/etc/passwd",O_RDONLY|O_CLOEXEC|O_NOFOLLOW);if(fd<0)return -1;
-    struct stat before,after;char text[65536];ssize_t size;
-    int bad=fstat(fd,&before)||!S_ISREG(before.st_mode)||before.st_uid||before.st_nlink!=1||
+    struct stat alias,alias_after,named,before,after;
+    if(identity_alias(&alias))return -1;
+    static const char account[]="/var/lib/luma-os/identity/passwd";
+    int fd=open(account,O_RDONLY|O_CLOEXEC|O_NOFOLLOW|O_NONBLOCK);if(fd<0)return -1;
+    char text[65536];ssize_t size;
+    int bad=fstat(fd,&before)||!S_ISREG(before.st_mode)||before.st_uid||before.st_gid||before.st_nlink!=1||
         (before.st_mode&0022)||before.st_size<=0||before.st_size>=(off_t)sizeof(text);
     size=bad?-1:read(fd,text,sizeof(text));
-    if(size<0||size!=before.st_size||fstat(fd,&after)||before.st_dev!=after.st_dev||before.st_ino!=after.st_ino||
-        before.st_size!=after.st_size||before.st_mtim.tv_sec!=after.st_mtim.tv_sec||
-        before.st_mtim.tv_nsec!=after.st_mtim.tv_nsec||before.st_ctim.tv_sec!=after.st_ctim.tv_sec||
-        before.st_ctim.tv_nsec!=after.st_ctim.tv_nsec)bad=1;
+    if(size<0||size!=before.st_size||fstat(fd,&after)||!same_metadata(&before,&after)||
+        identity_alias(&alias_after)||!same_metadata(&alias,&alias_after)||
+        lstat(account,&named)||!same_metadata(&before,&named))bad=1;
     if(close(fd))bad=1;
     if(bad)return -1;
     text[size]=0;

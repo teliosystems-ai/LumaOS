@@ -166,6 +166,11 @@ def compose(root, source_root, model_path, runtime_path):
             except FileNotFoundError:
                 pass
         data = runtime_archive(archive_tree.read(Path(runtime_path).name, 32*1024**2))
+        # Include the actual platform ELF before traversing dependencies. Its
+        # own DT_NEEDED closure (including libsystemd) belongs to this manifest,
+        # not merely to the surrounding package's generic dependency inventory.
+        worker = 'usr/libexec/luma-os/luma-platform'
+        data[worker] = source_elf(target, worker)
         # Resolve every direct ELF dependency, including the one explicitly
         # allowed dynamically loaded CPU plugin. No RPC, GPU or server program.
         queue = list(data)
@@ -178,7 +183,7 @@ def compose(root, source_root, model_path, runtime_path):
             if len(checked) > 64:
                 raise ValueError('inference ELF closure exceeds its fixed bound')
             interpreter, needed, search = package.elf(data[name][0], object_path=name, details=True,
-                require_entry=name == PRIVATE+'/llama-completion', private_dirs=PRIVATE_DIRS)
+                require_entry=name in (worker, PRIVATE+'/llama-completion'), private_dirs=PRIVATE_DIRS)
             folders = tuple(dict.fromkeys((*(search['runpath'] or search['rpath']), *PRIVATE_DIRS, *package.LIB_DIRS)))
             dependencies = [interpreter[1:]] if interpreter else []
             for soname in needed:
@@ -209,9 +214,6 @@ def compose(root, source_root, model_path, runtime_path):
                 if dependency not in data:
                     data[dependency] = source_elf(source, dependency)
                 queue.append(dependency)
-        # The worker itself is also bound into the exact runtime descriptor.
-        worker = 'usr/libexec/luma-os/luma-platform'
-        data[worker] = (target.read(worker, package.MAX_ELF), 0o755)
         records = []
         for name, (value, mode) in sorted(data.items()):
             try:

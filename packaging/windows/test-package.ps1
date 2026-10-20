@@ -35,6 +35,22 @@ try {
     # Add-Type/csc scratch files remain inside the disposable caller-selected drive.
     $env:TEMP = $temporary; $env:TMP = $temporary
     Import-Module (Join-Path $PSScriptRoot 'Luma.Package.psm1') -Force
+    $packageModule = Get-Module Luma.Package
+    $inferenceProfile = 'usr/share/luma-os/hosted-inference.json'
+    $inferenceRuntime = 'usr/share/luma-os/hosted-inference-runtime.json'
+    $bothDescriptors = @{}; $bothDescriptors[$inferenceProfile]='validated-profile'; $bothDescriptors[$inferenceRuntime]='validated-runtime'
+    # These exercise only the post-validation classifier, not archive validation
+    # or publisher authentication. Real combined archives are inspected separately.
+    Assert-Package (& $packageModule { param($c) Get-LumaValidatedHostedInferencePresence $false $true $c } $bothDescriptors) 'Schema3 workspace must report its separately validated inference composition.'
+    Assert-Package (& $packageModule { param($c) Get-LumaValidatedHostedInferencePresence $true $false $c } $bothDescriptors) 'Schema2 inference reporting must remain true.'
+    Assert-Package (-not (& $packageModule { Get-LumaValidatedHostedInferencePresence $false $true @{} })) 'Workspace-only reporting must remain model-disabled.'
+    Assert-Package (-not (& $packageModule { Get-LumaValidatedHostedInferencePresence $false $false @{} })) 'Compute-only reporting must remain inference-disabled.'
+    foreach ($descriptor in @($inferenceProfile,$inferenceRuntime)) {
+        $partial=@{}; $partial[$descriptor]='not-a-complete-profile'
+        Assert-PackageThrows { & $packageModule { param($c) Get-LumaValidatedHostedInferencePresence $false $true $c } $partial } 'A lone descriptor must not become an inference composition.'
+    }
+    Assert-PackageThrows { & $packageModule { Get-LumaValidatedHostedInferencePresence $true $false @{} } } 'Inference identity without descriptors must refuse.'
+    Assert-PackageThrows { & $packageModule { param($c) Get-LumaValidatedHostedInferencePresence $false $false $c } $bothDescriptors } 'Descriptor names must not broaden a compute identity.'
     function New-Entry([string] $Path, [byte[]] $Content, [string] $Type='0', [int] $Mode=420) {
         [pscustomobject]@{ Path=$Path; Content=$Content; Type=$Type; Mode=$Mode }
     }

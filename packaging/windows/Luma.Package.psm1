@@ -74,6 +74,22 @@ function Assert-LumaPackageHostPath {
     return $item
 }
 
+function Get-LumaValidatedHostedInferencePresence {
+    param([bool] $InferenceIdentity, [bool] $WorkspaceIdentity, $Configuration)
+    # Call only after ValidateHostedProfile has joined both full descriptors to
+    # publisher-required bytes. This classifies that validated composition; it
+    # does not authenticate a package or grant an inference session.
+    $profile = $Configuration.ContainsKey('usr/share/luma-os/hosted-inference.json')
+    $runtime = $Configuration.ContainsKey('usr/share/luma-os/hosted-inference-runtime.json')
+    if ($profile -ne $runtime -or ($InferenceIdentity -and -not $profile)) {
+        throw 'Validated inference composition requires both complete descriptors.'
+    }
+    if ($profile -and -not ($InferenceIdentity -or $WorkspaceIdentity)) {
+        throw 'Inference descriptors require a closed inference or workspace identity.'
+    }
+    return $profile -and ($InferenceIdentity -or $WorkspaceIdentity)
+}
+
 function Test-LumaWslPackage {
     [CmdletBinding()]
     param([Parameter(Mandatory)][string] $PackageDirectory)
@@ -220,6 +236,7 @@ WantedBy=multi-user.target
             -not $content.HostedConfiguration[$policy].Contains('profile luma-hosted-compute ') -or
             -not $content.HostedConfiguration[$policy].Contains('deny network,')) { throw 'Hosted policy is missing or not completely preprocessed.' }
         [Luma.Windows.PackageInspector]::ValidateHostedProfile($content, $files.ToArray())
+        $hostedInference = Get-LumaValidatedHostedInferencePresence $hostedInference $hostedWorkspace $content.HostedConfiguration
     }
     if ($content.WslConfiguration -cne $requiredWsl) { throw 'WSL configuration is not the exact confined development baseline.' }
     [pscustomobject]@{

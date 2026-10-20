@@ -7,8 +7,8 @@ profile luma-acquisition flags=(attach_disconnected,mediate_deleted) {
   capability setuid,
   capability setgid,
   capability kill,
-  # Available only in the generated action's systemd capability ceiling;
-  # the fixed runner uses it to irreversibly drop its child's bounding set.
+  # Available only in generated/ASR action ceilings; the fixed parent uses
+  # it to irreversibly drop the isolated child's entire bounding set.
   capability setpcap,
   ptrace (readby) peer=luma-broker,
   signal (receive) peer=luma-broker,
@@ -25,6 +25,12 @@ profile luma-acquisition flags=(attach_disconnected,mediate_deleted) {
   /usr/libexec/luma-os/generated_runtime.py r,
   /usr/libexec/luma-os/generated_build.py r,
   /usr/bin/qemu-system-x86_64 mrpx -> &luma-generated-qemu,
+  /usr/libexec/luma-os/speech/luma-asr-worker mrpx -> &luma-speech-asr,
+  /usr/share/luma-os/speech/** r,
+  /usr/src/ r,
+  /usr/src/luma-speech/ r,
+  /usr/src/luma-speech/controller/ r,
+  /usr/src/luma-speech/controller/{asr_engine.cpp,asr_worker.cpp} r,
   /usr/share/qemu/** r,
   /usr/share/seabios/** r,
   /dev/kvm rw,
@@ -63,6 +69,8 @@ profile luma-acquisition flags=(attach_disconnected,mediate_deleted) {
   /memfd:luma-workflow-output rw,
   /memfd:luma-generated-{request,executable,input} r,
   /memfd:luma-generated-output rw,
+  /memfd:luma-speech-{request,pcm} r,
+  /memfd:luma-speech-{output,runtime-output,runtime-errors} rw,
   /memfd:luma-content-request r,
   /memfd:luma-content-output rw,
   /memfd:luma-generated-{kernel,initrd} rw,

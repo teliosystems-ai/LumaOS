@@ -969,6 +969,11 @@ impl Manager {
         pin: File,
     ) -> Result<serde_json::Value> {
         validate(request, peer.uid, now()?)?;
+        let _hardware = if matches!(request.payload, Message::Begin { .. }) {
+            self.hardware.admit(super::Kind::Model)?
+        } else {
+            None
+        };
         crate::platform::require_installed()?;
         if !matches!(
             request.payload,

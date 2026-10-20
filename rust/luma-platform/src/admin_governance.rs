@@ -153,6 +153,10 @@ struct CatalogEvent {
     command: Command,
 }
 
+#[path = "admin_governance/hardware.rs"]
+mod hardware;
+pub(crate) use hardware::{current_hardware_state, hardware_guard_snapshot, with_hardware_cleanup, HardwareSession, HardwareProjection};
+
 fn event_name(request: &str) -> String {
     format!(
         "event-{}.json",
@@ -448,6 +452,7 @@ impl<'a> Context<'a> {
                 return Err("Admin catalog event does not bind the authenticated history".into());
             }
             check_model_receipt(&event)?;
+            hardware::check_event(&event, &catalog, history.floor_ms)?;
             if !catalog.apply(&event.command)? {
                 return Err("anchored Admin catalog event is not a mutation".into());
             }
@@ -2027,7 +2032,7 @@ fn grant_session_scope(
         if uses.len() != 1
             || uses[0].1.action != Action::AcquireResource
             || uses[0].1.selector.kind != Kind::Resource
-            || !model_id(&uses[0].1.selector.id)
+            || !(model_id(&uses[0].1.selector.id) || uses[0].1.selector.id == "ModelPack-whisper-tiny-multilingual-f16-cpu-v1")
             || uses[0].1.selector.generation != 1
             || uses[0].1.units != 1
         {
@@ -2935,6 +2940,9 @@ pub(crate) fn publisher_time_observation() -> Result<(crate::utc_stream::Observa
 pub(crate) fn skill_trust_present() -> Result<bool> {
     Ok(catalog_state_optional()?.is_some_and(|catalog| catalog.skill_trust.is_some()))
 }
+
+mod speech;
+pub(crate) use speech::{current_speech_authority,speech_pack_preparation_authority,speech_qualification_preparation,speech_qualification_observation};
 
 pub(crate) fn current_model_authority(profile: &crate::model::Profile) -> Result<()> {
     model_authority(profile, false, None)
@@ -5571,6 +5579,9 @@ fn execute_catalog_authorized_at<A: Checkpoint>(
     reviewed: Option<&str>,
     authority: CatalogAuthority<'_, '_>,
 ) -> Result<serde_json::Value> {
+    if matches!(command, Command::HardwarePolicyEvent { .. }) {
+        return Err("hardware journal events require the owned original hardware PAM controller, never a supplied catalog payload".into());
+    }
     if !admin_roles::identifier(request) || request == REQUEST {
         return Err("invalid or reserved Admin request".into());
     }
@@ -11252,6 +11263,43 @@ mod tests {
             keeper_generation: 5,
             runtime_sha256: "ef".repeat(32),
         }
+    }
+
+    #[test]
+    fn supplied_hardware_catalog_payload_never_reaches_a_tpm_append_or_event_stage() {
+        let fixture = Fixture::new("hardware-catalog-injection");
+        fixture.activate();
+        let intent = crate::hardware_policy::tests::intent();
+        let event = crate::hardware_policy::Event::Prepare {
+            intent: intent.clone(),
+        };
+        let command = Command::HardwarePolicyEvent {
+            authorization: crate::hardware_policy::Authorization {
+                subject: intent.subject.clone(),
+                subject_generation: 1,
+                context: floor_statement(3000),
+                lower_ms: 3000,
+                upper_ms: 3100,
+                uses: event
+                    .uses(&crate::hardware_policy::State::default(), None)
+                    .unwrap(),
+            },
+            event,
+        };
+        let before = fixture.store().snapshot().unwrap();
+        let writes = fixture.writes();
+        let error = fixture
+            .catalog_inspect("supplied-hardware-event", &command)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("owned original hardware PAM controller"));
+        assert_eq!(fixture.writes(), writes);
+        assert_eq!(fixture.store().snapshot().unwrap().head, before.head);
+        assert!(!fixture
+            .directory
+            .join(event_name("supplied-hardware-event"))
+            .exists());
+        assert!(!fixture.directory.join("journal.pending.json").exists());
     }
 
     #[test]

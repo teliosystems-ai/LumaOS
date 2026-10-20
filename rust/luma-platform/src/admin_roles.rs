@@ -25,6 +25,10 @@ pub(crate) fn identifier(value: &str) -> bool {
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) enum Command {
+    HardwarePolicyEvent {
+        event: crate::hardware_policy::Event,
+        authorization: crate::hardware_policy::Authorization,
+    },
     PublishModelTrust {
         expected_sequence: u64,
         bundle: crate::model_trust::SignedTrust,
@@ -148,6 +152,7 @@ pub(crate) enum Command {
 impl Command {
     pub(crate) fn activity(&self) -> &'static str {
         match self {
+            Self::HardwarePolicyEvent { event, .. } => event.activity(),
             Self::PublishModelTrust { .. } => "admin.models.trust_publish",
             Self::AdmitModelCatalog { .. } => "admin.models.catalog_admit",
             Self::RecordModelCatalogApproval { approval, .. } => match approval.activity.as_str() {
@@ -217,6 +222,13 @@ impl Command {
     pub(crate) fn validate(&self) -> Result<()> {
         let valid_activity = |v: &str| identifier(v) && v != "admin.bootstrap";
         match self {
+            Self::HardwarePolicyEvent {
+                event,
+                authorization,
+            } => {
+                event.validate()?;
+                authorization.validate()
+            }
             Self::PublishModelTrust {
                 expected_sequence,
                 bundle,
@@ -416,6 +428,8 @@ pub(crate) struct Role {
 
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 pub(crate) struct Catalog {
+    #[serde(skip_serializing_if = "crate::hardware_policy::State::is_empty")]
+    pub hardware_policies: crate::hardware_policy::State,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub model_trust: Option<crate::model_trust::State>,
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
@@ -485,6 +499,7 @@ impl Catalog {
 
     pub(crate) fn initial() -> Self {
         Self {
+            hardware_policies: crate::hardware_policy::State::default(),
             model_trust: None,
             assignment_receipts: BTreeMap::new(),
             model_approvals: BTreeMap::new(),
@@ -543,6 +558,13 @@ impl Catalog {
             .checked_add(1)
             .ok_or("Admin catalog version exhausted")?;
         match command {
+            Command::HardwarePolicyEvent {
+                event,
+                authorization,
+            } => {
+                authorization.check(self, event)?;
+                self.hardware_policies.apply(event)?;
+            }
             Command::PublishModelTrust {
                 expected_sequence,
                 bundle,

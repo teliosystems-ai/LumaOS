@@ -62,4 +62,16 @@ RUN mkdir -p /usr/src/luma-tcc && cd /usr/src/luma-tcc && \
       'd63c113bcdd657f51c8ee197a0b0a24203603313e19a52b5f678d40ab7f5df35  tcc_0.9.27+git20200814.62c30a4a.orig.tar.bz2' \
       '27036dd5f67b6ce3b8212080d1d6e55b1f7b2e54a23d0f2a4af38090a8d75716  tcc_0.9.27+git20200814.62c30a4a-1.debian.tar.xz' | sha256sum -c -
 RUN apt-get install -y --no-install-recommends --snapshot=${SNAPSHOT} libreoffice-writer bubblewrap
+RUN apt-get install -y --no-install-recommends --snapshot=${SNAPSHOT} power-profiles-daemon=0.21-1ubuntu3
+RUN apt-get install -y --no-install-recommends --snapshot=${SNAPSHOT} g++ cmake \
+    libespeak-ng1=1.51+dfsg-12build1 espeak-ng-data=1.51+dfsg-12build1 libespeak-ng-dev=1.51+dfsg-12build1
+COPY speech/inputs/ /usr/src/luma-speech/inputs/
+COPY speech/ggml-tiny.bin /usr/share/luma-os/speech/ggml-tiny.bin
+RUN printf '%s\n' \
+    '645445da884df6dbd52b30f82d7be7c01d1767c938714e477e786b88d529e9f4  /usr/src/luma-speech/inputs/whisper-source.tar.gz' \
+    'b5d65a59060e68c4ff940e1eddfa6f94b2d68fdf58ed7f4dd57721c997e35e9d  /usr/src/luma-speech/inputs/model-LICENSE' \
+    '7d7e4f7606f1ddf3eb497a4848649eb72fc0acf70caccd9a61987f4d4444d688  /usr/src/luma-speech/inputs/espeak-ng_1.51+dfsg-12build1.dsc' \
+    '72242d7c06a4d80f5056335977c5be1ff79ff27bb502d4d054be1803ff787fa9  /usr/src/luma-speech/inputs/espeak-ng_1.51+dfsg.orig.tar.gz' \
+    'ccd4411d9efe0604030c604bd7369ec19598bc4d2b6435a0782398e174c0ee54  /usr/src/luma-speech/inputs/espeak-ng_1.51+dfsg-12build1.debian.tar.xz' \
+    'be07e048e1e599ad46341c8d2a135645097a538221678b7acdd1b1919c6e1b21  /usr/share/luma-os/speech/ggml-tiny.bin' | sha256sum -c -
 CMD ["/sbin/init"]

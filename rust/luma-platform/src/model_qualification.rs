@@ -21,6 +21,64 @@ use std::{
 const ROOT: &str = "/var/lib/luma-os/model-qualifications";
 const INPUT: &str = "/run/luma-admin/model-qualifications";
 const LIMIT: u64 = 96 * 1024;
+enum QualifiedProfile {
+    Text(crate::model::Profile),
+    Asr(crate::model::speech::Profile),
+}
+impl QualifiedProfile {
+    fn public(id: &str) -> Result<Self> {
+        if id == crate::model::speech::ID {
+            Ok(Self::Asr(crate::model::speech::public_profile()?))
+        } else {
+            Ok(Self::Text(crate::model::public_profile(id)?))
+        }
+    }
+    fn id(&self) -> &str {
+        match self {
+            Self::Text(p) => &p.id,
+            Self::Asr(p) => &p.id,
+        }
+    }
+    fn binding(&self) -> Result<&crate::model::NativeBinding> {
+        match self {
+            Self::Text(p) => p
+                .governed
+                .as_ref()
+                .ok_or_else(|| "qualification requires governed public text profile".into()),
+            Self::Asr(p) => Ok(&p.binding),
+        }
+    }
+    fn resource_binding(&self) -> Result<String> {
+        match self {
+            Self::Text(p) => p.resource_binding(),
+            Self::Asr(p) => p.resource_binding(),
+        }
+    }
+    fn prepare(&self, package: &Package) -> Result<()> {
+        match self {
+            Self::Text(p) => crate::admin_governance::qualification_preparation(
+                p,
+                &package.record,
+                &package.evidence,
+                &package.signature()?,
+            ),
+            Self::Asr(p) => crate::admin_governance::speech_qualification_preparation(
+                p,
+                &package.record,
+                &package.evidence,
+                &package.signature()?,
+            ),
+        }
+    }
+    fn observe(&self, level: &str, report: &str) -> Result<QualificationEvidence> {
+        match self {
+            Self::Text(p) => crate::admin_governance::qualification_observation(p, level, report),
+            Self::Asr(p) => {
+                crate::admin_governance::speech_qualification_observation(p, level, report)
+            }
+        }
+    }
+}
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Package {
@@ -202,11 +260,8 @@ fn source(path: &Path) -> Result<Transfer> {
 pub(crate) fn stage_input(path: &Path) -> Result<Vec<u8>> {
     model_trust::canonical(&source(path)?)
 }
-fn destination(profile: &crate::model::Profile, package: &Package) -> Result<PathBuf> {
-    let binding = profile
-        .governed
-        .as_ref()
-        .ok_or("qualification requires governed public model profile")?;
+fn destination(profile: &QualifiedProfile, package: &Package) -> Result<PathBuf> {
+    let binding = profile.binding()?;
     if binding.manifest_sha256 != package.record.pack_manifest_sha256
         || binding.runtime_tuple_sha256 != package.record.runtime_tuple_sha256
     {
@@ -224,7 +279,7 @@ fn current(path: &Path) -> Result<Option<String>> {
         })
         .transpose()
 }
-fn usage(profile: &crate::model::Profile, transfer: &Transfer) -> Result<Use> {
+fn usage(profile: &QualifiedProfile, transfer: &Transfer) -> Result<Use> {
     let bytes = transfer.package.bytes()?;
     let digest = model_trust::digest(
         &serde_json::json!({"domain":"luma-native-model-qualification-provision-v1","installation":crate::artifacts::installation()?,"profile":profile.resource_binding()?,"package_sha256":hash(&bytes),"previous_sha256":transfer.expected_previous_sha256}),
@@ -235,7 +290,8 @@ fn usage(profile: &crate::model::Profile, transfer: &Transfer) -> Result<Use> {
             kind: Kind::Resource,
             id: format!(
                 "ModelQualification-{}-{}",
-                profile.id, transfer.package.record.level
+                profile.id(),
+                transfer.package.record.level
             ),
             generation: 1,
             digest,
@@ -459,14 +515,9 @@ pub(crate) fn review(id: &str, input: &Path) -> Result<()> {
     crate::require_root()?;
     crate::platform::require_installed()?;
     crate::platform::require_production_activation()?;
-    let profile = crate::model::public_profile(id)?;
+    let profile = QualifiedProfile::public(id)?;
     let transfer = source(input)?;
-    crate::admin_governance::qualification_preparation(
-        &profile,
-        &transfer.package.record,
-        &transfer.package.evidence,
-        &transfer.package.signature()?,
-    )?;
+    profile.prepare(&transfer.package)?;
     let path = destination(&profile, &transfer.package)?;
     match fs::symlink_metadata(ROOT) {
         Ok(_) => {
@@ -490,16 +541,11 @@ pub(crate) fn install(login: &str, grant: &str, id: &str, input: &Path) -> Resul
     crate::require_root()?;
     crate::platform::require_installed()?;
     crate::platform::require_production_activation()?;
-    let profile = crate::model::public_profile(id)?;
+    let profile = QualifiedProfile::public(id)?;
     let transfer = source(input)?;
     let path = destination(&profile, &transfer.package)?;
     let usage = usage(&profile, &transfer)?;
-    crate::admin_governance::qualification_preparation(
-        &profile,
-        &transfer.package.record,
-        &transfer.package.evidence,
-        &transfer.package.signature()?,
-    )?;
+    profile.prepare(&transfer.package)?;
     crate::admin_governance::with_grant(login, grant, &usage, |boundary| {
         boundary.require_admin()?;
         hierarchy(true)?;
@@ -512,12 +558,7 @@ pub(crate) fn install(login: &str, grant: &str, id: &str, input: &Path) -> Resul
         )?;
         let changed = publish(Path::new(ROOT), &path, &transfer, || {
             boundary.require_admin()?;
-            crate::admin_governance::qualification_preparation(
-                &profile,
-                &transfer.package.record,
-                &transfer.package.evidence,
-                &transfer.package.signature()?,
-            )?;
+            profile.prepare(&transfer.package)?;
             boundary.check()
         })?;
         boundary.require_admin()?;
@@ -533,9 +574,8 @@ pub(crate) fn install(login: &str, grant: &str, id: &str, input: &Path) -> Resul
     })
 }
 pub(crate) fn observe(id: &str, level: &str, report_sha256: &str) -> Result<()> {
-    let profile = crate::model::public_profile(id)?;
-    let evidence =
-        crate::admin_governance::qualification_observation(&profile, level, report_sha256)?;
+    let profile = QualifiedProfile::public(id)?;
+    let evidence = profile.observe(level, report_sha256)?;
     println!(
         "{}",
         serde_json::json!({"schema_version":1,"evidence":evidence,"evidence_sha256":model_trust::digest(&evidence)?,"certified":false,"authority_returned":false})
@@ -552,11 +592,8 @@ struct Pending {
     ctime_nsec: i64,
     sha256: String,
 }
-fn pending(profile: &crate::model::Profile) -> Result<Vec<Pending>> {
-    let binding = profile
-        .governed
-        .as_ref()
-        .ok_or("qualification retention requires exact governed public model")?;
+fn pending(profile: &QualifiedProfile) -> Result<Vec<Pending>> {
+    let binding = profile.binding()?;
     hierarchy(false)?;
     let prefix = format!(".pending-{}-", binding.manifest_sha256);
     let mut out = Vec::new();
@@ -614,7 +651,7 @@ fn pending(profile: &crate::model::Profile) -> Result<Vec<Pending>> {
     }
     Ok(out)
 }
-fn pending_usage(profile: &crate::model::Profile, witness: &[Pending]) -> Result<Use> {
+fn pending_usage(profile: &QualifiedProfile, witness: &[Pending]) -> Result<Use> {
     let digest = model_trust::digest(
         &serde_json::json!({"domain":"luma-model-qualification-retain-unverified-v1","installation":crate::artifacts::installation()?,"profile":profile.resource_binding()?,"pending":witness}),
     )?;
@@ -626,7 +663,7 @@ fn pending_usage(profile: &crate::model::Profile, witness: &[Pending]) -> Result
         action: Action::Retain,
         selector: Selector {
             kind: Kind::Resource,
-            id: format!("ModelQualification-{}-pending", profile.id),
+            id: format!("ModelQualification-{}-pending", profile.id()),
             generation: 1,
             digest,
         },
@@ -641,7 +678,7 @@ pub(crate) fn pending_review(id: &str) -> Result<()> {
     crate::require_root()?;
     crate::platform::require_installed()?;
     crate::platform::require_production_activation()?;
-    let profile = crate::model::public_profile(id)?;
+    let profile = QualifiedProfile::public(id)?;
     let witness = pending(&profile)?;
     println!(
         "{}",
@@ -653,7 +690,7 @@ pub(crate) fn pending_retain(login: &str, grant: &str, id: &str, review: &str) -
     crate::require_root()?;
     crate::platform::require_installed()?;
     crate::platform::require_production_activation()?;
-    let profile = crate::model::public_profile(id)?;
+    let profile = QualifiedProfile::public(id)?;
     let witness = pending(&profile)?;
     let usage = pending_usage(&profile, &witness)?;
     if usage.selector.digest != review {

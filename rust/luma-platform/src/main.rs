@@ -28,6 +28,7 @@ mod credential_observer;
 mod disk;
 mod finite_grants;
 mod generated_runtime;
+mod hardware_policy;
 mod hosted_fence;
 mod hosted_inference;
 mod hosted_windows;
@@ -54,6 +55,7 @@ mod sealed_credential;
 mod service;
 mod skill_trust;
 mod skills;
+mod speech;
 mod sqlite;
 mod staging;
 mod storage_io;
@@ -166,6 +168,8 @@ fn dispatch() -> Result<()> {
                     | "granted-infer-review"
                     | "generated-review"
                     | "generated-execute"
+                    | "speech-review"
+                    | "speech-transcribe"
                     | "model-pack-import-review"
                     | "model-pack-import"
                     | "model-pack-pending-review"
@@ -344,6 +348,11 @@ fn dispatch() -> Result<()> {
             hosted_workspace::contract()
         }
         Some("hosted-windows-workspace-drain") if args.len() == 2 => hosted_workspace::drain(&args[1]),
+        Some("speech-resource-worker" | "speech-import-resource-worker" | "speech-review") if args.len() == 2 => speech::command(&args),
+        Some("speech-transcribe") if args.len() == 4 => speech::command(&args),
+        Some("hardware-run") if args.len() == 2 => hardware_policy::console::launch(&args[1]),
+        Some("hardware-console") if args.len() == 2 => hardware_policy::console::run(&args[1]),
+        Some("hardware-cleanup") if args.len() == 2 => hardware_policy::console::cleanup(&args[1]),
         Some(
             "hosted-windows-workspace-bootstrap"
             | "hosted-windows-workspace-bootstrap-launch"

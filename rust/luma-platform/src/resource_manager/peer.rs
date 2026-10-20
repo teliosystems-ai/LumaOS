@@ -335,6 +335,90 @@ pub(super) fn live_generation(peer: libc::ucred, pin: &File) -> Result<(u64, Str
     Ok((start, boot))
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) enum HardwareCommand {
+    Console,
+    Cleanup(String),
+}
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct HardwarePeer {
+    pub pid: u32,
+    pub start: u64,
+    pub boot: String,
+    pub unit: String,
+    pub command: HardwareCommand,
+}
+pub(super) fn hardware_generation(peer: libc::ucred, pin: &File) -> Result<HardwarePeer> {
+    if peer.uid != 0 || peer.gid != 0 {
+        return Err("hardware handoff requires its capability-free root controller".into());
+    }
+    let (start, boot) = live_generation(peer, pin)?;
+    let process = Path::new("/proc").join(peer.pid.to_string());
+    let cgroup = safe_text(&process.join("cgroup"), 4096)?;
+    let unit = cgroup
+        .strip_prefix("0::/system.slice/luma-hardware-")
+        .and_then(|value| value.strip_suffix(".service\n"))
+        .ok_or("hardware caller is not a fixed transient hardware unit")?;
+    if crate::tpm::decode::<16>(unit)? == [0; 16] {
+        return Err("hardware unit identity is zero".into());
+    }
+    let unit = format!("luma-hardware-{unit}.service");
+    let cmdline = safe_text(&process.join("cmdline"), 4096)?;
+    let parts = cmdline.split('\0').collect::<Vec<_>>();
+    if parts.len() != 4 || parts[0] != "/usr/libexec/luma-os/luma-platform" || !parts[3].is_empty()
+    {
+        return Err("hardware process is not its fixed native console/cleanup entrypoint".into());
+    }
+    let command = match parts[1] {
+        "hardware-console"
+            if parts[2].len() <= 32
+                && !parts[2].is_empty()
+                && parts[2].as_bytes()[0].is_ascii_lowercase()
+                && parts[2].bytes().all(|byte| {
+                    byte.is_ascii_lowercase() || byte.is_ascii_digit() || b"_-".contains(&byte)
+                }) =>
+        {
+            HardwareCommand::Console
+        }
+        "hardware-cleanup" if crate::admin_roles::identifier(parts[2]) => {
+            HardwareCommand::Cleanup(parts[2].into())
+        }
+        _ => return Err("hardware process arguments exceed the closed native entrypoint".into()),
+    };
+    let executable = fs::metadata(process.join("exe"))?;
+    let installed = fs::symlink_metadata("/usr/libexec/luma-os/luma-platform")?;
+    if executable.dev() != installed.dev()
+        || executable.ino() != installed.ino()
+        || !installed.is_file()
+        || installed.uid() != 0
+        || installed.mode() & 0o022 != 0
+    {
+        return Err("hardware controller is not the immutable installed native binary".into());
+    }
+    for _ in 0..2 {
+        confined_status(&safe_text(&process.join("status"), STATUS_BYTES)?, 0, 0)?;
+        locked_memory_bound(&safe_text(&process.join("limits"), 8192)?, 262_144)?;
+        let group = Path::new("/sys/fs/cgroup/system.slice").join(&unit);
+        if safe_text(&process.join("attr/current"), 128)? != "luma-hardware (enforce)\n"
+            || safe_text(&process.join("cgroup"), 4096)? != cgroup
+            || safe_text(&process.join("cmdline"), 4096)? != cmdline
+            || number(&safe_text(&group.join("memory.max"), 64)?)? != 268_435_456
+            || number(&safe_text(&group.join("memory.swap.max"), 64)?)? != 0
+            || number(&safe_text(&group.join("pids.max"), 64)?)? != 16
+            || live_generation(peer, pin)? != (start, boot.clone())
+        {
+            return Err("hardware controller lost its fixed process/confinement generation".into());
+        }
+    }
+    Ok(HardwarePeer {
+        pid: peer.pid.try_into()?,
+        start,
+        boot,
+        unit,
+        command,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

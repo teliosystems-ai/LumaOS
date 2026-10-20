@@ -22,9 +22,43 @@ from luma_os.signing_trust import SignedTrustBundle, RootTrustAnchor
 spec = importlib.util.spec_from_file_location('luma_public_inputs', Path(__file__).with_name('provision_public_trust.py'))
 public = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(public)
+speech_spec = importlib.util.spec_from_file_location('luma_auxiliary_speech_catalog', Path(__file__).parent/'speech/catalog.py')
+speech = importlib.util.module_from_spec(speech_spec)
+speech_spec.loader.exec_module(speech)
 MAX_MEMBER = 16 * 1024 * 1024
 MAX_TOTAL = 128 * 1024 * 1024
 RESERVE = 2 * 1024 * 1024 * 1024
+
+
+def native_tuple(p, manifest, n, tuple_value, tuple_digest):
+    m = manifest.document
+    models = [b for b in manifest.blobs if b.role == 'model']
+    size = sum(b.size_bytes for b in manifest.blobs)
+    floor = size+n['bytes']+RESERVE
+    memory = lambda r: len(r) == 1 and r[0]['domain'] == 'host' and r[0]['bytes'] >= n['memory_max_bytes']
+    installs = [i for i in manifest.installation_profiles if i.profile_id == p['profile_id']]
+    if len(manifest.blobs) > 128 or len(models) != 1 or models[0].sha256 != n['sha256'] or models[0].size_bytes != n['bytes'] \
+            or models[0].shard_index != 0 or tuple_value not in m['runtime_tuples'] \
+            or p['runtime_tuple_sha256'] != tuple_digest or p['execution_mode'] != 'cpu' \
+            or p['minimum_accelerator_memory_bytes'] != 0 or p['context_tokens'] != n['context_tokens'] \
+            or p['minimum_host_ram_bytes'] < n['minimum_ram_bytes'] or p['install_bytes'] != size \
+            or p['storage_peak_bytes'] < floor or not memory(p['load_reservations']) or not memory(p['serve_reservations']) \
+            or p['minimum_host_ram_bytes'] <= max(p['load_reservations'][0]['bytes'], p['serve_reservations'][0]['bytes']) \
+            or (p['parameter_total'], p['parameter_active_min'], p['parameter_active_max']) != (n['parameters'], n['active_parameters'], n['active_parameters']) \
+            or m['model']['architecture'] != 'qwen3' or m['model']['quantization'] != 'Q4_K_M' \
+            or m['model']['required_features'] != ['chat-completion', 'text-generation'] \
+            or m['model']['source'] != n['url'] or manifest.total_parameters != n['parameters'] \
+            or manifest.active_parameters_min != n['active_parameters'] or manifest.active_parameters_max != n['active_parameters'] \
+            or manifest.maximum_context_tokens < n['context_tokens'] or manifest.license_use != 'approved' \
+            or m['license']['identifier'] != n['license'] or len(installs) != 1:
+        raise ValueError('model pack/catalog changes or understates compiled native tuple')
+    install = installs[0]
+    if install.runtime_tuple_sha256 != tuple_digest or install.execution_mode != 'cpu' \
+            or install.minimum_accelerator_memory_bytes != 0 \
+            or install.minimum_host_ram_bytes > p['minimum_host_ram_bytes'] \
+            or install.minimum_model_storage_bytes > p['storage_peak_bytes'] \
+            or install.maximum_context_tokens < n['context_tokens']:
+        raise ValueError('model install profile does not match actual native execution')
 
 
 def canonical(value):
@@ -203,8 +237,6 @@ def validate(root, values):
             continue
         p = profile.canonical_payload()
         n = native.get(p['profile_id'])
-        if n is None:
-            raise ValueError('model catalog requires unsupported compiled native profile')
         prefix = 'model-packs/' + p['model_pack_manifest_sha256'] + '/'
         expected.update((prefix + 'manifest.json', prefix + 'manifest.sig'))
         manifest = ModelManifest.parse(values[prefix + 'manifest.json'])
@@ -213,33 +245,13 @@ def validate(root, values):
             raise ValueError('model pack is not its declared immutable digest')
         signature(manifest.signer_key_id, 'model-pack-manifest', manifest.canonical_bytes,
                   values[prefix + 'manifest.sig'])
-        models = [b for b in manifest.blobs if b.role == 'model']
-        size = sum(b.size_bytes for b in manifest.blobs)
-        floor = size + n['bytes'] + RESERVE
-        memory = lambda r: len(r) == 1 and r[0]['domain'] == 'host' and r[0]['bytes'] >= n['memory_max_bytes']
-        installs = [i for i in manifest.installation_profiles if i.profile_id == p['profile_id']]
-        if len(manifest.blobs) > 128 or len(models) != 1 or models[0].sha256 != n['sha256'] or models[0].size_bytes != n['bytes'] \
-                or models[0].shard_index != 0 or tuple_value not in m['runtime_tuples'] \
-                or p['runtime_tuple_sha256'] != tuple_digest or p['execution_mode'] != 'cpu' \
-                or p['minimum_accelerator_memory_bytes'] != 0 or p['context_tokens'] != n['context_tokens'] \
-                or p['minimum_host_ram_bytes'] < n['minimum_ram_bytes'] or p['install_bytes'] != size \
-                or p['storage_peak_bytes'] < floor or not memory(p['load_reservations']) or not memory(p['serve_reservations']) \
-                or p['minimum_host_ram_bytes'] <= max(p['load_reservations'][0]['bytes'], p['serve_reservations'][0]['bytes']) \
-                or (p['parameter_total'], p['parameter_active_min'], p['parameter_active_max']) != (n['parameters'], n['active_parameters'], n['active_parameters']) \
-                or m['model']['architecture'] != 'qwen3' or m['model']['quantization'] != 'Q4_K_M' \
-                or m['model']['required_features'] != ['chat-completion', 'text-generation'] \
-                or m['model']['source'] != n['url'] or manifest.total_parameters != n['parameters'] \
-                or manifest.active_parameters_min != n['active_parameters'] or manifest.active_parameters_max != n['active_parameters'] \
-                or manifest.maximum_context_tokens < n['context_tokens'] or manifest.license_use != 'approved' \
-                or m['license']['identifier'] != n['license'] or len(installs) != 1:
-            raise ValueError('model pack/catalog changes or understates compiled native tuple')
-        install = installs[0]
-        if install.runtime_tuple_sha256 != tuple_digest or install.execution_mode != 'cpu' \
-                or install.minimum_accelerator_memory_bytes != 0 \
-                or install.minimum_host_ram_bytes > p['minimum_host_ram_bytes'] \
-                or install.minimum_model_storage_bytes > p['storage_peak_bytes'] \
-                or install.maximum_context_tokens < n['context_tokens']:
-            raise ValueError('model install profile does not match actual native execution')
+        exact_tuple_digest = tuple_digest
+        if p['profile_id'] == speech.PROFILE or m['model']['architecture'] == 'whisper-tiny-multilingual':
+            exact_tuple_digest = speech.validate(p, document(manifest.canonical_bytes))
+        elif n is not None:
+            native_tuple(p, manifest, n, tuple_value, tuple_digest)
+        else:
+            raise ValueError('model catalog requires unsupported compiled native/auxiliary profile')
         auxiliary = 0
         for blob in manifest.blobs:
             if blob.role == 'model':
@@ -262,7 +274,7 @@ def validate(root, values):
             record = CertificationRecord(**closed(document(values[cert_prefix + '.json']),
                      ('level', 'pack_manifest_sha256', 'runtime_tuple_sha256', 'evidence_sha256', 'signer_key_id')))
             if record.level != level or record.pack_manifest_sha256 != p['model_pack_manifest_sha256'] \
-                    or record.runtime_tuple_sha256 != tuple_digest:
+                    or record.runtime_tuple_sha256 != exact_tuple_digest:
                 raise ValueError('model certification changes exact pack/tuple/level')
             signature(record.signer_key_id, 'model-pack-' + level + '-certification',
                       record.canonical_bytes, values[cert_prefix + '.sig'])

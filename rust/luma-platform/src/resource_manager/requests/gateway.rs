@@ -305,6 +305,11 @@ impl Manager {
         mut admission: Option<crate::service::granted_gateway::Admission>,
     ) -> Result<serde_json::Value> {
         validate(request, peer.uid, now()?)?;
+        let _hardware = if matches!(request.payload, Message::Submit { .. }) {
+            self.hardware.admit(super::super::Kind::Model)?
+        } else {
+            None
+        };
         crate::platform::require_installed()?;
         let identity = super::super::peer::live_generation(peer, &pin)?;
         self.maintain()?;

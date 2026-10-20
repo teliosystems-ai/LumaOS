@@ -1,0 +1,32 @@
+{
+  "schema_version": 1,
+  "recorded_on": "2026-10-20",
+  "status": "pinned-speech-source-and-model-acquisition-software-verified",
+  "scope": "Explicit exact public-input acquisition and image-builder wiring, not inference, model admission or audio-device authorization",
+  "verification": {
+    "directory": "/mnt/luma-build/work/speech-input-20261020-Y1z2j35g",
+    "tests": 14,
+    "speech_input_tests": 4,
+    "existing_build_driver_tests": 6,
+    "existing_runtime_input_tests": 4,
+    "all_six_actual_cached_inputs_verified": true,
+    "network_used": false,
+    "code_executed_by_acquisition": false,
+    "log_sha256": "72c7d805460d6c83c046131ed58f26dd0e691dd4bf6c703affa0ffdca324439e"
+  },
+  "implementation": [
+    "Acquire the exact Whisper source commit, original model license, model weight and three corresponding eSpeak source archives into a new exclusive runtime context. Every input has a fixed size and SHA256, verified again in the image Docker recipe",
+    "Optional cached input directories are explicit and nonredirected; files must be regular, stable, single-linked and exact. Acquisition preserves mismatching inert partial inputs rather than overwriting or executing them",
+    "HTTPS inputs refuse downgrade redirects and use bounded streaming/deadlines. Model weights are never executed, treated as a text-model GGUF, or inferred to confer model authority",
+    "The image assembler invokes the fixed source-bound runtime builder before verity sealing. Speech image verification binds corresponding source, actual compiler recipe, binary/runtime hashes and conservative no-qualification declarations",
+    "This acquisition checkpoint does not verify a final whole image. Later assembler and desktop integration changes require a separately identified source sweep and image"
+  ],
+  "source_sha256": {
+    "native/image/prepare_speech.py": "dc0c85a1a838204e9b81d3216c2e2404c3a7d0524a36e7fb7398132808c8f4b1",
+    "native/tests/test_speech_input.py": "22a8347db1a06b2ee2d73925b0f0698c5c86ae227c7185069f595ea84a0ac087"
+  },
+  "installed_qualified": false,
+  "model_authority_provisioned": false,
+  "production_qualified": false,
+  "gate_closing": false
+}

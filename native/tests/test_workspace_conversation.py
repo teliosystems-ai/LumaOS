@@ -28,6 +28,7 @@ def load(name, path):
 
 auth = load('luma_conversation_auth', 'native/desktop/workspace_auth.py')
 app = load('luma_conversation_app', 'native/desktop/workspace_app.py')
+draft = load('luma_conversation_manual_draft', 'native/desktop/workspace_draft.py')
 
 
 def initial(prompt='Explain this without changing any files.', maximum=128):
@@ -246,7 +247,7 @@ class WorkspaceConversationTests(unittest.TestCase):
     def test_manual_handoff_requires_every_exact_field_and_new_native_workflow_authority(self):
         binding = dict(installation='1'*64, owner='2'*64, owner_generation=2**64-1)
         controls = [json.dumps(binding), 'document.new', 'manual.request.1', 'null', 'document']
-        with patch.object(auth, 'terminal_line', side_effect=controls), \
+        with patch.object(auth, 'draft_controller', return_value=draft), patch.object(auth, 'terminal_line', side_effect=controls), \
              patch.object(auth, 'revised_source', return_value='{"manual":"explicit human source, not a model reply"}'), \
              patch.object(auth, 'workflow_journey', return_value=0) as workflow, patch('sys.stdout', new_callable=io.StringIO):
             self.assertEqual(auth.conversation_manual_workflow('alice', Path('/inert/private')), 0)
@@ -260,7 +261,7 @@ class WorkspaceConversationTests(unittest.TestCase):
             self.assertIsNone(source['operation']['request']['expected'])
             self.assertEqual(source['operation']['request']['request_id'], 'manual.request.1')
             self.assertIn('explicit human source', source['operation']['request']['source'])
-        with patch.object(auth, 'terminal_line', return_value='q'), patch.object(auth, 'revised_source') as source, \
+        with patch.object(auth, 'draft_controller', return_value=draft), patch.object(auth, 'terminal_line', return_value='q'), patch.object(auth, 'revised_source') as source, \
              patch.object(auth, 'workflow_journey') as workflow, patch('sys.stdout', new_callable=io.StringIO):
             self.assertEqual(auth.conversation_manual_workflow('alice', Path('/inert/private')), 0)
             workflow.assert_not_called()

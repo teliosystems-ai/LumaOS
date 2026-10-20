@@ -141,6 +141,9 @@ python3 "$source_context/native/image/prepare_runtime.py" "${runtime_args[@]}"
 utc_args=(--output "$runtime_context")
 if [ -n "${LUMA_UTC_ARCHIVE:-}" ]; then utc_args+=(--cached "$LUMA_UTC_ARCHIVE"); fi
 python3 "$source_context/native/image/utc/prepare_release_input.py" "${utc_args[@]}"
+speech_args=(--output "$runtime_context")
+if [ -n "${LUMA_SPEECH_INPUTS:-}" ]; then speech_args+=(--cached-directory "$LUMA_SPEECH_INPUTS"); fi
+python3 "$source_context/native/image/prepare_speech.py" "${speech_args[@]}"
 docker build "${build_limits[@]}" --network "$build_network" --build-arg "UBUNTU_BASE=$base" -f "$source_context/native/image/Dockerfile.tools" -t "$tools" "$source_context/native/image"
 docker build "${build_limits[@]}" --network "$build_network" --build-arg "EDITION=$edition" -f "$source_context/native/image/Dockerfile.root" -t "luma-native-root:20260927-$edition" "$runtime_context"
 docker volume create "$volume"

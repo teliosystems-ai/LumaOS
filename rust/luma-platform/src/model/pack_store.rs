@@ -10,11 +10,34 @@ use crate::{
 };
 use std::collections::BTreeSet;
 
-const PUBLIC: &str = "/usr/share/luma-os/model-packs";
-const PUBLIC_CATALOG: &str = "/usr/share/luma-os/models/catalog.json";
+pub(super) const PUBLIC: &str = "/usr/share/luma-os/model-packs";
+pub(super) const PUBLIC_CATALOG: &str = "/usr/share/luma-os/models/catalog.json";
 const RESERVE: u64 = 2 * 1024 * 1024 * 1024;
 
-fn read(at: &Path, maximum: u64) -> Result<Vec<u8>> {
+pub(super) trait PackBinding {
+    fn pack_binding(&self) -> Result<&NativeBinding>;
+    fn pack_resource_binding(&self) -> Result<String>;
+}
+impl PackBinding for Profile {
+    fn pack_binding(&self) -> Result<&NativeBinding> {
+        self.governed
+            .as_ref()
+            .ok_or_else(|| "pack operation requires exact governed public text tuple".into())
+    }
+    fn pack_resource_binding(&self) -> Result<String> {
+        self.resource_binding()
+    }
+}
+impl PackBinding for speech::Profile {
+    fn pack_binding(&self) -> Result<&NativeBinding> {
+        Ok(&self.binding)
+    }
+    fn pack_resource_binding(&self) -> Result<String> {
+        self.resource_binding()
+    }
+}
+
+pub(super) fn read(at: &Path, maximum: u64) -> Result<Vec<u8>> {
     let mut file = regular(at)?;
     if file.metadata()?.len() > maximum {
         return Err("model public metadata exceeds bound".into());
@@ -29,7 +52,7 @@ fn read(at: &Path, maximum: u64) -> Result<Vec<u8>> {
     }
     Ok(bytes)
 }
-fn identity(m: &fs::Metadata) -> (u64, u64, u64, i64, i64, i64, i64) {
+pub(super) fn identity(m: &fs::Metadata) -> (u64, u64, u64, i64, i64, i64, i64) {
     (
         m.dev(),
         m.ino(),
@@ -40,7 +63,7 @@ fn identity(m: &fs::Metadata) -> (u64, u64, u64, i64, i64, i64, i64) {
         m.ctime_nsec(),
     )
 }
-fn regular(at: &Path) -> Result<File> {
+pub(super) fn regular(at: &Path) -> Result<File> {
     let mut parent = at.parent().ok_or("model path has no parent")?;
     loop {
         let m = fs::symlink_metadata(parent)?;
@@ -59,7 +82,7 @@ fn regular(at: &Path) -> Result<File> {
     }
     Ok(file)
 }
-fn public_manifest(digest: &str) -> Result<PackManifest> {
+pub(super) fn public_manifest(digest: &str) -> Result<PackManifest> {
     if !crate::artifacts::hash(digest) {
         return Err("invalid model manifest digest".into());
     }
@@ -193,11 +216,12 @@ pub(crate) fn public_native_profiles() -> Result<Option<Vec<Profile>>> {
             let mut result = Vec::new();
             for profile in &catalog.profiles {
                 if let SelectableProfile::Model(p) = profile {
-                    result.push(native_profile(
-                        p,
-                        &public_manifest(&p.model_pack_manifest_sha256)?,
-                        &digest,
-                    )?);
+                    let manifest = public_manifest(&p.model_pack_manifest_sha256)?;
+                    if speech::matches(p, &manifest) {
+                        speech::project(p, &manifest, &digest)?;
+                        continue;
+                    }
+                    result.push(native_profile(p, &manifest, &digest)?);
                 }
             }
             Ok(Some(result))
@@ -271,7 +295,7 @@ fn expected(m: &PackManifest, auxiliary: bool) -> BTreeSet<String> {
     }
     set
 }
-fn hash_member(
+pub(super) fn hash_member(
     at: &Path,
     size: u64,
     digest: &str,
@@ -331,6 +355,9 @@ fn verify_sidecars(
     manifest: &PackManifest,
     check: &mut impl FnMut() -> Result<()>,
 ) -> Result<()> {
+    if manifest.model.architecture == speech::ARCHITECTURE {
+        return speech::sidecars(root, manifest, check);
+    }
     let weight = manifest
         .blobs
         .iter()
@@ -435,6 +462,16 @@ pub(super) fn import_pack_from(
     let Some(binding) = &p.governed else {
         return Ok(());
     };
+    import_binding_from(public, var, binding, weight, check)
+}
+pub(super) fn import_binding_from(
+    public: &Path,
+    var: &Path,
+    binding: &NativeBinding,
+    weight: &Path,
+    check: &mut impl FnMut() -> Result<()>,
+) -> Result<()> {
+    binding.validate()?;
     let source = public.join(&binding.manifest_sha256);
     let manifest = PackManifest::parse(&read(
         &source.join("manifest.json"),
@@ -522,11 +559,8 @@ pub(super) fn import_pack_from(
 }
 /// Metadata-only disposition review of interrupted, unverified bytes. This is
 /// not a byte verification, a pack admission, or permission to resume copying.
-pub(super) fn pending_review(p: &Profile) -> Result<(String, u64, PathBuf)> {
-    let binding = p
-        .governed
-        .as_ref()
-        .ok_or("pending governed pack disposition requires exact signed public profile")?;
+pub(super) fn pending_review(p: &impl PackBinding) -> Result<(String, u64, PathBuf)> {
+    let binding = p.pack_binding()?;
     let manifest = public_manifest(&binding.manifest_sha256)?;
     let root = Path::new(VAR).join(STATE).join("model-packs");
     let pending = root.join(format!(".import-{}.pending", binding.manifest_sha256));
@@ -600,7 +634,7 @@ pub(super) fn pending_review(p: &Profile) -> Result<(String, u64, PathBuf)> {
     let bytes = serde_json::to_vec(&(
         "luma-native-unverified-model-pending-retention-v1",
         &binding,
-        p.resource_binding()?,
+        p.pack_resource_binding()?,
         crate::resource_manager::storage_device(Path::new(VAR))?,
         witness,
     ))?;
@@ -614,7 +648,7 @@ pub(super) fn pending_review(p: &Profile) -> Result<(String, u64, PathBuf)> {
     ))
 }
 pub(super) fn retain_pending(
-    p: &Profile,
+    p: &impl PackBinding,
     review: &str,
     check: &mut impl FnMut() -> Result<()>,
 ) -> Result<()> {
@@ -623,10 +657,7 @@ pub(super) fn retain_pending(
         return Err("interrupted pack changed after reviewed disposition".into());
     }
     let root = pending.parent().ok_or("pending model parent missing")?;
-    let binding = p
-        .governed
-        .as_ref()
-        .ok_or("governed pending model binding missing")?;
+    let binding = p.pack_binding()?;
     let retained_name = format!(".retained-{}-{review}", binding.manifest_sha256);
     let mut count = 0usize;
     let mut total = 0u64;
@@ -771,7 +802,7 @@ static PROOFS: std::sync::OnceLock<
     std::sync::Mutex<std::collections::BTreeMap<String, RetainedPack>>,
 > = std::sync::OnceLock::new();
 static BACKGROUND: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-fn retained_pack(
+pub(super) fn retained_pack(
     root: &Path,
     manifest: &PackManifest,
     allow_hash: bool,
@@ -825,18 +856,20 @@ fn retained_pack(
         .iter()
         .find(|blob| blob.role == "model")
         .ok_or("native pack model missing")?;
-    let profile = legacy_catalog()?
-        .models
-        .into_iter()
-        .find(|profile| profile.sha256 == weights.sha256 && profile.bytes == weights.size_bytes)
-        .ok_or("runtime cache lacks exact compiled model tuple")?;
-    let cached = Path::new(VAR)
-        .join(STATE)
-        .join("models")
-        .join(format!("{}.gguf", profile.id));
-    let file = hash_member(&cached, weights.size_bytes, &weights.sha256, check)?;
-    let pin = identity(&file.metadata()?);
-    members.push((cached, file, pin));
+    if manifest.model.architecture != speech::ARCHITECTURE {
+        let profile = legacy_catalog()?
+            .models
+            .into_iter()
+            .find(|profile| profile.sha256 == weights.sha256 && profile.bytes == weights.size_bytes)
+            .ok_or("runtime cache lacks exact compiled model tuple")?;
+        let cached = Path::new(VAR)
+            .join(STATE)
+            .join("models")
+            .join(format!("{}.gguf", profile.id));
+        let file = hash_member(&cached, weights.size_bytes, &weights.sha256, check)?;
+        let pin = identity(&file.metadata()?);
+        members.push((cached, file, pin));
+    }
     let mut paths = BTreeSet::from([root.to_path_buf()]);
     for b in &manifest.blobs {
         let mut parent = root
@@ -1142,7 +1175,13 @@ pub(crate) fn verify_catalog_packs(
     for profile in &catalog.profiles {
         if let SelectableProfile::Model(p) = profile {
             let manifest = public_manifest(&p.model_pack_manifest_sha256)?;
-            let native = native_profile(p, &manifest, &digest)?;
+            let binding = if speech::matches(p, &manifest) {
+                speech::project(p, &manifest, &digest)?.binding
+            } else {
+                native_profile(p, &manifest, &digest)?
+                    .governed
+                    .ok_or("native tuple missing")?
+            };
             if p.availability != "available" {
                 continue;
             }
@@ -1160,17 +1199,7 @@ pub(crate) fn verify_catalog_packs(
             let tuple = manifest
                 .runtime_tuples
                 .iter()
-                .find(|t| {
-                    t.digest().ok().as_deref()
-                        == Some(
-                            native
-                                .governed
-                                .as_ref()
-                                .unwrap()
-                                .runtime_tuple_sha256
-                                .as_str(),
-                        )
-                })
+                .find(|t| t.digest().ok().as_deref() == Some(binding.runtime_tuple_sha256.as_str()))
                 .ok_or("exact native tuple missing")?
                 .clone();
             let mut verification = PackVerification {
@@ -1326,6 +1355,28 @@ pub(crate) fn start_pack_verifier() -> Result<PackVerifier> {
                         }
                     }
                 }
+                if let Ok(profile) = speech::public_profile() {
+                    let root = Path::new(VAR).join(STATE).join("model-packs").join(&profile.binding.manifest_sha256);
+                    if let Ok(manifest) = public_manifest(&profile.binding.manifest_sha256) {
+                        let weight = root.join(format!("blobs/sha256/{}", speech::WEIGHT_SHA256));
+                        if let Ok(witness) = physical_witness(&root, &weight) {
+                            if attempted.get(&profile.binding.manifest_sha256) != Some(&witness) {
+                                let deadline = std::time::Instant::now()+std::time::Duration::from_secs(60);
+                                let outcome = retained_pack(&root, &manifest, true, &mut || {
+                                    if cancel.load(std::sync::atomic::Ordering::Acquire) || std::time::Instant::now() >= deadline {
+                                        Err("auxiliary speech physical verification cancelled or timed out".into())
+                                    } else { Ok(()) }
+                                });
+                                let transient = outcome.as_ref().err().is_some_and(|e| {
+                                    let m=e.to_string();m.contains("busy") || m.contains("concurrently") || m.contains("before publication")
+                                });
+                                if !transient && (outcome.is_ok() || !cancel.load(std::sync::atomic::Ordering::Acquire)) {
+                                    attempted.insert(profile.binding.manifest_sha256,witness);
+                                }
+                            }
+                        }
+                    }
+                }
                 let Ok(guard) = wait.0.lock() else {
                     break;
                 };
@@ -1390,6 +1441,14 @@ pub(crate) fn verify_public_preparation(
     if public_profile(&p.id)?.resource_binding()? != p.resource_binding()? {
         return Err("model preparation profile changed".into());
     }
+    verify_public_binding_preparation(binding, trust, interval)
+}
+pub(super) fn verify_public_binding_preparation(
+    binding: &NativeBinding,
+    trust: &SignedTrust,
+    interval: Interval,
+) -> Result<PackVerification> {
+    binding.validate()?;
     let manifest = public_manifest(&binding.manifest_sha256)?;
     let root = Path::new(PUBLIC).join(&binding.manifest_sha256);
     if inventory(&root)? != expected(&manifest, true) {

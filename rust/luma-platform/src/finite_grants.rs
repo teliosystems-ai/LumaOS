@@ -55,6 +55,12 @@ pub(crate) enum Action {
     ExecuteGenerated,
     #[serde(rename = "model.qa")]
     QualifyModel,
+    #[serde(rename = "hardware.inspect")]
+    InspectHardware,
+    #[serde(rename = "hardware.apply")]
+    ApplyHardware,
+    #[serde(rename = "hardware.restore")]
+    RestoreHardware,
 }
 impl Action {
     pub(crate) fn activity(self) -> &'static str {
@@ -76,6 +82,9 @@ impl Action {
             Self::RecoverResource => "resource.recover",
             Self::ExecuteGenerated => "generated.execute",
             Self::QualifyModel => "model.qa",
+            Self::InspectHardware => "hardware.inspect",
+            Self::ApplyHardware => "hardware.apply",
+            Self::RestoreHardware => "hardware.restore",
         }
     }
 }
@@ -92,6 +101,7 @@ pub(crate) enum Kind {
     Resource,
     GeneratedCode,
     ModelQa,
+    Hardware,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -129,6 +139,10 @@ impl Selector {
                 | (Kind::Worker, Action::StartWorker | Action::StopWorker)
                 | (Kind::GeneratedCode, Action::ExecuteGenerated)
                 | (Kind::ModelQa, Action::QualifyModel)
+                | (
+                    Kind::Hardware,
+                    Action::InspectHardware | Action::ApplyHardware | Action::RestoreHardware
+                )
                 | (
                     Kind::Resource,
                     Action::AcquireResource

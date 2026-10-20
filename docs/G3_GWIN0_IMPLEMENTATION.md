@@ -1525,3 +1525,15 @@ an unsigned development artifact, not authenticated installation admission,
 firmware-bootable Windows media or a complete G3 native image. The sequence-16
 native candidate remains unchanged. Remaining code and qualification are kept
 separate in the [delivery register](G3_GWIN0_DELIVERY.md).
+
+### Capture revocation follow-through, 20 October 2026
+
+Capture cleanup now attempts portal disconnect and descriptor release even if
+worker drainage fails. Uncertain handles remain available for cleanup retry;
+new capture admission closes. The production worker also binds its lifetime
+to its exact UI owner before opening input, with checks around setup. Actual
+owned-process and private D-Bus regressions passed: 28 control/policy tests
+and six transport tests, with no skips. The
+[source-bound execution record](gates/g3/capture_revocation_2026-10-20.json)
+retains exact hashes and earlier attempts. These checks do not qualify physical
+devices, installed portal consent or the final enforcing image.

@@ -1,0 +1,49 @@
+{
+  "schema_version": 1,
+  "recorded_on": "2026-10-20",
+  "status": "capture-revocation-software-verified",
+  "scope": "Capture cleanup failure isolation and exact UI-owner death supervision; not installed capture or image qualification",
+  "previous_checkpoint": "conversation_capture_inference_2026-10-20.json",
+  "previous_published_commit": "0f238d98bb3334e33be7ec7ba1f0667ae079ebb6",
+  "implemented": [
+    "Cleanup attempts worker drainage, portal disconnect and descriptor closure even when another cleanup fails; partial samples are cleared",
+    "Uncertain worker or portal handles remain available for cleanup retry while new capture admission closes",
+    "A reaped worker leader never authorizes signalling its possibly reused numeric process group",
+    "The production worker binds SIGKILL to its exact UI parent's death and checks the parent before and after binding, before opening any input source",
+    "Portal disconnect runs even after request cleanup failure and is retriable despite closed admission"
+  ],
+  "proof": {
+    "path": "/mnt/luma-build/work/capture-revocation-control-20261020-b3wtu93n/verification.json",
+    "sha256": "d8cd43912b86fd303b0e7a98b4a2b767e8a996fd984bdf76b55b5a178a4f4dd7",
+    "sources_unchanged_before_and_after": true,
+    "controls_and_policy_tests": 28,
+    "private_dbus_transport_tests": 6,
+    "skips": 0,
+    "controls_log_sha256": "ee0aa39a783bdf936e299c3883902baad8db79a9f9f9ce9386afcffd0355b048",
+    "private_dbus_log_sha256": "9ef19a9c8f7bd6ef16a494189a94189ae7be06e60cdcf43f96a5c8a71660d5f9",
+    "actual_process_checks": "A disposable subreaper verifies actual worker SIGKILL and reaping after original-parent death; another owned child verifies kill, wait and descriptor release",
+    "sources": {
+      "native/desktop/workspace_capture.py": "bdda48c8fc7a1478428fcf5b70ce1448aae9918da1de4246a78cfc44cc74abf8",
+      "native/tests/test_workspace_capture.py": "c8848534bc8575ff817e4c91eaed343fb89c865190a72cc856981725f2724682",
+      "native/image/capture_policy.py": "5cc35321e11d74846a1f6a553bc483fad339d00d136ab53ad6e7daf32025d0a7",
+      "native/image/overlay/etc/apparmor.d/luma-workspace-capture": "b2202c4a6a96f36baffb1cff93dacaaa7cc59769c23dbe3f83a11066b0ca834f",
+      "native/tests/test_capture_policy.py": "986e3e67c85f311b91c42541726247c01ec6e3f8c2a3c488d4b19a7e683b23c9",
+      "native/tests/capture_portal_integration.py": "858a0744e5b6a086bb585d5c29f9fa1fc349b16eb8421ac61a784aec266c988a"
+    }
+  },
+  "retained_attempts": [
+    "The first default-user invocation could not create two fixtures in the root-owned private D build area. All tests passed in the existing root-owned fixture lane; no storage permissions were weakened.",
+    "Earlier capture-revocation-control-20261020-x5fc6cq0 covers 25 control/policy tests before final parent-death binding. It remains historical, is superseded and is not an additional unique-test total."
+  ],
+  "api_reference": "https://www.man7.org/linux/man-pages/man2/PR_SET_PDEATHSIG.2const.html",
+  "limitations": [
+    "No physical microphone, screen or camera was opened. Private D-Bus fixtures are not installed desktop consent acceptance.",
+    "No host kernel, loaded AppArmor or physical TPM settings changed. Parent-death behavior under the final enforcing capture domain needs installed-image qualification.",
+    "This fixes capture supervision, not speech transcription, model consumption, publication or other remaining G3/GWIN0 development."
+  ],
+  "g3_complete": false,
+  "gwin0_complete": false,
+  "new_bootable_image_produced": false,
+  "installed_capture_qualified": false,
+  "production_qualified": false
+}

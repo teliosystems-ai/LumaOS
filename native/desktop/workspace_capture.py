@@ -44,6 +44,73 @@ def capture_clock_ns():
     return time.clock_gettime_ns(time.CLOCK_BOOTTIME)
 
 
+def bind_capture_parent(parent_pid):
+    """Kill input capture when its exact UI owner dies, including setup races."""
+    if type(parent_pid) is not int or not 1 < parent_pid < 2**31 or os.getppid() != parent_pid:
+        raise ValueError('capture worker lost its original UI owner')
+    import ctypes
+    libc = ctypes.CDLL(None, use_errno=True)
+    if libc.prctl(1, int(signal.SIGKILL), 0, 0, 0) != 0:
+        raise OSError(ctypes.get_errno(), 'capture parent-death binding failed')
+    if os.getppid() != parent_pid:
+        raise ValueError('capture UI owner exited during parent-death binding')
+
+
+def close_capture_backend(state):
+    """Attempt every revocation even when another resource cannot be drained.
+
+    Retain uncertain handles for another cleanup attempt; an error must never
+    strand the portal permission merely because the worker failed to reap.
+    The caller must close admission after any failure, not claim completion.
+    """
+    errors = []
+    pipeline = state['pipeline']
+    if pipeline is not None:
+        try:
+            if pipeline.poll() is None:
+                try:
+                    os.killpg(pipeline.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    # An exit between poll and kill still requires actual reap.
+                    pass
+            pipeline.wait(timeout=2)
+            try:
+                os.killpg(pipeline.pid, 0)
+            except ProcessLookupError:
+                state['pipeline'] = None
+            else:
+                # Do not signal a group after reaping its leader: its numeric
+                # identity may already have been reused by an unrelated task.
+                raise ValueError('capture worker group did not prove complete drain')
+        except Exception as error:
+            errors.append(error)
+        try:
+            pipeline.stdout.close()
+        except Exception as error:
+            errors.append(error)
+    portal = state['portal']
+    if portal is not None:
+        try:
+            portal.close()
+            state['portal'] = None
+        except Exception as error:
+            errors.append(error)
+    descriptor = state['fd']
+    if descriptor is not None:
+        # Detach before close: Linux may release a descriptor despite a close
+        # error, so retrying that integer could close a different resource.
+        state['fd'] = None
+        try:
+            os.close(descriptor)
+        except OSError as error:
+            errors.append(error)
+    state['received'].clear()
+    state['stopping'] = None
+    state['pending'] = False
+    if errors:
+        raise ValueError('capture revocation could not prove complete cleanup') from errors[0]
+
+
 def validate_png(data):
     """Bounded complete PNG structure/inflate check; no decoder or URI loader.
 
@@ -449,26 +516,30 @@ class Portal:
 
     def close(self):
         if self.closed:
+            if not self.bus.is_closed():
+                self.bus.close_sync(None)
             return
         self.closed = True
-        for path, (subscription, timer) in list(self.pending.items()):
-            self.bus.signal_unsubscribe(subscription)
-            self.GLib.source_remove(timer)
-            self.bus.call(self.NAME, path, 'org.freedesktop.portal.Request', 'Close', None, None, self.Gio.DBusCallFlags.NONE, 1000, None, None, None)
-        self.pending.clear()
-        for subscription in self.subscriptions:
-            self.bus.signal_unsubscribe(subscription)
-        self.subscriptions.clear()
-        session, self.session = self.session, None
-        if session:
-            self.bus.call(self.NAME, session, 'org.freedesktop.portal.Session', 'Close', None, None, self.Gio.DBusCallFlags.NONE, 1000, None, None, None)
-        # A separate connection is deliberate: disconnect also cancels a
-        # CreateSession response racing with Stop before its handle is known.
-        if not self.bus.is_closed():
-            self.bus.close_sync(None)
+        try:
+            for path, (subscription, timer) in list(self.pending.items()):
+                self.bus.signal_unsubscribe(subscription)
+                self.GLib.source_remove(timer)
+                self.bus.call(self.NAME, path, 'org.freedesktop.portal.Request', 'Close', None, None, self.Gio.DBusCallFlags.NONE, 1000, None, None, None)
+            self.pending.clear()
+            for subscription in self.subscriptions:
+                self.bus.signal_unsubscribe(subscription)
+            self.subscriptions.clear()
+            session, self.session = self.session, None
+            if session:
+                self.bus.call(self.NAME, session, 'org.freedesktop.portal.Session', 'Close', None, None, self.Gio.DBusCallFlags.NONE, 1000, None, None, None)
+        finally:
+            # Disconnect even if a request-close/unsubscribe operation failed.
+            # It also cancels an unknown CreateSession response racing Stop.
+            if not self.bus.is_closed():
+                self.bus.close_sync(None)
 
 
-def capture_worker(kind, seconds, deadline_ns, descriptor=None, target=None, *, source_factory=None):
+def capture_worker(kind, seconds, deadline_ns, descriptor=None, target=None, *, source_factory=None, parent_pid=None):
     """Dedicated killable bounded GStreamer process; no file/URI pipeline input.
 
     A test can supply an actual audiotestsrc/videotestsrc factory by importing
@@ -483,6 +554,8 @@ def capture_worker(kind, seconds, deadline_ns, descriptor=None, target=None, *, 
         raise ValueError('video worker requires the exact restricted portal descriptor and stream')
     if kind == 'speech' and (descriptor is not None or target is not None):
         raise ValueError('speech worker cannot accept a video descriptor')
+    if source_factory is None:
+        bind_capture_parent(parent_pid)
     import resource
     resource.setrlimit(resource.RLIMIT_AS, (512*1024*1024, 512*1024*1024))
     resource.setrlimit(resource.RLIMIT_CPU, (MAX_SECONDS+5, MAX_SECONDS+5))
@@ -638,28 +711,7 @@ def launch_capture(parent, on_complete=None):
         state['speech_arm'] = None
         if state['timer'] is not None:
             GLib.source_remove(state['timer']); state['timer'] = None
-        pipeline, state['pipeline'] = state['pipeline'], None
-        if pipeline is not None:
-            if pipeline.poll() is None:
-                os.killpg(pipeline.pid, signal.SIGKILL)
-            pipeline.wait(timeout=2)
-            pipeline.stdout.close()
-            try:
-                os.killpg(pipeline.pid, 0)
-            except ProcessLookupError:
-                pass
-            else:
-                os.killpg(pipeline.pid, signal.SIGKILL)
-                raise ValueError('capture worker group did not prove complete drain')
-        state['received'].clear()
-        state['stopping'] = None
-        portal, state['portal'] = state['portal'], None
-        if portal:
-            portal.close()
-        descriptor, state['fd'] = state['fd'], None
-        if descriptor is not None:
-            os.close(descriptor)
-        state['pending'] = False
+        close_capture_backend(state)
 
     def revoke(message='INACTIVE — stopped, discarded and permission revoked'):
         buffer, state['buffer'] = state['buffer'], None
@@ -703,7 +755,7 @@ def launch_capture(parent, on_complete=None):
         buffer = CaptureBuffer(kind, seconds)
         deadline_ns = int((buffer.started+seconds)*1000000000)
         profile = 'luma-workspace-capture-audio' if kind == 'speech' else 'luma-workspace-capture-video'
-        arguments = ['/usr/bin/aa-exec', '-p', profile, '--', '/usr/bin/python3', '-I', script, '--capture-worker', kind, str(seconds), str(deadline_ns)]
+        arguments = ['/usr/bin/aa-exec', '-p', profile, '--', '/usr/bin/python3', '-I', script, '--capture-worker', kind, str(seconds), str(deadline_ns), str(os.getpid())]
         if kind == 'video':
             arguments.extend((str(descriptor), target))
         environment = {key: value for key, value in os.environ.items() if key in ('PATH', 'USER', 'LOGNAME', 'XDG_RUNTIME_DIR')}
@@ -891,8 +943,8 @@ def launch_capture(parent, on_complete=None):
 
 if __name__ == '__main__':
     try:
-        if not sys.flags.isolated or os.getuid() == 0 or os.geteuid() != os.getuid() or len(sys.argv) not in (5, 7) or sys.argv[1] != '--capture-worker' or not re.fullmatch(r'[1-9][0-9]?', sys.argv[3]) or not re.fullmatch(r'[1-9][0-9]{0,19}', sys.argv[4]):
+        if not sys.flags.isolated or os.getuid() == 0 or os.geteuid() != os.getuid() or len(sys.argv) not in (6, 8) or sys.argv[1] != '--capture-worker' or not re.fullmatch(r'[1-9][0-9]?', sys.argv[3]) or not re.fullmatch(r'[1-9][0-9]{0,19}', sys.argv[4]) or not re.fullmatch(r'[1-9][0-9]{0,9}', sys.argv[5]):
             raise ValueError('capture worker requires an isolated ordinary-user finite invocation')
-        capture_worker(sys.argv[2], int(sys.argv[3]), int(sys.argv[4]), *(tuple((int(sys.argv[5]), sys.argv[6])) if len(sys.argv) == 7 else ()))
+        capture_worker(sys.argv[2], int(sys.argv[3]), int(sys.argv[4]), *(tuple((int(sys.argv[6]), sys.argv[7])) if len(sys.argv) == 8 else ()), parent_pid=int(sys.argv[5]))
     except Exception:
         sys.exit(1)

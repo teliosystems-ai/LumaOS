@@ -127,6 +127,7 @@
     "docs/gates/g3/content_publication_restore_2026-10-18.json",
     "docs/gates/g3/content_storage_2026-10-15.json",
     "docs/gates/g3/conversation_capture_inference_2026-10-20.json",
+    "docs/gates/g3/capture_revocation_2026-10-20.json",
     "docs/gates/g3/custody_recovery_approval_2026-10-16.json",
     "docs/gates/g3/development_2026-10-15.json",
     "docs/gates/g3/discovery_optical_2026-10-20.json",

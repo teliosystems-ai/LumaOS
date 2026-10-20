@@ -7,8 +7,11 @@ import os
 from pathlib import Path
 import stat
 import struct
+import subprocess
+import sys
 import tempfile
 import unittest
+from unittest import mock
 import zipfile
 import zlib
 
@@ -29,6 +32,171 @@ def image(width=2, height=2, color=2, raw=None):
 
 
 class CaptureTests(unittest.TestCase):
+    def test_parent_binding_rejects_absent_substituted_or_noncanonical_owner(self):
+        for value in (None, True, 0, 1, -1, 2**31, '42', os.getppid()+100000):
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                CAPTURE.bind_capture_parent(value)
+
+    def test_parent_binding_refuses_prctl_failure_and_owner_exit_during_setup(self):
+        import ctypes
+        libc = mock.Mock()
+        with mock.patch.object(CAPTURE.os, 'getppid', return_value=42), mock.patch.object(ctypes, 'CDLL', return_value=libc):
+            libc.prctl.return_value = -1
+            with self.assertRaises(OSError):
+                CAPTURE.bind_capture_parent(42)
+            libc.prctl.return_value = 0
+            with mock.patch.object(CAPTURE.os, 'getppid', side_effect=(42, 1)):
+                with self.assertRaises(ValueError):
+                    CAPTURE.bind_capture_parent(42)
+
+    def test_actual_parent_death_kills_owned_worker_without_opening_capture_devices(self):
+        # Subreaping is confined to this disposable driver, not the test host
+        # or test runner. All descendants are genuine and explicitly reaped.
+        driver = r'''
+import ctypes, importlib.util, os, signal, sys, time
+libc=ctypes.CDLL(None, use_errno=True)
+assert libc.prctl(36,1,0,0,0)==0
+spec=importlib.util.spec_from_file_location('capture_parent_fixture',sys.argv[1])
+capture=importlib.util.module_from_spec(spec); spec.loader.exec_module(capture)
+read,write=os.pipe()
+parent=os.fork()
+if parent==0:
+    os.close(read)
+    owner=os.getpid()
+    worker=os.fork()
+    if worker==0:
+        capture.bind_capture_parent(owner)
+        os.write(write,(str(os.getpid())+'\n').encode())
+        os.close(write)
+        time.sleep(5)
+        os._exit(99)
+    os.close(write)
+    time.sleep(5)
+    os._exit(98)
+os.close(write)
+worker=int(os.read(read,64)); os.close(read)
+os.kill(parent,signal.SIGKILL)
+assert os.waitpid(parent,0)[0]==parent
+observed,status=os.waitpid(worker,0)
+assert observed==worker and os.WIFSIGNALED(status) and os.WTERMSIG(status)==signal.SIGKILL
+print('owned capture worker killed and reaped after owner death')
+'''
+        result = subprocess.run([sys.executable, '-I', '-B', '-c', driver, str(MODULE)],
+            stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=10)
+        self.assertEqual(result.returncode, 0, result.stderr.decode(errors='replace'))
+        self.assertEqual(result.stdout, b'owned capture worker killed and reaped after owner death\n')
+
+    def test_portal_disconnect_runs_after_request_cleanup_failure_and_can_retry(self):
+        portal = CAPTURE.Portal.__new__(CAPTURE.Portal)
+        portal.closed = False
+        portal.bus, portal.GLib, portal.Gio = mock.Mock(), mock.Mock(), mock.Mock()
+        portal.pending = {'/request/test': (1, 2)}
+        portal.subscriptions, portal.session = [], None
+        portal.bus.is_closed.return_value = False
+        portal.bus.signal_unsubscribe.side_effect = RuntimeError('unsubscribe failed')
+        with self.assertRaises(RuntimeError):
+            portal.close()
+        self.assertTrue(portal.closed)
+        portal.bus.close_sync.assert_called_once_with(None)
+        portal.bus.close_sync.reset_mock()
+        # An unsuccessful disconnect must remain retriable despite closed
+        # admission; never accept self.closed as proof of transport closure.
+        portal.close()
+        portal.bus.close_sync.assert_called_once_with(None)
+        portal.bus.is_closed.return_value = True
+        portal.bus.close_sync.reset_mock()
+        portal.close()
+        portal.bus.close_sync.assert_not_called()
+
+    @staticmethod
+    def backend(pipeline=None, portal=None, descriptor=None):
+        return dict(pipeline=pipeline, portal=portal, fd=descriptor,
+                    received=bytearray(b'private partial sample'), stopping=1, pending=True)
+
+    def test_cleanup_reaps_actual_owned_child_and_closes_portal_and_descriptor(self):
+        portal = mock.Mock()
+        read, write = os.pipe()
+        os.close(write)
+        process = subprocess.Popen([sys.executable, '-I', '-c', 'import time; time.sleep(30)'],
+            stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+            start_new_session=True)
+        state = self.backend(process, portal, read)
+        try:
+            CAPTURE.close_capture_backend(state)
+            self.assertIsNotNone(process.returncode)
+            self.assertTrue(process.stdout.closed)
+            self.assertEqual(state, dict(pipeline=None, portal=None, fd=None,
+                                        received=bytearray(), stopping=None, pending=False))
+            self.assertEqual(state['received'], bytearray())
+            portal.close.assert_called_once_with()
+            with self.assertRaises(OSError):
+                os.fstat(read)
+        finally:
+            if process.poll() is None:
+                process.kill()
+            process.wait(timeout=2)
+            process.stdout.close()
+
+    def test_cleanup_worker_timeout_still_revokes_portal_clears_bytes_closes_fd(self):
+        worker, portal = mock.Mock(), mock.Mock()
+        worker.pid, worker.poll.return_value = 1234, None
+        worker.wait.side_effect = subprocess.TimeoutExpired('capture', 2)
+        state = self.backend(worker, portal, 42)
+        with mock.patch.object(CAPTURE.os, 'killpg') as kill, mock.patch.object(CAPTURE.os, 'close') as close:
+            with self.assertRaisesRegex(ValueError, 'complete cleanup'):
+                CAPTURE.close_capture_backend(state)
+            kill.assert_called_once_with(1234, CAPTURE.signal.SIGKILL)
+            close.assert_called_once_with(42)
+        self.assertIs(state['pipeline'], worker)
+        self.assertIsNone(state['portal'])
+        self.assertIsNone(state['fd'])
+        self.assertFalse(state['received'])
+        self.assertFalse(state['pending'])
+        portal.close.assert_called_once_with()
+        worker.stdout.close.assert_called_once_with()
+
+    def test_cleanup_portal_error_retains_handle_without_stranding_other_resources(self):
+        portal = mock.Mock()
+        portal.close.side_effect = RuntimeError('transport closed')
+        state = self.backend(portal=portal, descriptor=42)
+        with mock.patch.object(CAPTURE.os, 'close') as close:
+            with self.assertRaises(ValueError):
+                CAPTURE.close_capture_backend(state)
+            close.assert_called_once_with(42)
+        self.assertIs(state['portal'], portal)
+        self.assertIsNone(state['fd'])
+        self.assertFalse(state['received'])
+        portal.close.side_effect = None
+        CAPTURE.close_capture_backend(state)
+        self.assertIsNone(state['portal'])
+
+    def test_cleanup_never_signals_group_after_reaping_leader_and_fences_uncertainty(self):
+        worker = mock.Mock()
+        worker.pid, worker.poll.return_value = 1234, 0
+        state = self.backend(worker)
+        with mock.patch.object(CAPTURE.os, 'killpg') as kill:
+            with self.assertRaises(ValueError):
+                CAPTURE.close_capture_backend(state)
+            kill.assert_called_once_with(1234, 0)
+        self.assertIs(state['pipeline'], worker)
+        self.assertFalse(state['received'])
+
+    def test_cleanup_exit_between_poll_and_signal_requires_reap_and_close_error_no_fd_retry(self):
+        worker = mock.Mock()
+        worker.pid, worker.poll.return_value = 1234, None
+        state = self.backend(worker, descriptor=42)
+        with mock.patch.object(CAPTURE.os, 'killpg', side_effect=ProcessLookupError) as kill:
+            with mock.patch.object(CAPTURE.os, 'close', side_effect=OSError('close failed')):
+                with self.assertRaises(ValueError):
+                    CAPTURE.close_capture_backend(state)
+            self.assertEqual(kill.call_args_list, [mock.call(1234, CAPTURE.signal.SIGKILL), mock.call(1234, 0)])
+        worker.wait.assert_called_once_with(timeout=2)
+        self.assertIsNone(state['pipeline'])
+        self.assertIsNone(state['fd'])
+        with mock.patch.object(CAPTURE.os, 'close') as close:
+            CAPTURE.close_capture_backend(state)
+            close.assert_not_called()
+
     def test_complete_png_structure_rgb_rgba_and_generated_actual_pixels(self):
         for data in (image(), image(color=6), CAPTURE.rgb_png(b'\xff\0\0\0\xff\0', 2, 1, 6)):
             self.assertEqual(CAPTURE.validate_png(data), (2, 2) if data != CAPTURE.rgb_png(b'\xff\0\0\0\xff\0', 2, 1, 6) else (2, 1))

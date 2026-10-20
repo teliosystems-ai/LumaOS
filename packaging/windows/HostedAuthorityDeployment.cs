@@ -326,10 +326,15 @@ namespace Luma.Windows.Hosted
             finally {primary.Dispose();}
         }
         internal static OwnedWindowsProcess Start(PinnedWsl binary,HostedActor actor,string[] arguments,Action<OwnedWindowsProcess> beforeResume)
+        {return StartCore(binary.Path,binary.Check,actor,arguments,beforeResume,null);}
+        internal static OwnedWindowsProcess StartConfigurationObserver(PinnedConfigurationObserver binary,HostedActor actor,string distribution,string nonce,Action check,Stopwatch deadline)
+        {return StartCore(binary.Path,binary.Check,actor,HostedWslObserverContract.Arguments(distribution,nonce),delegate(OwnedWindowsProcess process) {check();},deadline);}
+        private Stopwatch observerDeadline;
+        private static OwnedWindowsProcess StartCore(string executable,Action pinned,HostedActor actor,string[] arguments,Action<OwnedWindowsProcess> beforeResume,Stopwatch observerDeadline)
         {
-            FixedServiceIdentity.Require();actor.Check();binary.Check();if(arguments==null || arguments.Length>12 || beforeResume==null) throw new InvalidDataException("Closed WSL invocation shape or pre-execution registration differs.");
-            StringBuilder command=new StringBuilder(Argument(binary.Path));foreach(string argument in arguments) command.Append(" "+Argument(argument));
-            OwnedWindowsProcess result=new OwnedWindowsProcess();SafeFileHandle childInput=null,childOutput=null,childError=null,parentInput=null,parentOutput=null,parentError=null;
+            FixedServiceIdentity.Require();actor.Check();pinned();if(arguments==null || arguments.Length>12 || beforeResume==null) throw new InvalidDataException("Closed invocation shape or pre-execution registration differs.");
+            StringBuilder command=new StringBuilder(Argument(executable));foreach(string argument in arguments) command.Append(" "+Argument(argument));
+            OwnedWindowsProcess result=new OwnedWindowsProcess();result.observerDeadline=observerDeadline;SafeFileHandle childInput=null,childOutput=null,parentInput=null,parentOutput=null,parentError=null,childError=null;
             ProcessInfo created=new ProcessInfo();bool assigned=false;
             try {
                 SecurityAttributes attributes=new SecurityAttributes {Length=Marshal.SizeOf(typeof(SecurityAttributes)),Inherit=1};
@@ -337,7 +342,7 @@ namespace Luma.Windows.Hosted
                     !CreatePipe(out parentError,out childError,ref attributes,4096)) throw new Win32Exception(Marshal.GetLastWin32Error());
                 foreach(SafeFileHandle handle in new SafeFileHandle[]{parentInput,parentOutput,parentError}) if(!SetHandleInformation(handle,1,0)) throw new Win32Exception(Marshal.GetLastWin32Error());
                 result.job=CreateJobObject(IntPtr.Zero,null);if(result.job.IsInvalid) throw new Win32Exception(Marshal.GetLastWin32Error());
-                Limits limits=new Limits();limits.Basic.Flags=0x2000|0x200|0x8|0x400;limits.Basic.Processes=4;limits.JobMemory=(UIntPtr)(512UL*1024*1024);
+                Limits limits=new Limits();limits.Basic.Flags=0x2000|0x200|0x8|0x400;limits.Basic.Processes=observerDeadline==null?(uint)4:(uint)1;limits.JobMemory=(UIntPtr)((observerDeadline==null?512UL:128UL)*1024*1024);
                 if(!SetInformationJobObject(result.job,9,ref limits,(uint)Marshal.SizeOf(typeof(Limits)))) throw new Win32Exception(Marshal.GetLastWin32Error());
                 StartupEx startup=new StartupEx();startup.Startup=new Startup {Size=Marshal.SizeOf(typeof(StartupEx)),Flags=0x100,Input=childInput.DangerousGetHandle(),Output=childOutput.DangerousGetHandle(),Error=childError.DangerousGetHandle(),Desktop="winsta0\\default"};
                 // The environment is fixed, not inherited from the service or
@@ -354,7 +359,7 @@ namespace Luma.Windows.Hosted
                     Marshal.WriteIntPtr(inheritList,IntPtr.Size,childOutput.DangerousGetHandle());Marshal.WriteIntPtr(inheritList,IntPtr.Size*2,childError.DangerousGetHandle());
                     if(!UpdateProcThreadAttribute(startup.Attributes,0,(IntPtr)0x20002,inheritList,(UIntPtr)(IntPtr.Size*3),IntPtr.Zero,IntPtr.Zero)) throw new Win32Exception(Marshal.GetLastWin32Error());
                     using(SafeAccessTokenHandle restricted=Restricted(actor.Token)) {
-                        if(!CreateProcessAsUser(restricted,binary.Path,command,IntPtr.Zero,IntPtr.Zero,true,4|0x400|0x08000000|0x80000,environment,Environment.SystemDirectory,ref startup,out created))
+                        if(!CreateProcessAsUser(restricted,executable,command,IntPtr.Zero,IntPtr.Zero,true,4|0x400|0x08000000|0x80000,environment,Environment.SystemDirectory,ref startup,out created))
                             throw new Win32Exception(Marshal.GetLastWin32Error());
                     }
                 } finally {
@@ -367,7 +372,7 @@ namespace Luma.Windows.Hosted
                 if(!GetProcessTimes(result.process,out creation,out exit,out kernel,out user) || creation<=0) throw new Win32Exception(Marshal.GetLastWin32Error());result.Creation=(ulong)creation;
                 using(SafeWaitHandle thread=new SafeWaitHandle(created.Thread,true)) {created.Thread=IntPtr.Zero;
                     if(!AssignProcessToJobObject(result.job,result.process)) throw new Win32Exception(Marshal.GetLastWin32Error());assigned=true;
-                    actor.Check();binary.Check();beforeResume(result);actor.Check();if(ResumeThread(thread)==UInt32.MaxValue) throw new Win32Exception(Marshal.GetLastWin32Error());
+                    actor.Check();pinned();beforeResume(result);actor.Check();if(ResumeThread(thread)==UInt32.MaxValue) throw new Win32Exception(Marshal.GetLastWin32Error());
                 }
                 childInput.Dispose();childInput=null;childOutput.Dispose();childOutput=null;childError.Dispose();childError=null;
                 result.input=new FileStream(parentInput,FileAccess.Write,4096,false);parentInput=null;
@@ -405,7 +410,7 @@ namespace Luma.Windows.Hosted
             if(input!=null){input.Dispose();input=null;}
             if(job!=null && !job.IsInvalid) {TerminateJobObject(job,1);job.Dispose();job=null;}
             if(output!=null){output.Dispose();output=null;}if(error!=null){error.Dispose();error=null;}
-            if(process!=null){WaitForSingleObject(process,3000);process.Dispose();process=null;}
+            if(process!=null){uint remaining=observerDeadline==null?(uint)3000:(uint)Math.Max(0,5000-observerDeadline.ElapsedMilliseconds);uint observed=WaitForSingleObject(process,remaining);process.Dispose();process=null;if(observerDeadline!=null && observed!=0) throw new IOException("Read-only configuration observer exit was not observed within its original five-second deadline.");}
         }
     }
 
@@ -524,7 +529,6 @@ namespace Luma.Windows.Hosted
         // https://learn.microsoft.com/windows/win32/api/wslapi/
         [DllImport("api-ms-win-wsl-api-l1-1-0.dll",CharSet=CharSet.Unicode)]
         [return:MarshalAs(UnmanagedType.Bool)] private static extern bool WslIsDistributionRegistered(string distribution);
-        [DllImport("api-ms-win-wsl-api-l1-1-0.dll",CharSet=CharSet.Unicode)] private static extern int WslGetDistributionConfiguration(string distribution,out uint version,out uint uid,out uint flags,out IntPtr variables,out uint count);
         [DllImport("api-ms-win-wsl-api-l1-1-0.dll",CharSet=CharSet.Unicode)] private static extern int WslConfigureDistribution(string distribution,uint uid,uint flags);
         private static void ImpersonatedIdentity(HostedActor actor)
         {
@@ -537,23 +541,10 @@ namespace Luma.Windows.Hosted
             bool registered=WindowsIdentity.RunImpersonated(actor.Token,delegate {ImpersonatedIdentity(actor);return WslIsDistributionRegistered(distribution);});
             FixedServiceIdentity.Require();actor.Check();return registered;
         }
-        internal static void RequireClosed(AuthorityIdentity identity,HostedActor actor,DeploymentEvent admission)
+        internal static void RequireClosed(AuthorityIdentity identity,HostedActor actor,DeploymentEvent admission,Action check)
         {
-            FixedServiceIdentity.Require();actor.RequireAdmin(identity.FirstAdminSid);string distribution=HostedGuestRunner.Distribution(identity,admission);
-            WindowsIdentity.RunImpersonated(actor.Token,delegate {
-                ImpersonatedIdentity(actor);if(!WslIsDistributionRegistered(distribution)) throw new SecurityException("Exact installation-owned WSL slot is absent.");
-                uint version,uid,flags,count;IntPtr environment;int result=WslGetDistributionConfiguration(distribution,out version,out uid,out flags,out environment,out count);
-                try {
-                    if(result!=0 || version!=2 || uid!=65534 || flags!=0 || count>128) throw new SecurityException("Actual owned WSL slot is not version2/defaultnobody/zero interop-path-drive flags.");
-                } finally {
-                    if(environment!=IntPtr.Zero) {
-                        try {for(uint index=0;index<count;index++) {
-                            IntPtr value=Marshal.ReadIntPtr(environment,checked((int)index*IntPtr.Size));if(value!=IntPtr.Zero) Marshal.FreeCoTaskMem(value);
-                        }} finally {Marshal.FreeCoTaskMem(environment);}
-                    }
-                }
-            });
-            FixedServiceIdentity.Require();actor.Check();
+            if(check==null) throw new ArgumentNullException("check");FixedServiceIdentity.Require();actor.RequireAdmin(identity.FirstAdminSid);
+            HostedWslConfigurationObserver.RequireClosed(identity,actor,admission,check);FixedServiceIdentity.Require();actor.Check();check();
         }
         internal static void ConfigureNew(AuthorityIdentity identity,HostedActor actor,DeploymentEvent admission,Action check)
         {
@@ -563,7 +554,7 @@ namespace Luma.Windows.Hosted
                 int result=WslConfigureDistribution(distribution,65534,0);
                 if(result!=0) throw new SecurityException("Actual owned WSL interop/path/drive/default-user configuration refused: 0x"+unchecked((uint)result).ToString("x8"));
             });
-            FixedServiceIdentity.Require();check();RequireClosed(identity,actor,admission);
+            FixedServiceIdentity.Require();check();RequireClosed(identity,actor,admission,check);
         }
     }
 }

@@ -66,7 +66,24 @@ try {
         return
     }
     $identity=[Security.Principal.WindowsIdentity]::GetCurrent()
-    try {if (-not [Security.Principal.WindowsPrincipal]::new($identity).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {throw 'Actual enabled Windows Admin is required for explicit service installation.'}} finally {$identity.Dispose()}
+    try {if (-not [Security.Principal.WindowsPrincipal]::new($identity).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {throw 'Actual enabled Windows Admin is required for explicit service installation.'};$installerSid=$identity.User.Value} finally {$identity.Dispose()}
+    # Load only the exact held EXE whose complete bundle passed the independent
+    # review above. Loading does not invoke its entrypoint or install a service.
+    $reviewedExecutable=Join-Path $package.FullName 'Luma.HostedAuthority.exe'
+    $reviewedAssembly=[Reflection.Assembly]::LoadFrom($reviewedExecutable)
+    if (-not [String]::Equals($reviewedAssembly.Location,$reviewedExecutable,[StringComparison]::OrdinalIgnoreCase)) {throw 'Host admission observer did not originate in the exact reviewed executable.'}
+    $protectionType=$reviewedAssembly.GetType('Luma.Windows.WindowsHostProtection',$true)
+    $observe=$protectionType.GetMethod('Observe',[type[]]@([string]))
+    $custodyPath=[Environment]::GetFolderPath([Environment+SpecialFolder]::CommonApplicationData)
+    $protectionVolume=$null;$protectionSerial=[uint32]0
+    function Assert-InstallHostProtection {
+        $snapshot=$observe.Invoke($null,[object[]]@($custodyPath))
+        $snapshot.Volume.RequireProtected();$snapshot.Management.RequireLocalChecks($installerSid)
+        if ($null -ne $protectionVolume -and ($snapshot.Volume.Volume -ine $protectionVolume -or $snapshot.Volume.Serial -ne $protectionSerial)) {throw 'Private custody backing volume changed during installation admission.'}
+        return $snapshot
+    }
+    $firstProtection=Assert-InstallHostProtection
+    $protectionVolume=$firstProtection.Volume.Volume;$protectionSerial=$firstProtection.Volume.Serial
     if (Test-Path -LiteralPath $destination) {throw 'Existing runtime is never overwritten or adopted; a separately reviewed runtime migration is required.'}
     if (Test-Path -LiteralPath 'HKLM:\SYSTEM\CurrentControlSet\Services\LumaHostedAuthority') {throw 'Fixed service already exists; never replace an unrelated or existing registration.'}
     $programFiles=Get-Item -LiteralPath ([IO.Path]::GetDirectoryName($destination)) -Force
@@ -75,8 +92,10 @@ try {
     if ($drive.DriveFormat -cne 'NTFS') {throw 'Installed runtime requires native NTFS ACL enforcement.'}
     $acl=[Security.AccessControl.DirectorySecurity]::new()
     $acl.SetSecurityDescriptorSddlForm('O:BAG:BAD:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;0x1200a9;;;BU)',[Security.AccessControl.AccessControlSections]'Owner,Group,Access')
+    $null=Assert-InstallHostProtection
     $null=[IO.Directory]::CreateDirectory($destination,$acl)
     foreach ($name in $names) {
+        $null=Assert-InstallHostProtection
         $source=$sources[$name];$source.Position=0
         $target=[IO.FileStream]::new((Join-Path $destination $name),[IO.FileMode]::CreateNew,[IO.FileAccess]::Write,[IO.FileShare]::None,32768,[IO.FileOptions]::WriteThrough)
         try {$source.CopyTo($target,32768);$target.Flush($true)} finally {$target.Dispose()}
@@ -85,15 +104,18 @@ try {
         [IO.File]::SetAccessControl((Join-Path $destination $name),$fileAcl)
         $expected=@($records | Where-Object {$_.name -ceq $name})[0]
         if ((Get-FileHash -LiteralPath (Join-Path $destination $name) -Algorithm SHA256).Hash.ToLowerInvariant() -cne $expected.sha256) {throw 'Installed runtime component differs; service was not created.'}
+        $null=Assert-InstallHostProtection
     }
     $sc=Join-Path ([Environment]::SystemDirectory) 'sc.exe'
     $image='"'+(Join-Path $destination 'Luma.HostedAuthority.exe')+'" service'
+    $null=Assert-InstallHostProtection
     $messages=& $sc create LumaHostedAuthority 'type=' own 'start=' demand 'error=' normal 'obj=' LocalSystem 'binPath=' $image 2>&1
     if ($LASTEXITCODE -ne 0) {throw ('SCM create refused; installed files preserved for inspection: '+($messages -join ' '))}
     $messages=& $sc sidtype LumaHostedAuthority unrestricted 2>&1
     if ($LASTEXITCODE -ne 0) {throw ('Service SID setup refused; service is not started: '+($messages -join ' '))}
     $registered=Get-ItemProperty -LiteralPath 'HKLM:\SYSTEM\CurrentControlSet\Services\LumaHostedAuthority'
     if ($registered.ImagePath -cne $image -or $registered.Type -ne 16 -or $registered.ObjectName -cne 'LocalSystem' -or $registered.ServiceSidType -ne 1) {throw 'Actual SCM registration differs; service is not started.'}
+    $null=Assert-InstallHostProtection
     [pscustomobject][ordered]@{schema_version=1;status='service-installed-not-started';bundle_sha256=$actual;fixed_destination=$destination;
         service_name='LumaHostedAuthority';service_installed=$true;service_started=$false;hardware_custody_invoked=$false;
         distribution_imported=$false;production_qualified=$false;gate_closing=$false;

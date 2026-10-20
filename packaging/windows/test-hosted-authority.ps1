@@ -630,6 +630,10 @@ public static class LumaHostedLifecycleFixture {
     $script:HostedAssertions+=$readAssertions
     Add-Type -ReferencedAssemblies @((Join-Path $build.work_directory 'Luma.HostedAuthority.Library.dll'),'System.dll','System.Core.dll','System.Security.dll') -Path (Join-Path $PSScriptRoot 'HostedAuthorityIngestionFixture.cs')
     $ingestionAssertions=[LumaHostedIngestionFixture]::Run([IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..')))
+    Add-Type -ReferencedAssemblies @((Join-Path $build.work_directory 'Luma.HostedAuthority.Library.dll'),'System.dll','System.Core.dll','System.Security.dll') -Path (Join-Path $PSScriptRoot 'HostedAuthorityHostProtectionFixture.cs')
+    $hostProtectionAssertions=[LumaHostedHostProtectionFixture]::Run()
+    Assert-Hosted ($hostProtectionAssertions -ge 180) 'Host protection/provider/cache regression coverage incomplete.'
+    $script:HostedAssertions+=$hostProtectionAssertions
     Assert-Hosted ($ingestionAssertions -ge 60) 'Complete scoped-read to fresh independent inference handoff, actual tiny NTFS, cancellation and strict UTF8 software mechanisms did not run.'
     $script:HostedAssertions+=$ingestionAssertions
     $entry=[Luma.Windows.Hosted.JournalEntry]::Prepare($identity,1,[Luma.Windows.Hosted.JournalKind]::Commission,$zero,$zero,$sid,$identity.Encode())
@@ -835,6 +839,7 @@ public static class LumaHostedFrameFixture {
         signed_inference_lifecycle_and_delivery_tests=$true;inference_assertions=$inferenceAssertions;actual_guest_inference_executed=$false;five_minute_purpose_approved=$true;compute_purpose_seconds=30;inference_purpose_seconds=300;
         inference_mechanism_assertions=$inferenceMechanismAssertions;held_original_inference_input_ntfs_tests=$true;closed_inference_profile_runtime_join_tests=$true;
         ingestion_assertions=$ingestionAssertions;scoped_read_to_fresh_inference_handoff_tests=$true;actual_authenticated_ingestion_to_model_qualified=$false;
+        host_protection_assertions=$hostProtectionAssertions;read_only_host_protection_contracts=$true;actual_encryption_state_modified=$false;enterprise_authorization_created=$false;
         inference_wire_cases_path=$InferenceCasesPath;inference_wire_cases_sha256=$inferenceCasesHash;
         production_qualified=$false;gate_closing=$false} | ConvertTo-Json -Depth 8
 } finally {

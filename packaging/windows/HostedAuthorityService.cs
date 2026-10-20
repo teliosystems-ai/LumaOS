@@ -165,10 +165,11 @@ namespace Luma.Windows.Hosted
                 intent=new CommissionIntent(domain,Wire.Hex(Wire.Random(32)),actor.Sid,environment,release,time,
                     FileHash(Process.GetCurrentProcess().MainModule.FileName),FileHash(Path.Combine(System.Environment.SystemDirectory,"wsl.exe")),endpoint,HostedRuntimeFiles.Capture("",check));bytes=intent.Encode();
             }
-            CheckCommissionRuntime(intent,check);Review(pipe,resume?"commission-resume":"commission",bytes,Describe(intent,bytes),check);
+            HostedProtectionLease.BeforeCommission(actor,check);CheckCommissionRuntime(intent,check);Review(pipe,resume?"commission-resume":"commission",bytes,Describe(intent,bytes),check);
             byte[] secretFrame=HostedPipe.Read(pipe,check,Standard),ownerAuth=null;
             try {
                 using(Wire.Reader secret=new Wire.Reader(secretFrame,"luma-windows-hosted-owner-authorization-v1")) {ownerAuth=secret.Blob(64);secret.End();if(ownerAuth.Length<1) throw new SecurityException("Existing owner hierarchy authorization is explicit and nonempty.");}
+                HostedProtectionLease.BeforeCommission(actor,check);
                 using(PrivateState state=PrivateState.OpenFixed(domain,!resume)) {
                     if(state.Exists("identity.bin")) throw new SecurityException("Cannot overwrite an existing commissioned identity.");
                     if(resume) {if(!Wire.Equal(state.Read("commission.intent",1,4096),bytes)) throw new SecurityException("Protected intent changed after review.");}
@@ -640,6 +641,7 @@ namespace Luma.Windows.Hosted
         public static int Main(string[] arguments)
         {
             try {
+                if(arguments.Length>0 && arguments[0]=="configuration-observer") return HostedWslConfigurationObserver.Child(arguments);
                 if(arguments.Length>0 && arguments[0]=="read-intent") return HostedReadInputs.Describe(arguments);
                 if(arguments.Length>0 && arguments[0]=="enrollment-intent") return HostedEnrollmentInputs.Describe(arguments);
                 if(arguments.Length==1 && arguments[0]=="service") {if(System.Environment.UserInteractive) throw new SecurityException("Service entrypoint requires actual SCM launch.");using(HostedAuthorityWindowsService service=new HostedAuthorityWindowsService()) {ServiceBase.Run(service);return service.ExitCode;}}

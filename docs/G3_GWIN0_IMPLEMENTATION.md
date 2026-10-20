@@ -1554,3 +1554,24 @@ workspace/desktop tests, including 18 new draft cases, and six actual native
 document render cases, with no skips. It preserves the failed runner and
 empty-title attempts. These software checks do not establish installed PAM,
 inference, publication, graphical accessibility or final-image qualification.
+
+### Windows host-protection admission, 20 October 2026
+
+The shared preflight/service observer now checks the actual held private NTFS
+backing volume and live BitLocker state, including suspended protection. It
+combines caller-context AAD, machine domain/MDM and typed WSL policy signals;
+unknown or managed policy cannot supply enterprise approval. Installation,
+commission, import/activation and new work fail closed. Read-only inspection and
+explicit drainage remain accessible. Sampled observations are bounded checks,
+not atomic reservations or a guarantee against an administrator changing host
+protection between observations.
+
+A pinned original-user child now observes WSL configuration under a single
+bounded lifetime. Native failed/oversized allocation outputs cannot be walked
+by the long-lived service. The [execution record](gates/gwin0/host_protection_2026-10-20.json)
+joins all 67 Windows sources, 915 authority assertions, 166 preflight assertions,
+162 package assertions, full compilation and review-only installer validation.
+The actual read-only provider query timed out and policy remained unknown;
+admission refused correctly. This is not host protection qualification or an
+installed service/guest pass. First-launch identity and workspace/manual
+controls remain implementation work; no host setting was changed.

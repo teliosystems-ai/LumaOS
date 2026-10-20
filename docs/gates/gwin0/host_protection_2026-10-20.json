@@ -1,0 +1,77 @@
+{
+  "schema_version": 1,
+  "recorded_on": "2026-10-20",
+  "status": "windows-host-protection-software-verified",
+  "scope": "Actual-volume encryption and original-actor managed-policy observations wired to fail-closed admission, plus disposable WSL configuration observation; not host or installed-guest qualification",
+  "implemented": [
+    "Held no-follow NTFS volume identity and live BitLocker lock/protection/conversion/method queries distinguish protected, suspended, decrypted, conversion-incomplete and unknown states",
+    "Actual caller-token AAD and machine domain/MDM plus closed typed HKLM64 WSL policies are jointly observed; absent one signal never proves unmanaged, and managed/configured/unknown states cannot manufacture enterprise authorization",
+    "Commission, service installation, import/activation and new compute/inference require protected actual private storage and policy checks; writes recheck protection and explicit read-only status/drain remain accessible",
+    "Bounded observed-state sampling retains original actor and volume identity, forces fresh checks at dispatch boundaries and refuses stale, missing or regressing observations; this is not an atomic protection reservation",
+    "WSL configuration is observed by a pinned exact-runtime, original-user, one-process 128-MiB child with nonce-bound metadata-only output and actual exit before acceptance",
+    "Failed or oversized native WSL outputs are never dereferenced in the long-lived service; disposable-process teardown owns unknown native allocations, under one four-second execution plus one-second cleanup deadline"
+  ],
+  "proof": {
+    "path": "D:/LumaOS-builds/gwin-host-protection-development-86dd01ed0e4a48528972b3a485bc8086/verification.json",
+    "sha256": "8d1128fff9c2c9343ab027469561bfa297e77581774242ac724b4b6fc5a5cb8d",
+    "exact_windows_source_records": 67,
+    "sources_unchanged_before_and_after": true,
+    "root_independently_joined_all_current_sources": true,
+    "authority_assertions": 915,
+    "host_protection_and_helper_assertions_included": 221,
+    "inference_lifecycle_assertions_included": 74,
+    "inference_mechanism_assertions_included": 116,
+    "enrolled_ingestion_assertions_included": 67,
+    "unchanged_compute_assertions_included": 80,
+    "preflight_assertions": 166,
+    "package_assertions": 162,
+    "full_executable_compiled": true,
+    "unsigned_public_d_installer_review_only_verified": true,
+    "preflight_log_sha256": "2711dc3dd38f9c735b7ad96838576e53ef1ffba92ac2db0798e26f274135d8e1",
+    "actual_observation_sha256": "dcdf0eeffb0b5652d746a42448a670ca52dbd3c49f3bc31e0dac2107a1869a6c",
+    "installer_review_sha256": "f5fbfb43b9f06868af9df57d645bff02e5ee7f84eb456675e5e06983209d2b52",
+    "csharp_inference_cases_sha256": "34368513b34802afa55b03d725287ae301878cbb40e7f3182035be3354869252"
+  },
+  "actual_read_only_host_observation": {
+    "encryption_status": "query-timed-out",
+    "policy_status": "unknown",
+    "protection_observed": false,
+    "enterprise_authorization_created": false,
+    "admission_result": "refuse; do not infer protected, unencrypted or unmanaged"
+  },
+  "retained_attempts": [
+    {
+      "directory": "D:/LumaOS-builds/gwin-host-protection-development-710d580e6aad4be98a42571ab9375ead",
+      "authority_log_sha256": "49f9705a1a86cf2df2f172b6b904aa3f380de104305170eb0f35e4b06fc040d1",
+      "reason": "888 authority assertions passed; wrapper expected the wrong preflight label and stopped without final proof"
+    },
+    {
+      "directory": "D:/LumaOS-builds/gwin-host-protection-development-3870c78b6d3f499a838336b7e5f83501",
+      "authority_log_sha256": "e6947220cbc2436def8a2e11e8caa3f91cc9c4bd3ed71a0934c0ef284c9ddb50",
+      "reason": "Source changed during the full sweep; source-join guard correctly refused a final proof"
+    },
+    {
+      "directory": "conversation tool transcript only",
+      "reason": "Initial compile wrapper quoting error and focused fixture wrong expected-exception type were corrected; no file proof exists for those original attempts"
+    }
+  ],
+  "primary_references": [
+    "https://learn.microsoft.com/windows/win32/secprov/win32-encryptablevolume",
+    "https://learn.microsoft.com/windows/win32/api/lmjoin/nf-lmjoin-netgetjoininformation",
+    "https://learn.microsoft.com/windows/win32/api/lmjoin/nf-lmjoin-netgetaadjoininformation",
+    "https://learn.microsoft.com/windows/win32/api/mdmregistration/nf-mdmregistration-isdeviceregisteredwithmanagement",
+    "https://github.com/microsoft/WSL/blob/master/intune/WSL.admx",
+    "https://learn.microsoft.com/windows/win32/api/wslapi/nf-wslapi-wslgetdistributionconfiguration"
+  ],
+  "limitations": [
+    "Actual provider success, enterprise authorization, suspended-protection transitions and installed original-user service/WSL execution still require platform qualification.",
+    "No host settings, account, service, physical TPM, distribution, policy or encryption configuration changed. No model was executed by this software sweep.",
+    "The new observer child was contract/allocation-tested; its genuine installed SYSTEM-to-original-user job execution remains unqualified.",
+    "First-launch usable nonroot identity, authenticated health-to-workspace/manual controls, native G3 hardware/speech and final image delivery remain separate development or qualification work. Hyper-V stays owner-deferred."
+  ],
+  "gwin0_complete": false,
+  "service_installed": false,
+  "distribution_imported": false,
+  "new_bootable_image_produced": false,
+  "production_qualified": false
+}

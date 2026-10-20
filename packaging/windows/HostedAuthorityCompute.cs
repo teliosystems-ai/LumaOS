@@ -210,21 +210,22 @@ namespace Luma.Windows.Hosted
                 AuthorityIdentity execution=authority.Runtime.GuestExecutionIdentity;
                 byte[] signature;ReleaseDescriptor release=ComputeRelease(authority,state.Active,out signature);release.Verify(authority.Trust.ForRelease(),signature);
                 HostedReleaseLease utc=new HostedReleaseLease(pipe,authority,release,signature,original);utc.Check();
+                HostedProtectionLease protection=new HostedProtectionLease(authority.State,actor,original);
                 DeploymentEvent admission=new DeploymentEvent(3,releaseHash,release.Sequence,request.RequestSha256,HostedHostResources.BootCreation(),state.Active.PackageLeaf,0,0,0,new string('0',64));
                 byte[] review=Review(pipe,"compute",HostedComputeContract.ReviewBytes(admission,request,history.Head),
                     "One30-second original first-Admin INERT computation; operation "+request.Operation+"\nExact request SHA256: "+request.RequestSha256+"\nExact payload SHA256: "+request.PayloadSha256+
                     "\nCurrent publisher-authenticated active release: "+releaseHash+"\nOwned distribution: "+HostedGuestRunner.Distribution(authority.Identity,admission)+
                     "\nInput <=4096 UTF8 bytes /8192 canonical encoded bytes; output <=16MiB; request, subprocess, independent UTC, cancellation and delivery share the original30-second deadline. No Linux/product principal, finite grant, model inference, content publication or workflow effect. Interrupted execution is never replayed; exact original exit and guest drainage must be reviewed before releasing its resource generation.",utc.CheckObserved);
                 HostedComputeHead heldHead=new HostedComputeHead(authority.Identity,history,authority.Nv.ReadHead());
-                Action writing=delegate {original();authority.State.Check();utc.CheckObserved();HostedHostResources.Check(256UL*1024*1024);};
+                Action writing=delegate {original();authority.State.Check();protection.Check();utc.CheckObserved();HostedHostResources.Check(256UL*1024*1024);};
                 Action live=delegate {writing();NoUncertainFileAuthority(authority);heldHead.Require(authority.Nv.ReadHead());};
                 Action<JournalKind,byte[]> append=delegate(JournalKind kind,byte[] payload) {live();JournalEntry accepted=authority.Journal.Append(kind,actor.Sid,payload,writing);heldHead.Advance(accepted);live();};
                 using(HostedGuestDirectory directory=HostedGuestDirectory.Open(execution,admission,false)) {
-                    directory.Check();HostedWslConfiguration.RequireClosed(execution,actor,admission);live();
-                    append(JournalKind.ComputePrepared,admission.Encode());DeploymentEvent started=null;
+                    directory.Check();HostedWslConfiguration.RequireClosed(execution,actor,admission,live);live();
+                    protection.CheckFresh();append(JournalKind.ComputePrepared,admission.Encode());DeploymentEvent started=null;
                     byte[] result=HostedGuestRunner.Compute(execution,actor,admission,request,delegate(OwnedWindowsProcess controller) {
-                        live();if(started!=null) throw new SecurityException("Compute cannot dispatch a second controller or retry its exact request.");
-                        started=admission.WithController(controller.Id,controller.Creation,0,request.RequestSha256);append(JournalKind.ControllerStarted,started.Encode());
+                        live();protection.CheckFresh();if(started!=null) throw new SecurityException("Compute cannot dispatch a second controller or retry its exact request.");
+                        started=admission.WithController(controller.Id,controller.Creation,0,request.RequestSha256);append(JournalKind.ControllerStarted,started.Encode());protection.CheckFresh();
                     },live);
                     try {
                         live();directory.Check();if(started==null || !OwnedWindowsProcess.OriginalExited(started.Controller,started.ControllerCreation)) throw new SecurityException("Exact original compute controller exit is unobserved.");
@@ -260,7 +261,7 @@ namespace Luma.Windows.Hosted
                 Action<JournalKind,byte[]> append=delegate(JournalKind kind,byte[] payload) {live();JournalEntry accepted=authority.Journal.Append(kind,actor.Sid,payload,writing);heldHead.Advance(accepted);live();};
                 AuthorityIdentity execution=authority.Runtime.GuestExecutionIdentity;
                 using(HostedGuestDirectory directory=HostedGuestDirectory.Open(execution,admission,false)) {
-                    directory.Check();HostedWslConfiguration.RequireClosed(execution,actor,admission);
+                    directory.Check();HostedWslConfiguration.RequireClosed(execution,actor,admission,live);
                     if(state.Worker!=null && !OwnedWindowsProcess.OriginalExited(state.Worker.Controller,state.Worker.ControllerCreation)) throw new SecurityException("Original compute controller is still present; its resource generation remains held.");
                     HostedGuestRunner.Drain(execution,actor,admission,drainRequest,live);directory.Check();live();
                     string proof=HostedComputeContract.Digest(Encoding.ASCII.GetBytes("luma-compute-original-exit-and-confined-drain-no-replay-v1\n"+generation+"\n"+HostedHostResources.BootCreation().ToString(CultureInfo.InvariantCulture)));

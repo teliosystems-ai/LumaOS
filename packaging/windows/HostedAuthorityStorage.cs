@@ -79,6 +79,10 @@ namespace Luma.Windows.Hosted
         {Capacity(null,null,0,false,true,physicalTail);}
         internal void AttachRuntimeIntegrity(Action check) {if(check==null || runtimeIntegrity!=null) throw new SecurityException("Runtime integrity boundary cannot be absent or replaced.");runtimeIntegrity=check;check();}
         internal string DirectoryPath {get{return directory;}}
+        private void RequireProtectedWrite()
+        {
+            Check();Luma.Windows.WindowsHostProtection.ObserveVolume(directory).RequireProtected();Check();
+        }
         private PrivateState(string directory,string ownerSid,string serviceSid) {this.directory=directory;this.ownerSid=ownerSid;this.serviceSid=serviceSid;}
         private static string Name(string value)
         {
@@ -188,7 +192,7 @@ namespace Luma.Windows.Hosted
         }
         internal void WriteNew(string leaf,byte[] bytes)
         {
-            Check();Name(leaf);Wire.Copy(bytes,1,Wire.MaximumFrame);
+            RequireProtectedWrite();Name(leaf);Wire.Copy(bytes,1,Wire.MaximumFrame);
             if(physicalStage!=null) {
                 PlannedFile planned;
                 if(!physicalStage.Files.TryGetValue(leaf,out planned) || planned.Bytes!=bytes.Length || planned.Sha256!=Wire.Hash(bytes))
@@ -205,18 +209,18 @@ namespace Luma.Windows.Hosted
                     if(handle.IsInvalid) {int error=Marshal.GetLastWin32Error();handle.Dispose();throw new Win32Exception(error);}
                     using(FileStream stream=new FileStream(handle,FileAccess.ReadWrite,4096,false)) {
                         Inspect(stream.SafeFileHandle,false,true);HostedFileAllocation.ReserveEmpty(stream.SafeFileHandle,bytes.Length);
-                        Capacity(leaf,stream.SafeFileHandle,0,false,true);Check();stream.Write(bytes,0,bytes.Length);stream.Flush(true);
+                        Capacity(leaf,stream.SafeFileHandle,0,false,true);RequireProtectedWrite();stream.Write(bytes,0,bytes.Length);stream.Flush(true);RequireProtectedWrite();
                         Inspect(stream.SafeFileHandle,false,true);Capacity(leaf,stream.SafeFileHandle,0,false,true);
                     }
                 } finally {Marshal.FreeHGlobal(native);}
             } finally {pin.Free();}
-            FlushVolume();Check();
+            FlushVolume();RequireProtectedWrite();
         }
         internal StagedPackage CapturePackage(string leaf,long bytes,string expectedSha256,Func<long,byte[]> next,Action check)
         {
             Name(leaf);if(!HostedStateCapacity.IsPackage(leaf) ||
                 bytes<1024 || bytes>PackageInspector.MaximumArchiveBytes || next==null || check==null) throw new SecurityException("Closed package capture shape differs.");
-            Wire.Bytes(expectedSha256,32,true);check();Check();if(physicalStage!=null) throw new SecurityException("Package capture cannot borrow a journal stage.");
+            Wire.Bytes(expectedSha256,32,true);check();RequireProtectedWrite();if(physicalStage!=null) throw new SecurityException("Package capture cannot borrow a journal stage.");
             Capacity(null,null,bytes,true,true);RequireFree(checked(bytes+physicalTail.AllocatedBytes));
             byte[] descriptor=Descriptor();GCHandle pin=GCHandle.Alloc(descriptor,GCHandleType.Pinned);string destination=Path.Combine(directory,leaf);
             try {
@@ -238,7 +242,7 @@ namespace Luma.Windows.Hosted
                     }
                 } finally {Marshal.FreeHGlobal(native);}
             } finally {pin.Free();}
-            FlushVolume();check();Check();return OpenPackage(leaf,bytes,expectedSha256,check);
+            FlushVolume();check();RequireProtectedWrite();return OpenPackage(leaf,bytes,expectedSha256,check);
         }
         internal StagedPackage OpenPackage(string leaf,long bytes,string expectedSha256,Action check)
         {
@@ -315,12 +319,12 @@ namespace Luma.Windows.Hosted
         }
         internal void Publish(string source,string destination)
         {
-            Check();Name(source);Name(destination);Read(source,1,Wire.MaximumFrame);
+            RequireProtectedWrite();Name(source);Name(destination);Read(source,1,Wire.MaximumFrame);
             if(!MoveFileEx(Path.Combine(directory,source),Path.Combine(directory,destination),8)) throw new Win32Exception(Marshal.GetLastWin32Error());
             if(physicalStage!=null && physicalStage.Files.ContainsKey(source)) {
                 PlannedFile moved=physicalStage.Files[source];physicalStage.Files.Remove(source);physicalStage.Files.Add(destination,moved);
             }
-            FlushVolume();Read(destination,1,Wire.MaximumFrame);Check();
+            FlushVolume();Read(destination,1,Wire.MaximumFrame);RequireProtectedWrite();
         }
         internal void RemovePublishedDuplicate(string leaf,string expectedSha256)
         {

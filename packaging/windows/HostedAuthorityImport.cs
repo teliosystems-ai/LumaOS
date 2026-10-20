@@ -229,6 +229,7 @@ namespace Luma.Windows.Hosted
                 AuthorityIdentity execution=authority.Runtime.GuestExecutionIdentity;
                 JournalHistory journal=authority.Journal.Read(original);journal.Reconcile(authority.Identity,null,authority.Nv.ReadHead());DeploymentHistory state=DeploymentHistory.Replay(journal,original);Candidate(release,state);
                 release.Verify(authority.Trust.ForRelease(),signature);HostedReleaseLease utc=new HostedReleaseLease(pipe,authority,release,signature,original);utc.Check();
+                HostedProtectionLease protection=new HostedProtectionLease(authority.State,actor,original);
                 DeploymentEvent imported=state.Imported(releaseHash);
                 if(activate && imported==null) throw new SecurityException("Activation requires an exact genuinely imported signed package.");
                 if(!activate && imported!=null) throw new SecurityException("Release is already imported; use its separate activation action.");
@@ -240,16 +241,17 @@ namespace Luma.Windows.Hosted
                         "\nDescriptor SHA256: "+releaseHash+"\nRelease: "+release.Sequence+"\nRootfs SHA256: "+release.RootfsSha256+"\nOwned slot: "+HostedGuestRunner.Distribution(authority.Identity,admission)+
                         "\nGeneration: "+generation+"\nOnly fixed compute-only profile2 is admitted; no Linux identity/grants/TPM/product authority, production qualification or default-distribution change.",utc.CheckObserved);
                 }
-                utc.Check();HostedHostResources.Check(1536UL*1024*1024);authority.State.Check();
-                SaveTicket(authority.State,Ticket("r",releaseHash),description,utc.Check);SaveTicket(authority.State,Ticket("s",releaseHash),signature,utc.Check);
-                authority.Journal.Append(activate?JournalKind.ActivationPrepared:JournalKind.ImportPrepared,actor.Sid,admission.Encode(),utc.Check);
-                Action live=delegate {original();authority.State.Check();utc.Check();HostedHostResources.Check(256UL*1024*1024);};
+                Action admitting=delegate {original();authority.State.Check();protection.Check();utc.Check();};
+                admitting();protection.CheckFresh();HostedHostResources.Check(1536UL*1024*1024);
+                SaveTicket(authority.State,Ticket("r",releaseHash),description,admitting);SaveTicket(authority.State,Ticket("s",releaseHash),signature,admitting);
+                authority.Journal.Append(activate?JournalKind.ActivationPrepared:JournalKind.ImportPrepared,actor.Sid,admission.Encode(),admitting);
+                Action live=delegate {admitting();HostedHostResources.Check(256UL*1024*1024);};
                 DeploymentEvent started=null;
                 GuestComputeRequest probe=null;
                 Action<OwnedWindowsProcess> register=delegate(OwnedWindowsProcess controller) {
-                    live();if(started!=null) throw new SecurityException("A previous original controller lacks a genuine completion.");
+                    live();protection.CheckFresh();if(started!=null) throw new SecurityException("A previous original controller lacks a genuine completion.");
                     DeploymentEvent value=admission.WithController(controller.Id,controller.Creation,0,probe==null?new string('0',64):probe.RequestSha256);
-                    authority.Journal.Append(JournalKind.ControllerStarted,actor.Sid,value.Encode(),live);started=value;
+                    authority.Journal.Append(JournalKind.ControllerStarted,actor.Sid,value.Encode(),live);started=value;protection.CheckFresh();
                 };
                 Action<string> complete=delegate(string observation) {
                     live();if(started==null || !OwnedWindowsProcess.OriginalExited(started.Controller,started.ControllerCreation)) throw new SecurityException("Original registered controller has not actually exited.");
@@ -266,7 +268,7 @@ namespace Luma.Windows.Hosted
                     PackageInspector.ValidateHostedProfile(inspected,release.RequiredFiles);live();
                     if(activate) {
                         using(HostedGuestDirectory directory=HostedGuestDirectory.Open(execution,admission,false)) {
-                            directory.Check();HostedWslConfiguration.RequireClosed(execution,actor,admission);
+                            directory.Check();HostedWslConfiguration.RequireClosed(execution,actor,admission,live);
                             probe=new GuestComputeRequest("capture",ProbePayload(authority.Identity,admission));
                             byte[] data=HostedGuestRunner.Compute(execution,actor,admission,probe,register,live);
                             string digest;using(SHA256 hash=SHA256.Create()) digest=Wire.Hex(hash.ComputeHash(data));complete(digest);directory.Check();
@@ -307,7 +309,8 @@ namespace Luma.Windows.Hosted
                         "\nExact last guest request (or never-dispatched/import-only token): "+drainRequest+"\nDrain durably revokes this token and requires no queued unit job before resource return. Revocation is an append-only negative execution barrier, not new TPM or grant authority; it is never automatically deleted. A later activation probe uses a fresh independently journaled request, never replays the revoked one."+
                         "\nNo import is automatically replayed. Unknown import success is never inferred from a partial boot. No distributions or artifacts are deleted, unregistered or name-killed; previous active slot remains unchanged on abandonment.",utc.CheckObserved);
                 }
-                Action live=delegate {original();authority.State.Check();utc.Check();};live();
+                HostedProtectionLease protection=abandon?null:new HostedProtectionLease(authority.State,actor,original);
+                Action live=delegate {original();authority.State.Check();if(protection!=null) protection.Check();utc.Check();};live();
                 bool registered=HostedWslConfiguration.Registered(execution,actor,admission);ulong currentBoot=HostedHostResources.BootCreation();
                 if(state.Worker!=null) {
                     if(!OwnedWindowsProcess.OriginalExited(state.Worker.Controller,state.Worker.ControllerCreation)) throw new SecurityException("Original controller still exists; resource generation remains held.");
@@ -336,11 +339,11 @@ namespace Luma.Windows.Hosted
                     using(StagedPackage package=authority.State.OpenPackage(admission.PackageLeaf,release.ArchiveBytes,release.RootfsSha256,live))
                     using(HostedGuestDirectory directory=HostedGuestDirectory.Open(execution,admission,false)) {
                         PackageContent inspected=PackageInspector.Validate(package.Path,release.ArchiveBytes,release.ContentBytes,release.MemberCount,release.RootfsSha256,release.RequiredFiles,live);
-                        PackageInspector.ValidateHostedProfile(inspected,release.RequiredFiles);HostedWslConfiguration.RequireClosed(execution,actor,admission);
+                        PackageInspector.ValidateHostedProfile(inspected,release.RequiredFiles);HostedWslConfiguration.RequireClosed(execution,actor,admission,live);
                         DeploymentEvent started=null;
                         GuestComputeRequest probe=new GuestComputeRequest("capture",ProbePayload(authority.Identity,admission));
                         byte[] data=HostedGuestRunner.Compute(execution,actor,admission,probe,delegate(OwnedWindowsProcess controller) {
-                            started=admission.WithController(controller.Id,controller.Creation,0,probe.RequestSha256);authority.Journal.Append(JournalKind.ControllerStarted,actor.Sid,started.Encode(),live);
+                            live();protection.CheckFresh();started=admission.WithController(controller.Id,controller.Creation,0,probe.RequestSha256);authority.Journal.Append(JournalKind.ControllerStarted,actor.Sid,started.Encode(),live);protection.CheckFresh();
                         },live);
                         if(started==null || !OwnedWindowsProcess.OriginalExited(started.Controller,started.ControllerCreation)) throw new SecurityException("New exact recovery probe controller exit is unobserved.");
                         string proof;using(SHA256 hash=SHA256.Create()) proof=Wire.Hex(hash.ComputeHash(data));

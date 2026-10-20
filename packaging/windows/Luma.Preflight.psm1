@@ -1,5 +1,27 @@
 Set-StrictMode -Version Latest
 
+if (-not ('Luma.Windows.WindowsHostProtection' -as [type])) {
+    Add-Type -Path (Join-Path $PSScriptRoot 'WindowsHostProtection.cs') -ReferencedAssemblies @('System.dll','System.Core.dll','System.Security.dll','System.Management.dll')
+}
+
+function Get-LumaHostProtectionObservation {
+    [CmdletBinding()]
+    param()
+    $path=[Environment]::GetFolderPath([Environment+SpecialFolder]::CommonApplicationData)
+    $observed=[Luma.Windows.WindowsHostProtection]::Observe($path)
+    $volume=$observed.Volume
+    $management=$observed.Management
+    [pscustomobject]@{
+        host_encryption=[pscustomobject]@{schema_version=1;scope='fixed-private-custody-and-product-volume';volume=$volume.Volume;volume_serial=$volume.Serial
+            status=$volume.Status;error_code=$volume.ErrorCode;protection_status=$volume.Protection;conversion_status=$volume.Conversion
+            encryption_method=$volume.EncryptionMethod;lock_status=$volume.Lock;protection_observed=$volume.Protected}
+        enterprise_policy=[pscustomobject]@{schema_version=1;scope='current-token-and-machine';status=$management.Status
+            domain_join=$management.DomainJoin;aad_join=$management.AadJoin;mdm_registered=$management.MdmRegistered
+            wsl_policy_configured=$management.WslPolicyConfigured;wsl_explicitly_denied=$management.WslExplicitlyDenied
+            known_local_checks_passed=$management.KnownLocalChecksPassed;enterprise_authorization=$false}
+    }
+}
+
 function Assert-LumaClosedRecord {
     param($Value, [string[]] $Fields, [string] $Name)
     if ($null -eq $Value -or ($Value -isnot [pscustomobject] -and
@@ -269,6 +291,7 @@ function Get-LumaWindowsObservation {
     $list = Invoke-LumaWslObservation list
     $distributions = ConvertFrom-LumaWslList -Text $list.text -ExitCode $list.exit_code
     $drive = Get-PSDrive -Name $StorageDrive -PSProvider FileSystem -ErrorAction Stop
+    $protection = Get-LumaHostProtectionObservation
     [pscustomobject]@{
         schema_version = 1
         observed_at_utc = [DateTime]::UtcNow.ToString('o')
@@ -286,8 +309,8 @@ function Get-LumaWindowsObservation {
         storage_free_bytes = [uint64]$drive.Free
         wsl_runtime = $version
         wsl = $distributions
-        host_encryption = 'not-qualified'
-        enterprise_policy = 'not-qualified'
+        host_encryption = $protection.host_encryption
+        enterprise_policy = $protection.enterprise_policy
         nested_virtualization = 'not-qualified'
         confinement = 'not-qualified'
         accelerator = 'not-qualified'
@@ -333,6 +356,16 @@ function Test-LumaWindowsPreflight {
     $storage = Test-LumaStoragePlan -Observation $Observation -Plan $StoragePlan
     $release = Test-LumaReleasePolicy -Observation $Observation -Policy $ReleasePolicy
     $planningBlockers = New-Object 'System.Collections.Generic.List[string]'
+    if (-not ($Observation.PSObject.Properties.Name -ccontains 'host_encryption') -or
+        $null -eq $Observation.host_encryption -or $Observation.host_encryption.status -cne 'protected' -or
+        $Observation.host_encryption.protection_observed -isnot [bool] -or -not $Observation.host_encryption.protection_observed) {
+        $planningBlockers.Add('Actual fixed private custody/product volume must have observed active full encryption; suspended, absent, locked, unsupported or unknown protection refuses admission.')
+    }
+    if (-not ($Observation.PSObject.Properties.Name -ccontains 'enterprise_policy') -or
+        $null -eq $Observation.enterprise_policy -or $Observation.enterprise_policy.status -cne 'no-management-signals-observed' -or
+        $Observation.enterprise_policy.known_local_checks_passed -isnot [bool] -or -not $Observation.enterprise_policy.known_local_checks_passed) {
+        $planningBlockers.Add('Known local Windows policy checks must pass; managed, configured, denied or unknown signals require separate authenticated enterprise authorization, not an observation flag.')
+    }
     if (-not $storage.capacity_observation_passed) {
         $planningBlockers.Add('An explicit complete storage budget must fit the observed selected-drive free capacity.')
     }
@@ -351,7 +384,7 @@ function Test-LumaWindowsPreflight {
         executable_skills_enabled = $false; production_qualified = $false; gate_closing = $false
         pending_qualification = @('Authenticated production release policy and actual per-tuple qualification',
             'Fresh storage recheck and exclusive allocation at installation',
-            'Host encryption and managed-device policy', 'Effective guest limits and other WSL workloads',
+            'Installed encryption/policy transition qualification and authenticated enterprise authorization when applicable', 'Effective guest limits and other WSL workloads',
             'Authenticated bridge and Windows ACL broker', 'Enforcing worker confinement',
             'Actual compact inference', 'Hyper-V Gen2 desktop and recovery proof')
         observation = $Observation
@@ -359,4 +392,4 @@ function Test-LumaWindowsPreflight {
 }
 
 Export-ModuleMember -Function ConvertFrom-LumaWslList, Get-LumaWindowsObservation, Test-LumaWindowsPreflight,
-    Test-LumaStoragePlan, Test-LumaReleasePolicy, Read-LumaPlanningJson
+    Test-LumaStoragePlan, Test-LumaReleasePolicy, Read-LumaPlanningJson, Get-LumaHostProtectionObservation

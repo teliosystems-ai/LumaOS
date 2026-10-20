@@ -15,6 +15,8 @@ function New-Observation {
         windows_product_type=1; windows_edition='Professional'; processor_architectures=@(9); virtualization_firmware=@($true)
         hypervisor_present=$true; available_memory_bytes=32GB; total_memory_bytes=64GB
         storage_drive='D'; storage_free_bytes=[uint64]32GB
+        host_encryption=[pscustomobject]@{status='protected';protection_observed=$true}
+        enterprise_policy=[pscustomobject]@{status='no-management-signals-observed';known_local_checks_passed=$true}
         wsl_runtime=[pscustomobject]@{ status='observed'; exit_code=0; text='WSL version: 2.6.0.0' }
         wsl=(ConvertFrom-LumaWslList "  NAME            STATE           VERSION`n* Ubuntu          Running         2" 0) }
 }
@@ -76,6 +78,14 @@ $policy = New-ReleasePolicy
 $base = New-Observation
 $before = @($base, $plan, $policy) | ConvertTo-Json -Depth 12 -Compress
 $complete = Test-LumaWindowsPreflight $base -StoragePlan $plan -ReleasePolicy $policy
+foreach ($status in @('fully-decrypted','suspended-or-protection-off','conversion-incomplete','locked','query-access-denied','provider-unavailable','query-timed-out','unknown')) {
+    $unsafe=New-Observation;$unsafe.host_encryption.status=$status;$unsafe.host_encryption.protection_observed=$false
+    Assert-Luma (-not (Test-LumaWindowsPreflight $unsafe -StoragePlan $plan -ReleasePolicy $policy).planning_observations_passed) "Unsafe encryption status admitted: $status"
+}
+foreach ($status in @('enterprise-review-required','wsl-policy-denied','unknown','non-user-token-context')) {
+    $unsafe=New-Observation;$unsafe.enterprise_policy.status=$status;$unsafe.enterprise_policy.known_local_checks_passed=$false
+    Assert-Luma (-not (Test-LumaWindowsPreflight $unsafe -StoragePlan $plan -ReleasePolicy $policy).planning_observations_passed) "Unsafe policy status admitted: $status"
+}
 Assert-Luma $complete.planning_observations_passed 'Exact complete planning input refused.'
 Assert-Luma ($complete.storage_planning.required_free_bytes -eq 14GB) 'Seven-component storage sum incorrect.'
 Assert-Luma (-not $complete.storage_planning.allocation_reserved -and -not $complete.release_comparison.policy_authenticated `

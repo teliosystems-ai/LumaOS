@@ -268,6 +268,7 @@ namespace Luma.Windows.Hosted
                 HostedComputeContract.RequireAdmissionCapacity(history);authority.State.RequireReadableTail();AuthorityIdentity execution=authority.Runtime.GuestExecutionIdentity;
                 byte[] signature;ReleaseDescriptor release=ComputeRelease(authority,state.Active,out signature);release.Verify(authority.Trust.ForRelease(),signature);request.RequireRelease(release);
                 HostedReleaseLease utc=new HostedReleaseLease(pipe,authority,release,signature,original);utc.Check();
+                HostedProtectionLease protection=new HostedProtectionLease(authority.State,actor,original);
                 DeploymentEvent admission=new DeploymentEvent(4,releaseHash,release.Sequence,request.RequestSha256,HostedHostResources.BootCreation(),state.Active.PackageLeaf,0,0,0,new string('0',64));
                 byte[] review=Review(pipe,"infer",HostedInferenceContract.ReviewBytes(admission,request,history.Head),
                     "One nonrenewable five-minute original first-Admin MODEL INFERENCE session; not the thirty-second inert compute purpose.\nExact request: "+request.RequestSha256+
@@ -275,13 +276,13 @@ namespace Luma.Windows.Hosted
                     "\nPublisher-bound inference profile SHA256: "+request.ProfileSha256+"\nCurrent release: "+releaseHash+"\nOwned distribution: "+HostedGuestRunner.Distribution(execution,admission)+
                     "\nThe exact source is user text within fixed ChatML user/assistant framing with an empty thinking prefill, not a hidden system instruction. Prompt <=4096 UTF8 bytes, context2048, generated tokens <="+request.MaximumTokens+", result <=1MiB; CPU-only2threads/4.5GiB/no swap/16tasks. Windows and guest each require observed5.5GiB headroom before dispatch and retain a1GiB continuous low-water floor; these checks are observations, not atomic reservations or a no-impact guarantee for other workloads. Low headroom interrupts work and retains any uncertain generation for exact recovery. Review, protected UTC refresh, subprocess, drainage and delivery share the original five-minute deadline. No native product principal/grant, publication, workflow effect or production qualification. Interrupted work is never replayed; original exit and fresh confined drainage are mandatory before releasing its generation.",utc.CheckObserved);
                 HostedComputeHead heldHead=new HostedComputeHead(authority.Identity,history,authority.Nv.ReadHead());
-                Action writing=delegate {original();authority.State.Check();utc.CheckObserved();HostedInferenceContract.CheckHostHeadroom(false);};
+                Action writing=delegate {original();authority.State.Check();protection.Check();utc.CheckObserved();HostedInferenceContract.CheckHostHeadroom(false);};
                 Action observed=delegate {writing();NoUncertainFileAuthority(authority);heldHead.Require(authority.Nv.ReadHead());};
                 Action live=delegate {original();authority.State.Check();utc.Check();observed();};
                 Action<JournalKind,byte[]> append=delegate(JournalKind kind,byte[] payload) {live();JournalEntry accepted=authority.Journal.Append(kind,actor.Sid,payload,writing);heldHead.Advance(accepted);observed();};
-                Action starting=delegate {live();HostedInferenceContract.CheckHostHeadroom(true);};
+                Action starting=delegate {live();protection.CheckFresh();HostedInferenceContract.CheckHostHeadroom(true);};
                 using(HostedGuestDirectory directory=HostedGuestDirectory.Open(execution,admission,false)) {
-                    directory.Check();HostedWslConfiguration.RequireClosed(execution,actor,admission);starting();append(JournalKind.InferencePrepared,admission.Encode());DeploymentEvent started=null;
+                    directory.Check();HostedWslConfiguration.RequireClosed(execution,actor,admission,live);starting();append(JournalKind.InferencePrepared,admission.Encode());DeploymentEvent started=null;
                     byte[] result=HostedGuestRunner.Infer(execution,actor,admission,request,delegate(OwnedWindowsProcess controller) {
                         starting();if(started!=null) throw new SecurityException("Inference cannot dispatch a second controller or replay the exact request.");started=admission.WithController(controller.Id,controller.Creation,0,request.RequestSha256);append(JournalKind.ControllerStarted,started.Encode());starting();
                     },live);
@@ -322,7 +323,7 @@ namespace Luma.Windows.Hosted
                 Action<JournalKind,byte[]> append=delegate(JournalKind kind,byte[] payload) {live();JournalEntry accepted=authority.Journal.Append(kind,actor.Sid,payload,writing);heldHead.Advance(accepted);live();};
                 AuthorityIdentity execution=authority.Runtime.GuestExecutionIdentity;
                 using(HostedGuestDirectory directory=HostedGuestDirectory.Open(execution,admission,false)) {
-                    directory.Check();HostedWslConfiguration.RequireClosed(execution,actor,admission);
+                    directory.Check();HostedWslConfiguration.RequireClosed(execution,actor,admission,live);
                     if(state.Worker!=null && !OwnedWindowsProcess.OriginalExited(state.Worker.Controller,state.Worker.ControllerCreation)) throw new SecurityException("Original inference controller remains present; its generation remains held.");
                     HostedGuestRunner.DrainInference(execution,actor,admission,drainRequest,live);directory.Check();live();
                     string proof=HostedComputeContract.Digest(Encoding.ASCII.GetBytes("luma-inference-original-exit-and-confined-drain-no-replay-v1\n"+generation+"\n"+HostedHostResources.BootCreation().ToString(CultureInfo.InvariantCulture)));

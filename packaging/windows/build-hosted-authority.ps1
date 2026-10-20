@@ -29,11 +29,12 @@ Compile-Hosted @((Join-Path $PSScriptRoot 'PlatformSignature.cs')) $signature @(
 Compile-Hosted @((Join-Path $PSScriptRoot 'PlatformCustody.cs')) $custody @('System.dll','System.Core.dll','System.Security.dll') 'library'
 Compile-Hosted @((Join-Path $PSScriptRoot 'PackageInspector.cs')) $package @('System.dll','System.Core.dll') 'library'
 $names=@('HostedAuthorityProtocol.cs','HostedAuthorityCustody.cs','HostedAuthorityCapacity.cs','HostedAuthorityStorage.cs','HostedAuthorityRelease.cs','HostedAuthorityTransport.cs','HostedAuthorityDeployment.cs','HostedAuthorityService.cs','HostedAuthorityTime.cs','HostedAuthorityLifecycle.cs','HostedAuthorityImport.cs','HostedAuthorityRecovery.cs','HostedAuthorityTrust.cs','HostedAuthorityRuntime.cs','HostedAuthorityRuntimeService.cs','HostedAuthorityInstalledInput.cs','HostedAuthorityRead.cs','HostedAuthorityEnrollment.cs','HostedAuthorityCompute.cs','HostedAuthorityInference.cs','HostedAuthorityIngestion.cs')
+$names+=@('WindowsHostProtection.cs','HostedAuthorityHostProtection.cs','HostedAuthorityWslObserver.cs')
 $inputs=@($names | ForEach-Object {Join-Path $PSScriptRoot $_})
 foreach ($sourceInput in $inputs) { if (-not (Test-Path -LiteralPath $sourceInput -PathType Leaf)) { throw ('Hosted build source missing: '+$sourceInput) } }
 $target=if ($LibraryOnly) {'library'} else {'exe'}
 $binary=Join-Path $output $(if ($LibraryOnly) {'Luma.HostedAuthority.Library.dll'} else {'Luma.HostedAuthority.exe'})
-Compile-Hosted $inputs $binary @('System.dll','System.Core.dll','System.Security.dll','System.ServiceProcess.dll',$signature,$custody,$package) $target $true
+Compile-Hosted $inputs $binary @('System.dll','System.Core.dll','System.Security.dll','System.ServiceProcess.dll','System.Management.dll',$signature,$custody,$package) $target $true
 [string[]]$files=@($signature,$custody,$package,$binary)
 [Array]::Sort($files,[StringComparer]::Ordinal)
 $pins=@($files | ForEach-Object {[ordered]@{name=[IO.Path]::GetFileName($_);bytes=(Get-Item -LiteralPath $_).Length;sha256=(Get-FileHash -LiteralPath $_ -Algorithm SHA256).Hash.ToLowerInvariant()}})

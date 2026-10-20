@@ -399,7 +399,7 @@ def main() -> None:
         shutil.copytree(REPO/name,reference/name,ignore=shutil.ignore_patterns('__pycache__','*.pyc'))
     if args.edition == 'desktop':
         import browser_policy
-        for name in ('workspace_host.py', 'workspace_auth.py', 'workspace_app.py', 'browser_adapter.py'):
+        for name in ('workspace_host.py', 'workspace_auth.py', 'workspace_app.py', 'workspace_capture.py', 'browser_adapter.py'):
             target = binary.parent/name
             shutil.copy2(REPO/'native/desktop'/name, target)
             target.chmod(0o644)
@@ -515,6 +515,9 @@ def main() -> None:
         raise SystemExit('unexpected pre-existing interactive identity in base image')
     qemu_policy.configure(ROOT)
     desktop_profile = desktop_policy.configure(ROOT, args.edition, args.environment)
+    if args.edition == 'desktop':
+        import capture_policy
+        desktop_profile['input_capture'] = capture_policy.verify(ROOT)
     root_mib, payload_mib = desktop_policy.geometry(args.edition)
     template = ROOT/'usr/share/luma-os/var-template'
     # Fresh build-owned exported filesystem only; no host files are involved.

@@ -121,6 +121,7 @@ namespace Luma.Windows.Hosted
         {this.identity=identity;this.release=release;requireReleaseLifetime=lifetime;nonce=Wire.Hex(Wire.Random(32));challengeAge=Stopwatch.StartNew();}
         internal static LiveRelease ForAbandonment(AuthorityIdentity identity,ReleaseDescriptor release) {return new LiveRelease(identity,release,false);}
         internal string Nonce {get{return nonce;}}
+        internal bool RenewalDue {get{return HostedUtcContinuation.RenewalDue(challengeAge.Elapsed);}}
         internal void Accept(byte[] bytes,byte[] signature)
         {
             if(time!=null || challengeAge.Elapsed.TotalSeconds>=30) throw new SecurityException("UTC challenge is expired or already consumed.");

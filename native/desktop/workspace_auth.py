@@ -35,6 +35,7 @@ MAX_ENVELOPE_OUTPUT = 2*MAX_ENVELOPE + 16384
 MAX_RECOVERY_REQUEST = 96*1024
 MAX_RECOVERY_OUTPUT = 96*1024
 MAX_DISCOVERY_REQUEST = 65536
+MAX_CONVERSATION_REQUEST = 16384
 ENGINES = ('spreadsheet', 'document', 'diagram', 'animation')
 
 
@@ -75,7 +76,7 @@ def proposal(value):
     if not isinstance(value['approval'], str):
         raise ValueError('explicit approval text or an empty string required')
     operation = value['operation']
-    if operation in ('inspection', 'office-proposal', 'paged-read', 'envelope-read', 'search-journey', 'workflow-journey', 'restore-journey', 'retire-journey'):
+    if operation in ('inspection', 'office-proposal', 'paged-read', 'envelope-read', 'search-journey', 'conversation-journey', 'workflow-journey', 'restore-journey', 'retire-journey'):
         if any(value[field] for field in ('read_grant', 'effect_grant', 'approval')):
             raise ValueError('inspection cannot select effect authority')
     elif operation == 'review':
@@ -94,7 +95,8 @@ def proposal(value):
         raise ValueError('unsupported authenticated terminal operation')
     request = value['request']
     bound = (MAX_RECOVERY_REQUEST if operation in ('restore-journey', 'retire-journey')
-             else MAX_DISCOVERY_REQUEST if operation == 'search-journey' else MAX_REQUEST)
+             else MAX_DISCOVERY_REQUEST if operation == 'search-journey'
+             else MAX_CONVERSATION_REQUEST if operation == 'conversation-journey' else MAX_REQUEST)
     if not isinstance(request, str) or not 0 < len(request.encode('utf-8')) <= bound:
         raise ValueError('native request exceeds bound')
     source = strict_json(request)
@@ -107,6 +109,8 @@ def proposal(value):
         envelope_request(source)
     elif operation == 'search-journey':
         discovery_request(source)
+    elif operation == 'conversation-journey':
+        conversation_request(source)
     elif operation == 'workflow-journey':
         workflow_request(source)
     elif operation in ('restore-journey', 'retire-journey'):
@@ -126,6 +130,219 @@ def owner_request(source):
     if any(not isinstance(binding[key], str) or not re.fullmatch(r'[0-9a-f]{64}', binding[key]) or binding[key] == '0'*64 for key in ('installation', 'owner')) or type(binding['owner_generation']) is not int or not 1 <= binding['owner_generation'] <= 2**64-1:
         raise ValueError('invalid owner binding')
     return source
+
+
+def conversation_messages(messages):
+    """Keep the existing native gateway bounds, without inventing history."""
+    if not isinstance(messages, list) or not 1 <= len(messages) <= 15 or len(messages) % 2 != 1:
+        raise ValueError('one to fifteen alternating messages ending with this human are required')
+    total = 0
+    for index, message in enumerate(messages):
+        if not isinstance(message, dict) or set(message) != {'role', 'content'} or message['role'] != ('user' if index % 2 == 0 else 'assistant') or not isinstance(message['content'], str) or not message['content'].strip():
+            raise ValueError('only explicit human text and observed model replies form conversation history')
+        total += len(message['content'].encode('utf-8'))
+    if total > 8192 or len(encoded(messages)) > 16384:
+        raise ValueError('conversation exceeds native 8192-byte content / 16384-byte encoded input bounds; explicitly start afresh')
+    return messages
+
+
+def conversation_request(source):
+    """An initial human prompt only, not a grant, model choice or receipt."""
+    if not isinstance(source, dict) or set(source) != {'schema_version', 'login', 'messages', 'max_tokens'} or type(source['schema_version']) is not int or source['schema_version'] != 1:
+        raise ValueError('closed initial conversation data required')
+    if not isinstance(source['login'], str) or not re.fullmatch(r'[a-z][a-z0-9_-]{0,31}', source['login']):
+        raise ValueError('explicit native human login required')
+    conversation_messages(source['messages'])
+    if len(source['messages']) != 1 or len(source['messages'][0]['content'].encode('utf-8')) > 4096:
+        raise ValueError('begin with one explicit human prompt, at most 4096 bytes; no imported assistant history')
+    if type(source['max_tokens']) is not int or not 1 <= source['max_tokens'] <= 128:
+        raise ValueError('native response limit must be one to 128 tokens')
+    return source
+
+
+def conversation_digest(messages):
+    conversation_messages(messages)
+    canonical = [dict(role=message['role'], content=message['content']) for message in messages]
+    return hashlib.sha256(b'luma-native-gateway-messages-v1\0'+encoded(canonical)).hexdigest()
+
+
+def conversation_decimal(value, maximum=2**64-1):
+    if not isinstance(value, str) or not re.fullmatch(r'[1-9][0-9]{0,19}', value) or int(value) > maximum:
+        raise ValueError('canonical positive native resource count required')
+    return int(value)
+
+
+def conversation_worker(value):
+    if not isinstance(value, dict) or set(value) != {'lease_id', 'generation', 'manager_epoch'}:
+        raise ValueError('exact current native worker generation required')
+    if any(not isinstance(value[key], str) or not re.fullmatch(r'[0-9a-f]{32}', value[key]) for key in ('lease_id', 'manager_epoch')):
+        raise ValueError('invalid native worker identity')
+    conversation_decimal(value['generation'])
+    return value
+
+
+def conversation_review(messages, maximum, output):
+    """Check the live native review pipe, never import an asserted grant."""
+    if type(maximum) is not int or not 1 <= maximum <= 128:
+        raise ValueError('explicit native token bound required')
+    if not isinstance(output, bytes) or not 0 < len(output) < MAX_QUERY_OUTPUT:
+        raise ValueError('native inference review exceeds its observation bound')
+    value = strict_json(output)
+    if not isinstance(value, dict) or set(value) != {'schema_version', 'usage', 'worker', 'input_sha256', 'authority_returned', 'gate_closing'} or type(value['schema_version']) is not int or value['schema_version'] != 1 or value['authority_returned'] is not False or value['gate_closing'] is not False or value['input_sha256'] != conversation_digest(messages):
+        raise ValueError('native inference review substitutes input or claims authority')
+    worker = conversation_worker(value['worker'])
+    usage = value['usage']
+    if not isinstance(usage, dict) or set(usage) != {'action', 'selector', 'input_bytes', 'output_bytes', 'units'} or usage['action'] != 'inference.execute' or type(usage['input_bytes']) is not int or usage['input_bytes'] != sum(len(item['content'].encode('utf-8')) for item in messages) or type(usage['output_bytes']) is not int or usage['output_bytes'] != 8192 or type(usage['units']) is not int or usage['units'] != maximum:
+        raise ValueError('native inference scope changes its finite byte/token allowance')
+    selector = usage['selector']
+    if not isinstance(selector, dict) or set(selector) != {'kind', 'id', 'generation', 'digest'} or selector['kind'] != 'model' or not isinstance(selector['id'], str) or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.-]{0,127}', selector['id']) or type(selector['generation']) is not int or selector['generation'] != int(worker['generation']) or not exact_sha(selector['digest']):
+        raise ValueError('native inference scope substitutes the current model or worker generation')
+    return value
+
+
+def conversation_result(review, grant, output):
+    """Join an observed native result to this exact reviewed turn, not authority."""
+    if not isinstance(output, bytes) or not 0 < len(output) < MAX_QUERY_OUTPUT:
+        raise ValueError('native inference result exceeds its observation bound')
+    value = strict_json(output)
+    if not isinstance(value, dict) or set(value) != {'schema_version', 'result', 'output', 'receipt', 'gate_closing'} or type(value['schema_version']) is not int or value['schema_version'] != 1 or value['result'] != 'ok' or value['gate_closing'] is not False:
+        raise ValueError('no exact native inference completion was observed')
+    result, receipt = value['output'], value['receipt']
+    if not isinstance(result, dict) or set(result) != {'text', 'prompt_tokens', 'output_tokens'} or not isinstance(result['text'], str) or not result['text'].strip() or len(result['text'].encode('utf-8')) > 8192:
+        raise ValueError('native completion text is absent or exceeds its finite allowance')
+    conversation_decimal(result['prompt_tokens'], 2048)
+    conversation_decimal(result['output_tokens'], review['usage']['units'])
+    fields = {'kind', 'nonce', 'worker', 'phase', 'profile', 'input_digest', 'max_output_tokens', 'context_tokens', 'request_deadline', 'prompt_tokens', 'token_digest', 'output_tokens', 'result_digest', 'slot_released', 'worker_resources_released', 'product'}
+    if not isinstance(receipt, dict) or set(receipt) != fields or receipt['kind'] != 'permit' or receipt['phase'] != 'completed' or not isinstance(receipt['nonce'], str) or not re.fullmatch(r'[0-9a-f]{32}', receipt['nonce']) or not same_data(receipt['worker'], review['worker']) or receipt['profile'] != review['usage']['selector']['id'] or receipt['input_digest'] != review['input_sha256'] or receipt['max_output_tokens'] != str(review['usage']['units']) or receipt['context_tokens'] != '2048' or receipt['prompt_tokens'] != result['prompt_tokens'] or receipt['output_tokens'] != result['output_tokens'] or not exact_sha(receipt['token_digest']) or receipt['slot_released'] is not True or receipt['worker_resources_released'] is not False:
+        raise ValueError('native completion receipt changes its input, worker, token allowance or release status')
+    conversation_decimal(receipt['request_deadline'])
+    digest = hashlib.sha256(b'luma-native-gateway-result-v1\0'+encoded(dict(text=result['text'], prompt_tokens=result['prompt_tokens'], output_tokens=result['output_tokens']))).hexdigest()
+    if receipt['result_digest'] != digest:
+        raise ValueError('native completion digest differs from delivered text/accounting')
+    audit = receipt['product']
+    if not isinstance(audit, dict) or set(audit) not in ({'subject', 'subject_generation', 'grant_id', 'grant_version', 'checkpoint_head', 'usage'}, {'subject', 'subject_generation', 'grant_id', 'grant_version', 'checkpoint_head', 'operation_id', 'usage'}) or not exact_sha(audit['subject']) or not exact_sha(audit['checkpoint_head']) or type(audit['subject_generation']) is not int or not 1 <= audit['subject_generation'] <= 2**64-1 or audit['grant_id'] != grant or type(audit['grant_version']) is not int or audit['grant_version'] != 1 or not same_data(audit['usage'], review['usage']) or ('operation_id' in audit and (not isinstance(audit['operation_id'], str) or not re.fullmatch(r'[0-9a-f]{32}', audit['operation_id']))):
+        raise ValueError('native completion does not attribute this exact finite inference use')
+    return result
+
+
+def conversation_commitment(login, review):
+    """Reproducible review DATA; native rechecks the tuple BEFORE dispatch."""
+    if not isinstance(login, str) or not re.fullmatch(r'[a-z][a-z0-9_-]{0,31}', login):
+        raise ValueError('exact original human login required')
+    value = dict(purpose='luma-native-reviewed-inference-v1', login=login,
+        worker=review['worker'], usage=review['usage'], input_sha256=review['input_sha256'])
+    return hashlib.sha256(json.dumps(value, sort_keys=True, ensure_ascii=False, separators=(',', ':'), allow_nan=False).encode('utf-8')).hexdigest()
+
+
+def conversation_capture(command, path, maximum, login=None, grant=None, review_sha256=None):
+    """Closed genuine native inference endpoint, with PAM on the actual tty."""
+    if type(maximum) is not int or not 1 <= maximum <= 128:
+        raise ValueError('explicit native token bound required')
+    arguments = ['/usr/bin/sudo', '--', NATIVE, 'granted-run']
+    if command == 'review' and login is None and grant is None and review_sha256 is None:
+        arguments += ['granted-infer-review', str(path), str(maximum)]
+    elif command == 'infer' and isinstance(login, str) and re.fullmatch(r'[a-z][a-z0-9_-]{0,31}', login) and isinstance(grant, str) and re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.-]{0,127}', grant) and exact_sha(review_sha256):
+        arguments += ['granted-infer-reviewed', login, grant, str(path), str(maximum), review_sha256]
+    else:
+        raise ValueError('only exact native review/infer invocations are supported')
+    protected(NATIVE, 128*1024*1024)
+    return _capture_native(arguments, MAX_QUERY_OUTPUT)
+
+
+def conversation_manual_workflow(login, directory):
+    """Human-authored handoff to the existing independently granted workflow."""
+    print('Independent MANUAL workflow. No model reply is reused as source, identity, grant or approval. Enter every exact field explicitly; q cancels before native review. Native still recalculates the selected engine, obtains fresh separate Read/effect grants, reviews the exact intended publication/retention and requires its own approval.', flush=True)
+    fields = {}
+    for name, label, maximum in [('binding', 'Exact owner binding JSON', 1024),
+        ('artifact_id', 'Explicit artifact ID', 128), ('request_id', 'New stable request ID (retain for reconciliation)', 128),
+        ('expected', 'Exact expected immutable reference JSON, or literal null for a NEW artifact', 2048),
+        ('engine', 'Engine: spreadsheet, document, diagram, animation', 32)]:
+        item = terminal_line(label+' (q cancels): ', maximum)
+        if item == 'q':
+            print('Manual handoff cancelled before workflow review; no effect requested.', flush=True)
+            return 0
+        fields[name] = item
+    content = revised_source()
+    if content is None:
+        return 0
+    request = dict(schema_version=1, request_id=fields['request_id'], artifact_id=fields['artifact_id'],
+        expected=strict_json(fields['expected']), engine=fields['engine'], source=content)
+    source = workflow_request(dict(schema_version=1, login=login, binding=strict_json(fields['binding']),
+        operation=dict(kind='workflow', request=request)))
+    value = proposal(dict(schema_version=1, operation='workflow-journey', login=login,
+        read_grant='', effect_grant='', approval='', request=encoded(source).decode('utf-8')))
+    return workflow_journey(value, directory)
+
+
+def conversation_journey(value, directory):
+    """Transient real conversation: fresh finite admission per turn, no effects."""
+    proposal(value)
+    if value['operation'] != 'conversation-journey':
+        raise ValueError('explicit native conversation journey required')
+    source = conversation_request(strict_json(value['request']))
+    messages = source['messages']
+    print('Native local conversation. Each turn obtains fresh original PAM and exact finite inference admission; native request deadline remains 25 seconds, not the separate Windows five-minute purpose. Text is untrusted DATA, not an OS instruction or a grounded citation. No content is attached automatically and no tool/effect is dispatched. History stays only in this terminal and bounded private /run staging; no durable history or grant is created. q stops before submission; Ctrl+C stops observation. Model unavailability never falls back to an ungoverned smoke endpoint.', flush=True)
+    for round_number in range(8):
+        submitted = False
+        observed = False
+        try:
+            conversation_messages(messages)
+            print('Exact proposed conversation input (escaped DATA):\n'+json.dumps(messages, ensure_ascii=True, indent=2), flush=True)
+            with request_stage(directory, encoded(messages).decode('utf-8')) as path:
+                print('Checking the actual admitted local model and exact inference scope…', flush=True)
+                review = conversation_review(messages, source['max_tokens'], conversation_capture('review', path, source['max_tokens']))
+                commitment = conversation_commitment(source['login'], review)
+                print('Actual native scope and input digest (DATA, not an issued grant):\n'+json.dumps(review, ensure_ascii=True, indent=2), flush=True)
+                print('Exact login/model/worker/input/token review commitment (DATA; native rechecks before submission): '+commitment, flush=True)
+                grant = grant_selection('Fresh finite inference grant ID for this exact turn, or q to stop: ')
+                if grant is None:
+                    print('CANCELLED before inference submission. No inference/effect requested by this turn.', flush=True)
+                    return 0
+                if terminal_line('Type infer:'+commitment+' to submit exactly this reviewed turn, or q to stop: ', 128) != 'infer:'+commitment:
+                    print('CANCELLED before inference submission; exact prompt approval was not given.', flush=True)
+                    return 0
+                print('Running genuine native inference. Original PAM, current generation, grant/resource checks and revocation remain native. Ctrl+C interrupts observation; no terminal escape in model text is executed.', flush=True)
+                submitted = True
+                result = conversation_result(review, grant, conversation_capture('infer', path, source['max_tokens'], source['login'], grant, commitment))
+                observed = True
+            submitted = False
+            print('OBSERVED actual native inference completion. Untrusted model text, escaped as DATA:\n'+json.dumps(result['text'], ensure_ascii=True), flush=True)
+            print('This already-delivered text is not continuing permission, a workflow proposal, verified source, citation or production qualification.', flush=True)
+            messages = messages + [dict(role='assistant', content=result['text'])]
+        except (KeyboardInterrupt, EOFError):
+            print('Actual native completion was validated before presentation stopped; it is not cancellation or rollback. No subsequent inference/effect was requested.' if observed else 'UNCERTAIN: submitted inference may have run; no complete validated delivery was observed. Native retains cancellation/drain obligations. No automatic retry, slot release or OS effect is inferred.' if submitted else 'Conversation stopped before inference submission. Previously delivered replies, if any, remain already observed.', file=sys.stderr, flush=True)
+            return 130
+        except Exception:
+            print('Actual native completion was validated before presentation failed. Do not infer cancellation, rollback or a need to repeat this turn.' if observed else 'UNCERTAIN: inference was submitted but its exact result was not observed. Native effect/resource evidence must be inspected before retry; no automatic retry, success or release is claimed.' if submitted else 'Model unavailable or exact input/review refused. No inference submitted in this round. Use the independent manual workflow/read/discovery controls; no ungoverned fallback is attempted.', file=sys.stderr, flush=True)
+            if submitted or observed:
+                return 1
+            messages = []
+        if round_number == 7:
+            break
+        try:
+            choice = terminal_line('Type n for a follow-up, c to CLEAR history/new prompt, w for an independent manual workflow, m for manual help, or q to finish: ', 8)
+            if choice == 'q':
+                return 0
+            if choice == 'm':
+                print('Manual controls remain available in the native workspace: exact owner Read, semantic discovery, managed engine workflow, authenticated native owner operation and Admin encrypted recovery. These are separate reviewed/granted journeys; model text is never forwarded or applied automatically. Close this terminal with q, then choose the required native control.', flush=True)
+                return 0
+            if choice == 'w':
+                return conversation_manual_workflow(source['login'], directory)
+            if choice not in ('n', 'c') or (choice == 'n' and not messages):
+                raise ValueError('a follow-up requires an observed native reply; choose explicit new input otherwise')
+            prompt = terminal_line('Explicit human prompt (one line, at most 4096 UTF-8 bytes; q cancels): ', 4096)
+            if prompt == 'q':
+                return 0
+            messages = ([] if choice == 'c' else messages) + [dict(role='user', content=prompt)]
+            conversation_messages(messages)
+        except (KeyboardInterrupt, EOFError):
+            print('Conversation input stopped. No additional inference or OS effect was requested.', flush=True)
+            return 130
+        except Exception:
+            print('Conversation input refused; no additional inference/effect requested. Start a new explicit conversation to reset history or limits.', file=sys.stderr, flush=True)
+            return 1
+    print('Conversation reached its fixed eight-turn limit. No history or grant was retained; start a new explicit journey for further requests.', flush=True)
+    return 0
 
 
 def reference_data(reference):
@@ -381,7 +598,7 @@ def protected(path, maximum, *, sudo=False):
 
 def terminal_arguments(value, path):
     value = proposal(value)
-    if value['operation'] in ('paged-read', 'envelope-read', 'search-journey', 'workflow-journey', 'restore-journey', 'retire-journey'):
+    if value['operation'] in ('paged-read', 'envelope-read', 'search-journey', 'conversation-journey', 'workflow-journey', 'restore-journey', 'retire-journey'):
         raise ValueError('managed journeys require their explicit review and fresh grant steps')
     prefix = ['/usr/bin/sudo', '--', NATIVE, 'granted-run']
     if value['operation'] == 'office-proposal':
@@ -1517,6 +1734,8 @@ def terminal(path):
     protected(NATIVE, 128 * 1024 * 1024)
     request_path = directory / (uuid.uuid4().hex + '.request')
     try:
+        if value['operation'] == 'conversation-journey':
+            return conversation_journey(value, directory)
         if value['operation'] == 'restore-journey':
             return restore_journey(value, directory)
         if value['operation'] == 'retire-journey':

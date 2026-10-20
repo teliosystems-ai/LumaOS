@@ -192,7 +192,7 @@ namespace Luma.Windows.Hosted
 
     internal sealed class HostedReadInputs : IDisposable
     {
-        internal readonly EnrolledReadIntent Intent;private byte[] content;private string source,review;private int received;private bool completed;private int cancelled;private readonly ConsoleCancelEventHandler cancel;
+        internal readonly EnrolledReadIntent Intent;private byte[] content;private string source,review;private int received;private bool completed,ingested;private int cancelled;private readonly ConsoleCancelEventHandler cancel;
         internal HostedReadInputs(string[] arguments,bool interactive) {
             if(arguments.Length!=6) throw new InvalidDataException("Exact read arguments: INSTALLATION ROOT RELATIVE_PATH EXACT_BYTES SHA256.");int count;
             if(!Int32.TryParse(arguments[4],NumberStyles.None,CultureInfo.InvariantCulture,out count) || count.ToString(CultureInfo.InvariantCulture)!=arguments[4]) throw new SecurityException("Read byte count must be canonical positive decimal.");
@@ -224,6 +224,13 @@ namespace Luma.Windows.Hosted
         internal string Summary() {return SummaryText(false);}
         internal string SummaryForPersistent() {return SummaryText(true);}
         private string SummaryText(bool persistent) {if(!completed) throw new SecurityException("Read did not complete.");return "Received "+received+" exact inert bytes in original-client ephemeral memory; SHA256 "+Intent.Sha256+(persistent?". The existing persistent enrollment was selected, not created or changed; no source file saved, content publication, Linux authority, write or production qualification.":". No file saved, persistent enrollment, content publication, Linux authority, write or production qualification.");}
+        internal byte[] TakeCompletedForInference() {
+            Check();if(!completed || ingested || content==null || received!=Intent.Bytes || Intent.Bytes>GuestInferenceRequest.MaximumPrompt)
+                throw new SecurityException("Inference ingestion requires one complete verified live read of at most4096 bytes; no partial, replayed or portable receipt is accepted.");
+            using(SHA256 hash=SHA256.Create()) if(Wire.Hex(hash.ComputeHash(content))!=Intent.Sha256) throw new SecurityException("Already-delivered ingestion snapshot changed before transfer.");
+            string text=new UTF8Encoding(false,true).GetString(content);if(text.Length==0 || text.IndexOf('\0')>=0) throw new SecurityException("The exact read must be nonempty scalar UTF8 without NUL; binary data is never repaired or truncated into a prompt.");
+            byte[] result=content;content=null;ingested=true;return result;
+        }
         public void Dispose() {if(cancel!=null) Console.CancelKeyPress-=cancel;if(content!=null) {Array.Clear(content,0,content.Length);content=null;}}
         internal static int Describe(string[] arguments) {
             using(HostedReadInputs input=new HostedReadInputs(arguments,false)) {Console.WriteLine("Purpose: host-file-read (read-exact-file)\nActual input SID (not authority): "+input.Intent.Owner+"\nIntent SHA256 for separate native U-source review: "+Wire.Hash(input.Intent.Encode())+"\nIntent bytes (hex): "+Wire.Hex(input.Intent.Encode())+"\nNo source accessed, session admitted, persistent enrollment or product/Linux authority.");return 0;}

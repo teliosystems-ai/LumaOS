@@ -53,7 +53,7 @@ namespace Luma.Windows.Hosted
         private readonly PipeStream pipe;private readonly NativeAuthority authority;private readonly ReleaseDescriptor release;private readonly Action original;
         private readonly bool requireLifetime;private readonly AuthorityIdentity verifier;
         private readonly object sync=new object();
-        private LiveRelease current;private Stopwatch since;
+        private LiveRelease current;
         internal HostedReleaseLease(PipeStream pipe,NativeAuthority authority,ReleaseDescriptor release,byte[] signature,Action original)
             :this(pipe,authority,release,signature,original,true,authority.Trust.ForRelease()) {}
         private HostedReleaseLease(PipeStream pipe,NativeAuthority authority,ReleaseDescriptor release,byte[] signature,Action original,bool lifetime,AuthorityIdentity verifier)
@@ -66,17 +66,19 @@ namespace Luma.Windows.Hosted
         internal void Check()
         {
             lock(sync) {
-            original();if(current==null || since.Elapsed.TotalSeconds>=10) {
+            original();if(current==null || current.RenewalDue) {
+                LiveRelease previous=current;
+                Action renewal=HostedUtcContinuation.Require(original,previous==null?null:new Action(previous.Check));renewal();
                 LiveRelease next=requireLifetime?new LiveRelease(verifier,release):LiveRelease.ForAbandonment(verifier,release);byte[] challenge;
                 using(Wire.Writer writer=new Wire.Writer("luma-windows-hosted-utc-challenge-v1")) {
                     writer.Fixed(Wire.Bytes(authority.Identity.Installation,32,true),32);writer.Fixed(Wire.Bytes(next.Nonce,32,true),32);writer.Fixed(Wire.HashBytes(release.Encode()),32);challenge=writer.Bytes();
                 }
                 using(Wire.Writer writer=new Wire.Writer("luma-windows-hosted-time-relay-v1")) {
-                    writer.Text(authority.Trust.Endpoint,2048);writer.Blob(challenge,1024);HostedCoordinator.Reply(pipe,"utc-challenge",writer.Bytes(),original);
+                    writer.Text(authority.Trust.Endpoint,2048);writer.Blob(challenge,1024);HostedCoordinator.Reply(pipe,"utc-challenge",writer.Bytes(),renewal);
                 }
-                byte[] delivery=HostedPipe.Read(pipe,original,TimeSpan.FromSeconds(20));
-                using(Wire.Reader reader=new Wire.Reader(delivery,"luma-windows-hosted-utc-delivery-v1")) {byte[] proof=reader.Blob(8192),signature=reader.Fixed(64);reader.End();next.Accept(proof,signature);}
-                current=next;since=Stopwatch.StartNew();
+                byte[] delivery=HostedPipe.Read(pipe,renewal,TimeSpan.FromSeconds(20));
+                using(Wire.Reader reader=new Wire.Reader(delivery,"luma-windows-hosted-utc-delivery-v1")) {byte[] proof=reader.Blob(8192),signature=reader.Fixed(64);reader.End();renewal();next.Accept(proof,signature);}
+                renewal();current=next;
             }
             current.Check();original();
             }
@@ -89,6 +91,20 @@ namespace Luma.Windows.Hosted
             // dialogue into its pending confirmation; expiry simply refuses.
             original();if(current==null) throw new SecurityException("Protected UTC has not been observed.");current.Check();original();
             }
+        }
+    }
+
+    // Pure continuation composition, not a clock or authority provider. During
+    // renewal the actual previous nonce-signed proof must remain valid until
+    // the next proof is accepted; a slow/offline relay cannot bridge a gap.
+    public static class HostedUtcContinuation
+    {
+        public static bool RenewalDue(TimeSpan wholeNonceAge)
+        {if(wholeNonceAge<TimeSpan.Zero) throw new SecurityException("Negative UTC nonce age refused.");return wholeNonceAge>=TimeSpan.FromSeconds(10);}
+        public static Action Require(Action original,Action previous)
+        {
+            if(original==null) throw new ArgumentNullException("original");
+            return delegate {original();if(previous!=null) previous();original();};
         }
     }
 }

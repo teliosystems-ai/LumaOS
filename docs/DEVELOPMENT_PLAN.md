@@ -429,6 +429,14 @@ physical qualification all remain blockers.
 
 ## GWIN0 Windows hosted-platform proof
 
+**Owner scope decision, 20 October 2026:** Implement native G3 and profile-W
+GWIN0 now; defer complete Hyper-V deployment and its W030–W032 proof to a later
+development tranche. The requirements and original exit criteria below remain
+visible for traceability. Deferral is not implementation, qualification or a
+passing result for profile V. The owner also approved a distinct five-minute
+compact-inference purpose; the existing deterministic-compute purpose remains
+thirty seconds.
+
 **Scheduling and ownership:** Begin after G1 and run alongside G2. Architecture/platform, Windows/release, storage/security, and inference leads. Re-estimate the remainder of the Windows program at this gate.
 
 **Primary requirements and work packages:** `W005–W012`, `W021–W022`, `W030–W032`, `W035–W036`, and `W042–W043`; `WPW01–WPW02` with the required proof work from `WPW03`, `WPW04`, and `WPW06`. Foundational work for the program-wide `W001–W004` and `W041` obligations starts here, but those requirements close only in GWIN2 after every profile and final release artifact can be tested.

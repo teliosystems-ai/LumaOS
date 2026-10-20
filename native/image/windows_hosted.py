@@ -54,7 +54,9 @@ def unresolved_includes(data):
     return re.search(rb'(?m)^[ \t]*(?:#[ \t]*)?include(?:[ \t]|$)', data) is not None
 
 
-def preprocess_policy():
+def preprocess_policy(policy=POLICY):
+    if policy not in (POLICY, 'etc/apparmor.d/luma-hosted-inference'):
+        raise ValueError('only the fixed compute and inference policies may be preprocessed')
     parser = Path('/usr/sbin/apparmor_parser')
     for path in (parser, *parser.parents):
         metadata = path.stat()
@@ -63,7 +65,7 @@ def preprocess_policy():
     metadata = parser.stat()
     if not stat.S_ISREG(metadata.st_mode) or not metadata.st_mode & 0o111:
         raise ValueError('build policy parser is not an installed executable')
-    source = Path(__file__).with_name('overlay') / POLICY
+    source = Path(__file__).with_name('overlay') / policy
     data = source.read_bytes()
     if not 1 <= len(data) <= 16384 or source.is_symlink():
         raise ValueError('closed hosted policy source refused')

@@ -25,6 +25,14 @@ ASSETS = {'/native-workspace.html': ('native-workspace.html', 'text/html'),
           '/native-workspace.css': ('native-workspace.css', 'text/css')}
 
 
+def conversation_proposal(auth, login, prompt, maximum):
+    """Initial explicit prompt DATA only; no model, grant or history is assumed."""
+    source = auth.conversation_request(dict(schema_version=1, login=login,
+        messages=[dict(role='user', content=prompt)], max_tokens=maximum))
+    return auth.proposal(dict(schema_version=1, operation='conversation-journey', login=login,
+        read_grant='', effect_grant='', approval='', request=auth.encoded(source).decode('utf-8')))
+
+
 def discovery_proposal(auth, login, binding_text, mode, selector_text, query, limit, dimensions):
     """Prepare exact discovery DATA for the separate original native terminal.
 
@@ -224,6 +232,9 @@ def main():
     authority_note.set_selectable(True)
     owner_actions.pack_start(authority_button, False, False, 4)
     toolbar.pack_start(authority_note, True, True, 4)
+    conversation_button = Gtk.Button.new_with_mnemonic('_Local conversation…')
+    conversation_button.set_tooltip_text('Genuine current local model, original PAM and a new exact finite inference grant for each explicit turn. Private replies stay only in the terminal and never dispatch OS effects.')
+    owner_actions.pack_start(conversation_button, False, False, 4)
     read_button = Gtk.Button.new_with_mnemonic('_Read exact owner artifact…')
     read_button.set_tooltip_text('Open a native terminal for independently granted pages of one exact immutable reference. Private content never enters this browser.')
     owner_actions.pack_start(read_button, False, False, 4)
@@ -233,6 +244,9 @@ def main():
     workflow_button = Gtk.Button.new_with_mnemonic('_Managed engine workflow…')
     workflow_button.set_tooltip_text('Review, approve and apply an image-defined deterministic engine workflow in the original native PAM terminal; reopen and recalculate under fresh Read authority.')
     engine_actions.pack_start(workflow_button, False, False, 4)
+    capture_button = Gtk.Button.new_with_mnemonic('_Permission-bound capture…')
+    capture_button.set_tooltip_text('Independent visible consent window for selected PNG, portal screenshot/sampled video and short push-to-talk audio. Nothing is automatically sent to a model, published, transcribed or shared.')
+    engine_actions.pack_start(capture_button, False, False, 4)
     recovery_button = Gtk.Button.new_with_mnemonic('_Admin encrypted recovery…')
     recovery_button.set_tooltip_text('Open the original native Admin terminal for encrypted fresh-owner restore, exact-prefix resume, or reviewed damaged-batch retirement. No key, password, grant or private result enters WebKit.')
     engine_actions.pack_start(recovery_button, False, False, 4)
@@ -242,6 +256,84 @@ def main():
     layout.pack_start(toolbar, False, False, 4)
     layout.pack_start(view, True, True, 0)
     window.add(layout)
+    capture_windows = []
+    capture_module = None
+
+    def permission_capture(_button):
+        nonlocal capture_module
+        if capture_windows:
+            capture_windows[0].present()
+            return
+        try:
+            if capture_module is None:
+                path = Path('/usr/libexec/luma-os/workspace_capture.py')
+                protected_file(path, 128*1024)
+                spec = importlib.util.spec_from_file_location('luma_workspace_capture', path)
+                loaded = importlib.util.module_from_spec(spec)
+                sys.modules[spec.name] = loaded
+                spec.loader.exec_module(loaded)
+                capture_module = loaded
+            child = capture_module.launch_capture(window)
+            capture_windows.append(child)
+            child.connect('destroy', lambda closed: capture_windows.remove(closed) if closed in capture_windows else None)
+            authority_note.set_text('Independent capture consent/control window opened. Private captures remain there; no data is forwarded to WebKit, inference, publication or sharing. Stop/revoke and window close retain their own worker-drain obligations. Only one capture window may be active.')
+        except Exception:
+            authority_note.set_text('Capture unavailable or refused. The installed protected module, enforcing worker confinement and required portal/media runtime must be available. No capture, inference, publication or completion was inferred. Other manual controls remain usable.')
+
+    capture_button.connect('clicked', permission_capture)
+
+    def local_conversation(_button):
+        dialog = Gtk.Dialog(title='Local model conversation — separate original native terminal', transient_for=window, modal=True)
+        dialog.add_buttons('Cancel', Gtk.ResponseType.CANCEL, 'Open conversation terminal', Gtk.ResponseType.OK)
+        dialog.set_default_size(820, 530)
+        area = dialog.get_content_area()
+        note = Gtk.Label(label='Enter only your initial prompt and human login here. The genuine installed admitted model is selected by native authority, not this form. Every turn reviews its exact input, obtains original PAM and a fresh finite inference grant, and requires explicit confirmation in the terminal. Responses remain escaped untrusted text ONLY there. No private artifact, capture or history is attached automatically; model text never invokes tools, publishes, exports or changes system state. Manual workflows remain available without a model. The existing native 25-second request and 30-second authentication bounds are unchanged; the separate Windows five-minute purpose is not used here.')
+        note.set_line_wrap(True)
+        area.pack_start(note, False, False, 8)
+        fields = {}
+        for key, label_text, length in [('login', '_Human login', 32), ('maximum', '_Maximum output tokens (1–128)', 3)]:
+            label = Gtk.Label.new_with_mnemonic(label_text)
+            label.set_xalign(0)
+            entry = Gtk.Entry()
+            entry.set_max_length(length)
+            label.set_mnemonic_widget(entry)
+            fields[key] = entry
+            area.pack_start(label, False, False, 3)
+            area.pack_start(entry, False, False, 3)
+        fields['maximum'].set_text('128')
+        label = Gtk.Label.new_with_mnemonic('Initial _prompt (at most 4096 UTF-8 bytes; no credentials or grant IDs)')
+        label.set_xalign(0)
+        prompt = Gtk.TextView()
+        prompt.set_wrap_mode(Gtk.WrapMode.WORD_CHAR)
+        label.set_mnemonic_widget(prompt)
+        area.pack_start(label, False, False, 3)
+        scroll = Gtk.ScrolledWindow()
+        scroll.set_min_content_height(150)
+        scroll.add(prompt)
+        area.pack_start(scroll, True, True, 4)
+        error = Gtk.Label()
+        error.set_line_wrap(True)
+        error.set_selectable(True)
+        area.pack_start(error, False, False, 4)
+        dialog.show_all()
+        while dialog.run() == Gtk.ResponseType.OK:
+            try:
+                maximum = fields['maximum'].get_text()
+                if not re.fullmatch(r'[1-9][0-9]{0,2}', maximum):
+                    raise ValueError('explicit canonical token limit required')
+                buffer = prompt.get_buffer()
+                value = conversation_proposal(auth_module, fields['login'].get_text(),
+                    buffer.get_text(buffer.get_start_iter(), buffer.get_end_iter(), False), int(maximum))
+                auth_module.launch(value)
+                authority_note.set_text('Native conversation terminal launched; not authenticated or completed here. Exact inference review, new finite grant, original PAM, observed results and cancellation remain there. Model text is never an OS action.')
+                break
+            except Exception:
+                error.set_text('Conversation not launched. Enter a valid human login, a nonempty prompt no larger than 4096 UTF-8 bytes, and an exact 1–128 token limit. Manual controls remain available; no model, grant or completion was inferred.')
+                prompt.grab_focus()
+        dialog.destroy()
+        conversation_button.grab_focus()
+
+    conversation_button.connect('clicked', local_conversation)
 
     def authenticated_operation(_button):
         # Native GTK controls, not messages from rendered source/JavaScript.
@@ -663,6 +755,8 @@ def main():
     def close(*_):
         nonlocal closing
         closing = True
+        for capture_window in list(capture_windows):
+            capture_window.destroy()
         for document_view, observation in presentations:
             observation.request_stop('window-close')
             document_view.stop_loading()

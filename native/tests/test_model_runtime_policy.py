@@ -354,7 +354,9 @@ class ModelRuntimePolicyTests(unittest.TestCase):
                       'validation::worker_admission(state, p)?', 'self.trial = trial',
                       'validation::worker_hashes(state)? != self.hashes', 'owned.terminate()?'):
             self.assertIn(check, supervision)
-        self.assertLess(supervision.index('check()?;'), supervision.index('command.spawn()?'))
+        self.assertIn('run_with_pid(command, |_| check())', supervision)
+        self.assertLess(supervision.index('check(0)?;'), supervision.index('command.spawn()?'))
+        self.assertIn('check(child.id())', supervision)
         for forbidden in ('systemctl', 'remove_file(', 'fs::write(', 'killpg(', 'Command::new('):
             self.assertNotIn(forbidden, supervision)
 

@@ -205,6 +205,7 @@ namespace Luma.Windows.Hosted
                 NoUncertainFileAuthority(authority);JournalHistory history=authority.Journal.Read(original);history.Reconcile(authority.Identity,null,authority.Nv.ReadHead());
                 DeploymentHistory state=DeploymentHistory.Replay(history,original);
                 if(state.Pending!=null || state.Active==null || state.Active.ReleaseSha256!=releaseHash) throw new SecurityException("Compute requires the one current genuinely activated distribution and no outstanding resource generation.");
+                state.RequireFreshGeneration(request.RequestSha256);
                 HostedComputeContract.RequireAdmissionCapacity(history);authority.State.RequireReadableTail();
                 AuthorityIdentity execution=authority.Runtime.GuestExecutionIdentity;
                 byte[] signature;ReleaseDescriptor release=ComputeRelease(authority,state.Active,out signature);release.Verify(authority.Trust.ForRelease(),signature);
@@ -223,7 +224,7 @@ namespace Luma.Windows.Hosted
                     append(JournalKind.ComputePrepared,admission.Encode());DeploymentEvent started=null;
                     byte[] result=HostedGuestRunner.Compute(execution,actor,admission,request,delegate(OwnedWindowsProcess controller) {
                         live();if(started!=null) throw new SecurityException("Compute cannot dispatch a second controller or retry its exact request.");
-                        started=admission.WithController(controller.Id,controller.Creation,0,new string('0',64));append(JournalKind.ControllerStarted,started.Encode());
+                        started=admission.WithController(controller.Id,controller.Creation,0,request.RequestSha256);append(JournalKind.ControllerStarted,started.Encode());
                     },live);
                     try {
                         live();directory.Check();if(started==null || !OwnedWindowsProcess.OriginalExited(started.Controller,started.ControllerCreation)) throw new SecurityException("Exact original compute controller exit is unobserved.");
@@ -248,10 +249,11 @@ namespace Luma.Windows.Hosted
             using(NativeAuthority authority=new NativeAuthority("host-deployment",actor,RuntimeAccess.Standard,true)) {
                 NoUncertainFileAuthority(authority);JournalHistory history=authority.Journal.Read(original);history.Reconcile(authority.Identity,null,authority.Nv.ReadHead());DeploymentHistory state=DeploymentHistory.Replay(history,original);DeploymentEvent admission=state.Pending;
                 if(admission==null || admission.Purpose!=3 || admission.ReleaseSha256!=releaseHash || admission.Generation!=generation) throw new SecurityException("Compute recovery requires the exact genuinely outstanding request generation and active release, not an automatic retry.");
+                string drainRequest=state.DrainRequestSha256();
                 byte[] signature;ReleaseDescriptor release=ComputeRelease(authority,admission,out signature);AuthorityIdentity verifier=authority.Trust.ForCleanup(generation);release.Verify(verifier,signature);
                 HostedReleaseLease utc=HostedReleaseLease.ForAbandonment(pipe,authority,release,signature,original,verifier);utc.Check();
                 using(Wire.Writer exact=new Wire.Writer("luma-windows-hosted-compute-recovery-v1")) {exact.Blob(admission.Encode(),4096);exact.Fixed(Wire.Bytes(history.Head,32,true),32);
-                    Review(pipe,"compute-recover",exact.Bytes(),"Close only interrupted inert request "+generation+"\nCurrent release: "+releaseHash+"\nRequires exact original controller exit and fresh confined guest drain. No request replay, adoption of partial output, successful result claim, distribution deletion, name-based process kill or product authority.",utc.CheckObserved);}
+                    Review(pipe,"compute-recover",exact.Bytes(),"Close only interrupted inert request "+generation+"\nCurrent release: "+releaseHash+"\nExact request revocation: "+drainRequest+"\nRequires exact original controller exit, durable append-only guest request revocation, no queued unit job and fresh confined guest drain. The marker is a negative execution barrier, not TPM/grant authority, and is never automatically removed. No request replay, adoption of partial output, successful result claim, distribution deletion, name-based process kill or product authority.",utc.CheckObserved);}
                 HostedComputeHead heldHead=new HostedComputeHead(authority.Identity,history,authority.Nv.ReadHead());
                 Action writing=delegate {original();authority.State.Check();utc.CheckObserved();};
                 Action live=delegate {writing();NoUncertainFileAuthority(authority);heldHead.Require(authority.Nv.ReadHead());};
@@ -260,7 +262,7 @@ namespace Luma.Windows.Hosted
                 using(HostedGuestDirectory directory=HostedGuestDirectory.Open(execution,admission,false)) {
                     directory.Check();HostedWslConfiguration.RequireClosed(execution,actor,admission);
                     if(state.Worker!=null && !OwnedWindowsProcess.OriginalExited(state.Worker.Controller,state.Worker.ControllerCreation)) throw new SecurityException("Original compute controller is still present; its resource generation remains held.");
-                    HostedGuestRunner.Drain(execution,actor,admission,live);directory.Check();live();
+                    HostedGuestRunner.Drain(execution,actor,admission,drainRequest,live);directory.Check();live();
                     string proof=HostedComputeContract.Digest(Encoding.ASCII.GetBytes("luma-compute-original-exit-and-confined-drain-no-replay-v1\n"+generation+"\n"+HostedHostResources.BootCreation().ToString(CultureInfo.InvariantCulture)));
                     if(state.Worker!=null) append(JournalKind.ControllerCompleted,state.Worker.WithController(state.Worker.Controller,state.Worker.ControllerCreation,2,proof).Encode());
                     append(JournalKind.Cancelled,admission.WithController(0,0,2,proof).Encode());

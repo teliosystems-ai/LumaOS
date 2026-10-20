@@ -223,11 +223,13 @@ namespace Luma.Windows
                 if (result.ContentBytes > MaximumArchiveBytes) throw new InvalidDataException("Archive content sum exceeds fixed bound.");
                 RequiredFile expectation;
                 bool selected = required.TryGetValue(path, out expectation);
+                if(!directory && path.StartsWith("usr/libexec/luma-os/hosted-llama/",StringComparison.Ordinal) && !selected)
+                    throw new InvalidDataException("Every private inference runtime member must be independently required by the authenticated release.");
                 if (selected && (directory || expectation.Bytes != size || expectation.Executable != ((mode & 73) != 0)))
                     throw new InvalidDataException("Required member type, byte size or executable status differs.");
                 bool platformElf = path == "usr/bin/luma-platform" || path == "usr/libexec/luma-os/luma-platform";
                 int captureBound = platformElf ? 64 : 16384;
-                if (selected && path == "etc/apparmor.d/luma-hosted-compute") captureBound = 1024 * 1024;
+                if (selected && (path == "etc/apparmor.d/luma-hosted-compute" || path == "etc/apparmor.d/luma-hosted-inference")) captureBound = 1024 * 1024;
                 if (selected && path == "usr/lib/luma/platform.json") captureBound = 4096;
                 MemoryStream captured = selected ? new MemoryStream() : null;
                 using (SHA256 memberHash = selected ? SHA256.Create() : null)
@@ -258,7 +260,10 @@ namespace Luma.Windows
                         else if (path == "etc/passwd" || path == "etc/group" || path == "etc/shadow" || path == "etc/gshadow" ||
                             path == "etc/systemd/system/luma-hosted-confinement.service" ||
                             path == "etc/systemd/system/multi-user.target.wants/luma-hosted-confinement.service" ||
-                            path == "etc/apparmor.d/luma-hosted-compute")
+                            path == "etc/apparmor.d/luma-hosted-compute" || path == "etc/apparmor.d/luma-hosted-inference" ||
+                            path == "etc/systemd/system/luma-hosted-inference-confinement.service" ||
+                            path == "etc/systemd/system/multi-user.target.wants/luma-hosted-inference-confinement.service" ||
+                            path == "usr/share/luma-os/hosted-inference.json" || path == "usr/share/luma-os/hosted-inference-runtime.json")
                         {
                             int wantedMode = path == "etc/shadow" || path == "etc/gshadow" ? 384 : 420;
                             if (mode != wantedMode) throw new InvalidDataException("Hosted configuration permissions differ from the closed profile.");
@@ -301,7 +306,8 @@ namespace Luma.Windows
 
         private static string ContentBinding(PackageContent content, RequiredFile[] files)
         {
-            if (content == null || files == null || files.Length < 4 || files.Length > 64) throw new InvalidDataException("Actual bounded package inspection is required.");
+            if (content == null || files == null || files.Length < 4 || files.Length > 128 ||
+                (files.Length > 64 && !InferenceIdentity(content.PlatformIdentity))) throw new InvalidDataException("Actual bounded package inspection is required; only the closed inference identity permits 65..128 required files.");
             foreach (RequiredFile file in files)
                 if (file == null || String.IsNullOrEmpty(file.Path) || file.Bytes < 0 ||
                     file.Sha256 == null || !Regex.IsMatch(file.Sha256, "\\A[a-f0-9]{64}\\z", RegexOptions.CultureInvariant))
@@ -331,7 +337,7 @@ namespace Luma.Windows
             if (content == null || String.IsNullOrEmpty(content.ValidatedBinding) ||
                 content.ValidatedBinding != ContentBinding(content, files))
                 throw new InvalidDataException("Hosted validation requires the unchanged actual archive inspection.");
-            const string identity = "\\A\\{\"architecture\":\"amd64\",\"profile\":\"W\",\"release_id\":\"luma-wsl-dev-[A-Za-z0-9][A-Za-z0-9.-]{0,63}\",\"runtime_profile\":\"luma-windows-hosted-compute-v1\",\"schema_version\":2\\}\\n\\z";
+            const string identity = "\\A\\{\"architecture\":\"amd64\",\"profile\":\"W\",\"release_id\":\"luma-wsl-dev-[A-Za-z0-9][A-Za-z0-9.-]{0,63}\",\"runtime_profile\":\"luma-windows-hosted-(?:compute|inference)-v1\",\"schema_version\":2\\}\\n\\z";
             if (!Regex.IsMatch(content.PlatformIdentity, identity, RegexOptions.CultureInvariant))
                 throw new InvalidDataException("Hosted identity must be the exact schema-2 compute package identity.");
             const string wsl = "[boot]\nsystemd=true\n[automount]\nenabled=false\n[interop]\nenabled=false\nappendWindowsPath=false\n[user]\ndefault=nobody\n";
@@ -379,7 +385,68 @@ namespace Luma.Windows
                 Regex.IsMatch(policy, "(?m)^[ \\t]*(?:#[ \\t]*)?include(?:[ \\t]|$)", RegexOptions.CultureInvariant) ||
                 !policy.Contains("profile luma-hosted-compute ") || !policy.Contains("deny network,"))
                 throw new InvalidDataException("Hosted policy is missing, unresolved or outside the closed compute profile.");
+            if(InferenceIdentity(content.PlatformIdentity)) {
+                const string prefix="etc/systemd/system/",leaf="luma-hosted-inference-confinement.service";
+                string inferenceUnit=unit.Replace("hosted inert compute","hosted compact inference").Replace("luma-hosted-compute","luma-hosted-inference");
+                foreach(string name in new string[]{prefix+leaf,prefix+"multi-user.target.wants/"+leaf}) {
+                    string actual;RequiredFile expected;
+                    if(!content.HostedConfiguration.TryGetValue(name,out actual) || actual!=inferenceUnit || !selected.TryGetValue(name,out expected) || expected.Executable)
+                        throw new InvalidDataException("Inference confinement loader is missing or differs from the closed independent unit.");
+                }
+                const string inferencePolicy="etc/apparmor.d/luma-hosted-inference";
+                if(!selected.TryGetValue(inferencePolicy,out policyFile) || policyFile.Executable || policyFile.Bytes<1 || policyFile.Bytes>1024*1024 ||
+                    !content.HostedConfiguration.TryGetValue(inferencePolicy,out policy) || Regex.IsMatch(policy,"(?m)^[ \\t]*(?:#[ \\t]*)?include(?:[ \\t]|$)",RegexOptions.CultureInvariant) ||
+                    !policy.Contains("profile luma-hosted-inference ") || !policy.Contains("deny network,")) throw new InvalidDataException("Inference policy is absent, unresolved or substituted.");
+                string description,manifest;
+                if(!content.HostedConfiguration.TryGetValue("usr/share/luma-os/hosted-inference.json",out description) ||
+                    !content.HostedConfiguration.TryGetValue("usr/share/luma-os/hosted-inference-runtime.json",out manifest)) throw new InvalidDataException("Inference descriptors are absent from actual inspection.");
+                ValidateInferenceDescriptors(description,manifest,files);
+            }
         }
+
+        private static bool InferenceIdentity(string identity)
+        {return identity!=null && Regex.IsMatch(identity,"\\A\\{\"architecture\":\"amd64\",\"profile\":\"W\",\"release_id\":\"luma-wsl-dev-[A-Za-z0-9][A-Za-z0-9.-]{0,63}\",\"runtime_profile\":\"luma-windows-hosted-inference-v1\",\"schema_version\":2\\}\\n\\z",RegexOptions.CultureInvariant);}
+
+        // Pure descriptor validation only. Callers still need actual archive
+        // inspection, release authentication and live host admission separately.
+        public static void ValidateInferenceDescriptors(string description,string manifest,RequiredFile[] files)
+        {
+            if(description==null || manifest==null || description.Length>8192 || manifest.Length>16384 || files==null || files.Length<4 || files.Length>128) throw new InvalidDataException("Inference descriptors exceed the closed bounds.");
+            const string profile="luma-windows-hosted-inference-v1",model="usr/share/luma-os/models/qwen3-4b-q4-k-m.gguf",modelSha="7485fe6f11af29433bc51cab58009521f205840f5b4ae3a32fa7f92e8534fdf5";
+            Dictionary<string,RequiredFile> selected=new Dictionary<string,RequiredFile>(StringComparer.Ordinal);
+            foreach(RequiredFile file in files) {
+                if(file==null || file.Path==null || selected.ContainsKey(file.Path)) throw new InvalidDataException("Inference required-file records are missing or duplicated.");selected.Add(file.Path,file);
+            }
+            string manifestSha=Sha256(new UTF8Encoding(false,true).GetBytes(manifest));
+            string expected="{\"context_tokens\":2048,\"cpu_period_usec\":100000,\"cpu_quota_usec\":200000,\"environment\":\"lab\",\"maximum_output_tokens\":512,\"memory_max_bytes\":4831838208,\"memory_swap_max_bytes\":0,\"model_bytes\":2497280256,\"model_path\":\""+model+"\",\"model_sha256\":\""+modelSha+"\",\"profile\":\""+profile+"\",\"runtime\":\"llama.cpp-b11100-cpu-amd64-completion\",\"runtime_cpu_seconds\":300,\"runtime_manifest_sha256\":\""+manifestSha+"\",\"schema_version\":1,\"tasks_max\":16,\"threads\":2}\n";
+            if(description!=expected) throw new InvalidDataException("Inference profile is not the exact canonical approved CPU-only model/resource descriptor.");
+            string record="\\{\"bytes\":([1-9][0-9]{0,8}),\"executable\":(true|false),\"path\":\"([A-Za-z0-9._/+@=-]{1,255})\",\"sha256\":\"([a-f0-9]{64})\"\\}";
+            Match outer=Regex.Match(manifest,"\\A\\{\"files\":\\[("+record+"(?:,"+record+"){0,63})\\],\"profile\":\""+profile+"\",\"schema_version\":1\\}\\n\\z",RegexOptions.CultureInvariant);
+            if(!outer.Success) throw new InvalidDataException("Inference runtime manifest is not closed, bounded canonical JSON.");
+            MatchCollection records=Regex.Matches(outer.Groups[1].Value,record,RegexOptions.CultureInvariant);HashSet<string> runtime=new HashSet<string>(StringComparer.Ordinal);string previous=null;
+            foreach(Match item in records) {
+                string path=ValidatePath(item.Groups[3].Value);long size=Int64.Parse(item.Groups[1].Value,System.Globalization.CultureInfo.InvariantCulture);bool executable=item.Groups[2].Value=="true";
+                RequiredFile file;if(size<64 || size>64*1024*1024 || previous!=null && String.CompareOrdinal(previous,path)>=0 || !selected.TryGetValue(path,out file) || file.Bytes!=size || file.Executable!=executable || file.Sha256!=item.Groups[4].Value)
+                    throw new InvalidDataException("Inference runtime member is unsorted, duplicated, unbounded or not exactly publisher-required.");
+                if(path!="usr/libexec/luma-os/luma-platform" && !path.StartsWith("usr/libexec/luma-os/hosted-llama/",StringComparison.Ordinal) &&
+                    !Regex.IsMatch(path,"\\A(?:usr/)?lib(?:64|/x86_64-linux-gnu)?/[A-Za-z0-9._+@=-]+\\z",RegexOptions.CultureInvariant)) throw new InvalidDataException("Inference runtime member escapes the fixed private/system ELF namespace.");
+                runtime.Add(path);previous=path;
+            }
+            HashSet<string> privateNames=new HashSet<string>(StringComparer.Ordinal) {"llama-completion","libllama-completion-impl.so","libggml-cpu-x64.so"};
+            foreach(string stem in new string[]{"libllama","libllama-common","libmtmd","libggml","libggml-base"}) {
+                string version=stem=="libggml" || stem=="libggml-base"?"0.24.0":"0.4.1";privateNames.Add(stem+".so");privateNames.Add(stem+".so.0");privateNames.Add(stem+".so."+version);
+            }
+            const string privatePrefix="usr/libexec/luma-os/hosted-llama/";
+            foreach(string name in privateNames) if(!runtime.Contains(privatePrefix+name)) throw new InvalidDataException("Inference runtime omits the fixed noninteractive completion program or a CPU-only dependency alias.");
+            foreach(string name in runtime) if(name.StartsWith(privatePrefix,StringComparison.Ordinal) && !privateNames.Contains(name.Substring(privatePrefix.Length))) throw new InvalidDataException("Inference runtime contains an unapproved RPC, GPU, server program or private dependency.");
+            foreach(string name in selected.Keys) if(name.StartsWith(privatePrefix,StringComparison.Ordinal) && !runtime.Contains(name)) throw new InvalidDataException("The selected package contains a private executable or plugin outside its exact inference runtime manifest.");
+            if(!runtime.Contains("usr/libexec/luma-os/luma-platform")) throw new InvalidDataException("Inference runtime omits its exact native worker.");
+            RequireInferenceData(selected,model,2497280256L,modelSha);
+            RequireInferenceData(selected,"usr/share/luma-os/hosted-inference-runtime.json",new UTF8Encoding(false,true).GetByteCount(manifest),manifestSha);
+            RequireInferenceData(selected,"usr/share/luma-os/hosted-inference.json",new UTF8Encoding(false,true).GetByteCount(description),Sha256(new UTF8Encoding(false,true).GetBytes(description)));
+        }
+        private static void RequireInferenceData(Dictionary<string,RequiredFile> selected,string path,long size,string sha)
+        {RequiredFile file;if(!selected.TryGetValue(path,out file) || file.Bytes!=size || file.Executable || file.Sha256!=sha) throw new InvalidDataException("Inference model/descriptor differs from exact publisher-required non-executable data.");}
 
         public static PackageContent Validate(string path, long bytes, long contentBytes, int memberCount, string sha256, RequiredFile[] expected)
         {

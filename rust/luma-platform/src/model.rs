@@ -1018,6 +1018,13 @@ pub(crate) fn supervise_owned_controller(
     supervision::run(command, check)
 }
 
+pub(crate) fn supervise_owned_controller_with_pid(
+    command: &mut Command,
+    check: impl FnMut(u32) -> Result<()>,
+) -> Result<()> {
+    supervision::run_with_pid(command, check)
+}
+
 pub(crate) fn verify_acquired_model(
     var: &Path,
     p: &Profile,

@@ -129,8 +129,12 @@ namespace Luma.Windows.Hosted
         }
         internal static void Check(ulong minimum)
         {
+            if(AvailableMemory()<minimum) throw new IOException("Actual Windows host memory headroom is insufficient for this fixed deployment profile.");
+        }
+        internal static ulong AvailableMemory()
+        {
             Memory memory=new Memory {Length=(uint)Marshal.SizeOf(typeof(Memory))};
-            if(!GlobalMemoryStatusEx(ref memory) || memory.Available<minimum) throw new IOException("Actual Windows host memory headroom is insufficient for this fixed deployment profile.");
+            if(!GlobalMemoryStatusEx(ref memory)) throw new IOException("Actual Windows host memory headroom is unavailable.");return memory.Available;
         }
     }
 
@@ -241,9 +245,10 @@ namespace Luma.Windows.Hosted
                 authority.Journal.Append(activate?JournalKind.ActivationPrepared:JournalKind.ImportPrepared,actor.Sid,admission.Encode(),utc.Check);
                 Action live=delegate {original();authority.State.Check();utc.Check();HostedHostResources.Check(256UL*1024*1024);};
                 DeploymentEvent started=null;
+                GuestComputeRequest probe=null;
                 Action<OwnedWindowsProcess> register=delegate(OwnedWindowsProcess controller) {
                     live();if(started!=null) throw new SecurityException("A previous original controller lacks a genuine completion.");
-                    DeploymentEvent value=admission.WithController(controller.Id,controller.Creation,0,new string('0',64));
+                    DeploymentEvent value=admission.WithController(controller.Id,controller.Creation,0,probe==null?new string('0',64):probe.RequestSha256);
                     authority.Journal.Append(JournalKind.ControllerStarted,actor.Sid,value.Encode(),live);started=value;
                 };
                 Action<string> complete=delegate(string observation) {
@@ -262,7 +267,8 @@ namespace Luma.Windows.Hosted
                     if(activate) {
                         using(HostedGuestDirectory directory=HostedGuestDirectory.Open(execution,admission,false)) {
                             directory.Check();HostedWslConfiguration.RequireClosed(execution,actor,admission);
-                            byte[] data=HostedGuestRunner.Compute(execution,actor,admission,new GuestComputeRequest("capture",ProbePayload(authority.Identity,admission)),register,live);
+                            probe=new GuestComputeRequest("capture",ProbePayload(authority.Identity,admission));
+                            byte[] data=HostedGuestRunner.Compute(execution,actor,admission,probe,register,live);
                             string digest;using(SHA256 hash=SHA256.Create()) digest=Wire.Hex(hash.ComputeHash(data));complete(digest);directory.Check();
                             authority.Journal.Append(JournalKind.Activated,actor.Sid,admission.WithController(0,0,1,digest).Encode(),live);
                         }
@@ -291,12 +297,14 @@ namespace Luma.Windows.Hosted
                 AuthorityIdentity execution=authority.Runtime.GuestExecutionIdentity;
                 JournalHistory journal=authority.Journal.Read(original);journal.Reconcile(authority.Identity,null,authority.Nv.ReadHead());DeploymentHistory state=DeploymentHistory.Replay(journal,original);
                 DeploymentEvent admission=state.Pending;if(admission==null || admission.ReleaseSha256!=digest || admission.ReleaseSequence!=release.Sequence) throw new SecurityException("No exact outstanding deployment exists for this recovery.");
+                string drainRequest=state.DrainRequestSha256();
                 AuthorityIdentity verifier=abandon?authority.Trust.ForCleanup(admission.Generation):authority.Trust.ForRelease();release.Verify(verifier,signature);
                 HostedReleaseLease utc=abandon?HostedReleaseLease.ForAbandonment(pipe,authority,release,signature,original,verifier):new HostedReleaseLease(pipe,authority,release,signature,original);utc.Check();
                 using(Wire.Writer exact=new Wire.Writer("luma-windows-hosted-deployment-recovery-v1")) {
                     exact.Blob(admission.Encode(),4096);exact.Fixed(signature,64);exact.Fixed(Wire.Bytes(journal.Head,32,true),32);exact.U8(abandon?(byte)1:(byte)0);
                     Review(pipe,abandon?"abandon":"reconcile",exact.Bytes(),(abandon?"Abandon and quarantine":"Continue only a genuinely evidenced")+" exact generation "+admission.Generation+
                         "\nDescriptor SHA256: "+digest+"\nOwned slot: "+HostedGuestRunner.Distribution(authority.Identity,admission)+
+                        "\nExact last guest request (or never-dispatched/import-only token): "+drainRequest+"\nDrain durably revokes this token and requires no queued unit job before resource return. Revocation is an append-only negative execution barrier, not new TPM or grant authority; it is never automatically deleted. A later activation probe uses a fresh independently journaled request, never replays the revoked one."+
                         "\nNo import is automatically replayed. Unknown import success is never inferred from a partial boot. No distributions or artifacts are deleted, unregistered or name-killed; previous active slot remains unchanged on abandonment.",utc.CheckObserved);
                 }
                 Action live=delegate {original();authority.State.Check();utc.Check();};live();
@@ -305,14 +313,14 @@ namespace Luma.Windows.Hosted
                     if(!OwnedWindowsProcess.OriginalExited(state.Worker.Controller,state.Worker.ControllerCreation)) throw new SecurityException("Original controller still exists; resource generation remains held.");
                     if(admission.Purpose==1 && !abandon) throw new SecurityException("Unknown import exit is not successful import evidence. Use explicit quarantine after a genuine host reboot, not replay.");
                     if(admission.Purpose==1 && currentBoot==admission.HostBootCreation) throw new SecurityException("Unobserved import may still have asynchronous work; actual host reboot proof is required before quarantine.");
-                    if(registered) HostedGuestRunner.Drain(execution,actor,admission,live);
+                    if(registered) HostedGuestRunner.Drain(execution,actor,admission,state.DrainRequestSha256(),live);
                     else if(admission.Purpose!=1 || currentBoot==admission.HostBootCreation) throw new SecurityException("Absent slot is not sufficient current-boot drain evidence.");
                     string proof=Wire.Hash(Encoding.ASCII.GetBytes("luma-observed-original-controller-exit-and-drain-v1\n"+admission.Generation+"\n"+currentBoot.ToString(System.Globalization.CultureInfo.InvariantCulture)));
                     authority.Journal.Append(JournalKind.ControllerCompleted,actor.Sid,state.Worker.WithController(state.Worker.Controller,state.Worker.ControllerCreation,2,proof).Encode(),live);
                     state=DeploymentHistory.Replay(authority.Journal.Read(live),live);
                 }
                 if(abandon) {
-                    if(state.CompletedControllers!=0 && registered) HostedGuestRunner.Drain(execution,actor,admission,live);
+                    if(state.CompletedControllers!=0 && registered) HostedGuestRunner.Drain(execution,actor,admission,state.DrainRequestSha256(),live);
                     if(admission.Purpose==1 && state.CompletedControllers!=0 && state.SuccessfulControllers==0 && currentBoot==admission.HostBootCreation)
                         throw new SecurityException("Unknown import is still quarantined pending genuine host reboot/drain evidence.");
                     string proof=Wire.Hash(Encoding.ASCII.GetBytes("luma-quarantine-no-replay-no-delete-v1\n"+admission.Generation+"\n"+currentBoot.ToString(System.Globalization.CultureInfo.InvariantCulture)));
@@ -330,8 +338,9 @@ namespace Luma.Windows.Hosted
                         PackageContent inspected=PackageInspector.Validate(package.Path,release.ArchiveBytes,release.ContentBytes,release.MemberCount,release.RootfsSha256,release.RequiredFiles,live);
                         PackageInspector.ValidateHostedProfile(inspected,release.RequiredFiles);HostedWslConfiguration.RequireClosed(execution,actor,admission);
                         DeploymentEvent started=null;
-                        byte[] data=HostedGuestRunner.Compute(execution,actor,admission,new GuestComputeRequest("capture",ProbePayload(authority.Identity,admission)),delegate(OwnedWindowsProcess controller) {
-                            started=admission.WithController(controller.Id,controller.Creation,0,new string('0',64));authority.Journal.Append(JournalKind.ControllerStarted,actor.Sid,started.Encode(),live);
+                        GuestComputeRequest probe=new GuestComputeRequest("capture",ProbePayload(authority.Identity,admission));
+                        byte[] data=HostedGuestRunner.Compute(execution,actor,admission,probe,delegate(OwnedWindowsProcess controller) {
+                            started=admission.WithController(controller.Id,controller.Creation,0,probe.RequestSha256);authority.Journal.Append(JournalKind.ControllerStarted,actor.Sid,started.Encode(),live);
                         },live);
                         if(started==null || !OwnedWindowsProcess.OriginalExited(started.Controller,started.ControllerCreation)) throw new SecurityException("New exact recovery probe controller exit is unobserved.");
                         string proof;using(SHA256 hash=SHA256.Create()) proof=Wire.Hex(hash.ComputeHash(data));

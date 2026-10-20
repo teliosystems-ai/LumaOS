@@ -1,5 +1,5 @@
 [CmdletBinding()]
-param([Parameter(Mandatory)][string] $BuildRoot)
+param([Parameter(Mandatory)][string] $BuildRoot,[string] $InferenceCasesPath)
 $ErrorActionPreference='Stop'
 Set-StrictMode -Version Latest
 $build=& (Join-Path $PSScriptRoot 'build-hosted-authority.ps1') -BuildRoot $BuildRoot -LibraryOnly
@@ -425,6 +425,93 @@ public static class LumaHostedLifecycleFixture {
         }finally {string resolved=Path.GetFullPath(root);if(Path.GetDirectoryName(resolved)!=parent || !System.Text.RegularExpressions.Regex.IsMatch(Path.GetFileName(resolved),"\\Awindows-compute-fixtures-[0-9a-f]{32}\\z")) throw new Exception("Refuse cleanup outside exact new compute fixture.");Directory.Delete(resolved,true);}
         return assertions;
     }
+    public static int RunInference(AuthorityIdentity identity,Func<byte[],byte[]> sign) {
+        int assertions=0;GuestInferenceRequest request=new GuestInferenceRequest(H('7'),H('8'),"Exact private prompt\n\u00e9",128);
+        Require(Wire.Equal(GuestInferenceRequest.Decode(request.Bytes).Bytes,request.Bytes));assertions++;
+        Require(request.RequestSha256!=request.PromptSha256 && request.MaximumTokens==128);assertions++;
+        GuestInferenceRequest escaped=new GuestInferenceRequest(H('7'),H('8'),new string('\u0001',4096),512);
+        Require(escaped.Bytes.Length>8192 && Wire.Equal(GuestInferenceRequest.Decode(escaped.Bytes).Bytes,escaped.Bytes));assertions++;
+        foreach(string denied in new string[]{"",new string('x',4097),new string('\u00e9',2049),"x\0y","\ud800"}) {Refuse(delegate {new GuestInferenceRequest(H('7'),H('8'),denied,128);});assertions++;}
+        foreach(uint denied in new uint[]{0,513,UInt32.MaxValue}) {Refuse(delegate {new GuestInferenceRequest(H('7'),H('8'),"x",denied);});assertions++;}
+        string raw=System.Text.Encoding.UTF8.GetString(request.Bytes);
+        foreach(string changed in new string[]{raw+"\n"," "+raw,raw.Replace("\"schema_version\":1","\"schema_version\":true"),raw.Replace("\"schema_version\":1","\"schema_version\":1,\"schema_version\":1"),
+            raw.Replace(GuestInferenceRequest.Profile,GuestComputeRequest.Profile),raw.Replace(GuestInferenceRequest.ModelSha256,H('9')),raw.Replace(request.PromptSha256,H('a')),
+            raw.Replace("\"context_tokens\":2048","\"context_tokens\":4096"),raw.Replace("\"nonce\":\""+request.Nonce+"\"","\"nonce\":\""+Zero+"\""),raw.Replace("\"max_tokens\":128","\"max_tokens\":128,\"operation\":\"shell\"")}) {
+            Refuse(delegate {GuestInferenceRequest.Decode(System.Text.Encoding.UTF8.GetBytes(changed));});assertions++;
+        }
+        DeploymentEvent admission=new DeploymentEvent(4,H('1'),1,request.RequestSha256,17,"ticket-package-"+new string('b',32)+".tar",0,0,0,Zero);
+        byte[] review=HostedInferenceContract.ReviewBytes(admission,request,H('a'));Require(HostedInferenceContract.ValidateReview(review,request,H('1')).Generation==request.RequestSha256);assertions++;
+        Refuse(delegate {HostedInferenceContract.ValidateReview(review,new GuestInferenceRequest(H('7'),H('8'),"Exact private prompt\n\u00e9",128),H('1'));});assertions++;
+        Refuse(delegate {HostedInferenceContract.ValidateReview(review,request,H('2'));});assertions++;
+        Refuse(delegate {HostedInferenceContract.ReviewBytes(Event(3,'1',1,'a','b',0,0,0,'0'),request,H('a'));});assertions++;
+        Transition[] activation={T(JournalKind.ImportPrepared,Event(1,'1',1,'a','b',0,0,0,'0')),T(JournalKind.ControllerStarted,Event(1,'1',1,'a','b',42,99,0,'0')),
+            T(JournalKind.ControllerCompleted,Event(1,'1',1,'a','b',42,99,1,'c')),T(JournalKind.Imported,Event(1,'1',1,'a','b',0,0,1,'c')),
+            T(JournalKind.ActivationPrepared,Event(2,'1',1,'d','b',0,0,0,'0')),T(JournalKind.ControllerStarted,Event(2,'1',1,'d','b',43,100,0,'0')),
+            T(JournalKind.ControllerCompleted,Event(2,'1',1,'d','b',43,100,1,'e')),T(JournalKind.Activated,Event(2,'1',1,'d','b',0,0,1,'e'))};
+        DeploymentEvent prepare=Event(4,'1',1,'e','b',0,0,0,'0'),start=Event(4,'1',1,'e','b',44,101,0,'0'),done=Event(4,'1',1,'e','b',44,101,1,'f'),observed=Event(4,'1',1,'e','b',0,0,1,'f'),cancelled=Event(4,'1',1,'e','b',0,0,2,'c');
+        Func<Transition[],JournalHistory> history=delegate(Transition[] tail) {List<Transition> list=new List<Transition>(activation);list.AddRange(tail);return History(identity,sign,list.ToArray());};
+        JournalHistory success=history(new Transition[]{T(JournalKind.InferencePrepared,prepare),T(JournalKind.ControllerStarted,start),T(JournalKind.ControllerCompleted,done),T(JournalKind.InferenceObserved,observed)});
+        DeploymentHistory state=DeploymentHistory.Replay(success);Require(state.Pending==null && state.Active.Purpose==2 && state.Active.Generation==H('d'));assertions++;
+        int staged=0;Refuse(delegate {state.RequireFreshGeneration(prepare.Generation);staged++;});Require(staged==0);assertions+=2;
+        state.RequireFreshGeneration(H('9'));assertions++;
+        JournalEntry repeated=JournalEntry.Prepare(identity,success.Sequence+1,JournalKind.InferencePrepared,success.Head,success.Record,identity.FirstAdminSid,prepare.Encode());repeated=repeated.Signed(identity,sign(repeated.SigningInput));
+        Refuse(delegate {DeploymentHistory.ValidateNext(identity,success,repeated,delegate { });staged++;});Require(staged==0 && success.Sequence==13 && DeploymentHistory.Replay(success).Pending==null);assertions+=2;
+        HostedComputeContract.RequireAdmissionCapacity(success);assertions++;
+        foreach(Transition[] bad in new Transition[][] {
+            new Transition[]{T(JournalKind.ComputePrepared,prepare)},new Transition[]{T(JournalKind.InferencePrepared,Event(3,'1',1,'e','b',0,0,0,'0'))},
+            new Transition[]{T(JournalKind.InferencePrepared,prepare),T(JournalKind.InferenceObserved,observed)},
+            new Transition[]{T(JournalKind.InferencePrepared,prepare),T(JournalKind.ControllerStarted,start),T(JournalKind.InferenceObserved,observed)},
+            new Transition[]{T(JournalKind.InferencePrepared,prepare),T(JournalKind.ControllerStarted,start),T(JournalKind.Cancelled,cancelled)},
+            new Transition[]{T(JournalKind.InferencePrepared,prepare),T(JournalKind.ControllerStarted,start),T(JournalKind.ControllerCompleted,done),T(JournalKind.ComputeObserved,observed)},
+            new Transition[]{T(JournalKind.InferencePrepared,prepare),T(JournalKind.ControllerStarted,start),T(JournalKind.ControllerCompleted,done),T(JournalKind.ControllerStarted,start)},
+            new Transition[]{T(JournalKind.InferencePrepared,prepare),T(JournalKind.InferencePrepared,prepare)},
+            new Transition[]{T(JournalKind.InferencePrepared,Event(4,'2',1,'e','b',0,0,0,'0'))},new Transition[]{T(JournalKind.InferencePrepared,Event(4,'1',1,'e','f',0,0,0,'0'))},
+            new Transition[]{T(JournalKind.InferencePrepared,prepare),T(JournalKind.ControllerStarted,start),T(JournalKind.ControllerCompleted,Event(4,'1',1,'e','b',44,102,1,'f'))}}) {
+            Refuse(delegate {DeploymentHistory.Replay(history(bad));});assertions++;
+        }
+        Refuse(delegate {DeploymentHistory.Replay(History(identity,sign,T(JournalKind.InferencePrepared,prepare)));});assertions++;
+        JournalHistory pending=history(new Transition[]{T(JournalKind.InferencePrepared,prepare)});
+        Require(DeploymentHistory.Replay(pending).DrainRequestSha256()==prepare.Generation);assertions++;
+        DeploymentEvent boundStart=Event(4,'1',1,'e','b',44,101,0,'e');
+        JournalHistory runningBound=history(new Transition[]{T(JournalKind.InferencePrepared,prepare),T(JournalKind.ControllerStarted,boundStart)});
+        Require(DeploymentHistory.Replay(runningBound).DrainRequestSha256()==H('e'));assertions++;
+        JournalHistory completedBound=history(new Transition[]{T(JournalKind.InferencePrepared,prepare),T(JournalKind.ControllerStarted,boundStart),T(JournalKind.ControllerCompleted,done)});
+        Require(DeploymentHistory.Replay(completedBound).Worker==null && DeploymentHistory.Replay(completedBound).LastControllerRequestSha256==H('e') && DeploymentHistory.Replay(completedBound).DrainRequestSha256()==H('e'));assertions++;
+        Refuse(delegate {DeploymentHistory.Replay(history(new Transition[]{T(JournalKind.InferencePrepared,prepare),T(JournalKind.ControllerStarted,Event(4,'1',1,'e','b',44,101,0,'f'))}));});assertions++;
+        Refuse(delegate {DeploymentHistory.Replay(history(new Transition[]{T(JournalKind.InferencePrepared,prepare),T(JournalKind.ControllerStarted,start)})).DrainRequestSha256();});assertions++;
+        Refuse(delegate {DeploymentHistory.Replay(history(new Transition[]{T(JournalKind.InferencePrepared,prepare),T(JournalKind.ControllerStarted,boundStart),T(JournalKind.ControllerCompleted,boundStart)}));});assertions++;
+        List<Transition> next=new List<Transition>(activation);
+        next.AddRange(new Transition[]{T(JournalKind.ImportPrepared,Event(1,'2',2,'8','f',0,0,0,'0')),T(JournalKind.ControllerStarted,Event(1,'2',2,'8','f',50,200,0,'0')),
+            T(JournalKind.ControllerCompleted,Event(1,'2',2,'8','f',50,200,1,'c')),T(JournalKind.Imported,Event(1,'2',2,'8','f',0,0,1,'c')),
+            T(JournalKind.ActivationPrepared,Event(2,'2',2,'9','f',0,0,0,'0')),T(JournalKind.ControllerStarted,Event(2,'2',2,'9','f',51,201,0,'7')),
+            T(JournalKind.ControllerCompleted,Event(2,'2',2,'9','f',51,201,2,'c'))});
+        DeploymentHistory continued=DeploymentHistory.Replay(History(identity,sign,next.ToArray()));Require(continued.Pending.Generation==H('9') && continued.Worker==null && continued.DrainRequestSha256()==H('7'));assertions++;
+        next.Add(T(JournalKind.ControllerStarted,Event(2,'2',2,'9','f',52,202,0,'6')));
+        continued=DeploymentHistory.Replay(History(identity,sign,next.ToArray()));Require(continued.Pending.Generation==H('9') && continued.DrainRequestSha256()==H('6'));assertions++;
+        next.Add(T(JournalKind.ControllerCompleted,Event(2,'2',2,'9','f',52,202,1,'c')));next.Add(T(JournalKind.Activated,Event(2,'2',2,'9','f',0,0,1,'c')));
+        continued=DeploymentHistory.Replay(History(identity,sign,next.ToArray()));Require(continued.Pending==null && continued.Active.ReleaseSequence==2);assertions++;
+        foreach(JournalKind denied in new JournalKind[]{JournalKind.TrustChanged,JournalKind.RuntimePrepared,JournalKind.FileEnrolled}) {Refuse(delegate {DeploymentHistory.Replay(Add(identity,sign,pending,denied,new byte[]{1}));});assertions++;}
+        JournalHistory recovered=history(new Transition[]{T(JournalKind.InferencePrepared,prepare),T(JournalKind.ControllerStarted,start),T(JournalKind.ControllerCompleted,Event(4,'1',1,'e','b',44,101,2,'c')),T(JournalKind.Cancelled,cancelled)});
+        Require(DeploymentHistory.Replay(recovered).Pending==null && DeploymentHistory.Replay(recovered).Active.Generation==H('d'));assertions++;
+        byte[] result=new byte[70000];for(int index=0;index<result.Length;index++) result[index]=(byte)('a'+index%26);string reviewHash=Wire.Hash(review);
+        HostedInferenceDelivery delivery=new HostedInferenceDelivery(reviewHash,request.RequestSha256,result);
+        using(HostedInferenceReceiver receiver=new HostedInferenceReceiver(request.RequestSha256)) {
+            Refuse(delegate {receiver.Part(delivery.Next());});assertions++;
+        }
+        delivery.Clear();delivery=new HostedInferenceDelivery(reviewHash,request.RequestSha256,result);
+        using(HostedInferenceReceiver receiver=new HostedInferenceReceiver(request.RequestSha256)) {
+            receiver.Reviewed(reviewHash);Refuse(delegate {receiver.Reviewed(reviewHash);});assertions++;
+            Refuse(delegate {delivery.Receipt(H('f'));});assertions++;
+            Refuse(delegate {receiver.ResultBase64();});assertions++;
+            while(!delivery.Complete) {byte[] part=delivery.Next();Refuse(delegate {delivery.Next();});assertions++;byte[] ack=receiver.Part(part);byte[] bad=(byte[])ack.Clone();bad[bad.Length-1]^=1;
+                Refuse(delegate {delivery.Acknowledge(bad);});assertions++;delivery.Acknowledge(ack);assertions++;}
+            receiver.Finish(delivery.Receipt(H('f')));Require(receiver.Complete && Wire.Equal(Convert.FromBase64String(receiver.ResultBase64()),result));assertions++;
+            Refuse(delegate {receiver.Finish(delivery.Receipt(H('f')));});assertions++;
+            Refuse(delegate {delivery.Next();});assertions++;
+        }delivery.Clear();
+        using(HostedComputeReceiver wrong=new HostedComputeReceiver(request.RequestSha256)) {wrong.Reviewed(reviewHash);HostedInferenceDelivery distinct=new HostedInferenceDelivery(reviewHash,request.RequestSha256,result);Refuse(delegate {wrong.Part(distinct.Next());});assertions++;distinct.Clear();}
+        return assertions;
+    }
     public static int Run(AuthorityIdentity identity,Func<byte[],byte[]> sign) {
         int assertions=0;
         DeploymentEvent prepare=Event(1,'1',1,'a','b',0,0,0,'0'),start=Event(1,'1',1,'a','b',42,99,0,'0'),
@@ -433,7 +520,7 @@ public static class LumaHostedLifecycleFixture {
         DeploymentHistory state=DeploymentHistory.Replay(History(identity,sign,import));Require(state.Pending==null && state.Active==null && state.Imported(H('1'))!=null);assertions++;
         Require(Wire.Equal(DeploymentEvent.Decode(prepare.Encode()).Encode(),prepare.Encode()));assertions++;
         byte[] extra=new byte[prepare.Encode().Length+1];Array.Copy(prepare.Encode(),extra,extra.Length-1);Refuse(delegate {DeploymentEvent.Decode(extra);});assertions++;
-        Refuse(delegate {Event(4,'1',1,'a','b',0,0,0,'0');});assertions++;
+        Refuse(delegate {Event(5,'1',1,'a','b',0,0,0,'0');});assertions++;
         Refuse(delegate {Event(1,'1',1,'a','b',42,0,0,'0');});assertions++;
         Refuse(delegate {Event(1,'1',1,'a','b',0,0,1,'0');});assertions++;
         Refuse(delegate {DeploymentHistory.Replay(History(identity,sign,T(JournalKind.ImportPrepared,prepare),T(JournalKind.Imported,imported)));});assertions++;
@@ -511,6 +598,13 @@ public static class LumaHostedLifecycleFixture {
     $computeAssertions=[LumaHostedLifecycleFixture]::RunCompute($identity,$fixtureSigner,[IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..')))
     Assert-Hosted ($computeAssertions -ge 65) 'Complete actual signed compute lifecycle, original-client delivery and held NTFS regressions did not run.'
     $script:HostedAssertions+=$computeAssertions
+    $inferenceAssertions=[LumaHostedLifecycleFixture]::RunInference($identity,$fixtureSigner)
+    Assert-Hosted ($inferenceAssertions -ge 60) 'Complete exact signed inference lifecycle and separate bounded original-client delivery regressions did not run.'
+    $script:HostedAssertions+=$inferenceAssertions
+    Add-Type -ReferencedAssemblies @((Join-Path $build.work_directory 'Luma.HostedAuthority.Library.dll'),(Join-Path $build.work_directory 'Luma.PackageInspector.dll'),'System.dll','System.Core.dll','System.Security.dll') -Path (Join-Path $PSScriptRoot 'HostedAuthorityInferenceFixture.cs')
+    $inferenceMechanismAssertions=[LumaHostedInferenceFixture]::Run([IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..')))
+    Assert-Hosted ($inferenceMechanismAssertions -ge 80) 'Complete inference model/profile/closure, actual framing, confinement, cancellation and held NTFS tests did not run.'
+    $script:HostedAssertions+=$inferenceMechanismAssertions
     $publisherSigner={param([byte[]]$inputBytes) $keys[0].Sign($inputBytes)}
     $timeSigner={param([byte[]]$inputBytes) $keys[1].Sign($inputBytes)}
     $newPublisherSigner={param([byte[]]$inputBytes) $keys[3].Sign($inputBytes)}
@@ -534,6 +628,10 @@ public static class LumaHostedLifecycleFixture {
     $readAssertions=[LumaHostedReadFixture]::Run([IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..')),$identity,$timeSigner,$fixtureSigner,$publisherSigner)
     Assert-Hosted ($readAssertions -ge 80) 'Complete actual read-only NTFS/session/wire/persistent-enrollment mechanism regressions did not run.'
     $script:HostedAssertions+=$readAssertions
+    Add-Type -ReferencedAssemblies @((Join-Path $build.work_directory 'Luma.HostedAuthority.Library.dll'),'System.dll','System.Core.dll','System.Security.dll') -Path (Join-Path $PSScriptRoot 'HostedAuthorityIngestionFixture.cs')
+    $ingestionAssertions=[LumaHostedIngestionFixture]::Run([IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..')))
+    Assert-Hosted ($ingestionAssertions -ge 60) 'Complete scoped-read to fresh independent inference handoff, actual tiny NTFS, cancellation and strict UTF8 software mechanisms did not run.'
+    $script:HostedAssertions+=$ingestionAssertions
     $entry=[Luma.Windows.Hosted.JournalEntry]::Prepare($identity,1,[Luma.Windows.Hosted.JournalKind]::Commission,$zero,$zero,$sid,$identity.Encode())
     $entry=$entry.Signed($identity,$keys[2].Sign($entry.SigningInput))
     $decoded=[Luma.Windows.Hosted.JournalEntry]::Decode($identity,$entry.Bytes)
@@ -684,6 +782,27 @@ public static class LumaHostedFrameFixture {
     $delayed=New-ActualLiveRelease
     [Threading.Thread]::Sleep(100)
     Assert-HostedThrows {Accept-ActualTime $delayed 1999940 1999950 $keys[1]} 'Protected UTC omitted actual nonce-to-receipt network/issuance delay from its upper bound.'
+    $script:UtcOriginalChecks=0;$script:UtcPreviousChecks=0
+    Assert-Hosted (-not [Luma.Windows.Hosted.HostedUtcContinuation]::RenewalDue([TimeSpan]::FromTicks(99999999))) 'Protected UTC refreshed before its exact ten-second whole-nonce threshold.'
+    Assert-Hosted ([Luma.Windows.Hosted.HostedUtcContinuation]::RenewalDue([TimeSpan]::FromSeconds(10))) 'Protected UTC renewal omitted time spent obtaining the previous proof.'
+    Assert-HostedThrows {[Luma.Windows.Hosted.HostedUtcContinuation]::RenewalDue([TimeSpan]::FromTicks(-1))} 'Negative whole UTC nonce age accepted.'
+    $initialContinuation=[Luma.Windows.Hosted.HostedUtcContinuation]::Require([Action]{$script:UtcOriginalChecks++},[Action]$null)
+    $initialContinuation.Invoke()
+    Assert-Hosted ($script:UtcOriginalChecks -eq 2) 'First UTC proof did not keep original caller checks around relay continuation.'
+    $prior=New-ActualLiveRelease
+    Accept-ActualTime $prior 1999500 1999510 $keys[1]
+    $priorCheck=[Action]{$script:UtcPreviousChecks++;$null=$liveType.GetMethod('Check',$flags).Invoke($prior,$null)}
+    $continuation=[Luma.Windows.Hosted.HostedUtcContinuation]::Require([Action]{$script:UtcOriginalChecks++},$priorCheck)
+    $continuation.Invoke()
+    Assert-Hosted ($script:UtcPreviousChecks -eq 1) 'Renewal omitted the exact previously accepted independent proof.'
+    [Threading.Thread]::Sleep(600)
+    Assert-HostedThrows {$continuation.Invoke()} 'Slow UTC renewal crossed the previously accepted release interval while allowing continued work.'
+    $fresh=New-ActualLiveRelease;Accept-ActualTime $fresh 1000001 1000010 $keys[1]
+    Assert-HostedThrows {$continuation.Invoke()} 'A separately fresh proof retroactively bridged an expired previous UTC continuation.'
+    $script:UtcPriorAfterExpiry=0
+    $expiredOriginal=[Luma.Windows.Hosted.HostedUtcContinuation]::Require([Action]{throw [Security.SecurityException]::new('Actual original caller expired.')},[Action]{$script:UtcPriorAfterExpiry++})
+    Assert-HostedThrows {$expiredOriginal.Invoke()} 'UTC renewal ignored original caller expiry.'
+    Assert-Hosted ($script:UtcPriorAfterExpiry -eq 0) 'Expired original caller continued into another proof ceremony.'
     $forged=[Luma.Windows.PackageContent]::new()
     Assert-HostedThrows {[Luma.Windows.PackageInspector]::ValidateHostedProfile($forged,$files.ToArray())} 'Caller-constructed package metadata was accepted as genuine inspection.'
     $script:PackageCallbackCount=0
@@ -692,12 +811,31 @@ public static class LumaHostedFrameFixture {
     })} 'Checked archive inspection bypassed a live pre-open refusal.'
     Assert-Hosted ($script:PackageCallbackCount -eq 1) 'Checked archive inspection did not call its live boundary before opening input.'
     Assert-HostedThrows {[Luma.Windows.PackageInspector]::Validate('Z:\luma-nonexistent-authority-fixture.tar',1024,67,8,('56'*32),$files.ToArray(),[Action]$null)} 'Authority archive inspection accepted an absent continuous boundary.'
+    $inferenceCasesHash=$null
+    if ($InferenceCasesPath) {
+        if ($InferenceCasesPath -notmatch '\A[A-Za-z]:\\' -or $InferenceCasesPath.Contains('/') -or $InferenceCasesPath -match '(^|\\)\.{1,2}(\\|$)' -or $InferenceCasesPath.Substring(2).Contains(':')) {throw 'Inference test-case export requires one exact canonical local new-file path.'}
+        $parent=Get-Item -LiteralPath ([IO.Path]::GetDirectoryName($InferenceCasesPath)) -Force
+        if ($parent -isnot [IO.DirectoryInfo]) {throw 'Inference test-case parent must exist.'}
+        for ($ancestor=$parent;$null -ne $ancestor;$ancestor=$ancestor.Parent) {if (($ancestor.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {throw 'Inference test-case output may not traverse reparse points.'}}
+        $cases=@(foreach ($wire in [LumaHostedInferenceFixture]::Requests()) {
+            $requestCase=[Luma.Windows.Hosted.GuestInferenceRequest]::Decode($wire)
+            [ordered]@{request_base64=[Convert]::ToBase64String($wire);request_sha256=$requestCase.RequestSha256;prompt_sha256=$requestCase.PromptSha256;prompt_bytes=$requestCase.PromptBytes;max_tokens=$requestCase.MaximumTokens}
+        })
+        $caseBytes=[Text.UTF8Encoding]::new($false,$true).GetBytes(([ordered]@{schema_version=1;kind='actual-csharp-inference-wire-fixtures';cases=$cases;authority_returned=$false;inference_executed=$false;production_qualified=$false} | ConvertTo-Json -Depth 6 -Compress))
+        $stream=[IO.FileStream]::new($InferenceCasesPath,[IO.FileMode]::CreateNew,[IO.FileAccess]::Write,[IO.FileShare]::None)
+        try {$stream.Write($caseBytes,0,$caseBytes.Length);$stream.Flush($true)} finally {$stream.Dispose()}
+        $inferenceCasesHash=(Get-FileHash -LiteralPath $InferenceCasesPath -Algorithm SHA256).Hash.ToLowerInvariant()
+    }
     [pscustomobject][ordered]@{schema_version=1;status='hosted-software-protocol-tests-passed';assertions=$script:HostedAssertions;
         build_directory=$build.work_directory;actual_ephemeral_bcrypt_signatures=$true;hardware_custody_invoked=$false;
         live_service_installed=$false;host_tpm_mutated=$false;distribution_imported=$false;actual_current_user_ntfs_identity_lease_fixture=$true;actual_threaded_service_lifecycle_software_tests=$true;
         installed_scm_stop_qualified=$false;installed_system_acl_qualified=$false;ntfs_durability_qualified=$false;
         actual_read_only_ntfs_and_wire_mechanism_tests=$true;signed_persistent_enrollment_software_tests=$true;installed_authenticated_read_bridge_qualified=$false;installed_persistent_enrollment_qualified=$false;linux_principal_mapping=$false;
         signed_compute_lifecycle_and_delivery_tests=$true;held_original_compute_input_ntfs_tests=$true;compute_assertions=$computeAssertions;actual_guest_compute_executed=$false;model_inference_executed=$false;
+        signed_inference_lifecycle_and_delivery_tests=$true;inference_assertions=$inferenceAssertions;actual_guest_inference_executed=$false;five_minute_purpose_approved=$true;compute_purpose_seconds=30;inference_purpose_seconds=300;
+        inference_mechanism_assertions=$inferenceMechanismAssertions;held_original_inference_input_ntfs_tests=$true;closed_inference_profile_runtime_join_tests=$true;
+        ingestion_assertions=$ingestionAssertions;scoped_read_to_fresh_inference_handoff_tests=$true;actual_authenticated_ingestion_to_model_qualified=$false;
+        inference_wire_cases_path=$InferenceCasesPath;inference_wire_cases_sha256=$inferenceCasesHash;
         production_qualified=$false;gate_closing=$false} | ConvertTo-Json -Depth 8
 } finally {
     foreach ($key in $keys) {if ($null -ne $key) {$key.Dispose()}}

@@ -178,7 +178,14 @@ impl Drop for OwnedRuntime {
 }
 
 pub(super) fn run(command: &mut Command, mut check: impl FnMut() -> Result<()>) -> Result<()> {
-    check()?;
+    run_with_pid(command, |_| check())
+}
+
+pub(super) fn run_with_pid(
+    command: &mut Command,
+    mut check: impl FnMut(u32) -> Result<()>,
+) -> Result<()> {
+    check(0)?;
     require_waitable_children()?;
     arm_parent_death(command);
     let child = command.spawn()?;
@@ -187,7 +194,7 @@ pub(super) fn run(command: &mut Command, mut check: impl FnMut() -> Result<()>) 
     // already-armed parent-death signal/unit teardown handles that uncertainty.
     let mut owned = OwnedRuntime::pin(&child)?;
     loop {
-        if check().is_err() {
+        if check(child.id()).is_err() {
             owned.terminate()?;
             return Err("model supervision fence failed; owned child reaped; readiness/resource return not proven".into());
         }

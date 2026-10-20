@@ -196,7 +196,7 @@ def plan_input(path):
     return value
 
 
-def runtime_search_paths(text, object_path):
+def runtime_search_paths(text, object_path, private_dirs=()):
     """Closed Ubuntu search paths, with lexical root-bound ORIGIN expansion.
 
     This never consults host paths, LD_LIBRARY_PATH or the working directory.
@@ -204,6 +204,9 @@ def runtime_search_paths(text, object_path):
     beneath the package root and ending at an explicitly supported directory.
     """
     relative(object_path)
+    if private_dirs not in ((), ('usr/libexec/luma-os/hosted-llama',)):
+        raise ValueError('only the versioned hosted inference private runtime directory is supported')
+    admitted = SEARCH_DIRS | set(private_dirs)
     if not text or len(text) > 4096:
         raise ValueError('ELF search path is empty or exceeds bound')
     result = []
@@ -239,15 +242,15 @@ def runtime_search_paths(text, object_path):
                     pieces.append(component)
                     forward = True
             path = '/'.join(pieces)
-        if path not in SEARCH_DIRS:
+        if path not in admitted:
             raise ValueError('ELF search path is outside the closed Ubuntu directory policy')
-        if path in result or len(result) >= len(SEARCH_DIRS):
+        if path in result or len(result) >= len(admitted):
             raise ValueError('ELF search path is duplicated or exceeds bound')
         result.append(path)
     return tuple(result)
 
 
-def elf(data, require_entry=False, object_path=None, details=False):
+def elf(data, require_entry=False, object_path=None, details=False, private_dirs=()):
     """Inspect bounded real ELF segments and direct loader dependencies, no execution."""
     if len(data) < 64 or len(data) > MAX_ELF or data[:7] != b'\x7fELF\x02\x01\x01':
         raise ValueError('required runtime is not an amd64 executable ELF')
@@ -330,11 +333,20 @@ def elf(data, require_entry=False, object_path=None, details=False):
                 if tag in tags:
                     if len(tags[tag]) != 1 or object_path is None:
                         raise ValueError('ELF search path requires a unique tag and package object location')
-                    search[label] = runtime_search_paths(string(tags[tag][0]), object_path)
+                    search[label] = runtime_search_paths(string(tags[tag][0]), object_path, private_dirs)
     return (interpreter, needed, search) if details else (interpreter, needed)
 
 
-def build(root, platform, plan_path, output, release, hosted_compute=False):
+def build(root, platform, plan_path, output, release, hosted_compute=False, hosted_inference=False):
+    if hosted_compute and hosted_inference:
+        raise ValueError('select one distinct hosted runtime profile')
+    if hosted_inference:
+        spec = importlib.util.spec_from_file_location('luma_windows_inference_build', Path(__file__).with_name('windows_inference.py'))
+        inference = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(inference)
+    else:
+        inference = None
+    private_dirs = inference.PRIVATE_DIRS if inference else ()
     if not re.fullmatch(r'luma-wsl-dev-[A-Za-z0-9][A-Za-z0-9.-]{0,63}', release):
         raise ValueError('release ID is outside the existing development schema')
     plan = plan_input(plan_path)
@@ -362,11 +374,11 @@ def build(root, platform, plan_path, output, release, hosted_compute=False):
         embedded_identity = {'schema_version': 1, 'release_id': release, 'architecture': 'amd64', 'profile': 'W'}
         wsl = WSL
         hosted = None
-        if hosted_compute:
+        if hosted_compute or hosted_inference:
             spec = importlib.util.spec_from_file_location('luma_windows_hosted_package', Path(__file__).with_name('windows_hosted.py'))
             hosted = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(hosted)
-            embedded_identity.update(schema_version=2, runtime_profile=hosted.PROFILE)
+            embedded_identity.update(schema_version=2, runtime_profile=inference.PROFILE if inference else hosted.PROFILE)
             wsl += b'[user]\ndefault=nobody\n'
         replacements = {
             'usr/bin/luma-platform': (binary, 0o755),
@@ -408,7 +420,8 @@ def build(root, platform, plan_path, output, release, hosted_compute=False):
                     for child in children:
                         visit(path + '/' + child, ancestry + (inode,))
                 else:
-                    if not stat.S_ISREG(metadata.st_mode) or metadata.st_size > MAX_FILE:
+                    maximum = inference.MODEL_BYTES if inference and path == inference.MODEL else MAX_FILE
+                    if not stat.S_ISREG(metadata.st_mode) or metadata.st_size > maximum:
                         raise ValueError('source member exceeds regular-file bounds: ' + path)
                     add(path, False, mode, metadata.st_size, identity(metadata))
         root_identity = identity(os.fstat(tree.fd))
@@ -443,13 +456,16 @@ def build(root, platform, plan_path, output, release, hosted_compute=False):
         required = {'etc/os-release', 'etc/wsl.conf', 'usr/lib/luma/platform.json',
                     'usr/bin/luma-platform', 'bin/sh', 'usr/lib/systemd/systemd'}
         roots = ('usr/bin/luma-platform', 'bin/sh', 'usr/lib/systemd/systemd')
-        if hosted_compute:
+        if hosted_compute or hosted_inference:
             required.update((*hosted.GENERATED, hosted.PLATFORM, hosted.POLICY, *hosted.BINARIES,
                              'usr/bin/systemctl'))
             if not required.issubset(entries):
                 raise ValueError('hosted compute composition lacks mandatory fixed runtime files')
             hosted.validate(data_at, entries, binary)
             roots += (*hosted.BINARIES, hosted.PLATFORM, 'usr/bin/systemctl')
+        if inference:
+            required.update(inference.validate(data_at, entries, tree))
+            roots += (inference.PRIVATE+'/llama-completion', inference.PRIVATE+'/libggml-cpu-x64.so')
         if not required.issubset(entries):
             raise ValueError('explicit exclusions removed mandatory runtime content')
         todo = [(path, (), path) for path in roots]
@@ -461,10 +477,12 @@ def build(root, platform, plan_path, output, release, hosted_compute=False):
             if key in checked:
                 continue
             checked.add(key)
-            if len(checked) > 256 or len({item[0] for item in checked}) > 60:
+            if len(checked) > (512 if inference else 256) or len({item[0] for item in checked}) > (128 if inference else 60):
                 raise ValueError('runtime dependency closure exceeds manifest bounds')
-            interp, needed, search = elf(data_at(path), require_entry=path in roots, object_path=path, details=True)
-            if path in roots and not entries[path][1] & 0o111:
+            executable_root = path in roots and not (inference and path.endswith('/libggml-cpu-x64.so'))
+            interp, needed, search = elf(data_at(path), require_entry=executable_root, object_path=path,
+                                        details=True, private_dirs=private_dirs)
+            if executable_root and not entries[path][1] & 0o111:
                 raise ValueError('required ELF is not executable: ' + path)
             dependencies = []
             inherited_next = tuple(dict.fromkeys((*search['rpath'], *inherited)))
@@ -489,7 +507,7 @@ def build(root, platform, plan_path, output, release, hosted_compute=False):
                 if len(hashes) != 1:
                     raise ValueError('ambiguous ELF dependency resolution: ' + name)
                 selected = existing if existing is not None else candidates[0]
-                _, _, selected_metadata = elf(data_at(selected), object_path=selected, details=True)
+                _, _, selected_metadata = elf(data_at(selected), object_path=selected, details=True, private_dirs=private_dirs)
                 if selected_metadata['soname'] not in (None, name):
                     # Do not approximate the loader's multiple-name aliases.
                     # The closed Ubuntu profile supports matching SONAMEs or
@@ -504,7 +522,7 @@ def build(root, platform, plan_path, output, release, hosted_compute=False):
             # This namespace is private to each independent executable root.
             todo.extend((p, inherited_next, scope) for p in dependencies
                         if (p, inherited_next, scope) not in checked)
-        if len(required) > 64:
+        if len(required) > (128 if inference else 64):
             raise ValueError('required runtime files exceed existing manifest bound')
         content_bytes = sum(item[2] for item in entries.values())
         archive_bytes = 1024 + sum(512 + ((item[2] + 511) // 512) * 512 for item in entries.values())
@@ -615,6 +633,7 @@ if __name__ == '__main__':
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--release-id', required=True)
     parser.add_argument('--hosted-compute', action='store_true')
+    parser.add_argument('--hosted-inference', action='store_true')
     args = parser.parse_args()
     print(canonical(build(args.root, args.platform, args.plan, args.output, args.release_id,
-                         hosted_compute=args.hosted_compute)).decode(), end='')
+                         hosted_compute=args.hosted_compute, hosted_inference=args.hosted_inference)).decode(), end='')

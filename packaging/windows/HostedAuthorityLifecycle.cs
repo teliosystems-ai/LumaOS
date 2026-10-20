@@ -19,10 +19,11 @@ namespace Luma.Windows.Hosted
         public byte ObservationKind {get;private set;}
         public DeploymentEvent(byte purpose,string release,ulong sequence,string generation,ulong boot,string package,uint controller,ulong creation,byte observationKind,string observation)
         {
-            if((purpose!=1 && purpose!=2 && purpose!=3) || sequence<1 || sequence>9007199254740991UL || boot<1 || (controller==0)!=(creation==0) || (controller!=0 && controller<4))
+            if((purpose!=1 && purpose!=2 && purpose!=3 && purpose!=4) || sequence<1 || sequence>9007199254740991UL || boot<1 || (controller==0)!=(creation==0) || (controller!=0 && controller<4))
                 throw new InvalidDataException("Typed deployment purpose, sequence or actual controller binding differs.");
             Wire.Bytes(release,32,true);Wire.Bytes(generation,32,true);Wire.Bytes(observation,32,false);
-            if(observationKind>2 || (observationKind==0)!=(observation==new string('0',64))) throw new SecurityException("Typed controller outcome or observation commitment differs.");
+            bool zero=observation==new string('0',64);
+            if(observationKind>2 || (observationKind!=0 && zero) || (observationKind==0 && controller==0 && !zero)) throw new SecurityException("Typed controller outcome or observation commitment differs.");
             if(package==null || !System.Text.RegularExpressions.Regex.IsMatch(package,@"\Aticket-package-[0-9a-f]{32}\.tar\z")) throw new InvalidDataException("Deployment package is not a closed private artifact leaf.");
             Purpose=purpose;ReleaseSha256=release;ReleaseSequence=sequence;Generation=generation;HostBootCreation=boot;PackageLeaf=package;Controller=controller;ControllerCreation=creation;ObservationKind=observationKind;ObservationSha256=observation;
         }
@@ -56,10 +57,32 @@ namespace Luma.Windows.Hosted
         public int CompletedControllers {get;private set;}
         public int SuccessfulControllers {get;private set;}
         public DeploymentEvent LastSuccess {get;private set;}
+        public string LastControllerRequestSha256 {get;private set;}
         private readonly Dictionary<string,DeploymentEvent> imported=new Dictionary<string,DeploymentEvent>(StringComparer.Ordinal);
         private readonly HashSet<string> generations=new HashSet<string>(StringComparer.Ordinal);
         private DeploymentHistory() {}
         public DeploymentEvent Imported(string release) {DeploymentEvent result;return imported.TryGetValue(release,out result)?result:null;}
+        public void RequireFreshGeneration(string generation)
+        {Wire.Bytes(generation,32,true);if(Pending!=null || generations.Contains(generation)) throw new SecurityException("A resource generation is already outstanding or was previously used; no new journal write or execution is admitted.");}
+        public string DrainRequestSha256()
+        {
+            if(Pending==null) throw new SecurityException("Drain requires the exact outstanding resource generation.");
+            // Import's sole controller is wsl --import, not a guest compute
+            // request. Before any controller, no request was ever dispatched.
+            if(Pending.Purpose==1 || (Worker==null && CompletedControllers==0)) return Pending.Generation;
+            string request=Worker==null?LastControllerRequestSha256:Worker.ObservationSha256;
+            if(request==null || request==new string('0',64)) throw new SecurityException("Legacy controller has no durably bound exact request; preserve its fence for separately reviewed legacy cleanup, never guess or rerun.");
+            Wire.Bytes(request,32,true);return request;
+        }
+        public static void ValidateNext(AuthorityIdentity identity,JournalHistory history,JournalEntry candidate,Action check)
+        {
+            if(identity==null || history==null || candidate==null || check==null) throw new ArgumentNullException("candidate");
+            // Validate the actual signed prospective transition before staging
+            // even its dispatch ticket. Accepted NV history must never be used
+            // as a speculative parser for an invalid or reused generation.
+            List<byte[]> records=new List<byte[]>();foreach(JournalEntry entry in history.Entries) {check();records.Add(entry.Bytes);}records.Add(candidate.Bytes);
+            Replay(JournalHistory.Replay(identity,records.ToArray(),check),check);check();
+        }
         public static DeploymentHistory Replay(JournalHistory history)
         {return Replay(history,delegate {});}
         public static DeploymentHistory Replay(JournalHistory history,Action check)
@@ -69,10 +92,10 @@ namespace Luma.Windows.Hosted
             DeploymentHistory state=new DeploymentHistory();JournalEntry[] records=history.Entries;
             for(int index=1;index<records.Length;index++) {
                 check();
-                if(state.Pending!=null && state.Pending.Purpose==3 && (records[index].Kind==JournalKind.TrustChanged || records[index].Kind==JournalKind.TrustPrepared || records[index].Kind==JournalKind.TrustCancelled ||
+                if(state.Pending!=null && state.Pending.Purpose>=3 && (records[index].Kind==JournalKind.TrustChanged || records[index].Kind==JournalKind.TrustPrepared || records[index].Kind==JournalKind.TrustCancelled ||
                     records[index].Kind==JournalKind.RuntimePrepared || records[index].Kind==JournalKind.RuntimeActivated || records[index].Kind==JournalKind.RuntimeCancelled ||
                     records[index].Kind==JournalKind.FileEnrolled || records[index].Kind==JournalKind.FileEnrollmentRevoked))
-                    throw new SecurityException("Unresolved compute generation cannot be crossed by new trust, runtime or file-policy effects.");
+                    throw new SecurityException("Unresolved compute or inference generation cannot be crossed by new trust, runtime or file-policy effects.");
                 if(records[index].Kind==JournalKind.NvWriteAborted || records[index].Kind==JournalKind.TrustChanged || records[index].Kind==JournalKind.TrustPrepared || records[index].Kind==JournalKind.TrustCancelled ||
                     records[index].Kind==JournalKind.RuntimePrepared || records[index].Kind==JournalKind.RuntimeActivated || records[index].Kind==JournalKind.RuntimeCancelled ||
                     records[index].Kind==JournalKind.FileEnrolled || records[index].Kind==JournalKind.FileEnrollmentRevoked) continue;
@@ -81,10 +104,12 @@ namespace Luma.Windows.Hosted
                     case JournalKind.ImportPrepared:
                     case JournalKind.ActivationPrepared:
                     case JournalKind.ComputePrepared:
+                    case JournalKind.InferencePrepared:
                         if(state.Pending!=null || !empty || !state.generations.Add(value.Generation) ||
                             (record.Kind==JournalKind.ImportPrepared)!=(value.Purpose==1) ||
-                            (record.Kind==JournalKind.ComputePrepared)!=(value.Purpose==3)) throw new SecurityException("Deployment admission is concurrent, replayed or not exact.");
-                        if(value.Purpose==3) {
+                            (record.Kind==JournalKind.ComputePrepared)!=(value.Purpose==3) ||
+                            (record.Kind==JournalKind.InferencePrepared)!=(value.Purpose==4)) throw new SecurityException("Deployment admission is concurrent, replayed or not exact.");
+                        if(value.Purpose>=3) {
                             if(state.Active==null || value.ReleaseSequence!=state.Active.ReleaseSequence || value.ReleaseSha256!=state.Active.ReleaseSha256 || value.PackageLeaf!=state.Active.PackageLeaf)
                                 throw new SecurityException("Compute admission requires the exact genuinely activated immutable distribution, not an imported or substituted slot.");
                         } else if(value.ReleaseSequence!=(state.Active==null?1:checked(state.Active.ReleaseSequence+1))) throw new SecurityException("Release does not extend the current activation floor.");
@@ -93,28 +118,31 @@ namespace Luma.Windows.Hosted
                             DeploymentEvent prior=state.Imported(value.ReleaseSha256);
                             if(prior==null || prior.ReleaseSequence!=value.ReleaseSequence || prior.PackageLeaf!=value.PackageLeaf) throw new SecurityException("Activation lacks a genuine exact imported package.");
                         }
-                        state.Pending=value;state.CompletedControllers=0;state.SuccessfulControllers=0;state.LastSuccess=null;break;
+                        state.Pending=value;state.CompletedControllers=0;state.SuccessfulControllers=0;state.LastSuccess=null;state.LastControllerRequestSha256=null;break;
                     case JournalKind.ControllerStarted:
-                        if(state.Pending==null || !state.Pending.SameAdmission(value) || state.Worker!=null || value.Controller<4 || value.ObservationSha256!=new string('0',64) || state.CompletedControllers>=4 ||
-                            ((value.Purpose==1 || value.Purpose==3) && state.CompletedControllers!=0))
+                        if(state.Pending==null || !state.Pending.SameAdmission(value) || state.Worker!=null || value.Controller<4 || value.ObservationKind!=0 || state.CompletedControllers>=4 ||
+                            (value.Purpose>=3 && value.ObservationSha256!=new string('0',64) && value.ObservationSha256!=value.Generation) ||
+                            ((value.Purpose==1 || value.Purpose>=3) && state.CompletedControllers!=0))
                             throw new SecurityException("Controller start is unadmitted, substituted or exceeds the finite profile.");
-                        state.Worker=value;break;
+                        state.Worker=value;state.LastControllerRequestSha256=value.ObservationSha256==new string('0',64)?null:value.ObservationSha256;break;
                     case JournalKind.ControllerCompleted:
                         if(state.Pending==null || state.Worker==null || !state.Pending.SameAdmission(value) || value.Controller!=state.Worker.Controller ||
-                            value.ControllerCreation!=state.Worker.ControllerCreation || value.ObservationSha256==new string('0',64)) throw new SecurityException("Controller completion lacks exact start or observed result.");
+                            value.ControllerCreation!=state.Worker.ControllerCreation || value.ObservationKind==0 || value.ObservationSha256==new string('0',64)) throw new SecurityException("Controller completion lacks exact start or observed result.");
                         state.Worker=null;state.CompletedControllers++;if(value.ObservationKind==1) {state.SuccessfulControllers++;state.LastSuccess=value;}break;
                     case JournalKind.Imported:
                     case JournalKind.Activated:
                     case JournalKind.ComputeObserved:
+                    case JournalKind.InferenceObserved:
                         if(state.Pending==null || !state.Pending.SameAdmission(value) || state.Worker!=null || state.SuccessfulControllers<1 || state.LastSuccess==null || value.Controller!=0 ||
                             value.ObservationKind!=1 || value.ObservationSha256!=state.LastSuccess.ObservationSha256 || (record.Kind==JournalKind.Imported)!=(value.Purpose==1) ||
-                            (record.Kind==JournalKind.ComputeObserved)!=(value.Purpose==3)) throw new SecurityException("Deployment completion lacks successful observed controllers or the exact admission/result.");
+                            (record.Kind==JournalKind.ComputeObserved)!=(value.Purpose==3) ||
+                            (record.Kind==JournalKind.InferenceObserved)!=(value.Purpose==4)) throw new SecurityException("Deployment completion lacks successful observed controllers or the exact admission/result.");
                         if(value.Purpose==1) state.imported.Add(value.ReleaseSha256,value);else if(value.Purpose==2) state.Active=value;
-                        state.Pending=null;state.CompletedControllers=0;state.SuccessfulControllers=0;state.LastSuccess=null;break;
+                        state.Pending=null;state.CompletedControllers=0;state.SuccessfulControllers=0;state.LastSuccess=null;state.LastControllerRequestSha256=null;break;
                     case JournalKind.Cancelled:
                         if(state.Pending==null || !state.Pending.SameAdmission(value) || state.Worker!=null || value.Controller!=0 || value.ObservationKind!=2)
                             throw new SecurityException("Abandonment lacks a closed exact outstanding generation.");
-                        state.Pending=null;state.CompletedControllers=0;state.SuccessfulControllers=0;state.LastSuccess=null;break;
+                        state.Pending=null;state.CompletedControllers=0;state.SuccessfulControllers=0;state.LastSuccess=null;state.LastControllerRequestSha256=null;break;
                     default:throw new SecurityException("Deployment journal contains an unsupported or unreviewed transition.");
                 }
             }

@@ -106,8 +106,8 @@ function Test-LumaWslPackage {
     $contentBytes = ConvertTo-LumaPackageInteger $manifest.rootfs.content_bytes ([Luma.Windows.PackageInspector]::MaximumArchiveBytes) 'Content bytes'
     $memberCount = ConvertTo-LumaPackageInteger $manifest.rootfs.member_count ([Luma.Windows.PackageInspector]::MaximumMembers) 'Member count'
     if ($memberCount -eq 0 -or $manifest.required_files -isnot [array] -or
-        $manifest.required_files.Count -lt 4 -or $manifest.required_files.Count -gt 64) {
-        throw 'Manifest requires bounded member count and 4 to 64 required regular files.'
+        $manifest.required_files.Count -lt 4 -or $manifest.required_files.Count -gt 128) {
+        throw 'Manifest requires bounded member count and 4 to 128 required regular files; only the closed inference identity admits more than 64.'
     }
     $files = New-Object 'System.Collections.Generic.List[Luma.Windows.RequiredFile]'
     $paths = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
@@ -140,15 +140,18 @@ function Test-LumaWslPackage {
     $identity = ConvertFrom-LumaPackageJson $content.PlatformIdentity
     $platformSchema = ConvertTo-LumaPackageInteger $identity.schema_version 2 'Platform schema'
     $hostedCompute = $platformSchema -eq 2
+    $hostedInference = $false
     $identityFields = @('schema_version', 'release_id', 'architecture', 'profile')
     if ($hostedCompute) { $identityFields += 'runtime_profile' }
     Assert-LumaPackageRecord $identity $identityFields 'Embedded platform identity'
+    if ($hostedCompute) { $hostedInference = $identity.runtime_profile -is [string] -and $identity.runtime_profile -ceq 'luma-windows-hosted-inference-v1' }
     if ($platformSchema -lt 1 -or $identity.release_id -isnot [string] -or $identity.release_id -cne $manifest.release_id -or
         $identity.architecture -isnot [string] -or $identity.architecture -cne 'amd64' -or
         $identity.profile -isnot [string] -or $identity.profile -cne 'W') { throw 'Embedded platform identity differs from package manifest.' }
-    if ($hostedCompute -and ($identity.runtime_profile -isnot [string] -or $identity.runtime_profile -cne 'luma-windows-hosted-compute-v1')) {
+    if ($hostedCompute -and ($identity.runtime_profile -isnot [string] -or $identity.runtime_profile -cnotin @('luma-windows-hosted-compute-v1','luma-windows-hosted-inference-v1'))) {
         throw 'Unsupported hosted compute profile.'
     }
+    if ($files.Count -gt 64 -and -not $hostedInference) { throw 'Only the closed separately inspected inference profile permits 65 to 128 required files.' }
     $osKeys = @{}
     foreach ($line in ($content.OsRelease -split '\r?\n')) {
         if ($line -cmatch '^(?<key>ID|VERSION_ID)=(?:"(?<quoted>[A-Za-z0-9.]+)"|(?<plain>[A-Za-z0-9.]+))$') {
@@ -221,6 +224,7 @@ WantedBy=multi-user.target
         schema_version=1; status='content-validated-not-authenticated'; package_type=$manifest.package_type
         release_id=$manifest.release_id; architecture='amd64'; profile='W'
         hosted_compute_profile=$hostedCompute
+        hosted_inference_profile=$hostedInference
         manifest_sha256=[Luma.Windows.PackageInspector]::Sha256($manifestBytes)
         rootfs_sha256=$content.ArchiveSha256; rootfs_bytes=$content.ArchiveBytes
         archive_member_count=$content.MemberCount; content_bytes=$content.ContentBytes

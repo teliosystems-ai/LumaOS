@@ -28,6 +28,8 @@ mod credential_observer;
 mod disk;
 mod finite_grants;
 mod generated_runtime;
+mod hosted_fence;
+mod hosted_inference;
 mod hosted_windows;
 mod model;
 mod model_qualification;
@@ -159,6 +161,7 @@ fn dispatch() -> Result<()> {
             args.first().map(String::as_str),
             Some(
                 "granted-infer"
+                    | "granted-infer-reviewed"
                     | "granted-infer-review"
                     | "generated-review"
                     | "generated-execute"
@@ -317,9 +320,25 @@ fn dispatch() -> Result<()> {
             | "content-office-export"
             | "content-office-resource-worker",
         ) => office_export::command(&args),
-        Some("hosted-windows-compute") if args.len() == 1 => hosted_windows::worker(),
-        Some("hosted-windows-compute-launch") if args.len() == 1 => hosted_windows::launch(),
-        Some("hosted-windows-compute-drain") if args.len() == 1 => hosted_windows::drain(),
+        Some("hosted-windows-compute") if args.len() == 3 => {
+            hosted_windows::worker(&args[1], &args[2])
+        }
+        Some("hosted-windows-compute-launch") if args.len() == 3 => {
+            hosted_windows::launch(&args[1], &args[2])
+        }
+        Some("hosted-windows-compute-drain") if args.len() == 2 => hosted_windows::drain(&args[1]),
+        Some("hosted-windows-inference") if args.len() == 3 => {
+            hosted_inference::worker(&args[1], &args[2])
+        }
+        Some("hosted-windows-inference-launch") if args.len() == 3 => {
+            hosted_inference::launch(&args[1], &args[2])
+        }
+        Some("hosted-windows-inference-drain") if args.len() == 2 => {
+            hosted_inference::drain(&args[1])
+        }
+        Some("hosted-windows-inference-contract") if args.len() == 1 => {
+            hosted_inference::contract()
+        }
         Some(
             "resource-checkpoint-prepare-review"
             | "resource-checkpoint-prepare"
@@ -504,6 +523,20 @@ fn dispatch() -> Result<()> {
                 &args[2],
                 inference_input(&args[3])?,
                 max_tokens,
+                None,
+            )
+        }
+        Some("granted-infer-reviewed") if args.len() == 6 => {
+            let max_tokens = args[4].parse::<u64>()?;
+            if max_tokens.to_string() != args[4] {
+                return Err("noncanonical inference token bound".into());
+            }
+            service::granted_gateway::infer(
+                &args[1],
+                &args[2],
+                inference_input(&args[3])?,
+                max_tokens,
+                Some(&args[5]),
             )
         }
         Some("granted-infer-review") if args.len() == 3 => {
@@ -932,6 +965,7 @@ fn dispatch() -> Result<()> {
             println!("Explicit collection data: content-contract-collection prepares canonical schema-1 luma-explicit-collection-v1 JSON with a stable collection ID, name and up to64 sorted exact member references. Native laboratory content requests support collection publication, current/historical collection pages, reverse membership, preparation review and separately scoped recover:SHA quarantine retirement. Membership and reviews are data, never grants or rollback authority; each private read/effect still needs current finite authorization.");
             println!("Explicit legacy copy import (installed root only): artifact-catalog-legacy-inspect LEGACY-REQUEST-ID | artifact-catalog-import-legacy LEGACY-REQUEST-ID REVIEW-SHA256. Review binds the complete source receipt; fixed source/catalog locks and current signed workflow checks span publication. Stable mapped IDs provide exact replay. Original data/receipts and retained preparations are preserved; no automatic migration or format downgrade.");
             println!("Model operations: models | model-install-check MODEL-ID | model-install MODEL-ID | model-chat [--timeout-seconds 1..1800] [--max-tokens 1..128] (prompt on stdin).\nInstaller accepts --model MODEL-ID or --model manual-only; otherwise prompts.\nPreflight does not change model configuration or reserve future serving capacity; cached verification uses a temporary acquisition lease. Activation rechecks after stopping the worker. Weights are acquired from pinned HTTPS publisher URLs after hardware admission.");
+            println!("Reviewed native conversation: granted-run granted-infer-review INPUT MAX-TOKENS | granted-run granted-infer-reviewed LOGIN GRANT INPUT MAX-TOKENS REVIEW-SHA256. Exact login, model/worker generation, input digest and finite byte/token review tuple must still match before dispatch. Review commitment is data, not authority: fresh original PAM and the independent current finite inference grant remain required. Existing native 25-second request bound is unchanged; output is untrusted text and never dispatches OS effects.");
             println!("Governed model distribution: admin-model-command LOGIN REQUEST FILE [--commit REVIEW-SHA256] (trust publication/catalog admission only); admin-model-custodian-command LOGIN REQUEST FILE [--commit REVIEW-SHA256] (closed approve/sign intent, actual scoped PAM, server-derived UTC and event receipt). Sign only the canonical statement returned after its committed signing authorization; private signing custody remains external. model-pack-import-review MODEL-ID | model-pack-import LOGIN GRANT MODEL-ID (pack preparation only, never catalog/serving activation).");
             println!("Interrupted pack preparation: model-pack-pending-review MODEL-ID | model-pack-pending-retain LOGIN GRANT MODEL-ID REVIEW-SHA256 (retain exact interrupted unverified bytes; no deletion or catalog activation).");
             println!("Externally certified exact-image/machine qualification: model-qualification-observe MODEL-ID LEVEL REPORT-SHA256 (unsigned measured descriptor only); model-qualification-review MODEL-ID INPUT | model-qualification-install LOGIN GRANT MODEL-ID INPUT (original Admin finite resource.provision, atomic public package, exact reviewed predecessor). Serving after admitted catalog: model-activate-review MODEL-ID | model-activate LOGIN GRANTS-JSON MODEL-ID (closed provision/start/stop grants).");

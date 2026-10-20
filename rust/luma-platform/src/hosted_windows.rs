@@ -66,14 +66,14 @@ fn command(operation: &str) -> Result<&'static str> {
         _ => return Err("unsupported closed hosted data operation".into()),
     })
 }
-fn filesystem(file: &File, expected: libc::c_long) -> Result<()> {
+pub(crate) fn filesystem(file: &File, expected: libc::c_long) -> Result<()> {
     let mut info: libc::statfs = unsafe { std::mem::zeroed() };
     if unsafe { libc::fstatfs(file.as_raw_fd(), &mut info) } != 0 || info.f_type != expected {
         return Err("hosted observation requires actual kernel filesystem".into());
     }
     Ok(())
 }
-fn kernel(path: &str, magic: libc::c_long, maximum: u64) -> Result<String> {
+pub(crate) fn kernel(path: &str, magic: libc::c_long, maximum: u64) -> Result<String> {
     let mut file = OpenOptions::new()
         .read(true)
         .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NONBLOCK)
@@ -99,7 +99,7 @@ fn kernel(path: &str, magic: libc::c_long, maximum: u64) -> Result<String> {
     }
     Ok(value)
 }
-fn status_field<'a>(status: &'a str, name: &str) -> Result<&'a str> {
+pub(crate) fn status_field<'a>(status: &'a str, name: &str) -> Result<&'a str> {
     let mut values = status.lines().filter_map(|line| line.strip_prefix(name));
     let value = values.next().ok_or("hosted process status missing")?.trim();
     if values.next().is_some() {
@@ -108,6 +108,7 @@ fn status_field<'a>(status: &'a str, name: &str) -> Result<&'a str> {
     Ok(value)
 }
 fn context() -> Result<Vec<u32>> {
+    crate::hosted_fence::check_current()?;
     if unsafe { libc::getuid() } != 65534
         || unsafe { libc::geteuid() } != 65534
         || unsafe { libc::getgid() } != 65534
@@ -170,7 +171,7 @@ fn context() -> Result<Vec<u32>> {
     Ok(groups)
 }
 
-fn require_network_denial() -> Result<()> {
+pub(crate) fn require_network_denial() -> Result<()> {
     // These create no connections and send no bytes. The actual confined
     // process must be unable to create even a local or host-vsock channel.
     for family in [libc::AF_UNIX, libc::AF_INET, libc::AF_INET6, libc::AF_VSOCK] {
@@ -197,7 +198,7 @@ fn require_network_denial() -> Result<()> {
 
 // New open-file descriptions of the dedicated job's FIFO endpoints avoid
 // changing inherited descriptor flags. No regular-file/stdout fallback exists.
-fn pipe(number: i32, writing: bool) -> Result<File> {
+pub(crate) fn pipe(number: i32, writing: bool) -> Result<File> {
     let original = unsafe { libc::dup(number) };
     if original < 0 {
         return Err(std::io::Error::last_os_error().into());
@@ -288,7 +289,8 @@ fn write(file: &mut File, mut bytes: &[u8], deadline: Instant) -> Result<()> {
     context()?;
     Ok(())
 }
-pub(crate) fn worker() -> Result<()> {
+pub(crate) fn worker(resource: &str, request_sha: &str) -> Result<()> {
+    crate::hosted_fence::bind(resource, request_sha)?;
     crate::protect_memory()?;
     let groups = context()?;
     require_network_denial()?;
@@ -303,6 +305,7 @@ pub(crate) fn worker() -> Result<()> {
     }
     let mut bytes = vec![0; size];
     read(&mut input, &mut bytes, deadline)?;
+    crate::hosted_fence::require_bytes(&bytes)?;
     let request = parse(&bytes)?;
     let result = serde_json::to_vec(&crate::content_contract::process(
         command(&request.operation)?,
@@ -350,7 +353,7 @@ pub(crate) fn worker() -> Result<()> {
     Ok(())
 }
 
-fn host_context() -> Result<()> {
+pub(crate) fn host_context() -> Result<()> {
     crate::require_root()?;
     if kernel("/proc/1/comm", PROCFS, 64)? != "systemd\n"
         || !kernel("/proc/sys/kernel/osrelease", PROCFS, 256)?
@@ -417,8 +420,9 @@ fn arguments() -> Vec<&'static str> {
         "hosted-windows-compute",
     ]
 }
-pub(crate) fn launch() -> Result<()> {
+pub(crate) fn launch(resource: &str, request_sha: &str) -> Result<()> {
     host_context()?;
+    crate::hosted_fence::prepare(resource, request_sha)?;
     // An occupied unit refuses; never replace, restart or name-kill a possibly
     // different invocation. Windows retains its lease until drain is observed.
     let error = Command::new("/usr/bin/systemd-run")
@@ -426,26 +430,47 @@ pub(crate) fn launch() -> Result<()> {
         .env("PATH", "/usr/bin")
         .env("LC_ALL", "C")
         .args(arguments())
+        .args([resource, request_sha])
         .stdin(Stdio::inherit())
         .stdout(Stdio::inherit())
         .stderr(Stdio::null())
         .exec();
     Err(error.into())
 }
-pub(crate) fn drain() -> Result<()> {
+pub(crate) fn drain(request_sha: &str) -> Result<()> {
+    drain_profile(UNIT, GROUP, PROFILE, request_sha)
+}
+pub(crate) fn drain_profile(
+    unit: &str,
+    group: &str,
+    profile: &str,
+    request_sha: &str,
+) -> Result<()> {
+    if !matches!(
+        (unit, group, profile),
+        (UNIT, GROUP, PROFILE)
+            | (
+                "luma-hosted-inference.service",
+                "/sys/fs/cgroup/lumahosted.slice/luma-hosted-inference.service",
+                "luma-windows-hosted-inference-v1"
+            )
+    ) {
+        return Err("unknown hosted drain profile".into());
+    }
     host_context()?;
+    crate::hosted_fence::revoke(request_sha)?;
     let hierarchy = OpenOptions::new()
         .read(true)
         .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC)
         .open("/sys/fs/cgroup")?;
     filesystem(&hierarchy, CGROUP2)?;
-    let empty = match kernel(&format!("{GROUP}/cgroup.procs"), CGROUP2, 4096) {
+    let empty = match kernel(&format!("{group}/cgroup.procs"), CGROUP2, 4096) {
         Ok(value) => value.is_empty(),
         Err(error) => {
-            if std::fs::symlink_metadata(GROUP).is_ok() {
+            if std::fs::symlink_metadata(group).is_ok() {
                 return Err(error);
             }
-            match std::fs::symlink_metadata(GROUP) {
+            match std::fs::symlink_metadata(group) {
                 Err(value) if value.kind() == std::io::ErrorKind::NotFound => true,
                 _ => return Err(error),
             }
@@ -465,11 +490,12 @@ pub(crate) fn drain() -> Result<()> {
         .env("LC_ALL", "C")
         .args([
             "show",
-            UNIT,
+            unit,
             "--no-pager",
             "--property=LoadState",
             "--property=ActiveState",
             "--property=SubState",
+            "--property=Job",
         ])
         .stdin(Stdio::null())
         .stdout(Stdio::from(result.try_clone()?))
@@ -494,7 +520,7 @@ pub(crate) fn drain() -> Result<()> {
     })?;
     result.seek(SeekFrom::Start(0))?;
     let mut state = String::new();
-    result.take(4097).read_to_string(&mut state)?;
+    (&mut result).take(4097).read_to_string(&mut state)?;
     if state.len() > 4096 {
         return Err("hosted unit-state observation exceeds bound".into());
     }
@@ -503,16 +529,31 @@ pub(crate) fn drain() -> Result<()> {
     // The host must also observe its exact controller exit. Neither fact is a
     // workflow completion receipt or permission for a new resource generation.
     let empty = empty
-        && match kernel(&format!("{GROUP}/cgroup.procs"), CGROUP2, 4096) {
+        && match kernel(&format!("{group}/cgroup.procs"), CGROUP2, 4096) {
             Ok(value) => value.is_empty(),
-            Err(error) => match std::fs::symlink_metadata(GROUP) {
+            Err(error) => match std::fs::symlink_metadata(group) {
                 Err(value) if value.kind() == std::io::ErrorKind::NotFound => true,
                 _ => return Err(error),
             },
         };
+    result.set_len(0)?;
+    result.seek(SeekFrom::Start(0))?;
+    crate::model::supervise_owned_controller(&mut command, || {
+        if Instant::now() >= deadline {
+            return Err("hosted repeated unit/job observation deadline expired".into());
+        }
+        filesystem(&hierarchy, CGROUP2)
+    })?;
+    result.seek(SeekFrom::Start(0))?;
+    let mut repeated = String::new();
+    (&mut result).take(4097).read_to_string(&mut repeated)?;
+    if repeated.len() > 4096 {
+        return Err("hosted repeated unit observation exceeds bound".into());
+    }
+    let inactive = inactive && inactive_unit(&repeated)?;
     println!(
         "{}",
-        serde_json::json!({"schema_version":1,"profile":PROFILE,"unit":UNIT,
+        serde_json::json!({"schema_version":1,"profile":profile,"unit":unit,
         "cgroup_empty_or_absent":empty,"unit_inactive":inactive,"authority_returned":false,"job_completed":false})
     );
     Ok(())
@@ -524,20 +565,21 @@ fn inactive_unit(state: &str) -> Result<bool> {
         let (key, value) = line
             .split_once('=')
             .ok_or("malformed hosted unit-state observation")?;
-        if !["LoadState", "ActiveState", "SubState"].contains(&key)
-            || value.is_empty()
+        if !["LoadState", "ActiveState", "SubState", "Job"].contains(&key)
+            || (value.is_empty() && key != "Job")
             || value.len() > 64
             || fields.insert(key, value).is_some()
         {
             return Err("ambiguous hosted unit-state observation".into());
         }
     }
-    if fields.len() != 3 {
+    if fields.len() != 4 {
         return Err("incomplete hosted unit-state observation".into());
     }
     Ok(matches!(fields["LoadState"], "loaded" | "not-found")
         && matches!(fields["ActiveState"], "inactive" | "failed")
-        && matches!(fields["SubState"], "dead" | "failed"))
+        && matches!(fields["SubState"], "dead" | "failed")
+        && fields["Job"].is_empty())
 }
 
 #[cfg(test)]
@@ -546,13 +588,16 @@ mod tests {
     #[test]
     fn absent_cgroup_never_substitutes_for_inactive_systemd_unit() {
         assert!(
-            inactive_unit("LoadState=not-found\nActiveState=inactive\nSubState=dead\n").unwrap()
+            inactive_unit("LoadState=not-found\nActiveState=inactive\nSubState=dead\nJob=\n")
+                .unwrap()
         );
         assert!(
-            !inactive_unit("LoadState=loaded\nActiveState=activating\nSubState=start\n").unwrap()
+            !inactive_unit("LoadState=loaded\nActiveState=activating\nSubState=start\nJob=\n")
+                .unwrap()
         );
         assert!(
-            !inactive_unit("LoadState=loaded\nActiveState=active\nSubState=running\n").unwrap()
+            !inactive_unit("LoadState=loaded\nActiveState=active\nSubState=running\nJob=\n")
+                .unwrap()
         );
         for invalid in [
             "",
@@ -561,6 +606,11 @@ mod tests {
         ] {
             assert!(inactive_unit(invalid).is_err());
         }
+        assert!(
+            !inactive_unit("LoadState=loaded\nActiveState=inactive\nSubState=dead\nJob=123\n")
+                .unwrap()
+        );
+        assert!(inactive_unit("LoadState=loaded\nActiveState=inactive\nSubState=dead\n").is_err());
     }
     fn request() -> Vec<u8> {
         serde_json::to_vec(&Request {
@@ -618,7 +668,7 @@ mod tests {
             assert!(command(name).is_err());
         }
         assert!(filesystem(&File::open("/proc/self/status").unwrap(), CGROUP2).is_err());
-        assert!(worker().is_err());
+        assert!(worker(&"ab".repeat(32), &"bc".repeat(32)).is_err());
         let args = arguments();
         for required in [
             "--property=CapabilityBoundingSet=",

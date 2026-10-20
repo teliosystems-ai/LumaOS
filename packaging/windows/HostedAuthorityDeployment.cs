@@ -18,7 +18,7 @@ namespace Luma.Windows.Hosted
     internal sealed class ObservationJson
     {
         private readonly string input;private int at;private int nodes;
-        private ObservationJson(byte[] bytes) {input=new UTF8Encoding(false,true).GetString(Wire.Copy(bytes,1,8192));}
+        private ObservationJson(byte[] bytes,int maximum) {input=new UTF8Encoding(false,true).GetString(Wire.Copy(bytes,1,maximum));}
         private void Space() {while(at<input.Length && (input[at]==' ' || input[at]=='\t' || input[at]=='\r' || input[at]=='\n')) at++;}
         private char Take() {if(at>=input.Length) throw new InvalidDataException("Truncated guest observation.");return input[at++];}
         private void Expect(char value) {Space();if(Take()!=value) throw new InvalidDataException("Guest observation JSON punctuation differs.");}
@@ -56,8 +56,11 @@ namespace Luma.Windows.Hosted
             ulong number;if(!UInt64.TryParse(input.Substring(start,at-start),System.Globalization.NumberStyles.None,System.Globalization.CultureInfo.InvariantCulture,out number)) throw new InvalidDataException("Guest numeric overflow.");return number;
         }
         internal static Dictionary<string,object> Parse(byte[] bytes)
+        {return Parse(bytes,8192);}
+        internal static Dictionary<string,object> Parse(byte[] bytes,int maximum)
         {
-            ObservationJson parser=new ObservationJson(bytes);Dictionary<string,object> values=new Dictionary<string,object>(StringComparer.Ordinal);parser.Expect('{');parser.Space();
+            if(maximum!=8192 && maximum!=32768) throw new ArgumentOutOfRangeException("maximum");
+            ObservationJson parser=new ObservationJson(bytes,maximum);Dictionary<string,object> values=new Dictionary<string,object>(StringComparer.Ordinal);parser.Expect('{');parser.Space();
             if(parser.at<parser.input.Length && parser.input[parser.at]=='}') {parser.at++;parser.Space();if(parser.at!=parser.input.Length) throw new InvalidDataException("Trailing guest observation bytes.");return values;}
             while(true) {string key=parser.Text();parser.Expect(':');if(values.ContainsKey(key)) throw new InvalidDataException("Duplicate guest observation key.");values.Add(key,parser.Value(0));
                 parser.Space();char delimiter=parser.Take();if(delimiter=='}') break;if(delimiter!=',') throw new InvalidDataException("Guest object delimiter differs.");}
@@ -103,7 +106,7 @@ namespace Luma.Windows.Hosted
             if(result.PayloadSha256!=(string)fields["payload_sha256"] || !Wire.Equal(result.Bytes,bytes)) throw new SecurityException("Compute request is noncanonical or its complete payload hash differs.");
             return result;
         }
-        private static string Quote(string value)
+        internal static string Quote(string value)
         {
             StringBuilder result=new StringBuilder();result.Append('"');
             foreach(char c in value) {switch(c) {
@@ -413,12 +416,17 @@ namespace Luma.Windows.Hosted
             if(identity.Domain!="host-deployment" || admission==null) throw new SecurityException("Hosted slot identity or exact source admission is missing.");
             return "LumaHosted-"+identity.Installation+"-"+admission.ReleaseSequence.ToString(System.Globalization.CultureInfo.InvariantCulture)+"-"+admission.PackageLeaf.Substring("ticket-package-".Length,32);
         }
-        private static string[] Arguments(string distribution,string operation)
+        private static string[] Arguments(string distribution,string operation,string resource,string request)
         {
             if(distribution==null || distribution.Length>128 || !System.Text.RegularExpressions.Regex.IsMatch(distribution,@"\ALumaHosted-[0-9a-f]{64}-[1-9][0-9]{0,15}-[0-9a-f]{32}\z"))
                 throw new SecurityException("Hosted distribution is not an installation-owned slot.");
-            if(operation!="hosted-windows-compute-launch" && operation!="hosted-windows-compute-drain") throw new SecurityException("Hosted process operation is not fixed.");
-            return new string[]{"--distribution",distribution,"--user","root","--exec","/usr/libexec/luma-os/luma-platform",operation};
+            if(operation!="hosted-windows-compute-launch" && operation!="hosted-windows-compute-drain" && operation!="hosted-windows-inference-launch" && operation!="hosted-windows-inference-drain") throw new SecurityException("Hosted process operation is not fixed.");
+            Wire.Bytes(request,32,true);
+            if(operation=="hosted-windows-compute-launch" || operation=="hosted-windows-inference-launch") {
+                Wire.Bytes(resource,32,true);return new string[]{"--distribution",distribution,"--user","root","--exec","/usr/libexec/luma-os/luma-platform",operation,resource,request};
+            }
+            if(resource!=null) throw new SecurityException("Exact request drainage cannot acquire a different launch resource.");
+            return new string[]{"--distribution",distribution,"--user","root","--exec","/usr/libexec/luma-os/luma-platform",operation,request};
         }
         private static Task<byte[]> Diagnostics(Stream input)
         {
@@ -444,7 +452,7 @@ namespace Luma.Windows.Hosted
             if(live==null) throw new ArgumentNullException("live");string distribution=Distribution(identity,admission);live();actor.Check();
             byte[] result;
             using(PinnedWsl binary=new PinnedWsl(identity.WslSha256)) {
-                using(OwnedWindowsProcess controller=OwnedWindowsProcess.Start(binary,actor,Arguments(distribution,"hosted-windows-compute-launch"),beforeResume)) {
+                using(OwnedWindowsProcess controller=OwnedWindowsProcess.Start(binary,actor,Arguments(distribution,"hosted-windows-compute-launch",admission.Generation,request.RequestSha256),beforeResume)) {
                     Task<byte[]> errors=Diagnostics(controller.Error);Action check=Checked(actor,binary,live,errors);
                     // The caller's resource generation is already durably
                     // reserved before this invocation. Any exception leaves it
@@ -454,17 +462,54 @@ namespace Luma.Windows.Hosted
                     GuestComputeFrames.Await(errors,check,Stopwatch.StartNew(),TimeSpan.FromSeconds(1));
                     if(!controller.Exited) throw new SecurityException("Original WSL controller exit is unobserved.");
                 }
-                Drain(binary,actor,distribution,live);
+                Drain(binary,actor,distribution,request.RequestSha256,live);
             }
             live();return result;
         }
         internal static void Drain(AuthorityIdentity identity,HostedActor actor,DeploymentEvent admission,Action live)
         {
-            using(PinnedWsl binary=new PinnedWsl(identity.WslSha256)) Drain(binary,actor,Distribution(identity,admission),live);
+            if(admission.Purpose!=1) throw new SecurityException("A previously dispatched guest controller requires its exact durable request binding for drain.");
+            Drain(identity,actor,admission,admission.Generation,live);
         }
-        private static void Drain(PinnedWsl binary,HostedActor actor,string distribution,Action live)
+        internal static void Drain(AuthorityIdentity identity,HostedActor actor,DeploymentEvent admission,string request,Action live)
         {
-            actor.Check();live();using(OwnedWindowsProcess observer=OwnedWindowsProcess.Start(binary,actor,Arguments(distribution,"hosted-windows-compute-drain"),delegate(OwnedWindowsProcess process) {live();})) {
+            using(PinnedWsl binary=new PinnedWsl(identity.WslSha256)) Drain(binary,actor,Distribution(identity,admission),request,live);
+        }
+        internal static byte[] Infer(AuthorityIdentity identity,HostedActor actor,DeploymentEvent admission,GuestInferenceRequest request,Action<OwnedWindowsProcess> beforeResume,Action live)
+        {
+            if(live==null || admission.Purpose!=4) throw new SecurityException("Inference requires its separate exact resource admission.");
+            string distribution=Distribution(identity,admission);live();actor.Check();byte[] result=null;
+            try {
+                using(PinnedWsl binary=new PinnedWsl(identity.WslSha256)) {
+                    using(OwnedWindowsProcess controller=OwnedWindowsProcess.Start(binary,actor,Arguments(distribution,"hosted-windows-inference-launch",admission.Generation,request.RequestSha256),beforeResume)) {
+                        Task<byte[]> errors=Diagnostics(controller.Error);Action check=Checked(actor,binary,live,errors);
+                        result=GuestInferenceFrames.Exchange(request,controller.Output,controller.Input,check);
+                        controller.Input.Close();controller.RequireSuccess(check,TimeSpan.FromSeconds(1));
+                        GuestComputeFrames.Await(errors,check,Stopwatch.StartNew(),TimeSpan.FromSeconds(1));
+                        if(!controller.Exited) throw new SecurityException("Original inference controller exit is unobserved.");
+                    }
+                    DrainInference(binary,actor,distribution,request.RequestSha256,live);
+                }
+                live();return result;
+            }catch {if(result!=null) Array.Clear(result,0,result.Length);throw;}
+        }
+        internal static void DrainInference(AuthorityIdentity identity,HostedActor actor,DeploymentEvent admission,string request,Action live)
+        {
+            if(admission.Purpose!=4) throw new SecurityException("Inference drain cannot borrow another resource purpose.");
+            using(PinnedWsl binary=new PinnedWsl(identity.WslSha256)) DrainInference(binary,actor,Distribution(identity,admission),request,live);
+        }
+        private static void DrainInference(PinnedWsl binary,HostedActor actor,string distribution,string request,Action live)
+        {
+            actor.Check();live();using(OwnedWindowsProcess observer=OwnedWindowsProcess.Start(binary,actor,Arguments(distribution,"hosted-windows-inference-drain",null,request),delegate(OwnedWindowsProcess process) {live();})) {
+                observer.Input.Close();Task<byte[]> errors=Diagnostics(observer.Error);Action check=Checked(actor,binary,live,errors);Stopwatch deadline=Stopwatch.StartNew();
+                byte[] observation=GuestComputeFrames.BoundedEnd(observer.Output,8192,check,deadline,TimeSpan.FromSeconds(5));
+                observer.RequireSuccess(check,TimeSpan.FromSeconds(1));GuestComputeFrames.Await(errors,check,deadline,TimeSpan.FromSeconds(5));
+                GuestInferenceObservation.ValidateDrain(observation);if(!observer.Exited) throw new SecurityException("Inference guest drain observer has not exited.");check();
+            }
+        }
+        private static void Drain(PinnedWsl binary,HostedActor actor,string distribution,string request,Action live)
+        {
+            actor.Check();live();using(OwnedWindowsProcess observer=OwnedWindowsProcess.Start(binary,actor,Arguments(distribution,"hosted-windows-compute-drain",null,request),delegate(OwnedWindowsProcess process) {live();})) {
                 observer.Input.Close();Task<byte[]> errors=Diagnostics(observer.Error);Action check=Checked(actor,binary,live,errors);Stopwatch deadline=Stopwatch.StartNew();
                 byte[] observation=GuestComputeFrames.BoundedEnd(observer.Output,8192,check,deadline,TimeSpan.FromSeconds(5));
                 observer.RequireSuccess(check,TimeSpan.FromSeconds(1));GuestComputeFrames.Await(errors,check,deadline,TimeSpan.FromSeconds(5));

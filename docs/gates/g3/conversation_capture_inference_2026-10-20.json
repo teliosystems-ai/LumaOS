@@ -1,0 +1,636 @@
+{
+  "schema_version": 1,
+  "recorded_on": "2026-10-20",
+  "branch": "feature/g3-gwin0-beta",
+  "status": "conversation-capture-and-hosted-inference-software-verified",
+  "scope": "Integrated development checkpoint with actual compact-model diagnostics and an unsigned profile-W package; not complete G3/GWIN0, installed authority qualification or a new bootable image",
+  "previous_checkpoint": "discovery_optical_2026-10-20.json",
+  "previous_published_commit": "9977090b89e6f74987ce9429dc48187bac45308f",
+  "owner_decisions": {
+    "approved_on": "2026-10-20",
+    "inference_purpose_seconds": 300,
+    "deterministic_compute_purpose_seconds": 30,
+    "inference_deadline_covers_review_execution_drainage_and_delivery": true,
+    "automatic_renewal": false,
+    "hyperv_deployment_deferred": true,
+    "hyperv_deferral_scope": "Later development and qualification; this deferral does not establish W030-W032 behavior or qualify a VM image"
+  },
+  "implemented": [
+    "Trusted native per-turn conversation review with a fresh finite Infer grant and native admission checks binding the reviewed model, worker, prompt commitment and output budget; no private inference result or grant enters WebKit",
+    "Independent singleton GTK input controls: explicit local PNG and interactive portal screenshot selection, held push-to-talk PCM, finite sampled portal video, visible state, stop/lock/session-loss revocation and suspend-inclusive deadlines",
+    "Exact local capture/sample/digest selection or clarification refusal, bounded PNG validation and exclusive private local saving; capture is not transcription, model submission or native publication authority",
+    "Separate fixed audio/video capture workers and reviewed AppArmor domains, bounded memory/bytes/duration and owned-process drainage; no ambient screen-grab, persistent portal permission, arbitrary pipeline or network source",
+    "Separate first-Admin Windows five-minute inference purpose, continuous authenticated authorization/UTC checks, resource observation, cancellation/ACK barriers and uncertain-generation recovery; thirty-second deterministic compute remains unchanged",
+    "Explicit enrolled-file Read to fresh independently reviewed inference handoff; Read receipts and original-file bytes never become Infer authority",
+    "Pinned Qwen3-4B CPU completion profile, finite streamed model staging and closed runtime/ELF packaging, excluding the interactive CLI, server program/implementation, RPC and GPU plugins",
+    "Noninteractive completion through sealed model/prompt descriptors with fixed framing and no backslash interpretation; returned UTF-8 is retained verbatim as data, never commands or authority",
+    "Unsigned populated profile-W package constructed and fully read back on Linux, exclusively exported to public D storage and independently inspected by a freshly compiled source-pinned C# archive/profile inspector"
+  ],
+  "source_join": {
+    "final_snapshot": {
+      "bytes": 111652,
+      "current_sources_verified": true,
+      "files": 637,
+      "path": "/mnt/luma-build/work/gwin-functional-source-20261020-f/build-inputs.json",
+      "sha256": "9b59d28ea86caba21476b6d9e67c3dd887893d430e3e4e97272d6756f00804d5"
+    },
+    "native_snapshot": {
+      "bytes": 100486,
+      "current_sources_verified": false,
+      "files": 574,
+      "path": "/mnt/luma-build/work/gwin-functional-source-20261020-e/build-inputs.json",
+      "sha256": "0e6d5aded7a07fe90dae8ead5adf4fe29f114473a0f1319c73844d166a28b314"
+    },
+    "every_current_captured_source_matched": true,
+    "native_E_is_exact_final_F_subset": true,
+    "windows_sources": 63,
+    "native_sources": 574,
+    "total_sources": 637,
+    "python_snapshot": {
+      "bytes": 111652,
+      "current_sources_verified": false,
+      "files": 637,
+      "path": "/mnt/luma-build/work/gwin-functional-source-20261020-d/build-inputs.json",
+      "sha256": "478e13edc6731eb9bb2bc0ac744faac45d1cc8a89cb5e01d67b7fea826760ce7"
+    },
+    "only_native_change_after_python_lane": "rust/luma-platform/src/hosted_inference.rs: add the fixed --no-escape argv flag; final native check/test/build and actual-model diagnostics separately cover this source",
+    "preflight_snapshot": {
+      "bytes": 100486,
+      "current_sources_verified": false,
+      "files": 574,
+      "path": "/mnt/luma-build/work/gwin-native-source-20261020-b/build-inputs.json",
+      "sha256": "20578ba079164fe3bfe5de0ee5675160f1414bd8a4caf6cbe8f39afebc8007a1"
+    },
+    "unchanged_model_sources": [
+      "rust/luma-platform/src/model.rs",
+      "rust/luma-platform/src/model/gateway.rs",
+      "rust/luma-platform/src/model/installer_staging.rs",
+      "rust/luma-platform/src/model/layout.rs",
+      "rust/luma-platform/src/model/pack_store.rs",
+      "rust/luma-platform/src/model/qa.rs",
+      "rust/luma-platform/src/model/supervision.rs",
+      "rust/luma-platform/src/model/validation.rs"
+    ],
+    "facts_scope": "Immutable manifests and nested source/log/artifact hashes joined to final F. Documentation and this execution record are outside the runtime snapshot."
+  },
+  "verification": {
+    "tools_image": "sha256:819dfe7772da1e3c76ffdc8f9ea4a1fa44c7c549bd4fa988e35d9397d87924b2",
+    "native_final": {
+      "evidence_directory": "/mnt/luma-build/work/gwin-functional-native-20261020-e",
+      "command": "cargo check --offline --locked --workspace --all-targets",
+      "rustflags": "-Dwarnings",
+      "check_passed": true,
+      "build_passed": true,
+      "hosted_tests": 11,
+      "gateway_tests": 15,
+      "failed": 0,
+      "ignored": 0,
+      "actual_binary_sha256": "7d7ecc81aa2a8c09a1f990d235e290c913fb1f2a03eaa2e1bfab6209f6082016",
+      "log_hashes_sha256": "2613b848bd1eab3d48a0d2ab8157fff059a36bfedeb38bc3fa986979e43a8440",
+      "logs": {
+        "apparmor.log": {
+          "bytes": 100,
+          "path": "/mnt/luma-build/work/gwin-functional-native-20261020-e/apparmor.log",
+          "sha256": "45bd9940df71498a9ead2fa0552fda8abe23c0fcf930109a60c62bba11a4a389"
+        },
+        "build.log": {
+          "bytes": 112,
+          "path": "/mnt/luma-build/work/gwin-functional-native-20261020-e/build.log",
+          "sha256": "d7c87d7578001539fa9518f38c3b9d0c0baac071775f24e45503716dd2890e39"
+        },
+        "check.log": {
+          "bytes": 242,
+          "path": "/mnt/luma-build/work/gwin-functional-native-20261020-e/check.log",
+          "sha256": "96275c0027fdd38d3b8a937e57a30658d03f8189b8ec8c44edf09be1eb8e04a1"
+        },
+        "rust-hosted_.log": {
+          "bytes": 1541,
+          "path": "/mnt/luma-build/work/gwin-functional-native-20261020-e/rust-hosted_.log",
+          "sha256": "8f6819462cdd64a50cebf75b0a04393b4a5620a2bfc86c9760bb7d6283f50a75"
+        },
+        "rust-service--granted_gateway--tests--.log": {
+          "bytes": 2051,
+          "path": "/mnt/luma-build/work/gwin-functional-native-20261020-e/rust-service--granted_gateway--tests--.log",
+          "sha256": "cdf8af5751d0c70cb0555c12253c8c45e0d4ed0e33214df99394a5717799628b"
+        }
+      },
+      "apparmor_scope": "All packaged profiles parsed offline; no kernel policy was loaded and enforcement is not qualified"
+    },
+    "native_python": {
+      "evidence_directory": "/mnt/luma-build/work/gwin-functional-python-20261020-d",
+      "tests": 767,
+      "failed": 0,
+      "skipped": 0,
+      "public_trust_tests": 13,
+      "model_input_tests": 13,
+      "warnings_denied": true,
+      "logs": {
+        "command-000.log": {
+          "bytes": 138835,
+          "path": "/mnt/luma-build/work/gwin-functional-python-20261020-d/command-000.log",
+          "sha256": "f05659fbb06a40eeba0fbbd6a5c2069ccad98ee444d988f4b5a4ac5d73781879"
+        },
+        "model-inputs.log": {
+          "bytes": 2311,
+          "path": "/mnt/luma-build/work/gwin-functional-python-20261020-d/model-inputs.log",
+          "sha256": "8db3a16fc73b97869c8336c0db464fa68b0eb1e3061328b62855b1c1b903073c"
+        },
+        "native-source.log": {
+          "bytes": 1072,
+          "path": "/mnt/luma-build/work/gwin-functional-python-20261020-d/native-source.log",
+          "sha256": "a592c04f6a632913b2155844765497cd2eb09463d7c542999aa89b55fe8ea36e"
+        },
+        "public-trust.log": {
+          "bytes": 2343,
+          "path": "/mnt/luma-build/work/gwin-functional-python-20261020-d/public-trust.log",
+          "sha256": "b06a145803b5335484414e2f2d4a3715cfddc2fb3e0967117e5dcbd1ce2f54b9"
+        }
+      },
+      "source_join": "Every non-Windows source unchanged except fixed --no-escape argv flag in hosted_inference.rs; final native Rust lane separately required."
+    },
+    "model_state_and_supervision": {
+      "helper_entries_added_to_passed_count": false,
+      "helpers_exercised_by_passing_parent_process_tests": true,
+      "log": "/mnt/luma-build/work/gwin-native-preflight-20261020-b/rust-model--.log",
+      "sha256": "ba63a6312d474a3a47896ec348330925329ac34e8eee71b0b262bf89c211f2c3",
+      "source_files_unchanged": [
+        "rust/luma-platform/src/model.rs",
+        "rust/luma-platform/src/model/gateway.rs",
+        "rust/luma-platform/src/model/installer_staging.rs",
+        "rust/luma-platform/src/model/layout.rs",
+        "rust/luma-platform/src/model/pack_store.rs",
+        "rust/luma-platform/src/model/qa.rs",
+        "rust/luma-platform/src/model/supervision.rs",
+        "rust/luma-platform/src/model/validation.rs"
+      ],
+      "standalone_owned_child_helper_entries": 2,
+      "unit_tests": 159,
+      "accounting": "159 passing parent tests; two standalone owned-child helper entrypoints are marked ignored in the broad filter and exercised only through passing owned-process fixtures. They are not added as two extra independent passing tests."
+    },
+    "windows_software": {
+      "record": {
+        "bytes": 18680,
+        "path": "/mnt/d/LumaOS-builds/gwin-inference-development-555571eabb9d4889add22b12d57c53d5/verification.json",
+        "sha256": "23782da50fec232d4b46ceff8485a4150b28cfe56897bb9763ea7aa6724875c1"
+      },
+      "sources_joined": 63,
+      "authority_assertions": 693,
+      "inference_lifecycle_assertions": 74,
+      "inference_mechanism_assertions": 116,
+      "enrolled_ingestion_assertions": 67,
+      "deterministic_compute_assertions": 80,
+      "package_and_full_executable_assertions": 162,
+      "accounting": "74/116/67/80 are subgroups within 693 authority assertions, not additional totals",
+      "authority_record": {
+        "bytes": 2150,
+        "path": "/mnt/d/LumaOS-builds/gwin-inference-development-555571eabb9d4889add22b12d57c53d5/authority.json",
+        "sha256": "7e0137e034392c67922fa7b40f431eb658fa7fe96ade0e3f8fb9b23e8d326270"
+      },
+      "log_sha256": {
+        "authority.json": "7e0137e034392c67922fa7b40f431eb658fa7fe96ade0e3f8fb9b23e8d326270",
+        "package.log": "7cd1673c0d06b409e32487050012552c16b13796acd1fd1c51eabded53db908a"
+      },
+      "actual_ephemeral_bcrypt_signatures": true,
+      "actual_threaded_lifecycle_and_current_user_ntfs_fixtures": true,
+      "installed_service_tpm_and_guest_inference_qualified": false
+    },
+    "cross_language": {
+      "record": {
+        "bytes": 2098,
+        "path": "/mnt/luma-build/work/gwin-cross-language-20261020-e/verification.json",
+        "sha256": "e795d91d9af0543636360572f1b021ce818b799156fb33268f061b3f9ee13d37"
+      },
+      "csharp_request_cases_sha256": "57e21bf99a87bf35398030aa3d6ef4288bc128c973ad8b33d8a277d212ec9c31",
+      "actual_rust_binary_sha256": "7d7ecc81aa2a8c09a1f990d235e290c913fb1f2a03eaa2e1bfab6209f6082016",
+      "actual_csharp_to_rust_cases": 7,
+      "closed_negative_cases": 7,
+      "negative_fields": [
+        "schema_version",
+        "context_tokens",
+        "max_tokens",
+        "prompt",
+        "model_sha256",
+        "runtime_manifest_sha256",
+        "unknown"
+      ],
+      "actual_foreign_enforcement_refused": true,
+      "foreign_enforcement_refusal_log_sha256": "6af6377491a3e3dd829cd64417eb46f8698154ce46b301145d626f63e50b26a6",
+      "scope": "Real contract execution and setpriv 65534/zero-capability/no-new-privileges/non-Luma-domain refusal before input; not model execution, a Read grant or installed authentication"
+    },
+    "workspace_regression": {
+      "record": {
+        "bytes": 3453,
+        "path": "/mnt/d/LumaOS-builds/g3-discovery-general-212bf486022d4303998cb1c9666e075b/verification.json",
+        "sha256": "8d521559977ba9d9508100df59a13efc8d89b3196b90b3f77e850a1685565ce7"
+      },
+      "sources_joined": 8,
+      "javascript_assertions": 128,
+      "ui_contract_tests": 5,
+      "reference_python_passed": 315,
+      "reference_python_skipped": 5,
+      "logs": {
+        "dom": {
+          "exit_code": 0,
+          "log": "D:\\LumaOS-builds\\g3-discovery-general-212bf486022d4303998cb1c9666e075b\\dom.log",
+          "sha256": "bb480a496c9ba26a63bf576520e3c50b64daac3947381f81c3c56e8a7a666ac5"
+        },
+        "python-regression": {
+          "exit_code": 0,
+          "log": "D:\\LumaOS-builds\\g3-discovery-general-212bf486022d4303998cb1c9666e075b\\python-regression.log",
+          "sha256": "4a94536d4833473139f1cdfa0cb2340a9e588946dd38454fe578a1fb8aa87795"
+        },
+        "ui-contract": {
+          "exit_code": 0,
+          "log": "D:\\LumaOS-builds\\g3-discovery-general-212bf486022d4303998cb1c9666e075b\\ui-contract.log",
+          "sha256": "dd1ad9602cf581ca45ed3834d9e19cf9bce2fb314d660e8c89dc96f4e78ef10c"
+        }
+      },
+      "installed_graphical_or_accessibility_qualified": false
+    },
+    "capture": {
+      "controls_record": {
+        "bytes": 1792,
+        "path": "/mnt/luma-build/work/capture-final-control-20261020-vnkl9bo0/verification.json",
+        "sha256": "12e0d24b3d868b6bda1075029cf666b62f282792744bbc4d8a5693f8ef1530ec"
+      },
+      "sources_joined": 6,
+      "control_and_file_tests": 19,
+      "private_dbus_transport_tests": 6,
+      "failed": 0,
+      "skipped": 0,
+      "control_logs": {
+        "controls": {
+          "command": [
+            "python3",
+            "-B",
+            "-m",
+            "unittest",
+            "discover",
+            "-s",
+            "/mnt/c/Users/hakim/LumaOS/native/tests",
+            "-p",
+            "test_*capture*.py",
+            "-v"
+          ],
+          "exit_code": 0,
+          "log": "/mnt/luma-build/work/capture-final-control-20261020-vnkl9bo0/controls.log",
+          "log_sha256": "a908ef1241ac95910eab7e5b5d441b9c13302990adfc108b078bb67b6015defa",
+          "skips": 0,
+          "tests": 19
+        },
+        "private_dbus": {
+          "command": [
+            "python3",
+            "-B",
+            "/mnt/c/Users/hakim/LumaOS/native/tests/capture_portal_integration.py",
+            "-v"
+          ],
+          "exit_code": 0,
+          "log": "/mnt/luma-build/work/capture-final-control-20261020-vnkl9bo0/private_dbus.log",
+          "log_sha256": "a4eb07a4af816d7a0070af4d22c05520aad4c29a61142a6494f0324c01a0cd03",
+          "skips": 0,
+          "tests": 6
+        }
+      },
+      "engine_record": {
+        "bytes": 1723,
+        "path": "/mnt/luma-build/work/capture-engine-proof-20261020-a-wIqCFoVa/verification.json",
+        "sha256": "ac2031718c2efebda8aa24e45002b14677e42a89f7447d45d03fbe0af9989edb"
+      },
+      "actual_synthetic_engine_cases": 2,
+      "speech": {
+        "factory": "audiotestsrc",
+        "pcm_bytes": 65536,
+        "sample_rate": 16000,
+        "channels": 1,
+        "format": "S16LE",
+        "wire_bytes": 65664,
+        "wire_sha256": "c0c96f050b2c1b7d5ae4ff12903ea4b2d8cc9d152ab16f3703dd1c9843d6483b"
+      },
+      "video": {
+        "factory": "videotestsrc",
+        "sampled_png_frames": 1,
+        "width": 1280,
+        "height": 720,
+        "wire_bytes": 122744,
+        "wire_sha256": "26118d7d34fb72ed0bbf41701b19b14d8c02a9b6b47d1b80913fa190a9a89bf5"
+      },
+      "profile_sha256": "b2202c4a6a96f36baffb1cff93dacaaa7cc59769c23dbe3f83a11066b0ca834f",
+      "offline_apparmor_parser_exit_code": 0,
+      "scope": "Actual synthetic engines in a read-only cached desktop root plus a disposable private D-Bus transport fixture. No real microphone, camera, desktop portal session, capture hardware or enforced domain is qualified.",
+      "actual_speech_transcription_implemented": false,
+      "accounting": "The 19 control/file tests overlap the native Python lane and are not added to its total"
+    },
+    "completion_runtime": {
+      "record": {
+        "bytes": 2873,
+        "path": "/mnt/luma-build/work/gwin-completion-runtime-probe-20261020-nFff2HTz/verification.json",
+        "sha256": "46817dae03c59a0b685e4ff85177a4ac020a3dfbe2faa479132753d1f7717814"
+      },
+      "sources_joined": 2,
+      "private_runtime_files": 18,
+      "archive_sha256": "a836c913236ab4533ef9aaf49f0e1ad2955c8159869d7eec1a9072a92e13d61b",
+      "program": "llama-completion",
+      "program_sha256": "7119bef261611b26f326f7c4da4dc3fdeb7bb28e2faf1ec392bda7b21215ef52",
+      "probes": {
+        "devices": {
+          "exit_code": 0,
+          "sha256": "1ee656e48e272fceb5124f234d036df59f4702c6fcbc6d3ee708320d3647aa58"
+        },
+        "help": {
+          "exit_code": 0,
+          "sha256": "0619452aa273f0a50165ab724b80db94ee7b5dbab65761d9c48762e907b956c9"
+        }
+      },
+      "runtime_private_inventory": [
+        "libggml-base.so",
+        "libggml-base.so.0",
+        "libggml-base.so.0.24.0",
+        "libggml-cpu-x64.so",
+        "libggml.so",
+        "libggml.so.0",
+        "libggml.so.0.24.0",
+        "libllama-common.so",
+        "libllama-common.so.0",
+        "libllama-common.so.0.4.1",
+        "libllama-completion-impl.so",
+        "libllama.so",
+        "libllama.so.0",
+        "libllama.so.0.4.1",
+        "libmtmd.so",
+        "libmtmd.so.0",
+        "libmtmd.so.0.4.1",
+        "llama-completion"
+      ]
+    },
+    "actual_qwen_diagnostic": {
+      "record": {
+        "bytes": 3319,
+        "path": "/mnt/luma-build/work/gwin-completion-profile-proof-20261020-vLRgfO0N/verification.json",
+        "sha256": "24215fec210e066dc7c3afaa18a232125cca7e2062588c4cca05ce0d98d23fce"
+      },
+      "model_bytes": 2497280256,
+      "model_sha256": "7485fe6f11af29433bc51cab58009521f205840f5b4ae3a32fa7f92e8534fdf5",
+      "model_inference_executed": true,
+      "unique_cases": 2,
+      "actual_cgroup_limits": {
+        "cpu.max": "200000 100000",
+        "memory.max": "4831838208",
+        "memory.swap.max": "0",
+        "pids.max": "16"
+      },
+      "context_tokens": 2048,
+      "maximum_test_output_tokens": 8,
+      "threads": 2,
+      "gpu_used": false,
+      "network_enabled": false,
+      "fixed_command": [
+        "/runtime/llama-completion",
+        "--model",
+        "/proc/self/fd/4",
+        "--file",
+        "/proc/self/fd/3",
+        "--ctx-size",
+        "2048",
+        "--n-predict",
+        "8",
+        "--threads",
+        "2",
+        "--threads-batch",
+        "2",
+        "--batch-size",
+        "128",
+        "--ubatch-size",
+        "128",
+        "--n-gpu-layers",
+        "0",
+        "--seed",
+        "0",
+        "--temp",
+        "0",
+        "--no-conversation",
+        "--no-escape",
+        "--no-display-prompt",
+        "--simple-io",
+        "--color",
+        "off",
+        "--no-warmup",
+        "--no-perf",
+        "--log-verbosity",
+        "0",
+        "--no-context-shift"
+      ],
+      "cases": {
+        "answer": {
+          "exit_code": 0,
+          "elapsed_seconds": 28.939,
+          "prompt_sha256": "5879948ae785302d434d54835b1a03ee50d7118c18c44755156e4683a5878fae",
+          "framed_prompt_sha256": "14f324ac163dfa25bce06bbaa20c2b24fac1c503edbe8b5817cc677196762072",
+          "result_bytes": 21,
+          "result_sha256": "1a7ea4cdd923d1016af60be026e8c1a050336f1c3139442dba18acb689abf150",
+          "stderr_sha256": "f26d43b9b9cea8b10113dc2a0250467df2da13c699d76528c75f937ac6d5b843"
+        },
+        "slash-command-is-text": {
+          "exit_code": 0,
+          "elapsed_seconds": 27.959,
+          "prompt_sha256": "bf4fef41dfa2ad3eb8018888ac8ba3af36fa2dd0d872e279fdb77425142e9b90",
+          "framed_prompt_sha256": "6c24d29f59340b4aacd11d6e90de835e217cf877ae9b9e3d78d94d14f57c9b3c",
+          "result_bytes": 38,
+          "result_sha256": "0dd3b590960e19f07e7c9e384d2cfa1ba684f2514ecb34f01929613b7635242f",
+          "stderr_sha256": "f26d43b9b9cea8b10113dc2a0250467df2da13c699d76528c75f937ac6d5b843"
+        }
+      },
+      "output_preserved_verbatim": true,
+      "runtime_end_marker_possible": true,
+      "model_only_stdout_claimed": false,
+      "scope": "Actual pinned weight and completion backend under observed matching resource limits; no Windows service authentication, installed Luma AppArmor dispatch, native hardware qualification or held-out quality claim",
+      "previous_32_task_diagnostic": {
+        "bytes": 3169,
+        "path": "/mnt/luma-build/work/gwin-completion-model-proof-20261020-V5X6FaNC/verification.json",
+        "sha256": "5043a626462cad40b6b1f73e4941b9ff54dae36dcfc0d048554fe9f6f0dc0319"
+      },
+      "accounting": "The final 16-task run repeats the same two cases; earlier runs are not additional unique test cases"
+    }
+  },
+  "produced_package": {
+    "type": "unsigned profile-W development rootfs package; not firmware-bootable OS media",
+    "linux_directory": "/mnt/luma-build/work/gwin-inference-package-20261020-d/package",
+    "manifest": {
+      "bytes": 12255,
+      "path": "/mnt/luma-build/work/gwin-inference-package-20261020-d/package/manifest.json",
+      "sha256": "a5de7e61ffe9293f31b0f9369cbc7627d6692eb355507b8589efd80c9a45216f"
+    },
+    "rootfs": {
+      "bytes": 2723034624,
+      "content_bytes": 2722879110,
+      "member_count": 207,
+      "path": "rootfs.tar",
+      "sha256": "f0a9e898b954c2ea57813fef72431e0965f1b063739b27fd80343ae9c217f6c2"
+    },
+    "required_files": 75,
+    "release_id": "luma-wsl-dev-inference-20261020",
+    "staged_model_bytes": 2497280256,
+    "staged_runtime_records": 28,
+    "private_completion_runtime_files": 18,
+    "staged_profile": "luma-windows-hosted-inference-v1",
+    "profile_sha256": "0b4d7b4883b2d119136005c284d750c5fd8890b0cafeda9a5d6032b4fdf2dc96",
+    "runtime_manifest_sha256": "e021f3e787e6585e29ac3081deeff544ce61f290900f05be623b83c36dcd6c62",
+    "stage_record": {
+      "bytes": 543,
+      "path": "/mnt/luma-build/work/gwin-inference-package-20261020-d/stage/inference-stage.json",
+      "sha256": "5f1a2590156db975cf8f7183f0e6f4b4be445490e272fdc94c82eea4df7470ba"
+    },
+    "linux_logs": {
+      "SHA256SUMS": {
+        "bytes": 469,
+        "path": "/mnt/luma-build/work/gwin-inference-package-20261020-d/SHA256SUMS",
+        "sha256": "13d018664491f977b5848480a3f1f457631a275b04acf58ec13c08d934519f02"
+      },
+      "actual-runtime-elf.json": {
+        "bytes": 7356,
+        "path": "/mnt/luma-build/work/gwin-inference-package-20261020-d/actual-runtime-elf.json",
+        "sha256": "89ee0c3179f3dd1006fd3923ae99ea87a6e5187655ac55fac319226d35d3a2c4"
+      },
+      "package.log": {
+        "bytes": 805,
+        "path": "/mnt/luma-build/work/gwin-inference-package-20261020-d/package.log",
+        "sha256": "ea1e452fd6f68e08bb5f6d69147fb8a3122e687900c0076e8ec7bc40985247c8"
+      },
+      "staging.log": {
+        "bytes": 543,
+        "path": "/mnt/luma-build/work/gwin-inference-package-20261020-d/staging.log",
+        "sha256": "5f1a2590156db975cf8f7183f0e6f4b4be445490e272fdc94c82eea4df7470ba"
+      }
+    },
+    "public_directory": "D:\\LumaOS-builds\\gwin-inference-package-20261020-d-public-f45edbd7da4f4f68a609d0f7b9e7a504",
+    "public_export_record": {
+      "path": "D:/LumaOS-builds/gwin-inference-package-20261020-d-public-f45edbd7da4f4f68a609d0f7b9e7a504-export.json",
+      "sha256": "4a7b94b7cb178cb3c6764cc39d35dcf0a7e4695a92dd6ce8620ffe4fe884e8fc"
+    },
+    "independent_csharp_inspection": {
+      "record": {
+        "bytes": 18579,
+        "path": "/mnt/d/LumaOS-builds/gwin-full-package-inspect-0953325cc28941c680dde97480e4dee9/verification.json",
+        "sha256": "2616804356f1f8c3e21dcbb13008b22e953f42a0b634fed80af90753880da3e8"
+      },
+      "sources_joined": 63,
+      "inspector_assembly": "D:\\LumaOS-builds\\gwin-full-package-inspect-0953325cc28941c680dde97480e4dee9\\Luma.PackageInspector.dll",
+      "inspector_sha256": "02c8fe7e7eff2724dc25573b231c6052cd6603256ee65d9e2d33e48d7fa64518",
+      "elapsed_seconds": 24.677058499999998,
+      "members": 207,
+      "required_files": 75,
+      "private_runtime_files": 18,
+      "full_archive_stream_validated": true,
+      "closed_hosted_profile_validated": true,
+      "archive_extracted": false,
+      "package_authenticated": false,
+      "signature_verified": false,
+      "installation_admitted": false
+    },
+    "archive_digest_provenance": "Linux construction/full readback, fresh export/full readback and independent source-pinned C# full stream inspection agree. This metadata aggregation does not repeat the multi-GiB read."
+  },
+  "resource_policy": {
+    "inference_memory_max_bytes": 4831838208,
+    "inference_memory_swap_max_bytes": 0,
+    "inference_tasks_max": 16,
+    "inference_cpu_quota_usec": 200000,
+    "inference_cpu_period_usec": 100000,
+    "inference_context_tokens": 2048,
+    "inference_maximum_output_tokens": 512,
+    "initial_observed_available_minimum_bytes": 5905580032,
+    "ongoing_observed_reserve_bytes": 1073741824,
+    "observations_are_atomic_reservations": false,
+    "pressure_policy": "Refuse or interrupt and preserve uncertain-generation recovery; no automatic WSL memory increase, deadline renewal, security fallback or model restart"
+  },
+  "retained_nonqualifying_attempts": [
+    {
+      "path": "/mnt/luma-build/work/gwin-inference-model-proof-20261020-4wEu6cOg",
+      "reason": "Earlier interactive CLI produced banners/command-interface output; superseded by the completion-only program and not accepted as the product worker boundary"
+    },
+    {
+      "path": "/mnt/luma-build/work/gwin-completion-model-proof-20261020-Akggd0Zx",
+      "reason": "Earlier log-disable invocation returned empty result output; not a passing completion proof"
+    },
+    {
+      "path": "/mnt/luma-build/work/gwin-completion-model-proof-20261020-EyNYKW4o",
+      "reason": "Earlier successful completion cut lacked the final no-escape flag; retained but superseded"
+    },
+    {
+      "path": "/mnt/luma-build/work/capture-engine-proof-20261020-a-9W2mkgB9",
+      "reason": "Actual synthetic engines completed but offline parsing refused an unsupported Unix address selector; policy corrected before final proof"
+    },
+    {
+      "path": "/mnt/luma-build/work/capture-engine-proof-20261020-a-mW3aaPwF",
+      "reason": "One final-source engine refresh hit the harness 20-second timeout; unchanged-source bounded retry passed. The empty attempt directory and task transcript are retained."
+    },
+    {
+      "path": "/mnt/luma-build/work/capture-final-control-20261020-tklh1enf",
+      "reason": "Actual combined 24 tests passed; evidence harness expected 19 because its pattern also selected five private-D-Bus cases. Corrected only the ignored harness pattern."
+    },
+    {
+      "path": "D:/LumaOS-builds/gwin-full-package-inspect-78b7e93af67f4444b5b3f95d71c9c48a/failure.json",
+      "sha256": "1e6c484a4f89a800d222b9f856f83c8f2f183bfddf722cad2f24e38ed119beba",
+      "reason": "Initial private UNC path was not accessible to the Windows inspector; no content validation or admission occurred. Fresh public export was independently fully inspected."
+    }
+  ],
+  "remaining_development": {
+    "g3": [
+      "Actual speech transcription and verified speech-model/runtime delivery; explicit capture-to-model and grounded-reference journeys beyond retained local samples",
+      "Model outcome to user-reviewed typed draft and fresh finite workflow/effect ceremonies, including private/conversational content integration; no model-created authority",
+      "Remaining generated-source build/test receipts, allowlisted hardware adapters and complete cross-application workflow joins. Existing governed Office export and native WebKit presentation are components already present."
+    ],
+    "gwin0": [
+      "Actual host-encryption and suspended-protection observations and managed-policy detection; unqualified preflight inputs are not production proof",
+      "Explicit first-launch human user and Admin setup",
+      "Authenticated health to workspace and manual model-disabled launcher integration"
+    ],
+    "separately_deferred_or_later": [
+      "Owner-deferred complete Hyper-V desktop deployment, verified boot, encryption and recovery proof",
+      "GWIN1 general ordinary-user SID/product-principal integration, automation and broader product lifecycle",
+      "GWIN2 clone/checkpoint reconciliation and final all-profile release qualification; true custody-root succession remains separately scoped production hardening"
+    ],
+    "scope_note": "Do not treat unlimited journal capacity/history or future root replacement as newly inherited G3/GWIN0 gates without governing scope. Existing bounds and commissioned-root constraints remain enforced."
+  },
+  "remaining_qualification": [
+    "Installed native Ubuntu G3 original-PAM/finite-grant/model/workflow, graphical, accessibility, permission and adapter acceptance",
+    "An enforcing WSL/native platform and actual Luma worker confinement, cgroup pressure, cancellation, cleanup and recovery; current WSL reports AppArmor disabled and protected execution must refuse",
+    "Installed Windows SYSTEM/SCM/CNG/TPM/NV custody, actual two-user separation and authenticated ingestion-to-model operation",
+    "Production release/model/catalog signatures, licensing and independent deployment acceptance; the package here is unsigned and not authenticated",
+    "New integrated native bootable-media assembly and installed-image testing after the remaining implementation; existing sequence-16 G2 media is unchanged"
+  ],
+  "host_effects": {
+    "physical_tpm_mutated": false,
+    "host_service_installed": false,
+    "distribution_imported": false,
+    "wsl_configuration_changed": false,
+    "host_kernel_or_apparmor_changed": false,
+    "physical_disk_formatted": false,
+    "archive_extracted_on_windows": false,
+    "old_images_or_failed_attempts_deleted": false,
+    "bulk_artifacts_on_d": true,
+    "source_tree_on_c": true
+  },
+  "g3_complete": false,
+  "gwin0_complete": false,
+  "image_produced": false,
+  "image_signed": false,
+  "new_complete_bootable_images_produced": false,
+  "installed": false,
+  "physical_hardware_tested": false,
+  "guest_confinement_qualified": false,
+  "production_qualified": false,
+  "gate_closing": false,
+  "qualification": {
+    "g3_complete": false,
+    "gwin0_complete": false,
+    "image_produced": false,
+    "image_signed": false,
+    "installed": false,
+    "installed_image_qualified": false,
+    "physical_hardware_tested": false,
+    "desktop_capture_hardware_qualified": false,
+    "guest_confinement_qualified": false,
+    "production_qualified": false,
+    "gate_closing": false
+  }
+}

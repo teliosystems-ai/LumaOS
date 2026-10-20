@@ -1412,7 +1412,7 @@ contain nonbootable test data: extent/catalog success is not firmware boot or
 a produced OS image. Full optical assembly, installed journeys and final
 profile acceptance remain separate from this source implementation.
 
-### Windows inference and custody decisions 20 October 2026
+### Earlier Windows inference planning 20 October 2026 (superseded below)
 
 GWIN0 still needs its actual compact-inference, authenticated scoped host-file,
 enforced-confinement and complete-VM-desktop proof, including the W008 lifetime/
@@ -1456,3 +1456,72 @@ Retaining the original hardware root and rotating delegated signing keys is a
 different, narrower contract. Neither design has been enabled without the
 owner's choice, and neither replaces genuine product-principal/finite-grant
 integration with caller-supplied SID metadata.
+
+### Integrated conversation, capture and compact inference 20 October 2026
+
+The owner approved the distinct five-minute inference purpose and deferred
+Hyper-V deployment to later development. This supersedes the earlier pending
+session decision, not the original profile-V requirements. The current target
+is native G3 and profile-W GWIN0; neither stage is declared complete by this
+checkpoint. Exact source joins, executed tests, retained failed attempts and
+artifact hashes are recorded in
+[the execution record](gates/g3/conversation_capture_inference_2026-10-20.json).
+
+Native GTK conversation performs a fresh finite Infer ceremony for every turn.
+The model/worker/input commitment is checked inside native admission before
+opening effect authority. Manual operation remains available when inference is
+unavailable; uncertain submitted work is not retried automatically. Model text
+is untrusted data, with no automatic workflow or OS effect.
+
+Explicit image/screenshot, bounded PCM audio and sampled portal-video controls
+now have visible indicators, stop/session revocation, dedicated portal
+connections and separate audio/video confinement profiles. Private D-Bus and
+real synthetic GStreamer fixtures do not establish installed portal permission
+or hardware enforcement. PCM capture is not speech transcription; captured
+images/video are not automatically submitted to a multimodal model or published
+to native content storage.
+
+The Windows inference profile streams the complete pinned Qwen3-4B Q4_K_M
+weight and an eighteen-file private completion runtime plus its required ELF
+closure. Actual token tests exposed the interactive CLI's banners/prompt echo
+and the completion logger's empty-output behavior; both earlier attempts are
+retained. The final path uses noninteractive `llama-completion`, output-only
+logging, disabled prompt echo/backslash conversion and a sealed prompt memfd.
+Its fixed ChatML user/assistant framing and empty thinking prefill match the
+[Qwen tokenizer's non-thinking template](https://huggingface.co/Qwen/Qwen3-4B/blob/main/tokenizer_config.json).
+There are no hidden system instructions. Completion stdout is retained
+verbatim, including its possible end-of-generation marker; no heuristic
+stripping or model-text command execution is used.
+
+An authenticated thirty-second enrolled-file Read must complete and close its
+pipe before an explicit snapshot-forward choice. The complete, hash-verified
+UTF-8 file of at most 4096 bytes then becomes user text in a fresh independently
+authenticated five-minute inference session. The snapshot is not a current
+file-access claim, portable grant or reusable Read authority. The joined flow
+uses one-use in-memory transfer and explicit cancellation/clearing.
+
+The companion command is `infer-enrolled-file`. It takes the current release
+and installation identities, enrolled root/relative path, exact whole-file
+length and SHA256, publisher-bound runtime/profile hashes and output token
+limit. It is interactive and refuses redirected input/output. Direct `infer`
+uses an independently reviewed request file; `infer-recover` reconciles the
+exact interrupted generation without rerunning the model. These commands do
+not provision Windows custody, enroll arbitrary paths, import a distribution
+or commission an enforcing kernel automatically.
+
+Original-purpose expiry, protected UTC continuity, exact request hashes,
+publisher-bound model/runtime bytes and observed Windows/guest memory headroom
+remain mandatory. A durable request-specific cancellation barrier prevents a
+late systemd start from executing a drained request. Unknown legacy dispatch
+bindings and exhausted cancellation inventory refuse; retained evidence is not
+reset to manufacture recovery or capacity. The existing thirty-second
+deterministic-compute purpose is unchanged.
+
+The current WSL kernel still lacks the required enforcing AppArmor context.
+Offline parsing, actual CPU token generation, package inspection and foreign
+label refusal do not qualify an installed Windows-hosted guest. No service,
+distribution, kernel setting or physical TPM was changed. The new package is
+an unsigned development artifact, not authenticated installation admission,
+firmware-bootable Windows media or a complete G3 native image. The sequence-16
+native candidate remains unchanged. Remaining code and qualification are kept
+separate in the [delivery register](G3_GWIN0_DELIVERY.md).

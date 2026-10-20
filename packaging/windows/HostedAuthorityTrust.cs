@@ -138,7 +138,7 @@ namespace Luma.Windows.Hosted
                     state.Generation=state.Pending.Change.Generation;state.SourceSha256=Wire.Hash(cancellation.Encode());
                     if(cancellation.ProposedTime) {state.retired.Add(Wire.Hash(state.CurrentIdentity.TimeKey));state.TimeRevoked=true;}state.Pending=null;
                 }
-                else if(entry.Kind==JournalKind.ImportPrepared || entry.Kind==JournalKind.ActivationPrepared || entry.Kind==JournalKind.ComputePrepared) {
+                else if(entry.Kind==JournalKind.ImportPrepared || entry.Kind==JournalKind.ActivationPrepared || entry.Kind==JournalKind.ComputePrepared || entry.Kind==JournalKind.InferencePrepared) {
                     DeploymentEvent admission=DeploymentEvent.Decode(entry.Payload);if(state.PublisherRevoked || state.TimeRevoked || state.Pending!=null || state.admissions.ContainsKey(admission.Generation)) throw new SecurityException("Deployment admission crossed a revoked/prepared trust generation or duplicate authority.");
                     state.admissions.Add(admission.Generation,state.CurrentIdentity);
                 }

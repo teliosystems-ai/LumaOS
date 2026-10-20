@@ -10,6 +10,8 @@ profile luma-hosted-compute flags=(attach_disconnected,mediate_deleted) {
   /proc/[0-9]*/attr/current r,
   /proc/[0-9]*/fd/ r,
   /proc/[0-9]*/fd/[01] rw,
+  /var/lib/luma-hosted-revocations/ r,
+  /var/lib/luma-hosted-revocations/[0-9a-f]* r,
   /sys/fs/cgroup/lumahosted.slice/luma-hosted-compute.service/ r,
   /sys/fs/cgroup/lumahosted.slice/luma-hosted-compute.service/{memory.max,memory.swap.max,pids.max,cpu.max,cgroup.procs} r,
   /dev/{null,zero} rw,

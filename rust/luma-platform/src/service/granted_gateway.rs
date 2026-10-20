@@ -1276,6 +1276,7 @@ pub(crate) fn infer(
     grant: &str,
     messages: Vec<ChatMessage>,
     max_tokens: u64,
+    expected_review: Option<&str>,
 ) -> Result<()> {
     crate::require_root()?;
     crate::platform::require_installed()?;
@@ -1300,6 +1301,9 @@ pub(crate) fn infer(
     };
     let usage = infer_usage(&worker, &profile, &messages, max_tokens)?;
     let digest = crate::resource_manager::requests::gateway::input_digest(&messages)?;
+    if let Some(expected) = expected_review {
+        require_reviewed_inference(expected, login, &worker, &usage, &digest)?;
+    }
     crate::admin_governance::with_grant(login, grant, &usage, |boundary| {
         let pending =
             boundary.effect_begin(&job, crate::policy_decisions::EffectKind::Inference)?;
@@ -1441,6 +1445,62 @@ pub(crate) fn infer(
             }
         }
     })
+}
+
+/// A closed review commitment prevents a selected worker/model from changing
+/// between a human's displayed review and dispatch. It is DATA, never a grant;
+/// the independent current PAM/catalog/finite boundary remains mandatory.
+fn reviewed_inference_digest(
+    login: &str,
+    worker: &crate::resources::Token,
+    usage: &Use,
+    input_sha256: &str,
+) -> Result<String> {
+    usage.validate()?;
+    if login.is_empty()
+        || login.len() > 32
+        || !login.as_bytes()[0].is_ascii_lowercase()
+        || !login
+            .bytes()
+            .all(|v| v.is_ascii_lowercase() || v.is_ascii_digit() || b"_-".contains(&v))
+        || worker.generation == 0
+        || usage.action != Action::Infer
+        || usage.selector.kind != Kind::Model
+        || usage.selector.generation != worker.generation
+        || usage.input_bytes == 0
+        || usage.input_bytes > 8192
+        || usage.output_bytes != 8192
+        || !(1..=128).contains(&usage.units)
+        || crate::tpm::decode::<32>(input_sha256)? == [0; 32]
+    {
+        return Err("invalid exact inference review tuple".into());
+    }
+    crate::tpm::decode::<16>(&worker.lease_id)?;
+    crate::tpm::decode::<16>(&worker.manager_epoch)?;
+    let value = serde_json::json!({
+        "purpose":"luma-native-reviewed-inference-v1", "login":login,
+        "worker":worker,"usage":usage,"input_sha256":input_sha256
+    });
+    Ok(crate::bundle::hex(&Sha256::digest(serde_json::to_vec(
+        &value,
+    )?)))
+}
+
+fn require_reviewed_inference(
+    expected: &str,
+    login: &str,
+    worker: &crate::resources::Token,
+    usage: &Use,
+    input_sha256: &str,
+) -> Result<()> {
+    crate::tpm::decode::<32>(expected)?;
+    if expected != reviewed_inference_digest(login, worker, usage, input_sha256)? {
+        return Err(
+            "exact inference review changed before dispatch; obtain a new review and finite grant"
+                .into(),
+        );
+    }
+    Ok(())
 }
 
 pub(crate) fn infer_review(messages: Vec<ChatMessage>, max_tokens: u64) -> Result<()> {
@@ -1669,6 +1729,7 @@ pub(crate) fn launch(arguments: &[String]) -> Result<()> {
         || !matches!(
             arguments[0].as_str(),
             "granted-infer"
+                | "granted-infer-reviewed"
                 | "granted-infer-review"
                 | "generated-review"
                 | "generated-execute"
@@ -1963,11 +2024,11 @@ pub(crate) fn launch(arguments: &[String]) -> Result<()> {
                 .into();
             Some(stage)
         }
-        "granted-infer" | "granted-infer-review" => {
-            let (count, index) = if arguments[0] == "granted-infer" {
-                (5, 3)
-            } else {
-                (3, 1)
+        "granted-infer" | "granted-infer-reviewed" | "granted-infer-review" => {
+            let (count, index) = match arguments[0].as_str() {
+                "granted-infer" => (5, 3),
+                "granted-infer-reviewed" => (6, 3),
+                _ => (3, 1),
             };
             if arguments.len() != count {
                 return Err("granted inference argument shape differs".into());
@@ -2192,6 +2253,112 @@ pub(crate) fn launch(arguments: &[String]) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn reviewed_turn_fixture() -> (crate::resources::Token, Use, String) {
+        (
+            crate::resources::Token {
+                lease_id: "2".repeat(32),
+                generation: u64::MAX,
+                manager_epoch: "3".repeat(32),
+            },
+            Use {
+                action: Action::Infer,
+                selector: Selector {
+                    kind: Kind::Model,
+                    id: "qwen3-4b-q4-k-m".into(),
+                    generation: u64::MAX,
+                    digest: "1".repeat(64),
+                },
+                input_bytes: 5,
+                output_bytes: 8192,
+                units: 128,
+            },
+            "97c789eaa3d9479f0fc8ecfad11bebf8f5d2693dd5073469a198ee3f1b2ff4ce".into(),
+        )
+    }
+
+    #[test]
+    fn reviewed_inference_commitment_matches_exact_python_u64_contract() {
+        let (worker, usage, input) = reviewed_turn_fixture();
+        let expected = "f78bfff8ee5c01686c9f74ea6906b8dee21f7109778ee0e98fec67303cf8c5ef";
+        assert_eq!(
+            reviewed_inference_digest("alice", &worker, &usage, &input).unwrap(),
+            expected
+        );
+        require_reviewed_inference(expected, "alice", &worker, &usage, &input).unwrap();
+        assert!(require_reviewed_inference(expected, "bob", &worker, &usage, &input).is_err());
+        assert!(
+            require_reviewed_inference(expected, "alice", &worker, &usage, &"a".repeat(64))
+                .is_err()
+        );
+        assert!(
+            require_reviewed_inference(&"0".repeat(64), "alice", &worker, &usage, &input).is_err()
+        );
+        assert!(
+            require_reviewed_inference("not-a-digest", "alice", &worker, &usage, &input).is_err()
+        );
+    }
+
+    #[test]
+    fn reviewed_inference_refuses_changed_model_worker_generation_and_bounds() {
+        let (worker, usage, input) = reviewed_turn_fixture();
+        let expected = reviewed_inference_digest("alice", &worker, &usage, &input).unwrap();
+        for changed in [
+            crate::resources::Token {
+                lease_id: "a".repeat(32),
+                ..worker.clone()
+            },
+            crate::resources::Token {
+                manager_epoch: "b".repeat(32),
+                ..worker.clone()
+            },
+            crate::resources::Token {
+                generation: 1,
+                ..worker.clone()
+            },
+        ] {
+            assert!(
+                require_reviewed_inference(&expected, "alice", &changed, &usage, &input).is_err()
+            );
+        }
+        let mut changed = usage.clone();
+        changed.selector.id = "another-admitted-model".into();
+        assert!(require_reviewed_inference(&expected, "alice", &worker, &changed, &input).is_err());
+        changed = usage.clone();
+        changed.selector.digest = "a".repeat(64);
+        assert!(require_reviewed_inference(&expected, "alice", &worker, &changed, &input).is_err());
+        changed = usage.clone();
+        changed.input_bytes += 1;
+        assert!(require_reviewed_inference(&expected, "alice", &worker, &changed, &input).is_err());
+        changed = usage.clone();
+        changed.units -= 1;
+        assert!(require_reviewed_inference(&expected, "alice", &worker, &changed, &input).is_err());
+        changed = usage.clone();
+        changed.output_bytes += 1;
+        assert!(require_reviewed_inference(&expected, "alice", &worker, &changed, &input).is_err());
+    }
+
+    #[test]
+    fn reviewed_inference_data_never_substitutes_for_finite_admission_or_lifetime() {
+        let (worker, usage, input) = reviewed_turn_fixture();
+        for login in ["", "Alice", "alice;exec", "a/b"] {
+            assert!(reviewed_inference_digest(login, &worker, &usage, &input).is_err());
+        }
+        for (action, kind) in [
+            (Action::Read, Kind::File),
+            (Action::Write, Kind::Artifact),
+            (Action::Infer, Kind::Resource),
+        ] {
+            let mut changed = usage.clone();
+            changed.action = action;
+            changed.selector.kind = kind;
+            assert!(reviewed_inference_digest("alice", &worker, &changed, &input).is_err());
+        }
+        assert!(!extended_client_command("granted-infer-reviewed"));
+        let expected = reviewed_inference_digest("alice", &worker, &usage, &input).unwrap();
+        let (socket, _) = UnixStream::pair().unwrap();
+        assert!(Admission::capture(&socket, &"4".repeat(32), usage, expected).is_err());
+    }
 
     #[test]
     fn backup_checked_relay_preserves_ciphertext_and_checks_every_transfer_and_ack() {

@@ -24,7 +24,9 @@ RUN apt-get update --snapshot=${SNAPSHOT} -o APT::Update::Error-Mode=any && \
         gdm3 gnome-session gnome-shell gnome-console nautilus gnome-text-editor \
         gnome-control-center network-manager-gnome epiphany-browser \
         xdg-desktop-portal-gnome fonts-dejavu-core \
-        python3-gi gir1.2-gtk-3.0 gir1.2-webkit2-4.1; \
+        python3-gi gir1.2-gtk-3.0 gir1.2-webkit2-4.1 \
+        gir1.2-gstreamer-1.0 gstreamer1.0-plugins-base gstreamer1.0-plugins-good \
+        gstreamer1.0-pipewire xdg-desktop-portal pipewire-pulse; \
     elif [ "$EDITION" != headless ]; then exit 2; fi
 # Image assembly records the exact installed tuple and strips builder/container state.
 RUN apt-get install -y --no-install-recommends --snapshot=${SNAPSHOT} systemd-boot

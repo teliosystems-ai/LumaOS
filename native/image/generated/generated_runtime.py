@@ -80,8 +80,11 @@ def read_sealed(descriptor, name, maximum):
     return data
 
 
-def validate_static_elf(data):
-    if not 64 <= len(data) <= CONTRACT['executable_max_bytes']:
+def validate_static_elf(data, *, trusted_appliance=False):
+    # The larger ceiling is solely for the fixed statically linked compiler
+    # appliance during image packaging; raw request callers retain the v1 bound.
+    maximum = 2 * 1024 * 1024 if trusted_appliance else CONTRACT['executable_max_bytes']
+    if not 64 <= len(data) <= maximum:
         raise ValueError('static ELF size is outside the supported bound')
     values = struct.unpack_from('<16sHHIQQQIHHHHHH', data)
     ident, kind, machine, version, entry, offset, section_offset, flags, header_size, size, count, section_size, section_count, strings = values

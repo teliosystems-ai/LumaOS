@@ -89,7 +89,12 @@ def package(root, kernel, work):
     publish(target / 'guest-init.c', init_source)
     publish(root / 'usr/libexec/luma-os/generated_runtime.py', runner, executable=True)
     publish(root / 'usr/libexec/luma-os/prepare_generated_request.py', request_helper, executable=True)
-    publish(target / 'manifest.json', (json.dumps(manifest, sort_keys=True, separators=(',', ':')) + '\n').encode())
+    encoded_manifest = (json.dumps(manifest, sort_keys=True, separators=(',', ':')) + '\n').encode()
+    publish(target / 'manifest.json', encoded_manifest)
+    build_spec = importlib.util.spec_from_file_location('luma_generated_build_packaging', ASSETS / 'package_build.py')
+    build_packaging = importlib.util.module_from_spec(build_spec)
+    build_spec.loader.exec_module(build_packaging)
+    build_packaging.package(root, work, encoded_manifest, source, publish, runtime)
     return manifest
 
 

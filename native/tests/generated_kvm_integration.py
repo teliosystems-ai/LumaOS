@@ -180,6 +180,33 @@ def main():
         results.append({'case':name,'passed':True,'elapsed_seconds':elapsed,'execution_status':status,
                         'execution_value':value,'stdout_bytes':len(output),'receipt_sha256':runtime.sha(result.stdout)})
         print('GENERATED_KVM_CASE_PASSED='+name,flush=True)
+    # Regression: buffered bytes may remain after the leader has already exited.
+    # A clipped 32KiB prefix must never become a clean v1 exit0 receipt. V1 has
+    # no output_limit status, so SIGKILL or explicit failed completion are valid.
+    case=args.output/'buffered-output-exit'
+    case.mkdir(mode=0o700)
+    source=case/'task.c'; executable=case/'task'
+    source.write_text(HEADER+'char b[40000]; for(unsigned i=0;i<sizeof(b);i++)b[i]=\'A\'; syscall(SYS_write,1,b,sizeof(b)); return 0;\n}\n')
+    with (case/'compile.log').open('xb') as log:
+        compilation=subprocess.run(['/usr/bin/cc','-O2','-static','-s','-fno-pie','-no-pie','-Wall','-Wextra','-Werror',
+                                    '-Wl,-z,noexecstack',str(source),'-o',str(executable)],stdout=log,stderr=subprocess.STDOUT,timeout=60)
+    if compilation.returncode:
+        raise ValueError('buffered raw-ELF regression fixture compilation failed')
+    began=time.monotonic()
+    try:
+        receipt=runtime.run(package.source(executable,1048576),b'')
+    except ValueError as error:
+        if str(error)!='missing/ambiguous failed guest completion':
+            raise
+        disposition={'execution_status':'refused','reason':'explicit_guest_failure_after_buffered_overflow'}
+    else:
+        if receipt['execution_status']!='signal' or receipt['execution_value']!=signal.SIGKILL:
+            raise ValueError('buffered output truncation falsely reported clean raw-ELF completion')
+        disposition=receipt
+    encoded=json.dumps(disposition,sort_keys=True).encode()
+    (case/'disposition.json').write_bytes(encoded)
+    results.append({'case':'buffered-output-exit','passed':True,'elapsed_seconds':time.monotonic()-began,
+                    'execution_status':disposition['execution_status'],'receipt_sha256':runtime.sha(encoded)})
     evidence={'schema_version':1,'result':'passed','manifest':manifest,'kernel_sha256':args.kernel_sha256,'cases':results,
               'actual_accelerator':'kvm','tcg_fallback':False,'unprivileged_guest_seccomp_tested':True,
               'host_apparmor_enforced':False,'governed_resource_admission_tested':False,

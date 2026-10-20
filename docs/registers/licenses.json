@@ -187,6 +187,23 @@
         "docs/gates/g1/local_model_smoke_2026-09-22.json"
       ],
       "limitations": "Approval covers the pinned external development assets only. It does not approve bundling runtime binaries or CUDA dependencies in a Luma OS release."
+    },
+    {
+      "id": "LIC-012",
+      "component": "TinyCC compiler appliance and libtcc1 freestanding support",
+      "version_or_digest": "0.9.27+git20200814.62c30a4a-1; libtcc.a sha256:99487d6c78619ec6a9003641d938e5c59f2342b006d31619f8a056084f51dd11; libtcc1.a sha256:66cffad205235f5c0ca72e028b574476a031b43dad7b13656461093f38bcff93",
+      "source": "https://snapshot.ubuntu.com/ubuntu/20260927T000000Z/pool/universe/t/tcc/",
+      "license_expression": "LGPL-2.1-or-later for libtcc; GPL-2.0-or-later with the exact upstream runtime linking/distribution exception for libtcc1; component notices retained",
+      "use_scope": "Pinned offline KVM compiler appliance; corresponding source, application object and relink recipe are mandatory image closure inputs",
+      "redistributed": true,
+      "owner": "license-owner",
+      "status": "engineering-corresponding-source-and-relink-kit-implemented-release-review-required",
+      "evidence": [
+        "docs/gates/g3/generated_build_2026-10-20.json",
+        "native/image/generated/package_build.py",
+        "native/image/generated/generated_build.py"
+      ],
+      "limitations": "Engineering inventory and delivery mechanisms are not formal legal clearance or approval of the entire image. Static libc/system toolchain and all other dependencies retain their separate exact-artifact redistribution obligations."
     }
   ]
 }

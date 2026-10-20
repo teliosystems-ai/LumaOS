@@ -45,5 +45,21 @@ RUN \
 # Keep the fixed KVM dependency separate so adding it does not invalidate the
 # large, already pinned firmware and desktop package layers.
 RUN apt-get install -y --no-install-recommends --snapshot=${SNAPSHOT} qemu-system-x86
+RUN apt-get install -y --no-install-recommends --snapshot=${SNAPSHOT} \
+    tcc=0.9.27+git20200814.62c30a4a-1 libtcc-dev=0.9.27+git20200814.62c30a4a-1
+RUN mkdir -p /usr/src/luma-tcc && cd /usr/src/luma-tcc && \
+    curl --fail --location --silent --show-error --max-time 120 \
+      https://snapshot.ubuntu.com/ubuntu/20260927T000000Z/pool/universe/t/tcc/tcc_0.9.27+git20200814.62c30a4a-1.dsc \
+      -o tcc_0.9.27+git20200814.62c30a4a-1.dsc && \
+    curl --fail --location --silent --show-error --max-time 120 \
+      https://snapshot.ubuntu.com/ubuntu/20260927T000000Z/pool/universe/t/tcc/tcc_0.9.27+git20200814.62c30a4a.orig.tar.bz2 \
+      -o tcc_0.9.27+git20200814.62c30a4a.orig.tar.bz2 && \
+    curl --fail --location --silent --show-error --max-time 120 \
+      https://snapshot.ubuntu.com/ubuntu/20260927T000000Z/pool/universe/t/tcc/tcc_0.9.27+git20200814.62c30a4a-1.debian.tar.xz \
+      -o tcc_0.9.27+git20200814.62c30a4a-1.debian.tar.xz && \
+    printf '%s\n' \
+      '3d211ea8e260e6b846c9a085ea43229c48b20871be7a7ad8f520b2d345587cfd  tcc_0.9.27+git20200814.62c30a4a-1.dsc' \
+      'd63c113bcdd657f51c8ee197a0b0a24203603313e19a52b5f678d40ab7f5df35  tcc_0.9.27+git20200814.62c30a4a.orig.tar.bz2' \
+      '27036dd5f67b6ce3b8212080d1d6e55b1f7b2e54a23d0f2a4af38090a8d75716  tcc_0.9.27+git20200814.62c30a4a-1.debian.tar.xz' | sha256sum -c -
 RUN apt-get install -y --no-install-recommends --snapshot=${SNAPSHOT} libreoffice-writer bubblewrap
 CMD ["/sbin/init"]

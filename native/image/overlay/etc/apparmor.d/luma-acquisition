@@ -23,6 +23,7 @@ profile luma-acquisition flags=(attach_disconnected,mediate_deleted) {
   /usr/bin/curl mrix,
   /usr/bin/python3{,.12} mrix,
   /usr/libexec/luma-os/generated_runtime.py r,
+  /usr/libexec/luma-os/generated_build.py r,
   /usr/bin/qemu-system-x86_64 mrpx -> &luma-generated-qemu,
   /usr/share/qemu/** r,
   /usr/share/seabios/** r,

@@ -73,7 +73,7 @@ impl Authority {
             request.usage.clone(),
             request.input_sha256.clone(),
         )?;
-        let expected_output = if request.profile.starts_with("generated-v1-") {
+        let expected_output = if crate::generated_runtime::is_profile(&request.profile) {
             None
         } else if request.profile.starts_with("qa-v1-") {
             None
@@ -156,7 +156,7 @@ impl Authority {
 }
 
 pub(crate) fn usage(profile: &str) -> Result<Use> {
-    if profile.starts_with("generated-v1-") {
+    if crate::generated_runtime::is_profile(profile) {
         crate::generated_runtime::acquisition_usage(profile)
     } else if profile.starts_with("qa-v1-") {
         crate::model::qa::usage(profile)
@@ -215,7 +215,7 @@ pub(crate) fn run_generated<T: Send>(
     boundary: &mut crate::admin_governance::GrantBoundary<'_>,
     controller: impl FnOnce(&mut dyn FnMut() -> Result<()>) -> Result<T> + Send,
 ) -> Result<T> {
-    if !profile.starts_with("generated-v1-") {
+    if !crate::generated_runtime::is_profile(profile) {
         return Err("generated acquisition profile is not closed".into());
     }
     run_controller(profile, usage, boundary, None, move |cancel| {

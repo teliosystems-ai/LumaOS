@@ -918,7 +918,7 @@ impl Admission {
         acquisition_arguments(credentials(socket)?.pid, profile, None)?;
         let purpose = if profile.starts_with(crate::content_restore::PREFIX) {
             BrokerPurpose::ContentRestoreAdmin
-        } else if profile.starts_with("generated-v1-") || profile.starts_with("content-v1-") {
+        } else if crate::generated_runtime::is_profile(profile) || profile.starts_with("content-v1-") {
             BrokerPurpose::Standard
         } else if profile.starts_with(crate::content_backup::PREFIX)
             || profile.starts_with(crate::office_export::PREFIX)
@@ -1041,7 +1041,7 @@ fn acquisition_arguments(
         }
         return Ok(());
     }
-    let generated = profile.starts_with("generated-v1-");
+    let generated = crate::generated_runtime::is_profile(profile);
     if args.len() != 6
         || args[0] != IMAGE_EXE
         || args[1]

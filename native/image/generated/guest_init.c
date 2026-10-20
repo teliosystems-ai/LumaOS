@@ -24,8 +24,12 @@
 #include <time.h>
 #include <unistd.h>
 
+#ifndef OUTPUT_MAX
 #define OUTPUT_MAX 32768
+#endif
+#ifndef WALL_MS
 #define WALL_MS 3000
+#endif
 static unsigned char output[2][OUTPUT_MAX];
 static size_t lengths[2];
 
@@ -140,7 +144,7 @@ int main(void) {
     if (flags < 0 || fcntl(pipes[index][0], F_SETFL, flags|O_NONBLOCK)) halt_failure();
   }
   uint64_t started = milliseconds();
-  int status = 0, finished = 0, ended[2] = {0, 0}, killed = 0;
+  int status = 0, finished = 0, ended[2] = {0, 0}, killed = 0, overflowed = 0;
   while (!finished || !ended[0] || !ended[1]) {
     if (!finished && !killed && milliseconds() - started >= WALL_MS) {
       if (kill(pid, SIGKILL)) halt_failure();
@@ -155,9 +159,12 @@ int main(void) {
         size_t remaining = OUTPUT_MAX - lengths[index];
         size_t copied = (size_t)size < remaining ? (size_t)size : remaining;
         for (size_t byte = 0; byte < copied; byte++) output[index][lengths[index]++] = buffer[byte];
-        if (copied != (size_t)size && !finished && !killed) {
-          if (kill(pid, SIGKILL)) halt_failure();
-          killed = 1;
+        if (copied != (size_t)size) {
+          overflowed = 1;
+          if (!killed) {
+            if (!finished && kill(pid, SIGKILL)) halt_failure();
+            killed = 2;
+          }
         }
       }
       if (!size) ended[index] = 1;
@@ -171,8 +178,18 @@ int main(void) {
   }
   close(pipes[0][0]); close(pipes[1][0]);
   if (!WIFEXITED(status) && !WIFSIGNALED(status)) halt_failure();
+#ifndef REPORT_LIMITS
+  /* A reaped/exiting leader can leave buffered bytes. V1 has no output-limit
+   * status: never describe a clipped buffer as a complete successful exit. */
+  if (overflowed && WIFEXITED(status)) halt_failure();
+#endif
+  const char *execution_status = WIFEXITED(status) ? "exit" : "signal";
+#ifdef REPORT_LIMITS
+  if (killed == 1) execution_status = "timeout";
+  if (overflowed) execution_status = "output_limit";
+#endif
   printf("\nLUMA_GENERATED_RESULT_V1 {\"execution_status\":\"%s\",\"execution_value\":%d,\"stdout_hex\":\"",
-         WIFEXITED(status) ? "exit" : "signal", WIFEXITED(status) ? WEXITSTATUS(status) : WTERMSIG(status));
+         execution_status, WIFEXITED(status) ? WEXITSTATUS(status) : WTERMSIG(status));
   hexadecimal(0); printf("\",\"stderr_hex\":\""); hexadecimal(1); printf("\"}\n");
   if (fflush(stdout)) halt_failure();
   (void)reboot(RB_POWER_OFF);

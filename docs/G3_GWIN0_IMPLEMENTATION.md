@@ -1575,3 +1575,22 @@ The actual read-only provider query timed out and policy remained unknown;
 admission refused correctly. This is not host protection qualification or an
 installed service/guest pass. First-launch identity and workspace/manual
 controls remain implementation work; no host setting was changed.
+
+### Genuine bounded source build and test, 20 October 2026
+
+The new initial source profile compiles a declared freestanding C99 subset
+inside KVM, then runs one or two explicit tests in fresh strict ELF microVMs.
+It retains the existing PAM, finite ExecuteGenerated grant, resource generation,
+revocation and drainage boundaries. Original compiler bytes and separately
+hardened runnable bytes have distinct digests; receipts do not grant execution.
+Source, dependencies, diagnostics and observed tests remain bounded. Compilation
+failure, timeout or buffered output overflow cannot be reported as passing tests.
+
+The [execution record](gates/g3/generated_build_2026-10-20.json) joins a coherent
+published-base source cut, warnings-denied workspace/all-targets check, 12 generated
+and 15 gateway Rust tests, 18 Python tests, six genuine build/test KVM cases,
+14 existing raw-ELF KVM regressions and three inert installed request-helper cases.
+There were no skipped cases. The appliance includes pinned compiler binaries,
+corresponding source, notices and a relink kit; legal redistribution clearance
+is not inferred. Offline AppArmor parsing is not enforcement. Installed authority,
+full image, hardware-policy adapters and complete G3 acceptance remain open.

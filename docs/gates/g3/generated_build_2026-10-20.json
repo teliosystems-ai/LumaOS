@@ -1,0 +1,91 @@
+{
+  "schema_version": 1,
+  "recorded_on": "2026-10-20",
+  "status": "bounded-source-build-test-software-verified",
+  "scope": "Initial declared freestanding C99 subset compiled and tested inside real KVM; not a general toolchain or installed authority qualification",
+  "implementation": {
+    "profile": "generated-build-v1-<request-sha256>",
+    "language": "c99-freestanding-tcc-v1",
+    "authorization": "Existing original PAM, finite ExecuteGenerated grant, acquisition resource generations, revocation and physical drainage; receipts remain inert data",
+    "source_max_bytes": 16384,
+    "test_count": "one or two explicit tests",
+    "stream_max_bytes_per_test": 2048,
+    "compiler_output_max_bytes": 32768,
+    "runnable_output_max_bytes": 36864,
+    "compiler_guest_timeout_ms": 5000,
+    "test_guest_timeout_ms": 1000,
+    "runner_total_timeout_ms": 15000,
+    "guest_memory_mib": 128,
+    "elf_hardening": "static-elf-stack-v1 preserves original compiler bytes, separately records bounded hardening and runnable digest, and retains the strict static ELF validator",
+    "response_conservative_max_bytes": 224913,
+    "response_max_bytes": 262144,
+    "failure_semantics": "Compilation failures explicitly mark tests not run; exit, timeout and output limits cannot become passing tests through clipping. Raw-v1 buffered overflow after exit refuses completion without inventing a signal."
+  },
+  "source_cut": {
+    "path": "/mnt/luma-build/work/generated-component-20261020-l5isu6ad",
+    "base_commit": "03aa7f25ff189ce79dfb65adc974ebc1e700e016",
+    "archive_sha256": "42368b352ad15388ff2d197e45399b0189248a8685a0f01d3affe88f0dca1d95",
+    "source_manifest_sha256": "8ca4ecd7f1b77eaee4ef8e0b147588b8c48e164329df090476695b733ef49eff",
+    "component_source_sha256": "56bec7f0999f42d93998989c6b5b31535e2c9cfde15733ec4480b48d12482140",
+    "overlay_files": 16,
+    "additional_mechanical_routing_files": 2,
+    "routing_replacements": [3, 2],
+    "excludes_in_progress_hardware_and_workspace": true
+  },
+  "verification": {
+    "warnings_denied_workspace_all_targets_check": "passed",
+    "generated_rust_tests": 12,
+    "gateway_rust_tests": 15,
+    "python_contract_tests": 18,
+    "skips": 0,
+    "check_log_sha256": "49e862453f78527d449cb44617e3552916c47dca965e5b82e7254a3c7718b1a8",
+    "generated_log_sha256": "bd6306fdebb58348bc856189aef6d061ef0d7e4a0ca88ad7de20c5f2614aa886",
+    "gateway_log_sha256": "2dbde9ac2241d8050a7ae19a850d2baabd6663e0af6338a61ea153eba59dbbd6",
+    "python_log_sha256": "3ffbee7abe9f5aa8d3fdab7dffffe990bc859112f4c45a52ca6f762c1f89e97f",
+    "actual_kvm_build_test_cases": {
+      "count": 6,
+      "path": "/mnt/luma-build/work/generated-build-kvm-20261020-bnYNHsSt/result/verification.json",
+      "sha256": "0f3730cdec2f80fc9a83f3b99cbbfbf905cca990d8043f4a6366248d750808c8",
+      "cases": ["compile-two-tests", "compile-failure", "test-failure", "timeout", "output-limit", "buffered-output-after-exit"],
+      "memory_max_bytes": 536870912,
+      "memory_swap_max_bytes": 0,
+      "memory_peak_bytes": 250834944,
+      "pids_max": 16,
+      "cpu_max": "200000 100000",
+      "successful_compile_two_tests_seconds": 6.101
+    },
+    "actual_kvm_raw_regressions": {
+      "count": 14,
+      "path": "/mnt/luma-build/work/generated-raw-kvm-20261020-bHPojMcw/result/result.json",
+      "sha256": "0f938c98a219f2eba9afd4785db0c222b39c889add2c4831b420726b930ee690",
+      "tcg_fallback": false
+    },
+    "actual_installed_inert_request_helper": {
+      "count": 3,
+      "path": "/mnt/luma-build/work/generated-prepare-probe-20261020-oDcXrhBo/verification.json",
+      "sha256": "104ebafa15e45b2e4f4ad3eccac57c85fb3c9283ac5077e99e23731832acd660",
+      "compiler_or_payload_executed": false
+    },
+    "apparmor": "Offline parse passed; missing host kernel interface warning retained, not loaded or enforced"
+  },
+  "dependency_delivery": {
+    "compiler": "TinyCC 0.9.27+git20200814.62c30a4a-1",
+    "snapshot": "https://snapshot.ubuntu.com/ubuntu/20260927T000000Z/",
+    "source_chain": "Signed noble InRelease -> universe source Sources -> exact pinned tcc source archives",
+    "closure_files": 23,
+    "relink_kit": "Mandatory application object, libtcc archive/header, corresponding compiler source and Debian patch archive, provenance, recipe and full license texts",
+    "engineering_license_register": "docs/registers/licenses.json#LIC-012",
+    "legal_redistribution_approval": false
+  },
+  "retained_failed_attempts": [
+    {"path": "/mnt/luma-build/work/generated-component-20261020-zzo7c74p", "reason": "Ignored source-cut helper replaced a profile substring in the wrong order; product routing was correct. Failed cut retained and corrected in a new immutable cut."},
+    {"reason": "Strict validator rejected original TinyCC ELF lacking explicit nonexecutable stack; production now preserves original compiler bytes and explicitly records a separate bounded hardening transformation."},
+    {"reason": "Real buffered-output tests exposed false-success clipping after child exit; fixed in both compiler test and existing raw runners and retested in KVM."}
+  ],
+  "installed_pam_and_finite_grants_qualified": false,
+  "host_apparmor_enforced": false,
+  "new_bootable_image_produced": false,
+  "g3_complete": false,
+  "gwin0_complete": false,
+  "production_qualified": false
+}

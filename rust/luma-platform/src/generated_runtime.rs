@@ -12,7 +12,11 @@ use std::os::unix::process::CommandExt;
 use std::path::Path;
 use std::process::{Command, Stdio};
 
+#[path = "generated_build.rs"]
+mod build;
+
 const PREFIX: &str = "generated-v1-";
+const BUILD_PREFIX: &str = "generated-build-v1-";
 const MAX_EXECUTABLE: usize = 1_048_576;
 const MAX_INPUT: usize = 65_536;
 const MAX_REQUEST: usize = 2 * (MAX_EXECUTABLE + MAX_INPUT) + 256;
@@ -20,6 +24,16 @@ const MAX_OUTPUT: u64 = 262_144;
 const OUTPUT_STREAM: usize = 32_768;
 const SEALS: i32 = libc::F_SEAL_WRITE | libc::F_SEAL_GROW | libc::F_SEAL_SHRINK | libc::F_SEAL_SEAL;
 const MANIFEST: &str = "/usr/share/luma-os/generated/manifest.json";
+
+/// A routing predicate only; no syntactically valid name grants execution.
+/// Request, runtime, original PAM, finite grant and physical-generation checks
+/// remain mandatory at the selected admission boundary.
+pub(crate) fn is_profile(value: &str) -> bool {
+    value
+        .strip_prefix(PREFIX)
+        .or_else(|| value.strip_prefix(BUILD_PREFIX))
+        .is_some_and(io::hash)
+}
 
 #[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -105,7 +119,7 @@ pub(crate) fn read_request(path: &str) -> Result<Vec<u8>> {
     {
         return Err("generated request changed during bounded capture".into());
     }
-    parse_input(&bytes)?;
+    request_profile(&bytes)?;
     Ok(bytes)
 }
 
@@ -200,6 +214,7 @@ fn runtime_digest() -> Result<String> {
 pub(crate) fn source_digest(profile: &str) -> Result<&str> {
     let digest = profile
         .strip_prefix(PREFIX)
+        .or_else(|| profile.strip_prefix(BUILD_PREFIX))
         .ok_or("unknown generated runtime profile")?;
     if !io::hash(digest) {
         return Err("invalid generated request identity".into());
@@ -220,9 +235,13 @@ pub(crate) fn binding(profile: &str, device: &str) -> Result<String> {
         return Err("generated execution requires exact installed block-backed storage".into());
     }
     Ok(io::digest(&serde_json::to_vec(&(
-        "luma-generated-kvm-v1",
+        if profile.starts_with(BUILD_PREFIX) {
+            "luma-generated-build-kvm-v1"
+        } else {
+            "luma-generated-kvm-v1"
+        },
         io::installation()?,
-        runtime_digest()?,
+        profile_runtime(profile)?,
         source,
         device,
     ))?))
@@ -286,7 +305,41 @@ struct Output {
     request_sha256: String,
     binding: String,
     lease: crate::resources::Token,
-    guest: GuestReceipt,
+    guest: Guest,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(untagged)]
+enum Guest {
+    Elf(GuestReceipt),
+    Build(build::Receipt),
+}
+
+fn request_profile(bytes: &[u8]) -> Result<String> {
+    if parse_input(bytes).is_ok() {
+        Ok(format!("{PREFIX}{}", io::digest(bytes)))
+    } else {
+        build::parse(bytes)?;
+        Ok(format!("{BUILD_PREFIX}{}", io::digest(bytes)))
+    }
+}
+
+fn profile_runtime(profile: &str) -> Result<String> {
+    source_digest(profile)?;
+    if profile.starts_with(BUILD_PREFIX) {
+        build::runtime_digest()
+    } else {
+        runtime_digest()
+    }
+}
+
+fn checked_guest(profile: &str, encoded: &[u8], bytes: &[u8], runtime: &str) -> Result<Guest> {
+    if profile.starts_with(BUILD_PREFIX) {
+        Ok(Guest::Build(build::receipt(encoded, bytes, runtime)?))
+    } else {
+        let (_, executable, input) = parse_input(bytes)?;
+        Ok(Guest::Elf(receipt(encoded, &executable, &input, runtime)?))
+    }
 }
 
 #[derive(Deserialize)]
@@ -350,40 +403,59 @@ pub(crate) fn worker(profile: &str) -> Result<()> {
     if io::digest(&bytes) != expected {
         return Err("generated worker request differs from lease".into());
     }
-    let (_, executable, input) = parse_input(&bytes)?;
-    let runtime = runtime_digest()?;
+    if request_profile(&bytes)? != profile {
+        return Err("generated request schema differs from its admitted profile".into());
+    }
+    let runtime = profile_runtime(profile)?;
     let exact_binding = binding(
         profile,
         &resource_manager::storage_device(Path::new("/var"))?,
     )?;
-    let elf = anonymous("luma-generated-executable", &executable, true)?;
-    let stdin = anonymous("luma-generated-input", &input, true)?;
     let mut output = anonymous("luma-generated-output", &[], false)?;
-    let input_fd = stdin.as_raw_fd();
     let mut command = Command::new("/usr/bin/python3");
+    let held_input;
+    if profile.starts_with(BUILD_PREFIX) {
+        let request = anonymous("luma-generated-request", &bytes, true)?;
+        command
+            .args([
+                "-I",
+                "/usr/libexec/luma-os/generated_build.py",
+                "--request-fd",
+                "0",
+            ])
+            .stdin(Stdio::from(request));
+        held_input = None;
+    } else {
+        let (_, executable, input) = parse_input(&bytes)?;
+        let elf = anonymous("luma-generated-executable", &executable, true)?;
+        let stdin = anonymous("luma-generated-input", &input, true)?;
+        let input_fd = stdin.as_raw_fd();
+        command
+            .args([
+                "-I",
+                "/usr/libexec/luma-os/generated_runtime.py",
+                "--executable-fd",
+                "0",
+                "--input-fd",
+                "3",
+            ])
+            .stdin(Stdio::from(elf));
+        unsafe {
+            command.pre_exec(move || {
+                if libc::dup2(input_fd, 3) < 0 || libc::fcntl(3, libc::F_SETFD, 0) < 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
+        held_input = Some(stdin);
+    }
     command
-        .args([
-            "-I",
-            "/usr/libexec/luma-os/generated_runtime.py",
-            "--executable-fd",
-            "0",
-            "--input-fd",
-            "3",
-        ])
         .env_clear()
         .env("PATH", "/usr/bin")
         .env("LC_ALL", "C")
-        .stdin(Stdio::from(elf))
         .stdout(Stdio::from(output.try_clone()?))
         .stderr(Stdio::null());
-    unsafe {
-        command.pre_exec(move || {
-            if libc::dup2(input_fd, 3) < 0 || libc::fcntl(3, libc::F_SETFD, 0) < 0 {
-                return Err(std::io::Error::last_os_error());
-            }
-            Ok(())
-        });
-    }
     let deadline = resource_manager::now()?
         .checked_add(20_000)
         .ok_or("generated worker deadline overflow")?;
@@ -391,30 +463,32 @@ pub(crate) fn worker(profile: &str) -> Result<()> {
         lease.check()?;
         if resource_manager::now()? >= deadline
             || output.metadata()?.len() >= MAX_OUTPUT
-            || runtime_digest()? != runtime
+            || profile_runtime(profile)? != runtime
         {
             return Err("generated runtime lost its finite resource fence".into());
         }
         Ok(())
     })?;
-    drop(stdin);
+    drop(held_input);
     lease.check()?;
     output.seek(SeekFrom::Start(0))?;
     let mut encoded = Vec::new();
     output.take(MAX_OUTPUT + 1).read_to_end(&mut encoded)?;
-    let guest = receipt(&encoded, &executable, &input, &runtime)?;
+    let guest = checked_guest(profile, &encoded, &bytes, &runtime)?;
     let guest_bytes = serde_json::to_vec(&guest)?;
     lease.complete_output(&io::digest(&guest_bytes))?;
     lease.check_local()?;
-    std::io::stdout()
-        .lock()
-        .write_all(&serde_json::to_vec(&Output {
-            schema_version: 1,
-            request_sha256: expected.into(),
-            binding: exact_binding,
-            lease: lease.token().clone(),
-            guest,
-        })?)?;
+    let encoded_output = serde_json::to_vec(&Output {
+        schema_version: 1,
+        request_sha256: expected.into(),
+        binding: exact_binding,
+        lease: lease.token().clone(),
+        guest,
+    })?;
+    if encoded_output.len() as u64 >= MAX_OUTPUT {
+        return Err("whole generated result exceeds the admitted response bound".into());
+    }
+    std::io::stdout().lock().write_all(&encoded_output)?;
     Ok(())
 }
 
@@ -426,22 +500,30 @@ pub(crate) fn acquisition_usage(profile: &str) -> Result<finite_grants::Use> {
         action: finite_grants::Action::ExecuteGenerated,
         selector: finite_grants::Selector {
             kind: finite_grants::Kind::GeneratedCode,
-            id: "static-amd64-kvm-v1".into(),
+            id: if profile.starts_with(BUILD_PREFIX) {
+                build::LANGUAGE
+            } else {
+                "static-amd64-kvm-v1"
+            }
+            .into(),
             generation: 1,
             digest: binding(
                 profile,
                 &resource_manager::storage_device(Path::new("/var"))?,
             )?,
         },
-        input_bytes: MAX_REQUEST as u64,
+        input_bytes: if profile.starts_with(BUILD_PREFIX) {
+            build::MAX_REQUEST
+        } else {
+            MAX_REQUEST
+        } as u64,
         output_bytes: MAX_OUTPUT,
         units: 1,
     })
 }
 
 fn usage(bytes: &[u8]) -> Result<finite_grants::Use> {
-    parse_input(bytes)?;
-    acquisition_usage(&format!("{PREFIX}{}", io::digest(bytes)))
+    acquisition_usage(&request_profile(bytes)?)
 }
 
 fn request_namespace_shape(path: &Path) -> bool {
@@ -544,7 +626,7 @@ pub(crate) fn command(args: &[String]) -> Result<()> {
             let scope = usage(&bytes)?;
             crate::admin_governance::with_grant(&args[1], &args[2], &scope, |guard| {
                 let expected_binding = scope.selector.digest.clone();
-                let profile = format!("{PREFIX}{}", io::digest(&bytes));
+                let profile = request_profile(&bytes)?;
                 acquisition::await_drainage()?;
                 guard.check()?;
                 let pending = guard.effect_begin(
@@ -604,12 +686,11 @@ pub(crate) fn command(args: &[String]) -> Result<()> {
                 )?;
                 guard.check()?;
                 let output: Output = serde_json::from_slice(&encoded)?;
-                let (_, executable, stdin) = parse_input(&bytes)?;
-                receipt(
+                checked_guest(
+                    &profile,
                     &serde_json::to_vec(&output.guest)?,
-                    &executable,
-                    &stdin,
-                    &runtime_digest()?,
+                    &bytes,
+                    &profile_runtime(&profile)?,
                 )?;
                 if output.schema_version != 1
                     || output.binding != expected_binding
@@ -640,6 +721,50 @@ pub(crate) fn command(args: &[String]) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn generated_profile_routing_accepts_only_closed_versioned_digest_names() {
+        for prefix in [PREFIX, BUILD_PREFIX] {
+            assert!(is_profile(&format!("{prefix}{}", "a".repeat(64))));
+            for suffix in [
+                "a".repeat(63),
+                "a".repeat(65),
+                "A".repeat(64),
+                format!("{}x", "a".repeat(63)),
+                format!("{}/extra", "a".repeat(64)),
+            ] {
+                assert!(!is_profile(&format!("{prefix}{suffix}")));
+            }
+        }
+        for prefix in [
+            "generated-",
+            "generated-v2-",
+            "generated-build-",
+            "generated-build-v2-",
+            "xgenerated-v1-",
+        ] {
+            assert!(!is_profile(&format!("{prefix}{}", "a".repeat(64))));
+        }
+    }
+    #[test]
+    fn reviewed_schema_selects_exact_separate_build_profile_before_grant_admission() {
+        let raw = input();
+        assert_eq!(
+            request_profile(&raw).unwrap(),
+            format!("{PREFIX}{}", io::digest(&raw))
+        );
+        let build = serde_json::json!({"schema_version": 2, "language": "c99-freestanding-tcc-v1",
+            "declared_dependencies": ["luma-syscall-v1", "tinycc-libtcc1-0.9.27+git20200814.62c30a4a-1"],
+            "source_hex": crate::bundle::hex(b"int main(void){return 0;}"),
+            "tests": [{"stdin_hex":"", "expected_exit":0, "expected_stdout_hex":"", "expected_stderr_hex":""}]});
+        // Deserialize into the closed type, then serialize its canonical order.
+        let build: build::Request = serde_json::from_value(build).unwrap();
+        let encoded = serde_json::to_vec(&build).unwrap();
+        let profile = request_profile(&encoded).unwrap();
+        assert_eq!(profile, format!("{BUILD_PREFIX}{}", io::digest(&encoded)));
+        assert!(is_profile(&profile));
+        assert_ne!(profile, format!("{PREFIX}{}", io::digest(&encoded)));
+        assert!(request_profile(br#"{"schema_version":3}"#).is_err());
+    }
     #[test]
     fn generated_live_admission_uses_only_the_launchers_private_snapshot_namespace() {
         let valid = format!(
@@ -794,7 +919,7 @@ mod tests {
                 generation: 1,
                 manager_epoch: "c".repeat(64),
             },
-            guest: GuestReceipt {
+            guest: Guest::Elf(GuestReceipt {
                 schema_version: 1,
                 execution_status: "exit".into(),
                 execution_value: 0,
@@ -803,7 +928,7 @@ mod tests {
                 input_sha256: io::digest(&stdin),
                 stdout_hex: String::new(),
                 stderr_hex: String::new(),
-            },
+            }),
         };
         let epochs: std::collections::BTreeMap<_, _> = resource_manager::invoice_output_domains()
             .into_iter()

@@ -49,9 +49,10 @@ this scope decision does not supply its missing implementation or evidence.
 
 | Workstream | Scope | Remaining implementation or qualification |
 | --- | --- | --- |
-| Durable content and custody | Supported G3 capacity and later production durability | Preserve explicit finite-capacity refusals, interrupted evidence and outstanding restore reservations; continuation/compaction, key succession and forensics beyond the supported exact chain remain recorded production work, not an implied unlimited-history G3 gate |
-| Discovery and result policy | G3 | Explicit conversation/manual collection editing now joins exact-version native membership review, independent grants and conflict-aware publication; installed custody/journeys, relevance and general per-result policy remain qualification or separately scoped development. Owner-local TF-IDF/LSA remains bounded ASCII retrieval, not neural multilingual search |
-| Accessible workspace | G3 | Exact historical Read, fresh inference, human-edited document and collection handoff, model-disabled manual controls, and human-described visual-reference clarification are implemented. The joined 176 workspace tests pass; installed keyboard/screen-reader, cancellation and read/edit/recalculation acceptance remain open |
+| Durable content and custody | G3 capacity and later production durability | The current owner-generation store accepts at most 256 committed outcomes and 64 MiB. Safe refusals preserve interrupted evidence and restore reservations, but do not satisfy the current G3 NF08 corpus size. Segmented authoritative storage and custody-bound indexed snapshots remain development; unlimited history, root succession and additional forensics are separate later obligations |
+| Discovery and result policy | G3 | Explicit conversation/manual collection editing joins exact-version native membership review, independent grants and conflict-aware publication. Owner-local TF-IDF/LSA is bounded ASCII retrieval with at most 64 selected versions, not neural multilingual search. NF08 requires ACL-filtered text and semantic queries on 100,000 indexed objects with P95 first results at most 500 ms: the current path cannot represent that authorized corpus. This is an implementation gap, not merely a missing timing test or an approved deferral |
+| Accessible workspace | G3 | Exact historical Read, fresh inference, human-edited document and collection handoff, model-disabled manual controls, and human-described visual-reference clarification are implemented. Draft edits are currently in memory: persistent editor session leases with durable checkpoints and fresh-authorized resume remain development, distinct from existing durable workflow checkpoints. Installed keyboard/screen-reader, cancellation and read/edit/recalculation acceptance remain open |
+| Live-content lifecycle | G3, FR30/A061 | Governed versioned trash and explicit restore are being integrated with exact lifecycle revisions, separate Read/Delete or Read/Write grants, existing independent C custody and trash-preserving encrypted restore. Existing orphan garbage collection or interrupted-preparation quarantine does not implement deletion of a live published artifact. No physical purge, expiry or irreversible erasure is implied |
 | Capture and references | G3 | Explicit PNG/PCM/sampled-video controls now include latched lock/bus-loss revocation. Auxiliary Whisper ASR and separately rendered/consented offline readback are implemented; signed ASR model admission and actual installed device/authority qualification remain mandatory. Visual clarification uses human descriptions and exact artifact versions; the current text-only model performs no pixel understanding or OCR |
 | Engines and adapters | G3 | Actual bounded C99 build/test receipts, query-only hardware image mediation, typed adapters, original-Admin console, protected dispatch/recovery and active CPU/I/O guards are software-verified: strict all-target check plus 75 hardware and 10 speech tests pass. Installed authority, external application receipts, real hardware effects/recovery and image qualification remain open |
 | Windows hosted proof | Current profile-W GWIN0 | Host-protection/policy gates and a distinct opt-in first-account/PAM bootstrap, exact interruption repair, authenticated health and model-disabled original-Windows-user manual console are implemented and software-verified. Installed first-launch/TTY/PAM/health, protection/provider, inference, scoped ingestion, lifecycle/resource coexistence, confinement and two-user proof remain qualification; no native product-grant bridge or GTK desktop is inferred |
@@ -67,6 +68,31 @@ Image assembly follows integration; producing another partial image does not
 mark these workstreams complete.
 
 ## Current development checkpoint
+
+The integration commit `4b5d23d` is pushed. Its current runtime and tests join
+the frozen native cut that passed 888 native Python and 39 image tests. A
+separate corrected invocation passed all eight UTC release-authentication
+checks; the original misconfigured UTC attempt remains retained as failed.
+All 219 Rust and literal-include inputs match both the strict hardware/speech
+cut and the broader Rust cut. The latter passed 97 content and 135
+content-store tests before its overall timeout during platform tests; those
+platform tests are being rerun separately, not counted as passed. The
+[integration record](gates/g3/integration_regression_2026-10-20.json) retains
+the exact evidence joins and limitations.
+
+The wider requirement audit found the NF08 storage/indexing gap above.
+Neither this integration checkpoint nor another image closes G3 while that
+development is missing. The [held-out quality tool](../scripts/g3_quality.py)
+now validates a pinned 500-task external corpus and independently supplied
+complete observations, compares retained artifacts against data oracles,
+joins explicit human rubric adjudications and reports every attempt, repair,
+false refusal, latency, memory and energy measurement. Its 31 regression cases
+are synthetic protocol fixtures, not the actual held-out corpus or a product
+quality result. The [protocol](gates/g3/QUALITY_PROTOCOL.md) and
+[software record](gates/g3/quality_protocol_2026-10-20.json) state its limits:
+digest joins do not authenticate native execution, human identity, measurement
+origin or release qualification. Persistent editor sessions and the in-progress
+live-content lifecycle also remain development, not native-testing-only work.
 
 The integrated source includes typed spreadsheet, document, diagram, animation
 and collection editors, exact-version lexical and latent semantic retrieval,

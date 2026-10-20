@@ -1,0 +1,54 @@
+{
+  "schema_version": 1,
+  "recorded_on": "2026-10-20",
+  "status": "read-only-held-out-evaluation-protocol-software-verified",
+  "scope": "External pinned 500-task corpus validation and complete externally executed evidence ingestion; not task execution or installed authorization",
+  "implementation": [
+    "Exactly 500 unique sorted task IDs with retained nonduplicate input/oracle identities, independently supplied corpus, current run/tuple manifest, observations and adjudication hashes",
+    "Single-link bounded regular evidence, canonical relative paths checked before metadata access, alias/reparse refusal, full retained byte hashes and final re-observation; no arbitrary command execution, downloads or native authority changes",
+    "Literal-byte, strict typed JSON with exact bounded decimal numbers, fixed-decimal CSV and explicit refusal oracles; qualitative cases require a separately pinned external human rubric decision joined to the actual retained artifact set",
+    "Malformed expected oracles or evidence joins refuse the protocol; malformed actual JSON/CSV task results count as oracle failures rather than aborting or silently dropping a task",
+    "Shared oracle data is validated without retaining hundreds of duplicate large buffers. Only the current task's oracle/artifacts are loaded for comparison, with bounded unique evidence accounting",
+    "Every attempt, failure, cancellation, false refusal, retry and repair remains in the report. Initial and final quality tallies are separate; repair eligibility is not invented",
+    "Nearest-rank P95 timing and peak-memory measurements and energy totals retain their run/context joins and measurement method/domain. A self-reported model success is never a deterministic oracle"
+  ],
+  "verification": {
+    "directory": "/mnt/luma-build/work/g3-quality-protocol-proof-20261020-0y9vXngz",
+    "tests_passed": 31,
+    "failed": 0,
+    "skipped": 0,
+    "python": "3.12 in the pinned isolated Ubuntu tools image",
+    "warnings_denied": true,
+    "memory_limit_bytes": 268435456,
+    "network": "none",
+    "test_log_sha256": "74910efe9fc7cd6de7644e563efad40cf1a1636456545d2615fdb4586948a161",
+    "sha256sums_file_sha256": "5edb80fa20c78cc5362b5596b70990b4bbc481efe801070ea20fb57b17973696",
+    "source_before_and_after_sha256": "012476b00f15a57058bdb60ae2c87d07c97626c20cdbffe10165cc230633e513",
+    "actual_cli_validation_and_aggregation_exercised": true,
+    "real_linux_symlink_hardlink_and_changed_file_refusals": true,
+    "windows_reparse_behavior_qualified": false,
+    "synthetic_fixtures_only": true,
+    "actual_held_out_product_run_performed": false,
+    "review_findings_resolved_after_earlier_25_case_cut": [
+      "Repeated large shared-oracle bytes could accumulate across the complete corpus despite unique-file accounting",
+      "The document path needed canonical relative validation before its first lstat",
+      "Malformed actual task JSON/CSV needed a counted oracle failure rather than aborting the evaluation",
+      "Floating-point rounding or underflow could incorrectly equate distinct exact JSON numbers"
+    ]
+  },
+  "source_sha256": {
+    "scripts/g3_quality.py": "14292230e2850ad284e5dc425fff07a9b5cf4cbcc0c880fcb46a3d0f81bf9ef9",
+    "schemas/g3_quality.schema.json": "cca63d24bac9f56e2f52524820d803e4bff6cf0126357366e23bb255e907e121",
+    "tests/test_g3_quality.py": "3e22935c898cfea209195c8541f90a0936a60d74f8ca97d57c34519d3b2cf0d0",
+    "docs/gates/g3/QUALITY_PROTOCOL.md": "5bccd3bd80ab7dd2d4efec6e7a35d5d72a98c04c1d7cb8191cdee45f6d0a3593"
+  },
+  "remaining": [
+    "Supply and independently retain the real held-out corpus, exact image/model/runtime/machine tuple, genuine execution observations and external adjudications",
+    "Qualify actual measurement origin, native execution receipts and human review outside this data-ingestion protocol; digest joins do not establish those identities or semantics",
+    "Run and publish the complete actual product baseline; the protocol's synthetic 500-entry fixtures do not count toward Q10"
+  ],
+  "native_authority_qualified": false,
+  "held_out_secrecy_verified": false,
+  "production_qualified": false,
+  "gate_closing": false
+}

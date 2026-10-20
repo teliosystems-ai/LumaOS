@@ -1737,3 +1737,40 @@ the precise test-only source corrections and retains the original failures.
 No physical TPM, installed PAM/C editing, loaded LSM, GTK input or final image
 qualification is inferred. The NF08 segmented storage/custody/index path
 remains separate development; this editor checkpoint does not close G3.
+
+### NF08 data foundations and remaining native joins, 20 October 2026
+
+The independent v2 data modules now implement private immutable paged maps,
+membership/absence proofs, byte-aware splits, exact CAS and read-only delta
+reconstruction, Merkle blob ranges, globally ordered segments and cross-segment
+request uniqueness. Held reads reserve capacity before consumption; mount,
+namespace, alias/link and physical-inventory adversaries are exercised without
+selecting a product owner head or discarding interrupted evidence. Existing
+v1 storage/custody limits and serialized bytes are unchanged.
+
+The legacy C-continuation codec preserves original typed event order and
+event/NV-extension commitments. Its full-journal bootstrap needs no invented
+ordinary event or historical redispatch. It remains descriptive data, not
+current NV observation, semantic state replay or a publication authority.
+
+The complete-corpus derivative core streams postings, uses a bounded
+feature-space covariance/eigensolver and stores paged statistical ASCII LSA
+coordinates. Exact source/runtime builder identity is mandatory data in the
+manifest and a fresh independently enforced callback; a profile string or
+self-reported hash cannot authenticate an index generation. Native selection,
+bounded resumable jobs and term/cursor optimization are not implemented by
+these library APIs. Small real-store fixtures and a 100,000-scalar shape test
+must not be reported as a native 100,000-object build/query or 500-ms result.
+
+The [execution and join record](gates/g3/nf08_foundations_2026-10-20.json)
+retains strict integrated checking, separate storage/custody/index scopes,
+the failed original fixture attempt and exact staged-source hashes. It also
+records the next concrete contracts: whole OwnerHeadV2, C-specific
+installation/sealed-genesis maps, independently replayed semantic deltas,
+actual pre-NV capacity/publication/reconciliation, side-by-side migration,
+authenticated encrypted multipart snapshots and fresh-owner restore windows.
+Every window retains existing fresh thirty-second Standard authentication;
+no export, inference, QA, model or repair purpose is borrowed. A separate
+thirty-minute restore purpose remains unapproved, not silently implemented.
+These are remaining development obligations, so neither G3 nor final-media
+readiness is declared complete by this foundation stage.

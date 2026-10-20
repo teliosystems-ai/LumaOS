@@ -1438,6 +1438,58 @@ impl<A: Checkpoint> Store<A> {
 mod tests {
     use super::*;
     #[test]
+    fn continuation_data_preserves_actual_typed_c_event_and_production_nv_commitment() {
+        use luma_content_store::v2::custody::{extend_head, EventData};
+        // Existing genuine typed signed-receipt fixture; neither signature nor
+        // serialization is synthesized by the new continuation codec.
+        let event = Event::Backup(backup::test_signed_receipt().body);
+        let original = serde_json::to_vec(&event).unwrap();
+        let copied = EventData::parse(&original).unwrap();
+        assert_eq!(copied.canonical_event.as_bytes(), original);
+        let actual_event = event.digest().unwrap();
+        assert_eq!(copied.event_sha256().unwrap(), bundle::hex(&actual_event));
+        let before = [7; 32];
+        assert_eq!(
+            extend_head(&bundle::hex(&before), &copied.event_sha256().unwrap()).unwrap(),
+            bundle::hex(&tpm::extend_value(before, actual_event))
+        );
+        // Exercise an actually typed/validated retained event above the former
+        // 16KiB codec ceiling. Certificate bodies here are pinned inert bytes,
+        // not a certificate commissioning or live original-Admin ceremony.
+        use crate::backup_crypto::{RecipientPin, RecipientPins};
+        use crate::finite_grants::{Action, Kind, Selector, Use};
+        let installation = "11".repeat(32);
+        let certificate_a = vec![0x31; 8192];
+        let certificate_b = vec![0x32; 8192];
+        let request = recipients::Request {
+            schema_version: 1,
+            purpose: "luma-content-encryption-recipients-v1".into(),
+            binding: OwnerBinding {installation:installation.clone(),owner:"22".repeat(32),owner_generation:1},
+            expected_generation: 0,
+            active: true,
+            recipients: RecipientPins {
+                owner: RecipientPin {certificate_sha256:hash(&certificate_a),spki_sha256:"33".repeat(32)},
+                offline_admin: RecipientPin {certificate_sha256:hash(&certificate_b),spki_sha256:"44".repeat(32)},
+            },
+            owner_certificate_der_hex: bundle::hex(&certificate_a),
+            offline_admin_certificate_der_hex: bundle::hex(&certificate_b),
+        };
+        request.validate().unwrap();
+        let audit = Audit {subject:"22".repeat(32),subject_generation:1,grant_id:"fixture-recipients".into(),grant_version:1,
+            checkpoint_head:"55".repeat(32),operation_id:Some("66".repeat(16)),
+            usage:Use {action:Action::ProvisionResource,selector:Selector {kind:Kind::Resource,id:"content-backup-recipients-enroll-v1".into(),
+                generation:1,digest:hash(&serde_json::to_vec(&request).unwrap())},input_bytes:recipients::MAX_REQUEST as u64,output_bytes:65536,units:1}};
+        let enrollment:recipients::Enrollment=serde_json::from_value(serde_json::json!({"schema_version":1,
+            "purpose":"luma-content-recipient-custody-enrollment-v1","generation":1,"request":request,"original_authority":audit})).unwrap();
+        enrollment.validate(&installation).unwrap();
+        let large=Event::Recipients(enrollment);
+        let original=serde_json::to_vec(&large).unwrap();
+        assert!(original.len()>32*1024);
+        let copied=EventData::parse(&original).unwrap();
+        assert_eq!(copied.canonical_event.as_bytes(),original);
+        assert_eq!(copied.event_sha256().unwrap(),bundle::hex(&large.digest().unwrap()));
+    }
+    #[test]
     fn empty_history_is_exact_genesis_not_a_reconstructed_disk_head() {
         let journal = Journal::empty(&"12".repeat(32), [7; 32]).unwrap();
         let bytes = journal.bytes().unwrap();

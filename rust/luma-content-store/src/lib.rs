@@ -4,10 +4,12 @@
 //! kernel resource lease, sign data or establish rollback-resistant authority.
 //! Every caller must supply a real [`Boundary`] that enforces those independent
 //! requirements continuously. There is deliberately no default implementation.
-//! A repository is exclusively locked for its lifetime. Immutable outcomes are
+//! The v1 [`Repository`] is exclusively locked for its lifetime. Its outcomes are
 //! committed by a no-replace directory rename, with their exact source retained.
 //! Partial preparation is never erased or overwritten; an incompatible partial
 //! write requires separately authorized, exact reviewed quarantine recovery.
+//! [`v2`] separately provides immutable, unselected paged-map/segment data
+//! foundations. It is not a current-root publisher, migration or custody adapter.
 #![cfg(target_os = "linux")]
 
 use luma_content::{
@@ -21,6 +23,7 @@ use std::path::Path;
 
 mod backup;
 mod collections;
+pub mod corpus_index;
 mod lifecycle;
 mod publication;
 mod queries;
@@ -29,6 +32,7 @@ mod restore;
 mod semantic;
 mod state;
 mod storage;
+pub mod v2;
 pub use backup::{
     inspect_backup_data, inspect_backup_data_checked, BackupArea, BackupAreaReview, BackupBoundary,
     BackupBudget, BackupDirectory, BackupInspection, BackupManifest, BackupMember, BackupNamespace,

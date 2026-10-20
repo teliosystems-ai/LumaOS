@@ -1,6 +1,6 @@
 # ADR-0014: Segmented content and index generations
 
-- Status: **Design for implementation; not implemented or qualified**
+- Status: **Partially implemented data foundations; native integration and qualification remain open**
 - Date: 2026-10-20
 - Owners: storage, security/custody, platform, desktop and QA
 - Extends: ADR-0003, ADR-0004, ADR-0010 and the existing independent content custody contract
@@ -26,9 +26,14 @@ each request, with a 32-entry/24 MiB physical namespace. Backup and restore also
 have single-repository/256-step bounds. Changing a search constant would not
 remove these coupled constraints safely.
 
-This decision defines a new format and implementation direction. It reports
-neither NF08 completion nor a measured 500 ms result. Existing v1 bytes, limits,
-receipts, parsers, grants and recovery paths remain independently supported.
+This decision defines a new format and implementation direction. Public,
+unselected v2 storage/custody and corpus-index data APIs now implement the
+bounded format foundations; their verification is recorded separately from
+native integration. They do not select a product head, perform a migration,
+authenticate a builder or create a deployed native endpoint. This decision
+reports neither NF08 completion nor a measured 500 ms result. Existing v1
+bytes, limits, receipts, parsers, grants and recovery paths remain independently
+supported.
 
 ## Authority and format boundary
 
@@ -178,9 +183,14 @@ cannot authenticate the original installation or a complete backup.
 Restore streams bounded chronological windows, remaps artifact/collection and
 lifecycle references into the independently provisioned fresh owner, and keeps
 an exact C-selected target prefix and all outstanding capacity reservations.
-Each new window uses a newly authenticated existing Admin-purpose session and
-fresh grants. It does not extend the prior thirty-minute deadline or import
-source credentials, grants or TPM state. Completion requires every declared
+Each new window uses a newly authenticated original Admin, the existing
+standard thirty-second purpose and fresh grants. Source preparation, secret
+entry where required, work, drainage and delivery must fit that original
+deadline; a long worker timeout is not a longer authentication purpose. A
+separate thirty-minute restore-only purpose remains an unapproved optional
+policy change. Export, model import/activation, QA, repair and five-minute
+inference approvals cannot authorize it. Windowing does not renew an earlier
+session or import source credentials, grants or TPM state. Completion requires every declared
 part and final target commitment; partial prefixes and encrypted original
 evidence remain retained. Existing v1/v2 small-archive restore stays unchanged.
 

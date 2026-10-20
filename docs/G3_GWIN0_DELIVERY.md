@@ -49,8 +49,8 @@ this scope decision does not supply its missing implementation or evidence.
 
 | Workstream | Scope | Remaining implementation or qualification |
 | --- | --- | --- |
-| Durable content and custody | G3 capacity and later production durability | The current owner-generation store accepts at most 256 committed outcomes and 64 MiB. Safe refusals preserve interrupted evidence and restore reservations, but do not satisfy the current G3 NF08 corpus size. Segmented authoritative storage and custody-bound indexed snapshots remain development; unlimited history, root succession and additional forensics are separate later obligations |
-| Discovery and result policy | G3 | Explicit conversation/manual collection editing joins exact-version native membership review, independent grants and conflict-aware publication. Owner-local TF-IDF/LSA is bounded ASCII retrieval with at most 64 selected versions, not neural multilingual search. NF08 requires ACL-filtered text and semantic queries on 100,000 indexed objects with P95 first results at most 500 ms: the current path cannot represent that authorized corpus. This is an implementation gap, not merely a missing timing test or an approved deferral |
+| Durable content and custody | G3 capacity and later production durability | The deployed owner-generation path still accepts at most 256 committed outcomes and 64 MiB. New unselected v2 map/blob/segment and legacy C-continuation data foundations pass scoped software tests; actual owner-head/C selection, semantic publication, migration and segmented backup/restore integration remain development. Unlimited history, root succession and additional forensics are separate later obligations |
+| Discovery and result policy | G3 | Existing native owner-local TF-IDF/LSA is bounded ASCII retrieval over at most 64 selected versions. A separate complete-corpus data core now implements bounded streamed postings and feature-space LSA, with explicit source/runtime builder identity and fresh non-default boundary callbacks. It is not a native-selected endpoint, resumable admitted job or measured 100,000-object path. NF08's ACL-filtered text/semantic corpus and P95 first results at most 500 ms still require native integration and optimization; this is not merely missing timing evidence or an approved deferral |
 | Accessible workspace | G3 | Exact historical Read, fresh inference, human-edited document and collection handoff, model-disabled manual controls, and human-described visual-reference clarification are implemented. The native editor now retains a real bounded worker lease between literal edits, drains on explicit Freeze, and supports separately authorized durable checkpoints and exact-version resume. Frozen data is not Saved or a renewable session; installed keyboard/screen-reader, cancellation and read/edit/recalculation acceptance remain open |
 | Live-content lifecycle | G3, FR30/A061 | Versioned trash/restore, exact lifecycle revisions, separate Read/Delete or Read/Write grants, independent C joins and trash-preserving restore pass scoped software regressions, including all 147 store tests. The subsequent short-response transport and installed authority/GTK journeys remain separately verified. No physical purge, expiry, space reclamation or irreversible erasure is implied |
 | Capture and references | G3 | Explicit PNG/PCM/sampled-video controls now include latched lock/bus-loss revocation. Auxiliary Whisper ASR and separately rendered/consented offline readback are implemented; signed ASR model admission and actual installed device/authority qualification remain mandatory. Visual clarification uses human descriptions and exact artifact versions; the current text-only model performs no pixel understanding or OCR |
@@ -73,7 +73,10 @@ confirmed 28 installed package states, nine retained input hashes and actual
 GTK/WebKit/GStreamer typelib imports. This is a cached build prerequisite,
 not the final Luma disk or optical image. The [versioned NF08 design](adr/0014-segmented-content-and-index-generations.md)
 documents the required segmented storage, custody continuation and derived
-index migration; it is explicitly not an implemented 100,000-object path.
+index migration. The [data-foundation record](gates/g3/nf08_foundations_2026-10-20.json)
+joins the new bounded formats and index core to scoped software results, and
+lists the remaining native producer/consumer contracts. It is explicitly not
+an implemented or qualified 100,000-object product path.
 
 ## Current development checkpoint
 

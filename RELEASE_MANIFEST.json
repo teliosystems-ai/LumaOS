@@ -141,6 +141,7 @@
     "docs/gates/g3/QUALITY_PROTOCOL.md",
     "docs/gates/g3/quality_protocol_2026-10-20.json",
     "docs/gates/g3/native_package_root_2026-10-20.json",
+    "docs/gates/g3/nf08_foundations_2026-10-20.json",
     "docs/adr/0014-segmented-content-and-index-generations.md",
     "schemas/g3_quality.schema.json",
     "scripts/g3_quality.py",

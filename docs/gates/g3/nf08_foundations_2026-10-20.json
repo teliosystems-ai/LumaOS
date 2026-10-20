@@ -1,0 +1,127 @@
+{
+  "schema_version": 1,
+  "recorded_on": "2026-10-20",
+  "status": "bounded-v2-foundations-scoped-software-regressions-passed",
+  "scope": "Public unselected data/immutable-store APIs, not deployed owner migration, current C selection or a native 100,000-object endpoint",
+  "implementation": {
+    "storage": [
+      "Distinct owner-generation v2 domain; immutable hash-prefixed objects and exact private ext4 namespace, held inode and mount identities",
+      "Canonical authenticated B+ map pages at most 16KiB with owner/kind/count/range/height binding, membership and absence proofs, exact value CAS and checked complete ordered traversal",
+      "Leaf packing obeys both entry and actual encoded-byte limits, including maximum binary values",
+      "Read-only deterministic delta replay reconstructs the whole expected root while preserving untouched subtrees; a same-count old-request deletion/unrelated insertion cannot pass segment verification",
+      "Bounded blobs provide whole-source commitments and separately verified Merkle chunk ranges; partial reads do not claim whole-source hashing",
+      "Immutable segments preserve canonical original records/source/payload, contiguous global ordinals and request uniqueness across segments",
+      "Non-default Boundary checks precede private I/O and hashing. Actual held reads reserve capacity before consumption, including EOF probes; partial/unselected writes remain retained and measured",
+      "Physical inventory refuses unknown root members, hardlinks, changed namespaces/mounts and mutation during enumeration; it neither selects a head nor performs garbage collection"
+    ],
+    "custody_data": [
+      "Closed versioned continuation descriptors and immutable legacy-v1 event archives preserve original typed JSON order and the existing event/NV-extension commitments",
+      "A full-v1-journal bootstrap candidate extends the exact legacy selected head without inventing an ordinary event or redispatching historical events",
+      "Global ordinal includes continuation extensions; descriptor sequence and archived ordinary-event segment counts are independent",
+      "The new-format raw-event ceiling accommodates existing certificate/restore/publication shapes while aggregate archive bounds remain finite; existing v1 limits are unchanged",
+      "Data validation is explicitly not event-semantic replay, an authenticated map delta, physical preallocation, original authority or current NV selection"
+    ],
+    "index_data": [
+      "Exact complete Corpus map traversal binds current immutable references, content lengths/hashes and lifecycle commitments before source indexing",
+      "Streamed immutable posting pages, bounded bucket statistics and deterministic TF-IDF feature selection avoid an N-by-N document matrix",
+      "Feature-space covariance/Jacobi decomposition is bounded by at most 512 features and eight latent dimensions; non-convergence refuses the entire generation",
+      "Closed manifests bind exact corpus/coverage/page roots and explicit source/runtime BuilderIdentity. A mandatory non-default current_builder callback and separately observed current-generation callback establish provenance outside serialized hashes",
+      "Open verifies complete document, postings, model and vector closure. Lexical AND and statistical ASCII LSA queries retain finite result/work/I/O bounds and fresh corpus/generation/candidate checks",
+      "No ordinary Read, Infer, effect, publication or longer-session authority is created by an index, progress record or result"
+    ]
+  },
+  "finite_data_profile": {
+    "owner_map_entries_upper_bound": 1048576,
+    "map_page_bytes": 16384,
+    "map_height_upper_bound": 8,
+    "map_delta_entries": 256,
+    "segment_outcomes": 256,
+    "segment_logical_bytes": 67108864,
+    "segment_count_upper_bound": 4096,
+    "custody_descriptor_bytes": 16384,
+    "custody_raw_event_bytes": 1048576,
+    "custody_archive_bytes": 4194304,
+    "custody_archive_events": 256,
+    "index_objects_upper_bound": 100000,
+    "index_object_bytes": 1048576,
+    "index_first_pass_source_bytes": 8589934592,
+    "index_posting_records": 32000000,
+    "index_features": 512,
+    "index_dimensions": 8,
+    "index_supported_text": "Canonical UTF8 text/JSON/CSV source; complete ASCII alphanumeric tokens up to64bytes, not multilingual neural embeddings or pixel/OCR understanding",
+    "limits_are_not_resource_reservations_or_capacity_guarantees": true,
+    "v1_store_and_custody_limits_unchanged": true
+  },
+  "verification": {
+    "directory": "/mnt/luma-build/work/nf08-integrated-20261020-zgOk9poA",
+    "source_manifest_sha256": "0d46623a8559efb8ba5264084d15edec0250714307c1e3cbbe2249b2f94cab4e",
+    "workspace_all_targets_warnings_denied_passed": true,
+    "check_log_sha256": "89ae640ce95e813a857f7e4f70b79bac8d8336971d7527f42638b133aec11872",
+    "v2_tests_passed": 29,
+    "v2_log_sha256": "daae2dc989583e296236ed7bf075125f5f28c24a98c2f492dddbbb369eaa2ae1",
+    "corpus_tests_passed": 14,
+    "corpus_log_sha256": "f879e035ab5ed32b76358d631b731e6edecaae230554e12a722cc06e285cc996",
+    "existing_semantic_tests_passed": 3,
+    "existing_semantic_log_sha256": "b82892438eeb5c5c09f685693ab334f5645b0b650ab43034d38ba09d26593c87",
+    "actual_production_c_event_codec_tests_passed": 1,
+    "actual_c_codec_log_sha256": "13fd94609071f914effd2cceb56683f6c2fdd4137652344cdb01b5396401b84d",
+    "actual_c_codec_scope": "Existing typed Backup and greater-than32KiB typed/validated Recipients fixtures compare the real production Event::digest and tpm::extend_value algorithms; no physical TPM dispatch, certificate commissioning or authenticated Admin ceremony",
+    "targeted_tests_total": 47,
+    "failed": 0,
+    "ignored": 0,
+    "network": "none",
+    "compiler_memory_limit_bytes": 4294967296,
+    "compiler_memory_peak_bytes": 3722305536,
+    "compiler_oom_events": 0,
+    "additional_swap_bytes": 0,
+    "cpu_limit": 2,
+    "task_limit": 128,
+    "actual_ext4_private_map_page_and_mutation_tests": true,
+    "authority_callbacks_are_explicit_disposable_fixtures": true,
+    "hundred_thousand_test_is_scalar_shape_only_not_stored_corpus": true,
+    "native_100000_object_or_latency_qualification": false,
+    "physical_tpm_or_installed_pam_authority_executed": false
+  },
+  "staged_source_join": {
+    "report": "/mnt/luma-build/work/nf08-index-join-20261020-1ta146rt/verification.json",
+    "report_sha256": "ce306d1c37b6780429dae07ce11ea44b9cf7409d5c8b89a4b34352935957ca9a",
+    "rust_implementation_files": 15,
+    "source_files_including_corrected_adr": 16,
+    "all_staged_source_bytes_match_final_frozen_cut": true
+  },
+  "retained_attempts": [
+    "First isolated store cut U7qGYAGk passed strict checking and27tests; it predates the root-inventory and canonical-reference corrections and is not proof of those corrections",
+    "First joined TJEFPI8x strict check correctly failed a test-only bool-versus-serde_json::Value assignment. The single fixture was fixed; the original failed command/log remain retained"
+  ],
+  "known_algorithm_costs": [
+    "Build requires three complete source passes plus bounded feature-space decomposition; no native checkpointed thirty-second job adapter exists yet",
+    "Cold open verifies full corpus/map and posting/model/vector closure",
+    "Lexical queries scan complete relevant hash-bucket chains;100000 common-term postings require about1042posting pages before additional bucket collisions",
+    "Semantic queries scan all bounded coordinate pages;100000 scalar/descriptor sizing is not measured native latency",
+    "Term-specific optimized posting/cursor paths and native timing qualification remain development/acceptance, not an assumed500ms result"
+  ],
+  "native_development_remaining": [
+    "OwnerHeadV2 binding every authoritative map, global history, migration provenance and physical-policy/inventory commitment; a Corpus root alone is not whole owner state",
+    "Distinct installation/sealed-genesis C map bindings and closed C map kinds. Never invent a synthetic Admin owner or reinterpret an owner Boundary as C authority",
+    "Native independently reconstructed semantic publication/deltas, original principal/grants/UTC/resource fencing, actual current C/NV selection and side-by-side v1-to-v2 migration",
+    "Separate closed v2 physical namespace, actual pre-NV allocation/sync/readback of all owner/C pages and publication/terminal tails, poisoned uncertain dispatch and exact original-context reconciliation",
+    "Explicit versioned owner/index/snapshot/restore-window C events; current legacy event codec does not implement their semantic adapter",
+    "Whole-snapshot intent plus authenticated ordered bounded encrypted parts and final origin-signed manifest; avoid circular plaintext/final-ciphertext manifest commitments",
+    "Chronological fresh-owner restore windows with C-selected target prefix/mapping/lifecycle and retained evidence. Use fresh Standard30second authentication and grants; no automatic renewal or borrowed extended purpose",
+    "Native fixed-builder generation selection, checkpointed bounded indexing jobs, fresh query/output and result-read admission, workspace migration/rebuild/progress/recovery journeys and fault regressions",
+    "Actual native100000-object owner corpus with unauthorized-owner/revocation/corruption/recovery and cold/warm timing boundaries, followed by complete final media and installed acceptance"
+  ],
+  "restore_purpose_policy": {
+    "currently_authorized_seconds": 30,
+    "fresh_original_admin_and_grants_per_window": true,
+    "optional_separate_1800_second_restore_purpose_approved": false,
+    "inference_export_model_qa_or_repair_purposes_borrowed": false
+  },
+  "new_native_image_built": false,
+  "native_v2_endpoint_published": false,
+  "production_qualified": false,
+  "nf08_complete": false,
+  "g3_gate_closed": false,
+  "gwin0_gate_closed": false,
+  "hyper_v": "owner-deferred development; W030-W032 remain unpassed"
+}

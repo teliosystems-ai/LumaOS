@@ -1,0 +1,25 @@
+#include <tunables/global>
+
+profile luma-hardware-query flags=(attach_disconnected,mediate_deleted) {
+  #include <abstractions/base>
+  capability net_admin,
+  capability sys_ptrace,
+  ptrace (read) peer=luma-hardware,
+  ptrace (readby) peer=luma-hardware,
+  deny ptrace (trace, tracedby),
+  signal (receive) peer=unconfined,
+  unix (getopt) type=seqpacket,
+  unix (receive,send) type=seqpacket peer=(label=luma-hardware),
+  /usr/libexec/luma-os/hardware-bpf-query mr,
+  /usr/libexec/luma-os/luma-platform r,
+  /{usr/,}lib{,64}/** mr,
+  /proc/self/{status,attr/current} r,
+  /proc/@{pid}/{stat,status,cgroup,cmdline,exe} r,
+  /proc/@{pid}/attr/current r,
+  /proc/sys/kernel/random/boot_id r,
+  /sys/fs/cgroup/{lumamodel,lumaacquisition}.slice/ r,
+  deny /proc/@{pid}/{mem,environ} rw,
+  deny /dev/tpm* rw,
+  deny /var/lib/luma-os/** rwklx,
+  deny /sys/** w,
+}

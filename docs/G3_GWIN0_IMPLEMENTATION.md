@@ -5,6 +5,16 @@ The latest produced image is the [sequence-16 native Ubuntu candidate](../native
 not a Windows image or a complete G3 release. Dated checkpoints below retain
 their original source and execution scope.
 
+The [hardware image-mediation checkpoint](gates/g3/hardware_image_mediation_2026-10-20.json)
+records pinned ordinary-writer restrictions and separate query-only kernel-filter
+and platform-daemon observers. Sixteen image-policy tests, 28 actual private
+D-Bus cases and 492 C assertions pass, including actual kernel queries,
+descriptor transfer, process-generation checks and intrinsic syscall refusals.
+These helpers neither admit effects nor create grants. Their offline profile
+parsing is not installed AppArmor/socket-activation or hardware qualification.
+The Admin controller and resource-manager integration remain a separate source
+cut under verification; this checkpoint changes no produced image.
+
 G3 functional-beta development and the GWIN0 Windows foundation start on
 `feature/g3-gwin0-beta`, authorized on 2026-10-15. G2 remains open for native
 and production qualification. The delivered sequence-14 laboratory image and

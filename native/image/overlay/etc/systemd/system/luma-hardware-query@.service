@@ -1,0 +1,47 @@
+[Unit]
+Description=Luma one-request authenticated cgroup BPF observation
+After=apparmor.service
+Requires=apparmor.service
+
+[Service]
+Type=exec
+ExecStart=/usr/libexec/luma-os/hardware-bpf-query
+User=root
+Group=root
+StandardInput=socket
+StandardOutput=socket
+StandardError=journal
+UMask=0077
+NoNewPrivileges=yes
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_SYS_PTRACE
+AmbientCapabilities=
+AppArmorProfile=luma-hardware-query
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_UNIX
+RestrictNamespaces=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service bpf capget capset
+SystemCallFilter=~@mount @raw-io @reboot @swap @obsolete @debug
+SystemCallFilter=~ptrace process_vm_readv process_vm_writev
+LimitNOFILE=16
+LimitCORE=0
+LimitMEMLOCK=0
+LimitCPU=1
+MemoryMax=32M
+MemorySwapMax=0
+TasksMax=1
+CPUQuota=100%
+RuntimeMaxSec=2
+TimeoutStartSec=2
+TimeoutStopSec=1
+KillMode=control-group
+SendSIGKILL=yes
+Restart=no

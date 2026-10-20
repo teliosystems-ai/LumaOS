@@ -1,0 +1,20 @@
+[Unit]
+Description=Luma fixed query-only hardware observation socket
+After=systemd-tmpfiles-setup.service apparmor.service
+Requires=apparmor.service
+
+[Socket]
+ListenSequentialPacket=/run/luma-hardware/query.sock
+SocketMode=0600
+DirectoryMode=0700
+SocketUser=root
+SocketGroup=root
+Accept=yes
+MaxConnections=2
+Backlog=2
+RemoveOnStop=yes
+TriggerLimitIntervalSec=1
+TriggerLimitBurst=16
+
+[Install]
+WantedBy=sockets.target

@@ -1,0 +1,20 @@
+[Unit]
+Description=Luma fixed read-only platform-daemon observation socket
+After=apparmor.service
+Requires=apparmor.service
+
+[Socket]
+ListenSequentialPacket=/run/luma-hardware-daemon-observer/observe.sock
+DirectoryMode=0700
+SocketMode=0600
+SocketUser=root
+SocketGroup=root
+Accept=yes
+Backlog=4
+MaxConnections=2
+RemoveOnStop=yes
+TriggerLimitIntervalSec=1
+TriggerLimitBurst=64
+
+[Install]
+WantedBy=sockets.target

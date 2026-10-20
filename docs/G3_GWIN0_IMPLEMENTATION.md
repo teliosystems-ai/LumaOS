@@ -1594,3 +1594,23 @@ There were no skipped cases. The appliance includes pinned compiler binaries,
 corresponding source, notices and a relink kit; legal redistribution clearance
 is not inferred. Offline AppArmor parsing is not enforcement. Installed authority,
 full image, hardware-policy adapters and complete G3 acceptance remain open.
+
+### Windows complete-snapshot manual save, 20 October 2026
+
+The original interactive client can now explicitly save a fully verified
+completed Read snapshot, up to one MiB, to a new private NTFS file. The Read
+pipe closes first. A fresh 30-second manual action binds the source, current
+Windows token/logon/session, fresh nonce and held target to an independent
+human confirmation. It checks actual target protection, refuses overwrites and
+ambiguous objects, then flushes and verifies the whole-file readback. The
+client opens the output, not SYSTEM. Read receipts remain data rather than
+product Export authority; inference, publication and Linux grants are not implied.
+Failure can leave a named partial file for manual inspection, never automatic
+retry or deletion. Synchronous kernel hard deadlines are not claimed.
+
+The [execution record](gates/gwin0/manual_snapshot_save_2026-10-20.json) joins
+973 authority assertions, including 57 new actual NTFS/manual-save mechanism
+checks, 162 package assertions and full executable compilation. It retains the
+failed full-file/wire-hash attempt and exact source pins. Installed first-Admin,
+UTC, host protection and manual-workspace journeys remain qualification or
+separate implementation work; no service, account or host protection was changed.

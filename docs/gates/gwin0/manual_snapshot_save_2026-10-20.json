@@ -1,0 +1,65 @@
+{
+  "schema_version": 1,
+  "recorded_on": "2026-10-20",
+  "status": "windows-whole-snapshot-manual-save-software-verified",
+  "scope": "Original-client manual save after a complete independent existing first-Admin Read; not product Export, Linux grants, model effects or installed qualification",
+  "command": "save-enrolled-snapshot INSTALLATION ROOT RELATIVE_PATH EXACT_BYTES SHA256 NEW_ABSOLUTE_TARGET",
+  "implementation": [
+    "The existing service authenticates and reviews its original first-Admin-owned local NTFS Read; all chunks and final receipt/whole SHA256 must validate before one-use ownership transfer, at most 1048576 bytes",
+    "Read pipe closes before the independent manual action; its receipt supplies no filesystem or service-side Export authority. No current-source re-read, background action, model, publication or inference grant is implied",
+    "A fresh nonrenewable 30-second original-client action binds the entire completed source, fresh nonce, actual primary-token/logon/session fingerprint and held target/ancestor/owner-DACL identity to an exact human SAVE hash",
+    "Actual original local Windows account SID/flags, active unlocked interactive session, primary-token identity and enabled ACL-bypass privileges are checked throughout; impersonation and service identities refuse",
+    "The ordinary original client, never SYSTEM, creates a new no-follow exclusive owner/SYSTEM-only protected-DACL NTFS output under held ancestors. Existing files, hard links, aliases, streams, reparse/cloud/recall/offline or changed objects refuse",
+    "Actual protected target volume identity and BitLocker state are rechecked with bounded sampling; unknown/suspended/unprotected state refuses. This is not enterprise authorization or an atomic encryption-state reservation",
+    "Bounded writes, flush and complete length/SHA256 readback precede success. Cancellation or failure never claims completion, retries automatically, overwrites or deletes the named possible partial file",
+    "Manual binary data uses a full-file hash rather than raising the intentionally smaller wire-frame hash limit. The separate 4096-byte UTF8 inference handoff remains unchanged and mutually exclusive with this transfer"
+  ],
+  "verification": {
+    "path": "D:/LumaOS-builds/gwin-inference-development-01e3dc60dd6c4c69921d0c8e1b8c832c/verification.json",
+    "sha256": "e824dd8879a982177ff570d585db618df431b25d99deac81d9c751d207e22c13",
+    "authority_assertions": 973,
+    "manual_save_mechanism_assertions_included": 57,
+    "inference_lifecycle_assertions_included": 74,
+    "inference_mechanism_assertions_included": 116,
+    "unchanged_compute_assertions_included": 80,
+    "package_assertions": 162,
+    "full_executable_compiled": true,
+    "source_records": 71,
+    "sources_unchanged_before_and_after": true,
+    "root_independently_joined_current_sources": true,
+    "unregistered_in_progress_workspace_file": "HostedAuthorityWorkspace.cs is inventoried but is not compiled, used or claimed by this component",
+    "standalone_ntfs_proof": {
+      "path": "D:/LumaOS-builds/gwin-manual-save-development-ddd353466eaf4f3980e3f2c1c6942dc8/verification.json",
+      "sha256": "06e1c5f9ba6410f991d512d35473157d3dfc0622aed62363f1823f9668c86dad",
+      "assertions": 57
+    },
+    "cases": ["real multipart one-MiB snapshot", "partial receipt refusal", "one-use transfer and replay refusal", "wrong confirmation and nonce refusal", "actual no-overwrite", "actual existing hard-link refusal", "held-ancestor rename refusal", "private DACL", "actual full readback", "cancellation before creation", "protection callback refusal", "ambiguous paths", "binary non-UTF8 preserved"],
+    "sources": {
+      "packaging/windows/HostedAuthorityClientIdentity.cs": "fac4db25cceeb79d6886cd9aadf71a3609f47328162fe1d51b9da4a4dee08b8a",
+      "packaging/windows/HostedAuthorityManualExport.cs": "8e223d15927b30847f8104254e67d55b27a9a9cdcc1bb7f9375c0838ba78bd76",
+      "packaging/windows/HostedAuthorityManualExportFixture.cs": "4367e4eafbe9397bb3df521c75a472319070dfacd287ca257d2e46f90f2d4121",
+      "packaging/windows/HostedAuthorityRead.cs": "21371b4177fefac5631db472e911f74abe3d935bcc84e61290a5adab2fb5508d",
+      "packaging/windows/HostedAuthorityService.cs": "e9368ef18d81969188c838ad7aadb65370d0f9679eed6a0b60af089ea9a378e1",
+      "packaging/windows/build-hosted-authority.ps1": "bee0e80b99e49b7271fcd69e12b983e0aa640e64b5730c90261f335db15c5a2a",
+      "packaging/windows/test-hosted-authority.ps1": "4ac386e1968bc1f2881ec48a0674565f8a7584010920bd3f88c3302d87bcfd68"
+    }
+  },
+  "retained_failed_attempt": {
+    "path": "D:/LumaOS-builds/gwin-manual-save-development-019c9a30f7f54d7f87f7763dfdd59d68/verification.json",
+    "reason": "One-MiB test correctly refused the wire-frame hash helper's smaller input bound; implementation and fixture now use explicit SHA256 for full file data, leaving wire bounds unchanged"
+  },
+  "limitations": [
+    "NTFS fixtures exercise actual files, metadata, chunks and readback with controlled current-authority callbacks. They do not replace actual first-Admin authentication, protected UTC, live BitLocker/provider behavior or installed service/client qualification.",
+    "Synchronous kernel/provider hard deadlines and zero-exposure protection transitions are not claimed. A failed or cancelled named partial file is retained for manual inspection.",
+    "General ordinary-user product principal/grants and content publication remain GWIN1 scope. The first-launch account/health/manual workspace implementation remains a separate development component."
+  ],
+  "service_installed": false,
+  "host_accounts_changed": false,
+  "physical_tpm_mutated": false,
+  "encryption_changed": false,
+  "distribution_imported": false,
+  "new_bootable_image_produced": false,
+  "g3_complete": false,
+  "gwin0_complete": false,
+  "production_qualified": false
+}

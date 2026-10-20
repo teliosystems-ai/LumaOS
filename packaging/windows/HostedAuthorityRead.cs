@@ -231,6 +231,13 @@ namespace Luma.Windows.Hosted
             string text=new UTF8Encoding(false,true).GetString(content);if(text.Length==0 || text.IndexOf('\0')>=0) throw new SecurityException("The exact read must be nonempty scalar UTF8 without NUL; binary data is never repaired or truncated into a prompt.");
             byte[] result=content;content=null;ingested=true;return result;
         }
+        internal byte[] TakeCompletedForManualSave() {
+            Check();if(!completed || ingested || content==null || received!=Intent.Bytes)
+                throw new SecurityException("Manual save requires the entire completed, verified Read, consumed once; a receipt alone cannot supply bytes or write authority.");
+            using(SHA256 hash=SHA256.Create()) if(Wire.Hex(hash.ComputeHash(content))!=Intent.Sha256)
+                throw new SecurityException("Completed manual snapshot changed before transfer.");
+            byte[] result=content;content=null;ingested=true;return result;
+        }
         public void Dispose() {if(cancel!=null) Console.CancelKeyPress-=cancel;if(content!=null) {Array.Clear(content,0,content.Length);content=null;}}
         internal static int Describe(string[] arguments) {
             using(HostedReadInputs input=new HostedReadInputs(arguments,false)) {Console.WriteLine("Purpose: host-file-read (read-exact-file)\nActual input SID (not authority): "+input.Intent.Owner+"\nIntent SHA256 for separate native U-source review: "+Wire.Hash(input.Intent.Encode())+"\nIntent bytes (hex): "+Wire.Hex(input.Intent.Encode())+"\nNo source accessed, session admitted, persistent enrollment or product/Linux authority.");return 0;}

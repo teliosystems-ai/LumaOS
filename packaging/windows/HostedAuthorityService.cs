@@ -436,6 +436,7 @@ namespace Luma.Windows.Hosted
         {
             if(Console.IsInputRedirected || Console.IsOutputRedirected) throw new SecurityException("The original interactive client must review and confirm directly.");
             if(arguments.Length>0 && arguments[0]=="infer-enrolled-file") return IngestClient(arguments);
+            if(arguments.Length>0 && arguments[0]=="save-enrolled-snapshot") return ManualSaveClient(arguments);
             if(arguments.Length<2) throw new InvalidDataException("Usage: commission DOMAIN ENV RELEASEKEYHEX TIMEKEYHEX HTTPS_TIME_ENDPOINT | commission-resume DOMAIN | commission-abort DOMAIN | status DOMAIN | recover DOMAIN | recover-abort DOMAIN | release-review DESCRIPTION_FILE SIGNATURE_FILE | import DESCRIPTION_FILE SIGNATURE_FILE ARCHIVE_FILE | activate DESCRIPTION_FILE SIGNATURE_FILE | reconcile DESCRIPTION_FILE SIGNATURE_FILE | abandon DESCRIPTION_FILE SIGNATURE_FILE | compute ACTIVE_RELEASE_SHA256 OPERATION PAYLOAD_FILE | compute-recover ACTIVE_RELEASE_SHA256 REQUEST_GENERATION | infer ACTIVE_RELEASE_SHA256 REQUEST_JSON_FILE | infer-recover ACTIVE_RELEASE_SHA256 REQUEST_GENERATION | trust|trust-prepare|trust-finalize|trust-cancel|trust-quarantine DESCRIPTION_FILE OLD_PUBLISHER_SIGNATURE_FILE NEW_PUBLISHER_ACCEPTANCE_FILE");
             string command=arguments[0];bool trustCommand=command=="trust" || command=="trust-prepare" || command=="trust-finalize" || command=="trust-cancel" || command=="trust-quarantine";
             bool readCommand=command=="read-enrolled-file";

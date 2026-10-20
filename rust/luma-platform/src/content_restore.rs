@@ -68,6 +68,16 @@ fn digest(value: &str) -> bool {
 pub(crate) fn graph_sha256() -> String {
     io::digest(b"luma-fresh-owner-custody-restore-graph-v1:verify-independent-origin;decrypt-inert-data;replay-all-published-chronologically;remap-prior-typed-references;original-admin-finite-batch;held-source;C-anchor-before-rename;fresh-same-state-read;retain-encrypted-origin-evidence")
 }
+fn lifecycle_graph_sha256() -> String {
+    io::digest(b"luma-fresh-owner-custody-restore-graph-v2:verify-independent-origin;decrypt-inert-data;replay-published-and-logical-lifecycle-chronologically;preserve-trash-with-remapped-exact-version-and-lifecycle-revision;leave-conflicts-and-noops-inert;original-admin-finite-batch;held-source;C-anchor-before-rename;fresh-same-state-read;retain-encrypted-origin-evidence;no-purge")
+}
+fn review_graph_sha256(review: &RestoreReview) -> Result<String> {
+    match (review.schema_version, review.profile.as_str()) {
+        (1, "luma-fresh-owner-content-restore-v1") => Ok(graph_sha256()),
+        (2, "luma-fresh-owner-content-restore-v2") => Ok(lifecycle_graph_sha256()),
+        _ => Err("restore review has no exact image-defined replay graph".into()),
+    }
+}
 impl Input {
     pub(crate) fn validate(&self) -> Result<()> {
         self.admin.validate()?;
@@ -97,7 +107,7 @@ impl Input {
         if let Some(review) = &self.review {
             review.validate()?;
             if review.target != self.target
-                || review.workflow_sha256 != graph_sha256()
+                || review.workflow_sha256 != review_graph_sha256(review)?
                 || review.request_namespace != self.request_namespace
                 || review.published_outcomes == 0
             {
@@ -838,7 +848,13 @@ impl Boundary for StoreGuard<'_> {
                 let p = self.step.ok_or("restore inspection has no mutation step")?;
                 if self.live.input.review.is_none()
                     || p.review_sha256() != review_sha256
-                    || decision != DecisionKind::Published
+                    || decision != p.decision()
+                    || !matches!(
+                        decision,
+                        DecisionKind::Published | DecisionKind::Trashed | DecisionKind::Restored
+                    )
+                    || (matches!(decision, DecisionKind::Trashed | DecisionKind::Restored)
+                        && (self.review.schema_version != 2 || p.lifecycle_request().is_none()))
                     || source_bytes != p.source_bytes()
                     || storage_bytes != p.storage_bytes()
                 {
@@ -928,11 +944,12 @@ fn worker(id: &str, path: &Path) -> Result<()> {
             "decrypted archive differs from independently authenticated original bytes".into(),
         );
     }
-    let planner = luma_content_store::plan_restore_data_checked(
+    let planner = luma_content_store::plan_restore_data_checked_versions(
         data,
         &input.target,
         &input.request_namespace,
         &graph_sha256(),
+        &lifecycle_graph_sha256(),
         &mut || live.check(),
     )?;
     if planner.review().origin != capsule.receipt.body.input.binding
@@ -1269,6 +1286,65 @@ fn verify_output(response: &Response) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn lifecycle_restore_review_selects_distinct_graph_without_reinterpreting_v1() {
+        // Pure request data only. The installed worker must still authenticate
+        // the encrypted origin and rebuild every actual chronological step.
+        for (version, name, graph) in [
+            (1, "luma-fresh-owner-content-restore-v1", graph_sha256()),
+            (
+                2,
+                "luma-fresh-owner-content-restore-v2",
+                lifecycle_graph_sha256(),
+            ),
+        ] {
+            let mut value = input();
+            let mut review = RestoreReview {
+                schema_version: version,
+                profile: name.into(),
+                origin: OwnerBinding {
+                    installation: "66".repeat(32),
+                    owner: "77".repeat(32),
+                    owner_generation: 1,
+                },
+                target: value.target.clone(),
+                archive_sha256: "88".repeat(32),
+                archive_bytes: 4096,
+                manifest_sha256: "99".repeat(32),
+                origin_head_sha256: "aa".repeat(32),
+                workflow_sha256: graph.clone(),
+                request_namespace: value.request_namespace.clone(),
+                published_outcomes: 1,
+                inert_committed_outcomes: 0,
+                inert_pending_directories: 0,
+                inert_quarantined_directories: 0,
+                planned_storage_bytes: 8192,
+                mappings_sha256: "bb".repeat(32),
+                steps: vec![luma_content_store::RestoreStepReview {
+                    request_id: format!("{}.1", value.request_namespace),
+                    review_sha256: "cc".repeat(32),
+                }],
+                review_sha256: String::new(),
+            };
+            review.review_sha256 = io::digest(&serde_json::to_vec(&review).unwrap());
+            review.validate().unwrap();
+            assert_eq!(review_graph_sha256(&review).unwrap(), graph);
+            value.review = Some(review.clone());
+            value.validate().unwrap();
+            review.workflow_sha256 = if version == 1 {
+                lifecycle_graph_sha256()
+            } else {
+                graph_sha256()
+            };
+            review.review_sha256.clear();
+            review.review_sha256 = io::digest(&serde_json::to_vec(&review).unwrap());
+            review.validate().unwrap();
+            value.review = Some(review);
+            assert!(value.validate().is_err());
+        }
+        assert_ne!(graph_sha256(), lifecycle_graph_sha256());
+    }
     fn input() -> Input {
         Input {
             schema_version: 1,

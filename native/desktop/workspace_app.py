@@ -261,6 +261,9 @@ def main():
     collection_button = Gtk.Button.new_with_mnemonic('_Edit exact collection…')
     collection_button.set_tooltip_text('Human-authored exact typed collection with fresh original native review and independent Read/effect grants. Model/capture references never confer membership or publication authority.')
     input_actions.pack_start(collection_button, False, False, 4)
+    lifecycle_button = Gtk.Button.new_with_mnemonic('_Versioned trash…')
+    lifecycle_button.set_tooltip_text('Fresh original native lifecycle status, or explicitly reviewed logical trash/restore of an exact reference. Separate Read and Delete/Write grants; no physical purge, automatic undo or inferred latest version.')
+    owner_actions.pack_start(lifecycle_button, False, False, 4)
     recovery_button = Gtk.Button.new_with_mnemonic('_Admin encrypted recovery…')
     recovery_button.set_tooltip_text('Open the original native Admin terminal for encrypted fresh-owner restore, exact-prefix resume, or reviewed damaged-batch retirement. No key, password, grant or private result enters WebKit.')
     engine_actions.pack_start(recovery_button, False, False, 4)
@@ -352,6 +355,14 @@ def main():
         except Exception:
             authority_note.set_text('Collection editor unavailable or refused; no collection, membership, grant or publication was inferred.')
     collection_button.connect('clicked', edit_collection)
+
+    def lifecycle_control(_button):
+        try:
+            opened = auth_module.workspace_controller('lifecycle').launch_dialog(window, auth_module)
+            authority_note.set_text('Native lifecycle terminal launched, not authenticated or completed. Current status and historical replay remain distinct; fresh original PAM, review and independent grants stay in that terminal.' if opened else 'Lifecycle selection cancelled; no native Read or logical change requested.')
+        except Exception:
+            authority_note.set_text('Lifecycle unavailable or refused; no current status, logical change, purge, restore permission or completion inferred.')
+    lifecycle_button.connect('clicked', lifecycle_control)
 
     def clarify_capture(_button):
         try:

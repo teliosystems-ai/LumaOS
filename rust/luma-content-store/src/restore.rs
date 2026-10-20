@@ -64,9 +64,10 @@ impl RestoreReview {
             .published_outcomes
             .checked_add(self.inert_committed_outcomes)
             .ok_or("restore outcome count overflow")?;
-        if self.schema_version != 1
-            || self.profile != PROFILE
-            || self.origin.installation == self.target.installation
+        if !matches!(
+            (self.schema_version, self.profile.as_str()),
+            (1, PROFILE) | (2, "luma-fresh-owner-content-restore-v2")
+        ) || self.origin.installation == self.target.installation
             || self.origin.owner == self.target.owner
             || !namespace(&self.request_namespace)
             || self.archive_bytes <= 20
@@ -189,12 +190,45 @@ pub fn plan_restore_data_checked<'a>(
     restore_graph_sha: &str,
     check: &mut impl FnMut() -> Result<()>,
 ) -> Result<RestorePlan<'a>> {
+    plan_restore_data_checked_versions(
+        archive,
+        target,
+        request_namespace,
+        restore_graph_sha,
+        restore_graph_sha,
+        check,
+    )
+}
+
+/// Select the compiled v1/v2 workflow only after complete canonical archive
+/// reconstruction, without building simultaneous plans or trusting metadata.
+pub fn plan_restore_data_checked_versions<'a>(
+    archive: &'a [u8],
+    target: &OwnerBinding,
+    request_namespace: &str,
+    restore_graph_sha_v1: &str,
+    restore_graph_sha_v2: &str,
+    check: &mut impl FnMut() -> Result<()>,
+) -> Result<RestorePlan<'a>> {
     check()?;
     target.validate()?;
-    if !namespace(request_namespace) || !digest(restore_graph_sha) {
+    if !namespace(request_namespace)
+        || !digest(restore_graph_sha_v1)
+        || !digest(restore_graph_sha_v2)
+    {
         return Err("invalid fresh restore request namespace or workflow digest".into());
     }
     let (inspection, outcomes) = backup::inspect_parts(archive, check)?;
+    let restore_graph_sha = if outcomes.iter().any(|outcome| {
+        matches!(
+            outcome.record.plan.decision,
+            DecisionKind::Trashed | DecisionKind::Restored
+        )
+    }) {
+        restore_graph_sha_v2
+    } else {
+        restore_graph_sha_v1
+    };
     let origin = &inspection.manifest.binding;
     if target.installation == origin.installation || target.owner == origin.owner {
         return Err(
@@ -202,6 +236,8 @@ pub fn plan_restore_data_checked<'a>(
         );
     }
     let mut current: BTreeMap<String, ArtifactVersion> = BTreeMap::new();
+    let mut lifecycle = BTreeMap::<String, crate::LifecycleReference>::new();
+    let mut has_lifecycle = false;
     let mut history = CollectionHistory::new();
     let mut mappings = Vec::new();
     let mut steps = Vec::new();
@@ -214,7 +250,10 @@ pub fn plan_restore_data_checked<'a>(
     for outcome in outcomes {
         check()?;
         let old = &outcome.record.plan;
-        if old.decision != DecisionKind::Published {
+        if !matches!(
+            old.decision,
+            DecisionKind::Published | DecisionKind::Trashed | DecisionKind::Restored
+        ) {
             inert += 1;
             continue;
         }
@@ -292,11 +331,34 @@ pub fn plan_restore_data_checked<'a>(
                 )?;
                 (plan, Cow::Owned(source))
             }
+            SourceKind::LifecycleIntent => {
+                let mut request: crate::LifecycleRequest = serde_json::from_slice(outcome.source)?;
+                request.binding = target.clone();
+                request.request_id = request_id.clone();
+                request.workflow_sha256 = restore_graph_sha.into();
+                request.expected = lifecycle
+                    .get(&old.artifact_id)
+                    .ok_or("restore lifecycle base unavailable")?
+                    .clone();
+                let source = request.canonical_bytes()?;
+                let plan = Plan::lifecycle(
+                    existing.ok_or("restore lifecycle payload unavailable")?,
+                    &request.expected,
+                    &request,
+                )?;
+                if plan.decision() != old.decision {
+                    return Err(
+                        "restore lifecycle operation changed archived visibility semantics".into(),
+                    );
+                }
+                has_lifecycle = true;
+                (plan, Cow::Owned(source))
+            }
         };
         check()?;
         let rebuilt = luma_content::reopen(&plan.payload, target)?;
         let archived = luma_content::reopen(outcome.payload, origin)?;
-        if plan.decision() != DecisionKind::Published
+        if plan.decision() != old.decision
             || plan.resulting().artifact_id != old.resulting.artifact_id
             || plan.resulting().version != old.resulting.version
             || (plan.source_kind() != SourceKind::CollectionIntent
@@ -311,11 +373,31 @@ pub fn plan_restore_data_checked<'a>(
         if storage > MAX_REPOSITORY_BYTES {
             return Err("fresh restore would exceed bounded target repository storage".into());
         }
-        mappings.push(RestoreMapping {
-            origin: old.resulting.clone(),
-            target: plan.resulting().clone(),
-        });
-        current.insert(plan.artifact_id().into(), rebuilt);
+        if plan.decision() == DecisionKind::Published {
+            mappings.push(RestoreMapping {
+                origin: old.resulting.clone(),
+                target: plan.resulting().clone(),
+            });
+            current.insert(plan.artifact_id().into(), rebuilt);
+        }
+        let record = crate::Record {
+            schema_version: plan.data.schema_version,
+            sequence: steps.len() as u64 + 1,
+            review_sha256: plan.review.clone(),
+            plan: plan.data.clone(),
+        };
+        lifecycle.insert(
+            plan.artifact_id().into(),
+            crate::lifecycle::advanced(
+                target,
+                &record,
+                if plan.decision() == DecisionKind::Trashed {
+                    crate::LifecycleStatus::Trashed
+                } else {
+                    crate::LifecycleStatus::Live
+                },
+            )?,
+        );
         steps.push(Step { plan, source });
     }
     if steps.is_empty() {
@@ -330,8 +412,13 @@ pub fn plan_restore_data_checked<'a>(
             .count() as u64
     };
     let mut review = RestoreReview {
-        schema_version: 1,
-        profile: PROFILE.into(),
+        schema_version: if has_lifecycle { 2 } else { 1 },
+        profile: if has_lifecycle {
+            "luma-fresh-owner-content-restore-v2"
+        } else {
+            PROFILE
+        }
+        .into(),
         origin: origin.clone(),
         target: target.clone(),
         archive_sha256: inspection.archive_sha256,

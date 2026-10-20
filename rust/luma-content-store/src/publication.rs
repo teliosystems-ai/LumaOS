@@ -251,6 +251,7 @@ pub fn canonical_record_history_head(
     }
     let mut parsed = Vec::with_capacity(records.len());
     let mut requests = BTreeSet::new();
+    let mut lifecycle = BTreeMap::<String, LifecycleReference>::new();
     for (index, bytes) in records.iter().enumerate() {
         if bytes.is_empty() || bytes.len() as u64 > MAX_RECORD {
             return Err("canonical record exceeds fixed byte bound".into());
@@ -265,6 +266,7 @@ pub fn canonical_record_history_head(
             (2, Some(SourceKind::ManagedTableIntent))
             | (3, Some(SourceKind::ManagedRenderIntent)) => MAX_SOURCE,
             (4, Some(SourceKind::CollectionIntent)) => MAX_COLLECTION_SOURCE_BYTES as u64,
+            (5, Some(SourceKind::LifecycleIntent)) => MAX_RECORD,
             _ => return Err("record history schema and source kind differ".into()),
         };
         if data.schema_version != record.schema_version
@@ -293,6 +295,36 @@ pub fn canonical_record_history_head(
             || record.review_sha256 != luma_content::sha256(&serde_json::to_vec(data)?)
         {
             return Err("record history sequence, metadata or self-commitment differs".into());
+        }
+        crate::lifecycle::validate_data(data)?;
+        if let Some(transition) = &data.lifecycle {
+            if lifecycle.get(&data.artifact_id) != Some(&transition.observed) {
+                return Err(
+                    "canonical history lifecycle revision does not extend its prior record".into(),
+                );
+            }
+        } else if lifecycle
+            .get(&data.artifact_id)
+            .is_some_and(|state| state.status == LifecycleStatus::Trashed)
+        {
+            return Err("canonical history overwrites a trashed identity".into());
+        }
+        if matches!(
+            data.decision,
+            DecisionKind::Published | DecisionKind::Trashed | DecisionKind::Restored
+        ) {
+            lifecycle.insert(
+                data.artifact_id.clone(),
+                crate::lifecycle::advanced(
+                    binding,
+                    &record,
+                    if data.decision == DecisionKind::Trashed {
+                        LifecycleStatus::Trashed
+                    } else {
+                        LifecycleStatus::Live
+                    },
+                )?,
+            );
         }
         parsed.push(record);
     }

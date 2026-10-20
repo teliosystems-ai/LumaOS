@@ -1,5 +1,6 @@
 use super::*;
 mod collections;
+mod lifecycle;
 use luma_content::EditOrigin;
 use std::fs;
 use std::os::unix::fs::{DirBuilderExt, PermissionsExt};

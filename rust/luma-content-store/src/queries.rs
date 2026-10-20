@@ -131,6 +131,7 @@ impl Repository {
         }
         boundary.admit(&self.binding, ResourceBudget::inspection())?;
         let snapshot = self.snapshot(None, boundary)?;
+        snapshot.require_live(&expected.artifact_id)?;
         let mut found = None;
         for (record, plan, _) in snapshot.records {
             storage::repository_check(self, None, boundary)?;
@@ -173,7 +174,13 @@ impl Repository {
     ) -> Result<SearchResults> {
         let canonical_query = canonical_search_query(query, limit)?;
         boundary.admit(&self.binding, ResourceBudget::inspection())?;
-        let snapshot = self.snapshot(None, boundary)?;
+        let mut snapshot = self.snapshot(None, boundary)?;
+        snapshot.current.retain(|artifact, _| {
+            snapshot
+                .lifecycle
+                .get(artifact)
+                .is_some_and(|state| state.status == crate::LifecycleStatus::Live)
+        });
         self.search_versions(
             canonical_query,
             limit,
@@ -198,6 +205,9 @@ impl Repository {
         let canonical_query = canonical_search_query(query, limit)?;
         boundary.admit(&self.binding, ResourceBudget::inspection())?;
         let snapshot = self.snapshot(None, boundary)?;
+        for reference in references {
+            snapshot.require_live(&reference.artifact_id)?;
+        }
         let mut selected = std::collections::BTreeMap::new();
         for (record, plan, _) in &snapshot.records {
             storage::repository_check(self, None, boundary)?;
@@ -253,6 +263,7 @@ impl Repository {
         let canonical_query = canonical_search_query(query, limit)?;
         boundary.admit(&self.binding, ResourceBudget::inspection())?;
         let snapshot = self.snapshot(None, boundary)?;
+        snapshot.require_live(&expected.artifact_id)?;
         let source = snapshot
             .records
             .iter()
@@ -264,6 +275,9 @@ impl Repository {
             .map(|(_, _, source)| crate::CollectionSource::from_canonical(source))
             .transpose()?
             .ok_or("exact published typed collection unavailable")?;
+        for member in &source.members {
+            snapshot.require_live(&member.artifact_id)?;
+        }
         storage::repository_check(self, None, boundary)?;
         let mut selected = std::collections::BTreeMap::new();
         for (record, plan, _) in &snapshot.records {

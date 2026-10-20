@@ -1,0 +1,80 @@
+{
+  "schema_version": 1,
+  "recorded_on": "2026-10-20",
+  "status": "logical-trash-and-explicit-restore-scoped-software-regressions-passed",
+  "scope": "Versioned managed-content lifecycle, exact native grant/custody joins and workspace controls; not physical erasure or installed authority qualification",
+  "implementation": [
+    "Closed typed lifecycle intent binds the exact artifact version, owner generation, lifecycle revision and state digest, preventing stale and ABA substitution",
+    "Logical trash requires independent Read plus Delete; explicit restore requires independent Read plus Write. Conflict and no-change outcomes retain the requested action rather than borrowing retention authority",
+    "Trashed identities remain reserved; ordinary reads, edits, rendering, selected/semantic queries and collection access refuse trashed content. Explicit trash inspection does not authorize restoration",
+    "Native publication independently reconstructs the canonical typed lifecycle intent and exact grant selector under the existing complete C custody pair. Serialized records and callbacks are not authority",
+    "Versioned fresh-owner restore preserves chronological trash/restore transitions with remapped immutable references and lifecycle revisions. Inert conflicts/no-ops do not resurrect data; legacy v1 restore review bytes remain unchanged",
+    "Workspace controls require exact status, review, separate grants and explicit approval; historical replay is reported separately from actual current state, with no automatic retry or undo"
+  ],
+  "retention": {
+    "policy": "until-explicit-restore-no-purge",
+    "old_versions_and_conflicts_preserved": true,
+    "external_originals_changed": false,
+    "physical_erasure_available": false,
+    "automatic_expiry_or_space_reclamation": false
+  },
+  "rust_verification": {
+    "directory": "/mnt/luma-build/work/lifecycle-integrated-verify-20261020-hzkXRt7R",
+    "source_manifest_sha256": "383e69324cd6a03f40feb9b9a3c79ff11c08ae402c25c56ef463e416aa36f7bf",
+    "workspace_all_targets_check_passed": true,
+    "warnings_denied": true,
+    "check_log_sha256": "e6f99fc8d2319d243947a5110cbeab075255d68288ec799f694460864fad42c3",
+    "full_content_store_tests": 147,
+    "full_store_failed": 0,
+    "full_store_ignored": 0,
+    "full_store_log_sha256": "57b91ac5465e0bc7613cbea3a936d3392fe1a653dda85070ee7d141c775b3b2e",
+    "focused_lifecycle_store_tests": 12,
+    "focused_lifecycle_platform_tests": 10,
+    "focused_lifecycle_log_sha256": "3c3a64a7fb5b4d71e5a3d416aa95b2b1c4a110e0f64dde1b3119728e957ec422",
+    "native_content_tests": 51,
+    "native_content_log_sha256": "4051ec9b2f1c2d0c98fb78bb350fd970cde7c554de9b8900d0ae3a903c576220",
+    "native_restore_tests": 4,
+    "native_restore_log_sha256": "8e3813a931f109d82d4b4962d82c59be7b2f448921f7ec43c508c5e5e70003e4",
+    "complete_grant_pair_tests": 6,
+    "complete_pair_log_sha256": "70f716d35f574bd30f5bc9886da785a09752bd766b38aaadd57269139ab1734c",
+    "gateway_complete_pair_tests": 1,
+    "gateway_pair_log_sha256": "1cc8191365c6b8aa69ccf76bd98c22632cb0872fd24238e789beccaa8c3f7fd2",
+    "overlapping_test_counts_must_not_be_summed_as_unique": true,
+    "unused_filter": "The separate content_custody:: filter matched zero tests and is not execution evidence. The real content_checkpoint::custody lifecycle scope test ran in the ten-test lifecycle platform subset",
+    "network": "none",
+    "memory_limit_bytes": 3221225472,
+    "swap_additional_bytes": 0,
+    "tpm_scope": "Explicit disposable metadata/failure fixtures, not a provisioned physical TPM or authenticated native PAM/C execution"
+  },
+  "workspace_verification": {
+    "directory": "/mnt/luma-build/work/lifecycle-workspace-proof-20261020-J5RpQHyM",
+    "focused_lifecycle_tests": 17,
+    "full_workspace_tests": 193,
+    "failed": 0,
+    "skipped": 0,
+    "warnings_denied": true,
+    "focused_log_sha256": "206ad565d5ae10f40b5dd6dee6e64186aa6e159514cca34aa03a87b3622d7fee",
+    "full_workspace_log_sha256": "e49f87384d9403f458892e8142b9b383895598dcde0c599853c86bf928264b4b",
+    "source_before_after_sha256": "0b234da9dff89afd50f76fc215dde32f237a02c1480b6411f5572454b72d9afb",
+    "checksums_sha256": "fd14ee9d4f1fc47fdb6dfe64af67e481ff8dec9e3c506b9c05173ed548ecbe52",
+    "authority_orchestration_uses_explicit_ordered_fixtures": true,
+    "native_pam_tpm_or_installed_gtk_executed": false
+  },
+  "commit_source_join": {
+    "report": "/mnt/luma-build/work/lifecycle-index-join-20261020-7afe3626/verification.json",
+    "report_sha256": "0ba7bfb935bf14c6dd565b5900dc9f88404bfbb48d35520869da95518368573b",
+    "staged_implementation_files": 23,
+    "all_indexed_bytes_match_tested_frozen_source": true,
+    "later_editor_ui_and_short_response_transport_changes_included": false
+  },
+  "qualification_remaining": [
+    "The subsequent editor/acknowledged-response stage repairs the existing PTY/machine-JSON separation and caller-owned source staging; that later source is not retroactively covered by this lifecycle cut",
+    "Actual installed PAM, independent C enrollment, grant/UTC revocation, LSM/cgroup effects, two-user separation and encrypted backup/native restore require native execution",
+    "Current store/custody capacities remain unchanged; this does not implement NF08's 100,000-object indexed corpus or close G3"
+  ],
+  "native_image_built_for_this_cut": false,
+  "installed_authority_qualified": false,
+  "production_qualified": false,
+  "g3_gate_closed": false,
+  "gwin0_gate_closed": false
+}

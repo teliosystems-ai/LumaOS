@@ -150,7 +150,11 @@ pub(super) fn publication_event(value: &Publication, state: &Validated) -> Resul
         .get(index)
         .ok_or("restore publication exceeds exact batch")?;
     if value.batch_review_sha256 != review.review_sha256
-        || held.decision != DecisionKind::Published
+        || !matches!(
+            held.decision,
+            DecisionKind::Published | DecisionKind::Trashed | DecisionKind::Restored
+        )
+        || (held.decision != DecisionKind::Published && review.schema_version != 2)
         || held.already_published
         || held.request_id != step.request_id
         || held.review_sha256 != step.review_sha256

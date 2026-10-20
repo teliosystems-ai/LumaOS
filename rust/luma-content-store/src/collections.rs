@@ -113,6 +113,7 @@ pub(crate) struct CollectionHistory {
     versions: Vec<CollectionVersion>,
     latest: BTreeMap<String, CollectionVersion>,
     occupied: std::collections::BTreeSet<String>,
+    trashed: std::collections::BTreeSet<String>,
 }
 
 impl CollectionHistory {
@@ -122,6 +123,7 @@ impl CollectionHistory {
             versions: Vec::new(),
             latest: BTreeMap::new(),
             occupied: std::collections::BTreeSet::new(),
+            trashed: std::collections::BTreeSet::new(),
         }
     }
 
@@ -162,6 +164,14 @@ impl CollectionHistory {
                 }
             }
             check_members(&collection, &self.published, check)?;
+            if self.trashed.contains(&artifact)
+                || collection
+                    .members
+                    .iter()
+                    .any(|member| self.trashed.contains(&member.artifact_id))
+            {
+                return Err("collection history attempts to include a trashed identity".into());
+            }
             if plan.decision() == DecisionKind::Published {
                 let version = CollectionVersion {
                     reference: plan.resulting().clone(),
@@ -171,16 +181,26 @@ impl CollectionHistory {
                     .insert(version.source.collection_id.clone(), version.clone());
                 self.versions.push(version);
             }
-        } else if self
-            .latest
-            .values()
-            .any(|v| v.reference.artifact_id == plan.artifact_id())
+        } else if plan.source_kind() != crate::SourceKind::LifecycleIntent
+            && self
+                .latest
+                .values()
+                .any(|v| v.reference.artifact_id == plan.artifact_id())
         {
             return Err("a typed collection cannot be overwritten by generic content".into());
         }
         if plan.decision() == DecisionKind::Published {
             self.published.push(plan.resulting().clone());
             self.occupied.insert(plan.artifact_id().into());
+        }
+        match plan.decision() {
+            DecisionKind::Trashed => {
+                self.trashed.insert(plan.artifact_id().into());
+            }
+            DecisionKind::Restored => {
+                self.trashed.remove(plan.artifact_id());
+            }
+            _ => (),
         }
         check()
     }
@@ -247,6 +267,14 @@ impl Repository {
         }
         boundary.admit(&self.binding, ResourceBudget::inspection())?;
         let state = self.collection_state(None, boundary)?;
+        if state.trashed.contains(&source.artifact_id()?)
+            || source
+                .members
+                .iter()
+                .any(|member| state.trashed.contains(&member.artifact_id))
+        {
+            return Err("collection edits cannot target or include a trashed identity".into());
+        }
         check_members(source, &state.published, &mut || {
             storage::repository_check(self, None, boundary)
         })?;
@@ -337,11 +365,22 @@ impl Repository {
     ) -> Result<CollectionVersion> {
         identifier(collection_id)?;
         boundary.admit(&self.binding, ResourceBudget::inspection())?;
-        let version = self
-            .collection_state(None, boundary)?
+        let mut state = self.collection_state(None, boundary)?;
+        let version = state
             .latest
             .remove(collection_id)
             .ok_or("current explicit collection unavailable")?;
+        if state.trashed.contains(&version.reference.artifact_id)
+            || version
+                .source
+                .members
+                .iter()
+                .any(|member| state.trashed.contains(&member.artifact_id))
+        {
+            return Err(
+                "collection contains trashed identities; explicit trash recovery required".into(),
+            );
+        }
         storage::repository_check(self, None, boundary)?;
         Ok(version)
     }
@@ -358,12 +397,23 @@ impl Repository {
         reference(expected)?;
         page_bounds(offset, limit)?;
         boundary.admit(&self.binding, ResourceBudget::inspection())?;
-        let version = self
-            .collection_state(None, boundary)?
+        let state = self.collection_state(None, boundary)?;
+        let version = state
             .versions
             .into_iter()
             .find(|v| v.reference == *expected)
             .ok_or("exact published collection version unavailable")?;
+        if state.trashed.contains(&version.reference.artifact_id)
+            || version
+                .source
+                .members
+                .iter()
+                .any(|member| state.trashed.contains(&member.artifact_id))
+        {
+            return Err(
+                "collection page contains trashed identities; explicit recovery required".into(),
+            );
+        }
         let total_members = version.source.members.len();
         let end = page_end(offset, limit, total_members)?;
         let result = CollectionPage {
@@ -392,13 +442,18 @@ impl Repository {
         page_bounds(offset, limit)?;
         boundary.admit(&self.binding, ResourceBudget::inspection())?;
         let state = self.collection_state(None, boundary)?;
+        if state.trashed.contains(&member.artifact_id) {
+            return Err("ordinary reverse membership cannot discover a trashed artifact".into());
+        }
         if !state.published.contains(member) {
             return Err("collection membership requires a genuine published member".into());
         }
         let mut collections = Vec::new();
         for version in state.latest.into_values() {
             storage::repository_check(self, None, boundary)?;
-            if version.source.members.contains(member) {
+            if !state.trashed.contains(&version.reference.artifact_id)
+                && version.source.members.contains(member)
+            {
                 collections.push(version.reference);
             }
         }

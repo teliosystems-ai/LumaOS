@@ -307,6 +307,7 @@ impl Repository {
         let query = validate_semantic_query(query, limit, dimensions)?;
         boundary.admit(&self.binding, ResourceBudget::inspection())?;
         let snapshot = self.snapshot(None, boundary)?;
+        snapshot.require_live(&expected.artifact_id)?;
         let source = snapshot
             .records
             .iter()
@@ -354,6 +355,9 @@ impl Repository {
         snapshot: crate::Snapshot,
         boundary: &mut impl Boundary,
     ) -> Result<SemanticResults> {
+        for reference in references {
+            snapshot.require_live(&reference.artifact_id)?;
+        }
         let mut selected = BTreeMap::new();
         for (record, plan, _) in &snapshot.records {
             storage::repository_check(self, None, boundary)?;

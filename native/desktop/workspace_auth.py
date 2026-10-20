@@ -77,7 +77,7 @@ def proposal(value):
     if not isinstance(value['approval'], str):
         raise ValueError('explicit approval text or an empty string required')
     operation = value['operation']
-    if operation in ('inspection', 'office-proposal', 'paged-read', 'envelope-read', 'search-journey', 'conversation-journey', 'workflow-journey', 'collection-journey', 'speech-journey', 'capture-reference-journey', 'restore-journey', 'retire-journey'):
+    if operation in ('inspection', 'office-proposal', 'paged-read', 'envelope-read', 'search-journey', 'conversation-journey', 'workflow-journey', 'collection-journey', 'speech-journey', 'capture-reference-journey', 'restore-journey', 'retire-journey', 'lifecycle-journey'):
         if any(value[field] for field in ('read_grant', 'effect_grant', 'approval')):
             raise ValueError('inspection cannot select effect authority')
     elif operation == 'review':
@@ -90,7 +90,7 @@ def proposal(value):
         if not isinstance(path, str) or not Path(path).is_absolute() or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.-]{0,123}\.pdf', Path(path).name):
             raise ValueError('Office export requires an explicit new bounded PDF filename')
     elif operation == 'apply':
-        if not value['read_grant'] or not value['effect_grant'] or not isinstance(value['approval'], str) or not re.fullmatch(r'(?:write|retain|recover):[0-9a-f]{64}', value['approval']):
+        if not value['read_grant'] or not value['effect_grant'] or not isinstance(value['approval'], str) or not re.fullmatch(r'(?:write|retain|recover|trash|untrash):[0-9a-f]{64}', value['approval']):
             raise ValueError('apply requires exact Read/effect grants and reviewed approval')
     else:
         raise ValueError('unsupported authenticated terminal operation')
@@ -120,6 +120,8 @@ def proposal(value):
         workspace_controller('speech').transcription_request(source)
     elif operation == 'capture-reference-journey':
         workspace_controller('grounding').request(source)
+    elif operation == 'lifecycle-journey':
+        workspace_controller('lifecycle').request(types.SimpleNamespace(**globals()), source)
     elif operation in ('restore-journey', 'retire-journey'):
         recovery_request(source, retirement=operation == 'retire-journey')
     return value
@@ -257,7 +259,7 @@ def conversation_capture(command, path, maximum, login=None, grant=None, review_
 
 
 def workspace_controller(name):
-    if name not in ('draft', 'collections', 'speech', 'grounding'):
+    if name not in ('draft', 'collections', 'speech', 'grounding', 'lifecycle'):
         raise ValueError('fixed protected workspace controller required')
     path = Path('/usr/libexec/luma-os/workspace_'+name+'.py')
     protected(path, 128*1024)
@@ -610,7 +612,7 @@ def protected(path, maximum, *, sudo=False):
 
 def terminal_arguments(value, path):
     value = proposal(value)
-    if value['operation'] in ('paged-read', 'envelope-read', 'search-journey', 'conversation-journey', 'workflow-journey', 'collection-journey', 'speech-journey', 'capture-reference-journey', 'restore-journey', 'retire-journey'):
+    if value['operation'] in ('paged-read', 'envelope-read', 'search-journey', 'conversation-journey', 'workflow-journey', 'collection-journey', 'speech-journey', 'capture-reference-journey', 'restore-journey', 'retire-journey', 'lifecycle-journey'):
         raise ValueError('managed journeys require their explicit review and fresh grant steps')
     prefix = ['/usr/bin/sudo', '--', NATIVE, 'granted-run']
     if value['operation'] == 'office-proposal':
@@ -1262,7 +1264,7 @@ def restore_review(review, source):
         'manifest_sha256', 'origin_head_sha256', 'workflow_sha256', 'request_namespace',
         'published_outcomes', 'inert_committed_outcomes', 'inert_pending_directories',
         'inert_quarantined_directories', 'planned_storage_bytes', 'mappings_sha256', 'steps', 'review_sha256')
-    if not isinstance(review, dict) or set(review) != set(fields) or type(review['schema_version']) is not int or review['schema_version'] != 1 or review['profile'] != 'luma-fresh-owner-content-restore-v1':
+    if not isinstance(review, dict) or set(review) != set(fields) or type(review['schema_version']) is not int or (review['schema_version'], review['profile']) not in ((1, 'luma-fresh-owner-content-restore-v1'), (2, 'luma-fresh-owner-content-restore-v2')):
         raise ValueError('closed native restore review required')
     owner_request(dict(schema_version=1, login=source['target_login'], binding=review['origin'], operation={}))
     if not same_data(review['target'], source['target']) or review['origin']['installation'] == source['target']['installation'] or review['origin']['owner'] == source['target']['owner'] or review['request_namespace'] != source['request_namespace']:
@@ -1760,6 +1762,8 @@ def terminal(path):
             return workspace_controller('speech').transcription_journey(types.SimpleNamespace(**globals()), value, directory)
         if value['operation'] == 'capture-reference-journey':
             return workspace_controller('grounding').journey(types.SimpleNamespace(**globals()), value, directory)
+        if value['operation'] == 'lifecycle-journey':
+            return workspace_controller('lifecycle').journey(types.SimpleNamespace(**globals()), value, directory)
         if value['operation'] == 'restore-journey':
             return restore_journey(value, directory)
         if value['operation'] == 'retire-journey':

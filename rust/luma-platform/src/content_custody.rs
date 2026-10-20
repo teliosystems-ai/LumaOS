@@ -281,6 +281,8 @@ impl Publication {
         let held = HeldPublication::parse(self.commitment.as_bytes())?;
         self.original_authority.validate()?;
         let is_restore = self.profile.starts_with(crate::content_restore::PREFIX);
+        let lifecycle = luma_content_store::record_lifecycle_request(self.record.as_bytes())?;
+        let (action, selector) = publication_effect(&held, lifecycle.as_ref())?;
         if is_restore {
             restore::authority(
                 &self.profile,
@@ -299,7 +301,7 @@ impl Publication {
                         &held.binding,
                         &held.review_sha256,
                     )?
-                || self.original_authority.usage.selector.id != "native-content-store-v1"
+                || self.original_authority.usage.selector.id != selector
                 || self.original_authority.usage.selector.generation
                     != held.binding.owner_generation
                 || self.original_authority.operation_id.is_none())
@@ -308,12 +310,12 @@ impl Publication {
                 "content event is not bound to its original finite principal/review".into(),
             );
         }
-        use crate::finite_grants::Action;
-        let action = match held.decision {
-            DecisionKind::Published => Action::Write,
-            DecisionKind::ConflictRetained | DecisionKind::NoChangeRetained => Action::Retain,
-        };
-        if self.original_authority.usage.action != action
+        if self.original_authority.usage.action
+            != if is_restore {
+                crate::finite_grants::Action::Write
+            } else {
+                action
+            }
             || held.already_published
             || hash(self.record.as_bytes()) != held.members[1].sha256
             || self.record.len() as u64 != held.members[1].bytes
@@ -339,6 +341,176 @@ impl Publication {
             return Err("held publication disagrees with its exact canonical Record fields".into());
         }
         Ok(held)
+    }
+}
+
+fn publication_effect(
+    held: &HeldPublication,
+    lifecycle: Option<&luma_content_store::LifecycleRequest>,
+) -> Result<(crate::finite_grants::Action, &'static str)> {
+    use crate::finite_grants::Action;
+    if let Some(request) = lifecycle {
+        request.validate()?;
+        if request.binding != held.binding
+            || request.request_id() != held.request_id
+            || request.artifact_id() != held.resulting.artifact_id
+        {
+            return Err(
+                "protected lifecycle publication substitutes its exact owner, request or artifact"
+                    .into(),
+            );
+        }
+        return match request.operation {
+            luma_content_store::LifecycleOperation::Trash
+                if matches!(
+                    held.decision,
+                    DecisionKind::Trashed
+                        | DecisionKind::ConflictRetained
+                        | DecisionKind::NoChangeRetained
+                ) =>
+            {
+                Ok((Action::Delete, "native-content-trash-v1"))
+            }
+            luma_content_store::LifecycleOperation::Restore
+                if matches!(
+                    held.decision,
+                    DecisionKind::Restored
+                        | DecisionKind::ConflictRetained
+                        | DecisionKind::NoChangeRetained
+                ) =>
+            {
+                Ok((Action::Write, "native-content-restore-deleted-v1"))
+            }
+            _ => Err("protected lifecycle decision differs from its exact typed operation".into()),
+        };
+    }
+    match held.decision {
+        DecisionKind::Published => Ok((Action::Write, "native-content-store-v1")),
+        DecisionKind::ConflictRetained | DecisionKind::NoChangeRetained => {
+            Ok((Action::Retain, "native-content-store-v1"))
+        }
+        DecisionKind::Trashed | DecisionKind::Restored => {
+            Err("protected lifecycle effect lacks its exact canonical lifecycle intent".into())
+        }
+    }
+}
+
+#[cfg(test)]
+mod lifecycle_scope_tests {
+    use super::*;
+    use luma_content_store::{
+        LifecycleOperation, LifecycleReference, LifecycleRequest, LifecycleStatus, RetentionPolicy,
+    };
+
+    fn request(operation: LifecycleOperation) -> LifecycleRequest {
+        LifecycleRequest {
+            schema_version: 1,
+            binding: OwnerBinding {
+                installation: "1".repeat(64),
+                owner: "2".repeat(64),
+                owner_generation: 1,
+            },
+            request_id: "exact-logical-change".into(),
+            workflow_sha256: "3".repeat(64),
+            expected: LifecycleReference {
+                version: VersionReference {
+                    artifact_id: "document-one".into(),
+                    version: 1,
+                    content_sha256: "4".repeat(64),
+                    receipt_sha256: "5".repeat(64),
+                },
+                revision: 1,
+                state_sha256: "6".repeat(64),
+                status: if operation == LifecycleOperation::Trash {
+                    LifecycleStatus::Live
+                } else {
+                    LifecycleStatus::Trashed
+                },
+            },
+            operation,
+            retention: RetentionPolicy::UntilExplicitRestoreNoPurge,
+        }
+    }
+
+    // Deliberately unvalidated fixture metadata for this pure action/selector
+    // predicate, not a held file, native proof, grant or custody event.
+    fn held(request: &LifecycleRequest, decision: DecisionKind) -> HeldPublication {
+        HeldPublication {
+            schema_version: 1,
+            purpose: "pure-scope-fixture-not-authority".into(),
+            binding: request.binding.clone(),
+            request_id: request.request_id.clone(),
+            review_sha256: "7".repeat(64),
+            decision,
+            resulting: request.expected.version.clone(),
+            base_outcome_count: 1,
+            outcome_count: 2,
+            base_head_sha256: "8".repeat(64),
+            outcome_head_sha256: "9".repeat(64),
+            quarantine_sha256: "a".repeat(64),
+            already_published: false,
+            namespaces: Vec::new(),
+            directory: PreparationDirectoryIdentity {
+                device: 1,
+                inode: 1,
+                owner: 0,
+                group: 0,
+                mode: 0o40700,
+            },
+            directory_mount_id: 1,
+            members: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn lifecycle_scope_never_downgrades_delete_or_restore_on_conflict_and_noop() {
+        use crate::finite_grants::Action;
+        for (operation, actual, action, selector) in [
+            (
+                LifecycleOperation::Trash,
+                DecisionKind::Trashed,
+                Action::Delete,
+                "native-content-trash-v1",
+            ),
+            (
+                LifecycleOperation::Restore,
+                DecisionKind::Restored,
+                Action::Write,
+                "native-content-restore-deleted-v1",
+            ),
+        ] {
+            let request = request(operation);
+            for decision in [
+                actual,
+                DecisionKind::ConflictRetained,
+                DecisionKind::NoChangeRetained,
+            ] {
+                assert_eq!(
+                    publication_effect(&held(&request, decision), Some(&request)).unwrap(),
+                    (action, selector)
+                );
+            }
+            for decision in [
+                DecisionKind::Published,
+                if operation == LifecycleOperation::Trash {
+                    DecisionKind::Restored
+                } else {
+                    DecisionKind::Trashed
+                },
+            ] {
+                assert!(publication_effect(&held(&request, decision), Some(&request)).is_err());
+            }
+            assert!(publication_effect(&held(&request, actual), None).is_err());
+            let mut wrong = held(&request, actual);
+            wrong.binding.owner_generation += 1;
+            assert!(publication_effect(&wrong, Some(&request)).is_err());
+            let mut wrong = held(&request, actual);
+            wrong.request_id.push('x');
+            assert!(publication_effect(&wrong, Some(&request)).is_err());
+            let mut wrong = held(&request, actual);
+            wrong.resulting.artifact_id.push('x');
+            assert!(publication_effect(&wrong, Some(&request)).is_err());
+        }
     }
 }
 
@@ -896,10 +1068,17 @@ impl<A: Checkpoint> Store<A> {
             || audit.operation_id.is_none()
             || audit.usage
                 != crate::content_governed::custody_usage(profile, device, binding, review)?
-            || audit.usage.selector.id != "native-content-store-v1"
+            || !matches!(
+                audit.usage.selector.id.as_str(),
+                "native-content-store-v1"
+                    | "native-content-trash-v1"
+                    | "native-content-restore-deleted-v1"
+            )
             || !matches!(
                 audit.usage.action,
-                crate::finite_grants::Action::Write | crate::finite_grants::Action::Retain
+                crate::finite_grants::Action::Write
+                    | crate::finite_grants::Action::Retain
+                    | crate::finite_grants::Action::Delete
             )
         {
             return Err(

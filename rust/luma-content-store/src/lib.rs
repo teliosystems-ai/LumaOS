@@ -21,6 +21,7 @@ use std::path::Path;
 
 mod backup;
 mod collections;
+mod lifecycle;
 mod publication;
 mod queries;
 mod recovery;
@@ -38,6 +39,10 @@ pub use collections::{
     CollectionMemberships, CollectionPage, CollectionSource, CollectionVersion,
     MAX_COLLECTION_MEMBERS, MAX_COLLECTION_PAGE, MAX_COLLECTION_SOURCE_BYTES,
 };
+pub use lifecycle::{
+    record_lifecycle_request, LifecycleOperation, LifecycleReference, LifecycleRequest,
+    LifecycleStatus, RetentionPolicy,
+};
 pub use publication::{
     canonical_record_history_head, PreparedPublication, PublicationCommitment, PublicationMember,
 };
@@ -53,8 +58,8 @@ pub use recovery::{
     MAX_QUARANTINED_PREPARATIONS,
 };
 pub use restore::{
-    plan_restore_data_checked, RestoreMapping, RestorePlan, RestoreReview, RestoreStepReview,
-    MAX_RESTORE_REVIEW_BYTES,
+    plan_restore_data_checked, plan_restore_data_checked_versions, RestoreMapping, RestorePlan,
+    RestoreReview, RestoreStepReview, MAX_RESTORE_REVIEW_BYTES,
 };
 pub use semantic::{
     validate_semantic_query, SemanticCollectionResults, SemanticHit, SemanticResults,
@@ -106,6 +111,8 @@ pub enum DecisionKind {
     Published,
     ConflictRetained,
     NoChangeRetained,
+    Trashed,
+    Restored,
 }
 
 /// Identifies what the retained exact input means, not an execution permission.
@@ -116,6 +123,7 @@ pub enum SourceKind {
     ManagedTableIntent,
     ManagedRenderIntent,
     CollectionIntent,
+    LifecycleIntent,
 }
 
 /// Inspect and mutation authority are independent. Mutation checks must also
@@ -177,6 +185,8 @@ struct PlanData {
     source_kind: Option<SourceKind>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     derivation: Option<luma_content::rendered::Derivation>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    lifecycle: Option<lifecycle::Transition>,
 }
 
 /// Immutable, source-bound proposal. It is not a grant, lease or commitment.
@@ -280,6 +290,7 @@ impl Plan {
             payload_bytes: payload.len() as u64,
             source_kind: None,
             derivation: None,
+            lifecycle: None,
         };
         let bytes = serde_json::to_vec(&data)?;
         if bytes.len() as u64 > MAX_RECORD {
@@ -342,6 +353,7 @@ impl Plan {
             payload_bytes: payload.len() as u64,
             source_kind: Some(SourceKind::ManagedTableIntent),
             derivation: None,
+            lifecycle: None,
         };
         let bytes = serde_json::to_vec(&data)?;
         if bytes.len() as u64 > MAX_RECORD || payload.len() as u64 > MAX_PAYLOAD {
@@ -400,6 +412,7 @@ impl Plan {
             payload_bytes: payload.len() as u64,
             source_kind: Some(SourceKind::ManagedRenderIntent),
             derivation: Some(derivation),
+            lifecycle: None,
         };
         let bytes = serde_json::to_vec(&data)?;
         if bytes.len() as u64 > MAX_RECORD || payload.len() as u64 > MAX_PAYLOAD {
@@ -412,6 +425,7 @@ impl Plan {
         })
     }
     fn rebuild(current: Option<&ArtifactVersion>, data: &PlanData, source: &[u8]) -> Result<Self> {
+        lifecycle::validate_data(data)?;
         match (data.schema_version, data.source_kind) {
             (1, None) => Self::build(
                 current,
@@ -451,6 +465,20 @@ impl Plan {
                     &collection,
                     data.expected.clone(),
                     data.provenance.clone(),
+                )
+            }
+            (5, Some(SourceKind::LifecycleIntent)) => {
+                let transition = data
+                    .lifecycle
+                    .as_ref()
+                    .ok_or("lifecycle transition absent")?;
+                if transition.request.canonical_bytes()? != source {
+                    return Err("lifecycle source differs from its exact typed request".into());
+                }
+                Self::lifecycle(
+                    current.ok_or("lifecycle retained head absent")?,
+                    &transition.observed,
+                    &transition.request,
                 )
             }
             _ => Err("unsupported content-store plan schema or source kind".into()),
@@ -541,6 +569,7 @@ pub struct Retained {
 struct Snapshot {
     records: Vec<(Record, Plan, Vec<u8>)>,
     current: BTreeMap<String, ArtifactVersion>,
+    lifecycle: BTreeMap<String, LifecycleReference>,
     pending: Vec<String>,
     bytes: u64,
     quarantine_sha256: String,
@@ -552,6 +581,7 @@ struct Snapshot {
 /// continue a different history using the same partially observed state.
 struct HistoryReconstruction {
     current: BTreeMap<String, ArtifactVersion>,
+    lifecycle: BTreeMap<String, LifecycleReference>,
     requests: BTreeSet<String>,
     collection_history: collections::CollectionHistory,
     count: u64,
@@ -562,6 +592,7 @@ impl HistoryReconstruction {
     fn new() -> Self {
         Self {
             current: BTreeMap::new(),
+            lifecycle: BTreeMap::new(),
             requests: BTreeSet::new(),
             collection_history: collections::CollectionHistory::new(),
             count: 0,
@@ -588,6 +619,7 @@ impl HistoryReconstruction {
             (2, Some(SourceKind::ManagedTableIntent))
             | (3, Some(SourceKind::ManagedRenderIntent)) => MAX_SOURCE,
             (4, Some(SourceKind::CollectionIntent)) => MAX_COLLECTION_SOURCE_BYTES as u64,
+            (5, Some(SourceKind::LifecycleIntent)) => MAX_RECORD,
             _ => return Err("content history schema or source kind mismatch".into()),
         };
         if record.schema_version != record.plan.schema_version
@@ -612,6 +644,18 @@ impl HistoryReconstruction {
         }
         check()?;
         let prior = self.current.get(&record.plan.artifact_id);
+        lifecycle::validate_data(&record.plan)?;
+        if let Some(transition) = &record.plan.lifecycle {
+            if self.lifecycle.get(&record.plan.artifact_id) != Some(&transition.observed) {
+                return Err("lifecycle record does not extend its exact revision".into());
+            }
+        } else if self
+            .lifecycle
+            .get(&record.plan.artifact_id)
+            .is_some_and(|value| value.status == LifecycleStatus::Trashed)
+        {
+            return Err("ordinary content publication targets a trashed identity".into());
+        }
         if prior.map(ArtifactVersion::reference).transpose()? != record.plan.observed {
             return Err("content outcome does not extend its exact observed base".into());
         }
@@ -628,6 +672,20 @@ impl HistoryReconstruction {
             self.current.insert(
                 record.plan.artifact_id.clone(),
                 luma_content::reopen(payload, binding)?,
+            );
+        }
+        if matches!(
+            rebuilt.decision(),
+            DecisionKind::Published | DecisionKind::Trashed | DecisionKind::Restored
+        ) {
+            let status = if rebuilt.decision() == DecisionKind::Trashed {
+                LifecycleStatus::Trashed
+            } else {
+                LifecycleStatus::Live
+            };
+            self.lifecycle.insert(
+                record.plan.artifact_id.clone(),
+                lifecycle::advanced(binding, record, status)?,
             );
         }
         self.requests
@@ -841,6 +899,7 @@ impl Repository {
                         | (2, Some(SourceKind::ManagedTableIntent))
                         | (3, Some(SourceKind::ManagedRenderIntent))
                         | (4, Some(SourceKind::CollectionIntent))
+                        | (5, Some(SourceKind::LifecycleIntent))
                 )
                 || record.plan.binding != self.binding
                 || name != luma_content::sha256(record.plan.provenance.request_id.as_bytes())
@@ -863,6 +922,7 @@ impl Repository {
                         MAX_SOURCE
                     }
                     Some(SourceKind::CollectionIntent) => MAX_COLLECTION_SOURCE_BYTES as u64,
+                    Some(SourceKind::LifecycleIntent) => MAX_RECORD,
                     Some(SourceKind::Content) => {
                         return Err("explicit legacy source kind forbidden".into())
                     }
@@ -917,6 +977,7 @@ impl Repository {
         let snapshot = Snapshot {
             records,
             current: history.current,
+            lifecycle: history.lifecycle,
             pending,
             bytes: total,
             quarantine_sha256,
@@ -931,8 +992,9 @@ impl Repository {
 
     pub fn current(&self, artifact: &str, boundary: &mut impl Boundary) -> Result<ArtifactVersion> {
         boundary.admit(&self.binding, ResourceBudget::inspection())?;
-        let version = self
-            .snapshot(None, boundary)?
+        let mut snapshot = self.snapshot(None, boundary)?;
+        snapshot.require_live(artifact)?;
+        let version = snapshot
             .current
             .remove(artifact)
             .ok_or("current content artifact unavailable")?;
@@ -954,17 +1016,18 @@ impl Repository {
 
     pub fn retained(&self, request: &str, boundary: &mut impl Boundary) -> Result<Retained> {
         boundary.admit(&self.binding, ResourceBudget::inspection())?;
-        let (record, plan, source) = self
-            .snapshot(None, boundary)?
+        let snapshot = self.snapshot(None, boundary)?;
+        let (record, plan, source) = snapshot
             .records
-            .into_iter()
+            .iter()
             .find(|(r, _, _)| r.plan.provenance.request_id == request)
             .ok_or("retained content outcome unavailable")?;
+        snapshot.require_live(plan.artifact_id())?;
         storage::repository_check(self, None, boundary)?;
         Ok(Retained {
             outcome: outcome(&record, false),
-            payload: plan.payload,
-            source,
+            payload: plan.payload.clone(),
+            source: source.clone(),
         })
     }
 
@@ -979,17 +1042,20 @@ impl Repository {
         boundary: &mut impl Boundary,
     ) -> Result<Option<Plan>> {
         boundary.admit(&self.binding, ResourceBudget::inspection())?;
-        let prior = self
-            .snapshot(None, boundary)?
+        let snapshot = self.snapshot(None, boundary)?;
+        let prior = snapshot
             .records
-            .into_iter()
+            .iter()
             .find(|(record, _, _)| record.plan.provenance.request_id == request);
         let plan = match prior {
             Some((_, plan, prior_source)) => {
+                if plan.lifecycle_request().is_none() {
+                    snapshot.require_live(plan.artifact_id())?;
+                }
                 if prior_source != source {
                     return Err("content request replay changed exact retained input".into());
                 }
-                Some(plan)
+                Some(plan.clone())
             }
             None => None,
         };
@@ -1045,6 +1111,7 @@ impl Repository {
         }
         boundary.admit(&self.binding, ResourceBudget::inspection())?;
         let snapshot = self.snapshot(None, boundary)?;
+        snapshot.require_live(&request.artifact_id)?;
         let plan = Plan::managed_render(snapshot.current.get(&request.artifact_id), request)?;
         storage::repository_check(self, None, boundary)?;
         Ok(plan)
@@ -1146,6 +1213,7 @@ impl Repository {
         if snapshot.records.len() == MAX_OUTCOMES {
             return Err("content outcome capacity exhausted; no automatic eviction".into());
         }
+        snapshot.check_lifecycle_plan(plan)?;
         let rebuilt = Plan::rebuild(
             snapshot.current.get(&plan.data.artifact_id),
             &plan.data,

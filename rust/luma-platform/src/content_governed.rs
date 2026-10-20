@@ -63,6 +63,15 @@ enum Operation {
     Recovery {
         review: luma_content_store::PreparationReview,
     },
+    Lifecycle {
+        request: luma_content_store::LifecycleRequest,
+    },
+    LifecycleStatus {
+        artifact_id: String,
+    },
+    TrashVersion {
+        expected: luma_content_store::LifecycleReference,
+    },
     Collection {
         source: luma_content_store::CollectionSource,
         expected: Option<VersionReference>,
@@ -136,6 +145,7 @@ impl Input {
             Operation::Table { request } => Ok(&request.metadata.request_id),
             Operation::Render { request } => Ok(&request.metadata.request_id),
             Operation::Workflow { request } => Ok(&request.request_id),
+            Operation::Lifecycle { request } => Ok(request.request_id()),
             _ => Err("operation has no governed publication request identity".into()),
         }
     }
@@ -157,11 +167,18 @@ impl Input {
                 | Operation::CollectionsForMember { .. }
                 | Operation::BackupReview {}
                 | Operation::OfficeReview { .. }
+                | Operation::LifecycleStatus { .. }
+                | Operation::TrashVersion { .. }
         )
     }
 
     fn read_mode(&self) -> Mode {
-        if matches!(self.operation, Operation::Envelope { .. }) {
+        if matches!(
+            self.operation,
+            Operation::LifecycleStatus { .. } | Operation::TrashVersion { .. }
+        ) {
+            Mode::TrashQuery
+        } else if matches!(self.operation, Operation::Envelope { .. }) {
             Mode::Envelope
         } else if self.is_query() {
             Mode::Query
@@ -173,6 +190,21 @@ impl Input {
     fn matches_mode(&self, mode: Mode) -> bool {
         self.is_query() == mode.is_query()
             && matches!(self.operation, Operation::Envelope { .. }) == (mode == Mode::Envelope)
+            && matches!(
+                self.operation,
+                Operation::LifecycleStatus { .. } | Operation::TrashVersion { .. }
+            ) == (mode == Mode::TrashQuery)
+            && match (&self.operation, mode) {
+                (Operation::Lifecycle { request }, Mode::Trash) => {
+                    request.operation == luma_content_store::LifecycleOperation::Trash
+                }
+                (Operation::Lifecycle { request }, Mode::Restore) => {
+                    request.operation == luma_content_store::LifecycleOperation::Restore
+                }
+                (Operation::Lifecycle { .. }, Mode::Read) => true,
+                (Operation::Lifecycle { .. }, _) | (_, Mode::Trash | Mode::Restore) => false,
+                _ => true,
+            }
     }
 
     fn source(&self) -> Result<Vec<u8>> {
@@ -187,6 +219,7 @@ impl Input {
             Operation::Render { request } => request.canonical_bytes()?,
             Operation::Workflow { request } => request.intent(&self.binding)?.canonical_bytes()?,
             Operation::Recovery { review } => serde_json::to_vec(review)?,
+            Operation::Lifecycle { request } => request.canonical_bytes()?,
             Operation::Collection { source, .. } => source.canonical_bytes()?,
             Operation::Current { .. }
             | Operation::Historical { .. }
@@ -202,6 +235,9 @@ impl Input {
             | Operation::CollectionPage { .. }
             | Operation::CollectionsForMember { .. } => {
                 return Err("native content query has no mutation source".into());
+            }
+            Operation::LifecycleStatus { .. } | Operation::TrashVersion { .. } => {
+                return Err("trash inspection has no mutation source".into());
             }
             Operation::BackupReview {} | Operation::OfficeReview { .. } => {
                 return Err("backup metadata review has no mutation or export source".into());
@@ -247,6 +283,19 @@ impl Input {
                     return Err("content recovery substitutes its owner binding".into());
                 }
             }
+            Operation::Lifecycle { request } => {
+                request.validate()?;
+                if request.binding != self.binding {
+                    return Err("content lifecycle substitutes its owner binding".into());
+                }
+                if request.workflow_sha256 == crate::content_workflow::graph_sha256() {
+                    return Err(
+                        "content lifecycle cannot claim the managed workflow identity".into(),
+                    );
+                }
+            }
+            Operation::LifecycleStatus { artifact_id } => validate_artifact_id(artifact_id)?,
+            Operation::TrashVersion { expected } => expected.validate()?,
             Operation::Collection {
                 source,
                 expected,
@@ -535,6 +584,9 @@ enum Mode {
     Write,
     Retain,
     Recover,
+    Trash,
+    Restore,
+    TrashQuery,
 }
 impl Mode {
     fn name(self) -> &'static str {
@@ -545,10 +597,13 @@ impl Mode {
             Self::Write => "write",
             Self::Retain => "retain",
             Self::Recover => "recover",
+            Self::Trash => "trash",
+            Self::Restore => "untrash",
+            Self::TrashQuery => "trashquery",
         }
     }
     fn is_query(self) -> bool {
-        matches!(self, Self::Query | Self::Envelope)
+        matches!(self, Self::Query | Self::Envelope | Self::TrashQuery)
     }
     fn is_read(self) -> bool {
         self == Self::Read || self.is_query()
@@ -564,6 +619,55 @@ impl Mode {
         match decision {
             DecisionKind::Published => Self::Write,
             DecisionKind::ConflictRetained | DecisionKind::NoChangeRetained => Self::Retain,
+            DecisionKind::Trashed => Self::Trash,
+            DecisionKind::Restored => Self::Restore,
+        }
+    }
+
+    fn accepts_decision(self, decision: DecisionKind) -> bool {
+        match self {
+            Self::Trash => matches!(
+                decision,
+                DecisionKind::Trashed
+                    | DecisionKind::ConflictRetained
+                    | DecisionKind::NoChangeRetained
+            ),
+            Self::Restore => matches!(
+                decision,
+                DecisionKind::Restored
+                    | DecisionKind::ConflictRetained
+                    | DecisionKind::NoChangeRetained
+            ),
+            _ => self == Self::decision(decision),
+        }
+    }
+}
+
+fn effect_mode(input: &Input, plan: &Plan) -> Result<Mode> {
+    match &input.operation {
+        Operation::Lifecycle { request } => {
+            if plan.lifecycle_request() != Some(request) {
+                return Err("lifecycle effect differs from its complete exact intent".into());
+            }
+            let mode = match request.operation {
+                luma_content_store::LifecycleOperation::Trash => Mode::Trash,
+                luma_content_store::LifecycleOperation::Restore => Mode::Restore,
+            };
+            if !mode.accepts_decision(plan.decision()) {
+                return Err("lifecycle decision differs from its reviewed operation".into());
+            }
+            Ok(mode)
+        }
+        _ => {
+            if plan.lifecycle_request().is_some()
+                || matches!(
+                    plan.decision(),
+                    DecisionKind::Trashed | DecisionKind::Restored
+                )
+            {
+                return Err("ordinary content operation cannot carry a lifecycle effect".into());
+            }
+            Ok(Mode::decision(plan.decision()))
         }
     }
 }
@@ -586,6 +690,9 @@ fn profile(value: &str) -> Result<Profile<'_>> {
         Some("write") => Mode::Write,
         Some("retain") => Mode::Retain,
         Some("recover") => Mode::Recover,
+        Some("trash") => Mode::Trash,
+        Some("untrash") => Mode::Restore,
+        Some("trashquery") => Mode::TrashQuery,
         _ => return Err("unknown native content effect mode".into()),
     };
     let generation = parts.next().ok_or("missing native content generation")?;
@@ -657,8 +764,10 @@ fn usage_at(id: &str, digest: String, inspect: bool) -> Result<grants::Use> {
     let usage = grants::Use {
         action: if read {
             grants::Action::Read
-        } else if p.mode == Mode::Write {
+        } else if matches!(p.mode, Mode::Write | Mode::Restore) {
             grants::Action::Write
+        } else if p.mode == Mode::Trash {
+            grants::Action::Delete
         } else {
             grants::Action::Retain
         },
@@ -668,7 +777,13 @@ fn usage_at(id: &str, digest: String, inspect: bool) -> Result<grants::Use> {
             } else {
                 grants::Kind::Artifact
             },
-            id: if p.mode == Mode::Recover && !read {
+            id: if p.mode == Mode::TrashQuery {
+                "native-content-trash-read-v1"
+            } else if p.mode == Mode::Trash && !read {
+                "native-content-trash-v1"
+            } else if p.mode == Mode::Restore && !read {
+                "native-content-restore-deleted-v1"
+            } else if p.mode == Mode::Recover && !read {
                 "native-content-recovery-v1"
             } else if p.mode == Mode::Envelope {
                 "native-content-envelope-v1"
@@ -713,7 +828,15 @@ pub(crate) fn custody_usage(
         || selected.review != review
         || !matches!(
             selected.mode,
-            Mode::Read | Mode::Query | Mode::Envelope | Mode::Write | Mode::Retain | Mode::Recover
+            Mode::Read
+                | Mode::Query
+                | Mode::Envelope
+                | Mode::Write
+                | Mode::Retain
+                | Mode::Recover
+                | Mode::Trash
+                | Mode::Restore
+                | Mode::TrashQuery
         )
     {
         return Err("content custody profile differs from owner/review or closed operation".into());
@@ -939,7 +1062,7 @@ impl Boundary for LiveBoundary<'_> {
                 storage_bytes,
             } => {
                 self.current(binding)?;
-                if self.mode != Mode::decision(decision)
+                if !self.mode.accepts_decision(decision)
                     || self.review != review_sha256
                     || source_bytes > MAX_REQUEST as u64
                     || storage_bytes > MAX_STORAGE
@@ -998,6 +1121,7 @@ fn plan(
             Operation::Render { request } => request.metadata.request_id.as_str(),
             Operation::Workflow { request } => request.request_id.as_str(),
             Operation::Collection { provenance, .. } => provenance.request_id.as_str(),
+            Operation::Lifecycle { request } => request.request_id(),
             Operation::Recovery { .. } => {
                 return Err("content recovery uses its dedicated review path".into())
             }
@@ -1015,6 +1139,9 @@ fn plan(
             | Operation::CollectionPage { .. }
             | Operation::CollectionsForMember { .. } => {
                 return Err("native content query cannot construct a mutation plan".into());
+            }
+            Operation::LifecycleStatus { .. } | Operation::TrashVersion { .. } => {
+                return Err("trash inspection cannot construct a mutation plan".into());
             }
             Operation::BackupReview {} | Operation::OfficeReview { .. } => {
                 return Err("backup review cannot construct a mutation or export plan".into());
@@ -1069,6 +1196,9 @@ fn plan(
         Operation::Recovery { .. } => {
             return Err("content recovery uses its dedicated review path".into())
         }
+        Operation::Lifecycle { request } => repository
+            .ok_or("content lifecycle requires an existing owner repository")?
+            .plan_lifecycle(request, boundary)?,
         Operation::Collection {
             source,
             expected,
@@ -1101,6 +1231,9 @@ fn plan(
         | Operation::CollectionPage { .. }
         | Operation::CollectionsForMember { .. } => {
             return Err("native content query cannot construct a mutation plan".into());
+        }
+        Operation::LifecycleStatus { .. } | Operation::TrashVersion { .. } => {
+            return Err("trash inspection cannot construct a mutation plan".into());
         }
         Operation::BackupReview {} | Operation::OfficeReview { .. } => {
             return Err("backup review cannot construct a mutation or export plan".into());
@@ -1173,6 +1306,12 @@ fn validate_replay(input: &Input, prior: &Plan) -> Result<()> {
                 && prior.expected() == expected.as_ref()
                 && prior.provenance() == provenance
         }
+        Operation::Lifecycle { request } => {
+            prior.source_kind() == luma_content_store::SourceKind::LifecycleIntent
+                && prior.lifecycle_request() == Some(request)
+                && prior.artifact_id() == request.artifact_id()
+                && prior.provenance() == &request.provenance()?
+        }
         Operation::Current { .. }
         | Operation::Historical { .. }
         | Operation::Envelope { .. }
@@ -1184,6 +1323,7 @@ fn validate_replay(input: &Input, prior: &Plan) -> Result<()> {
         | Operation::CollectionSearchSemantic { .. }
         | Operation::Preparation { .. }
         | Operation::Recovery { .. } => false,
+        Operation::LifecycleStatus { .. } | Operation::TrashVersion { .. } => false,
         Operation::CollectionCurrent { .. }
         | Operation::CollectionPage { .. }
         | Operation::CollectionsForMember { .. } => false,
@@ -1256,6 +1396,19 @@ fn query(
     boundary: &mut impl Boundary,
 ) -> Result<serde_json::Value> {
     let result = match &input.operation {
+        Operation::LifecycleStatus { artifact_id } => serde_json::json!({
+            "schema_version":1,"lifecycle":repository.lifecycle_status(artifact_id,boundary)?,
+            "content_delivered":false,"committed":false,"authority_returned":false,
+            "physical_purge_available":false,"retention":"until-explicit-restore-no-purge",
+            "restore_authorized":false,"production_qualified":false
+        }),
+        Operation::TrashVersion { expected } => {
+            let version = repository.trash_version(expected, boundary)?;
+            let mut result = version_result(&version, None)?;
+            result["lifecycle"] = serde_json::to_value(expected)?;
+            result["restore_authorized"] = false.into();
+            result
+        }
         Operation::BackupReview {} => {
             let review = repository.review_backup_data(boundary)?;
             review.validate()?;
@@ -1422,7 +1575,12 @@ fn worker(id: &str) -> Result<()> {
     let input = parse(&bytes)?;
     if matches!(
         input.operation,
-        Operation::Workflow { .. } | Operation::OfficeReview { .. } | Operation::Envelope { .. }
+        Operation::Workflow { .. }
+            | Operation::OfficeReview { .. }
+            | Operation::Envelope { .. }
+            | Operation::Lifecycle { .. }
+            | Operation::LifecycleStatus { .. }
+            | Operation::TrashVersion { .. }
     ) && !checkpoint_required
     {
         return Err("managed workflow or whole-envelope delivery requires independently enrolled current content custody, not a laboratory file commit".into());
@@ -1453,32 +1611,39 @@ fn worker(id: &str) -> Result<()> {
         return Err("native content input is not the current installed principal".into());
     }
     let cut = if checkpoint_required {
-        Some(if matches!(p.mode, Mode::Write | Mode::Retain) {
-            crate::content_checkpoint::custody::preparation_cut(
-                id,
-                &input.binding,
-                lease.token(),
-                input.publication_request_id()?,
-                p.review,
-            )?
-        } else if p.mode == Mode::Recover {
-            let review = match &input.operation {
-                Operation::Recovery { review } => review,
-                _ => {
-                    return Err("recovery profile requires exact reviewed preparation input".into())
-                }
-            };
-            crate::content_checkpoint::custody::recovery_cut(id, lease.token(), review)?
-        } else {
-            crate::content_checkpoint::custody::PreparationCut {
-                current: crate::content_checkpoint::custody::selected(
+        Some(
+            if matches!(
+                p.mode,
+                Mode::Write | Mode::Retain | Mode::Trash | Mode::Restore
+            ) {
+                crate::content_checkpoint::custody::preparation_cut(
                     id,
                     &input.binding,
                     lease.token(),
-                )?,
-                prior_base: None,
-            }
-        })
+                    input.publication_request_id()?,
+                    p.review,
+                )?
+            } else if p.mode == Mode::Recover {
+                let review = match &input.operation {
+                    Operation::Recovery { review } => review,
+                    _ => {
+                        return Err(
+                            "recovery profile requires exact reviewed preparation input".into()
+                        )
+                    }
+                };
+                crate::content_checkpoint::custody::recovery_cut(id, lease.token(), review)?
+            } else {
+                crate::content_checkpoint::custody::PreparationCut {
+                    current: crate::content_checkpoint::custody::selected(
+                        id,
+                        &input.binding,
+                        lease.token(),
+                    )?,
+                    prior_base: None,
+                }
+            },
+        )
     } else {
         None
     };
@@ -1611,12 +1776,17 @@ fn worker(id: &str) -> Result<()> {
     } else {
         let proposal = plan(&input, repository.as_ref(), &mut boundary)?;
         if p.mode == Mode::Read {
-            let effect_mode = Mode::decision(proposal.decision());
+            let effect_mode = effect_mode(&input, &proposal)?;
             let effect_profile = profile_id(effect_mode, &input, &bytes, proposal.review_sha256())?;
-            serde_json::json!({"schema_version":1,"approval":format!("{}:{}",effect_mode.name(),proposal.review_sha256()),"review_sha256":proposal.review_sha256(),"decision":proposal.decision(),"resulting":proposal.resulting(),"derivation":proposal.derivation(),"source_bytes":proposal.source_bytes(),"storage_bytes":proposal.storage_bytes(),"inspection_usage":inspection_usage(&effect_profile)?,"effect_usage":acquisition_usage(&effect_profile)?,"committed":false,"authority_returned":false,"provenance_authority":false,"workflow_executed":false})
+            let mut result = serde_json::json!({"schema_version":1,"approval":format!("{}:{}",effect_mode.name(),proposal.review_sha256()),"review_sha256":proposal.review_sha256(),"decision":proposal.decision(),"resulting":proposal.resulting(),"derivation":proposal.derivation(),"source_bytes":proposal.source_bytes(),"storage_bytes":proposal.storage_bytes(),"inspection_usage":inspection_usage(&effect_profile)?,"effect_usage":acquisition_usage(&effect_profile)?,"committed":false,"authority_returned":false,"provenance_authority":false,"workflow_executed":false});
+            if let Some(request) = proposal.lifecycle_request() {
+                result["lifecycle_request"] = serde_json::to_value(request)?;
+                result["logical_only"] = true.into();
+                result["physical_bytes_erased"] = false.into();
+            }
+            result
         } else {
-            if p.mode != Mode::decision(proposal.decision()) || p.review != proposal.review_sha256()
-            {
+            if p.mode != effect_mode(&input, &proposal)? || p.review != proposal.review_sha256() {
                 return Err(
                     "native content base/decision differs from its exact reviewed effect".into(),
                 );
@@ -1713,7 +1883,17 @@ fn worker(id: &str) -> Result<()> {
                     "provenance_authority":false,"workflow_executed":true})
             } else {
                 // Supplied descriptive workflow/provenance hashes remain data.
-                serde_json::json!({"schema_version":1,"outcome":outcome,"derivation":proposal.derivation(),"committed":true,"authority_returned":false,"provenance_authority":false,"workflow_executed":false})
+                let mut result = serde_json::json!({"schema_version":1,"outcome":outcome,"derivation":proposal.derivation(),"committed":true,"authority_returned":false,"provenance_authority":false,"workflow_executed":false});
+                if let Operation::Lifecycle { request } = &input.operation {
+                    result["lifecycle"] = serde_json::to_value(
+                        owner_repository.lifecycle_status(request.artifact_id(), &mut boundary)?,
+                    )?;
+                    result["requested_lifecycle"] = serde_json::to_value(request)?;
+                    result["logical_only"] = true.into();
+                    result["physical_bytes_erased"] = false.into();
+                    result["historical_replay_is_not_a_new_state_change"] = true.into();
+                }
+                result
             }
         }
     };
@@ -2184,7 +2364,12 @@ pub(crate) fn command(args: &[String]) -> Result<()> {
     let input = parse(&bytes)?;
     if matches!(
         input.operation,
-        Operation::Workflow { .. } | Operation::OfficeReview { .. } | Operation::Envelope { .. }
+        Operation::Workflow { .. }
+            | Operation::OfficeReview { .. }
+            | Operation::Envelope { .. }
+            | Operation::Lifecycle { .. }
+            | Operation::LifecycleStatus { .. }
+            | Operation::TrashVersion { .. }
     ) && !checkpoint_required
     {
         return Err("managed workflow or whole-envelope delivery requires independent current C custody; laboratory-only publication cannot supply it".into());
@@ -2235,7 +2420,9 @@ pub(crate) fn command(args: &[String]) -> Result<()> {
     ];
     crate::admin_governance::with_grants(login, &uses, |guard| {
         check_subject(&input, guard)?;
-        let kind = if mode == Mode::Write {
+        let kind = if mode == Mode::Trash {
+            crate::policy_decisions::EffectKind::Deletion
+        } else if matches!(mode, Mode::Write | Mode::Restore) {
             crate::policy_decisions::EffectKind::ArtifactPublication
         } else {
             crate::policy_decisions::EffectKind::Retention
@@ -2286,11 +2473,13 @@ fn deliver_protected(
 fn approval(value: &str) -> Result<(Mode, &str)> {
     let (mode, digest) = value
         .split_once(':')
-        .ok_or("native content apply requires exact write:SHA256, retain:SHA256 or recover:SHA256 approval")?;
+        .ok_or("native content apply requires an exact write:, retain:, recover:, trash: or untrash: SHA256 approval")?;
     let mode = match mode {
         "write" => Mode::Write,
         "retain" => Mode::Retain,
         "recover" => Mode::Recover,
+        "trash" => Mode::Trash,
+        "untrash" => Mode::Restore,
         _ => return Err("native content approval effect is not closed".into()),
     };
     if !io::hash(digest) {
@@ -2303,6 +2492,278 @@ fn approval(value: &str) -> Result<(Mode, &str)> {
 mod tests {
     use super::*;
     use std::os::unix::fs::PermissionsExt;
+
+    fn lifecycle_input(operation: luma_content_store::LifecycleOperation) -> Input {
+        let mut value = input();
+        value.operation = Operation::Lifecycle {
+            request: luma_content_store::LifecycleRequest {
+                schema_version: 1,
+                binding: value.binding.clone(),
+                request_id: "reviewed-lifecycle-one".into(),
+                workflow_sha256: "9".repeat(64),
+                expected: luma_content_store::LifecycleReference {
+                    version: reference(),
+                    revision: 1,
+                    state_sha256: "8".repeat(64),
+                    status: if operation == luma_content_store::LifecycleOperation::Trash {
+                        luma_content_store::LifecycleStatus::Live
+                    } else {
+                        luma_content_store::LifecycleStatus::Trashed
+                    },
+                },
+                operation,
+                retention: luma_content_store::RetentionPolicy::UntilExplicitRestoreNoPurge,
+            },
+        };
+        value
+    }
+
+    #[test]
+    fn lifecycle_profiles_preserve_separate_delete_restore_and_private_read_scopes() {
+        for (operation, mode, action, selector) in [
+            (
+                luma_content_store::LifecycleOperation::Trash,
+                Mode::Trash,
+                grants::Action::Delete,
+                "native-content-trash-v1",
+            ),
+            (
+                luma_content_store::LifecycleOperation::Restore,
+                Mode::Restore,
+                grants::Action::Write,
+                "native-content-restore-deleted-v1",
+            ),
+        ] {
+            let value = lifecycle_input(operation);
+            value.validate().unwrap();
+            let bytes = serde_json::to_vec(&value).unwrap();
+            let parsed = parse(&bytes).unwrap();
+            assert!(parsed.matches_mode(Mode::Read));
+            assert!(parsed.matches_mode(mode));
+            for wrong in [
+                Mode::Query,
+                Mode::Envelope,
+                Mode::TrashQuery,
+                Mode::Write,
+                Mode::Retain,
+                Mode::Recover,
+            ] {
+                assert!(!parsed.matches_mode(wrong));
+            }
+            let id = profile_id(mode, &value, &bytes, &"7".repeat(64)).unwrap();
+            assert_eq!(profile(&id).unwrap().mode, mode);
+            let effect = usage_at(&id, "6".repeat(64), false).unwrap();
+            let inspection = usage_at(&id, "6".repeat(64), true).unwrap();
+            assert_eq!(effect.action, action);
+            assert_eq!(effect.selector.id, selector);
+            assert_eq!(inspection.action, grants::Action::Read);
+            assert_ne!(inspection.selector, effect.selector);
+            assert!(mode.accepts_decision(DecisionKind::ConflictRetained));
+            assert!(mode.accepts_decision(DecisionKind::NoChangeRetained));
+            assert!(!mode.accepts_decision(DecisionKind::Published));
+            assert_eq!(
+                approval(&format!("{}:{}", mode.name(), "7".repeat(64))).unwrap(),
+                (mode, "7".repeat(64).as_str())
+            );
+        }
+        assert!(!Mode::Trash.accepts_decision(DecisionKind::Restored));
+        assert!(!Mode::Restore.accepts_decision(DecisionKind::Trashed));
+        for decision in [DecisionKind::Trashed, DecisionKind::Restored] {
+            assert!(!Mode::Write.accepts_decision(decision));
+            assert!(!Mode::Retain.accepts_decision(decision));
+        }
+    }
+
+    #[test]
+    fn lifecycle_query_has_a_distinct_private_read_profile_and_no_effect_route() {
+        let mut value = input();
+        value.operation = Operation::LifecycleStatus {
+            artifact_id: "notes-one".into(),
+        };
+        value.validate().unwrap();
+        assert_eq!(value.read_mode(), Mode::TrashQuery);
+        assert!(value.matches_mode(Mode::TrashQuery));
+        for mode in [
+            Mode::Read,
+            Mode::Query,
+            Mode::Envelope,
+            Mode::Trash,
+            Mode::Restore,
+        ] {
+            assert!(!value.matches_mode(mode));
+        }
+        assert!(value.source().is_err());
+        assert!(value.publication_request_id().is_err());
+        let bytes = serde_json::to_vec(&value).unwrap();
+        let digest = io::digest(&bytes);
+        let id = profile_id(Mode::TrashQuery, &value, &bytes, &digest).unwrap();
+        let scope = usage_at(&id, "6".repeat(64), false).unwrap();
+        assert_eq!(scope.action, grants::Action::Read);
+        assert_eq!(scope.selector.kind, grants::Kind::File);
+        assert_eq!(scope.selector.id, "native-content-trash-read-v1");
+        assert!(approval(&format!("trashquery:{}", digest)).is_err());
+    }
+
+    #[test]
+    fn lifecycle_rejects_owner_generation_and_reserved_workflow_substitution() {
+        let mut value = lifecycle_input(luma_content_store::LifecycleOperation::Trash);
+        if let Operation::Lifecycle { request } = &mut value.operation {
+            request.binding.owner_generation += 1;
+        }
+        assert!(value.validate().is_err());
+        let mut value = lifecycle_input(luma_content_store::LifecycleOperation::Trash);
+        if let Operation::Lifecycle { request } = &mut value.operation {
+            request.workflow_sha256 = crate::content_workflow::graph_sha256();
+        }
+        assert!(value.validate().is_err());
+        let value = lifecycle_input(luma_content_store::LifecycleOperation::Restore);
+        let mut tree = serde_json::to_value(value).unwrap();
+        for bad in [
+            serde_json::json!(true),
+            serde_json::json!(0),
+            serde_json::json!(257),
+        ] {
+            tree["operation"]["request"]["expected"]["revision"] = bad;
+            assert!(canonical_request(&serde_json::to_vec(&tree).unwrap()).is_err());
+        }
+    }
+
+    #[test]
+    fn lifecycle_native_query_and_effect_selection_join_real_store_history() {
+        use std::os::unix::fs::DirBuilderExt;
+        struct Directory(std::path::PathBuf);
+        impl Drop for Directory {
+            fn drop(&mut self) {
+                std::fs::remove_dir_all(&self.0).unwrap();
+            }
+        }
+        let root = std::env::var_os("LUMA_STORAGE_TEST_ROOT")
+            .expect("lifecycle glue requires disposable private ext4 storage");
+        let directory = Directory(std::path::PathBuf::from(root).join(format!(
+            "luma-native-lifecycle-{}-{}",
+            std::process::id(),
+            crate::resources::random_id().unwrap()
+        )));
+        std::fs::DirBuilder::new()
+            .mode(0o700)
+            .create(&directory.0)
+            .unwrap();
+        let binding = input().binding;
+        let private = b"Retained private document; never a metadata response";
+        let initial = Plan::capture(
+            binding.clone(),
+            "notes-one",
+            Format::Utf8Text,
+            private,
+            Provenance {
+                request_id: "lifecycle-source".into(),
+                workflow_sha256: "c".repeat(64),
+                source_sha256: io::digest(private),
+                origin: luma_content::EditOrigin::Managed,
+            },
+        )
+        .unwrap();
+        let mut writer = BackupQueryBoundary {
+            binding: binding.clone(),
+            review: Some(initial.review_sha256().into()),
+            checks: 0,
+            refuse_at: usize::MAX,
+        };
+        let mut repository = Repository::create_at(&directory.0, &initial, &mut writer).unwrap();
+        repository.apply(&initial, private, &mut writer).unwrap();
+        let mut reader = BackupQueryBoundary {
+            binding: binding.clone(),
+            review: None,
+            checks: 0,
+            refuse_at: usize::MAX,
+        };
+        for (operation, expected_mode, status) in [
+            (
+                luma_content_store::LifecycleOperation::Trash,
+                Mode::Trash,
+                luma_content_store::LifecycleStatus::Trashed,
+            ),
+            (
+                luma_content_store::LifecycleOperation::Restore,
+                Mode::Restore,
+                luma_content_store::LifecycleStatus::Live,
+            ),
+        ] {
+            let before = repository
+                .lifecycle_status("notes-one", &mut reader)
+                .unwrap();
+            let mut value = lifecycle_input(operation);
+            if let Operation::Lifecycle { request } = &mut value.operation {
+                request.expected = before;
+                request.request_id = format!("native-life-{}", expected_mode.name());
+            }
+            let proposal = plan(&value, Some(&repository), &mut reader).unwrap();
+            assert_eq!(effect_mode(&value, &proposal).unwrap(), expected_mode);
+            validate_replay(&value, &proposal).unwrap();
+            writer.review = Some(proposal.review_sha256().into());
+            let source = value.source().unwrap();
+            let prepared = repository.prepare(&proposal, &source, &mut writer).unwrap();
+            let extracted =
+                luma_content_store::record_lifecycle_request(prepared.record_bytes()).unwrap();
+            assert_eq!(extracted.as_ref(), proposal.lifecycle_request());
+            prepared.publish(&mut writer).unwrap();
+            let state = repository
+                .lifecycle_status("notes-one", &mut reader)
+                .unwrap();
+            assert_eq!(state.status, status);
+            assert_eq!(state.version, initial.resulting().clone());
+            let mut inspection = input();
+            inspection.operation = Operation::LifecycleStatus {
+                artifact_id: "notes-one".into(),
+            };
+            let result = query(&inspection, &repository, &mut reader).unwrap();
+            assert_eq!(
+                serde_json::from_value::<luma_content_store::LifecycleReference>(
+                    result["lifecycle"].clone()
+                )
+                .unwrap(),
+                state
+            );
+            assert_eq!(result["restore_authorized"], false);
+            assert!(!String::from_utf8(serde_json::to_vec(&result).unwrap())
+                .unwrap()
+                .contains(std::str::from_utf8(private).unwrap()));
+            if status == luma_content_store::LifecycleStatus::Trashed {
+                assert!(repository.current("notes-one", &mut reader).is_err());
+                assert!(repository
+                    .historical(initial.resulting(), &mut reader)
+                    .is_err());
+                inspection.operation = Operation::TrashVersion { expected: state };
+                let metadata = query(&inspection, &repository, &mut reader).unwrap();
+                assert_eq!(
+                    metadata["reference"],
+                    serde_json::to_value(initial.resulting()).unwrap()
+                );
+                assert_eq!(metadata["content_delivered"], false);
+            } else {
+                assert_eq!(
+                    repository
+                        .current("notes-one", &mut reader)
+                        .unwrap()
+                        .reference()
+                        .unwrap(),
+                    *initial.resulting()
+                );
+            }
+        }
+        let mut revoked = BackupQueryBoundary {
+            binding,
+            review: None,
+            checks: 0,
+            refuse_at: 1,
+        };
+        let mut inspection = input();
+        inspection.operation = Operation::LifecycleStatus {
+            artifact_id: "notes-one".into(),
+        };
+        assert!(query(&inspection, &repository, &mut revoked).is_err());
+        assert_eq!(repository.inventory(&mut reader).unwrap().len(), 3);
+    }
 
     fn input() -> Input {
         Input {

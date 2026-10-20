@@ -155,7 +155,10 @@ struct CatalogEvent {
 
 #[path = "admin_governance/hardware.rs"]
 mod hardware;
-pub(crate) use hardware::{current_hardware_state, hardware_guard_snapshot, with_hardware_cleanup, HardwareSession, HardwareProjection};
+pub(crate) use hardware::{
+    current_hardware_state, hardware_guard_snapshot, with_hardware_cleanup, HardwareProjection,
+    HardwareSession,
+};
 
 fn event_name(request: &str) -> String {
     format!(
@@ -1174,6 +1177,8 @@ fn content_acquisition_scope(
         (write.action, write.selector.id.as_str()),
         (Action::Write | Action::Retain, "native-content-store-v1")
             | (Action::Retain, "native-content-recovery-v1")
+            | (Action::Delete, "native-content-trash-v1")
+            | (Action::Write, "native-content-restore-deleted-v1")
     );
     if !effect_scope
         || write.selector.kind != Kind::Artifact
@@ -1248,6 +1253,63 @@ mod content_acquisition_tests {
                 authentication::SessionPurpose::Standard
             )
             .is_err());
+        }
+    }
+
+    #[test]
+    fn lifecycle_acquisition_requires_its_exact_independent_pair_and_original_action() {
+        for (action, selector) in [
+            (Action::Delete, "native-content-trash-v1"),
+            (Action::Write, "native-content-restore-deleted-v1"),
+        ] {
+            let mut uses = pair(action);
+            uses[1].1.selector.id = selector.into();
+            let requested = uses[1].1.clone();
+            assert_eq!(
+                content_acquisition_scope(
+                    &uses,
+                    &requested,
+                    authentication::SessionPurpose::Standard
+                )
+                .unwrap(),
+                1
+            );
+            for bad in [
+                Action::Read,
+                Action::Retain,
+                if action == Action::Delete {
+                    Action::Write
+                } else {
+                    Action::Delete
+                },
+            ] {
+                let mut changed = uses.clone();
+                changed[1].1.action = bad;
+                assert!(content_acquisition_scope(
+                    &changed,
+                    &changed[1].1,
+                    authentication::SessionPurpose::Standard
+                )
+                .is_err());
+            }
+            let mut wrong = requested.clone();
+            wrong.selector.digest = "b".repeat(64);
+            assert!(content_acquisition_scope(
+                &uses,
+                &wrong,
+                authentication::SessionPurpose::Standard
+            )
+            .is_err());
+            uses.reverse();
+            assert_eq!(
+                content_acquisition_scope(
+                    &uses,
+                    &requested,
+                    authentication::SessionPurpose::Standard
+                )
+                .unwrap(),
+                0
+            );
         }
     }
 
@@ -2032,7 +2094,8 @@ fn grant_session_scope(
         if uses.len() != 1
             || uses[0].1.action != Action::AcquireResource
             || uses[0].1.selector.kind != Kind::Resource
-            || !(model_id(&uses[0].1.selector.id) || uses[0].1.selector.id == "ModelPack-whisper-tiny-multilingual-f16-cpu-v1")
+            || !(model_id(&uses[0].1.selector.id)
+                || uses[0].1.selector.id == "ModelPack-whisper-tiny-multilingual-f16-cpu-v1")
             || uses[0].1.selector.generation != 1
             || uses[0].1.units != 1
         {
@@ -2942,7 +3005,10 @@ pub(crate) fn skill_trust_present() -> Result<bool> {
 }
 
 mod speech;
-pub(crate) use speech::{current_speech_authority,speech_pack_preparation_authority,speech_qualification_preparation,speech_qualification_observation};
+pub(crate) use speech::{
+    current_speech_authority, speech_pack_preparation_authority, speech_qualification_observation,
+    speech_qualification_preparation,
+};
 
 pub(crate) fn current_model_authority(profile: &crate::model::Profile) -> Result<()> {
     model_authority(profile, false, None)

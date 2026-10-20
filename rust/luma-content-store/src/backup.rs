@@ -519,7 +519,14 @@ fn reconstructed<'a>(
     ))?);
     let current = history
         .current
-        .values()
+        .iter()
+        .filter(|(artifact, _)| {
+            history
+                .lifecycle
+                .get(*artifact)
+                .is_some_and(|state| state.status == crate::LifecycleStatus::Live)
+        })
+        .map(|(_, version)| version)
         .map(|version| version.reference())
         .collect::<luma_content::Result<Vec<_>>>()?;
     check()?;

@@ -15,6 +15,7 @@ REQUIRED = (
     'usr/libexec/luma-os/workspace_collections.py',
     'usr/libexec/luma-os/workspace_speech.py',
     'usr/libexec/luma-os/workspace_grounding.py',
+    'usr/libexec/luma-os/workspace_lifecycle.py',
     'usr/libexec/luma-os/luma-workspace-launch',
     'usr/libexec/luma-os/browser_adapter.py',
     'usr/share/luma-os/adapters/browser-presentation-v1.json',

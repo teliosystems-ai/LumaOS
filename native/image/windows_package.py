@@ -337,9 +337,15 @@ def elf(data, require_entry=False, object_path=None, details=False, private_dirs
     return (interpreter, needed, search) if details else (interpreter, needed)
 
 
-def build(root, platform, plan_path, output, release, hosted_compute=False, hosted_inference=False):
-    if hosted_compute and hosted_inference:
+def build(root, platform, plan_path, output, release, hosted_compute=False, hosted_inference=False, hosted_workspace=False):
+    if hosted_compute and (hosted_inference or hosted_workspace):
         raise ValueError('select one distinct hosted runtime profile')
+    if hosted_workspace:
+        spec=importlib.util.spec_from_file_location('luma_windows_workspace_build',Path(__file__).with_name('windows_workspace.py'))
+        workspace=importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(workspace)
+    else:
+        workspace=None
     if hosted_inference:
         spec = importlib.util.spec_from_file_location('luma_windows_inference_build', Path(__file__).with_name('windows_inference.py'))
         inference = importlib.util.module_from_spec(spec)
@@ -374,11 +380,11 @@ def build(root, platform, plan_path, output, release, hosted_compute=False, host
         embedded_identity = {'schema_version': 1, 'release_id': release, 'architecture': 'amd64', 'profile': 'W'}
         wsl = WSL
         hosted = None
-        if hosted_compute or hosted_inference:
+        if hosted_compute or hosted_inference or workspace:
             spec = importlib.util.spec_from_file_location('luma_windows_hosted_package', Path(__file__).with_name('windows_hosted.py'))
             hosted = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(hosted)
-            embedded_identity.update(schema_version=2, runtime_profile=inference.PROFILE if inference else hosted.PROFILE)
+            embedded_identity.update(schema_version=3 if workspace else 2, runtime_profile=workspace.PROFILE if workspace else inference.PROFILE if inference else hosted.PROFILE)
             wsl += b'[user]\ndefault=nobody\n'
         replacements = {
             'usr/bin/luma-platform': (binary, 0o755),
@@ -456,7 +462,7 @@ def build(root, platform, plan_path, output, release, hosted_compute=False, host
         required = {'etc/os-release', 'etc/wsl.conf', 'usr/lib/luma/platform.json',
                     'usr/bin/luma-platform', 'bin/sh', 'usr/lib/systemd/systemd'}
         roots = ('usr/bin/luma-platform', 'bin/sh', 'usr/lib/systemd/systemd')
-        if hosted_compute or hosted_inference:
+        if hosted_compute or hosted_inference or workspace:
             required.update((*hosted.GENERATED, hosted.PLATFORM, hosted.POLICY, *hosted.BINARIES,
                              'usr/bin/systemctl'))
             if not required.issubset(entries):
@@ -466,6 +472,9 @@ def build(root, platform, plan_path, output, release, hosted_compute=False, host
         if inference:
             required.update(inference.validate(data_at, entries, tree))
             roots += (inference.PRIVATE+'/llama-completion', inference.PRIVATE+'/libggml-cpu-x64.so')
+        if workspace:
+            required.update(workspace.validate(data_at,entries,tree))
+            roots+=(workspace.AUTH_HELPER,workspace.SHELL,workspace.PAM_MODULE)
         if not required.issubset(entries):
             raise ValueError('explicit exclusions removed mandatory runtime content')
         todo = [(path, (), path) for path in roots]
@@ -477,9 +486,9 @@ def build(root, platform, plan_path, output, release, hosted_compute=False, host
             if key in checked:
                 continue
             checked.add(key)
-            if len(checked) > (512 if inference else 256) or len({item[0] for item in checked}) > (128 if inference else 60):
+            if len(checked) > (512 if inference or workspace else 256) or len({item[0] for item in checked}) > (128 if inference or workspace else 60):
                 raise ValueError('runtime dependency closure exceeds manifest bounds')
-            executable_root = path in roots and not (inference and path.endswith('/libggml-cpu-x64.so'))
+            executable_root = path in roots and not (inference and path.endswith('/libggml-cpu-x64.so')) and not (workspace and path==workspace.PAM_MODULE)
             interp, needed, search = elf(data_at(path), require_entry=executable_root, object_path=path,
                                         details=True, private_dirs=private_dirs)
             if executable_root and not entries[path][1] & 0o111:
@@ -522,7 +531,7 @@ def build(root, platform, plan_path, output, release, hosted_compute=False, host
             # This namespace is private to each independent executable root.
             todo.extend((p, inherited_next, scope) for p in dependencies
                         if (p, inherited_next, scope) not in checked)
-        if len(required) > (128 if inference else 64):
+        if len(required) > (128 if inference or workspace else 64):
             raise ValueError('required runtime files exceed existing manifest bound')
         content_bytes = sum(item[2] for item in entries.values())
         archive_bytes = 1024 + sum(512 + ((item[2] + 511) // 512) * 512 for item in entries.values())
@@ -634,6 +643,7 @@ if __name__ == '__main__':
     parser.add_argument('--release-id', required=True)
     parser.add_argument('--hosted-compute', action='store_true')
     parser.add_argument('--hosted-inference', action='store_true')
+    parser.add_argument('--hosted-workspace', action='store_true')
     args = parser.parse_args()
     print(canonical(build(args.root, args.platform, args.plan, args.output, args.release_id,
-                         hosted_compute=args.hosted_compute, hosted_inference=args.hosted_inference)).decode(), end='')
+                         hosted_compute=args.hosted_compute, hosted_inference=args.hosted_inference,hosted_workspace=args.hosted_workspace)).decode(), end='')

@@ -54,7 +54,7 @@ this scope decision does not supply its missing implementation or evidence.
 | Accessible workspace | G3 | Exact historical private-read to fresh inference and observed-reply to human-edited literal document to independently granted workflow are implemented; capture/model integration and installed read/edit/recalculation, cancellation and keyboard/screen-reader journeys remain open. Other typed engines retain explicit manual reviewed controls |
 | Capture and references | G3 | Bounded PNG, PCM audio and sampled portal video capture now have explicit controls, indicators and revocation; installed device/portal enforcement, speech transcription, model consumption and grounded-reference ambiguity handling remain open |
 | Engines and adapters | G3 | Bounded freestanding C99 source-to-KVM-build/test receipts are implemented and software-verified; installed authority/image qualification, LibreOffice/browser journeys and allowlisted hardware-policy adapter integration remain. Existing Office export and WebKit presentation are implementations, not absent components |
-| Windows hosted proof | Current profile-W GWIN0 | Actual host-encryption/suspended-protection and managed-policy observation and fail-closed gates are implemented; explicit first-launch nonroot user/Admin setup and authenticated health-to-workspace/manual-model-disabled launcher remain development. Installed protection/provider, inference, scoped ingestion, lifecycle/resource coexistence, confinement and two-user proof remain qualification |
+| Windows hosted proof | Current profile-W GWIN0 | Host-protection/policy gates and a distinct opt-in first-account/PAM bootstrap, exact interruption repair, authenticated health and model-disabled original-Windows-user manual console are implemented and software-verified. Installed first-launch/TTY/PAM/health, protection/provider, inference, scoped ingestion, lifecycle/resource coexistence, confinement and two-user proof remain qualification; no native product-grant bridge or GTK desktop is inferred |
 | Hyper-V deployment | Deferred development | Complete desktop, explicit identity/resources, verified boot, encrypted data and recovery under W030–W032; installer/template, commissioned vTPM and complete VM proof remain unimplemented/unqualified |
 | Windows product integration | GWIN1 | General ordinary-user SID/product-principal and finite-grant integration, enrollment/automation/event queue, adapters, updates, recovery, migration and opt-in background lifecycle beyond the inherited GWIN0 controls |
 | Windows release hardening | GWIN2 and production custody | W033 checkpoint/clone rollback reconciliation, all-profile final evidence and custody-root succession. Retaining the commissioned root does not make epoch migration a GWIN0 prerequisite |
@@ -85,6 +85,21 @@ session; no Read receipt becomes inference authority. These are first-Admin
 GWIN0 controls, not general ordinary-user product grants. Use the dated
 execution records linked from the [implementation register](G3_GWIN0_IMPLEMENTATION.md)
 for exact software results and remaining limitations.
+
+The separate schema3 workspace profile now provides original-Admin reviewed
+nonroot Linux account creation with real local yescrypt/PAM implementation,
+exact interruption repair, protected ninety-day aging and independently
+challenged health. The Windows-user manual console offers fresh scoped Read,
+independent private whole-snapshot Save, diagnostics, repair and cancel without
+requiring a model. It does not launch native GTK or create a general Linux
+principal/grant bridge. Its separate setup purpose remains the standard thirty
+seconds unless a distinct longer setup approval is granted; the five-minute
+model-inference approval is not reused. The [workspace record](gates/gwin0/workspace_bootstrap_2026-10-20.json)
+joins 1,191 Windows authority assertions, 162 package assertions, 13 strict
+native workspace tests, 60 Python regressions and a real-built-worker/PAM
+closure tar validated on both platforms. That unsigned 127.8-MB workspace-only
+artifact is not the final combined image, an imported distribution, tested
+installed account or production qualification. All gates remain open.
 
 The native workspace now has explicit per-turn conversation review and a fresh
 finite Infer grant. The reviewed worker/model/input commitment is checked

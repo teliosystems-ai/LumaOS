@@ -303,6 +303,10 @@ namespace Luma.Windows.Hosted
         internal static string Argument(string value)
         {
             if(value==null || value.Length>1024 || value.IndexOf('\0')>=0 || value.IndexOf('\r')>=0 || value.IndexOf('\n')>=0) throw new InvalidDataException("WSL argument exceeds fixed inert bound.");
+            return QuoteArgument(value);
+        }
+        private static string QuoteArgument(string value)
+        {
             StringBuilder quoted=new StringBuilder("\"");int slashes=0;
             foreach(char c in value) {if(c=='\\') {slashes++;continue;}if(c=='"') {quoted.Append('\\',slashes*2+1);quoted.Append('"');slashes=0;continue;}quoted.Append('\\',slashes);slashes=0;quoted.Append(c);}
             quoted.Append('\\',slashes*2);quoted.Append('"');return quoted.ToString();
@@ -329,28 +333,34 @@ namespace Luma.Windows.Hosted
         {return StartCore(binary.Path,binary.Check,actor,arguments,beforeResume,null);}
         internal static OwnedWindowsProcess StartConfigurationObserver(PinnedConfigurationObserver binary,HostedActor actor,string distribution,string nonce,Action check,Stopwatch deadline)
         {return StartCore(binary.Path,binary.Check,actor,HostedWslObserverContract.Arguments(distribution,nonce),delegate(OwnedWindowsProcess process) {check();},deadline);}
+        internal static OwnedWindowsProcess StartWorkspace(PinnedWsl binary,HostedActor actor,HostedWorkspaceInvocation invocation,Action<OwnedWindowsProcess> beforeResume)
+        {if(invocation==null) throw new ArgumentNullException("invocation");return StartCore(binary.Path,binary.Check,actor,invocation.Arguments,beforeResume,null,invocation);}
         private Stopwatch observerDeadline;
-        private static OwnedWindowsProcess StartCore(string executable,Action pinned,HostedActor actor,string[] arguments,Action<OwnedWindowsProcess> beforeResume,Stopwatch observerDeadline)
+        private static OwnedWindowsProcess StartCore(string executable,Action pinned,HostedActor actor,string[] arguments,Action<OwnedWindowsProcess> beforeResume,Stopwatch observerDeadline,HostedWorkspaceInvocation workspace=null)
         {
             FixedServiceIdentity.Require();actor.Check();pinned();if(arguments==null || arguments.Length>12 || beforeResume==null) throw new InvalidDataException("Closed invocation shape or pre-execution registration differs.");
-            StringBuilder command=new StringBuilder(Argument(executable));foreach(string argument in arguments) command.Append(" "+Argument(argument));
+            bool interactive=workspace!=null && workspace.Interactive;
+            if(workspace!=null) workspace.RequireArguments(arguments);
+            StringBuilder command=new StringBuilder(Argument(executable));for(int index=0;index<arguments.Length;index++) command.Append(" "+(workspace!=null && index>=10?QuoteArgument(arguments[index]):Argument(arguments[index])));
             OwnedWindowsProcess result=new OwnedWindowsProcess();result.observerDeadline=observerDeadline;SafeFileHandle childInput=null,childOutput=null,parentInput=null,parentOutput=null,parentError=null,childError=null;
             ProcessInfo created=new ProcessInfo();bool assigned=false;
             try {
                 SecurityAttributes attributes=new SecurityAttributes {Length=Marshal.SizeOf(typeof(SecurityAttributes)),Inherit=1};
-                if(!CreatePipe(out childInput,out parentInput,ref attributes,65536) || !CreatePipe(out parentOutput,out childOutput,ref attributes,65536) ||
-                    !CreatePipe(out parentError,out childError,ref attributes,4096)) throw new Win32Exception(Marshal.GetLastWin32Error());
-                foreach(SafeFileHandle handle in new SafeFileHandle[]{parentInput,parentOutput,parentError}) if(!SetHandleInformation(handle,1,0)) throw new Win32Exception(Marshal.GetLastWin32Error());
+                if(!interactive && (!CreatePipe(out childInput,out parentInput,ref attributes,65536) || !CreatePipe(out parentOutput,out childOutput,ref attributes,65536) ||
+                    !CreatePipe(out parentError,out childError,ref attributes,4096))) throw new Win32Exception(Marshal.GetLastWin32Error());
+                if(!interactive) foreach(SafeFileHandle handle in new SafeFileHandle[]{parentInput,parentOutput,parentError}) if(!SetHandleInformation(handle,1,0)) throw new Win32Exception(Marshal.GetLastWin32Error());
                 result.job=CreateJobObject(IntPtr.Zero,null);if(result.job.IsInvalid) throw new Win32Exception(Marshal.GetLastWin32Error());
                 Limits limits=new Limits();limits.Basic.Flags=0x2000|0x200|0x8|0x400;limits.Basic.Processes=observerDeadline==null?(uint)4:(uint)1;limits.JobMemory=(UIntPtr)((observerDeadline==null?512UL:128UL)*1024*1024);
                 if(!SetInformationJobObject(result.job,9,ref limits,(uint)Marshal.SizeOf(typeof(Limits)))) throw new Win32Exception(Marshal.GetLastWin32Error());
-                StartupEx startup=new StartupEx();startup.Startup=new Startup {Size=Marshal.SizeOf(typeof(StartupEx)),Flags=0x100,Input=childInput.DangerousGetHandle(),Output=childOutput.DangerousGetHandle(),Error=childError.DangerousGetHandle(),Desktop="winsta0\\default"};
+                StartupEx startup=new StartupEx();startup.Startup=interactive?new Startup {Size=Marshal.SizeOf(typeof(Startup)),Flags=0,Desktop="winsta0\\default"}:
+                    new Startup {Size=Marshal.SizeOf(typeof(StartupEx)),Flags=0x100,Input=childInput.DangerousGetHandle(),Output=childOutput.DangerousGetHandle(),Error=childError.DangerousGetHandle(),Desktop="winsta0\\default"};
                 // The environment is fixed, not inherited from the service or
                 // caller. No Windows executable or shell is chosen by a guest.
                 string block="LANG=C.UTF-8\0LC_ALL=C.UTF-8\0PATH="+Environment.SystemDirectory+"\0SystemRoot="+Environment.GetFolderPath(Environment.SpecialFolder.Windows)+"\0\0";
                 IntPtr environment=Marshal.StringToHGlobalUni(block);
                 IntPtr inheritList=IntPtr.Zero;bool initialized=false;
                 try {
+                    if(!interactive) {
                     UIntPtr needed=UIntPtr.Zero;InitializeProcThreadAttributeList(IntPtr.Zero,1,0,ref needed);
                     if(needed.ToUInt64()<1 || needed.ToUInt64()>65536) throw new SecurityException("Process attribute-list size differs.");
                     startup.Attributes=Marshal.AllocHGlobal((int)needed.ToUInt64());
@@ -358,8 +368,10 @@ namespace Luma.Windows.Hosted
                     inheritList=Marshal.AllocHGlobal(IntPtr.Size*3);Marshal.WriteIntPtr(inheritList,0,childInput.DangerousGetHandle());
                     Marshal.WriteIntPtr(inheritList,IntPtr.Size,childOutput.DangerousGetHandle());Marshal.WriteIntPtr(inheritList,IntPtr.Size*2,childError.DangerousGetHandle());
                     if(!UpdateProcThreadAttribute(startup.Attributes,0,(IntPtr)0x20002,inheritList,(UIntPtr)(IntPtr.Size*3),IntPtr.Zero,IntPtr.Zero)) throw new Win32Exception(Marshal.GetLastWin32Error());
+                    }
                     using(SafeAccessTokenHandle restricted=Restricted(actor.Token)) {
-                        if(!CreateProcessAsUser(restricted,executable,command,IntPtr.Zero,IntPtr.Zero,true,4|0x400|0x08000000|0x80000,environment,Environment.SystemDirectory,ref startup,out created))
+                        uint flags=interactive?(uint)(4|0x400|0x10):(uint)(4|0x400|0x08000000|0x80000);
+                        if(!CreateProcessAsUser(restricted,executable,command,IntPtr.Zero,IntPtr.Zero,!interactive,flags,environment,Environment.SystemDirectory,ref startup,out created))
                             throw new Win32Exception(Marshal.GetLastWin32Error());
                     }
                 } finally {
@@ -374,6 +386,7 @@ namespace Luma.Windows.Hosted
                     if(!AssignProcessToJobObject(result.job,result.process)) throw new Win32Exception(Marshal.GetLastWin32Error());assigned=true;
                     actor.Check();pinned();beforeResume(result);actor.Check();if(ResumeThread(thread)==UInt32.MaxValue) throw new Win32Exception(Marshal.GetLastWin32Error());
                 }
+                if(interactive) return result;
                 childInput.Dispose();childInput=null;childOutput.Dispose();childOutput=null;childError.Dispose();childError=null;
                 result.input=new FileStream(parentInput,FileAccess.Write,4096,false);parentInput=null;
                 result.output=new FileStream(parentOutput,FileAccess.Read,4096,false);parentOutput=null;

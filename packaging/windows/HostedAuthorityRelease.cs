@@ -114,7 +114,7 @@ namespace Luma.Windows.Hosted
     internal sealed class LiveRelease
     {
         private readonly AuthorityIdentity identity;private readonly ReleaseDescriptor release;private readonly Stopwatch challengeAge;private readonly bool requireReleaseLifetime;
-        private readonly string nonce;private TimeAttestation time;
+        private readonly string nonce;private TimeAttestation time;private byte[] signature;
         internal LiveRelease(AuthorityIdentity identity,ReleaseDescriptor release)
             :this(identity,release,true) {}
         private LiveRelease(AuthorityIdentity identity,ReleaseDescriptor release,bool lifetime)
@@ -128,7 +128,12 @@ namespace Luma.Windows.Hosted
             TimeAttestation actual=TimeAttestation.Decode(bytes);
             if(actual.Installation!=identity.Installation || actual.Nonce!=nonce || actual.ReleaseSha256!=Wire.Hash(release.Encode()) ||
                 !PlatformSignature.Verify(identity.TimeKey,actual.Encode(),Wire.Copy(signature,64,64))) throw new SecurityException("Actual nonce-signed UTC receipt differs.");
-            time=actual;Check();
+            time=actual;this.signature=Wire.Copy(signature,64,64);Check();
+        }
+        internal HostedWorkspaceTime WorkspaceTime()
+        {
+            Check();ulong elapsed=checked((ulong)Math.Ceiling(challengeAge.Elapsed.TotalMilliseconds*1.001)+1);
+            return new HostedWorkspaceTime(time.Encode(),signature,checked(time.UpperMilliseconds+elapsed));
         }
         internal void Check()
         {

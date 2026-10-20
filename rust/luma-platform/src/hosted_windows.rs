@@ -454,6 +454,11 @@ pub(crate) fn drain_profile(
                 "/sys/fs/cgroup/lumahosted.slice/luma-hosted-inference.service",
                 "luma-windows-hosted-inference-v1"
             )
+            | (
+                "luma-hosted-workspace-bootstrap.service",
+                "/sys/fs/cgroup/lumahosted.slice/luma-hosted-workspace-bootstrap.service",
+                "luma-windows-hosted-workspace-v1"
+            )
     ) {
         return Err("unknown hosted drain profile".into());
     }

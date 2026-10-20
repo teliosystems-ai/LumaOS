@@ -1614,3 +1614,69 @@ checks, 162 package assertions and full executable compilation. It retains the
 failed full-file/wire-hash attempt and exact source pins. Installed first-Admin,
 UTC, host protection and manual-workspace journeys remain qualification or
 separate implementation work; no service, account or host protection was changed.
+
+### Windows first-account, fresh health and manual launcher, 20 October 2026
+
+The opt-in `luma-windows-hosted-workspace-v1` schema3 profile adds a real unique
+Linux UID/GID1000 account without shared credentials or sudo/root membership.
+The commissioned Windows first Admin remains the separate custody role; its
+SID is not Linux PAM authentication. Existing compute/inference contracts keep
+default UID65534 and WSL flags0. Actual local hidden TTY password entry uses
+distribution yescrypt and a fixed held PAM helper. No secret/verifier enters
+argv, manifests, approval hashes or WebKit.
+
+Windows prepares the exact account/request/release/runtime/profile/actor/UTC
+intent in genuine CNG/NV history before admitting its suspended owned console.
+Four exact account-file deltas, private staged replacements, fsync witnesses
+and an owned home support explicit interrupted repair. Never-started recovery
+requires absent transaction/home/temporaries and all untouched original
+baselines. Partial unknown stages are retained/refused; no account adoption,
+automatic retry or aging reset occurs. Ninety-day aging uses the original
+protected day, with a journal-reconstructed high-water day against rollback.
+
+The original thirty-second purpose includes review, protected UTC, secret
+entry, worker and drainage. A distinct longer setup purpose has not been
+approved. The five-minute inference approval does not extend this purpose.
+One controller is admitted per resource; after original exit and exact
+request-revocation/drain, health uses a fresh independent session/nonce. Its
+private account closure is joined to genuine Windows history; a once-PAM
+marker is not a renewed user grant. Model execution is not required for manual
+health. Windows/guest startup checks observe 1.25 GiB and supervision observes
+a 1-GiB floor; these are not atomic reservations.
+
+On an independently admitted installed release, the original interactive
+client exposes these separate commands; the unsigned software fixture below
+does not authorize running them against an installed distribution:
+
+```powershell
+.\Luma.HostedAuthority.exe workspace-setup ACTIVE_RELEASE_SHA256 alice
+.\Luma.HostedAuthority.exe workspace-health ACTIVE_RELEASE_SHA256 alice
+.\Luma.HostedAuthority.exe workspace-open ACTIVE_RELEASE_SHA256 alice
+.\Luma.HostedAuthority.exe workspace-recover ACTIVE_RELEASE_SHA256 EXACT_PENDING_GENERATION
+.\Luma.HostedAuthority.exe workspace-repair ACTIVE_RELEASE_SHA256 alice
+```
+
+Setup/repair open a new owned console only after exact explicit confirmation;
+automated tests never open it. Recovery first closes an outstanding resource
+without replaying the password ceremony. Repair and subsequent fresh health
+are separate actions. `workspace-open` is the original Windows-user manual
+console, not GTK: exact scoped Read, independent complete-snapshot private
+NTFS Save, authenticated diagnostics, explicit repair, fresh health and
+cancel. It holds no authority while idle; each selected action obtains a fresh
+bounded ceremony. No model, native TPM/content grant bridge or Read-to-Export
+authority conversion is implied. The complete VM desktop remains owner-deferred.
+
+The [execution record](gates/gwin0/workspace_bootstrap_2026-10-20.json) joins all
+77 Windows source files to 1,191 authority assertions (110 workspace codec and
+105 genuine software-signed lifecycle/controller cases), 162 package assertions
+and full executable compilation. A coherent published-base plus exact
+workspace-overlay native cut passed actual `-Dwarnings` workspace/all-targets
+checking, 13 Rust tests with no ignores, 60 Python tests and three actual C# to
+Python to newly built Rust CLI cases. The cut explicitly excludes unrelated
+in-flight hardware/speech registrations; it is not global combined-source
+qualification. An actual compiled/derived worker plus real 22-file PAM/shell
+runtime closure produced a 127,811,072-byte unsigned tar that the production
+Windows inspector validated (194 members, 63 required pins). Original unstripped
+and failed runner attempts are retained. No installed account, actual installed
+PAM/TTY, service, distribution, TPM mutation, confinement enforcement, native
+GUI or final G3/GWIN0 qualification is claimed.

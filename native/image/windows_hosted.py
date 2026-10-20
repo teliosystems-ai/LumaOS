@@ -55,8 +55,8 @@ def unresolved_includes(data):
 
 
 def preprocess_policy(policy=POLICY):
-    if policy not in (POLICY, 'etc/apparmor.d/luma-hosted-inference'):
-        raise ValueError('only the fixed compute and inference policies may be preprocessed')
+    if policy not in (POLICY, 'etc/apparmor.d/luma-hosted-inference', 'etc/apparmor.d/luma-hosted-workspace-bootstrap'):
+        raise ValueError('only the fixed compute, inference and distinct workspace policies may be preprocessed')
     parser = Path('/usr/sbin/apparmor_parser')
     for path in (parser, *parser.parents):
         metadata = path.stat()

@@ -103,7 +103,8 @@ public static class LumaHostedIngestionFixture
             using(IDisposable selection=(IDisposable)New("HostedIngestionInputs",good,false)) {Kind("HostedIngestionInputs").GetField("cancelled",BindingFlags.Instance|BindingFlags.NonPublic).SetValue(selection,1);bool refused=false;try {Call(selection,"Check");}catch(OperationCanceledException) {refused=true;}Require(refused);}
             Static("HostedStatusShape","Require",(byte)4,H('9'),(uint)1234,(ulong)5678);assertions++;
             Static("HostedStatusShape","Require",(byte)0,"",(uint)0,(ulong)0);assertions++;
-            Refuse(delegate {Static("HostedStatusShape","Require",(byte)5,H('9'),(uint)0,(ulong)0);});
+            Static("HostedStatusShape","Require",(byte)5,H('9'),(uint)0,(ulong)0);assertions++;
+            Refuse(delegate {Static("HostedStatusShape","Require",(byte)6,H('9'),(uint)0,(ulong)0);});
             Refuse(delegate {Static("HostedStatusShape","Require",(byte)4,"",(uint)0,(ulong)0);});
             Refuse(delegate {Static("HostedStatusShape","Require",(byte)0,H('9'),(uint)0,(ulong)0);});
             Refuse(delegate {Static("HostedStatusShape","Require",(byte)4,H('9'),(uint)1234,(ulong)0);});

@@ -81,7 +81,13 @@ def capture(tree, path, maximum):
         return bytes(value), mode, package.identity(metadata)
 
 
-def stage(root, platform, work_root, output_name, hosted_compute=False):
+def stage(root, platform, work_root, output_name, hosted_compute=False, hosted_workspace=False):
+    workspace=None
+    if hosted_workspace:
+        spec=importlib.util.spec_from_file_location('luma_windows_workspace_stage',Path(__file__).with_name('windows_workspace.py'))
+        workspace=importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(workspace)
+        hosted_compute=True
     if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._-]{0,95}', output_name):
         raise ValueError('stage output name must be one bounded new directory component')
     work_root = Path(os.path.abspath(work_root))
@@ -202,6 +208,9 @@ def stage(root, platform, work_root, output_name, hosted_compute=False):
         generated = dict(GENERATED)
         if hosted_compute:
             generated.update(hosted.GENERATED)
+        if workspace:
+            generated[workspace.NSS_PATH]=(workspace.NSS,0o644)
+            generated[workspace.PAM_PATH]=(workspace.PAM,0o644)
         for path, (value, mode) in generated.items():
             add(path, value, mode, {'kind': 'fixed-locked-development-profile',
                                   'profile': hosted.PROFILE if hosted_compute else PROFILE})
@@ -280,6 +289,9 @@ def stage(root, platform, work_root, output_name, hosted_compute=False):
             report.update(profile=hosted.PROFILE, status='confined-compute-userland-staged-not-runtime-qualified',
                           service_enablement_configured=True, confinement_policy_preprocessed=True,
                           guest_authority_implemented=False)
+        if workspace:
+            report.update(profile=workspace.PROFILE,status='workspace-base-staged-awaiting-explicit-pam-runtime-composition',
+                          workspace_runtime_composed=False,linux_account_created=False,linux_pam_authenticated=False)
         for name, value in (('plan.json', plan), ('stage.json', report)):
             with os.fdopen(os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
                                    0o600, dir_fd=output_fd), 'wb') as stream:
@@ -306,7 +318,8 @@ if __name__ == '__main__':
     parser.add_argument('--work-root', type=Path, required=True)
     parser.add_argument('--output-name', required=True)
     parser.add_argument('--hosted-compute', action='store_true')
+    parser.add_argument('--hosted-workspace', action='store_true')
     arguments = parser.parse_args()
     result = stage(arguments.root, arguments.platform, arguments.work_root, arguments.output_name,
-                   hosted_compute=arguments.hosted_compute)
+                   hosted_compute=arguments.hosted_compute,hosted_workspace=arguments.hosted_workspace)
     print(package.canonical({key: value for key, value in result.items() if key != 'files'}).decode(), end='')

@@ -392,7 +392,9 @@ namespace Luma.Windows.Hosted
             if(state.Exists("pending.bin") || state.Exists("abort.intent")) throw new SecurityException("An interrupted authority write requires its own exact reviewed recovery command.");
             JournalHistory history=Read(check);history.Reconcile(identity,null,nv.ReadHead());check();
             JournalEntry entry=JournalEntry.Prepare(identity,checked(history.Sequence+1),kind,history.Head,history.Record,actorSid,payload);
-            entry=entry.Signed(identity,key.Sign(entry.SigningInput));DeploymentHistory.ValidateNext(identity,history,entry,check);
+            entry=entry.Signed(identity,key.Sign(entry.SigningInput));
+            CommissionIntent workspaceIntent=kind==JournalKind.WorkspacePrepared?CommissionIntent.Decode(state.Read("commission.intent",1,4096)):null;
+            DeploymentHistory.ValidateNext(identity,history,entry,check,workspaceIntent);
             DispatchTicket ticket=PrepareDispatch(entry,check);check();state.WriteNew("pending.bin",entry.Bytes);
             DispatchFirst(entry,ticket,check);check();
             state.Publish("pending.bin","record-"+entry.Sequence.ToString("D4",System.Globalization.CultureInfo.InvariantCulture)+".bin");

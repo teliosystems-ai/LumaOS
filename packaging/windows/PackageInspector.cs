@@ -227,9 +227,10 @@ namespace Luma.Windows
                     throw new InvalidDataException("Every private inference runtime member must be independently required by the authenticated release.");
                 if (selected && (directory || expectation.Bytes != size || expectation.Executable != ((mode & 73) != 0)))
                     throw new InvalidDataException("Required member type, byte size or executable status differs.");
-                bool platformElf = path == "usr/bin/luma-platform" || path == "usr/libexec/luma-os/luma-platform";
+                bool platformElf = path == "usr/bin/luma-platform" || path == "usr/libexec/luma-os/luma-platform" || path == "usr/libexec/luma-os/luma-workspace-auth-helper" || path=="bin/bash";
                 int captureBound = platformElf ? 64 : 16384;
-                if (selected && (path == "etc/apparmor.d/luma-hosted-compute" || path == "etc/apparmor.d/luma-hosted-inference")) captureBound = 1024 * 1024;
+                if (selected && (path == "etc/apparmor.d/luma-hosted-compute" || path == "etc/apparmor.d/luma-hosted-inference" || path=="etc/apparmor.d/luma-hosted-workspace-bootstrap")) captureBound = 1024 * 1024;
+                if(selected && (path=="usr/share/luma-os/hosted-workspace.json" || path=="usr/share/luma-os/hosted-workspace-runtime.json")) captureBound=32768;
                 if (selected && path == "usr/lib/luma/platform.json") captureBound = 4096;
                 MemoryStream captured = selected ? new MemoryStream() : null;
                 using (SHA256 memberHash = selected ? SHA256.Create() : null)
@@ -263,7 +264,7 @@ namespace Luma.Windows
                             path == "etc/apparmor.d/luma-hosted-compute" || path == "etc/apparmor.d/luma-hosted-inference" ||
                             path == "etc/systemd/system/luma-hosted-inference-confinement.service" ||
                             path == "etc/systemd/system/multi-user.target.wants/luma-hosted-inference-confinement.service" ||
-                            path == "usr/share/luma-os/hosted-inference.json" || path == "usr/share/luma-os/hosted-inference-runtime.json")
+                            path == "usr/share/luma-os/hosted-inference.json" || path == "usr/share/luma-os/hosted-inference-runtime.json" || WorkspaceConfiguration(path))
                         {
                             int wantedMode = path == "etc/shadow" || path == "etc/gshadow" ? 384 : 420;
                             if (mode != wantedMode) throw new InvalidDataException("Hosted configuration permissions differ from the closed profile.");
@@ -307,7 +308,7 @@ namespace Luma.Windows
         private static string ContentBinding(PackageContent content, RequiredFile[] files)
         {
             if (content == null || files == null || files.Length < 4 || files.Length > 128 ||
-                (files.Length > 64 && !InferenceIdentity(content.PlatformIdentity))) throw new InvalidDataException("Actual bounded package inspection is required; only the closed inference identity permits 65..128 required files.");
+                (files.Length > 64 && !InferenceIdentity(content.PlatformIdentity) && !WorkspaceIdentity(content.PlatformIdentity))) throw new InvalidDataException("Actual bounded package inspection is required; only closed inference/workspace identities permit 65..128 required files.");
             foreach (RequiredFile file in files)
                 if (file == null || String.IsNullOrEmpty(file.Path) || file.Bytes < 0 ||
                     file.Sha256 == null || !Regex.IsMatch(file.Sha256, "\\A[a-f0-9]{64}\\z", RegexOptions.CultureInvariant))
@@ -338,7 +339,7 @@ namespace Luma.Windows
                 content.ValidatedBinding != ContentBinding(content, files))
                 throw new InvalidDataException("Hosted validation requires the unchanged actual archive inspection.");
             const string identity = "\\A\\{\"architecture\":\"amd64\",\"profile\":\"W\",\"release_id\":\"luma-wsl-dev-[A-Za-z0-9][A-Za-z0-9.-]{0,63}\",\"runtime_profile\":\"luma-windows-hosted-(?:compute|inference)-v1\",\"schema_version\":2\\}\\n\\z";
-            if (!Regex.IsMatch(content.PlatformIdentity, identity, RegexOptions.CultureInvariant))
+            if (!Regex.IsMatch(content.PlatformIdentity, identity, RegexOptions.CultureInvariant) && !WorkspaceIdentity(content.PlatformIdentity))
                 throw new InvalidDataException("Hosted identity must be the exact schema-2 compute package identity.");
             const string wsl = "[boot]\nsystemd=true\n[automount]\nenabled=false\n[interop]\nenabled=false\nappendWindowsPath=false\n[user]\ndefault=nobody\n";
             if (content.WslConfiguration != wsl) throw new InvalidDataException("Hosted WSL configuration differs.");
@@ -385,7 +386,7 @@ namespace Luma.Windows
                 Regex.IsMatch(policy, "(?m)^[ \\t]*(?:#[ \\t]*)?include(?:[ \\t]|$)", RegexOptions.CultureInvariant) ||
                 !policy.Contains("profile luma-hosted-compute ") || !policy.Contains("deny network,"))
                 throw new InvalidDataException("Hosted policy is missing, unresolved or outside the closed compute profile.");
-            if(InferenceIdentity(content.PlatformIdentity)) {
+            if(InferenceIdentity(content.PlatformIdentity) || WorkspaceIdentity(content.PlatformIdentity) && (content.HostedConfiguration.ContainsKey("usr/share/luma-os/hosted-inference.json") || content.HostedConfiguration.ContainsKey("usr/share/luma-os/hosted-inference-runtime.json"))) {
                 const string prefix="etc/systemd/system/",leaf="luma-hosted-inference-confinement.service";
                 string inferenceUnit=unit.Replace("hosted inert compute","hosted compact inference").Replace("luma-hosted-compute","luma-hosted-inference");
                 foreach(string name in new string[]{prefix+leaf,prefix+"multi-user.target.wants/"+leaf}) {
@@ -402,10 +403,83 @@ namespace Luma.Windows
                     !content.HostedConfiguration.TryGetValue("usr/share/luma-os/hosted-inference-runtime.json",out manifest)) throw new InvalidDataException("Inference descriptors are absent from actual inspection.");
                 ValidateInferenceDescriptors(description,manifest,files);
             }
+            if(WorkspaceIdentity(content.PlatformIdentity)) {
+                string description,manifest;
+                if(!content.HostedConfiguration.TryGetValue("usr/share/luma-os/hosted-workspace.json",out description) || !content.HostedConfiguration.TryGetValue("usr/share/luma-os/hosted-workspace-runtime.json",out manifest))
+                    throw new InvalidDataException("Workspace descriptors are absent from actual archive inspection.");
+                ValidateWorkspaceDescriptors(description,manifest,files);
+                foreach(KeyValuePair<string,string> pair in WorkspaceTemplates()) {
+                    string actual;if(!content.HostedConfiguration.TryGetValue(pair.Key,out actual) || actual!=pair.Value) throw new InvalidDataException("Workspace exact PAM/NSS/baseline data differs from actual archive bytes.");
+                }
+                string workspaceUnit=unit.Replace("hosted inert compute","hosted first-account workspace").Replace("luma-hosted-compute","luma-hosted-workspace-bootstrap");
+                foreach(string path in new string[]{"etc/systemd/system/luma-hosted-workspace-confinement.service","etc/systemd/system/multi-user.target.wants/luma-hosted-workspace-confinement.service"}) {
+                    string actual;RequiredFile expected;if(!content.HostedConfiguration.TryGetValue(path,out actual) || actual!=workspaceUnit || !selected.TryGetValue(path,out expected) || expected.Executable)
+                        throw new InvalidDataException("Workspace independent confinement deployment differs.");
+                }
+                const string workspacePolicy="etc/apparmor.d/luma-hosted-workspace-bootstrap";
+                if(!selected.TryGetValue(workspacePolicy,out policyFile)||policyFile.Executable||policyFile.Bytes<1||policyFile.Bytes>1024*1024||!content.HostedConfiguration.TryGetValue(workspacePolicy,out policy)||
+                    Regex.IsMatch(policy,"(?m)^[ \\t]*(?:#[ \\t]*)?include(?:[ \\t]|$)",RegexOptions.CultureInvariant)||!policy.Contains("profile luma-hosted-workspace-bootstrap ")||!policy.Contains("deny network,")||!policy.Contains("capability chown,"))
+                    throw new InvalidDataException("Workspace confinement is absent, unresolved, or substituted.");
+            }
         }
 
         private static bool InferenceIdentity(string identity)
         {return identity!=null && Regex.IsMatch(identity,"\\A\\{\"architecture\":\"amd64\",\"profile\":\"W\",\"release_id\":\"luma-wsl-dev-[A-Za-z0-9][A-Za-z0-9.-]{0,63}\",\"runtime_profile\":\"luma-windows-hosted-inference-v1\",\"schema_version\":2\\}\\n\\z",RegexOptions.CultureInvariant);}
+
+        private static bool WorkspaceIdentity(string identity)
+        {return identity!=null && Regex.IsMatch(identity,"\\A\\{\"architecture\":\"amd64\",\"profile\":\"W\",\"release_id\":\"luma-wsl-dev-[A-Za-z0-9][A-Za-z0-9.-]{0,63}\",\"runtime_profile\":\"luma-windows-hosted-workspace-v1\",\"schema_version\":3\\}\\n\\z",RegexOptions.CultureInvariant);}
+
+        private static bool WorkspaceConfiguration(string path)
+        {return path=="usr/share/luma-os/hosted-workspace.json"||path=="usr/share/luma-os/hosted-workspace-runtime.json"||path=="etc/pam.d/luma-admin"||path=="etc/nsswitch.conf"||
+            path=="etc/apparmor.d/luma-hosted-workspace-bootstrap"||path=="etc/systemd/system/luma-hosted-workspace-confinement.service"||path=="etc/systemd/system/multi-user.target.wants/luma-hosted-workspace-confinement.service"||WorkspaceTemplates().ContainsKey(path);}
+
+        private static Dictionary<string,string> WorkspaceTemplates()
+        {
+            const string prefix="usr/share/luma-os/hosted-workspace/accounts/";
+            return new Dictionary<string,string>(StringComparer.Ordinal) {
+                {prefix+"passwd","root:x:0:0:Locked guest root:/root:/bin/bash\nnobody:x:65534:65534:Inert compute:/nonexistent:/bin/false\n"},
+                {prefix+"group","root:x:0:\nnogroup:x:65534:\n"},{prefix+"shadow","root:!:0:0:99999:7:::\nnobody:!:0:0:99999:7:::\n"},{prefix+"gshadow","root:!::\nnogroup:!::\n"},
+                {"etc/nsswitch.conf","passwd: files\ngroup: files\nshadow: files\ngshadow: files\nhosts: files\n"},
+                {"etc/pam.d/luma-admin","# Local Linux password/account verification, not a product Admin role.\nauth required /usr/lib/x86_64-linux-gnu/security/pam_unix.so nodelay\naccount required /usr/lib/x86_64-linux-gnu/security/pam_unix.so\n"}
+            };
+        }
+
+        public static byte[] WorkspaceProfile(string runtime)
+        {
+            if(runtime==null||!Regex.IsMatch(runtime,"\\A[a-f0-9]{64}\\z",RegexOptions.CultureInvariant)||runtime==new string('0',64)) throw new InvalidDataException("Workspace runtime digest differs.");
+            Dictionary<string,string> data=WorkspaceTemplates();const string prefix="usr/share/luma-os/hosted-workspace/accounts/";
+            Func<string,string> hash=delegate(string name){return "\""+Sha256(Encoding.ASCII.GetBytes(data[name]))+"\"";};
+            return Encoding.ASCII.GetBytes("{\"account_baselines\":{\"group\":"+hash(prefix+"group")+",\"gshadow\":"+hash(prefix+"gshadow")+",\"passwd\":"+hash(prefix+"passwd")+",\"shadow\":"+hash(prefix+"shadow")+
+                "},\"account_generation\":1,\"account_gid\":1000,\"account_uid\":1000,\"bootstrap_cpu_seconds\":25,\"bootstrap_purpose_seconds\":30,\"cpu_period_usec\":100000,\"cpu_quota_usec\":100000,"+
+                "\"default_uid\":65534,\"drain_seconds\":5,\"memory_max_bytes\":268435456,\"memory_swap_max_bytes\":0,\"nss_sha256\":"+hash("etc/nsswitch.conf")+",\"pam_sha256\":"+hash("etc/pam.d/luma-admin")+
+                ",\"password_max_age_days\":90,\"profile\":\"luma-windows-hosted-workspace-v1\",\"runtime\":\"luma-windows-manual-workspace-v1\",\"runtime_manifest_sha256\":\""+runtime+"\",\"schema_version\":3,\"tasks_max\":8,\"wsl_flags\":0}\n");
+        }
+
+        public static void ValidateWorkspaceDescriptors(string description,string manifest,RequiredFile[] files)
+        {
+            if(description==null||manifest==null||description.Length>32768||manifest.Length>32768||files==null||files.Length<4||files.Length>128) throw new InvalidDataException("Workspace descriptor bounds differ.");
+            const string profile="luma-windows-hosted-workspace-v1";
+            Dictionary<string,RequiredFile> selected=new Dictionary<string,RequiredFile>(StringComparer.Ordinal);
+            foreach(RequiredFile file in files){if(file==null||file.Path==null||selected.ContainsKey(file.Path))throw new InvalidDataException("Workspace publisher-required members are absent/duplicated.");selected.Add(file.Path,file);}
+            string runtimeSha=Sha256(Encoding.ASCII.GetBytes(manifest));
+            if(description!=Encoding.ASCII.GetString(WorkspaceProfile(runtimeSha))) throw new InvalidDataException("Workspace profile differs from the exact reviewed schema3 account/resource policy.");
+            string record="\\{\"bytes\":([1-9][0-9]{0,8}),\"executable\":(true|false),\"path\":\"([A-Za-z0-9._/+-]{1,240})\",\"sha256\":\"([a-f0-9]{64})\"\\}";
+            Match outer=Regex.Match(manifest,"\\A\\{\"files\":\\[("+record+"(?:,"+record+"){4,63})\\],\"profile\":\""+profile+"\",\"schema_version\":1\\}\\n\\z",RegexOptions.CultureInvariant);
+            if(!outer.Success) throw new InvalidDataException("Workspace runtime manifest is not closed bounded canonical JSON.");
+            string previous=null;HashSet<string> runtime=new HashSet<string>(StringComparer.Ordinal);
+            foreach(Match member in Regex.Matches(outer.Groups[1].Value,record,RegexOptions.CultureInvariant)) {
+                string path=ValidatePath(member.Groups[3].Value);long size=Int64.Parse(member.Groups[1].Value,System.Globalization.CultureInfo.InvariantCulture);bool executable=member.Groups[2].Value=="true";
+                bool program=path=="usr/libexec/luma-os/luma-platform"||path=="usr/libexec/luma-os/luma-workspace-auth-helper"||path=="bin/bash";
+                if(!program&&path!="usr/lib/x86_64-linux-gnu/security/pam_unix.so"&&!Regex.IsMatch(path,"\\A(?:usr/)?lib(?:64|/x86_64-linux-gnu)/[A-Za-z0-9._+-]*\\.so[A-Za-z0-9._+-]*\\z",RegexOptions.CultureInvariant)) throw new InvalidDataException("Workspace runtime escapes its closed fixed ELF/module namespace.");
+                RequiredFile file;if(size<64||size>64*1024*1024||previous!=null&&String.CompareOrdinal(previous,path)>=0||!selected.TryGetValue(path,out file)||file.Bytes!=size||file.Executable!=executable||file.Sha256!=member.Groups[4].Value||program&&!executable)
+                    throw new InvalidDataException("Workspace runtime member differs from exact publisher-required size/hash/mode/order.");
+                runtime.Add(path);previous=path;
+            }
+            foreach(string path in new string[]{"usr/libexec/luma-os/luma-platform","usr/libexec/luma-os/luma-workspace-auth-helper","bin/bash","usr/lib/x86_64-linux-gnu/security/pam_unix.so"}) if(!runtime.Contains(path)) throw new InvalidDataException("Workspace omits its real worker/helper/PAM/login-shell closure.");
+            foreach(KeyValuePair<string,string> pair in WorkspaceTemplates()) {byte[] bytes=Encoding.ASCII.GetBytes(pair.Value);RequireInferenceData(selected,pair.Key,bytes.Length,Sha256(bytes));}
+            RequireInferenceData(selected,"usr/share/luma-os/hosted-workspace-runtime.json",Encoding.ASCII.GetByteCount(manifest),runtimeSha);
+            RequireInferenceData(selected,"usr/share/luma-os/hosted-workspace.json",Encoding.ASCII.GetByteCount(description),Sha256(Encoding.ASCII.GetBytes(description)));
+        }
 
         // Pure descriptor validation only. Callers still need actual archive
         // inspection, release authentication and live host admission separately.

@@ -156,7 +156,7 @@ namespace Luma.Windows.Hosted
         }
     }
 
-    public enum JournalKind : byte { Commission=1,ImportPrepared=2,Imported=3,ActivationPrepared=4,Activated=5,UpdatePrepared=6,RollbackPrepared=7,Cancelled=8,ControllerStarted=9,ControllerCompleted=10,NvWriteAborted=11,TrustChanged=12,TrustPrepared=13,TrustCancelled=14,RuntimePrepared=15,RuntimeActivated=16,RuntimeCancelled=17,FileEnrolled=18,FileEnrollmentRevoked=19,ComputePrepared=20,ComputeObserved=21,InferencePrepared=22,InferenceObserved=23 }
+    public enum JournalKind : byte { Commission=1,ImportPrepared=2,Imported=3,ActivationPrepared=4,Activated=5,UpdatePrepared=6,RollbackPrepared=7,Cancelled=8,ControllerStarted=9,ControllerCompleted=10,NvWriteAborted=11,TrustChanged=12,TrustPrepared=13,TrustCancelled=14,RuntimePrepared=15,RuntimeActivated=16,RuntimeCancelled=17,FileEnrolled=18,FileEnrollmentRevoked=19,ComputePrepared=20,ComputeObserved=21,InferencePrepared=22,InferenceObserved=23,WorkspacePrepared=24,WorkspaceObserved=25 }
     public sealed class JournalEntry
     {
         public ulong Sequence {get;private set;}
@@ -179,6 +179,7 @@ namespace Luma.Windows.Hosted
                 (sequence==1 && (previousHead!=new string('0',64) || previousRecord!=new string('0',64))))
                 throw new SecurityException("Hosted journal actor/genesis differs from explicit commissioning.");
             if(kind==JournalKind.FileEnrolled || kind==JournalKind.FileEnrollmentRevoked) FileEnrollmentRecord.Decode(payload).Envelope(identity,kind,previousHead);
+            if(kind==JournalKind.WorkspacePrepared) HostedWorkspacePreparation.Decode(payload).RequireIdentity(identity,actorSid);
             JournalEntry result=new JournalEntry {Sequence=sequence,Kind=kind,PreviousHead=previousHead,PreviousRecord=previousRecord,
                 ActorSid=actorSid,payload=Wire.Copy(payload,1,4096)};
             using(Wire.Writer writer=new Wire.Writer("luma-windows-hosted-journal-v1")) {

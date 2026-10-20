@@ -323,6 +323,10 @@ namespace Luma.Windows.Hosted
                         case "compute-recover":RecoverCompute(pipe,actor,request,running);break;
                         case "infer":InferenceActive(pipe,actor,request,running);break;
                         case "infer-recover":RecoverInference(pipe,actor,request,running);break;
+                        case "workspace-setup":WorkspaceActive(pipe,actor,request,running,1);break;
+                        case "workspace-health":WorkspaceActive(pipe,actor,request,running,2);break;
+                        case "workspace-repair":WorkspaceActive(pipe,actor,request,running,3);break;
+                        case "workspace-recover":RecoverWorkspace(pipe,actor,request,running);break;
                         default:throw new InvalidDataException("Hosted service command is not in the closed protocol.");
                     }
                 }} finally {Array.Clear(frame,0,frame.Length);}
@@ -437,6 +441,7 @@ namespace Luma.Windows.Hosted
             if(Console.IsInputRedirected || Console.IsOutputRedirected) throw new SecurityException("The original interactive client must review and confirm directly.");
             if(arguments.Length>0 && arguments[0]=="infer-enrolled-file") return IngestClient(arguments);
             if(arguments.Length>0 && arguments[0]=="save-enrolled-snapshot") return ManualSaveClient(arguments);
+            if(arguments.Length>0 && arguments[0].StartsWith("workspace-",StringComparison.Ordinal)) return WorkspaceClient(arguments);
             if(arguments.Length<2) throw new InvalidDataException("Usage: commission DOMAIN ENV RELEASEKEYHEX TIMEKEYHEX HTTPS_TIME_ENDPOINT | commission-resume DOMAIN | commission-abort DOMAIN | status DOMAIN | recover DOMAIN | recover-abort DOMAIN | release-review DESCRIPTION_FILE SIGNATURE_FILE | import DESCRIPTION_FILE SIGNATURE_FILE ARCHIVE_FILE | activate DESCRIPTION_FILE SIGNATURE_FILE | reconcile DESCRIPTION_FILE SIGNATURE_FILE | abandon DESCRIPTION_FILE SIGNATURE_FILE | compute ACTIVE_RELEASE_SHA256 OPERATION PAYLOAD_FILE | compute-recover ACTIVE_RELEASE_SHA256 REQUEST_GENERATION | infer ACTIVE_RELEASE_SHA256 REQUEST_JSON_FILE | infer-recover ACTIVE_RELEASE_SHA256 REQUEST_GENERATION | trust|trust-prepare|trust-finalize|trust-cancel|trust-quarantine DESCRIPTION_FILE OLD_PUBLISHER_SIGNATURE_FILE NEW_PUBLISHER_ACCEPTANCE_FILE");
             string command=arguments[0];bool trustCommand=command=="trust" || command=="trust-prepare" || command=="trust-finalize" || command=="trust-cancel" || command=="trust-quarantine";
             bool readCommand=command=="read-enrolled-file";

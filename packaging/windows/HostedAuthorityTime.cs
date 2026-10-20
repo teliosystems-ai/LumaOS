@@ -92,6 +92,8 @@ namespace Luma.Windows.Hosted
             original();if(current==null) throw new SecurityException("Protected UTC has not been observed.");current.Check();original();
             }
         }
+        internal HostedWorkspaceTime WorkspaceTime()
+        {lock(sync) {original();if(current==null) throw new SecurityException("Workspace requires actual protected UTC.");HostedWorkspaceTime result=current.WorkspaceTime();original();return result;}}
     }
 
     // Pure continuation composition, not a clock or authority provider. During

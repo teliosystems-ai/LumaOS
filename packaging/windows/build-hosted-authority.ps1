@@ -31,6 +31,7 @@ Compile-Hosted @((Join-Path $PSScriptRoot 'PackageInspector.cs')) $package @('Sy
 $names=@('HostedAuthorityProtocol.cs','HostedAuthorityCustody.cs','HostedAuthorityCapacity.cs','HostedAuthorityStorage.cs','HostedAuthorityRelease.cs','HostedAuthorityTransport.cs','HostedAuthorityDeployment.cs','HostedAuthorityService.cs','HostedAuthorityTime.cs','HostedAuthorityLifecycle.cs','HostedAuthorityImport.cs','HostedAuthorityRecovery.cs','HostedAuthorityTrust.cs','HostedAuthorityRuntime.cs','HostedAuthorityRuntimeService.cs','HostedAuthorityInstalledInput.cs','HostedAuthorityRead.cs','HostedAuthorityEnrollment.cs','HostedAuthorityCompute.cs','HostedAuthorityInference.cs','HostedAuthorityIngestion.cs')
 $names+=@('WindowsHostProtection.cs','HostedAuthorityHostProtection.cs','HostedAuthorityWslObserver.cs')
 $names+=@('HostedAuthorityClientIdentity.cs','HostedAuthorityManualExport.cs')
+$names+=@('HostedAuthorityWorkspace.cs','HostedAuthorityWorkspaceLifecycle.cs','HostedAuthorityWorkspaceExecution.cs','HostedAuthorityWorkspaceCoordinator.cs','HostedAuthorityWorkspaceClient.cs')
 $inputs=@($names | ForEach-Object {Join-Path $PSScriptRoot $_})
 foreach ($sourceInput in $inputs) { if (-not (Test-Path -LiteralPath $sourceInput -PathType Leaf)) { throw ('Hosted build source missing: '+$sourceInput) } }
 $target=if ($LibraryOnly) {'library'} else {'exe'}

@@ -31,6 +31,7 @@ mod generated_runtime;
 mod hosted_fence;
 mod hosted_inference;
 mod hosted_windows;
+mod hosted_workspace;
 mod model;
 mod model_qualification;
 mod model_trust;
@@ -339,6 +340,18 @@ fn dispatch() -> Result<()> {
         Some("hosted-windows-inference-contract") if args.len() == 1 => {
             hosted_inference::contract()
         }
+        Some("hosted-windows-workspace-contract") if args.len() == 1 => {
+            hosted_workspace::contract()
+        }
+        Some("hosted-windows-workspace-drain") if args.len() == 2 => hosted_workspace::drain(&args[1]),
+        Some(
+            "hosted-windows-workspace-bootstrap"
+            | "hosted-windows-workspace-bootstrap-launch"
+            | "hosted-windows-workspace-status"
+            | "hosted-windows-workspace-status-launch"
+            | "hosted-windows-workspace-repair"
+            | "hosted-windows-workspace-repair-launch",
+        ) if args.len() == 6 => hosted_workspace::command(&args),
         Some(
             "resource-checkpoint-prepare-review"
             | "resource-checkpoint-prepare"

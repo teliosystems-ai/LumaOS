@@ -14,7 +14,7 @@ namespace Luma.Windows.Hosted
     internal static class HostedStatusShape
     {
         internal static void Require(byte purpose,string pending,uint controller,ulong creation) {
-            if(pending==null || purpose>4 || (pending.Length==0)!=(purpose==0) || (controller==0)!=(creation==0))
+            if(pending==null || purpose>5 || (pending.Length==0)!=(purpose==0) || (controller==0)!=(creation==0))
                 throw new SecurityException("Status resource generation shape differs.");
             if(pending.Length!=0) Wire.Bytes(pending,32,true);
         }

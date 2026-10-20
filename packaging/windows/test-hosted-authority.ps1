@@ -520,7 +520,7 @@ public static class LumaHostedLifecycleFixture {
         DeploymentHistory state=DeploymentHistory.Replay(History(identity,sign,import));Require(state.Pending==null && state.Active==null && state.Imported(H('1'))!=null);assertions++;
         Require(Wire.Equal(DeploymentEvent.Decode(prepare.Encode()).Encode(),prepare.Encode()));assertions++;
         byte[] extra=new byte[prepare.Encode().Length+1];Array.Copy(prepare.Encode(),extra,extra.Length-1);Refuse(delegate {DeploymentEvent.Decode(extra);});assertions++;
-        Refuse(delegate {Event(5,'1',1,'a','b',0,0,0,'0');});assertions++;
+        Refuse(delegate {Event(6,'1',1,'a','b',0,0,0,'0');});assertions++;
         Refuse(delegate {Event(1,'1',1,'a','b',42,0,0,'0');});assertions++;
         Refuse(delegate {Event(1,'1',1,'a','b',0,0,1,'0');});assertions++;
         Refuse(delegate {DeploymentHistory.Replay(History(identity,sign,T(JournalKind.ImportPrepared,prepare),T(JournalKind.Imported,imported)));});assertions++;
@@ -638,6 +638,14 @@ public static class LumaHostedLifecycleFixture {
     $script:HostedAssertions+=$ingestionAssertions
     Add-Type -ReferencedAssemblies @((Join-Path $build.work_directory 'Luma.HostedAuthority.Library.dll'),'System.dll','System.Core.dll','System.Security.dll') -Path (Join-Path $PSScriptRoot 'HostedAuthorityManualExportFixture.cs')
     $manualSaveAssertions=[LumaHostedManualExportFixture]::Run([IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..')))
+    Add-Type -ReferencedAssemblies @((Join-Path $build.work_directory 'Luma.HostedAuthority.Library.dll'),(Join-Path $build.work_directory 'Luma.PackageInspector.dll'),'System.dll','System.Core.dll','System.Security.dll') -Path (Join-Path $PSScriptRoot 'HostedAuthorityWorkspaceFixture.cs')
+    $workspaceAssertions=[LumaHostedWorkspaceFixture]::Run()
+    Assert-Hosted ($workspaceAssertions -ge 80) 'Separate workspace canonical request, account-generation, profile and fresh health codec regressions did not run.'
+    $script:HostedAssertions+=$workspaceAssertions
+    Add-Type -ReferencedAssemblies @((Join-Path $build.work_directory 'Luma.HostedAuthority.Library.dll'),'System.dll','System.Core.dll','System.Security.dll') -Path (Join-Path $PSScriptRoot 'HostedAuthorityWorkspaceIntegrationFixture.cs')
+    $workspaceIntegrationAssertions=[LumaHostedWorkspaceIntegrationFixture]::Run($identity,$fixtureSigner,$timeSigner,[LumaHostedLifecycleFixture]::SoftwareBaseline($identity))
+    Assert-Hosted ($workspaceIntegrationAssertions -ge 80) 'Actual software-signed workspace account reservation/recovery, chronological UTC, private state witness, health and exact owned-controller selections did not run.'
+    $script:HostedAssertions+=$workspaceIntegrationAssertions
     Assert-Hosted ($manualSaveAssertions -ge 57) 'Complete whole-snapshot manual save, actual private NTFS, overwrite/cancellation and readback regressions did not run.'
     $script:HostedAssertions+=$manualSaveAssertions
     $entry=[Luma.Windows.Hosted.JournalEntry]::Prepare($identity,1,[Luma.Windows.Hosted.JournalKind]::Commission,$zero,$zero,$sid,$identity.Encode())
@@ -840,10 +848,11 @@ public static class LumaHostedFrameFixture {
         installed_scm_stop_qualified=$false;installed_system_acl_qualified=$false;ntfs_durability_qualified=$false;
         actual_read_only_ntfs_and_wire_mechanism_tests=$true;signed_persistent_enrollment_software_tests=$true;installed_authenticated_read_bridge_qualified=$false;installed_persistent_enrollment_qualified=$false;linux_principal_mapping=$false;
         signed_compute_lifecycle_and_delivery_tests=$true;held_original_compute_input_ntfs_tests=$true;compute_assertions=$computeAssertions;actual_guest_compute_executed=$false;model_inference_executed=$false;
-        signed_inference_lifecycle_and_delivery_tests=$true;inference_assertions=$inferenceAssertions;actual_guest_inference_executed=$false;five_minute_purpose_approved=$true;compute_purpose_seconds=30;inference_purpose_seconds=300;
+        signed_inference_lifecycle_and_delivery_tests=$true;inference_assertions=$inferenceAssertions;actual_guest_inference_executed=$false;five_minute_purpose_approved=$true;compute_purpose_seconds=30;inference_purpose_seconds=300;workspace_integration_assertions=$workspaceIntegrationAssertions;workspace_purpose_seconds=30;actual_workspace_console_launched=$false;
         inference_mechanism_assertions=$inferenceMechanismAssertions;held_original_inference_input_ntfs_tests=$true;closed_inference_profile_runtime_join_tests=$true;
         ingestion_assertions=$ingestionAssertions;scoped_read_to_fresh_inference_handoff_tests=$true;actual_authenticated_ingestion_to_model_qualified=$false;
         manual_save_assertions=$manualSaveAssertions;whole_snapshot_manual_save_mechanisms=$true;installed_authenticated_manual_save_qualified=$false;
+        workspace_contract_assertions=$workspaceAssertions;workspace_wire_contract_tests=$true;actual_linux_account_created=$false;actual_linux_pam_authenticated=$false;installed_workspace_qualified=$false;
         host_protection_assertions=$hostProtectionAssertions;read_only_host_protection_contracts=$true;actual_encryption_state_modified=$false;enterprise_authorization_created=$false;
         inference_wire_cases_path=$InferenceCasesPath;inference_wire_cases_sha256=$inferenceCasesHash;
         production_qualified=$false;gate_closing=$false} | ConvertTo-Json -Depth 8

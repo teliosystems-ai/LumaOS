@@ -127,6 +127,19 @@ closure tar validated on both platforms. That unsigned 127.8-MB workspace-only
 artifact is not the final combined image, an imported distribution, tested
 installed account or production qualification. All gates remain open.
 
+The subsequent [combined package record](gates/gwin0/combined_workspace_inference_2026-10-20.json)
+now joins a real 2,710,491,136-byte workspace/inference rootfs, the full pinned
+Qwen3-4B model, both runtime dependency manifests and the actual compiled
+platform worker. Public archive and all 741 captured source files passed
+read-back hash verification; the Windows inspector validated all 225 archive
+members and 91 publisher pins. Its 21 Python tests and 170 Windows package
+assertions pass. The retained package is under
+`D:/LumaOS-builds/gwin-integrated-package-20261020-2fZO16wr-public/package`.
+It is unsigned and uninstalled, not qualified or bootable Windows firmware
+media. Its executable joins the retained `4b5d23d` source cut, not subsequent
+native lifecycle/editor changes. The current WSL AppArmor parameter is `N`;
+package inspection cannot substitute for installed enforcing confinement.
+
 The native workspace has explicit per-turn review and a fresh finite Infer
 grant. Native admission checks the reviewed worker/model/input commitment.
 Capture remains local data: separately admitted ASR may transcribe a selected

@@ -2,6 +2,8 @@
 //! A completed statistics state is not a projection, vector index, selected
 //! generation or query authority. Every window requires its original boundary.
 use super::*;
+pub mod accounted;
+pub mod selected;
 
 const STATS_DOMAIN: &str = "luma-corpus-statistics-v1";
 const LEVELS: usize = 5;
@@ -550,7 +552,7 @@ impl PreparedStatistics {
 
 struct CachedPage {
     value: Page,
-    observation: crate::v2::PageObservation,
+    observation: storage::IndexObservation,
 }
 #[derive(Default)]
 struct InputCache {
@@ -558,7 +560,7 @@ struct InputCache {
     merged: BTreeMap<String, CachedPage>,
 }
 struct Window<'a, 'b, B: StatisticsBoundary> {
-    store: &'a ObjectStore,
+    store: &'a dyn IndexReadStore,
     live: &'b mut Current<'a, B>,
     read_limit: u64,
     write_limit: u64,
@@ -1093,7 +1095,7 @@ fn finish_term(
 }
 
 pub fn plan_statistics_window<B: StatisticsBoundary>(
-    store: &ObjectStore,
+    store: &dyn IndexReadStore,
     request: &StatisticsRequest,
     base: &StatisticsProgress,
     read_bytes: u64,
@@ -1421,7 +1423,7 @@ pub fn prepare_statistics<B: StatisticsBoundary>(
     })
 }
 pub fn verify_statistics_data<B: StatisticsBoundary>(
-    store: &ObjectStore,
+    store: &dyn IndexReadStore,
     value: &StatisticsCommitment,
     b: &mut B,
 ) -> Result<()> {

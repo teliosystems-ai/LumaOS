@@ -24,7 +24,7 @@ pub trait ObservedPageReader {
 
 /// Collects and independently decodes precisely one Merkle search path. Local
 /// held-filesystem lookup and the external observer use the identical parser.
-pub(super) fn collect_lookup(
+pub(crate) fn collect_lookup(
     root: &MapRoot,
     key: &str,
     mut read: impl FnMut(&PageRef) -> Result<Vec<u8>>,

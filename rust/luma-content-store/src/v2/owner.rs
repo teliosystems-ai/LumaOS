@@ -285,11 +285,17 @@ pub struct PreparedOwnerAppend<'a> {
     _writer: File,
     commitment: AppendCommitment,
 }
+#[path = "owner/writer.rs"]
+mod writer;
+pub use writer::{AppendWriterBoundary, ObservedPreparedOwnerAppend};
 impl PreparedOwnerAppend<'_> {
     pub fn commitment(&self) -> &AppendCommitment {
         &self.commitment
     }
     pub fn acknowledge_selected(self, boundary: &mut impl OwnerBoundary) -> Result<OwnerHeadV2> {
+        self.selected_data(boundary)
+    }
+    fn selected_data(&self, boundary: &mut impl OwnerBoundary) -> Result<OwnerHeadV2> {
         boundary.current_owner_head(&self.commitment.next)?;
         if boundary.current_physical_accounting(&self.commitment.next)?
             != self.commitment.physical_after
@@ -602,13 +608,35 @@ impl<'a> OwnerRepository<'a> {
         budget: IoBudget,
         boundary: &mut impl OwnerBoundary,
     ) -> Result<PreparedOwnerAppend<'a>> {
+        self.check_append_proposal(proposal, boundary)?;
+        let writer = self.store.acquire_writer()?;
+        let commitment = self.prepare_append_data(proposal, budget, boundary)?;
+        Ok(PreparedOwnerAppend {
+            store: self.store,
+            _writer: writer,
+            commitment,
+        })
+    }
+    fn check_append_proposal(
+        &self,
+        proposal: &OwnerPlan,
+        boundary: &mut impl OwnerBoundary,
+    ) -> Result<()> {
         if proposal.base_sha256 != self.head.sha256()?
             || proposal.review_sha256 != luma_content::sha256(&proposal.review_bytes()?)
         {
             return Err("v2 append proposal has a different exact selected base".into());
         }
         boundary.current_owner_head(&self.head)?;
-        let writer = self.store.acquire_writer()?;
+        Ok(())
+    }
+    fn prepare_append_data(
+        &self,
+        proposal: &OwnerPlan,
+        budget: IoBudget,
+        boundary: &mut impl OwnerBoundary,
+    ) -> Result<AppendCommitment> {
+        self.check_append_proposal(proposal, boundary)?;
         let before = boundary.current_physical_accounting(&self.head)?;
         let mutation = Mutation {
             review_sha256: proposal.review_sha256.clone(),
@@ -684,11 +712,7 @@ impl<'a> OwnerRepository<'a> {
         };
         commitment.validate()?;
         guard.check()?;
-        Ok(PreparedOwnerAppend {
-            store: self.store,
-            _writer: writer,
-            commitment,
-        })
+        Ok(commitment)
     }
 }
 pub(super) fn add_physical(

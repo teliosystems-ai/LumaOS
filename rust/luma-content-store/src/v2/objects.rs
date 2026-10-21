@@ -4,14 +4,20 @@ use std::io::{Read, Write};
 use std::os::fd::AsRawFd;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
+mod blob_plan;
+pub use blob_plan::{BlobObjectPlan, ObjectWriteSpec, PlannedBlobObject};
+mod index_writer;
+pub use index_writer::ObservedObjectWriter;
 
 #[path = "objects/snapshot.rs"]
 mod snapshot;
 pub use snapshot::{RawObjectScan, RawObjectWindow};
 mod observation;
 pub use observation::{
-    HeldNamespaceObservation, HeldRawObjectObservation, NamespaceObservationData, ObservedFileData,
-    RawObjectObservationData,
+    CompletedWriterBatch, HeldNamespaceObservation, HeldRawObjectObservation, HeldWriterBatch,
+    HeldWriterObservation, NamespaceObservationData, ObservedFileData, PlannedWriterObject,
+    RawObjectObservationData, ScopedObjectDelta, WriterBatchPlan, WriterObservationData,
+    MAX_WRITER_BATCH_OBJECTS,
 };
 
 const GROUP: usize = 64;
@@ -742,66 +748,19 @@ impl ObjectStore {
         bytes: &[u8],
         guard: &mut Guard<'_, B>,
     ) -> Result<BlobReference> {
-        if bytes.len() as u64 > MAX_SEGMENT_BYTES {
-            return Err("v2 blob exceeds finite segment bound".into());
-        }
-        let mut groups = Vec::new();
-        let mut chunks = Vec::new();
-        let mut count = 0_u32;
-        for part in bytes.chunks(MAX_PAGE_BYTES) {
-            chunks.push(Chunk {
-                sha256: self.write_object(part, guard)?,
-                bytes: part.len() as u32,
-            });
-            count += 1;
-            if chunks.len() == GROUP {
-                groups.push(self.put_group(std::mem::take(&mut chunks), guard)?);
+        let plan = BlobObjectPlan::data(&self.binding, bytes, || guard.check())?;
+        for object in plan.objects() {
+            guard.check()?;
+            let actual = self.write_object(object.bytes(), guard)?;
+            if actual != object.sha256() {
+                return Err(
+                    "actual blob writer differs from its single canonical object plan".into(),
+                );
             }
+            guard.check()?;
         }
-        if !chunks.is_empty() {
-            groups.push(self.put_group(chunks, guard)?);
-        }
-        let index = if groups.is_empty() {
-            None
-        } else {
-            let bytes = serde_json::to_vec(&BlobIndex {
-                schema_version: 1,
-                domain: DOMAIN.into(),
-                binding: self.binding.clone(),
-                groups,
-            })?;
-            Some(self.write_object(&bytes, guard)?)
-        };
-        let value = BlobReference {
-            schema_version: 1,
-            domain: DOMAIN.into(),
-            binding: self.binding.clone(),
-            sha256: luma_content::sha256(bytes),
-            bytes: bytes.len() as u64,
-            chunk_count: count,
-            index_sha256: index,
-        };
-        value.validate()?;
-        Ok(value)
-    }
-    fn put_group<B: Boundary>(
-        &self,
-        chunks: Vec<Chunk>,
-        guard: &mut Guard<'_, B>,
-    ) -> Result<GroupRef> {
-        let bytes = chunks.iter().map(|c| u64::from(c.bytes)).sum();
-        let count = chunks.len() as u32;
-        let encoded = serde_json::to_vec(&ChunkGroup {
-            schema_version: 1,
-            domain: DOMAIN.into(),
-            binding: self.binding.clone(),
-            chunks,
-        })?;
-        Ok(GroupRef {
-            sha256: self.write_object(&encoded, guard)?,
-            bytes,
-            chunks: count,
-        })
+        guard.check()?;
+        Ok(plan.reference().clone())
     }
     pub fn read_blob(
         &self,

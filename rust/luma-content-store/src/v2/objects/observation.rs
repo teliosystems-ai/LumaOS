@@ -3,6 +3,15 @@
 //! Held values cannot be deserialized, cloned or converted into write access.
 use super::*;
 use std::sync::Arc;
+#[path = "observation_batch.rs"]
+mod observation_batch;
+pub use observation_batch::{
+    CompletedWriterBatch, HeldWriterBatch, PlannedWriterObject, ScopedObjectDelta, WriterBatchPlan,
+    MAX_WRITER_BATCH_OBJECTS,
+};
+#[path = "writer_observation.rs"]
+mod writer_observation;
+pub use writer_observation::{HeldWriterObservation, WriterObservationData};
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]

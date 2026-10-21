@@ -364,6 +364,29 @@ fn bounded_ranking_preserves_full_counts_and_exact_prefixes_on_actual_store() {
 }
 
 #[test]
+fn full_coverage_consumes_multiple_document_leaves_without_skipping_candidates() {
+    let texts = vec!["alpha beta"; pages::DOCUMENT_ROWS + 1];
+    let (_fixture, store, root, mut sources) = setup(&texts);
+    let built = build(&store, &root, &mut sources);
+    assert!(built.manifest.documents.as_ref().unwrap().height > 0);
+    let (index, mut guard) = open(&store, &built);
+    assert_eq!(guard.candidate_checks, texts.len() as u64);
+    let found = index
+        .query(
+            &store,
+            CorpusQueryKind::LexicalAnd,
+            "alpha",
+            64,
+            limits(false),
+            &mut guard,
+        )
+        .unwrap();
+    assert_eq!(found.total_matches, texts.len() as u64);
+    assert_eq!(found.matches.len(), texts.len());
+    assert_eq!(guard.candidate_checks, 3 * texts.len() as u64);
+}
+
+#[test]
 fn deterministic_full_source_build_and_actual_semantic_coordinates() {
     let (_fixture, store, root, mut sources) = setup(&[
         "apple fruit orchard",

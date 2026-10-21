@@ -4,6 +4,8 @@
 //! require the independently implemented live boundary below.
 use super::*;
 use crate::v2::cursor::{MapCursor, MapCursorBoundary};
+pub mod accounted;
+pub mod covariance;
 pub mod statistics;
 
 const DOMAIN: &str = "luma-corpus-ingestion-v1";
@@ -312,7 +314,7 @@ pub struct IngestRunWindow {
 }
 
 struct RunReader<'a, 'b, B: CorpusIndexJobBoundary> {
-    store: &'a ObjectStore,
+    store: &'a dyn IndexReadStore,
     live: &'b mut Live<'a, B>,
     maximum: u64,
     read: u64,
@@ -322,7 +324,7 @@ struct RunReader<'a, 'b, B: CorpusIndexJobBoundary> {
 }
 struct CachedRunPage {
     page: RunPage,
-    observation: crate::v2::PageObservation,
+    observation: storage::IndexObservation,
 }
 impl<B: CorpusIndexJobBoundary> RunReader<'_, '_, B> {
     fn get(&mut self, hash: &str) -> Result<RunPage> {
@@ -472,7 +474,7 @@ impl<B: CorpusIndexJobBoundary> RunReader<'_, '_, B> {
 /// current selected phase progress; an arbitrary historical run argument is not
 /// proof of membership in the current ingestion chain.
 pub fn read_ingest_run_window<B: CorpusIndexJobBoundary>(
-    store: &ObjectStore,
+    store: &dyn IndexReadStore,
     request: &IngestRequest,
     ingested: &IngestProgress,
     run: &RunRef,
@@ -497,7 +499,7 @@ pub fn read_ingest_run_window<B: CorpusIndexJobBoundary>(
 // A cache is local to ONE separately admitted statistics window. Its immutable
 // hash-bound bytes never constitute a saved cursor or selected-job permission.
 fn read_ingest_run_cached<B: CorpusIndexJobBoundary>(
-    store: &ObjectStore,
+    store: &dyn IndexReadStore,
     request: &IngestRequest,
     ingested: &IngestProgress,
     run: &RunRef,
@@ -753,7 +755,7 @@ fn finite_remaining(
 }
 
 pub fn plan_ingestion_window<B: CorpusIndexJobBoundary, C: CorpusContent>(
-    store: &ObjectStore,
+    store: &dyn IndexReadStore,
     request: &IngestRequest,
     base: &IngestProgress,
     maximum: usize,
@@ -1027,7 +1029,7 @@ pub fn prepare_ingestion<B: CorpusIndexJobBoundary>(
 /// Independent read-only semantic reconstruction, not a hash-only publication
 /// setter. Every expected page must actually exist with exactly rebuilt bytes.
 pub fn verify_ingestion_data<B: CorpusIndexJobBoundary, C: CorpusContent>(
-    store: &ObjectStore,
+    store: &dyn IndexReadStore,
     value: &IngestCommitment,
     content: &mut C,
     b: &mut B,

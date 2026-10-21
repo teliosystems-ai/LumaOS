@@ -9,6 +9,9 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 static NEXT: AtomicU64 = AtomicU64::new(0);
+
+#[path = "../storage/tests.rs"]
+mod observed_storage_tests;
 pub(super) struct Fixture {
     pub(super) path: PathBuf,
 }
@@ -269,13 +272,12 @@ fn setup(texts: &[&str]) -> (Fixture, ObjectStore, IngestRequest, Sources, Guard
         });
     }
     edits.sort_by(|a, z| a.key.cmp(&z.key));
-    let root = if edits.is_empty() {
-        empty
-    } else {
-        store
-            .prepare_map(&empty, &edits, budget(), &seed_mutation(), &mut seed)
-            .unwrap()
-    };
+    let mut root = empty;
+    for window in edits.chunks(256) {
+        root = store
+            .prepare_map(&root, window, budget(), &seed_mutation(), &mut seed)
+            .unwrap();
+    }
     let request = IngestRequest {
         schema_version: 1,
         job_sha256: "f".repeat(64),

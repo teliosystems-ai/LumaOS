@@ -20,8 +20,8 @@ pub mod owner_segment;
 pub mod readonly;
 pub mod restore;
 pub use owner::{
-    verify_append_data, AppendCommitment, OwnerBoundary, OwnerPlan, OwnerRepository,
-    PreparedOwnerAppend,
+    verify_append_data, AppendCommitment, AppendWriterBoundary, ObservedPreparedOwnerAppend,
+    OwnerBoundary, OwnerPlan, OwnerRepository, PreparedOwnerAppend,
 };
 mod map;
 mod objects;
@@ -29,9 +29,12 @@ mod page;
 mod segment;
 pub use map::{LookupProof, MapEdit, MapRoot};
 pub use objects::{
-    Allocation, BlobReference, HeldNamespaceObservation, HeldRawObjectObservation,
-    NamespaceObservationData, ObjectStore, ObservedFileData, PageObservation, PageWriteMeasurement,
-    PhysicalInventory, RawObjectObservationData, RawObjectScan, RawObjectWindow,
+    Allocation, BlobObjectPlan, BlobReference, CompletedWriterBatch, HeldNamespaceObservation,
+    HeldRawObjectObservation, HeldWriterBatch, HeldWriterObservation, NamespaceObservationData,
+    ObjectStore, ObjectWriteSpec, ObservedFileData, ObservedObjectWriter, PageObservation,
+    PageWriteMeasurement, PhysicalInventory, PlannedBlobObject, PlannedWriterObject,
+    RawObjectObservationData, RawObjectScan, RawObjectWindow, ScopedObjectDelta, WriterBatchPlan,
+    WriterObservationData, MAX_WRITER_BATCH_OBJECTS,
 };
 pub use page::{MapKind, PageRef};
 pub use segment::{SealedSegment, SegmentDescriptor, SegmentInput};

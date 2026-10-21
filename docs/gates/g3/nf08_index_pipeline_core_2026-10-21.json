@@ -1,0 +1,96 @@
+{
+  "schema_version": 1,
+  "recorded_on": "2026-10-21",
+  "status": "verified-storage-and-index-core-only",
+  "scope": "Exact staged luma-content-store source; newer native controllers, custody publication and policies remain a separate integration cut",
+  "implementation": [
+    "Resumable covariance, projection, vector, generation and audit phases independently reconstruct exact source and phase commitments",
+    "Bounded lexical and feature-space queries share verified generation storage with actual read-only observed readers; each reused page is rehashed under a fresh current boundary",
+    "Pure exact blob-object plans are consumed by the actual writer, not a parallel approximation; planned metadata write sets and retained same-OFD writer observations precede effects",
+    "Scoped physical observation batches bind the actual held writer, planned objects and touched directories; their opaque deltas cannot become whole-owner physical inventory or release permission",
+    "Private ext4 fixtures exercise actual directory/OFD identity, advisory-lock loss, interrupted writes, admission ordering and retained unselected objects"
+  ],
+  "exact_staged_source": {
+    "parent_commit": "fed214f",
+    "code_tree_before_documentation": "2756518cffba7307e75f76e95dac223197a0f44c",
+    "directory": "/mnt/luma-build/work/g3-writer-corrected-20261021-yqbik070/index-source",
+    "captured_files": 857,
+    "source_manifest_sha256": "eb1fe1e9215894759caff1c9ce1304fe4dee640bb9c49762fb6dc7426fd3a8cf",
+    "matched_core_files": 103,
+    "changed_core_files": 41,
+    "staging_report_sha256": "bb439df3aac6a69852a7698167f75a492ddc182166fb0a8a59b54c7ba21f531f",
+    "newer_working_tree_preserved": true,
+    "native_working_tree_staged": false
+  },
+  "verification": {
+    "directory": "/mnt/luma-build/work/g3-writer-corrected-20261021-yqbik070/core-checks-2",
+    "results_sha256": "94f40b3bd7a9edc3895690e1745fbc5308e602de30fb4a66902acff6dc3511c9",
+    "runner_sha256": "2d0a2d801881ba14ee724a9f94c52cec4655edcfb04513a7cd422a2fa544ec19",
+    "warnings_denied": true,
+    "production_workspace_check": {
+      "passed": true,
+      "log_sha256": "c6064c7a7362d7174159d6a2f0421074d6b00ea8d95181880138baf1cb7357f9"
+    },
+    "content_store_all_targets_check": {
+      "passed": true,
+      "log_sha256": "3fc86f6433d9a5193edd84db1a0207b968c331c54d244ce87b16b9131d600c6d"
+    },
+    "v2_tests": {
+      "passed": 134,
+      "failed": 0,
+      "ignored": 0,
+      "log_sha256": "9d4d4da3f77912eda92a3ebbf688f7d7ea314a2c3fba87d4704c75e14a1dfde1"
+    },
+    "corpus_index_tests": {
+      "passed": 73,
+      "failed": 0,
+      "ignored": 0,
+      "log_sha256": "3a3ff4781070685b5dcfb464454a74226bcd421d5db47ccc668f39704e207524"
+    },
+    "compiler_memory_limit_bytes": 4294967296,
+    "observed_peak_bytes": 100597760,
+    "compiler_cache_was_warm": true,
+    "oom_events": 0,
+    "swap_limit_bytes": 0,
+    "network": "none",
+    "storage": "Disposable private ext4 on drive D",
+    "authority": "Explicit software boundaries, not installed original PAM, physical TPM or loaded LSM qualification"
+  },
+  "retained_failed_attempts": [
+    {
+      "directory": "/mnt/luma-build/work/g3-whole-corrected-20261021-o3l_t3hr",
+      "results_sha256": "f840bd195e412a67030d8aff2bcb1c4812f6f0164940ba99477678cdea7dcccb",
+      "source_manifest_sha256": "38a911c47fce07b1f0f8a6cb3589a273d50d1687487acdcacd0be126ef2f3d5b",
+      "passed": 401,
+      "failed": 6,
+      "ignored": 0,
+      "cause": "Six writer fixtures requested a general traversal budget for the explicitly read-only 128-KiB raw observation API",
+      "correction": "Change only the fixture raw-observation budgets, preserving production admission checks and separate inventory budgets",
+      "corrected_source_origin_sha256": "7e500a67d81611bf6fb47e71c924d6229424f8c36dd589ebdfa6d84baee50d16",
+      "native_runtime_passes_are_not_part_of_this_core_commit": true
+    },
+    {
+      "directory": "/mnt/luma-build/work/g3-writer-corrected-20261021-yqbik070/core-checks",
+      "passed": 47,
+      "failed": 87,
+      "ignored": 0,
+      "log_sha256": "4d35c94b5b77918d6a6bf5099f0cda4eed148e0f7922073794952cd477e9cebc",
+      "cause": "Checkpoint harness omitted the disposable ext4 storage parent; fixture creation failed with ENOENT",
+      "correction": "Create a new evidence directory and its private storage parent, without modifying source or the retained failed logs"
+    }
+  ],
+  "remaining_development": [
+    "Complete native direct C continuation, owner migration and typed worker publication with actual allocation and original-operation replay",
+    "C-selected prewrite index reservations, independent preparation replay, finite metadata extensions and explicit retained-authority recovery",
+    "Integrated native Read/effect controllers, workspace journeys and physical memory enforcement on the final selected source",
+    "Native authenticated segmented backup, archive inventory, delivery and clean-owner restore joins",
+    "Actual 100000-current-object ACL/lifecycle-filtered native text and semantic queries, including P95 first results at most 500 ms",
+    "Complete source-bound native and Windows hosted distribution assembly followed by separate installed qualification"
+  ],
+  "full_100000_object_product_tested": false,
+  "native_qualified": false,
+  "g3_complete": false,
+  "gwin0_complete": false,
+  "hyper_v": "Owner-deferred, not passed",
+  "new_final_image_produced": false
+}

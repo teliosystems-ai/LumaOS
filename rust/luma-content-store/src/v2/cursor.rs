@@ -91,11 +91,157 @@ impl<B: MapCursorBoundary> Boundary for Current<'_, B> {
     }
 }
 
+/// Shared closed rank/range decoder. This interface supplies bytes/checkpoints,
+/// never a current-root choice, a grant or a filesystem creator observation.
+pub(crate) trait CursorPages {
+    fn check(&mut self) -> Result<()>;
+    fn read(&mut self, reference: &PageRef) -> Result<Vec<u8>>;
+}
+pub(crate) fn collect_window(
+    root: &MapRoot,
+    cursor: &MapCursor,
+    maximum: usize,
+    pages: &mut impl CursorPages,
+) -> Result<MapWindow> {
+    root.validate()?;
+    cursor.validate(root)?;
+    if maximum == 0 || maximum > MAX_WINDOW_ENTRIES {
+        return Err("map cursor requires a finite read-only window".into());
+    }
+    if root.entry_count != 0 && cursor.after_count == root.entry_count {
+        return Err("completed map cursor cannot be resumed".into());
+    }
+    pages.check()?;
+    if let Some(key) = &cursor.after_key {
+        let reference = root.page.as_ref().ok_or("cursor key has no root page")?;
+        let rank = cursor_rank(root, reference, key, pages)?;
+        if rank.checked_add(1) != Some(cursor.after_count) {
+            return Err("map cursor last key does not have its declared exact rank".into());
+        }
+    }
+    let count = (root.entry_count - cursor.after_count).min(maximum as u64);
+    let mut entries = Vec::with_capacity(count as usize);
+    if let Some(reference) = &root.page {
+        cursor_range(
+            root,
+            reference,
+            0,
+            cursor.after_count..cursor.after_count + count,
+            &mut entries,
+            pages,
+        )?;
+    }
+    if entries.len() as u64 != count
+        || entries.windows(2).any(|pair| pair[0].0 >= pair[1].0)
+        || cursor
+            .after_key
+            .as_ref()
+            .is_some_and(|key| entries.first().is_some_and(|entry| entry.0 <= *key))
+    {
+        return Err("authenticated map window lost, repeated or reordered coverage".into());
+    }
+    let after_count = cursor
+        .after_count
+        .checked_add(count)
+        .ok_or("cursor count overflow")?;
+    let next = MapCursor {
+        schema_version: 1,
+        root_sha256: cursor.root_sha256.clone(),
+        after_count,
+        after_key: entries
+            .last()
+            .map(|entry| entry.0.clone())
+            .or_else(|| cursor.after_key.clone()),
+    };
+    next.validate(root)?;
+    pages.check()?;
+    Ok(MapWindow {
+        entries,
+        next,
+        complete: after_count == root.entry_count,
+    })
+}
+
+fn cursor_rank(
+    root: &MapRoot,
+    reference: &PageRef,
+    key: &str,
+    pages: &mut impl CursorPages,
+) -> Result<u64> {
+    let bytes = pages.read(reference)?;
+    let page = Page::decode(&bytes, &root.binding, root.kind, reference)?;
+    match page.body {
+        Body::Leaf { entries } => entries
+            .iter()
+            .position(|entry| entry.key == key)
+            .map(|rank| rank as u64)
+            .ok_or_else(|| "cursor last key is absent from selected map".into()),
+        Body::Branch { children } => {
+            let mut before = 0_u64;
+            for child in children {
+                pages.check()?;
+                if child.first_key.as_str() <= key && key <= child.last_key.as_str() {
+                    return before
+                        .checked_add(cursor_rank(root, &child, key, pages)?)
+                        .ok_or_else(|| "cursor rank overflow".into());
+                }
+                before = before
+                    .checked_add(child.entry_count)
+                    .ok_or("cursor subtree count overflow")?;
+            }
+            Err("cursor last key lies in no selected subtree".into())
+        }
+    }
+}
+
+fn cursor_range(
+    root: &MapRoot,
+    reference: &PageRef,
+    offset: u64,
+    range: std::ops::Range<u64>,
+    entries: &mut Vec<(String, Vec<u8>)>,
+    pages: &mut impl CursorPages,
+) -> Result<()> {
+    pages.check()?;
+    let subtree_end = offset
+        .checked_add(reference.entry_count)
+        .ok_or("cursor subtree range overflow")?;
+    if offset >= range.end || subtree_end <= range.start {
+        return Ok(());
+    }
+    let bytes = pages.read(reference)?;
+    let page = Page::decode(&bytes, &root.binding, root.kind, reference)?;
+    match page.body {
+        Body::Leaf { entries: rows } => {
+            for (position, row) in rows.into_iter().enumerate() {
+                pages.check()?;
+                let ordinal = offset
+                    .checked_add(position as u64)
+                    .ok_or("cursor leaf position overflow")?;
+                if range.contains(&ordinal) {
+                    if entries.len() >= MAX_WINDOW_ENTRIES {
+                        return Err("cursor output exceeds finite entry bound".into());
+                    }
+                    entries.push((row.key, row.value));
+                }
+            }
+        }
+        Body::Branch { children } => {
+            let mut next_offset = offset;
+            for child in children {
+                cursor_range(root, &child, next_offset, range.clone(), entries, pages)?;
+                next_offset = next_offset
+                    .checked_add(child.entry_count)
+                    .ok_or("cursor child position overflow")?;
+            }
+        }
+    }
+    pages.check()
+}
+
 impl ObjectStore {
-    /// Read at most 256 values without rescanning earlier leaves. Before any
-    /// continuation, an authenticated search path proves that the last key has
-    /// exactly the saved rank. A changed root, missing member, substituted rank,
-    /// denied boundary or exhausted budget withholds the entire window.
+    /// The same decoder serves real held private files and the separately
+    /// confined observer. Original current-map checks still bracket every read.
     pub fn scan_map_window<B: MapCursorBoundary>(
         &self,
         root: &MapRoot,
@@ -106,143 +252,43 @@ impl ObjectStore {
     ) -> Result<MapWindow> {
         self.check_root(root)?;
         cursor.validate(root)?;
-        if maximum == 0 || maximum > MAX_WINDOW_ENTRIES || budget.write_bytes != 0 {
-            return Err("map cursor requires a finite read-only window".into());
+        if maximum == 0
+            || maximum > MAX_WINDOW_ENTRIES
+            || (root.entry_count != 0 && cursor.after_count == root.entry_count)
+        {
+            return Err("map cursor requires unfinished finite exact coverage".into());
         }
-        if root.entry_count != 0 && cursor.after_count == root.entry_count {
-            return Err("completed map cursor cannot be resumed".into());
+        if budget.write_bytes != 0 || budget.new_files != 0 {
+            return Err("map cursor requires read-only resources".into());
         }
         let mut current = Current { root, boundary };
         let mut guard = Guard::new(&mut current, &root.binding, budget, None)?;
-        if let Some(key) = &cursor.after_key {
-            let reference = root.page.as_ref().ok_or("cursor key has no root page")?;
-            let rank = self.cursor_rank(root, reference, key, &mut guard)?;
-            if rank.checked_add(1) != Some(cursor.after_count) {
-                return Err("map cursor last key does not have its declared exact rank".into());
+        struct Held<'a, 'b, 'c, B: Boundary> {
+            store: &'a ObjectStore,
+            guard: &'b mut Guard<'c, B>,
+        }
+        impl<B: Boundary> CursorPages for Held<'_, '_, '_, B> {
+            fn check(&mut self) -> Result<()> {
+                self.guard.check()
+            }
+            fn read(&mut self, reference: &PageRef) -> Result<Vec<u8>> {
+                self.guard.check()?;
+                self.store
+                    .read_object(&reference.sha256, MAX_PAGE_BYTES, self.guard)
             }
         }
-        let count = (root.entry_count - cursor.after_count).min(maximum as u64);
-        let mut entries = Vec::with_capacity(count as usize);
-        if let Some(reference) = &root.page {
-            self.cursor_range(
-                root,
-                reference,
-                0,
-                cursor.after_count..cursor.after_count + count,
-                &mut entries,
-                &mut guard,
-            )?;
-        }
-        if entries.len() as u64 != count
-            || entries.windows(2).any(|pair| pair[0].0 >= pair[1].0)
-            || cursor
-                .after_key
-                .as_ref()
-                .is_some_and(|key| entries.first().is_some_and(|entry| entry.0 <= *key))
-        {
-            return Err("authenticated map window lost, repeated or reordered coverage".into());
-        }
-        let after_count = cursor
-            .after_count
-            .checked_add(count)
-            .ok_or("cursor count overflow")?;
-        let next = MapCursor {
-            schema_version: 1,
-            root_sha256: cursor.root_sha256.clone(),
-            after_count,
-            after_key: entries
-                .last()
-                .map(|entry| entry.0.clone())
-                .or_else(|| cursor.after_key.clone()),
-        };
-        next.validate(root)?;
+        let value = collect_window(
+            root,
+            cursor,
+            maximum,
+            &mut Held {
+                store: self,
+                guard: &mut guard,
+            },
+        )?;
         guard.check()?;
-        Ok(MapWindow {
-            entries,
-            next,
-            complete: after_count == root.entry_count,
-        })
-    }
-
-    fn cursor_rank<B: Boundary>(
-        &self,
-        root: &MapRoot,
-        reference: &PageRef,
-        key: &str,
-        guard: &mut Guard<'_, B>,
-    ) -> Result<u64> {
-        let bytes = self.read_object(&reference.sha256, MAX_PAGE_BYTES, guard)?;
-        let page = Page::decode(&bytes, &root.binding, root.kind, reference)?;
-        match page.body {
-            Body::Leaf { entries } => entries
-                .iter()
-                .position(|entry| entry.key == key)
-                .map(|rank| rank as u64)
-                .ok_or_else(|| "cursor last key is absent from selected map".into()),
-            Body::Branch { children } => {
-                let mut before = 0_u64;
-                for child in children {
-                    guard.check()?;
-                    if child.first_key.as_str() <= key && key <= child.last_key.as_str() {
-                        return before
-                            .checked_add(self.cursor_rank(root, &child, key, guard)?)
-                            .ok_or_else(|| "cursor rank overflow".into());
-                    }
-                    before = before
-                        .checked_add(child.entry_count)
-                        .ok_or("cursor subtree count overflow")?;
-                }
-                Err("cursor last key lies in no selected subtree".into())
-            }
-        }
-    }
-
-    fn cursor_range<B: Boundary>(
-        &self,
-        root: &MapRoot,
-        reference: &PageRef,
-        offset: u64,
-        range: std::ops::Range<u64>,
-        entries: &mut Vec<(String, Vec<u8>)>,
-        guard: &mut Guard<'_, B>,
-    ) -> Result<()> {
-        guard.check()?;
-        let subtree_end = offset
-            .checked_add(reference.entry_count)
-            .ok_or("cursor subtree range overflow")?;
-        if offset >= range.end || subtree_end <= range.start {
-            return Ok(());
-        }
-        let bytes = self.read_object(&reference.sha256, MAX_PAGE_BYTES, guard)?;
-        let page = Page::decode(&bytes, &root.binding, root.kind, reference)?;
-        match page.body {
-            Body::Leaf { entries: rows } => {
-                for (position, row) in rows.into_iter().enumerate() {
-                    guard.check()?;
-                    let ordinal = offset
-                        .checked_add(position as u64)
-                        .ok_or("cursor leaf position overflow")?;
-                    if range.contains(&ordinal) {
-                        if entries.len() >= MAX_WINDOW_ENTRIES {
-                            return Err("cursor output exceeds finite entry bound".into());
-                        }
-                        entries.push((row.key, row.value));
-                    }
-                }
-            }
-            Body::Branch { children } => {
-                let mut next_offset = offset;
-                for child in children {
-                    self.cursor_range(root, &child, next_offset, range.clone(), entries, guard)?;
-                    next_offset = next_offset
-                        .checked_add(child.entry_count)
-                        .ok_or("cursor child position overflow")?;
-                }
-            }
-        }
-        guard.check()
+        Ok(value)
     }
 }
-
 #[cfg(test)]
 mod tests;

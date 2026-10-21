@@ -12,7 +12,9 @@ pub mod job;
 mod math;
 mod pages;
 mod query;
+pub mod storage;
 pub use pages::{Span as CorpusIndexPageRef, Tree as CorpusIndexTreeKind};
+use storage::IndexReadStore;
 #[cfg(test)]
 mod tests;
 

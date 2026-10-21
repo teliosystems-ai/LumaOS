@@ -8,6 +8,10 @@ use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::atomic::{AtomicU64, Ordering};
+#[path = "owner/index_writer_tests.rs"]
+mod index_writer_tests;
+#[path = "owner/writer_tests.rs"]
+mod writer_tests;
 static NEXT: AtomicU64 = AtomicU64::new(0);
 struct Fixture {
     path: PathBuf,

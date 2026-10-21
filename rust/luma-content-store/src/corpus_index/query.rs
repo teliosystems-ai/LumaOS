@@ -1,7 +1,7 @@
 use super::*;
 use pages::{Body, BucketHead, Feature};
 use std::cmp::{Ordering, Reverse};
-use std::collections::BinaryHeap;
+use std::collections::{BinaryHeap, VecDeque};
 
 /// Higher scores, then lower document ordinals, are better. The reverse heap
 /// keeps the worst retained result at its root; no corpus-sized ranking vector
@@ -56,9 +56,12 @@ impl TopMatches {
         }
         Ok(())
     }
-    fn finish(self) -> (u64, Vec<Ranked>) {
-        let mut retained: Vec<_> = self.heap.into_iter().map(|Reverse(row)| row).collect();
-        retained.sort_unstable_by(|a, b| b.cmp(a));
+    fn finish(mut self) -> (u64, Vec<Ranked>) {
+        let mut retained = Vec::with_capacity(self.heap.len());
+        while let Some(Reverse(row)) = self.heap.pop() {
+            retained.push(row);
+        }
+        retained.reverse();
         (self.total, retained)
     }
 }
@@ -121,6 +124,10 @@ impl VerifiedCorpusIndex {
         )?;
         let mut ordinal = 0_u32;
         let mut source = 0_u64;
+        // Consume each authenticated document leaf once within this operation.
+        // This is only a bounded queue of already decoded DATA, not a selected
+        // generation, reusable authority or a filesystem-immutability cache.
+        let mut document_rows = VecDeque::new();
         m.read(512 * 1024 * 1024)?;
         let count = store.visit_map_checked(
             current_corpus,
@@ -137,7 +144,20 @@ impl VerifiedCorpusIndex {
                     .documents
                     .as_ref()
                     .ok_or("index omitted nonempty corpus documents")?;
-                let indexed = pages::record(store, current_corpus, span, ordinal, &mut m, b)?;
+                if document_rows.is_empty() {
+                    let Body::Documents { first, records } =
+                        pages::at(store, current_corpus, span, ordinal, &mut m, b)?
+                    else {
+                        return Err("document coverage reached another page type".into());
+                    };
+                    if first != ordinal || records.is_empty() {
+                        return Err("document leaf repeats or skips the exact corpus prefix".into());
+                    }
+                    document_rows.extend(records);
+                }
+                let indexed = document_rows
+                    .pop_front()
+                    .ok_or("document coverage lost a row")?;
                 if indexed != actual {
                     return Err(
                         "index document differs from exact authenticated corpus entry".into(),
@@ -154,6 +174,7 @@ impl VerifiedCorpusIndex {
         if count != current_corpus.entry_count
             || u64::from(ordinal) != count
             || source != manifest.source_bytes
+            || !document_rows.is_empty()
         {
             return Err("index full corpus/source coverage differs".into());
         }
@@ -254,8 +275,9 @@ impl VerifiedCorpusIndex {
                 semantic(store, &self.manifest, &canonical, &mut ranked, &mut m, b)?
             }
         };
-        // At most64 retained rows; comparison work is charged before sorting.
-        m.work((ranked.heap.len() as u64) * 7, root, b)?;
+        // At most64 retained rows; each heap pop traverses at most six levels.
+        // Reserve comparison work before draining, not after protected results.
+        m.work((ranked.heap.len() as u64) * 16, root, b)?;
         let (total_matches, ranked) = ranked.finish();
         let mut matches = Vec::new();
         for Ranked { ordinal, score } in ranked {

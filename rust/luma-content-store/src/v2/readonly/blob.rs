@@ -3,6 +3,17 @@
 //! the exact current source and authorizes every read.
 use super::*;
 
+/// Shared closed Merkle DATA decoder. Callers must retain their own actual
+/// original selected-source boundary around every supplied member read.
+pub(crate) fn collect_range_data(
+    reference: &BlobReference,
+    offset: u64,
+    length: u64,
+    read: impl FnMut(&str) -> Result<Vec<u8>>,
+) -> Result<Vec<u8>> {
+    super::super::objects::collect_blob_range(reference, offset, length, read)
+}
+
 pub trait CurrentBlobBoundary: Boundary {
     /// Must independently verify this exact descriptor against the selected
     /// owner/corpus/lifecycle state and original live Read grants. No cached

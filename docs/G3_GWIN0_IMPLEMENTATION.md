@@ -1859,3 +1859,18 @@ fixture fixes and the newer native Page/Admin/publication joins are not qualifie
 by these passes. Complete native integration, physical source/allocation proof,
 the actual 100000-object/500ms requirement and final media remain open. Hyper-V
 remains owner-deferred, not passed.
+
+### Resumable index and observed writer core 21 October 2026
+
+The [index pipeline core checkpoint](gates/g3/nf08_index_pipeline_core_2026-10-21.json)
+passes 134 storage and 73 corpus/index tests, with warning-denied production
+workspace and all-target core checks against the exact staged source. It adds
+resumable covariance, projection, vectors, generation and audit, shared observed
+readers, exact blob write plans and retained same-OFD writer observations.
+Scoped allocation observations cannot authorize whole-owner accounting or
+resource release.
+
+Native controllers, direct custody continuation, prewrite reservation events,
+segmented backup/restore joins and workspace routing remain a separate
+integration cut. The native 100000-object/500-ms requirement and final media
+remain open; these component passes do not complete G3 or GWIN0.

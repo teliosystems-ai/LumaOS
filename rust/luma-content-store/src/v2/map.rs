@@ -179,33 +179,9 @@ impl ObjectStore {
         self.check_root(root)?;
         digest(key)?;
         let mut guard = Guard::new(boundary, &self.binding, budget, None)?;
-        let mut pages = Vec::new();
-        let mut next = root.page.clone();
-        while let Some(reference) = next {
-            let bytes = self.read_object(&reference.sha256, MAX_PAGE_BYTES, &mut guard)?;
-            let page = Page::decode(&bytes, &self.binding, root.kind, &reference)?;
-            next = match &page.body {
-                Body::Leaf { .. } => None,
-                Body::Branch { children } => children
-                    .iter()
-                    .find(|p| p.first_key.as_str() <= key && key <= p.last_key.as_str())
-                    .cloned(),
-            };
-            let leaf = matches!(page.body, Body::Leaf { .. });
-            pages.push(bytes);
-            if pages.len() > usize::from(MAX_MAP_HEIGHT) + 1 {
-                return Err("v2 lookup depth exceeded".into());
-            }
-            if leaf {
-                break;
-            }
-        }
-        let proof = LookupProof {
-            root: root.clone(),
-            key: key.into(),
-            pages,
-        };
-        proof.verify(root)?;
+        let proof = super::readonly::collect_lookup(root, key, |reference| {
+            self.read_object(&reference.sha256, MAX_PAGE_BYTES, &mut guard)
+        })?;
         guard.check()?;
         Ok(proof)
     }
@@ -400,6 +376,69 @@ impl ObjectStore {
         require_present: bool,
     ) -> Result<MapRoot> {
         self.check_root(base)?;
+        derive_delta(
+            base,
+            edits,
+            &mut LocalMapIo { store: self, guard },
+            persist,
+            require_present,
+        )
+    }
+}
+
+/// Bytes and checks only. The installed observer adapter does not gain a
+/// filesystem writer by sharing the deterministic tree reconstruction engine.
+pub(super) trait MapIo {
+    fn check(&mut self) -> Result<()>;
+    fn read(&mut self, sha256: &str) -> Result<Vec<u8>>;
+    fn write(&mut self, bytes: &[u8]) -> Result<()>;
+}
+
+struct LocalMapIo<'a, 'b, 'c, B: Boundary> {
+    store: &'a ObjectStore,
+    guard: &'b mut Guard<'c, B>,
+}
+impl<B: Boundary> MapIo for LocalMapIo<'_, '_, '_, B> {
+    fn check(&mut self) -> Result<()> {
+        self.guard.check()
+    }
+    fn read(&mut self, sha256: &str) -> Result<Vec<u8>> {
+        self.store.read_object(sha256, MAX_PAGE_BYTES, self.guard)
+    }
+    fn write(&mut self, bytes: &[u8]) -> Result<()> {
+        self.store.write_object(bytes, self.guard)?;
+        Ok(())
+    }
+}
+
+pub(super) fn derive_delta(
+    base: &MapRoot,
+    edits: &[MapEdit],
+    io: &mut impl MapIo,
+    persist: bool,
+    require_present: bool,
+) -> Result<MapRoot> {
+    MapEditor {
+        binding: &base.binding,
+        io,
+    }
+    .edit(base, edits, persist, require_present)
+}
+
+struct MapEditor<'a, I: MapIo> {
+    binding: &'a OwnerBinding,
+    io: &'a mut I,
+}
+impl<I: MapIo> MapEditor<'_, I> {
+    fn edit(
+        &mut self,
+        base: &MapRoot,
+        edits: &[MapEdit],
+        persist: bool,
+        require_present: bool,
+    ) -> Result<MapRoot> {
+        base.validate()?;
+        self.io.check()?;
         if edits.is_empty() || edits.len() > MAX_MAP_EDITS {
             return Err("v2 map delta count invalid".into());
         }
@@ -410,7 +449,10 @@ impl ObjectStore {
                 return Err("v2 map delta must be sorted unique keys".into());
             }
             previous = Some(edit.key.as_str());
-            let observed = self.get_map(base, &edit.key, guard)?;
+            let observed = super::readonly::collect_lookup(base, &edit.key, |reference| {
+                self.io.read(&reference.sha256)
+            })?
+            .verify(base)?;
             if observed.as_ref().map(|v| luma_content::sha256(v)) != edit.expected_value_sha256 {
                 return Err("v2 map exact value CAS conflict".into());
             }
@@ -418,11 +460,9 @@ impl ObjectStore {
         let mut root = base.clone();
         let mut session = PageSession::new(persist);
         for edit in edits {
-            guard.check()?;
+            self.io.check()?;
             let nodes = match &root.page {
-                Some(reference) => {
-                    self.update_page(root.kind, reference, edit, guard, &mut session)?
-                }
+                Some(reference) => self.update_page(root.kind, reference, edit, &mut session)?,
                 None => {
                     let value = edit.value.as_ref().ok_or("v2 empty map deletion")?;
                     vec![self.put_page(
@@ -436,7 +476,6 @@ impl ObjectStore {
                                 }],
                             },
                         ),
-                        guard,
                         &mut session,
                     )?]
                 }
@@ -446,7 +485,6 @@ impl ObjectStore {
                 1 => Some(nodes[0].clone()),
                 _ => Some(self.put_page(
                     Page::new(&self.binding, root.kind, Body::Branch { children: nodes }),
-                    guard,
                     &mut session,
                 )?),
             };
@@ -455,24 +493,19 @@ impl ObjectStore {
         }
         if require_present {
             for (hash, bytes) in &session.pages {
-                if self.read_object(hash, MAX_PAGE_BYTES, guard)? != *bytes {
+                if self.io.read(hash)? != *bytes {
                     return Err("v2 derived map page missing or changed before selection".into());
                 }
             }
         }
-        guard.check()?;
+        self.io.check()?;
         Ok(root)
     }
-    fn put_page<B: Boundary>(
-        &self,
-        page: Page,
-        guard: &mut Guard<'_, B>,
-        session: &mut PageSession,
-    ) -> Result<PageRef> {
+    fn put_page(&mut self, page: Page, session: &mut PageSession) -> Result<PageRef> {
         let (bytes, reference) = page.encode()?;
-        guard.check()?;
+        self.io.check()?;
         if session.persist {
-            self.write_object(&bytes, guard)?;
+            self.io.write(&bytes)?;
         } else if !session.pages.contains_key(&reference.sha256) {
             if session.pages.len() >= MAX_GENERATED_PAGES
                 || session
@@ -487,20 +520,19 @@ impl ObjectStore {
         }
         Ok(reference)
     }
-    fn update_page<B: Boundary>(
-        &self,
+    fn update_page(
+        &mut self,
         kind: MapKind,
         reference: &PageRef,
         edit: &MapEdit,
-        guard: &mut Guard<'_, B>,
         session: &mut PageSession,
     ) -> Result<Vec<PageRef>> {
         let bytes = match session.pages.get(&reference.sha256) {
             Some(bytes) => {
-                guard.check()?;
+                self.io.check()?;
                 bytes.clone()
             }
-            None => self.read_object(&reference.sha256, MAX_PAGE_BYTES, guard)?,
+            None => self.io.read(&reference.sha256)?,
         };
         let page = Page::decode(&bytes, &self.binding, kind, reference)?;
         match page.body {
@@ -553,7 +585,6 @@ impl ObjectStore {
                                     entries: std::mem::take(&mut packed),
                                 },
                             ),
-                            guard,
                             session,
                         )?);
                         packed.push(tail);
@@ -562,7 +593,6 @@ impl ObjectStore {
                 if !packed.is_empty() {
                     result.push(self.put_page(
                         Page::new(&self.binding, kind, Body::Leaf { entries: packed }),
-                        guard,
                         session,
                     )?);
                 }
@@ -573,7 +603,7 @@ impl ObjectStore {
                     .iter()
                     .position(|p| p.last_key >= edit.key)
                     .unwrap_or(children.len() - 1);
-                let replacement = self.update_page(kind, &children[index], edit, guard, session)?;
+                let replacement = self.update_page(kind, &children[index], edit, session)?;
                 children.splice(index..index + 1, replacement);
                 let mut result = Vec::new();
                 for chunk in children.chunks(FANOUT) {
@@ -585,7 +615,6 @@ impl ObjectStore {
                                 children: chunk.to_vec(),
                             },
                         ),
-                        guard,
                         session,
                     )?);
                 }

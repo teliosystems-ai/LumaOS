@@ -1839,3 +1839,23 @@ native routing and the100000-object/500ms target remain development. In
 particular, the existing conservative128KiB/page debit is not sufficient
 evidence that a worst-case32M-posting build fits64GiB; an actual measured page
 API alone does not grant permission to release resource reservations.
+
+### Observed read-only verification core, 21 October 2026
+
+The [read-only checkpoint](gates/g3/nf08_observed_readers_2026-10-21.json)
+records 110 passing v2 tests with no failed or ignored tests in that scope.
+Observer-backed map lookup, complete blobs, snippets and exact map deltas now
+reuse the actual local parsers and writer reconstruction algorithm. Every read
+retains an independently implemented current boundary and reserves its bounded
+response before transport. These APIs cannot write, select a head or issue a
+grant. Typed artifact resolution follows the real semantic-record indirection;
+its positive fixture goes through actual owner append preparation and software
+selection, not an invented leaf format.
+
+Only the frozen v2 source is committed by this checkpoint. The wider diagnostic
+cut still failed one oversized index-fixture batch and ten observer fixture
+inventory admissions. Their exact failed logs remain recorded; subsequent
+fixture fixes and the newer native Page/Admin/publication joins are not qualified
+by these passes. Complete native integration, physical source/allocation proof,
+the actual 100000-object/500ms requirement and final media remain open. Hyper-V
+remains owner-deferred, not passed.

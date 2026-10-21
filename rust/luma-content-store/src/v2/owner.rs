@@ -45,6 +45,19 @@ pub(super) fn read_budget() -> IoBudget {
 pub(super) struct ValueRef {
     pub sha256: String,
 }
+/// The local owner reader and independent observer use the same closed
+/// indirection grammar and exact semantic-member content commitment.
+pub(super) fn decode_semantic_value<T: Serialize + for<'de> Deserialize<'de>>(
+    reference_bytes: &[u8],
+    member_bytes: &[u8],
+) -> Result<T> {
+    let reference: ValueRef = canonical(reference_bytes, MAX_VALUE_BYTES)?;
+    digest(&reference.sha256)?;
+    if luma_content::sha256(member_bytes) != reference.sha256 {
+        return Err("owner semantic member differs from exact map ValueRef".into());
+    }
+    canonical(member_bytes, MAX_PAGE_BYTES)
+}
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub(super) struct ArtifactValue {
@@ -792,9 +805,9 @@ impl ObjectStore {
             .map(|bytes| {
                 let reference: ValueRef = canonical(&bytes, MAX_VALUE_BYTES)?;
                 digest(&reference.sha256)?;
-                canonical(
+                decode_semantic_value(
+                    &bytes,
                     &self.read_object(&reference.sha256, MAX_PAGE_BYTES, guard)?,
-                    MAX_PAGE_BYTES,
                 )
             })
             .transpose()

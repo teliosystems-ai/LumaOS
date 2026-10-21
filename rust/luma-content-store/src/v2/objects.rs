@@ -8,6 +8,11 @@ use std::path::{Path, PathBuf};
 #[path = "objects/snapshot.rs"]
 mod snapshot;
 pub use snapshot::{RawObjectScan, RawObjectWindow};
+mod observation;
+pub use observation::{
+    HeldNamespaceObservation, HeldRawObjectObservation, NamespaceObservationData, ObservedFileData,
+    RawObjectObservationData,
+};
 
 const GROUP: usize = 64;
 const MAX_OBJECTS: u64 = 4_194_304;
@@ -845,108 +850,13 @@ impl ObjectStore {
         length: u64,
         guard: &mut Guard<'_, B>,
     ) -> Result<Vec<u8>> {
-        reference.validate()?;
         self.check()?;
-        if reference.binding != self.binding
-            || offset
-                .checked_add(length)
-                .map_or(true, |end| end > reference.bytes)
-        {
+        if reference.binding != self.binding {
             return Err("v2 blob owner/range mismatch".into());
         }
-        if reference.bytes == 0 {
-            guard.check()?;
-            return Ok(Vec::new());
-        }
-        let index_bytes = self.read_object(
-            reference
-                .index_sha256
-                .as_ref()
-                .ok_or("v2 blob index missing")?,
-            MAX_PAGE_BYTES,
-            guard,
-        )?;
-        let index: BlobIndex = canonical(&index_bytes, MAX_PAGE_BYTES)?;
-        if index.schema_version != 1
-            || index.domain != DOMAIN
-            || index.binding != self.binding
-            || index.groups.is_empty()
-            || index.groups.len() > GROUP
-        {
-            return Err("v2 blob index identity/fanout invalid".into());
-        }
-        let mut total = 0_u64;
-        let mut chunk_count = 0_u32;
-        for (number, group) in index.groups.iter().enumerate() {
-            digest(&group.sha256)?;
-            if group.chunks == 0
-                || group.chunks > GROUP as u32
-                || (number + 1 < index.groups.len() && group.chunks != GROUP as u32)
-                || group.bytes == 0
-                || group.bytes > u64::from(group.chunks) * MAX_PAGE_BYTES as u64
-                || group.bytes <= u64::from(group.chunks - 1) * MAX_PAGE_BYTES as u64
-                || (number + 1 < index.groups.len()
-                    && group.bytes != u64::from(group.chunks) * MAX_PAGE_BYTES as u64)
-            {
-                return Err("v2 blob group coverage invalid".into());
-            }
-            total = total
-                .checked_add(group.bytes)
-                .ok_or("v2 blob byte overflow")?;
-            chunk_count = chunk_count
-                .checked_add(group.chunks)
-                .ok_or("v2 blob count overflow")?;
-        }
-        if total != reference.bytes || chunk_count != reference.chunk_count {
-            return Err("v2 blob index coverage differs".into());
-        }
-        let mut result = Vec::with_capacity(length as usize);
-        let end = offset + length;
-        let mut group_offset = 0_u64;
-        for group in index.groups {
-            let group_end = group_offset + group.bytes;
-            if length > 0 && offset < group_end && group_offset < end {
-                let bytes = self.read_object(&group.sha256, MAX_PAGE_BYTES, guard)?;
-                let actual: ChunkGroup = canonical(&bytes, MAX_PAGE_BYTES)?;
-                if actual.schema_version != 1
-                    || actual.domain != DOMAIN
-                    || actual.binding != self.binding
-                    || actual.chunks.len() != group.chunks as usize
-                {
-                    return Err("v2 chunk group identity/count differs".into());
-                }
-                let mut position = group_offset;
-                for (number, chunk) in actual.chunks.iter().enumerate() {
-                    digest(&chunk.sha256)?;
-                    if chunk.bytes == 0
-                        || chunk.bytes > MAX_PAGE_BYTES as u32
-                        || (number + 1 < actual.chunks.len()
-                            && chunk.bytes != MAX_PAGE_BYTES as u32)
-                    {
-                        return Err("v2 chunk size invalid".into());
-                    }
-                    let next = position + u64::from(chunk.bytes);
-                    if offset < next && position < end {
-                        let bytes = self.read_object(&chunk.sha256, MAX_PAGE_BYTES, guard)?;
-                        if bytes.len() != chunk.bytes as usize {
-                            return Err("v2 chunk committed length differs".into());
-                        }
-                        result.extend_from_slice(
-                            &bytes[(offset.saturating_sub(position)) as usize
-                                ..(end.min(next) - position) as usize],
-                        );
-                    }
-                    position = next;
-                }
-                if position != group_end {
-                    return Err("v2 chunk group byte coverage differs".into());
-                }
-            }
-            group_offset = group_end;
-        }
-        if result.len() as u64 != length {
-            return Err("v2 blob range coverage differs".into());
-        }
+        let result = collect_blob_range(reference, offset, length, |sha| {
+            self.read_object(sha, MAX_PAGE_BYTES, guard)
+        })?;
         guard.check()?;
         Ok(result)
     }
@@ -1098,6 +1008,118 @@ impl ObjectStore {
         Ok(result)
     }
 }
+/// The same bounded Merkle parser is used for held local reads and confined
+/// observer bytes. Neither a valid path nor this result selects a current blob.
+pub(super) fn collect_blob_range(
+    reference: &BlobReference,
+    offset: u64,
+    length: u64,
+    mut read: impl FnMut(&str) -> Result<Vec<u8>>,
+) -> Result<Vec<u8>> {
+    reference.validate()?;
+    let end = offset.checked_add(length).ok_or("v2 blob range overflow")?;
+    if end > reference.bytes {
+        return Err("v2 blob range exceeds committed length".into());
+    }
+    if reference.bytes == 0 {
+        return Ok(Vec::new());
+    }
+    let mut committed = |sha: &str| -> Result<Vec<u8>> {
+        digest(sha)?;
+        let bytes = read(sha)?;
+        if bytes.is_empty() || bytes.len() > MAX_PAGE_BYTES || luma_content::sha256(&bytes) != sha {
+            return Err("v2 observed blob member length/hash differs".into());
+        }
+        Ok(bytes)
+    };
+    let index_bytes = committed(
+        reference
+            .index_sha256
+            .as_ref()
+            .ok_or("v2 blob index missing")?,
+    )?;
+    let index: BlobIndex = canonical(&index_bytes, MAX_PAGE_BYTES)?;
+    if index.schema_version != 1
+        || index.domain != DOMAIN
+        || index.binding != reference.binding
+        || index.groups.is_empty()
+        || index.groups.len() > GROUP
+    {
+        return Err("v2 blob index identity/fanout invalid".into());
+    }
+    let mut total = 0_u64;
+    let mut chunk_count = 0_u32;
+    for (number, group) in index.groups.iter().enumerate() {
+        digest(&group.sha256)?;
+        if group.chunks == 0
+            || group.chunks > GROUP as u32
+            || (number + 1 < index.groups.len() && group.chunks != GROUP as u32)
+            || group.bytes == 0
+            || group.bytes > u64::from(group.chunks) * MAX_PAGE_BYTES as u64
+            || group.bytes <= u64::from(group.chunks - 1) * MAX_PAGE_BYTES as u64
+            || (number + 1 < index.groups.len()
+                && group.bytes != u64::from(group.chunks) * MAX_PAGE_BYTES as u64)
+        {
+            return Err("v2 blob group coverage invalid".into());
+        }
+        total = total
+            .checked_add(group.bytes)
+            .ok_or("v2 blob byte overflow")?;
+        chunk_count = chunk_count
+            .checked_add(group.chunks)
+            .ok_or("v2 blob count overflow")?;
+    }
+    if total != reference.bytes || chunk_count != reference.chunk_count {
+        return Err("v2 blob index coverage differs".into());
+    }
+    let mut result = Vec::with_capacity(usize::try_from(length)?);
+    let mut group_offset = 0_u64;
+    for group in index.groups {
+        let group_end = group_offset + group.bytes;
+        if length > 0 && offset < group_end && group_offset < end {
+            let bytes = committed(&group.sha256)?;
+            let actual: ChunkGroup = canonical(&bytes, MAX_PAGE_BYTES)?;
+            if actual.schema_version != 1
+                || actual.domain != DOMAIN
+                || actual.binding != reference.binding
+                || actual.chunks.len() != group.chunks as usize
+            {
+                return Err("v2 chunk group identity/count differs".into());
+            }
+            let mut position = group_offset;
+            for (number, chunk) in actual.chunks.iter().enumerate() {
+                digest(&chunk.sha256)?;
+                if chunk.bytes == 0
+                    || chunk.bytes > MAX_PAGE_BYTES as u32
+                    || (number + 1 < actual.chunks.len() && chunk.bytes != MAX_PAGE_BYTES as u32)
+                {
+                    return Err("v2 chunk size invalid".into());
+                }
+                let next = position + u64::from(chunk.bytes);
+                if offset < next && position < end {
+                    let bytes = committed(&chunk.sha256)?;
+                    if bytes.len() != chunk.bytes as usize {
+                        return Err("v2 chunk committed length differs".into());
+                    }
+                    result.extend_from_slice(
+                        &bytes[offset.saturating_sub(position) as usize
+                            ..(end.min(next) - position) as usize],
+                    );
+                }
+                position = next;
+            }
+            if position != group_end {
+                return Err("v2 chunk group byte coverage differs".into());
+            }
+        }
+        group_offset = group_end;
+    }
+    if result.len() as u64 != length {
+        return Err("v2 blob range coverage differs".into());
+    }
+    Ok(result)
+}
+
 fn object_names<B: Boundary>(
     directory: &File,
     canonical_order: bool,

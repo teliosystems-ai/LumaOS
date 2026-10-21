@@ -17,6 +17,7 @@ pub mod migration;
 pub mod owner;
 pub mod owner_recovery;
 pub mod owner_segment;
+pub mod readonly;
 pub mod restore;
 pub use owner::{
     verify_append_data, AppendCommitment, OwnerBoundary, OwnerPlan, OwnerRepository,
@@ -28,8 +29,9 @@ mod page;
 mod segment;
 pub use map::{LookupProof, MapEdit, MapRoot};
 pub use objects::{
-    Allocation, BlobReference, ObjectStore, PageObservation, PageWriteMeasurement,
-    PhysicalInventory, RawObjectScan, RawObjectWindow,
+    Allocation, BlobReference, HeldNamespaceObservation, HeldRawObjectObservation,
+    NamespaceObservationData, ObjectStore, ObservedFileData, PageObservation, PageWriteMeasurement,
+    PhysicalInventory, RawObjectObservationData, RawObjectScan, RawObjectWindow,
 };
 pub use page::{MapKind, PageRef};
 pub use segment::{SealedSegment, SegmentDescriptor, SegmentInput};

@@ -1,0 +1,87 @@
+{
+  "schema_version": 1,
+  "recorded_on": "2026-10-21",
+  "status": "verified-v2-readonly-core-only",
+  "scope": "Only the staged v2 content-store source bytes; not all newer native/index/observer source in the frozen diagnostic tree",
+  "implementation": [
+    "Opaque same-namespace held raw-object observations retain actual root/object/identity descriptors and refuse replacement, tampering, foreign generations, incomplete pages and changed named/held metadata",
+    "Confined-observer Merkle lookup uses the same canonical page/proof verifier as local held reads, with exact current-map checks and full response-plus-EOF reservation before every read",
+    "Observed blob and range reads share the local BlobIndex/ChunkGroup parser, validate all actual member hashes, reserve bounded read-only resources and independently check the whole-source SHA for complete reads",
+    "Observed map-delta verification shares the actual writer CAS/split/packing engine and reopens every generated page, including old-only split siblings and intermediate pages; it cannot write or select a root",
+    "Typed artifact/lifecycle/corpus proof resolution follows the actual owner ValueRef indirection and shares its semantic-value parser; retained proof DATA is reverified against a freshly selected full owner head",
+    "Positive typed-selection fixtures use actual OwnerRepository plan/prepare/allocation verification/software selection/acknowledgement, not an invented inline semantic-leaf layout"
+  ],
+  "runtime_verification": {
+    "directory": "/mnt/luma-build/work/g3-owner-20261021-RemLnxQY",
+    "source_files": 880,
+    "source_manifest_sha256": "c58d788be20a30dba456914528396a4f1ea84992aa2e774f78f8dae3e808fa7f",
+    "runner_sha256": "2ba5ec04114d81b12549d16984504af38553dce100d29b7607bb4b523d5ee465",
+    "suite": "v2-diagnostic-tests",
+    "passed": 110,
+    "failed": 0,
+    "ignored": 0,
+    "log_sha256": "b1acd9b1602fedeef3caad15c28f181fd74ea12be4993be9d5d9b25919b6d28f",
+    "memory_peak_bytes_at_v2_completion": 2491273216,
+    "compiler_memory_limit_bytes": 4294967296,
+    "oom_events": 0,
+    "swap_limit_bytes": 0,
+    "network": "none",
+    "storage": "Disposable private ext4 on drive D",
+    "authentication": "Explicit software boundaries, not installed C selection, PAM, physical TPM or loaded LSM qualification",
+    "full_frozen_diagnostic_sweep_passed": false
+  },
+  "frozen_strict_checks": {
+    "production_workspace_log_sha256": "dac315cd38c306f79601ed612da4fdd6ec1d44abded6e64ee12f094234c59240",
+    "content_store_all_targets_log_sha256": "1522e2dbfc9538fd36d870d4a5904660aba5393731630c7892f55984872b8d0a",
+    "warnings_denied": true,
+    "diagnostic_native_hooks_not_production_registered": true
+  },
+  "staged_source_join": {
+    "report": "/mnt/luma-build/work/g3-owner-20261021-RemLnxQY/staged-readonly-source.json",
+    "report_sha256": "7ea4fd2b63276f4b93e2be5c5ff1eda32ec58815c63432191147c3a4a409a457",
+    "verified_v2_files": 44,
+    "changed_rust_files": 14,
+    "code_tree_before_documentation": "e2beb7344007a59472b3e4f3a1b4339c2a8c6fc2",
+    "exact_index_source_files": 830,
+    "exact_index_source_manifest_sha256": "c92ed9039bc20d9ba83711157c9f90d8c0e2f186ba69412c6a975208a52b96ba",
+    "exact_index_production_workspace_warnings_denied_passed": true,
+    "exact_index_production_workspace_log_sha256": "02a0e8e2a8028df2e8b22043f7dd010ed44f01ff6b4bff269ae962b9e4b4dce9",
+    "exact_index_content_store_all_targets_warnings_denied_passed": true,
+    "exact_index_content_store_log_sha256": "745bb5088c46505832cae40d4c97165cd5646da08895ae01892be4024bf68d4b",
+    "newer_working_tree_bytes_preserved": true,
+    "source_bytes_match_the_frozen_runtime_manifest": true,
+    "native_diagnostic_hooks_staged": false
+  },
+  "excluded_failures_from_the_same_frozen_cut": [
+    {
+      "suite": "corpus-diagnostic",
+      "passed": 68,
+      "failed": 1,
+      "ignored": 0,
+      "log_sha256": "e185e68ad85d640bcaac4528f8c7e8571c9cb5feb9f2f87b3753e89ab5fd6052",
+      "cause": "The 277-document vector fixture submitted a single map edit batch exceeding the existing 256-edit limit",
+      "later_correction_not_verified_by_this_record": "Seed the actual fixture through bounded batches without increasing the production limit"
+    },
+    {
+      "suite": "content-data-observer",
+      "passed": 6,
+      "failed": 10,
+      "ignored": 0,
+      "log_sha256": "9f799012312df7f0c8819921ce748dcdd2ad199b9b2cc1d7688a306e0fc75e8b",
+      "cause": "Ten fixtures requested a write budget for their read-only initial inventory; the core correctly refused before transport",
+      "later_correction_not_verified_by_this_record": "Pass the same finite read ceiling with zero write bytes and zero new files"
+    }
+  ],
+  "remaining_development": [
+    "Actual native typed Page/output provenance, current C selection and original-operation observer integration",
+    "Exact selected job allocations, one-dispatch publication, old/new/third-NV reconciliation, physical creation/OFD handshakes and bounded source/stage accounting",
+    "Complete native index phase/controller/builder/source pairing, current generation selection and worker/workspace routing",
+    "Native snapshot attestation/signing/archive inventory/delivery and fresh Standard-window restore integration",
+    "Actual native 100000-object text and semantic queries with P95 first results at most 500 ms",
+    "Feature-complete native disk/ISO and authenticated Windows package delivery followed by installed qualification"
+  ],
+  "hyper_v": "Owner-deferred development, not passed",
+  "g3_complete": false,
+  "gwin0_complete": false,
+  "new_final_image_produced": false
+}

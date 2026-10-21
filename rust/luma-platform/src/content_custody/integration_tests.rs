@@ -10,6 +10,73 @@ use std::rc::Rc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 static NEXT: AtomicU64 = AtomicU64::new(0);
+
+#[test]
+fn interrupted_paged_migration_never_reopens_or_publishes_the_legacy_journal() {
+    let fixture = Fixture::new();
+    let mut held = fixture.store();
+    let before = fixture.files().read(JOURNAL, &mut || Ok(())).unwrap();
+    fs::DirBuilder::new()
+        .mode(0o700)
+        .create(fixture.authority.join("paged-v3"))
+        .unwrap();
+    // Even an empty staged directory fences the old format. No selector or
+    // syntactically valid new descriptor is required to prevent fallback.
+    assert_eq!(
+        format::probe(&fixture.files(), &mut || Ok(())).unwrap(),
+        format::Layout::Paged
+    );
+    assert!(Store::open(fixture.memory.clone(), fixture.files(), &mut || Ok(())).is_err());
+    assert!(held.selected(&fixture.binding, &mut || Ok(())).is_err());
+    assert!(held.poisoned);
+    assert_eq!(fixture.memory.advances.get(), 0);
+    assert_eq!(
+        fixture.files().read(JOURNAL, &mut || Ok(())).unwrap(),
+        before
+    );
+    assert!(fixture.authority.join("paged-v3").is_dir());
+    // Moving the staged directory away is an explicit fixture adversary, not
+    // a recovery operation. A writer that observed the transition stays fenced.
+    fs::rename(
+        fixture.authority.join("paged-v3"),
+        fixture.authority.join("preserved-paged-migration"),
+    )
+    .unwrap();
+    assert!(held.selected(&fixture.binding, &mut || Ok(())).is_err());
+    assert_eq!(fixture.memory.advances.get(), 0);
+}
+
+#[test]
+fn paged_namespace_substitution_and_original_guard_revocation_refuse_format_selection() {
+    use std::os::unix::fs::symlink;
+    let regular = Fixture::new();
+    assert!(regular
+        .files()
+        .create("paged-v3", b"not a private directory", &mut || Ok(()))
+        .is_err());
+    // Closed legacy creation correctly refuses unknown members; use the
+    // explicit disposable fixture adversary to plant the substitution.
+    fs::write(regular.authority.join("paged-v3"), b"not a directory").unwrap();
+    assert!(format::probe(&regular.files(), &mut || Ok(())).is_err());
+    assert!(Store::open(regular.memory.clone(), regular.files(), &mut || Ok(())).is_err());
+    let linked = Fixture::new();
+    symlink(&regular.authority, linked.authority.join("paged-v3")).unwrap();
+    assert!(format::probe(&linked.files(), &mut || Ok(())).is_err());
+    let revoked = Fixture::new();
+    let mut checks = 0;
+    assert!(format::probe(&revoked.files(), &mut || {
+        checks += 1;
+        if checks >= 2 {
+            return Err("fixture original operation revoked during format probe".into());
+        }
+        Ok(())
+    })
+    .is_err());
+    assert_eq!(regular.memory.advances.get(), 0);
+    assert_eq!(linked.memory.advances.get(), 0);
+    assert_eq!(revoked.memory.advances.get(), 0);
+}
+
 struct FixtureExport {
     binding: OwnerBinding,
     manifest: String,

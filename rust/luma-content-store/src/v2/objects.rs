@@ -5,6 +5,10 @@ use std::os::fd::AsRawFd;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 
+#[path = "objects/snapshot.rs"]
+mod snapshot;
+pub use snapshot::{RawObjectScan, RawObjectWindow};
+
 const GROUP: usize = 64;
 const MAX_OBJECTS: u64 = 4_194_304;
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -90,7 +94,7 @@ pub struct Allocation {
     pub allocated_bytes: u64,
     pub complete: bool,
 }
-#[derive(Clone, Debug, Default, Serialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PhysicalInventory {
     pub regular_files: u64,
     pub directories: u64,
@@ -155,14 +159,47 @@ fn read_member<B: Boundary>(
     limit: usize,
     mount_id: u64,
     guard: &mut Guard<'_, B>,
-    mut namespace: impl FnMut() -> Result<()>,
+    namespace: impl FnMut() -> Result<()>,
 ) -> Result<Vec<u8>> {
+    Ok(read_member_observed(directory, name, limit, mount_id, guard, namespace)?.bytes)
+}
+struct ObservedMember {
+    file: File,
+    before: fs::Metadata,
+    bytes: Vec<u8>,
+}
+fn observed_pin(m: &fs::Metadata) -> (PinForSnapshot, u64, u32, u32, u64) {
+    (pin(m), m.blocks(), m.uid(), m.gid(), m.nlink())
+}
+type PinForSnapshot = (u64, u64, u64, i64, i64, i64, i64, u32);
+impl ObservedMember {
+    fn recheck(&self, directory: &File, name: &str, mount_id: u64) -> Result<()> {
+        crate::storage::check_private(&self.file, false)?;
+        let named = crate::storage::open(directory, name, libc::O_RDONLY, 0)?;
+        if observed_pin(&self.file.metadata()?) != observed_pin(&self.before)
+            || observed_pin(&named.metadata()?) != observed_pin(&self.before)
+            || mount(&self.file)? != mount_id
+            || mount(&named)? != mount_id
+        {
+            return Err("snapshot captured file identity or allocation changed".into());
+        }
+        Ok(())
+    }
+}
+fn read_member_observed<B: Boundary>(
+    directory: &File,
+    name: &str,
+    limit: usize,
+    mount_id: u64,
+    guard: &mut Guard<'_, B>,
+    mut namespace: impl FnMut() -> Result<()>,
+) -> Result<ObservedMember> {
     guard.check()?;
     namespace()?;
     let mut file = crate::storage::open(directory, name, libc::O_RDONLY, 0)?;
     crate::storage::check_private(&file, false)?;
     let before = file.metadata()?;
-    let expected = pin(&before);
+    let expected = observed_pin(&before);
     if before.mode() & 0o7777 != 0o400 || before.len() > limit as u64 || mount(&file)? != mount_id {
         return Err("v2 held read file mode/length/mount invalid".into());
     }
@@ -172,8 +209,8 @@ fn read_member<B: Boundary>(
         namespace()?;
         guard.check()?;
         let named = crate::storage::open(directory, name, libc::O_RDONLY, 0)?;
-        if pin(&file.metadata()?) != expected
-            || pin(&named.metadata()?) != expected
+        if observed_pin(&file.metadata()?) != expected
+            || observed_pin(&named.metadata()?) != expected
             || mount(&named)? != mount_id
         {
             return Err("v2 held file changed before private read".into());
@@ -199,8 +236,8 @@ fn read_member<B: Boundary>(
     }
     let named = crate::storage::open(directory, name, libc::O_RDONLY, 0)?;
     if bytes.len() as u64 != before.len()
-        || pin(&file.metadata()?) != expected
-        || pin(&named.metadata()?) != expected
+        || observed_pin(&file.metadata()?) != expected
+        || observed_pin(&named.metadata()?) != expected
         || mount(&named)? != mount_id
         || mount(&file)? != mount_id
     {
@@ -208,7 +245,11 @@ fn read_member<B: Boundary>(
     }
     guard.check()?;
     namespace()?;
-    Ok(bytes)
+    Ok(ObservedMember {
+        file,
+        before,
+        bytes,
+    })
 }
 struct Leaf {
     first: File,
@@ -367,6 +408,17 @@ impl ObjectStore {
         }
         Ok(())
     }
+    pub(super) fn acquire_writer(&self) -> Result<File> {
+        self.check()?;
+        let file = crate::storage::open(&self.root, ".", libc::O_RDONLY | libc::O_DIRECTORY, 0)?;
+        if !same(&file, &self.root)?
+            || unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0
+        {
+            return Err("v2 owner already has a writer or namespace changed".into());
+        }
+        self.check()?;
+        Ok(file)
+    }
     fn leaf<B: Boundary>(
         &self,
         hash: &str,
@@ -391,8 +443,13 @@ impl ObjectStore {
                         return Err(error);
                     }
                     guard.write(0)?;
+                    let before = current.metadata()?;
                     match crate::storage::mkdir(&current, component) {
-                        Ok(file) => file,
+                        Ok(file) => {
+                            guard.allocated_directory(&file)?;
+                            guard.directory_growth(&before, &current.metadata()?)?;
+                            file
+                        }
                         Err(error) => {
                             if error
                                 .downcast_ref::<std::io::Error>()
@@ -479,6 +536,7 @@ impl ObjectStore {
             return Err("v2 physical block/inode reserve unavailable".into());
         }
         leaf.check(self)?;
+        let before = leaf.second.metadata()?;
         let mut file = crate::storage::open(
             &leaf.second,
             &hash,
@@ -493,6 +551,8 @@ impl ObjectStore {
         }
         file.sync_all()?;
         leaf.second.sync_all()?;
+        guard.allocated_file(&file)?;
+        guard.directory_growth(&before, &leaf.second.metadata()?)?;
         leaf.check(self)?;
         guard.check()?;
         if self.read_object(&hash, MAX_PAGE_BYTES, guard)? != bytes {
@@ -758,11 +818,35 @@ impl ObjectStore {
     }
     /// Explicit full physical audit, including valid-hash-named partial writes.
     /// Every member is retained; this method never adopts, selects or removes it.
-    pub fn inventory(
+    pub fn inventory<B: Boundary>(
         &self,
         budget: IoBudget,
-        boundary: &mut impl Boundary,
+        boundary: &mut B,
         mut visitor: impl FnMut(Allocation) -> Result<()>,
+    ) -> Result<PhysicalInventory> {
+        self.audit_objects(budget, boundary, false, |_, allocation, _, _| {
+            visitor(allocation)
+        })
+    }
+    /// Canonical bounded raw-object export, including explicitly incomplete
+    /// objects. Names are SHA identifiers, never import/extraction paths. This
+    /// does not authenticate a selected owner head or a complete backup.
+    /// A leaf with over 65536 names refuses instead of retaining an unbounded
+    /// sort or skipping files; the original inventory keeps its existing scope.
+    pub fn visit_raw_objects_checked<B: Boundary>(
+        &self,
+        budget: IoBudget,
+        boundary: &mut B,
+        visitor: impl FnMut(&str, Allocation, &[u8], &mut B) -> Result<()>,
+    ) -> Result<PhysicalInventory> {
+        self.audit_objects(budget, boundary, true, visitor)
+    }
+    fn audit_objects<B: Boundary>(
+        &self,
+        budget: IoBudget,
+        boundary: &mut B,
+        canonical_order: bool,
+        mut visitor: impl FnMut(&str, Allocation, &[u8], &mut B) -> Result<()>,
     ) -> Result<PhysicalInventory> {
         let mut guard = Guard::new(boundary, &self.binding, budget, None)?;
         self.check()?;
@@ -781,39 +865,35 @@ impl ObjectStore {
         result.regular_files = 1;
         result.logical_bytes = identity.len();
         result.allocated_bytes += identity.blocks() * 512;
-        for first in fs::read_dir(format!("/proc/self/fd/{}", self.objects.as_raw_fd()))? {
+        for first in object_names(&self.objects, canonical_order, 256, &mut guard)? {
             guard.check()?;
-            let first = first?
-                .file_name()
-                .into_string()
-                .map_err(|_| "v2 nonUTF8 prefix")?;
+            let first = first?;
             prefix(&first)?;
             let a = crate::storage::directory(&self.objects, &first)?;
             charge_dir(&a, &mut result)?;
             let a_pin = pin(&a.metadata()?);
-            for second in fs::read_dir(format!("/proc/self/fd/{}", a.as_raw_fd()))? {
+            for second in object_names(&a, canonical_order, 256, &mut guard)? {
                 guard.check()?;
-                let second = second?
-                    .file_name()
-                    .into_string()
-                    .map_err(|_| "v2 nonUTF8 prefix")?;
+                let second = second?;
                 prefix(&second)?;
                 let b = crate::storage::directory(&a, &second)?;
                 charge_dir(&b, &mut result)?;
                 let b_pin = pin(&b.metadata()?);
-                for entry in fs::read_dir(format!("/proc/self/fd/{}", b.as_raw_fd()))? {
+                for entry in object_names(&b, canonical_order, 65536, &mut guard)? {
                     guard.check()?;
                     self.check()?;
-                    let name = entry?
-                        .file_name()
-                        .into_string()
-                        .map_err(|_| "v2 nonUTF8 object")?;
+                    let name = entry?;
                     digest(&name)?;
                     if name[..2] != first || name[2..4] != second {
                         return Err("v2 misplaced object name".into());
                     }
-                    let bytes =
-                        read_member(&b, &name, MAX_PAGE_BYTES, self.mount_id, &mut guard, || {
+                    let observed = read_member_observed(
+                        &b,
+                        &name,
+                        MAX_PAGE_BYTES,
+                        self.mount_id,
+                        &mut guard,
+                        || {
                             self.check()?;
                             if !same(&a, &crate::storage::directory(&self.objects, &first)?)?
                                 || !same(&b, &crate::storage::directory(&a, &second)?)?
@@ -823,9 +903,10 @@ impl ObjectStore {
                                 return Err("v2 audited prefix moved".into());
                             }
                             Ok(())
-                        })?;
-                    let file = crate::storage::open(&b, &name, libc::O_RDONLY, 0)?;
-                    let m = file.metadata()?;
+                        },
+                    )?;
+                    let bytes = &observed.bytes;
+                    let m = &observed.before;
                     let complete = !bytes.is_empty() && luma_content::sha256(&bytes) == name;
                     result.regular_files += 1;
                     if result.regular_files > MAX_OBJECTS {
@@ -842,14 +923,21 @@ impl ObjectStore {
                     if !complete {
                         result.incomplete_objects += 1;
                     }
-                    visitor(Allocation {
-                        relative_path: format!("objects/{first}/{second}/{name}"),
-                        device: m.dev(),
-                        inode: m.ino(),
-                        bytes: m.len(),
-                        allocated_bytes: m.blocks() * 512,
-                        complete,
-                    })?;
+                    visitor(
+                        &name,
+                        Allocation {
+                            relative_path: format!("objects/{first}/{second}/{name}"),
+                            device: m.dev(),
+                            inode: m.ino(),
+                            bytes: m.len(),
+                            allocated_bytes: m.blocks() * 512,
+                            complete,
+                        },
+                        bytes,
+                        guard.boundary,
+                    )?;
+                    guard.check()?;
+                    observed.recheck(&b, &name, self.mount_id)?;
                     guard.check()?;
                 }
                 if b_pin != pin(&b.metadata()?)
@@ -875,6 +963,84 @@ impl ObjectStore {
         guard.check()?;
         Ok(result)
     }
+}
+fn object_names<B: Boundary>(
+    directory: &File,
+    canonical_order: bool,
+    maximum: usize,
+    guard: &mut Guard<'_, B>,
+) -> Result<Box<dyn Iterator<Item = Result<String>>>> {
+    if !canonical_order {
+        let entries = fs::read_dir(format!("/proc/self/fd/{}", directory.as_raw_fd()))?;
+        return Ok(Box::new(entries.map(|entry| {
+            Ok(entry?
+                .file_name()
+                .into_string()
+                .map_err(|_| "v2 nonUTF8 object/prefix")?)
+        })));
+    }
+    Ok(Box::new(
+        held_names(directory, maximum, guard)?.into_iter().map(Ok),
+    ))
+}
+fn held_names<B: Boundary>(
+    directory: &File,
+    maximum: usize,
+    guard: &mut Guard<'_, B>,
+) -> Result<Vec<String>> {
+    guard.check()?;
+    let dot = std::ffi::CString::new(".")?;
+    let fd = unsafe {
+        libc::openat(
+            directory.as_raw_fd(),
+            dot.as_ptr(),
+            libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+        )
+    };
+    if fd < 0 {
+        return Err(std::io::Error::last_os_error().into());
+    }
+    let raw = unsafe { libc::fdopendir(fd) };
+    if raw.is_null() {
+        let error = std::io::Error::last_os_error();
+        unsafe { libc::close(fd) };
+        return Err(error.into());
+    }
+    struct Directory(*mut libc::DIR);
+    impl Drop for Directory {
+        fn drop(&mut self) {
+            unsafe { libc::closedir(self.0) };
+        }
+    }
+    let stream = Directory(raw);
+    let mut names = Vec::new();
+    loop {
+        guard.check()?;
+        unsafe { *libc::__errno_location() = 0 };
+        let entry = unsafe { libc::readdir(stream.0) };
+        if entry.is_null() {
+            let error = std::io::Error::last_os_error();
+            if error.raw_os_error() != Some(0) {
+                return Err(error.into());
+            }
+            break;
+        }
+        let bytes = unsafe { std::ffi::CStr::from_ptr((*entry).d_name.as_ptr()) }.to_bytes();
+        if bytes == b"." || bytes == b".." {
+            continue;
+        }
+        if names.len() == maximum || bytes.len() > 64 {
+            return Err("canonical snapshot directory exceeds its finite name profile".into());
+        }
+        guard.read(bytes.len() as u64 + 128)?;
+        names.push(std::str::from_utf8(bytes)?.to_owned());
+    }
+    names.sort_unstable();
+    if names.windows(2).any(|pair| pair[0] == pair[1]) {
+        return Err("canonical snapshot directory repeated a name".into());
+    }
+    guard.check()?;
+    Ok(names)
 }
 fn prefix(value: &str) -> Result<()> {
     if value.len() != 2

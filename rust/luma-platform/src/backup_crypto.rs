@@ -67,6 +67,9 @@ pub(crate) struct Recipients {
 }
 
 impl Recipients {
+    pub(crate) fn pins(&self) -> &RecipientPins {
+        &self.pins
+    }
     pub(crate) fn new(owner: &[u8], offline_admin: &[u8], pins: RecipientPins) -> Result<Self> {
         pins.validate()?;
         for (bytes, pin) in [(owner, &pins.owner), (offline_admin, &pins.offline_admin)] {
@@ -585,7 +588,7 @@ pub(crate) fn encrypt_backup_data(
     encrypt_data(backup.bytes(), backup.sha256(), recipients, boundary)
 }
 
-fn encrypt_data(
+pub(crate) fn encrypt_data(
     data: &[u8],
     archive_sha256: &str,
     recipients: &Recipients,
@@ -599,7 +602,7 @@ fn encrypt_data(
         operation: CryptoOperation::Encrypt,
         input_sha256: archive_sha256.into(),
         input_bytes: data.len() as u64,
-        recipients: recipients.pins.clone(),
+        recipients: recipients.pins().clone(),
     };
     let Output::Encrypted(bytes) = run(data, recipients, None, &request, boundary)? else {
         return Err("backup helper returned a different operation".into());
@@ -665,21 +668,21 @@ pub(crate) fn decrypt_backup_data(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use std::io::{Seek, SeekFrom};
 
     // Only disposable fixtures use this boundary. It is never compiled into an
     // installed adapter and explicitly checks the expected request and budget.
-    struct Guard {
+    pub(crate) struct Guard {
         expected: CryptoRequest,
-        admitted: bool,
+        pub(crate) admitted: bool,
         checks: usize,
         refuse_at: usize,
         refuse_budget: bool,
     }
     impl Guard {
-        fn new(recipients: &Recipients, operation: CryptoOperation, input: &[u8]) -> Self {
+        pub(crate) fn new(recipients: &Recipients, operation: CryptoOperation, input: &[u8]) -> Self {
             Self {
                 expected: CryptoRequest {
                     schema_version: 1,
@@ -798,13 +801,13 @@ mod tests {
         args.iter().map(|s| (*s).into()).collect()
     }
 
-    struct KeyFixture {
-        key: PrivateBuffer,
-        certificate: Vec<u8>,
-        pin: RecipientPin,
+    pub(crate) struct KeyFixture {
+        pub(crate) key: PrivateBuffer,
+        pub(crate) certificate: Vec<u8>,
+        pub(crate) pin: RecipientPin,
     }
     impl KeyFixture {
-        fn new(bits: u32) -> Self {
+        pub(crate) fn new(bits: u32) -> Self {
             Self::with_usage(bits, "critical,keyEncipherment")
         }
         fn with_usage(bits: u32, usage: &str) -> Self {

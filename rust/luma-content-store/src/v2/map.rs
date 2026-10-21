@@ -307,7 +307,7 @@ impl ObjectStore {
     ) -> Result<MapRoot> {
         self.check_root(base)?;
         let mut guard = Guard::new(boundary, &self.binding, budget, None)?;
-        let root = self.edit_map_mode(base, edits, &mut guard, false)?;
+        let root = self.edit_map_mode(base, edits, &mut guard, false, false)?;
         guard.check()?;
         Ok(root)
     }
@@ -354,7 +354,7 @@ impl ObjectStore {
         edits: &[MapEdit],
         guard: &mut Guard<'_, B>,
     ) -> Result<MapRoot> {
-        self.edit_map_mode(base, edits, guard, true)
+        self.edit_map_mode(base, edits, guard, true, false)
     }
     pub(super) fn preview_map_inner<B: Boundary>(
         &self,
@@ -362,7 +362,15 @@ impl ObjectStore {
         edits: &[MapEdit],
         guard: &mut Guard<'_, B>,
     ) -> Result<MapRoot> {
-        self.edit_map_mode(base, edits, guard, false)
+        self.edit_map_mode(base, edits, guard, false, false)
+    }
+    pub(super) fn verify_map_inner<B: Boundary>(
+        &self,
+        base: &MapRoot,
+        edits: &[MapEdit],
+        guard: &mut Guard<'_, B>,
+    ) -> Result<MapRoot> {
+        self.edit_map_mode(base, edits, guard, false, true)
     }
     fn edit_map_mode<B: Boundary>(
         &self,
@@ -370,6 +378,7 @@ impl ObjectStore {
         edits: &[MapEdit],
         guard: &mut Guard<'_, B>,
         persist: bool,
+        require_present: bool,
     ) -> Result<MapRoot> {
         self.check_root(base)?;
         if edits.is_empty() || edits.len() > MAX_MAP_EDITS {
@@ -424,6 +433,13 @@ impl ObjectStore {
             };
             root.entry_count = root.page.as_ref().map_or(0, |p| p.entry_count);
             root.validate()?;
+        }
+        if require_present {
+            for (hash, bytes) in &session.pages {
+                if self.read_object(hash, MAX_PAGE_BYTES, guard)? != *bytes {
+                    return Err("v2 derived map page missing or changed before selection".into());
+                }
+            }
         }
         guard.check()?;
         Ok(root)

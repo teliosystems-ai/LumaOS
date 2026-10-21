@@ -5,6 +5,15 @@ use serde::{Deserialize, Serialize};
 
 const MAX_VALIDITY_MS: i64 = 366 * 86_400_000;
 
+// Quantity ceilings for the closed segmented-snapshot selectors, not new
+// session purposes or authorization. Raw object bytes, complete namespace
+// accounting, per-part encryption, directories and signed framing all count.
+pub(crate) const SNAPSHOT_READ_ID: &str = "native-content-snapshot-read-v1";
+pub(crate) const SNAPSHOT_EXPORT_ID: &str = "native-content-snapshot-export-v1";
+pub(crate) const SNAPSHOT_MAX_READ_BYTES: u64 = 72 * 1024 * 1024 * 1024;
+pub(crate) const SNAPSHOT_MAX_EXPORT_BYTES: u64 = 80 * 1024 * 1024 * 1024;
+pub(crate) const SNAPSHOT_MAX_REVIEW_BYTES: u64 = 32768;
+
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Assignment {
@@ -165,19 +174,31 @@ impl Constraints {
     pub(crate) fn validate(&self, selector: &Selector, action: Action) -> Result<()> {
         // The two compiled GGUF packs exceed one GiB. Their exact import
         // targets may name a larger finite storage peak; this does not widen
-        // file/artifact/export, other resources or generated-code grants.
-        let bytes = if selector.kind == Kind::Resource
+        // ordinary file/artifact/export, other resources or generated-code
+        // grants. Segmented snapshots have their separate exact selectors.
+        let (input, output) = if selector.kind == Kind::File
+            && action == Action::Read
+            && selector.id == SNAPSHOT_READ_ID
+        {
+            (SNAPSHOT_MAX_READ_BYTES, SNAPSHOT_MAX_REVIEW_BYTES)
+        } else if selector.kind == Kind::Artifact
+            && action == Action::Export
+            && selector.id == SNAPSHOT_EXPORT_ID
+        {
+            (SNAPSHOT_MAX_READ_BYTES, SNAPSHOT_MAX_EXPORT_BYTES)
+        } else if selector.kind == Kind::Resource
             && action == Action::AcquireResource
             && matches!(
                 selector.id.as_str(),
                 "ModelPack-qwen3-4b-q4-k-m" | "ModelPack-qwen3-1-7b-q4-k-m"
-            ) {
-            64 * 1024 * 1024 * 1024
+            )
+        {
+            (64 * 1024 * 1024 * 1024, 64 * 1024 * 1024 * 1024)
         } else {
-            1_073_741_824
+            (1_073_741_824, 1_073_741_824)
         };
-        if self.max_input_bytes > bytes
-            || self.max_output_bytes > bytes
+        if self.max_input_bytes > input
+            || self.max_output_bytes > output
             || self.max_units == 0
             || self.max_units > 1_000_000
         {
@@ -421,6 +442,58 @@ impl Use {
 mod tests {
     use super::*;
     use crate::admin_roles::Command;
+    #[test]
+    fn whole_snapshot_limits_are_asymmetric_and_exact_not_generic_grant_uplifts() {
+        let (_, _, mut grant, _) = fixture();
+        grant.action = Action::Read;
+        grant.selector.kind = Kind::File;
+        grant.selector.id = SNAPSHOT_READ_ID.into();
+        grant.constraints.max_input_bytes = SNAPSHOT_MAX_READ_BYTES;
+        grant.constraints.max_output_bytes = SNAPSHOT_MAX_REVIEW_BYTES;
+        assert!(grant.validate().is_ok());
+        grant.constraints.max_output_bytes += 1;
+        assert!(grant.validate().is_err());
+        grant.constraints.max_output_bytes = SNAPSHOT_MAX_REVIEW_BYTES;
+        grant.constraints.max_input_bytes += 1;
+        assert!(grant.validate().is_err());
+        grant.constraints.max_input_bytes = SNAPSHOT_MAX_READ_BYTES;
+        for id in [
+            "native-content-snapshot-read-v2",
+            "native-content-snapshot-read-v1-extra",
+            SNAPSHOT_EXPORT_ID,
+        ] {
+            grant.selector.id = id.into();
+            assert!(grant.validate().is_err());
+        }
+        grant.action = Action::Export;
+        grant.selector.kind = Kind::Artifact;
+        grant.selector.id = SNAPSHOT_EXPORT_ID.into();
+        grant.constraints.max_output_bytes = SNAPSHOT_MAX_EXPORT_BYTES;
+        assert!(grant.validate().is_ok());
+        grant.constraints.max_output_bytes += 1;
+        assert!(grant.validate().is_err());
+        grant.constraints.max_output_bytes = SNAPSHOT_MAX_EXPORT_BYTES;
+        grant.constraints.max_input_bytes += 1;
+        assert!(grant.validate().is_err());
+        grant.constraints.max_input_bytes = SNAPSHOT_MAX_READ_BYTES;
+        for (kind, action, id) in [
+            (Kind::File, Action::Read, SNAPSHOT_EXPORT_ID),
+            (Kind::Artifact, Action::Write, SNAPSHOT_EXPORT_ID),
+            (Kind::Artifact, Action::Retain, SNAPSHOT_EXPORT_ID),
+            (Kind::Artifact, Action::Delete, SNAPSHOT_EXPORT_ID),
+            (Kind::Resource, Action::AcquireResource, SNAPSHOT_EXPORT_ID),
+            (
+                Kind::Artifact,
+                Action::Export,
+                "native-content-backup-export-v1",
+            ),
+        ] {
+            grant.selector.kind = kind;
+            grant.action = action;
+            grant.selector.id = id.into();
+            assert!(grant.validate().is_err());
+        }
+    }
     #[test]
     fn large_pack_byte_limits_are_specific_to_the_exact_import_targets() {
         let (_, _, mut grant, _) = fixture();

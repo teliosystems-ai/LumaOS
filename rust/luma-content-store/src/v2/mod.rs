@@ -1,18 +1,35 @@
 //! Bounded immutable v2 data foundations. These APIs never select a current
-//! content/custody head, authenticate a receipt, migrate an owner or publish an
-//! index. Production callers must independently supply selected roots and a
+//! content/custody head, authenticate a receipt or publish an index. Append,
+//! migration and recovery preparations remain UNSELECTED DATA. Production
+//! callers must independently supply selected roots and a
 //! genuinely live [`crate::Boundary`]. Unselected/partial objects are retained.
 use crate::{Access, Boundary, DecisionKind, ResourceBudget, Result};
 use luma_content::OwnerBinding;
 use serde::{Deserialize, Serialize};
 
+pub mod backup;
+pub mod cursor;
 pub mod custody;
+pub mod custody_map;
+pub mod head;
+pub mod lifecycle;
+pub mod migration;
+pub mod owner;
+pub mod owner_recovery;
+pub mod owner_segment;
+pub mod restore;
+pub use owner::{
+    verify_append_data, AppendCommitment, OwnerBoundary, OwnerPlan, OwnerRepository,
+    PreparedOwnerAppend,
+};
 mod map;
 mod objects;
 mod page;
 mod segment;
 pub use map::{LookupProof, MapEdit, MapRoot};
-pub use objects::{Allocation, BlobReference, ObjectStore, PhysicalInventory};
+pub use objects::{
+    Allocation, BlobReference, ObjectStore, PhysicalInventory, RawObjectScan, RawObjectWindow,
+};
 pub use page::{MapKind, PageRef};
 pub use segment::{SealedSegment, SegmentDescriptor, SegmentInput};
 
@@ -106,9 +123,11 @@ pub(super) struct Guard<'a, B: Boundary> {
     binding: &'a OwnerBinding,
     budget: IoBudget,
     mutation: Option<&'a Mutation>,
+    recovery: Option<(&'a str, u64)>,
     read: u64,
     written: u64,
     files: u32,
+    allocations: PhysicalInventory,
 }
 impl<'a, B: Boundary> Guard<'a, B> {
     fn new(
@@ -117,12 +136,43 @@ impl<'a, B: Boundary> Guard<'a, B> {
         budget: IoBudget,
         mutation: Option<&'a Mutation>,
     ) -> Result<Self> {
+        Self::with_access(boundary, binding, budget, mutation, None)
+    }
+    fn new_recovery(
+        boundary: &'a mut B,
+        binding: &'a OwnerBinding,
+        budget: IoBudget,
+        review_sha256: &'a str,
+        retained_bytes: u64,
+    ) -> Result<Self> {
+        digest(review_sha256)?;
+        if retained_bytes > crate::MAX_REPOSITORY_BYTES {
+            return Err("v2 preparation recovery exceeds retained source profile".into());
+        }
+        Self::with_access(
+            boundary,
+            binding,
+            budget,
+            None,
+            Some((review_sha256, retained_bytes)),
+        )
+    }
+    fn with_access(
+        boundary: &'a mut B,
+        binding: &'a OwnerBinding,
+        budget: IoBudget,
+        mutation: Option<&'a Mutation>,
+        recovery: Option<(&'a str, u64)>,
+    ) -> Result<Self> {
         binding.validate()?;
         budget.validate()?;
         if let Some(value) = mutation {
             value.validate()?;
         }
-        if mutation.is_none() && budget.write_bytes != 0 {
+        if mutation.is_some() && recovery.is_some() {
+            return Err("v2 admission cannot combine mutation and recovery authority".into());
+        }
+        if mutation.is_none() && recovery.is_none() && budget.write_bytes != 0 {
             return Err("read admission cannot reserve v2 writes".into());
         }
         boundary.admit(
@@ -143,9 +193,11 @@ impl<'a, B: Boundary> Guard<'a, B> {
             binding,
             budget,
             mutation,
+            recovery,
             read: 0,
             written: 0,
             files: 0,
+            allocations: PhysicalInventory::default(),
         };
         value.check()?;
         Ok(value)
@@ -163,6 +215,13 @@ impl<'a, B: Boundary> Guard<'a, B> {
                 storage_bytes: self.budget.write_bytes,
             })?;
         }
+        if let Some((review_sha256, retained_bytes)) = self.recovery {
+            self.boundary.check(Access::Recover {
+                binding: self.binding,
+                review_sha256,
+                retained_bytes,
+            })?;
+        }
         Ok(())
     }
     fn read(&mut self, bytes: u64) -> Result<()> {
@@ -175,8 +234,8 @@ impl<'a, B: Boundary> Guard<'a, B> {
     }
     fn write(&mut self, bytes: u64) -> Result<()> {
         self.check()?;
-        if self.mutation.is_none() {
-            return Err("v2 write requires original effect boundary".into());
+        if self.mutation.is_none() && self.recovery.is_none() {
+            return Err("v2 write requires original effect or recovery boundary".into());
         }
         self.written = self.written.checked_add(bytes).ok_or("v2 write overflow")?;
         self.files = self.files.checked_add(1).ok_or("v2 file overflow")?;
@@ -185,7 +244,78 @@ impl<'a, B: Boundary> Guard<'a, B> {
         }
         Ok(())
     }
+    fn allocated_file(&mut self, file: &std::fs::File) -> Result<()> {
+        use std::os::unix::fs::MetadataExt;
+        let metadata = file.metadata()?;
+        self.allocations.regular_files = self
+            .allocations
+            .regular_files
+            .checked_add(1)
+            .ok_or("v2 new inode count overflow")?;
+        self.allocations.logical_bytes = self
+            .allocations
+            .logical_bytes
+            .checked_add(metadata.len())
+            .ok_or("v2 new logical bytes overflow")?;
+        self.allocations.allocated_bytes = self
+            .allocations
+            .allocated_bytes
+            .checked_add(
+                metadata
+                    .blocks()
+                    .checked_mul(512)
+                    .ok_or("v2 new allocated bytes overflow")?,
+            )
+            .ok_or("v2 cumulative allocation overflow")?;
+        self.check()
+    }
+    fn allocated_directory(&mut self, file: &std::fs::File) -> Result<()> {
+        use std::os::unix::fs::MetadataExt;
+        let metadata = file.metadata()?;
+        self.allocations.directories = self
+            .allocations
+            .directories
+            .checked_add(1)
+            .ok_or("v2 new directory count overflow")?;
+        self.allocations.allocated_bytes = self
+            .allocations
+            .allocated_bytes
+            .checked_add(
+                metadata
+                    .blocks()
+                    .checked_mul(512)
+                    .ok_or("v2 directory allocated bytes overflow")?,
+            )
+            .ok_or("v2 directory allocation overflow")?;
+        self.check()
+    }
+    fn directory_growth(
+        &mut self,
+        before: &std::fs::Metadata,
+        after: &std::fs::Metadata,
+    ) -> Result<()> {
+        use std::os::unix::fs::MetadataExt;
+        if before.dev() != after.dev()
+            || before.ino() != after.ino()
+            || before.blocks() > after.blocks()
+        {
+            return Err("v2 directory allocation changed outside append contract".into());
+        }
+        let growth = after
+            .blocks()
+            .checked_sub(before.blocks())
+            .and_then(|n| n.checked_mul(512))
+            .ok_or("v2 directory growth overflow")?;
+        self.allocations.allocated_bytes = self
+            .allocations
+            .allocated_bytes
+            .checked_add(growth)
+            .ok_or("v2 directory allocation total overflow")?;
+        self.check()
+    }
 }
 
+#[cfg(test)]
+mod owner_tests;
 #[cfg(test)]
 mod tests;

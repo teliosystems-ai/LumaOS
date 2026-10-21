@@ -36,6 +36,8 @@ mod bootstrap;
 #[path = "content_custody/capacity.rs"]
 mod capacity;
 pub(crate) use capacity::policy as restore_capacity_policy;
+#[path = "content_custody/format.rs"]
+mod format;
 #[path = "content_custody/genesis.rs"]
 mod genesis;
 #[path = "content_custody/lifecycle.rs"]
@@ -1175,6 +1177,7 @@ impl<A: Checkpoint> Store<A> {
     }
     fn open(mut anchor: A, files: Files, check: &mut impl FnMut() -> Result<()>) -> Result<Self> {
         check()?;
+        format::require_legacy(&files, check)?;
         physical::inspect(&files, check)?;
         files.absent(PREPARED)?;
         files.absent(PUBLISHED)?;
@@ -1204,6 +1207,10 @@ impl<A: Checkpoint> Store<A> {
             return Err("content writer is fenced; exact pending reconciliation required".into());
         }
         check()?;
+        if let Err(error) = format::require_legacy(&self.files, check) {
+            self.poisoned = true;
+            return Err(error);
+        }
         if let Some(expected) = &self.genesis_proof {
             if self.files.read("genesis.json", check)? != *expected {
                 self.poisoned = true;
@@ -1464,30 +1471,59 @@ mod tests {
         let request = recipients::Request {
             schema_version: 1,
             purpose: "luma-content-encryption-recipients-v1".into(),
-            binding: OwnerBinding {installation:installation.clone(),owner:"22".repeat(32),owner_generation:1},
+            binding: OwnerBinding {
+                installation: installation.clone(),
+                owner: "22".repeat(32),
+                owner_generation: 1,
+            },
             expected_generation: 0,
             active: true,
             recipients: RecipientPins {
-                owner: RecipientPin {certificate_sha256:hash(&certificate_a),spki_sha256:"33".repeat(32)},
-                offline_admin: RecipientPin {certificate_sha256:hash(&certificate_b),spki_sha256:"44".repeat(32)},
+                owner: RecipientPin {
+                    certificate_sha256: hash(&certificate_a),
+                    spki_sha256: "33".repeat(32),
+                },
+                offline_admin: RecipientPin {
+                    certificate_sha256: hash(&certificate_b),
+                    spki_sha256: "44".repeat(32),
+                },
             },
             owner_certificate_der_hex: bundle::hex(&certificate_a),
             offline_admin_certificate_der_hex: bundle::hex(&certificate_b),
         };
         request.validate().unwrap();
-        let audit = Audit {subject:"22".repeat(32),subject_generation:1,grant_id:"fixture-recipients".into(),grant_version:1,
-            checkpoint_head:"55".repeat(32),operation_id:Some("66".repeat(16)),
-            usage:Use {action:Action::ProvisionResource,selector:Selector {kind:Kind::Resource,id:"content-backup-recipients-enroll-v1".into(),
-                generation:1,digest:hash(&serde_json::to_vec(&request).unwrap())},input_bytes:recipients::MAX_REQUEST as u64,output_bytes:65536,units:1}};
+        let audit = Audit {
+            subject: "22".repeat(32),
+            subject_generation: 1,
+            grant_id: "fixture-recipients".into(),
+            grant_version: 1,
+            checkpoint_head: "55".repeat(32),
+            operation_id: Some("66".repeat(16)),
+            usage: Use {
+                action: Action::ProvisionResource,
+                selector: Selector {
+                    kind: Kind::Resource,
+                    id: "content-backup-recipients-enroll-v1".into(),
+                    generation: 1,
+                    digest: hash(&serde_json::to_vec(&request).unwrap()),
+                },
+                input_bytes: recipients::MAX_REQUEST as u64,
+                output_bytes: 65536,
+                units: 1,
+            },
+        };
         let enrollment:recipients::Enrollment=serde_json::from_value(serde_json::json!({"schema_version":1,
             "purpose":"luma-content-recipient-custody-enrollment-v1","generation":1,"request":request,"original_authority":audit})).unwrap();
         enrollment.validate(&installation).unwrap();
-        let large=Event::Recipients(enrollment);
-        let original=serde_json::to_vec(&large).unwrap();
-        assert!(original.len()>32*1024);
-        let copied=EventData::parse(&original).unwrap();
-        assert_eq!(copied.canonical_event.as_bytes(),original);
-        assert_eq!(copied.event_sha256().unwrap(),bundle::hex(&large.digest().unwrap()));
+        let large = Event::Recipients(enrollment);
+        let original = serde_json::to_vec(&large).unwrap();
+        assert!(original.len() > 32 * 1024);
+        let copied = EventData::parse(&original).unwrap();
+        assert_eq!(copied.canonical_event.as_bytes(), original);
+        assert_eq!(
+            copied.event_sha256().unwrap(),
+            bundle::hex(&large.digest().unwrap())
+        );
     }
     #[test]
     fn empty_history_is_exact_genesis_not_a_reconstructed_disk_head() {

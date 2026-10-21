@@ -59,6 +59,9 @@ pub(super) struct Enrollment {
     original_authority: Audit,
 }
 impl Enrollment {
+    pub(super) fn audit(&self) -> &Audit {
+        &self.original_authority
+    }
     pub(super) fn public_pin(&self) -> (&str, &str) {
         (&self.spki_der_hex, &self.spki_sha256)
     }
@@ -78,13 +81,13 @@ impl Enrollment {
         if hash(&spki) != self.spki_sha256 {
             return Err("receipt signer enrolled pin differs".into());
         }
-        self.original_authority.validate()?;
+        self.audit().validate()?;
         admin_scope(
             "content-backup-signer-enroll",
-            &self.original_authority.usage,
+            &self.audit().usage,
         )?;
-        if self.original_authority.usage.selector.digest != self.sealed_envelope_sha256
-            || self.original_authority.operation_id.is_none()
+        if self.audit().usage.selector.digest != self.sealed_envelope_sha256
+            || self.audit().operation_id.is_none()
         {
             return Err(
                 "receipt signer enrollment lacks exact original reviewed Admin operation".into(),

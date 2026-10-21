@@ -21,6 +21,9 @@ pub(crate) struct Body {
     original_authority: Audit,
 }
 impl Body {
+    pub(super) fn audit(&self) -> &Audit {
+        &self.original_authority
+    }
     pub(crate) fn message(&self) -> Result<Vec<u8>> {
         self.validate()?;
         let mut bytes = crate::receipt_signer::DOMAIN.to_vec();
@@ -33,7 +36,7 @@ impl Body {
     fn validate(&self) -> Result<()> {
         self.input.validate()?;
         self.source_state.validate()?;
-        self.original_authority.validate()?;
+        self.audit().validate()?;
         digest(&self.checkpoint_before)?;
         digest(&self.origin_spki_sha256)?;
         let public = tpm::decode::<44>(&self.origin_spki_der_hex)?;

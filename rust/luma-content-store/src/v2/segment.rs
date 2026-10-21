@@ -142,7 +142,7 @@ struct RequestValue {
     record_sha256: String,
 }
 
-fn validate_record(
+pub(super) fn validate_record(
     binding: &OwnerBinding,
     input: &SegmentInput<'_>,
     check: &mut impl FnMut() -> Result<()>,
@@ -163,12 +163,23 @@ fn validate_record(
         | (3, Some(crate::SourceKind::ManagedRenderIntent)) => crate::MAX_SOURCE,
         (4, Some(crate::SourceKind::CollectionIntent)) => crate::MAX_COLLECTION_SOURCE_BYTES as u64,
         (5, Some(crate::SourceKind::LifecycleIntent)) => crate::MAX_RECORD,
+        (6, Some(crate::SourceKind::LifecycleIntent)) => crate::MAX_RECORD,
         _ => return Err("v2 canonical outcome schema/source kind invalid".into()),
     };
     identifier(&data.artifact_id)?;
     identifier(&data.provenance.request_id)?;
     digest(&data.provenance.workflow_sha256)?;
-    crate::lifecycle::validate_data(data)?;
+    if record.schema_version == 6 {
+        super::lifecycle::validate_record_data(
+            binding,
+            &record,
+            input.source,
+            input.payload,
+            check,
+        )?;
+    } else {
+        crate::lifecycle::validate_data(data)?;
+    }
     for reference in std::iter::once(&data.resulting)
         .chain(data.observed.iter())
         .chain(data.expected.iter())
@@ -202,6 +213,28 @@ fn validate_record(
         );
     }
     check()?;
+    if data.decision == DecisionKind::ConflictRetained
+        && matches!(
+            data.source_kind,
+            None | Some(crate::SourceKind::CollectionIntent)
+        )
+    {
+        let candidate: luma_content::CapturedContent =
+            canonical(input.payload, crate::MAX_PAYLOAD as usize)?;
+        if candidate.canonical_bytes()? != input.payload
+            || candidate.binding != *binding
+            || candidate.artifact_id != data.artifact_id
+            || candidate.format != data.format
+            || candidate.provenance != data.provenance
+            || candidate.original_bytes != input.source.len() as u64
+        {
+            return Err(
+                "v2 retained external conflict candidate differs from exact source metadata".into(),
+            );
+        }
+        check()?;
+        return Ok(data.provenance.request_id.clone());
+    }
     let version = luma_content::reopen(input.payload, binding)?;
     check()?;
     if version.reference()? != data.resulting

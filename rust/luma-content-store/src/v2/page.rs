@@ -15,6 +15,9 @@ pub enum MapKind {
     Pending,
     Retained,
     Corpus,
+    SegmentMembers,
+    RestoreMappings,
+    RestoreSourceLifecycle,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]

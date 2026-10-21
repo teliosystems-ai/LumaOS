@@ -79,9 +79,12 @@ pub(super) struct Enrollment {
     original_authority: Audit,
 }
 impl Enrollment {
+    pub(super) fn audit(&self) -> &Audit {
+        &self.original_authority
+    }
     pub(super) fn validate(&self, installation: &str) -> Result<()> {
         self.request.validate()?;
-        self.original_authority.validate()?;
+        self.audit().validate()?;
         if self.schema_version != 1
             || self.purpose != "luma-content-recipient-custody-enrollment-v1"
             || self.request.binding.installation != installation
@@ -91,9 +94,9 @@ impl Enrollment {
                     .expected_generation
                     .checked_add(1)
                     .ok_or("recipient generation overflow")?
-            || self.original_authority.operation_id.is_none()
-            || self.original_authority.usage
-                != usage(&self.request, self.original_authority.subject_generation)?
+            || self.audit().operation_id.is_none()
+            || self.audit().usage
+                != usage(&self.request, self.audit().subject_generation)?
         {
             return Err(
                 "recipient custody event differs from its approved original Admin request".into(),

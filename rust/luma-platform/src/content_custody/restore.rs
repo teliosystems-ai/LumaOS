@@ -24,6 +24,18 @@ pub(super) struct Publication {
     batch_review_sha256: String,
 }
 impl Start {
+    pub(super) fn audit(&self) -> &Audit {
+        &self.original_authority
+    }
+    pub(super) fn profile(&self) -> &str {
+        &self.profile
+    }
+    pub(super) fn device(&self) -> &str {
+        &self.storage_device
+    }
+    pub(super) fn receipt(&self) -> &backup::Receipt {
+        &self.receipt
+    }
     pub(super) fn review(&self) -> Result<&RestoreReview> {
         self.input
             .review
@@ -32,10 +44,10 @@ impl Start {
     }
     pub(super) fn validate(&self, installation: &str) -> Result<()> {
         self.input.validate()?;
-        self.original_authority.validate()?;
+        self.audit().validate()?;
         let review = self.review()?;
-        self.receipt
-            .check_data(&self.receipt.body.input, &self.receipt.body.encryption)?;
+        self.receipt()
+            .check_data(&self.receipt().body.input, &self.receipt().body.encryption)?;
         let capacity_valid = match (self.schema_version, &self.capacity) {
             (1, None) => true,
             (2, Some(value)) => value == &super::capacity::Reservation::fixed(),
@@ -64,11 +76,11 @@ impl Start {
             || self.original_authority.subject_generation != self.input.admin.owner_generation
             || self.original_authority.operation_id.is_none()
             || crate::content_restore::profile(&self.input, &serde_json::to_vec(&self.input)?)?
-                != self.profile
-            || self.original_authority.usage
+                != self.profile()
+            || self.audit().usage
                 != crate::content_restore::custody_usage(
-                    &self.profile,
-                    &self.storage_device,
+                    self.profile(),
+                    self.device(),
                     installation,
                 )?
         {

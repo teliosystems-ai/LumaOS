@@ -1774,3 +1774,28 @@ no export, inference, QA, model or repair purpose is borrowed. A separate
 thirty-minute restore purpose remains unapproved, not silently implemented.
 These are remaining development obligations, so neither G3 nor final-media
 readiness is declared complete by this foundation stage.
+
+### Owner migration, recovery and snapshot core, 21 October 2026
+
+The [owner/snapshot checkpoint](gates/g3/nf08_owner_snapshot_2026-10-21.json)
+records 127 passing scoped tests, a warning-denied production workspace check
+and all-target content-store check. The actual private ext4 tests cover
+side-by-side legacy migration, retained pending/quarantine bytes, explicit
+Recover-only retirement, wrong-owner refusal before I/O and chronological
+fresh-owner engine replay with exact collection/lifecycle remapping.
+
+Whole-snapshot scope and origin-receipt data bind the complete manifest,
+reviewed part/object quantities, original Export attribution, source input,
+recipient generation and physical storage identity. A bounded public header
+retains recovery certificates without duplicating the whole manifest. Actual
+CMS/locked-buffer tests use explicit software Standard-window gates. Neither
+those gates nor a valid historical signature supply installed Admin authority.
+The diagnostic native modules are not exposed production endpoints; the
+record states their warning/test-hook scope explicitly.
+
+Native C bootstrap/compatibility, guaranteed physical tails and bounded
+accounting, independent data/allocation observation, actual snapshot signing
+and delivery, complete resumable indexing and workspace routing still need
+development. Newer terminal-completion and static-validation optimization are
+not qualified by this frozen source cut. The 100,000-object/500-ms target remains
+mandatory, Hyper-V remains owner-deferred, and no new final image is declared.

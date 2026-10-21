@@ -113,6 +113,155 @@ enum Operation {
         record: String,
     },
 }
+
+/// Closed source identity carried into C's semantic replay. This is descriptive
+/// data, not a reusable grant, and deliberately has no Deserialize implementation.
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub(super) enum SourcePurpose {
+    Select,
+    RestoreStatus,
+    RestoreStart,
+    RestorePreparation,
+    RestorePublish,
+    BackupPrepare,
+    BackupReceipt,
+    PreparationCut,
+    RecoveryCut,
+    Quarantine,
+    Publish,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub(super) struct TypedOperationSource {
+    pub(super) schema_version: u32,
+    pub(super) request_sha256: String,
+    pub(super) purpose: SourcePurpose,
+    pub(super) profile: String,
+    pub(super) storage_device: String,
+    pub(super) binding: OwnerBinding,
+    pub(super) worker_pid: u32,
+    pub(super) worker_start: u64,
+    pub(super) worker_label: String,
+    pub(super) lease: Token,
+}
+
+impl TypedOperationSource {
+    // Only the fixed-socket handler can construct this after proving the
+    // original confined peer, exact input, finite audit and resource lease.
+    fn authenticated(
+        request: &Request,
+        bytes: &[u8],
+        worker_pid: u32,
+        worker_start: u64,
+        worker_label: &str,
+    ) -> Self {
+        let purpose = match &request.operation {
+            Operation::Select => SourcePurpose::Select,
+            Operation::RestoreStatus { .. } => SourcePurpose::RestoreStatus,
+            Operation::RestoreStart { .. } => SourcePurpose::RestoreStart,
+            Operation::RestorePreparation { .. } => SourcePurpose::RestorePreparation,
+            Operation::RestorePublish { .. } => SourcePurpose::RestorePublish,
+            Operation::BackupPrepare { .. } => SourcePurpose::BackupPrepare,
+            Operation::BackupReceipt { .. } => SourcePurpose::BackupReceipt,
+            Operation::PreparationCut { .. } => SourcePurpose::PreparationCut,
+            Operation::RecoveryCut { .. } => SourcePurpose::RecoveryCut,
+            Operation::Quarantine { .. } => SourcePurpose::Quarantine,
+            Operation::Publish { .. } => SourcePurpose::Publish,
+        };
+        Self {
+            schema_version: 1,
+            request_sha256: hash(bytes),
+            purpose,
+            profile: request.profile.clone(),
+            storage_device: request.storage_device.clone(),
+            binding: request.binding.clone(),
+            worker_pid,
+            worker_start,
+            worker_label: worker_label.into(),
+            lease: request.lease.clone(),
+        }
+    }
+}
+
+/// Ephemeral access to the ORIGINAL authenticated operation. No decoder,
+/// public constructor, clone or stored boolean can manufacture this context.
+pub(super) struct OriginalCOperation<'a> {
+    audit: &'a Audit,
+    source: TypedOperationSource,
+    check: &'a mut dyn FnMut() -> Result<()>,
+}
+
+impl OriginalCOperation<'_> {
+    pub(super) fn audit(&self) -> &Audit {
+        self.audit
+    }
+    pub(super) fn source_binding(&self) -> &TypedOperationSource {
+        &self.source
+    }
+    pub(super) fn check(&mut self) -> Result<()> {
+        (self.check)()
+    }
+}
+
+/// Global Admin control is not an owner operation. It carries no invented
+/// owner, owner generation, worker lease or conversion into an owner boundary.
+#[derive(Clone, Debug, Serialize)]
+pub(super) struct TypedAdminOperationSource {
+    pub(super) schema_version: u32,
+    pub(super) request_sha256: String,
+    pub(super) command: String,
+    pub(super) usage: crate::finite_grants::Use,
+    pub(super) installation: String,
+    pub(super) job: String,
+    pub(super) client_pid: u32,
+    pub(super) client_start: u64,
+    pub(super) client_label: String,
+}
+
+impl TypedAdminOperationSource {
+    fn authenticated(
+        request: &AdminRequest,
+        bytes: &[u8],
+        client_pid: u32,
+        client_start: u64,
+    ) -> Self {
+        Self {
+            schema_version: 1,
+            request_sha256: hash(bytes),
+            command: request.command.clone(),
+            usage: request.usage.clone(),
+            installation: request.installation.clone(),
+            job: request.job.clone(),
+            client_pid,
+            client_start,
+            client_label: "luma-granted-client (enforce)".into(),
+        }
+    }
+}
+
+pub(super) struct OriginalCAdminOperation<'a> {
+    audit: &'a Audit,
+    source: TypedAdminOperationSource,
+    check: &'a mut dyn FnMut() -> Result<()>,
+}
+
+impl OriginalCAdminOperation<'_> {
+    pub(super) fn audit(&self) -> &Audit {
+        self.audit
+    }
+    pub(super) fn source_binding(&self) -> &TypedAdminOperationSource {
+        &self.source
+    }
+    pub(super) fn check(&mut self) -> Result<()> {
+        (self.check)()?;
+        super::admin_scope(&self.source.command, &self.source.usage)?;
+        if self.audit.usage != self.source.usage {
+            return Err("content custody Admin context differs from original finite usage".into());
+        }
+        (self.check)()
+    }
+}
 #[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct Request {
@@ -753,6 +902,21 @@ fn handle(stream: &mut UnixStream) -> Result<()> {
         }
         Ok(())
     };
+    let mut authority = OriginalCOperation {
+        audit: &original,
+        source: TypedOperationSource::authenticated(
+            &request,
+            &bytes,
+            peer.pid as u32,
+            worker_start,
+            worker_label,
+        ),
+        check: &mut live,
+    };
+    authority.check()?;
+    let request_sha256 = authority.source_binding().request_sha256.clone();
+    let original = authority.audit().clone();
+    let mut live = || authority.check();
     let mut store = Store::installed(&mut live)?;
     if store.journal.installation != request.binding.installation {
         return Err("content custody request installation differs from sealed authority".into());
@@ -966,7 +1130,7 @@ fn handle(stream: &mut UnixStream) -> Result<()> {
     let response = Response {
         schema_version: 1,
         result: "ok".into(),
-        request_sha256: hash(&bytes),
+        request_sha256,
         state: cut.current,
         prior_base: cut.prior_base,
         receipt,
@@ -1154,6 +1318,20 @@ fn handle_admin(
         }
         Ok(())
     };
+    let mut authority = OriginalCAdminOperation {
+        audit: &original,
+        source: TypedAdminOperationSource::authenticated(
+            &request,
+            bytes,
+            peer.pid as u32,
+            client_start,
+        ),
+        check: &mut live,
+    };
+    authority.check()?;
+    let request_sha256 = authority.source_binding().request_sha256.clone();
+    let original = authority.audit().clone();
+    let mut live = || authority.check();
     let mut store = Store::installed(&mut live)?;
     if store.journal.installation != request.installation {
         return Err("content custody Admin installation differs from enrolled C authority".into());
@@ -1169,7 +1347,7 @@ fn handle_admin(
     let response = AdminResponse {
         schema_version: 1,
         result: "ok".into(),
-        request_sha256: hash(bytes),
+        request_sha256,
         value,
     };
     let bytes = serde_json::to_vec(&response)?;
@@ -1218,6 +1396,79 @@ pub(crate) fn run() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn ephemeral_source_context_binds_exact_request_and_rechecks_original_guard() {
+        let request = Request {
+            schema_version: 1,
+            profile: format!("content-v1-query-7-{}", "11".repeat(32)),
+            storage_device: "8:1".into(),
+            binding: OwnerBinding {
+                installation: "22".repeat(32),
+                owner: "33".repeat(32),
+                owner_generation: 7,
+            },
+            lease: Token {
+                lease_id: "44".repeat(16),
+                generation: 5,
+                manager_epoch: "55".repeat(16),
+            },
+            operation: Operation::Select,
+        };
+        let bytes = serde_json::to_vec(&request).unwrap();
+        let source = TypedOperationSource::authenticated(
+            &request,
+            &bytes,
+            123,
+            456,
+            "luma-acquisition (enforce)",
+        );
+        assert_eq!(source.request_sha256, hash(&bytes));
+        assert_eq!(source.purpose, SourcePurpose::Select);
+        assert_eq!(source.lease, request.lease);
+        assert_eq!(source.binding, request.binding);
+        let audit = Audit {
+            subject: request.binding.owner.clone(),
+            subject_generation: 7,
+            grant_id: "explicit-fixture-reader".into(),
+            grant_version: 1,
+            checkpoint_head: "66".repeat(32),
+            operation_id: Some("77".repeat(16)),
+            usage: crate::finite_grants::Use {
+                action: crate::finite_grants::Action::Read,
+                selector: crate::finite_grants::Selector {
+                    kind: crate::finite_grants::Kind::File,
+                    id: "explicit-fixture-content".into(),
+                    generation: 7,
+                    digest: "88".repeat(32),
+                },
+                input_bytes: 1,
+                output_bytes: 1,
+                units: 1,
+            },
+        };
+        audit.validate().unwrap();
+        let mut checks = 0;
+        let mut fresh = || -> Result<()> {
+            checks += 1;
+            if checks > 1 {
+                return Err("explicit fixture original operation revoked".into());
+            }
+            Ok(())
+        };
+        let mut authority = OriginalCOperation {
+            audit: &audit,
+            source,
+            check: &mut fresh,
+        };
+        assert_eq!(authority.audit(), &audit);
+        assert_eq!(authority.source_binding().worker_start, 456);
+        authority.check().unwrap();
+        assert!(authority.check().is_err());
+        drop(authority);
+        assert_eq!(checks, 2);
+        // This explicitly constructed fixture tests only source/liveness
+        // composition; it does not assert a PAM, role or resource qualification.
+    }
     #[test]
     fn bounded_transport_refuses_zero_oversized_truncation_and_timeout() {
         for length in [0u32, MAX_FRAME as u32 + 1, 12] {

@@ -228,6 +228,14 @@ pub(super) struct Retirement {
     review: Review,
     original_authority: Audit,
 }
+impl Retirement {
+    pub(super) fn binding(&self) -> &OwnerBinding {
+        &self.review.binding
+    }
+    pub(super) fn audit(&self) -> &Audit {
+        &self.original_authority
+    }
+}
 pub(super) fn principal_unavailable(binding: &OwnerBinding, state: &Validated) -> Result<bool> {
     Ok(state.retired.contains(&owner_key(binding)?))
 }
@@ -237,7 +245,7 @@ pub(super) fn validate_event(
     state: &mut Validated,
 ) -> Result<()> {
     let review = &value.review;
-    let key = owner_key(&review.binding)?;
+    let key = owner_key(value.binding())?;
     let start = state
         .restores
         .get(&key)
@@ -250,10 +258,10 @@ pub(super) fn validate_event(
                 .into(),
         );
     }
-    value.original_authority.validate()?;
-    scope(RETIRE, &value.original_authority.usage)?;
-    if value.original_authority.usage.selector.digest != review.sha256()?
-        || value.original_authority.operation_id.is_none()
+    value.audit().validate()?;
+    scope(RETIRE, &value.audit().usage)?;
+    if value.audit().usage.selector.digest != review.sha256()?
+        || value.audit().operation_id.is_none()
     {
         return Err("retirement event lacks exact original reviewed Admin recovery".into());
     }

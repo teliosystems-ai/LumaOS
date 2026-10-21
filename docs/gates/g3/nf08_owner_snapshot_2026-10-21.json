@@ -1,0 +1,81 @@
+{
+  "schema_version": 1,
+  "recorded_on": "2026-10-21",
+  "status": "owner-migration-recovery-and-snapshot-core-scoped-software-tests-passed",
+  "scope": "Registered unselected storage APIs and diagnostic-only native snapshot data/crypto adapters; not a deployed paged-C endpoint or complete G3 release",
+  "implementation": [
+    "Nine-role OwnerHeadV2 and real capture/edit/table/render/collection/lifecycle planning, immutable active segments, exact read-only semantic reconstruction and held writer acknowledgement",
+    "Bounded side-by-side migration preserves original records, source/reference identities, trash revisions, pending and quarantined bytes; independently selected prefix windows never become authority by deserialization",
+    "Explicit Recover-only pending retirement preserves all original bytes/history and permanently retires request identities; wrong-owner stores refuse before private I/O",
+    "C-specific installation/sealed-genesis paged maps, distinct from owner maps; the deployed legacy C parser fences staged paged namespaces and retains its poison after the namespace disappears",
+    "Separate ephemeral original worker and global Admin proof contexts created by authenticated handlers; neither has an authority decoder or invented owner conversion",
+    "Whole raw namespace snapshot traversal, bounded binary parts and immutable part directories include incomplete evidence without promoting it",
+    "Fresh-owner chronological replay uses real target engines, preserves inert conflicts, remaps version/collection/lifecycle references and independently verifies actual prepared target and auxiliary pages",
+    "Exact Export-only Read/Export pair data, closed asymmetric snapshot quantity ceilings, complete source-request binding and whole-manifest origin receipts",
+    "Bounded package header retains public recovery recipient DER and reconstructs the exact signed source input without duplicating the complete manifest",
+    "Actual isolated CMS encryption/decryption and locked plaintext borrowing are tested under explicit software Standard-window gates; no longer restore session is introduced"
+  ],
+  "verification": {
+    "directory": "/mnt/luma-build/work/g3-owner-20261021-CvwAXwye",
+    "source_files": 810,
+    "source_manifest_sha256": "590389d5d30c72f9a53d7491f887289ae07131120b5c5f4738b65d4352d82363",
+    "runner_sha256": "8c1d877d6ea13794c152c5512dbe6a2118914b9efea0aa41a38d1ab956db1fa1",
+    "production_workspace_warnings_denied_passed": true,
+    "production_workspace_check_log_sha256": "52e98cafd1d8516509d8e639d89d969ece4091717b95a1107992f60578b9057e",
+    "content_store_all_targets_warnings_denied_passed": true,
+    "content_store_check_log_sha256": "8d76a328fc66593de0ca25614445d40e4fb29f9cc1f30061a899bd16d536fb58",
+    "diagnostic_workspace_all_targets_passed": true,
+    "diagnostic_check_log_sha256": "b7d42b8677fe848be321fa99ff577dcae27413e617f04f10956b008b36830efe",
+    "diagnostic_warning": "CmsStage::new is uncalled in this frozen cut; its module and the Standard adapter were included only by explicit test hooks. No warning is suppressed and no production routing is inferred.",
+    "tests": [
+      {"suite": "v2", "passed": 75, "log_sha256": "2b4f11da1e7fd02120bb9f14fac04e9e63f94663b2be3bad1ac60597b832f0ed"},
+      {"suite": "snapshot-scope-and-receipt", "passed": 7, "log_sha256": "ae35f488bc36a96647a70bfe562adf01defe30a86d198c1d574c4a8c33e74b8e"},
+      {"suite": "standard-window-cms", "passed": 3, "log_sha256": "5ee6ddf4c9a52f1a734bddb2072e10ac8fadf9d1de6ba8a31b0667534470c20b"},
+      {"suite": "corpus-index", "passed": 14, "log_sha256": "fd8521f2dc87b3cd9f787127b466cabb551190c1faaaabebcf02f267ba408550"},
+      {"suite": "legacy-custody-integration", "passed": 15, "log_sha256": "3c9f9abba7a6dcc285ae292231b02bb9f70b079fe7e3d6b73091d93e99d8431e"},
+      {"suite": "custody-protocol", "passed": 3, "log_sha256": "154deabb63be47c85f67d405f31c63da64d2375c91020d2180cdd49371dcb2f3"},
+      {"suite": "finite-grants", "passed": 10, "log_sha256": "ca7d177d78a7051641ac8ce8ad748dfcdbdc33a305378da5aa3b2c7e6c56648a"}
+    ],
+    "total_passed": 127,
+    "failed": 0,
+    "ignored": 0,
+    "compiler_memory_limit_bytes": 4294967296,
+    "compiler_memory_peak_bytes": 3806232576,
+    "oom_events": 0,
+    "swap_limit_bytes": 0,
+    "cpu_limit": 2,
+    "task_limit": 128,
+    "network": "none",
+    "storage": "Disposable private ext4 on drive D",
+    "authority": "Explicit software fixtures, not installed PAM, real grants, independently enrolled C or a physical TPM",
+    "standard_revocation_precision": "This cut proves refusal and no plaintext delivery; it does not establish that revocation occurred after actual child protocol entry. Later diagnostic instrumentation is outside this source cut.",
+    "v2_suite_unoptimized_seconds": 680.78,
+    "timing_is_not_native_window_or_nf08_qualification": true
+  },
+  "retained_attempts": [
+    {"directory": "/mnt/luma-build/work/g3-owner-20261021-8ADqK9xD", "result": "Initial 54 v2 tests passed; legacy test fixture failed with cross-device rename and was corrected without changing production checks"},
+    {"directory": "/mnt/luma-build/work/g3-owner-20261021-WkIpyADk", "result": "Strict all-target workspace passed; 65 v2 passed and two migration fixtures failed. Corrected deterministic inode budget and setup ordering preserve production pending fences."},
+    {"directory": "/mnt/luma-build/work/g3-owner-20261021-f8EjB4Wa", "result": "Unregistered native-bootstrap diagnostic failed borrow checking before runtime tests; this is separate unfinished development, not part of the passed native adapter scope"}
+  ],
+  "verified_source_join": {
+    "report": "/mnt/luma-build/work/g3-owner-20261021-CvwAXwye/staged-verified-source.json",
+    "report_sha256": "84eabd09a7e824845eb63ba0e1da58d32f6b5c772425ea1512804d660adf6a0a",
+    "selected_rust_files": 50,
+    "selection": "Registered v2 core and passed platform changes/adapters only; native paged publisher, index job, terminal completion and newer optimization source excluded",
+    "staged_bytes_match_frozen_manifest": true,
+    "diagnostic_main_and_windowed_module_hooks_not_staged": true,
+    "newer_parallel_working_tree_changes_preserved": true
+  },
+  "remaining_development": [
+    "Deployed paged C bootstrap/initial retirement-resumption and every legacy Admin/restore compatibility route",
+    "Genuinely preallocated publication and terminal storage, bounded physical accounting, independent allocation/data observation and one-dispatch reconciliation",
+    "Native owner migration/publication, segmented snapshot attestation/package delivery and original Standard restore job integration",
+    "Explicit restore terminal completion and immutable-validation CPU optimization are newer source, outside this verified cut",
+    "Resumable complete index build, optimized query, independent C generation selection and actual workspace routing",
+    "The native 100000-object workload and P95 first result at most500ms remain a required implementation/optimization and qualification target",
+    "Fresh native disk/optical media and installed native/Windows qualification; existing artifacts are unchanged"
+  ],
+  "hyper_v": "Owner-deferred development, not passed",
+  "g3_complete": false,
+  "new_final_image_produced": false
+}

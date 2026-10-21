@@ -1,7 +1,7 @@
 # ADR-0014: Segmented content and index generations
 
-- Status: **Partially implemented data foundations; native integration and qualification remain open**
-- Date: 2026-10-20
+- Status: **Owner and snapshot core implemented; native integration and qualification remain open**
+- Date: 2026-10-21
 - Owners: storage, security/custody, platform, desktop and QA
 - Extends: ADR-0003, ADR-0004, ADR-0010 and the existing independent content custody contract
 - Scope: native G3 NF08, with inherited artifact, lifecycle, backup and recovery guarantees
@@ -13,7 +13,7 @@ requires: “P95 first results at most 500 ms on 100,000 indexed objects”. Its
 acceptance covers ACL-filtered text and semantic queries, excluding model
 synthesis. The development plan assigns NF08 to G3; it is not deferred.
 
-Current owner-generation content storage permits 256 committed outcomes and
+The deployed v1 owner-generation content storage permits 256 committed outcomes and
 64 MiB, separately from 16 pending preparations. All published versions,
 conflicts and no-change outcomes consume that committed history. Reads rebuild
 and verify the whole history under an exclusive repository lock. Owner-local
@@ -29,11 +29,55 @@ remove these coupled constraints safely.
 This decision defines a new format and implementation direction. Public,
 unselected v2 storage/custody and corpus-index data APIs now implement the
 bounded format foundations; their verification is recorded separately from
-native integration. They do not select a product head, perform a migration,
-authenticate a builder or create a deployed native endpoint. This decision
+native integration. They do not select a product head, activate a migrated
+owner, authenticate a builder or create a deployed native endpoint. This decision
 reports neither NF08 completion nor a measured 500 ms result. Existing v1
 bytes, limits, receipts, parsers, grants and recovery paths remain independently
 supported.
+
+## Implemented core behavior
+
+`OwnerHeadV2` binds all nine authoritative map roles, aggregate history,
+migration provenance and physical accounting. `OwnerRepository` requires a
+fresh independently selected head and physical-accounting boundary. It plans
+and prepares real capture, external edit, table/render, collection and
+lifecycle operations, independently replays their semantic/map changes, and
+retains the owner writer lock through publication acknowledgement. Its
+immutable active segment extends one outcome at a time and rotates at the
+declared outcome or byte limit; a single write does not consume an entire
+segment slot. The v2 lifecycle schema supports global revisions without
+changing the v1 parser or its bounds.
+
+C maps have a separate installation/sealed-genesis binding and closed roles;
+they do not manufacture an owner identity for global custody. The installed
+legacy C parser now refuses any staged `paged-v3` namespace, including an
+empty or damaged migration. A writer that observes it stays fenced even if
+the directory later disappears. Original worker and Admin operations retain
+separate ephemeral proof contexts created by the authenticated socket handlers.
+
+Snapshot review and export traverse the complete held object namespace in
+bounded windows, including incomplete retained objects. Binary-framed parts
+and bounded directory pages bind the exact reviewed stream and whole owner
+head. The native origin signer and deployed CMS/restore adapters still need
+to join these core APIs before they form an authenticated product backup.
+Only the exact snapshot Read/Export selectors have larger finite byte
+ceilings; ordinary grants and the thirty-second restore purpose are unchanged.
+
+The map cursor verifies the saved key's exact rank against the current selected
+root before returning at most 256 ordered values. Root, rank, missing-key and
+revocation checks prevent continuation from silently changing coverage. This
+is the bounded traversal needed by an indexing job, not an implemented native
+resumable builder or permission to resume one.
+
+The expanded [owner/snapshot execution record](../gates/g3/nf08_owner_snapshot_2026-10-21.json)
+records 75 passing v2 tests and 52 scoped platform/index regressions, with
+warning-denied production workspace and content-store all-target checks.
+Side-by-side migration and chronological fresh-owner replay now perform real
+immutable storage and engine work under explicit software boundaries. Their
+native C activation, snapshot attestation/delivery and Standard-window job
+adapters remain development. Newer terminal-completion and CPU optimization
+sources are separate from that verified cut. Fixed-builder admission,
+optimized indexed query and workspace integration also remain open.
 
 ## Authority and format boundary
 

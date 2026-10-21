@@ -332,6 +332,38 @@ fn complete_actual_map_lexical_and_ranking_and_whole_ascii_boundaries() {
 }
 
 #[test]
+fn bounded_ranking_preserves_full_counts_and_exact_prefixes_on_actual_store() {
+    let (_fixture, store, root, mut sources) = setup(&[
+        "alpha beta alpha",
+        "alpha beta",
+        "alpha beta",
+        "alpha gamma gamma",
+    ]);
+    let built = build(&store, &root, &mut sources);
+    let (index, mut guard) = open(&store, &built);
+    for kind in [CorpusQueryKind::LexicalAnd, CorpusQueryKind::FeatureLsa] {
+        let full = index
+            .query(&store, kind, "alpha", 64, limits(false), &mut guard)
+            .unwrap();
+        assert_eq!(full.total_matches, 4);
+        assert!(!full.truncated);
+        for limit in [1, 2, 3] {
+            let current = index
+                .query(&store, kind, "alpha", limit, limits(false), &mut guard)
+                .unwrap();
+            assert_eq!(current.total_matches, full.total_matches);
+            assert!(current.truncated);
+            assert_eq!(current.matches, full.matches[..limit]);
+        }
+        guard.deny_after_candidates = Some(guard.candidate_checks + 1);
+        assert!(index
+            .query(&store, kind, "alpha", 1, limits(false), &mut guard)
+            .is_err());
+        guard.deny_after_candidates = None;
+    }
+}
+
+#[test]
 fn deterministic_full_source_build_and_actual_semantic_coordinates() {
     let (_fixture, store, root, mut sources) = setup(&[
         "apple fruit orchard",

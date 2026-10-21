@@ -103,6 +103,25 @@ pub struct PhysicalInventory {
     pub incomplete_objects: u64,
 }
 
+/// Non-serializable observation of the SAME held immutable page read. It is
+/// only an identity/integrity cache pin, never a current-root or read grant.
+pub struct PageObservation {
+    binding: OwnerBinding,
+    root: (u64, u64),
+    mount_id: u64,
+    hash: String,
+    observed: (PinForSnapshot, u64, u32, u32, u64),
+}
+/// Actual same-operation measurements, not a signed worker witness or authority
+/// to release C reservations. Existing unmeasured APIs retain their old limits.
+pub struct PageWriteMeasurement {
+    pub sha256: String,
+    pub read_bytes: u64,
+    pub logical_written_bytes: u64,
+    pub new_inodes: u32,
+    pub allocation: PhysicalInventory,
+}
+
 /// Held same-ext4 immutable-object namespace. Opening it does not select any
 /// map, establish current custody, initialize an absent owner or authorize GC.
 pub struct ObjectStore {
@@ -587,6 +606,37 @@ impl ObjectStore {
         guard.check()?;
         Ok(hash)
     }
+    /// Opt-in measured construction under the full BEFORE-I/O finite reserve.
+    /// An exceeded real allocation cap withholds success but retains files and
+    /// the original admission reservation; no failed attempt is silently free.
+    pub fn prepare_page_measured(
+        &self,
+        bytes: &[u8],
+        budget: IoBudget,
+        mutation: &Mutation,
+        maximum_allocated_bytes: u64,
+        boundary: &mut impl Boundary,
+    ) -> Result<PageWriteMeasurement> {
+        if maximum_allocated_bytes == 0 || maximum_allocated_bytes > budget.write_bytes {
+            return Err("measured page cap exceeds its original finite storage reserve".into());
+        }
+        let mut guard = Guard::new(boundary, &self.binding, budget, Some(mutation))?;
+        let hash = self.write_object(bytes, &mut guard)?;
+        if guard.allocations.allocated_bytes > maximum_allocated_bytes {
+            return Err(
+                "actual page allocation exceeds reviewed cap; preserve preparation and reservation"
+                    .into(),
+            );
+        }
+        guard.check()?;
+        Ok(PageWriteMeasurement {
+            sha256: hash,
+            read_bytes: guard.read,
+            logical_written_bytes: guard.written,
+            new_inodes: guard.files,
+            allocation: guard.allocations,
+        })
+    }
     pub fn read_page(
         &self,
         sha256: &str,
@@ -597,6 +647,90 @@ impl ObjectStore {
         let bytes = self.read_object(sha256, MAX_PAGE_BYTES, &mut guard)?;
         guard.check()?;
         Ok(bytes)
+    }
+    /// Captures exact metadata from the held descriptor that supplied bytes;
+    /// there is no second-file identity adoption after the private read.
+    pub fn read_page_observed(
+        &self,
+        hash: &str,
+        budget: IoBudget,
+        boundary: &mut impl Boundary,
+    ) -> Result<(Vec<u8>, PageObservation)> {
+        digest(hash)?;
+        if budget.write_bytes != 0 || budget.new_files != 0 {
+            return Err("page observation requires read-only admission".into());
+        }
+        let mut guard = Guard::new(boundary, &self.binding, budget, None)?;
+        self.check()?;
+        let leaf = self.leaf(hash, false, &mut guard)?;
+        let value = read_member_observed(
+            &leaf.second,
+            hash,
+            MAX_PAGE_BYTES,
+            self.mount_id,
+            &mut guard,
+            || leaf.check(self),
+        )?;
+        if value.bytes.is_empty() || luma_content::sha256(&value.bytes) != hash {
+            return Err("observed immutable page content differs from exact hash".into());
+        }
+        value.recheck(&leaf.second, hash, self.mount_id)?;
+        let root = self.root.metadata()?;
+        let observation = PageObservation {
+            binding: self.binding.clone(),
+            root: (root.dev(), root.ino()),
+            mount_id: self.mount_id,
+            hash: hash.into(),
+            observed: observed_pin(&value.before),
+        };
+        leaf.check(self)?;
+        guard.check()?;
+        Ok((value.bytes, observation))
+    }
+    /// Brackets exact named file/mount/ctime AND content checks with fresh
+    /// original access. Metadata clocks are not cryptographic immutability.
+    pub fn check_page_observation(
+        &self,
+        observation: &PageObservation,
+        budget: IoBudget,
+        boundary: &mut impl Boundary,
+    ) -> Result<u64> {
+        let root = self.root.metadata()?;
+        if observation.binding != self.binding
+            || observation.root != (root.dev(), root.ino())
+            || observation.mount_id != self.mount_id
+        {
+            return Err("page observation belongs to another held owner namespace".into());
+        }
+        if budget.write_bytes != 0 || budget.new_files != 0 {
+            return Err("cached page verification requires read-only admission".into());
+        }
+        let mut guard = Guard::new(boundary, &self.binding, budget, None)?;
+        let leaf = self.leaf(&observation.hash, false, &mut guard)?;
+        let named = crate::storage::open(&leaf.second, &observation.hash, libc::O_RDONLY, 0)?;
+        crate::storage::check_private(&named, false)?;
+        if observed_pin(&named.metadata()?) != observation.observed
+            || mount(&named)? != observation.mount_id
+        {
+            return Err("cached page identity, mount or modification time changed".into());
+        }
+        let value = read_member_observed(
+            &leaf.second,
+            &observation.hash,
+            MAX_PAGE_BYTES,
+            self.mount_id,
+            &mut guard,
+            || leaf.check(self),
+        )?;
+        if observed_pin(&value.before) != observation.observed
+            || luma_content::sha256(&value.bytes) != observation.hash
+        {
+            return Err("cached page content or held-read identity changed".into());
+        }
+        value.recheck(&leaf.second, &observation.hash, self.mount_id)?;
+        leaf.check(self)?;
+        guard.check()?;
+        Ok(guard.read)
     }
     pub(super) fn put_blob<B: Boundary>(
         &self,

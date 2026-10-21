@@ -1,5 +1,8 @@
 use super::*;
 const ROWS: usize = 32;
+#[cfg(test)]
+#[path = "directory/tests.rs"]
+mod tests;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
@@ -202,6 +205,14 @@ fn get(
     pages: &mut impl SnapshotPages,
     check: &mut impl FnMut() -> Result<()>,
 ) -> Result<Body> {
+    Ok(get_page(intent, reference, pages, check)?.0)
+}
+fn get_page(
+    intent: &SnapshotIntent,
+    reference: &PartDirectoryRef,
+    pages: &mut impl SnapshotPages,
+    check: &mut impl FnMut() -> Result<()>,
+) -> Result<(Body, Vec<u8>)> {
     reference.validate()?;
     check()?;
     let bytes = pages.read_page(&reference.sha256, check)?;
@@ -220,7 +231,7 @@ fn get(
         return Err("snapshot directory owner/intent/span differs".into());
     }
     check()?;
-    Ok(page.body)
+    Ok((page.body, bytes))
 }
 pub(super) struct Builder {
     parts: Vec<PartCommitment>,
@@ -312,29 +323,77 @@ impl WholeSnapshotManifest {
         pages: &mut impl SnapshotPages,
         check: &mut impl FnMut() -> Result<()>,
     ) -> Result<()> {
+        self.visit_directory(pages, check, &mut |_, check| check())
+    }
+    /// Visits the actual canonical pages and their committed parts in packed
+    /// depth-first preorder. All spans, hashes, intent, part packing and final
+    /// coverage are verified using the same codec as selected part reads.
+    /// Events are inert DATA, not origin authentication or permission to retain
+    /// bytes. No complete result is returned after any failed visitor/check.
+    pub fn visit_directory(
+        &self,
+        pages: &mut impl SnapshotPages,
+        check: &mut impl FnMut() -> Result<()>,
+        visitor: &mut impl FnMut(
+            SnapshotDirectoryEntry<'_>,
+            &mut dyn FnMut() -> Result<()>,
+        ) -> Result<()>,
+    ) -> Result<()> {
         self.validate()?;
+        let mut capacity = ROWS as u64;
+        let mut height = 0;
+        while u64::from(self.part_count) > capacity {
+            capacity *= ROWS as u64;
+            height += 1;
+        }
+        if self.parts.height != height {
+            return Err("snapshot directory root is not minimally packed".into());
+        }
         let mut next = 0_u32;
         let mut previous = None;
         let mut objects = 0_u64;
+        let mut pages_seen = 0_u32;
+        let mut page_bytes = 0_u64;
         walk(
             &self.intent,
             &self.parts,
+            self.part_count,
             pages,
             check,
-            &mut |part, check| {
+            &mut |entry, check| {
                 check()?;
-                if part.number != next || part.previous_plaintext_sha256 != previous {
-                    return Err("whole snapshot reordered/substituted a part chain".into());
+                match entry {
+                    SnapshotDirectoryEntry::Page { bytes, .. } => {
+                        pages_seen = pages_seen.checked_add(1).ok_or("directory page overflow")?;
+                        page_bytes = page_bytes
+                            .checked_add(bytes.len() as u64)
+                            .ok_or("directory bytes overflow")?;
+                        if pages_seen > MAX_SNAPSHOT_DIRECTORY_PAGES
+                            || page_bytes > MAX_SNAPSHOT_DIRECTORY_BYTES
+                        {
+                            return Err(
+                                "canonical directory exceeds bounded page reservation".into()
+                            );
+                        }
+                    }
+                    SnapshotDirectoryEntry::Part(part) => {
+                        if part.number != next || part.previous_plaintext_sha256 != previous {
+                            return Err("whole snapshot reordered/substituted a part chain".into());
+                        }
+                        if part.objects != self.expected_part_objects(part.number)? {
+                            return Err(
+                                "whole snapshot loses canonical fixed-size object packing".into()
+                            );
+                        }
+                        next += 1;
+                        objects = objects
+                            .checked_add(u64::from(part.objects))
+                            .ok_or("whole snapshot object overflow")?;
+                        previous = Some(part.plaintext_sha256.clone());
+                    }
                 }
-                if part.objects != self.expected_part_objects(part.number)? {
-                    return Err("whole snapshot loses canonical fixed-size object packing".into());
-                }
-                next += 1;
-                objects = objects
-                    .checked_add(u64::from(part.objects))
-                    .ok_or("whole snapshot object overflow")?;
-                previous = Some(part.plaintext_sha256.clone());
-                Ok(())
+                visitor(entry, check)?;
+                check()
             },
         )?;
         if next != self.part_count
@@ -375,24 +434,53 @@ impl WholeSnapshotManifest {
             .min(MAX_PART_OBJECTS as u64) as u32)
     }
 }
+/// Borrowed canonical directory DATA. The walker retains at most one bounded
+/// page per level; callers must separately account any copies they retain.
+#[derive(Clone, Copy)]
+pub enum SnapshotDirectoryEntry<'a> {
+    Page {
+        reference: &'a PartDirectoryRef,
+        bytes: &'a [u8],
+    },
+    Part(&'a PartCommitment),
+}
 fn walk(
     intent: &SnapshotIntent,
     reference: &PartDirectoryRef,
+    total_parts: u32,
     pages: &mut impl SnapshotPages,
     check: &mut impl FnMut() -> Result<()>,
-    visitor: &mut impl FnMut(&PartCommitment, &mut dyn FnMut() -> Result<()>) -> Result<()>,
+    visitor: &mut impl FnMut(SnapshotDirectoryEntry<'_>, &mut dyn FnMut() -> Result<()>) -> Result<()>,
 ) -> Result<()> {
-    match get(intent, reference, pages, check)? {
+    reference.validate()?;
+    let span = (ROWS as u64).pow(u32::from(reference.height) + 1);
+    if u64::from(reference.first) % span != 0
+        || reference.first >= total_parts
+        || u64::from(reference.count) != span.min(u64::from(total_parts - reference.first))
+    {
+        return Err("snapshot directory does not use canonical full nonfinal spans".into());
+    }
+    let (body, bytes) = get_page(intent, reference, pages, check)?;
+    check()?;
+    visitor(
+        SnapshotDirectoryEntry::Page {
+            reference,
+            bytes: &bytes,
+        },
+        check,
+    )?;
+    check()?;
+    match body {
         Body::Leaf { parts } => {
             for part in parts {
                 check()?;
-                visitor(&part, check)?;
+                visitor(SnapshotDirectoryEntry::Part(&part), check)?;
                 check()?;
             }
         }
         Body::Branch { children } => {
             for child in children {
-                walk(intent, &child, pages, check, visitor)?;
+                walk(intent, &child, total_parts, pages, check, visitor)?;
             }
         }
     }

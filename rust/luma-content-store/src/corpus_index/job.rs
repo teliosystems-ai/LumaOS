@@ -4,6 +4,7 @@
 //! require the independently implemented live boundary below.
 use super::*;
 use crate::v2::cursor::{MapCursor, MapCursorBoundary};
+pub mod statistics;
 
 const DOMAIN: &str = "luma-corpus-ingestion-v1";
 pub const MAX_INGEST_DOCUMENTS: usize = 4;
@@ -315,24 +316,50 @@ struct RunReader<'a, 'b, B: CorpusIndexJobBoundary> {
     live: &'b mut Live<'a, B>,
     maximum: u64,
     read: u64,
-    cache: BTreeMap<String, RunPage>,
+    cache: BTreeMap<String, CachedRunPage>,
     first_document: u32,
     records: Vec<CorpusRecord>,
 }
+struct CachedRunPage {
+    page: RunPage,
+    observation: crate::v2::PageObservation,
+}
 impl<B: CorpusIndexJobBoundary> RunReader<'_, '_, B> {
     fn get(&mut self, hash: &str) -> Result<RunPage> {
+        self.live.current()?;
         if let Some(value) = self.cache.get(hash) {
-            return Ok(value.clone());
+            if self
+                .read
+                .checked_add(RUN_PAGE_READ)
+                .map_or(true, |n| n > self.maximum)
+            {
+                return Err("finite cached-run content verification allowance exhausted".into());
+            }
+            let used = self.store.check_page_observation(
+                &value.observation,
+                IoBudget {
+                    read_bytes: RUN_PAGE_READ,
+                    write_bytes: 0,
+                    new_files: 0,
+                },
+                self.live,
+            )?;
+            self.read = self
+                .read
+                .checked_add(used)
+                .ok_or("cached run read overflow")?;
+            self.live.current()?;
+            return Ok(value.page.clone());
         }
-        self.read = self
+        let upper = self
             .read
             .checked_add(RUN_PAGE_READ)
             .ok_or("run read overflow")?;
-        if self.read > self.maximum {
+        if upper > self.maximum || self.cache.len() >= 256 {
             return Err("finite ingestion-run read allowance exhausted".into());
         }
         self.live.current()?;
-        let bytes = self.store.read_page(
+        let (bytes, observation) = self.store.read_page_observed(
             hash,
             IoBudget {
                 read_bytes: RUN_PAGE_READ,
@@ -342,13 +369,23 @@ impl<B: CorpusIndexJobBoundary> RunReader<'_, '_, B> {
             self.live,
         )?;
         let value: RunPage = decode(&bytes, MAX_INDEX_PAGE_BYTES)?;
+        self.read = self
+            .read
+            .checked_add(bytes.len() as u64 + 1)
+            .ok_or("run read overflow")?;
         if value.schema_version != 1
             || value.domain != DOMAIN
             || value.request_sha256 != self.live.request.sha256()?
         {
             return Err("ingestion run page substitutes builder/request domain".into());
         }
-        self.cache.insert(hash.into(), value.clone());
+        self.cache.insert(
+            hash.into(),
+            CachedRunPage {
+                page: value.clone(),
+                observation,
+            },
+        );
         Ok(value)
     }
     fn range(
@@ -444,6 +481,35 @@ pub fn read_ingest_run_window<B: CorpusIndexJobBoundary>(
     budget: IoBudget,
     b: &mut B,
 ) -> Result<IngestRunWindow> {
+    read_ingest_run_cached(
+        store,
+        request,
+        ingested,
+        run,
+        after,
+        maximum,
+        budget,
+        b,
+        &mut BTreeMap::new(),
+    )
+}
+
+// A cache is local to ONE separately admitted statistics window. Its immutable
+// hash-bound bytes never constitute a saved cursor or selected-job permission.
+fn read_ingest_run_cached<B: CorpusIndexJobBoundary>(
+    store: &ObjectStore,
+    request: &IngestRequest,
+    ingested: &IngestProgress,
+    run: &RunRef,
+    after: u64,
+    maximum: usize,
+    budget: IoBudget,
+    b: &mut B,
+    cache: &mut BTreeMap<String, CachedRunPage>,
+) -> Result<IngestRunWindow> {
+    // Any refusal poisons this ephemeral cache, including a failure before the
+    // first file read or before admission has refreshed original authority.
+    let captured_cache = std::mem::take(cache);
     request.validate()?;
     ingested.validate(request)?;
     run.validate(request)?;
@@ -481,7 +547,7 @@ pub fn read_ingest_run_window<B: CorpusIndexJobBoundary>(
         live: &mut live,
         maximum: budget.read_bytes,
         read: 0,
-        cache: BTreeMap::new(),
+        cache: captured_cache,
         first_document: run.first,
         records: Vec::new(),
     };
@@ -550,7 +616,7 @@ pub fn read_ingest_run_window<B: CorpusIndexJobBoundary>(
         _ => return Err("ingestion posting root does not match run total".into()),
     }
     reader.live.current()?;
-    Ok(IngestRunWindow {
+    let result = IngestRunWindow {
         previous,
         entries: entries
             .into_iter()
@@ -559,7 +625,9 @@ pub fn read_ingest_run_window<B: CorpusIndexJobBoundary>(
         next_offset: after + count,
         complete: after + count == run.postings,
         read_bytes: reader.read,
-    })
+    };
+    *cache = reader.cache;
+    Ok(result)
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]

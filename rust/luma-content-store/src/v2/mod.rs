@@ -28,7 +28,8 @@ mod page;
 mod segment;
 pub use map::{LookupProof, MapEdit, MapRoot};
 pub use objects::{
-    Allocation, BlobReference, ObjectStore, PhysicalInventory, RawObjectScan, RawObjectWindow,
+    Allocation, BlobReference, ObjectStore, PageObservation, PageWriteMeasurement,
+    PhysicalInventory, RawObjectScan, RawObjectWindow,
 };
 pub use page::{MapKind, PageRef};
 pub use segment::{SealedSegment, SegmentDescriptor, SegmentInput};

@@ -1,0 +1,69 @@
+{
+  "schema_version": 1,
+  "recorded_on": "2026-10-21",
+  "status": "registered-core-tests-passed-native-diagnostics-not-passed",
+  "scope": "Only the registered content-store APIs listed in the staged-source report; not the complete frozen native source or a product endpoint",
+  "implementation": [
+    "Resumable sixteen-way reduction of exact immutable ingestion runs, at most4096 output postings per merge window, bounded append frontier, and linear document-frequency/top512 feature selection",
+    "Every statistics window independently reconstructs source coverage, sorted output and new physical pages before selected acknowledgement; completed statistics is not a completed semantic index",
+    "Exact top64 ranking retains complete positive-match counts and deterministic score/ordinal ordering without a corpus-sized ranking vector",
+    "Same-read private page observations revalidate actual content SHA and held/named metadata under fresh original access; caching saves parsing, not cryptographic integrity or authorization checks",
+    "An opt-in page preparation API exposes actual guarded logical writes and file/directory allocation measurements as data, not a deployed native allocation witness",
+    "Canonical snapshot directory traversal emits validated pages and parts in deterministic order, including actual33-part and1025-part tree fixtures"
+  ],
+  "verification": {
+    "directory": "/mnt/luma-build/work/g3-owner-20261021-D7d4TBCp",
+    "source_files": 829,
+    "source_manifest_sha256": "07b2a65275b0b975e9f74f89eefb87e3604bec950811c735a4b8756ebeb25048",
+    "runner_sha256": "724183ff69c7633b69de9899814322333e5fa4722370eb39cd4241ca343ba4c6",
+    "tests": [
+      {"suite": "v2", "passed": 81, "log_sha256": "6bb10f963b551fad2a0ae352ded6a60cf2c9bb603002a6b556116f7410a6793f"},
+      {"suite": "corpus-index", "passed": 34, "log_sha256": "82f18980dd67d89bf5fbdb2c298abac987a00928ac5df326222c91999fbe3ef4"}
+    ],
+    "scoped_passed": 115,
+    "scoped_failed": 0,
+    "scoped_ignored": 0,
+    "production_workspace_warnings_denied_passed": true,
+    "production_workspace_log_sha256": "4d832e5e37c5ab8f2691dab03101e815e5b07ac4a3b792c5e4498644cdfa10a9",
+    "content_store_all_targets_warnings_denied_passed": true,
+    "content_store_log_sha256": "6d74fecd376b08586a54c3d9eb32df271df3bc5b2fac8cf0da7397f1b09a2bd3",
+    "compiler_memory_limit_bytes": 4294967296,
+    "scoped_test_memory_peak_bytes": 2367946752,
+    "oom_events": 0,
+    "swap_limit_bytes": 0,
+    "network": "none",
+    "storage": "Disposable private ext4 on drive D",
+    "authority": "Explicit software boundaries; no native grants, enrolled production C or physical TPM qualification",
+    "scalar_ranking_fixture_is_not_100000_native_objects_or_nf08_latency": true,
+    "complete_frozen_native_sweep_passed": false
+  },
+  "excluded_native_failure": {
+    "suite": "native-diagnostic-publisher",
+    "passed": 15,
+    "failed": 9,
+    "ignored": 0,
+    "log_sha256": "bc6d8242baaf2979933d6d0140ab58f505572259532ea7f144f4545476528335",
+    "cause": "Eight actual fault fixtures used an unsafe temporary ancestor and were correctly refused before NV; the location replay verifier ambiguously keyed repeated payload hashes instead of ordered exact physical witnesses",
+    "corrections": "Later source moves fixtures to the protected ext4 test root and consumes ordered full seal-call witnesses; those corrections are outside this core-only verified cut",
+    "native_publisher_and_protocol_changes_not_staged": true
+  },
+  "verified_source_join": {
+    "report": "/mnt/luma-build/work/g3-owner-20261021-D7d4TBCp/staged-index-source.json",
+    "report_sha256": "36b825dd5afead0a01a575da02a8e12eef1a79ea322e896b940b61d5f3927ce0",
+    "selected_rust_files": 45,
+    "staged_bytes_match_frozen_manifest": true,
+    "newer_working_tree_changes_preserved": true,
+    "excluded": "Covariance, later document-leaf verification optimization, accounted reservations, native storage/control and snapshot delivery adapters"
+  },
+  "remaining_development": [
+    "Resumable covariance, projection, vectors and final independently selected index generation",
+    "Accounted finite reservations, actual native data/allocation observer, selected preallocated tails and one-dispatch reconciliation",
+    "Native owner migration, snapshot C attestation/signing, live package delivery and fresh Standard restore integration",
+    "Bounded current-authority query/workspace integration and measured native100000-object at-most500ms P95 first results",
+    "Feature-complete native disk/ISO and authenticated Windows package delivery; installed qualification"
+  ],
+  "full_profile_storage_representability": "Not claimed: unchanged128KiB/page conservative ingestion/statistics debits can exhaust64GiB before worst-case32M-posting reduction finishes. Actual measurement does not by itself authorize lowering or releasing reservations.",
+  "hyper_v": "Owner-deferred development, not passed",
+  "g3_complete": false,
+  "new_final_image_produced": false
+}

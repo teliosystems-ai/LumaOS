@@ -1819,3 +1819,23 @@ installed publication fault matrix. Native dispatch/allocation, guaranteed
 tails, authenticated package delivery, remaining index phases, optimized
 queries and workspace selection are still development. Newer parallel work is
 kept distinct from this immutable verified source; no new image is declared.
+
+### Resumable statistics and bounded ranking, 21 October 2026
+
+The [statistics checkpoint](gates/g3/nf08_statistics_2026-10-21.json) records
+81 passing storage tests and 34 passing index tests, with strict production and
+all-target core checks. Sixteen-way merge windows now produce independently
+reconstructed sorted streams and complete document-frequency/top512 data.
+Queries retain at most64 ranked hits while preserving full match counts and
+the original deterministic order. Cached source pages are hash-checked under
+fresh live access, not trusted from metadata alone.
+
+This is a core-only checkpoint. The same frozen run failed nine native
+diagnostics; their failed record is retained, and neither those adapters nor
+their later fixes are part of this verified commit. The native failures do not
+invalidate the separate passing core tests or become passes by exclusion.
+Covariance/projection/vectors, actual reservation and observer integration,
+native routing and the100000-object/500ms target remain development. In
+particular, the existing conservative128KiB/page debit is not sufficient
+evidence that a worst-case32M-posting build fits64GiB; an actual measured page
+API alone does not grant permission to release resource reservations.

@@ -1,5 +1,70 @@
 use super::*;
 use pages::{Body, BucketHead, Feature};
+use std::cmp::{Ordering, Reverse};
+use std::collections::BinaryHeap;
+
+/// Higher scores, then lower document ordinals, are better. The reverse heap
+/// keeps the worst retained result at its root; no corpus-sized ranking vector
+/// or full sort is needed. This is derivative DATA, never an access decision.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Ranked {
+    ordinal: u32,
+    score: i64,
+}
+impl Ord for Ranked {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.score
+            .cmp(&other.score)
+            .then_with(|| other.ordinal.cmp(&self.ordinal))
+    }
+}
+impl PartialOrd for Ranked {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+struct TopMatches {
+    limit: usize,
+    maximum: u32,
+    total: u64,
+    heap: BinaryHeap<Reverse<Ranked>>,
+}
+impl TopMatches {
+    fn new(limit: usize, maximum: u64) -> Result<Self> {
+        if !(1..=crate::MAX_SEARCH_RESULTS).contains(&limit) || maximum > MAX_CORPUS_OBJECTS {
+            return Err("query rank capacity exceeds the finite corpus profile".into());
+        }
+        Ok(Self {
+            limit,
+            maximum: u32::try_from(maximum)?,
+            total: 0,
+            heap: BinaryHeap::with_capacity(limit),
+        })
+    }
+    fn offer(&mut self, ordinal: u32, score: i64) -> Result<()> {
+        if ordinal >= self.maximum || score <= 0 || self.total >= u64::from(self.maximum) {
+            return Err("query rank row exceeds its exact positive ordinal coverage".into());
+        }
+        self.total += 1;
+        let row = Ranked { ordinal, score };
+        if self.heap.len() < self.limit {
+            self.heap.push(Reverse(row));
+        } else if let Some(mut worst) = self.heap.peek_mut() {
+            if row > worst.0 {
+                *worst = Reverse(row);
+            }
+        }
+        Ok(())
+    }
+    fn finish(self) -> (u64, Vec<Ranked>) {
+        let mut retained: Vec<_> = self.heap.into_iter().map(|Reverse(row)| row).collect();
+        retained.sort_unstable_by(|a, b| b.cmp(a));
+        (self.total, retained)
+    }
+}
+
+#[cfg(test)]
+mod tests;
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
@@ -180,15 +245,20 @@ impl VerifiedCorpusIndex {
             &self.manifest_sha256,
             b,
         )?;
-        let mut ranked = match kind {
-            CorpusQueryKind::LexicalAnd => lexical(store, &self.manifest, &canonical, &mut m, b)?,
-            CorpusQueryKind::FeatureLsa => semantic(store, &self.manifest, &canonical, &mut m, b)?,
+        let mut ranked = TopMatches::new(limit, root.entry_count)?;
+        match kind {
+            CorpusQueryKind::LexicalAnd => {
+                lexical(store, &self.manifest, &canonical, &mut ranked, &mut m, b)?
+            }
+            CorpusQueryKind::FeatureLsa => {
+                semantic(store, &self.manifest, &canonical, &mut ranked, &mut m, b)?
+            }
         };
-        m.work((ranked.len() as u64).saturating_mul(18), root, b)?;
-        ranked.sort_unstable_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
-        let total_matches = ranked.len() as u64;
+        // At most64 retained rows; comparison work is charged before sorting.
+        m.work((ranked.heap.len() as u64) * 7, root, b)?;
+        let (total_matches, ranked) = ranked.finish();
         let mut matches = Vec::new();
-        for (ordinal, score) in ranked.into_iter().take(limit) {
+        for Ranked { ordinal, score } in ranked {
             m.check(root, b)?;
             let record = pages::record(
                 store,
@@ -317,9 +387,10 @@ fn lexical<B: CorpusIndexBoundary>(
     store: &ObjectStore,
     manifest: &CorpusIndexManifest,
     query: &str,
+    ranked: &mut TopMatches,
     m: &mut Meter,
     b: &mut B,
-) -> Result<Vec<(u32, i64)>> {
+) -> Result<()> {
     let root = &manifest.corpus;
     let terms: Vec<_> = query.split(' ').collect();
     // Fixed scalar state per object, never a term's unbounded list of IDs.
@@ -350,26 +421,28 @@ fn lexical<B: CorpusIndexBoundary>(
         })?;
     }
     let all = ((1_u16 << terms.len()) - 1) as u8;
-    let mut result = Vec::new();
     for (i, (mask, score)) in counts.into_iter().enumerate() {
         m.work(1, root, b)?;
         if mask == all {
-            result.push((i as u32, score as i64));
+            // A push or root replacement traverses at most six heap levels.
+            m.work(16, root, b)?;
+            ranked.offer(i as u32, i64::try_from(score)?)?;
         }
     }
-    Ok(result)
+    Ok(())
 }
 fn semantic<B: CorpusIndexBoundary>(
     store: &ObjectStore,
     manifest: &CorpusIndexManifest,
     query: &str,
+    ranked: &mut TopMatches,
     m: &mut Meter,
     b: &mut B,
-) -> Result<Vec<(u32, i64)>> {
+) -> Result<()> {
     let root = &manifest.corpus;
     let features = model(store, manifest, m, b)?;
     if features.is_empty() {
-        return Ok(Vec::new());
+        return Ok(());
     }
     let frequencies: Vec<_> = features
         .iter()
@@ -391,9 +464,8 @@ fn semantic<B: CorpusIndexBoundary>(
     let tf = words(query.as_bytes(), root, m, b)?;
     let weights = build::weights(&tf, &frequencies, &idfs)?;
     let latent = build::project(&weights, &projection, usize::from(manifest.dimensions))?;
-    let mut result = Vec::new();
     if latent.iter().all(|x| *x == 0.0) {
-        return Ok(result);
+        return Ok(());
     }
     if let Some(span) = &manifest.vectors {
         pages::walk(store, root, span, m, b, &mut |body, m, b| {
@@ -415,11 +487,12 @@ fn semantic<B: CorpusIndexBoundary>(
                 }
                 let score = (cosine.clamp(-1.0, 1.0) * 1_000_000.0).round() as i64;
                 if score > 0 {
-                    result.push((*first + index as u32, score));
+                    m.work(16, root, b)?;
+                    ranked.offer(*first + index as u32, score)?;
                 }
             }
             Ok(())
         })?;
     }
-    Ok(result)
+    Ok(())
 }

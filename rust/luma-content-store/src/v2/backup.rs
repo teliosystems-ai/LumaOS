@@ -10,7 +10,7 @@ mod part;
 mod pipeline;
 #[cfg(test)]
 mod tests;
-pub use directory::{PartCommitment, PartDirectoryRef, SnapshotPages};
+pub use directory::{PartCommitment, PartDirectoryRef, SnapshotDirectoryEntry, SnapshotPages};
 pub use part::{SnapshotObject, SnapshotPart, SnapshotPartHeader};
 pub use pipeline::{
     export_snapshot, review_snapshot, SnapshotBoundary, SnapshotBudget, SnapshotMode, SnapshotSink,
@@ -25,8 +25,20 @@ pub const MAX_PART_OBJECTS: usize = 32;
 pub const MAX_CANONICAL_PART_BYTES: usize = MAX_PART_OBJECTS * MAX_PAGE_BYTES + MAX_PAGE_BYTES + 20;
 pub const MAX_SNAPSHOT_CIPHERTEXT_BYTES: u64 =
     MAX_SNAPSHOT_RAW_BYTES + MAX_SNAPSHOT_PARTS as u64 * (MAX_PAGE_BYTES as u64 + 20 + 65536);
-pub const MAX_SNAPSHOT_DIRECTORY_BYTES: u64 = (4096 + 128 + 4 + 1) * MAX_PAGE_BYTES as u64;
-pub const MAX_SNAPSHOT_PACKAGE_OVERHEAD: u64 = MAX_SNAPSHOT_DIRECTORY_BYTES + 65556;
+pub const MAX_SNAPSHOT_DIRECTORY_PAGES: u32 = 4096 + 128 + 4 + 1;
+pub const MAX_SNAPSHOT_DIRECTORY_BYTES: u64 =
+    MAX_SNAPSHOT_DIRECTORY_PAGES as u64 * MAX_PAGE_BYTES as u64;
+pub const MAX_SNAPSHOT_HEADER_BYTES: usize = 65536;
+pub const SNAPSHOT_PACKAGE_PREFIX_BYTES: u64 = 20;
+pub const SNAPSHOT_PACKAGE_PAGE_FRAME_BYTES: u64 = 5;
+pub const SNAPSHOT_PACKAGE_PART_FRAME_BYTES: u64 = 9;
+pub const SNAPSHOT_PACKAGE_TRAILER_BYTES: u64 = 49;
+pub const MAX_SNAPSHOT_PACKAGE_OVERHEAD: u64 = MAX_SNAPSHOT_DIRECTORY_BYTES
+    + SNAPSHOT_PACKAGE_PREFIX_BYTES
+    + MAX_SNAPSHOT_HEADER_BYTES as u64
+    + MAX_SNAPSHOT_DIRECTORY_PAGES as u64 * SNAPSHOT_PACKAGE_PAGE_FRAME_BYTES
+    + MAX_SNAPSHOT_PARTS as u64 * SNAPSHOT_PACKAGE_PART_FRAME_BYTES
+    + SNAPSHOT_PACKAGE_TRAILER_BYTES;
 pub const MAX_SNAPSHOT_EXPORT_BYTES: u64 =
     MAX_SNAPSHOT_CIPHERTEXT_BYTES + MAX_SNAPSHOT_PACKAGE_OVERHEAD;
 pub const MAX_SNAPSHOT_READ_BYTES: u64 = 72 * 1024 * 1024 * 1024;

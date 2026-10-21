@@ -1799,3 +1799,23 @@ and delivery, complete resumable indexing and workspace routing still need
 development. Newer terminal-completion and static-validation optimization are
 not qualified by this frozen source cut. The 100,000-object/500-ms target remains
 mandatory, Hyper-V remains owner-deferred, and no new final image is declared.
+
+### Bounded index jobs and terminal restore completion, 21 October 2026
+
+The [subsequent frozen checkpoint](gates/g3/nf08_windows_and_jobs_2026-10-21.json)
+passes 157 scoped tests, strict production workspace checking and strict
+all-target content-store checking. It adds explicit terminal restore completion,
+four-document resumable index ingestion with independent run reconstruction,
+shared original-Export source/staging facades and actual private ext4 CMS tests.
+The Standard-window revocation fixture observes real child protocol entry and
+drainage; no longer authentication window is introduced.
+
+Restore's static validation is now checked once per public operation without
+caching any live authorization. Its 78-test unoptimized v2 suite took 286.58
+seconds, compared with 680.78 seconds in the preceding cut. This is component
+software timing, not proof of a native thirty-second operation or NF08 latency.
+Native publisher diagnostics test codecs and storage helpers, not the complete
+installed publication fault matrix. Native dispatch/allocation, guaranteed
+tails, authenticated package delivery, remaining index phases, optimized
+queries and workspace selection are still development. Newer parallel work is
+kept distinct from this immutable verified source; no new image is declared.

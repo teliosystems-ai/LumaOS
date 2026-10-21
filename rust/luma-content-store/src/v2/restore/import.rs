@@ -187,7 +187,7 @@ pub fn prepare_import_part<'s, B: RestoreBoundary>(
             .ok_or("import commitment missing")?
             .plaintext_bytes,
     };
-    let mut source = read::source_boundary(manifest, prefix, Some(&plan.review), b);
+    let mut source = read::source_boundary(manifest, prefix, Some(&plan.review), b)?;
     let guard = std::cell::RefCell::new(Guard::new(
         &mut source,
         &manifest.intent.head.binding,

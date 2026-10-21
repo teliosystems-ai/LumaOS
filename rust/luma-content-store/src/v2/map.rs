@@ -311,6 +311,25 @@ impl ObjectStore {
         guard.check()?;
         Ok(root)
     }
+    /// Read-only exact delta reconstruction with physical presence checks for
+    /// every generated page, including split siblings containing only old keys.
+    /// This DATA verifier neither selects a root nor grants publication rights.
+    pub fn verify_map_delta(
+        &self,
+        base: &MapRoot,
+        edits: &[MapEdit],
+        budget: IoBudget,
+        boundary: &mut impl Boundary,
+    ) -> Result<MapRoot> {
+        self.check_root(base)?;
+        if budget.write_bytes != 0 || budget.new_files != 0 {
+            return Err("map delta verification requires a read-only budget".into());
+        }
+        let mut guard = Guard::new(boundary, &self.binding, budget, None)?;
+        let root = self.verify_map_inner(base, edits, &mut guard)?;
+        guard.check()?;
+        Ok(root)
+    }
     pub(super) fn check_root(&self, root: &MapRoot) -> Result<()> {
         root.validate()?;
         if root.binding != self.binding {

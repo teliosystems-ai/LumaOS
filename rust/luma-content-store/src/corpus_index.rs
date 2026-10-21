@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
 mod build;
+pub mod job;
 mod math;
 mod pages;
 mod query;

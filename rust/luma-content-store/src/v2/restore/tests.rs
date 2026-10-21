@@ -279,21 +279,35 @@ fn prefix(manifest: &WholeSnapshotManifest) -> RestorePrefix {
 struct Live {
     prefix: RestorePrefix,
     manifest_sha: String,
+    manifest_value: WholeSnapshotManifest,
+    prefix_sha: String,
+    target_sha: String,
     review: Option<String>,
     revoked: bool,
     retained: bool,
     verified_prepared: bool,
+    authority_checks: [u64; 4],
 }
 impl Live {
     fn new(manifest: &WholeSnapshotManifest) -> Self {
+        let prefix = prefix(manifest);
         Self {
-            prefix: prefix(manifest),
+            prefix_sha: prefix.sha256(manifest).unwrap(),
+            target_sha: prefix.target.sha256().unwrap(),
+            prefix,
             manifest_sha: manifest.sha256().unwrap(),
+            manifest_value: manifest.clone(),
             review: None,
             revoked: false,
             retained: true,
             verified_prepared: false,
+            authority_checks: [0; 4],
         }
+    }
+    fn select_prefix(&mut self, next: RestorePrefix) {
+        self.prefix_sha = next.sha256(&self.manifest_value).unwrap();
+        self.target_sha = next.target.sha256().unwrap();
+        self.prefix = next;
     }
 }
 impl Boundary for Live {
@@ -320,6 +334,7 @@ impl Boundary for Live {
 }
 impl OwnerBoundary for Live {
     fn current_owner_head(&mut self, h: &OwnerHeadV2) -> Result<()> {
+        self.authority_checks[2] += 1;
         if self.revoked || h != &self.prefix.target || h.binding == origin() {
             return Err("fixture refuses foreign owner as selected target".into());
         }
@@ -335,7 +350,8 @@ impl OwnerBoundary for Live {
 }
 impl SnapshotReadBoundary for Live {
     fn authenticated_snapshot(&mut self, m: &WholeSnapshotManifest) -> Result<()> {
-        if self.revoked || m.sha256()? != self.manifest_sha {
+        self.authority_checks[0] += 1;
+        if self.revoked || m != &self.manifest_value {
             return Err("fixture pinned whole-origin receipt differs".into());
         }
         Ok(())
@@ -347,6 +363,7 @@ impl RestoreBoundary for Live {
         _: &WholeSnapshotManifest,
         p: &RestorePrefix,
     ) -> Result<()> {
+        self.authority_checks[1] += 1;
         if self.revoked || p != &self.prefix {
             return Err("fixture selected C prefix changed".into());
         }
@@ -358,11 +375,24 @@ impl RestoreBoundary for Live {
         p: &RestorePrefix,
         r: Option<&RestoreWindowReview>,
     ) -> Result<()> {
+        self.authority_checks[3] += 1;
         if self.revoked {
             return Err("fixture Standard window expired".into());
         }
         if let Some(r) = r {
-            r.validate(m, p)?;
+            if m != &self.manifest_value
+                || p != &self.prefix
+                || r.manifest_sha256 != self.manifest_sha
+                || r.prefix_sha256 != self.prefix_sha
+                || r.target_head_sha256 != self.target_sha
+                || r.job_sha256 != p.job_sha256
+                || self
+                    .review
+                    .as_ref()
+                    .is_some_and(|expected| expected != &r.review_sha256)
+            {
+                return Err("fixture current original review differs".into());
+            }
         }
         Ok(())
     }
@@ -435,7 +465,7 @@ fn exact_part_import_keeps_foreign_origin_inert_and_requires_c_selection() {
         .read_page(&"f".repeat(64), io(false), &mut SetupIo)
         .is_err());
     let next = prepared.proposed_prefix().clone();
-    live.prefix = next.clone();
+    live.select_prefix(next.clone());
     assert_eq!(
         prepared.acknowledge_selected(&manifest, &mut live).unwrap(),
         next
@@ -557,4 +587,42 @@ fn caller_cannot_expand_fixed_import_profile_before_any_write() {
             1
         );
     }
+}
+#[test]
+fn immutable_window_validation_never_caches_dynamic_authority_or_accepts_substitution() {
+    let (manifest, mut pages, frame, _) = snapshot(false);
+    let mut live = Live::new(&manifest);
+    let prefix = live.prefix.clone();
+    let checked = CheckedWindow::new(&manifest, &prefix, None).unwrap();
+    for _ in 0..2 {
+        let before = live.authority_checks;
+        checked.current(&mut live).unwrap();
+        assert!(live
+            .authority_checks
+            .iter()
+            .zip(before)
+            .all(|(after, before)| *after > before));
+    }
+    live.revoked = true;
+    assert!(checked.current(&mut live).is_err());
+    live.revoked = false;
+    let mut selected = prefix.clone();
+    selected.origin_namespace_sha256 = "a".repeat(64);
+    live.select_prefix(selected);
+    assert!(checked.current(&mut live).is_err());
+    live.select_prefix(prefix.clone());
+    let plan = plan_import_part(&manifest, &prefix, &frame, &mut pages, &mut live).unwrap();
+    live.review = Some(plan.review().review_sha256.clone());
+    let mut changed = plan.review().clone();
+    changed.proposed_data_sha256 = "d".repeat(64);
+    assert!(CheckedWindow::new(&manifest, &prefix, Some(&changed)).is_err());
+    changed.finish(&manifest, &prefix).unwrap();
+    let substituted = CheckedWindow::new(&manifest, &prefix, Some(&changed)).unwrap();
+    assert!(substituted.current(&mut live).is_err());
+    let mut other = manifest.clone();
+    other.last_plaintext_sha256 = "e".repeat(64);
+    let mut other_prefix = prefix;
+    other_prefix.manifest_sha256 = other.sha256().unwrap();
+    let substituted = CheckedWindow::new(&other, &other_prefix, None).unwrap();
+    assert!(substituted.current(&mut live).is_err());
 }

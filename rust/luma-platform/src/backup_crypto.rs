@@ -315,7 +315,10 @@ struct Running(Child);
 impl Drop for Running {
     fn drop(&mut self) {
         let _ = self.0.kill();
+        #[cfg(not(test))]
         let _ = self.0.wait();
+        #[cfg(test)]
+        tests::record_owned_drain(self.0.wait().is_ok());
     }
 }
 
@@ -488,6 +491,8 @@ fn run(
     channel.write(&header)?;
     channel.write(&recipients.owner)?;
     channel.write(&recipients.offline_admin)?;
+    #[cfg(test)]
+    let _protocol_observation = tests::ProtocolObservation::new(&mut child)?;
     let mut input_offset = 0_usize;
     let mut output_offset = 0_usize;
     let mut output: Option<Output> = None;
@@ -671,6 +676,35 @@ pub(crate) fn decrypt_backup_data(
 pub(crate) mod tests {
     use super::*;
     use std::io::{Seek, SeekFrom};
+    thread_local! {static PRIVATE_PROTOCOL:std::cell::Cell<bool>=const{std::cell::Cell::new(false)};}
+    thread_local! {static OWNED_DRAIN:std::cell::Cell<Option<bool>>=const{std::cell::Cell::new(None)};}
+    pub(crate) fn private_protocol_observed() -> bool {
+        PRIVATE_PROTOCOL.with(std::cell::Cell::get)
+    }
+    pub(crate) fn owned_child_drained() -> bool {
+        OWNED_DRAIN.with(|value| value.get() == Some(true))
+    }
+    pub(super) fn record_owned_drain(drained: bool) {
+        OWNED_DRAIN.with(|value| value.set(Some(drained)));
+    }
+    pub(super) struct ProtocolObservation {
+        previous: bool,
+    }
+    impl ProtocolObservation {
+        pub(super) fn new(child: &mut Running) -> Result<Self> {
+            if child.0.try_wait()?.is_some() {
+                return Err("disposable helper ended before actual protocol observation".into());
+            }
+            OWNED_DRAIN.with(|value| value.set(None));
+            let previous = PRIVATE_PROTOCOL.with(|stage| stage.replace(true));
+            Ok(Self { previous })
+        }
+    }
+    impl Drop for ProtocolObservation {
+        fn drop(&mut self) {
+            PRIVATE_PROTOCOL.with(|stage| stage.set(self.previous));
+        }
+    }
 
     // Only disposable fixtures use this boundary. It is never compiled into an
     // installed adapter and explicitly checks the expected request and budget.
@@ -682,7 +716,11 @@ pub(crate) mod tests {
         refuse_budget: bool,
     }
     impl Guard {
-        pub(crate) fn new(recipients: &Recipients, operation: CryptoOperation, input: &[u8]) -> Self {
+        pub(crate) fn new(
+            recipients: &Recipients,
+            operation: CryptoOperation,
+            input: &[u8],
+        ) -> Self {
             Self {
                 expected: CryptoRequest {
                     schema_version: 1,
@@ -1035,6 +1073,14 @@ pub(crate) mod tests {
         let archive_sha = luma_content::sha256(&data);
         let mut export = Guard::new(&recipients, CryptoOperation::Encrypt, &data);
         let encrypted = encrypt_data(&data, &archive_sha, &recipients, &mut export).unwrap();
+        assert!(
+            !private_protocol_observed(),
+            "actual private protocol observation must be cleared after owned cleanup"
+        );
+        assert!(
+            owned_child_drained(),
+            "the actual owned child wait must have succeeded"
+        );
         let commitment = encrypted.commitment();
         assert_eq!(commitment.archive_sha256, archive_sha);
         assert_eq!(

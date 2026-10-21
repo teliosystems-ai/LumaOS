@@ -18,6 +18,8 @@ pub enum MapKind {
     SegmentMembers,
     RestoreMappings,
     RestoreSourceLifecycle,
+    IndexTermBuckets,
+    IndexTerms,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]

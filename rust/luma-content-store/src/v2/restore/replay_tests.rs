@@ -3,6 +3,10 @@
 //! PAM, a grant ceremony, encrypted-volume proof or native qualification.
 use super::super::super::backup::*;
 use super::super::super::head::{HistoryCursor, OwnerRoots, PhysicalAccounting};
+use super::super::completion::{
+    plan_completion, prepare_completion, verify_prepared_completion_data, CompletionBoundary,
+    TerminalCommitment,
+};
 use super::*;
 use std::collections::BTreeMap;
 use std::fs;
@@ -381,6 +385,9 @@ struct Live<'a> {
     target: &'a ObjectStore,
     prefix: RestorePrefix,
     manifest: String,
+    manifest_value: WholeSnapshotManifest,
+    prefix_sha: String,
+    target_sha: String,
     origin_physical: PhysicalInventory,
     job_physical: PhysicalInventory,
     target_physical: PhysicalInventory,
@@ -434,8 +441,11 @@ impl<'a> Live<'a> {
             origin,
             job,
             target,
+            prefix_sha: prefix.sha256(manifest).unwrap(),
+            target_sha: prefix.target.sha256().unwrap(),
             prefix,
             manifest: manifest.sha256().unwrap(),
+            manifest_value: manifest.clone(),
             origin_physical: observed(origin),
             job_physical: observed(job),
             target_physical: observed(target),
@@ -443,6 +453,11 @@ impl<'a> Live<'a> {
             revoked: false,
             retained: manifest.part_count,
         }
+    }
+    fn select_prefix(&mut self, next: RestorePrefix) {
+        self.prefix_sha = next.sha256(&self.manifest_value).unwrap();
+        self.target_sha = next.target.sha256().unwrap();
+        self.prefix = next;
     }
     fn import_all(&mut self, manifest: &WholeSnapshotManifest, sink: &mut PlainFixtureSink) {
         for number in 0..manifest.part_count {
@@ -453,7 +468,7 @@ impl<'a> Live<'a> {
             self.reviews.push(plan.review().review_sha256.clone());
             let prepared =
                 prepare_import_part(self.origin, manifest, &old, plan, io(true), self).unwrap();
-            self.prefix = prepared.proposed_prefix().clone();
+            self.select_prefix(prepared.proposed_prefix().clone());
             self.origin_physical = observed(self.origin);
             prepared.acknowledge_selected(manifest, self).unwrap();
         }
@@ -509,7 +524,7 @@ impl OwnerBoundary for Live<'_> {
 }
 impl SnapshotReadBoundary for Live<'_> {
     fn authenticated_snapshot(&mut self, m: &WholeSnapshotManifest) -> Result<()> {
-        if self.revoked || m.sha256()? != self.manifest {
+        if self.revoked || m != &self.manifest_value {
             return Err("fixture independent whole-origin pin differs".into());
         }
         Ok(())
@@ -534,7 +549,16 @@ impl RestoreBoundary for Live<'_> {
     ) -> Result<()> {
         self.current_restore_prefix(m, p)?;
         if let Some(r) = r {
-            r.validate(m, p)?;
+            if m != &self.manifest_value
+                || p != &self.prefix
+                || r.manifest_sha256 != self.manifest
+                || r.prefix_sha256 != self.prefix_sha
+                || r.target_head_sha256 != self.target_sha
+                || r.job_sha256 != p.job_sha256
+                || (!self.reviews.is_empty() && !self.reviews.contains(&r.review_sha256))
+            {
+                return Err("fixture current original review differs".into());
+            }
         }
         Ok(())
     }
@@ -607,6 +631,30 @@ impl ReplayBoundary for Live<'_> {
         if let Some(append) = &c.target_append {
             self.verify_prepared_allocations(append)?;
         }
+        Ok(())
+    }
+}
+impl CompletionBoundary for Live<'_> {
+    fn verify_prepared_terminal(
+        &mut self,
+        m: &WholeSnapshotManifest,
+        p: &RestorePrefix,
+        r: &RestoreWindowReview,
+        c: &TerminalCommitment,
+        s: &ObjectStore,
+    ) -> Result<()> {
+        self.verify_job_namespace(m, p, s)?;
+        r.validate(m, p)?;
+        if c.review_sha256 != r.review_sha256
+            || c.base_prefix_sha256 != p.sha256(m)?
+            || c.prefix_object_sha256 != c.next.sha256(m)?
+            || super::super::super::owner::add_physical(&self.job_physical, &c.newly_allocated_job)?
+                != observed(s)
+        {
+            return Err("fixture actual terminal prefix/physical delta differs".into());
+        }
+        // This observes disposable job files only. Actual C preallocated tails,
+        // installed encryption, PAM and NV publication are not this fixture.
         Ok(())
     }
 }
@@ -694,7 +742,7 @@ fn actual_multiwindow_engines_remap_history_visibility_and_collection_without_in
             .map(|a| a.physical_after.clone())
             .unwrap_or_else(|| live.target_physical.clone());
         live.job_physical = observed(&job);
-        live.prefix = commitment.next;
+        live.select_prefix(commitment.next);
         prepared.acknowledge_selected(&manifest, &mut live).unwrap();
     }
     assert_eq!(
@@ -726,6 +774,44 @@ fn actual_multiwindow_engines_remap_history_visibility_and_collection_without_in
             .reference()
             .unwrap()
     );
+    live.reviews.clear();
+    let old = live.prefix.clone();
+    let target_before = observed(&target);
+    let job_before = observed(&job);
+    let terminal = RestoreReservations {
+        reservation_sha256: "f".repeat(64),
+        publication_tail: 0,
+        terminal_tail: 0,
+        reserved_bytes: 0,
+        reserved_inodes: 0,
+    };
+    let plan = plan_completion(&job, &manifest, &old, terminal.clone(), &mut live).unwrap();
+    assert!(prepare_completion(&job, &manifest, &old, plan, &mut live).is_err());
+    assert_eq!(observed(&job), job_before);
+    let plan = plan_completion(&job, &manifest, &old, terminal.clone(), &mut live).unwrap();
+    let review = plan.review().clone();
+    live.reviews.push(review.review_sha256.clone());
+    let prepared = prepare_completion(&job, &manifest, &old, plan, &mut live).unwrap();
+    let commitment = prepared.commitment().clone();
+    assert_eq!(
+        verify_prepared_completion_data(&job, &manifest, &old, &review, &commitment, &mut live)
+            .unwrap(),
+        commitment.next
+    );
+    let mut altered = commitment.clone();
+    altered.prefix_object_sha256 = "a".repeat(64);
+    assert!(
+        verify_prepared_completion_data(&job, &manifest, &old, &review, &altered, &mut live)
+            .is_err()
+    );
+    live.job_physical = observed(&job);
+    live.select_prefix(commitment.next);
+    prepared.acknowledge_selected(&manifest, &mut live).unwrap();
+    assert_eq!(live.prefix.stage, RestoreStage::Complete);
+    assert_eq!(observed(&target), target_before);
+    assert!(live.job_physical.regular_files > 0);
+    let completed = live.prefix.clone();
+    assert!(plan_completion(&job, &manifest, &completed, terminal, &mut live).is_err());
 }
 #[test]
 fn replay_budget_cannot_expand_or_renew_unreviewed_work() {

@@ -212,7 +212,8 @@ struct Original {
     purpose: SessionPurpose,
     expired: bool,
     checks: usize,
-    expire_at: usize,
+    expire_in_protocol: bool,
+    observed_protocol: bool,
 }
 impl Original {
     fn new(f: &Fixture, m: &WholeSnapshotManifest, p: &RestorePrefix, cipher: &[u8]) -> Self {
@@ -227,7 +228,8 @@ impl Original {
             purpose: SessionPurpose::Standard,
             expired: false,
             checks: 0,
-            expire_at: usize::MAX,
+            expire_in_protocol: false,
+            observed_protocol: false,
         }
     }
 }
@@ -246,8 +248,10 @@ impl OriginalStandardWindow for Original {
         p: &RestorePrefix,
     ) -> Result<()> {
         self.checks += 1;
+        let protocol = self.expire_in_protocol && crypto::tests::private_protocol_observed();
+        self.observed_protocol |= protocol;
         if self.expired
-            || (self.crypto.admitted && self.checks >= self.expire_at)
+            || protocol
             || self.purpose != SessionPurpose::Standard
             || m.sha256()? != self.manifest
             || p.sha256(m)? != self.prefix
@@ -328,7 +332,7 @@ fn nonstandard_purpose_and_midprotocol_revocation_never_deliver_plaintext() {
         assert!(!original.crypto.admitted);
     }
     let mut original = Original::new(&fixture, &manifest, &prefix, &cipher);
-    original.expire_at = 20;
+    original.expire_in_protocol = true;
     assert!(decrypt_import_part(
         &manifest,
         &prefix,
@@ -340,7 +344,9 @@ fn nonstandard_purpose_and_midprotocol_revocation_never_deliver_plaintext() {
     )
     .is_err());
     assert!(original.crypto.admitted);
-    assert!(original.checks >= 20);
+    assert!(original.observed_protocol);
+    assert!(!crypto::tests::private_protocol_observed());
+    assert!(crypto::tests::owned_child_drained());
 }
 #[test]
 fn real_cms_does_not_accept_changed_ciphertext_intent_or_nonframe_plaintext() {

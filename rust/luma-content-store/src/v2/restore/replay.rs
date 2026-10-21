@@ -216,15 +216,13 @@ impl PreparedReplay<'_> {
 }
 struct Job<'a, B: ReplayBoundary> {
     b: &'a mut B,
-    manifest: &'a WholeSnapshotManifest,
-    prefix: &'a RestorePrefix,
     store: &'a ObjectStore,
-    review: Option<&'a RestoreWindowReview>,
+    window: CheckedWindow<'a>,
 }
 impl<B: ReplayBoundary> Boundary for Job<'_, B> {
     fn admit(&mut self, binding: &OwnerBinding, budget: ResourceBudget) -> Result<()> {
         self.check_live()?;
-        if binding != &self.prefix.target.binding {
+        if binding != &self.window.prefix.target.binding {
             return Err("restore auxiliary job retargets target binding".into());
         }
         self.b.admit(binding, budget)?;
@@ -238,9 +236,9 @@ impl<B: ReplayBoundary> Boundary for Job<'_, B> {
 }
 impl<B: ReplayBoundary> Job<'_, B> {
     fn check_live(&mut self) -> Result<()> {
-        live(self.manifest, self.prefix, self.review, self.b)?;
+        self.window.current(self.b)?;
         self.b
-            .verify_job_namespace(self.manifest, self.prefix, self.store)
+            .verify_job_namespace(self.window.manifest, self.window.prefix, self.store)
     }
 }
 fn state_key(root: &MapRoot, job: &str, artifact: &str) -> Result<String> {
@@ -337,10 +335,8 @@ pub fn plan_replay_outcome<B: ReplayBoundary>(
     let data = &record.plan;
     let mut jb = Job {
         b,
-        manifest,
-        prefix,
         store: job,
-        review: None,
+        window: CheckedWindow::new(manifest, prefix, None)?,
     };
     let mut jg = Guard::new(&mut jb, &prefix.target.binding, job_budget, None)?;
     let before = read_state(
@@ -360,7 +356,7 @@ pub fn plan_replay_outcome<B: ReplayBoundary>(
     {
         return Err("archived content overwrites a trashed identity".into());
     }
-    let mut sb = read::source_boundary(manifest, prefix, None, jg.boundary.b);
+    let mut sb = read::source_boundary(manifest, prefix, None, jg.boundary.b)?;
     let mut sg = Guard::new(&mut sb, &manifest.intent.head.binding, source_budget, None)?;
     let current = data
         .observed
@@ -559,10 +555,8 @@ pub fn plan_replay_outcome<B: ReplayBoundary>(
                 let mut collection = crate::CollectionSource::from_canonical(&outcome.source)?;
                 let mut job_boundary = Job {
                     b,
-                    manifest,
-                    prefix,
                     store: job,
-                    review: None,
+                    window: CheckedWindow::new(manifest, prefix, None)?,
                 };
                 let mut guard =
                     Guard::new(&mut job_boundary, &prefix.target.binding, job_budget, None)?;
@@ -614,10 +608,8 @@ pub fn plan_replay_outcome<B: ReplayBoundary>(
     }
     let mut jb = Job {
         b,
-        manifest,
-        prefix,
         store: job,
-        review: None,
+        window: CheckedWindow::new(manifest, prefix, None)?,
     };
     let mut jg = Guard::new(&mut jb, &prefix.target.binding, job_budget, None)?;
     let mut mapping_edit = Vec::new();
@@ -777,10 +769,8 @@ pub fn prepare_replay<'a, B: ReplayBoundary>(
     };
     let mut jb = Job {
         b,
-        manifest,
-        prefix,
         store: job,
-        review: Some(&plan.review),
+        window: CheckedWindow::new(manifest, prefix, Some(&plan.review))?,
     };
     let mut jg = Guard::new(&mut jb, &prefix.target.binding, job_budget, Some(&mutation))?;
     let mappings = if plan.mapping_edit.is_empty() {
@@ -891,10 +881,8 @@ pub fn verify_prepared_replay_data<B: ReplayBoundary>(
     };
     let mut jb = Job {
         b,
-        manifest,
-        prefix,
         store: job,
-        review: Some(review),
+        window: CheckedWindow::new(manifest, prefix, Some(review))?,
     };
     let mut guard = Guard::new(
         &mut jb,

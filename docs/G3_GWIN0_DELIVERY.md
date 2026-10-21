@@ -67,6 +67,13 @@ Neither an editor nor the model receives authority to bypass those controls.
 Image assembly follows integration; producing another partial image does not
 mark these workstreams complete.
 
+The [latest bounded-job checkpoint](gates/g3/nf08_windows_and_jobs_2026-10-21.json)
+adds terminal restore completion, independently verified resumable ingestion
+and actual CMS stage tests, with 157 scoped passes and strict production/core
+checks. It does not close the native C/physical-allocation joins, remaining
+index phases, current-authority search routing or authenticated package
+delivery, and does not change the existing disk or Windows package bytes.
+
 The [native desktop package prerequisite](gates/g3/native_package_root_2026-10-20.json)
 has now built from the pinned canonical recipe. Its read-only offline check
 confirmed 28 installed package states, nine retained input hashes and actual

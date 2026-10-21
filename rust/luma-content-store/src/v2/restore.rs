@@ -7,6 +7,7 @@ use super::owner_segment::StoredOutcome;
 use super::*;
 use serde::{Deserialize, Serialize};
 
+pub mod completion;
 mod import;
 mod read;
 pub mod replay;
@@ -342,16 +343,43 @@ pub trait RestoreBoundary: OwnerBoundary + SnapshotReadBoundary {
         store: &ObjectStore,
     ) -> Result<()>;
 }
+/// Validates immutable DATA once for this borrowed operation. It contains no
+/// C/principal/session/grant/UTC/resource observation and is not transferable
+/// authority. Every I/O still calls all original live boundary methods.
+struct CheckedWindow<'a> {
+    manifest: &'a WholeSnapshotManifest,
+    prefix: &'a RestorePrefix,
+    review: Option<&'a RestoreWindowReview>,
+}
+impl<'a> CheckedWindow<'a> {
+    fn new(
+        manifest: &'a WholeSnapshotManifest,
+        prefix: &'a RestorePrefix,
+        review: Option<&'a RestoreWindowReview>,
+    ) -> Result<Self> {
+        manifest.validate()?;
+        prefix.validate(manifest)?;
+        if let Some(review) = review {
+            review.validate(manifest, prefix)?;
+        }
+        Ok(Self {
+            manifest,
+            prefix,
+            review,
+        })
+    }
+    fn current<B: RestoreBoundary>(&self, b: &mut B) -> Result<()> {
+        b.authenticated_snapshot(self.manifest)?;
+        b.current_restore_prefix(self.manifest, self.prefix)?;
+        b.current_owner_head(&self.prefix.target)?;
+        b.standard_admin_window(self.manifest, self.prefix, self.review)
+    }
+}
 fn live<B: RestoreBoundary>(
     manifest: &WholeSnapshotManifest,
     prefix: &RestorePrefix,
     review: Option<&RestoreWindowReview>,
     b: &mut B,
 ) -> Result<()> {
-    manifest.validate()?;
-    prefix.validate(manifest)?;
-    b.authenticated_snapshot(manifest)?;
-    b.current_restore_prefix(manifest, prefix)?;
-    b.current_owner_head(&prefix.target)?;
-    b.standard_admin_window(manifest, prefix, review)
+    CheckedWindow::new(manifest, prefix, review)?.current(b)
 }

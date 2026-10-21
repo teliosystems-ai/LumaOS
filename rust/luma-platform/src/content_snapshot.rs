@@ -14,6 +14,9 @@ use std::os::unix::fs::MetadataExt;
 mod crypto;
 pub(crate) mod receipt;
 pub(crate) mod scope;
+mod sharing;
+#[cfg(test)]
+mod tests;
 
 /// Installed implementation must independently prove the fixed private stage
 /// namespace, held mount/volume and original Export-purpose finite pair and

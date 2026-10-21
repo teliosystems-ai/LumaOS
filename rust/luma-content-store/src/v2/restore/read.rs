@@ -8,23 +8,21 @@ pub trait SnapshotReadBoundary: Boundary {
 }
 struct Source<'a, B: RestoreBoundary> {
     boundary: &'a mut B,
-    manifest: &'a WholeSnapshotManifest,
-    prefix: &'a RestorePrefix,
-    review: Option<&'a RestoreWindowReview>,
+    window: CheckedWindow<'a>,
 }
 impl<B: RestoreBoundary> Boundary for Source<'_, B> {
     fn admit(&mut self, binding: &OwnerBinding, budget: ResourceBudget) -> Result<()> {
-        live(self.manifest, self.prefix, self.review, self.boundary)?;
-        if binding != &self.manifest.intent.head.binding {
+        self.window.current(self.boundary)?;
+        if binding != &self.window.manifest.intent.head.binding {
             return Err("snapshot source read retargets old origin".into());
         }
         self.boundary.admit(binding, budget)?;
-        live(self.manifest, self.prefix, self.review, self.boundary)
+        self.window.current(self.boundary)
     }
     fn check(&mut self, access: Access<'_>) -> Result<()> {
-        live(self.manifest, self.prefix, self.review, self.boundary)?;
+        self.window.current(self.boundary)?;
         self.boundary.check(access)?;
-        live(self.manifest, self.prefix, self.review, self.boundary)
+        self.window.current(self.boundary)
     }
 }
 pub fn read_snapshot_outcome<B: RestoreBoundary>(
@@ -43,9 +41,7 @@ pub fn read_snapshot_outcome<B: RestoreBoundary>(
     store.check_root(&manifest.intent.head.roots.artifacts)?;
     let mut source = Source {
         boundary: b,
-        manifest,
-        prefix,
-        review: None,
+        window: CheckedWindow::new(manifest, prefix, None)?,
     };
     let mut guard = Guard::new(&mut source, &manifest.intent.head.binding, budget, None)?;
     let result = store.owner_outcome(&manifest.intent.head, ordinal, &mut guard)?;
@@ -57,11 +53,9 @@ pub(super) fn source_boundary<'a, B: RestoreBoundary>(
     prefix: &'a RestorePrefix,
     review: Option<&'a RestoreWindowReview>,
     b: &'a mut B,
-) -> impl Boundary + 'a {
-    Source {
+) -> Result<impl Boundary + 'a> {
+    Ok(Source {
         boundary: b,
-        manifest,
-        prefix,
-        review,
-    }
+        window: CheckedWindow::new(manifest, prefix, review)?,
+    })
 }

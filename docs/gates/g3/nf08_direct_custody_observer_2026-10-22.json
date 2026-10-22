@@ -1,0 +1,204 @@
+{
+  "schema_version": 1,
+  "recorded_on": "2026-10-22",
+  "status": "verified-component-integration-artifact-harness-blocked-at-native-anchor",
+  "scope": "Whole working-tree integration cut: direct paged custody, CAP0 data observer, paged Admin review, index request/review joins and custody memory split; no installed index run or native C activation",
+  "implementation": [
+    "Paged C data uses direct-addressed immutable storage locations with sealed slot digests, bounded control cells and prewrite index reservations",
+    "A worker consumes those fixed slots for direct publication; a private installed reader verifies the completed C cut, and the cold verifier binds the logical review digest exactly as planning does",
+    "A query-only CAP0 data observer admits only the fixed C peer under its own AppArmor profile and systemd unit",
+    "Paged custody review, bootstrap and reconcile run only under an original Admin governance grant and effect journal",
+    "Index request and scope-proposal commands return DATA; the workspace index review reads current C state but never executes a build effect",
+    "Fixed custody memory split under a 512 MiB Index lease: worker and C each have a 256 MiB hard ceiling; only Manager after real admission raises the C slice from its ordinary 128M bound, and lowering retains the lease until C drained; custody, observer and slice units deny swap",
+    "PDF remains the only native office driver; the portable workbook is a pure data module without I/O",
+    "Test-only seam: inside the verified disposable CLI container with no TPM device node, the publication fixture observes an empty fixed-handle set instead of opening a TPM; it never substitutes an enrolled Admin or release anchor"
+  ],
+  "exact_staged_source": {
+    "parent_commit": "d99ee02",
+    "branch": "feature/g3-gwin0-beta",
+    "code_tree_before_documentation": "867499dd421e5a22febfb414a3e3bf2d2c16b77b",
+    "staged_files": 134,
+    "directory": "/mnt/luma-build/work/claude-wip7-20261022T091744Z-DHGw/source",
+    "captured_files": 1267,
+    "source_manifest_sha256": "33d35d1702d061eef7f3772f44ac9d5ae928edf40e6e406bad0977f7e162a4eb",
+    "working_tree_rematched_after_runs": true,
+    "native_working_tree_staged": true
+  },
+  "verification": {
+    "directory": "/mnt/luma-build/work/claude-wip7-20261022T091744Z-DHGw/evidence",
+    "results_sha256": "ed1bd62dc329855013f9160f6dc653452e1e1efcc0c95dc7455c5ded08a30503",
+    "runner_sha256": {
+      "orchestrator": "d07c2b65509e545d0a68a5e71f9963a4aabd7572d4400596c41a2c56a31b4ce4",
+      "cargo_container": "3b6d25b0ec2ad4c3a2bc685ccc9b9ec94cccee90df1f699b775509b6cb9d19be",
+      "strict_runner": "99c7b55b6735bb7985dd84525c771846adc8e92dcc3cba05a14aa19951631e90",
+      "python_runner": "d38a0e22e7b0fb9b9e14b97591e0a235db1ecdb9056fa4021324b7ddfdf37fcb"
+    },
+    "warnings_denied": true,
+    "cargo_build_jobs": 1,
+    "format_check": {
+      "passed": true,
+      "log_sha256": "b986c22b26a8c00c730bc1f094a641e7b5f07485d2344b6dcadcef010cee7c29"
+    },
+    "workspace_all_targets_check": {
+      "passed": true,
+      "observed_peak_bytes": 2489008128,
+      "log_sha256": "c8cd3b03bc7bb3de7db912e2e2af1b08d1d655980e2e7dc57cb88702d7e110f1"
+    },
+    "workspace_build": {
+      "passed": true,
+      "compiler_cache_was_warm": true,
+      "log_sha256": "888c0914ad36fc9509b04e3708128dc950e0877d5478326880c03d0a2e03ab65"
+    },
+    "luma_platform_tests": {
+      "passed": 1559,
+      "failed": 3,
+      "ignored": 42,
+      "observed_peak_bytes": 1032519680,
+      "log_sha256": "f68e4feadf900d6144d02bcb3a195713ac9ac4c9fb648928c737adbe92c1f405",
+      "failed_in_parallel_then_passed_isolated": [
+        {
+          "test": "hardware_policy::network_query::tests::unexpected_actual_rights_and_kernel_pidfd_are_closed_on_transport_refusal",
+          "log_sha256": "47da49de9fcf9b7efa1b25453e398b1d0b4db62a5d8b3df40ca9f1c08f149863"
+        },
+        {
+          "test": "model::tests::worker_exec_inherits_lock_and_process_death_releases_it",
+          "log_sha256": "532ad8d25590b3452ce40ffa7f1e619bec8e165b5701654e65b6ea8e14765203"
+        },
+        {
+          "test": "model::validation::tests::incomplete_trial_archive_retry_refuses_conflicting_public_linked_and_oversized_copies",
+          "log_sha256": "ce189c312be703fce7b575aaea18d34682824687a9b5ab8df3a91a655c81bbde"
+        }
+      ],
+      "parallel_interference_resolved": false
+    },
+    "luma_content_tests": {
+      "passed": 102,
+      "failed": 0,
+      "ignored": 0,
+      "log_sha256": "41599a5b650d2a8db94f3b9df63a0329f2cb494f388f449edf20f252639f1257"
+    },
+    "luma_content_store_tests": {
+      "passed": 357,
+      "failed": 0,
+      "ignored": 0,
+      "log_sha256": "6c7bd939881fbab6b56b02cc9d5703907ae89f363d44683d7e24f27d122d7575"
+    },
+    "native_python_tests": {
+      "ran": 957,
+      "passed": true,
+      "skipped": 2,
+      "container_memory_limit_bytes": 1610612736,
+      "log_sha256": "5783d785928929e754aae3681a60293c5a568401d14e6c10c1d74a251424be46"
+    },
+    "artifact_cli_harness": {
+      "passed": false,
+      "log_sha256": "abfa9f7d05e4108287992811e27d62da4a00b1a38e478fb54a0e748a2c327364",
+      "reached": "Store init, native calculation refusals, synthetic calculation, refused admissions with unchanged store, first publication and generation-2 replay",
+      "blocked_at": "Native artifact-read: production activation requires the installed Admin anchor lock, Admin credentials and a local TPM before laboratory effects (gate since 2e62f4d)",
+      "required_environment": "TPM-backed installed laboratory with an enrolled Admin anchor; the disposable container has no TPM by design and the gate is not bypassed",
+      "compile_run": {
+        "directory": "/mnt/luma-build/work/claude-artq1-20261022T090637Z-CTAK/evidence",
+        "source_manifest_sha256": "33d35d1702d061eef7f3772f44ac9d5ae928edf40e6e406bad0977f7e162a4eb",
+        "format_log_sha256": "c6a2fcd8cf4c86130f456a747365a7bad95e5ec457d7c1f2fa287620f4a5c11f",
+        "log_sha256": "c43a9e61d6acba81765012c2632ea1e1672a52886579488677d25b7267c7c707",
+        "observed_peak_bytes_including_page_cache": 5368709120,
+        "oom_events": 0
+      }
+    },
+    "compiler_memory_limit_bytes": 5368709120,
+    "observed_peak_bytes": 2489008128,
+    "oom_events": 0,
+    "swap_limit_bytes": 0,
+    "cpu_limit": 6,
+    "network": "none",
+    "storage": "Disposable private ext4 on drive D",
+    "authority": "Explicit software boundaries, not installed original PAM, physical TPM or loaded LSM qualification",
+    "host_interruption": "Windows Modern Standby suspended the host for about seven wall-clock hours during the content-store test step (1076.77 s monotonic test time); that step then completed and passed, and no check was restarted or partially counted"
+  },
+  "retained_failed_attempts": [
+    {
+      "directory": "/mnt/luma-build/work/claude-wip1-20261022T060251Z-iFbk",
+      "source_manifest_sha256": "712681406ea206e611e01c5744190a3042157738e9dea12e0d82292cafd66aa3",
+      "logs": {
+        "python": "fb1dfed414b9ddd14a7d8e2919ef08a861e930ee2956ac24aa1d62020554005d",
+        "luma_platform_tests": "4ebb4593a24408387ecec13bb4d87e1e63128db0aa16483424c2b359063a093d"
+      },
+      "cause": "Python runner omitted LUMA_STORAGE_TEST_ROOT (69 errors); export-session test still expected the route set without index-review; platform run interrupted without an exit line",
+      "correction": "Supply the storage test root in the runner and update the export-session expectation to the new index-review route"
+    },
+    {
+      "directory": "/mnt/luma-build/work/claude-wip2-20261022T061646Z-jBPs",
+      "source_manifest_sha256": "e8d6753b6ffd1ae741f83da9dd33857dd931036386e36d29517941f409b79856",
+      "logs": {
+        "format": "f1c5fa02606e2c5039e8b1a77aa79462b1e14758a85b254ede043df25b0992b2",
+        "python": "b5ad4a37c085246679aa156caf620f1555a4dab44b69ca68a935b739f5db86de"
+      },
+      "cause": "Pre-existing unformatted sources and unformatted feature files; Python fixture root was world-writable and correctly refused",
+      "correction": "Separate formatting-only commit 0c16f70, format the feature files, and give the Python runner a sticky private temporary root"
+    },
+    {
+      "directory": "/mnt/luma-build/work/claude-wip3-20261022T062306Z-oJts",
+      "source_manifest_sha256": "46d13cef8583c35cdd2d0d5c24e1f01eea10fc7eefe91179aec391271d05a941",
+      "logs": {
+        "workspace_all_targets_check": "d29033d16574ba8ea611f5e1956abdfb38460d3bf93f496243c88d30db130fe0",
+        "luma_platform_tests": "b25563677397939fc9a91c0ceba8dc69ba705623d9b4e4d3c16834d4f4b878b7"
+      },
+      "cause": "Twelve warning-denied dead-code errors on index-run items that no installed caller constructs yet",
+      "correction": "Explicit, commented dead-code allowances naming the awaited C index publisher; no item was wired to a caller"
+    },
+    {
+      "directory": "/mnt/luma-build/work/claude-wip4-20261022T062608Z-t3OA",
+      "source_manifest_sha256": "5eb0ad76404926219a1daa2d2b7bec96cca3077a9cd4f03c56aa93ec0a7d7c88",
+      "logs": {
+        "build_default_jobs": "606922c823d5705502d082fbdb8077201e5868679fdbdcf74868322aea183dbf",
+        "test_default_jobs": "bb3881188484f45e1545de65601c4acf08b37562af5874d0a845318b9216bfb7",
+        "luma_platform_tests_j1": "c23ee796f31b6a7b331d5cda89da9dc02e78c34f9b2b4bd52b7aa8c927dda199",
+        "artifact_cli_j1": "73775dd8ef6dc2c7376e4cbca9312e09a0a045901c6a09202c4b0e7ffeeb0cd0"
+      },
+      "passed": 1551,
+      "failed": 11,
+      "ignored": 42,
+      "cause": "Default-parallel rustc was killed at the 5 GiB limit; direct fixtures pinned descriptor slots under attempts/ instead of tails/; one memory fixture requested a 60-second lease against the 30-second maximum; artifact harness lacked the release identity required by signed skill admission since 0e43cce",
+      "correction": "Serialize compilation with CARGO_BUILD_JOBS=1; correct the fixture paths and lease; write the laboratory headless release identity in the harness"
+    },
+    {
+      "directory": "/mnt/luma-build/work/claude-wip5-20261022T081724Z-ydDO",
+      "source_manifest_sha256": "8a5d86e78f75499d8a9de1164324c91b0c92fd83d35b3270f6d1e9b0dac77220",
+      "logs": {
+        "format": "cb199ed65fd84624b71094a2f15a14f3471997cf5ef39b6c56e71efee1b8c565"
+      },
+      "cause": "One unformatted backend.rs line after the tails correction",
+      "correction": "Format the line; the remaining checks of this attempt were stopped and not counted"
+    },
+    {
+      "directory": "/mnt/luma-build/work/claude-wip6-20261022T081936Z-vqX8",
+      "source_manifest_sha256": "f93d40ea68e226f7734bc0d45fcc3a7bac54d6ec15390a7e5d4c06ae664a47ed",
+      "logs": {
+        "luma_platform_tests": "b51468d176fad8b6fa39dea2109562fd57837c17b756db2f75e4fd26e23d1f8c",
+        "artifact_cli": "3fc359459e591e3e75be411a762a93fe5fb3ca2469a0dde943105234ed1cfd77",
+        "python": "21f3a1f8fe5830728ccc5f312db72ccdcf8ecdf6f3c3cc0b7a8cd5c085456e48"
+      },
+      "passed": 1559,
+      "failed": 3,
+      "ignored": 42,
+      "cause": "Production defect: the cold verifier selected a legacy owner row without binding the logical review digest that planning binds; plus broker flock and network-query descriptor races under parallel execution; the publication fixture opened a TPM that the disposable container lacks",
+      "correction": "Bind review_sha256 in cold verification as planning does; add the test-only absent-TPM fixed-handle observation seam behind the verified disposable container"
+    }
+  ],
+  "remaining_development": [
+    "Native direct C activation, owner migration and typed worker publication with actual allocation and original-operation replay",
+    "Installed index run wired to the C index publisher, with physical tails/accounting enforced on the final selected source",
+    "Native authenticated segmented snapshot backup, archive inventory, delivery and clean-owner restore joins",
+    "Actual 100000-current-object ACL/lifecycle-filtered native text and semantic queries, including P95 first results at most 500 ms",
+    "Complete the artifact CLI harness in a TPM-backed installed laboratory with an enrolled Admin anchor",
+    "Resolve parallel test interference in network-query descriptor, model worker-exec lock and trial-archive retry tests",
+    "Restore CI past the tools-image apt snapshot fetch failure so the artifact harness runs in CI",
+    "Complete source-bound native and Windows hosted distribution assembly followed by separate installed qualification"
+  ],
+  "full_100000_object_product_tested": false,
+  "native_qualified": false,
+  "g3_complete": false,
+  "gwin0_complete": false,
+  "hyper_v": "Owner-deferred, not passed",
+  "new_final_image_produced": false
+}

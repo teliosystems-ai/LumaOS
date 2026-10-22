@@ -182,6 +182,7 @@ pub(crate) fn arguments(target: &Path, profile: &str, action: &str) -> Result<Ve
             | "speech-import"
             | "content"
             | "editor"
+            | "index"
     ) {
         return Err("invalid acquisition action".into());
     }
@@ -234,6 +235,16 @@ pub(crate) fn arguments(target: &Path, profile: &str, action: &str) -> Result<Ve
     ] {
         args.push(format!("--property={property}"));
     }
+    if action == "index" {
+        crate::content_index::request::parse_profile(profile)?;
+        for arg in &mut args {
+            if arg == "--property=MemoryMax=512M" {
+                *arg = "--property=MemoryMax=256M".into();
+            } else if arg == "--property=MemoryHigh=384M" {
+                *arg = "--property=MemoryHigh=224M".into();
+            }
+        }
+    }
     if action == "editor" {
         for arg in &mut args {
             if arg == "--property=AppArmorProfile=luma-acquisition" {
@@ -243,7 +254,7 @@ pub(crate) fn arguments(target: &Path, profile: &str, action: &str) -> Result<Ve
         for property in ["SystemCallFilter=@system-service","SystemCallFilter=~@mount @raw-io @reboot @swap @obsolete @debug","InaccessiblePaths=/var/lib/luma-os /var/lib/luma-broker /run/luma-admin /run/luma-resource-checkpoint /run/luma-content-checkpoint"] {args.push(format!("--property={property}"));}
     }
     args.push(
-        if matches!(action, "content" | "speech-import" | "editor") {
+        if matches!(action, "content" | "speech-import" | "editor" | "index") {
             "--property=CapabilityBoundingSet=".into()
         } else if matches!(action, "generated" | "speech") {
             "--property=CapabilityBoundingSet=CAP_SETUID CAP_SETGID CAP_KILL CAP_SETPCAP".into()
@@ -253,7 +264,7 @@ pub(crate) fn arguments(target: &Path, profile: &str, action: &str) -> Result<Ve
     );
     if matches!(
         action,
-        "invoice" | "generated" | "speech" | "speech-import" | "content" | "editor"
+        "invoice" | "generated" | "speech" | "speech-import" | "content" | "editor" | "index"
     ) {
         if target != Path::new("/var") {
             return Err("workflow calculation requires the installed data mount".into());
@@ -268,6 +279,13 @@ pub(crate) fn arguments(target: &Path, profile: &str, action: &str) -> Result<Ve
             crate::speech::source_digest(profile)?;
         } else if action == "editor" {
             crate::editor_session::source_digest(profile)?;
+        } else if action == "index" {
+            let selected = crate::content_index::request::parse_profile(profile)?;
+            args.push(if selected.mode.mutates() {
+                "--property=ReadWritePaths=/var/lib/luma-os/content-store".into()
+            } else {
+                "--property=ReadOnlyPaths=/var/lib/luma-os/content-store".into()
+            });
         } else if action == "speech-import" {
             if profile != model::speech::ID {
                 return Err("auxiliary image import accepts only exact ASR profile".into());
@@ -287,7 +305,7 @@ pub(crate) fn arguments(target: &Path, profile: &str, action: &str) -> Result<Ve
             "RuntimeMaxSec=30",
             if action == "speech-import" {
                 "LimitFSIZE=128M"
-            } else if action == "content" {
+            } else if matches!(action, "content" | "index") {
                 "LimitFSIZE=16M"
             } else {
                 "LimitFSIZE=4M"
@@ -308,7 +326,7 @@ pub(crate) fn arguments(target: &Path, profile: &str, action: &str) -> Result<Ve
     }
     if matches!(
         action,
-        "invoice" | "generated" | "speech" | "speech-import" | "content" | "editor"
+        "invoice" | "generated" | "speech" | "speech-import" | "content" | "editor" | "index"
     ) {
         args.extend([
             "--".into(),
@@ -323,6 +341,8 @@ pub(crate) fn arguments(target: &Path, profile: &str, action: &str) -> Result<Ve
                 "speech-import-resource-worker".into()
             } else if action == "editor" {
                 "editor-resource-worker".into()
+            } else if action == "index" {
+                "index-resource-worker".into()
             } else {
                 "content-resource-worker".into()
             },
@@ -835,6 +855,53 @@ mod tests {
             .iter()
             .any(|arg| arg == "--property=RestrictAddressFamilies=AF_UNIX"));
         assert!(arguments(Path::new("/tmp"), &profile, "content").is_err());
+    }
+    #[test]
+    fn index_launcher_is_exact_capability_free_standard_and_read_only_until_explicit_effect() {
+        for mode in [
+            "review", "status", "query", "start", "step", "advance", "publish", "retain",
+        ] {
+            let profile = format!("index-v2-{mode}-7-{}-{}", "a".repeat(64), "a".repeat(64));
+            let args = arguments(Path::new("/var"), &profile, "index").unwrap();
+            for property in [
+                "--property=AppArmorProfile=luma-acquisition",
+                "--property=CapabilityBoundingSet=",
+                "--property=RuntimeMaxSec=30",
+                "--property=MemoryMax=256M",
+                "--property=MemorySwapMax=0",
+                "--property=TasksMax=16",
+                "--property=RestrictAddressFamilies=AF_UNIX",
+                "--property=LimitFSIZE=16M",
+            ] {
+                assert!(args.iter().any(|value| value == property), "{property}");
+            }
+            assert_eq!(
+                &args[args.len() - 3..],
+                [
+                    "/usr/libexec/luma-os/luma-platform",
+                    "index-resource-worker",
+                    profile.as_str()
+                ]
+            );
+            let mutates = crate::content_index::request::parse_profile(&profile)
+                .unwrap()
+                .mode
+                .mutates();
+            assert_eq!(
+                args.iter().any(
+                    |value| value == "--property=ReadWritePaths=/var/lib/luma-os/content-store"
+                ),
+                mutates
+            );
+            assert_eq!(args.iter().any(|value| value == "--property=ReadOnlyPaths=/var/lib/luma-os/content-store"), !mutates);
+            assert!(!args.iter().any(|value| value.contains("AF_INET")
+                || value.contains("/dev/kvm")
+                || value.contains("TTYPath=")));
+            assert!(arguments(Path::new("/tmp"), &profile, "index").is_err());
+        }
+        for invalid in ["index-v2-", "index-v2-step-07-bad-bad", "qwen3-4b-q4-k-m"] {
+            assert!(arguments(Path::new("/var"), invalid, "index").is_err());
+        }
     }
 
     #[test]

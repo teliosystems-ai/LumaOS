@@ -40,12 +40,28 @@ pub(crate) use capacity::policy as restore_capacity_policy;
 mod format;
 #[path = "content_custody/genesis.rs"]
 mod genesis;
+#[path = "content_custody/indexed.rs"]
+mod indexed;
+#[path = "content_custody/indexed_output.rs"]
+mod indexed_output;
 #[path = "content_custody/lifecycle.rs"]
 mod lifecycle;
+#[path = "content_custody/observed.rs"]
+mod observed;
+#[path = "content_custody/paged.rs"]
+mod paged;
+#[path = "content_custody/paged_admin.rs"]
+mod paged_admin;
+#[path = "content_custody/v2_publication.rs"]
+mod v2_publication;
+pub(crate) use paged_admin::{
+    command as paged_command, original_arguments as verify_paged_admin_arguments,
+};
 #[path = "content_custody/physical.rs"]
 mod physical;
 #[path = "content_custody/protocol.rs"]
 mod protocol;
+pub(crate) use observed::PageReply as ObservedPageReply;
 #[path = "content_custody/recipients.rs"]
 mod recipients;
 #[path = "content_custody/restore.rs"]
@@ -66,9 +82,9 @@ pub(crate) use backup::Receipt as BackupReceipt;
 pub(crate) use bootstrap::command as bootstrap_command;
 pub(crate) use genesis::{retain_genesis_statement, validate_genesis_at};
 pub(crate) use protocol::{
-    backup_cut, backup_receipt, check_output, preparation_cut, publish, quarantine, recovery_cut,
-    restore_preparation_cut, restore_publish, restore_start, restore_status, run, selected,
-    GuardRequest,
+    backup_cut, backup_receipt, check_output, indexed_read, observed_page, preparation_cut,
+    publish, quarantine, recovery_cut, restore_preparation_cut, restore_publish, restore_start,
+    restore_status, run, selected, GuardRequest,
 };
 pub(crate) use recipients::{
     command as recipients_command, read_request as read_recipient_request,
@@ -76,6 +92,9 @@ pub(crate) use recipients::{
 };
 pub(crate) use signer::signer_command;
 pub(crate) fn admin_scope(command: &str, usage: &crate::finite_grants::Use) -> Result<()> {
+    if let Some(result) = format::paged_admin_scope(command, usage) {
+        return result;
+    }
     if matches!(command, retire::INSPECT | retire::RETIRE) {
         retire::scope(command, usage)
     } else if command == "content-backup-recipients-enroll" {

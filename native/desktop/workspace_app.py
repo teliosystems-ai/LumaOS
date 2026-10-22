@@ -267,6 +267,9 @@ def main():
     editor_button = Gtk.Button.new_with_mnemonic('_Bounded native editor…')
     editor_button.set_tooltip_text('Real original-PAM 30-second resource-leased edit period. Explicit Freeze drains but is NOT Saved; checkpoint commit and exact reopen require separately reviewed fresh C Read/effect authority. No automatic renewal, save or guessed latest resume.')
     engine_actions.pack_start(editor_button, False, False, 4)
+    index_button = Gtk.Button.new_with_mnemonic('Native _index reads…')
+    index_button.set_tooltip_text('Current status, lexical/feature queries and proposed build reviews through fresh original PAM and finite Read. No automatic build phase, effect, recovery or qualification.')
+    engine_actions.pack_start(index_button, False, False, 4)
     recovery_button = Gtk.Button.new_with_mnemonic('_Admin encrypted recovery…')
     recovery_button.set_tooltip_text('Open the original native Admin terminal for encrypted fresh-owner restore, exact-prefix resume, or reviewed damaged-batch retirement. No key, password, grant or private result enters WebKit.')
     engine_actions.pack_start(recovery_button, False, False, 4)
@@ -374,6 +377,14 @@ def main():
         except Exception:
             authority_note.set_text('Editor unavailable or refused; no active lease, Frozen draft, Saved checkpoint, automatic renewal or resume permission inferred.')
     editor_button.connect('clicked', bounded_editor)
+
+    def index_reads(_button):
+        try:
+            opened = auth_module.workspace_controller('index').launch_dialog(window, auth_module)
+            authority_note.set_text('Index terminal launched, not authenticated or completed. Actual Read, resource admission and current C proofs stay in the original terminal. No build effect requested.' if opened else 'Index selection cancelled; no private Read or build requested.')
+        except Exception:
+            authority_note.set_text('Index unavailable/refused. No current selection, private result, permission, build completion or automatic retry inferred.')
+    index_button.connect('clicked', index_reads)
 
     def clarify_capture(_button):
         try:

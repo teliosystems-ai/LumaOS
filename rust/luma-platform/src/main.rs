@@ -21,8 +21,12 @@ mod calculation;
 mod content_backup;
 mod content_checkpoint;
 mod content_contract;
+mod content_data_observer;
 mod content_governed;
+mod content_index;
 mod content_restore;
+#[cfg(test)]
+mod content_snapshot;
 mod content_workflow;
 mod credential_observer;
 mod disk;
@@ -172,6 +176,7 @@ fn dispatch() -> Result<()> {
                     | "speech-review"
                     | "speech-transcribe"
                     | "editor-review"
+                    | "index-review"
                     | "editor-run"
                     | "model-pack-import-review"
                     | "model-pack-import"
@@ -260,6 +265,10 @@ fn dispatch() -> Result<()> {
                     | "content-backup-signer-enroll"
                     | "content-backup-recipients-proposal"
                     | "content-backup-recipients-enroll"
+                    | "content-custody-paged-proposal"
+                    | "content-custody-paged-review"
+                    | "content-custody-paged-bootstrap"
+                    | "content-custody-paged-reconcile"
             )
         )
     {
@@ -360,6 +369,14 @@ fn dispatch() -> Result<()> {
         }
         Some("speech-transcribe") if args.len() == 4 => speech::command(&args),
         Some("editor-resource-worker") if args.len() == 2 => editor_session::command(&args),
+        Some("index-resource-worker") if args.len() == 2 => content_index::runtime::command(&args),
+        Some("index-review") if args.len() == 4 => content_index::runtime::command(&args),
+        Some("index-request") if args.len() == 1 => {
+            content_index::runtime::pure_request_stdin(false)
+        }
+        Some("index-scope-proposal") if args.len() == 1 => {
+            content_index::runtime::pure_request_stdin(true)
+        }
         Some("editor-review") if args.len() == 3 => editor_session::command(&args),
         Some("editor-run") if args.len() == 5 => editor_session::command(&args),
         Some("editor-request" | "editor-checkpoint-request") if args.len() == 1 => {
@@ -429,6 +446,7 @@ fn dispatch() -> Result<()> {
         ) => workflow_runs::recovery::command(&args),
         Some("granted-run") => service::granted_gateway::launch(&args[1..]),
         Some("content-custody-service") if args.len() == 1 => content_checkpoint::custody::run(),
+        Some("content-data-observer") if args.len() == 1 => content_data_observer::command(),
         Some(
             "content-custody-bootstrap-proposal"
             | "content-custody-bootstrap-review"
@@ -442,6 +460,12 @@ fn dispatch() -> Result<()> {
             | "content-backup-signer-prepare"
             | "content-backup-signer-enroll",
         ) => content_checkpoint::custody::signer_command(&args),
+        Some(
+            "content-custody-paged-proposal"
+            | "content-custody-paged-review"
+            | "content-custody-paged-bootstrap"
+            | "content-custody-paged-reconcile",
+        ) => content_checkpoint::custody::paged_command(&args),
         Some(
             "content-custody-inspect-proposal"
             | "content-custody-inspect"
@@ -995,6 +1019,7 @@ fn dispatch() -> Result<()> {
                 "Restore uses the standard thirty-second session; there is no plaintext fallback or automatic authority/account restoration."
             ));
             println!("Governed content beta requires an installed laboratory image or activated production image with independent C custody. granted-run content-owned-inspection-review LOGIN REQUEST returns an exact finite Read scope without private content access. granted-run content-owned-review LOGIN READ-GRANT REQUEST uses a fresh broker lease for a query or exact proposed Read/effect scopes and write:SHA256 or retain:SHA256 approval. granted-run content-owned-apply LOGIN READ-GRANT EFFECT-GRANT APPROVAL REQUEST rechecks both grants, protected UTC, actual owner generation and resource fencing before immutable publication or intent retention. Image-defined engine Workflow completion requires actual C custody, not a laboratory file commit. Requests must use canonical JSON from content-contract-native-request. No unleased/root-bypass path or installed-image qualification is implied.");
+            println!("Paged index reads: index-request and index-scope-proposal accept bounded typed JSON on stdin and return inert canonical request/scope data, never authority. granted-run index-review LOGIN READ-GRANT REQUEST requires a currently C-selected paged owner, fresh original Standard authentication, exact finite Read, a physically enforced resource lease and current index/source proofs. Status, current-generation lexical/feature queries and proposed build reviews return acknowledged private DATA. Reviews do not run phases; index-run and recovery effects are not exposed by this read-only command.");
             println!("Governed content reads: Current, Historical, Envelope, Page, Search, SearchSelected and CollectionSearch use content-owned-inspection-review then content-owned-review with their exact finite Read scope. SearchSelected uses kind search-selected, 1..64 exact references sorted by unique artifact ID, query and limit; its exact selection narrows an owner-local read, never grants visibility. Envelope returns one exact immutable envelope under its separate native-content-envelope-v1 selector and finite output allowance, with continuous current authorization on every delivery chunk and the same standard30-second session. Ordinary queries retain their64-KiB cap. Low-level pages remain independently admitted, at most16384 bytes encoded as hex. Latest-version, selected-version and exact-collection owner-local lexical search is bounded, not semantic search or cross-owner policy. Query workers mount storage read-only and never initialize or repair it. Delivery requires a pipe, socket or terminal, not direct file export.");
             println!("Bounded latent retrieval: SearchSemanticSelected uses kind search-semantic-selected with exact sorted references, query, limit and dimensions1..8. It rebuilds owner-local TF-IDF latent semantic vectors from only the admitted published selection, with a4096-term vocabulary and512 features. Scores are rounded cosine similarity, not confidence, grants or truth; the descriptor hash is a reproducible cache key, not a persisted index signature. ASCII canonical-byte tokenization is not neural or multilingual search. The same original finite Read, resource and continuous-revocation requirements apply; no external service, model or unselected corpus is consulted.");
             println!("Deterministic spreadsheet data: content-contract-spreadsheet takes a schema-1 typed source with 1..64 rows and 1..32 columns. Explicit decimal/ref/negate/binary/sum/minimum/maximum/average expressions use exact six-place decimal arithmetic; overflow, cycles, zero division and required rounding are refused. Returns canonical editable JSON source and CSV digests. CSV formula-looking text stays inert. This pure command establishes no ownership, storage publication or workflow authority.");

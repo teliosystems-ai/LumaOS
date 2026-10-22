@@ -410,7 +410,7 @@ def main() -> None:
         shutil.copytree(REPO/name,reference/name,ignore=shutil.ignore_patterns('__pycache__','*.pyc'))
     if args.edition == 'desktop':
         import browser_policy
-        for name in ('workspace_host.py', 'workspace_auth.py', 'workspace_app.py', 'workspace_capture.py', 'workspace_draft.py', 'workspace_collections.py', 'workspace_speech.py', 'workspace_grounding.py', 'workspace_lifecycle.py', 'workspace_editor.py', 'browser_adapter.py'):
+        for name in ('workspace_host.py', 'workspace_auth.py', 'workspace_app.py', 'workspace_capture.py', 'workspace_draft.py', 'workspace_collections.py', 'workspace_speech.py', 'workspace_grounding.py', 'workspace_lifecycle.py', 'workspace_editor.py', 'workspace_index.py', 'browser_adapter.py'):
             target = binary.parent/name
             shutil.copy2(REPO/'native/desktop'/name, target)
             target.chmod(0o644)
@@ -591,6 +591,10 @@ def main() -> None:
     # Empty public-certificate transport storage is not model authority.
     (ROOT/'var/lib/luma-os/model-qualifications').mkdir()
     (ROOT/'var/lib/luma-os/model-qualifications').chmod(0o700)
+    # Empty protected parent only: no owner generation, content, key, custody
+    # enrollment or selected root is provisioned by the image assembler.
+    (ROOT/'var/lib/luma-os/content-store').mkdir()
+    (ROOT/'var/lib/luma-os/content-store').chmod(0o700)
     (ROOT/'var/lib/luma-os/workflow-inputs').mkdir()
     (ROOT/'var/lib/luma-os/workflow-inputs').chmod(0o711)
     connections=ROOT/'var/lib/NetworkManager/system-connections'
@@ -606,7 +610,7 @@ def main() -> None:
     put('etc/systemd/system/sleep.target.d/luma.conf',
         '[Unit]\nConflicts=luma-reference.service luma-model.service\n')
     put('etc/systemd/system/hibernate.target','[Unit]\nDescription=Hibernation is unqualified and disabled\nRefuseManualStart=yes\n')
-    for unit in ('luma-broker.service','luma-reference.service','luma-model.service','luma-staging-clean.service','luma-peer-observer.service','luma-admin.service','luma-content-custody.service','luma-content-custody.path'):
+    for unit in ('luma-broker.service','luma-reference.service','luma-model.service','luma-staging-clean.service','luma-peer-observer.service','luma-admin.service','luma-content-data-observer.service','luma-content-custody.service','luma-content-custody.path'):
         enable(unit)
     # Explicitly activate the packaged measured-UKI userspace phase barriers.
     # They do not activate Admin or make a missing TPM a general boot dependency.

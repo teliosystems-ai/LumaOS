@@ -64,6 +64,8 @@ impl GuardRequest {
             crate::office_export::source_digest(&self.profile)?;
         } else if self.profile.starts_with(crate::content_backup::PREFIX) {
             crate::content_backup::source_digest(&self.profile)?;
+        } else if self.profile.starts_with(crate::content_index::PREFIX) {
+            crate::content_index::request::parse_profile(&self.profile)?;
         } else {
             crate::content_governed::source_digest(&self.profile)?;
         }
@@ -73,6 +75,12 @@ impl GuardRequest {
 #[derive(Deserialize, Serialize)]
 #[serde(tag = "kind", rename_all = "kebab-case", deny_unknown_fields)]
 enum Operation {
+    IndexRead {
+        source: String,
+    },
+    ObservedRead {
+        source: String,
+    },
     RestoreStatus {
         input: crate::content_restore::Input,
     },
@@ -90,7 +98,7 @@ enum Operation {
         commitment: String,
         record: String,
     },
-    Select,
+    Select {},
     BackupPrepare {
         input: crate::content_backup::Input,
     },
@@ -119,6 +127,10 @@ enum Operation {
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
 pub(super) enum SourcePurpose {
+    IndexRead,
+    #[cfg_attr(not(test), allow(dead_code))]
+    IndexPrepare,
+    ObservedRead,
     Select,
     RestoreStatus,
     RestoreStart,
@@ -157,7 +169,9 @@ impl TypedOperationSource {
         worker_label: &str,
     ) -> Self {
         let purpose = match &request.operation {
-            Operation::Select => SourcePurpose::Select,
+            Operation::IndexRead { .. } => SourcePurpose::IndexRead,
+            Operation::ObservedRead { .. } => SourcePurpose::ObservedRead,
+            Operation::Select {} => SourcePurpose::Select,
             Operation::RestoreStatus { .. } => SourcePurpose::RestoreStatus,
             Operation::RestoreStart { .. } => SourcePurpose::RestoreStart,
             Operation::RestorePreparation { .. } => SourcePurpose::RestorePreparation,
@@ -217,6 +231,8 @@ pub(super) struct TypedAdminOperationSource {
     pub(super) client_pid: u32,
     pub(super) client_start: u64,
     pub(super) client_label: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) paged_control: Option<super::paged_admin::Source>,
 }
 
 impl TypedAdminOperationSource {
@@ -225,8 +241,22 @@ impl TypedAdminOperationSource {
         bytes: &[u8],
         client_pid: u32,
         client_start: u64,
-    ) -> Self {
-        Self {
+    ) -> Result<Self> {
+        tpm::decode::<16>(&request.job)?;
+        let paged_control = request
+            .paged_control
+            .as_ref()
+            .map(|control| {
+                control.validate_original(
+                    &request.command,
+                    &request.usage,
+                    &request.installation,
+                )?;
+                control.original_source()
+            })
+            .transpose()?
+            .flatten();
+        Ok(Self {
             schema_version: 1,
             request_sha256: hash(bytes),
             command: request.command.clone(),
@@ -236,7 +266,8 @@ impl TypedAdminOperationSource {
             client_pid,
             client_start,
             client_label: "luma-granted-client (enforce)".into(),
-        }
+            paged_control,
+        })
     }
 }
 
@@ -262,6 +293,34 @@ impl OriginalCAdminOperation<'_> {
         (self.check)()
     }
 }
+
+// These factories expose no installed constructor. They let consumer tests
+// exercise real publication/reconciliation code with explicitly synthetic
+// attribution and a software checkpoint; no PAM or TPM proof is claimed.
+#[cfg(test)]
+pub(super) fn software_worker_operation<'a>(
+    audit: &'a Audit,
+    source: TypedOperationSource,
+    check: &'a mut dyn FnMut() -> Result<()>,
+) -> OriginalCOperation<'a> {
+    OriginalCOperation {
+        audit,
+        source,
+        check,
+    }
+}
+#[cfg(test)]
+pub(super) fn software_admin_operation<'a>(
+    audit: &'a Audit,
+    source: TypedAdminOperationSource,
+    check: &'a mut dyn FnMut() -> Result<()>,
+) -> OriginalCAdminOperation<'a> {
+    OriginalCAdminOperation {
+        audit,
+        source,
+        check,
+    }
+}
 #[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct Request {
@@ -283,6 +342,24 @@ struct Response {
     receipt: Option<backup::Receipt>,
     restore_started: Option<bool>,
 }
+const OBSERVED_PAGE_PURPOSE: &str = "luma-current-observed-content-page-v1";
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct ObservedResponse {
+    schema_version: u32,
+    purpose: String,
+    request_sha256: String,
+    reply: super::observed::PageReply,
+}
+const INDEX_READ_PURPOSE: &str = "luma-current-observed-content-index-v2";
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct IndexResponse {
+    schema_version: u32,
+    purpose: String,
+    request_sha256: String,
+    reply: super::indexed::IndexReply,
+}
 
 fn remaining(deadline: Instant) -> Result<Duration> {
     deadline
@@ -293,7 +370,8 @@ fn remaining(deadline: Instant) -> Result<Duration> {
 fn read_exact(stream: &mut UnixStream, mut bytes: &mut [u8], deadline: Instant) -> Result<()> {
     while !bytes.is_empty() {
         stream.set_read_timeout(Some(remaining(deadline)?))?;
-        match stream.read(bytes) {
+        let bound = bytes.len().min(4096);
+        match stream.read(&mut bytes[..bound]) {
             Ok(0) => return Err("truncated content custody frame".into()),
             Ok(n) => bytes = &mut bytes[n..],
             Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
@@ -513,7 +591,7 @@ pub(crate) fn selected(
         storage_device: crate::resource_manager::storage_device(std::path::Path::new("/var"))?,
         binding: binding.clone(),
         lease: lease.clone(),
-        operation: Operation::Select,
+        operation: Operation::Select {},
     })
 }
 pub(crate) fn backup_cut(
@@ -537,12 +615,13 @@ fn read_live(
     stream: &mut UnixStream,
     mut bytes: &mut [u8],
     deadline: Instant,
-    check: &mut impl FnMut() -> Result<()>,
+    check: &mut (impl FnMut() -> Result<()> + ?Sized),
 ) -> Result<()> {
     while !bytes.is_empty() {
         check()?;
         stream.set_read_timeout(Some(remaining(deadline)?.min(Duration::from_millis(100))))?;
-        match stream.read(bytes) {
+        let bound = bytes.len().min(4096);
+        match stream.read(&mut bytes[..bound]) {
             Ok(0) => return Err("truncated authenticated backup custody transfer".into()),
             Ok(count) => bytes = &mut bytes[count..],
             Err(error)
@@ -561,6 +640,203 @@ fn read_live(
     check()?;
     remaining(deadline)?;
     Ok(())
+}
+fn write_live(
+    stream: &mut UnixStream,
+    bytes: &[u8],
+    deadline: Instant,
+    check: &mut (impl FnMut() -> Result<()> + ?Sized),
+) -> Result<()> {
+    if bytes.is_empty() || bytes.len() > MAX_FRAME {
+        return Err("checked custody frame exceeds bound".into());
+    }
+    let header = (bytes.len() as u32).to_be_bytes();
+    for block in [&header[..], bytes] {
+        let mut rest = block;
+        while !rest.is_empty() {
+            check()?;
+            stream.set_write_timeout(Some(remaining(deadline)?.min(Duration::from_millis(100))))?;
+            match stream.write(&rest[..rest.len().min(4096)]) {
+                Ok(0) => return Err("checked custody frame closed before completion".into()),
+                Ok(count) => rest = &rest[count..],
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        std::io::ErrorKind::Interrupted
+                            | std::io::ErrorKind::WouldBlock
+                            | std::io::ErrorKind::TimedOut
+                    ) =>
+                {
+                    ()
+                }
+                Err(error) => return Err(error.into()),
+            }
+            check()?;
+        }
+    }
+    check()?;
+    remaining(deadline)?;
+    Ok(())
+}
+pub(crate) fn observed_page(
+    profile: &str,
+    binding: &OwnerBinding,
+    lease: &Token,
+    source: &[u8],
+    original: &mut impl FnMut() -> Result<()>,
+) -> Result<super::observed::PageReply> {
+    original()?;
+    let device = crate::resource_manager::storage_device(std::path::Path::new("/var"))?;
+    let page = crate::content_governed::observed_read::PageSource::parse(
+        source, profile, &device, binding,
+    )?;
+    let request = Request {
+        schema_version: 1,
+        profile: profile.into(),
+        storage_device: device,
+        binding: binding.clone(),
+        lease: lease.clone(),
+        operation: Operation::ObservedRead {
+            source: std::str::from_utf8(source)?.into(),
+        },
+    };
+    let bytes = serde_json::to_vec(&request)?;
+    let end = Instant::now() + DEADLINE;
+    let mut socket = crate::service::connect_local(SOCKET, end)?;
+    let peer = crate::service::credentials(&socket)?;
+    if peer.uid != 0 || peer.gid != 0 || peer.pid <= 0 {
+        return Err("observed Page requires actual root C peer".into());
+    }
+    peer_label(&socket, "luma-content-custody (enforce)")?;
+    let pin = crate::service::peer_pidfd(&socket)?;
+    let generation = start(peer.pid as u32)?;
+    let checked = socket.try_clone()?;
+    let confinement = confinement::KernelUnix::capture()?;
+    let mut check = || {
+        original()?;
+        remaining(end)?;
+        confinement.check()?;
+        pidfd_alive(&pin)?;
+        let now = crate::service::credentials(&checked)?;
+        if (now.pid, now.uid, now.gid) != (peer.pid, peer.uid, peer.gid)
+            || start(peer.pid as u32)? != generation
+        {
+            return Err("observed Page C peer generation changed".into());
+        }
+        peer_label(&checked, "luma-content-custody (enforce)")?;
+        original()
+    };
+    write_live(&mut socket, &bytes, end, &mut check)?;
+    let mut size = [0; 4];
+    read_live(&mut socket, &mut size, end, &mut check)?;
+    let size = u32::from_be_bytes(size) as usize;
+    if size == 0 || size > MAX_FRAME {
+        return Err("observed Page reply exceeds existing C frame bound".into());
+    }
+    check()?;
+    let mut reply = vec![0; size];
+    read_live(&mut socket, &mut reply, end, &mut check)?;
+    let response: ObservedResponse = canonical(&reply, MAX_FRAME)?;
+    if response.schema_version != 1
+        || response.purpose != OBSERVED_PAGE_PURPOSE
+        || response.request_sha256 != hash(&bytes)
+    {
+        return Err("observed Page response substitutes exact original source".into());
+    }
+    match &response.reply {
+        super::observed::PageReply::Legacy { state } => {
+            state.validate()?;
+            if state.binding != *binding {
+                return Err("legacy Page response changed owner".into());
+            }
+        }
+        super::observed::PageReply::Paged {
+            head_sha256,
+            result,
+        } => {
+            digest(head_sha256)?;
+            page.validate_result(result)?;
+        }
+    }
+    check()?;
+    Ok(response.reply)
+}
+
+pub(crate) fn indexed_read(
+    profile: &str,
+    binding: &OwnerBinding,
+    lease: &Token,
+    source: &[u8],
+    original: &mut impl FnMut() -> Result<()>,
+) -> Result<(String, serde_json::Value)> {
+    original()?;
+    let input = crate::content_index::scope::verify_input(profile, source)?;
+    if input.binding != *binding
+        || crate::content_index::request::parse_profile(profile)?
+            .mode
+            .mutates()
+    {
+        return Err("index read cannot substitute an owner or execute effects".into());
+    }
+    let request = Request {
+        schema_version: 1,
+        profile: profile.into(),
+        binding: binding.clone(),
+        lease: lease.clone(),
+        storage_device: crate::resource_manager::storage_device(std::path::Path::new("/var"))?,
+        operation: Operation::IndexRead {
+            source: std::str::from_utf8(source)?.into(),
+        },
+    };
+    let bytes = serde_json::to_vec(&request)?;
+    let end = Instant::now() + DEADLINE;
+    let mut socket = crate::service::connect_local(SOCKET, end)?;
+    let peer = crate::service::credentials(&socket)?;
+    if peer.uid != 0 || peer.gid != 0 || peer.pid <= 0 {
+        return Err("index read requires actual root C peer".into());
+    }
+    peer_label(&socket, "luma-content-custody (enforce)")?;
+    let pin = crate::service::peer_pidfd(&socket)?;
+    let generation = start(peer.pid as u32)?;
+    let checked = socket.try_clone()?;
+    let confinement = confinement::KernelUnix::capture()?;
+    let mut check = || {
+        original()?;
+        remaining(end)?;
+        confinement.check()?;
+        pidfd_alive(&pin)?;
+        let now = crate::service::credentials(&checked)?;
+        if (now.pid, now.uid, now.gid) != (peer.pid, peer.uid, peer.gid)
+            || start(peer.pid as u32)? != generation
+        {
+            return Err("index read C peer generation changed".into());
+        }
+        peer_label(&checked, "luma-content-custody (enforce)")?;
+        original()
+    };
+    write_live(&mut socket, &bytes, end, &mut check)?;
+    let mut size = [0; 4];
+    read_live(&mut socket, &mut size, end, &mut check)?;
+    let size = u32::from_be_bytes(size) as usize;
+    if size == 0 || size > crate::content_index::MAX_OUTPUT as usize || size > MAX_FRAME {
+        return Err("index read response exceeds original finite output".into());
+    }
+    check()?;
+    let mut reply = vec![0; size];
+    read_live(&mut socket, &mut reply, end, &mut check)?;
+    let response: IndexResponse = canonical(&reply, MAX_FRAME)?;
+    if response.schema_version != 1
+        || response.purpose != INDEX_READ_PURPOSE
+        || response.request_sha256 != hash(&bytes)
+    {
+        return Err("index read response substitutes the exact original source".into());
+    }
+    digest(&response.reply.selection_sha256)?;
+    if response.reply.selection_sha256.bytes().all(|b| b == b'0') {
+        return Err("index read response has no actual current C selection".into());
+    }
+    check()?;
+    Ok((response.reply.selection_sha256, response.reply.result))
 }
 
 pub(crate) fn backup_receipt(
@@ -819,7 +1095,7 @@ fn handle(stream: &mut UnixStream) -> Result<()> {
         || (restore_profile
             && !matches!(
                 request.operation,
-                Operation::Select
+                Operation::Select {}
                     | Operation::RestoreStatus { .. }
                     | Operation::RestoreStart { .. }
                     | Operation::RestorePreparation { .. }
@@ -841,7 +1117,7 @@ fn handle(stream: &mut UnixStream) -> Result<()> {
         || (backup_profile
             && !matches!(
                 request.operation,
-                Operation::Select
+                Operation::Select {}
                     | Operation::BackupPrepare { .. }
                     | Operation::BackupReceipt { .. }
             ))
@@ -862,20 +1138,22 @@ fn handle(stream: &mut UnixStream) -> Result<()> {
     if (worker_label == "luma-office-export (enforce)")
         != request.profile.starts_with(crate::office_export::PREFIX)
         || (request.profile.starts_with(crate::office_export::PREFIX)
-            && !matches!(request.operation, Operation::Select))
+            && !matches!(request.operation, Operation::Select {}))
     {
         return Err("Office export custody permits only exact independently authorized Read selection, never C publication".into());
     }
+    let peer_socket = stream.try_clone()?;
     let check = || -> Result<Audit> {
         confinement.check()?;
         remaining(deadline)?;
         pidfd_alive(&pin)?;
-        if crate::service::credentials(stream)?.pid != peer.pid
+        let current = crate::service::credentials(&peer_socket)?;
+        if (current.pid, current.uid, current.gid) != (peer.pid, peer.uid, peer.gid)
             || start(peer.pid as u32)? != worker_start
         {
             return Err("content custody original worker changed".into());
         }
-        peer_label(stream, worker_label)?;
+        peer_label(&peer_socket, worker_label)?;
         let guard = GuardRequest {
             schema_version: 1,
             action: "resource-content-custody-guard".into(),
@@ -915,6 +1193,30 @@ fn handle(stream: &mut UnixStream) -> Result<()> {
     };
     authority.check()?;
     let request_sha256 = authority.source_binding().request_sha256.clone();
+    if let Operation::IndexRead { source } = &request.operation {
+        return super::indexed::with_index(&mut authority, source.as_bytes(), |reply, check| {
+            check()?;
+            let response = IndexResponse {
+                schema_version: 1,
+                purpose: INDEX_READ_PURPOSE.into(),
+                request_sha256,
+                reply,
+            };
+            write_live(stream, &serde_json::to_vec(&response)?, deadline, check)
+        });
+    }
+    if let Operation::ObservedRead { source } = &request.operation {
+        return super::observed::with_page(&mut authority, source.as_bytes(), |reply, check| {
+            check()?;
+            let response = ObservedResponse {
+                schema_version: 1,
+                purpose: OBSERVED_PAGE_PURPOSE.into(),
+                request_sha256,
+                reply,
+            };
+            write_live(stream, &serde_json::to_vec(&response)?, deadline, check)
+        });
+    }
     let original = authority.audit().clone();
     let mut live = || authority.check();
     let mut store = Store::installed(&mut live)?;
@@ -924,6 +1226,9 @@ fn handle(stream: &mut UnixStream) -> Result<()> {
     let mut receipt = None;
     let mut restore_started = None;
     let cut = match &request.operation {
+        Operation::ObservedRead { .. } | Operation::IndexRead { .. } => {
+            return Err("observed Page/index cannot enter legacy publication dispatch".into())
+        }
         Operation::RestoreStatus { input } => {
             if input.target != request.binding {
                 return Err("restore status target differs".into());
@@ -1065,7 +1370,7 @@ fn handle(stream: &mut UnixStream) -> Result<()> {
                 prior_base: None,
             }
         }
-        Operation::Select => PreparationCut {
+        Operation::Select {} => PreparationCut {
             current: store.selected(&request.binding, &mut live)?,
             prior_base: None,
         },
@@ -1149,6 +1454,8 @@ struct AdminRequest {
     installation: String,
     recipients: Option<super::recipients::Request>,
     retirement: Option<super::retire::Request>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    paged_control: Option<super::paged_admin::Request>,
 }
 #[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -1165,7 +1472,7 @@ pub(super) fn admin_exchange(
     job: &str,
     cancel: std::sync::Arc<std::sync::atomic::AtomicBool>,
 ) -> Result<serde_json::Value> {
-    admin_exchange_request(command, usage, installation, job, None, None, cancel)
+    admin_exchange_request(command, usage, installation, job, None, None, None, cancel)
 }
 pub(super) fn admin_recipients_exchange(
     usage: &crate::finite_grants::Use,
@@ -1181,6 +1488,7 @@ pub(super) fn admin_recipients_exchange(
         installation,
         job,
         Some(request),
+        None,
         None,
         cancel,
     )
@@ -1200,6 +1508,26 @@ pub(super) fn admin_retirement_exchange(
         job,
         None,
         Some(request),
+        None,
+        cancel,
+    )
+}
+pub(super) fn admin_paged_exchange(
+    usage: &crate::finite_grants::Use,
+    installation: &str,
+    job: &str,
+    request: super::paged_admin::Request,
+    cancel: std::sync::Arc<std::sync::atomic::AtomicBool>,
+) -> Result<serde_json::Value> {
+    request.validate_original(request.command(), usage, installation)?;
+    admin_exchange_request(
+        request.command(),
+        usage,
+        installation,
+        job,
+        None,
+        None,
+        Some(request.clone()),
         cancel,
     )
 }
@@ -1210,6 +1538,7 @@ fn admin_exchange_request(
     job: &str,
     recipients: Option<super::recipients::Request>,
     retirement: Option<super::retire::Request>,
+    paged_control: Option<super::paged_admin::Request>,
     cancel: std::sync::Arc<std::sync::atomic::AtomicBool>,
 ) -> Result<serde_json::Value> {
     super::admin_scope(command, usage)?;
@@ -1230,20 +1559,43 @@ fn admin_exchange_request(
         installation: installation.into(),
         recipients,
         retirement,
+        paged_control,
     };
     let bytes = serde_json::to_vec(&request)?;
     let deadline = Instant::now() + Duration::from_secs(120);
     let mut stream = crate::service::connect_local(SOCKET, deadline)?;
-    if crate::service::credentials(&stream)?.uid != 0 {
-        return Err("content custody Admin service is not root".into());
+    let peer = crate::service::credentials(&stream)?;
+    if peer.uid != 0 || peer.gid != 0 || peer.pid <= 0 {
+        return Err("content custody Admin service is not the exact root peer".into());
     }
-    peer_label(&stream, "luma-content-custody (enforce)")?;
-    check()?;
-    write(&mut stream, &bytes, deadline)?;
-    let response: AdminResponse =
-        canonical(&read(&mut stream, deadline)?, usage.output_bytes as usize)?;
-    check()?;
-    peer_label(&stream, "luma-content-custody (enforce)")?;
+    let observed = stream.try_clone()?;
+    let peer_pin = crate::service::peer_pidfd(&observed)?;
+    let peer_start = start(peer.pid as u32)?;
+    let kernel = confinement::KernelUnix::capture()?;
+    let mut current = || -> Result<()> {
+        check()?;
+        kernel.check()?;
+        pidfd_alive(&peer_pin)?;
+        let credentials = crate::service::credentials(&observed)?;
+        if (credentials.pid, credentials.uid, credentials.gid) != (peer.pid, 0, 0)
+            || start(peer.pid as u32)? != peer_start
+        {
+            return Err("original content custody Admin endpoint generation changed".into());
+        }
+        peer_label(&observed, "luma-content-custody (enforce)")
+    };
+    current()?;
+    write_live(&mut stream, &bytes, deadline, &mut current)?;
+    let mut header = [0_u8; 4];
+    read_live(&mut stream, &mut header, deadline, &mut current)?;
+    let count = u32::from_be_bytes(header) as usize;
+    if count == 0 || count > usage.output_bytes as usize || count > MAX_FRAME {
+        return Err("content custody Admin response exceeds the original finite frame".into());
+    }
+    let mut response_bytes = vec![0_u8; count];
+    read_live(&mut stream, &mut response_bytes, deadline, &mut current)?;
+    let response: AdminResponse = canonical(&response_bytes, usage.output_bytes as usize)?;
+    current()?;
     if response.schema_version != 1
         || response.result != "ok"
         || response.request_sha256 != hash(&bytes)
@@ -1272,6 +1624,20 @@ fn handle_admin(
         return Err("unsupported content Admin protocol".into());
     }
     super::admin_scope(&request.command, &request.usage)?;
+    let paged = matches!(
+        request.command.as_str(),
+        "content-custody-paged-review"
+            | "content-custody-paged-bootstrap"
+            | "content-custody-paged-reconcile"
+    );
+    if paged != request.paged_control.is_some()
+        || (paged && (request.recipients.is_some() || request.retirement.is_some()))
+    {
+        return Err("paged control requires its one exact closed original payload".into());
+    }
+    if let Some(control) = &request.paged_control {
+        control.validate_original(&request.command, &request.usage, &request.installation)?;
+    }
     if (request.command == "content-backup-recipients-enroll") != request.recipients.is_some() {
         return Err("content custody Admin payload differs from exact closed ceremony".into());
     }
@@ -1283,16 +1649,17 @@ fn handle_admin(
         return Err("content Admin retirement payload differs from exact original command".into());
     }
     digest(&request.installation)?;
+    let observed_client = stream.try_clone()?;
     let original_check = || -> Result<Audit> {
         confinement.check()?;
         remaining(deadline)?;
         pidfd_alive(&pin)?;
-        if crate::service::credentials(stream)?.pid != peer.pid
+        if crate::service::credentials(&observed_client)?.pid != peer.pid
             || start(peer.pid as u32)? != client_start
         {
             return Err("content custody original Admin client generation changed".into());
         }
-        peer_label(stream, "luma-granted-client (enforce)")?;
+        peer_label(&observed_client, "luma-granted-client (enforce)")?;
         let request = crate::service::content_admin::Guard {
             schema_version: 1,
             action: "resource-content-admin-guard".into(),
@@ -1325,25 +1692,31 @@ fn handle_admin(
             bytes,
             peer.pid as u32,
             client_start,
-        ),
+        )?,
         check: &mut live,
     };
     authority.check()?;
     let request_sha256 = authority.source_binding().request_sha256.clone();
     let original = authority.audit().clone();
-    let mut live = || authority.check();
-    let mut store = Store::installed(&mut live)?;
-    if store.journal.installation != request.installation {
-        return Err("content custody Admin installation differs from enrolled C authority".into());
-    }
-    let value = if let Some(retirement) = &request.retirement {
-        store.execute_retirement(retirement, &request.command, &original, &mut live)?
-    } else if let Some(recipients) = &request.recipients {
-        super::recipients::execute(&mut store, recipients, &original, &mut live)?
+    let value = if let Some(control) = &request.paged_control {
+        control.execute(&request.installation, &mut authority)?
     } else {
-        super::signer::execute(&mut store, &request.command, &original, &mut live)?
+        let mut live = || authority.check();
+        let mut store = Store::installed(&mut live)?;
+        if store.journal.installation != request.installation {
+            return Err(
+                "content custody Admin installation differs from enrolled C authority".into(),
+            );
+        }
+        if let Some(retirement) = &request.retirement {
+            store.execute_retirement(retirement, &request.command, &original, &mut live)?
+        } else if let Some(recipients) = &request.recipients {
+            super::recipients::execute(&mut store, recipients, &original, &mut live)?
+        } else {
+            super::signer::execute(&mut store, &request.command, &original, &mut live)?
+        }
     };
-    live()?;
+    authority.check()?;
     let response = AdminResponse {
         schema_version: 1,
         result: "ok".into(),
@@ -1354,7 +1727,7 @@ fn handle_admin(
     if bytes.len() > request.usage.output_bytes as usize {
         return Err("content custody Admin response exceeds finite output bound".into());
     }
-    write(stream, &bytes, deadline)
+    write_live(stream, &bytes, deadline, &mut || authority.check())
 }
 pub(crate) fn run() -> Result<()> {
     crate::require_root()?;
@@ -1362,7 +1735,8 @@ pub(crate) fn run() -> Result<()> {
     // The broker's genuine activated original-client proof is still mandatory
     // before any private authority input is opened, on both image variants.
     crate::platform::production_image()?;
-    if fs::read_to_string("/proc/self/cgroup")? != "0::/system.slice/luma-content-custody.service\n"
+    if fs::read_to_string("/proc/self/cgroup")?
+        != format!("0::{}\n", crate::resource_manager::CUSTODY_LEAF)
         || fs::read_to_string("/proc/self/attr/current")? != "luma-content-custody (enforce)\n"
     {
         return Err("content custody requires its fixed isolated unit".into());
@@ -1412,7 +1786,7 @@ mod tests {
                 generation: 5,
                 manager_epoch: "55".repeat(16),
             },
-            operation: Operation::Select,
+            operation: Operation::Select {},
         };
         let bytes = serde_json::to_vec(&request).unwrap();
         let source = TypedOperationSource::authenticated(
@@ -1481,6 +1855,24 @@ mod tests {
         assert!(read(&mut reader, Instant::now() + Duration::from_millis(10)).is_err());
     }
     #[test]
+    fn readonly_operation_codecs_refuse_extra_duplicate_and_cross_channel_fields() {
+        let select = br#"{"kind":"select"}"#;
+        let parsed: Operation = canonical(select, 256).unwrap();
+        assert!(matches!(parsed, Operation::Select {}));
+        for attack in [
+            br#"{"kind":"select","Admin":true}"#.as_slice(),
+            br#"{"kind":"select","source":"borrowed"}"#.as_slice(),
+            br#"{"kind":"index-read","source":"{}","effect":true}"#.as_slice(),
+            br#"{"kind":"index-read","source":"{}","source":"{}"}"#.as_slice(),
+            br#"{"kind":"index-read","source":"{}","paged_head_sha256":"borrowed"}"#.as_slice(),
+        ] {
+            assert!(canonical::<Operation>(attack, 1024).is_err());
+        }
+        let operation: Operation =
+            canonical(br#"{"kind":"index-read","source":"{}"}"#, 1024).unwrap();
+        assert!(matches!(operation, Operation::IndexRead { .. }));
+    }
+    #[test]
     fn ciphertext_transfer_rechecks_revocation_while_the_peer_is_idle() {
         let (mut reader, _writer) = UnixStream::pair().unwrap();
         let mut checks = 0;
@@ -1500,5 +1892,53 @@ mod tests {
         )
         .is_err());
         assert_eq!(checks, 2);
+    }
+    #[test]
+    fn live_reads_stop_before_the_next_four_kib_private_block() {
+        let (mut reader, mut writer) = UnixStream::pair().unwrap();
+        writer.write_all(&[b'x'; 8192]).unwrap();
+        let mut checks = 0;
+        let mut live = || -> Result<()> {
+            checks += 1;
+            if checks == 2 {
+                return Err("explicit original revoked between blocks".into());
+            }
+            Ok(())
+        };
+        let mut output = [0_u8; 8192];
+        assert!(read_live(
+            &mut reader,
+            &mut output,
+            Instant::now() + Duration::from_secs(1),
+            &mut live
+        )
+        .is_err());
+        assert_eq!(checks, 2);
+        assert_eq!(&output[..4096], &[b'x'; 4096]);
+        assert_eq!(&output[4096..], &[0; 4096]);
+    }
+    #[test]
+    fn live_write_revocation_after_header_withholds_the_private_body() {
+        let (mut reader, mut writer) = UnixStream::pair().unwrap();
+        let mut checks = 0;
+        let mut live = || -> Result<()> {
+            checks += 1;
+            if checks == 3 {
+                return Err("explicit original revoked before body".into());
+            }
+            Ok(())
+        };
+        assert!(write_live(
+            &mut writer,
+            &[b'x'; 8192],
+            Instant::now() + Duration::from_secs(1),
+            &mut live
+        )
+        .is_err());
+        writer.shutdown(std::net::Shutdown::Write).unwrap();
+        let mut received = Vec::new();
+        reader.read_to_end(&mut received).unwrap();
+        assert_eq!(checks, 3);
+        assert_eq!(received, 8192_u32.to_be_bytes());
     }
 }

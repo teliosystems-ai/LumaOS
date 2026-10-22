@@ -1,0 +1,58 @@
+[Unit]
+Description=Luma CAP0 query-only protected content data observer
+After=apparmor.service local-fs.target
+Requires=apparmor.service
+ConditionKernelCommandLine=luma.mode=installed
+
+[Service]
+Type=simple
+ExecStart=/usr/libexec/luma-os/luma-platform content-data-observer
+User=root
+Group=root
+RuntimeDirectory=luma-content-data-observer
+RuntimeDirectoryMode=0700
+RuntimeDirectoryPreserve=no
+UMask=0077
+Environment=PATH=/usr/sbin:/usr/bin:/sbin:/bin LANG=C LC_ALL=C
+UnsetEnvironment=LD_PRELOAD LD_LIBRARY_PATH LD_AUDIT OPENSSL_MODULES SSLKEYLOGFILE
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+DevicePolicy=closed
+ProtectProc=default
+ProcSubset=all
+ReadOnlyPaths=/var/lib/luma-os/content-store
+ReadWritePaths=/run/luma-content-data-observer
+InaccessiblePaths=/var/lib/luma-os/admin /var/lib/luma-os/identity /var/lib/luma-os/principals /var/lib/luma-os/models /var/lib/luma-os/model-packs /var/lib/luma-os/resource-checkpoint /var/lib/luma-os/content-checkpoint /var/lib/luma-os/content-restore-jobs /var/lib/luma-broker /run/luma-admin /run/luma-governance /run/luma-broker /run/luma-content-custody /efi /boot
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+RestrictAddressFamilies=AF_UNIX
+RestrictNamespaces=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@mount @raw-io @reboot @swap @obsolete @debug
+AppArmorProfile=luma-content-data-observer
+LimitCORE=0
+LimitNOFILE=256
+LimitMEMLOCK=0
+MemoryMax=256M
+MemorySwapMax=0
+TasksMax=2
+CPUQuota=25%
+CPUQuotaPeriodSec=100ms
+OOMPolicy=kill
+TimeoutStopSec=5
+KillMode=control-group
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

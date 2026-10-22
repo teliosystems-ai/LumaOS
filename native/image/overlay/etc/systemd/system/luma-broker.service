@@ -1,7 +1,7 @@
 [Unit]
 Description=Luma native privileged platform broker
-After=apparmor.service local-fs.target lumamodel.slice lumaacquisition.slice luma-resource-live.service
-Requires=apparmor.service lumamodel.slice lumaacquisition.slice luma-resource-live.service
+After=apparmor.service local-fs.target lumamodel.slice lumaacquisition.slice system-lumacustody.slice luma-resource-live.service
+Requires=apparmor.service lumamodel.slice lumaacquisition.slice system-lumacustody.slice luma-resource-live.service
 Before=luma-reference.service luma-boot-health.service
 
 [Service]
@@ -27,6 +27,7 @@ ProtectKernelModules=yes
 ProtectControlGroups=no
 ReadOnlyPaths=/sys/fs/cgroup
 ReadWritePaths=/sys/fs/cgroup/lumamodel.slice /sys/fs/cgroup/lumaacquisition.slice
+ReadWritePaths=/sys/fs/cgroup/system.slice/system-lumacustody.slice/memory.max
 ReadWritePaths=-/var/lib/luma-os/resource-checkpoint/paired
 ReadWritePaths=/run/luma-resource-checkpoint/authority.lock
 ReadWritePaths=/run/luma-admin

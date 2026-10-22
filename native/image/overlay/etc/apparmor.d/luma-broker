@@ -66,6 +66,9 @@ profile luma-broker flags=(attach_disconnected,mediate_deleted) {
   /sys/** r,
   /sys/fs/cgroup/lumamodel.slice/** rw,
   /sys/fs/cgroup/lumaacquisition.slice/** rw,
+  # Only the closed 128/256 MiB C parent memory.max transition is writable.
+  # No service-child, cgroup.kill, arbitrary system slice or new quota access.
+  /sys/fs/cgroup/system.slice/system-lumacustody.slice/memory.max rw,
   /sys/fs/cgroup/ r,
   /sys/fs/cgroup/system.slice/ r,
   /sys/fs/cgroup/system.slice/luma-utc-windows.service/ r,
@@ -87,6 +90,7 @@ profile luma-broker flags=(attach_disconnected,mediate_deleted) {
   /run/luma-granted-client/requests/ r,
   /run/luma-granted-client/requests/*/ r,
   /run/luma-granted-client/requests/*/content.json r,
+  /run/luma-granted-client/requests/*/index.json r,
   /run/luma-granted-client/requests/*/content-backup.json r,
   /run/luma-granted-client/requests/*/content-backup-recipients.json r,
   /run/luma-granted-client/requests/*/content-restore.json r,

@@ -16,6 +16,27 @@ use std::time::{Duration, Instant};
 #[path = "backup_confinement.rs"]
 mod confinement;
 
+/// Private closed export drivers. These names never come from a caller path,
+/// executable, filter or environment; PDF keeps its original schema/framing.
+/// A portable workbook driver is not implemented; `luma_content::workbook`
+/// remains a pure data module without a native export command.
+#[derive(Clone, Copy)]
+enum Driver {
+    Pdf,
+}
+impl Driver {
+    fn command(self) -> &'static str {
+        match self {
+            Self::Pdf => "content-office-export",
+        }
+    }
+    fn leaf(self) -> &'static str {
+        match self {
+            Self::Pdf => "content-office.json",
+        }
+    }
+}
+
 pub(crate) const PREFIX: &str = "office-export-v1-";
 pub(crate) const MAX_REQUEST: usize = 16384;
 pub(crate) const MEMORY: u64 = 1024 * 1024 * 1024;
@@ -186,6 +207,11 @@ pub(crate) fn prepare_stdin() -> Result<()> {
 }
 
 pub(crate) fn read_request(path: &Path) -> Result<Vec<u8>> {
+    let bytes = read_request_data(path)?;
+    parse(&bytes, true)?;
+    Ok(bytes)
+}
+fn read_request_data(path: &Path) -> Result<Vec<u8>> {
     let mut file = OpenOptions::new()
         .read(true)
         .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC)
@@ -223,7 +249,6 @@ pub(crate) fn read_request(path: &Path) -> Result<Vec<u8>> {
     {
         return Err("office request changed during bounded capture".into());
     }
-    parse(&bytes, true)?;
     Ok(bytes)
 }
 
@@ -378,9 +403,13 @@ pub(crate) fn acquisition_usage(id: &str) -> Result<grants::Use> {
 }
 
 fn snapshot_path(path: &Path) -> bool {
+    driver_snapshot_path(path, Driver::Pdf)
+}
+fn driver_snapshot_path(path: &Path, driver: Driver) -> bool {
+    let suffix = format!("/{}", driver.leaf());
     path.to_str()
         .and_then(|p| p.strip_prefix("/run/luma-granted-client/requests/"))
-        .and_then(|p| p.strip_suffix("/content-office.json"))
+        .and_then(|p| p.strip_suffix(suffix.as_str()))
         .is_some_and(|p| {
             p.len() == 32
                 && p.bytes()
@@ -394,15 +423,37 @@ pub(crate) fn check_client_arguments(
     audit: Option<&grants::Audit>,
 ) -> Result<()> {
     let (generation, archive_bytes, sha) = parse_profile(id)?;
+    let bytes = original_request_data(args, Driver::Pdf)?;
+    let input = parse(&bytes, true)?;
+    if io::digest(&bytes) != sha
+        || input.login != args[2]
+        || input.binding.owner_generation != generation
+        || input.review.source_bytes != archive_bytes
+    {
+        return Err("office original command differs from exact admitted source".into());
+    }
+    if let Some(audit) = audit {
+        audit.validate()?;
+        if audit.subject != input.binding.owner
+            || audit.subject_generation != generation
+            || audit.grant_id != args[4]
+            || audit.usage != acquisition_usage(id)?
+        {
+            return Err("office proof substitutes its exact current owner or Export scope".into());
+        }
+    }
+    Ok(())
+}
+fn original_request_data(args: &[&str], driver: Driver) -> Result<Vec<u8>> {
     if args.len() != 9
         || args[0] != "/usr/libexec/luma-os/luma-platform"
-        || args[1] != "content-office-export"
+        || args[1] != driver.command()
         || !args[8].is_empty()
         || args[6] != "--export-channel"
         || args[3] == args[4]
         || !crate::admin_roles::identifier(args[3])
         || !crate::admin_roles::identifier(args[4])
-        || !snapshot_path(Path::new(args[5]))
+        || !driver_snapshot_path(Path::new(args[5]), driver)
     {
         return Err(
             "office proof lacks exact original export command and independent grants".into(),
@@ -456,26 +507,7 @@ pub(crate) fn check_client_arguments(
     {
         return Err("office proof snapshot is not immutable private input".into());
     }
-    let bytes = read_request(Path::new(args[5]))?;
-    let input = parse(&bytes, true)?;
-    if io::digest(&bytes) != sha
-        || input.login != args[2]
-        || input.binding.owner_generation != generation
-        || input.review.source_bytes != archive_bytes
-    {
-        return Err("office original command differs from exact admitted source".into());
-    }
-    if let Some(audit) = audit {
-        audit.validate()?;
-        if audit.subject != input.binding.owner
-            || audit.subject_generation != generation
-            || audit.grant_id != args[4]
-            || audit.usage != acquisition_usage(id)?
-        {
-            return Err("office proof substitutes its exact current owner or Export scope".into());
-        }
-    }
-    Ok(())
+    read_request_data(Path::new(args[5]))
 }
 
 pub(crate) fn check_worker(id: &str, device: &str, pid: u32) -> Result<()> {
@@ -807,22 +839,29 @@ fn subject(
     guard: &mut crate::admin_governance::GrantBoundary<'_>,
     pending: Option<&crate::policy_decisions::PendingEffect>,
 ) -> Result<()> {
+    current_export_subject(&input.login, &input.binding, guard, pending)
+}
+fn current_export_subject(
+    login: &str,
+    binding: &OwnerBinding,
+    guard: &mut crate::admin_governance::GrantBoundary<'_>,
+    pending: Option<&crate::policy_decisions::PendingEffect>,
+) -> Result<()> {
     match pending {
         Some(pending) => guard.stream_check(pending)?,
         None => guard.check()?,
     }
     if guard.session_purpose() != crate::authentication::SessionPurpose::Export
-        || guard.subject()? != input.binding.owner
-        || guard.subject_generation()? != input.binding.owner_generation
+        || guard.subject()? != binding.owner
+        || guard.subject_generation()? != binding.owner_generation
     {
         return Err("office current original Export principal changed".into());
     }
-    let (registry, account, installation) =
-        crate::admin_governance::current_principal(&input.login)?;
+    let (registry, account, installation) = crate::admin_governance::current_principal(login)?;
     registry.current()?;
-    if installation != input.binding.installation
-        || account.id != input.binding.owner
-        || account.generation != input.binding.owner_generation
+    if installation != binding.installation
+        || account.id != binding.owner
+        || account.generation != binding.owner_generation
         || !account.enabled
         || account.uid != guard.subject_uid()?
     {

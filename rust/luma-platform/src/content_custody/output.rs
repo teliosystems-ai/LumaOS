@@ -36,7 +36,45 @@ struct Response {
     schema_version: u32,
     result: String,
     request_sha256: String,
-    state: VerifiedState,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    state: Option<VerifiedState>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    paged_head_sha256: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    index_selection_sha256: Option<String>,
+}
+fn validate_selection(response: &Response, descriptor: &Descriptor) -> Result<()> {
+    if descriptor.index_source()?.is_some() {
+        if response.state.is_some()
+            || response.paged_head_sha256.is_some()
+            || response.index_selection_sha256.as_ref()
+                != descriptor.index.as_ref().map(|p| &p.selection_sha256)
+        {
+            return Err(
+                "private index output changed actual C selection or mixed response formats".into(),
+            );
+        }
+        return digest(
+            response
+                .index_selection_sha256
+                .as_ref()
+                .ok_or("index output selection missing")?,
+        );
+    }
+    if response.index_selection_sha256.is_some() {
+        return Err("legacy/Page output cannot borrow index provenance".into());
+    }
+    match (
+        descriptor.page_source()?,
+        &response.state,
+        &response.paged_head_sha256,
+    ) {
+        (None, Some(state), None) if state.binding == descriptor.binding => state.validate(),
+        (Some(_), None, Some(head)) if Some(head) == descriptor.paged_head_sha256.as_ref() => {
+            digest(head)
+        }
+        _ => Err("private output response changed exact legacy/paged selection".into()),
+    }
 }
 
 pub(crate) fn exchange(job: &str, descriptor: &Descriptor, cancel: &Arc<AtomicBool>) -> Result<()> {
@@ -68,16 +106,15 @@ pub(crate) fn exchange(job: &str, descriptor: &Descriptor, cancel: &Arc<AtomicBo
     let response: Response = canonical(&read(&mut stream, end)?, 4096)?;
     check()?;
     peer_label(&stream, "luma-content-custody (enforce)")?;
-    response.state.validate()?;
     if response.schema_version != 1
         || response.result != "ok"
         || response.request_sha256 != hash(&bytes)
-        || response.state.binding != descriptor.binding
     {
         return Err(
             "private output current-C response differs from exact original operation".into(),
         );
     }
+    validate_selection(&response, descriptor)?;
     Ok(())
 }
 
@@ -96,11 +133,12 @@ pub(super) fn handle(
     peer_label(stream, "luma-granted-client (enforce)")?;
     let pin = crate::service::peer_pidfd(stream)?;
     let generation = start(peer.pid as u32)?;
+    let peer_socket = stream.try_clone()?;
     let original = || -> Result<Audit> {
         confinement.check()?;
         remaining(end)?;
         pidfd_alive(&pin)?;
-        let now = crate::service::credentials(stream)?;
+        let now = crate::service::credentials(&peer_socket)?;
         if (now.pid, now.uid, now.gid) != (peer.pid, peer.uid, peer.gid)
             || start(peer.pid as u32)? != generation
         {
@@ -109,7 +147,7 @@ pub(super) fn handle(
         // The fresh broker guard below observes every original task's current
         // kernel credentials through its retained Admission pidfd. C remains
         // capability-free and never gains cross-process ptrace privileges.
-        peer_label(stream, "luma-granted-client (enforce)")?;
+        peer_label(&peer_socket, "luma-granted-client (enforce)")?;
         let guard = crate::service::content_output::Guard {
             schema_version: 1,
             action: "resource-content-output-guard".into(),
@@ -134,6 +172,78 @@ pub(super) fn handle(
         }
         Ok(())
     };
+    if request.descriptor.index_source()?.is_some() {
+        let expected = &request
+            .descriptor
+            .index
+            .as_ref()
+            .ok_or("index output source missing")?
+            .selection_sha256;
+        let mut store = super::super::v2_publication::PagedStore::installed(&mut live)?;
+        let mut current = || {
+            super::super::indexed_output::require(&request.descriptor, &initial, &mut live)?;
+            let selected = store.selected_index(&request.descriptor.binding, &mut live)?;
+            if super::super::indexed::selection_sha256(&selected)? != *expected {
+                return Err(
+                    "private index output exact current owner/index selection changed".into(),
+                );
+            }
+            super::super::indexed_output::require(&request.descriptor, &initial, &mut live)
+        };
+        current()?;
+        let response = Response {
+            schema_version: 1,
+            result: "ok".into(),
+            request_sha256: hash(bytes),
+            state: None,
+            paged_head_sha256: None,
+            index_selection_sha256: Some(expected.clone()),
+        };
+        return write_live(stream, &serde_json::to_vec(&response)?, end, &mut current);
+    }
+    if let Some(page) = request.descriptor.page_source()? {
+        page.check_original(&initial)?;
+        let expected = request
+            .descriptor
+            .paged_head_sha256
+            .as_ref()
+            .ok_or("paged output head missing")?;
+        let mut store = super::super::v2_publication::PagedStore::installed(&mut live)?;
+        let mut current = || {
+            super::super::observed::require_output_observation(
+                &request.descriptor,
+                &initial,
+                &mut live,
+            )?;
+            match store.selected_owner(&request.descriptor.binding, &mut live)? {
+                super::super::v2_publication::SelectedOwner::Paged { head, .. }
+                    if head.sha256()? == *expected =>
+                {
+                    ()
+                }
+                _ => return Err("private Page output exact current owner head changed".into()),
+            }
+            super::super::observed::require_output_observation(
+                &request.descriptor,
+                &initial,
+                &mut live,
+            )
+        };
+        current()?;
+        let response = Response {
+            schema_version: 1,
+            result: "ok".into(),
+            request_sha256: hash(bytes),
+            state: None,
+            paged_head_sha256: Some(expected.clone()),
+            index_selection_sha256: None,
+        };
+        let encoded = serde_json::to_vec(&response)?;
+        if encoded.len() > 4096 {
+            return Err("paged output response exceeds existing bound".into());
+        }
+        return write_live(stream, &encoded, end, &mut current);
+    }
     let mut store = Store::installed(&mut live)?;
     // Same actual protected semantic selector used by worker reads. Retirement,
     // rollback, uncertainty, missing history or substitution all refuse here.
@@ -143,7 +253,9 @@ pub(super) fn handle(
         schema_version: 1,
         result: "ok".into(),
         request_sha256: hash(bytes),
-        state,
+        state: Some(state),
+        paged_head_sha256: None,
+        index_selection_sha256: None,
     };
     let encoded = serde_json::to_vec(&response)?;
     if encoded.len() > 4096 {
@@ -176,6 +288,9 @@ mod tests {
                     manager_epoch: "66".repeat(16),
                 },
                 output_sha256: "77".repeat(32),
+                paged_head_sha256: None,
+                paged_source: None,
+                index: None,
             },
         }
     }
@@ -196,5 +311,58 @@ mod tests {
         let mut trailing = bytes;
         trailing.push(b' ');
         assert!(canonical::<Request>(&trailing, 8192).is_err());
+    }
+    #[test]
+    fn paged_reply_cannot_strip_substitute_or_cross_legacy_selection() {
+        let descriptor = crate::service::content_output::paged_tests::fixture();
+        let mut response = Response {
+            schema_version: 1,
+            result: "ok".into(),
+            request_sha256: "99".repeat(32),
+            state: None,
+            paged_head_sha256: descriptor.paged_head_sha256.clone(),
+            index_selection_sha256: None,
+        };
+        validate_selection(&response, &descriptor).unwrap();
+        response.paged_head_sha256 = Some("aa".repeat(32));
+        assert!(validate_selection(&response, &descriptor).is_err());
+        response.paged_head_sha256 = None;
+        assert!(validate_selection(&response, &descriptor).is_err());
+        response.state = Some(VerifiedState::empty(&descriptor.binding).unwrap());
+        assert!(validate_selection(&response, &descriptor).is_err());
+        let mut stripped = descriptor.clone();
+        stripped.paged_source = None;
+        assert!(validate_selection(&response, &stripped).is_err());
+        stripped.paged_head_sha256 = None;
+        validate_selection(&response, &stripped).unwrap();
+        response.state = None;
+        response.paged_head_sha256 = descriptor.paged_head_sha256.clone();
+        assert!(validate_selection(&response, &stripped).is_err());
+    }
+    #[test]
+    fn index_reply_cannot_strip_mix_or_substitute_current_selection() {
+        let descriptor = super::super::super::indexed_output::tests::descriptor();
+        let expected = descriptor.index.as_ref().unwrap().selection_sha256.clone();
+        let mut response = Response {
+            schema_version: 1,
+            result: "ok".into(),
+            request_sha256: "99".repeat(32),
+            state: None,
+            paged_head_sha256: None,
+            index_selection_sha256: Some(expected.clone()),
+        };
+        validate_selection(&response, &descriptor).unwrap();
+        response.index_selection_sha256 = Some("aa".repeat(32));
+        assert!(validate_selection(&response, &descriptor).is_err());
+        response.index_selection_sha256 = None;
+        assert!(validate_selection(&response, &descriptor).is_err());
+        response.index_selection_sha256 = Some(expected);
+        response.paged_head_sha256 = Some("aa".repeat(32));
+        assert!(validate_selection(&response, &descriptor).is_err());
+        response.paged_head_sha256 = None;
+        response.state = Some(VerifiedState::empty(&descriptor.binding).unwrap());
+        assert!(validate_selection(&response, &descriptor).is_err());
+        let legacy = request().descriptor;
+        assert!(validate_selection(&response, &legacy).is_err());
     }
 }

@@ -1,12 +1,18 @@
 //! Bounded, C-selected global format bootstrap. A copied prefix is progress
 //! DATA only: it cannot service ordinary selection until final completion.
 use super::*;
+#[cfg(test)]
+#[path = "direct/progress.rs"]
+pub(super) mod direct_progress;
 #[path = "bootstrap/initial.rs"]
 mod initial;
 use initial::Initial;
+#[cfg(test)]
+#[path = "bootstrap/filesystem_tests.rs"]
+mod filesystem_tests;
 pub(crate) use initial::{
     initial_recovery_review, resume_retired_bootstrap, retire_initial_bootstrap,
-    retired_bootstrap_review, RetiredInitialBootstrap,
+    retired_bootstrap_review,
 };
 const WINDOW_ENTRIES: usize = 16;
 const MAX_ENTRIES: u64 = 2 * MAX_EVENTS as u64;
@@ -304,20 +310,33 @@ impl Blueprint {
     }
 }
 
-fn require_admin(
+pub(super) fn require_admin(
     authority: &mut OriginalCAdminOperation<'_>,
     binding: &map::CustodyBinding,
     phase: &Phase,
     intent: &str,
+    selected: Option<&str>,
+    attempt: Option<&str>,
 ) -> Result<()> {
     use crate::finite_grants::{Action, Kind};
     authority.check()?;
     digest(intent)?;
     let source = authority.source_binding();
+    let control = source
+        .paged_control
+        .as_ref()
+        .ok_or("paged bootstrap lacks parsed authenticated control source")?;
+    control.validate()?;
+    let opaque = tpm::decode::<16>(&source.job)?;
     let audit = authority.audit();
     if source.command != "content-custody-paged-bootstrap"
         || source.installation != binding.installation
-        || source.job != phase.review_sha256
+        || opaque == [0; 16]
+        || source.job != bundle::hex(&opaque)
+        || control.stable_review_sha256 != phase.review_sha256
+        || control.expected_window_sha256 != intent
+        || control.expected_selected_descriptor_sha256.as_deref() != selected
+        || control.attempt_sha256.as_deref() != attempt
         || source.usage != audit.usage
         || audit.operation_id.is_none()
         || audit.usage.action != Action::ProvisionResource
@@ -334,7 +353,7 @@ fn require_admin(
     authority.check()
 }
 
-fn legacy_snapshot<A: Checkpoint>(
+pub(super) fn legacy_snapshot<A: Checkpoint>(
     store: &mut Store<A>,
     check: &mut impl FnMut() -> Result<()>,
 ) -> Result<(map::CustodyBinding, LegacyCut, Blueprint)> {
@@ -398,10 +417,17 @@ pub(crate) fn legacy_bootstrap_review(
 /// selected format. The first event copies no rows; every later bounded window
 /// has its own original Admin proof and exact selected progress commitment.
 pub(crate) fn begin_bootstrap(
-    mut store: Store<super::super::super::ContentAnchor>,
+    store: Store<super::super::super::ContentAnchor>,
     expected_intent: &str,
     authority: &mut OriginalCAdminOperation<'_>,
 ) -> Result<PagedStore<super::super::super::ContentAnchor>> {
+    begin_from_original_store(store, expected_intent, authority)
+}
+fn begin_from_original_store<A: Checkpoint>(
+    mut store: Store<A>,
+    expected_intent: &str,
+    authority: &mut OriginalCAdminOperation<'_>,
+) -> Result<PagedStore<A>> {
     let (binding, legacy, blueprint) = legacy_snapshot(&mut store, &mut || authority.check())?;
     if capacity::remaining(&store.state)?.outstanding_restore_batches != 0 {
         return Err("global bootstrap cannot release an existing restore publication/terminal capacity obligation; the current paged admission profile accepts only cuts without outstanding restore batches".into());
@@ -416,7 +442,7 @@ pub(crate) fn begin_bootstrap(
     if intent != expected_intent {
         return Err("legacy C bootstrap review changed before namespace creation".into());
     }
-    require_admin(authority, &binding, &phase, &intent)?;
+    require_admin(authority, &binding, &phase, &intent, None, None)?;
     store.live(&mut || authority.check())?;
     store.poisoned = true;
     let pages = PageStore::create(&store.files.root, binding.clone(), &mut || {
@@ -436,12 +462,20 @@ pub(crate) fn begin_bootstrap(
     };
     dispatch_initial(initial, expected_intent, authority)
 }
-
-fn dispatch_initial(
-    mut store: Initial,
+#[cfg(test)]
+pub(super) fn software_begin<A: Checkpoint>(
+    store: Store<A>,
     expected_intent: &str,
     authority: &mut OriginalCAdminOperation<'_>,
-) -> Result<PagedStore<super::super::super::ContentAnchor>> {
+) -> Result<PagedStore<A>> {
+    begin_from_original_store(store, expected_intent, authority)
+}
+
+fn dispatch_initial<A: Checkpoint>(
+    mut store: Initial<A>,
+    expected_intent: &str,
+    authority: &mut OriginalCAdminOperation<'_>,
+) -> Result<PagedStore<A>> {
     store.check(&mut || authority.check())?;
     store.require_new_operation(authority)?;
     let binding = store.binding.clone();
@@ -458,9 +492,17 @@ fn dispatch_initial(
     if intent != expected_intent {
         return Err("legacy C bootstrap review changed before dispatch".into());
     }
-    require_admin(authority, &binding, &phase, &intent)?;
+    let retired_attempt = store.previous_retirement();
+    require_admin(
+        authority,
+        &binding,
+        &phase,
+        &intent,
+        None,
+        retired_attempt.as_deref(),
+    )?;
     let operation = OperationData::BootstrapProgress {
-        previous_retirement: store.previous_retirement(),
+        previous_retirement: retired_attempt.clone(),
         review_sha256: phase.review_sha256.clone(),
         window_intent_sha256: intent,
         request_sha256: authority.source_binding().request_sha256.clone(),
@@ -483,6 +525,7 @@ fn dispatch_initial(
         legacy: legacy.clone(),
         roots: Roots::empty(&binding)?,
         phase: phase.clone(),
+        storage: None,
         operation,
     }
     .seal()?;
@@ -543,7 +586,14 @@ fn dispatch_initial(
         return Err("resumed initial namespace has a different exact legacy selector".into());
     }
     pages.create_member("pending.json", &pending.bytes()?, &mut || authority.check())?;
-    require_admin(authority, &binding, &phase, expected_intent)?;
+    require_admin(
+        authority,
+        &binding,
+        &phase,
+        expected_intent,
+        None,
+        retired_attempt.as_deref(),
+    )?;
     if anchor.read()? != tpm::decode(&legacy.nv_head)?
         || files.read(JOURNAL, &mut || authority.check())? != legacy_bytes
         || files.read("genesis.json", &mut || authority.check())? != genesis_proof
@@ -572,7 +622,14 @@ fn dispatch_initial(
             "original legacy C or preallocated first cut changed before sole dispatch".into(),
         );
     }
-    require_admin(authority, &binding, &phase, expected_intent)?;
+    require_admin(
+        authority,
+        &binding,
+        &phase,
+        expected_intent,
+        None,
+        retired_attempt.as_deref(),
+    )?;
     if anchor.advance(tpm::decode(&legacy.nv_head)?, descriptor.event_digest()?)?
         != tpm::decode(&next.nv_head)?
     {
@@ -638,7 +695,14 @@ impl<A: Checkpoint> PagedStore<A> {
         if intent != expected_intent {
             return Err("selected C bootstrap window changed after review".into());
         }
-        require_admin(authority, &self.descriptor.binding, &phase, &intent)?;
+        require_admin(
+            authority,
+            &self.descriptor.binding,
+            &phase,
+            &intent,
+            Some(&self.selected.descriptor_sha256),
+            None,
+        )?;
         let from = usize::try_from(phase.copied_entries)?;
         let to = (from + WINDOW_ENTRIES).min(blueprint.rows.len());
         let context = self.context(Some(intent.clone()));
@@ -728,6 +792,7 @@ impl<A: Checkpoint> PagedStore<A> {
             legacy: self.descriptor.legacy.clone(),
             roots,
             phase: next_phase,
+            storage: self.descriptor.storage.clone(),
             operation: OperationData::BootstrapProgress {
                 previous_retirement: None,
                 review_sha256: phase.review_sha256.clone(),
@@ -738,7 +803,14 @@ impl<A: Checkpoint> PagedStore<A> {
             },
         }
         .seal()?;
-        require_admin(authority, &self.descriptor.binding, &phase, &intent)?;
+        require_admin(
+            authority,
+            &self.descriptor.binding,
+            &phase,
+            &intent,
+            Some(&self.selected.descriptor_sha256),
+            None,
+        )?;
         self.commit_verified(
             VerifiedSemanticDelta {
                 base: self.selected.clone(),

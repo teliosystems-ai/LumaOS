@@ -65,6 +65,9 @@ impl Body {
     pub(crate) fn audit(&self) -> &Audit {
         &self.original_authority
     }
+    pub(crate) fn measured_package_bytes(&self) -> u64 {
+        self.measured_package_bytes
+    }
     pub(crate) fn validate(&self) -> Result<()> {
         self.manifest.validate()?;
         self.original_authority.validate()?;
@@ -180,6 +183,19 @@ pub(crate) struct Header {
     pub(crate) receipt: Receipt,
 }
 impl Header {
+    /// Exact encoded-length DATA for pre-sign measurement. Only the length
+    /// escapes: no unsigned/synthetic receipt is returned as an origin proof.
+    /// The real signature has the fixed canonical 128-hex-character width.
+    pub(crate) fn unsigned_encoded_length_data(input: &scope::Input, body: &Body) -> Result<usize> {
+        let data = Self::new_data(
+            input,
+            Receipt {
+                body: body.clone(),
+                signature_hex: "0".repeat(128),
+            },
+        )?;
+        Ok(data.canonical_bytes()?.len())
+    }
     pub(crate) fn new_data(input: &scope::Input, receipt: Receipt) -> Result<Self> {
         receipt.body.check_source(input)?;
         tpm::decode::<64>(&receipt.signature_hex)?;

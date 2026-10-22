@@ -12,6 +12,7 @@ use std::io::{Read, Write};
 use std::os::fd::AsRawFd;
 use std::os::unix::fs::MetadataExt;
 mod crypto;
+mod package;
 pub(crate) mod receipt;
 pub(crate) mod scope;
 mod sharing;

@@ -1300,6 +1300,12 @@ pub(crate) fn utc_checkpoint_name() -> [u8; 34] {
 pub(crate) fn enrollment_handles(parent_name: Option<&[u8; 34]>) -> Result<(bool, bool, bool)> {
     crate::require_root()?;
     crate::platform::require_installed()?;
+    #[cfg(test)]
+    if crate::publication_fixture::absent_tpm_verified() {
+        // The verified disposable CLI container has no TPM device, so no fixed
+        // handle can be occupied; this never substitutes an enrolled anchor.
+        return Ok((false, false, false));
+    }
     let mut context = Context::local()?;
     context.enrollment_handles(parent_name)
 }

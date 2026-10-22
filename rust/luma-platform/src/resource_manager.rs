@@ -22,7 +22,9 @@ const PIDS: &str = "worker-processes";
 const LEASE_MS: u64 = 10_000;
 pub(crate) const ACQUISITION_MEMORY: u64 = 512 * 1024 * 1024;
 
+mod custody_memory;
 mod hardware;
+pub(crate) use custody_memory::CUSTODY_LEAF;
 pub(crate) mod history;
 mod peer;
 pub(crate) mod recovery;
@@ -361,6 +363,7 @@ enum AcquisitionProfile {
     Generated(String),
     Speech(String),
     Editor(String),
+    Index(String),
     SpeechImport,
     Qa(String),
     Content(String),
@@ -383,6 +386,9 @@ impl AcquisitionProfile {
             Ok(Self::Speech(id.into()))
         } else if crate::editor_session::is_profile(id) {
             Ok(Self::Editor(id.into()))
+        } else if id.starts_with(crate::content_index::PREFIX) {
+            crate::content_index::request::parse_profile(id)?;
+            Ok(Self::Index(id.into()))
         } else if id.starts_with("qa-") {
             model::qa::parse_profile(id)?;
             Ok(Self::Qa(id.into()))
@@ -409,6 +415,7 @@ impl AcquisitionProfile {
             Self::Generated(id) => crate::generated_runtime::binding(id, device),
             Self::Speech(id) => crate::speech::binding(id, device),
             Self::Editor(id) => crate::editor_session::binding(id, device),
+            Self::Index(id) => crate::content_index::scope::binding(id, device),
             Self::SpeechImport => Ok(model::speech::import_usage()?.selector.digest),
             Self::Qa(id) => model::qa::binding(id, device),
             Self::Content(id) => crate::content_governed::binding(id, device),
@@ -424,6 +431,13 @@ impl AcquisitionProfile {
             Self::Office(_) => Ok(crate::office_export::MEMORY),
             Self::Restore(_) => Ok(crate::content_restore::MEMORY),
             _ => Ok(ACQUISITION_MEMORY),
+        }
+    }
+    fn worker_memory(&self) -> Result<u64> {
+        if matches!(self, Self::Index(_)) {
+            Ok(custody_memory::INDEX_WORKER)
+        } else {
+            self.memory()
         }
     }
     fn tasks(&self) -> u64 {
@@ -442,6 +456,7 @@ impl AcquisitionProfile {
                 Self::Generated(_)
                     | Self::Speech(_)
                     | Self::Editor(_)
+                    | Self::Index(_)
                     | Self::SpeechImport
                     | Self::Qa(_)
                     | Self::Content(_)
@@ -497,6 +512,7 @@ impl AcquisitionProfile {
             Self::Generated(id) => crate::generated_runtime::source_digest(id).map(|_| ()),
             Self::Speech(id) => crate::speech::check_worker(id, device, pid),
             Self::Editor(id) => crate::editor_session::check_worker(id, device, pid),
+            Self::Index(id) => crate::content_index::client::check_worker(id, device, pid),
             Self::SpeechImport => model::speech::check_import_worker(pid),
             Self::Qa(id) => model::qa::check_worker(id, device, pid),
             Self::Content(id) => crate::content_governed::check_worker(id, device, pid),
@@ -691,9 +707,11 @@ fn native_outstanding(ledger: &resources::Ledger) -> Result<()> {
 }
 
 fn protected_reserve(total: u64) -> u64 {
-    // Independent C128MiB, U256MiB (including its isolated64MiB helper), and
+    // Ordinary independent C128MiB, U256MiB (including its isolated64MiB helper), and
     // unprivileged TLS128MiB remain outside job workers. Reserve their complete
-    // fixed budgets even before optional UTC transport is commissioned.
+    // fixed budgets even before optional UTC transport is commissioned. The
+    // Index512MiB lease additionally covers its worker256MiB+C256MiB split;
+    // its full liability remains held until C returns to hard/current128MiB.
     (total / 5)
         .max(1024 * 1024 * 1024)
         .saturating_add(128 * 1024 * 1024)
@@ -721,6 +739,7 @@ pub(crate) struct Manager {
     hardware: hardware::Gate,
     group: Group,
     acquisition: Group,
+    custody_memory: custody_memory::CustodyMemory,
     oom: u64,
     acquisition_oom: u64,
     owners: BTreeMap<String, File>,
@@ -760,61 +779,6 @@ pub(crate) fn content_client_generation(peer: libc::ucred, pin: &File) -> Result
     Ok(peer::live_generation(peer, pin)?.0)
 }
 
-fn custody_controls(mut read: impl FnMut(&str) -> Result<String>) -> Result<()> {
-    for (name, wanted) in [
-        ("memory.max", "134217728"),
-        ("memory.swap.max", "0"),
-        ("pids.max", "2"),
-        ("cpu.max", "25000 100000"),
-        ("memory.oom.group", "1"),
-    ] {
-        if read(name)?.trim() != wanted {
-            return Err("independent content custody resource ceiling changed".into());
-        }
-    }
-    if number(&read("pids.current")?)? > 2 || number(&read("memory.current")?)? > 128 * 1024 * 1024
-    {
-        return Err("content custody current physical charges exceed its reserved budget".into());
-    }
-    Ok(())
-}
-fn custody_unit() -> Result<()> {
-    let path = Path::new("/sys/fs/cgroup/system.slice/luma-content-custody.service");
-    let directory = OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC)
-        .open(path)?;
-    let mut filesystem: libc::statfs = unsafe { std::mem::zeroed() };
-    let metadata = directory.metadata()?;
-    if unsafe { libc::fstatfs(directory.as_raw_fd(), &mut filesystem) } != 0
-        || filesystem.f_type != 0x63677270
-        || metadata.uid() != 0
-        || metadata.mode() & 0o022 != 0
-    {
-        return Err("content custody budget requires genuine protected cgroup2 evidence".into());
-    }
-    custody_controls(|name| {
-        let mut text = String::new();
-        descriptor(&directory, name, false, false)?
-            .take(4097)
-            .read_to_string(&mut text)?;
-        if text.len() > 4096 {
-            return Err("oversized content custody cgroup evidence".into());
-        }
-        Ok(text)
-    })?;
-    let current = fs::symlink_metadata(path)?;
-    if !current.is_dir()
-        || current.dev() != metadata.dev()
-        || current.ino() != metadata.ino()
-        || current.uid() != 0
-        || current.mode() & 0o022 != 0
-    {
-        return Err("content custody budget namespace changed".into());
-    }
-    Ok(())
-}
-
 impl Manager {
     pub(crate) fn register_content_output(
         &mut self,
@@ -846,7 +810,7 @@ impl Manager {
         pin: File,
     ) -> Result<crate::finite_grants::Audit> {
         request.validate()?;
-        custody_unit()?;
+        self.custody_memory.baseline()?;
         if peer.uid != 0 || peer.gid != 0 || peer.pid <= 0 {
             return Err("content output guard requires fixed custody service".into());
         }
@@ -899,7 +863,7 @@ impl Manager {
         pin: File,
     ) -> Result<crate::finite_grants::Audit> {
         request.validate()?;
-        custody_unit()?;
+        self.custody_memory.baseline()?;
         if peer.uid != 0 || peer.gid != 0 || peer.pid <= 0 {
             return Err("content Admin guard requires fixed custody service".into());
         }
@@ -930,7 +894,9 @@ impl Manager {
         pin: File,
     ) -> Result<crate::finite_grants::Audit> {
         request.validate()?;
-        custody_unit()?;
+        if !request.profile.starts_with(crate::content_index::PREFIX) {
+            self.custody_memory.baseline()?;
+        }
         if peer.uid != 0 || peer.pid <= 0 {
             return Err("content custody guard requires its fixed service peer".into());
         }
@@ -973,10 +939,14 @@ impl Manager {
             AcquisitionProfile::Office(id) => id,
             AcquisitionProfile::Restore(id) => id,
             AcquisitionProfile::Backup(id) => id,
+            AcquisitionProfile::Index(id) => id,
             _ => return Err("non-content worker cannot use content custody".into()),
         };
         if expected != &request.profile || device != &request.storage_device {
             return Err("content custody exact worker profile changed".into());
+        }
+        if matches!(profile, AcquisitionProfile::Index(_)) {
+            self.custody_memory.check(&ledger, &request.lease)?;
         }
         profile.current(device, request.worker_pid)?;
         if owner(request.worker_pid, 0, &self.acquisition)? != lease.owner {
@@ -1006,6 +976,12 @@ impl Manager {
                 != service_start
         {
             return Err("content custody guard peer changed before acknowledgment".into());
+        }
+        if matches!(profile, AcquisitionProfile::Index(_)) {
+            self.custody_memory
+                .check(&self.store.read()?, &request.lease)?;
+        } else {
+            self.custody_memory.baseline()?;
         }
         request.validate()?;
         Ok(audit)
@@ -1064,6 +1040,7 @@ impl Manager {
         store.transact(|l| l.restart(resources::random_id()?, inventory()?))?;
         let requests = requests::Gate::open(&store)?;
         let hardware = hardware::Gate::open()?;
+        let custody_memory = custody_memory::CustodyMemory::open()?;
         let oom = group.oom()?;
         let acquisition_oom = acquisition.oom()?;
         let mut manager = Self {
@@ -1071,6 +1048,7 @@ impl Manager {
             hardware,
             group,
             acquisition,
+            custody_memory,
             oom,
             acquisition_oom,
             owners: BTreeMap::new(),
@@ -1194,6 +1172,7 @@ impl Manager {
         self.oom = oom;
         self.acquisition_oom = acquisition_oom;
         let ledger = self.store.read()?;
+        self.custody_memory.maintain(&ledger)?;
         let active: Vec<_> = ledger
             .leases
             .iter()
@@ -1230,11 +1209,13 @@ impl Manager {
                             .get(&lease.token.lease_id)
                             .ok_or("missing acquisition generation binding")?;
                         (
-                            profile.memory()?,
+                            profile.worker_memory()?,
                             profile.tasks(),
                             device.clone(),
                             profile.binding(device)? == lease.binding
-                                && profile.current(device, lease.owner.pid).is_ok(),
+                                && profile.current(device, lease.owner.pid).is_ok()
+                                && (!matches!(profile, AcquisitionProfile::Index(_))
+                                    || self.custody_memory.check(&ledger, &lease.token).is_ok()),
                         )
                     }
                 };
@@ -1284,6 +1265,11 @@ impl Manager {
                 // File-cache charges can survive process exit. Keep them explicitly
                 // accounted rather than equating cgroup emptiness with zero bytes.
                 for lease in draining {
+                    if self.custody_memory.owns(&lease.token)
+                        && !self.custody_memory.finish(&ledger, &lease.token, group)?
+                    {
+                        continue;
+                    }
                     let (can_finish, _hardware_drain_guard) =
                         self.hardware.can_finish_draining(kind, &lease.token)?;
                     if !can_finish {
@@ -1433,6 +1419,11 @@ impl Manager {
                 } else {
                     kind.tasks()
                 };
+                let worker_memory = if kind == Kind::Acquisition {
+                    profile.worker_memory()?
+                } else {
+                    memory
+                };
                 let binding = match kind {
                     Kind::Model => match &profile {
                         AcquisitionProfile::Model(profile) => profile.resource_binding()?,
@@ -1440,6 +1431,7 @@ impl Manager {
                         | AcquisitionProfile::Generated(_)
                         | AcquisitionProfile::Speech(_)
                         | AcquisitionProfile::Editor(_)
+                        | AcquisitionProfile::Index(_)
                         | AcquisitionProfile::SpeechImport
                         | AcquisitionProfile::Qa(_)
                         | AcquisitionProfile::Content(_)
@@ -1471,7 +1463,9 @@ impl Manager {
                 if self.store.owner_retired(&owner)? {
                     return Err("resource owner belongs to a retired allocation generation".into());
                 }
-                group.leaf()?.verify_limits_for(memory, &storage, tasks)?;
+                group
+                    .leaf()?
+                    .verify_limits_for(worker_memory, &storage, tasks)?;
                 let ledger = self.store.read()?;
                 if ledger.leases.iter().any(|l| {
                     l.state != State::Released && l.owner != owner && l.owner.uid == peer.uid
@@ -1494,16 +1488,16 @@ impl Manager {
                         return Err("unleased processes or descendants occupy worker domain".into());
                     }
                     let current = group.current()?;
-                    if current > memory {
+                    if current > worker_memory {
                         return Err("retained worker charges exceed selected peak".into());
                     }
                     let total = ledger.domains[HOST].capacity;
                     check_loading(total, available, memory, current)?;
                     // The parent ceiling includes cache reparented from earlier
                     // worker cgroups. Leaf limits alone would miss those bytes.
-                    group.write("memory.max", &memory.to_string())?;
+                    group.write("memory.max", &worker_memory.to_string())?;
                     group.write("pids.max", &tasks.to_string())?;
-                    if number(&group.read("memory.max")?)? != memory
+                    if number(&group.read("memory.max")?)? != worker_memory
                         || number(&group.read("pids.max")?)? != tasks
                     {
                         return Err("whole worker domain memory ceiling unavailable".into());
@@ -1534,6 +1528,7 @@ impl Manager {
                 let admitted = token.as_ref().ok_or("missing admitted resource token")?;
                 self.owners.insert(admitted.lease_id.clone(), pin);
                 if kind == Kind::Acquisition {
+                    let index = matches!(profile, AcquisitionProfile::Index(_));
                     if profile.requires_original_authority() {
                         self.acquisition_authority
                             .as_mut()
@@ -1542,6 +1537,15 @@ impl Manager {
                     }
                     self.acquisition_bindings
                         .insert(admitted.lease_id.clone(), (profile, storage));
+                    if index && !self.custody_memory.owns(admitted) {
+                        if let Err(error) = self.custody_memory.begin(&self.store.read()?, admitted)
+                        {
+                            self.store.transact(|ledger| {
+                                ledger.revoke(admitted, "index-c-memory-split-unverified")
+                            })?;
+                            return Err(error);
+                        }
+                    }
                 }
             }
             "resource-renew" => {
@@ -2207,6 +2211,38 @@ pub(crate) fn migrate_reviewed(review: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn index_profiles_require_exact_source_review_and_original_authority_without_resource_uplift() {
+        for mode in [
+            "review", "status", "query", "start", "step", "advance", "publish", "retain",
+        ] {
+            let id = format!("index-v2-{mode}-7-{}-{}", "a".repeat(64), "a".repeat(64));
+            let profile = AcquisitionProfile::resolve(&id).unwrap();
+            assert!(matches!(profile, AcquisitionProfile::Index(_)));
+            assert!(profile.requires_original_authority());
+            assert_eq!(profile.memory().unwrap(), ACQUISITION_MEMORY);
+            assert_eq!(profile.worker_memory().unwrap(), 256 * 1024 * 1024);
+            assert_eq!(profile.tasks(), Kind::Acquisition.tasks());
+            assert!(profile.current("0:1", std::process::id()).is_err());
+        }
+        for invalid in [
+            format!("index-v2-query-07-{}-{}", "a".repeat(64), "a".repeat(64)),
+            format!("index-v2-query-7-{}-{}", "a".repeat(64), "b".repeat(64)),
+            format!("index-v2-step-7-{}-{}", "A".repeat(64), "b".repeat(64)),
+            format!("index-v2-other-7-{}-{}", "a".repeat(64), "b".repeat(64)),
+            "index-v2-".into(),
+        ] {
+            assert!(AcquisitionProfile::resolve(&invalid).is_err());
+        }
+        for profile in [
+            AcquisitionProfile::resolve(&format!("editor-v1-{}", "a".repeat(64))).unwrap(),
+            AcquisitionProfile::resolve(&format!("invoice-v1-{}", "a".repeat(64))).unwrap(),
+            AcquisitionProfile::resolve("qwen3-4b-q4-k-m").unwrap(),
+        ] {
+            assert_eq!(profile.worker_memory().unwrap(), ACQUISITION_MEMORY);
+            assert_eq!(profile.memory().unwrap(), ACQUISITION_MEMORY);
+        }
+    }
     #[test]
     fn restore_profile_cannot_fall_through_to_generic_content_or_reuse_serving_budget() {
         for (mode, steps) in [('r', 0), ('w', 2)] {

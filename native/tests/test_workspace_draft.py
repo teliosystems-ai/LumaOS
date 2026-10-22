@@ -430,7 +430,7 @@ class WorkspaceDraftTests(unittest.TestCase):
     def test_new_fixed_protected_module_is_installed_and_required_not_webkit_callback(self):
         body=(ROOT/'native/desktop/workspace_auth.py').read_text(encoding='utf-8')
         self.assertLessEqual(len(body.encode()),128*1024)
-        self.assertIn("name not in ('draft', 'collections', 'speech', 'grounding', 'lifecycle', 'editor')",body)
+        self.assertIn("name not in ('draft', 'collections', 'speech', 'grounding', 'lifecycle', 'editor', 'index')",body)
         self.assertIn("Path('/usr/libexec/luma-os/workspace_'+name+'.py')",body)
         self.assertIn('protected(path, 128*1024)',body)
         for name in ['native/image/assemble.py','native/image/desktop_policy.py']:

@@ -29,9 +29,11 @@ struct Projection {
 /// validators, original ephemeral context and canonical record replay create it.
 pub(super) struct VerifiedEventSemantics {
     pub(super) base: Selector,
+    #[allow(dead_code)]
     pub(super) event: Event,
     pub(super) binding: Option<OwnerBinding>,
     pub(super) state: Validated,
+    #[allow(dead_code)]
     pub(super) owner: Option<OwnerLeaf>,
     pub(super) source_sha256: String,
 }

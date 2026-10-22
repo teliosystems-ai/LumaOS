@@ -1,6 +1,7 @@
 [Unit]
 Description=Luma independent protected content custody
-After=apparmor.service local-fs.target luma-broker.service
+After=apparmor.service local-fs.target luma-broker.service luma-content-data-observer.service
+Wants=luma-content-data-observer.service
 Requires=apparmor.service luma-broker.service
 ConditionPathExists=/var/lib/luma-os/content-checkpoint/sealed/anchor.json
 ConditionPathExists=/var/lib/luma-os/content-checkpoint/genesis.json
@@ -8,6 +9,7 @@ ConditionPathExists=/var/lib/luma-os/content-checkpoint/history.json
 
 [Service]
 Type=simple
+Slice=system-lumacustody.slice
 ExecStart=/usr/libexec/luma-os/luma-platform content-custody-service
 User=root
 Group=root
@@ -40,7 +42,7 @@ SystemCallFilter=~@mount @raw-io @reboot @swap @obsolete @debug
 CapabilityBoundingSet=
 AmbientCapabilities=
 AppArmorProfile=luma-content-custody
-MemoryMax=128M
+MemoryMax=256M
 MemorySwapMax=0
 LimitMEMLOCK=100663296
 LimitCORE=0

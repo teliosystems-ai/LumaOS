@@ -1,8 +1,21 @@
 //! Disposable store/crash fixture, compiled ONLY into the Rust test executable.
 //! This substitutes synthetic computation, never native resource authority.
+//! Inside the verified container it also substitutes an empty fixed-handle
+//! observation for the absent TPM, never an enrolled Admin or release anchor.
 use crate::{artifact_catalog, artifacts, calculation, resources, workflow_resource, Result};
 use std::io::Write;
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
+
+static DISPOSABLE: AtomicBool = AtomicBool::new(false);
+
+/// True only after `execute` verified the disposable CLI container and the TPM
+/// device nodes are still absent; ordinary unit tests never set it.
+pub(crate) fn absent_tpm_verified() -> bool {
+    DISPOSABLE.load(Ordering::SeqCst)
+        && !Path::new("/dev/tpm0").exists()
+        && !Path::new("/dev/tpmrm0").exists()
+}
 
 fn arguments(value: Option<&str>) -> Result<Vec<String>> {
     let args: Vec<String> = serde_json::from_str(value.ok_or("no publication fixture requested")?)?;
@@ -31,6 +44,7 @@ fn disposable() -> Result<()> {
 
 fn execute(args: &[String]) -> Result<serde_json::Value> {
     disposable()?;
+    DISPOSABLE.store(true, Ordering::SeqCst);
     let generation = std::env::var("LUMA_PUBLICATION_TEST_GENERATION").unwrap_or("1".into());
     let parsed = generation.parse::<u64>()?;
     if parsed == 0 || parsed.to_string() != generation {

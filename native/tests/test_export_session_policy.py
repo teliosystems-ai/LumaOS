@@ -18,11 +18,12 @@ class ExportSessionPolicyTests(unittest.TestCase):
         self.assertEqual(set(re.findall(r'"([a-z-]+)"', routes)), {
             'artifact-owned-export', 'artifact-governed-export',
             'policy-archive-export', 'workflow-history-export', 'content-backup-export',
-            'content-office-export', 'editor-run', 'content-owned-inspection-review',
+            'content-office-export', 'editor-run', 'index-review', 'content-owned-inspection-review',
             'content-owned-review', 'content-owned-apply'})
         short = launcher.split('fn short_response_command(', 1)[1].split('\n}', 1)[0]
         self.assertEqual(set(re.findall(r'"([a-z-]+)"', short)), {
-            'editor-run', 'content-owned-inspection-review', 'content-owned-review', 'content-owned-apply'})
+            'editor-run', 'index-review', 'content-owned-inspection-review', 'content-owned-review',
+            'content-owned-apply'})
         extended = launcher.split('fn extended_client_command(', 1)[1].split('\n}', 1)[0]
         self.assertIn('(payload_command(command) && !short_response_command(command))', extended)
         self.assertIn('PAYLOAD_RUNTIME: Duration = Duration::from_secs(1800)', launcher)

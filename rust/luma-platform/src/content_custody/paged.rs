@@ -6,6 +6,14 @@ use std::cell::RefCell;
 use std::fs::File;
 use std::os::unix::fs::{DirBuilderExt, MetadataExt};
 use std::path::Path;
+// Exact cells and slots back the direct C publisher; native slot allocation
+// and physical tails are not yet joined to the production service.
+#[cfg_attr(not(test), allow(dead_code))]
+#[path = "paged/cells.rs"]
+pub(super) mod cells;
+#[cfg_attr(not(test), allow(dead_code))]
+#[path = "paged/slots.rs"]
+pub(super) mod slots;
 
 pub(super) const NAME: &str = "paged-v3";
 pub(super) const PAGE_BYTES: usize = 16 * 1024;
@@ -22,7 +30,8 @@ struct Identity {
     purpose: String,
     binding: luma_content_store::v2::custody_map::CustodyBinding,
 }
-#[derive(Clone, Copy, Debug, Default, Serialize, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct PhysicalInventory {
     pub files: u64,
     pub directories: u64,
@@ -134,22 +143,35 @@ fn names(path: &Path, limit: usize) -> Result<Vec<String>> {
     Ok(output.into_iter().collect())
 }
 fn valid_name(name: &str) -> Result<()> {
-    if name.is_empty() || name.len()>64 || name=="." || name==".."
-        || !name.bytes().all(|byte|byte.is_ascii_alphanumeric() || b".-_".contains(&byte)) {
+    if name.is_empty()
+        || name.len() > 64
+        || name == "."
+        || name == ".."
+        || !name
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || b".-_".contains(&byte))
+    {
         return Err("noncanonical bounded C directory entry".into());
     }
     Ok(())
 }
-fn visit_names(path:&Path,limit:usize,mut visit:impl FnMut(&str)->Result<()>)->Result<()> {
-    if fs::canonicalize(path)?!=path {return Err("paged C streaming inventory path alias".into());}
-    let before=fs::symlink_metadata(path)?;
-    for(index,item)in fs::read_dir(path)?.enumerate(){
-        if index>=limit {return Err("paged C streaming directory count exceeded".into());}
-        let name=item?.file_name().into_string().map_err(|_|"nonUTF8 C directory entry")?;
+fn visit_names(path: &Path, limit: usize, mut visit: impl FnMut(&str) -> Result<()>) -> Result<()> {
+    if fs::canonicalize(path)? != path {
+        return Err("paged C streaming inventory path alias".into());
+    }
+    let before = fs::symlink_metadata(path)?;
+    for (index, item) in fs::read_dir(path)?.enumerate() {
+        if index >= limit {
+            return Err("paged C streaming directory count exceeded".into());
+        }
+        let name = item?
+            .file_name()
+            .into_string()
+            .map_err(|_| "nonUTF8 C directory entry")?;
         valid_name(&name)?;
         visit(&name)?;
     }
-    if file_identity(&before)!=file_identity(&fs::symlink_metadata(path)?) {
+    if file_identity(&before) != file_identity(&fs::symlink_metadata(path)?) {
         return Err("paged C directory changed during streaming inventory".into());
     }
     Ok(())
@@ -170,7 +192,7 @@ impl PageStore {
         fs::DirBuilder::new().mode(0o700).create(&root)?;
         parent.file.sync_all()?;
         check()?;
-        for name in ["pages", "records", "attempts"] {
+        for name in ["pages", "records", "attempts", "controls", "tails"] {
             fs::DirBuilder::new().mode(0o700).create(root.join(name))?;
             File::open(root.join(name))?.sync_all()?;
         }
@@ -201,7 +223,7 @@ impl PageStore {
             purpose: "luma-content-paged-namespace-v3".into(),
             binding: binding.clone(),
         })?;
-        let children = ["pages", "records", "attempts"]
+        let children = ["pages", "records", "attempts", "controls", "tails"]
             .into_iter()
             .map(|name| PersistentDirectory::capture(&root.join(name)))
             .collect::<Result<Vec<_>>>()?;
@@ -222,8 +244,21 @@ impl PageStore {
         check()?;
         Ok(store)
     }
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(super) fn binding(&self) -> &luma_content_store::v2::custody_map::CustodyBinding {
         &self.binding
+    }
+    pub(super) fn require_hash_controls_empty(&self) -> Result<()> {
+        self.check()?;
+        if !names(&self.root.join("controls"), 3)?.is_empty()
+            || fs::read_dir(self.root.join("tails"))?
+                .next()
+                .transpose()?
+                .is_some()
+        {
+            return Err("fixed direct-slot control evidence exists; hashed C opener cannot adopt or ignore it".into());
+        }
+        Ok(())
     }
     pub(super) fn check(&self) -> Result<()> {
         self.pin.check()?;
@@ -243,6 +278,8 @@ impl PageStore {
             "records",
             "pending.json",
             "selected.json",
+            "controls",
+            "tails",
         ];
         if names(&self.root, allowed.len())?
             .iter()
@@ -516,6 +553,7 @@ impl PageStore {
         }
         Ok(bytes)
     }
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(super) fn write_record(
         &self,
         bytes: &[u8],
@@ -653,7 +691,7 @@ impl PageStore {
         let mut total = PhysicalInventory::default();
         let root_before = fs::symlink_metadata(&self.root)?;
         total.add(&root_before, true)?;
-        for name in names(&self.root, 6)? {
+        for name in names(&self.root, 8)? {
             check()?;
             let path = self.root.join(&name);
             let metadata = fs::symlink_metadata(&path)?;
@@ -748,10 +786,14 @@ impl PageStore {
                         let completed = members.iter().any(|name| name == "completed.json");
                         let retired = members.iter().any(|name| name == "retired.json");
                         if completed && retired {
-                            return Err("paged C attempt has contradictory terminal evidence".into());
+                            return Err(
+                                "paged C attempt has contradictory terminal evidence".into()
+                            );
                         }
                         if !completed && !retired {
-                            total.interrupted_files = total.interrupted_files.checked_add(1)
+                            total.interrupted_files = total
+                                .interrupted_files
+                                .checked_add(1)
                                 .ok_or("C interrupted attempt count overflow")?;
                         }
                         for member in members {
@@ -775,6 +817,103 @@ impl PageStore {
                         return Err("C attempts changed during inventory".into());
                     }
                 }
+                "controls" => {
+                    let before = file_identity(&metadata);
+                    total.add(&metadata, true)?;
+                    for name in names(&path, 3)? {
+                        if !["selector-0", "selector-1", "pending"].contains(&name.as_str()) {
+                            return Err("unknown fixed C control-cell member".into());
+                        }
+                        let member = path.join(&name);
+                        let parent = MemberParent::capture(&member)?;
+                        let file = parent.open(&member, libc::O_RDONLY, 0)?;
+                        let observed = file.metadata()?;
+                        cells::validate_file(&file, &member, self, None)?;
+                        total.add(&observed, false)?;
+                    }
+                    if before != file_identity(&fs::symlink_metadata(&path)?) {
+                        return Err(
+                            "C fixed control-cell namespace changed during inventory".into()
+                        );
+                    }
+                }
+                "tails" => {
+                    let before = file_identity(&metadata);
+                    total.add(&metadata, true)?;
+                    visit_names(&path, MAX_ATTEMPTS as usize, |job| {
+                        check()?;
+                        digest(job)?;
+                        let directory = path.join(job);
+                        let pin = PersistentDirectory::capture(&directory)?;
+                        let initial = fs::symlink_metadata(&directory)?;
+                        total.add(&initial, true)?;
+                        let identity = directory.join("identity.json");
+                        let parent = MemberParent::capture(&identity)?;
+                        let file = parent.open(&identity, libc::O_RDONLY, 0)?;
+                        let metadata = parent.member(&file, slots::PLAN_BYTES as u64)?;
+                        total.add(&metadata, false)?;
+                        let bytes = self.read(
+                            &format!("tails/{job}/identity.json"),
+                            slots::PLAN_BYTES,
+                            check,
+                        )?;
+                        let plan: slots::Plan = canonical(&bytes, slots::PLAN_BYTES)?;
+                        plan.validate()?;
+                        if plan.job != job || plan.binding != self.binding {
+                            return Err(
+                                "physical tail inventory changes exact job or C binding".into()
+                            );
+                        }
+                        visit_names(&directory, usize::try_from(plan.slots()?)? + 1, |name| {
+                            check()?;
+                            if name == "identity.json" {
+                                return Ok(());
+                            }
+                            if name.len() != 8
+                                || !name
+                                    .bytes()
+                                    .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+                            {
+                                return Err("physical tail inventory has unknown member".into());
+                            }
+                            let number = u32::from_str_radix(name, 16)?;
+                            plan.spec(number)?;
+                            let member = directory.join(name);
+                            let parent = MemberParent::capture(&member)?;
+                            let file = parent.open(&member, libc::O_RDONLY, 0)?;
+                            let metadata = file.metadata()?;
+                            if !metadata.is_file()
+                                || metadata.uid() != 0
+                                || metadata.nlink() != 1
+                                || ![0o400, 0o600].contains(&(metadata.mode() & 0o7777))
+                                || metadata.len() > plan.capacity(number)?
+                                || metadata.dev() != self.pin.identity.0
+                                || PersistentDirectory::mount(&file)? != self.pin.mount
+                                || file_identity(
+                                    &parent.open(&member, libc::O_RDONLY, 0)?.metadata()?,
+                                ) != file_identity(&metadata)
+                            {
+                                return Err("physical tail inventory member inode/mode/length/mount differs".into());
+                            }
+                            total.add(&metadata, false)?;
+                            slots::instance(&file)?;
+                            parent.check()?;
+                            Ok(())
+                        })?;
+                        if file_identity(&initial)
+                            != file_identity(&fs::symlink_metadata(&directory)?)
+                        {
+                            return Err(
+                                "physical tail namespace changed during complete inventory".into(),
+                            );
+                        }
+                        pin.check()?;
+                        Ok(())
+                    })?;
+                    if before != file_identity(&fs::symlink_metadata(&path)?) {
+                        return Err("physical tail jobs changed during inventory".into());
+                    }
+                }
                 _ => return Err("unknown C paged layout member".into()),
             }
         }
@@ -791,20 +930,29 @@ impl PageStore {
 mod tests {
     use super::*;
     use std::os::unix::fs::PermissionsExt;
-    use std::sync::atomic::{AtomicU64,Ordering};
-    static NEXT:AtomicU64=AtomicU64::new(1);
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static NEXT: AtomicU64 = AtomicU64::new(1);
     struct Fixture(PathBuf);
     impl Fixture {
-        fn new()->Self {
-            let path=std::env::temp_dir().join(format!("luma-paged-inventory-{}-{}",std::process::id(),NEXT.fetch_add(1,Ordering::Relaxed)));
+        fn new() -> Self {
+            let path = std::env::temp_dir().join(format!(
+                "luma-paged-inventory-{}-{}",
+                std::process::id(),
+                NEXT.fetch_add(1, Ordering::Relaxed)
+            ));
             fs::DirBuilder::new().mode(0o700).create(&path).unwrap();
-            assert_eq!(fs::canonicalize(&path).unwrap(),path);
+            assert_eq!(fs::canonicalize(&path).unwrap(), path);
             Self(path)
         }
-        fn file(&self,name:&str) {
-            let path=self.0.join(name);
-            let file=fs::OpenOptions::new().create_new(true).write(true).open(&path).unwrap();
-            file.set_permissions(fs::Permissions::from_mode(0o400)).unwrap();
+        fn file(&self, name: &str) {
+            let path = self.0.join(name);
+            let file = fs::OpenOptions::new()
+                .create_new(true)
+                .write(true)
+                .open(&path)
+                .unwrap();
+            file.set_permissions(fs::Permissions::from_mode(0o400))
+                .unwrap();
         }
     }
     impl Drop for Fixture {
@@ -812,40 +960,99 @@ mod tests {
             // Only this fresh private test directory, no recursive deletion or
             // followed links. Every fixture-created child is a file or empty.
             for entry in fs::read_dir(&self.0).unwrap() {
-                let path=entry.unwrap().path();let metadata=fs::symlink_metadata(&path).unwrap();
-                if metadata.is_dir(){fs::remove_dir(&path).unwrap();}else{fs::remove_file(&path).unwrap();}
+                let path = entry.unwrap().path();
+                let metadata = fs::symlink_metadata(&path).unwrap();
+                if metadata.is_dir() {
+                    fs::remove_dir(&path).unwrap();
+                } else {
+                    fs::remove_file(&path).unwrap();
+                }
             }
             fs::remove_dir(&self.0).unwrap();
         }
     }
     #[test]
     fn streaming_inventory_enforces_count_before_callback_without_collecting_large_names() {
-        let fixture=Fixture::new();for index in 0..8{fixture.file(&format!("{index:064x}"));}
-        let mut seen=BTreeSet::new();visit_names(&fixture.0,8,|name|{assert!(seen.insert(name.to_string()));Ok(())}).unwrap();assert_eq!(seen.len(),8);
-        let mut callbacks=0;assert!(visit_names(&fixture.0,4,|_|{callbacks+=1;Ok(())}).is_err());assert_eq!(callbacks,4);
-        assert!(names(&fixture.0,257).is_err());
-        assert!(MAX_ATTEMPTS>=100_000);
+        let fixture = Fixture::new();
+        for index in 0..8 {
+            fixture.file(&format!("{index:064x}"));
+        }
+        let mut seen = BTreeSet::new();
+        visit_names(&fixture.0, 8, |name| {
+            assert!(seen.insert(name.to_string()));
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(seen.len(), 8);
+        let mut callbacks = 0;
+        assert!(visit_names(&fixture.0, 4, |_| {
+            callbacks += 1;
+            Ok(())
+        })
+        .is_err());
+        assert_eq!(callbacks, 4);
+        assert!(names(&fixture.0, 257).is_err());
+        assert!(MAX_ATTEMPTS >= 100_000);
     }
     #[test]
     fn invalid_name_and_directory_alias_refuse_before_data_callback() {
-        let fixture=Fixture::new();fixture.file(&"a".repeat(65));let mut callbacks=0;
-        assert!(visit_names(&fixture.0,4,|_|{callbacks+=1;Ok(())}).is_err());assert_eq!(callbacks,0);
-        for invalid in ["", ".", "..", "x/y", "x:y", "é"]{assert!(valid_name(invalid).is_err());}
-        let alias=fixture.0.join("alias");std::os::unix::fs::symlink(&fixture.0,&alias).unwrap();
-        assert!(visit_names(&alias,4,|_|{callbacks+=1;Ok(())}).is_err());assert_eq!(callbacks,0);
+        let fixture = Fixture::new();
+        fixture.file(&"a".repeat(65));
+        let mut callbacks = 0;
+        assert!(visit_names(&fixture.0, 4, |_| {
+            callbacks += 1;
+            Ok(())
+        })
+        .is_err());
+        assert_eq!(callbacks, 0);
+        for invalid in ["", ".", "..", "x/y", "x:y", "é"] {
+            assert!(valid_name(invalid).is_err());
+        }
+        let alias = fixture.0.join("alias");
+        std::os::unix::fs::symlink(&fixture.0, &alias).unwrap();
+        assert!(visit_names(&alias, 4, |_| {
+            callbacks += 1;
+            Ok(())
+        })
+        .is_err());
+        assert_eq!(callbacks, 0);
     }
     #[test]
     fn streaming_complete_result_refuses_observed_directory_change() {
-        let fixture=Fixture::new();fixture.file("original");let mut changed=false;
-        assert!(visit_names(&fixture.0,16,|_|{if !changed{fs::DirBuilder::new().mode(0o700).create(fixture.0.join("changed"))?;changed=true;}Ok(())}).is_err());
+        let fixture = Fixture::new();
+        fixture.file("original");
+        let mut changed = false;
+        assert!(visit_names(&fixture.0, 16, |_| {
+            if !changed {
+                fs::DirBuilder::new()
+                    .mode(0o700)
+                    .create(fixture.0.join("changed"))?;
+                changed = true;
+            }
+            Ok(())
+        })
+        .is_err());
     }
     #[test]
     fn private_file_shape_and_allocated_interruption_are_data_not_selectable_authority() {
-        let fixture=Fixture::new();fixture.file("member");let path=fixture.0.join("member");
-        let metadata=fs::symlink_metadata(&path).unwrap();regular(&metadata,1).unwrap();
-        let mut inventory=PhysicalInventory::default();inventory.add(&metadata,false).unwrap();assert_eq!(inventory.interrupted_files,1);assert_eq!(inventory.files,1);
-        fs::hard_link(&path,fixture.0.join("second")).unwrap();assert!(regular(&fs::symlink_metadata(&path).unwrap(),1).is_err());
-        fs::remove_file(fixture.0.join("second")).unwrap();fs::set_permissions(&path,fs::Permissions::from_mode(0o600)).unwrap();assert!(regular(&fs::symlink_metadata(&path).unwrap(),1).is_err());
-        let mut exhausted=PhysicalInventory{files:MAX_PAGES+MAX_ATTEMPTS*8+8,..PhysicalInventory::default()};assert!(exhausted.add(&metadata,false).is_err());
+        let fixture = Fixture::new();
+        fixture.file("member");
+        let path = fixture.0.join("member");
+        let metadata = fs::symlink_metadata(&path).unwrap();
+        regular(&metadata, 1).unwrap();
+        let mut inventory = PhysicalInventory::default();
+        inventory.add(&metadata, false).unwrap();
+        assert_eq!(inventory.interrupted_files, 1);
+        assert_eq!(inventory.files, 1);
+        fs::hard_link(&path, fixture.0.join("second")).unwrap();
+        assert!(regular(&fs::symlink_metadata(&path).unwrap(), 1).is_err());
+        fs::remove_file(fixture.0.join("second")).unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+        assert!(regular(&fs::symlink_metadata(&path).unwrap(), 1).is_err());
+        let mut exhausted = PhysicalInventory {
+            files: MAX_PAGES + MAX_ATTEMPTS * 8 + 8,
+            ..PhysicalInventory::default()
+        };
+        assert!(exhausted.add(&metadata, false).is_err());
     }
 }

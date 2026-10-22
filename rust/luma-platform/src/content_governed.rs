@@ -23,6 +23,8 @@ const MAX_PAGE_BYTES: u32 = 16384;
 const MAX_QUERY_RESULTS: usize = 32;
 const PREFIX: &str = "content-v1-";
 const SEALS: i32 = libc::F_SEAL_WRITE | libc::F_SEAL_GROW | libc::F_SEAL_SHRINK | libc::F_SEAL_SEAL;
+#[path = "content_governed/observed_read.rs"]
+pub(crate) mod observed_read;
 
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -1632,6 +1634,8 @@ struct Response {
     binding: String,
     lease: crate::resources::Token,
     result: serde_json::Value,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    paged_head_sha256: Option<String>,
 }
 
 fn worker(id: &str) -> Result<()> {
@@ -1689,7 +1693,65 @@ fn worker(id: &str) -> Result<()> {
     {
         return Err("native content input is not the current installed principal".into());
     }
-    let cut = if checkpoint_required {
+    let observed_legacy = if checkpoint_required
+        && matches!(input.operation, Operation::Page { .. })
+    {
+        // The actual acquisition lease was obtained before input/private IO.
+        // Retain the same fixed readonly worker budget fence on this route.
+        validate_budget(
+            p.mode,
+            ResourceBudget {
+                memory_bytes: 64 * 1024 * 1024,
+                tasks: 1,
+                read_bytes: MAX_REQUEST as u64,
+                write_bytes: 0,
+                additional_storage_bytes: 0,
+            },
+        )?;
+        lease.check()?;
+        let mut current = || {
+            lease.check()?;
+            registry.current()?;
+            if account.id != input.binding.owner
+                || !account.enabled
+                || account.generation > input.binding.owner_generation
+            {
+                return Err("observed Page worker principal changed".into());
+            }
+            lease.check()
+        };
+        match crate::content_checkpoint::custody::observed_page(
+            id,
+            &input.binding,
+            lease.token(),
+            &bytes,
+            &mut current,
+        )? {
+            crate::content_checkpoint::custody::ObservedPageReply::Paged {
+                head_sha256,
+                result,
+            } => {
+                current()?;
+                observed_read::PageSource::parse(
+                    &bytes,
+                    id,
+                    &resource_manager::storage_device(Path::new("/var"))?,
+                    &input.binding,
+                )?
+                .validate_result(&result)?;
+                return emit_worker_response(id, &p, &lease, result, Some(head_sha256));
+            }
+            crate::content_checkpoint::custody::ObservedPageReply::Legacy { state } => Some(state),
+        }
+    } else {
+        None
+    };
+    let cut = if let Some(current) = observed_legacy {
+        Some(crate::content_checkpoint::custody::PreparationCut {
+            current,
+            prior_base: None,
+        })
+    } else if checkpoint_required {
         Some(
             if matches!(
                 p.mode,
@@ -1977,6 +2039,21 @@ fn worker(id: &str) -> Result<()> {
         }
     };
     boundary.current(&input.binding)?;
+    emit_worker_response(id, &p, &lease, result, None)
+}
+fn emit_worker_response(
+    id: &str,
+    p: &Profile<'_>,
+    lease: &resource_manager::WorkerLease,
+    result: serde_json::Value,
+    paged_head_sha256: Option<String>,
+) -> Result<()> {
+    if paged_head_sha256
+        .as_ref()
+        .is_some_and(|hash| !io::hash(hash) || hash.bytes().all(|b| b == b'0'))
+    {
+        return Err("observed Page worker returned invalid head commitment".into());
+    }
     let result_bytes = serde_json::to_vec(&result)?;
     lease.complete_output(&io::digest(&result_bytes))?;
     let response = Response {
@@ -1985,6 +2062,7 @@ fn worker(id: &str) -> Result<()> {
         binding: binding(id, &resource_manager::storage_device(Path::new("/var"))?)?,
         lease: lease.token().clone(),
         result,
+        paged_head_sha256,
     };
     let output = serde_json::to_vec(&response)?;
     if output.len() as u64 >= p.mode.output_limit() {
@@ -2551,19 +2629,40 @@ fn deliver_protected(
     // checked writer into the scoped C proof callback before it changes thread;
     // that callback must never acquire a fresh stdout fallback.
     let output = crate::service::granted_gateway::required_export_writer()?;
+    let deliver = |proof: crate::service::content_output::Proof| {
+        deliver_payload_result(&response.result, output_limit, output, || {
+            proof.check()?;
+            check_response_output(response, id, &output_sha256)?;
+            proof.check()
+        })
+    };
+    if let Some(head) = &response.paged_head_sha256 {
+        let source = serde_json::to_vec(input)?;
+        let page = observed_read::PageSource::parse(
+            &source,
+            id,
+            &resource_manager::storage_device(Path::new("/var"))?,
+            &input.binding,
+        )?;
+        page.validate_result(&response.result)?;
+        return crate::service::content_output::run_paged(
+            id,
+            &input.binding,
+            &response.lease,
+            &output_sha256,
+            head,
+            std::str::from_utf8(&source)?,
+            guard,
+            deliver,
+        );
+    }
     crate::service::content_output::run(
         id,
         &input.binding,
         &response.lease,
         &output_sha256,
         guard,
-        |proof| {
-            deliver_payload_result(&response.result, output_limit, output, || {
-                proof.check()?;
-                check_response_output(response, id, &output_sha256)?;
-                proof.check()
-            })
-        },
+        deliver,
     )
 }
 
@@ -5334,6 +5433,7 @@ mod tests {
             binding: "d".repeat(64),
             lease: lease.clone(),
             result: serde_json::json!({"committed":true,"outcome":"exact"}),
+            paged_head_sha256: None,
         };
         let receipt = serde_json::json!({"binding":response.binding,"output_sha256":io::digest(&serde_json::to_vec(&response.result).unwrap()),"output_domain_epochs":{"acquisition-executions":"1","host-memory":"2","worker-processes":"3"},"lease":lease,"state":"released","physical_release_granted":false});
         (response, receipt)

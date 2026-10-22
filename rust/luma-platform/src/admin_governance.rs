@@ -1546,6 +1546,15 @@ impl GrantBoundary<'_> {
                 requested,
                 self.session.account.purpose(),
             )?
+        } else if matches!(
+            requested.selector.id.as_str(),
+            "native-content-index-build-v2" | "native-content-index-retain-v2"
+        ) {
+            crate::content_index::scope::pair(
+                &self.uses,
+                requested,
+                self.session.account.purpose(),
+            )?
         } else {
             content_acquisition_scope(&self.uses, requested, self.session.account.purpose())?
         };

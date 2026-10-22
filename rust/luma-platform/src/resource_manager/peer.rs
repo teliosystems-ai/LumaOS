@@ -160,9 +160,14 @@ fn content_status(status: &str, uid: u32, cmdline: &str) -> Result<()> {
     if uid != 0
         || parts.len() != 4
         || parts[0] != "/usr/libexec/luma-os/luma-platform"
-        || parts[1] != "content-resource-worker"
         || !parts[3].is_empty()
-        || crate::content_governed::source_digest(parts[2]).is_err()
+        || match parts[1] {
+            "content-resource-worker" => crate::content_governed::source_digest(parts[2]).is_err(),
+            "index-resource-worker" => {
+                crate::content_index::request::parse_profile(parts[2]).is_err()
+            }
+            _ => true,
+        }
     {
         return Err("zero-capability content admission requires the exact governed worker".into());
     }
@@ -300,7 +305,7 @@ fn reference_generation(mut read: impl FnMut(&str, u64) -> Result<String>) -> Re
 pub(super) fn custody_generation(mut read: impl FnMut(&str, u64) -> Result<String>) -> Result<u64> {
     let start = start_ticks(&read("stat", 4096)?)?;
     for _ in 0..2 {
-        if read("cgroup", 4096)? != "0::/system.slice/luma-content-custody.service\n"
+        if read("cgroup", 4096)? != format!("0::{}\n", CUSTODY_LEAF)
             || read("attr/current", 128)? != "luma-content-custody (enforce)\n"
             || read("cmdline", 4096)?
                 != "/usr/libexec/luma-os/luma-platform\0content-custody-service\0"
@@ -479,6 +484,38 @@ mod tests {
         )
         .is_err());
         assert!(content_status(&status, 988, &exact).is_err());
+    }
+    #[test]
+    fn capability_free_index_worker_requires_exact_profile_and_cannot_borrow_content_identity() {
+        let status = status(Kind::Model, 0);
+        for mode in [
+            "review", "status", "query", "start", "step", "advance", "publish", "retain",
+        ] {
+            let selected = format!("index-v2-{mode}-7-{}-{}", "a".repeat(64), "a".repeat(64));
+            let exact =
+                format!("/usr/libexec/luma-os/luma-platform\0index-resource-worker\0{selected}\0");
+            content_status(&status, 0, &exact).unwrap();
+            for invalid in [
+                exact.replace("index-resource-worker", "content-resource-worker"),
+                exact.replace("index-resource-worker", "model-acquisition-worker"),
+                exact.replace("/usr/libexec/luma-os/luma-platform", "/tmp/luma-platform"),
+                exact.replace("-7-", "-07-"),
+                format!("{exact}extra\0"),
+                exact.trim_end_matches('\0').to_owned(),
+            ] {
+                assert!(content_status(&status, 0, &invalid).is_err());
+            }
+            assert!(content_status(&status, 988, &exact).is_err());
+            assert!(
+                content_status(&status.replace("Seccomp:\t2", "Seccomp:\t0"), 0, &exact).is_err()
+            );
+            assert!(content_status(
+                &status.replace("0000000000000000", "00000000000000e0"),
+                0,
+                &exact
+            )
+            .is_err());
+        }
     }
     #[test]
     fn generated_extra_capability_requires_exact_closed_supervisor_argv() {

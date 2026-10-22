@@ -8,8 +8,8 @@ pub(super) struct RetiredCut {
     pending: Pending,
     next: Descriptor,
 }
-pub(super) struct Initial {
-    pub anchor: super::super::super::super::ContentAnchor,
+pub(super) struct Initial<A: Checkpoint> {
+    pub anchor: A,
     pub files: Files,
     pub pages: PageStore,
     pub binding: map::CustodyBinding,
@@ -18,7 +18,7 @@ pub(super) struct Initial {
     pub genesis_proof: Vec<u8>,
     pub retired: Option<RetiredCut>,
 }
-impl Initial {
+impl<A: Checkpoint> Initial<A> {
     pub fn previous_retirement(&self) -> Option<String> {
         self.retired.as_ref().map(|cut| cut.pending.attempt.clone())
     }
@@ -28,9 +28,12 @@ impl Initial {
     pub fn check(&mut self, check: &mut impl FnMut() -> Result<()>) -> Result<()> {
         check()?;
         self.pages.check()?;
-        if self.anchor.installation() != self.binding.installation
-            || bundle::hex(&self.anchor.genesis_event()) != self.binding.sealed_genesis_sha256
-            || self.anchor.read()? != tpm::decode(&self.legacy.nv_head)?
+        genesis::validate(
+            &self.genesis_proof,
+            &self.binding.installation,
+            tpm::decode(&self.binding.sealed_genesis_sha256)?,
+        )?;
+        if self.anchor.read()? != tpm::decode(&self.legacy.nv_head)?
             || self.files.read(JOURNAL, check)? != self.bytes
             || self.files.read("genesis.json", check)? != self.genesis_proof
             || !self.pages.absent("pending.json")?
@@ -213,10 +216,11 @@ fn previous_cut(
 
 /// This held selection/recovery result is DATA, not permission. It cannot be
 /// cloned or deserialized and every use requires fresh original callbacks.
-pub(crate) struct RetiredInitialBootstrap {
-    state: Initial,
+pub(crate) struct RetiredInitialBootstrap<A: Checkpoint = super::super::super::super::ContentAnchor>
+{
+    state: Initial<A>,
 }
-impl RetiredInitialBootstrap {
+impl<A: Checkpoint> RetiredInitialBootstrap<A> {
     pub(crate) fn review(
         &mut self,
         check: &mut impl FnMut() -> Result<()>,
@@ -254,27 +258,44 @@ impl RetiredInitialBootstrap {
         self,
         expected_intent: &str,
         authority: &mut OriginalCAdminOperation<'_>,
-    ) -> Result<PagedStore<super::super::super::super::ContentAnchor>> {
+    ) -> Result<PagedStore<A>> {
         dispatch_initial(self.state, expected_intent, authority)
     }
 }
 
 fn load_initial(
     check: &mut impl FnMut() -> Result<()>,
-) -> Result<(Initial, Pending, Descriptor, String)> {
+) -> Result<(
+    Initial<super::super::super::super::ContentAnchor>,
+    Pending,
+    Descriptor,
+    String,
+)> {
     check()?;
-    let mut anchor = super::super::super::super::ContentAnchor::installed()?;
+    let anchor = super::super::super::super::ContentAnchor::installed()?;
     let binding = map::CustodyBinding {
         installation: anchor.installation().into(),
         sealed_genesis_sha256: bundle::hex(&anchor.genesis_event()),
     };
     let files = Files::installed();
-    validate_genesis_at(&files.root, &binding.installation, anchor.genesis_event())?;
+    load_initial_at(anchor, files, binding, check)
+}
+fn load_initial_at<A: Checkpoint>(
+    mut anchor: A,
+    files: Files,
+    binding: map::CustodyBinding,
+    check: &mut impl FnMut() -> Result<()>,
+) -> Result<(Initial<A>, Pending, Descriptor, String)> {
+    validate_genesis_at(
+        &files.root,
+        &binding.installation,
+        tpm::decode(&binding.sealed_genesis_sha256)?,
+    )?;
     let genesis_proof = files.read("genesis.json", check)?;
     genesis::validate(
         &genesis_proof,
         &binding.installation,
-        anchor.genesis_event(),
+        tpm::decode(&binding.sealed_genesis_sha256)?,
     )?;
     let pages = PageStore::open(&files.root, binding.clone(), check)?;
     let pending_bytes = pages.read("pending.json", CONTROL_BYTES, check)?;
@@ -388,9 +409,10 @@ fn load_initial(
 pub(crate) fn initial_recovery_review(
     check: &mut impl FnMut() -> Result<()>,
 ) -> Result<serde_json::Value> {
-    let (state, pending, _, review) = load_initial(check)?;
+    let (state, pending, next, review) = load_initial(check)?;
     let value = serde_json::json!({"schema_version":3,"installation":state.binding.installation,"review_sha256":review,
-        "attempt":pending.attempt,"actual_nv_head":state.legacy.nv_head,"retirement_only":true,
+        "stable_review_sha256":next.phase.review_sha256,"expected_window_sha256":review,
+        "attempt":pending.attempt,"attempt_sha256":pending.attempt,"actual_nv_head":state.legacy.nv_head,"retirement_only":true,
         "legacy_writer_available":false,"old_event_will_be_redispatched":false,
         "separate_fresh_bootstrap_required":true,"authority_returned":false,"production_qualified":false});
     if serde_json::to_vec(&value)?.len() > 8192 {
@@ -411,7 +433,21 @@ fn open_retired(
         sealed_genesis_sha256: bundle::hex(&anchor.genesis_event()),
     };
     let files = Files::installed();
-    validate_genesis_at(&files.root, &binding.installation, anchor.genesis_event())?;
+    open_retired_at(anchor, files, binding, attempt, check)
+}
+fn open_retired_at<A: Checkpoint>(
+    anchor: A,
+    files: Files,
+    binding: map::CustodyBinding,
+    attempt: &str,
+    check: &mut impl FnMut() -> Result<()>,
+) -> Result<RetiredInitialBootstrap<A>> {
+    digest(attempt)?;
+    validate_genesis_at(
+        &files.root,
+        &binding.installation,
+        tpm::decode(&binding.sealed_genesis_sha256)?,
+    )?;
     let pages = PageStore::open(&files.root, binding.clone(), check)?;
     let base: BaseSnapshot = canonical(
         &pages.read(
@@ -441,7 +477,7 @@ fn open_retired(
     genesis::validate(
         &genesis_proof,
         &binding.installation,
-        anchor.genesis_event(),
+        tpm::decode(&binding.sealed_genesis_sha256)?,
     )?;
     let mut state = Initial {
         anchor,
@@ -481,16 +517,37 @@ pub(crate) fn retire_initial_bootstrap(
     expected_review: &str,
     authority: &mut OriginalCAdminOperation<'_>,
 ) -> Result<RetiredInitialBootstrap> {
-    use crate::finite_grants::{Action, Kind};
     digest(expected_review)?;
     authority.check()?;
-    let (mut state, pending, next, review) = load_initial(&mut || authority.check())?;
+    let (state, pending, next, review) = load_initial(&mut || authority.check())?;
+    retire_loaded(state, pending, next, &review, expected_review, authority)
+}
+fn retire_loaded<A: Checkpoint>(
+    mut state: Initial<A>,
+    pending: Pending,
+    next: Descriptor,
+    review: &str,
+    expected_review: &str,
+    authority: &mut OriginalCAdminOperation<'_>,
+) -> Result<RetiredInitialBootstrap<A>> {
+    use crate::finite_grants::{Action, Kind};
     let source = authority.source_binding();
+    let control = source
+        .paged_control
+        .as_ref()
+        .ok_or("initial retirement lacks authenticated control DATA")?;
+    control.validate()?;
+    let opaque = tpm::decode::<16>(&source.job)?;
     let audit = authority.audit();
     if review != expected_review
         || source.command != "content-custody-paged-reconcile"
         || source.installation != state.binding.installation
-        || source.job != pending.attempt
+        || opaque == [0; 16]
+        || source.job != bundle::hex(&opaque)
+        || control.attempt_sha256.as_deref() != Some(pending.attempt.as_str())
+        || control.expected_selected_descriptor_sha256.is_some()
+        || control.expected_window_sha256 != review
+        || control.stable_review_sha256 != next.phase.review_sha256
         || source.usage != audit.usage
         || audit.operation_id.is_none()
         || audit.usage.action != Action::RecoverResource
@@ -515,6 +572,35 @@ pub(crate) fn retire_initial_bootstrap(
     state.retired = Some(RetiredCut { pending, next });
     state.check(&mut || authority.check())?;
     Ok(RetiredInitialBootstrap { state })
+}
+
+#[cfg(test)]
+pub(super) fn software_load_initial<A: Checkpoint>(
+    anchor: A,
+    files: Files,
+    binding: map::CustodyBinding,
+    check: &mut impl FnMut() -> Result<()>,
+) -> Result<(Initial<A>, Pending, Descriptor, String)> {
+    load_initial_at(anchor, files, binding, check)
+}
+#[cfg(test)]
+pub(super) fn software_retire_initial<A: Checkpoint>(
+    loaded: (Initial<A>, Pending, Descriptor, String),
+    expected: &str,
+    authority: &mut OriginalCAdminOperation<'_>,
+) -> Result<RetiredInitialBootstrap<A>> {
+    let (state, pending, next, review) = loaded;
+    retire_loaded(state, pending, next, &review, expected, authority)
+}
+#[cfg(test)]
+pub(super) fn software_open_retired<A: Checkpoint>(
+    anchor: A,
+    files: Files,
+    binding: map::CustodyBinding,
+    attempt: &str,
+    check: &mut impl FnMut() -> Result<()>,
+) -> Result<RetiredInitialBootstrap<A>> {
+    open_retired_at(anchor, files, binding, attempt, check)
 }
 
 #[cfg(test)]
@@ -579,6 +665,7 @@ mod tests {
             legacy,
             roots: Roots::empty(&binding).unwrap(),
             phase: phase.clone(),
+            storage: None,
             operation: OperationData::BootstrapProgress {
                 previous_retirement: None,
                 review_sha256: phase.review_sha256.clone(),

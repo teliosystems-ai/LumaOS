@@ -8,6 +8,8 @@ use crate::resource_manager::requests::gateway::{
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt};
+#[cfg(test)]
+mod snapshot_bound_tests;
 mod source;
 
 const PROFILE: &str = "luma-granted-client (enforce)";
@@ -36,6 +38,7 @@ fn payload_command(command: &str) -> bool {
             | "content-backup-export"
             | "content-office-export"
             | "editor-run"
+            | "index-review"
             | "content-owned-inspection-review"
             | "content-owned-review"
             | "content-owned-apply"
@@ -56,6 +59,7 @@ fn short_response_command(command: &str) -> bool {
     matches!(
         command,
         "editor-run"
+            | "index-review"
             | "content-owned-inspection-review"
             | "content-owned-review"
             | "content-owned-apply"
@@ -100,6 +104,7 @@ pub(crate) fn short_original_arguments<'a>(args: &[&'a str]) -> Result<Vec<&'a s
     }
     let logical = match args[1] {
         "editor-run" => 7,
+        "index-review" => 6,
         "content-owned-inspection-review" => 5,
         "content-owned-review" => 6,
         "content-owned-apply" => 8,
@@ -213,7 +218,57 @@ pub(crate) fn required_export_writer() -> Result<CheckedPayload> {
 }
 
 pub(crate) struct CheckedPayload(PayloadWriter);
+/// Opaque finite transport DATA. It does not admit a session or select an
+/// export operation; the caller must continuously check its genuine original
+/// authority. No generic public larger-byte constructor exists.
+pub(crate) struct CheckedDeliveryBound {
+    maximum: u64,
+}
+/// Temporary diagnostic bridge while the snapshot's genuine C/original-worker
+/// route is unregistered. No snapshot command/listener is installed by this.
+#[cfg(test)]
+pub(crate) fn snapshot_delivery_bound(
+    read: &crate::finite_grants::Use,
+    export: &crate::finite_grants::Use,
+) -> Result<CheckedDeliveryBound> {
+    use crate::finite_grants as g;
+    read.validate()?;
+    export.validate()?;
+    if read.action != g::Action::Read
+        || read.selector.kind != g::Kind::File
+        || read.selector.id != g::SNAPSHOT_READ_ID
+        || export.action != g::Action::Export
+        || export.selector.kind != g::Kind::Artifact
+        || export.selector.id != g::SNAPSHOT_EXPORT_ID
+        || read.selector.generation != export.selector.generation
+        || read.selector.digest != export.selector.digest
+        || read.input_bytes != export.input_bytes
+        || read.input_bytes > g::SNAPSHOT_MAX_READ_BYTES
+        || read.output_bytes != g::SNAPSHOT_MAX_REVIEW_BYTES
+        || export.output_bytes == 0
+        || export.output_bytes > g::SNAPSHOT_MAX_EXPORT_BYTES
+        || read.units != 1
+        || export.units != 1
+    {
+        return Err("snapshot transport requires its closed exact finite selector pair".into());
+    }
+    Ok(CheckedDeliveryBound {
+        maximum: export.output_bytes,
+    })
+}
 impl CheckedPayload {
+    #[cfg(test)]
+    pub(crate) fn diagnostic_socket(socket: UnixStream) -> Result<Self> {
+        socket.set_nonblocking(true)?;
+        Ok(Self(PayloadWriter {
+            socket,
+            bytes: 0,
+            digest: Sha256::new(),
+        }))
+    }
+    pub(crate) fn checked_measurement(&self) -> (u64, [u8; 32]) {
+        (self.0.bytes, self.0.digest.clone().finalize().into())
+    }
     fn transfer(&mut self, bytes: &[u8], check: &mut dyn FnMut() -> Result<()>) -> Result<()> {
         let deadline = Instant::now() + PAYLOAD_TIMEOUT;
         let mut sent = 0;
@@ -267,9 +322,8 @@ impl CheckedPayload {
                 Err(error) => return Err(error.into()),
             }
         }
-        if ack[..8] != self.0.bytes.to_be_bytes()
-            || ack[8..] != self.0.digest.clone().finalize()[..]
-        {
+        let (bytes, digest) = self.checked_measurement();
+        if ack[..8] != bytes.to_be_bytes() || ack[8..] != digest {
             return Err("backup relay exact delivery acknowledgement differs".into());
         }
         check()
@@ -279,6 +333,20 @@ impl CheckedPayload {
         bytes: &[u8],
         check: &mut dyn FnMut() -> Result<()>,
     ) -> Result<()> {
+        self.write_checked_bound(
+            bytes,
+            &CheckedDeliveryBound {
+                maximum: PAYLOAD_MAX,
+            },
+            check,
+        )
+    }
+    pub(crate) fn write_checked_bound(
+        &mut self,
+        bytes: &[u8],
+        bound: &CheckedDeliveryBound,
+        check: &mut dyn FnMut() -> Result<()>,
+    ) -> Result<()> {
         if bytes.is_empty() || bytes.len() > PAYLOAD_BLOCK {
             return Err("backup relay block outside fixed bound".into());
         }
@@ -286,7 +354,7 @@ impl CheckedPayload {
             .0
             .bytes
             .checked_add(bytes.len() as u64)
-            .filter(|count| *count <= PAYLOAD_MAX)
+            .filter(|count| *count <= bound.maximum)
             .ok_or("backup relay exceeds finite delivery bound")?;
         self.transfer(&(bytes.len() as u32).to_be_bytes(), check)?;
         self.transfer(bytes, check)?;
@@ -1157,22 +1225,7 @@ impl Admission {
             );
         }
         acquisition_arguments(credentials(socket)?.pid, profile, None)?;
-        let purpose = if profile.starts_with(crate::content_restore::PREFIX) {
-            BrokerPurpose::ContentRestoreAdmin
-        } else if crate::generated_runtime::is_profile(profile)
-            || crate::speech::is_profile(profile)
-            || profile.starts_with("content-v1-")
-        {
-            BrokerPurpose::Standard
-        } else if profile.starts_with(crate::content_backup::PREFIX)
-            || profile.starts_with(crate::office_export::PREFIX)
-        {
-            BrokerPurpose::Export
-        } else if profile.starts_with("qa-v1-") {
-            BrokerPurpose::ModelQa
-        } else {
-            BrokerPurpose::ModelImport
-        };
+        let purpose = acquisition_purpose(profile)?;
         let result = Self::capture_for(
             socket,
             job,
@@ -1239,6 +1292,30 @@ impl Admission {
     }
 }
 
+fn acquisition_purpose(profile: &str) -> Result<BrokerPurpose> {
+    if profile.starts_with(crate::content_index::PREFIX) {
+        crate::content_index::request::parse_profile(profile)?;
+        return Ok(BrokerPurpose::Standard);
+    }
+    Ok(if profile.starts_with(crate::content_restore::PREFIX) {
+        BrokerPurpose::ContentRestoreAdmin
+    } else if crate::generated_runtime::is_profile(profile)
+        || crate::speech::is_profile(profile)
+        || crate::editor_session::is_profile(profile)
+        || profile.starts_with("content-v1-")
+    {
+        BrokerPurpose::Standard
+    } else if profile.starts_with(crate::content_backup::PREFIX)
+        || profile.starts_with(crate::office_export::PREFIX)
+    {
+        BrokerPurpose::Export
+    } else if profile.starts_with("qa-v1-") {
+        BrokerPurpose::ModelQa
+    } else {
+        BrokerPurpose::ModelImport
+    })
+}
+
 fn acquisition_arguments(
     pid: i32,
     profile: &str,
@@ -1254,6 +1331,9 @@ fn acquisition_arguments(
     )?;
     let args = raw.split('\0').collect::<Vec<_>>();
     let args = short_original_arguments(&args)?;
+    if profile.starts_with(crate::content_index::PREFIX) {
+        return crate::content_index::client::check_client_arguments(&args, profile, audit);
+    }
     if profile.starts_with("content-v1-") {
         return crate::content_governed::check_client_arguments(&args, profile, audit);
     }
@@ -1345,6 +1425,16 @@ fn custody_arguments(
         0x9fa0,
     )?;
     let args = raw.split('\0').collect::<Vec<_>>();
+    if matches!(
+        command,
+        "content-custody-paged-review"
+            | "content-custody-paged-bootstrap"
+            | "content-custody-paged-reconcile"
+    ) {
+        return crate::content_checkpoint::custody::verify_paged_admin_arguments(
+            &args, command, usage, audit,
+        );
+    }
     let count = if command == "content-backup-signer-prepare" {
         5
     } else {
@@ -1398,7 +1488,9 @@ fn acquisition_audit(
         | "native-content-trash-v1"
         | "native-content-restore-deleted-v1"
         | "native-content-backup-export-v1" => content_pair(usage),
-        "native-content-office-export-v1" => content_pair(usage),
+        "native-content-office-export-v1"
+        | "native-content-index-build-v2"
+        | "native-content-index-retain-v2" => content_pair(usage),
         "native-content-restore-review-v1" | "native-content-restore-write-v1" => {
             content_pair(usage)
         }
@@ -1854,7 +1946,9 @@ fn bounded_json_input(path: &str) -> Result<Vec<u8>> {
 }
 impl InputStage {
     fn capture(bytes: &[u8], leaf: &str) -> Result<Self> {
-        let maximum = if leaf == "content.json" {
+        let maximum = if leaf == "index.json" {
+            crate::content_index::MAX_REQUEST
+        } else if leaf == "content.json" {
             crate::content_governed::MAX_REQUEST
         } else if leaf == "content-backup.json" {
             crate::content_backup::MAX_REQUEST
@@ -1883,6 +1977,7 @@ impl InputStage {
                 | "speech.json"
                 | "editor.json"
                 | "content.json"
+                | "index.json"
                 | "content-backup.json"
                 | "content-backup-recipients.json"
                 | "content-office.json"
@@ -2033,6 +2128,7 @@ pub(crate) fn launch(arguments: &[String]) -> Result<()> {
                 | "speech-review"
                 | "speech-transcribe"
                 | "editor-review"
+                | "index-review"
                 | "editor-run"
                 | "model-pack-import-review"
                 | "model-pack-import"
@@ -2094,6 +2190,10 @@ pub(crate) fn launch(arguments: &[String]) -> Result<()> {
                 | "content-backup-signer-enroll"
                 | "content-backup-recipients-proposal"
                 | "content-backup-recipients-enroll"
+                | "content-custody-paged-proposal"
+                | "content-custody-paged-review"
+                | "content-custody-paged-bootstrap"
+                | "content-custody-paged-reconcile"
                 | "policy-evidence-review"
                 | "policy-evidence-retain"
                 | "policy-evidence-pending-review"
@@ -2234,6 +2334,26 @@ pub(crate) fn launch(arguments: &[String]) -> Result<()> {
                 .path
                 .to_str()
                 .ok_or("invalid private backup request path")?
+                .into();
+            Some(stage)
+        }
+        "index-review" => {
+            if arguments.len() != 4 {
+                return Err("index review launcher requires LOGIN READ-GRANT INDEX.json".into());
+            }
+            let bytes = source::read(Path::new(&arguments[3]), crate::content_index::MAX_REQUEST)?;
+            let input = crate::content_index::request::Input::parse(&bytes)?;
+            if input.login != arguments[1]
+                || !crate::admin_roles::identifier(&arguments[2])
+                || arguments[2] == "none"
+            {
+                return Err("index review source/login/original Read grant differs".into());
+            }
+            let stage = InputStage::capture(&bytes, "index.json")?;
+            owned[3] = stage
+                .path
+                .to_str()
+                .ok_or("index snapshot path encoding")?
                 .into();
             Some(stage)
         }
@@ -2469,7 +2589,15 @@ pub(crate) fn launch(arguments: &[String]) -> Result<()> {
     ) {
         writable.push_str(" /var/lib/luma-os/model-qualifications");
     }
-    let short_limit = if owned[0] == "editor-run" {
+    let short_limit = if owned[0] == "index-review" {
+        let staged = stage
+            .as_ref()
+            .ok_or("index response requires protected original source")?;
+        let bytes = source::read(&staged.path, crate::content_index::MAX_REQUEST)?;
+        Some(crate::content_index::runtime::response_limit(
+            &owned[0], &bytes,
+        )?)
+    } else if owned[0] == "editor-run" {
         Some(65536)
     } else if short_response_command(&owned[0]) {
         let staged = stage
@@ -2850,6 +2978,7 @@ mod tests {
     fn structured_content_and_editor_payload_never_borrow_extended_client_runtime() {
         for command in [
             "editor-run",
+            "index-review",
             "content-owned-inspection-review",
             "content-owned-review",
             "content-owned-apply",
@@ -2863,6 +2992,7 @@ mod tests {
             "editor-checkpoint-request",
             "editor-resource-worker",
             "editor-review",
+            "index-run",
         ] {
             assert!(!payload_command(command));
         }
@@ -3228,6 +3358,8 @@ mod tests {
             "native-content-recovery-v1 ",
             "Native-content-recovery-v1",
             "native-content-recovery-v1-extra",
+            "native-content-index-build-v20",
+            "native-content-index-retain-v2-extra",
         ] {
             usage.selector.id = id.into();
             let singleton_called = Cell::new(false);
@@ -3255,6 +3387,49 @@ mod tests {
             },
         )
         .is_err());
+        for id in [
+            "native-content-index-build-v2",
+            "native-content-index-retain-v2",
+        ] {
+            usage.selector.id = id.into();
+            assert!(acquisition_audit(
+                &usage,
+                || panic!("index effect must not borrow singleton attribution"),
+                |requested| {
+                    assert_eq!(requested, &usage);
+                    Err("fixture strict index pair refuses malformed Write/File".into())
+                },
+            )
+            .is_err());
+        }
+    }
+    #[test]
+    fn editor_and_all_exact_index_modes_keep_standard_purpose_not_import_or_export() {
+        let editor = format!("editor-v1-{}", "a".repeat(64));
+        assert_eq!(
+            acquisition_purpose(&editor).unwrap(),
+            BrokerPurpose::Standard
+        );
+        assert!(acquisition_purpose(&editor)
+            .unwrap()
+            .require(crate::authentication::SessionPurpose::Standard)
+            .is_ok());
+        for mode in [
+            "review", "status", "query", "start", "step", "advance", "publish", "retain",
+        ] {
+            let profile = format!("index-v2-{mode}-7-{}-{}", "a".repeat(64), "a".repeat(64));
+            let purpose = acquisition_purpose(&profile).unwrap();
+            assert_eq!(purpose, BrokerPurpose::Standard);
+            for actual in [
+                crate::authentication::SessionPurpose::Export,
+                crate::authentication::SessionPurpose::ModelImport,
+                crate::authentication::SessionPurpose::ModelQa,
+                crate::authentication::SessionPurpose::ModelActivation,
+            ] {
+                assert!(purpose.require(actual).is_err());
+            }
+        }
+        assert!(acquisition_purpose("index-v2-query-7-bad-bad").is_err());
     }
     #[test]
     fn framed_export_preserves_binary_bytes_and_acknowledges_actual_delivery() {

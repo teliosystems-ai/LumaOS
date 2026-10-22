@@ -372,7 +372,7 @@ class PinnedExecutable:
 
 def run_process(binary, command, payload, cancelled, started, *, timeout=TIMEOUT, maximum=MAX_OUTPUT):
     """Bound both streams while reading; cancellation completes only after reap."""
-    if command not in ('content-office-request', 'content-restore-request', 'content-restore-retire-request', 'editor-request', 'editor-checkpoint-request') and command not in {'content-contract-' + name for name in ('capture', 'reopen', 'spreadsheet', 'document', 'diagram', 'animation', 'collection', 'native-request')}:
+    if command not in ('content-office-request', 'content-restore-request', 'content-restore-retire-request', 'editor-request', 'editor-checkpoint-request', 'index-request', 'index-scope-proposal') and command not in {'content-contract-' + name for name in ('capture', 'reopen', 'spreadsheet', 'document', 'diagram', 'animation', 'collection', 'native-request')}:
         raise ValueError('preview command is not allowlisted')
     binary.check()
     with tempfile.TemporaryDirectory(prefix='luma-native-preview-') as directory:

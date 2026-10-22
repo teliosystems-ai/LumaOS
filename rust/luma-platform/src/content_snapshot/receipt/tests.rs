@@ -173,6 +173,11 @@ fn package_header_retains_exact_recovery_certificates_without_duplicate_manifest
     };
     let header = Header::new_data(&input, receipt).unwrap();
     let bytes = header.canonical_bytes().unwrap();
+    assert_eq!(header.receipt.body.measured_package_bytes(), 8192);
+    assert_eq!(
+        Header::unsigned_encoded_length_data(&input, &header.receipt.body).unwrap(),
+        bytes.len()
+    );
     let parsed = Header::from_canonical(&bytes).unwrap();
     assert_eq!(
         parsed.source().unwrap().canonical_bytes().unwrap(),

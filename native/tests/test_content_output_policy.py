@@ -33,7 +33,7 @@ class ContentOutputPolicyTests(unittest.TestCase):
         self.assertIn('credential_observer::kernel_check(&self.pin, 0, 0)?', admission)
         guard = manager[manager.index('pub(crate) fn content_output_guard('):manager.index('pub(crate) fn register_content_admin(')]
         self.assertEqual(guard.count('request.descriptor.ledger(&self.store.read()?)?'), 2)
-        for fence in ('peer::live_generation(peer, &pin)?', '.guard(request)?', 'custody_unit()?'):
+        for fence in ('peer::live_generation(peer, &pin)?', '.guard(request)?', 'self.custody_memory.baseline()?'):
             self.assertIn(fence, guard)
         routing = admission[admission.index('fn acquisition_audit('):admission.index('pub(crate) fn acquisition_proof(')]
         self.assertIn('"native-content-store-v1"', routing)

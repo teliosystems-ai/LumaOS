@@ -19,15 +19,85 @@ pub(crate) struct Descriptor {
     pub binding: OwnerBinding,
     pub lease: Token,
     pub output_sha256: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub paged_head_sha256: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub paged_source: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub index: Option<IndexProof>,
+}
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct IndexProof {
+    pub selection_sha256: String,
+    pub source: String,
 }
 impl Descriptor {
+    pub(crate) fn index_source(&self) -> Result<Option<crate::content_index::request::Input>> {
+        let Some(proof) = &self.index else {
+            return Ok(None);
+        };
+        if self.paged_head_sha256.is_some()
+            || self.paged_source.is_some()
+            || !crate::artifacts::hash(&proof.selection_sha256)
+            || proof.selection_sha256.bytes().all(|b| b == b'0')
+            || proof.source.len() > 4096
+        {
+            return Err("index output cannot mix sources or substitute a current selection".into());
+        }
+        let input =
+            crate::content_index::scope::verify_input(&self.profile, proof.source.as_bytes())?;
+        let profile = crate::content_index::request::parse_profile(&self.profile)?;
+        if profile.mode.mutates() || input.binding != self.binding {
+            return Err("readonly index output cannot borrow an effect or another owner".into());
+        }
+        Ok(Some(input))
+    }
+    pub(crate) fn page_source(
+        &self,
+    ) -> Result<Option<crate::content_governed::observed_read::PageSource>> {
+        if self.index.is_some() {
+            self.index_source()?;
+        }
+        match (&self.paged_head_sha256, &self.paged_source) {
+            (None, None) => Ok(None),
+            (Some(head), Some(source))
+                if crate::artifacts::hash(head)
+                    && head.bytes().any(|b| b != b'0')
+                    && source.len() <= 4096 =>
+            {
+                Ok(Some(
+                    crate::content_governed::observed_read::PageSource::parse(
+                        source.as_bytes(),
+                        &self.profile,
+                        &self.storage_device,
+                        &self.binding,
+                    )?,
+                ))
+            }
+            _ => Err(
+                "paged output requires paired exact current head and canonical Page source".into(),
+            ),
+        }
+    }
     fn data_usage_at(&self, device: &str) -> Result<Use> {
         self.binding.validate()?;
-        if !self.profile.starts_with("content-v1-")
-            || !crate::workflow_resource::token_valid(&self.lease)
+        if !crate::workflow_resource::token_valid(&self.lease)
             || !crate::artifacts::hash(&self.output_sha256)
         {
             return Err("invalid closed content output descriptor".into());
+        }
+        if let Some(input) = self.index_source()? {
+            return crate::content_index::scope::original_usage(
+                &self.profile,
+                device,
+                &self.binding,
+                &input.sha256()?,
+                true,
+            );
+        }
+        if !self.profile.starts_with("content-v1-") {
+            return Err("private index output lacks its actual C-produced source/selection".into());
         }
         let review = self
             .profile
@@ -36,6 +106,7 @@ impl Descriptor {
             .ok_or("content output profile lacks review")?;
         let usage =
             crate::content_governed::custody_usage(&self.profile, device, &self.binding, review)?;
+        self.page_source()?;
         if usage.selector.generation != self.binding.owner_generation {
             return Err("content output descriptor differs from original owner generation".into());
         }
@@ -45,7 +116,11 @@ impl Descriptor {
         self.data_usage_at(&self.storage_device)
     }
     fn installed_usage(&self) -> Result<Use> {
-        let expected = crate::content_governed::acquisition_usage(&self.profile)?;
+        let expected = if self.index.is_some() {
+            crate::content_index::scope::acquisition_usage(&self.profile)?
+        } else {
+            crate::content_governed::acquisition_usage(&self.profile)?
+        };
         if self.storage_device != resource_manager::storage_device(Path::new("/var"))? {
             return Err("content output selected another installed storage device".into());
         }
@@ -98,6 +173,8 @@ impl Descriptor {
         )
     }
 }
+#[cfg(test)]
+pub(crate) mod paged_tests;
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -188,6 +265,24 @@ fn original_binding(pid: u32, descriptor: &Descriptor, audit: &Audit) -> Result<
     let text = std::str::from_utf8(&raw)?;
     let args: Vec<_> = text.split('\0').collect();
     let args = crate::service::granted_gateway::short_original_arguments(&args)?;
+    if let Some(input) = descriptor.index_source()? {
+        crate::content_index::client::check_client_arguments(
+            &args,
+            &descriptor.profile,
+            Some(audit),
+        )?;
+        if args.len() != 6
+            || args[1] != "index-review"
+            || crate::content_index::client::read_snapshot(
+                Path::new(args[4]),
+                &descriptor.profile,
+                args[2],
+            )? != input
+        {
+            return Err("index output differs from the actual original immutable source".into());
+        }
+        return Ok(());
+    }
     crate::content_governed::check_client_arguments(&args, &descriptor.profile, Some(audit))?;
     let path = match args.len() {
         6 => Path::new(args[4]).to_path_buf(),
@@ -331,12 +426,81 @@ pub(crate) fn run<T: Send>(
     boundary: &mut crate::admin_governance::GrantBoundary<'_>,
     controller: impl FnOnce(Proof) -> Result<T> + Send,
 ) -> Result<T> {
+    run_inner(
+        id,
+        binding,
+        lease,
+        output_sha256,
+        None,
+        None,
+        boundary,
+        controller,
+    )
+}
+pub(crate) fn run_paged<T: Send>(
+    id: &str,
+    binding: &OwnerBinding,
+    lease: &Token,
+    output_sha256: &str,
+    head: &str,
+    source: &str,
+    boundary: &mut crate::admin_governance::GrantBoundary<'_>,
+    controller: impl FnOnce(Proof) -> Result<T> + Send,
+) -> Result<T> {
+    run_inner(
+        id,
+        binding,
+        lease,
+        output_sha256,
+        Some((head, source)),
+        None,
+        boundary,
+        controller,
+    )
+}
+pub(crate) fn run_index<T: Send>(
+    id: &str,
+    binding: &OwnerBinding,
+    lease: &Token,
+    output_sha256: &str,
+    selection: &str,
+    source: &str,
+    boundary: &mut crate::admin_governance::GrantBoundary<'_>,
+    controller: impl FnOnce(Proof) -> Result<T> + Send,
+) -> Result<T> {
+    run_inner(
+        id,
+        binding,
+        lease,
+        output_sha256,
+        None,
+        Some(IndexProof {
+            selection_sha256: selection.into(),
+            source: source.into(),
+        }),
+        boundary,
+        controller,
+    )
+}
+fn run_inner<T: Send>(
+    id: &str,
+    binding: &OwnerBinding,
+    lease: &Token,
+    output_sha256: &str,
+    page: Option<(&str, &str)>,
+    index: Option<IndexProof>,
+    boundary: &mut crate::admin_governance::GrantBoundary<'_>,
+    controller: impl FnOnce(Proof) -> Result<T> + Send,
+) -> Result<T> {
     let descriptor = Descriptor {
         profile: id.into(),
         storage_device: resource_manager::storage_device(Path::new("/var"))?,
         binding: binding.clone(),
         lease: lease.clone(),
         output_sha256: output_sha256.into(),
+        paged_head_sha256: page.map(|(head, _)| head.into()),
+        paged_source: page.map(|(_, source)| source.into()),
+        index,
     };
     let usage = descriptor.usage()?;
     boundary.check()?;
@@ -470,6 +634,9 @@ mod tests {
                 manager_epoch: "44".repeat(16),
             },
             output_sha256: "55".repeat(32),
+            paged_head_sha256: None,
+            paged_source: None,
+            index: None,
         }
     }
     fn receipt(value: &Descriptor, usage: &Use) -> serde_json::Value {

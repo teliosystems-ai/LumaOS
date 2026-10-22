@@ -35,6 +35,11 @@ def main():
     (share/'workflows').mkdir(parents=True)
     shutil.copyfile(Path(__file__).parent/'overlay/usr/share/luma-os/workflows/file-to-artifact-v1.json',
                     share/'workflows/file-to-artifact-v1.json')
+    # Signed skill admission binds the immutable image environment; this
+    # disposable laboratory identity is not a release.
+    (share/'release-identity.json').write_text(json.dumps({
+        'schema_version':1,'release':'artifact-cli-fixture','sequence':1,'environment':'lab',
+        'architecture':'amd64','ubuntu':'24.04','edition':'headless'},separators=(',',':'))+'\n')
     (state/'principals').mkdir(parents=True, mode=0o700)
     state.chmod(0o700)
     (state/'principals/registry.json').write_text(json.dumps({

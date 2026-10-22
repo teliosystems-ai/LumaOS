@@ -1874,3 +1874,37 @@ Native controllers, direct custody continuation, prewrite reservation events,
 segmented backup/restore joins and workspace routing remain a separate
 integration cut. The native 100000-object/500-ms requirement and final media
 remain open; these component passes do not complete G3 or GWIN0.
+
+### Direct custody, data observer and index review joins, 22 October 2026
+
+The [direct custody checkpoint](gates/g3/nf08_direct_custody_observer_2026-10-22.json)
+records warning-denied all-target checks and serialized tests against one exact
+whole-tree snapshot: 1559 luma-platform tests passed and three failed only under
+parallel execution, each passing in isolation; 102 luma-content and 357
+luma-content-store tests and 957 native Python tests passed, with two skipped.
+Paged C data now uses direct-addressed immutable storage locations with sealed
+slot digests, bounded control cells and prewrite index reservations. A worker
+consumes those fixed slots for direct publication and a private installed reader
+verifies the completed C cut. A query-only CAP0 data observer admits only the
+fixed C peer. Paged custody review, bootstrap and reconcile run only under an
+original Admin governance grant and effect journal. Index request and
+scope-proposal commands return DATA; the workspace index review reads current C
+state but never executes a build effect. The Index lease reserves 512 MiB: worker
+and C each have a 256 MiB hard ceiling, only Manager raises C after admission,
+and C otherwise returns to 128 MiB. PDF is the only native office driver; the
+portable workbook remains a pure data module.
+
+One production defect was corrected: cold verification of a selected legacy
+owner row now binds the logical review digest exactly as planning does. Test
+corrections moved direct fixtures from `attempts/` to `tails/`, reduced one
+memory fixture lease to the 30-second maximum, and gave the artifact harness the
+release identity required since 0e43cce. A test-only seam lets the publication
+fixture observe an empty fixed-handle set inside the verified TPM-less container;
+it never substitutes an enrolled anchor. The artifact harness therefore reaches
+publication and generation-2 replay, then stops at native `artifact-read`, which
+correctly requires the installed Admin anchor and TPM. It is not passed and needs
+a TPM-backed laboratory. The parallel test interference also remains open.
+Earlier failed and memory-limited attempts remain recorded. These passes are not
+native C activation, an installed index run, physical tails/accounting or
+authenticated snapshot delivery. The 100000-object/500-ms requirement and final
+media remain open; these component passes do not complete G3 or GWIN0.

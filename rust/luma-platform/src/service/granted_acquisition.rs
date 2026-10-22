@@ -63,6 +63,15 @@ pub(crate) struct Authority {
     next_check: u64,
     expected_output: Option<String>,
 }
+fn original_proof_due(profile: &str, now: u64, next_check: u64) -> bool {
+    profile.starts_with("content-v1-")
+        || profile.starts_with(crate::content_backup::PREFIX)
+        || profile.starts_with(crate::office_export::PREFIX)
+        || profile.starts_with(crate::content_restore::PREFIX)
+        || profile.starts_with(crate::content_index::PREFIX)
+        || crate::editor_session::is_profile(profile)
+        || now >= next_check
+}
 impl Authority {
     pub(crate) fn capture(socket: &UnixStream, request: &Request) -> Result<Self> {
         request.validate(credentials(socket)?)?;
@@ -76,6 +85,7 @@ impl Authority {
         let expected_output = if crate::generated_runtime::is_profile(&request.profile)
             || crate::speech::is_profile(&request.profile)
             || crate::editor_session::is_profile(&request.profile)
+            || request.profile.starts_with(crate::content_index::PREFIX)
         {
             None
         } else if request.profile.starts_with("qa-v1-") {
@@ -115,13 +125,7 @@ impl Authority {
         // Content storage calls renew at every bounded I/O/commit checkpoint.
         // It requires a fresh original PAM/grant/UTC proof there, not the
         // model-controller's permitted 500ms cached sampling window.
-        if !self.profile.starts_with("content-v1-")
-            && !self.profile.starts_with(crate::content_backup::PREFIX)
-            && !self.profile.starts_with(crate::office_export::PREFIX)
-            && !self.profile.starts_with(crate::content_restore::PREFIX)
-            && !crate::editor_session::is_profile(&self.profile)
-            && now < self.next_check
-        {
+        if !original_proof_due(&self.profile, now, self.next_check) {
             return Ok(());
         }
         self.admission.check()?;
@@ -175,6 +179,8 @@ pub(crate) fn usage(profile: &str) -> Result<Use> {
         crate::speech::acquisition_usage(profile)
     } else if crate::editor_session::is_profile(profile) {
         crate::editor_session::acquisition_usage(profile)
+    } else if profile.starts_with(crate::content_index::PREFIX) {
+        crate::content_index::scope::acquisition_usage(profile)
     } else if profile.starts_with("qa-v1-") {
         crate::model::qa::usage(profile)
     } else if profile.starts_with("content-v1-") {
@@ -310,6 +316,37 @@ pub(crate) fn run_editor<T: Send>(
             cutoff.check()?;
             if cancel.load(Ordering::Acquire) {
                 Err("original editor principal/session/grant fenced; draft not saved".into())
+            } else {
+                Ok(())
+            }
+        })
+    })
+}
+
+/// Original Standard-session read/review only. A mutation profile cannot use
+/// this controller, even if its source has a separately valid Read grant.
+pub(crate) fn run_index<T: Send>(
+    profile: &str,
+    usage: &Use,
+    boundary: &mut crate::admin_governance::GrantBoundary<'_>,
+    controller: impl FnOnce(&mut dyn FnMut() -> Result<()>) -> Result<T> + Send,
+) -> Result<T> {
+    if crate::content_index::request::parse_profile(profile)?
+        .mode
+        .mutates()
+        || boundary.session_purpose() != crate::authentication::SessionPurpose::Standard
+        || usage != &crate::content_index::scope::acquisition_usage(profile)?
+    {
+        return Err("index read/review requires its exact original Standard Read scope".into());
+    }
+    // This existing projection retains the ORIGINAL thirty-second deadline;
+    // capturing it does not create a fresh window or permit renewal.
+    let cutoff = boundary.editor_cutoff()?;
+    run_controller(profile, usage, boundary, None, move |cancel| {
+        controller(&mut || {
+            cutoff.check()?;
+            if cancel.load(Ordering::Acquire) {
+                Err("original index Read principal/session/grant fenced".into())
             } else {
                 Ok(())
             }
@@ -597,6 +634,23 @@ fn run_controller<T: Send>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn every_index_and_editor_checkpoint_requires_fresh_original_proof_without_sample_cache() {
+        for mode in [
+            "review", "status", "query", "start", "step", "advance", "publish", "retain",
+        ] {
+            let profile = format!("index-v2-{mode}-7-{}-{}", "a".repeat(64), "a".repeat(64));
+            assert!(original_proof_due(&profile, 1, 501));
+            assert!(original_proof_due(&profile, 500, 501));
+        }
+        assert!(original_proof_due(
+            &format!("editor-v1-{}", "a".repeat(64)),
+            1,
+            501
+        ));
+        assert!(!original_proof_due("qwen3-4b-q4-k-m", 1, 501));
+        assert!(original_proof_due("qwen3-4b-q4-k-m", 501, 501));
+    }
     use crate::resources::{Domain, Ledger, Owner, Reservation, State};
     use std::collections::BTreeMap;
     fn ledger() -> (Ledger, Token) {

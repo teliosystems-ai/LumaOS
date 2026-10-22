@@ -1,0 +1,14 @@
+[Unit]
+Description=Luma fixed protected content custody memory domain
+After=local-fs.target
+Before=luma-broker.service luma-content-custody.service
+
+[Slice]
+MemoryAccounting=yes
+CPUAccounting=yes
+TasksAccounting=yes
+MemoryMax=128M
+MemorySwapMax=0
+TasksMax=2
+CPUQuota=25%
+CPUQuotaPeriodSec=100ms

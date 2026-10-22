@@ -11,13 +11,34 @@ const DOMAIN: &str = "luma-native-content-custody-paged-v3";
 const CONTROL_BYTES: usize = 64 * 1024;
 const SUFFIX_LIMIT: u64 = 256;
 const READ_BUDGET: u64 = 32 * 1024 * 1024;
+// The direct publisher carries C-only fields and accessors that its native
+// activation consumes; under test it is exercised without that activation.
+#[path = "v2_publication/admin_review.rs"]
+mod admin_review;
+#[allow(dead_code)]
+#[cfg(test)]
+#[path = "v2_publication/direct.rs"]
+mod direct;
 
 #[path = "v2_publication/bootstrap.rs"]
 mod bootstrap;
 pub(crate) use bootstrap::{
     begin_bootstrap, initial_recovery_review, legacy_bootstrap_review, resume_retired_bootstrap,
-    retire_initial_bootstrap, retired_bootstrap_review, RetiredInitialBootstrap,
+    retire_initial_bootstrap, retired_bootstrap_review,
 };
+// Control cells, location maps and typed-event semantics are staged for the
+// native direct C publisher, which is still compiled only under test.
+#[cfg_attr(not(test), allow(dead_code))]
+#[path = "v2_publication/control.rs"]
+mod control;
+#[path = "v2_publication/index.rs"]
+pub(in crate::content_checkpoint::custody) mod index;
+#[cfg_attr(not(test), allow(dead_code))]
+#[path = "v2_publication/locations.rs"]
+mod locations;
+#[path = "v2_publication/parent_allocation.rs"]
+mod parent_allocation;
+#[cfg_attr(not(test), allow(dead_code))]
 #[path = "v2_publication/semantic.rs"]
 mod semantic;
 
@@ -25,6 +46,7 @@ mod semantic;
 /// contexts. Worker leases and Admin provenance stay disjoint; neither can be
 /// decoded, cached as a permission or replaced by an OwnerBinding-shaped value.
 enum COperation<'a, 'b> {
+    #[cfg_attr(not(test), allow(dead_code))]
     Worker(&'a mut OriginalCOperation<'b>),
     Admin(&'a mut OriginalCAdminOperation<'b>),
 }
@@ -240,6 +262,14 @@ enum OperationData {
         event: RecordRef,
         original_authority: Audit,
     },
+    IndexPreparation {
+        binding: OwnerBinding,
+        request_sha256: String,
+        input_sha256: String,
+        source_sha256: String,
+        preparation: RecordRef,
+        original_authority: Audit,
+    },
 }
 impl OperationData {
     fn validate(&self) -> Result<()> {
@@ -284,6 +314,39 @@ impl OperationData {
                 event.validate()?;
                 original_authority.validate()?;
             }
+            Self::IndexPreparation {
+                binding,
+                request_sha256,
+                input_sha256,
+                source_sha256,
+                preparation,
+                original_authority,
+            } => {
+                binding.validate()?;
+                digest(request_sha256)?;
+                digest(input_sha256)?;
+                digest(source_sha256)?;
+                preparation.validate()?;
+                original_authority.validate()?;
+                let usage = &original_authority.usage;
+                if preparation.bytes > 64 * 1024
+                    || original_authority.operation_id.is_none()
+                    || original_authority.subject != binding.owner
+                    || original_authority.subject_generation != binding.owner_generation
+                    || usage.action != crate::finite_grants::Action::Write
+                    || usage.selector.kind != crate::finite_grants::Kind::Artifact
+                    || usage.selector.id != "native-content-index-build-v2"
+                    || usage.selector.generation != binding.owner_generation
+                    || usage.units != 1
+                    || usage.input_bytes > 256 * 1024 * 1024
+                    || usage.output_bytes > 128 * 1024 * 1024
+                {
+                    return Err(
+                        "index preparation changes its closed historical owner/effect record"
+                            .into(),
+                    );
+                }
+            }
         }
         Ok(())
     }
@@ -304,9 +367,99 @@ struct Descriptor {
     legacy: LegacyCut,
     roots: Roots,
     phase: bootstrap::Phase,
+    storage: Option<StorageSelection>,
     operation: OperationData,
 }
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+struct StorageSelection {
+    schema_version: u32,
+    controls: super::paged::cells::Selection,
+    locations: locations::Root,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    jobs: Option<locations::JobRoot>,
+    descriptor_slot: super::paged::slots::Reference,
+    post_allocation: super::paged::PhysicalInventory,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    parent_allocation: Option<parent_allocation::Delta>,
+}
+impl StorageSelection {
+    fn validate(&self, binding: &map::CustodyBinding) -> Result<()> {
+        self.controls.validate()?;
+        self.locations.validate()?;
+        self.descriptor_slot.validate_data()?;
+        if let Some(delta) = &self.parent_allocation {
+            delta.validate()?;
+            if self.schema_version != 2 {
+                return Err(
+                    "parent allocation delta requires the closed direct job profile".into(),
+                );
+            }
+        }
+        let profile = match self.schema_version {
+            1 => self.jobs.is_none(),
+            2 => match &self.jobs {
+                Some(jobs) => {
+                    jobs.validate()?;
+                    jobs.binding() == binding
+                }
+                None => false,
+            },
+            _ => false,
+        };
+        if !profile
+            || self.controls.binding != *binding
+            || self.locations.binding != *binding
+            || self.descriptor_slot.kind != super::paged::slots::Kind::Page
+            || self.post_allocation.files == 0
+            || self.post_allocation.logical_bytes > 24 * 1024 * 1024 * 1024
+            || self.post_allocation.allocated_bytes > 24 * 1024 * 1024 * 1024
+            || self.post_allocation.interrupted_files != 0
+        {
+            return Err("direct-slot storage field substitutes C binding, descriptor capacity or physical admission data".into());
+        }
+        Ok(())
+    }
+}
 impl Descriptor {
+    #[cfg_attr(not(test), allow(dead_code))]
+    fn slot_frame(&self) -> Result<Vec<u8>> {
+        if self.storage.is_none() {
+            return Err("hash-addressed descriptor cannot impersonate direct-slot storage".into());
+        }
+        let bytes = self.bytes()?;
+        let header = b"LUMACDESCv3!\n";
+        if bytes.len() > PAGE_BYTES - header.len() - 4 {
+            return Err("direct-slot descriptor exceeds its fixed allocated frame".into());
+        }
+        let mut frame = vec![0_u8; PAGE_BYTES];
+        frame[..header.len()].copy_from_slice(header);
+        frame[header.len()..header.len() + 4]
+            .copy_from_slice(&u32::try_from(bytes.len())?.to_be_bytes());
+        frame[header.len() + 4..header.len() + 4 + bytes.len()].copy_from_slice(&bytes);
+        Ok(frame)
+    }
+    #[cfg_attr(not(test), allow(dead_code))]
+    fn from_slot_frame(frame: &[u8]) -> Result<Self> {
+        let header = b"LUMACDESCv3!\n";
+        let start = header.len() + 4;
+        if frame.len() != PAGE_BYTES || &frame[..header.len()] != header {
+            return Err("invalid exact direct-slot descriptor frame".into());
+        }
+        let length = u32::from_be_bytes(frame[header.len()..start].try_into()?) as usize;
+        if length == 0
+            || length > PAGE_BYTES - start
+            || frame[start + length..].iter().any(|n| *n != 0)
+        {
+            return Err("direct-slot descriptor length/padding differs".into());
+        }
+        let value: Self = canonical(&frame[start..start + length], PAGE_BYTES)?;
+        value.validate()?;
+        if value.storage.is_none() || value.slot_frame()? != frame {
+            return Err("descriptor frame is not the closed direct-slot format".into());
+        }
+        Ok(value)
+    }
     fn event_digest(&self) -> Result<[u8; 32]> {
         Ok(sha2::Sha256::digest(serde_json::to_vec(&(
             "luma-native-content-custody-paged-event-v3",
@@ -318,6 +471,7 @@ impl Descriptor {
             &self.legacy,
             &self.roots,
             &self.phase,
+            &self.storage,
             &self.operation,
         ))?)
         .into())
@@ -328,6 +482,9 @@ impl Descriptor {
         self.roots.validate(&self.binding)?;
         self.operation.validate()?;
         self.phase.validate(&self.legacy, &self.roots)?;
+        if let Some(storage) = &self.storage {
+            storage.validate(&self.binding)?;
+        }
         if let OperationData::BootstrapProgress {
             review_sha256,
             previous_retirement,
@@ -612,6 +769,29 @@ impl PagedStore<super::super::ContentAnchor> {
         expected_review: &str,
         authority: &mut OriginalCAdminOperation<'_>,
     ) -> Result<Self> {
+        authority.check()?;
+        let anchor = super::super::ContentAnchor::installed()?;
+        let binding = map::CustodyBinding {
+            installation: anchor.installation().into(),
+            sealed_genesis_sha256: bundle::hex(&anchor.genesis_event()),
+        };
+        Self::reconcile_from_anchor(
+            anchor,
+            Files::installed(),
+            binding,
+            expected_review,
+            authority,
+        )
+    }
+}
+impl<A: Checkpoint> PagedStore<A> {
+    fn reconcile_from_anchor(
+        mut anchor: A,
+        files: Files,
+        binding: map::CustodyBinding,
+        expected_review: &str,
+        authority: &mut OriginalCAdminOperation<'_>,
+    ) -> Result<Self> {
         digest(expected_review)?;
         authority.check()?;
         let audit = authority.audit();
@@ -623,17 +803,32 @@ impl PagedStore<super::super::ContentAnchor> {
         {
             return Err("paged reconciliation requires its separate fresh exact original Admin recovery scope".into());
         }
-        let mut anchor = super::super::ContentAnchor::installed()?;
-        let binding = map::CustodyBinding {
-            installation: anchor.installation().into(),
-            sealed_genesis_sha256: bundle::hex(&anchor.genesis_event()),
-        };
-        let files = Files::installed();
-        validate_genesis_at(&files.root, &binding.installation, anchor.genesis_event())?;
+        validate_genesis_at(
+            &files.root,
+            &binding.installation,
+            tpm::decode(&binding.sealed_genesis_sha256)?,
+        )?;
         let pages = PageStore::open(&files.root, binding.clone(), &mut || authority.check())?;
         let bytes = pages.read("pending.json", CONTROL_BYTES, &mut || authority.check())?;
         let pending: Pending = canonical(&bytes, CONTROL_BYTES)?;
         pending.bytes()?;
+        let source = authority.source_binding();
+        let control = source
+            .paged_control
+            .clone()
+            .ok_or("paged reconciliation lacks authenticated control DATA")?;
+        control.validate()?;
+        let opaque = tpm::decode::<16>(&source.job)?;
+        if source.command != "content-custody-paged-reconcile"
+            || source.installation != binding.installation
+            || opaque == [0; 16]
+            || source.job != bundle::hex(&opaque)
+            || control.attempt_sha256.as_deref() != Some(pending.attempt.as_str())
+            || control.expected_selected_descriptor_sha256.as_deref()
+                != Some(pending.base.descriptor_sha256.as_str())
+        {
+            return Err("paged reconciliation changes original Admin command, installation or exact pending attempt".into());
+        }
         let prefix = format!("attempts/{}", pending.attempt);
         if pages.read(
             &format!("{prefix}/prepared.json"),
@@ -691,7 +886,10 @@ impl PagedStore<super::super::ContentAnchor> {
             bundle::hex(&actual),
             &selected,
         ))?);
-        if review != expected_review {
+        if review != expected_review
+            || control.expected_window_sha256 != review
+            || control.stable_review_sha256 != next.phase.review_sha256
+        {
             return Err("actual pending C state changed after the independently reviewed recovery observation".into());
         }
         authority.check()?;
@@ -781,6 +979,7 @@ impl<A: Checkpoint> PagedStore<A> {
             return Err("paged C opener cannot adopt a legacy or absent namespace".into());
         }
         let pages = PageStore::open(&files.root, binding.clone(), check)?;
+        pages.require_hash_controls_empty()?;
         if !pages.absent("pending.json")? {
             return Err(
                 "paged C publication is pending; explicit exact reconciliation required".into(),
@@ -796,6 +995,9 @@ impl<A: Checkpoint> PagedStore<A> {
             PAGE_BYTES,
         )?;
         descriptor.validate()?;
+        if descriptor.storage.is_some() {
+            return Err("direct-slot C requires its closed control-cell opener, never the hashed-file parser".into());
+        }
         if descriptor.binding != binding || Selector::for_descriptor(&descriptor)? != selected {
             return Err("paged selected descriptor differs from sealed C identity".into());
         }
@@ -818,6 +1020,7 @@ impl<A: Checkpoint> PagedStore<A> {
         }
         check()?;
         self.pages.check()?;
+        self.pages.require_hash_controls_empty()?;
         let actual_nv = self.anchor.read()?;
         if !self.pages.absent("pending.json")?
             || self.pages.read("selected.json", 4096, check)? != self.selected.bytes()?
@@ -961,6 +1164,8 @@ impl<A: Checkpoint> PagedStore<A> {
         self.live(check)?;
         Ok(selected)
     }
+    // V1 paged publication is driven only by the direct C publisher.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn selected_v1(
         &mut self,
         binding: &OwnerBinding,
@@ -1046,6 +1251,7 @@ impl<A: Checkpoint> PagedStore<A> {
         Ok(records)
     }
 
+    #[cfg_attr(not(test), allow(dead_code))]
     fn publication_history(
         &self,
         binding: &OwnerBinding,
@@ -1096,6 +1302,7 @@ impl<A: Checkpoint> PagedStore<A> {
         Ok(result)
     }
 
+    #[cfg_attr(not(test), allow(dead_code))]
     fn exact_v1_authority(
         &mut self,
         held: &HeldPublication,
@@ -1127,6 +1334,7 @@ impl<A: Checkpoint> PagedStore<A> {
         self.live(&mut || authority.check())
     }
 
+    #[allow(dead_code)]
     pub(crate) fn preparation_cut_v1(
         &mut self,
         binding: &OwnerBinding,
@@ -1191,6 +1399,7 @@ impl<A: Checkpoint> PagedStore<A> {
         })
     }
 
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn publish_v1(
         &mut self,
         commitment: &[u8],
@@ -1370,6 +1579,7 @@ impl<A: Checkpoint> PagedStore<A> {
             legacy: self.descriptor.legacy.clone(),
             roots,
             phase: self.descriptor.phase.clone(),
+            storage: self.descriptor.storage.clone(),
             operation: OperationData::V1Publication {
                 binding: held.binding.clone(),
                 request_sha256: authority.source_binding().request_sha256.clone(),
@@ -1715,7 +1925,7 @@ mod tests {
             },
         }
     }
-    fn initial() -> Descriptor {
+    pub(super) fn initial() -> Descriptor {
         let binding = map::CustodyBinding {
             installation: "11".repeat(32),
             sealed_genesis_sha256: "55".repeat(32),
@@ -1747,6 +1957,7 @@ mod tests {
             event_sha256: String::new(),
             selected_nv_head: String::new(),
             phase: phase.clone(),
+            storage: None,
             legacy,
             operation: OperationData::BootstrapProgress {
                 previous_retirement: None,

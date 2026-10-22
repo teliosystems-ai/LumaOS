@@ -7,6 +7,123 @@ use std::os::unix::fs::MetadataExt;
 
 const PAGED: &str = "paged-v3";
 
+/// Closed scope DATA only. Recognizing it does not add a command dispatcher,
+/// create a grant or permit legacy Store to enter a staged paged namespace.
+pub(super) fn paged_admin_scope(
+    command: &str,
+    usage: &crate::finite_grants::Use,
+) -> Option<Result<()>> {
+    use crate::finite_grants::{Action, Kind};
+    let (action, selector) = match command {
+        "content-custody-paged-review" => (Action::Read, "content-custody-paged-read-v3"),
+        "content-custody-paged-bootstrap" => (
+            Action::ProvisionResource,
+            "content-custody-paged-bootstrap-v3",
+        ),
+        "content-custody-paged-reconcile" => (
+            Action::RecoverResource,
+            "content-custody-paged-reconcile-v3",
+        ),
+        _ => return None,
+    };
+    Some((|| {
+        usage.validate()?;
+        digest(&usage.selector.digest)?;
+        if usage.action != action
+            || usage.selector.kind
+                != if action == Action::Read {
+                    Kind::File
+                } else {
+                    Kind::Resource
+                }
+            || usage.selector.id != selector
+            || usage.selector.generation != 1
+            || usage.input_bytes != 0
+            || usage.output_bytes != 8192
+            || usage.units != 1
+        {
+            return Err("paged custody control differs from its exact finite Admin scope".into());
+        }
+        Ok(())
+    })())
+}
+
+#[cfg(test)]
+mod scope_tests {
+    use super::*;
+    use crate::finite_grants::{Action, Kind, Selector, Use};
+    #[test]
+    fn paged_scopes_are_exact_data_not_fallback_dispatch_or_generic_admin_permission() {
+        for (command, action, id) in [
+            (
+                "content-custody-paged-review",
+                Action::Read,
+                "content-custody-paged-read-v3",
+            ),
+            (
+                "content-custody-paged-bootstrap",
+                Action::ProvisionResource,
+                "content-custody-paged-bootstrap-v3",
+            ),
+            (
+                "content-custody-paged-reconcile",
+                Action::RecoverResource,
+                "content-custody-paged-reconcile-v3",
+            ),
+        ] {
+            let usage = Use {
+                action,
+                selector: Selector {
+                    kind: if action == Action::Read {
+                        Kind::File
+                    } else {
+                        Kind::Resource
+                    },
+                    id: id.into(),
+                    generation: 1,
+                    digest: "a".repeat(64),
+                },
+                input_bytes: 0,
+                output_bytes: 8192,
+                units: 1,
+            };
+            paged_admin_scope(command, &usage).unwrap().unwrap();
+            let mut changed = usage.clone();
+            changed.selector.generation += 1;
+            assert!(paged_admin_scope(command, &changed).unwrap().is_err());
+            changed = usage.clone();
+            changed.input_bytes = 1;
+            assert!(paged_admin_scope(command, &changed).unwrap().is_err());
+            changed = usage.clone();
+            changed.output_bytes -= 1;
+            assert!(paged_admin_scope(command, &changed).unwrap().is_err());
+            changed = usage.clone();
+            changed.units += 1;
+            assert!(paged_admin_scope(command, &changed).unwrap().is_err());
+            changed = usage.clone();
+            changed.action = if action == Action::Read {
+                Action::ProvisionResource
+            } else {
+                Action::Read
+            };
+            changed.selector.kind = if action == Action::Read {
+                Kind::Resource
+            } else {
+                Kind::File
+            };
+            assert!(paged_admin_scope(command, &changed).unwrap().is_err());
+            changed = usage.clone();
+            changed.selector.id.push_str("-extra");
+            assert!(paged_admin_scope(command, &changed).unwrap().is_err());
+            changed = usage.clone();
+            changed.selector.digest = "0".repeat(64);
+            assert!(paged_admin_scope(command, &changed).unwrap().is_err());
+            assert!(paged_admin_scope(&format!("{command}-extra"), &usage).is_none());
+            assert!(paged_admin_scope("content-unrecognized", &usage).is_none());
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Layout {
     Legacy,

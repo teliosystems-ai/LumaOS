@@ -1,10 +1,14 @@
 //! Actual append/files/flock callbacks with software-selected fixture heads.
 //! These tests do not supply native C preregistration or a creator attestation.
 use super::*;
-use std::os::unix::fs::MetadataExt;
 use std::os::fd::AsRawFd;
+use std::os::unix::fs::MetadataExt;
 fn observation_budget() -> IoBudget {
-    IoBudget { read_bytes: 128 * 1024, write_bytes: 0, new_files: 0 }
+    IoBudget {
+        read_bytes: 128 * 1024,
+        write_bytes: 0,
+        new_files: 0,
+    }
 }
 struct Observer<'a> {
     store: &'a ObjectStore,

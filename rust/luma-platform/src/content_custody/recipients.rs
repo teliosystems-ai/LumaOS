@@ -95,8 +95,7 @@ impl Enrollment {
                     .checked_add(1)
                     .ok_or("recipient generation overflow")?
             || self.audit().operation_id.is_none()
-            || self.audit().usage
-                != usage(&self.request, self.audit().subject_generation)?
+            || self.audit().usage != usage(&self.request, self.audit().subject_generation)?
         {
             return Err(
                 "recipient custody event differs from its approved original Admin request".into(),

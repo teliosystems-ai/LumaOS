@@ -82,10 +82,7 @@ impl Enrollment {
             return Err("receipt signer enrolled pin differs".into());
         }
         self.audit().validate()?;
-        admin_scope(
-            "content-backup-signer-enroll",
-            &self.audit().usage,
-        )?;
+        admin_scope("content-backup-signer-enroll", &self.audit().usage)?;
         if self.audit().usage.selector.digest != self.sealed_envelope_sha256
             || self.audit().operation_id.is_none()
         {

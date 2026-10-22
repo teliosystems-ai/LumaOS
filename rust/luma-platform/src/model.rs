@@ -27,8 +27,8 @@ mod gateway;
 pub(crate) mod installer_staging;
 mod layout;
 mod pack_store;
-pub(crate) mod speech;
 pub(crate) mod qa;
+pub(crate) mod speech;
 mod supervision;
 mod validation;
 pub(crate) use pack_store::{
@@ -254,7 +254,9 @@ pub fn profile(id: &str) -> Result<Profile> {
 }
 
 pub(crate) fn pack_import_usage(id: &str) -> Result<crate::finite_grants::Use> {
-    if id == speech::ID { return speech::import_usage(); }
+    if id == speech::ID {
+        return speech::import_usage();
+    }
     use crate::finite_grants::{Action, Kind, Selector, Use};
     let p = public_profile(id)?;
     let (input_bytes, output_bytes) = pack_store::import_bounds(&p)?;
@@ -285,7 +287,9 @@ pub(crate) fn pack_import_usage(id: &str) -> Result<crate::finite_grants::Use> {
     Ok(usage)
 }
 pub(crate) fn pack_import_review(id: &str) -> Result<()> {
-    if id == speech::ID { return speech::import_review(); }
+    if id == speech::ID {
+        return speech::import_review();
+    }
     crate::require_root()?;
     platform::require_installed()?;
     platform::require_production_activation()?;
@@ -299,7 +303,9 @@ pub(crate) fn pack_import_review(id: &str) -> Result<()> {
     Ok(())
 }
 pub(crate) fn pack_import(login: &str, grant: &str, id: &str) -> Result<()> {
-    if id == speech::ID { return speech::import(login, grant); }
+    if id == speech::ID {
+        return speech::import(login, grant);
+    }
     crate::require_root()?;
     platform::require_installed()?;
     platform::require_production_activation()?;
@@ -348,7 +354,9 @@ fn pending_usage(id: &str, review: &str, bytes: u64) -> Result<crate::finite_gra
     Ok(usage)
 }
 pub(crate) fn pack_pending_review(id: &str) -> Result<()> {
-    if id == speech::ID { return speech::pending_review(); }
+    if id == speech::ID {
+        return speech::pending_review();
+    }
     crate::require_root()?;
     platform::require_installed()?;
     platform::require_production_activation()?;
@@ -364,7 +372,9 @@ pub(crate) fn pack_pending_review(id: &str) -> Result<()> {
     Ok(())
 }
 pub(crate) fn pack_pending_retain(login: &str, grant: &str, id: &str, review: &str) -> Result<()> {
-    if id == speech::ID { return speech::pending_retain(login,grant,review); }
+    if id == speech::ID {
+        return speech::pending_retain(login, grant, review);
+    }
     crate::require_root()?;
     platform::require_installed()?;
     platform::require_production_activation()?;

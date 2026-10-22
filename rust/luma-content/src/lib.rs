@@ -16,6 +16,7 @@ pub mod document;
 pub mod rendered;
 pub mod spreadsheet;
 pub mod table;
+pub mod workbook;
 
 pub const MAX_CONTENT_BYTES: usize = 1024 * 1024;
 pub const MAX_ENVELOPE_BYTES: usize = MAX_CONTENT_BYTES * 6 + 8192;

@@ -6,8 +6,9 @@ remains at `C:\Users\hakim\LumaOS`. Public images/installers, inputs, logs and
 VM disks remain under `D:\LumaOS-builds`.
 
 Current execution direction: **implementation first**, then a consolidated
-image-test sweep and separate native Ubuntu testing. Do not apply the proposed
-WSL memory increase or restart old VM queues during implementation. Small
+image-test sweep and separate native Ubuntu testing. The owner-approved WSL
+memory increase of 2026-10-26 is recorded below; do not make further WSL
+changes or restart old VM queues during implementation. Small
 targeted checks remain permitted; see [the agreed sequence](../G2_IMPLEMENTATION_FIRST.md).
 
 The dedicated profile uses:
@@ -69,7 +70,7 @@ This check is a conservative observation, not a reservation or cgroup-limit
 validator; competing allocations and tighter container/ancestor limits still
 matter. Serialize large jobs and use an adequately provisioned host. Do not
 silently shrink the required guest, count swap as RAM, stop unrelated services,
-or change global WSL settings to bypass refusal. A possible 10 GiB WSL limit
+or change global WSL settings to bypass refusal. Any larger WSL limit
 needs operator approval, Windows-memory review and a planned restart, followed
 by fresh admission; it is not an automatic guarantee. Existing frozen queues
 do not inherit new source safeguards and must not be resumed unchanged.
@@ -85,6 +86,21 @@ gracefully stopping affected applications and cleanly stopping the dedicated
 D-backed store before an approved restart; then recheck both Windows and WSL
 headroom. See [Microsoft's WSL configuration documentation](https://learn.microsoft.com/en-us/windows/wsl/wsl-config)
 and the [impact checkpoint](../evidence/G2_MODEL_REPLY_2026-10-01.md).
+
+On 2026-10-26 the owner approved, for the 8 GiB fat-LTO assembly bound only,
+`%UserProfile%\.wslconfig` with `[wsl2]` `memory=12GB` and `swap=2GB` (swap
+unchanged). No other WSL or Windows setting was changed. Before the restart,
+Docker Desktop was quit gracefully, Ubuntu's own `docker.service`/`docker.socket`
+were stopped, and `luma-build-docker`, `luma-build-containerd` and
+`luma-build-store` were stopped in that order and the store verified unmounted.
+After `wsl --shutdown` WSL reported 11,959 MiB RAM (previously 7,847 MiB) and
+2,048 MiB swap; the store remounted as ext4 on its D-backed loop device, the
+dedicated services were active, and Docker Desktop and the owner's compose stack
+were restored. Windows itself retains only about 4 GiB beyond this ceiling on
+this 16 GiB machine, so close heavy Windows applications during large builds
+and VM runs. The 12 GB limit raises the ceiling; it does not reserve memory,
+and every assembly and VM admission is still observed afresh. See the
+[assembly memory checkpoint](../evidence/G2_ASSEMBLY_MEMORY_2026-10-26.md).
 
 From Ubuntu WSL in the repository:
 

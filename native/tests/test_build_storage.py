@@ -18,25 +18,30 @@ class BuildStorageTests(unittest.TestCase):
 
     def test_assembly_memory_selection_is_closed_with_absent_only_default(self):
         self.assertEqual(storage.selected_assembly_memory_gib({}), 4)
-        for value in ('4', '5'):
+        for value in ('4', '5', '8'):
             self.assertEqual(storage.selected_assembly_memory_gib({'LUMA_NATIVE_ASSEMBLY_MEMORY_GIB': value}), int(value))
-        for value in ('', ' 5', '5 ', '5\n', '4.0', '4.5', '05', '6', '0', '-1', '+5', '5g', '5GiB', True, 5, None):
+        for value in ('', ' 5', '5 ', '5\n', '4.0', '4.5', '05', '6', '7', '9', '08', '8 ', '8.0', '16',
+                      '0', '-1', '+5', '5g', '5GiB', '8g', True, 5, 8, None):
             with self.subTest(value=value), self.assertRaises(ValueError):
                 storage.selected_assembly_memory_gib({'LUMA_NATIVE_ASSEMBLY_MEMORY_GIB': value})
 
     def test_assembly_memory_exact_physical_boundary_and_reserve_ignore_swap(self):
-        for selected in (4, 5):
+        total = 12*storage.GIB
+        for selected in (4, 5, 8):
             required = (selected+1)*storage.GIB
-            observed = storage.check_assembly_memory(selected, self.memory_info(required))
+            observed = storage.check_assembly_memory(selected, self.memory_info(required, total))
             self.assertEqual(observed, dict(assembly_memory_gib=selected,
-                assembly_memory_bytes=selected*storage.GIB, host_total_bytes=8*storage.GIB,
+                assembly_memory_bytes=selected*storage.GIB, host_total_bytes=total,
                 host_available_bytes=required, build_host_reserve_bytes=storage.GIB,
                 swap_counted_as_capacity=False, reservation=False))
             with self.assertRaisesRegex(RuntimeError, 'swap is not capacity'):
-                storage.check_assembly_memory(selected, self.memory_info(required-1024))
+                storage.check_assembly_memory(selected, self.memory_info(required-1024, total))
             with self.assertRaises(RuntimeError):
-                storage.check_assembly_memory(selected, self.memory_info(0))
-        for selected in (True, '5', 4.0, 3, 6, None):
+                storage.check_assembly_memory(selected, self.memory_info(0, total))
+        # An 8 GiB bound on the former ~8 GiB WSL host is refused, never admitted on swap.
+        with self.assertRaisesRegex(RuntimeError, 'swap is not capacity'):
+            storage.check_assembly_memory(8, self.memory_info(8*storage.GIB))
+        for selected in (True, '5', '8', 4.0, 8.0, 3, 6, 7, 9, None):
             with self.subTest(selected=selected), self.assertRaises(ValueError):
                 storage.check_assembly_memory(selected, self.memory_info(6*storage.GIB))
 
@@ -62,11 +67,13 @@ class BuildStorageTests(unittest.TestCase):
             self.assertEqual(observed['assembly_memory_gib'], 5)
             opened.assert_called_once_with(encoding='ascii')
             opened.return_value.read.assert_called_once_with(65537)
-        with mock.patch.dict(os.environ, {'LUMA_NATIVE_ASSEMBLY_MEMORY_GIB': '6'}, clear=True), \
-                mock.patch.object(Path, 'open') as refused:
-            with self.assertRaises(ValueError):
-                storage.admit_assembly_memory()
-            refused.assert_not_called()
+        for value in ('6', '7'):
+            with self.subTest(value=value), \
+                    mock.patch.dict(os.environ, {'LUMA_NATIVE_ASSEMBLY_MEMORY_GIB': value}, clear=True), \
+                    mock.patch.object(Path, 'open') as refused:
+                with self.assertRaises(ValueError):
+                    storage.admit_assembly_memory()
+                refused.assert_not_called()
         observed = storage.check_assembly_memory(5, self.memory_info(6*storage.GIB))
         with mock.patch.object(sys, 'argv', ['build_storage.py', 'assembly-memory']), \
                 mock.patch.object(storage, 'admit_assembly_memory', return_value=observed) as check, \
@@ -80,7 +87,7 @@ class BuildStorageTests(unittest.TestCase):
     def test_only_assembly_container_selects_memory_and_actual_admission_is_immediate(self):
         script = (Path(__file__).resolve().parents[1]/'image/build.sh').read_text(encoding='utf-8')
         self.assertIn('assembly_memory_gib=${LUMA_NATIVE_ASSEMBLY_MEMORY_GIB-4}', script)
-        self.assertIn('case "$assembly_memory_gib" in\n    4|5) ;;', script)
+        self.assertIn('case "$assembly_memory_gib" in\n    4|5|8) ;;', script)
         self.assertIn('build_limits=(--memory 4g --memory-swap 4g --cpu-period 100000 --cpu-quota 200000)', script)
         self.assertIn('run_limits=(--memory 4g --memory-swap 4g --cpus 2)', script)
         self.assertIn('assembly_limits=(--memory "${assembly_memory_gib}g" --memory-swap "${assembly_memory_gib}g" --cpus 2)', script)

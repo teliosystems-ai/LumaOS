@@ -1908,3 +1908,16 @@ Earlier failed and memory-limited attempts remain recorded. These passes are not
 native C activation, an installed index run, physical tails/accounting or
 authenticated snapshot delivery. The 100000-object/500-ms requirement and final
 media remain open; these component passes do not complete G3 or GWIN0.
+
+### Fat-LTO assembly memory bound, 26 October 2026
+
+Sequence-17 assembly from the frozen `4acc3a0` inputs was killed by its 5-GiB
+memory cgroup during fat LTO; a one-codegen-unit variant stalled in reclaim for
+24.6 hours at the same bound. A thin-LTO compile fitted, but the owner chose to
+keep the committed fat-LTO release profile and approved a 12 GB WSL limit
+(`swap` unchanged at 2 GB) with a coordinated restart. The unchanged profile
+then compiled under 8 GiB in 724 s with a 6,571,802,624-byte peak and no
+memory-limit events. The builder now accepts exactly 4, 5 or 8 GiB for the
+assembly container only, still admitted against observed physical memory plus
+a 1-GiB reserve. See the [assembly memory checkpoint](../native/evidence/G2_ASSEMBLY_MEMORY_2026-10-26.md).
+Sequence 17 must be re-frozen and rebuilt; nothing here is image evidence.

@@ -14,8 +14,8 @@ case "${LUMA_BUILD_PROFILE:-auto}" in
 esac
 assembly_memory_gib=${LUMA_NATIVE_ASSEMBLY_MEMORY_GIB-4}
 case "$assembly_memory_gib" in
-    4|5) ;;
-    *) echo 'LUMA_NATIVE_ASSEMBLY_MEMORY_GIB must be exactly 4 or 5; absent defaults to 4' >&2; exit 2 ;;
+    4|5|8) ;;
+    *) echo 'LUMA_NATIVE_ASSEMBLY_MEMORY_GIB must be exactly 4, 5 or 8; absent defaults to 4' >&2; exit 2 ;;
 esac
 if [ "${1:-}" = production-continue ]; then
     if [ "$#" -ne 5 ]; then

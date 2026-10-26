@@ -21,14 +21,14 @@ ASSEMBLY_HOST_RESERVE = GIB
 
 def selected_assembly_memory_gib(environment):
     value = environment.get('LUMA_NATIVE_ASSEMBLY_MEMORY_GIB', '4')
-    if type(value) is not str or value not in ('4', '5'):
-        raise ValueError('LUMA_NATIVE_ASSEMBLY_MEMORY_GIB must be exactly 4 or 5; absent defaults to 4')
+    if type(value) is not str or value not in ('4', '5', '8'):
+        raise ValueError('LUMA_NATIVE_ASSEMBLY_MEMORY_GIB must be exactly 4, 5 or 8; absent defaults to 4')
     return int(value)
 
 
 def check_assembly_memory(memory_gib, text):
     """Physical host observation only, never a reservation or swap capacity."""
-    if type(memory_gib) is not int or memory_gib not in (4, 5):
+    if type(memory_gib) is not int or memory_gib not in (4, 5, 8):
         raise ValueError('unsupported assembly memory limit')
     if not isinstance(text, str) or len(text) > 65536 or not text.isascii():
         raise ValueError('invalid or oversized assembly host memory observation')

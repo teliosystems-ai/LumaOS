@@ -937,8 +937,8 @@ bash native/image/build.sh headless NEXT_SEQUENCE
 ```
 
 Tools/package-build and export containers are limited to 4 GiB RAM, no additional
-swap and two CPUs. Assembly defaults to the same bounds; the guarded 5 GiB
-option is described below.
+swap and two CPUs. Assembly defaults to the same bounds; the guarded 5 and
+8 GiB options are described below.
 Assembly uses one Cargo compiler job with warnings denied; release LTO and
 optimization remain unchanged. Run the source sweep before the image build,
 not concurrently with compilation, a qualification VM or a loaded model. These
@@ -982,15 +982,23 @@ Build volumes are retained for diagnosis and VM testing. They are not silently
 deleted. Repeated builds consume additional storage.
 
 The assembly container defaults to 4 GiB. On a builder with enough current
-physical-memory headroom, `LUMA_NATIVE_ASSEMBLY_MEMORY_GIB=5` selects the sole
-larger supported bound; tools/package builds and export retain their existing
-4 GiB limit. Immediately before assembly, a bounded kernel memory observation
-must leave another 1 GiB for the build host. Swap is not capacity, and the
-observation is not a reservation against competing workloads. This option
-does not change WSL configuration, restart it, or reduce release optimization
-or runtime security checks. The separate VM guest admission still retains its
-2 GiB host reserve. Retain failed build diagnostics before selecting a fresh
-attempt; do not run another large job concurrently to force admission.
+physical-memory headroom, `LUMA_NATIVE_ASSEMBLY_MEMORY_GIB=5` or `=8` selects
+one of the two larger supported bounds; tools/package builds and export retain
+their existing 4 GiB limit. Immediately before assembly, a bounded kernel memory
+observation must leave another 1 GiB for the build host. Swap is not capacity,
+and the observation is not a reservation against competing workloads. These
+options do not change WSL configuration, restart it, or reduce release
+optimization or runtime security checks. The separate VM guest admission still
+retains its 2 GiB host reserve. Retain failed build diagnostics before selecting
+a fresh attempt; do not run another large job concurrently to force admission.
+
+The committed fat-LTO release profile needs the 8 GiB bound for the current
+workspace. On 2026-10-26 its compile peaked at 6,571,802,624 bytes under 8 GiB
+with no limit events; at 5 GiB it was OOM-killed with default codegen units and
+stalled in reclaim for 24.6 hours with one codegen unit. The 8 GiB bound needs
+at least 9 GiB available, so an ~8 GiB WSL VM refuses it; this builder uses the
+owner-approved 12 GB WSL limit in the [host profile](../host/README.md). See the
+[assembly memory checkpoint](../evidence/G2_ASSEMBLY_MEMORY_2026-10-26.md).
 
 ### External build drive (including Windows D: / exFAT)
 

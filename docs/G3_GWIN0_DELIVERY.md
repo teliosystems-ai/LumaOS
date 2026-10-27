@@ -168,6 +168,20 @@ media. Its executable joins the retained `4b5d23d` source cut, not subsequent
 native lifecycle/editor changes. The current WSL AppArmor parameter is `N`;
 package inspection cannot substitute for installed enforcing confinement.
 
+The [2026-10-27 refresh record](gates/gwin0/combined_workspace_inference_2026-10-27.json)
+recomposes the same profile-W package from the `453ca2e` cut that the
+sequence-17 native candidate also froze (954 captured sources, all 396 Rust
+files identical to the compiled cut). Its platform worker uses the workspace
+release profile under the approved 8 GiB / 2 CPU assembly bound: 22,120,944
+stripped bytes. A debug-profile worker from the same cut measured 75,700,080
+bytes, over the unchanged 64 MiB executable cap; that unit is retained as
+failed evidence. The 2,636,566,528-byte rootfs passed full public read-back,
+21 Python tests, 170 Windows package assertions and production inspection of
+225 members and 91 publisher pins. It is under
+`D:/LumaOS-builds/gwin-integrated-package-20261027-xD2dTQpC-public/package`.
+The 2026-10-20 package remains retained. The refresh is likewise unsigned,
+uninstalled and unqualified, and WSL AppArmor is still `N`.
+
 The native workspace has explicit per-turn review and a fresh finite Infer
 grant. Native admission checks the reviewed worker/model/input commitment.
 Capture remains local data: separately admitted ASR may transcribe a selected

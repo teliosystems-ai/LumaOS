@@ -65,5 +65,24 @@ class SpeechInputTests(unittest.TestCase):
         for name in ('usr/share/doc/luma-os/speech.md', 'usr/share/doc/luma-os/hardware-policy.md'):
             self.assertIn(name, (ROOT/'image/assemble.py').read_text())
 
+    def test_root_speech_layer_installs_the_default_generator_build_program(self):
+        # Sequence-17 assembly 20261026T150426Z failed here: cmake only
+        # recommends make, and the root installs without recommends.
+        recipe = (ROOT/'image/Dockerfile.root').read_text()
+        runs = [line for line in recipe.replace('\\\n', ' ').splitlines() if line.startswith('RUN ')]
+        layer = next(line for line in runs if 'libespeak-ng-dev=' in line).split()
+        self.assertIn('--no-install-recommends', layer)
+        packages = layer[layer.index('--snapshot=${SNAPSHOT}')+1:]
+        policy_spec = importlib.util.spec_from_file_location('speech_policy_tests', ROOT/'image/speech_policy.py')
+        policy = importlib.util.module_from_spec(policy_spec)
+        policy_spec.loader.exec_module(policy)
+        self.assertEqual(sorted(packages), sorted(policy.PACKAGES))
+        configure, build, render = speech.recipe.build_commands()
+        self.assertFalse(any(argument.startswith('-G') for argument in configure))
+        self.assertEqual(build[:2], ['/usr/bin/cmake', '--build'])
+        self.assertEqual(render[0], '/usr/bin/cc')
+        for package in ('g++', 'cmake', 'make'):
+            self.assertIn(package, packages)
+
 
 if __name__ == '__main__': unittest.main()

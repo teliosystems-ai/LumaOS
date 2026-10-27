@@ -13,7 +13,7 @@ spec = importlib.util.spec_from_file_location('luma_image_speech_builder', ASSET
 builder = importlib.util.module_from_spec(spec); spec.loader.exec_module(builder)
 PROFILE = 'whisper-tiny-multilingual-f16-cpu-v1'
 PACKAGES = ('libespeak-ng1=1.51+dfsg-12build1', 'espeak-ng-data=1.51+dfsg-12build1',
-            'libespeak-ng-dev=1.51+dfsg-12build1', 'g++', 'cmake')
+            'libespeak-ng-dev=1.51+dfsg-12build1', 'g++', 'cmake', 'make')
 REQUIRED = ('usr/libexec/luma-os/workspace_speech.py', 'usr/libexec/luma-os/speech/luma-tts-render',
     'usr/libexec/luma-os/speech/luma-asr-worker', 'usr/share/luma-os/speech/runtime.json',
     'usr/share/luma-os/speech/model-layout.json', 'usr/share/luma-os/speech/build-receipt.json',

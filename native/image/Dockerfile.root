@@ -68,7 +68,9 @@ RUN mkdir -p /usr/src/luma-tcc && cd /usr/src/luma-tcc && \
       'd63c113bcdd657f51c8ee197a0b0a24203603313e19a52b5f678d40ab7f5df35  tcc_0.9.27+git20200814.62c30a4a.orig.tar.bz2' \
       '27036dd5f67b6ce3b8212080d1d6e55b1f7b2e54a23d0f2a4af38090a8d75716  tcc_0.9.27+git20200814.62c30a4a-1.debian.tar.xz' | sha256sum -c -
 RUN apt-get install -y --no-install-recommends --snapshot=${SNAPSHOT} power-profiles-daemon=0.21-1ubuntu3
-RUN apt-get install -y --no-install-recommends --snapshot=${SNAPSHOT} g++ cmake \
+# No recommends: make is named because cmake only recommends it, and the fixed
+# speech build uses CMake's default Unix Makefiles generator.
+RUN apt-get install -y --no-install-recommends --snapshot=${SNAPSHOT} g++ cmake make \
     libespeak-ng1=1.51+dfsg-12build1 espeak-ng-data=1.51+dfsg-12build1 libespeak-ng-dev=1.51+dfsg-12build1
 COPY speech/inputs/ /usr/src/luma-speech/inputs/
 COPY speech/ggml-tiny.bin /usr/share/luma-os/speech/ggml-tiny.bin

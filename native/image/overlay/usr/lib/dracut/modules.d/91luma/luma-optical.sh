@@ -1,11 +1,25 @@
 #!/bin/sh
 # Runs only from the firmware-authenticated optical UKI's embedded initrd.
+# This plain systemd unit has no dracut environment, and dracut-lib.sh is not
+# safe under `set -u` (NEWROOT is unset here), so the signed UKI command line is
+# read directly. Each key (passed with its trailing =) must occur exactly once.
 set -eu
 export PATH=/usr/sbin:/usr/bin:/sbin:/bin LC_ALL=C
-. /lib/dracut-lib.sh
-[ "$(getarg luma.media=)" = optical ] && [ "$(getarg luma.mode=)" = live ] &&
-    [ "$(getarg luma.slot=)" = live ] || exit 1
-hash=$(getarg roothash=)
+cmdline_value() {
+    value=
+    matches=0
+    set -f
+    for token in $cmdline; do
+        case "$token" in "$1"*) value=${token#"$1"}; matches=$((matches+1)) ;; esac
+    done
+    set +f
+    [ "$matches" = 1 ] || return 1
+    printf '%s\n' "$value"
+}
+cmdline=$(cat /proc/cmdline)
+[ "$(cmdline_value luma.media=)" = optical ] && [ "$(cmdline_value luma.mode=)" = live ] &&
+    [ "$(cmdline_value luma.slot=)" = live ] || exit 1
+hash=$(cmdline_value roothash=) || exit 1
 case "$hash" in *[!0-9a-f]*|'') exit 1 ;; esac
 [ "${#hash}" = 64 ] || exit 1
 selected=
@@ -16,8 +30,10 @@ for node in /sys/class/block/sr*; do
     case "$name" in sr[0-9]|sr[0-9][0-9]) ;; *) exit 1 ;; esac
     count=$((count+1))
     [ "$count" -le 16 ] || exit 1
-    [ "$(cat "$node/device/type")" = 5 ] && [ "$(cat "$node/ro")" = 1 ] || exit 1
-    [ -b "/dev/$name" ] || exit 1
+    [ "$(cat "$node/device/type")" = 5 ] && [ -b "/dev/$name" ] || exit 1
+    # Writer drives commonly report ro=0; force read-only, then require it.
+    blockdev --setro "/dev/$name"
+    [ "$(cat "$node/ro")" = 1 ] || exit 1
     # No label-only lookup and no silent choice between multiple inserted CDs.
     [ -z "$selected" ] || exit 1
     selected=/dev/$name

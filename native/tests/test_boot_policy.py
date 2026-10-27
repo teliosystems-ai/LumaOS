@@ -150,12 +150,13 @@ class BootPhaseInitrdTests(unittest.TestCase):
             stream.write(Path('/usr/bin/true').read_bytes())
         fixture.chmod(0o755)
         self.addCleanup(fixture.unlink)
-        rules = Path('/etc/udev/rules.d/99-luma-tpm.rules')
-        rules.parent.mkdir(parents=True, exist_ok=True)
-        with rules.open('xb') as stream:
-            self.addCleanup(rules.unlink)
-            stream.write((IMAGE/'overlay/etc/udev/rules.d/99-luma-tpm.rules').read_bytes())
-        rules.chmod(0o644)
+        for name in ('99-luma-tpm.rules', '99-luma-optical.rules'):
+            rules = Path('/etc/udev/rules.d')/name
+            rules.parent.mkdir(parents=True, exist_ok=True)
+            with rules.open('xb') as stream:
+                self.addCleanup(rules.unlink)
+                stream.write((IMAGE/'overlay/etc/udev/rules.d'/name).read_bytes())
+            rules.chmod(0o644)
         with tempfile.TemporaryDirectory(prefix='luma-initrd-policy-',
                                          dir=Path(os.environ['LUMA_STORAGE_TEST_ROOT'])) as folder:
             output = Path(folder) / 'initrd'

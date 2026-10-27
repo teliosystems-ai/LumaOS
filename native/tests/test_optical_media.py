@@ -3,8 +3,10 @@ import hashlib
 import importlib.util
 import os
 from pathlib import Path
+import re
 import shutil
 import struct
+import subprocess
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -24,6 +26,37 @@ class OpticalSourceTests(unittest.TestCase):
             self.assertIn(token,source)
         self.assertNotIn('by-label',source)
         self.assertNotIn('dmsetup remove',source)
+        self.assertIn('blockdev --setro "/dev/$name"',source)
+        self.assertLess(source.index('--setro'),source.index('"$node/ro")" = 1'))
+
+    def test_initrd_discovery_does_not_need_dracut_environment(self):
+        # Sequence 17: sourcing dracut-lib.sh under `set -u` aborted on NEWROOT,
+        # so the optical ISO never reached its verity root.
+        source=(IMAGE/'overlay/usr/lib/dracut/modules.d/91luma/luma-optical.sh').read_text()
+        self.assertTrue(source.startswith('#!/bin/sh\n'))
+        self.assertIn('\nset -eu\n',source)
+        self.assertNotRegex(source,r'(?m)^\s*(\.|source)\s')
+        self.assertNotIn('getarg',source)
+        self.assertIn('cmdline=$(cat /proc/cmdline)',source)
+
+    @unittest.skipUnless(os.name=='posix' and shutil.which('dash'),'requires dash, the initrd /bin/sh')
+    def test_initrd_command_line_parser_requires_each_key_once(self):
+        source=(IMAGE/'overlay/usr/lib/dracut/modules.d/91luma/luma-optical.sh').read_text()
+        self.assertEqual(subprocess.run([shutil.which('dash'),'-n','-c',source]).returncode,0)
+        function=re.search(r'^cmdline_value\(\) \{\n.*?^\}\n',source,re.M|re.S).group(0)
+        def value(cmdline,key):
+            return subprocess.run(['/usr/bin/env','-i',shutil.which('dash'),'-c',
+                                   'set -eu\n'+function+'cmdline=$1\ncmdline_value "$2"','dash',cmdline,key],
+                                  capture_output=True,text=True,cwd='/')
+        good=('root=/dev/mapper/root ro roothash='+'a'*64+' systemd.verity_root_hash=/dev/luma-optical-hash '
+              'luma.mode=live luma.slot=live luma.media=optical /* rd.shell=0')
+        for key,expected in (('luma.media=','optical'),('luma.mode=','live'),('luma.slot=','live'),('roothash=','a'*64)):
+            result=value(good,key)
+            self.assertEqual((result.returncode,result.stdout,result.stderr),(0,expected+'\n',''),key)
+        for cmdline in (good+' luma.media=optical',good+' luma.media=disk',good.replace('luma.media=optical','')):
+            result=value(cmdline,'luma.media=')
+            self.assertEqual((result.returncode,result.stdout),(1,''),cmdline)
+        self.assertEqual(value('xluma.media=optical','luma.media=').returncode,1)
 
     def test_initrd_unit_blocks_verity_on_failed_optical_discovery(self):
         unit=(IMAGE/'overlay/usr/lib/dracut/modules.d/91luma/luma-optical.service').read_text()
@@ -33,6 +66,22 @@ class OpticalSourceTests(unittest.TestCase):
         setup=(IMAGE/'overlay/usr/lib/dracut/modules.d/91luma/module-setup.sh').read_text()
         self.assertIn('systemd-veritysetup@root.service.requires',setup)
         self.assertIn('/etc/udev/rules.d/99-luma-optical.rules',setup)
+
+    def test_real_root_names_optical_loops_after_switch_root(self):
+        # Sequence-17 diagnostic: the real root regenerates
+        # systemd-veritysetup@root, which waits for the same links. The rule
+        # must ship in the root and reach the initrd from that one source.
+        rule=(IMAGE/'overlay/etc/udev/rules.d/99-luma-optical.rules').read_text()
+        spec=importlib.util.spec_from_file_location('luma_optical_boot_policy',IMAGE/'boot_policy.py')
+        policy=importlib.util.module_from_spec(spec);spec.loader.exec_module(policy)
+        line=policy.command_line('0'*64,'optical','desktop')
+        for backing,link in (('root.ext4','luma-optical-root'),('root.verity','luma-optical-hash')):
+            self.assertIn(f'ATTR{{loop/backing_file}}=="/run/initramfs/luma-optical/{backing}", SYMLINK+="{link}"',rule)
+            self.assertIn(f'/dev/{link} ',line)
+        self.assertFalse((IMAGE/'overlay/usr/lib/dracut/modules.d/91luma/99-luma-optical.rules').exists())
+        setup=(IMAGE/'overlay/usr/lib/dracut/modules.d/91luma/module-setup.sh').read_text()
+        self.assertIn('inst_multiple /etc/udev/rules.d/99-luma-optical.rules || return 1',setup)
+        self.assertNotIn('$moddir/99-luma-optical.rules',setup)
 
 
 @unittest.skipUnless(LINUX,'requires isolated Linux xorriso tools container')

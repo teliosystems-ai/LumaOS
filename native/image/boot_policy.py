@@ -111,11 +111,12 @@ def verify_initrd(initrd):
     expected_rules = (Path(__file__).parent/'overlay/etc/udev/rules.d/99-luma-tpm.rules').read_bytes()
     if command('lsinitrd', '--file', 'etc/udev/rules.d/99-luma-tpm.rules', initrd) != expected_rules:
         raise ValueError('initrd TPM ownership rules differ from image policy')
-    optical = Path(__file__).parent/'overlay/usr/lib/dracut/modules.d/91luma'
-    for name,target in [('luma-optical.sh','usr/lib/luma-optical.sh'),
-                        ('luma-optical.service','usr/lib/systemd/system/luma-optical.service'),
-                        ('99-luma-optical.rules','etc/udev/rules.d/99-luma-optical.rules')]:
-        if command('lsinitrd','--file',target,initrd) != (optical/name).read_bytes():
+    overlay = Path(__file__).parent/'overlay'
+    optical = overlay/'usr/lib/dracut/modules.d/91luma'
+    for source,target in [(optical/'luma-optical.sh','usr/lib/luma-optical.sh'),
+                          (optical/'luma-optical.service','usr/lib/systemd/system/luma-optical.service'),
+                          (overlay/'etc/udev/rules.d/99-luma-optical.rules','etc/udev/rules.d/99-luma-optical.rules')]:
+        if command('lsinitrd','--file',target,initrd) != source.read_bytes():
             raise ValueError('initrd optical discovery differs from signed build policy')
     return {'phase_module': 'luma-pcrphase', 'required_paths': sorted(required)}
 

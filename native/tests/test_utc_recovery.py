@@ -129,6 +129,29 @@ class RecoveryUtc(unittest.TestCase):
         self.assertIn('SO_PEERSEC', peer)
         self.assertIn('label.as_bytes()', peer)
 
+    def test_producer_paths_do_not_close_a_boot_ordering_cycle(self):
+        # Sequence-17 serial logs: systemd broke a cycle by skipping paths.target
+        # (disk) or the recovery producer path (optical). A default path unit is
+        # Before=paths.target, which precedes basic.target and so the keeper.
+        def fields(name):
+            values = {}
+            for line in (ASSETS / name).read_text().splitlines():
+                key, separator, value = line.partition('=')
+                if separator and not line.startswith('#'):
+                    values.setdefault(key, []).extend(value.split())
+            return values
+        for keeper in ('luma-utc-keeper', 'luma-utc-recovery-keeper'):
+            path = fields(keeper.replace('keeper', 'producer') + '.path')
+            self.assertNotIn('DefaultDependencies', fields(keeper + '.service'))
+            self.assertIn(keeper + '.service', path['After'])
+            self.assertIn(keeper + '.service', path['BindsTo'])
+            self.assertEqual(path['DefaultDependencies'], ['no'])
+            for key, unit in (('After', 'sysinit.target'), ('Requires', 'sysinit.target'),
+                              ('Conflicts', 'shutdown.target'), ('Before', 'shutdown.target')):
+                self.assertIn(unit, path[key])
+            self.assertEqual(path['Before'], ['shutdown.target'])
+            self.assertEqual(path['WantedBy'], ['multi-user.target'])
+
 
 if __name__ == '__main__':
     unittest.main()

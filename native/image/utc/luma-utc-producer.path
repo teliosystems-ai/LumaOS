@@ -1,7 +1,12 @@
 [Unit]
 Description=Start fixed NTS producer only after reviewed seed and protected bind
-After=luma-utc-keeper.service
-Requires=luma-utc-keeper.service
+# Default Before=paths.target closes a cycle through the keeper's implicit
+# After=basic.target; keep the other default edges explicitly.
+DefaultDependencies=no
+After=sysinit.target luma-utc-keeper.service
+Requires=sysinit.target luma-utc-keeper.service
+Conflicts=shutdown.target
+Before=shutdown.target
 BindsTo=luma-utc-keeper.service
 ConditionKernelCommandLine=luma.mode=installed
 

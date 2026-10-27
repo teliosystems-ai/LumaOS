@@ -1,9 +1,13 @@
 [Unit]
 Description=Start recovery NTS only after reviewed seed and protected bind
-After=luma-utc-recovery-keeper.service
-Requires=luma-utc-recovery-keeper.service
+# Default Before=paths.target closes a cycle through the keeper's implicit
+# After=basic.target; keep the other default edges explicitly.
+DefaultDependencies=no
+After=sysinit.target luma-utc-recovery-keeper.service
+Requires=sysinit.target luma-utc-recovery-keeper.service
 BindsTo=luma-utc-recovery-keeper.service
-Conflicts=luma-utc-keeper.service luma-utc-producer.service luma-utc-producer.path
+Conflicts=shutdown.target luma-utc-keeper.service luma-utc-producer.service luma-utc-producer.path
+Before=shutdown.target
 ConditionKernelCommandLine=luma.mode=live
 
 [Path]

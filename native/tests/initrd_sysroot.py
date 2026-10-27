@@ -32,10 +32,11 @@ def main():
         raise SystemExit('requires a disposable container and read-only /work/root')
     if not output.is_relative_to('/out') or output == Path('/out') or output.exists():
         raise SystemExit('choose a fresh evidence file beneath /out')
-    if Path('/etc/udev/rules.d/99-luma-tpm.rules').exists():
+    rules = ('etc/udev/rules.d/99-luma-tpm.rules',)+(
+        ('etc/udev/rules.d/99-luma-optical.rules',) if args.check_shutdown else ())
+    if any((Path('/')/rule).exists() for rule in rules):
         raise SystemExit('build-host rule would mask the sysroot-only regression')
-    paths = ('etc/udev/rules.d/99-luma-tpm.rules',
-             'usr/lib/dracut/modules.d/92luma-pcrphase/module-setup.sh')
+    paths = rules+('usr/lib/dracut/modules.d/92luma-pcrphase/module-setup.sh',)
     sources = {p:hashlib.sha256((root/p).read_bytes()).hexdigest() for p in paths}
     if args.check_shutdown:
         for path in (root/'usr/lib/dracut/modules.d/91luma').glob('*.sh'):

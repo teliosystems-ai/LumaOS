@@ -94,6 +94,7 @@ class ContractFileTests(unittest.TestCase):
             "admin-authorization-event.schema.json",
             "artifact.schema.json",
             "g2-host-inventory.schema.json",
+            "g3_quality.schema.json",
             "grant.schema.json",
             "model-catalog-signature.schema.json",
             "model-pack.schema.json",

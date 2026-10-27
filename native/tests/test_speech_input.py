@@ -84,5 +84,21 @@ class SpeechInputTests(unittest.TestCase):
         for package in ('g++', 'cmake', 'make'):
             self.assertIn(package, packages)
 
+    def test_copied_speech_inputs_are_root_protected_whatever_the_context_modes(self):
+        # Sequence-17 assembly 20261027T094601Z failed here: COPY keeps the
+        # build-context modes, and a context staged on D: (WSL drvfs) reports
+        # 0777, which speech_policy.protected refuses.
+        lines = (ROOT/'image/Dockerfile.root').read_text().replace('\\\n', ' ').splitlines()
+        copies = [index for index, line in enumerate(lines) if line.startswith('COPY speech')]
+        targets = set()
+        for index in copies:
+            _copy, _source, destination = lines[index].split()
+            targets |= {destination+name for name in speech.recipe.INPUTS} if destination.endswith('/') else {destination}
+        self.assertEqual(len(targets), len(speech.recipe.INPUTS)+1)
+        commands = [command.split() for line in lines[max(copies)+1:] if line.startswith('RUN ')
+                    for command in line[4:].split('&&')]
+        protected = {path for command in commands if command[:2] == ['chmod', '0644'] for path in command[2:]}
+        self.assertEqual(targets-protected, set())
+
 
 if __name__ == '__main__': unittest.main()

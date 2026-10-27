@@ -1,0 +1,479 @@
+{
+  "schema_version": 1,
+  "date": "2026-10-27",
+  "status": "built-offline-verified-and-disk-image-live-secure-boot-smoke-passed-optical-iso-boot-failed",
+  "scope": "Standalone Ubuntu 24.04 amd64 UEFI desktop laboratory installation/recovery disk image plus a separate UEFI-only optical live/installer ISO of the same signed root; not an application installed into existing Ubuntu, a Windows image or a WSL package",
+  "operator_handoff": "G2_NATIVE_DESKTOP_CANDIDATE_17_2026-10-27.md",
+  "source": {
+    "commit": "55da2e2",
+    "head": "55da2e2b74276188747b41de95bf12f6b5ada3bd",
+    "snapshot": "/mnt/luma-build/work/candidate17-source-20261027-b",
+    "frozen_manifest_sha256": "f4198f999a3cf75a51b753b02c22a2324bc85001a17c53f4ceec0db7b6f4b756",
+    "frozen_files": 877,
+    "frozen_bytes": 14925158,
+    "product_source_lock_sha256": "eae1b551205ab149bf134e742869c4e21994ee33c94ab3a67861f95421e3a143",
+    "product_files": 727,
+    "join_record": "/mnt/luma-build/work/candidate17-source-20261027-b.join.json",
+    "join_record_sha256": "874fa1116f30ff86422722d580677e1603d7c97e444e17cd73f4f87b41c84374",
+    "prior_cut": "/mnt/luma-build/work/candidate17-source-20261027-a (453ca2e, manifest 13bb22f4295513a349b40793c2a684bc214dd3fa3bae692a59cc371674358ef8)",
+    "changed_from_prior_cut": [
+      "native/image/Dockerfile.root",
+      "native/tests/test_speech_input.py"
+    ],
+    "rust_changed_since_prior_cut": [],
+    "head_line_ending_record": "/mnt/luma-build/work/candidate17-source-20261027-b.head-eol.json",
+    "head_line_ending_record_sha256": "9dba0a159cf179992027cf5353daaf7262969b2dac4114e6244a1debf045ae46",
+    "files_differing_from_head_only_by_working_tree_crlf": 25,
+    "gwin0_refresh_relation": "The committed 2026-10-27 GWIN0 refresh record names the 453ca2e cut; this image's 55da2e2 cut differs from it only in the two non-Rust files above"
+  },
+  "assembly": {
+    "build_id": "20261027T132536Z-desktop",
+    "volume": "luma-native-build-20261027T132536Z-desktop",
+    "export_directory": "D:/LumaOS-builds/native/20261027T132536Z-desktop",
+    "public_exports": 13,
+    "checksum_rows": 12,
+    "release": "luma-native-lab-20260927-desktop-17",
+    "sequence": 17,
+    "log": "D:/LumaOS-builds/candidate17-assembly-20261027T132536Z.log",
+    "log_sha256": "aca62c84da113f5243ab6533567df93cc5568ad53aef8f6dae91c6ac37c8feb0",
+    "exit_code": 0,
+    "optimized_release_compile": "passed in 10m 33s; committed fat-LTO release profile retained",
+    "memory_cap_gib": 8,
+    "physical_host_reserve_gib": 1,
+    "admission_host_total_bytes": 12540600320,
+    "admission_host_available_bytes": 10837839872,
+    "admission_swap_counted": false,
+    "preflight_store_free_bytes": 39549456384,
+    "preflight_d_free_bytes": 319884623872,
+    "dedicated_d_backed_ext4_store_and_daemon_verified": true,
+    "c_drive_bulk_build_fallback": false,
+    "package_downloads_network": "explicit host networking for pinned snapshot downloads only",
+    "assembly_and_tests_network": "none",
+    "kernel": "6.8.0-142-generic",
+    "verity_root_hash": "e02c9495eb837a4f65823c32415e43f69aee49659677183c68c91ee4c5b3329f",
+    "root_bytes": 6442450944,
+    "hash_bytes": 50733056,
+    "packaged_platform_sha256": "c146fe8a3dff98fca693ae51279e46fc9083493f3f29b0288eb851f58f19b7d0",
+    "build_json_sha256": "5b6e3ca63560930d92ab4668ae4564bf44cbe048e3067aeaedbbbd8fdb84384f",
+    "llm_model_weights_embedded": false,
+    "asr_model_weight_embedded": {
+      "path": "/usr/share/luma-os/speech/ggml-tiny.bin",
+      "sha256": "be07e048e1e599ad46341c8d2a135645097a538221678b7acdd1b1919c6e1b21",
+      "checked_by": "native/image/speech_policy.py",
+      "asr_model_authority_or_language_accuracy_qualified": false
+    },
+    "speech_input_pins": {
+      "whisper_source_tar_gz": "645445da884df6dbd52b30f82d7be7c01d1767c938714e477e786b88d529e9f4",
+      "model_license": "b5d65a59060e68c4ff940e1eddfa6f94b2d68fdf58ed7f4dd57721c997e35e9d",
+      "ggml_tiny_bin": "be07e048e1e599ad46341c8d2a135645097a538221678b7acdd1b1919c6e1b21",
+      "llama_runtime": "a836c913236ab4533ef9aaf49f0e1ad2955c8159869d7eec1a9072a92e13d61b"
+    },
+    "model_installation": "Explicit --stage-model downloads pinned supported GGUF bytes with size/digest and resource checks; inert staging is not serving activation",
+    "build_json_sections_present_but_unqualified": [
+      "speech",
+      "input_capture",
+      "hardware_writer_mediation",
+      "desktop"
+    ],
+    "exported_build_status_preserved": "built-not-yet-boot-tested",
+    "production_signed": false,
+    "signed_or_exported_files_rewritten_after_testing": false
+  },
+  "artifacts": {
+    "compressed": {
+      "name": "luma-native-lab-20260927-desktop-17.img.zst",
+      "bytes": 3690945062,
+      "sha256": "201f66662307e8373f75f9a50be742bbd92123600ef1a57f9b93c2ba4eb9070d"
+    },
+    "decompressed_raw": {
+      "name": "luma-native-lab-20260927-desktop-17.img",
+      "bytes": 16190013440,
+      "sha256": "24b8ef41eda9932b6d43914b7ea7671e8977595f4c6f79cde1c08adf14f27774",
+      "retained_in_d_backed_build_volume": true,
+      "additional_raw_export_copy_created": false
+    },
+    "optical_iso": {
+      "name": "luma-native-lab-20260927-desktop-17.iso",
+      "bytes": 7225755648,
+      "sha256": "58bf1cb3b518ad2f9dfeb8cd881c85bf48a4768d0baca1ef5204bc618e07b760",
+      "format": "ISO9660 with a single EFI El Torito entry; UEFI only, no legacy BIOS entry, not hybrid USB media",
+      "media": "DVD+R DL or virtual CD; exceeds single-layer DVD; not raw USB",
+      "optical_uki_sha256": "e7d98226aa16365a2d667af7680abf028b646f8776e0f8ffa59845143400f10c",
+      "optical_media_record": "optical-media.json",
+      "optical_media_record_sha256": "ade5cab04dd02b99b1e096ed7ed739a303dd653b7f48918f663d1f91fb484189",
+      "members": {
+        "root.ext4": {"bytes": 6442450944, "sha256": "ca1e316df4de70ba14d2f1727feba043eda15b2896c4130d60478aab424706d9"},
+        "root.verity": {"bytes": 50733056, "sha256": "616b98a40e57fafeb61c9c0eea8c22e1634483e0c0b644a26f3d2729540b438d"},
+        "slot-a.efi": {"bytes": 97593784, "sha256": "770e63664e5f90ba178d7877b219798ef3a3d7d1fd7467b7c2125a05541b0599"},
+        "slot-b.efi": {"bytes": 97593784, "sha256": "455cd4444b5a4e15c1ec05ed40f1948a9f647b7f6f2e3aef588216f65aa5c5d1"},
+        "bootloader.efi": {"bytes": 97208, "sha256": "0651f91979771a60158287566a9278b6e7827ccb48f078438ab0a212093a2bf1"},
+        "efi.img": {"bytes": 536870912, "sha256": "9619843523c8b16054774b5d3bba8623a17d658918b56361282c8d66c8e92ad6"},
+        "release.json": {"bytes": 995, "sha256": "d89a46ba5462da931db554a5f161b7b98d6c44a7ca179356f9441c0c6047f280"},
+        "release.sig": {"bytes": 64, "sha256": "1fd690c935636afdf7aa50d7c0400305a05cff944245825e8d3e070616372267"},
+        "packages.lock": {"bytes": 28474, "sha256": "05b1dc02df7729570d2570dfce45e51e55305236ff493c21c4cf14dc613368e7"},
+        "secureboot.cer": {"bytes": 1073, "sha256": "2637785a3cb4798db902bf62732324984d3f2475d7f2eecc318442772d9c06c8"}
+      },
+      "installed_admin_pcr_approval_for_optical_slot": false
+    },
+    "secureboot_public_cert": {
+      "name": "secureboot.cer",
+      "bytes": 1073,
+      "sha256": "2637785a3cb4798db902bf62732324984d3f2475d7f2eecc318442772d9c06c8"
+    },
+    "checksum_inventory": {"name": "SHA256SUMS", "bytes": 1069, "sha256": "49951e2fb4e981888adf1fadbdf85cb4cdeccbf39da53633bd1b4f9eb3eee43b"},
+    "release_json_sha256": "d89a46ba5462da931db554a5f161b7b98d6c44a7ca179356f9441c0c6047f280",
+    "release_sig_sha256": "1fd690c935636afdf7aa50d7c0400305a05cff944245825e8d3e070616372267",
+    "native_source_archive_sha256": "526394dcad8d88ba472e6483c0ed337eb59b569130659c999a6975c1ec674353",
+    "source_lock_sha256": "eae1b551205ab149bf134e742869c4e21994ee33c94ab3a67861f95421e3a143",
+    "packages_lock_sha256": "05b1dc02df7729570d2570dfce45e51e55305236ff493c21c4cf14dc613368e7",
+    "toolchain_packages_lock_sha256": "674dfe922b7eca733e893b85b9560a82e11d0a58235e87ac78fa1f7ef5e86668",
+    "boot_policy_sha256": "02805d6396dcbb05e7805861e2ecf46780466998769f11055f40493437c780fe",
+    "release_public_sha256": "62588a16a8901fbdf20cdfee1c1df5c243e85022693f6edb275a51366d01878f",
+    "pcr_public_sha256": "b55221f37d366b64367db37394852d7af70b328a9c8173f5aa2e499762bfad26",
+    "private_keys_exported": false,
+    "storage_warning": "The D: USB disk holding the export reports bad blocks and Windows 'Full Repair Needed'; copy the export to sound storage and accept only a copy whose SHA256SUMS check passes"
+  },
+  "source_tests": {
+    "log": "D:/LumaOS-builds/candidate17-source-tests-20261027-b.log",
+    "log_sha256": "a4f4968fa1c14588e66e558b135f9bcfad73335974d6c8aa29e3baae6f9de9a9",
+    "source": "frozen cut b (f4198f99...)",
+    "ran": 959,
+    "result": "OK",
+    "failures": 0,
+    "errors": 0,
+    "skipped": 2,
+    "skip_cause": "Consistent with the two native/tests/test_utc_publisher.py tests that skip without LUMA_CHRONY_UPSTREAM/LUMA_CHRONY_RELEASE_UPSTREAM isolated pinned-source fixtures; the non-verbose runner did not print skipped names, so this is not separately confirmed",
+    "seconds": 148.009,
+    "earlier_attempts_retained": [
+      {"attempt": "20261026-a", "log_sha256": "a3f6a0b5fbbf6249785e87b194bd62861068adb6da6b6c4bb90353e76228953b", "outcome": "harness errors: KeyError LUMA_STORAGE_TEST_ROOT omitted by the test harness; corrected harness reran"},
+      {"attempt": "20261026-b", "log_sha256": "9b50eeeb6b058d348071e2db8d3f5d6cdd83bfa9b6347ad97f080cb74f2ecced", "outcome": "957 OK, 2 skipped (earlier 4acc3a0-era cut; not this image's source)"},
+      {"attempt": "20261027-a", "log_sha256": "eccafb9d5c9738b7efd918b7b48b74c79de23ff112e515caef94d9f086f12695", "outcome": "958 OK, 2 skipped (cut a, 453ca2e)"}
+    ]
+  },
+  "offline_image_verification": {
+    "status": "passed",
+    "evidence": "/mnt/luma-build/work/candidate17-image-verification-20261027-c/verification.json",
+    "evidence_sha256": "c90268b89c4a95b12fb4e10092135ff55ede40e6cc7a6520ee5258b952b0ef43",
+    "log": "D:/LumaOS-builds/candidate17-image-verification-20261027T132536Z-desktop-c.log",
+    "log_sha256": "2948b257f5cf3d8283992a2c027a6ec13f00cb763adf8c31b6ba1bd9f349e05e",
+    "executed_verifier": "candidate17_image_verify_2026_10_27.py",
+    "executed_verifier_sha256": "8f4269580bafe46d5b28277c7f1b663598379a6230805e1c9f5c4559ae788c8b",
+    "checks_passed": 14,
+    "checks_failed": 0,
+    "checks": [
+      "Exact selected read-only source/export/build-volume and writable evidence mount identities",
+      "Verifier-only four-fixed-instance-template extraction adapter with ordinary paths unchanged",
+      "All 877 frozen source records",
+      "Thirteen public exports and twelve checksum rows",
+      "Exact 727-file product subset and complete compressed source archive",
+      "Compressed image stream equals exact raw bytes without another raw copy",
+      "Primary and backup GPT, partition content and zero slack",
+      "Laboratory release signature, verity and four measured signed UKIs",
+      "Exact offline payload and ESP member inventories and bytes",
+      "Optical ISO9660, El Torito EFI FAT and signed optical UKI parsed offline with all ten member bytes compared",
+      "Browser v2 actual root library, fixed ELF launcher and profile pins",
+      "110 exact UI/overlay source members and native primary launcher",
+      "Image QEMU KSM default disabled, boot helper masked/not enabled, QEMU executable retained",
+      "Actual packaged optimized release binary: 30 CLI, four workflow DATA and four recovery DATA cases"
+    ],
+    "actual_packaged_cli": {
+      "contract_passed": 30,
+      "workflow_data_passed": 4,
+      "recovery_data_passed": 4,
+      "skipped": 0,
+      "pam_grants_live_c_authority_effects_or_gui_exercised": false
+    },
+    "verifier_limitation_wording": "The executed verifier's inherited limitation 'No model weights are embedded' refers to LLM/inference weights; the Whisper tiny ASR weight is embedded and checked as image data by speech_policy. The executed verifier is retained unchanged.",
+    "verifier_adapter_audit": {
+      "purpose": "The historical extraction allowlist rejected two new '@' template paths in sequence 17 (hardware query/observer units) in addition to the two getty paths; the fix remains verifier-only and modifies neither the signed image nor the frozen source",
+      "profile": "candidate17-fixed-instance-template-extraction-v2",
+      "ordinary_paths_delegated_unchanged": true,
+      "exact_special_paths": [
+        "/etc/systemd/system/getty@tty1.service.d/luma-mode.conf",
+        "/etc/systemd/system/luma-hardware-daemon-observer@.service",
+        "/etc/systemd/system/luma-hardware-query@.service",
+        "/etc/systemd/system/serial-getty@ttyS0.service.d/luma-mode.conf"
+      ],
+      "audit": "candidate17_verifier_adapter_audit_2026_10_27.py",
+      "audit_sha256": "2ca83d4e859ec90d6efe5734ae30566214efbaabebb96a0cc01de2008bb9a919",
+      "pure_adversarial_cases_passed": 158,
+      "pure_adversarial_cases_failed": 0,
+      "image_filesystem_or_debugfs_touched_by_audit": false,
+      "pure_evidence": "/mnt/luma-build/work/candidate17-verifier-adapter-audit-20261027-c/v2-audit.json",
+      "pure_evidence_sha256": "35f2ebc382986687dcc450df2046802fbaad09553f63b96d0c65cc2869f3f72d",
+      "previous_verifier": ".luma/candidate17-image-verify-20261022.py (5ea5f504...)",
+      "previous_verifier_audit_failure": "/mnt/luma-build/work/candidate17-verifier-adapter-audit-20261027-c/v1-audit.stderr",
+      "previous_verifier_audit_failure_sha256": "45edeb3f748c9707219686103a3a96416f8cf242b3216d2c1b47420b71bb68a4",
+      "previous_verifier_audit_failure_reason": "ValueError: instance-template extraction is not its exact bounded allowlist, raised on an allowed path, reproducing failed attempt b",
+      "actual_files_extracted_and_compared_in_check_9": "performed inside the passing verifier run; see its evidence",
+      "earlier_failed_verifier_attempt": "b",
+      "earlier_failed_verifier_evidence_retained": "/mnt/luma-build/work/candidate17-image-verification-20261027-b/verification.json",
+      "earlier_failed_verifier_evidence_sha256": "267b09f89b11ada3168c8dbf1bb98c6de02e5ad917b3711a9092e1ecae318d3a",
+      "earlier_failed_verifier_log": "D:/LumaOS-builds/candidate17-image-verification-20261027T132536Z-desktop.log",
+      "earlier_failed_verifier_log_sha256": "65ca30333a183d94f23be272b435410aa97a190699d0c10e6bb473ca2a022ede",
+      "earlier_failed_verifier_outcome": "checks 1-10 passed; stopped at check 11 on the allowlist refusal"
+    }
+  },
+  "vm_live_smoke": {
+    "result": "passed",
+    "evidence": "/mnt/luma-build/docker/volumes/luma-native-build-20261027T132536Z-desktop/_data/vm-candidate17-20261027-live-secureboot-tcg/result.json",
+    "evidence_sha256": "44c8b4435a04ca402c1df02876d485b5b322b107088399046b766ff68133afef",
+    "log": "D:/LumaOS-builds/candidate17-vm-smoke-20261027T132536Z-desktop.log",
+    "log_sha256": "617b405670c3265fb3bcba43b2e30295d029714a4e3670970d4a80c03aac28c1",
+    "serial_log_sha256": "0004e4f320d529c45200a42adc84d7eaf5820b2f0866c41ec551efae4a3e86ae",
+    "qemu_log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "fixture": "native/image/vm_test.py --smoke-only --secure-boot --require-clean-shutdown --accel tcg",
+    "fixture_sha256": "c9bc8246e8fcb8464959df2a23a2d0577a4bf7bbaefc9532f0650f2a05a048ae",
+    "wrapper_sha256": "09f516fecfc42864089ee31f946f9401d356f6aa819d77d0005c8aced49b81d9",
+    "acceleration": "tcg",
+    "guest_memory_mib": 4096,
+    "host_available_bytes_at_admission": 10989547520,
+    "host_reserve_bytes": 2147483648,
+    "container_memory_gib": 6,
+    "container_swap_additional_bytes": 0,
+    "network": false,
+    "physical_devices_or_kvm_passed_through": false,
+    "fresh_virtual_firmware_and_software_tpm": true,
+    "image_read_only_and_sha256_rechecked_after_test": true,
+    "uefi_boot_tested": true,
+    "actual_guest_secure_boot_enabled": true,
+    "live_inventory_status_broker_reference_media_verity_and_tpm_probe_passed": true,
+    "live_reference_apparmor_enforce_observed": true,
+    "clean_final_storage_teardown_tested": true,
+    "shutdown_marker": "LUMA_SHUTDOWN_STORAGE_CLEAN",
+    "shutdown_warning": "As in sequence 16, systemd initially failed unmounting /var; dracut old-root teardown then completed, the required final storage-clean marker appeared and QEMU exited zero. This does not claim warning-free service shutdown or installed encrypted-data recovery.",
+    "reported_stage_name": "install",
+    "reported_stage_name_is_not_installation_evidence": true,
+    "installation_tested": false,
+    "graphical_session_tested": false,
+    "atomic_export_tested": false,
+    "bounded_ipc_tested": false,
+    "gate_closing": false
+  },
+  "optical_live_smoke": {
+    "result": "failed",
+    "evidence": "/mnt/luma-build/docker/volumes/luma-native-build-20261027T132536Z-desktop/_data/vm-candidate17-20261027-optical-secureboot-tcg/result.json",
+    "evidence_sha256": "e690acc12ded94e2786d060894b8054c501fdce386908229dbcd1a6b5d5a68d9",
+    "log": "D:/LumaOS-builds/candidate17-optical-smoke-20261027T132536Z-desktop.log",
+    "log_sha256": "faa992afbe2a9dfa612c77905f51947316eebd34be746485d0747626445b74da",
+    "serial_log_sha256": "fb5e9a016f5a4adecf8ff0866f84f7bec6afd32a998b10bea165554fe3c89598",
+    "qemu_log_sha256": "bcde68ea3041f3cfbf6cc9cb5a2c44a9ab253a9e5b016985803a77ca3a40a099",
+    "harness": "candidate17_optical_smoke_2026_10_27.py",
+    "harness_sha256": "bad10db562c0c9af5e2b9b36ebcb426566962b521ebf641d04cbf39cccc42d6d",
+    "wrapper_sha256": "1a313e0afcb0084f53e0eb79c9ba4ad9fb55e8d07c2851c2d368cacc5173d669",
+    "acceleration": "tcg",
+    "guest_memory_mib": 4096,
+    "host_available_bytes_at_admission": 11035373568,
+    "host_reserve_bytes": 2147483648,
+    "network": false,
+    "physical_devices_or_kvm_passed_through": false,
+    "attached_block_devices": [
+      "read-only AHCI CD carrying the ISO"
+    ],
+    "fresh_virtual_firmware_and_software_tpm": true,
+    "iso_sha256_before_and_after": "58bf1cb3b518ad2f9dfeb8cd881c85bf48a4768d0baca1ef5204bc618e07b760",
+    "iso_unchanged": true,
+    "actual_guest_secure_boot_enabled": true,
+    "optical_uki_verified_and_started": true,
+    "cd_detected_by_kernel": true,
+    "observed_failure": "luma-optical.service failed in the initrd; systemd-veritysetup@root and veritysetup.target failed on that dependency; dracut-initqueue timed out waiting for /dev/mapper/root and the guest halted at 325.286 s without a shell; the harness then timed out after 1800 s waiting for the root prompt",
+    "root_cause": "luma-optical.sh ran 'set -eu' and then sourced /lib/dracut-lib.sh, which references the unset NEWROOT outside dracut's own hooks and aborts the script; reproduced offline as '/lib/dracut-lib.sh: NEWROOT: parameter not set'",
+    "disk_image_affected": false,
+    "source_fix": "native/image/overlay/usr/lib/dracut/modules.d/91luma/luma-optical.sh reads /proc/cmdline directly, requires each key exactly once and forces the single CD read-only before requiring ro=1; regression tests in native/tests/test_optical_media.py",
+    "sequence_17_iso_bootable": false,
+    "optical_boot_tested_on_physical_hardware": false,
+    "installation_tested": false,
+    "gate_closing": false,
+    "subsequent_diagnostic": "optical_discovery_diagnostic found a second optical defect, now fixed in source"
+  },
+  "optical_discovery_diagnostic": {
+    "result": "failed",
+    "purpose": "Software-only diagnostic of the source-fixed discovery script; direct kernel boot bypasses the signed UKI, so it is not image, Secure Boot or release evidence",
+    "evidence": "/mnt/luma-build/docker/volumes/luma-native-build-20261027T132536Z-desktop/_data/vm-candidate17-20261027-optical-diagnostic-fixed-tcg/result.json",
+    "evidence_sha256": "923cca5807f17a3c917ec6e817f8a439fa117be6af9bc3b9c2350585b5c38b05",
+    "log": "D:/LumaOS-builds/candidate17-optical-diagnostic-fixed-20261027T132536Z-desktop.log",
+    "log_sha256": "bcc51bb11a6e7eab8e3110c8e470bf40e4acf344506b1e1c24bff28d6e75a5e3",
+    "serial_log_sha256": "1031faf6b98ee7cfa9d34dd5fadb07749b92f7b4e60b47fea7af1384212f5f70",
+    "qemu_log_sha256": "bcde68ea3041f3cfbf6cc9cb5a2c44a9ab253a9e5b016985803a77ca3a40a099",
+    "harness": "candidate17_optical_diagnostic_2026_10_27.py",
+    "harness_sha256": "9198e0c641ef4ffd32faaa79c15b963d5c4536c5cf78c2325082624b9bfb7810",
+    "wrapper": "candidate17_optical_diagnostic_run_2026_10_27.sh",
+    "wrapper_sha256": "a98b52fa699f7bb537a20fe1f8bddb73342f3ed3315838eeb4a2d4cc4ef21f1b",
+    "kernel_sha256": "cd5fcfd260b91782637b7b4e221a48e656358f6eef549602540e62380b6f2f2c",
+    "initrd_sha256": "2c323e9d53bc6792bd79b6c498e3cf0565d97f99076ed4b026da942d22c9d992",
+    "fixed_script_sha256": "ba32039dc9a60c15d6cddd46bbc869b9f6ec1c0e0564eff84ece7e199477fb4c",
+    "overlay_sha256": "ea653b38099789c5844301f54a9ec5e103fb6ed9defa23cb0b6a7664f3bb8877",
+    "combined_initrd_sha256": "e35410bd3a0986ad7fe27f28a47f3239ce430e82841d0431d2400b25ae51b771",
+    "acceleration": "tcg",
+    "guest_memory_mib": 4096,
+    "host_memory_admission": {
+      "guest_memory_mib": 4096,
+      "host_available_bytes": 10992844800,
+      "host_reserve_bytes": 2147483648,
+      "reservation": false
+    },
+    "network": false,
+    "attached_block_devices": [
+      "read-only AHCI CD carrying the ISO"
+    ],
+    "secure_boot_tested": false,
+    "uki_tested": false,
+    "iso_sha256_before_and_after": "58bf1cb3b518ad2f9dfeb8cd881c85bf48a4768d0baca1ef5204bc618e07b760",
+    "iso_unchanged": true,
+    "diagnostic_markers": [
+      "LUMA_DIAG_SR0_RO_AFTER=1",
+      "LUMA_DIAG_SR0_RO_BEFORE=1"
+    ],
+    "root_shell_reached": true,
+    "required_checks": {
+      "broker-and-reference-active": "passed",
+      "fixed-discovery-loops": "passed",
+      "only-optical-loop-and-dm-block-devices": "passed",
+      "optical-media-bind-mount": "passed",
+      "verity-root": "passed"
+    },
+    "observations": {
+      "loop-inventory": {
+        "exit_code": 0,
+        "transcript_sha256": "75f9225d6cf606af1def16fab3662e3865b5da2f344d4dd6ebc76f6d67aa1562"
+      },
+      "media-mount": {
+        "exit_code": 0,
+        "transcript_sha256": "e51839dfd1134a1eec33cbf761020647230e3e49e16519829a58fc210a40a86d"
+      },
+      "signed-media-verify": {
+        "exit_code": 1,
+        "transcript_sha256": "0bfc166fe42f99c00646f3cceda3db2a4101e9be95b64dd4afb040c31f96564a"
+      },
+      "verity-status": {
+        "exit_code": 0,
+        "transcript_sha256": "1d573b63085089db5702f09504025fda1d2b6541e778e3031516f788a36ddf03"
+      }
+    },
+    "error": "RuntimeError: Expected b'\\\\r?\\\\n__LUMA_OBS_10=\\\\d+__\\\\r?\\\\n'; inspect /work/vm-candidate17-20261027-optical-diagnostic-fixed-tcg/optical-diagnostic/serial.log",
+    "clean_shutdown": null,
+    "finding_first_defect": "The fixed script discovered the single read-only CD, created both read-only loops and the initrd opened the verity root; the dracut-library abort is resolved",
+    "finding_second_defect": "After switch-root the real root regenerated systemd-veritysetup@root, which waited 90 s for /dev/luma-optical-root and /dev/luma-optical-hash and failed because the naming udev rule existed only in the initrd; the already-open root kept running",
+    "second_defect_source_fix": "native/image/overlay/etc/udev/rules.d/99-luma-optical.rules ships in the root and module-setup.sh copies that one file into the initrd with inst_multiple; boot_policy.verify_initrd compares it with the overlay; regression test test_real_root_names_optical_loops_after_switch_root",
+    "signed_media_verify_memory_finding": "luma-platform verify /media/luma exited 1 in the 4096-MiB guest because RAM-backed staging was unavailable; the signed optical smoke runs it with 6 GiB",
+    "harness_defect": "The failed-units observation ran systemctl without --no-pager, so the serial console entered a pager (it listed two failed units) and the harness stopped waiting for the observation marker (1800-s wait capped by the 3600-s run deadline) before power-off, so clean_shutdown is null; the executed harness is retained unchanged and a re-run needs a new versioned file",
+    "failed_units_in_serial_pager": [
+      "luma-utc-recovery-keeper.service",
+      "systemd-veritysetup@root.service"
+    ],
+    "ordering_cycle_observed": true,
+    "sequence_17_iso_bootable": false,
+    "optical_boot_tested_on_physical_hardware": false,
+    "installation_tested": false,
+    "gate_closing": false
+  },
+  "known_issues": [
+    {
+      "issue": "systemd boot ordering cycle",
+      "observed_in": [
+        "sequence-16 disk smoke serial log",
+        "sequence-17 disk smoke serial log",
+        "sequence-17 optical discovery diagnostic serial log"
+      ],
+      "mechanism": "A path unit with default dependencies is Before=paths.target, basic.target is After=paths.target and the keeper service is After=basic.target, so luma-utc-producer.path or luma-utc-recovery-producer.path After=its keeper closed a cycle; systemd deleted a different job per boot (paths.target, luma-utc-producer.path or luma-utc-recovery-producer.path)",
+      "impact": "When a producer path is dropped, authenticated network time does not start in that boot",
+      "source_fix": "Both producer .path units use DefaultDependencies=no with explicit sysinit/shutdown edges; regression test test_producer_paths_do_not_close_a_boot_ordering_cycle",
+      "fixed_in_this_image": false
+    },
+    {
+      "issue": "luma-utc-recovery-keeper.service failed in the optical diagnostic boot",
+      "cause_captured": false,
+      "note": "It started in the disk smoke; the next signed optical smoke must capture its journal",
+      "open": true
+    }
+  ],
+  "preserved_failed_builds": [
+    {
+      "build_id": "20261023T201237Z-desktop",
+      "source": "4acc3a0-era cut",
+      "failure": "Fat-LTO release compile killed by the 5-GiB assembly memory cgroup; no image or signing outputs",
+      "log_sha256": "31253108eccce963345f25c8e27b1adc35e6dc925b28b21f4e087c6816e77652",
+      "preservation_record": "D:/LumaOS-builds/failed-assembly-preserved/20261023T201237Z-desktop/preservation.json",
+      "preservation_record_sha256": "c9177eb4f13fd56f50c402c290e0b11439d2c36f269c0f1d440e3d089571d8e1",
+      "volume_removal_record_sha256": "aebdd5a06501a960a23a01b7fd1391fbbf1e03f8ad5de4ade82b196e6986c8a2"
+    },
+    {
+      "build_id": "20261026T150426Z-desktop",
+      "failure": "Speech runtime CMake build found no make program; fixed by installing make in the image root build stage (453ca2e)",
+      "log_sha256": "fe62ff070c5ae9d32325923b7835821f045524b735566cd2c7d9246aec02da92",
+      "preservation_record": "D:/LumaOS-builds/failed-assembly-preserved/20261026T150426Z-desktop/preservation.json",
+      "preservation_record_sha256": "7ef3faabcaa190ac332a23f3ce0f790031f6216ecadbd4d04326a793ea0333eb",
+      "volume_removal_record_sha256": "b0826e5aff71de827f0d4629ada07f3dc1e7ce8d5eb6c9fb91ab6b7e9c312d10"
+    },
+    {
+      "build_id": "20261027T094601Z-desktop",
+      "failure": "speech_policy correctly refused six copied speech inputs that inherited group/other-writable drvfs modes; fixed at the root in 55da2e2 by pinning root-protected modes, without weakening the policy",
+      "log_sha256": "da454a145b82597aca04ac55cb598c99f80ea26d529fedcbc64a9ead8665d338",
+      "diagnostic_log_sha256": "774e0368503f2b7d3ef11f5e08f28e35ec9a7dca19301d26f4cf0fedf6732aeb",
+      "preservation_record": "D:/LumaOS-builds/failed-assembly-preserved/20261027T094601Z-desktop/preservation.json",
+      "preservation_record_sha256": "083faa9d292c32a47098a34cb26d02e41dfe94d4fff7ef9ba3274a409b366471",
+      "volume_retained": true
+    },
+    {
+      "build_id": "20261027T120721Z-desktop",
+      "failure": "Payload verification refused a truncated read (hash_stream 'truncated regular artifact or image range') at payload.ext4 byte 1485045760, extent 17, coinciding with Windows bad-block events on the D: USB disk; verification was not weakened and the unchanged build was rerun",
+      "log_sha256": "335ab6d9e74e98a0251a88632c65d826116f63bcf15abe1c1fe3ed68f629a3e0",
+      "diagnostic_log_sha256": "566998d439018eda1d34a59245729b441d6f923c9caea3394e7bdbf85dfd69ee",
+      "preservation_record": "D:/LumaOS-builds/failed-assembly-preserved/20261027T120721Z-desktop/preservation.json",
+      "preservation_record_sha256": "7db0621ef5d715bd240837e8b3cd6a67a4f20e003e5151c2919136613290e1c1",
+      "volume_removal_record_sha256": "74fcc4bcca3c663ad096855db2fb3bb4c4f663af1af94a7447b9c90ace4a536e"
+    }
+  ],
+  "retained_failed_or_diagnostic_attempts": [
+    {"name": "fat-LTO one-codegen-unit diagnostic 20261023", "log_sha256": "e6ad92df70e225dd31404091d180582153328a4b34ffe9c10bd0e55152648ab9", "stall_record_sha256": "b7d7248d9818fbcaecd689132fbdaab3288769b320ad4be569ce052b91079c3b", "outcome": "stalled in reclaim at 5 GiB"},
+    {"name": "thin-LTO diagnostic 20261023", "log_sha256": "8bc56f5e79bc089b90a4eb03f13d2904dd522526e3de7a9ce65d3900f6c63456", "outcome": "fitted; not adopted because the owner kept the committed fat-LTO profile"},
+    {"name": "fat-LTO 8-GiB diagnostic 20261026", "log_sha256": "1321bc61364e99e4169e423ed78b78aac85f75f37824d91e494fd2ce410f1cf0", "outcome": "passed; basis for the 8-GiB bound (G2_ASSEMBLY_MEMORY_2026-10-26.md)"},
+    {"name": "speech diagnostic 20261027-a", "log_sha256": "c73ce8a1b0c283f14ce16896018b8aca0604dca43bef675e6ad68f876ae78b6d", "outcome": "failed on snapshot.ubuntu.com HTTP 502/503 at about 2026-10-27T03:38Z; the pinned snapshot policy was not weakened"},
+    {"name": "speech offline diagnostic 20261027-a", "log_sha256": "1b99174b7bc1134ff213a8583c9d780e028537635c83ec1a68f3eda58e09af02", "outcome": "built luma-tts-render offline and exited 0"},
+    {"name": "GWIN0 refresh debug-profile platform worker", "evidence": "/mnt/luma-build/work/gwin0-refresh-platform-20261027-Y15Rko9e", "outcome": "75,700,080 bytes, over the unchanged 64-MiB executable cap; release-profile worker used instead"}
+  ],
+  "host_storage_health": {
+    "device": "D: Sonnics USB 3.0, 932 GiB exFAT",
+    "windows_health_status": "Warning",
+    "operational_status": "Full Repair Needed",
+    "bad_block_events": "65 Windows disk event 7 entries: 18 on 2026-09-29, 29 on 2026-10-11, 18 on 2026-10-27; plus event 153 retries and UASPStor resets on 2026-10-11 and 2026-10-14",
+    "event_extract_sha256": "973d8f602012a29e4cadbb8365fa07b9ec65a5090097b7e5df84a85872422ea6",
+    "repair_or_replacement_performed": false,
+    "owner_action_required": "Back up D: (native exports and failed-assembly evidence) and repair or replace the disk; no disk-repair command was run"
+  },
+  "remaining": {
+    "sequence_18_rebuild": [
+      "New signed build from a source cut carrying both optical discovery fixes and the ordering-cycle fix",
+      "Signed software-emulated Secure Boot optical smoke with a new versioned harness: --no-pager observations, no failed units, no ordering cycle in the serial log and a captured recovery keeper journal",
+      "Repeat the disk-image smoke and confirm no ordering cycle"
+    ],
+    "native_qualification": [
+      "Reviewed destructive target installation and actual installed boot, from the disk image and from optical media",
+      "Physical UEFI boot of the optical ISO from DVD+R DL or BMC/VM virtual CD",
+      "Loaded native security and graphical/Wayland/WebKit sandbox behavior",
+      "Existing-owner physical TPM, independent A/R/C/U custody commissioning and protected UTC dependencies",
+      "Account/session/finite-grant and model admission on the installed target",
+      "Device permission, audio/video capture, ASR model authority and language accuracy, and installed hardware writer mediation",
+      "Secure Boot and verity rejection, update/fallback, encrypted storage, power-loss and recovery acceptance"
+    ],
+    "development_not_reclassified_as_testing": [
+      "NF08 100,000-object/500-ms discovery path",
+      "Native C activation with physical tails/accounting, authenticated snapshot delivery and installed restore",
+      "Broader G3 application/adapter/capture journeys and GWIN0 principal/grant/inference integration",
+      "Profile-W package signing, installation and enforcing WSL confinement; profile-V Hyper-V deployment deferred by the owner"
+    ],
+    "production_release": "Independent production custody, model catalog/trust and applicable qualification/finalization remain separate from this identified laboratory-signed candidate"
+  },
+  "qualification": {
+    "wsl_restarted_or_memory_configuration_changed": true,
+    "wsl_change": "Owner-approved .wslconfig memory=12GB, swap=2GB, with a coordinated WSL restart; no other WSL, power or pagefile setting changed",
+    "physical_disk_firmware_or_tpm_mutated": false,
+    "optical_boot_qualified": false,
+    "native_machine_qualified": false,
+    "installed_security_or_recovery_qualified": false,
+    "production_custody_qualified": false,
+    "g2_closed": false,
+    "g3_closed": false,
+    "gwin0_closed": false
+  }
+}

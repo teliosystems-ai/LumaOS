@@ -1,7 +1,7 @@
 # G3 and GWIN0 implementation plan
 
 Current delivery work targets [complete native G3 and Windows deployments](G3_GWIN0_DELIVERY.md).
-The latest produced image is the [sequence-16 native Ubuntu candidate](../native/evidence/G2_NATIVE_DESKTOP_CANDIDATE_16_2026-10-19.md),
+The latest produced image is the [sequence-17 native Ubuntu candidate](../native/evidence/G2_NATIVE_DESKTOP_CANDIDATE_17_2026-10-27.md),
 not a Windows image or a complete G3 release. Dated checkpoints below retain
 their original source and execution scope.
 
@@ -1921,3 +1921,58 @@ memory-limit events. The builder now accepts exactly 4, 5 or 8 GiB for the
 assembly container only, still admitted against observed physical memory plus
 a 1-GiB reserve. See the [assembly memory checkpoint](../native/evidence/G2_ASSEMBLY_MEMORY_2026-10-26.md).
 Sequence 17 must be re-frozen and rebuilt; nothing here is image evidence.
+
+### Sequence-17 native candidate, 27 October 2026
+
+Sequence 17 was rebuilt from the re-frozen `55da2e2` cut under the 8-GiB
+assembly bound. The committed fat-LTO profile compiled in 10m 33s and the build
+exited zero. Two earlier attempts from this day are preserved as failed evidence:
+`094601Z` stopped when `speech_policy` correctly refused copied speech inputs
+with group/other-writable drvfs modes, fixed at the root by pinning
+root-protected modes rather than relaxing the policy; `120721Z` stopped when
+payload verification refused a truncated read that coincided with bad-block
+events on the D: USB disk, and the unchanged build was rerun. The 959 source
+tests on the frozen cut passed with two skips. All fourteen offline image checks
+passed, including the optical ISO's El Torito image, signed optical UKI and all
+ten member files; a verifier-only extraction adapter for four fixed
+instance-template paths was audited separately. The disk image passed the
+software-emulated Secure Boot live smoke with final storage teardown.
+
+The optical ISO did not boot. The firmware verified the optical UKI and the
+kernel found the CD, but `luma-optical.service` failed: its script ran under
+`set -eu` and then sourced dracut's shell library, which references the unset
+`NEWROOT` outside dracut's hooks. Verity setup was skipped and the initrd timed
+out waiting for the root device. The script now reads the signed command line
+directly, requires each key exactly once, and forces the selected CD read-only
+before requiring `ro=1`, because writer drives commonly report `ro=0`.
+Regression tests reject sourcing any library and exercise the parser under
+`dash`.
+
+A software-only diagnostic then booted the same kernel with the fixed script and
+the sequence-17 ISO on a read-only virtual CD, by direct kernel boot under TCG
+without Secure Boot; it is diagnostic evidence, not image evidence. Discovery
+passed: two read-only loops backed by the disc's root files, a verity root, the
+media mount and the broker and reference services. It exposed a second defect.
+The optical udev rule was installed only into the initrd, so the real root's
+regenerated `systemd-veritysetup@root` waited 90 s for `/dev/luma-optical-hash`
+and failed, although the open verified root kept running. The rule now ships in
+the root overlay and reaches the initrd from that one source, as the TPM rule
+does, and the initrd verifier compares it with the overlay copy. In the 4-GiB
+guest, signed media verification refused as designed for lack of RAM-backed
+staging; live optical verification needs the 6-GiB evaluation memory. The
+diagnostic's failed-unit observation ran `systemctl` without `--no-pager`, so
+the harness stopped at its observation timeout and recorded a failure.
+
+The diagnostic and both disk smokes (sequences 16 and 17) also logged a boot
+ordering cycle that systemd broke by dropping one job, a different one each time:
+`paths.target`, the recovery producer path or the installed producer path. Each
+UTC producer path unit was ordered after its keeper, which by default follows
+`basic.target`, while default path dependencies order it before `paths.target`,
+which `basic.target` follows. Both path units now drop default dependencies and
+keep the `sysinit.target` and `shutdown.target` edges explicitly; a regression
+test checks both pairs. The recovery keeper was listed as failed in the optical
+guest and its cause was not captured, so it must be checked in the next build.
+The sequence-17 ISO stays non-bootable; a new signed build
+and a passing signed optical smoke are required. See the
+[sequence-17 handoff](../native/evidence/G2_NATIVE_DESKTOP_CANDIDATE_17_2026-10-27.md)
+and [execution record](../native/evidence/candidate17_execution_2026-10-27.json).

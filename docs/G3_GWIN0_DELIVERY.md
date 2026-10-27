@@ -2,8 +2,9 @@
 
 The development target is a feature-complete Ubuntu G3 candidate and the
 Windows-hosted Luma deployments defined by the governing requirements. The
-existing native sequence-16 image remains available for G2/native testing;
-subsequent source changes do not alter its bytes or qualify a new release.
+native [sequence-17 disk image](../native/evidence/G2_NATIVE_DESKTOP_CANDIDATE_17_2026-10-27.md)
+is the current G2/native test image, and sequence 16 remains available. Subsequent
+source changes do not alter either image's bytes or qualify a new release.
 
 On 20 October 2026 the owner approved a separate five-minute compact-inference
 session and deferred Hyper-V deployment to later development. The current
@@ -19,8 +20,16 @@ recorded delivery obligation, not an implemented or tested component.
 | Windows Hyper-V, profile V, deferred by owner | Later development: complete Generation 2 desktop deployment, explicit resource limits, verified guest boot, encrypted data and recovery, plus the required ISO | Retain W030–W032 and the full VM proof in the deferred backlog; existing VHDX work is a foundation, not a complete desktop |
 
 The native ISO is explicitly required by `W003` and `W025`. Its distinct optical
-UKI, read-only discovery, ISO assembly and verification paths are implemented;
-full media construction and optical boot acceptance remain unperformed.
+UKI, read-only discovery, ISO assembly and verification paths are implemented,
+and sequence 17 built and offline-verified a full ISO. That ISO failed its
+software-emulated Secure Boot boot: initrd discovery sourced dracut's library
+under `set -u` and aborted, so the verity root was never assembled. The script
+is fixed in source with a regression test. A software-only diagnostic boot of
+the fixed script then reached a verified root and found a second defect: the
+udev rule naming the optical loops existed only in the initrd, so the real
+root's verity unit failed after a 90 s wait. The rule now ships in the root
+overlay and is copied into the initrd from there. A new signed build must pass
+the optical smoke before any optical boot acceptance.
 
 These are Linux-based Luma guests under Windows, not replacement Microsoft
 Windows installation media. The current Windows deliverable is profile W;
@@ -171,7 +180,10 @@ package inspection cannot substitute for installed enforcing confinement.
 The [2026-10-27 refresh record](gates/gwin0/combined_workspace_inference_2026-10-27.json)
 recomposes the same profile-W package from the `453ca2e` cut that the
 sequence-17 native candidate also froze (954 captured sources, all 396 Rust
-files identical to the compiled cut). Its platform worker uses the workspace
+files identical to the compiled cut). The exported sequence-17 image was then
+built from a re-frozen `55da2e2` cut; that cut changes only
+`native/image/Dockerfile.root` and `native/tests/test_speech_input.py`, so no
+Rust source differs from the package's compiled cut. Its platform worker uses the workspace
 release profile under the approved 8 GiB / 2 CPU assembly bound: 22,120,944
 stripped bytes. A debug-profile worker from the same cut measured 75,700,080
 bytes, over the unchanged 64 MiB executable cap; that unit is retained as

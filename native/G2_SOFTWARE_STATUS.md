@@ -1,6 +1,6 @@
 # G2 software completion register
 
-Updated 2026-10-19. **The delivered compact-profile software candidate passes its recorded software verification; G2 is not closed.** This register separates
+Updated 2026-10-27. **The delivered compact-profile software candidate passes its recorded software verification; G2 is not closed.** This register separates
 work that can be executed in the current Windows/Ubuntu WSL/VM environment
 from production deployment decisions and physical qualification. It does not
 change the frozen reference release, governing requirements, or exit criteria.
@@ -15,15 +15,23 @@ requirement.
 
 ### Current image and continued G3 development
 
-The [sequence-16 desktop handoff](evidence/G2_NATIVE_DESKTOP_CANDIDATE_16_2026-10-19.md)
-is the current native Ubuntu candidate, exported on 2026-10-19. Its offline image
-verification and Secure Boot live-system/final-storage-teardown VM smoke passed;
-installation, graphical/installed security/recovery, physical TPM and production
-qualification did not run. See the exact
-[execution record](evidence/candidate16_execution_2026-10-19.json).
+The [sequence-17 desktop handoff](evidence/G2_NATIVE_DESKTOP_CANDIDATE_17_2026-10-27.md)
+is the current native Ubuntu candidate, exported on 2026-10-27. Its offline image
+verification and the disk image's Secure Boot live-system/final-storage-teardown
+VM smoke passed. Its optical ISO failed its Secure Boot VM smoke in the initrd
+(optical discovery sourced dracut's library under `set -u`). That script, a
+second optical defect found by a later diagnostic boot (the loop-naming udev
+rule was missing from the real root) and a UTC boot ordering cycle seen in every
+recorded sequence-16/17 boot are fixed in source; a bootable ISO needs a new
+signed build. Installation,
+graphical/installed security/recovery, physical TPM and production qualification
+did not run. See the exact
+[execution record](evidence/candidate17_execution_2026-10-27.json). The
+[sequence-16 handoff](evidence/G2_NATIVE_DESKTOP_CANDIDATE_16_2026-10-19.md)
+and its [execution record](evidence/candidate16_execution_2026-10-19.json) are retained.
 
 Later G3/GWIN0 work targets [distinct final deployments](../docs/G3_GWIN0_DELIVERY.md).
-It does not turn sequence 16 into a Windows image or a complete G3 release.
+It does not turn sequence 17 into a Windows image or a complete G3 release.
 The dated checkpoints below retain their original source and test scope.
 
 ### Approved QA session extension and beta development branch

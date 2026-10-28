@@ -2,9 +2,10 @@
 
 The development target is a feature-complete Ubuntu G3 candidate and the
 Windows-hosted Luma deployments defined by the governing requirements. The
-native [sequence-17 disk image](../native/evidence/G2_NATIVE_DESKTOP_CANDIDATE_17_2026-10-27.md)
-is the current G2/native test image, and sequence 16 remains available. Subsequent
-source changes do not alter either image's bytes or qualify a new release.
+native [sequence-18 disk image](../native/evidence/G2_NATIVE_DESKTOP_CANDIDATE_18_2026-10-28.md)
+is the current G2/native test image, and sequences 16 and 17 remain available.
+Subsequent source changes do not alter any of these images' bytes or qualify a
+new release.
 
 On 20 October 2026 the owner approved a separate five-minute compact-inference
 session and deferred Hyper-V deployment to later development. The current
@@ -28,8 +29,20 @@ is fixed in source with a regression test. A software-only diagnostic boot of
 the fixed script then reached a verified root and found a second defect: the
 udev rule naming the optical loops existed only in the initrd, so the real
 root's verity unit failed after a 90 s wait. The rule now ships in the root
-overlay and is copied into the initrd from there. A new signed build must pass
-the optical smoke before any optical boot acceptance.
+overlay and is copied into the initrd from there.
+
+Sequence 18 carries both fixes. Its signed ISO boots under software-emulated
+Secure Boot to a root shell on the verified root and passes all ten required
+optical checks, with no boot ordering cycle. Its smoke still failed four gated
+checks. The UTC recovery keeper exited `226/NAMESPACE` because
+`/run/luma-governance` existed only in installed mode, which also left its bound
+recovery producer path inactive. Signed media verification refused because live
+`/var` is a RAM-backed tmpfs holding at most half of RAM, and a 6-GiB guest
+cannot stage the 3,462,000,640-byte desktop payload. Commit `e29187b` creates the
+`/run` namespace paths at every boot, adds a regression test over every unit,
+and names the RAM that live staging needs; at least 8 GiB is required. A new
+signed build must pass the optical smoke at 8 GiB with no failed units before
+any optical boot acceptance.
 
 These are Linux-based Luma guests under Windows, not replacement Microsoft
 Windows installation media. The current Windows deliverable is profile W;
@@ -183,7 +196,11 @@ sequence-17 native candidate also froze (954 captured sources, all 396 Rust
 files identical to the compiled cut). The exported sequence-17 image was then
 built from a re-frozen `55da2e2` cut; that cut changes only
 `native/image/Dockerfile.root` and `native/tests/test_speech_input.py`, so no
-Rust source differs from the package's compiled cut. Its platform worker uses the workspace
+Rust source differs from the package's compiled cut. The sequence-18 cut at
+`4d7fa7c` changes no Rust file either. Source at `e29187b` changes one Rust
+file, `rust/luma-platform/src/staging.rs` (its refusal message), so a package
+built from that or later source needs its own refresh record. The 2026-10-27
+refresh's platform worker uses the workspace
 release profile under the approved 8 GiB / 2 CPU assembly bound: 22,120,944
 stripped bytes. A debug-profile worker from the same cut measured 75,700,080
 bytes, over the unchanged 64 MiB executable cap; that unit is retained as

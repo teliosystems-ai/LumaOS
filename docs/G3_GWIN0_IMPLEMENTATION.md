@@ -1,7 +1,7 @@
 # G3 and GWIN0 implementation plan
 
 Current delivery work targets [complete native G3 and Windows deployments](G3_GWIN0_DELIVERY.md).
-The latest produced image is the [sequence-17 native Ubuntu candidate](../native/evidence/G2_NATIVE_DESKTOP_CANDIDATE_17_2026-10-27.md),
+The latest produced image is the [sequence-18 native Ubuntu candidate](../native/evidence/G2_NATIVE_DESKTOP_CANDIDATE_18_2026-10-28.md),
 not a Windows image or a complete G3 release. Dated checkpoints below retain
 their original source and execution scope.
 
@@ -1976,3 +1976,48 @@ The sequence-17 ISO stays non-bootable; a new signed build
 and a passing signed optical smoke are required. See the
 [sequence-17 handoff](../native/evidence/G2_NATIVE_DESKTOP_CANDIDATE_17_2026-10-27.md)
 and [execution record](../native/evidence/candidate17_execution_2026-10-27.json).
+
+### Sequence-18 native candidate, 28 October 2026
+
+Sequence 18 was built from source cut c at `4d7fa7c` (877 captured files), which
+adds the two optical discovery fixes and the ordering-cycle fix to the sequence-17
+cut. No Rust file changed, and the packaged platform binary is byte-identical to
+sequence 17's. The 963 source tests on the frozen cut passed with two skips, the
+build exited zero, and all fourteen offline image checks passed with the audited
+verifier adapter. The disk image passed the unchanged software-emulated Secure
+Boot live smoke with final storage teardown, and neither boot printed an
+ordering cycle.
+
+**The sequence-18 ISO boots.** In its signed optical smoke (QEMU TCG, fresh
+Secure Boot variables, software TPM, one read-only CD, 6 GiB guest) the firmware
+started the signed optical UKI, and the guest reached a root shell on the
+verified root over two read-only loops. All ten required checks passed, and the
+journal held no ordering cycle. Four gated checks still failed, from two causes:
+
+- `luma-utc-recovery-keeper.service` exited `226/NAMESPACE` because
+  `/run/luma-governance`, which it hides without a `-` prefix, existed only as
+  the installed-mode Admin service's runtime directory. Its bound recovery
+  producer path stopped. This is the cause the sequence-17 diagnostic did not
+  capture. The disk smoke shows only the keeper's console start line, so the
+  same failure is inferred, not observed, for a USB live session.
+- Signed media verification refused, as designed, before copying: live `/var` is
+  a tmpfs holding at most half of RAM, and the 3,462,000,640-byte payload plus
+  its 64 MiB reserve needs more than 6732 MiB of RAM. The sequence-17 statement
+  above that live optical verification needs the 6-GiB evaluation memory is
+  therefore wrong for this payload; the minimum is 8 GiB.
+
+Commit `e29187b` creates `/run/luma-governance`, `/run/luma-broker` and
+`/run/luma-content-custody` through tmpfiles at every boot. Luma-admin no
+longer owns the first as a runtime directory. A regression test requires a boot-time
+creator for every unprefixed `/run` namespace path in every unit. The staging
+refusal now states the RAM its payload needs, without changing admission, and
+the desktop VM fixtures use 8192 MiB. These fixes have no booted evidence yet.
+The candidate-19 cut at `6528ea1` (880 files) passes its 966 Python source tests
+with two skips. Its 14 warning-denied `luma-platform` staging tests also pass.
+The first run of those tests was killed by the container memory limit while
+compiling at 5 GiB; a rerun with an 8 GiB limit passed. The owner approved the
+store space on 28 October. A signed sequence-19 build must then pass its disk
+smoke and an 8-GiB optical smoke with no failed units.
+Sequence 18 is the current test image for the `.img` path only. See the
+[sequence-18 handoff](../native/evidence/G2_NATIVE_DESKTOP_CANDIDATE_18_2026-10-28.md)
+and [execution record](../native/evidence/candidate18_execution_2026-10-28.json).

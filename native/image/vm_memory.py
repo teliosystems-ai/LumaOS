@@ -31,7 +31,7 @@ def available_memory(text):
 
 
 def check_memory(memory_mib, text):
-    if type(memory_mib) is not int or memory_mib not in (4096, 6144):
+    if type(memory_mib) is not int or memory_mib not in (4096, 6144, 8192):
         raise ValueError('unsupported test memory fixture')
     available = available_memory(text)
     required = memory_mib * MIB + HOST_RESERVE

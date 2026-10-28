@@ -18,9 +18,10 @@ from vm_test import VM, TEST_SOURCES, install, installed_login, live_ready
 
 
 def stage_memory(stage):
-    # The live installer retains a private verified desktop bundle in tmpfs.
+    # The live installer retains a private verified desktop bundle in tmpfs,
+    # which holds at most half of RAM; sequence 18 needed more than 6732 MiB.
     # Keep installed greeter evaluation at 4 GiB, distinct from installation.
-    return {'install': 6144, 'installed-greeter': 4096, 'cold-greeter': 4096}[stage]
+    return {'install': 8192, 'installed-greeter': 4096, 'cold-greeter': 4096}[stage]
 
 
 def verified_image(image):

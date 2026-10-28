@@ -16,16 +16,17 @@ def observation(available, total=8 * 1024 ** 2):
 
 class HostMemoryTests(unittest.TestCase):
     def test_exact_boundary_for_each_closed_guest_profile(self):
-        for guest in (4096, 6144):
+        for guest in (4096, 6144, 8192):
             needed_kib = (guest + 2048) * 1024
+            total = 16 * 1024 ** 2
             with self.subTest(guest=guest):
-                record = vm_memory.check_memory(guest, observation(needed_kib))
+                record = vm_memory.check_memory(guest, observation(needed_kib, total))
                 self.assertEqual(record['host_available_bytes'], needed_kib * 1024)
                 self.assertEqual(record['guest_memory_mib'], guest)
                 self.assertEqual(record['host_reserve_bytes'], 2 * 1024 ** 3)
                 self.assertIs(record['reservation'], False)
                 with self.assertRaisesRegex(RuntimeError, 'RAM admission refused'):
-                    vm_memory.check_memory(guest, observation(needed_kib - 1))
+                    vm_memory.check_memory(guest, observation(needed_kib - 1, total))
 
     def test_swap_free_or_total_cannot_substitute_for_available_ram(self):
         text = observation(20 * 1024) + 'MemFree: 999999999 kB\nSwapFree: 999999999 kB\n'
@@ -44,7 +45,7 @@ class HostMemoryTests(unittest.TestCase):
                 vm_memory.available_memory(text)
 
     def test_guest_size_is_closed_and_not_boolean_or_string(self):
-        for guest in (True, 4096.0, '6144', 2048, 8192, None):
+        for guest in (True, 4096.0, '6144', 2048, 12288, None):
             with self.subTest(guest=guest), self.assertRaises(ValueError):
                 vm_memory.check_memory(guest, observation(8 * 1024 ** 2))
 

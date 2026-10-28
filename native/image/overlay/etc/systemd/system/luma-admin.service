@@ -12,9 +12,8 @@ Type=simple
 ExecStart=/usr/libexec/luma-os/luma-platform admin-service
 User=root
 Group=root
-RuntimeDirectory=luma-governance
-RuntimeDirectoryMode=0711
-RuntimeDirectoryPreserve=no
+# /run/luma-governance is created for the whole boot by tmpfiles.d so units
+# that mask it start without Admin. The service proves any old socket stale.
 UMask=0077
 NoNewPrivileges=yes
 ProtectSystem=strict

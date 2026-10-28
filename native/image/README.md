@@ -223,12 +223,16 @@ does not reserve build space on C. The portable profile retains its separate
 repository/output guards. Raw artifact work always requires writable ext4.
 These are build thresholds, not certification of arbitrary desktop hardware.
 
-Desktop **installation** evaluation uses 6 GiB RAM; installed greeter checks
+Desktop **installation** evaluation uses 8 GiB RAM; installed greeter checks
 use 4 GiB separately. The live installer keeps a private verified bundle in
-RAM-backed `/var`. Sequence 11 needs about 2.25 GiB plus staging headroom and
-failed before disk confirmation in a 4 GiB installation VM. Model admission
-does not cover this separate installer requirement. Do not enlarge tmpfs or
-skip snapshot verification to bypass a refusal. See the
+RAM-backed `/var`, a tmpfs without a size option that holds at most half of
+RAM. Sequence 11 needed about 2.25 GiB plus staging headroom and failed before
+disk confirmation in a 4 GiB installation VM. The sequence-18 payload is
+3,462,000,640 bytes; admission needs it plus 64 MiB free in `/var`, so live
+verification needs more than 6732 MiB RAM and a 6 GiB guest refuses it. The
+refusal now reports the RAM its payload needs. Model admission does not cover
+this separate installer requirement. Do not enlarge tmpfs or skip snapshot
+verification to bypass a refusal. See the
 [measured failure and retry](../evidence/G2_DESKTOP_MEMORY_2026-10-01.md).
 
 After a desktop image has been built and its checksums verified, native Ubuntu

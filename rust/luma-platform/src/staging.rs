@@ -12,6 +12,7 @@ const BASE: &str = "/var/lib/luma-os/staging";
 const NAMESPACE: &str = "verified-v1";
 const MAX_ORPHANS: usize = 32;
 const RESERVE: u64 = 64 * 1024 * 1024;
+const MIB: u64 = 1024 * 1024;
 // Live staging must leave RAM for the OS and cryptsetup's memory-hard KDF.
 // This admission observation is not an atomic memory lease or OOM guarantee.
 const MEMORY_RESERVE: u64 = 2 * 1024 * 1024 * 1024;
@@ -255,12 +256,14 @@ impl Snapshot {
 }
 
 fn check_capacity(bytes: u64, available: u64) -> Result<()> {
-    if bytes
+    let needed = bytes
         .checked_add(RESERVE)
-        .ok_or("snapshot capacity overflow")?
-        > available
-    {
-        return Err(format!("insufficient snapshot storage; no payload copied: payload {bytes} bytes, reserve {RESERVE} bytes, available {available} bytes; live media requires sufficient RAM-backed staging (desktop installation evaluation uses 6 GiB RAM)").into());
+        .ok_or("snapshot capacity overflow")?;
+    if needed > available {
+        // Live /var is a tmpfs without a size option, so it holds at most half
+        // of RAM. Report what this payload needs, never a fixed machine size.
+        let ram_mib = needed.saturating_mul(2).saturating_add(MIB - 1) / MIB;
+        return Err(format!("insufficient snapshot storage; no payload copied: payload {bytes} bytes, reserve {RESERVE} bytes, available {available} bytes; live media stages in RAM-backed /var, which defaults to half of RAM, so this payload needs more than {ram_mib} MiB of RAM").into());
     }
     Ok(())
 }
@@ -424,7 +427,14 @@ mod tests {
         assert!(
             detail.contains("payload 1 bytes")
                 && detail.contains(&format!("available {RESERVE} bytes"))
+                && detail.contains("needs more than 129 MiB of RAM")
         );
+        // Sequence 18's measured refusal in a 6 GiB optical live guest.
+        let detail = check_capacity(3_462_000_640, 3_038_302_208)
+            .unwrap_err()
+            .to_string();
+        assert!(detail.contains("needs more than 6732 MiB of RAM") && !detail.contains("6 GiB"));
+        check_capacity(3_462_000_640, 3_462_000_640 + RESERVE).unwrap();
     }
 
     #[test]

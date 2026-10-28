@@ -19,7 +19,7 @@ import vm_display
 
 class GreeterTests(unittest.TestCase):
     def test_live_snapshot_memory_is_separate_from_installed_desktop(self):
-        self.assertEqual(desktop.stage_memory('install'), 6144)
+        self.assertEqual(desktop.stage_memory('install'), 8192)
         for stage in ('installed-greeter', 'cold-greeter'):
             self.assertEqual(desktop.stage_memory(stage), 4096)
         with self.assertRaises(KeyError):
@@ -34,7 +34,7 @@ class GreeterTests(unittest.TestCase):
         self.assertEqual(vm.run.call_args.kwargs['timeout'], 30)
 
     def test_only_low_memory_fixture_expects_model_ram_refusal(self):
-        for memory in (4096, 6144):
+        for memory in (4096, 6144, 8192):
             vm = Mock(memory_mib=memory, acceleration='tcg')
             vm.run.side_effect = lambda command, **kwargs: (
                 b'release signature verification failed' if '/tmp/bad-bundle --model' in command

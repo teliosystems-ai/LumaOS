@@ -57,7 +57,7 @@ class VM:
                             '--add-db',owner,cert,'--sb'],check=True)
         firmware='/usr/share/OVMF/OVMF_CODE_4M'+('.secboot' if secure_boot else '')+'.fd'
         self.acceleration=acceleration if acceleration!='auto' else ('kvm' if os.access('/dev/kvm',os.R_OK|os.W_OK) else 'tcg')
-        if memory_mib not in (4096,6144):raise ValueError('unsupported test memory fixture')
+        if memory_mib not in (4096,6144,8192):raise ValueError('unsupported test memory fixture')
         self.memory_mib=memory_mib
         command=['qemu-system-x86_64','-machine',f'q35,accel={self.acceleration}','-m',str(memory_mib),'-smp','2',
             '-cpu','host' if self.acceleration=='kvm' else 'max',

@@ -12,8 +12,9 @@ image and Rust platform implementation. It is outside the historical Python
 - [Exact-image native Ubuntu test handoff](evidence/TEST_IMAGE_2026-09-28.md)
 - [Implementation plan](image/BUILD_PLAN.md)
 - [Current G2 software completion register](G2_SOFTWARE_STATUS.md)
-- [Current sequence-18 native Ubuntu test image and installation guide](evidence/G2_NATIVE_DESKTOP_CANDIDATE_18_2026-10-28.md)
-- [Current sequence-18 build, offline verification, VM and optical evidence](evidence/candidate18_execution_2026-10-28.json)
+- [Current sequence-19 native Ubuntu test image and installation guide](evidence/G2_NATIVE_DESKTOP_CANDIDATE_19_2026-10-28.md)
+- [Current sequence-19 build, offline verification, VM and optical evidence](evidence/candidate19_execution_2026-10-28.json)
+- [Previous sequence-18 native Ubuntu test image and installation guide](evidence/G2_NATIVE_DESKTOP_CANDIDATE_18_2026-10-28.md)
 - [Previous sequence-17 native Ubuntu test image and installation guide](evidence/G2_NATIVE_DESKTOP_CANDIDATE_17_2026-10-27.md)
 - [Previous sequence-16 native Ubuntu test image and installation guide](evidence/G2_NATIVE_DESKTOP_CANDIDATE_16_2026-10-19.md)
 - [G3 and Windows delivery development](../docs/G3_GWIN0_DELIVERY.md)
@@ -27,22 +28,23 @@ image and Rust platform implementation. It is outside the historical Python
 G2 remains in progress. Headless and candidate GNOME/Wayland desktop images are
 laboratory-signed, not a complete production OS or hardware certification.
 Bulk builds, images and VM disks are on the owner-designated D: drive; source
-stays on C:. The [current image handoff](evidence/G2_NATIVE_DESKTOP_CANDIDATE_18_2026-10-28.md)
-identifies the sequence-18 desktop candidate exported on 2026-10-28. Its fourteen
+stays on C:. The [current image handoff](evidence/G2_NATIVE_DESKTOP_CANDIDATE_19_2026-10-28.md)
+identifies the sequence-19 desktop candidate exported on 2026-10-28. Its fourteen
 offline image checks and software-emulated Secure Boot live-startup/final-storage
-teardown test of the disk image passed. Its optical ISO now boots under emulated
-Secure Boot to the verified root, but its signed optical smoke failed four gated
-checks: the UTC recovery keeper failed with `226/NAMESPACE`, and live media
-verification refused for lack of RAM-backed staging in a 6-GiB guest. Do not
-use that ISO for installation. Both causes are fixed in source at `e29187b`. They
-need a new signed build, and live verification of the desktop payload needs at
-least 8 GiB of RAM. Installation, graphical/installed security
-and recovery, physical TPM and production qualification remain open. It is native Ubuntu
-media, not a Windows image or complete G3 release. Subsequent G3/GWIN0 source
-changes require their own identified builds and tests. The
+teardown test of the disk image passed. Its signed optical ISO booted under
+emulated Secure Boot in an 8-GiB guest and passed all ten required and all five
+gated checks, including no failed units, an active UTC recovery keeper and
+signed media verification; this fixes the sequence-18 optical defects in a
+booted image. Live verification or installation of the desktop payload needs at
+least 8 GiB of RAM. Installation, physical USB/optical boot, graphical/installed
+security and recovery, physical TPM and production qualification remain open.
+It is native Ubuntu media, not a Windows image or complete G3 release.
+Subsequent G3/GWIN0 source changes require their own identified builds and
+tests. The
+[sequence-18](evidence/G2_NATIVE_DESKTOP_CANDIDATE_18_2026-10-28.md),
 [sequence-17](evidence/G2_NATIVE_DESKTOP_CANDIDATE_17_2026-10-27.md) and
 [sequence-16](evidence/G2_NATIVE_DESKTOP_CANDIDATE_16_2026-10-19.md) handoffs
-remain available. The
+remain available; do not use the sequence-18 ISO. The
 [historical export checkpoint](evidence/G2_BROKER_CLIENT_2026-10-01.md)
 identifies the earlier sequence-11 candidate and its source/image differences.
 Desktop and fresh 4B model acceptance remain pending. Earlier sequence-4 model

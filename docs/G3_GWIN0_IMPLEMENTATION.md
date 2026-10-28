@@ -1,7 +1,7 @@
 # G3 and GWIN0 implementation plan
 
 Current delivery work targets [complete native G3 and Windows deployments](G3_GWIN0_DELIVERY.md).
-The latest produced image is the [sequence-18 native Ubuntu candidate](../native/evidence/G2_NATIVE_DESKTOP_CANDIDATE_18_2026-10-28.md),
+The latest produced image is the [sequence-19 native Ubuntu candidate](../native/evidence/G2_NATIVE_DESKTOP_CANDIDATE_19_2026-10-28.md),
 not a Windows image or a complete G3 release. Dated checkpoints below retain
 their original source and execution scope.
 
@@ -2021,3 +2021,33 @@ smoke and an 8-GiB optical smoke with no failed units.
 Sequence 18 is the current test image for the `.img` path only. See the
 [sequence-18 handoff](../native/evidence/G2_NATIVE_DESKTOP_CANDIDATE_18_2026-10-28.md)
 and [execution record](../native/evidence/candidate18_execution_2026-10-28.json).
+
+### Sequence-19 native candidate, 28 October 2026
+
+Sequence 19 was built from the `6528ea1` cut (880 captured files, build inputs
+`7d05afd7…`), which adds the `e29187b` fixes to the sequence-18 cut. With the
+owner's approval, duplicate sequence-18 intermediates and the rebuildable Rust
+target folder were removed first to free store space; the cache volume, the
+store's backing file and the 32 GiB preflight minimum are unchanged. The build exited zero under the
+8-GiB assembly bound with the committed release profile. The packaged platform
+binary is new because `staging.rs` changed. All fourteen offline image checks
+passed. The verifier is a new versioned copy of the sequence-18 one, and the
+adapter audit passed 158 of 158 cases against it.
+
+The disk image passed the unchanged Secure Boot live smoke with final storage
+teardown. **The signed ISO passed its optical smoke** (QEMU TCG, fresh Secure
+Boot variables, software TPM, one read-only CD, 8 GiB guest). All ten required
+and all five gated checks passed. The recovery keeper was active (running) and
+its producer path active (waiting), and no unit failed. The journal held no
+ordering cycle. `luma-platform verify /media/luma` exited zero after 381.9 s,
+staging the measured 3,462,041,600-byte payload. A measurement script that
+mirrors the bundle and staging code shows the payload needs more than 6732 MiB
+of RAM. Both sequence-18 defects are therefore fixed in a booted image.
+
+Both smokes still logged a `var.mount` unmount failure before the required
+storage-clean marker. Installed-mode `/var/lib/luma-os` namespace paths, the
+6144 MiB `model_vm_test` fixture and a GWIN0 package refresh from this cut
+remain open. Installation, physical optical or USB boot, graphical and
+installed security or recovery acceptance did not run. See the
+[sequence-19 handoff](../native/evidence/G2_NATIVE_DESKTOP_CANDIDATE_19_2026-10-28.md)
+and [execution record](../native/evidence/candidate19_execution_2026-10-28.json).

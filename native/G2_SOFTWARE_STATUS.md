@@ -15,30 +15,29 @@ requirement.
 
 ### Current image and continued G3 development
 
-The [sequence-18 desktop handoff](evidence/G2_NATIVE_DESKTOP_CANDIDATE_18_2026-10-28.md)
-is the current native Ubuntu candidate, exported on 2026-10-28. It carries the
-sequence-17 optical and UTC ordering fixes. Its offline image verification and
-the disk image's Secure Boot live-system/final-storage-teardown VM smoke passed,
-and no ordering cycle appeared. Its ISO boots under emulated Secure Boot to a
-root shell on the verified root and passed all ten required optical checks. Its
-signed optical smoke still failed four gated checks.
-`luma-utc-recovery-keeper.service` exited `226/NAMESPACE` because
-`/run/luma-governance` did not exist in live mode, so its bound recovery producer
-path stayed inactive. Signed media verification refused because a 6-GiB guest's
-RAM-backed live `/var` cannot stage the desktop payload. Both causes are fixed in
-source at `e29187b`, with booted evidence pending a sequence-19 build that needs
-owner-approved store space; live verification needs at least 8 GiB of RAM.
-Installation, graphical/installed security/recovery, physical TPM and
-production qualification did not run. See the exact
-[execution record](evidence/candidate18_execution_2026-10-28.json). The
+The [sequence-19 desktop handoff](evidence/G2_NATIVE_DESKTOP_CANDIDATE_19_2026-10-28.md)
+is the current native Ubuntu candidate, exported on 2026-10-28 from `6528ea1`.
+It carries the sequence-18 fixes for the live-mode `/run` namespace paths and
+names the RAM that live staging needs. Its offline image verification and the
+disk image's Secure Boot live-system/final-storage-teardown VM smoke passed. Its
+signed ISO booted under emulated Secure Boot in an 8-GiB guest and passed all
+ten required and all five gated optical checks. No unit failed, the UTC recovery
+keeper and producer path were active, no ordering cycle appeared, and signed
+media verification exited zero. Live verification or installation of this
+payload needs at least 8 GiB of RAM. Installation, physical USB/optical boot,
+graphical/installed security/recovery, physical TPM and production
+qualification did not run. See the exact
+[execution record](evidence/candidate19_execution_2026-10-28.json). The
+[sequence-18](evidence/G2_NATIVE_DESKTOP_CANDIDATE_18_2026-10-28.md),
 [sequence-17](evidence/G2_NATIVE_DESKTOP_CANDIDATE_17_2026-10-27.md) and
 [sequence-16](evidence/G2_NATIVE_DESKTOP_CANDIDATE_16_2026-10-19.md) handoffs
-and their [sequence-17](evidence/candidate17_execution_2026-10-27.json) and
+and their [sequence-18](evidence/candidate18_execution_2026-10-28.json),
+[sequence-17](evidence/candidate17_execution_2026-10-27.json) and
 [sequence-16](evidence/candidate16_execution_2026-10-19.json) execution records
 are retained.
 
 Later G3/GWIN0 work targets [distinct final deployments](../docs/G3_GWIN0_DELIVERY.md).
-It does not turn sequence 18 into a Windows image or a complete G3 release.
+It does not turn sequence 19 into a Windows image or a complete G3 release.
 The dated checkpoints below retain their original source and test scope.
 
 ### Approved QA session extension and beta development branch

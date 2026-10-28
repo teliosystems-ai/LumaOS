@@ -2,8 +2,8 @@
 
 The development target is a feature-complete Ubuntu G3 candidate and the
 Windows-hosted Luma deployments defined by the governing requirements. The
-native [sequence-18 disk image](../native/evidence/G2_NATIVE_DESKTOP_CANDIDATE_18_2026-10-28.md)
-is the current G2/native test image, and sequences 16 and 17 remain available.
+native [sequence-19 disk image and ISO](../native/evidence/G2_NATIVE_DESKTOP_CANDIDATE_19_2026-10-28.md)
+are the current G2/native test media, and sequences 16 to 18 remain available.
 Subsequent source changes do not alter any of these images' bytes or qualify a
 new release.
 
@@ -40,9 +40,17 @@ recovery producer path inactive. Signed media verification refused because live
 `/var` is a RAM-backed tmpfs holding at most half of RAM, and a 6-GiB guest
 cannot stage the 3,462,000,640-byte desktop payload. Commit `e29187b` creates the
 `/run` namespace paths at every boot, adds a regression test over every unit,
-and names the RAM that live staging needs; at least 8 GiB is required. A new
-signed build must pass the optical smoke at 8 GiB with no failed units before
-any optical boot acceptance.
+and names the RAM that live staging needs; at least 8 GiB is required.
+
+Sequence 19, built from `6528ea1`, carries those fixes. Its signed ISO booted
+under software-emulated Secure Boot in an 8-GiB guest and passed all ten
+required and all five gated optical checks. No unit failed, and the recovery
+keeper and producer path were active. Signed media verification staged the
+3,462,041,600-byte payload, which needs more than 6732 MiB of RAM, and exited
+zero. Its disk image passed the same live smoke as before. Physical optical boot
+from DVD+R DL or a virtual CD, installation from either medium and installed
+acceptance remain to be tested on another host; see the
+[sequence-19 handoff](../native/evidence/G2_NATIVE_DESKTOP_CANDIDATE_19_2026-10-28.md).
 
 These are Linux-based Luma guests under Windows, not replacement Microsoft
 Windows installation media. The current Windows deliverable is profile W;
@@ -199,7 +207,9 @@ built from a re-frozen `55da2e2` cut; that cut changes only
 Rust source differs from the package's compiled cut. The sequence-18 cut at
 `4d7fa7c` changes no Rust file either. Source at `e29187b` changes one Rust
 file, `rust/luma-platform/src/staging.rs` (its refusal message), so a package
-built from that or later source needs its own refresh record. The 2026-10-27
+built from that or later source needs its own refresh record. Sequence 19 was
+built from `6528ea1`, which includes that change; no GWIN0 refresh from that
+cut exists yet. The 2026-10-27
 refresh's platform worker uses the workspace
 release profile under the approved 8 GiB / 2 CPU assembly bound: 22,120,944
 stripped bytes. A debug-profile worker from the same cut measured 75,700,080

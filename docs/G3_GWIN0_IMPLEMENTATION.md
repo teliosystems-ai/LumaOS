@@ -2118,3 +2118,24 @@ tests (100 in all) and the 12 `custody::indexed` tests. See the
 Delta overlay, snapshot backup, a V2 owner creation route, the
 100000-object/500-ms requirement and final media remain open. G3 and GWIN0 are
 not complete.
+
+Slice 2 dispatches the closed worker V1 publisher in component tests over a
+real bootstrapped C cut. A retained legacy owner row is published in the
+original journal and the actual content repository, then copied into C by two
+direct bootstrap windows. The worker publisher then selects the next owner
+version in exactly one NV dispatch, and the repository's verified state equals
+the returned state. A revoked original check, a Select-purpose source, a
+substituted owner binding, a stale review attribution and an anonymous
+operation are each refused before any allocation or NV dispatch. Old, lost and
+third-party NV replies after the sole dispatch are fenced. All new content was
+allocated before dispatch, nothing is redispatched, a cold reopen fails and the
+repository keeps its prior verified state. A cold reopen after a successful
+worker publication also fails closed, because the V1 publication event class
+has no independent lineage verifier yet. The only production change is a
+comment; the publisher has no production caller. On snapshot `3ce336b`, format
+was clean and the warning-denied test build passed. The three new tests passed
+with the other `custody::v2_publication` tests (103 in all) and the 12
+`custody::indexed` tests. See the
+[worker publication checkpoint](gates/g3/nf08_direct_worker_publication_2026-10-29.json).
+The cold lineage verifier, C owner migration and the items above remain open.
+G3 and GWIN0 are not complete.

@@ -24,7 +24,7 @@ fn observed_ctime_change(path: &Path, mutate: &mut impl FnMut()) {
     }
 }
 
-fn open(fixture: &Fixture) -> Backend<Memory> {
+pub(super) fn open(fixture: &Fixture) -> Backend<Memory> {
     Backend::open(
         fixture.memory.clone(),
         fixture.files(),
@@ -33,7 +33,11 @@ fn open(fixture: &Fixture) -> Backend<Memory> {
     )
     .unwrap()
 }
-fn proposal(fixture: &Fixture, backend: &mut Backend<Memory>, number: u64) -> serde_json::Value {
+pub(super) fn proposal(
+    fixture: &Fixture,
+    backend: &mut Backend<Memory>,
+    number: u64,
+) -> serde_json::Value {
     let OperationData::BootstrapProgress {
         window_intent_sha256,
         ..
@@ -68,7 +72,7 @@ fn source(
     );
     (audit, source)
 }
-fn step(
+pub(super) fn step(
     fixture: &Fixture,
     backend: Backend<Memory>,
     proposal: &serde_json::Value,
@@ -329,9 +333,9 @@ fn current_descriptor_pin_detects_inode_mutation_even_after_bytes_and_mode_are_r
     assert_eq!(fixture.memory.0.borrow().calls, 1);
 }
 
-struct ContentGuard {
-    owner: OwnerBinding,
-    review: String,
+pub(super) struct ContentGuard {
+    pub(super) owner: OwnerBinding,
+    pub(super) review: String,
 }
 impl luma_content_store::Boundary for ContentGuard {
     fn admit(

@@ -1,0 +1,121 @@
+{
+  "schema_version": 1,
+  "recorded_on": "2026-10-29",
+  "status": "verified-component-tests-only-cold-lineage-verifier-open",
+  "scope": "G3 functional branch only: actual test-only dispatch of the closed direct worker V1 publisher over a real bootstrapped C cut; no production caller, produced image, GWIN0 package, installed run or native C activation",
+  "branch_policy": {
+    "branch": "feature/g3-functional-beta",
+    "branched_from": "b69e09385a919f074d3ba9dfce45fb561ef6ab6f",
+    "g2_testing_and_gwin0_branch": "feature/g3-gwin0-beta",
+    "owner_decision": "On 29 October 2026 the owner kept further sequence-19 G2 testing and GWIN0 completion on feature/g3-gwin0-beta and moved G3 functional development to this branch"
+  },
+  "implementation": [
+    "Slice 2 test joins: one retained legacy owner row is published in the original journal and the actual content repository, then copied into C by two direct bootstrap windows; the closed worker publisher then publishes the next V1 owner version in exactly one NV dispatch, and the repository's verified state equals the returned state",
+    "A revoked original check, a Select-purpose source, a substituted owner binding, a stale review attribution and an anonymous operation are each refused before any allocation or NV dispatch; the exact original then publishes",
+    "Old, lost and third-party NV replies after the sole dispatch are fenced: all new content was allocated before dispatch, no redispatch occurs, a cold reopen fails and the repository keeps the prior verified state",
+    "A cold reopen refuses the V1 publication event class because no independent lineage verifier for it exists yet; the warm publisher is not a cold reader",
+    "Production change is one comment in the direct backend; the test module widens three existing test helpers and the content guard to pub(super)"
+  ],
+  "exact_sources": {
+    "slice2_snapshot": {
+      "commit": "3ce336b321ea3448d09e186c6c6b902084616cb9",
+      "tree": "69fb70eb11dca4958af6b574c1fa3935c596db5a",
+      "parent_commit": "5575847aadafcca1c326a5b637cc611b00a9e12a",
+      "rust_tree_rematched_before_commit": true
+    }
+  },
+  "verification": {
+    "environment": {
+      "container": "pinned tools image sha256:819dfe7772da1e3c76ffdc8f9ea4a1fa44c7c549bd4fa988e35d9397d87924b2",
+      "network": "none",
+      "memory_limit": "8g",
+      "cpu_limit": 6,
+      "cargo_build_jobs": 1,
+      "warnings_denied": true,
+      "storage": "Disposable private ext4 work directories on drive D",
+      "authority": "Explicit software worker attribution, resource lease and NV fixtures, not installed original PAM, physical TPM or loaded LSM qualification"
+    },
+    "slice2_worker_tests": {
+      "directory": "/mnt/d/LumaOS-builds/g3-slice2-check-20261029-b",
+      "commit": "3ce336b321ea3448d09e186c6c6b902084616cb9",
+      "sha256sums_verified": true,
+      "admission_sha256": "d20e63c50db48c081ffb1ed2f633c9f7ec455baedf85a7126c6475a3419556ee",
+      "format_check": {
+        "passed": true,
+        "diff_lines": 0,
+        "log_sha256": "12c098b1b409bbd7e55cac7709a8299abe0612032a17c06d4c683dbe4310ab9a"
+      },
+      "warning_denied_test_build": {
+        "passed": true,
+        "log_sha256": "3f3b8f4d75ec47802bb703077359eb4360e8b7caf814c0c071a3064f8e0a9c68"
+      },
+      "worker_case_tests": {
+        "passed": 3,
+        "failed": 0,
+        "filtered_out": 1611,
+        "seconds": 279.92,
+        "log_sha256": "e2822cb02fd7da5ee484f2fd76fc60f2908def1371cea9a8434c0b3789fa245f"
+      }
+    },
+    "slice2_regression": {
+      "directory": "/mnt/d/LumaOS-builds/g3-slice2-check-20261029-c",
+      "commit": "3ce336b321ea3448d09e186c6c6b902084616cb9",
+      "sha256sums_verified": true,
+      "admission_sha256": "5caa9856dc5324460a49b180c45dc8de82a0743f67a5b65dcc4ae4a11387ced1",
+      "format_check": {
+        "passed": true,
+        "diff_lines": 0,
+        "log_sha256": "97efbf510bb755755419e75bfc480cfbf31b888b19930d22b4a7a7e91f376648"
+      },
+      "warning_denied_test_build": {
+        "passed": true,
+        "log_sha256": "89ec2968e32288a505dd1cacf47d2ff07ea982992bf437c45476b65f9d71262b"
+      },
+      "custody_v2_publication_tests": {
+        "passed": 103,
+        "failed": 0,
+        "filtered_out": 1511,
+        "seconds": 1010.42,
+        "log_sha256": "97cb2e5809d77a7424279e927fcbb00320355079e8b294237ffe8f43f8457b5a"
+      },
+      "custody_indexed_tests": {
+        "passed": 12,
+        "failed": 0,
+        "filtered_out": 1602,
+        "log_sha256": "024dabdc2bc1137dc344b0c3afd613ed8dd33d131212430c504412f91c279c80"
+      },
+      "new_tests": [
+        "actual_v1_publication_is_one_worker_dispatch_and_cold_reopen_fails_closed_without_lineage",
+        "actual_revoked_or_substituted_worker_original_is_refused_before_allocation_or_nv",
+        "actual_worker_nv_faults_are_fenced_without_redispatch_or_content_adoption"
+      ],
+      "total_platform_tests_in_build": 1614,
+      "full_platform_suite_run_locally": false,
+      "full_platform_suite_expected_in_ci": true,
+      "dispatched": "test builds only; no production caller"
+    }
+  },
+  "not_claimed": [
+    "A cold lineage verifier for the V1 publication event class; a cold reopen after a worker publication fails closed",
+    "A production caller of the worker publisher, an installed run or native C activation",
+    "C owner migration, delta overlay, snapshot backup delivery or a V2 owner creation route",
+    "The 100000-object/500-ms NF08 measurement",
+    "Artifact CLI harness passage, installed PAM, physical TPM, loaded LSM or Hyper-V qualification",
+    "Any produced image or GWIN0 package; G3 and GWIN0 remain open"
+  ],
+  "retained_failed_attempts": [
+    {
+      "directory": "/mnt/d/LumaOS-builds/g3-slice2-check-20261029-a",
+      "commit": "214ace403dd0dc24da184ad053b4d7f9d8657823",
+      "logs": {
+        "admission": "b3c8ed3d9e94fb548b4a00ed708514eda5e02c1fa49eb0d0bde3e44e9d674505",
+        "format": "2cba14fd7cfa8cfd8a892b67255051f5e1424cdcbd929abcb4c54dbd7f1d8885",
+        "diff": "812c80b3b350c50ce703fd4f8f04a70af2287d2824f9196751abc6711c9c3556",
+        "build_tests": "3921c8aefd7d63061be367bb57a0bccd56ee1806670dde10fbc44e4c1174ccdc",
+        "worker_case_tests_3_failed": "9b3c18357ced24c496e2d6aa539d1429041e6617ed7e48f6d6d25a77f11f2ef1"
+      },
+      "cause": "The new test file had one unformatted use line (14 diff lines), and all three tests panicked with InvalidProvenance because an external edit was planned with managed-capture provenance",
+      "correction": "Test-side only: wrap the use line and give the provenance fixture an explicit origin (managed for capture, external for edits)"
+    }
+  ]
+}

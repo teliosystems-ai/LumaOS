@@ -12,6 +12,8 @@ static NEXT: AtomicU64 = AtomicU64::new(1);
 mod progress_cases;
 #[path = "tests/resume.rs"]
 mod resume_cases;
+#[path = "tests/worker.rs"]
+mod worker_cases;
 #[derive(Clone, Copy)]
 enum Fault {
     None,

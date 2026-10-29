@@ -4,8 +4,9 @@
 use super::super::super::paged::slots;
 use super::super::*;
 
-// The closed worker-original publisher awaits its consumers, direct V1 and C
-// index publication; it is neither dispatched nor yet exercised by tests.
+// The closed worker-original publisher awaits its production consumers, direct
+// V1 and C index publication. Only tests dispatch it; a cold reader refuses
+// its event classes until each has an independent lineage verifier.
 #[allow(dead_code)]
 #[path = "worker.rs"]
 mod worker;

@@ -19,6 +19,11 @@ mod verification;
 pub(in crate::content_checkpoint::custody::v2_publication) use verification::{
     verify_index_preparation, PreparationView, VerifiedIndexPreparation,
 };
+// Historical replay awaits its only consumer, the cold direct C reader; it is
+// neither dispatched nor yet exercised by tests.
+#[allow(dead_code)]
+#[path = "effects/selected.rs"]
+mod selected;
 
 const PREPARATION_DOMAIN: &str = "luma-c-index-preparation-v1";
 

@@ -4,6 +4,12 @@
 use super::super::super::paged::slots;
 use super::super::*;
 
+// The closed worker-original publisher awaits its consumers, direct V1 and C
+// index publication; it is neither dispatched nor yet exercised by tests.
+#[allow(dead_code)]
+#[path = "worker.rs"]
+mod worker;
+
 pub(in crate::content_checkpoint::custody) struct Backend<A: Checkpoint> {
     anchor: A,
     files: Files,

@@ -218,7 +218,7 @@ impl InventoryPlan {
     }
 }
 
-fn walk(
+pub(super) fn walk(
     root: &InventoryRoot,
     binding: &OwnerBinding,
     mut credit: u64,

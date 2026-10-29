@@ -838,7 +838,7 @@ impl Roots {
             &self.index_generations,
         ]
     }
-    fn role(&self, role: map::Kind) -> &map::Root {
+    pub(super) fn role(&self, role: map::Kind) -> &map::Root {
         self.all()[role_index(role)]
     }
     fn set_role(&mut self, role: map::Kind, root: map::Root) -> Result<()> {

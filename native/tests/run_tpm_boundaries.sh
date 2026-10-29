@@ -19,6 +19,9 @@ cp -a /repo/native "$snapshot/"
 mkdir -p "$snapshot/examples" "$snapshot/docs/adr"
 cp -a /repo/examples/invoices.csv "$snapshot/examples/"
 cp -a /repo/docs/adr/0004-policy-model.md "$snapshot/docs/adr/"
+# The native harness suite also reads the Python package, release scripts and
+# workspace UI sources it checks.
+cp -a /repo/src /repo/scripts /repo/web "$snapshot/"
 cmp -- "$0" "$snapshot/native/tests/run_tpm_boundaries.sh"
 cd "$snapshot/rust"
 cargo fmt --check
@@ -58,6 +61,7 @@ sha256sum rust/Cargo.toml rust/Cargo.lock rust/.cargo/config.toml \
     rust/luma-platform/src/admin_service/peer.rs \
     examples/invoices.csv docs/adr/0004-policy-model.md native/tests/model_supervision_fixture.c \
     native/tests/run_tpm_boundaries.sh native/tests/*.py native/tests/fixtures/*.c native/image/*.py \
+    src/luma_os/*.py scripts/*.py web/native-workspace.* \
     native/image/overlay/usr/lib/dracut/modules.d/92luma-pcrphase/module-setup.sh \
     native/image/overlay/usr/lib/dracut/modules.d/91luma/*.sh \
     native/image/overlay/etc/pam.d/luma-admin \

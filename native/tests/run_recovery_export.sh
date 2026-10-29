@@ -20,6 +20,9 @@ cp -a /repo/native "$snapshot/"
 mkdir -p "$snapshot/examples" "$snapshot/docs/adr"
 cp -a /repo/examples/invoices.csv "$snapshot/examples/"
 cp -a /repo/docs/adr/0004-policy-model.md "$snapshot/docs/adr/"
+# The native harness suite also reads the Python package, release scripts and
+# workspace UI sources it checks.
+cp -a /repo/src /repo/scripts /repo/web "$snapshot/"
 cmp -- "$0" "$snapshot/native/tests/run_recovery_export.sh"
 cd "$snapshot/rust"
 export CARGO_TARGET_DIR=/tmp/luma-export-target
@@ -38,4 +41,5 @@ sha256sum rust/Cargo.toml rust/Cargo.lock rust/.cargo/config.toml \
     rust/luma-platform/src/*.rs rust/luma-platform/src/*.c rust/luma-platform/src/model/*.rs \
     examples/invoices.csv docs/adr/0004-policy-model.md native/tests/model_supervision_fixture.c \
     native/tests/run_recovery_export.sh native/tests/*.py native/image/*.py \
+    src/luma_os/*.py scripts/*.py web/native-workspace.* \
     > "$output/source-sha256.txt"

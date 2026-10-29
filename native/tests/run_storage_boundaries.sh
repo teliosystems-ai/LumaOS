@@ -23,6 +23,9 @@ cp -a /repo/native "$snapshot/"
 mkdir -p "$snapshot/examples" "$snapshot/docs/adr"
 cp -a /repo/examples/invoices.csv "$snapshot/examples/"
 cp -a /repo/docs/adr/0004-policy-model.md "$snapshot/docs/adr/"
+# The native harness suite also reads the Python package, release scripts and
+# workspace UI sources it checks.
+cp -a /repo/src /repo/scripts /repo/web "$snapshot/"
 cmp -- "$0" "$snapshot/native/tests/run_storage_boundaries.sh"
 cd "$snapshot/rust"
 export CARGO_TARGET_DIR=/tmp/luma-storage-target
@@ -36,12 +39,17 @@ install -m 0644 "$snapshot/native/image/overlay/etc/systemd/system/luma-staging-
 systemd-analyze verify "$unit_directory/luma-staging-clean.service" 2>&1 | tee "$output/unit-verification.txt"
 python3 "$snapshot/native/tests/staging_linux_integration.py" \
     --binary "$CARGO_TARGET_DIR/debug/luma-platform" --output "$output/linux-storage.json"
+# The boot-policy harness refuses any existing runtime directory. Remove only
+# this runner's unit-verification install; rmdir fails if anything else exists.
+rm -- /usr/libexec/luma-os/luma-platform
+rmdir -- /usr/libexec/luma-os
 python3 -W error -m unittest discover -s "$snapshot/native/tests" -v 2>&1 | tee "$output/native-tests.txt"
 cd "$snapshot"
 sha256sum rust/Cargo.toml rust/Cargo.lock rust/.cargo/config.toml \
     rust/luma-platform/Cargo.toml rust/luma-platform/build.rs \
     rust/luma-platform/src/*.rs rust/luma-platform/src/*.c rust/luma-platform/src/model/*.rs \
     examples/invoices.csv docs/adr/0004-policy-model.md native/tests/model_supervision_fixture.c native/tests/*.py native/image/*.py \
+    src/luma_os/*.py scripts/*.py web/native-workspace.* \
     native/tests/run_storage_boundaries.sh native/image/overlay/etc/systemd/system/luma-staging-clean.service \
     native/image/overlay/usr/lib/systemd/system-generators/luma-boot-generator \
     native/image/overlay/etc/systemd/system/media-luma.mount \

@@ -22,6 +22,11 @@ cp -a /repo/docs/adr/0004-policy-model.md "$snapshot/docs/adr/"
 cmp -- "$0" "$snapshot/native/tests/run_tpm_boundaries.sh"
 cd "$snapshot/rust"
 cargo fmt --check
+# Every filtered test below compiles all three workspace crates on first use.
+# Build those exact test artifacts once, outside the per-test 240/300/60 s
+# deadlines; the harnesses and timed runs inherit this target and flag set.
+export CARGO_TARGET_DIR=/tmp/luma-tpm-target RUSTFLAGS=-Dwarnings
+cargo test --offline --locked --no-run
 python3 "$snapshot/native/tests/tpm_integration.py" --repository "$snapshot" --output "$output"
 # Each helper guards fresh root tools containers and starts its own disposable
 # software TPM. Logs contain test outcomes, never hierarchy authorization or state.

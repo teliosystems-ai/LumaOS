@@ -19,6 +19,10 @@ mkdir "$snapshot/rust"
 cp -a /repo/rust/.cargo /repo/rust/Cargo.toml /repo/rust/Cargo.lock /repo/rust/luma-platform \
     /repo/rust/luma-content /repo/rust/luma-content-store "$snapshot/rust/"
 cp -a /repo/native "$snapshot/"
+# Test fixtures embed these repository files with include_bytes!.
+mkdir -p "$snapshot/examples" "$snapshot/docs/adr"
+cp -a /repo/examples/invoices.csv "$snapshot/examples/"
+cp -a /repo/docs/adr/0004-policy-model.md "$snapshot/docs/adr/"
 cmp -- "$0" "$snapshot/native/tests/run_storage_boundaries.sh"
 cd "$snapshot/rust"
 export CARGO_TARGET_DIR=/tmp/luma-storage-target
@@ -37,7 +41,7 @@ cd "$snapshot"
 sha256sum rust/Cargo.toml rust/Cargo.lock rust/.cargo/config.toml \
     rust/luma-platform/Cargo.toml rust/luma-platform/build.rs \
     rust/luma-platform/src/*.rs rust/luma-platform/src/*.c rust/luma-platform/src/model/*.rs \
-    native/tests/model_supervision_fixture.c native/tests/*.py native/image/*.py \
+    examples/invoices.csv docs/adr/0004-policy-model.md native/tests/model_supervision_fixture.c native/tests/*.py native/image/*.py \
     native/tests/run_storage_boundaries.sh native/image/overlay/etc/systemd/system/luma-staging-clean.service \
     native/image/overlay/usr/lib/systemd/system-generators/luma-boot-generator \
     native/image/overlay/etc/systemd/system/media-luma.mount \

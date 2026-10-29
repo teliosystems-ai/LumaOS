@@ -15,6 +15,10 @@ mkdir "$snapshot/rust"
 cp -a /repo/rust/.cargo /repo/rust/Cargo.toml /repo/rust/Cargo.lock /repo/rust/luma-platform \
     /repo/rust/luma-content /repo/rust/luma-content-store "$snapshot/rust/"
 cp -a /repo/native "$snapshot/"
+# Test fixtures embed these repository files with include_bytes!.
+mkdir -p "$snapshot/examples" "$snapshot/docs/adr"
+cp -a /repo/examples/invoices.csv "$snapshot/examples/"
+cp -a /repo/docs/adr/0004-policy-model.md "$snapshot/docs/adr/"
 cmp -- "$0" "$snapshot/native/tests/run_tpm_boundaries.sh"
 cd "$snapshot/rust"
 cargo fmt --check
@@ -47,7 +51,7 @@ sha256sum rust/Cargo.toml rust/Cargo.lock rust/.cargo/config.toml \
     rust/luma-platform/Cargo.toml rust/luma-platform/build.rs \
     rust/luma-platform/src/*.rs rust/luma-platform/src/*.c rust/luma-platform/src/model/*.rs \
     rust/luma-platform/src/admin_service/peer.rs \
-    native/tests/model_supervision_fixture.c \
+    examples/invoices.csv docs/adr/0004-policy-model.md native/tests/model_supervision_fixture.c \
     native/tests/run_tpm_boundaries.sh native/tests/*.py native/tests/fixtures/*.c native/image/*.py \
     native/image/overlay/usr/lib/dracut/modules.d/92luma-pcrphase/module-setup.sh \
     native/image/overlay/usr/lib/dracut/modules.d/91luma/*.sh \

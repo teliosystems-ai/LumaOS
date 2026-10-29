@@ -89,6 +89,9 @@ jobs:
             --mount type=volume,dst=/storage \
             luma-native-tools:ci bash -euc 'chmod 0700 /storage;
             exec bash /repo/native/tests/run_storage_boundaries.sh /out/results'
+      - name: Hand root-owned diagnostics to the runner
+        if: always()
+        run: sudo chown -R "$(id -u):$(id -g)" "$RUNNER_TEMP/luma-storage"
       - name: Retain storage boundary diagnostics
         if: always()
         uses: actions/upload-artifact@v4
@@ -118,6 +121,9 @@ jobs:
             --mount type=volume,dst=/storage \
             luma-native-tools:ci bash -euc 'chmod 0700 /storage;
             exec bash /repo/native/tests/run_tpm_boundaries.sh /out/results'
+      - name: Hand root-owned diagnostics to the runner
+        if: always()
+        run: sudo chown -R "$(id -u):$(id -g)" "$RUNNER_TEMP/luma-tpm"
       - name: Retain TPM checkpoint diagnostics (no TPM state or secrets)
         if: always()
         uses: actions/upload-artifact@v4

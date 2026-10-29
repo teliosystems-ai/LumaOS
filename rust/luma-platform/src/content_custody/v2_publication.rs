@@ -270,6 +270,47 @@ enum OperationData {
         preparation: RecordRef,
         original_authority: Audit,
     },
+    // Awaits its only producer, the direct C index publisher.
+    #[cfg(test)]
+    IndexJobReservation {
+        binding: OwnerBinding,
+        request_sha256: String,
+        input_sha256: String,
+        source_sha256: String,
+        reservation: RecordRef,
+        original_authority: Audit,
+    },
+}
+/// One closed historical index Write effect: the exact owner generation, a
+/// bounded C record and the unchanged original finite envelope.
+fn validate_index_effect(
+    binding: &OwnerBinding,
+    hashes: [&String; 3],
+    record: &RecordRef,
+    original_authority: &Audit,
+) -> Result<()> {
+    binding.validate()?;
+    for value in hashes {
+        digest(value)?;
+    }
+    record.validate()?;
+    original_authority.validate()?;
+    let usage = &original_authority.usage;
+    if record.bytes > 64 * 1024
+        || original_authority.operation_id.is_none()
+        || original_authority.subject != binding.owner
+        || original_authority.subject_generation != binding.owner_generation
+        || usage.action != crate::finite_grants::Action::Write
+        || usage.selector.kind != crate::finite_grants::Kind::Artifact
+        || usage.selector.id != "native-content-index-build-v2"
+        || usage.selector.generation != binding.owner_generation
+        || usage.units != 1
+        || usage.input_bytes > 256 * 1024 * 1024
+        || usage.output_bytes > 128 * 1024 * 1024
+    {
+        return Err("index preparation changes its closed historical owner/effect record".into());
+    }
+    Ok(())
 }
 impl OperationData {
     fn validate(&self) -> Result<()> {
@@ -321,32 +362,26 @@ impl OperationData {
                 source_sha256,
                 preparation,
                 original_authority,
-            } => {
-                binding.validate()?;
-                digest(request_sha256)?;
-                digest(input_sha256)?;
-                digest(source_sha256)?;
-                preparation.validate()?;
-                original_authority.validate()?;
-                let usage = &original_authority.usage;
-                if preparation.bytes > 64 * 1024
-                    || original_authority.operation_id.is_none()
-                    || original_authority.subject != binding.owner
-                    || original_authority.subject_generation != binding.owner_generation
-                    || usage.action != crate::finite_grants::Action::Write
-                    || usage.selector.kind != crate::finite_grants::Kind::Artifact
-                    || usage.selector.id != "native-content-index-build-v2"
-                    || usage.selector.generation != binding.owner_generation
-                    || usage.units != 1
-                    || usage.input_bytes > 256 * 1024 * 1024
-                    || usage.output_bytes > 128 * 1024 * 1024
-                {
-                    return Err(
-                        "index preparation changes its closed historical owner/effect record"
-                            .into(),
-                    );
-                }
-            }
+            } => validate_index_effect(
+                binding,
+                [request_sha256, input_sha256, source_sha256],
+                preparation,
+                original_authority,
+            )?,
+            #[cfg(test)]
+            Self::IndexJobReservation {
+                binding,
+                request_sha256,
+                input_sha256,
+                source_sha256,
+                reservation,
+                original_authority,
+            } => validate_index_effect(
+                binding,
+                [request_sha256, input_sha256, source_sha256],
+                reservation,
+                original_authority,
+            )?,
         }
         Ok(())
     }

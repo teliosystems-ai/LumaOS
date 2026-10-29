@@ -90,22 +90,98 @@ fn load_job<A: Checkpoint>(
     Ok(Some(job))
 }
 
-#[derive(Serialize)]
+/// Exact digest-bound Start/Advance transition review DATA. Reconstructing it
+/// never substitutes for the current owner, selection, builder or grant checks.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
-struct TransitionReview {
-    schema_version: u32,
-    input_sha256: String,
-    base_owner_sha256: String,
-    base_job_sha256: Option<String>,
-    selection_sha256: String,
-    operation: String,
-    core_review_sha256: String,
-    builder: BuilderIdentity,
-    policy_sha256: String,
-    metadata_maximum: phase::MetadataMaximum,
-    next_job: BlobReference,
-    objects: Vec<ObjectWriteSpec>,
-    review_sha256: String,
+pub(in crate::content_checkpoint::custody) struct TransitionReview {
+    pub(in crate::content_checkpoint::custody) schema_version: u32,
+    pub(in crate::content_checkpoint::custody) input_sha256: String,
+    pub(in crate::content_checkpoint::custody) base_owner_sha256: String,
+    pub(in crate::content_checkpoint::custody) base_job_sha256: Option<String>,
+    pub(in crate::content_checkpoint::custody) selection_sha256: String,
+    pub(in crate::content_checkpoint::custody) operation: String,
+    pub(in crate::content_checkpoint::custody) core_review_sha256: String,
+    pub(in crate::content_checkpoint::custody) builder: BuilderIdentity,
+    pub(in crate::content_checkpoint::custody) policy_sha256: String,
+    pub(in crate::content_checkpoint::custody) metadata_maximum: phase::MetadataMaximum,
+    pub(in crate::content_checkpoint::custody) next_job: BlobReference,
+    pub(in crate::content_checkpoint::custody) objects: Vec<ObjectWriteSpec>,
+    pub(in crate::content_checkpoint::custody) review_sha256: String,
+}
+/// The selected before-DATA a transition review binds.
+pub(in crate::content_checkpoint::custody) struct TransitionBase<'a> {
+    pub(in crate::content_checkpoint::custody) owner: &'a OwnerHeadV2,
+    pub(in crate::content_checkpoint::custody) job: Option<&'a Job>,
+    pub(in crate::content_checkpoint::custody) selection_sha256: &'a str,
+    pub(in crate::content_checkpoint::custody) builder: &'a BuilderIdentity,
+}
+impl TransitionReview {
+    pub(in crate::content_checkpoint::custody) fn data(
+        input: &Input,
+        base: TransitionBase<'_>,
+        core_review_sha256: String,
+        next_job: BlobReference,
+        objects: Vec<ObjectWriteSpec>,
+    ) -> Result<Self> {
+        digest(&core_review_sha256)?;
+        let mut review = Self {
+            schema_version: 2,
+            input_sha256: input.sha256()?,
+            base_owner_sha256: base.owner.sha256()?,
+            base_job_sha256: base.job.map(Job::sha256).transpose()?,
+            selection_sha256: base.selection_sha256.into(),
+            operation: input.mode().name().into(),
+            core_review_sha256,
+            builder: base.builder.clone(),
+            policy_sha256: content_index::policy::sha256()?,
+            metadata_maximum: phase::MetadataMaximum::compiled(),
+            next_job,
+            objects,
+            review_sha256: String::new(),
+        };
+        review.review_sha256 = review.digest()?;
+        review.validate()?;
+        Ok(review)
+    }
+    fn digest(&self) -> Result<String> {
+        Ok(luma_content::sha256(&serde_json::to_vec(&(
+            "luma-native-index-transition-review-v2",
+            self.schema_version,
+            &self.input_sha256,
+            &self.base_owner_sha256,
+            &self.base_job_sha256,
+            &self.selection_sha256,
+            &self.operation,
+            &self.core_review_sha256,
+            &self.builder,
+            &self.policy_sha256,
+            &self.metadata_maximum,
+            &self.next_job,
+            &self.objects,
+        ))?))
+    }
+    pub(in crate::content_checkpoint::custody) fn validate(&self) -> Result<()> {
+        for value in [
+            &self.input_sha256,
+            &self.base_owner_sha256,
+            &self.selection_sha256,
+            &self.core_review_sha256,
+            &self.policy_sha256,
+            &self.review_sha256,
+        ] {
+            digest(value)?;
+        }
+        if let Some(value) = &self.base_job_sha256 {
+            digest(value)?;
+        }
+        self.builder.validate()?;
+        self.next_job.validate()?;
+        if self.schema_version != 2 || self.review_sha256 != self.digest()? {
+            return Err("index transition review changes its exact digest-bound DATA".into());
+        }
+        Ok(())
+    }
 }
 fn transition<A: Checkpoint>(
     input: &Input,
@@ -126,36 +202,18 @@ fn transition<A: Checkpoint>(
         .try_borrow_mut()
         .map_err(|_| "reentrant index transition review")?;
     c.check()?;
-    let mut review = TransitionReview {
-        schema_version: 2,
-        input_sha256: input.sha256()?,
-        base_owner_sha256: c.head.sha256()?,
-        base_job_sha256: c.job.as_ref().map(Job::sha256).transpose()?,
-        selection_sha256: c.selection_sha256.clone(),
-        operation: input.mode().name().into(),
+    let review = TransitionReview::data(
+        input,
+        TransitionBase {
+            owner: &c.head,
+            job: c.job.as_ref(),
+            selection_sha256: &c.selection_sha256,
+            builder: c.builder.identity(),
+        },
         core_review_sha256,
-        builder: c.builder.identity().clone(),
-        policy_sha256: content_index::policy::sha256()?,
-        metadata_maximum: phase::MetadataMaximum::compiled(),
-        next_job: planned.reference().clone(),
+        planned.reference().clone(),
         objects,
-        review_sha256: String::new(),
-    };
-    review.review_sha256 = luma_content::sha256(&serde_json::to_vec(&(
-        "luma-native-index-transition-review-v2",
-        review.schema_version,
-        &review.input_sha256,
-        &review.base_owner_sha256,
-        &review.base_job_sha256,
-        &review.selection_sha256,
-        &review.operation,
-        &review.core_review_sha256,
-        &review.builder,
-        &review.policy_sha256,
-        &review.metadata_maximum,
-        &review.next_job,
-        &review.objects,
-    ))?);
+    )?;
     let profile = input.effect_profile(&review.review_sha256)?;
     c.check()?;
     Ok(

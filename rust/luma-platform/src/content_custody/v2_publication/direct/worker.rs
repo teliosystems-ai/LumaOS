@@ -38,6 +38,7 @@ struct ReadCas {
 enum Completed {
     V1(VerifiedState),
     IndexPreparation(RecordRef),
+    IndexJobReservation(RecordRef),
 }
 impl<A: Checkpoint> Backend<A> {
     pub(in crate::content_checkpoint::custody::v2_publication) fn publish_v1_direct(
@@ -53,7 +54,7 @@ impl<A: Checkpoint> Backend<A> {
             }
             Outcome::Prepared(token) => match storage::publish(self, token, original)? {
                 Completed::V1(state) => Ok(state),
-                Completed::IndexPreparation(_) => {
+                Completed::IndexPreparation(_) | Completed::IndexJobReservation(_) => {
                     Err("closed V1 consumer received a different semantic completion class".into())
                 }
             },
@@ -68,9 +69,23 @@ impl<A: Checkpoint> Backend<A> {
         let token = index_preparation::prepare(&mut self, input, plan, original)?;
         match storage::publish(self, token, original)? {
             Completed::IndexPreparation(reference) => Ok(reference),
-            Completed::V1(_) => Err(
+            Completed::V1(_) | Completed::IndexJobReservation(_) => Err(
                 "closed index-preparation consumer received a different semantic completion class"
                     .into(),
+            ),
+        }
+    }
+    pub(in crate::content_checkpoint::custody::v2_publication) fn reserve_index_start_direct(
+        mut self,
+        input: &crate::content_index::request::Input,
+        builder: &impl crate::content_checkpoint::custody::v2_publication::index::effects::CurrentBuilder,
+        original: &mut OriginalCOperation<'_>,
+    ) -> Result<RecordRef> {
+        let token = index_preparation::start(&mut self, input, builder, original)?;
+        match storage::publish(self, token, original)? {
+            Completed::IndexJobReservation(reference) => Ok(reference),
+            Completed::V1(_) | Completed::IndexPreparation(_) => Err(
+                "closed index-Start consumer received a different semantic completion class".into(),
             ),
         }
     }

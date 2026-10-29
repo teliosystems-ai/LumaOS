@@ -21,6 +21,12 @@ and production qualification. The delivered sequence-14 laboratory image and
 its evidence are frozen; subsequent branch changes need separately identified
 images and evidence. Native G2 defects take priority over beta features.
 
+On 29 October 2026 the owner split the tracks. G3 functional development
+continues on `feature/g3-functional-beta`, branched from `b69e093`. Further G2
+testing of the sequence-19 media and GWIN0 completion stay on
+`feature/g3-gwin0-beta`. Commits on the G3 branch change no produced image or
+GWIN0 package.
+
 The controlling scopes remain [G3](DEVELOPMENT_PLAN.md#g3-functional-beta) and
 [GWIN0](DEVELOPMENT_PLAN.md#gwin0-windows-hosted-platform-proof), with the pinned
 governing requirements. Development overlap does not waive inherited gates,
@@ -2051,3 +2057,64 @@ remain open. Installation, physical optical or USB boot, graphical and
 installed security or recovery acceptance did not run. See the
 [sequence-19 handoff](../native/evidence/G2_NATIVE_DESKTOP_CANDIDATE_19_2026-10-28.md)
 and [execution record](../native/evidence/candidate19_execution_2026-10-28.json).
+
+### Boundary CI restoration and NF08 seek reads, 29 October 2026
+
+This work is on `feature/g3-functional-beta` and changes no produced image or
+GWIN0 package. The native-platform workflow had failed on every push since the
+content crates joined the workspace. The fixes change only the CI environment
+and test fixtures; no production check is relaxed. Runner snapshots now carry
+the three workspace crates, the two embedded fixture files, and the `src/`,
+`scripts/` and `web/` sources that native discovery reads (`c658442`,
+`4dadefd`, `42a3408`). Every Rust or harness container gets a private
+mode-0700 ext4 storage root and the 640 MiB memlock bound of the retained
+evidence runs. Platform unit tests run serially, as in every retained run, so
+the parallel interference stays open. The TPM job compiles all workspace test
+artifacts once before its timed tests (`1425122`). Only the `sha2` digest
+crate is now optimized in dev and test builds (`37ba720`), and the release
+profile is unchanged. The real Linux staging step then took 35 s instead of
+200 s for its nine cases.
+
+Statistics lower-bound seeks now binary-search inside each validated leaf
+instead of descending from the root once per posting rank (`ad4d8ce`). Every
+page is still read through the original live boundary, validated and rehashed,
+and no parsed or authorization cache is added. On a 65-document, 80-term
+corpus (5,200 rows), measured seek reads fell from 78,360,930 to 37,834,212
+bytes with identical exact rank bounds. This is not the
+100000-object/500-ms measurement. Three fixture-only corrections came with it.
+The admin peer fixture retries its own binding while an earlier test thread
+retires. The staging harness gives its container the laboratory release
+identity. The TPM harness removes the PAM profile it created. `dcc3264`
+compiles the closed worker publisher and historical replay into the test build
+without a caller.
+
+Local snapshot `b7e7789` (the `ad4d8ce` tree; serial, `--network none`, 8 GiB
+cap) passed format, 102 content and 355 store tests, and 1562 platform tests
+with 42 ignored. It also passed the build, all nine staging cases and 966
+native Python tests with two skipped. On snapshot `de0f238`, the storage, TPM
+and recovery-export runner snapshots each ran 966 native tests with two
+skipped. CI run 40897723467 on `42a3408` then passed the storage and TPM
+boundary jobs. Its rust job passed 102 content, 355 store and 1562 platform
+tests (42 ignored), then stopped at native `artifact-read` as on 22 October.
+That step needs an installed Admin anchor and TPM, and it is not passed.
+
+Slice 1 adds the C Start reservation for a first index job. Planning and C
+reconstruction now build transition review DATA through one shared
+constructor. The C verifier reconstructs the first job from the selected owner
+and the current fixed builder. It accepts only an exact Start request for an
+owner without a C-selected index leaf, and re-proves the builder under the
+original boundary. The closed reservation record (canonical, at most 64 KiB)
+binds the base, request input, transition review, metadata liability, capacity
+and original attribution. A failed or expired attempt keeps that full
+liability. Replay rebuilds the record from fresh DATA under the current check
+and refuses a changed builder, base or input, or a revoked original. The worker
+reserve path shares the finish step of phase preparation and refuses a token of
+the other kind. Its event class compiles only in test builds, and the direct
+reader refuses it. Nothing dispatches it, and it is not an installed index run.
+On snapshot `fbab35e`, format was clean and the warning-denied test build
+passed. The seven new tests passed with the other `custody::v2_publication`
+tests (100 in all) and the 12 `custody::indexed` tests. See the
+[seek and CI boundary checkpoint](gates/g3/nf08_seek_and_ci_boundaries_2026-10-29.json).
+Delta overlay, snapshot backup, a V2 owner creation route, the
+100000-object/500-ms requirement and final media remain open. G3 and GWIN0 are
+not complete.

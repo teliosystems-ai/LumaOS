@@ -33,6 +33,9 @@ use std::cell::RefCell;
 mod boundary;
 #[path = "indexed/compute.rs"]
 mod compute;
+// Only the C Start reservation reconstruction consumes this DATA so far.
+#[cfg(test)]
+pub(super) use compute::{TransitionBase, TransitionReview};
 #[cfg(test)]
 #[path = "indexed/tests.rs"]
 mod tests;
@@ -59,10 +62,15 @@ pub(super) struct IndexReply {
 
 pub(super) fn selection_sha256(value: &Selection) -> Result<String> {
     digest(&value.descriptor_sha256)?;
+    selection_data_sha256(&value.owner, value.leaf.as_ref())
+}
+
+/// The same commitment from independently reconstructed owner/leaf DATA.
+pub(super) fn selection_data_sha256(owner: &OwnerHeadV2, leaf: Option<&Leaf>) -> Result<String> {
     Ok(luma_content::sha256(&serde_json::to_vec(&(
         "luma-native-current-owner-index-v2",
-        value.owner.sha256()?,
-        value.leaf.as_ref().map(Leaf::sha256).transpose()?,
+        owner.sha256()?,
+        leaf.map(Leaf::sha256).transpose()?,
     ))?))
 }
 

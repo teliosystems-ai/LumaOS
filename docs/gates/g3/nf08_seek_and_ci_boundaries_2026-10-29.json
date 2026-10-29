@@ -1,0 +1,305 @@
+{
+  "schema_version": 1,
+  "recorded_on": "2026-10-29",
+  "status": "verified-component-and-ci-boundaries-artifact-harness-blocked-at-native-anchor",
+  "scope": "G3 functional branch only: native-platform boundary CI restoration, NF08 leaf-probe statistics seeks, dev/test digest optimization and the C-reconstructed index Start reservation; no produced image, GWIN0 package, installed index run or native C activation",
+  "branch_policy": {
+    "branch": "feature/g3-functional-beta",
+    "branched_from": "b69e09385a919f074d3ba9dfce45fb561ef6ab6f",
+    "g2_testing_and_gwin0_branch": "feature/g3-gwin0-beta",
+    "owner_decision": "On 29 October 2026 the owner kept further sequence-19 G2 testing and GWIN0 completion on feature/g3-gwin0-beta and moved G3 functional development to this branch"
+  },
+  "implementation": [
+    "CI environment only (c658442, 4dadefd, 1425122, 42a3408): runner snapshots carry luma-content, luma-content-store, the two include_bytes fixture files and the src/, scripts/ and web/ sources native discovery reads; every Rust or harness container has a private mode-0700 ext4 storage root and a 640 MiB memlock bound; platform unit tests run serially; storage and TPM boundaries are separate jobs; the TPM job compiles all workspace test artifacts once before its timed tests; the diagnostics directory is handed to the runner user before upload",
+    "Dev/test build profile only (37ba720): the sha2 digest crate is optimized; every rehash and check and the release profile are unchanged",
+    "Statistics lower-bound seeks binary-search inside each fully validated leaf instead of descending from the root once per posting rank (ad4d8ce); every page is still read through the original live boundary, validated and rehashed, and no parsed or authorization cache is introduced",
+    "Fixture-only corrections (ad4d8ce): the admin peer fixture retries its own binding while libtest retires an earlier test thread; the staging harness gives its disposable container the laboratory release identity; the TPM harness removes the PAM profile it created",
+    "The closed worker publisher and historical replay compile into the test build under explicit dead-code allowances (dcc3264); nothing is dispatched",
+    "Slice 1: transition review DATA has one constructor shared by planning and C reconstruction; the C Start verifier reconstructs the first job from the selected owner and the current fixed builder, accepts only an exact Start request for an owner without a C-selected index leaf and re-proves the builder under the original boundary",
+    "Slice 1: the closed canonical Start reservation record (at most 64 KiB) binds base, request input, transition review, compiled metadata liability, capacity and original attribution; a failed or expired attempt retains the full liability; replay rebuilds it from fresh DATA under the current check and requires equality",
+    "Slice 1: the worker reserve path shares the phase-preparation finish step and refuses a token of the other kind; its event class compiles only in test builds and the direct reader refuses it before selecting that class"
+  ],
+  "exact_sources": {
+    "local_functional_snapshot": {
+      "commit": "b7e7789881f8ec98dc8d6e8fd93a06c7df31fd3d",
+      "tree_equals": "ad4d8ce"
+    },
+    "digest_timing_snapshot": {
+      "commit": "acbde47f0d47aef90d5f058cb41f93b1924cd6f5",
+      "tree_equals": "dcc3264"
+    },
+    "runner_snapshot": {
+      "commit": "de0f238396421ef9275a6f432c0c9d8c6bfdd992",
+      "native_directory_equals": "42a3408"
+    },
+    "slice1_snapshot": {
+      "commit": "fbab35e64c4d03df0eef3daa692272311afcb7df",
+      "parent_commit": "42a3408",
+      "rust_tree_rematched_before_commit": true
+    }
+  },
+  "verification": {
+    "environment": {
+      "container": "pinned tools image sha256:819dfe7772da1e3c76ffdc8f9ea4a1fa44c7c549bd4fa988e35d9397d87924b2",
+      "network": "none",
+      "memory_limit": "8g",
+      "cpu_limit": 6,
+      "cargo_build_jobs": 1,
+      "warnings_denied": true,
+      "storage": "Disposable private ext4 work directories on drive D",
+      "authority": "Explicit software boundaries, not installed original PAM, physical TPM or loaded LSM qualification"
+    },
+    "local_functional": {
+      "directory": "/mnt/d/LumaOS-builds/g3-functional-local-20261029-a",
+      "sha256sums_verified": true,
+      "admission_sha256": "ad91203a7ab7e7667f2dd25557e5475b12c1cc6a2a4020b6bed75ebcea5254a1",
+      "format_log_sha256": "35165172311a8fe9d28f16187a59e325768eafa096ca36efbdb9453c4640ef67",
+      "build_log_sha256": "b4e585f23b15033379524be67825123892aa5b7ba4a404bea128295beede8c45",
+      "content_and_store": {
+        "luma_content_passed": 102,
+        "luma_content_store_passed": 355,
+        "failed": 0,
+        "log_sha256": "f49e163fcd001a3b615bd35fd6c00312960fbbbd3fc62b2a1c27be84f528f9bf"
+      },
+      "luma_platform_serial": {
+        "passed": 1562,
+        "failed": 0,
+        "ignored": 42,
+        "seconds": 1518.08,
+        "log_sha256": "cae91838197e316293105697e20c4476835bf6c0a59a7cce732a64feb79a7a2d"
+      },
+      "admin_peer_fixture": {
+        "passed": 3,
+        "ignored": 2,
+        "log_sha256": "a6000b86df862021e6c089f9a9db4ad32d358581e389ed5b190d7e72833f1dd3"
+      },
+      "store_statistics": {
+        "passed": 7,
+        "seconds": 140.59,
+        "fixture": "65 documents, 80 terms, 5,200 rows",
+        "measured_seek_read_bytes": {
+          "rank_probe": 78360930,
+          "leaf_probe": 37834212
+        },
+        "rank_bounds_identical": true,
+        "log_sha256": "aab8e7e25bdbb5b53811f5ffdae91f185377dc1bd1eba138761d89c441226802"
+      },
+      "store_vectors_seek": {
+        "passed": 1,
+        "log_sha256": "8a96ffe57da90e83186961dddb9a7691fab7a232448a029d6ad54df50da0ba1c"
+      },
+      "real_linux_staging": {
+        "passed": true,
+        "cases": 9,
+        "step_seconds": 200,
+        "binary_sha256": "a6529a4d199049789b2872a18eea576a26ab230a45528e66aecc04ee1b333ba7",
+        "runner_sha256": "2ccb4c78e015cd46cab84b5316ccf03a48dc4406ec3e88d1a1cb902da01ced70",
+        "physical_power_loss_tested": false,
+        "image_tested": false,
+        "log_sha256": "773c57bab8cdffb0ccbe4158d74dbf471ac7e7e263d7f89e506a0f26617d56b4"
+      },
+      "native_python_tests": {
+        "ran": 966,
+        "passed": true,
+        "skipped": 2,
+        "log_sha256": "d49cd4a6e566a81c2bc616a825d5cd5019d12e05b81166d0354f67d335ec3d53"
+      }
+    },
+    "dev_test_digest_timing": {
+      "directory": "/mnt/d/LumaOS-builds/g3-sha2-timing-20261029-a",
+      "sha256sums_verified": true,
+      "admission_sha256": "7270639cf4cf87c65af617ff6fbe687a0733b40084e45ffebca19e8442290f49",
+      "build_log_sha256": "74e053cac7ce527667f1f463f706735b702d1d2e46646d676b7b19815de00cd5",
+      "build_tests_log_sha256": "53c902f40f731f1c1ceb586a4964c66f6fc92ebb8fdae99a363838acc3b14726",
+      "binary_sizes_log_sha256": "5e99641f14dca1d292e4a588118893b832af84552fb3b094c7bdc08c23716275",
+      "real_linux_staging": {
+        "passed": true,
+        "cases": 9,
+        "step_seconds": 35,
+        "log_sha256": "4b5dc440f78a023b7d3cc45417d5544e36c46b10de1c378d2d9bb402c1788e9f"
+      },
+      "pam_kernel_peer_software_tpm_catalog": {
+        "passed": true,
+        "catalog_test_seconds": 96.14,
+        "marker": "ADMIN_SERVICE_PAM_KERNEL_PEER_TPM_CATALOG_PASSED installed_service_tested=false confinement_enforced=false",
+        "log_sha256": "2fcbc6ec7f770b5d99d6a336e68e9e4f7bf9d186b1681e18b917a1ee00768ef3"
+      },
+      "release_profile_changed": false
+    },
+    "runner_snapshots": {
+      "directory": "/mnt/d/LumaOS-builds/g3-runner-snapshot-20261029-a",
+      "sha256sums_verified": true,
+      "admission_sha256": "b79aef89c275c5453005dacc49d57649190a91fda27ff1fe94e5d7249b22e876",
+      "native_discover_per_runner": {
+        "ran": 966,
+        "skipped": 2,
+        "failures": 0
+      },
+      "log_sha256": {
+        "recovery_export": "d7e9b26b56d3e4099a7c1698ca3bb87d7ffc73147d152dbd4d5dfd6f05559628",
+        "storage": "42fb486b9df6a327dfc9a7d9a8ebe752b39bfc0c66888151020bb230cf0829e1",
+        "tpm": "93702f9ab6913f4872e3a88a67ac35f4f90cfa1e5e2cdc3b165e4d2b623655e9"
+      }
+    },
+    "slice1_start_reservation": {
+      "directory": "/mnt/d/LumaOS-builds/g3-slice1-check-20261029-c",
+      "commit": "fbab35e64c4d03df0eef3daa692272311afcb7df",
+      "sha256sums_verified": true,
+      "admission_sha256": "100e55254d8b6d23f544537c73c4bd90fbfe98fab5cf5378c200bef86555a88f",
+      "format_check": {
+        "passed": true,
+        "diff_lines": 0,
+        "log_sha256": "19ea0b0e03c940bd05b70bfaeffc7ca45681befb88f1de4347b3ac7531a32ad2"
+      },
+      "warning_denied_test_build": {
+        "passed": true,
+        "log_sha256": "9bfff8ade2bb288228591100f5cdf21a5c52670239895c8c59578e263bde1505"
+      },
+      "custody_v2_publication_tests": {
+        "passed": 100,
+        "failed": 0,
+        "filtered_out": 1511,
+        "seconds": 730.32,
+        "log_sha256": "2d6a0e67596fad14ced44bd7fe4597bb4aa031a8ba8d433357ee3f78d3547e9d"
+      },
+      "custody_indexed_tests": {
+        "passed": 12,
+        "failed": 0,
+        "filtered_out": 1599,
+        "log_sha256": "5b49cc90b6e8c4660caf9dd780d40440e303a356b3826108b0b770024af9075b"
+      },
+      "new_tests": [
+        "start_reservation_is_canonical_closed_data_with_exact_metadata_liability",
+        "start_replay_refuses_changed_builder_before_input_and_current_callback",
+        "start_transition_requires_exact_selected_owner_without_index_leaf",
+        "start_reservation_refuses_relabelled_attribution_and_uncovered_capacity",
+        "start_verifier_reconstructs_reservation_from_selected_owner_and_fixed_builder",
+        "start_verifier_refuses_selected_leaf_stale_owner_purpose_builder_and_c_cut",
+        "start_verifier_fails_closed_at_every_original_operation_check"
+      ],
+      "total_platform_tests_in_build": 1611,
+      "full_platform_suite_run_locally": false,
+      "full_platform_suite_expected_in_ci": true,
+      "dispatched": false
+    },
+    "ci_run": {
+      "run_id": 40897723467,
+      "head_sha": "42a3408cc6df712533653e362de1c6be1fe3307b",
+      "storage_boundaries": {
+        "job_id": 123531279199,
+        "conclusion": "success"
+      },
+      "tpm_boundaries": {
+        "job_id": 123531279757,
+        "conclusion": "success"
+      },
+      "rust_boundaries": {
+        "job_id": 123531279565,
+        "conclusion": "failure",
+        "passed_before_block": {
+          "luma_content": 102,
+          "luma_content_store": 355,
+          "luma_platform": 1562,
+          "luma_platform_ignored": 42
+        },
+        "blocked_at": "Native artifact-read in the artifact CLI harness exited 1 (luma-platform: No such file or directory (os error 2)), as in the 22 October record: production activation requires the installed Admin anchor lock, Admin credentials and a local TPM",
+        "required_environment": "TPM-backed installed laboratory with an enrolled Admin anchor; the disposable container has no TPM by design and the gate is not bypassed"
+      }
+    }
+  },
+  "not_claimed": [
+    "The 100000-object/500-ms NF08 measurement",
+    "An installed index run, native C activation or a dispatched Start reservation",
+    "Delta overlay, snapshot backup delivery or a V2 owner creation route",
+    "Resolution of parallel luma-platform test interference",
+    "Artifact CLI harness passage, installed PAM, physical TPM, loaded LSM or Hyper-V qualification",
+    "Any produced image or GWIN0 package; G3 and GWIN0 remain open"
+  ],
+  "retained_failed_attempts": [
+    {
+      "ci_runs": [40832981549, 40833992243, 40835065813, 40845335802, 40891033836],
+      "head_shas": ["c658442", "4dadefd", "1425122", "ad4d8ce", "dcc3264"],
+      "cause": "All three boundary jobs failed on each run. Successive runs exposed embedded fixture files missing from runner snapshots, a 240 s TPM test deadline consumed by compiling from an empty target, boundary fixture interference, timeouts from unoptimized boundary rehashing, and native discovery missing src/, scripts/ and web/; the rust job also stops at native artifact-read",
+      "correction": "The successive CI-environment and dev/test-profile commits listed in implementation; no production check changed"
+    },
+    {
+      "directory": "/mnt/d/LumaOS-builds/g3-ci-repro-20261029-a",
+      "commit": "b69e093",
+      "logs": {
+        "admission": "d5c7f8a3afcd63434b65d124571e58d25a709d323ba42f67e97754b75b87ef7a",
+        "platform_parallel": "b8e18b6b223f15a157aa3c2bfb76492c1baa7f1a84086948fe0e4b7ce06c6e8c",
+        "platform_serial": "12e6af9a322ddd22c99becc355d459d10a86844af760fd87f8d73ca79fa69de1"
+      },
+      "cause": "Under an 8 GiB cap with default build jobs and full test debug info, rustc was killed (SIGKILL) while compiling the luma-platform test binary in both runs; no test ran",
+      "correction": "Later local runs kept the 8 GiB cap with one build job and no dev/test debug info; the release profile is unchanged"
+    },
+    {
+      "directory": "/mnt/d/LumaOS-builds/g3-slice0-check-20261029-a",
+      "commit": "829a7134ea292eac9bc6f262f41522d6f2b4cdef",
+      "logs": {
+        "format": "f7c02972be290911cba5225893b3130e8b3aaf4c5c5309191af0dc6c3d530156",
+        "check": "074848efb61faedb58ec379642ae033da36cb3c7b7dda1e425e0a79686134d2f"
+      },
+      "cause": "The format container refused an invalid rw mount field; the test build failed on a private inventory walk and Roots::role used by the newly compiled worker publisher",
+      "correction": "Widen only those two helpers to pub(super)"
+    },
+    {
+      "directory": "/mnt/d/LumaOS-builds/g3-slice0-fmt-20261029-a",
+      "commit": "4d2eb45ebfd66ff1e21ff4ea5aafbdd7590b3aaa",
+      "logs": {
+        "format": "df161f9465a096996c707bf6fd58318ebae8cbd7f8d6ccdb61ce0bec355726a1",
+        "diff": "1182fe1450b772f53249bf47ee2af4d34eb11da7e605dbc33ab604112e7d768b",
+        "typecheck_attempt_a_passed": "dcde0054ab1e18f7becfb464edd70a94a79a675a1ab3fe0ff6e32007eb4c3669"
+      },
+      "cause": "selected.rs was not rustfmt-formatted (317 diff lines); the typecheck on the same snapshot passed",
+      "correction": "rustfmt selected.rs; attempts b (format clean, 1f920f7ab4bfc9ea4bc6a53ce4b33a08400e9c842d8770411bd0b03917f3edb1) and typecheck b (331c4b5ca30e9b0db6c16db844196af46227c85083f8b805b99d1cb29615f987) passed"
+    },
+    {
+      "directory": "/mnt/d/LumaOS-builds/g3-slice0-fmt-20261029-c",
+      "commit": "f00af57b9bb4ca3fcc64da3ea889e851af93de11",
+      "logs": {
+        "format": "2476b1a3e6cdd5105fcb72899d69d15c94b516ab85ab7b6e93b1b74c9c485493",
+        "diff": "1f5f558c90c4d5e82ab74871d5d32a8deae7a4200bdf9b75769c56eced93e1c7"
+      },
+      "cause": "Early Slice 1 sources were not rustfmt-formatted (112 diff lines)",
+      "correction": "Reformat"
+    },
+    {
+      "directory": "/mnt/d/LumaOS-builds/g3-slice0-fmt-20261029-d",
+      "commit": "43b1bf509738a919b851aa0f5eb6ac90b763aa78",
+      "logs": {
+        "format": "91227075931b60b9f01a45c240f89e9021f0b3fe41706d43baf3aae76642141c",
+        "diff": "2fa57c6a3b6baadb338809b6c47411ed0f807e1ed50daac464f7ec0513398910"
+      },
+      "cause": "Slice 1 sources still had 15 unformatted diff lines",
+      "correction": "Reformat"
+    },
+    {
+      "directory": "/mnt/d/LumaOS-builds/g3-slice1-check-20261029-a",
+      "commit": "de0f238396421ef9275a6f432c0c9d8c6bfdd992",
+      "logs": {
+        "admission": "60d7e163de91f21b7035c0bf1af3015c391485489053f2cfd6bd64cdd4d8b6d3",
+        "format": "3012946aa8895013f332fc9eaf1ad5731a5e3fc7810c8936f68d84a1c588fe34",
+        "diff": "63c7f12b618f69b56965e4b4ced0a316c860f0f04a6c56a841a006f6bcbfe7c1",
+        "build_tests": "93b50aba85c3ceb175fe2ee5ed40dd011c32c43e2dfd3ff44ca4651caaec4692",
+        "v2_publication_tests_93_passed": "e7740d2000d3daf16cca95adb907e40994ae1e1e06bf1e8c8fa23e005179d03c",
+        "indexed_tests_12_passed": "ca22936450299b45973a88ae389ad63d629bbadd416f5fc449da68fa625d148f"
+      },
+      "cause": "The Slice 1 snapshot before its new tests had 98 unformatted diff lines; the build and existing filtered tests passed",
+      "correction": "Reformat and add the seven Start reservation tests"
+    },
+    {
+      "directory": "/mnt/d/LumaOS-builds/g3-slice1-check-20261029-b",
+      "commit": "fbab35e64c4d03df0eef3daa692272311afcb7df",
+      "logs": {
+        "admission": "fc60398350f67d48a5762707f112c999f34eaacea25a033195d0ccc1ea24ba3c",
+        "format": "8b7d5b4d00941fbca901a8bc01fe276722e351b6b72e6cf4c80c6689f27bda41",
+        "build_tests": "357fefc5a74d96abe99a4f3648b0ee2494e0f2a30e481f93867c117e151ed848",
+        "filtered_test_1": "786e5d839b827c1cc17a98e05a47967518aa92390471b248556f5cf8a8b68289",
+        "filtered_test_2": "fe19eab30892c45e91a244986d8919d9fea6333e4061090e8f415649b4b518a9"
+      },
+      "cause": "Format was clean and the warning-denied test build passed, but the filters used the file path content_custody:: instead of the module path custody::, so 0 of 1611 tests ran",
+      "correction": "Rerun the same snapshot with the module-path filters (attempt c)"
+    }
+  ]
+}

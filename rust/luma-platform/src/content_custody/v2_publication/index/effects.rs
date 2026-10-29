@@ -10,6 +10,11 @@ use luma_content_store::v2::{ObjectWriteSpec, PhysicalInventory};
 mod inventory;
 use inventory::{InventoryPlan, InventoryRoot};
 
+// The C Start reservation record awaits its only producer and replay,
+// the direct C index publisher and the cold direct C reader.
+#[allow(dead_code)]
+#[path = "effects/job.rs"]
+mod job;
 // The semantic proof awaits its only consumer, the direct C index publisher;
 // it is neither dispatched nor yet exercised by the publisher's tests.
 #[allow(dead_code)]
@@ -17,7 +22,8 @@ use inventory::{InventoryPlan, InventoryRoot};
 mod verification;
 #[allow(unused_imports)]
 pub(in crate::content_checkpoint::custody::v2_publication) use verification::{
-    verify_index_preparation, PreparationView, VerifiedIndexPreparation,
+    verify_index_preparation, verify_index_start, CurrentBuilder, PreparationView, PreparedKind,
+    VerifiedIndexPreparation,
 };
 // Historical replay awaits its only consumer, the cold direct C reader; it is
 // neither dispatched nor yet exercised by tests.

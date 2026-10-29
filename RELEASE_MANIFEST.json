@@ -151,6 +151,7 @@
     "docs/gates/g3/nf08_index_pipeline_core_2026-10-21.json",
     "docs/gates/g3/nf08_observed_readers_2026-10-21.json",
     "docs/gates/g3/nf08_owner_snapshot_2026-10-21.json",
+    "docs/gates/g3/nf08_seek_and_ci_boundaries_2026-10-29.json",
     "docs/gates/g3/nf08_statistics_2026-10-21.json",
     "docs/gates/g3/nf08_windows_and_jobs_2026-10-21.json",
     "docs/gates/g3/quality_protocol_2026-10-20.json",

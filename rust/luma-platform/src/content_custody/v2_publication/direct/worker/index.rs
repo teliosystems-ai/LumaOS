@@ -80,9 +80,49 @@ pub(super) fn prepare<A: Checkpoint>(
         plan,
         original,
     )?;
+    finish(
+        backend,
+        input,
+        proof,
+        effects::PreparedKind::Phase,
+        original,
+    )
+}
+pub(super) fn start<A: Checkpoint>(
+    backend: &mut Backend<A>,
+    input: &request::Input,
+    builder: &impl effects::CurrentBuilder,
+    original: &mut OriginalCOperation<'_>,
+) -> Result<VerifiedTransition> {
+    original.check()?;
+    let proof = effects::verify_index_start(
+        &mut View {
+            backend,
+            remaining: READ_BUDGET,
+        },
+        input,
+        builder,
+        original,
+    )?;
+    finish(
+        backend,
+        input,
+        proof,
+        effects::PreparedKind::Start,
+        original,
+    )
+}
+fn finish<A: Checkpoint>(
+    backend: &mut Backend<A>,
+    input: &request::Input,
+    proof: effects::VerifiedIndexPreparation,
+    kind: effects::PreparedKind,
+    original: &mut OriginalCOperation<'_>,
+) -> Result<VerifiedTransition> {
     let parts = proof.into_parts();
     let selected = Selector::for_descriptor(&backend.descriptor)?;
-    if parts.base != selected
+    if parts.kind != kind
+        || parts.base != selected
         || parts.owner_root != backend.descriptor.roots.owners
         || parts.index_root != backend.descriptor.roots.index_generations
         || parts.original_authority != *original.audit()
@@ -145,13 +185,29 @@ pub(super) fn prepare<A: Checkpoint>(
     let mut context = backend.context()?;
     context.review_sha256 = Some(parts.input_sha256.clone());
     let request_sha256 = original.source_binding().request_sha256.clone();
-    let operation = OperationData::IndexPreparation {
-        binding: parts.binding,
-        request_sha256: request_sha256.clone(),
-        input_sha256: parts.input_sha256.clone(),
-        source_sha256: parts.source_sha256.clone(),
-        preparation: parts.preparation.clone(),
-        original_authority: parts.original_authority,
+    let (operation, outcome) = match kind {
+        effects::PreparedKind::Phase => (
+            OperationData::IndexPreparation {
+                binding: parts.binding,
+                request_sha256: request_sha256.clone(),
+                input_sha256: parts.input_sha256.clone(),
+                source_sha256: parts.source_sha256.clone(),
+                preparation: parts.preparation.clone(),
+                original_authority: parts.original_authority,
+            },
+            Completed::IndexPreparation(parts.preparation),
+        ),
+        effects::PreparedKind::Start => (
+            OperationData::IndexJobReservation {
+                binding: parts.binding,
+                request_sha256: request_sha256.clone(),
+                input_sha256: parts.input_sha256.clone(),
+                source_sha256: parts.source_sha256.clone(),
+                reservation: parts.preparation.clone(),
+                original_authority: parts.original_authority,
+            },
+            Completed::IndexJobReservation(parts.preparation),
+        ),
     };
     operation.validate()?;
     let mut cache = Memory {
@@ -211,6 +267,6 @@ pub(super) fn prepare<A: Checkpoint>(
             literal: parts.owner_literal,
             value: parts.expected_owner_value,
         }],
-        outcome: Completed::IndexPreparation(parts.preparation),
+        outcome,
     })
 }

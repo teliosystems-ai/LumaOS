@@ -131,6 +131,7 @@ impl<A: Checkpoint> Backend<A> {
                 super::resume::verify_current(&mut anchor,&files,&pages,&binding,check)?.0,
             OperationData::V1Publication{..}=>return Err("direct reader requires independent publication lineage before selecting this event class".into()),
             OperationData::IndexPreparation{..}=>return Err("direct reader requires independently reconstructed index preparation lineage before selecting this event class".into()),
+            OperationData::IndexJobReservation{..}=>return Err("direct reader requires independently reconstructed index Start reservation lineage before selecting this event class".into()),
         }
         };
         if cut.descriptor().bytes()? != expected {

@@ -2,7 +2,10 @@
 //! reads come only from its current original-operation backend. This proof is
 //! NOT writer Go: actual C allocation/tails, owner creation observation and the
 //! single durable C dispatch must all finish before a worker can write.
+use super::job::JobReservation;
 use super::*;
+use crate::content_index::builder::FixedBuilder;
+use luma_content_store::corpus_index::BuilderIdentity;
 
 pub(in crate::content_checkpoint::custody::v2_publication) trait PreparationView {
     fn current(&mut self, original: &mut OriginalCOperation<'_>) -> Result<(Selector, Descriptor)>;
@@ -21,11 +24,18 @@ pub(in crate::content_checkpoint::custody::v2_publication) trait PreparationView
 }
 
 /// There is no public constructor, decoder, Clone or authorization conversion.
-/// Only verify_index_preparation below constructs this semantic token.
+/// Only the two verifiers below construct this semantic token.
 pub(in crate::content_checkpoint::custody::v2_publication) struct VerifiedIndexPreparation {
     parts: PreparationParts,
 }
+/// The closed record class a token's C event must anchor.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::content_checkpoint::custody::v2_publication) enum PreparedKind {
+    Phase,
+    Start,
+}
 pub(in crate::content_checkpoint::custody::v2_publication) struct PreparationParts {
+    pub(in crate::content_checkpoint::custody::v2_publication) kind: PreparedKind,
     pub(in crate::content_checkpoint::custody::v2_publication) base: Selector,
     pub(in crate::content_checkpoint::custody::v2_publication) owner_root: map::Root,
     pub(in crate::content_checkpoint::custody::v2_publication) index_root: map::Root,
@@ -70,7 +80,7 @@ fn checked_record(
 
 fn original_data(
     input: &request::Input,
-    review: &phase::WindowReview,
+    review_sha256: &str,
     original: &mut OriginalCOperation<'_>,
 ) -> Result<Attribution> {
     original.check()?;
@@ -78,7 +88,7 @@ fn original_data(
     if source.schema_version != 1
         || source.purpose != SourcePurpose::IndexPrepare
         || source.binding != input.binding
-        || source.profile != input.effect_profile(&review.review_sha256)?
+        || source.profile != input.effect_profile(review_sha256)?
     {
         return Err(
             "index prewrite requires its genuine original IndexPrepare purpose/source".into(),
@@ -101,27 +111,42 @@ fn original_data(
         )?,
         effect: original.audit().clone(),
     };
-    value.validate(input, &review.review_sha256)?;
+    value.validate(input, review_sha256)?;
     // The calculated Read Use is merely attribution DATA. This fresh original
     // callback re-proves the real independent pair held by GrantBoundary.
     original.check()?;
     Ok(value)
 }
 
-/// The plan is an opaque C-reconstructed Plan, never worker JSON. The actual
-/// direct backend must additionally enforce its finite aggregate read budget
-/// before every RPC and prove the same original selected location/NV cut.
-pub(in crate::content_checkpoint::custody::v2_publication) fn verify_index_preparation(
+/// The exact current selected C owner, observed under the original boundary.
+struct Observed {
+    base: Selector,
+    descriptor: Descriptor,
+    literal: Vec<u8>,
+    owner_value: Vec<u8>,
+    head: OwnerHeadV2,
+    physical: PhysicalInventory,
+    index_value: Option<Vec<u8>>,
+}
+impl Observed {
+    fn before(&self, index_sha256: Option<String>) -> Result<Base> {
+        Ok(Base {
+            binding: self.head.binding.clone(),
+            descriptor_sha256: self.base.descriptor_sha256.clone(),
+            nv_head: self.base.nv_head.clone(),
+            owner_sha256: self.head.sha256()?,
+            physical: self.physical.clone(),
+            segments: self.head.history.segments,
+            index_sha256,
+        })
+    }
+}
+
+fn observe(
     view: &mut impl PreparationView,
     input: &request::Input,
-    plan: &phase::Plan,
     original: &mut OriginalCOperation<'_>,
-) -> Result<VerifiedIndexPreparation> {
-    original.check()?;
-    input.validate()?;
-    let review = plan.review()?;
-    let attributed = original_data(input, &review, original)?;
-    let objects = plan.planned_objects(|| original.check())?;
+) -> Result<Observed> {
     original.check()?;
     let (base, descriptor) = view.current(original)?;
     original.check()?;
@@ -167,7 +192,93 @@ pub(in crate::content_checkpoint::custody::v2_publication) fn verify_index_prepa
     original.check()?;
     let index_value = view.value(&descriptor.roots.index_generations, &literal, original)?;
     original.check()?;
-    let leaf = if let Some(bytes) = &index_value {
+    Ok(Observed {
+        base,
+        descriptor,
+        literal,
+        owner_value,
+        head,
+        physical,
+        index_value,
+    })
+}
+
+/// The exact next leaf record and its one bounded indirect C map reference.
+fn replacement(leaf: &Leaf, binding: &OwnerBinding) -> Result<(Vec<u8>, (RecordRef, Vec<u8>))> {
+    leaf.validate(binding)?;
+    let leaf_bytes = serde_json::to_vec(leaf)?;
+    let leaf_ref = RecordRef {
+        sha256: hash(&leaf_bytes),
+        bytes: leaf_bytes.len() as u64,
+    };
+    let value = serde_json::to_vec(&Reference {
+        schema_version: 2,
+        binding: binding.clone(),
+        record: leaf_ref.clone(),
+    })?;
+    Reference::parse(&value, binding)?;
+    Ok((value, (leaf_ref, leaf_bytes)))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn deliver(
+    view: &mut impl PreparationView,
+    observed: Observed,
+    input: &request::Input,
+    kind: PreparedKind,
+    replacement_index_value: Vec<u8>,
+    records: Vec<(RecordRef, Vec<u8>)>,
+    preparation: RecordRef,
+    original: &mut OriginalCOperation<'_>,
+) -> Result<VerifiedIndexPreparation> {
+    // This is only a semantic proof. The publisher counts ALL actual generated
+    // location/map/event/descriptor/tail slots too and refuses before writing
+    // when the complete plan cannot fit its existing 256-slot window.
+    original.check()?;
+    let (again, actual) = view.current(original)?;
+    original.check()?;
+    if again != observed.base || actual != observed.descriptor {
+        return Err("C selection changed before preparation semantic proof delivery".into());
+    }
+    Ok(VerifiedIndexPreparation {
+        parts: PreparationParts {
+            kind,
+            base: observed.base,
+            owner_root: observed.descriptor.roots.owners,
+            index_root: observed.descriptor.roots.index_generations,
+            owner_literal: observed.literal,
+            expected_owner_value: observed.owner_value,
+            expected_index_value: observed.index_value,
+            replacement_index_value,
+            records,
+            preparation,
+            binding: input.binding.clone(),
+            input_sha256: input.sha256()?,
+            source_sha256: hash(&serde_json::to_vec(&(
+                "luma-c-original-worker-source-v1",
+                original.source_binding(),
+            ))?),
+            original_authority: original.audit().clone(),
+        },
+    })
+}
+
+/// The plan is an opaque C-reconstructed Plan, never worker JSON. The actual
+/// direct backend must additionally enforce its finite aggregate read budget
+/// before every RPC and prove the same original selected location/NV cut.
+pub(in crate::content_checkpoint::custody::v2_publication) fn verify_index_preparation(
+    view: &mut impl PreparationView,
+    input: &request::Input,
+    plan: &phase::Plan,
+    original: &mut OriginalCOperation<'_>,
+) -> Result<VerifiedIndexPreparation> {
+    original.check()?;
+    input.validate()?;
+    let review = plan.review()?;
+    let attributed = original_data(input, &review.review_sha256, original)?;
+    let objects = plan.planned_objects(|| original.check())?;
+    let observed = observe(view, input, original)?;
+    let leaf = if let Some(bytes) = &observed.index_value {
         let reference = Reference::parse(bytes, &input.binding)?;
         Leaf::parse(
             &checked_record(view, &reference.record, LEAF_BYTES, original)?,
@@ -190,15 +301,7 @@ pub(in crate::content_checkpoint::custody::v2_publication) fn verify_index_prepa
     if job_reference.sha256 != review.base_sha256 {
         return Err("index plan does not start from the exact C-selected job".into());
     }
-    let before = Base {
-        binding: input.binding.clone(),
-        descriptor_sha256: base.descriptor_sha256.clone(),
-        nv_head: base.nv_head.clone(),
-        owner_sha256: head.sha256()?,
-        physical,
-        segments: head.history.segments,
-        index_sha256: Some(leaf.sha256()?),
-    };
+    let before = observed.before(Some(leaf.sha256()?))?;
     let (preparation, inventory) =
         Preparation::data(&before, input, &review, &objects, &attributed, &mut || {
             original.check()
@@ -213,48 +316,105 @@ pub(in crate::content_checkpoint::custody::v2_publication) fn verify_index_prepa
     };
     let mut next_leaf = leaf;
     next_leaf.preparation = Some(reference.clone());
-    next_leaf.validate(&input.binding)?;
-    let leaf_bytes = serde_json::to_vec(&next_leaf)?;
-    let leaf_ref = RecordRef {
-        sha256: hash(&leaf_bytes),
-        bytes: leaf_bytes.len() as u64,
-    };
-    let replacement = serde_json::to_vec(&Reference {
-        schema_version: 2,
-        binding: input.binding.clone(),
-        record: leaf_ref.clone(),
-    })?;
-    Reference::parse(&replacement, &input.binding)?;
+    let (value, leaf_record) = replacement(&next_leaf, &input.binding)?;
     let mut records = inventory.pages().to_vec();
     records.push((reference.clone(), bytes));
-    records.push((leaf_ref, leaf_bytes));
-    // This is only a semantic proof. The publisher counts ALL actual generated
-    // location/map/event/descriptor/tail slots too and refuses before writing
-    // when the complete plan cannot fit its existing 256-slot window.
-    original.check()?;
-    let (again, actual) = view.current(original)?;
-    original.check()?;
-    if again != base || actual != descriptor {
-        return Err("C selection changed before preparation semantic proof delivery".into());
+    records.push(leaf_record);
+    deliver(
+        view,
+        observed,
+        input,
+        PreparedKind::Phase,
+        value,
+        records,
+        reference,
+        original,
+    )
+}
+
+/// The fixed image builder as currently re-proved under the original boundary.
+pub(in crate::content_checkpoint::custody::v2_publication) trait CurrentBuilder {
+    fn identity(&self) -> &BuilderIdentity;
+    fn check(&self, original: &mut OriginalCOperation<'_>) -> Result<()>;
+}
+impl CurrentBuilder for FixedBuilder {
+    fn identity(&self) -> &BuilderIdentity {
+        FixedBuilder::identity(self)
     }
-    Ok(VerifiedIndexPreparation {
-        parts: PreparationParts {
-            base,
-            owner_root: descriptor.roots.owners,
-            index_root: descriptor.roots.index_generations,
-            owner_literal: literal,
-            expected_owner_value: owner_value,
-            expected_index_value: index_value,
-            replacement_index_value: replacement,
-            records,
-            preparation: reference,
-            binding: input.binding.clone(),
-            input_sha256: input.sha256()?,
-            source_sha256: hash(&serde_json::to_vec(&(
-                "luma-c-original-worker-source-v1",
-                original.source_binding(),
-            ))?),
-            original_authority: original.audit().clone(),
-        },
-    })
+    fn check(&self, original: &mut OriginalCOperation<'_>) -> Result<()> {
+        FixedBuilder::check(self, || original.check())
+    }
+}
+
+/// A first index job is reconstructed by C from the selected owner and the
+/// current fixed builder; only an owner without any C-selected index leaf may
+/// reserve one. The new leaf selects no job or generation, only the charge.
+pub(in crate::content_checkpoint::custody::v2_publication) fn verify_index_start(
+    view: &mut impl PreparationView,
+    input: &request::Input,
+    builder: &impl CurrentBuilder,
+    original: &mut OriginalCOperation<'_>,
+) -> Result<VerifiedIndexPreparation> {
+    original.check()?;
+    input.validate()?;
+    if !matches!(input.operation, request::Operation::Start { .. }) {
+        return Err("index job reservation requires an exact Start request".into());
+    }
+    builder.check(original)?;
+    let identity = builder.identity().clone();
+    let observed = observe(view, input, original)?;
+    if observed.index_value.is_some() {
+        return Err(
+            "index Start reservation requires an owner without a C-selected index leaf".into(),
+        );
+    }
+    let before = observed.before(None)?;
+    let transition =
+        JobReservation::transition_data(&before, &observed.head, input, &identity, &mut || {
+            original.check()
+        })?;
+    let attributed = original_data(input, &transition.review_sha256, original)?;
+    let reservation = JobReservation::data(
+        &before,
+        &observed.head,
+        input,
+        &identity,
+        &attributed,
+        &mut || original.check(),
+    )?;
+    reservation.replay_data(
+        &before,
+        &observed.head,
+        input,
+        &identity,
+        &attributed,
+        &mut || original.check(),
+    )?;
+    builder.check(original)?;
+    if builder.identity() != &identity {
+        return Err("fixed index builder changed during Start reservation".into());
+    }
+    let bytes = reservation.bytes()?;
+    let reference = RecordRef {
+        sha256: hash(&bytes),
+        bytes: bytes.len() as u64,
+    };
+    let next_leaf = Leaf {
+        schema_version: 2,
+        binding: input.binding.clone(),
+        current_generation: None,
+        current_job: None,
+        preparation: Some(reference.clone()),
+    };
+    let (value, leaf_record) = replacement(&next_leaf, &input.binding)?;
+    deliver(
+        view,
+        observed,
+        input,
+        PreparedKind::Start,
+        value,
+        vec![(reference.clone(), bytes), leaf_record],
+        reference,
+        original,
+    )
 }

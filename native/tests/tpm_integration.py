@@ -147,6 +147,9 @@ def main():
             pam_profile.write_bytes(b'auth sufficient pam_permit.so\naccount sufficient pam_permit.so\n')
             run(pam_test)
             pam_profile.write_bytes(expected_pam)
+            # Remove only the profile this fixture created. Later boundary
+            # harnesses share this container and refuse any existing profile.
+            pam_profile.unlink()
             # Disposable PCR-policy signer, distinct from release/firmware
             # keys; never exported and never used for production approval.
             run(['openssl', 'genpkey', '-algorithm', 'RSA', '-pkeyopt', 'rsa_keygen_bits:2048', '-out', work/'pcr-private.pem'])

@@ -169,6 +169,63 @@ fn actual_sixteen_way_merge_resumes_multiple_output_windows_and_computes_df() {
 }
 
 #[test]
+fn leaf_probe_seeks_match_exact_rank_bounds_with_fewer_measured_reads() {
+    use selected::SelectedPostingReader;
+    let text = (0..80)
+        .map(|i| format!("term{i:04}"))
+        .collect::<Vec<_>>()
+        .join(" ");
+    let texts: Vec<&str> = (0..65).map(|_| text.as_str()).collect();
+    let (_fixture, store, mut b) = setup(&texts);
+    complete(&store, &mut b);
+    let (request, selected) = (b.request.clone(), b.selected.clone());
+    let mut reader =
+        SelectedPostingReader::open(&store, &request, &selected, 512 * 1024 * 1024, &mut b)
+            .unwrap();
+    let mut all = Vec::new();
+    while (all.len() as u64) < reader.count() {
+        all.extend(reader.range(all.len() as u64, 4096).unwrap());
+    }
+    // 5200 rows span many 96-row leaves under a multi-level merged tree.
+    assert_eq!(all.len(), 5200);
+    let mut terms: Vec<String> = (0..80).map(|i| format!("term{i:04}")).collect();
+    terms.push("notpresent".into());
+    let (mut leaf_probe, mut rank_probe) = (0, 0);
+    for term in &terms {
+        for document in [0, 1, 32, 64, 65, u32::MAX] {
+            let target = (bucket(term), term.clone(), document);
+            let expected = all.iter().filter(|row| posting_key(row) < target).count() as u64;
+            let before = reader.read_bytes();
+            assert_eq!(reader.lower_bound(term, document).unwrap(), expected);
+            let after = reader.read_bytes();
+            leaf_probe += after - before;
+            // The former seek: a full root descent for every single-rank
+            // probe, followed by the same adjacent-boundary proof.
+            let (mut low, mut high) = (0, reader.count());
+            while low < high {
+                let middle = low + (high - low) / 2;
+                let row = reader.range(middle, 1).unwrap().pop().unwrap();
+                if posting_key(&row) < target {
+                    low = middle + 1;
+                } else {
+                    high = middle;
+                }
+            }
+            assert_eq!(low, expected);
+            if low != 0 {
+                reader.range(low - 1, 1).unwrap();
+            }
+            if low < reader.count() {
+                reader.range(low, 1).unwrap();
+            }
+            rank_probe += reader.read_bytes() - after;
+        }
+    }
+    eprintln!("seek measured reads: leaf probe {leaf_probe}, rank probe {rank_probe}");
+    assert!(leaf_probe < rank_probe);
+}
+
+#[test]
 fn df_counts_documents_not_term_frequency_and_top512_ties_match_existing_profile() {
     let text = (0..700)
         .map(|i| format!("term{i:04} term{i:04}"))

@@ -33,6 +33,10 @@ impl Node {
         }
     }
 }
+enum NodePage {
+    Leaf(Vec<IngestPosting>),
+    Branch(Vec<Node>),
+}
 pub struct SelectedPostingReader<'a, B: CorpusIndexBoundary> {
     store: &'a dyn IndexReadStore,
     request: &'a StatisticsRequest,
@@ -201,12 +205,9 @@ impl<'a, B: CorpusIndexBoundary> SelectedPostingReader<'a, B> {
         self.current()?;
         Ok(result)
     }
-    fn range_node(
-        &mut self,
-        node: &Node,
-        range: std::ops::Range<u64>,
-        output: &mut Vec<IngestPosting>,
-    ) -> Result<()> {
+    /// Reads one node page and validates its complete leaf rows or exact child
+    /// coverage before any row or child is returned. Every caller uses this.
+    fn node_page(&mut self, node: &Node) -> Result<NodePage> {
         if node.count() == 0
             || node.height() > 12
             || node
@@ -271,17 +272,15 @@ impl<'a, B: CorpusIndexBoundary> SelectedPostingReader<'a, B> {
                 return Err("posting rank leaf count differs".into());
             }
             let mut last = None;
-            for (i, entry) in entries.into_iter().enumerate() {
-                validate_posting(&entry, self.request)?;
-                let key = posting_key(&entry);
+            for entry in &entries {
+                validate_posting(entry, self.request)?;
+                let key = posting_key(entry);
                 if last.as_ref().is_some_and(|old| old >= &key) {
                     return Err("posting rank leaf is duplicated or unordered".into());
                 }
                 last = Some(key);
-                if range.contains(&(node.first() + i as u64)) {
-                    output.push(entry);
-                }
             }
+            Ok(NodePage::Leaf(entries))
         } else if let Some(children) = children {
             if children.is_empty() || children.len() > 32 {
                 return Err("posting rank branch fanout invalid".into());
@@ -300,13 +299,54 @@ impl<'a, B: CorpusIndexBoundary> SelectedPostingReader<'a, B> {
             if end != node.first() + node.count() || height + 1 != node.height() {
                 return Err("posting rank branch total/height differs".into());
             }
-            for child in children {
-                if child.first() < range.end && child.first() + child.count() > range.start {
-                    self.range_node(&child, range.clone(), output)?;
+            Ok(NodePage::Branch(children))
+        } else {
+            Err("posting rank tree crosses node types".into())
+        }
+    }
+    fn range_node(
+        &mut self,
+        node: &Node,
+        range: std::ops::Range<u64>,
+        output: &mut Vec<IngestPosting>,
+    ) -> Result<()> {
+        match self.node_page(node)? {
+            NodePage::Leaf(entries) => {
+                for (i, entry) in entries.into_iter().enumerate() {
+                    if range.contains(&(node.first() + i as u64)) {
+                        output.push(entry);
+                    }
+                }
+            }
+            NodePage::Branch(children) => {
+                for child in children {
+                    if child.first() < range.end && child.first() + child.count() > range.start {
+                        self.range_node(&child, range.clone(), output)?;
+                    }
                 }
             }
         }
         Ok(())
+    }
+    /// Descends from the selected root through validated pages to the single
+    /// leaf whose exact rank coverage contains `rank`. Heights strictly fall
+    /// at every validated branch, so the descent reads at most 13 pages.
+    fn leaf_at(&mut self, rank: u64) -> Result<(u64, Vec<IngestPosting>)> {
+        if rank >= self.postings {
+            return Err("posting rank probe outside selected coverage".into());
+        }
+        let mut node = self.root.clone().ok_or("posting rank root absent")?;
+        loop {
+            match self.node_page(&node)? {
+                NodePage::Leaf(entries) => return Ok((node.first(), entries)),
+                NodePage::Branch(children) => {
+                    node = children
+                        .into_iter()
+                        .find(|child| child.first() <= rank && rank - child.first() < child.count())
+                        .ok_or("posting rank branch omits the probed rank")?;
+                }
+            }
+        }
     }
     pub fn range(&mut self, after: u64, maximum: usize) -> Result<Vec<IngestPosting>> {
         if after > self.postings || maximum == 0 || maximum > 4096 {
@@ -335,6 +375,8 @@ impl<'a, B: CorpusIndexBoundary> SelectedPostingReader<'a, B> {
     }
     /// Binary rank seek uses the fully verified selected generation's global
     /// ordering, then verifies the exact adjacent boundary. No bucket scan.
+    /// Each probe compares a whole validated leaf, not one rank, so a seek
+    /// takes about log2(leaves) root descents instead of log2(postings).
     pub fn lower_bound(&mut self, term: &str, document: u32) -> Result<u64> {
         if term.is_empty()
             || term.len() > crate::MAX_SEARCH_TERM_BYTES
@@ -349,14 +391,26 @@ impl<'a, B: CorpusIndexBoundary> SelectedPostingReader<'a, B> {
         let mut high = self.postings;
         while low < high {
             let middle = low + (high - low) / 2;
-            let row = self
-                .range(middle, 1)?
-                .pop()
-                .ok_or("posting seek rank absent")?;
-            if posting_key(&row) < target {
-                low = middle + 1;
+            let (first, entries) = self.leaf_at(middle)?;
+            // Compare only rows inside [low, high). That window contains
+            // `middle`, so every probe strictly narrows it.
+            let start = first.max(low);
+            let end = first
+                .checked_add(entries.len() as u64)
+                .ok_or("posting seek leaf overflow")?
+                .min(high);
+            if !(start <= middle && middle < end) {
+                return Err("posting seek leaf omits the probed rank".into());
+            }
+            let window = &entries[(start - first) as usize..(end - first) as usize];
+            let below = window.partition_point(|row| posting_key(row) < target) as u64;
+            if below == 0 {
+                high = start;
+            } else if below == end - start {
+                low = end;
             } else {
-                high = middle;
+                low = start + below;
+                high = low;
             }
         }
         if low != 0

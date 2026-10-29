@@ -54,6 +54,12 @@ def main():
     binary = args.binary.resolve(strict=True)
     state.mkdir(mode=0o700)
     trust.mkdir(mode=0o700)
+    # Lab signatures bind the immutable image environment; this disposable
+    # laboratory identity is not a release.
+    (trust / 'release-identity.json').write_text(json.dumps({
+        'schema_version': 1, 'release': 'storage-test', 'sequence': 1, 'environment': 'lab',
+        'architecture': 'amd64', 'ubuntu': '24.04', 'edition': 'headless'},
+        separators=(',', ':')) + '\n', encoding='utf-8')
     base = state / 'staging'
     namespace = base / 'verified-v1'
     passed = []

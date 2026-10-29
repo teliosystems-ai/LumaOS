@@ -173,15 +173,24 @@ impl Peer {
 mod tests {
     use super::*;
 
+    // The fixture peer is this libtest process. The harness may still be
+    // retiring an earlier test's thread, which correctly fails the thread
+    // census closed. Only this fixture's own binding is retried.
     fn bound() -> (Peer, UnixStream) {
-        let (server, client) = UnixStream::pair().unwrap();
-        let peer = Peer::bind(
-            &server,
-            credentials(&server).unwrap(),
-            Observer::KernelFixture,
-        )
-        .unwrap();
-        (peer, client)
+        let mut last = None;
+        for _ in 0..50 {
+            let (server, client) = UnixStream::pair().unwrap();
+            match Peer::bind(
+                &server,
+                credentials(&server).unwrap(),
+                Observer::KernelFixture,
+            ) {
+                Ok(peer) => return (peer, client),
+                Err(error) => last = Some(error.to_string()),
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        panic!("fixture peer task inventory never settled: {last:?}");
     }
 
     #[test]

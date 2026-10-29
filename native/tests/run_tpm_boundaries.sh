@@ -12,7 +12,8 @@ test -f /.dockerenv
 test ! -e "$output"
 snapshot=$(mktemp -d /tmp/luma-tpm-source-XXXXXXXX)
 mkdir "$snapshot/rust"
-cp -a /repo/rust/.cargo /repo/rust/Cargo.toml /repo/rust/Cargo.lock /repo/rust/luma-platform "$snapshot/rust/"
+cp -a /repo/rust/.cargo /repo/rust/Cargo.toml /repo/rust/Cargo.lock /repo/rust/luma-platform \
+    /repo/rust/luma-content /repo/rust/luma-content-store "$snapshot/rust/"
 cp -a /repo/native "$snapshot/"
 cmp -- "$0" "$snapshot/native/tests/run_tpm_boundaries.sh"
 cd "$snapshot/rust"

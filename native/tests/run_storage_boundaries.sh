@@ -16,14 +16,15 @@ test ! -e "$output"
 mkdir -- "$output"
 snapshot=$(mktemp -d /tmp/luma-storage-source-XXXXXXXX)
 mkdir "$snapshot/rust"
-cp -a /repo/rust/.cargo /repo/rust/Cargo.toml /repo/rust/Cargo.lock /repo/rust/luma-platform "$snapshot/rust/"
+cp -a /repo/rust/.cargo /repo/rust/Cargo.toml /repo/rust/Cargo.lock /repo/rust/luma-platform \
+    /repo/rust/luma-content /repo/rust/luma-content-store "$snapshot/rust/"
 cp -a /repo/native "$snapshot/"
 cmp -- "$0" "$snapshot/native/tests/run_storage_boundaries.sh"
 cd "$snapshot/rust"
 export CARGO_TARGET_DIR=/tmp/luma-storage-target
 export RUSTFLAGS=-Dwarnings
 cargo fmt --check
-cargo test --offline --locked 2>&1 | tee "$output/rust-tests.txt"
+cargo test --offline --locked -p luma-platform -- --test-threads=1 2>&1 | tee "$output/rust-tests.txt"
 cargo build --offline --locked
 install -D -m 0755 "$CARGO_TARGET_DIR/debug/luma-platform" /usr/libexec/luma-os/luma-platform
 unit_directory=$(mktemp -d /tmp/luma-storage-units-XXXXXXXX)

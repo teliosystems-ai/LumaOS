@@ -25,8 +25,11 @@ def main():
     args.output.mkdir(parents=True)
     repo = args.repository.resolve(strict=True)
     os.umask(0o077)
+    # Isolated fixtures need a private mode-0700 ext4 root with root-owned
+    # ancestors; a caller-supplied container volume takes precedence.
     environment = dict(os.environ, CARGO_TARGET_DIR=os.environ.get('CARGO_TARGET_DIR', '/tmp/luma-tpm-target'),
-                       LUMA_STORAGE_TEST_ROOT=str(args.output), RUSTFLAGS='-Dwarnings', TSS2_LOG='all+NONE')
+                       LUMA_STORAGE_TEST_ROOT=os.environ.get('LUMA_STORAGE_TEST_ROOT', str(args.output)),
+                       RUSTFLAGS='-Dwarnings', TSS2_LOG='all+NONE')
     with tempfile.TemporaryDirectory(prefix='luma-tpm-') as folder:
         work = Path(folder)
         state = work / 'state'
@@ -110,7 +113,7 @@ def main():
                  '-i', work/'genesis', '0x01804c41'])
             environment['LUMA_TPM_TEST_ADMISSION'] = 'occupied'
             run(admission)
-            run(['cargo', 'test', '--offline', '--locked', '--', '--nocapture',
+            run(['cargo', 'test', '--offline', '--locked', '-p', 'luma-platform', '--', '--nocapture',
                  '--test-threads=1'], timeout=1800)
             # Real PAM/shadow account checks, confined to this fresh container.
             # Never create, expire or lock an account on the Windows/WSL host.

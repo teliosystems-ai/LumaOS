@@ -13,14 +13,15 @@ test ! -e "$output"
 mkdir -- "$output"
 snapshot=$(mktemp -d /tmp/luma-export-source-XXXXXXXX)
 mkdir "$snapshot/rust"
-cp -a /repo/rust/.cargo /repo/rust/Cargo.toml /repo/rust/Cargo.lock /repo/rust/luma-platform "$snapshot/rust/"
+cp -a /repo/rust/.cargo /repo/rust/Cargo.toml /repo/rust/Cargo.lock /repo/rust/luma-platform \
+    /repo/rust/luma-content /repo/rust/luma-content-store "$snapshot/rust/"
 cp -a /repo/native "$snapshot/"
 cmp -- "$0" "$snapshot/native/tests/run_recovery_export.sh"
 cd "$snapshot/rust"
 export CARGO_TARGET_DIR=/tmp/luma-export-target
 export RUSTFLAGS=-Dwarnings
 cargo fmt --check
-cargo test --offline --locked 2>&1 | tee "$output/rust-tests.txt"
+cargo test --offline --locked -p luma-platform -- --test-threads=1 2>&1 | tee "$output/rust-tests.txt"
 # Only this separate test process can mount the 1 MiB disposable tmpfs.
 unshare --mount --propagation private env LUMA_EXPORT_MOUNT_TEST=1 \
     cargo test --offline --locked \

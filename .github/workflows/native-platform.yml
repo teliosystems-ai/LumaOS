@@ -19,7 +19,7 @@ permissions:
 jobs:
   rust-boundaries:
     runs-on: ubuntu-24.04
-    timeout-minutes: 25
+    timeout-minutes: 50
     steps:
       - uses: actions/checkout@v4
       - name: Build pinned Ubuntu toolchain
@@ -30,13 +30,18 @@ jobs:
       - name: Rust tests, native resource refusal and synthetic publication store crashes
         run: >-
           docker run --rm --network none
+          --ulimit memlock=671088640:671088640
           --mount type=bind,src="$PWD",dst=/repo,readonly
           --env CARGO_TARGET_DIR=/tmp/luma-target
           --env RUSTFLAGS=-Dwarnings
-          --env LUMA_STORAGE_TEST_ROOT=/var/lib
+          --env LUMA_STORAGE_TEST_ROOT=/storage
+          --mount type=volume,dst=/storage
           --mount type=volume,dst=/var/lib
           --workdir /repo/rust luma-native-tools:ci
-          bash -euc 'cargo test --offline --locked;
+          bash -euc 'chmod 0700 /storage;
+          test "$(stat -f -c %T /storage)" = ext2/ext3;
+          cargo test --offline --locked -p luma-content -p luma-content-store;
+          cargo test --offline --locked -p luma-platform -- --test-threads=1;
           cargo build --offline --locked;
           bash /repo/native/image/test_artifact_cli.sh'
       - name: Builder and harness syntax
@@ -45,35 +50,45 @@ jobs:
           bash -n native/image/test_artifact_cli.sh
           sh -n native/image/overlay/usr/lib/systemd/system-generators/luma-boot-generator
           python3 -m py_compile native/image/*.py
-          python3 -W error -m unittest discover -s native/tests -v
+      - name: Native harness tests
+        run: >-
+          docker run --rm --network none --security-opt no-new-privileges
+          --mount type=bind,src="$PWD",dst=/repo,readonly
+          --env LUMA_STORAGE_TEST_ROOT=/storage
+          --mount type=volume,dst=/storage
+          --workdir /repo luma-native-tools:ci
+          bash -euc 'chmod 0700 /storage;
+          test "$(stat -f -c %T /storage)" = ext2/ext3;
+          python3 -B -W error -m unittest discover -s native/tests -v'
       - name: Rust formatting
         run: >-
           docker run --rm --network none
           --mount type=bind,src="$PWD",dst=/repo,readonly
           --workdir /repo/rust luma-native-tools:ci cargo fmt --check
+
+  storage-boundaries:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 50
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build pinned Ubuntu toolchain
+        run: >-
+          docker build
+          --build-arg UBUNTU_BASE=ubuntu@sha256:008173c23f95b170204355c12626cb5a965d779a7e1283b09e9cffbb1bf33ca3
+          -f native/image/Dockerfile.tools -t luma-native-tools:ci native/image
       - name: Real Linux staging and storage boundaries
         run: |
           mkdir "$RUNNER_TEMP/luma-storage"
           docker run --rm --network none \
             --cap-add SYS_ADMIN --security-opt apparmor=unconfined \
             --security-opt no-new-privileges \
+            --ulimit memlock=671088640:671088640 \
             --mount type=bind,src="$PWD",dst=/repo,readonly \
             --mount type=bind,src="$RUNNER_TEMP/luma-storage",dst=/out \
-            luma-native-tools:ci bash /repo/native/tests/run_storage_boundaries.sh /out/results
-      - name: Local TPM2 checkpoint boundaries on disposable software TPM
-        run: |
-          mkdir "$RUNNER_TEMP/luma-tpm"
-          docker run --rm --network none --security-opt no-new-privileges \
-            --mount type=bind,src="$PWD",dst=/repo,readonly \
-            --mount type=bind,src="$RUNNER_TEMP/luma-tpm",dst=/out \
-            luma-native-tools:ci bash /repo/native/tests/run_tpm_boundaries.sh /out/results
-      - name: Retain TPM checkpoint diagnostics (no TPM state or secrets)
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: native-tpm-boundaries
-          path: ${{ runner.temp }}/luma-tpm
-          if-no-files-found: ignore
+            --env LUMA_STORAGE_TEST_ROOT=/storage \
+            --mount type=volume,dst=/storage \
+            luma-native-tools:ci bash -euc 'chmod 0700 /storage;
+            exec bash /repo/native/tests/run_storage_boundaries.sh /out/results'
       - name: Retain storage boundary diagnostics
         if: always()
         uses: actions/upload-artifact@v4
@@ -82,7 +97,41 @@ jobs:
           path: ${{ runner.temp }}/luma-storage
           if-no-files-found: ignore
 
+  tpm-boundaries:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build pinned Ubuntu toolchain
+        run: >-
+          docker build
+          --build-arg UBUNTU_BASE=ubuntu@sha256:008173c23f95b170204355c12626cb5a965d779a7e1283b09e9cffbb1bf33ca3
+          -f native/image/Dockerfile.tools -t luma-native-tools:ci native/image
+      - name: Local TPM2 checkpoint boundaries on disposable software TPM
+        run: |
+          mkdir "$RUNNER_TEMP/luma-tpm"
+          docker run --rm --network none --security-opt no-new-privileges \
+            --ulimit memlock=671088640:671088640 \
+            --mount type=bind,src="$PWD",dst=/repo,readonly \
+            --mount type=bind,src="$RUNNER_TEMP/luma-tpm",dst=/out \
+            --env LUMA_STORAGE_TEST_ROOT=/storage \
+            --mount type=volume,dst=/storage \
+            luma-native-tools:ci bash -euc 'chmod 0700 /storage;
+            exec bash /repo/native/tests/run_tpm_boundaries.sh /out/results'
+      - name: Retain TPM checkpoint diagnostics (no TPM state or secrets)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-tpm-boundaries
+          path: ${{ runner.temp }}/luma-tpm
+          if-no-files-found: ignore
+
 # Deliberately no disk installation, host firmware enrollment or gate promotion.
 # Full image/VM runs are separately retained image-specific evidence.
 # SYS_ADMIN above is confined to a disposable container's own mount namespace;
 # no host devices, network or Docker socket are supplied to the test container.
+# Isolated fixtures require a private mode-0700 ext4 LUMA_STORAGE_TEST_ROOT.
+# The backup helper mlockall()s itself, so each Rust container gets the same
+# 640 MiB memlock bound as the retained evidence runs. luma-platform unit tests
+# observe process-wide kernel state (descriptors, OFD locks, threads, model
+# credential census) and run serially, as in every retained evidence run.

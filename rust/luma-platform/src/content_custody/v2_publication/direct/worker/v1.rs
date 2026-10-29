@@ -4,6 +4,65 @@
 //! owners cannot enter this constructor.
 use super::*;
 
+/// The actual selected C cut that V1 semantics read. The warm cut is the held
+/// original backend; a cold cut is the exact previous descriptor of a selected
+/// V1 transition. Both replay the same closed DATA; neither grants authority.
+pub(super) trait Cut {
+    fn descriptor(&self) -> &Descriptor;
+    fn check(&mut self) -> Result<()>;
+    fn live(&mut self) -> Result<()>;
+    fn lookup(&mut self, root: &map::Root, literal: &[u8]) -> Result<Option<Vec<u8>>>;
+    fn read_record(&mut self, sha: &str) -> Result<Vec<u8>>;
+    fn journal(&mut self) -> Result<Journal>;
+}
+struct Warm<'a, 'b, 'c, A: Checkpoint> {
+    backend: &'a mut Backend<A>,
+    original: &'b mut OriginalCOperation<'c>,
+}
+impl<A: Checkpoint> Cut for Warm<'_, '_, '_, A> {
+    fn descriptor(&self) -> &Descriptor {
+        &self.backend.descriptor
+    }
+    fn check(&mut self) -> Result<()> {
+        self.original.check()
+    }
+    fn live(&mut self) -> Result<()> {
+        self.backend.live(&mut || self.original.check())
+    }
+    fn lookup(&mut self, root: &map::Root, literal: &[u8]) -> Result<Option<Vec<u8>>> {
+        self.backend
+            .lookup(root, literal, &mut COperation::Worker(&mut *self.original))
+    }
+    fn read_record(&mut self, sha: &str) -> Result<Vec<u8>> {
+        self.backend.read_immutable(
+            sha,
+            slots::Kind::Record,
+            &mut COperation::Worker(&mut *self.original),
+        )
+    }
+    fn journal(&mut self) -> Result<Journal> {
+        self.backend.legacy_data(&mut || self.original.check())
+    }
+}
+
+/// Whether an original audit is the exact finite owner effect for `held`.
+pub(super) fn attributed(
+    held: &HeldPublication,
+    profile: &str,
+    storage_device: &str,
+    audit: &Audit,
+) -> Result<bool> {
+    Ok(audit.subject == held.binding.owner
+        && audit.subject_generation == held.binding.owner_generation
+        && audit.operation_id.is_some()
+        && audit.usage
+            == crate::content_governed::custody_usage(
+                profile,
+                storage_device,
+                &held.binding,
+                &held.review_sha256,
+            )?)
+}
 fn exact<A: Checkpoint>(
     backend: &mut Backend<A>,
     held: &HeldPublication,
@@ -16,16 +75,7 @@ fn exact<A: Checkpoint>(
     audit.validate()?;
     if source.purpose != SourcePurpose::Publish
         || source.binding != held.binding
-        || audit.subject != held.binding.owner
-        || audit.subject_generation != held.binding.owner_generation
-        || audit.operation_id.is_none()
-        || audit.usage
-            != crate::content_governed::custody_usage(
-                &source.profile,
-                &source.storage_device,
-                &held.binding,
-                &held.review_sha256,
-            )?
+        || !attributed(held, &source.profile, &source.storage_device, audit)?
     {
         return Err(
             "direct V1 publication differs from the actual original owner/source/finite effect"
@@ -34,43 +84,25 @@ fn exact<A: Checkpoint>(
     }
     backend.live(&mut || original.check())
 }
-fn value<A: Checkpoint>(
-    backend: &mut Backend<A>,
-    root: &map::Root,
-    literal: &[u8],
-    original: &mut OriginalCOperation<'_>,
-) -> Result<Option<Vec<u8>>> {
-    backend.lookup(root, literal, &mut COperation::Worker(original))
-}
-fn record<A: Checkpoint>(
-    backend: &mut Backend<A>,
-    reference: &RecordRef,
-    budget: &mut u64,
-    original: &mut OriginalCOperation<'_>,
-) -> Result<Vec<u8>> {
+fn record(cut: &mut impl Cut, reference: &RecordRef, budget: &mut u64) -> Result<Vec<u8>> {
     reference.validate()?;
     *budget = budget
         .checked_sub(reference.bytes)
         .ok_or("direct V1 historical-record budget exhausted before I/O")?;
-    let bytes = backend.read_immutable(
-        &reference.sha256,
-        slots::Kind::Record,
-        &mut COperation::Worker(original),
-    )?;
+    let bytes = cut.read_record(&reference.sha256)?;
     if bytes.len() as u64 != reference.bytes {
         return Err("selected direct V1 record changes its complete byte length".into());
     }
     Ok(bytes)
 }
-fn event<A: Checkpoint>(
-    backend: &mut Backend<A>,
+fn event(
+    cut: &mut impl Cut,
     root: &map::Root,
     literal: &[u8],
     journal: &Journal,
     budget: &mut u64,
-    original: &mut OriginalCOperation<'_>,
 ) -> Result<Option<Event>> {
-    let Some(bytes) = value(backend, root, literal, original)? else {
+    let Some(bytes) = cut.lookup(root, literal)? else {
         return Ok(None);
     };
     let location: semantic::EventLocation = canonical(&bytes, map::MAX_VALUE_BYTES)?;
@@ -79,7 +111,7 @@ fn event<A: Checkpoint>(
             ordinal,
             event_sha256,
         } => {
-            if ordinal == 0 || ordinal > backend.descriptor.legacy.events {
+            if ordinal == 0 || ordinal > cut.descriptor().legacy.events {
                 return Err("direct V1 point references an unselected original event".into());
             }
             let event = journal
@@ -100,7 +132,7 @@ fn event<A: Checkpoint>(
                 event: Event,
             }
             let stored: Stored = canonical(
-                &record(backend, &reference, budget, original)?,
+                &record(cut, &reference, budget)?,
                 super::super::super::super::super::paged::FILE_BYTES,
             )?;
             if stored.schema_version != 3 {
@@ -113,18 +145,32 @@ fn event<A: Checkpoint>(
     Ok(Some(selected))
 }
 
-pub(super) fn prepare<A: Checkpoint>(
-    backend: &mut Backend<A>,
+/// The closed V1 semantic result over one actual cut: either the exact retry
+/// of an already selected outcome or the sole owner-map append it requires.
+pub(super) enum Semantic {
+    Selected(VerifiedState),
+    Append {
+        owner_root: map::Root,
+        edits: Vec<map::Edit>,
+        reference: RecordRef,
+        bytes: Vec<u8>,
+    },
+}
+/// Reconstructs V1 owner semantics from the actual selected cut alone. The
+/// profile, device and audit are those of the original operation (warm) or
+/// of the exact selected publication event (cold).
+pub(super) fn replay(
+    cut: &mut impl Cut,
+    held: &HeldPublication,
     commitment: &[u8],
     raw_record: &[u8],
-    original: &mut OriginalCOperation<'_>,
-) -> Result<Outcome> {
-    let held = HeldPublication::parse(commitment)?;
-    exact(backend, &held, original)?;
-    let selected = backend.context()?;
+    profile: &str,
+    storage_device: &str,
+    audit: &Audit,
+) -> Result<Semantic> {
     let key = owner_key(&held.binding)?;
-    let owner_root = backend.descriptor.roots.owners.clone();
-    let old_value = value(backend, &owner_root, key.as_bytes(), original)?;
+    let owner_root = cut.descriptor().roots.owners.clone();
+    let old_value = cut.lookup(&owner_root, key.as_bytes())?;
     let leaf = old_value
         .as_ref()
         .map(|bytes| canonical::<OwnerLeaf>(bytes, map::MAX_VALUE_BYTES))
@@ -140,7 +186,7 @@ pub(super) fn prepare<A: Checkpoint>(
                 records: records.clone(),
                 migration_prefix: None,
             }
-            .validate(&held.binding.installation, &backend.descriptor.legacy)?;
+            .validate(&held.binding.installation, &cut.descriptor().legacy)?;
             if state.binding != held.binding {
                 return Err("direct V1 selected owner binding changed".into());
             }
@@ -156,14 +202,14 @@ pub(super) fn prepare<A: Checkpoint>(
         None => (
             VerifiedState::empty(&held.binding)?,
             LegacyRecordClosure {
-                legacy_journal_sha256: backend.descriptor.legacy.journal_sha256.clone(),
+                legacy_journal_sha256: cut.descriptor().legacy.journal_sha256.clone(),
                 legacy_owner_record_count: 0,
                 latest_suffix: None,
                 suffix_count: 0,
             },
         ),
     };
-    let journal = backend.legacy_data(&mut || original.check())?;
+    let journal = cut.journal()?;
     let baseline = journal.validate()?;
     let mut records = baseline.records.get(&key).cloned().unwrap_or_default();
     if records.len() as u64 != closure.legacy_owner_record_count {
@@ -186,10 +232,10 @@ pub(super) fn prepare<A: Checkpoint>(
     let mut next = closure.latest_suffix.clone();
     let mut suffix = Vec::new();
     for expected in (1..=closure.suffix_count).rev() {
-        original.check()?;
+        cut.check()?;
         let reference = next.ok_or("direct V1 selected suffix ends before its protected count")?;
         let node: RecordNode = canonical(
-            &record(backend, &reference, &mut budget, original)?,
+            &record(cut, &reference, &mut budget)?,
             super::super::super::super::super::paged::FILE_BYTES,
         )?;
         let publication = node.publication.validate()?;
@@ -243,7 +289,7 @@ pub(super) fn prepare<A: Checkpoint>(
         );
     }
     let mut projection = Validated {
-        checkpoint: tpm::decode(&backend.descriptor.selected_nv_head)?,
+        checkpoint: tpm::decode(&cut.descriptor().selected_nv_head)?,
         owners: BTreeMap::from([(key.clone(), current.clone())]),
         records: BTreeMap::from([(key.clone(), records.clone())]),
         signer: None,
@@ -251,15 +297,8 @@ pub(super) fn prepare<A: Checkpoint>(
         restores: BTreeMap::new(),
         retired: BTreeSet::new(),
     };
-    let restores = backend.descriptor.roots.restore_reservations.clone();
-    if let Some(selected) = event(
-        backend,
-        &restores,
-        key.as_bytes(),
-        &journal,
-        &mut budget,
-        original,
-    )? {
+    let restores = cut.descriptor().roots.restore_reservations.clone();
+    if let Some(selected) = event(cut, &restores, key.as_bytes(), &journal, &mut budget)? {
         let Event::RestoreStart(value) = selected else {
             return Err("direct restore-reservation point has a different typed event".into());
         };
@@ -269,15 +308,8 @@ pub(super) fn prepare<A: Checkpoint>(
         }
         projection.restores.insert(key.clone(), value);
     }
-    let unavailable = backend.descriptor.roots.unavailable.clone();
-    if let Some(selected) = event(
-        backend,
-        &unavailable,
-        key.as_bytes(),
-        &journal,
-        &mut budget,
-        original,
-    )? {
+    let unavailable = cut.descriptor().roots.unavailable.clone();
+    if let Some(selected) = event(cut, &unavailable, key.as_bytes(), &journal, &mut budget)? {
         let Event::RestoreRetired(value) = selected else {
             return Err("direct unavailable point has a different typed event".into());
         };
@@ -287,11 +319,7 @@ pub(super) fn prepare<A: Checkpoint>(
         }
         projection.retired.insert(key.clone());
     }
-    restore::ordinary_publication(
-        &held.binding,
-        &original.source_binding().profile,
-        &projection,
-    )?;
+    restore::ordinary_publication(&held.binding, profile, &projection)?;
     if let Some(prior) = history.iter().find(|prior| {
         prior
             .validate()
@@ -303,7 +331,7 @@ pub(super) fn prepare<A: Checkpoint>(
             || previous.decision != held.decision
             || previous.resulting != held.resulting
             || prior.record.as_bytes() != raw_record
-            || prior.original_authority.usage != original.audit().usage
+            || prior.original_authority.usage != audit.usage
             || previous.members.len() != held.members.len()
             || previous
                 .members
@@ -315,8 +343,8 @@ pub(super) fn prepare<A: Checkpoint>(
                 "direct V1 retry substitutes an already selected immutable original outcome".into(),
             );
         }
-        backend.live(&mut || original.check())?;
-        return Ok(Outcome::Selected(current));
+        cut.live()?;
+        return Ok(Semantic::Selected(current));
     }
     if held.already_published || held.base() != current {
         return Err("direct V1 append does not extend the actual current owner".into());
@@ -326,9 +354,9 @@ pub(super) fn prepare<A: Checkpoint>(
         purpose: "luma-content-custody-publication-v1".into(),
         commitment: std::str::from_utf8(commitment)?.into(),
         record: std::str::from_utf8(raw_record)?.into(),
-        profile: original.source_binding().profile.clone(),
-        storage_device: original.source_binding().storage_device.clone(),
-        original_authority: original.audit().clone(),
+        profile: profile.to_owned(),
+        storage_device: storage_device.to_owned(),
+        original_authority: audit.clone(),
     };
     publication.validate()?;
     records.push(raw_record.to_vec());
@@ -369,12 +397,52 @@ pub(super) fn prepare<A: Checkpoint>(
             ..closure
         },
     };
-    next_leaf.validate(&held.binding.installation, &backend.descriptor.legacy)?;
-    let edits = [map::Edit {
+    next_leaf.validate(&held.binding.installation, &cut.descriptor().legacy)?;
+    let edits = vec![map::Edit {
         key: owner_root.key(key.as_bytes())?,
         expected_value_sha256: old_value.as_ref().map(|value| hash(value)),
         value: Some(serde_json::to_vec(&next_leaf)?),
     }];
+    Ok(Semantic::Append {
+        owner_root,
+        edits,
+        reference,
+        bytes,
+    })
+}
+
+pub(super) fn prepare<A: Checkpoint>(
+    backend: &mut Backend<A>,
+    commitment: &[u8],
+    raw_record: &[u8],
+    original: &mut OriginalCOperation<'_>,
+) -> Result<Outcome> {
+    let held = HeldPublication::parse(commitment)?;
+    exact(backend, &held, original)?;
+    let selected = backend.context()?;
+    let profile = original.source_binding().profile.clone();
+    let storage_device = original.source_binding().storage_device.clone();
+    let audit = original.audit().clone();
+    let (owner_root, edits, reference, bytes) = match replay(
+        &mut Warm {
+            backend: &mut *backend,
+            original: &mut *original,
+        },
+        &held,
+        commitment,
+        raw_record,
+        &profile,
+        &storage_device,
+        &audit,
+    )? {
+        Semantic::Selected(current) => return Ok(Outcome::Selected(current)),
+        Semantic::Append {
+            owner_root,
+            edits,
+            reference,
+            bytes,
+        } => (owner_root, edits, reference, bytes),
+    };
     let mut context = backend.context()?;
     context.review_sha256 = Some(held.review_sha256.clone());
     let source_sha256 = hash(&COperation::Worker(original).source_bytes()?);
@@ -425,7 +493,7 @@ pub(super) fn prepare<A: Checkpoint>(
         request_sha256: request_sha256.clone(),
         review_sha256: held.review_sha256.clone(),
         roots,
-        edits: BTreeMap::from([(map::Kind::OwnerStates, edits.into_iter().collect())]),
+        edits: BTreeMap::from([(map::Kind::OwnerStates, edits)]),
         pages: generated,
         records: BTreeMap::from([(reference.sha256.clone(), bytes)]),
         operation: OperationData::V1Publication {

@@ -2,12 +2,15 @@
 //! and reconstruct actual current C points before producing an ephemeral token.
 //! No decoder, arbitrary new roots or caller-approved replay flag is accepted.
 use super::*;
+#[path = "worker/cold.rs"]
+mod cold;
 #[path = "worker/index.rs"]
 mod index_preparation;
 #[path = "worker/storage.rs"]
 mod storage;
 #[path = "worker/v1.rs"]
 mod v1;
+pub(super) use cold::verify_selected as verify_cold_v1;
 
 const MEMORY_BYTES: usize = 4 * 1024 * 1024;
 const MEMORY_PAGES: usize = 256;

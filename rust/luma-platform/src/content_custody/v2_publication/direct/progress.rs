@@ -12,6 +12,9 @@ mod parents;
 #[path = "progress/recovery.rs"]
 mod recovery;
 pub(in crate::content_checkpoint::custody) use cold::verify_selected;
+pub(in crate::content_checkpoint::custody::v2_publication) use cold::{
+    verify_closure, Closure, Data,
+};
 pub(in crate::content_checkpoint::custody) use recovery::{reconcile, recovery_review};
 
 const CACHE_PAGES: usize = 64;

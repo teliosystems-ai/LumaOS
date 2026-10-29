@@ -4,14 +4,90 @@
 //! still be independently reconciled; this module never redispatches it.
 use super::*;
 
-struct Data<'a, 'b, F: FnMut() -> Result<()>> {
+/// Memory-only reads of one actual selected cut. Each closed event class keeps
+/// the same page admission as its own original planner; nothing is allocated.
+pub(in crate::content_checkpoint::custody::v2_publication) struct Data<
+    'a,
+    'b,
+    F: FnMut() -> Result<()>,
+> {
     pages: &'a PageStore,
-    locations: &'a locations::Root,
+    locations: locations::Root,
     check: &'b mut F,
     context: map::Context,
     cache: BTreeMap<String, Vec<u8>>,
     bytes: usize,
     readonly: bool,
+    limit_bytes: usize,
+    limit_pages: usize,
+}
+impl<'a, 'b, F: FnMut() -> Result<()>> Data<'a, 'b, F> {
+    pub(in crate::content_checkpoint::custody::v2_publication) fn new(
+        pages: &'a PageStore,
+        locations: locations::Root,
+        check: &'b mut F,
+        context: map::Context,
+        limit_bytes: usize,
+        limit_pages: usize,
+    ) -> Self {
+        Self {
+            pages,
+            locations,
+            check,
+            context,
+            cache: BTreeMap::new(),
+            bytes: 0,
+            readonly: false,
+            limit_bytes,
+            limit_pages,
+        }
+    }
+    pub(in crate::content_checkpoint::custody::v2_publication) fn context(&self) -> &map::Context {
+        &self.context
+    }
+    pub(in crate::content_checkpoint::custody::v2_publication) fn set_context(
+        &mut self,
+        context: map::Context,
+    ) {
+        self.context = context;
+    }
+    /// Selects which authenticated location tree resolves complete digests.
+    pub(in crate::content_checkpoint::custody::v2_publication) fn set_locations(
+        &mut self,
+        locations: locations::Root,
+    ) {
+        self.locations = locations;
+    }
+    pub(in crate::content_checkpoint::custody::v2_publication) fn set_readonly(
+        &mut self,
+        readonly: bool,
+    ) {
+        self.readonly = readonly;
+    }
+    pub(in crate::content_checkpoint::custody::v2_publication) fn take_cache(
+        &mut self,
+    ) -> BTreeMap<String, Vec<u8>> {
+        std::mem::take(&mut self.cache)
+    }
+    /// One complete immutable record selected by the current location tree.
+    pub(in crate::content_checkpoint::custody::v2_publication) fn record(
+        &mut self,
+        sha: &str,
+    ) -> Result<Vec<u8>> {
+        locations::Io::check(self)?;
+        let root = self.locations.clone();
+        let location = locations::lookup(&root, sha, self)?
+            .ok_or("actual current C has no selected immutable record address")?;
+        if location.slot.kind != slots::Kind::Record || location.sha256 != sha {
+            return Err("immutable record resolves to a different selected kind/hash".into());
+        }
+        let bytes = locations::Io::read(self, &location)?;
+        if bytes.is_empty() || bytes.len() as u64 != location.bytes || hash(&bytes) != sha {
+            return Err("cold C record complete bytes/hash differ".into());
+        }
+        locations::Io::check(self)?;
+        Ok(bytes)
+    }
 }
 impl<F: FnMut() -> Result<()>> locations::Io for Data<'_, '_, F> {
     fn check(&mut self) -> Result<()> {
@@ -34,8 +110,8 @@ impl<F: FnMut() -> Result<()>> map::CustodyIo for Data<'_, '_, F> {
     fn admit(&mut self, context: &map::Context, budget: map::Budget) -> Result<()> {
         budget.validate()?;
         if self.readonly && (budget.write_bytes != 0 || budget.new_files != 0)
-            || budget.write_bytes > CACHE_BYTES as u64
-            || budget.new_files > CACHE_PAGES as u32
+            || budget.write_bytes > self.limit_bytes as u64
+            || budget.new_files > self.limit_pages as u32
         {
             return Err("cold transition exceeds its memory-only reconstruction budget".into());
         }
@@ -82,11 +158,11 @@ impl<F: FnMut() -> Result<()>> map::CustodyIo for Data<'_, '_, F> {
             }
             return self.check_current(context);
         }
-        if self.cache.len() >= CACHE_PAGES
+        if self.cache.len() >= self.limit_pages
             || self
                 .bytes
                 .checked_add(bytes.len())
-                .map_or(true, |n| n > CACHE_BYTES)
+                .map_or(true, |n| n > self.limit_bytes)
         {
             return Err("cold C memory reconstruction exhausted before allocation".into());
         }
@@ -137,15 +213,14 @@ pub(in crate::content_checkpoint::custody) fn verify_selected(
         selected_nv_head: current.selected_nv_head.clone(),
         review_sha256: None,
     };
-    let mut data = Data {
+    let mut data = Data::new(
         pages,
-        locations: &storage.locations,
+        storage.locations.clone(),
         check,
-        context: context.clone(),
-        cache: BTreeMap::new(),
-        bytes: 0,
-        readonly: false,
-    };
+        context.clone(),
+        CACHE_BYTES,
+        CACHE_PAGES,
+    );
     let previous_sha = current
         .previous_descriptor_sha256
         .as_ref()
@@ -287,20 +362,105 @@ pub(in crate::content_checkpoint::custody) fn verify_selected(
             "cold C progress differs from its deterministic reviewed exact layout/phase".into(),
         );
     }
+    let semantic = planned
+        .pages
+        .iter()
+        .map(|(sha, bytes)| (sha.as_str(), bytes.as_slice(), Role::SemanticPage))
+        .collect();
+    verify_closure(
+        &mut data,
+        Closure {
+            binding: &current.binding,
+            storage,
+            previous: previous_storage,
+            old_jobs,
+            jobs,
+            location,
+            previous_sha256: previous_sha,
+            previous_location,
+            job: &job,
+            specs: &planned.specs,
+            base_descriptor_sha256: &planned.base.descriptor_sha256,
+            request_sha256,
+            source_sha256,
+            review_sha256: window_intent_sha256,
+            semantic,
+            location_nodes: planned.location_nodes,
+            job_nodes: planned.job_nodes,
+        },
+    )
+}
+
+/// The exact reviewed physical closure of one selected direct transition,
+/// after its event class independently reconstructed every semantic member.
+pub(in crate::content_checkpoint::custody::v2_publication) struct Closure<'c> {
+    pub(in crate::content_checkpoint::custody::v2_publication) binding: &'c map::CustodyBinding,
+    pub(in crate::content_checkpoint::custody::v2_publication) storage: &'c StorageSelection,
+    pub(in crate::content_checkpoint::custody::v2_publication) previous: &'c StorageSelection,
+    pub(in crate::content_checkpoint::custody::v2_publication) old_jobs: &'c locations::JobRoot,
+    pub(in crate::content_checkpoint::custody::v2_publication) jobs: &'c locations::JobRoot,
+    /// The current descriptor's own sealed location.
+    pub(in crate::content_checkpoint::custody::v2_publication) location: &'c slots::SealedReference,
+    pub(in crate::content_checkpoint::custody::v2_publication) previous_sha256: &'c str,
+    pub(in crate::content_checkpoint::custody::v2_publication) previous_location:
+        slots::SealedReference,
+    pub(in crate::content_checkpoint::custody::v2_publication) job: &'c str,
+    pub(in crate::content_checkpoint::custody::v2_publication) specs: &'c [slots::ExactSlot],
+    pub(in crate::content_checkpoint::custody::v2_publication) base_descriptor_sha256: &'c str,
+    pub(in crate::content_checkpoint::custody::v2_publication) request_sha256: &'c str,
+    pub(in crate::content_checkpoint::custody::v2_publication) source_sha256: &'c str,
+    pub(in crate::content_checkpoint::custody::v2_publication) review_sha256: &'c str,
+    /// Every reconstructed semantic member in exact manifest order.
+    pub(in crate::content_checkpoint::custody::v2_publication) semantic:
+        Vec<(&'c str, &'c [u8], Role)>,
+    pub(in crate::content_checkpoint::custody::v2_publication) location_nodes: usize,
+    pub(in crate::content_checkpoint::custody::v2_publication) job_nodes: usize,
+}
+
+pub(in crate::content_checkpoint::custody::v2_publication) fn verify_closure<
+    F: FnMut() -> Result<()>,
+>(
+    data: &mut Data<'_, '_, F>,
+    closure: Closure<'_>,
+) -> Result<()> {
+    let pages = data.pages;
+    let Closure {
+        binding,
+        storage,
+        previous: previous_storage,
+        old_jobs,
+        jobs,
+        location,
+        previous_sha256,
+        previous_location,
+        job,
+        specs,
+        base_descriptor_sha256,
+        request_sha256,
+        source_sha256,
+        review_sha256,
+        semantic: members,
+        location_nodes,
+        job_nodes,
+    } = closure;
+    if specs.is_empty() || members.len() > specs.len() {
+        return Err("cold C closure has no exact reviewed slot layout".into());
+    }
     let manifest_location = jobs
-        .lookup(&job, &mut data)?
+        .lookup(job, data)?
         .ok_or("cold C progress has no selected allocation manifest")?;
-    let manifest = Manifest::from_canonical(&locations::Io::read(&mut data, &manifest_location)?)?;
-    let semantic = planned.pages.len();
-    let manifest_index = semantic + planned.location_nodes;
-    let descriptor_index = planned.specs.len() - 1;
-    if manifest.layout != slots::Plan::exact(&current.binding, &job, planned.specs.clone())?
-        || manifest.base_descriptor_sha256 != planned.base.descriptor_sha256
-        || manifest.original_request_sha256 != *request_sha256
-        || manifest.source_sha256 != *source_sha256
-        || manifest.review_sha256 != *window_intent_sha256
+    let manifest = Manifest::from_canonical(&locations::Io::read(data, &manifest_location)?)?;
+    let semantic = members.len();
+    let manifest_index = semantic + location_nodes;
+    let descriptor_index = specs.len() - 1;
+    if manifest.layout != slots::Plan::exact(binding, job, specs.to_vec())?
+        || manifest.base_descriptor_sha256 != base_descriptor_sha256
+        || manifest.original_request_sha256 != request_sha256
+        || manifest.source_sha256 != source_sha256
+        || manifest.review_sha256 != review_sha256
         || manifest.previous.is_some()
         || manifest.own_slot as usize != manifest_index
+        || manifest.members.len() != specs.len()
         || manifest.members[descriptor_index].slot != storage.descriptor_slot
     {
         return Err(
@@ -308,11 +468,9 @@ pub(in crate::content_checkpoint::custody) fn verify_selected(
         );
     }
     let location_witnesses =
-        locations::planning::selected_location_nodes(&storage.locations, &job, &mut data)?;
-    let job_witnesses = locations::planning::selected_job_nodes(jobs, &job, &mut data)?;
-    if location_witnesses.len() != planned.location_nodes
-        || job_witnesses.len() != planned.job_nodes
-    {
+        locations::planning::selected_location_nodes(&storage.locations, job, data)?;
+    let job_witnesses = locations::planning::selected_job_nodes(jobs, job, data)?;
+    if location_witnesses.len() != location_nodes || job_witnesses.len() != job_nodes {
         return Err(
             "cold C selected index metadata omits/adds an exact reviewed physical member".into(),
         );
@@ -330,24 +488,24 @@ pub(in crate::content_checkpoint::custody) fn verify_selected(
         }
     }
     let mut insertions = vec![locations::Insertion {
-        sha256: previous_sha.clone(),
+        sha256: previous_sha256.to_owned(),
         location: previous_location,
     }];
-    for (number, (sha, bytes)) in planned.pages.iter().enumerate() {
+    for (number, (sha, bytes, role)) in members.iter().enumerate() {
         let member = &manifest.members[number];
         let Disposition::Sealed { value } = &member.disposition else {
             return Err("cold C semantic page is not actually sealed".into());
         };
-        if member.role != Role::SemanticPage
+        if member.role != *role
             || value.sha256 != *sha
-            || locations::Io::read(&mut data, value)? != *bytes
+            || locations::Io::read(data, value)? != *bytes
         {
             return Err(
                 "cold C semantic bytes do not equal complete deterministic reconstruction".into(),
             );
         }
         insertions.push(locations::Insertion {
-            sha256: sha.clone(),
+            sha256: (*sha).to_owned(),
             location: value.clone(),
         });
     }
@@ -357,21 +515,21 @@ pub(in crate::content_checkpoint::custody) fn verify_selected(
         &storage.locations,
         &insertions,
         &location_witnesses,
-        &mut data,
+        data,
     )?;
     old_jobs.verify_update(
         jobs,
         &[locations::JobEdit {
-            job: job.clone(),
+            job: job.to_owned(),
             previous: None,
             next: manifest_location.clone(),
         }],
         &job_witnesses,
-        &mut data,
+        data,
     )?;
     for (number, member) in manifest.members.iter().enumerate() {
         let expected_role = if number < semantic {
-            Role::SemanticPage
+            members[number].2
         } else if number < manifest_index {
             Role::LocationIndex
         } else if number == manifest_index {

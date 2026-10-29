@@ -1,0 +1,116 @@
+{
+  "schema_version": 1,
+  "recorded_on": "2026-10-29",
+  "status": "verified-component-tests-only-index-cold-verifiers-open",
+  "scope": "G3 functional branch only: a test-only cold lineage verifier for one selected direct worker V1 publication, joined to the direct reader over a real bootstrapped C cut; no production caller, produced image, GWIN0 package, installed run or native C activation",
+  "branch_policy": {
+    "branch": "feature/g3-functional-beta",
+    "branched_from": "b69e09385a919f074d3ba9dfce45fb561ef6ab6f",
+    "g2_testing_and_gwin0_branch": "feature/g3-gwin0-beta",
+    "owner_decision": "On 29 October 2026 the owner kept further sequence-19 G2 testing and GWIN0 completion on feature/g3-gwin0-beta and moved G3 functional development to this branch"
+  },
+  "implementation": [
+    "The direct reader routes a selected V1 publication at sequence above one to the new cold lineage verifier; other selected event classes keep the bootstrap cold verifier, and the sequence-one refusals are unchanged",
+    "Only the last transition is reconstructed: the previous descriptor is bound by its frame hash in the current location tree and by the NV chain, and must be a bootstrap or V1 cut with the same binding, legacy cut and phase and the next sequence and global ordinal",
+    "Index preparation and index job reservation have no cold verifier yet, so a V1 publication over either previous class is refused rather than inherited",
+    "The selected event record is re-read under the current tree; its schema, owner binding, held publication binding and original attribution must match the selected operation",
+    "The exact V1 owner semantics are replayed through the warm publisher's shared replay over the previous cut alone, with every map and record read resolved through that cut's own location tree and roots; the replayed record must equal the selected record and the rebuilt owner root must give exactly the selected roots",
+    "The deterministic reviewed layout is rebuilt from the replayed transition and the physical closure is verified through the shared closure verifier; nothing dispatches or allocates, and an unselected pending attempt still needs independent reconciliation",
+    "The retained legacy journal parser is shared between the warm and cold readers; production checks are unchanged and nothing is weakened"
+  ],
+  "exact_sources": {
+    "slice3_snapshot": {
+      "commit": "502fe8ef98bcf80a58e5dc9e7301e64894580a01",
+      "tree": "9d9600c1f83d94889b8acad5eb5526761585586a",
+      "parent_commit": "7be3e1d98c2fb382cbd486892e2cd378995032ca",
+      "rust_tree_rematched_before_commit": true
+    }
+  },
+  "verification": {
+    "environment": {
+      "container": "pinned tools image sha256:819dfe7772da1e3c76ffdc8f9ea4a1fa44c7c549bd4fa988e35d9397d87924b2",
+      "network": "none",
+      "memory_limit": "8g",
+      "cpu_limit": 6,
+      "cargo_build_jobs": 1,
+      "warnings_denied": true,
+      "storage": "Disposable private ext4 work directories on drive D",
+      "authority": "Explicit software worker attribution, resource lease and NV fixtures, not installed original PAM, physical TPM or loaded LSM qualification"
+    },
+    "slice3_regression": {
+      "directory": "/mnt/d/LumaOS-builds/g3-slice3-check-20261029-b",
+      "commit": "502fe8ef98bcf80a58e5dc9e7301e64894580a01",
+      "sha256sums_verified": true,
+      "admission_sha256": "64be6a9cac9d7f0ae7003532a92290a39575a96f2cc99563c50f9fdaf5696838",
+      "format_check": {
+        "passed": true,
+        "diff_lines": 0,
+        "log_sha256": "d4abd7ec1a465c3f4b18a864b2e13a9616762f788167acf40cd41b1d87c8ece8"
+      },
+      "warning_denied_test_build": {
+        "passed": true,
+        "log_sha256": "a773db6cdc0bb2d421a6a90aeb40f42996eff5dca8e8d4cf4dac8579ab9a06da"
+      },
+      "custody_v2_publication_tests": {
+        "passed": 104,
+        "failed": 0,
+        "filtered_out": 1511,
+        "seconds": 1109.51,
+        "log_sha256": "084a3b1e7d2ad8dd6790d737d33ced023ec8bffb83939cf9db645abb6a96eb7f"
+      },
+      "custody_indexed_tests": {
+        "passed": 12,
+        "failed": 0,
+        "filtered_out": 1603,
+        "log_sha256": "8957416c9295b943f260855958f9d7e365db182c7c173241d77ae2afaa92f5c2"
+      },
+      "worker_tests": [
+        "actual_v1_publication_is_one_worker_dispatch_and_cold_reopen_replays_its_lineage",
+        "actual_cold_reopened_v1_chain_publishes_and_replays_each_selected_lineage",
+        "actual_revoked_or_substituted_worker_original_is_refused_before_allocation_or_nv",
+        "actual_worker_nv_faults_are_fenced_without_redispatch_or_content_adoption"
+      ],
+      "new_or_renamed_tests": [
+        "actual_v1_publication_is_one_worker_dispatch_and_cold_reopen_replays_its_lineage",
+        "actual_cold_reopened_v1_chain_publishes_and_replays_each_selected_lineage"
+      ],
+      "test_behaviour": [
+        "A cold reopen after a worker publication selects exactly the worker-advanced NV, the next sequence and the replayed owner root, with no further dispatch or allocation",
+        "A retry of the selected outcome over that cold cut returns the exact outcome with no allocation or NV dispatch, and a further cold reopen selects the same descriptor",
+        "A two-step V1 chain publishes over cold-reopened cuts, one NV dispatch per step, and each selected step is cold-replayed over its previous bootstrap or V1 cut",
+        "Old, lost and third-party NV replies after the sole dispatch still leave the cold reopen failing, with no redispatch and the repository at its prior verified state"
+      ],
+      "renamed_from": "actual_v1_publication_is_one_worker_dispatch_and_cold_reopen_fails_closed_without_lineage",
+      "total_platform_tests_in_build": 1615,
+      "full_platform_suite_run_locally": false,
+      "full_platform_suite_expected_in_ci": true,
+      "dispatched": "test builds only; no production caller"
+    }
+  },
+  "not_claimed": [
+    "Cold lineage verifiers for the index preparation and index job reservation event classes; a V1 publication over either is refused",
+    "Reconciliation of an unselected pending worker attempt after a lost NV reply",
+    "A production caller of the worker publisher, an installed run or native C activation",
+    "C owner migration, delta overlay, snapshot backup delivery or a V2 owner creation route",
+    "The 100000-object/500-ms NF08 measurement",
+    "Artifact CLI harness passage, installed PAM, physical TPM, loaded LSM or Hyper-V qualification",
+    "Any produced image or GWIN0 package; G3 and GWIN0 remain open"
+  ],
+  "retained_failed_attempts": [
+    {
+      "directory": "/mnt/d/LumaOS-builds/g3-slice3-check-20261029-a",
+      "commit": "7286a81e49286d400739fedfb9b00f4a4dd1149e",
+      "diff_lines": 76,
+      "logs": {
+        "admission": "721c5a72ff446b0578b1765b4d63ec4e081d2c75878f32fe3e73d58f554ee71c",
+        "format": "f2cf69dec24c2fd50b113d2071ebe142fddbc1cf92ed4c50d73bbc9fecaa4855",
+        "diff": "4e2d3f5e549f28f129451c324a11aaede6ae1eefe64ef0c82f4fdd56f3f7c20d",
+        "build_tests": "03644e513ec9d03e776c4da2ed0c5ca8a2307e00c6f3e19bdddcfd7caf18cc43",
+        "custody_v2_publication_tests": "3f6db63215fe0d0b715275c7538086fc40e4574c0cf187b7b7381cc6c1f1c46d",
+        "custody_indexed_tests": "80286ad5e6c702bb1f53e8beb00b3e4a5256a5cc70604bfe0f1493f9c21f0a45"
+      },
+      "cause": "The warning-denied build and all 104 plus 12 tests passed, but rustfmt reported a 76-line diff: module and use ordering and three long lines in the new verifier, its re-export and the direct reader call",
+      "correction": "Formatting only: the five rustfmt changes were applied by hand and each changed file was compared byte for byte with the attempt-a rustfmt copy before the attempt-b snapshot"
+    }
+  ]
+}

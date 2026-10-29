@@ -5,8 +5,9 @@ use super::super::super::paged::slots;
 use super::super::*;
 
 // The closed worker-original publisher awaits its production consumers, direct
-// V1 and C index publication. Only tests dispatch it; a cold reader refuses
-// its event classes until each has an independent lineage verifier.
+// V1 and C index publication. Only tests dispatch it. A cold reader selects a
+// V1 publication only through its independent lineage verifier and refuses the
+// index event classes until each has one.
 #[allow(dead_code)]
 #[path = "worker.rs"]
 mod worker;
@@ -102,21 +103,35 @@ impl<A: Checkpoint> Backend<A> {
                 return Err("cold progress selected an empty cell".into());
             };
             let expected_nv = tpm::decode::<32>(&candidate.descriptor().selected_nv_head)?;
-            bootstrap::direct_progress::verify_selected(
-                &files,
-                &pages,
-                candidate.descriptor(),
-                location,
-                &mut || {
-                    check()?;
-                    if anchor.read()? != expected_nv {
-                        return Err(
-                            "actual C changed during cold current transition verification".into(),
-                        );
-                    }
-                    check()
-                },
-            )?;
+            let mut live = || {
+                check()?;
+                if anchor.read()? != expected_nv {
+                    return Err(
+                        "actual C changed during cold current transition verification".into(),
+                    );
+                }
+                check()
+            };
+            if matches!(
+                candidate.descriptor().operation,
+                OperationData::V1Publication { .. }
+            ) {
+                worker::verify_cold_v1(
+                    &files,
+                    &pages,
+                    candidate.descriptor(),
+                    location,
+                    &mut live,
+                )?;
+            } else {
+                bootstrap::direct_progress::verify_selected(
+                    &files,
+                    &pages,
+                    candidate.descriptor(),
+                    location,
+                    &mut live,
+                )?;
+            }
             candidate
         } else {
             match &candidate.descriptor().operation {
@@ -296,22 +311,7 @@ impl<A: Checkpoint> Backend<A> {
     ) -> Result<Journal> {
         self.live(check)?;
         let bytes = self.files.read(JOURNAL, check)?;
-        if bytes.len() as u64 != self.descriptor.legacy.journal_bytes
-            || hash(&bytes) != self.descriptor.legacy.journal_sha256
-        {
-            return Err("direct planner lost exact C-selected retained legacy DATA".into());
-        }
-        let journal: Journal = canonical(&bytes, MAX_JOURNAL)?;
-        journal.require_identity(
-            &self.descriptor.binding.installation,
-            tpm::decode(&self.descriptor.binding.sealed_genesis_sha256)?,
-        )?;
-        let state = journal.validate()?;
-        if journal.events.len() as u64 != self.descriptor.legacy.events
-            || bundle::hex(&state.checkpoint) != self.descriptor.legacy.nv_head
-        {
-            return Err("direct retained legacy typed event closure differs".into());
-        }
+        let journal = retained_journal(&self.descriptor, &bytes)?;
         self.live(check)?;
         Ok(journal)
     }
@@ -460,6 +460,26 @@ impl<A: Checkpoint> Backend<A> {
         }
         proof.verify_data(root)
     }
+}
+/// The exact retained legacy journal that a selected descriptor commits to.
+fn retained_journal(descriptor: &Descriptor, bytes: &[u8]) -> Result<Journal> {
+    if bytes.len() as u64 != descriptor.legacy.journal_bytes
+        || hash(bytes) != descriptor.legacy.journal_sha256
+    {
+        return Err("direct planner lost exact C-selected retained legacy DATA".into());
+    }
+    let journal: Journal = canonical(bytes, MAX_JOURNAL)?;
+    journal.require_identity(
+        &descriptor.binding.installation,
+        tpm::decode(&descriptor.binding.sealed_genesis_sha256)?,
+    )?;
+    let state = journal.validate()?;
+    if journal.events.len() as u64 != descriptor.legacy.events
+        || bundle::hex(&state.checkpoint) != descriptor.legacy.nv_head
+    {
+        return Err("direct retained legacy typed event closure differs".into());
+    }
+    Ok(journal)
 }
 struct MapRead<'a, 'b, 'c, 'd, A: Checkpoint> {
     store: &'a mut Backend<A>,

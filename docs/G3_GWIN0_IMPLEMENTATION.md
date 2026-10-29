@@ -2139,3 +2139,30 @@ with the other `custody::v2_publication` tests (103 in all) and the 12
 [worker publication checkpoint](gates/g3/nf08_direct_worker_publication_2026-10-29.json).
 The cold lineage verifier, C owner migration and the items above remain open.
 G3 and GWIN0 are not complete.
+
+Slice 3 adds a cold lineage verifier for one selected direct V1 publication.
+The direct reader routes that event class to it; other classes keep the
+bootstrap verifier. It reconstructs only the last transition. The previous
+descriptor is bound by its frame hash in the current location tree and by the
+NV chain, and it must be a bootstrap or V1 cut with the same binding, legacy
+cut and phase. Index event classes have no cold verifier yet, so a V1
+publication over one is refused. The verifier re-reads the event record and
+checks its owner binding and original attribution. It then replays the exact
+V1 owner semantics through the warm publisher's shared code over the previous
+cut alone, reading through that cut's own location tree and roots. The
+replayed record must equal the selected one, and the rebuilt owner root must
+give exactly the selected roots. It rebuilds the deterministic reviewed
+layout and verifies the physical closure. It never dispatches or allocates,
+and an unselected pending attempt still needs independent reconciliation. In
+component tests, a cold reopen after a worker publication now selects exactly
+the worker-advanced NV. A retry over that cold cut returns the selected
+outcome with no allocation or NV dispatch. A two-step V1 chain is published
+and cold-replayed at each step. Old, lost and third-party NV replies still
+leave the cold reopen failing, with no redispatch. The publisher still has no
+production caller. On snapshot `502fe8e`, format was clean and the
+warning-denied test build passed. The four worker tests passed with the other
+`custody::v2_publication` tests (104 in all) and the 12 `custody::indexed`
+tests. See the
+[cold lineage checkpoint](gates/g3/nf08_direct_worker_cold_lineage_2026-10-29.json).
+Cold verifiers for the index event classes, C owner migration and the items
+above remain open. G3 and GWIN0 are not complete.

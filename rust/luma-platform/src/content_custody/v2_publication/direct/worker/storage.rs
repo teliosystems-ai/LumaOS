@@ -10,20 +10,20 @@ use super::*;
 use crate::content_checkpoint::PersistentDirectory;
 use std::os::unix::fs::MetadataExt;
 
-struct Data {
-    sha256: String,
-    bytes: Vec<u8>,
-    kind: slots::Kind,
+pub(super) struct Data {
+    pub(super) sha256: String,
+    pub(super) bytes: Vec<u8>,
+    pub(super) kind: slots::Kind,
 }
-struct Plan {
-    job: String,
-    source: String,
-    request: String,
-    window: String,
-    specifications: Vec<slots::ExactSlot>,
-    data: Vec<Data>,
-    locations: usize,
-    jobs: usize,
+pub(super) struct Plan {
+    pub(super) job: String,
+    pub(super) source: String,
+    pub(super) request: String,
+    pub(super) window: String,
+    pub(super) specifications: Vec<slots::ExactSlot>,
+    pub(super) data: Vec<Data>,
+    pub(super) locations: usize,
+    pub(super) jobs: usize,
 }
 
 struct ReadNodes<'a, 'b, 'c, A: Checkpoint> {
@@ -94,9 +94,28 @@ fn plan<A: Checkpoint>(
     original: &mut OriginalCOperation<'_>,
 ) -> Result<Plan> {
     source(backend, token, original)?;
+    let binding = backend.descriptor.binding.clone();
+    let storage = backend.descriptor.storage.clone();
+    let planned = layout(
+        &binding,
+        storage.as_ref(),
+        token,
+        &mut ReadNodes { backend, original },
+    )?;
+    source(backend, token, original)?;
+    Ok(planned)
+}
+/// The deterministic exact layout of one verified transition over its base
+/// storage. A cold reader recomputes it from the actual selected base alone.
+pub(super) fn layout(
+    binding: &map::CustodyBinding,
+    storage: Option<&StorageSelection>,
+    token: &VerifiedTransition,
+    io: &mut impl locations::Io,
+) -> Result<Plan> {
     let job = hash(&serde_json::to_vec(&(
         "luma-c-direct-worker-allocation-v4",
-        &backend.descriptor.binding,
+        binding,
         &token.base_frame_sha256,
         &token.operation,
         &token.source_sha256,
@@ -139,28 +158,15 @@ fn plan<A: Checkpoint>(
     if keys.windows(2).any(|pair| pair[0] >= pair[1]) {
         return Err("worker semantic/location inputs repeat a complete object digest".into());
     }
-    let storage = backend
-        .descriptor
-        .storage
-        .as_ref()
-        .ok_or("worker base has no selected direct storage")?
-        .clone();
-    let location_nodes = locations::planning::new_locations(
-        &storage.locations,
-        &keys,
-        &mut ReadNodes { backend, original },
-    )?
-    .new_nodes;
+    let storage = storage.ok_or("worker base has no selected direct storage")?;
+    let location_nodes =
+        locations::planning::new_locations(&storage.locations, &keys, io)?.new_nodes;
     let old_jobs = storage
         .jobs
         .as_ref()
         .ok_or("worker base has no selected allocation index")?;
-    let job_nodes = locations::planning::new_jobs(
-        old_jobs,
-        std::slice::from_ref(&job),
-        &mut ReadNodes { backend, original },
-    )?
-    .new_nodes;
+    let job_nodes =
+        locations::planning::new_jobs(old_jobs, std::slice::from_ref(&job), io)?.new_nodes;
     let count = data
         .len()
         .checked_add(location_nodes)
@@ -222,7 +228,7 @@ fn plan<A: Checkpoint>(
         slots::Kind::Page,
         PAGE_BYTES as u64,
     )?);
-    slots::Plan::exact(&backend.descriptor.binding, &job, specifications.clone())?;
+    slots::Plan::exact(binding, &job, specifications.clone())?;
     let window = hash(&serde_json::to_vec(&(
         "luma-c-direct-worker-storage-v4",
         &token.base,
@@ -237,7 +243,6 @@ fn plan<A: Checkpoint>(
         job_nodes,
         admission(&specifications)?,
     ))?);
-    source(backend, token, original)?;
     Ok(Plan {
         job,
         source: token.source_sha256.clone(),

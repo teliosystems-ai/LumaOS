@@ -123,7 +123,7 @@ fn ready(fixture: &Fixture) -> (Owner, Backend<Memory>) {
 }
 
 #[test]
-fn actual_v1_publication_is_one_worker_dispatch_and_cold_reopen_fails_closed_without_lineage() {
+fn actual_v1_publication_is_one_worker_dispatch_and_cold_reopen_replays_its_lineage() {
     let fixture = Fixture::new();
     let (mut owner, current) = ready(&fixture);
     let base = current.descriptor().clone();
@@ -149,7 +149,7 @@ fn actual_v1_publication_is_one_worker_dispatch_and_cold_reopen_fails_closed_wit
     let record = held.record_bytes().to_vec();
     let expected = held.commitment().outcome_state();
     let (profile, audit) = attribution(&owner.binding, edit.review_sha256(), 41);
-    let source = worker(&owner.binding, profile, &commitment);
+    let source = worker(&owner.binding, profile.clone(), &commitment);
     let mut check = || Ok(());
     let state = current
         .publish_v1_direct(
@@ -169,14 +169,20 @@ fn actual_v1_publication_is_one_worker_dispatch_and_cold_reopen_fails_closed_wit
     assert!(after.files > before.files && after.allocated_bytes > before.allocated_bytes);
     held.publish(&mut guard).unwrap();
     assert_eq!(owner.repository.verified_state(&mut guard).unwrap(), state);
-    let Err(error) = cold(&fixture) else {
-        panic!("cold reopen selected a worker event without independent lineage verification")
-    };
-    assert!(
-        error
-            .to_string()
-            .contains("does not accept a different semantic event class"),
-        "{error}"
+    let reopened = cold(&fixture).unwrap();
+    let published = reopened.descriptor().clone();
+    assert!(matches!(
+        published.operation,
+        OperationData::V1Publication { .. }
+    ));
+    assert_eq!(published.sequence, base.sequence + 1);
+    assert_eq!(published.previous_nv_head, base.selected_nv_head);
+    assert_eq!(published.roots.owners.entry_count, 1);
+    assert_ne!(published.roots.owners, base.roots.owners);
+    assert_eq!(
+        tpm::decode::<32>(&published.selected_nv_head).unwrap(),
+        fixture.memory.0.borrow().head,
+        "the cold reader selected exactly the actual worker-advanced NV"
     );
     assert_ne!(
         tpm::decode::<32>(&base.selected_nv_head).unwrap(),
@@ -185,6 +191,101 @@ fn actual_v1_publication_is_one_worker_dispatch_and_cold_reopen_fails_closed_wit
     );
     assert_eq!(fixture.memory.0.borrow().calls, 4);
     assert_eq!(fixture.pages().inventory(&mut || Ok(())).unwrap(), after);
+    // A retry of the selected outcome over the cold cut is the exact outcome
+    // without allocation or another NV dispatch.
+    let source = worker(&owner.binding, profile, &commitment);
+    let mut check = || Ok(());
+    let retried = reopened
+        .publish_v1_direct(
+            &commitment,
+            &record,
+            &mut software_worker_operation(&audit, source, &mut check),
+        )
+        .unwrap();
+    assert_eq!(retried, state);
+    assert_eq!(fixture.memory.0.borrow().calls, 4, "no retry dispatch");
+    assert_eq!(fixture.pages().inventory(&mut || Ok(())).unwrap(), after);
+    assert_eq!(cold(&fixture).unwrap().descriptor(), &published);
+}
+
+#[test]
+fn actual_cold_reopened_v1_chain_publishes_and_replays_each_selected_lineage() {
+    let fixture = Fixture::new();
+    let (mut owner, current) = ready(&fixture);
+    let mut guard = ContentGuard {
+        owner: owner.binding.clone(),
+        review: owner.plan.review_sha256().into(),
+    };
+    let mut resulting = owner.plan.resulting().clone();
+    let mut state = owner.wanted.clone();
+    let mut previous = current.descriptor().clone();
+    drop(current);
+    for (number, body) in [
+        &b"second owner version over the bootstrap cut"[..],
+        &b"third owner version over a cold-reopened V1 cut"[..],
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let edit = owner
+            .repository
+            .plan_external_edit(
+                "document",
+                resulting.clone(),
+                body,
+                provenance(
+                    &format!("direct-worker-chain-{number}"),
+                    body,
+                    EditOrigin::External,
+                ),
+                &mut guard,
+            )
+            .unwrap();
+        guard.review = edit.review_sha256().into();
+        let held = owner.repository.prepare(&edit, body, &mut guard).unwrap();
+        let commitment = held.commitment().canonical_bytes().unwrap();
+        let record = held.record_bytes().to_vec();
+        let expected = held.commitment().outcome_state();
+        let (profile, audit) =
+            attribution(&owner.binding, edit.review_sha256(), 41 + number as u64);
+        let source = worker(&owner.binding, profile, &commitment);
+        let mut check = || Ok(());
+        let next = cold(&fixture)
+            .unwrap()
+            .publish_v1_direct(
+                &commitment,
+                &record,
+                &mut software_worker_operation(&audit, source, &mut check),
+            )
+            .unwrap();
+        assert_eq!(next, expected);
+        assert_eq!(next.outcome_count, state.outcome_count + 1);
+        assert_eq!(fixture.memory.0.borrow().calls, 4 + number as u64);
+        held.publish(&mut guard).unwrap();
+        assert_eq!(owner.repository.verified_state(&mut guard).unwrap(), next);
+        let after = fixture.pages().inventory(&mut || Ok(())).unwrap();
+        let selected = cold(&fixture).unwrap().descriptor().clone();
+        let OperationData::V1Publication { binding, .. } = &selected.operation else {
+            panic!("cold reader selected a different event class");
+        };
+        assert_eq!(binding, &owner.binding);
+        assert_eq!(selected.sequence, previous.sequence + 1);
+        assert_eq!(selected.previous_nv_head, previous.selected_nv_head);
+        assert_eq!(
+            tpm::decode::<32>(&selected.selected_nv_head).unwrap(),
+            fixture.memory.0.borrow().head
+        );
+        assert_eq!(fixture.memory.0.borrow().calls, 4 + number as u64);
+        assert_eq!(fixture.pages().inventory(&mut || Ok(())).unwrap(), after);
+        resulting = edit.resulting().clone();
+        state = next;
+        previous = selected;
+    }
+    assert!(matches!(
+        previous.operation,
+        OperationData::V1Publication { .. }
+    ));
+    assert_eq!(state.outcome_count, owner.wanted.outcome_count + 2);
 }
 
 #[test]

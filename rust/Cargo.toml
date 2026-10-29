@@ -7,3 +7,10 @@ overflow-checks = true
 panic = "abort"
 strip = true
 lto = true
+
+# Unoptimized test builds still rehash every large boundary input on every
+# check: the staged public test executable before each PAM catalog case and
+# the 512 MiB staging payload twice per verify. Optimizing only the digest
+# dependency keeps each rehash; the release profile is unchanged.
+[profile.dev.package.sha2]
+opt-level = 3

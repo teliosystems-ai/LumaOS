@@ -11,10 +11,10 @@ use super::*;
 
 /// The exact previous cut of a selected V1 transition. Every read resolves
 /// through that cut's own authenticated location tree and roots.
-struct Cold<'x, 'a, 'b, F: FnMut() -> Result<()>> {
-    data: &'x mut Replay<'a, 'b, F>,
-    files: &'x Files,
-    previous: &'x Descriptor,
+pub(super) struct Cold<'x, 'a, 'b, F: FnMut() -> Result<()>> {
+    pub(super) data: &'x mut Replay<'a, 'b, F>,
+    pub(super) files: &'x Files,
+    pub(super) previous: &'x Descriptor,
 }
 impl<F: FnMut() -> Result<()>> Cut for Cold<'_, '_, '_, F> {
     fn descriptor(&self) -> &Descriptor {
@@ -122,7 +122,8 @@ pub(in crate::content_checkpoint::custody::v2_publication) fn verify_selected(
     let previous =
         Descriptor::from_slot_frame(&locations::Io::read(&mut data, &previous_location)?)?;
     // Index event classes have no cold lineage verifier yet, so a V1 append
-    // over one is refused rather than inherited.
+    // over one is refused rather than inherited. A previous owner migration
+    // window has one; the V1 replay below still refuses its migrating owner.
     if previous_location.sha256 != *previous_sha
         || previous.binding != current.binding
         || previous.legacy != current.legacy
@@ -132,7 +133,9 @@ pub(in crate::content_checkpoint::custody::v2_publication) fn verify_selected(
         || previous.selected_nv_head != current.previous_nv_head
         || !matches!(
             previous.operation,
-            OperationData::BootstrapProgress { .. } | OperationData::V1Publication { .. }
+            OperationData::BootstrapProgress { .. }
+                | OperationData::V1Publication { .. }
+                | OperationData::OwnerMigration { .. }
         )
     {
         return Err(

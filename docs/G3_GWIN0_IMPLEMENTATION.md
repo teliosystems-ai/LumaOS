@@ -2166,3 +2166,35 @@ tests. See the
 [cold lineage checkpoint](gates/g3/nf08_direct_worker_cold_lineage_2026-10-29.json).
 Cold verifiers for the index event classes, C owner migration and the items
 above remain open. G3 and GWIN0 are not complete.
+
+Slice 4 adds bounded C owner migration windows to the closed direct worker
+publisher, with a cold verifier for each selected window. One original worker
+effect selects one window of at most 16 outcomes and 32 retained blobs. Its
+request commits to the owner binding, the reviewed legacy owner, the exact
+C-selected prefix it continues and the window bound. A window starts only from
+the actual C-selected V1 owner leaf; a restore-reserved, unavailable or
+already migrated owner is refused. The content-store window is prepared and
+independently replayed through a C adapter that re-proves the selected NV cut
+and the live original around every boundary call. Every v2 object, C page and
+record is written, synchronized and read back before the sole NV dispatch. An
+unfinished window records only C-selected prefix data on the V1 leaf; only the
+complete window replaces it with a V2 leaf binding the exact head and physical
+accounting. The store-side prefix or head is acknowledged only after a fresh C
+read shows exactly that window. The cold verifier binds the previous cut,
+re-reads the window records, rechecks attribution and request, re-derives the
+owner point from the previous cut alone and rebuilds the leaf edit, roots,
+layout and physical closure without dispatching. It does not re-read
+object-store bytes. The fresh-namespace and allocation joins are store
+inventory walks, not a C reservation or joined protected C counters. In
+component tests, each window is one NV dispatch and a cold reopen replays it.
+At least two windows run, and the selected V2 head reads back the exact
+retained bytes. Re-migrating a V2 owner, a substituted, stale, anonymous or
+revoked original and a wider window are refused before NV. Old, lost and
+third-party NV replies are fenced with no redispatch. The publisher still has
+no production caller. On snapshot `fe3c5ad`, format was clean and the
+warning-denied test build passed. The three migration tests passed with the
+other `custody::v2_publication` tests (107 in all) and the 12
+`custody::indexed` tests. See the
+[owner migration checkpoint](gates/g3/nf08_direct_owner_migration_2026-10-30.json).
+A C namespace reservation, cold verifiers for the index event classes and the
+items above remain open. G3 and GWIN0 are not complete.

@@ -8,6 +8,8 @@ use std::os::unix::fs::{DirBuilderExt, MetadataExt};
 use std::rc::Rc;
 use std::sync::atomic::{AtomicU64, Ordering};
 static NEXT: AtomicU64 = AtomicU64::new(1);
+#[path = "tests/migration.rs"]
+mod migration_cases;
 #[path = "tests/progress.rs"]
 mod progress_cases;
 #[path = "tests/resume.rs"]

@@ -1,0 +1,183 @@
+{
+  "schema_version": 1,
+  "recorded_on": "2026-10-30",
+  "status": "verified-component-tests-only-c-reservation-and-index-cold-verifiers-open",
+  "scope": "G3 functional branch only: test-only bounded C owner migration windows dispatched by the closed direct worker publisher over a real bootstrapped C cut and a real side-by-side v2 object store, with a cold verifier for each selected window; no production caller, produced image, GWIN0 package, installed run or native C activation",
+  "branch_policy": {
+    "branch": "feature/g3-functional-beta",
+    "branched_from": "b69e09385a919f074d3ba9dfce45fb561ef6ab6f",
+    "g2_testing_and_gwin0_branch": "feature/g3-gwin0-beta",
+    "owner_decision": "On 29 October 2026 the owner kept further sequence-19 G2 testing and GWIN0 completion on feature/g3-gwin0-beta and moved G3 functional development to this branch"
+  },
+  "implementation": [
+    "A test-only OwnerMigration source purpose and C operation class carry the owner binding, request and source digests, the selected window node and the original audit, which must be the exact original owner effect",
+    "One original worker effect selects one bounded window of at most 16 outcomes and 32 retained blobs, never zero of both; its request commits to the owner binding, the reviewed legacy owner, the hash of the exact C-selected prefix it continues and the window bound, and its attribution must be the custody usage for that review",
+    "A window starts only from the actual C-selected V1 owner leaf; a restore-reserved or unavailable owner and an already selected V2 owner are refused, and a later window resolves its node, review and unfinished prefix from C records that must match that V1 state",
+    "The content-store window is prepared and independently replayed through a C adapter that re-proves the selected NV cut and the live original before and after each boundary call; the v2 store is walked again to match the prefix's physical accounting, and every v2 object, C page and record is allocated, synchronized and read back before the sole NV dispatch through the shared storage publisher",
+    "An unfinished window keeps the V1 leaf and records only the selected window node as migration-prefix data; only the complete window replaces it with a V2 leaf binding the exact head record and physical accounting",
+    "The store-side prefix or owner head is acknowledged only after a fresh C read of the selected cut shows exactly that window",
+    "The direct reader routes a selected owner migration window to a new cold verifier: the previous cut must be a bootstrap, V1 or migration cut bound by frame hash and NV chain; the node, review and window records are re-read and the attribution and request rechecked; the owner point is re-derived from the previous cut alone and the exact leaf edit, roots, deterministic layout and physical closure are rebuilt; nothing dispatches or allocates",
+    "The cold V1 verifier accepts a previous migration cut, while the shared V1 replay still refuses an owner with a selected migration prefix or a V2 owner; production builds do not compile the new variants and no production check changes"
+  ],
+  "exact_sources": {
+    "slice4_snapshot": {
+      "commit": "fe3c5ad20a12a3d587a1d7ed83b6d0e6f9b732f7",
+      "tree": "a7bf1d1d5c63ea500962062beaeb6709c52dc324",
+      "parent_commit": "86c5a3f8ac5f060fbd238e7172d34da0cd236f92",
+      "rust_tree": "30754071a0b1498aa96d0640d5784cd66991e1e4",
+      "rust_tree_rematched_before_commit": true
+    },
+    "non_test_sources_typechecked_at": {
+      "commit": "d5cae88432e357e0aa33269730291737321cb427",
+      "difference_to_slice4_snapshot": "Only the test file initial/tests/migration.rs changes after this commit"
+    }
+  },
+  "verification": {
+    "environment": {
+      "container": "pinned tools image sha256:819dfe7772da1e3c76ffdc8f9ea4a1fa44c7c549bd4fa988e35d9397d87924b2",
+      "network": "none",
+      "memory_limit": "8g",
+      "cpu_limit": 6,
+      "cargo_build_jobs": 1,
+      "warnings_denied": true,
+      "storage": "Disposable private ext4 work directories on drive D",
+      "authority": "Explicit software worker attribution, resource lease and NV fixtures, not installed original PAM, physical TPM or loaded LSM qualification"
+    },
+    "all_targets_typecheck": {
+      "directory": "/mnt/d/LumaOS-builds/g3-slice4-typecheck-20261030-b",
+      "commit": "d5cae88432e357e0aa33269730291737321cb427",
+      "command": "cargo check --offline --locked --keep-going -p luma-platform --all-targets with RUSTFLAGS=-Dwarnings",
+      "passed": true,
+      "sha256sums_verified": true,
+      "admission_sha256": "c685323e83b8d09272023f6103a3e9b929f717df8f47c7589f764540c4df486d",
+      "log_sha256": "a7f9857189ed0a0c22436b5a00077988c42805151670f7400adb34d8af78b7c0"
+    },
+    "migration_tests": {
+      "directory": "/mnt/d/LumaOS-builds/g3-slice4-check-20261030-d",
+      "commit": "fe3c5ad20a12a3d587a1d7ed83b6d0e6f9b732f7",
+      "sha256sums_verified": true,
+      "admission_sha256": "0d1c20d4308985f45262d458ff77e644e00b00e5738edb8e83d6cb26c07ffb6d",
+      "format_check": {
+        "passed": true,
+        "diff_lines": 0,
+        "log_sha256": "a9e972dc25ccf822e9e440ad35ba9deb7fcc44df9a61204ca51837cb08095004"
+      },
+      "warning_denied_test_build": {
+        "passed": true,
+        "log_sha256": "8c445643484b1b97240568649392cb4058c80ab16c925dfe9587865f9be739cd"
+      },
+      "filter": "custody::v2_publication::direct::initial::tests::migration_cases",
+      "passed": 3,
+      "failed": 0,
+      "filtered_out": 1615,
+      "seconds": 1925.55,
+      "log_sha256": "4cf3c41e85d739c789f4b9ce4c61c1126df5c0c0e811e53267e41ccc089777b4"
+    },
+    "slice4_regression": {
+      "directory": "/mnt/d/LumaOS-builds/g3-slice4-check-20261030-e",
+      "commit": "fe3c5ad20a12a3d587a1d7ed83b6d0e6f9b732f7",
+      "sha256sums_verified": true,
+      "admission_sha256": "0bc59f306ac43716a079245fdd2290baf8a993d59e9cc2d7b79d347e5b247298",
+      "format_check": {
+        "passed": true,
+        "diff_lines": 0,
+        "log_sha256": "7a91e3fa884fafd4c2bd8623c5f7ae302fcb278eca91edd2844fafdb40a2d63f"
+      },
+      "warning_denied_test_build": {
+        "passed": true,
+        "log_sha256": "fe0fbe0cf173a3abde55320f240b1284c23eb81b018aad3208202a667fa02742",
+        "note": "Up to date in 1.43 s: the same commit's warning-denied test binary was compiled by the migration_tests run in the same target directory"
+      },
+      "custody_v2_publication_tests": {
+        "passed": 107,
+        "failed": 0,
+        "filtered_out": 1511,
+        "seconds": 3035.53,
+        "log_sha256": "219c2fe603b11c7163b1ed9ee789f001ea4fb5323280a885bfe08a6f18191ef9"
+      },
+      "custody_indexed_tests": {
+        "passed": 12,
+        "failed": 0,
+        "filtered_out": 1606,
+        "log_sha256": "e1c2876b4eeb260eb9108476f4eabb7a9faab7ff37aef84d236b23ed27ef275e"
+      },
+      "migration_tests": [
+        "actual_owner_migration_windows_are_c_selected_and_cold_reopen_replays_each",
+        "actual_substituted_or_revoked_migration_original_is_refused_before_nv",
+        "actual_owner_migration_nv_faults_are_fenced_without_adoption"
+      ],
+      "test_behaviour": [
+        "Each window is one NV dispatch for an original worker effect whose request the test computes independently from the documented tuple; a cold reopen after every window replays it through the cold migration verifier before a fresh C acknowledgement of its prefix or final owner head",
+        "At least two windows run, so a C-selected unfinished prefix is continued; the selected V2 head then reads back the exact retained bytes through the test's own independent authority",
+        "A further migration of the selected V2 owner is refused with no NV dispatch",
+        "A Publish purpose, a substituted request, an anonymous or stale original, a revoked original and a wider window than the original request are each refused before NV",
+        "Old, lost and third-party NV replies after the sole dispatch leave the window and the cold reopen failing, with no redispatch and no adoption"
+      ],
+      "total_platform_tests_in_build": 1618,
+      "full_platform_suite_run_locally": false,
+      "full_platform_suite_expected_in_ci": true,
+      "dispatched": "test builds only; no production caller"
+    }
+  },
+  "not_claimed": [
+    "A C reservation of the fresh v2 namespace or joined protected C counters; the fresh-namespace and allocation joins are actual store inventory walks",
+    "Cold re-verification of object-store bytes; the cold verifier replays the C records and roots only",
+    "A production migration grant shape, a production caller, an installed run or native C activation",
+    "A tested V1 publication over a selected migration prefix; the shared replay refuses it but no test exercises that path",
+    "Cold lineage verifiers for the index preparation and index job reservation event classes; a migration window over either is refused",
+    "Reconciliation of an unselected pending worker attempt after a lost NV reply",
+    "Delta overlay, snapshot backup delivery or a V2 owner creation route",
+    "The 100000-object/500-ms NF08 measurement",
+    "Artifact CLI harness passage, installed PAM, physical TPM, loaded LSM or Hyper-V qualification",
+    "Any produced image or GWIN0 package; G3 and GWIN0 remain open"
+  ],
+  "retained_failed_attempts": [
+    {
+      "directory": "/mnt/d/LumaOS-builds/g3-slice4-check-20261030-a",
+      "commit": "a9bc422036a05cf9902362a53c1db09e225098ed",
+      "diff_lines": 132,
+      "logs": {
+        "admission": "98ac6491e82bf2d2c66936e9a022fbc46f979a968c3b999c2c69d0b1f2557d4c",
+        "format": "398283514ffec94f35e96fcfafaa7bcc803b835188b76b13453f7cc90e437917",
+        "diff": "6034a07ff2694118ca9abe663ac7fc6083967ca7a37a8aff49c8ff7602104c4b",
+        "build_tests": "700bfafff38c6ec59b09ccaa743f21b1740ad5e591f3400877b804f4dc583304"
+      },
+      "cause": "rustfmt reported a 132-line diff in the new module, its worker re-export and the new test file, and the test build failed with E0432: the new test imported luma_content_store::v2::OwnerHeadV2, which that path does not export",
+      "correction": "The two production files were replaced with the attempt's own rustfmt output and compared byte for byte; the test file took the same output without the import, since the type is already in scope through the module glob"
+    },
+    {
+      "directory": "/mnt/d/LumaOS-builds/g3-slice4-check-20261030-b",
+      "commit": "d5cae88432e357e0aa33269730291737321cb427",
+      "logs": {
+        "admission": "b3e52b9ae050a7ed2266ef024f631512f90d63c4c4b60bc882c8559edfb8e8fd",
+        "format": "f16002aac60c007b90b44400e2b9ba09d01c28d4d1463aa30d33fc00041ab314",
+        "build_tests": "98f31fb570ed61ff11ba1c2c65b5cf37f005de794c80d49d6733c7fb08cd09fe",
+        "custody_v2_publication_tests": "59e184406406b59a31e22f3346f2713297594dc872d10e9a567ab7fe6a80923d",
+        "custody_indexed_tests": "b870fd60959ec72f4a6a71382f9b2f2e04519605f355829f67aa8b3c5b79cfdb"
+      },
+      "results": "104 passed, 3 failed, 1511 filtered out in 1198.63 s; 12 custody::indexed tests passed",
+      "cause": "All three new tests panicked in the test's own fixture with \"read admission cannot reserve v2 writes\": its inventory walk of the side-by-side store used the write budget",
+      "correction": "Test-side only: the fixture's inventory walks use a read-only budget, as the module under test already did"
+    },
+    {
+      "directory": "/mnt/d/LumaOS-builds/g3-slice4-check-20261030-c",
+      "commit": "177f2db56df820d93954c2e57780244c3ae0ba90",
+      "logs": {
+        "admission": "fc96c1edc256c3e0915dfa93f92fad900b6bea32fcff59b06f72bd1dabca91f4",
+        "format": "805ea94a7b65b8cfb89456285a68bfde9c8a70bfa581f9e1f5a10a51ed18e801",
+        "build_tests": "73654dc2bc765d93e7f01b5ed15ea356f7ca3c09d6f0f0b23be3e22039b1c6f9",
+        "migration_tests": "210d6e790297b5042bf154a9393e96c91592601331ed2b7e4a8b047b27a703e8"
+      },
+      "results": "2 passed, 1 failed, 1615 filtered out in 918.14 s",
+      "cause": "The window test failed with \"migration window makes no bounded progress\": after the outcome was copied, a window of one outcome and no retained blob cannot copy the retained blob",
+      "correction": "Test-side only: windows after the first allow one retained blob and the original request commits to that bound; the content store's bounded-progress refusal is unchanged"
+    }
+  ],
+  "passing_preliminary_typecheck": {
+    "directory": "/mnt/d/LumaOS-builds/g3-slice4-typecheck-20261030-a",
+    "commit": "df9b492ff077454d0d5957e46076c0a31688f39b",
+    "admission_sha256": "81db67f0997fd6205105f9c1ff9bbe6c2e3e90b90e61ac7324136aaa960299e6",
+    "log_sha256": "de368d9e75332c8704bde874ee5525bda630300f8771981836b567e56f5febdb",
+    "note": "Production module before its tests existed; superseded by the attempt-b typecheck"
+  }
+}

@@ -15,9 +15,9 @@ pub(super) trait Cut {
     fn read_record(&mut self, sha: &str) -> Result<Vec<u8>>;
     fn journal(&mut self) -> Result<Journal>;
 }
-struct Warm<'a, 'b, 'c, A: Checkpoint> {
-    backend: &'a mut Backend<A>,
-    original: &'b mut OriginalCOperation<'c>,
+pub(super) struct Warm<'a, 'b, 'c, A: Checkpoint> {
+    pub(super) backend: &'a mut Backend<A>,
+    pub(super) original: &'b mut OriginalCOperation<'c>,
 }
 impl<A: Checkpoint> Cut for Warm<'_, '_, '_, A> {
     fn descriptor(&self) -> &Descriptor {
@@ -84,7 +84,11 @@ fn exact<A: Checkpoint>(
     }
     backend.live(&mut || original.check())
 }
-fn record(cut: &mut impl Cut, reference: &RecordRef, budget: &mut u64) -> Result<Vec<u8>> {
+pub(super) fn record(
+    cut: &mut impl Cut,
+    reference: &RecordRef,
+    budget: &mut u64,
+) -> Result<Vec<u8>> {
     reference.validate()?;
     *budget = budget
         .checked_sub(reference.bytes)

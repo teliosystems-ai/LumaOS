@@ -280,6 +280,15 @@ enum OperationData {
         reservation: RecordRef,
         original_authority: Audit,
     },
+    // Awaits its only producer, the direct C owner migration publisher.
+    #[cfg(test)]
+    OwnerMigration {
+        binding: OwnerBinding,
+        request_sha256: String,
+        source_sha256: String,
+        event: RecordRef,
+        original_authority: Audit,
+    },
 }
 /// One closed historical index Write effect: the exact owner generation, a
 /// bounded C record and the unchanged original finite envelope.
@@ -382,6 +391,26 @@ impl OperationData {
                 reservation,
                 original_authority,
             )?,
+            #[cfg(test)]
+            Self::OwnerMigration {
+                binding,
+                request_sha256,
+                source_sha256,
+                event,
+                original_authority,
+            } => {
+                binding.validate()?;
+                digest(request_sha256)?;
+                digest(source_sha256)?;
+                event.validate()?;
+                original_authority.validate()?;
+                if original_authority.operation_id.is_none()
+                    || original_authority.subject != binding.owner
+                    || original_authority.subject_generation != binding.owner_generation
+                {
+                    return Err("owner migration changes its closed original owner effect".into());
+                }
+            }
         }
         Ok(())
     }

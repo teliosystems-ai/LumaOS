@@ -6,11 +6,14 @@ use super::*;
 mod cold;
 #[path = "worker/index.rs"]
 mod index_preparation;
+#[path = "worker/migration.rs"]
+mod migration;
 #[path = "worker/storage.rs"]
 mod storage;
 #[path = "worker/v1.rs"]
 mod v1;
 pub(super) use cold::verify_selected as verify_cold_v1;
+pub(super) use migration::verify_selected as verify_cold_migration;
 
 const MEMORY_BYTES: usize = 4 * 1024 * 1024;
 const MEMORY_PAGES: usize = 256;
@@ -42,6 +45,7 @@ enum Completed {
     V1(VerifiedState),
     IndexPreparation(RecordRef),
     IndexJobReservation(RecordRef),
+    OwnerMigration(RecordRef),
 }
 impl<A: Checkpoint> Backend<A> {
     pub(in crate::content_checkpoint::custody::v2_publication) fn publish_v1_direct(
@@ -57,7 +61,9 @@ impl<A: Checkpoint> Backend<A> {
             }
             Outcome::Prepared(token) => match storage::publish(self, token, original)? {
                 Completed::V1(state) => Ok(state),
-                Completed::IndexPreparation(_) | Completed::IndexJobReservation(_) => {
+                Completed::IndexPreparation(_)
+                | Completed::IndexJobReservation(_)
+                | Completed::OwnerMigration(_) => {
                     Err("closed V1 consumer received a different semantic completion class".into())
                 }
             },
@@ -72,7 +78,9 @@ impl<A: Checkpoint> Backend<A> {
         let token = index_preparation::prepare(&mut self, input, plan, original)?;
         match storage::publish(self, token, original)? {
             Completed::IndexPreparation(reference) => Ok(reference),
-            Completed::V1(_) | Completed::IndexJobReservation(_) => Err(
+            Completed::V1(_)
+            | Completed::IndexJobReservation(_)
+            | Completed::OwnerMigration(_) => Err(
                 "closed index-preparation consumer received a different semantic completion class"
                     .into(),
             ),
@@ -87,9 +95,12 @@ impl<A: Checkpoint> Backend<A> {
         let token = index_preparation::start(&mut self, input, builder, original)?;
         match storage::publish(self, token, original)? {
             Completed::IndexJobReservation(reference) => Ok(reference),
-            Completed::V1(_) | Completed::IndexPreparation(_) => Err(
-                "closed index-Start consumer received a different semantic completion class".into(),
-            ),
+            Completed::V1(_) | Completed::IndexPreparation(_) | Completed::OwnerMigration(_) => {
+                Err(
+                    "closed index-Start consumer received a different semantic completion class"
+                        .into(),
+                )
+            }
         }
     }
 }

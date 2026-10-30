@@ -142,6 +142,9 @@ pub(super) enum SourcePurpose {
     RecoveryCut,
     Quarantine,
     Publish,
+    // Awaits its only producer, the direct C owner migration publisher.
+    #[cfg(test)]
+    OwnerMigration,
 }
 
 #[derive(Clone, Debug, Serialize)]

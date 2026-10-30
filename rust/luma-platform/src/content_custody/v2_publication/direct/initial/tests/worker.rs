@@ -12,13 +12,13 @@ use luma_content_store::{Plan, Repository};
 
 /// One retained legacy owner row, published in the original journal and the
 /// actual content repository, then copied into C by two direct windows.
-struct Owner {
-    binding: OwnerBinding,
-    plan: Plan,
-    repository: Repository,
-    wanted: VerifiedState,
+pub(super) struct Owner {
+    pub(super) binding: OwnerBinding,
+    pub(super) plan: Plan,
+    pub(super) repository: Repository,
+    pub(super) wanted: VerifiedState,
 }
-fn provenance(request_id: &str, body: &[u8], origin: EditOrigin) -> Provenance {
+pub(super) fn provenance(request_id: &str, body: &[u8], origin: EditOrigin) -> Provenance {
     Provenance {
         request_id: request_id.into(),
         workflow_sha256: "44".repeat(32),
@@ -26,7 +26,7 @@ fn provenance(request_id: &str, body: &[u8], origin: EditOrigin) -> Provenance {
         origin,
     }
 }
-fn attribution(binding: &OwnerBinding, review: &str, number: u64) -> (String, Audit) {
+pub(super) fn attribution(binding: &OwnerBinding, review: &str, number: u64) -> (String, Audit) {
     let profile = format!("content-v1-write-1-{}-{}", "77".repeat(32), review);
     let usage = crate::content_governed::custody_usage(&profile, "8:1", binding, review).unwrap();
     let audit = Audit {
@@ -40,7 +40,11 @@ fn attribution(binding: &OwnerBinding, review: &str, number: u64) -> (String, Au
     };
     (profile, audit)
 }
-fn worker(binding: &OwnerBinding, profile: String, commitment: &[u8]) -> TypedOperationSource {
+pub(super) fn worker(
+    binding: &OwnerBinding,
+    profile: String,
+    commitment: &[u8],
+) -> TypedOperationSource {
     TypedOperationSource {
         schema_version: 1,
         request_sha256: hash(commitment),
@@ -58,7 +62,7 @@ fn worker(binding: &OwnerBinding, profile: String, commitment: &[u8]) -> TypedOp
         },
     }
 }
-fn cold(fixture: &Fixture) -> Result<Backend<Memory>> {
+pub(super) fn cold(fixture: &Fixture) -> Result<Backend<Memory>> {
     Backend::open(
         fixture.memory.clone(),
         fixture.files(),
@@ -66,7 +70,7 @@ fn cold(fixture: &Fixture) -> Result<Backend<Memory>> {
         &mut || Ok(()),
     )
 }
-fn ready(fixture: &Fixture) -> (Owner, Backend<Memory>) {
+pub(super) fn ready(fixture: &Fixture) -> (Owner, Backend<Memory>) {
     let binding = OwnerBinding {
         installation: fixture.binding.installation.clone(),
         owner: "22".repeat(32),

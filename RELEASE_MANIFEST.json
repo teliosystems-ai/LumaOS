@@ -147,6 +147,7 @@
     "docs/gates/g3/native_custody_recovery_2026-10-18.json",
     "docs/gates/g3/native_package_root_2026-10-20.json",
     "docs/gates/g3/nf08_direct_custody_observer_2026-10-22.json",
+    "docs/gates/g3/nf08_direct_owner_migration_2026-10-30.json",
     "docs/gates/g3/nf08_direct_worker_cold_lineage_2026-10-29.json",
     "docs/gates/g3/nf08_direct_worker_publication_2026-10-29.json",
     "docs/gates/g3/nf08_foundations_2026-10-20.json",

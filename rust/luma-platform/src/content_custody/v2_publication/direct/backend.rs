@@ -5,9 +5,10 @@ use super::super::super::paged::slots;
 use super::super::*;
 
 // The closed worker-original publisher awaits its production consumers, direct
-// V1 and C index publication. Only tests dispatch it. A cold reader selects a
-// V1 publication only through its independent lineage verifier and refuses the
-// index event classes until each has one.
+// V1, C owner migration and C index publication. Only tests dispatch it. A
+// cold reader selects a V1 publication or an owner migration window only
+// through its independent lineage verifier and refuses the index event classes
+// until each has one.
 #[allow(dead_code)]
 #[path = "worker.rs"]
 mod worker;
@@ -123,6 +124,17 @@ impl<A: Checkpoint> Backend<A> {
                     location,
                     &mut live,
                 )?;
+            } else if matches!(
+                candidate.descriptor().operation,
+                OperationData::OwnerMigration { .. }
+            ) {
+                worker::verify_cold_migration(
+                    &files,
+                    &pages,
+                    candidate.descriptor(),
+                    location,
+                    &mut live,
+                )?;
             } else {
                 bootstrap::direct_progress::verify_selected(
                     &files,
@@ -148,6 +160,7 @@ impl<A: Checkpoint> Backend<A> {
             OperationData::V1Publication{..}=>return Err("direct reader requires independent publication lineage before selecting this event class".into()),
             OperationData::IndexPreparation{..}=>return Err("direct reader requires independently reconstructed index preparation lineage before selecting this event class".into()),
             OperationData::IndexJobReservation{..}=>return Err("direct reader requires independently reconstructed index Start reservation lineage before selecting this event class".into()),
+            OperationData::OwnerMigration{..}=>return Err("direct reader requires independently reconstructed owner migration lineage before selecting this event class".into()),
         }
         };
         if cut.descriptor().bytes()? != expected {

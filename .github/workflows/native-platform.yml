@@ -19,7 +19,7 @@ permissions:
 jobs:
   rust-boundaries:
     runs-on: ubuntu-24.04
-    timeout-minutes: 50
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
       - name: Build pinned Ubuntu toolchain
@@ -68,7 +68,7 @@ jobs:
 
   storage-boundaries:
     runs-on: ubuntu-24.04
-    timeout-minutes: 50
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
       - name: Build pinned Ubuntu toolchain
@@ -102,7 +102,7 @@ jobs:
 
   tpm-boundaries:
     runs-on: ubuntu-24.04
-    timeout-minutes: 90
+    timeout-minutes: 150
     steps:
       - uses: actions/checkout@v4
       - name: Build pinned Ubuntu toolchain
@@ -141,3 +141,6 @@ jobs:
 # 640 MiB memlock bound as the retained evidence runs. luma-platform unit tests
 # observe process-wide kernel state (descriptors, OFD locks, threads, model
 # credential census) and run serially, as in every retained evidence run.
+# The direct C owner migration tests perform real bounded owner migrations in
+# an unoptimized build, so the full serial suite, which every job still runs in
+# full, needs the longer job limits above; no test is skipped.

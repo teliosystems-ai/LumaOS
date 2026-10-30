@@ -37,7 +37,7 @@ fn read() -> IoBudget {
 
 /// Independent software owner authority for the test's own review and final
 /// v2 read. It never stands in for the C adapter under test.
-struct Authority {
+pub(super) struct Authority {
     legacy: VerifiedState,
     head: Option<OwnerHeadV2>,
     physical: PhysicalInventory,
@@ -144,18 +144,28 @@ fn migration(
     (audit, source)
 }
 
-#[test]
-fn actual_owner_migration_windows_are_c_selected_and_cold_reopen_replays_each() {
-    let fixture = Fixture::new();
-    let (owner, mut current) = ready(&fixture);
-    let (store, mut authority, review) = side(&fixture, &owner);
+/// The actual retained owner after its complete bounded migration. Every
+/// window was one NV dispatch, replayed by a cold reopen before the next.
+pub(super) struct Migrated {
+    pub(super) owner: Owner,
+    pub(super) store: ObjectStore,
+    pub(super) authority: Authority,
+    pub(super) review: MigrationReview,
+    pub(super) head: OwnerHeadV2,
+    pub(super) windows: u64,
+}
+/// A narrow first window copies only the outcome, so the retained blob needs
+/// a selected prefix and a second window. A wide first window also retains
+/// one blob and may complete the owner at once.
+pub(super) fn migrated(fixture: &Fixture, wide: bool) -> Migrated {
+    let (owner, mut current) = ready(fixture);
+    let (store, authority, review) = side(fixture, &owner);
     let mut previous = None;
     let mut windows = 0;
     let head = loop {
         windows += 1;
         assert!(windows <= 64, "bounded migration did not finish");
-        // A retained blob needs a wider window once the outcome is copied.
-        let retained = u32::from(previous.is_some());
+        let retained = u32::from(wide || previous.is_some());
         let calls = fixture.memory.0.borrow().calls;
         let (audit, source) =
             migration(&owner, &review, previous.as_ref(), retained, 100 + windows);
@@ -174,7 +184,7 @@ fn actual_owner_migration_windows_are_c_selected_and_cold_reopen_replays_each() 
             calls + 1,
             "one NV dispatch per window"
         );
-        let reopened = cold(&fixture).expect("cold reopen replays the selected window");
+        let reopened = cold(fixture).expect("cold reopen replays the selected window");
         let mut check = || Ok(());
         let mut original = software_worker_operation(&audit, source, &mut check);
         if window.complete() {
@@ -187,8 +197,29 @@ fn actual_owner_migration_windows_are_c_selected_and_cold_reopen_replays_each() 
                 .acknowledge_migration_prefix_direct(window, &mut original)
                 .unwrap(),
         );
-        current = cold(&fixture).unwrap();
+        current = cold(fixture).unwrap();
     };
+    Migrated {
+        owner,
+        store,
+        authority,
+        review,
+        head,
+        windows,
+    }
+}
+
+#[test]
+fn actual_owner_migration_windows_are_c_selected_and_cold_reopen_replays_each() {
+    let fixture = Fixture::new();
+    let Migrated {
+        owner,
+        store,
+        mut authority,
+        review,
+        head,
+        windows,
+    } = migrated(&fixture, false);
     assert!(windows >= 2, "the selected prefix path was exercised");
     authority.head = Some(head.clone());
     authority.physical = store.inventory(read(), &mut authority, |_| Ok(())).unwrap();

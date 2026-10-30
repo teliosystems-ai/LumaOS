@@ -2198,3 +2198,49 @@ other `custody::v2_publication` tests (107 in all) and the 12
 [owner migration checkpoint](gates/g3/nf08_direct_owner_migration_2026-10-30.json).
 A C namespace reservation, cold verifiers for the index event classes and the
 items above remain open. G3 and GWIN0 are not complete.
+
+Slice 5 adds a cold verifier for a selected direct index Start reservation,
+and the direct reader routes a selected reservation to it. The verifier binds
+the previous cut by its frame hash and NV head; that cut must be a bootstrap,
+V1, migration or reservation cut. It re-reads the reservation record and
+rechecks the owner binding, request, input, original attribution and source.
+It replays the reserved Start and the owner point from the selected records
+and both cuts' own roots, then rebuilds the exact index role edit, roots,
+deterministic layout and physical closure. The retained builder identity is
+historical data, never proof of the current image, and nothing dispatches or
+allocates. The selected event data now also binds the original request digest.
+The cold V1 and migration verifiers accept a previous reservation cut; an index
+phase preparation still has no cold verifier and a cut over one is refused.
+
+Slice 5 also fixes a production defect, with the owner's explicit approval.
+Migration always keeps the legacy pending area as one permanent marker entry,
+and preparation recovery never removes it, so index Start refused every
+migrated owner. Start now accepts exactly that one marker on a migrated owner.
+A never-migrated owner still needs an empty pending map, and a migrated owner
+with no marker or with any further pending entry is still refused. The Start
+review over a migrated owner carries a warning and `approval_required`. Its
+review hash, whose effect profile the human's original effect must present,
+commits to the exact warning text, so approving the review approves having
+been shown the warning; if it is not approved, nothing changes. A
+never-migrated owner's review hash is unchanged. Start checks the marker count,
+not the marker entry itself. No production route yet creates a migrated owner,
+and no test exercises the review's warning fields; tests exercise the bound
+hash.
+
+In component tests over a migrated V2 owner, a Publish purpose, a substituted
+worker label, an anonymous or stale-head original and a revoked original are
+each refused before NV. One Start is then one NV dispatch, a cold reopen
+selects the exact reservation and a second first job is refused before NV. A
+lost NV reply is fenced with no redispatch and no adoption. Old and
+third-party replies share the fenced dispatch already tested on the worker and
+migration routes and are not repeated on this route. The publisher still has
+no production caller. On snapshot `e7f6aa7`, format was clean and the
+warning-denied test build and all-targets check passed. The two index Start
+tests passed, as did the 37 `content_index` tests, including the marker
+test. In a separate run on the same snapshot, the other
+`custody::v2_publication` tests (107 in all) and the
+12 `custody::indexed` tests passed. An earlier identical run also passed but
+wrote no checksums, so it was rerun and is kept as evidence. See the
+[index Start checkpoint](gates/g3/nf08_direct_index_start_2026-10-30.json).
+A C namespace reservation, a cold verifier for index phase preparations and
+the items above remain open. G3 and GWIN0 are not complete.

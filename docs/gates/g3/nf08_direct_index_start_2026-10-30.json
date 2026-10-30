@@ -1,0 +1,274 @@
+{
+  "schema_version": 1,
+  "recorded_on": "2026-10-30",
+  "status": "verified-component-tests-only-c-reservation-and-index-preparation-cold-verifier-open",
+  "scope": "G3 functional branch only: test-only first index job Start reservations dispatched by the closed direct worker publisher over a real migrated V2 owner in a real bootstrapped C cut, a cold verifier for the selected reservation, and an owner-approved production change that admits a migrated owner's permanent legacy pending marker at index Start under a warning bound into the reviewed hash; no production caller, produced image, GWIN0 package, installed run or native C activation",
+  "branch_policy": {
+    "branch": "feature/g3-functional-beta",
+    "branched_from": "b69e09385a919f074d3ba9dfce45fb561ef6ab6f",
+    "g2_testing_and_gwin0_branch": "feature/g3-gwin0-beta",
+    "owner_decision": "On 29 October 2026 the owner kept further sequence-19 G2 testing and GWIN0 completion on feature/g3-gwin0-beta and moved G3 functional development to this branch"
+  },
+  "implementation": [
+    "The direct reader routes a selected direct index Start reservation to a new cold verifier: the previous cut must be a bootstrap, V1, migration or reservation cut bound by frame hash and NV chain; the reservation record is re-read and the owner binding, original request digest, input, original attribution and historical source are rechecked",
+    "The reserved Start and its owner point are replayed from the selected records and both cuts' own roots alone, and the exact index role edit, roots, deterministic layout and physical closure are rebuilt; the retained builder identity is historical data, never proof of the current image, and nothing dispatches or allocates",
+    "The selected index event data now also binds the original request digest, for a Start reservation and an index phase preparation alike",
+    "The cold V1 and owner migration verifiers accept a previous reservation cut; an index phase preparation still has no cold verifier and a V1, migration or reservation cut over one is refused",
+    "Production change, with the owner's explicit approval: index Start over a migrated owner accepts exactly its one permanent legacy pending marker, and the Start review over such an owner carries a warning that its review hash commits to (see production_change)",
+    "The publisher still has no production caller; production builds do not compile the direct publisher, its cold verifiers or the new test-only variants"
+  ],
+  "production_change": {
+    "file": "rust/luma-platform/src/content_index/state.rs",
+    "defect": "Owner migration always keeps the legacy pending area itself as one entry in the V2 owner's pending map, and preparation recovery never removes it, while index Start required an empty pending map; index Start therefore refused every migrated owner",
+    "before": "Index Start required owner.roots.pending.entry_count == 0",
+    "after": "Index Start requires exactly one pending entry when the owner head records migration provenance and none otherwise; a migrated owner with no marker or with any further pending entry is still refused",
+    "warning_and_approval": "For a migrated owner the core Start review hash is computed under the distinct domain luma-native-index-start-review-v2-migrated and commits to the exact warning text. The review returned by the custody index compute path carries that warning and approval_required true. The human's original effect must present the effect profile bound to that review hash, so approving the review approves having been shown the warning; if the review is not approved nothing changes",
+    "warning_text": "This owner was migrated from the v1 content store and keeps its legacy pending area as one permanent recovery marker that preparation recovery never removes. Index Start accepts that single marker; any other unfinished preparation is still refused. Approve this exact review to start the index job over the migrated owner, or do not approve it and nothing changes.",
+    "unchanged": "A never-migrated owner's Start acceptance and review hash are unchanged; preparation recovery, the reviewed effect profile mechanism and the release profile are unchanged",
+    "owner_approval": {
+      "date": "2026-10-30",
+      "words": "yes do the recommended fix as outlined. but also add a warning to the user about this and ask for their approval to proceed or not.",
+      "note": "The change was applied only after this approval; an earlier attempt to apply it before the owner had approved it was not applied"
+    }
+  },
+  "exact_sources": {
+    "slice5_snapshot": {
+      "commit": "e7f6aa7de0ada4de0b3e45a70b3c75a69c13561a",
+      "tree": "7a22dc0d339e633ebcced07ae687a15d015869bb",
+      "parent_commit": "e3fe8eea4dfd87d8cce6fad1701c62e9ee0669dc",
+      "rust_tree": "e468137ef668874ae873ce02401c2f03f4eadc27",
+      "rust_tree_rematched_before_commit": true
+    }
+  },
+  "verification": {
+    "environment": {
+      "container": "pinned tools image sha256:819dfe7772da1e3c76ffdc8f9ea4a1fa44c7c549bd4fa988e35d9397d87924b2",
+      "network": "none",
+      "memory_limit": "8g",
+      "cpu_limit": 6,
+      "cargo_build_jobs": 1,
+      "warnings_denied": true,
+      "storage": "Disposable private ext4 work directories on drive D",
+      "authority": "Explicit software worker attribution, builder identity, resource lease and NV fixtures, not installed original PAM, the installed image builder, physical TPM or loaded LSM qualification"
+    },
+    "all_targets_typecheck": {
+      "directory": "/mnt/d/LumaOS-builds/g3-slice5-typecheck-20261030-a",
+      "commit": "e7f6aa7de0ada4de0b3e45a70b3c75a69c13561a",
+      "command": "cargo check --offline --locked --keep-going -p luma-platform --all-targets with RUSTFLAGS=-Dwarnings",
+      "passed": true,
+      "sha256sums_verified": true,
+      "admission_sha256": "7be74bde6724c9cb7c8807aff7f5c37f3236d988f3308e353c62ca29f3f6c487",
+      "log_sha256": "b36c4b246ff76f884e0a14433ef25f1736bc216dc4de103b904f0c6cf4a688ba"
+    },
+    "index_start_checks": {
+      "directory": "/mnt/d/LumaOS-builds/g3-slice5b-check-20261030-b",
+      "commit": "e7f6aa7de0ada4de0b3e45a70b3c75a69c13561a",
+      "sha256sums_verified": true,
+      "admission_sha256": "0e8e3b5dce0c61d0fc96d88d377f11cdf839d40146042da556f8dcabe458711d",
+      "filters": [
+        "content_index::",
+        "custody::indexed",
+        "custody::v2_publication::direct::initial::tests::index_cases"
+      ],
+      "format_check": {
+        "passed": true,
+        "diff_lines": 0,
+        "log_sha256": "e49fe4e1d51a1471bd02d45da8580d5cf3d0aae18c013aedd1cbf1385af1df94"
+      },
+      "warning_denied_test_build": {
+        "passed": true,
+        "log_sha256": "e30f3e0c0a5597a571764efcbe424fd38ad35a47e578efbaa317482766103a10"
+      },
+      "tests": [
+        {
+          "filter": "content_index::",
+          "log": "test-1.log",
+          "log_sha256": "ce5cd99db50e0e1ee153ee77811ff849c72f1ff9c8eacf18576e9be0584e6063",
+          "passed": 37,
+          "failed": 0,
+          "filtered_out": 1584,
+          "seconds": 0.39,
+          "required_ok": [
+            "content_index::state::tests::start_admits_only_the_permanent_migration_marker_under_a_bound_warning"
+          ]
+        },
+        {
+          "filter": "custody::indexed",
+          "log": "test-2.log",
+          "log_sha256": "641dacf279905992b52090b0f1dd23a4d9220fc35b81a69498d0a0e50bd185a9",
+          "passed": 12,
+          "failed": 0,
+          "filtered_out": 1609,
+          "seconds": 0.14
+        },
+        {
+          "filter": "custody::v2_publication::direct::initial::tests::index_cases",
+          "log": "test-3.log",
+          "log_sha256": "e55d639aca54e5db53e56f369f5181e40a25597b7a59f46c093df83e61ff4b32",
+          "passed": 2,
+          "failed": 0,
+          "filtered_out": 1619,
+          "seconds": 2442.82,
+          "required_ok": [
+            "content_checkpoint::custody::v2_publication::direct::initial::tests::index_cases::actual_index_start_refuses_substitutes_before_nv_then_one_dispatch_cold_reopen_replays",
+            "content_checkpoint::custody::v2_publication::direct::initial::tests::index_cases::actual_index_start_lost_nv_reply_is_fenced_without_adoption"
+          ]
+        }
+      ]
+    },
+    "slice5_regression": {
+      "directory": "/mnt/d/LumaOS-builds/g3-slice5d-check-20261030-a",
+      "commit": "e7f6aa7de0ada4de0b3e45a70b3c75a69c13561a",
+      "sha256sums_verified": true,
+      "admission_sha256": "134ed05de81b1b4d2a6eba959fd9afceadcc22a32a14ccb06be290447d91ba27",
+      "filters": [
+        "custody::v2_publication --skip index_cases",
+        "custody::indexed"
+      ],
+      "format_check": {
+        "passed": true,
+        "diff_lines": 0,
+        "log_sha256": "f3cfe2b76fdf2239e6a428a22ac97306b55fef57bfc7cb64edda3f8b350da13b"
+      },
+      "warning_denied_test_build": {
+        "passed": true,
+        "log_sha256": "d20ed635c350816840bff8faa33374ca2aef7d5ab01c7685ddacd0ca6076aa44",
+        "note": "Up to date in seconds: the same commit's warning-denied test binary was compiled by the index_start_checks run in the same target directory"
+      },
+      "tests": [
+        {
+          "filter": "custody::v2_publication --skip index_cases",
+          "log": "test-1.log",
+          "log_sha256": "95bd8656ecc54466ac693fdbe0ef4943ffd8d7d7050afea8e0ba712d4de625c6",
+          "passed": 107,
+          "failed": 0,
+          "filtered_out": 1514,
+          "seconds": 3004.34,
+          "absent": [
+            "index_cases::"
+          ],
+          "note": "The two index Start tests passed in index_start_checks on the same snapshot; they are skipped here because both runs together would exceed one run's 5400 s cap"
+        },
+        {
+          "filter": "custody::indexed",
+          "log": "test-2.log",
+          "log_sha256": "47719ef45524cf4eef4563b8134a21b408b1fffa5c09b2ed32e17f56973e2fe4",
+          "passed": 12,
+          "failed": 0,
+          "filtered_out": 1609,
+          "seconds": 0.22
+        }
+      ]
+    },
+    "index_start_tests": [
+      "actual_index_start_refuses_substitutes_before_nv_then_one_dispatch_cold_reopen_replays",
+      "actual_index_start_lost_nv_reply_is_fenced_without_adoption"
+    ],
+    "test_behaviour": [
+      "Each test first runs a real bounded owner migration into a real side-by-side v2 store, so Start runs over the actual C-selected migrated V2 owner, whose pending map holds exactly the legacy marker and whose Start review carries the warning",
+      "The original worker effect is computed by the test independently from the documented first-job transition review recipe over the head the request expects, including the warned review hash",
+      "A Publish purpose, a substituted worker label, an anonymous original, a self-consistent original over a stale owner head and a revoked original are each refused before NV",
+      "One Start is then one NV dispatch, a cold reopen selects the exact reservation through the cold verifier, and a second first job over it is refused before NV with the reservation still selected",
+      "A lost NV reply after the sole dispatch leaves the reservation and the cold reopen failing, with no redispatch and no adoption; old and third-party replies share the fenced dispatch already tested on the worker and migration routes and are not repeated on this route",
+      "The state unit test admits a never-migrated owner only with an empty pending map under the unchanged review hash, and a migrated owner only with exactly one pending entry under a review hash different from the unwarned one"
+    ],
+    "total_platform_tests_in_build": 1621,
+    "full_platform_suite_run_locally": false,
+    "full_platform_suite_expected_in_ci": true,
+    "dispatched": "test builds only; no production caller"
+  },
+  "not_claimed": [
+    "A cold lineage verifier for an index phase preparation; a cut over one is refused",
+    "A C reservation of the fresh v2 namespace or joined protected C counters",
+    "Cold re-verification of object-store bytes; the cold verifier replays the C records and roots only",
+    "A test of the compute path's review JSON warning and approval_required fields; they are typechecked, and only the bound review hash is exercised by tests",
+    "A production route that creates a migrated owner, so no production Start review yet shows the warning",
+    "Identity of the marker entry: Start checks the pending entry count against the owner's migration provenance, which relies on no path removing the marker",
+    "A production index grant shape, a production caller, an installed run or native C activation",
+    "Reconciliation of an unselected pending worker attempt after a lost NV reply",
+    "Delta overlay, snapshot backup delivery or a V2 owner creation route",
+    "The 100000-object/500-ms NF08 measurement",
+    "Artifact CLI harness passage, installed PAM, physical TPM, loaded LSM or Hyper-V qualification",
+    "Any produced image or GWIN0 package; G3 and GWIN0 remain open"
+  ],
+  "retained_failed_attempts": [
+    {
+      "directory": "/mnt/d/LumaOS-builds/g3-slice5-check-20261030-a",
+      "commit": "921d372144e4bcb7df7d990f1602bbfe9f19b644",
+      "diff_lines": 25,
+      "logs": {
+        "admission.txt": "5d6cb33ee759b7b208d52d20b84b957ee6c477df73b765cbfdb1115f57fa48f5",
+        "fmt.log": "0c43a9755669580805fc47fe0d49ef1fdeae83a89fb45f3f75ed6dfaccb00c42",
+        "fmt.diff": "ab5c6d81fad03f45dc154e91bebf227d11dcc7d486ef4585d8fe1f2b6b2f107f",
+        "build-tests.log": "c53ee6a661ea06d18afaf510f58851524acfddab871edb199811bfcf116c05c5",
+        "test-1.log": "dd98955e13556c0ba52471aa5e447d8bc062e5319448e37d9a5837fdc071a532",
+        "test-2.log": "8f23fb98526f4e867875dd0e1ef7da02958b157e97561b9989e69f047a593743",
+        "store-before.txt": "1846a1d88d8727ce221c118f8593801775f4dd83b4852bb2d52dc5e1e93c1eab",
+        "store-after.txt": "1f8ad9f82600850056a7ca1fa3fed0b0114332adcb88be5339151045efe29a87"
+      },
+      "results": {
+        "test-2.log": ["ok", 12, 0, 1609, 0.15]
+      },
+      "evidence": {
+        "test-1.log": [
+          "index_cases::actual_index_start_nv_faults_are_fenced_without_adoption ... FAILED",
+          "exit=143"
+        ]
+      },
+      "cause": "rustfmt reported a 25-line diff in the new cold verifier. In the custody::v2_publication run, the first index Start test, which then ran three NV fault cases over its own real migration, failed after about 20 minutes. The run did not pass --nocapture, so the panic message was held for the end-of-run summary, and the remaining tests could not finish inside the 5400 s cap; the test container was stopped after the failure was logged (exit 143), so this attempt records no cause. The 12 custody::indexed tests passed",
+      "correction": "The cold verifier took the attempt's own rustfmt output. Later checks pass --nocapture so a panic message is logged at once. Since every index Start test pays for a real migration, the three tests became two: the refusal and dispatch cases share one migrated owner, and the fault test keeps only the lost actual reply, because old and third-party replies share the fenced dispatch already tested on the worker and migration routes"
+    },
+    {
+      "directory": "/mnt/d/LumaOS-builds/g3-slice5b-check-20261030-a",
+      "commit": "3a554e36e5977b76e2c6d8fb70d0bbc2cbc454be",
+      "diff_lines": 15,
+      "logs": {
+        "admission.txt": "8d6dae6b26db04dc40a8de74f67040e2ccc2db62132da33fa190269560fd66f8",
+        "fmt.log": "549d05636fac588020375356dd995b693c29009175fb530196de4e01d38583a9",
+        "fmt.diff": "d1ba717ab1e51be0f324033e5249fb7480b834d9ffa0536531e4966bf85929c1",
+        "build-tests.log": "cc2588755bc9b9c5c3c68c77ee4c9d138140130cbb33a3ba45d265c2e1de0a7f",
+        "test-1.log": "9f40143708f61f45f2837c515b0b80e68afa208491118045f161fc6017f9a399",
+        "store-before.txt": "aa72865cd078846c60aa2505326225fcf1fd213af28bf16176252d710d76ad70",
+        "store-after.txt": "d2cacd3c974653ea11b679d35aeff2e7e0fb7b7494f75ffcb97a6140176bb0e1"
+      },
+      "results": {
+        "test-1.log": ["FAILED", 0, 2, 1618, 2277.77]
+      },
+      "evidence": {
+        "test-1.log": [
+          "index.rs:69:69",
+          "index start source/owner/selected generation changed or requires preparation recovery",
+          "one wide window completes the fixture owner"
+        ]
+      },
+      "cause": "rustfmt reported a 15-line diff in the new test file. Both index Start tests failed. In the lost-reply test, production index Start refused the test's own original computation (index.rs:69) because the migrated owner keeps its legacy pending marker, so index Start refused every migrated owner. The first test's own assertion that one wide window completes the fixture owner was wrong: the fixture took 8 windows (index.rs:129)",
+      "correction": "The test file took the attempt's own rustfmt output and the wrong window-count assertion was removed (test-side). The marker refusal was reported to the owner, who approved the production change recorded in production_change; the first test now asserts the single marker and the warning instead"
+    },
+    {
+      "directory": "/mnt/d/LumaOS-builds/g3-slice5c-check-20261030-a",
+      "commit": "e7f6aa7de0ada4de0b3e45a70b3c75a69c13561a",
+      "same_snapshot": true,
+      "sha256sums_empty": true,
+      "diff_lines": 0,
+      "logs": {
+        "SHA256SUMS": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "admission.txt": "4657ac1a343851d290de3d37e6f6d179786d105467924e8c2850b66003cf6fd3",
+        "fmt.log": "d7c8ca2af05062860f029521ecc229318bb90ea931b5afcd053e1ba2d32547a3",
+        "fmt.diff": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "build-tests.log": "cab7ff931710b7cce9d192b5049a6ad63508697222c5da0c8067c7ed61a118ac",
+        "test-1.log": "5a74f301fbc48ad962b59d847c8eb6f5607096ab80cf05e6cff9e99da6c3fb18",
+        "test-2.log": "264e38df99bbd951bd708f66c861f55b84d39872a0409240f964a743aa400dff",
+        "store-before.txt": "e0b2bab9f263c98e04e62c4f4ac2028fdb25ae956d4c7523ec9f2bc370a8d059",
+        "store-after.txt": "e750b231a0d5595711058a480a44d0b032453b55dda86594cbd136e4145b58e8"
+      },
+      "logs_hashed_after_run": "The run wrote an empty SHA256SUMS, so these file hashes were taken afterwards by reading the retained directory, which was left unmodified; they are not a record the run itself wrote",
+      "results": {
+        "test-1.log": ["ok", 107, 0, 1514, 3033.31],
+        "test-2.log": ["ok", 12, 0, 1609, 0.21]
+      },
+      "evidence": {},
+      "cause": "Both test runs passed and format was clean, but the check script's set -f, which keeps the word-split filter arguments from being glob-expanded, also disabled the glob in its final checksum line; sha256sum received the literal patterns, SHA256SUMS was left empty and the script exited 1",
+      "correction": "A new versioned check script re-enables globbing for the checksum step only, and the same regression was rerun on the same snapshot as slice5_regression; this attempt's directory was not modified"
+    }
+  ]
+}

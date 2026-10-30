@@ -873,8 +873,8 @@ pub(in crate::content_checkpoint::custody::v2_publication) fn verify_selected(
         .ok_or("cold owner migration lost the exact selected previous descriptor address")?;
     let previous =
         Descriptor::from_slot_frame(&locations::Io::read(&mut data, &previous_location)?)?;
-    // Index event classes have no cold lineage verifier yet, so a window over
-    // one is refused rather than inherited.
+    // Only event classes with a cold lineage verifier are inherited; an index
+    // phase preparation has none yet and is refused.
     if previous_location.sha256 != *previous_sha
         || previous.binding != current.binding
         || previous.legacy != current.legacy
@@ -887,6 +887,7 @@ pub(in crate::content_checkpoint::custody::v2_publication) fn verify_selected(
             OperationData::BootstrapProgress { .. }
                 | OperationData::V1Publication { .. }
                 | OperationData::OwnerMigration { .. }
+                | OperationData::IndexJobReservation { .. }
         )
     {
         return Err(

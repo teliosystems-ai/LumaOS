@@ -172,7 +172,20 @@ impl Stage {
     }
 }
 
+/// Shown with, and bound into, every Start review over a migrated owner.
+pub(crate) const MIGRATED_START_WARNING: &str = "This owner was migrated from the v1 content store and keeps its legacy pending area as one permanent recovery marker that preparation recovery never removes. Index Start accepts that single marker; any other unfinished preparation is still refused. Approve this exact review to start the index job over the migrated owner, or do not approve it and nothing changes.";
+
 impl Job {
+    /// Migration always retains the legacy pending area itself as exactly one
+    /// marker entry in the pending map. Every other pending entry is an
+    /// unfinished preparation, so Start requires exactly this count.
+    fn migration_marker(owner: &OwnerHeadV2) -> u64 {
+        u64::from(owner.migration.is_some())
+    }
+    /// The warning a human must see and approve before Start over this owner.
+    pub(crate) fn start_warning(owner: &OwnerHeadV2) -> Option<&'static str> {
+        owner.migration.as_ref().map(|_| MIGRATED_START_WARNING)
+    }
     pub(crate) fn beginning_review_data(
         input: &request::Input,
         owner: &OwnerHeadV2,
@@ -180,14 +193,27 @@ impl Job {
         selected_sha256: &str,
     ) -> Result<String> {
         let candidate = Self::beginning_data(input, owner, builder, selected_sha256)?;
-        Ok(luma_content::sha256(&serde_json::to_vec(&(
-            "luma-native-index-start-review-v2",
-            input.sha256()?,
-            owner.sha256()?,
-            selected_sha256,
-            builder,
-            candidate.sha256()?,
-        ))?))
+        let bytes = match Self::start_warning(owner) {
+            None => serde_json::to_vec(&(
+                "luma-native-index-start-review-v2",
+                input.sha256()?,
+                owner.sha256()?,
+                selected_sha256,
+                builder,
+                candidate.sha256()?,
+            ))?,
+            // The approved review commits to the exact warning shown.
+            Some(warning) => serde_json::to_vec(&(
+                "luma-native-index-start-review-v2-migrated",
+                input.sha256()?,
+                owner.sha256()?,
+                selected_sha256,
+                builder,
+                candidate.sha256()?,
+                warning,
+            ))?,
+        };
+        Ok(luma_content::sha256(&bytes))
     }
     fn identity_sha256(&self) -> Result<String> {
         identity_sha256(
@@ -303,7 +329,7 @@ impl Job {
         if input.binding != owner.binding
             || *expected_owner_sha256 != owner.sha256()?
             || expected_selection_sha256 != selected_sha256
-            || owner.roots.pending.entry_count != 0
+            || owner.roots.pending.entry_count != Self::migration_marker(owner)
         {
             return Err("index start source/owner/selected generation changed or requires preparation recovery".into());
         }
@@ -815,5 +841,78 @@ mod tests {
             *retained_inventory_sha256 = "f".repeat(64);
         }
         assert!(job.retain_data(&input).is_err());
+    }
+
+    #[test]
+    fn start_admits_only_the_permanent_migration_marker_under_a_bound_warning() {
+        let (input, owner, builder) = fixture();
+        let selected = "c".repeat(64);
+        let pending = |mut owner: OwnerHeadV2, count: u64| {
+            owner.roots.pending.entry_count = count;
+            owner.roots.pending.page = (count > 0).then(|| luma_content_store::v2::PageRef {
+                sha256: "f".repeat(64),
+                first_key: "1".repeat(64),
+                last_key: "f".repeat(64),
+                entry_count: count,
+                height: 0,
+            });
+            owner.validate().unwrap();
+            owner
+        };
+        let start = |owner: &OwnerHeadV2| {
+            let mut input = input.clone();
+            if let request::Operation::Start {
+                expected_owner_sha256,
+                ..
+            } = &mut input.operation
+            {
+                *expected_owner_sha256 = owner.sha256().unwrap();
+            }
+            Job::beginning_data(&input, owner, &builder, &selected).map(|_| input)
+        };
+        let unwarned = |input: &request::Input, owner: &OwnerHeadV2| {
+            let candidate = Job::beginning_data(input, owner, &builder, &selected).unwrap();
+            luma_content::sha256(
+                &serde_json::to_vec(&(
+                    "luma-native-index-start-review-v2",
+                    input.sha256().unwrap(),
+                    owner.sha256().unwrap(),
+                    &selected,
+                    &builder,
+                    candidate.sha256().unwrap(),
+                ))
+                .unwrap(),
+            )
+        };
+        // A never-migrated owner still requires an empty pending map, and its
+        // review is unchanged and carries no warning.
+        let plain = start(&owner).unwrap();
+        assert_eq!(Job::start_warning(&owner), None);
+        assert_eq!(
+            Job::beginning_review_data(&plain, &owner, &builder, &selected).unwrap(),
+            unwarned(&plain, &owner)
+        );
+        assert!(start(&pending(owner.clone(), 1)).is_err());
+        // A migrated owner is admitted only with exactly its one marker.
+        let mut migrated = owner.clone();
+        migrated.migration = Some(luma_content_store::v2::head::MigrationProvenance {
+            legacy: luma_content_store::VerifiedState::empty(&owner.binding).unwrap(),
+            legacy_identity_sha256: "8".repeat(64),
+            retained_inventory_sha256: "9".repeat(64),
+        });
+        migrated.validate().unwrap();
+        assert!(start(&migrated).is_err(), "a lost marker is refused");
+        assert!(
+            start(&pending(migrated.clone(), 2)).is_err(),
+            "an unfinished preparation beside the marker is refused"
+        );
+        let marked = pending(migrated, 1);
+        let input = start(&marked).unwrap();
+        assert_eq!(Job::start_warning(&marked), Some(MIGRATED_START_WARNING));
+        // The review a human approves commits to the warning it was shown.
+        assert_ne!(
+            Job::beginning_review_data(&input, &marked, &builder, &selected).unwrap(),
+            unwarned(&input, &marked)
+        );
     }
 }

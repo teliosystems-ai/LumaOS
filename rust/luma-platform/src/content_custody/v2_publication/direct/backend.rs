@@ -6,9 +6,9 @@ use super::super::*;
 
 // The closed worker-original publisher awaits its production consumers, direct
 // V1, C owner migration and C index publication. Only tests dispatch it. A
-// cold reader selects a V1 publication or an owner migration window only
-// through its independent lineage verifier and refuses the index event classes
-// until each has one.
+// cold reader selects a V1 publication, an owner migration window or an index
+// Start reservation only through its independent lineage verifier and refuses
+// an index phase preparation until it has one.
 #[allow(dead_code)]
 #[path = "worker.rs"]
 mod worker;
@@ -130,6 +130,16 @@ impl<A: Checkpoint> Backend<A> {
             ) {
                 worker::verify_cold_migration(
                     &files,
+                    &pages,
+                    candidate.descriptor(),
+                    location,
+                    &mut live,
+                )?;
+            } else if matches!(
+                candidate.descriptor().operation,
+                OperationData::IndexJobReservation { .. }
+            ) {
+                worker::verify_cold_index_start(
                     &pages,
                     candidate.descriptor(),
                     location,

@@ -248,7 +248,10 @@ pub(super) fn run<A: Checkpoint>(
             if c.leaf.as_ref().is_some_and(Leaf::has_preparation)||selected_job.as_ref().is_some_and(|v|!matches!(v.stage,Stage::Published{..}|Stage::Retained{..})){return Err("existing index preparation/active job must be explicitly completed or recovered first".into());}
             (c.head.clone(),c.builder.identity().clone(),c.selection_sha256.clone())};
             let next=Job::beginning_data(input,&owner,&builder,&selection)?;
-            transition(input,&next,Job::beginning_review_data(input,&owner,&builder,&selection)?,gate)?
+            let mut review=transition(input,&next,Job::beginning_review_data(input,&owner,&builder,&selection)?,gate)?;
+            // The review hash already binds this warning; the human approves or declines it.
+            if let Some(warning)=Job::start_warning(&owner){review["warning"]=warning.into();review["approval_required"]=true.into();}
+            review
         }
         Operation::Advance{..}=>{
             let job=selected_job.as_ref().ok_or("no actual current build job to advance")?;gate.current_native_job(job)?;

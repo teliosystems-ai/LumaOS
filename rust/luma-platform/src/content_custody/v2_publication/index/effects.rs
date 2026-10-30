@@ -10,13 +10,14 @@ use luma_content_store::v2::{ObjectWriteSpec, PhysicalInventory};
 mod inventory;
 use inventory::{InventoryPlan, InventoryRoot};
 
-// The C Start reservation record awaits its only producer and replay,
-// the direct C index publisher and the cold direct C reader.
+// The C Start reservation record's only producer and replay, the direct C
+// index publisher and the cold direct C reader, are compiled only under test.
 #[allow(dead_code)]
 #[path = "effects/job.rs"]
 mod job;
-// The semantic proof awaits its only consumer, the direct C index publisher;
-// it is neither dispatched nor yet exercised by the publisher's tests.
+// The semantic proof's only consumer, the direct C index publisher, is
+// compiled only under test. Tests dispatch the Start reservation; an index
+// phase preparation is not yet dispatched.
 #[allow(dead_code)]
 #[path = "effects/verification.rs"]
 mod verification;
@@ -25,11 +26,16 @@ pub(in crate::content_checkpoint::custody::v2_publication) use verification::{
     verify_index_preparation, verify_index_start, CurrentBuilder, PreparationView, PreparedKind,
     VerifiedIndexPreparation,
 };
-// Historical replay awaits its only consumer, the cold direct C reader; it is
-// neither dispatched nor yet exercised by tests.
+// Historical replay's only consumer, the cold direct C reader, is compiled
+// only under test. It replays a selected Start reservation; an index phase
+// preparation replay still has no consumer.
 #[allow(dead_code)]
 #[path = "effects/selected.rs"]
 mod selected;
+#[allow(unused_imports)]
+pub(in crate::content_checkpoint::custody::v2_publication) use selected::{
+    replay_reserved_start_data, SelectedEventData, SelectedPreparationReader,
+};
 
 const PREPARATION_DOMAIN: &str = "luma-c-index-preparation-v1";
 

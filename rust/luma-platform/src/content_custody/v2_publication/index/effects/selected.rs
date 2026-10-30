@@ -25,6 +25,7 @@ pub(in crate::content_checkpoint::custody::v2_publication) trait SelectedPrepara
 /// worker-supplied callback, signed-looking JSON or a historical grant check.
 pub(in crate::content_checkpoint::custody::v2_publication) struct SelectedEventData<'a> {
     pub(in crate::content_checkpoint::custody::v2_publication) binding: &'a OwnerBinding,
+    pub(in crate::content_checkpoint::custody::v2_publication) request_sha256: &'a str,
     pub(in crate::content_checkpoint::custody::v2_publication) input_sha256: &'a str,
     pub(in crate::content_checkpoint::custody::v2_publication) source_sha256: &'a str,
     pub(in crate::content_checkpoint::custody::v2_publication) preparation: &'a RecordRef,
@@ -98,6 +99,7 @@ fn selected_cut(
     before.validate()?;
     after.validate()?;
     event.binding.validate()?;
+    digest(event.request_sha256)?;
     digest(event.input_sha256)?;
     digest(event.source_sha256)?;
     event.original_authority.validate()?;
@@ -248,6 +250,7 @@ pub(in crate::content_checkpoint::custody::v2_publication) fn replay_selected_da
     )?;
     let preparation = Preparation::parse(&bytes)?;
     if preparation.input.binding != *event.binding
+        || preparation.original.rpc_sha256 != event.request_sha256
         || preparation.input.sha256()? != event.input_sha256
         || preparation.original.effect != *event.original_authority
         || historical_source_sha256(&preparation.original, &preparation.input.binding)?
@@ -361,6 +364,7 @@ pub(in crate::content_checkpoint::custody::v2_publication) fn replay_reserved_st
     )?;
     let reservation = JobReservation::parse(&bytes)?;
     if reservation.input().binding != *event.binding
+        || reservation.original().rpc_sha256 != event.request_sha256
         || reservation.input().sha256()? != event.input_sha256
         || reservation.original().effect != *event.original_authority
         || historical_source_sha256(reservation.original(), &reservation.input().binding)?

@@ -6,6 +6,8 @@ use super::*;
 mod cold;
 #[path = "worker/index.rs"]
 mod index_preparation;
+#[path = "worker/index_cold.rs"]
+mod index_start;
 #[path = "worker/migration.rs"]
 mod migration;
 #[path = "worker/storage.rs"]
@@ -13,6 +15,7 @@ mod storage;
 #[path = "worker/v1.rs"]
 mod v1;
 pub(super) use cold::verify_selected as verify_cold_v1;
+pub(super) use index_start::verify_selected as verify_cold_index_start;
 pub(super) use migration::verify_selected as verify_cold_migration;
 
 const MEMORY_BYTES: usize = 4 * 1024 * 1024;

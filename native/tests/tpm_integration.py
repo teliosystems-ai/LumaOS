@@ -114,9 +114,10 @@ def main():
             environment['LUMA_TPM_TEST_ADMISSION'] = 'occupied'
             run(admission)
             # The whole serial unoptimized suite includes real bounded owner
-            # migrations; this deadline only bounds a hung run.
+            # migrations, also under the index Start tests; this deadline only
+            # bounds a hung run.
             run(['cargo', 'test', '--offline', '--locked', '-p', 'luma-platform', '--', '--nocapture',
-                 '--test-threads=1'], timeout=5400)
+                 '--test-threads=1'], timeout=7200)
             # Real PAM/shadow account checks, confined to this fresh container.
             # Never create, expire or lock an account on the Windows/WSL host.
             pam_profile = Path('/etc/pam.d/luma-admin')

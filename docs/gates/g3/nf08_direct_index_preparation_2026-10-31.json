@@ -1,0 +1,260 @@
+{
+  "schema_version": 1,
+  "recorded_on": "2026-11-01",
+  "status": "verified-component-tests-only-phase-run-index-publication-partial-member-recovery-and-c-reservation-open",
+  "scope": "G3 functional branch only: a test-only cold lineage verifier for one selected direct index phase preparation, and the first such preparation dispatched over the selected first index job in a real migrated V2 store; the snapshot also carries a test-only wait in one ignored credential observer test; no production caller, produced image, GWIN0 package, installed run or native C activation",
+  "branch_policy": {
+    "branch": "feature/g3-functional-beta",
+    "branched_from": "b69e09385a919f074d3ba9dfce45fb561ef6ab6f",
+    "g2_testing_and_gwin0_branch": "feature/g3-gwin0-beta",
+    "owner_decision": "On 29 October 2026 the owner kept further sequence-19 G2 testing and GWIN0 completion on feature/g3-gwin0-beta and moved G3 functional development to this branch in the words: complete G3 in a different branch till we fully test G2 and complete GWIN0. This checkpoint is the next step of that work and closes the cold verifier item that the reconciliation checkpoint left open; no separate owner approval of it is claimed"
+  },
+  "implementation": [
+    "The direct reader routes a selected index phase preparation to a new cold verifier instead of refusing the cut",
+    "The verifier binds the previous cut by its frame hash and NV head. The previous cut must be a bootstrap progress, V1 publication, owner migration, Start reservation, job selection or index preparation cut",
+    "It replays the preparation's retained data, plan inventory and owner point from the selected records and both cuts' own roots with the existing selected replay, which still refuses an old index leaf that already carries a preparation",
+    "It rebuilds the exact index role edit with the existing prepare and verify updates on the index generations, keyed by the historical owner literal, and requires the current roots. It then checks the owner states by read compare-and-swap and rebuilds the deterministic layout and physical closure",
+    "The retained attribution, plan review and inventory are historical data, never a current grant, and the verifier dispatches and allocates nothing",
+    "The cold V1, migration, Start reservation and job selection verifiers accept a previous preparation cut",
+    "The closed worker's phase preparation, its refusals and its single NV dispatch are not changed by this checkpoint",
+    "The ignored credential observer test kernel_task_inventory_limit now records its own task set before spawning and, after joining, waits (bounded at 10 seconds, failing otherwise) for exactly that set before its final census. kernel_check and the test's place in the TPM boundaries job are unchanged",
+    "The publisher still has no production caller; production builds do not compile the direct publisher, its cold verifiers, the index effects module or the test-only variants"
+  ],
+  "production_change": "None. Commit a64a273 touches only modules compiled under test (the direct publisher and the index effects module), and commit 17b4293 changes the body of one ignored test",
+  "exact_sources": {
+    "slice8_snapshot": {
+      "commit": "17b4293ed43b0d70d24ba62e63c1c5f17752131a",
+      "tree": "9e46eaa1467cad88c0ef8a9b4da6437f036a19cf",
+      "parent_commit": "a64a273266f5494c4a7e103ce53b744c9f7cfa6a",
+      "rust_tree": "0b172d48231daafde69d47a54aa32d295d57be9b",
+      "diff_from_reconciliation_record_head": "bd8a655..17b4293: 11 files, 916 insertions, 31 deletions",
+      "note": "The snapshot commit is the test-only task census fix (1 file, 19 insertions) on top of the preparation commit, so the one check covers both"
+    },
+    "preparation_commit": {
+      "commit": "a64a273266f5494c4a7e103ce53b744c9f7cfa6a",
+      "tree": "a52a7302eff9581fc4889f40ca459619cb64bfc8",
+      "parent_commit": "bd8a65569083c587bdd7c40d5d74273f4c086ce5",
+      "rust_tree": "4e70204cdd081e7163d8fef87b758faef566ae0a",
+      "diff": "10 files, 897 insertions, 31 deletions"
+    }
+  },
+  "verification": {
+    "environment": {
+      "container": "pinned tools image sha256:819dfe7772da1e3c76ffdc8f9ea4a1fa44c7c549bd4fa988e35d9397d87924b2",
+      "network": "none",
+      "memory_limit": "8g",
+      "cpu_limit": 6,
+      "cargo_build_jobs": 1,
+      "warnings_denied": true,
+      "test_profile": "The committed lightly optimized dev/test profile (opt-level 1, line-table debug info, debug assertions and overflow checks; release unchanged), checked by the run in profile.txt, with debuginfo off for the run",
+      "storage": "Disposable private ext4 work directories on drive D",
+      "authority": "Explicit software worker attribution, builder identity, resource lease and NV fixtures, not installed original PAM, the installed image builder, physical TPM or loaded LSM qualification"
+    },
+    "slice8_checks": {
+      "directory": "/mnt/d/LumaOS-builds/g3-slice8-check-20261031-a",
+      "commit": "17b4293ed43b0d70d24ba62e63c1c5f17752131a",
+      "sha256sums_verified": true,
+      "sha256sums_sha256": "f93571cd53d3118937703d3bedc93461bb6dc367f4e4ab777cc35a242972143d",
+      "admission_sha256": "6a09565d9a075065de93a5eb9cd17177ec6cbb94a9af4d2311b23d8b4db87133",
+      "profile_sha256": "920ef8d5b573664e83bb766758844d4b44f30533aaba07a735b8fcd2aeda01fc",
+      "format_check": {
+        "passed": true,
+        "diff_lines": 0,
+        "log_sha256": "b35dab8e17e451052ebe6f2e9dc73c62bf84ee3f1a2d40dcfb9bac0305100b5d"
+      },
+      "warning_denied_test_build": {
+        "passed": true,
+        "packages": ["luma-content", "luma-content-store", "luma-platform"],
+        "log_sha256": "58a785a367f20852fa833eadd3d304dbf6e62bf7e410c247f1d68db29e470a1d",
+        "finished": "Finished test [optimized] target(s) in 21m 09s"
+      },
+      "tests": [
+        {
+          "filter": "custody::v2_publication::direct::initial::tests::index_cases custody::v2_publication::direct::backend::worker::index_selection::tests",
+          "log": "platform-index.log",
+          "log_sha256": "8bdabadce40e4ade050f25d3360d6dfb3e44cd92e9583fe76ef9c64ad4ca1f97",
+          "passed": 5,
+          "failed": 0,
+          "filtered_out": 1619,
+          "seconds": 3787.12,
+          "required_ok": [
+            "content_checkpoint::custody::v2_publication::direct::backend::worker::index_selection::tests::a_walk_is_admitted_only_as_c_or_c_plus_complete_reserved_members",
+            "content_checkpoint::custody::v2_publication::direct::initial::tests::index_cases::actual_index_job_selection_reconciles_complete_members_of_interrupted_attempts",
+            "content_checkpoint::custody::v2_publication::direct::initial::tests::index_cases::actual_index_phase_preparation_refuses_substitutes_before_nv_then_one_dispatch_cold_reopen_replays",
+            "content_checkpoint::custody::v2_publication::direct::initial::tests::index_cases::actual_index_start_lost_nv_reply_is_fenced_without_adoption",
+            "content_checkpoint::custody::v2_publication::direct::initial::tests::index_cases::actual_index_start_refuses_substitutes_before_nv_then_one_dispatch_cold_reopen_replays"
+          ]
+        },
+        {
+          "filter": "luma-content and luma-content-store, unfiltered",
+          "log": "content.log",
+          "log_sha256": "574f0c62951ac0a19fa270e3b911396fcb1762f7952b463e0746e93fd96f9eab",
+          "results": {
+            "luma-content unit tests": ["ok", 102, 0, 0, 0.06],
+            "luma-content-store unit tests": ["ok", 356, 0, 0, 824.00],
+            "luma-content doc-tests": ["ok", 0, 0, 0, 0.00],
+            "luma-content-store doc-tests": ["ok", 3, 0, 0, 8.02]
+          }
+        },
+        {
+          "filter": "custody::v2_publication --skip index_cases --skip index_selection::tests",
+          "log": "platform-v2-publication.log",
+          "log_sha256": "eeaa51207a58fc8736f7728a13fe26aaf0f9efd5279dfb8614dc65f112e0a633",
+          "passed": 107,
+          "failed": 0,
+          "filtered_out": 1517,
+          "seconds": 1923.31,
+          "absent": [
+            "index_cases::",
+            "index_selection::tests::"
+          ]
+        },
+        {
+          "filter": "--skip custody::v2_publication",
+          "log": "platform-rest.log",
+          "log_sha256": "ed236b861fa3ed528ec83488c267aa69c6ff2a3a590848513fe536c6b1dfb246",
+          "passed": 1470,
+          "failed": 0,
+          "ignored": 42,
+          "filtered_out": 112,
+          "seconds": 834.66
+        },
+        {
+          "filter": "credential_observer::tests::kernel_task_inventory_limit, run alone with --ignored --exact from the built test binary",
+          "log": "task-inventory-stress.log",
+          "log_sha256": "a07e455bd49d1240e2a50e584b1714ba614d5d42693594433e53c2b43e9d879c",
+          "binary_sha256": "12c53120d525e1bdecc158d7d37a33adbfc4cc4a137b8d02ef7a60ddb0106f45",
+          "serial_runs": 1000,
+          "serial_failures": 0,
+          "parallel_runs": 60000,
+          "parallel_loops": 6,
+          "parallel_failures": 0,
+          "total_runs": 61000,
+          "total_failures": 0
+        }
+      ],
+      "store": {
+        "before_sha256": "0c518047b4f45c2a6124b8c289c216718b80dfc6c215e8cf0a8aff1ccd31cfd3",
+        "after_sha256": "b15453051f0dc76865fc068c921737478b7d0a9f6378ce69bcbd091971cd9bcc"
+      },
+      "results_format": "Each results entry is [result, passed, failed, filtered_out, seconds]"
+    },
+    "task_census_baseline": {
+      "note": "A diagnostic run, not a gate check, of the unfixed test. It ran the binary that pre-check r2 attempt a left in the shared target, after checking that its credential_observer.rs equals bd8a655's. It ran with 4 GiB, not the 8 GiB of the stress above, and the same 6 CPUs",
+      "directory": "/mnt/d/LumaOS-builds/g3-task-inventory-baseline-20261031-a",
+      "sha256sums_verified": true,
+      "sha256sums_sha256": "f4c29b3cdbd85cb04708471b4c7038490f4202f9c92df4611d25ebd4df713628",
+      "log_sha256": "16b18f9742ceb7efbbb8d5d8272bc25311e09445118cb97e043531cd1fc5d720",
+      "source_sha256": "d4703d439d81c387f53abf6a60708ee5eb3d1a0f8cf9dba387babd3182b87e61",
+      "binary_sha256": "ac2e8ea4e925a6857198e98cf7728410c361a1d0efbb2b72111f96b942156daa",
+      "serial_runs": 1000,
+      "serial_failures": 0,
+      "parallel_runs": 6000,
+      "parallel_failures": 4,
+      "failure_location": "credential_observer.rs:1020:38"
+    },
+    "index_tests": [
+      "a_walk_is_admitted_only_as_c_or_c_plus_complete_reserved_members",
+      "actual_index_job_selection_reconciles_complete_members_of_interrupted_attempts",
+      "actual_index_phase_preparation_refuses_substitutes_before_nv_then_one_dispatch_cold_reopen_replays",
+      "actual_index_start_lost_nv_reply_is_fenced_without_adoption",
+      "actual_index_start_refuses_substitutes_before_nv_then_one_dispatch_cold_reopen_replays"
+    ],
+    "test_behaviour": [
+      "The preparation test first runs a real bounded owner migration into a real side-by-side v2 store, then dispatches a Start reservation and the job selection, so the preparation runs over the actual C-selected job of a migrated V2 owner",
+      "A one-item Step plan is made over the selected job; its review binds the job's digest as base and the Step input's digest as input",
+      "Five substitutes are each refused with no NV dispatch and an unchanged store inventory: the selection's own original, a Publish purpose, a stale review, another Step's plan under an original that binds this Step to that plan's review, and a revoked check",
+      "A cold reopen after those refusals still selects the job selection",
+      "One preparation is then exactly one NV dispatch with an unchanged store inventory",
+      "A cold reopen selects the exact preparation with the same binding, input digest, preparation and original attribution, sequence one higher, the owner root unchanged and the index generations root changed to one entry",
+      "A second preparation, of another Step under its own original, is refused from the reopened cut with no further NV dispatch and an unchanged store inventory, and a cold reopen still succeeds",
+      "The other four index tests are unchanged and still pass"
+    ],
+    "total_platform_tests_in_build": 1624,
+    "full_platform_suite_run_locally": true,
+    "full_platform_suite_note": "The three platform filters are disjoint and together cover every luma-platform test once: index_cases with the index_selection unit tests, the rest of custody::v2_publication and everything outside custody::v2_publication (5 + 107 + 1512 = 1624, 42 of them ignored by their own attributes). Platform unit tests ran serially; the parallel test interference stays open. kernel_task_inventory_limit is one of the 42 ignored tests and ran only in the stress",
+    "dispatched": "test builds only; no production caller"
+  },
+  "not_claimed": [
+    "CI acceptance of this snapshot; the push and its CI run follow this record, and the TPM boundaries job is the acceptance evidence for the task census fix. The local stress cannot rule out CI timing that differs from this host",
+    "Running the selected job's prepared phase or a published index generation",
+    "A test of the cold verifier's refusals: no test tampers with a selected preparation or its retained records, so the new verifier is exercised only by the honest replay",
+    "Any event dispatched over a preparation cut: the cold verifiers accept a previous preparation cut, but no test reaches one, because the only later attempt, a second preparation, is refused before NV",
+    "A specific refusal reason: the five substitutes and the second preparation assert an error, no NV dispatch and an unchanged store, not which check refused",
+    "Resolution or release of a selected preparation; it stays unresolved and charged",
+    "Recovery of a partial member or a foreign object; a store holding one is refused before NV and the reservation's liability stays charged",
+    "Verification of the identities of objects C already accounts for; the walk compares counters, so a same-size swap of a C-accounted object is not detected by it",
+    "Re-synchronization by other v2 writers that reuse an existing object through write_object",
+    "Cold re-verification of the job blob or other object-store bytes; the cold verifier replays the C records and roots only",
+    "A power-loss, crash-consistency or page-cache-drop test of the synchronization or the preparation; the tests use software interruption and revocation, and the host power loss below only ended a pre-check",
+    "The three working-tree pre-checks below; they are retained aids, not gate checks",
+    "A C reservation of the fresh v2 namespace or joined protected C counters",
+    "A production index grant shape, a production caller, an installed run or native C activation",
+    "Reconciliation of an unselected pending worker attempt after a lost NV reply",
+    "Delta overlay, snapshot backup delivery or a V2 owner creation route",
+    "The 100000-object/500-ms NF08 measurement",
+    "Artifact CLI harness passage, installed PAM, physical TPM, loaded LSM or Hyper-V qualification",
+    "Any produced image or GWIN0 package; G3 and GWIN0 remain open"
+  ],
+  "retained_failed_attempts": [
+    {
+      "directory": "/mnt/d/LumaOS-builds/g3-slice8-precheck-20261031-a",
+      "commit": "Uncommitted working tree over bd8a655",
+      "sha256sums_verified": true,
+      "sha256sums_sha256": "72a9e3ee3dcdeacd4af1b1080f38456722256924ed8977d48d1201a90d7fac71",
+      "diff_lines": 41,
+      "logs": {
+        "admission.txt": "1b367f4adb26a08f760131106ff70c3d804ca24e462f9f32bee70526ea68bce7",
+        "fmt.log": "45dfc3eec068e12718cd7c26c1de885254e02a1c6f8bf5fa9415975602006205",
+        "fmt.diff": "c172b6313b20ced432ea0d5c6575d55302f708e1c3ac618f33ac815b01231bbe",
+        "build-tests.log": "bdb98b2528a7133c228ec7473dcb0fe33f85e9427244a34597ac24c691861e67"
+      },
+      "results": {
+        "fmt.log": "exit=0 with a 41-line diff",
+        "build-tests.log": "exit=101 with 30 errors from files the copy did not hold"
+      },
+      "cause": "The first pre-check copied only rust/, but luma-platform includes files from native/, examples/ and docs/ at compile time, so the test build could not finish. Its diff also showed three formatting changes in the new code",
+      "correction": "A new pre-check script copied the whole repository; the first script was not edited. The formatting was corrected before commit a64a273"
+    },
+    {
+      "directory": "/mnt/d/LumaOS-builds/g3-slice8-precheck-r2-20261031-a",
+      "commit": "Uncommitted working tree over bd8a655",
+      "diff_lines": 0,
+      "logs": {
+        "admission.txt": "3b70f6252f072c360b937aad12b97a8e91c418553046859cf6f1d053b23fc1f7",
+        "fmt.log": "ac4f89faa6432c5b5f3b54bb8e2bcde2026ce0806fbbbe1362f101841b5578f5",
+        "fmt.diff": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "build-tests.log": "1e1a86ffb2b19f8d8707a91aba5f308213b16e62424d080d1a8671b58692d715",
+        "platform-index.log": "5de828c919fb190a521abf53e3c3421e0b44c900f04ddce1558d3a0f3b82b2e1"
+      },
+      "logs_hashed_after_run": "The host stopped before the attempt's checksum step, so it wrote no SHA256SUMS; these file hashes were taken afterwards by reading the retained directory, which was left unmodified; they are not a record the run itself wrote",
+      "results": {
+        "build-tests.log": "Finished test [optimized] target(s) in 19m 23s, exit=0",
+        "platform-index.log": "start=2026-10-31T18:42:40Z with one test reported ok and no end or exit line; last written at 20:30:14 local time"
+      },
+      "cause": "Not a test failure. Mains power dropped at 18:33:20 local time on 31 October and the laptop's battery ran flat, so the host stopped during the run; it booted again at 20:34:10. The battery report shows the capacity reaching 0 by 20:34",
+      "correction": "The same script ran as attempt b once power had returned; attempt a was left unmodified"
+    },
+    {
+      "directory": "/mnt/d/LumaOS-builds/g3-slice8-precheck-r2-20261031-b",
+      "commit": "Uncommitted working tree over bd8a655, with the task census fix",
+      "sha256sums_verified": true,
+      "sha256sums_sha256": "aec0fdc97ff0f35e2522595c9a3a069406accc13cc926d44b16b6eb78f15e6ed",
+      "diff_lines": 15,
+      "logs": {
+        "admission.txt": "39f749faa18ca02686cd5ece35488ecbd235f078d983af2ff3d7ce95df0e79bd",
+        "fmt.log": "c2bf9a69c1800766efd1117fac5128662bf4e24105f33041ade9bd36bf50ab7d",
+        "fmt.diff": "7d750c1ed5e15def8173162e35b42909c8f6a615e0e54a0875fe4926c7fc2e74",
+        "build-tests.log": "9822119fe747705be4d6b79b562bb50a2e703e1cbd69cf0b4c46c7f8f6785735",
+        "platform-index.log": "5d89f36e10cc81b1a7b90ef9c4fba9af59116d9c284bbbc9b5f2dbad5c0cb685"
+      },
+      "results": {
+        "fmt.log": "exit=0 with a 15-line diff",
+        "build-tests.log": "Finished test [optimized] target(s) in 17m 03s",
+        "platform-index.log": "4 passed, 0 failed, 1620 filtered out, 3779.45 seconds"
+      },
+      "cause": "Its tests passed, but rustfmt wanted one new assert in credential_observer.rs wrapped, so the tree would have failed a format check",
+      "correction": "The assert was wrapped before commit 17b4293, and the check on that commit has an empty diff"
+    }
+  ]
+}

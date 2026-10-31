@@ -2337,6 +2337,40 @@ Recovering a partial or foreign member, a C namespace reservation, a cold
 verifier for index phase preparations and the items above remain open. G3 and
 GWIN0 are not complete.
 
+Slice 8 adds a cold verifier for a selected direct index phase preparation,
+and the direct reader routes a selected preparation to it instead of refusing
+the cut. The verifier binds the previous cut by its frame hash and NV head; that
+cut must be a bootstrap, V1, migration, reservation, selection or preparation
+cut. It replays the preparation's retained data, plan inventory and owner point
+from the selected records and both cuts' own roots with the existing selected
+replay, which still refuses an old index leaf that already carries a
+preparation. It then rebuilds the exact index role edit, the roots, the owner
+read check, the deterministic layout and the physical closure. The retained
+attribution, plan review and inventory are historical data, never a current
+grant, and nothing dispatches or allocates. The cold V1, migration, Start
+reservation and job selection verifiers accept a previous preparation cut.
+There is no production change.
+
+In component tests over a migrated V2 owner with a selected first index job,
+one phase preparation of a one-item Step window is planned over the selected
+job. The selection's own original, a Publish purpose, a stale review, an
+original bound to another Step plan's review and a revoked check are each
+refused before NV with the store unchanged. One preparation is then one NV
+dispatch with nothing written to the object store, and a cold reopen selects
+the exact preparation with the same binding, input, preparation and original
+attribution. A second preparation is then refused before NV with the store
+unchanged. The cold verifier is exercised only by that honest replay: no test
+tampers with a preparation cut or dispatches over one. On snapshot `17b4293`,
+format was clean and the warning-denied test build passed. The five index
+tests, the `luma-content` and `luma-content-store` suites, the other 107
+`custody::v2_publication` tests and the remaining 1470 platform tests passed
+(42 ignored), so each of the 1624 platform tests ran once, serially. See the
+[index phase preparation checkpoint](gates/g3/nf08_direct_index_preparation_2026-10-31.json).
+Refusal tests for the cold verifier, running the selected job's prepared phase,
+publishing an index generation, recovering a partial or foreign member, a C
+namespace reservation and the items above remain open. G3 and GWIN0 are not
+complete.
+
 CI run 41205654555 on `6890988` passed the storage and TPM boundary jobs. Its
 rust job passed the content suites, then failed one of 1622 platform tests:
 the credential observer's real kernel handle test, with `NotFound`. The test
@@ -2352,3 +2386,16 @@ failure. See the
 The rust job's native `artifact-read` step still needs an installed Admin
 anchor and TPM and is not passed. Platform unit tests still run serially, so
 the parallel interference stays open.
+
+CI run 41224112063 on `bd8a655` passed the storage job. Its rust job passed the
+content suites and 1581 platform tests (42 ignored), including the changed real
+kernel handle test, then stopped at `artifact-read`. The TPM job failed one
+test, the ignored `kernel_task_inventory_limit`, with `NotFound` from its final
+census. A joined thread can stay listed in `/proc/PID/task` until the kernel
+releases its task, so a thread that vanished during the census failed the check
+closed, as designed. Alone, the unfixed test failed 4 of 7000 local runs, all
+under parallel load. `17b4293` makes the test wait, bounded, for its original
+task set before that census; `kernel_check` and production are unchanged. On
+that snapshot the fixed test passed all 61000 local runs. CI timing can differ,
+so the pushed branch's TPM job is the acceptance evidence. See the
+[task census test note](../native/evidence/NATIVE_TASK_CENSUS_TEST_2026-10-31.md).

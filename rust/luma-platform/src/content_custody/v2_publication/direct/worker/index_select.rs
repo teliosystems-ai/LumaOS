@@ -5,18 +5,24 @@
 //! index leaf (the selected job) together. The store write is DATA until that
 //! event is NV-selected.
 //!
-//! A crashed attempt can leave the store ahead of C: the blob is written and
-//! nothing is selected. A retry then refuses, because the observed writer
-//! begin requires the actual store walk to equal the C-selected accounting.
-//! Reconciling such an attempt is later G3 work; until a selection is
-//! published the reservation's liability stays charged.
+//! A crashed attempt can leave the store ahead of C: some or all members of
+//! the reserved job blob are written and nothing is selected. A retry under a
+//! NEW original walks the actual store and admits it only when it equals the
+//! C-selected accounting or exceeds it by complete C-reserved members and the
+//! directories that could hold them. Those members are content-addressed DATA
+//! the retry re-reads byte for byte before reuse; it writes the missing ones,
+//! and its measured inventory must still fit the reservation's liability. A
+//! partial member, a foreign object or any other difference is refused before
+//! any store write or NV dispatch. Recovering a partial member is later work;
+//! until a selection is published the reservation's liability stays charged.
 use super::index_preparation::View;
 use super::*;
 use crate::content_checkpoint::custody::v2_publication::index::effects;
 use crate::content_index::{policy, request};
 use luma_content_store::v2::{
-    AppendCommitment, AppendWriterBoundary, HeldNamespaceObservation, HeldWriterObservation,
-    IoBudget, Mutation, ObjectStore, OwnerBoundary, PhysicalInventory,
+    Allocation, AppendCommitment, AppendWriterBoundary, HeldNamespaceObservation,
+    HeldWriterObservation, IoBudget, Mutation, ObjectStore, ObjectWriteSpec, OwnerBoundary,
+    PhysicalInventory,
 };
 use luma_content_store::{Access, Boundary, DecisionKind, ResourceBudget};
 use std::fs::File;
@@ -67,6 +73,109 @@ fn write_budget(objects: usize, liability: &policy::Liability) -> Result<IoBudge
     Ok(budget)
 }
 
+/// One walk of the actual store, split into the C-reserved job members it
+/// shows and the object prefixes that every other file already holds. It is
+/// measured DATA, never a recovery grant or permission to adopt a file.
+struct Walk<'p> {
+    reserved: BTreeMap<&'p str, u32>,
+    files: u64,
+    logical_bytes: u64,
+    allocated_bytes: u64,
+    partial: bool,
+    held_first: BTreeSet<String>,
+    held_leaf: BTreeSet<String>,
+}
+impl<'p> Walk<'p> {
+    fn new(objects: &'p [ObjectWriteSpec]) -> Self {
+        Self {
+            reserved: objects
+                .iter()
+                .map(|object| (object.sha256.as_str(), object.bytes))
+                .collect(),
+            files: 0,
+            logical_bytes: 0,
+            allocated_bytes: 0,
+            partial: false,
+            held_first: BTreeSet::new(),
+            held_leaf: BTreeSet::new(),
+        }
+    }
+    fn visit(&mut self, allocation: Allocation) -> luma_content_store::Result<()> {
+        let name = allocation
+            .relative_path
+            .rsplit('/')
+            .next()
+            .unwrap_or_default();
+        let (Some(first), Some(leaf)) = (name.get(..2), name.get(..4)) else {
+            return Err("v2 store walk names an unplaced object".into());
+        };
+        let Some(&bytes) = self.reserved.get(name) else {
+            self.held_first.insert(first.to_owned());
+            self.held_leaf.insert(leaf.to_owned());
+            return Ok(());
+        };
+        if !allocation.complete || allocation.bytes != u64::from(bytes) {
+            self.partial = true;
+        }
+        let overflow = "index job selection store walk overflows";
+        self.files = self.files.checked_add(1).ok_or(overflow)?;
+        self.logical_bytes = self
+            .logical_bytes
+            .checked_add(allocation.bytes)
+            .ok_or(overflow)?;
+        self.allocated_bytes = self
+            .allocated_bytes
+            .checked_add(allocation.allocated_bytes)
+            .ok_or(overflow)?;
+        Ok(())
+    }
+    /// The walk may equal the C-selected accounting, or exceed it ONLY by the
+    /// complete C-reserved members it shows and at most the reserved prefix
+    /// directories no other file holds. A reserved member that C already
+    /// accounts for counts as new, so a store ahead of C over such a member
+    /// is refused rather than guessed.
+    fn attribute(
+        &self,
+        selected: &PhysicalInventory,
+        walk: &PhysicalInventory,
+    ) -> luma_content_store::Result<()> {
+        if self.partial {
+            return Err("index job selection retains an incomplete C-reserved member".into());
+        }
+        if walk == selected {
+            return Ok(());
+        }
+        let mut first = BTreeSet::new();
+        let mut leaf = BTreeSet::new();
+        for name in self.reserved.keys() {
+            let (Some(a), Some(b)) = (name.get(..2), name.get(..4)) else {
+                return Err("C-reserved job member is not an object identifier".into());
+            };
+            if !self.held_first.contains(a) {
+                first.insert(a);
+            }
+            if !self.held_leaf.contains(b) {
+                leaf.insert(b);
+            }
+        }
+        let directories = u64::try_from(first.len() + leaf.len())?;
+        let grew = |after: u64, before: u64| after.checked_sub(before);
+        if walk.incomplete_objects != selected.incomplete_objects
+            || grew(walk.regular_files, selected.regular_files) != Some(self.files)
+            || grew(walk.logical_bytes, selected.logical_bytes) != Some(self.logical_bytes)
+            || grew(walk.allocated_bytes, selected.allocated_bytes)
+                .map_or(true, |delta| delta < self.allocated_bytes)
+            || grew(walk.directories, selected.directories)
+                .map_or(true, |delta| delta > directories)
+        {
+            return Err(
+                "actual v2 store differs from C by more than complete C-reserved members".into(),
+            );
+        }
+        Ok(())
+    }
+}
+
 /// The actual C point and original worker that every content-store bound
 /// re-observes. The owner head and its accounting were resolved by the fresh
 /// C verifier; each admit/check re-proves the same selected NV cut and live
@@ -79,6 +188,9 @@ struct Current<'a, 'b, 'c, 's, A: Checkpoint> {
     binding: OwnerBinding,
     head: RecordRef,
     physical: PhysicalInventory,
+    /// The admitted walk: the C-selected accounting or that plus complete
+    /// C-reserved members. The writer begins only over this exact walk.
+    observed: Option<PhysicalInventory>,
     review: String,
     source_bytes: u64,
     write: IoBudget,
@@ -186,11 +298,12 @@ impl<A: Checkpoint> AppendWriterBoundary for Current<'_, '_, '_, '_, A> {
             return Err("index job selection repeats its observed writer".into());
         }
         let store = self.store;
-        if store.inventory(read_budget(), self, |_| Ok(()))? != self.physical {
-            return Err(
-                "actual v2 store differs from the C-selected owner accounting at writer begin"
-                    .into(),
-            );
+        let observed = self
+            .observed
+            .clone()
+            .ok_or("index job selection writer has no admitted store walk")?;
+        if store.inventory(read_budget(), self, |_| Ok(()))? != observed {
+            return Err("actual v2 store differs from the admitted walk at writer begin".into());
         }
         let namespace = self
             .namespace
@@ -300,18 +413,19 @@ fn select<A: Checkpoint>(
             binding: input.binding.clone(),
             head: plan.head_ref().clone(),
             physical: plan.physical().clone(),
+            observed: None,
             review: mutation.review_sha256.clone(),
             source_bytes: mutation.source_bytes,
             write,
             namespace: None,
             held: None,
         };
-        if store.inventory(read_budget(), &mut current, |_| Ok(()))? != current.physical {
-            return Err(
-                "actual v2 store differs from the C-selected owner accounting before job selection"
-                    .into(),
-            );
-        }
+        let mut walk = Walk::new(plan.objects());
+        let observed = store.inventory(read_budget(), &mut current, |allocation| {
+            walk.visit(allocation)
+        })?;
+        walk.attribute(&current.physical, &observed)?;
+        current.observed = Some(observed);
         current.namespace = Some(store.observe_namespace(observation_budget(), &mut current)?);
         let writer = store.prepare_index_observed(plan.head(), &mutation, write, &mut current)?;
         let job = writer.prepare_blob(plan.job_bytes(), write, &mutation, &mut current, |b| {
@@ -496,3 +610,7 @@ fn select<A: Checkpoint>(
         outcome: Completed::IndexJobSelection(parts.selection),
     })
 }
+
+#[cfg(test)]
+#[path = "index_select/tests.rs"]
+mod tests;

@@ -18,7 +18,8 @@ use crate::content_index::scope::original_usage;
 use crate::content_index::state::Job;
 use luma_content_store::corpus_index::{BuilderIdentity, CorpusIndexLimits};
 use luma_content_store::v2::{BlobObjectPlan, IoBudget, Mutation, PhysicalInventory};
-use luma_content_store::DecisionKind;
+use luma_content_store::{Access, Boundary, DecisionKind, ResourceBudget};
+use std::path::Path;
 
 /// Inventory walks and blob reads are read-only admissions.
 fn read() -> IoBudget {
@@ -395,12 +396,62 @@ fn actual_index_start_refuses_substitutes_before_nv_then_one_dispatch_cold_reope
     cold(&fixture).expect("the refused attempts leave the selected job");
 }
 
-/// A crashed selection can leave the job blob in the store with nothing
-/// selected. The store then differs from the C-selected owner accounting, so
-/// a retry is refused before any further store write or NV dispatch and the
-/// reservation stays selected. Reconciling such an attempt is later G3 work.
+/// The actual path of one object in the owner's single v2 store.
+fn object_path(fixture: &Fixture, sha256: &str) -> PathBuf {
+    let roots: Vec<PathBuf> = fs::read_dir(&fixture.data)
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .filter(|path| {
+            path.file_name()
+                .is_some_and(|name| name.to_string_lossy().starts_with("v2-"))
+        })
+        .collect();
+    assert_eq!(roots.len(), 1, "one v2 store under the fixture data");
+    roots[0]
+        .join("objects")
+        .join(&sha256[..2])
+        .join(&sha256[2..4])
+        .join(sha256)
+}
+/// Whether the object holds all of its bytes, as it does right after its last
+/// part is written and before it is synchronized.
+fn written(path: &Path, bytes: u32) -> bool {
+    fs::metadata(path).is_ok_and(|metadata| metadata.len() == u64::from(bytes))
+}
+/// A crash right after one object's last write: every later check refuses, so
+/// that object is complete and nothing after it is written.
+struct Interrupted<'a, B> {
+    inner: &'a mut B,
+    path: PathBuf,
+    bytes: u32,
+}
+impl<B: Boundary> Boundary for Interrupted<'_, B> {
+    fn admit(
+        &mut self,
+        binding: &OwnerBinding,
+        budget: ResourceBudget,
+    ) -> luma_content_store::Result<()> {
+        self.inner.admit(binding, budget)
+    }
+    fn check(&mut self, access: Access<'_>) -> luma_content_store::Result<()> {
+        if written(&self.path, self.bytes) {
+            return Err("software crash after a reserved job member".into());
+        }
+        self.inner.check(access)
+    }
+}
+
+/// Crashed selections can leave members of the reserved job blob in the
+/// store with nothing selected. One crash leaves only the first member; the
+/// actual worker under a new original is then revoked right after it writes
+/// the last. Each retry walks the store, admits it as the C-selected
+/// accounting plus complete reserved members, re-reads those members and
+/// writes only the missing ones. The reservation's own original is refused,
+/// and the final retry reconciles with one NV dispatch and nothing more
+/// written. Partial and foreign members are refused before NV; the pure
+/// attribution test covers them, since no retry may adopt or remove them.
 #[test]
-fn actual_index_job_selection_over_a_store_ahead_of_c_is_refused_before_nv() {
+fn actual_index_job_selection_reconciles_complete_members_of_interrupted_attempts() {
     let fixture = Fixture::new();
     let Migrated {
         owner,
@@ -412,6 +463,7 @@ fn actual_index_job_selection_over_a_store_ahead_of_c_is_refused_before_nv() {
     let current = builder();
     let input = start(&owner.binding, &head, "1");
     let (audit, source) = original(&input, &head, &current.0, 800);
+    let (reserved_audit, reserved_source) = (audit.clone(), source.clone());
     let mut check = || Ok(());
     cold(&fixture)
         .unwrap()
@@ -421,9 +473,21 @@ fn actual_index_job_selection_over_a_store_ahead_of_c_is_refused_before_nv() {
             &mut software_worker_operation(&audit, source, &mut check),
         )
         .unwrap();
-    // The interrupted attempt's only effect: the exact job blob, no C event.
+    let calls = fixture.memory.0.borrow().calls;
     let (job_bytes, job) = first_job(&input, &head, &current.0);
-    let written = store
+    let members = BlobObjectPlan::data(&input.binding, &job_bytes, || Ok(()))
+        .unwrap()
+        .write_set(|| Ok(()))
+        .unwrap();
+    assert_eq!(members.len(), 3, "one chunk, one group and the blob index");
+    let paths: Vec<PathBuf> = members
+        .iter()
+        .map(|member| object_path(&fixture, &member.sha256))
+        .collect();
+    assert!(paths.iter().all(|path| !path.exists()));
+    let stored = store.inventory(read(), &mut authority, |_| Ok(())).unwrap();
+    // The first crash's only effect: the first member, complete, no C event.
+    assert!(store
         .prepare_blob(
             &job_bytes,
             IoBudget {
@@ -436,14 +500,45 @@ fn actual_index_job_selection_over_a_store_ahead_of_c_is_refused_before_nv() {
                 decision: DecisionKind::Published,
                 source_bytes: job_bytes.len() as u64,
             },
-            &mut authority,
+            &mut Interrupted {
+                inner: &mut authority,
+                path: paths[0].clone(),
+                bytes: members[0].bytes,
+            },
         )
-        .unwrap();
-    assert_eq!(written, job);
+        .is_err());
+    assert!(written(&paths[0], members[0].bytes) && !paths[1].exists() && !paths[2].exists());
     let ahead = store.inventory(read(), &mut authority, |_| Ok(())).unwrap();
-    let calls = fixture.memory.0.borrow().calls;
-    let (audit, source) = original(&input, &head, &current.0, 801);
+    assert_eq!(ahead.regular_files, stored.regular_files + 1);
+    assert_eq!(ahead.incomplete_objects, stored.incomplete_objects);
+    // The reservation's own original never selects, even over its members.
     let mut check = || Ok(());
+    assert!(cold(&fixture)
+        .unwrap()
+        .select_index_start_direct(
+            &store,
+            &input,
+            &current,
+            &mut software_worker_operation(&reserved_audit, reserved_source, &mut check),
+        )
+        .is_err());
+    assert_eq!(fixture.memory.0.borrow().calls, calls, "refused before NV");
+    assert_eq!(
+        store.inventory(read(), &mut authority, |_| Ok(())).unwrap(),
+        ahead,
+        "refused before any store write"
+    );
+    // The actual worker reuses the first member, writes the other two and is
+    // revoked right after the last one: the blob is complete, nothing selected.
+    let (audit, source) = original(&input, &head, &current.0, 801);
+    let last = (paths[2].clone(), members[2].bytes);
+    let mut check = || {
+        if written(&last.0, last.1) {
+            Err("software original revoked after the last reserved member".into())
+        } else {
+            Ok(())
+        }
+    };
     assert!(cold(&fixture)
         .unwrap()
         .select_index_start_direct(
@@ -453,16 +548,69 @@ fn actual_index_job_selection_over_a_store_ahead_of_c_is_refused_before_nv() {
             &mut software_worker_operation(&audit, source, &mut check),
         )
         .is_err());
-    assert_eq!(fixture.memory.0.borrow().calls, calls, "refused before NV");
+    assert_eq!(fixture.memory.0.borrow().calls, calls, "revoked before NV");
+    let complete = store.inventory(read(), &mut authority, |_| Ok(())).unwrap();
+    assert_eq!(complete.regular_files, stored.regular_files + 3);
+    assert_eq!(complete.incomplete_objects, stored.incomplete_objects);
     assert_eq!(
-        store.inventory(read(), &mut authority, |_| Ok(())).unwrap(),
-        ahead
+        store.read_blob(&job, read(), &mut authority).unwrap(),
+        job_bytes
     );
-    let reopened = cold(&fixture).expect("the refused selection leaves the reservation");
+    let before = cold(&fixture).expect("the interrupted attempts leave the reservation");
+    let reserved = before.descriptor().clone();
     assert!(matches!(
-        reopened.descriptor().operation,
+        reserved.operation,
         OperationData::IndexJobReservation { .. }
     ));
+    // A new original reconciles: one dispatch, every member re-read, none
+    // rewritten, and the cold reader replays the selection.
+    let (audit, source) = original(&input, &head, &current.0, 802);
+    let mut check = || Ok(());
+    let selection = before
+        .select_index_start_direct(
+            &store,
+            &input,
+            &current,
+            &mut software_worker_operation(&audit, source, &mut check),
+        )
+        .unwrap();
+    assert_eq!(
+        fixture.memory.0.borrow().calls,
+        calls + 1,
+        "one NV dispatch per job selection"
+    );
+    assert_eq!(
+        store.inventory(read(), &mut authority, |_| Ok(())).unwrap(),
+        complete,
+        "nothing more is written"
+    );
+    assert_eq!(
+        store.read_blob(&job, read(), &mut authority).unwrap(),
+        job_bytes
+    );
+    let reopened = cold(&fixture).expect("cold reopen replays the reconciled job selection");
+    let selected = reopened.descriptor();
+    match &selected.operation {
+        OperationData::IndexJobSelection {
+            binding,
+            input_sha256,
+            selection: retained,
+            original_authority,
+            ..
+        } => {
+            assert_eq!(binding, &owner.binding);
+            assert_eq!(input_sha256, &input.sha256().unwrap());
+            assert_eq!(retained, &selection);
+            assert_eq!(original_authority, &audit);
+        }
+        _ => panic!("cold reopen did not select the reconciled job selection"),
+    }
+    assert_eq!(selected.sequence, reserved.sequence + 1);
+    assert_ne!(selected.roots.owners, reserved.roots.owners);
+    assert_ne!(
+        selected.roots.index_generations,
+        reserved.roots.index_generations
+    );
 }
 
 /// Old and third-NV dispatch faults are the shared fenced dispatch already

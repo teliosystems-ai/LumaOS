@@ -13,8 +13,14 @@ lto = true
 # index Start tests. Debug assertions and overflow checks stay on explicitly;
 # this changes only speed, not what any test checks. The release profile is
 # unchanged.
+#
+# Debug info is line tables only (file:line backtraces stay). Optimized code
+# with full debug info made the luma-platform test executable 599,169,880
+# bytes, over the unchanged 512 MiB cap that the TPM suite's disposable public
+# test executable staging enforces; line tables bring it to 222,472,792 bytes.
 [profile.dev]
 opt-level = 1
+debug = "line-tables-only"
 debug-assertions = true
 overflow-checks = true
 

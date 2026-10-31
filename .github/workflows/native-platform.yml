@@ -144,4 +144,6 @@ jobs:
 # The direct C owner migration and index Start tests each perform real bounded
 # owner migrations, so the full serial suite, which every job still runs in
 # full, needs the longer job limits above; no test is skipped. Dev/test builds
-# use opt-level 1 with debug assertions and overflow checks kept on.
+# use opt-level 1 with debug assertions and overflow checks kept on, and
+# line-table debug info so the staged TPM test executable stays under its
+# unchanged 512 MiB cap.

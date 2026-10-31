@@ -142,6 +142,6 @@ jobs:
 # observe process-wide kernel state (descriptors, OFD locks, threads, model
 # credential census) and run serially, as in every retained evidence run.
 # The direct C owner migration and index Start tests each perform real bounded
-# owner migrations in an unoptimized build, so the full serial suite, which
-# every job still runs in full, needs the longer job limits above; no test is
-# skipped.
+# owner migrations, so the full serial suite, which every job still runs in
+# full, needs the longer job limits above; no test is skipped. Dev/test builds
+# use opt-level 1 with debug assertions and overflow checks kept on.

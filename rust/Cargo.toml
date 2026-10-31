@@ -8,9 +8,19 @@ panic = "abort"
 strip = true
 lto = true
 
-# Unoptimized test builds still rehash every large boundary input on every
-# check: the staged public test executable before each PAM catalog case and
-# the 512 MiB staging payload twice per verify. Optimizing only the digest
-# dependency keeps each rehash; the release profile is unchanged.
+# Development and test builds are lightly optimized because the serial
+# luma-platform suite runs real bounded owner migrations, including under the
+# index Start tests. Debug assertions and overflow checks stay on explicitly;
+# this changes only speed, not what any test checks. The release profile is
+# unchanged.
+[profile.dev]
+opt-level = 1
+debug-assertions = true
+overflow-checks = true
+
+# Test builds still rehash every large boundary input on every check: the
+# staged public test executable before each PAM catalog case and the 512 MiB
+# staging payload twice per verify. Optimizing the digest dependency further
+# keeps each rehash.
 [profile.dev.package.sha2]
 opt-level = 3

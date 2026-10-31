@@ -113,7 +113,7 @@ def main():
                  '-i', work/'genesis', '0x01804c41'])
             environment['LUMA_TPM_TEST_ADMISSION'] = 'occupied'
             run(admission)
-            # The whole serial unoptimized suite includes real bounded owner
+            # The whole serial suite includes real bounded owner
             # migrations, also under the index Start tests; this deadline only
             # bounds a hung run.
             run(['cargo', 'test', '--offline', '--locked', '-p', 'luma-platform', '--', '--nocapture',

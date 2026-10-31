@@ -208,8 +208,8 @@ Rust source differs from the package's compiled cut. The sequence-18 cut at
 `4d7fa7c` changes no Rust file either. Source at `e29187b` changes one Rust
 file, `rust/luma-platform/src/staging.rs` (its refusal message), so a package
 built from that or later source needs its own refresh record. Sequence 19 was
-built from `6528ea1`, which includes that change; no GWIN0 refresh from that
-cut exists yet. The 2026-10-27
+built from `6528ea1`, which includes that change; the 2026-10-31 refresh below
+is built from that cut. The 2026-10-27
 refresh's platform worker uses the workspace
 release profile under the approved 8 GiB / 2 CPU assembly bound: 22,120,944
 stripped bytes. A debug-profile worker from the same cut measured 75,700,080
@@ -220,6 +220,24 @@ failed evidence. The 2,636,566,528-byte rootfs passed full public read-back,
 `D:/LumaOS-builds/gwin-integrated-package-20261027-xD2dTQpC-public/package`.
 The 2026-10-20 package remains retained. The refresh is likewise unsigned,
 uninstalled and unqualified, and WSL AppArmor is still `N`.
+
+The [2026-10-31 refresh record](gates/gwin0/combined_workspace_inference_2026-10-31.json)
+recomposes the same profile-W package from the `6528ea1` sequence-19 cut. The
+cut was captured from `feature/g3-gwin0-beta` at `b69e093`, whose later commits
+touch only records and documents outside every captured folder. All 880
+`candidate19-source-20261028-a` records are byte-identical, and all 396 Rust
+files among the 957 captured sources are identical to the compiled cut. The
+release platform worker, built under the same 8 GiB / 2 CPU bound, is
+22,129,136 stripped bytes; no debug-profile worker was rebuilt. The
+2,636,582,912-byte rootfs passed full public read-back, 21 Python tests, 170
+Windows package assertions and production inspection of 225 members and 91
+publisher pins. The inspection ran under PowerShell 7 and was repeated under
+Windows PowerShell 5.1 with all 25 fields equal. The package assertions ran
+under Windows PowerShell 5.1, which the harness requires; a first launch under
+PowerShell 7 ran no assertion and is retained. The package is under
+`D:/LumaOS-builds/gwin-integrated-package-20261031-cAX3a2u0-public/package`.
+The 2026-10-20 and 2026-10-27 packages remain retained. This refresh is
+unsigned, uninstalled and unqualified, and WSL AppArmor is still `N`.
 
 The native workspace has explicit per-turn review and a fresh finite Infer
 grant. Native admission checks the reviewed worker/model/input commitment.

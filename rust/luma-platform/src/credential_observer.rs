@@ -1001,6 +1001,13 @@ mod tests {
         let uid = unsafe { libc::getuid() };
         let gid = unsafe { libc::getgid() };
         kernel_check(&pin, uid, gid).unwrap();
+        let tasks = || {
+            fs::read_dir("/proc/self/task")
+                .unwrap()
+                .map(|entry| entry.unwrap().file_name())
+                .collect::<BTreeSet<_>>()
+        };
+        let before = tasks();
         let barrier = Arc::new(Barrier::new(MAX_THREADS + 1));
         let threads = (0..MAX_THREADS)
             .map(|_| {
@@ -1016,6 +1023,18 @@ mod tests {
         barrier.wait();
         for thread in threads {
             thread.join().unwrap();
+        }
+        // A joined thread can stay listed until the kernel releases its task,
+        // and a task vanishing during the census correctly fails the check
+        // closed. Wait, bounded, for the original task set before the final
+        // census instead of racing that release.
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while tasks() != before {
+            assert!(
+                Instant::now() < deadline,
+                "joined threads were not released"
+            );
+            std::thread::sleep(Duration::from_millis(1));
         }
         kernel_check(&pin, uid, gid).unwrap();
     }

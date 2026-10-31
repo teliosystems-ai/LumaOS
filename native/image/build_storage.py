@@ -12,7 +12,7 @@ import tomllib
 
 STORE = Path('/mnt/luma-build')
 BACKING = Path('/mnt/d/LumaOS-builds/docker/luma-build-v1.ext4')
-SIZE = 96*1024**3
+SIZE = 160*1024**3
 ENDPOINT = 'unix:///run/luma-build-docker.sock'
 CONFIG = Path('/etc/luma-build/storage.json')
 GIB = 1024**3

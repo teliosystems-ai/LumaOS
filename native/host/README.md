@@ -15,7 +15,7 @@ The dedicated profile uses:
 
 | Purpose | Location |
 | --- | --- |
-| New 96 GiB ext4 backing file | `D:\LumaOS-builds\docker\luma-build-v1.ext4` |
+| 160 GiB ext4 backing file (created at 96 GiB; grown online 2026-10-31, [evidence](../evidence/NATIVE_D_BUILD_STORE_GROW_2026-10-31.md)) | `D:\LumaOS-builds\docker\luma-build-v1.ext4` |
 | Linux mount | `/mnt/luma-build` |
 | Docker images, layers and volumes | `/mnt/luma-build/docker` |
 | Dedicated containerd persistent state | `/mnt/luma-build/containerd` |

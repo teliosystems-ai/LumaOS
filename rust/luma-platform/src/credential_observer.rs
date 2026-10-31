@@ -789,8 +789,25 @@ mod tests {
 
     #[test]
     fn real_kernel_handle_and_received_cloexec_descriptor_are_observed() {
+        // The target is a single-threaded child, not this libtest process: the
+        // harness starts and retires a thread per test, and a thread vanishing
+        // during the census correctly fails the observation closed.
+        struct Child(std::process::Child);
+        impl Drop for Child {
+            fn drop(&mut self) {
+                let _ = self.0.kill();
+                let _ = self.0.wait();
+            }
+        }
+        let child = std::process::Command::new("/bin/sleep")
+            .arg("30")
+            .spawn()
+            .unwrap();
+        let mut child = Child(child);
+        let raw = unsafe { libc::syscall(libc::SYS_pidfd_open, child.0.id(), 0) };
+        assert!(raw >= 0);
+        let pin = unsafe { File::from_raw_fd(raw as i32) };
         let (client, server) = pair();
-        let pin = self_pin(&client);
         let deadline = Instant::now() + BUDGET;
         let bytes = packet(1001, 1001).unwrap();
         send(&client, &bytes, Some(&pin), deadline).unwrap();
@@ -801,15 +818,16 @@ mod tests {
             unsafe { libc::fcntl(descriptors[0].as_raw_fd(), libc::F_GETFD) } & libc::FD_CLOEXEC,
             0
         );
-        kernel_check(&descriptors[0], unsafe { libc::getuid() }, unsafe {
-            libc::getgid()
-        })
-        .unwrap();
+        let (uid, gid) = unsafe { (libc::getuid(), libc::getgid()) };
+        kernel_check(&descriptors[0], uid, gid).unwrap();
         assert!(kernel_check(&descriptors[0], 65533, 65533).is_err());
         send(&server, &received, None, deadline).unwrap();
         let (reply, fds) = receive(&client, deadline).unwrap();
         assert_eq!(reply, bytes);
         assert!(fds.is_empty());
+        child.0.kill().unwrap();
+        child.0.wait().unwrap();
+        assert!(kernel_check(&descriptors[0], uid, gid).is_err());
     }
 
     #[test]

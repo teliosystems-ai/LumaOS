@@ -1,0 +1,206 @@
+{
+  "schema_version": 1,
+  "recorded_on": "2026-10-31",
+  "status": "verified-component-tests-only-partial-member-recovery-c-reservation-and-index-preparation-cold-verifier-open",
+  "scope": "G3 functional branch only: test-only reconciliation, by a retry under a new original, of complete reserved first index job members that interrupted job selection attempts left in a real migrated V2 store, and synchronization of every reserved member before the selection's NV dispatch; an additive read-only content-store synchronization method; no production caller, produced image, GWIN0 package, installed run or native C activation",
+  "branch_policy": {
+    "branch": "feature/g3-functional-beta",
+    "branched_from": "b69e09385a919f074d3ba9dfce45fb561ef6ab6f",
+    "g2_testing_and_gwin0_branch": "feature/g3-gwin0-beta",
+    "owner_decision": "On 29 October 2026 the owner kept further sequence-19 G2 testing and GWIN0 completion on feature/g3-gwin0-beta and moved G3 functional development to this branch; on 31 October 2026 the owner approved the index job selection step in the words: may I add the step that turns the reserved first index job into the selected job, plus its reopen check? yes. This checkpoint closes the reconciliation item that the job selection checkpoint left open"
+  },
+  "implementation": [
+    "An index job selection retry under a new original walks the actual v2 store and splits the walk into the C-reserved job members it shows and the object prefixes every other file already holds. The walk is measured data, never a recovery grant or permission to adopt a file",
+    "The walk is admitted only when it equals the C-selected owner accounting, or exceeds it only by complete C-reserved members: exact regular-file and logical-byte deltas, allocated bytes at least theirs, no more new directories than the reserved prefixes no other file holds, and an unchanged incomplete-object count. A partial member, a member of another length, a foreign object, a store behind C or any other difference is refused before any store write or NV dispatch",
+    "A reserved member that C already accounts for counts as new, so a store ahead of C over such a member is refused rather than guessed",
+    "The observed writer begins only when the actual store walk equals the admitted walk. The existing writer re-reads each present member byte for byte and writes only the missing ones; the measured after-state must still fit the reservation's liability, as before",
+    "luma-content-store gains an additive read-only ObjectStore::synchronize_objects. For an exact write set it reads each member from a held descriptor, checks its exact length and digest, synchronizes the file, both prefix directories and the object root, and rechecks the held identity. It never creates, adopts or selects anything; a missing, incomplete or differently sized member refuses, as do an empty set, write admission and a revoked boundary. Existing writer behaviour is unchanged",
+    "The closed direct worker's job selection calls it for every C-reserved member after the job blob read-back and before it measures the store and dispatches NV, because reuse through write_object only re-reads an existing member and the attempt that wrote it may have stopped before its own synchronization (ADR 0014: allocate, synchronize and read back all new content before any NV dispatch)",
+    "The reservation's own original still never selects. The selection event, its domain luma-c-index-job-selection-v1, the cold verifier and the single NV dispatch are unchanged from the job selection checkpoint",
+    "The publisher still has no production caller; production builds do not compile the direct publisher, its cold verifiers or the test-only variants. synchronize_objects is compiled into production builds and has no production caller"
+  ],
+  "production_change": "luma-content-store gains an additive read-only ObjectStore::synchronize_objects, compiled into production builds with no production caller; existing writer behaviour unchanged",
+  "exact_sources": {
+    "slice7_snapshot": {
+      "commit": "2c0bde3bfa2f829d26d6eee8546aff7ef5e0085b",
+      "tree": "bf86b3e6b8c145d6cb2890992adf91b4c78b150d",
+      "parent_commit": "699f36625306ecb7a320cd5635aec3fa1d913467",
+      "rust_tree": "edd09249e7a07fa9a74f72f2aaee5505a99660d6",
+      "diff_from_job_selection_branch_head": "6890988..2c0bde3: 5 files, 560 insertions, 35 deletions"
+    },
+    "reconciliation_commit": {
+      "commit": "699f36625306ecb7a320cd5635aec3fa1d913467",
+      "tree": "194782acc563860c89cd01f095cbd0f9ec3e0cf1",
+      "parent_commit": "68909887c818a62b49796c04684d51fb35290459",
+      "rust_tree": "357bf15ead632efd54bf9d36378a18de3a0dd2dc",
+      "note": "The synchronization commit 2c0bde3 adds the content-store method, its unit test and the worker call on top of it (3 files, 131 insertions, 1 deletion)"
+    },
+    "later_rust_change_before_this_record": {
+      "commit": "11a728305180822f703c79e07b47d6563da361fe",
+      "rust_tree": "dc051049fdfe3663c12d45bc90d3088c4eb14341",
+      "files": ["rust/luma-platform/src/credential_observer.rs"],
+      "note": "Test-only change to one credential observer test, checked separately; it does not touch the code under this checkpoint"
+    }
+  },
+  "verification": {
+    "environment": {
+      "container": "pinned tools image sha256:819dfe7772da1e3c76ffdc8f9ea4a1fa44c7c549bd4fa988e35d9397d87924b2",
+      "network": "none",
+      "memory_limit": "8g",
+      "cpu_limit": 6,
+      "cargo_build_jobs": 1,
+      "warnings_denied": true,
+      "test_profile": "The committed lightly optimized dev/test profile (opt-level 1, line-table debug info, debug assertions and overflow checks; release unchanged), checked by the run in profile.txt, with debuginfo off for the run",
+      "storage": "Disposable private ext4 work directories on drive D",
+      "authority": "Explicit software worker attribution, builder identity, resource lease and NV fixtures, not installed original PAM, the installed image builder, physical TPM or loaded LSM qualification"
+    },
+    "slice7_checks": {
+      "directory": "/mnt/d/LumaOS-builds/g3-slice7-check-20261031-c",
+      "commit": "2c0bde3bfa2f829d26d6eee8546aff7ef5e0085b",
+      "sha256sums_verified": true,
+      "sha256sums_sha256": "3501088bf70265e85ea12022d2c0d869fb84011ec56f2c6fcb9b328df8cd5a0c",
+      "admission_sha256": "290a3acbf58f24d8cf58a88726acc271a365afb7650bd1c775ea7f67d4fdc923",
+      "profile_sha256": "920ef8d5b573664e83bb766758844d4b44f30533aaba07a735b8fcd2aeda01fc",
+      "format_check": {
+        "passed": true,
+        "diff_lines": 0,
+        "log_sha256": "67e6f6c9cc7cede9b8972e6c6b82b5f59eecf1dfb3e7846cf7f407e360141e38"
+      },
+      "warning_denied_test_build": {
+        "passed": true,
+        "packages": ["luma-content", "luma-content-store", "luma-platform"],
+        "log_sha256": "e0f7817d5fa723cfaa1f63905e28d5ac85f04eac336194d95dfae35466cef733",
+        "finished": "Finished test [optimized] target(s) in 21m 29s"
+      },
+      "tests": [
+        {
+          "filter": "custody::v2_publication::direct::initial::tests::index_cases custody::v2_publication::direct::backend::worker::index_selection::tests",
+          "log": "platform-index-start.log",
+          "log_sha256": "6f91a8298eff1d5e15ca815f8877e0c335fd8ebd4423f290f7c85b6b381cd7fa",
+          "passed": 4,
+          "failed": 0,
+          "filtered_out": 1619,
+          "seconds": 2802.54,
+          "required_ok": [
+            "content_checkpoint::custody::v2_publication::direct::backend::worker::index_selection::tests::a_walk_is_admitted_only_as_c_or_c_plus_complete_reserved_members",
+            "content_checkpoint::custody::v2_publication::direct::initial::tests::index_cases::actual_index_job_selection_reconciles_complete_members_of_interrupted_attempts",
+            "content_checkpoint::custody::v2_publication::direct::initial::tests::index_cases::actual_index_start_lost_nv_reply_is_fenced_without_adoption",
+            "content_checkpoint::custody::v2_publication::direct::initial::tests::index_cases::actual_index_start_refuses_substitutes_before_nv_then_one_dispatch_cold_reopen_replays"
+          ]
+        },
+        {
+          "filter": "luma-content and luma-content-store, unfiltered",
+          "log": "content.log",
+          "log_sha256": "6d10273dded622f85026f2fcd33af2e8324065d35219d5454f3db5f089610c2e",
+          "results": {
+            "luma-content unit tests": ["ok", 102, 0, 0, 0.09],
+            "luma-content-store unit tests": ["ok", 356, 0, 0, 828.54],
+            "luma-content doc-tests": ["ok", 0, 0, 0, 0.00],
+            "luma-content-store doc-tests": ["ok", 3, 0, 0, 2.19]
+          },
+          "required_ok": [
+            "v2::tests::write_set_synchronization_reads_held_members_and_never_creates_or_adopts"
+          ]
+        },
+        {
+          "filter": "custody::v2_publication --skip index_cases --skip index_selection::tests",
+          "log": "platform-v2-publication.log",
+          "log_sha256": "0179f8566bb6f1be4ba41ca2d9659b4e5f0407d8613bd76d195161fbaec0b7a7",
+          "passed": 107,
+          "failed": 0,
+          "filtered_out": 1516,
+          "seconds": 1919.66,
+          "absent": [
+            "index_cases::",
+            "index_selection::tests::"
+          ]
+        },
+        {
+          "filter": "--skip custody::v2_publication",
+          "log": "platform-rest.log",
+          "log_sha256": "d55443675c35459107080921acd721b3757e57a4060d62d7ad4a4e8fe5121398",
+          "passed": 1470,
+          "failed": 0,
+          "ignored": 42,
+          "filtered_out": 111,
+          "seconds": 817.69
+        }
+      ],
+      "store": {
+        "before_sha256": "cc25fb641a7e261fe16c23c72237c822cc6e309266e466ef86d0dea3d3a3be76",
+        "after_sha256": "d6dfe99d82c886e5eeb5b6cf2b7f059b232b00dcc1b55969227c54d50dd2f4a1"
+      },
+      "results_format": "Each results entry is [result, passed, failed, filtered_out, seconds]"
+    },
+    "index_tests": [
+      "a_walk_is_admitted_only_as_c_or_c_plus_complete_reserved_members",
+      "actual_index_job_selection_reconciles_complete_members_of_interrupted_attempts",
+      "actual_index_start_lost_nv_reply_is_fenced_without_adoption",
+      "actual_index_start_refuses_substitutes_before_nv_then_one_dispatch_cold_reopen_replays"
+    ],
+    "test_behaviour": [
+      "Each direct test first runs a real bounded owner migration into a real side-by-side v2 store, so Start, job selection and reconciliation run over the actual C-selected migrated V2 owner",
+      "The reconciliation test dispatches and cold-reopens one Start reservation; the reserved job blob has three members (one chunk, one group and the blob index), none of them in the store",
+      "A first interrupted attempt stops right after the first member's last write: that member is complete, nothing after it is written and there is no C event; the store is one regular file ahead of C with the incomplete-object count unchanged",
+      "A selection under the reservation's own original is refused before NV and before any store write, with the store inventory unchanged",
+      "The actual worker under a new original reuses the first member, writes the other two and is revoked right after the last: it is refused before NV, the store holds all three members, the blob reads back as the C-derived job bytes and a cold reopen still selects the reservation",
+      "A retry under another new original reconciles with exactly one NV dispatch and nothing more written; the blob still reads back, and a cold reopen selects the reconciled job selection with the same binding, input digest, selection and original attribution, sequence one higher and changed owner and index roots",
+      "The pure walk test admits exactly C, C plus the whole blob and its new directories, and C plus one member with or without directories made for the members never written; it refuses more directories than the free reserved prefixes, a store behind C, a lost allocation, a foreign object beside a member, foreign bytes, a foreign partial object, an incomplete member, a member of another length and a store ahead of C over a member C already accounts for",
+      "The content-store test synchronizes a stored member with the inventory unchanged, and refuses a set with an absent member (which is never created), another length, an empty set, write admission, a revoked boundary and a set with a retained interrupted partial object, which stays retained with the inventory unchanged",
+      "The Start test and the lost-reply Start test are unchanged from the job selection checkpoint and still pass"
+    ],
+    "total_platform_tests_in_build": 1623,
+    "full_platform_suite_run_locally": true,
+    "full_platform_suite_note": "The three platform filters are disjoint and together cover every luma-platform test once: index_cases with the index_selection unit tests, the rest of custody::v2_publication and everything outside custody::v2_publication (4 + 107 + 1512 = 1623, 42 of them ignored by their own attributes). Platform unit tests ran serially; the parallel test interference stays open",
+    "dispatched": "test builds only; no production caller"
+  },
+  "not_claimed": [
+    "Recovery of a partial member or a foreign object; a store holding one is refused before NV and the reservation's liability stays charged",
+    "Verification of the identities of objects C already accounts for; the walk compares counters, so a same-size swap of a C-accounted object is not detected by it",
+    "Re-synchronization by other v2 writers that reuse an existing object through write_object",
+    "Cold re-verification of the job blob or other object-store bytes; the cold verifier replays the C records and roots only",
+    "A power-loss, crash-consistency or page-cache-drop test of the synchronization; the tests use software interruption and revocation",
+    "The three rustfmt pre-checks of the working tree (D:/LumaOS-builds/g3-slice7-fmt-precheck-20261031-a, -b and -c); they are retained formatting aids, not gate checks",
+    "A cold lineage verifier for an index phase preparation; a cut over one is refused",
+    "A C reservation of the fresh v2 namespace or joined protected C counters",
+    "Running the selected job, any index phase preparation after it or a published index generation",
+    "A production index grant shape, a production caller, an installed run or native C activation",
+    "Reconciliation of an unselected pending worker attempt after a lost NV reply",
+    "Delta overlay, snapshot backup delivery or a V2 owner creation route",
+    "The 100000-object/500-ms NF08 measurement",
+    "Artifact CLI harness passage, installed PAM, physical TPM, loaded LSM or Hyper-V qualification",
+    "Any produced image or GWIN0 package; G3 and GWIN0 remain open"
+  ],
+  "retained_failed_attempts": [
+    {
+      "directory": "/mnt/d/LumaOS-builds/g3-slice7-check-20261031-a",
+      "commit": "699f36625306ecb7a320cd5635aec3fa1d913467",
+      "logs": {
+        "profile.txt": "f806b853f5d8c503e3083379fac5db5a0479262c9136804e9d5e4203445f2783"
+      },
+      "logs_hashed_after_run": "The attempt refused before its checksum step and wrote no SHA256SUMS; this hash was taken afterwards by reading the retained directory, which was left unmodified; it is not a record the run itself wrote",
+      "cause": "The first check script still required the efb045a profile (opt-level 1, debug assertions and overflow checks, read as the three lines after [profile.dev]); 6890988 had added debug = \"line-tables-only\", so its profile comparison refused before formatting, building or running anything",
+      "correction": "A new check script required the committed 6890988 profile, read as the four lines after [profile.dev], and ran as attempt b; the first script was not edited"
+    },
+    {
+      "directory": "/mnt/d/LumaOS-builds/g3-slice7-check-20261031-b",
+      "commit": "699f36625306ecb7a320cd5635aec3fa1d913467",
+      "diff_lines": 0,
+      "logs": {
+        "admission.txt": "d9815850a9c1742d0e81c0faa9ecdf0a00ea134c3de191e14ce6dcf823d78bb3",
+        "profile.txt": "920ef8d5b573664e83bb766758844d4b44f30533aaba07a735b8fcd2aeda01fc",
+        "fmt.log": "bd5e3828dd0011a99e24845645fad48c5bb65a224a59ab0ace328259caca665f",
+        "fmt.diff": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "build-tests.log": "51072185f120b6561a17dcca1826aea8ce130f041b4edccfff3ce3e3c85cd107",
+        "store-before.txt": "3d7a93e9b99e1ffd5c662c3f57252c79a2fa34fb231754168bfb1eceebbc8b9f"
+      },
+      "logs_hashed_after_run": "The attempt was stopped before its checksum step, so it wrote no SHA256SUMS; these file hashes were taken afterwards by reading the retained directory, which was left unmodified; they are not a record the run itself wrote",
+      "results": {
+        "fmt.log": "exit=0 with an empty diff",
+        "build-tests.log": "no end or exit line; the log was last written at 2026-10-31T14:42:28Z while luma-platform compiled"
+      },
+      "cause": "While attempt b built its tests, review found that a retry reusing a member an interrupted attempt wrote would re-read it through write_object without synchronizing it, so C could reference an object that was not yet durable",
+      "correction": "Commit 2c0bde3 adds ObjectStore::synchronize_objects, its unit test and the worker call before NV. Attempt b was stopped during its test build so that the corrected snapshot could run the complete check as attempt c; only attempt b's own check script and its one tools-image container were stopped"
+    }
+  ]
+}

@@ -2291,3 +2291,64 @@ failed only its format check and is kept as evidence. See the
 Reconciling an interrupted selection attempt, a C namespace reservation, a
 cold verifier for index phase preparations and the items above remain open.
 G3 and GWIN0 are not complete.
+
+Slice 7 reconciles interrupted index job selections (`699f366`, `2c0bde3`). A
+crashed attempt can leave some or all members of the reserved job blob in the
+store with nothing selected. A retry under a new original now walks the actual
+store and admits it only when it equals the C-selected owner accounting, or
+exceeds it only by complete C-reserved members. The file and logical byte
+deltas must be exactly theirs and the allocation at least theirs, with no more
+new directories than the reserved prefixes no other file holds and no new
+incomplete object. A member that C already accounts for counts as new, so the
+walk is refused rather than guessed. A partial member, a member of another
+length, a foreign object or any other difference is refused before any store
+write or NV dispatch. The observed writer begins only over the exact admitted
+walk. It re-reads present members byte for byte, writes the missing ones, and
+its measured after-state must still fit the reservation's liability. The
+reservation's own original still never selects.
+
+Reuse of an existing member only re-reads it, and the attempt that wrote it may
+have stopped before its own synchronization. `luma-content-store` therefore
+gains an additive read-only `ObjectStore::synchronize_objects`, compiled into
+production builds with no production caller. For an exact write set it reads
+each member from a held descriptor, checks its length and digest, synchronizes
+the file, both prefix directories and the object root, and rechecks the held
+identity. It never creates, adopts or selects anything. The selection calls it
+for every reserved member after the blob read-back and before it measures the
+store and dispatches NV. Existing writer behaviour is unchanged.
+
+In component tests over a migrated V2 owner, one attempt crashes after the
+first of the three job members. The reservation's own original is then refused
+before NV with the store unchanged. The actual worker under a new original is
+revoked right after it writes the last member, so the blob is complete with
+nothing selected. A retry under another new original then reconciles with one
+NV dispatch and nothing more written, and a cold reopen replays the selection.
+A pure walk test covers partial, foreign, over-counted and already-accounted
+members, and a store test covers synchronization and its refusals. On snapshot
+`2c0bde3`, format was clean and the warning-denied test build passed. The four
+index tests, 102 `luma-content` and 356 `luma-content-store` tests, the other
+107 `custody::v2_publication` tests and the remaining 1470 platform tests
+passed (42 ignored), so each of the 1623 platform tests ran once, serially. Two
+earlier attempts on `699f366` are kept as evidence: one refused on the old
+profile check, and one was stopped when the missing synchronization was found.
+See the
+[index job reconciliation checkpoint](gates/g3/nf08_direct_index_job_reconciliation_2026-10-31.json).
+Recovering a partial or foreign member, a C namespace reservation, a cold
+verifier for index phase preparations and the items above remain open. G3 and
+GWIN0 are not complete.
+
+CI run 41205654555 on `6890988` passed the storage and TPM boundary jobs. Its
+rust job passed the content suites, then failed one of 1622 platform tests:
+the credential observer's real kernel handle test, with `NotFound`. The test
+had passed in the four earlier rust jobs. It observed the libtest process
+itself, and libtest starts and retires a thread per test, so a thread that
+left `/proc/PID/task` during the census failed the observation closed, as
+designed. `11a7283` makes that test observe a single-threaded child instead;
+`kernel_check` and production are unchanged. On snapshot `11a7283`, format was
+clean, the warning-denied platform test build passed, the credential observer
+tests passed serially, and 200 runs of the module with 8 test threads had no
+failure. See the
+[credential observer test note](../native/evidence/NATIVE_CREDENTIAL_OBSERVER_TEST_2026-10-31.md).
+The rust job's native `artifact-read` step still needs an installed Admin
+anchor and TPM and is not passed. Platform unit tests still run serially, so
+the parallel interference stays open.

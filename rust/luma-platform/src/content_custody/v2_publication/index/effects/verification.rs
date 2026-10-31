@@ -2,7 +2,7 @@
 //! reads come only from its current original-operation backend. This proof is
 //! NOT writer Go: actual C allocation/tails, owner creation observation and the
 //! single durable C dispatch must all finish before a worker can write.
-use super::job::JobReservation;
+use super::job::{JobReservation, JobSelection};
 use super::*;
 use crate::content_index::builder::FixedBuilder;
 use luma_content_store::corpus_index::BuilderIdentity;
@@ -124,6 +124,7 @@ struct Observed {
     descriptor: Descriptor,
     literal: Vec<u8>,
     owner_value: Vec<u8>,
+    head_ref: RecordRef,
     head: OwnerHeadV2,
     physical: PhysicalInventory,
     index_value: Option<Vec<u8>>,
@@ -197,6 +198,7 @@ fn observe(
         descriptor,
         literal,
         owner_value,
+        head_ref,
         head,
         physical,
         index_value,
@@ -220,6 +222,20 @@ fn replacement(leaf: &Leaf, binding: &OwnerBinding) -> Result<(Vec<u8>, (RecordR
     Ok((value, (leaf_ref, leaf_bytes)))
 }
 
+fn unchanged(
+    view: &mut impl PreparationView,
+    observed: &Observed,
+    original: &mut OriginalCOperation<'_>,
+) -> Result<()> {
+    original.check()?;
+    let (again, actual) = view.current(original)?;
+    original.check()?;
+    if again != observed.base || actual != observed.descriptor {
+        return Err("C selection changed before preparation semantic proof delivery".into());
+    }
+    Ok(())
+}
+
 #[allow(clippy::too_many_arguments)]
 fn deliver(
     view: &mut impl PreparationView,
@@ -234,12 +250,7 @@ fn deliver(
     // This is only a semantic proof. The publisher counts ALL actual generated
     // location/map/event/descriptor/tail slots too and refuses before writing
     // when the complete plan cannot fit its existing 256-slot window.
-    original.check()?;
-    let (again, actual) = view.current(original)?;
-    original.check()?;
-    if again != observed.base || actual != observed.descriptor {
-        return Err("C selection changed before preparation semantic proof delivery".into());
-    }
+    unchanged(view, &observed, original)?;
     Ok(VerifiedIndexPreparation {
         parts: PreparationParts {
             kind,
@@ -417,4 +428,250 @@ pub(in crate::content_checkpoint::custody::v2_publication) fn verify_index_start
         reference,
         original,
     )
+}
+
+/// The C event parts of one job selection. The owner leaf and the index leaf
+/// change together in one cut; neither is a writer Go.
+pub(in crate::content_checkpoint::custody::v2_publication) struct SelectionParts {
+    pub(in crate::content_checkpoint::custody::v2_publication) base: Selector,
+    pub(in crate::content_checkpoint::custody::v2_publication) owner_root: map::Root,
+    pub(in crate::content_checkpoint::custody::v2_publication) index_root: map::Root,
+    pub(in crate::content_checkpoint::custody::v2_publication) owner_literal: Vec<u8>,
+    pub(in crate::content_checkpoint::custody::v2_publication) expected_owner_value: Vec<u8>,
+    pub(in crate::content_checkpoint::custody::v2_publication) replacement_owner_value: Vec<u8>,
+    pub(in crate::content_checkpoint::custody::v2_publication) expected_index_value: Vec<u8>,
+    pub(in crate::content_checkpoint::custody::v2_publication) replacement_index_value: Vec<u8>,
+    pub(in crate::content_checkpoint::custody::v2_publication) records: Vec<(RecordRef, Vec<u8>)>,
+    pub(in crate::content_checkpoint::custody::v2_publication) selection: RecordRef,
+    pub(in crate::content_checkpoint::custody::v2_publication) binding: OwnerBinding,
+    pub(in crate::content_checkpoint::custody::v2_publication) input_sha256: String,
+    pub(in crate::content_checkpoint::custody::v2_publication) source_sha256: String,
+    pub(in crate::content_checkpoint::custody::v2_publication) original_authority: Audit,
+}
+/// Move-only, like VerifiedIndexPreparation; only JobSelectionPlan::finish
+/// constructs it.
+pub(in crate::content_checkpoint::custody::v2_publication) struct VerifiedIndexSelection {
+    parts: SelectionParts,
+}
+impl VerifiedIndexSelection {
+    pub(in crate::content_checkpoint::custody::v2_publication) fn into_parts(
+        self,
+    ) -> SelectionParts {
+        self.parts
+    }
+}
+
+/// The C-verified store write of the reserved first job. It holds no writer
+/// Go: the store writer still needs the actual original boundary, and nothing
+/// is selected until the C event built by `finish` is published.
+pub(in crate::content_checkpoint::custody::v2_publication) struct JobSelectionPlan {
+    observed: Observed,
+    before: Base,
+    reservation: JobReservation,
+    reservation_ref: RecordRef,
+    job_bytes: Vec<u8>,
+    attributed: Attribution,
+}
+impl JobSelectionPlan {
+    pub(in crate::content_checkpoint::custody::v2_publication) fn head(&self) -> &OwnerHeadV2 {
+        &self.observed.head
+    }
+    pub(in crate::content_checkpoint::custody::v2_publication) fn head_ref(&self) -> &RecordRef {
+        &self.observed.head_ref
+    }
+    /// The physical accounting of the C-selected owner leaf.
+    pub(in crate::content_checkpoint::custody::v2_publication) fn physical(
+        &self,
+    ) -> &PhysicalInventory {
+        &self.observed.physical
+    }
+    pub(in crate::content_checkpoint::custody::v2_publication) fn job_bytes(&self) -> &[u8] {
+        &self.job_bytes
+    }
+    pub(in crate::content_checkpoint::custody::v2_publication) fn next_job(
+        &self,
+    ) -> &BlobReference {
+        &self.reservation.transition().next_job
+    }
+    pub(in crate::content_checkpoint::custody::v2_publication) fn objects(
+        &self,
+    ) -> &[ObjectWriteSpec] {
+        &self.reservation.transition().objects
+    }
+    pub(in crate::content_checkpoint::custody::v2_publication) fn review_sha256(&self) -> &str {
+        &self.reservation.transition().review_sha256
+    }
+    pub(in crate::content_checkpoint::custody::v2_publication) fn liability(
+        &self,
+    ) -> &policy::Liability {
+        self.reservation.liability()
+    }
+    /// `physical_after` is the store inventory measured after the job blob was
+    /// written; it must stay inside the reserved liability. The same original
+    /// operation that was verified must still be current.
+    pub(in crate::content_checkpoint::custody::v2_publication) fn finish(
+        self,
+        view: &mut impl PreparationView,
+        physical_after: &PhysicalInventory,
+        original: &mut OriginalCOperation<'_>,
+    ) -> Result<VerifiedIndexSelection> {
+        original.check()?;
+        let input = self.reservation.input();
+        let transition = self.reservation.transition();
+        if original_data(input, &transition.review_sha256, original)? != self.attributed {
+            return Err("index job selection finishes under a different original operation".into());
+        }
+        let selection = JobSelection::data(
+            &self.before,
+            &self.reservation,
+            &self.reservation_ref,
+            physical_after,
+            &self.attributed,
+            &mut || original.check(),
+        )?;
+        let bytes = selection.bytes()?;
+        let reference = RecordRef {
+            sha256: hash(&bytes),
+            bytes: bytes.len() as u64,
+        };
+        let binding = &self.before.binding;
+        let next_leaf = Leaf {
+            schema_version: 2,
+            binding: binding.clone(),
+            current_generation: None,
+            current_job: Some(selection.job().clone()),
+            preparation: None,
+        };
+        let (index_value, leaf_record) = replacement(&next_leaf, binding)?;
+        let owner = OwnerLeaf::V2 {
+            binding: binding.clone(),
+            head: self.observed.head_ref.clone(),
+            physical: physical_after.clone(),
+        };
+        owner.validate(&binding.installation, &self.observed.descriptor.legacy)?;
+        let owner_value = serde_json::to_vec(&owner)?;
+        if owner_value.len() > map::MAX_VALUE_BYTES {
+            return Err("index job selection owner leaf exceeds its bounded map value".into());
+        }
+        let expected_index_value = self
+            .observed
+            .index_value
+            .clone()
+            .ok_or("index job selection lost its C-selected reservation leaf")?;
+        unchanged(view, &self.observed, original)?;
+        let input_sha256 = input.sha256()?;
+        let binding = binding.clone();
+        let observed = self.observed;
+        Ok(VerifiedIndexSelection {
+            parts: SelectionParts {
+                base: observed.base,
+                owner_root: observed.descriptor.roots.owners,
+                index_root: observed.descriptor.roots.index_generations,
+                owner_literal: observed.literal,
+                expected_owner_value: observed.owner_value,
+                replacement_owner_value: owner_value,
+                expected_index_value,
+                replacement_index_value: index_value,
+                records: vec![(reference.clone(), bytes), leaf_record],
+                selection: reference,
+                binding,
+                input_sha256,
+                source_sha256: hash(&serde_json::to_vec(&(
+                    "luma-c-original-worker-source-v1",
+                    original.source_binding(),
+                ))?),
+                original_authority: original.audit().clone(),
+            },
+        })
+    }
+}
+
+/// The reserved first job becomes the selected job only under a NEW original
+/// operation for the same Start. C re-derives the transition review and the job
+/// bytes from the selected owner and the current fixed builder and compares
+/// them with the reservation record; the record itself is never trusted.
+pub(in crate::content_checkpoint::custody::v2_publication) fn verify_index_selection(
+    view: &mut impl PreparationView,
+    input: &request::Input,
+    builder: &impl CurrentBuilder,
+    original: &mut OriginalCOperation<'_>,
+) -> Result<JobSelectionPlan> {
+    original.check()?;
+    input.validate()?;
+    if !matches!(input.operation, request::Operation::Start { .. }) {
+        return Err("index job selection requires the exact reserved Start request".into());
+    }
+    builder.check(original)?;
+    let identity = builder.identity().clone();
+    let observed = observe(view, input, original)?;
+    let value = observed
+        .index_value
+        .as_ref()
+        .ok_or("index job selection requires a C-selected Start reservation")?;
+    let reference = Reference::parse(value, &input.binding)?;
+    let leaf = Leaf::parse(
+        &checked_record(view, &reference.record, LEAF_BYTES, original)?,
+        &input.binding,
+    )?;
+    let reservation_ref = match (
+        &leaf.current_generation,
+        &leaf.current_job,
+        &leaf.preparation,
+    ) {
+        (None, None, Some(reserved)) => reserved.clone(),
+        _ => {
+            return Err(
+                "index job selection requires a reserved first job and no selected job".into(),
+            )
+        }
+    };
+    let reservation = JobReservation::parse(&checked_record(
+        view,
+        &reservation_ref,
+        PREPARATION_BYTES as usize,
+        original,
+    )?)?;
+    let before = observed.before(Some(leaf.sha256()?))?;
+    let reserved = reservation.base();
+    // The cut advanced past the reservation; its owner, physical accounting
+    // and segments did not.
+    if reservation.input() != input
+        || reservation.builder() != &identity
+        || before.binding != reserved.binding
+        || before.owner_sha256 != reserved.owner_sha256
+        || before.physical != reserved.physical
+        || before.segments != reserved.segments
+    {
+        return Err(
+            "index job selection differs from the C-selected reservation owner/input/builder"
+                .into(),
+        );
+    }
+    let transition =
+        JobReservation::transition_data(reserved, &observed.head, input, &identity, &mut || {
+            original.check()
+        })?;
+    if &transition != reservation.transition() {
+        return Err("independent first job review differs from the C-selected reservation".into());
+    }
+    let attributed = original_data(input, &transition.review_sha256, original)?;
+    if attributed.effect.operation_id == reservation.original().effect.operation_id {
+        return Err(
+            "index job selection requires a new original operation, not the reservation one".into(),
+        );
+    }
+    let job_bytes = reservation.job_bytes(&observed.head, &mut || original.check())?;
+    builder.check(original)?;
+    if builder.identity() != &identity {
+        return Err("fixed index builder changed during job selection".into());
+    }
+    unchanged(view, &observed, original)?;
+    Ok(JobSelectionPlan {
+        observed,
+        before,
+        reservation,
+        reservation_ref,
+        job_bytes,
+        attributed,
+    })
 }

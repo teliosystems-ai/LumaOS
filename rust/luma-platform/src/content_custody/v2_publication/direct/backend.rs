@@ -145,6 +145,16 @@ impl<A: Checkpoint> Backend<A> {
                     location,
                     &mut live,
                 )?;
+            } else if matches!(
+                candidate.descriptor().operation,
+                OperationData::IndexJobSelection { .. }
+            ) {
+                worker::verify_cold_index_selection(
+                    &pages,
+                    candidate.descriptor(),
+                    location,
+                    &mut live,
+                )?;
             } else {
                 bootstrap::direct_progress::verify_selected(
                     &files,
@@ -170,6 +180,7 @@ impl<A: Checkpoint> Backend<A> {
             OperationData::V1Publication{..}=>return Err("direct reader requires independent publication lineage before selecting this event class".into()),
             OperationData::IndexPreparation{..}=>return Err("direct reader requires independently reconstructed index preparation lineage before selecting this event class".into()),
             OperationData::IndexJobReservation{..}=>return Err("direct reader requires independently reconstructed index Start reservation lineage before selecting this event class".into()),
+            OperationData::IndexJobSelection{..}=>return Err("direct reader requires independently reconstructed index job selection lineage before selecting this event class".into()),
             OperationData::OwnerMigration{..}=>return Err("direct reader requires independently reconstructed owner migration lineage before selecting this event class".into()),
         }
         };

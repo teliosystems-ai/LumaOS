@@ -3,7 +3,7 @@
 //! an old OriginalCOperation, revives a grant, grants writer Go or releases a
 //! liability. The actual cold consumer separately verifies map/slot/physical
 //! closure and the descriptor's typed operation under its fresh caller checks.
-use super::job::JobReservation;
+use super::job::{JobReservation, JobSelection};
 use super::*;
 
 pub(in crate::content_checkpoint::custody::v2_publication) trait SelectedPreparationReader {
@@ -88,11 +88,13 @@ fn historical_source_sha256(p: &Attribution, binding: &OwnerBinding) -> Result<S
 }
 
 /// The exact retained before/after cut of one index event: only the index
-/// role map may differ and the after descriptor directly succeeds before.
+/// role map, and for a job selection the owner role map, may differ and the
+/// after descriptor directly succeeds before.
 fn selected_cut(
     before: &Descriptor,
     after: &Descriptor,
     event: &SelectedEventData<'_>,
+    owner_changes: bool,
     check: &mut impl FnMut() -> Result<()>,
 ) -> Result<()> {
     check()?;
@@ -115,7 +117,7 @@ fn selected_cut(
                 .sequence
                 .checked_add(1)
                 .ok_or("selected preparation sequence overflow")?
-        || before.roots.owners != after.roots.owners
+        || !owner_changes && before.roots.owners != after.roots.owners
         || before.roots.recipients != after.roots.recipients
         || before.roots.signers != after.roots.signers
         || before.roots.unavailable != after.roots.unavailable
@@ -131,6 +133,7 @@ fn selected_cut(
 struct SelectedOwner {
     literal: Vec<u8>,
     owner_value: Vec<u8>,
+    head_ref: RecordRef,
     head: OwnerHeadV2,
     physical: PhysicalInventory,
     index_value: Option<Vec<u8>>,
@@ -174,6 +177,7 @@ fn selected_owner(
     Ok(SelectedOwner {
         literal,
         owner_value,
+        head_ref,
         head,
         physical,
         index_value,
@@ -199,10 +203,12 @@ fn replacement_leaf(leaf: &Leaf, binding: &OwnerBinding) -> Result<(Vec<u8>, Rec
 
 /// The after owner/index CAS and the actually retained replacement leaf. Its
 /// read must already be reserved from the caller's finite credit.
+#[allow(clippy::too_many_arguments)]
 fn after_cas(
     reader: &mut impl SelectedPreparationReader,
     after: &Descriptor,
     owner: &SelectedOwner,
+    owner_value: &[u8],
     replacement: &[u8],
     leaf_ref: &RecordRef,
     leaf_bytes: &[u8],
@@ -213,9 +219,7 @@ fn after_cas(
     check()?;
     let after_index = reader.value(&after.roots.index_generations, &owner.literal, check)?;
     check()?;
-    if after_owner.as_ref() != Some(&owner.owner_value)
-        || after_index.as_deref() != Some(replacement)
-    {
+    if after_owner.as_deref() != Some(owner_value) || after_index.as_deref() != Some(replacement) {
         return Err(
             "selected preparation role CAS differs from exact canonical retained data".into(),
         );
@@ -240,7 +244,7 @@ pub(in crate::content_checkpoint::custody::v2_publication) fn replay_selected_da
     mut read_credit: u64,
     check: &mut impl FnMut() -> Result<()>,
 ) -> Result<HistoricalPreparationData> {
-    selected_cut(before, after, &event, check)?;
+    selected_cut(before, after, &event, false, check)?;
     let bytes = record(
         reader,
         event.preparation,
@@ -327,6 +331,7 @@ pub(in crate::content_checkpoint::custody::v2_publication) fn replay_selected_da
         reader,
         after,
         &owner,
+        &owner.owner_value,
         &replacement,
         &leaf_ref,
         &leaf_bytes,
@@ -354,7 +359,7 @@ pub(in crate::content_checkpoint::custody::v2_publication) fn replay_reserved_st
     mut read_credit: u64,
     check: &mut impl FnMut() -> Result<()>,
 ) -> Result<HistoricalPreparationData> {
-    selected_cut(before, after, &event, check)?;
+    selected_cut(before, after, &event, false, check)?;
     let bytes = record(
         reader,
         event.preparation,
@@ -413,6 +418,7 @@ pub(in crate::content_checkpoint::custody::v2_publication) fn replay_reserved_st
         reader,
         after,
         &owner,
+        &owner.owner_value,
         &replacement,
         &leaf_ref,
         &leaf_bytes,
@@ -424,6 +430,153 @@ pub(in crate::content_checkpoint::custody::v2_publication) fn replay_reserved_st
         owner_literal: owner.literal,
         expected_owner_value: owner.owner_value,
         expected_index_value: None,
+        replacement_index_value: replacement,
+        records,
+    })
+}
+
+/// The owner and index role CAS of one selected first job. Like
+/// HistoricalPreparationData it is DATA for the cold map-delta verifier only.
+pub(in crate::content_checkpoint::custody::v2_publication) struct HistoricalSelectionData {
+    pub(in crate::content_checkpoint::custody::v2_publication) owner_literal: Vec<u8>,
+    pub(in crate::content_checkpoint::custody::v2_publication) expected_owner_value: Vec<u8>,
+    pub(in crate::content_checkpoint::custody::v2_publication) replacement_owner_value: Vec<u8>,
+    pub(in crate::content_checkpoint::custody::v2_publication) expected_index_value: Vec<u8>,
+    pub(in crate::content_checkpoint::custody::v2_publication) replacement_index_value: Vec<u8>,
+    pub(in crate::content_checkpoint::custody::v2_publication) records: Vec<(RecordRef, Vec<u8>)>,
+}
+
+/// The same historical DATA replay for a checkpoint-selected first job. The
+/// consumed reservation is read from the before cut, its transition and job
+/// bytes are re-derived from the retained owner head and its own builder DATA,
+/// and the measured physical delta is checked against its reserved liability.
+/// The store blob is NOT re-read here: the measured inventory is selection
+/// DATA, and every later store opening compares the store with the owner leaf
+/// this event selects.
+pub(in crate::content_checkpoint::custody::v2_publication) fn replay_selected_job_data(
+    reader: &mut impl SelectedPreparationReader,
+    before: &Descriptor,
+    after: &Descriptor,
+    event: SelectedEventData<'_>,
+    mut read_credit: u64,
+    check: &mut impl FnMut() -> Result<()>,
+) -> Result<HistoricalSelectionData> {
+    selected_cut(before, after, &event, true, check)?;
+    let bytes = record(
+        reader,
+        event.preparation,
+        PREPARATION_BYTES as usize,
+        &mut read_credit,
+        check,
+    )?;
+    let selection = JobSelection::parse(&bytes)?;
+    if selection.base().binding != *event.binding
+        || selection.original().rpc_sha256 != event.request_sha256
+        || selection.original().effect != *event.original_authority
+        || historical_source_sha256(selection.original(), event.binding)? != event.source_sha256
+        || selection.base().descriptor_sha256 != hash(&before.bytes()?)
+        || selection.base().nv_head != before.selected_nv_head
+    {
+        return Err("selected job selection body substitutes exact checkpointed source/attribution/before tuple".into());
+    }
+    let owner = selected_owner(reader, before, event.binding, &mut read_credit, check)?;
+    let expected_index_value = owner
+        .index_value
+        .clone()
+        .ok_or("selected job selection original reservation leaf absent")?;
+    let old_ref = Reference::parse(&expected_index_value, event.binding)?;
+    let old_leaf = Leaf::parse(
+        &record(reader, &old_ref.record, LEAF_BYTES, &mut read_credit, check)?,
+        event.binding,
+    )?;
+    match (
+        &old_leaf.current_generation,
+        &old_leaf.current_job,
+        &old_leaf.preparation,
+    ) {
+        (None, None, Some(reserved)) if reserved == selection.reservation() => {}
+        _ => {
+            return Err(
+                "selected job selection does not consume the exact C-selected reservation".into(),
+            )
+        }
+    }
+    let reservation = JobReservation::parse(&record(
+        reader,
+        selection.reservation(),
+        PREPARATION_BYTES as usize,
+        &mut read_credit,
+        check,
+    )?)?;
+    selection.validate_against(&reservation, selection.reservation())?;
+    let base = Base {
+        binding: event.binding.clone(),
+        descriptor_sha256: hash(&before.bytes()?),
+        nv_head: before.selected_nv_head.clone(),
+        owner_sha256: owner.head.sha256()?,
+        physical: owner.physical.clone(),
+        segments: owner.head.history.segments,
+        index_sha256: Some(old_leaf.sha256()?),
+    };
+    if selection.base() != &base
+        || owner.head.binding != *event.binding
+        || reservation.input().binding != *event.binding
+        || reservation.input().sha256()? != event.input_sha256
+    {
+        return Err(
+            "selected job selection differs from its retained owner/reservation/input".into(),
+        );
+    }
+    reservation.replay_data(
+        reservation.base(),
+        &owner.head,
+        reservation.input(),
+        reservation.builder(),
+        reservation.original(),
+        check,
+    )?;
+    reservation.job_bytes(&owner.head, check)?;
+    let next_leaf = Leaf {
+        schema_version: 2,
+        binding: event.binding.clone(),
+        current_generation: None,
+        current_job: Some(selection.job().clone()),
+        preparation: None,
+    };
+    let (replacement, leaf_ref, leaf_bytes) = replacement_leaf(&next_leaf, event.binding)?;
+    let next_owner = OwnerLeaf::V2 {
+        binding: event.binding.clone(),
+        head: owner.head_ref.clone(),
+        physical: selection.physical_after().clone(),
+    };
+    next_owner.validate(&event.binding.installation, &before.legacy)?;
+    let owner_value = serde_json::to_vec(&next_owner)?;
+    if owner_value.len() > map::MAX_VALUE_BYTES {
+        return Err("selected job selection owner leaf exceeds its bounded map value".into());
+    }
+    // The final actual leaf read must fit the remaining finite credit.
+    if read_credit < leaf_ref.bytes + 1 {
+        return Err(
+            "selected replacement-leaf credit exhausted before job selection replay".into(),
+        );
+    }
+    after_cas(
+        reader,
+        after,
+        &owner,
+        &owner_value,
+        &replacement,
+        &leaf_ref,
+        &leaf_bytes,
+        check,
+    )?;
+    let records = vec![(event.preparation.clone(), bytes), (leaf_ref, leaf_bytes)];
+    check()?;
+    Ok(HistoricalSelectionData {
+        owner_literal: owner.literal,
+        expected_owner_value: owner.owner_value,
+        replacement_owner_value: owner_value,
+        expected_index_value,
         replacement_index_value: replacement,
         records,
     })

@@ -1,0 +1,174 @@
+{
+  "schema_version": 1,
+  "recorded_on": "2026-10-31",
+  "status": "verified-component-tests-only-attempt-reconciliation-c-reservation-and-index-preparation-cold-verifier-open",
+  "scope": "G3 functional branch only: test-only selection of the reserved first index job, dispatched by the closed direct worker publisher over a real migrated V2 owner with a selected Start reservation in a real bootstrapped C cut, and a cold verifier for the selected job selection; no production change, production caller, produced image, GWIN0 package, installed run or native C activation",
+  "branch_policy": {
+    "branch": "feature/g3-functional-beta",
+    "branched_from": "b69e09385a919f074d3ba9dfce45fb561ef6ab6f",
+    "g2_testing_and_gwin0_branch": "feature/g3-gwin0-beta",
+    "owner_decision": "On 29 October 2026 the owner kept further sequence-19 G2 testing and GWIN0 completion on feature/g3-gwin0-beta and moved G3 functional development to this branch; on 31 October 2026 the owner approved this step in the words: may I add the step that turns the reserved first index job into the selected job, plus its reopen check? yes"
+  },
+  "implementation": [
+    "The closed direct worker publisher turns a selected first index job Start reservation into the selected job. C re-derives the reservation's transition and job bytes from the selected reservation record and the owner; it accepts no worker JSON, review hash or job bytes",
+    "The selection needs a new original worker effect, never the reservation's own operation, attributed to the same binding, input and review with the index preparation purpose, and it is rechecked live. The reservation's input, fixed builder identity, owner, physical accounting and segments must still match, and the first job review is recomputed and compared with the reserved transition",
+    "The observed writer's budget is computed from the exact reserved write set and must fit the reservation's liability. The writer begins only when the actual store walk equals the C-selected owner accounting, so a store ahead of C is refused before any write or NV dispatch",
+    "The worker writes the job blob once under the retained owner writer, reads it back against the C-derived bytes and measures the store again; the measured growth in allocated bytes, regular files and directories must stay inside the reserved liability, logical bytes must not decrease, no new incomplete object may appear and the compiled capacity policy must admit the measured accounting",
+    "Only then does C build one event, domain luma-c-index-job-selection-v1, that replaces the owner leaf (its measured accounting) and the index leaf (the selected job) together; every page, record and descriptor is prepared and read back before the sole NV dispatch. The store write is data until that event is selected",
+    "The direct reader routes a selected job selection to a new cold verifier: the previous cut must be a bootstrap, V1, migration, reservation or selection cut bound by frame hash and NV chain, with the same binding, legacy state and phase and sequence and ordinal one higher",
+    "The cold verifier re-reads the selection record within its closed class, requires the consumed reservation to be this owner's selected index leaf, replays the exact owner and index role edits from both cuts' own roots, and rebuilds the deterministic layout and physical closure. The measured accounting is selection data bounded by the reservation's liability; the job blob is not re-read, and nothing dispatches or allocates",
+    "The cold V1, owner migration and Start reservation verifiers accept a previous selection cut; an index phase preparation still has no cold verifier and a cut over one is refused",
+    "The publisher still has no production caller; production builds do not compile the direct publisher, its cold verifiers or the new test-only variants"
+  ],
+  "production_change": "none",
+  "exact_sources": {
+    "slice6_snapshot": {
+      "commit": "095dbf99e9799f3b8711966f0290935dffa56b10",
+      "tree": "7aa4c7a9470768ecd935d171e4befd5717230ebb",
+      "parent_commit": "efb045a140e85e939240acf7e0fb93ee461a9983",
+      "rust_tree": "92d308389c852fab221f4d193a73122e9f702916",
+      "rust_tree_rematched_before_commit": true
+    }
+  },
+  "verification": {
+    "environment": {
+      "container": "pinned tools image sha256:819dfe7772da1e3c76ffdc8f9ea4a1fa44c7c549bd4fa988e35d9397d87924b2",
+      "network": "none",
+      "memory_limit": "8g",
+      "cpu_limit": 6,
+      "cargo_build_jobs": 1,
+      "warnings_denied": true,
+      "test_profile": "The committed lightly optimized dev/test profile (opt-level 1 with debug assertions and overflow checks; release unchanged), checked by the run in profile.txt, with debuginfo off for the run",
+      "storage": "Disposable private ext4 work directories on drive D",
+      "authority": "Explicit software worker attribution, builder identity, resource lease and NV fixtures, not installed original PAM, the installed image builder, physical TPM or loaded LSM qualification"
+    },
+    "slice6_checks": {
+      "directory": "/mnt/d/LumaOS-builds/g3-slice6-check-20261031-b",
+      "commit": "095dbf99e9799f3b8711966f0290935dffa56b10",
+      "sha256sums_verified": true,
+      "admission_sha256": "71bcaa81155251db31f75d2696eb0c35c687cec5b6584b9f937b5d46cb6fc476",
+      "profile_sha256": "30e92e5256ea3d244b2ce47c9716c338b94ed551c0818e9314cb0ba5ef82d708",
+      "format_check": {
+        "passed": true,
+        "diff_lines": 0,
+        "log_sha256": "777450063bdb36cc5ee8e0485053d9e4aa7ba85dfe738e79c29d3c756f52b8cb"
+      },
+      "warning_denied_test_build": {
+        "passed": true,
+        "packages": ["luma-content", "luma-content-store", "luma-platform"],
+        "log_sha256": "d26f69681ecf0a5c3002a48d7f21d57ee12694bbfc451338628313afe69ed79b"
+      },
+      "tests": [
+        {
+          "filter": "custody::v2_publication::direct::initial::tests::index_cases",
+          "log": "platform-index-start.log",
+          "log_sha256": "ea9423478921e6ec155f391f91cfee2f7f7b138d2b6a0abffdc68c7ad59932f8",
+          "passed": 3,
+          "failed": 0,
+          "filtered_out": 1619,
+          "seconds": 2504.57,
+          "required_ok": [
+            "content_checkpoint::custody::v2_publication::direct::initial::tests::index_cases::actual_index_start_refuses_substitutes_before_nv_then_one_dispatch_cold_reopen_replays",
+            "content_checkpoint::custody::v2_publication::direct::initial::tests::index_cases::actual_index_job_selection_over_a_store_ahead_of_c_is_refused_before_nv",
+            "content_checkpoint::custody::v2_publication::direct::initial::tests::index_cases::actual_index_start_lost_nv_reply_is_fenced_without_adoption"
+          ]
+        },
+        {
+          "filter": "luma-content and luma-content-store, unfiltered",
+          "log": "content.log",
+          "log_sha256": "8d3b3c1b467391f25eb016c3762c4fcb36b2c18baeb103bcc148d5d076dc3c6b",
+          "results": {
+            "luma-content unit tests": ["ok", 102, 0, 0, 0.08],
+            "luma-content-store unit tests": ["ok", 355, 0, 0, 828.91],
+            "luma-content doc-tests": ["ok", 0, 0, 0, 0.00],
+            "luma-content-store doc-tests": ["ok", 3, 0, 0, 1.60]
+          }
+        },
+        {
+          "filter": "custody::v2_publication --skip index_cases",
+          "log": "platform-v2-publication.log",
+          "log_sha256": "cbe17ce5b240365db41caac118e64a114d60d2afdd8a7eff36fe003ac76755f2",
+          "passed": 107,
+          "failed": 0,
+          "filtered_out": 1515,
+          "seconds": 1918.08,
+          "absent": [
+            "index_cases::"
+          ]
+        },
+        {
+          "filter": "--skip custody::v2_publication",
+          "log": "platform-rest.log",
+          "log_sha256": "49b39284d030ac682482fff577ff8e18f2c7eb7fe27fecb1f0f42bdf058f718d",
+          "passed": 1470,
+          "failed": 0,
+          "ignored": 42,
+          "filtered_out": 110,
+          "seconds": 810.26
+        }
+      ],
+      "results_format": "Each results entry is [result, passed, failed, filtered_out, seconds]"
+    },
+    "index_tests": [
+      "actual_index_start_refuses_substitutes_before_nv_then_one_dispatch_cold_reopen_replays",
+      "actual_index_job_selection_over_a_store_ahead_of_c_is_refused_before_nv",
+      "actual_index_start_lost_nv_reply_is_fenced_without_adoption"
+    ],
+    "test_behaviour": [
+      "Each test first runs a real bounded owner migration into a real side-by-side v2 store, so Start and job selection run over the actual C-selected migrated V2 owner",
+      "After one Start reservation is dispatched and cold-reopened, a job selection under the reservation's own original, under a substituted builder identity, under an original for a different Start input, with a Publish purpose and with a revoked original is each refused before NV and before any store write, with the store inventory unchanged",
+      "One selection is then exactly one NV dispatch; before it the job blob is complete in the store with no new incomplete object, and its bytes read back as the C-derived job bytes",
+      "A cold reopen selects the exact job selection through the new cold verifier: the same binding, input digest, selection and original attribution, sequence one higher, a changed owner leaf with the same entry count and a changed index leaf",
+      "A second selection and a second Start over the selected job are refused before NV with the store unchanged, and the cold reopen still selects the job",
+      "A store left ahead of C by an interrupted attempt (the exact job blob written, no C event) is refused before NV with the store unchanged, and the cold reopen still selects the reservation",
+      "The lost-reply Start test is unchanged from the index Start checkpoint and still passes"
+    ],
+    "total_platform_tests_in_build": 1622,
+    "full_platform_suite_run_locally": true,
+    "full_platform_suite_note": "The three platform filters are disjoint and together cover every luma-platform test once: index_cases, the rest of custody::v2_publication and everything outside custody::v2_publication (3 + 107 + 1512 = 1622, 42 of them ignored by their own attributes)",
+    "dispatched": "test builds only; no production caller"
+  },
+  "not_claimed": [
+    "Reconciliation of an interrupted selection attempt that left the job blob in the store with nothing selected; a retry is refused and the reservation's liability stays charged",
+    "Cold re-verification of the job blob or other object-store bytes; the cold verifier replays the C records and roots only",
+    "A cold lineage verifier for an index phase preparation; a cut over one is refused",
+    "A C reservation of the fresh v2 namespace or joined protected C counters",
+    "Running the selected job, any index phase preparation after it or a published index generation",
+    "A production index grant shape, a production caller, an installed run or native C activation",
+    "Reconciliation of an unselected pending worker attempt after a lost NV reply",
+    "Delta overlay, snapshot backup delivery or a V2 owner creation route",
+    "The 100000-object/500-ms NF08 measurement",
+    "Artifact CLI harness passage, installed PAM, physical TPM, loaded LSM or Hyper-V qualification",
+    "Any produced image or GWIN0 package; G3 and GWIN0 remain open"
+  ],
+  "retained_failed_attempts": [
+    {
+      "directory": "/mnt/d/LumaOS-builds/g3-slice6-check-20261031-a",
+      "commit": "539fc45242a2ab5b7250b51467faaf46e64c7d7f",
+      "diff_lines": 154,
+      "logs": {
+        "admission.txt": "5ed310c0d3f9086c9f87dcf38ebc07ad310886f86f5a509286135dfce19480ca",
+        "profile.txt": "30e92e5256ea3d244b2ce47c9716c338b94ed551c0818e9314cb0ba5ef82d708",
+        "fmt.log": "10599b7997392a808e14c4b6e93963af1e543d6a209c256896438ddfd8206c18",
+        "fmt.diff": "6b16d5059ab41586d7510ee1b41373e9cd5647be53d9b600c2445372c31add7b",
+        "build-tests.log": "0d79560a3f569b4ee070fc1650c7d97bd36fee8f3c55387cd7b95e5ae32c2ac5",
+        "platform-index-start.log": "3b7a73fdbf93f1e211560b97dea74d904ce079223cd05ad74ea1f0db1676bde9",
+        "content.log": "cc8a78433c070d1191feccefa339cabd423cd99b4fccd8414fbcc91ade5fce11",
+        "store-before.txt": "25db3218172ffdcaa8df5ddab7a49840908ad4eb67b1046e0eec98cabcc832d5"
+      },
+      "logs_hashed_after_run": "The attempt was stopped before its checksum step, so it wrote no SHA256SUMS; these file hashes were taken afterwards by reading the retained directory, which was left unmodified; they are not a record the run itself wrote",
+      "results": {
+        "platform-index-start.log": ["ok", 3, 0, 1619, 2531.53],
+        "content.log luma-content unit tests": ["ok", 102, 0, 0, 0.08]
+      },
+      "evidence": {
+        "build-tests.log": [
+          "Finished test [optimized] target(s) in 21m 29s",
+          "exit=0"
+        ]
+      },
+      "cause": "rustfmt reported a 154-line diff in six of the new or changed files (index_select.rs, index_select_cold.rs, worker.rs, job.rs, selected.rs and verification.rs): long string literals, wrapped calls and the order of the worker's path modules. The warning-denied test build passed and the three index tests passed",
+      "correction": "The attempt's own rustfmt output was applied unchanged, so snapshot 095dbf9 differs from 539fc45 by exactly that diff (6 files, 36 insertions, 21 deletions). Attempt a was stopped at 2026-10-31T10:44:21Z, after its index tests had passed and while its content suites ran, so that the formatted snapshot could run the complete check as attempt b instead of both attempts repeating the same long suites; only attempt a's own check script and its one tools-image container were stopped"
+    }
+  ]
+}

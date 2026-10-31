@@ -280,6 +280,16 @@ enum OperationData {
         reservation: RecordRef,
         original_authority: Audit,
     },
+    // Awaits its only producer, the direct C index publisher.
+    #[cfg(test)]
+    IndexJobSelection {
+        binding: OwnerBinding,
+        request_sha256: String,
+        input_sha256: String,
+        source_sha256: String,
+        selection: RecordRef,
+        original_authority: Audit,
+    },
     // Awaits its only producer, the direct C owner migration publisher.
     #[cfg(test)]
     OwnerMigration {
@@ -389,6 +399,20 @@ impl OperationData {
                 binding,
                 [request_sha256, input_sha256, source_sha256],
                 reservation,
+                original_authority,
+            )?,
+            #[cfg(test)]
+            Self::IndexJobSelection {
+                binding,
+                request_sha256,
+                input_sha256,
+                source_sha256,
+                selection,
+                original_authority,
+            } => validate_index_effect(
+                binding,
+                [request_sha256, input_sha256, source_sha256],
+                selection,
                 original_authority,
             )?,
             #[cfg(test)]

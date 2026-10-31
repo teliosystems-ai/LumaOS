@@ -5,9 +5,9 @@ use super::*;
 use crate::content_checkpoint::custody::v2_publication::index::effects::{self, PreparationView};
 use crate::content_index::{phase, request};
 
-struct View<'a, A: Checkpoint> {
-    backend: &'a mut Backend<A>,
-    remaining: u64,
+pub(super) struct View<'a, A: Checkpoint> {
+    pub(super) backend: &'a mut Backend<A>,
+    pub(super) remaining: u64,
 }
 impl<A: Checkpoint> PreparationView for View<'_, A> {
     fn current(&mut self, original: &mut OriginalCOperation<'_>) -> Result<(Selector, Descriptor)> {

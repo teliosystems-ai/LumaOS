@@ -888,6 +888,7 @@ pub(in crate::content_checkpoint::custody::v2_publication) fn verify_selected(
                 | OperationData::V1Publication { .. }
                 | OperationData::OwnerMigration { .. }
                 | OperationData::IndexJobReservation { .. }
+                | OperationData::IndexJobSelection { .. }
         )
     {
         return Err(

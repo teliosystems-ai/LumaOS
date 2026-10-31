@@ -6,6 +6,10 @@ use super::*;
 mod cold;
 #[path = "worker/index.rs"]
 mod index_preparation;
+#[path = "worker/index_select_cold.rs"]
+mod index_selected;
+#[path = "worker/index_select.rs"]
+mod index_selection;
 #[path = "worker/index_cold.rs"]
 mod index_start;
 #[path = "worker/migration.rs"]
@@ -15,6 +19,7 @@ mod storage;
 #[path = "worker/v1.rs"]
 mod v1;
 pub(super) use cold::verify_selected as verify_cold_v1;
+pub(super) use index_selected::verify_selected as verify_cold_index_selection;
 pub(super) use index_start::verify_selected as verify_cold_index_start;
 pub(super) use migration::verify_selected as verify_cold_migration;
 
@@ -48,6 +53,7 @@ enum Completed {
     V1(VerifiedState),
     IndexPreparation(RecordRef),
     IndexJobReservation(RecordRef),
+    IndexJobSelection(RecordRef),
     OwnerMigration(RecordRef),
 }
 impl<A: Checkpoint> Backend<A> {
@@ -66,6 +72,7 @@ impl<A: Checkpoint> Backend<A> {
                 Completed::V1(state) => Ok(state),
                 Completed::IndexPreparation(_)
                 | Completed::IndexJobReservation(_)
+                | Completed::IndexJobSelection(_)
                 | Completed::OwnerMigration(_) => {
                     Err("closed V1 consumer received a different semantic completion class".into())
                 }
@@ -83,6 +90,7 @@ impl<A: Checkpoint> Backend<A> {
             Completed::IndexPreparation(reference) => Ok(reference),
             Completed::V1(_)
             | Completed::IndexJobReservation(_)
+            | Completed::IndexJobSelection(_)
             | Completed::OwnerMigration(_) => Err(
                 "closed index-preparation consumer received a different semantic completion class"
                     .into(),
@@ -98,12 +106,12 @@ impl<A: Checkpoint> Backend<A> {
         let token = index_preparation::start(&mut self, input, builder, original)?;
         match storage::publish(self, token, original)? {
             Completed::IndexJobReservation(reference) => Ok(reference),
-            Completed::V1(_) | Completed::IndexPreparation(_) | Completed::OwnerMigration(_) => {
-                Err(
-                    "closed index-Start consumer received a different semantic completion class"
-                        .into(),
-                )
-            }
+            Completed::V1(_)
+            | Completed::IndexPreparation(_)
+            | Completed::IndexJobSelection(_)
+            | Completed::OwnerMigration(_) => Err(
+                "closed index-Start consumer received a different semantic completion class".into(),
+            ),
         }
     }
 }

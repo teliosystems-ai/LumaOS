@@ -2244,3 +2244,50 @@ wrote no checksums, so it was rerun and is kept as evidence. See the
 [index Start checkpoint](gates/g3/nf08_direct_index_start_2026-10-30.json).
 A C namespace reservation, a cold verifier for index phase preparations and
 the items above remain open. G3 and GWIN0 are not complete.
+
+Slice 6 turns the reserved first index job into the selected job, and adds a
+cold verifier for the selection. C re-derives the reservation's transition and
+job bytes from the selected reservation record and the owner; it accepts no
+worker JSON, review hash or job bytes. The selection needs a new original
+worker effect, not the reservation's own operation, with the same binding,
+input and review. The writer budget comes from the exact reserved write set
+and must fit the reservation's liability. The observed writer begins only when
+the actual store walk equals the C-selected owner accounting, so a store ahead
+of C is refused. The worker then writes the job blob once under the retained
+owner writer, reads it back and measures the store again. The measured growth
+must stay inside the reserved liability, with no new incomplete object. Only
+then does C build one event that replaces the owner leaf (its measured
+accounting) and the index leaf (the selected job) together; everything is
+prepared and read back before the NV dispatch. The store write is data until
+that event is selected. A crashed attempt can leave the blob written with
+nothing selected; a retry is then refused, and reconciling such an attempt is
+later work.
+
+The cold verifier binds the previous cut by its frame hash and NV head; that
+cut must be a bootstrap, V1, migration, reservation or selection cut. It
+re-reads the selection record, requires the consumed reservation to be this
+owner's selected index leaf, replays the exact owner and index role edits from
+both cuts' own roots, and rebuilds the deterministic physical closure. The
+measured accounting is selection data bounded by the reservation's liability;
+the verifier does not re-read the job blob, and nothing dispatches or
+allocates. The cold V1, migration and Start reservation verifiers accept a
+previous selection cut. There is no production change.
+
+In component tests over a migrated V2 owner with a selected Start
+reservation, a selection under the reservation's own original, a substituted
+builder, an original for a different Start input, a Publish purpose and a
+revoked original are each refused before NV and before any store write. One
+selection is then one NV dispatch, the job blob is complete in the store before
+it, and a cold reopen selects the exact selection. A second selection and a
+second Start are then refused before NV with the store unchanged. A store left
+ahead of C by an interrupted attempt is refused before NV, and the reservation
+stays selected. On snapshot `095dbf9`, format was clean and the warning-denied
+test build passed. The three index tests, the `luma-content` and
+`luma-content-store` suites, the other 107 `custody::v2_publication` tests and
+the remaining 1470 platform tests passed (42 are ignored by their own
+attributes), so each of the 1622 platform tests ran once. An earlier attempt
+failed only its format check and is kept as evidence. See the
+[index job selection checkpoint](gates/g3/nf08_direct_index_job_selection_2026-10-31.json).
+Reconciling an interrupted selection attempt, a C namespace reservation, a
+cold verifier for index phase preparations and the items above remain open.
+G3 and GWIN0 are not complete.

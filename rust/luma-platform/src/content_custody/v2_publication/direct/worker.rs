@@ -6,6 +6,8 @@ use super::*;
 mod cold;
 #[path = "worker/index.rs"]
 mod index_preparation;
+#[path = "worker/index_prepare_cold.rs"]
+mod index_prepared;
 #[path = "worker/index_select_cold.rs"]
 mod index_selected;
 #[path = "worker/index_select.rs"]
@@ -19,6 +21,7 @@ mod storage;
 #[path = "worker/v1.rs"]
 mod v1;
 pub(super) use cold::verify_selected as verify_cold_v1;
+pub(super) use index_prepared::verify_selected as verify_cold_index_preparation;
 pub(super) use index_selected::verify_selected as verify_cold_index_selection;
 pub(super) use index_start::verify_selected as verify_cold_index_start;
 pub(super) use migration::verify_selected as verify_cold_migration;

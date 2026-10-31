@@ -17,7 +17,7 @@ use luma_content_store::v2::{
 };
 use luma_content_store::{Access, Boundary, DecisionKind, ResourceBudget};
 
-const BODY: &[u8] = b"real retained owner bytes before the direct worker publisher";
+pub(super) const BODY: &[u8] = b"real retained owner bytes before the direct worker publisher";
 
 fn budget() -> IoBudget {
     IoBudget {

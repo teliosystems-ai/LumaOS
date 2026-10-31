@@ -1,23 +1,53 @@
-//! Actual first index job Start reservations and job selections of the closed
-//! direct worker over a real migrated V2 owner in a real bootstrapped C cut and
-//! its real v2 object store. The builder identity, original worker attribution,
-//! resources and NV are explicit software fixtures, not the installed image
-//! builder or installed qualification.
+//! Actual first index job Start reservations, job selections and first phase
+//! preparations of the closed direct worker over a real migrated V2 owner in a
+//! real bootstrapped C cut and its real v2 object store. The builder identity,
+//! original worker attribution, planning boundary, resources and NV are
+//! explicit software fixtures, not the installed image builder or installed
+//! qualification.
 use super::super::super::super::super::protocol::{
     software_worker_operation, OriginalCOperation, TypedOperationSource,
 };
-use super::migration_cases::{migrated, Migrated};
+use super::migration_cases::{migrated, Migrated, BODY};
 use super::worker_cases::cold;
 use super::*;
 use crate::content_checkpoint::custody::indexed::{
     selection_data_sha256, TransitionBase, TransitionReview,
 };
 use crate::content_checkpoint::custody::v2_publication::index::effects::CurrentBuilder;
-use crate::content_index::request;
 use crate::content_index::scope::original_usage;
 use crate::content_index::state::Job;
-use luma_content_store::corpus_index::{BuilderIdentity, CorpusIndexLimits};
-use luma_content_store::v2::{BlobObjectPlan, IoBudget, Mutation, PhysicalInventory};
+use crate::content_index::{phase, request};
+use luma_content_store::corpus_index::job::accounted::{
+    CapturedPageMeasurements, PageAccountingBoundary, PageDebitCommitment, PageReserve,
+};
+use luma_content_store::corpus_index::job::covariance::projection::vectors::generation::audit::{
+    AuditCommitment, AuditProgress, GenerationAuditBoundary,
+};
+use luma_content_store::corpus_index::job::covariance::projection::vectors::generation::{
+    CurrentGenerationBoundary, GenerationCommitment, GenerationJob, GenerationManifest,
+    GenerationPublicationBoundary, GenerationReview,
+};
+use luma_content_store::corpus_index::job::covariance::projection::vectors::{
+    VectorBoundary, VectorCommitment, VectorProgress, VectorRequest,
+};
+use luma_content_store::corpus_index::job::covariance::projection::{
+    ProjectionBoundary, ProjectionCommitment, ProjectionProgress, ProjectionRequest,
+};
+use luma_content_store::corpus_index::job::covariance::{
+    CovarianceBoundary, CovarianceCommitment, CovarianceProgress, CovarianceRequest,
+};
+use luma_content_store::corpus_index::job::statistics::{
+    StatisticsBoundary, StatisticsCommitment, StatisticsProgress, StatisticsRequest,
+};
+use luma_content_store::corpus_index::job::{
+    CorpusIndexJobBoundary, IngestCommitment, IngestProgress, IngestRequest,
+};
+use luma_content_store::corpus_index::{
+    BuilderIdentity, CorpusContent, CorpusIndexBoundary, CorpusIndexLimits, CorpusRecord,
+};
+use luma_content_store::v2::{
+    BlobObjectPlan, IoBudget, MapRoot, Mutation, ObjectStore, PhysicalInventory,
+};
 use luma_content_store::{Access, Boundary, DecisionKind, ResourceBudget};
 use std::path::Path;
 
@@ -113,12 +143,29 @@ fn original(
     )
     .unwrap()
     .review_sha256;
-    let profile = input.effect_profile(&review).unwrap();
+    effect(
+        input,
+        &review,
+        "explicit-software-direct-index-start",
+        &format!("software index Start rpc {number}"),
+        number,
+    )
+}
+/// One original worker effect over an exact reviewed request: the finite
+/// profile, usage and source all bind that request and review.
+fn effect(
+    input: &request::Input,
+    review: &str,
+    grant: &str,
+    rpc: &str,
+    number: u64,
+) -> (Audit, TypedOperationSource) {
+    let profile = input.effect_profile(review).unwrap();
     let source_sha256 = input.sha256().unwrap();
     let audit = Audit {
         subject: input.binding.owner.clone(),
         subject_generation: input.binding.owner_generation,
-        grant_id: "explicit-software-direct-index-start".into(),
+        grant_id: grant.into(),
         grant_version: 1,
         checkpoint_head: "33".repeat(32),
         operation_id: Some(format!("{number:032x}")),
@@ -126,7 +173,7 @@ fn original(
     };
     let source = TypedOperationSource {
         schema_version: 1,
-        request_sha256: hash(format!("software index Start rpc {number}").as_bytes()),
+        request_sha256: hash(rpc.as_bytes()),
         purpose: SourcePurpose::IndexPrepare,
         profile,
         storage_device: "8:1".into(),
@@ -636,4 +683,468 @@ fn actual_index_start_lost_nv_reply_is_fenced_without_adoption() {
         .is_err());
     assert!(cold(&fixture).is_err());
     assert_eq!(fixture.memory.0.borrow().calls, calls + 1, "no redispatch");
+}
+
+fn refused() -> luma_content_store::Result<()> {
+    Err("software planning guard refuses every effect and later phase".into())
+}
+/// A read-only software planning boundary over the exact C-selected first job
+/// and one Step request. It admits only finite owner inspection of that job's
+/// own corpus and builder, and refuses every effect and later phase.
+struct Guard<'a> {
+    job: &'a Job,
+    input: &'a request::Input,
+}
+impl Guard<'_> {
+    fn ingestion(&self) -> luma_content_store::Result<&IngestRequest> {
+        Ok(self.job.lineage()?.ingestion.0)
+    }
+}
+impl Boundary for Guard<'_> {
+    fn admit(
+        &mut self,
+        binding: &OwnerBinding,
+        budget: ResourceBudget,
+    ) -> luma_content_store::Result<()> {
+        if binding != &self.job.source_owner.binding
+            || budget.write_bytes != 0
+            || budget.additional_storage_bytes != 0
+        {
+            return Err("software planning guard admits only finite owner reads".into());
+        }
+        Ok(())
+    }
+    fn check(&mut self, access: Access<'_>) -> luma_content_store::Result<()> {
+        if !matches!(access, Access::Inspect { binding } if binding == &self.job.source_owner.binding)
+        {
+            return Err("software planning guard cannot mutate, recover or substitute".into());
+        }
+        Ok(())
+    }
+}
+impl CorpusIndexBoundary for Guard<'_> {
+    fn current_corpus(&mut self, root: &MapRoot) -> luma_content_store::Result<()> {
+        if root != &self.ingestion()?.corpus || root != &self.job.source_owner.roots.corpus {
+            return Err("software planning guard refuses a substituted corpus".into());
+        }
+        Ok(())
+    }
+    fn current_builder(
+        &mut self,
+        root: &MapRoot,
+        identity: &BuilderIdentity,
+    ) -> luma_content_store::Result<()> {
+        self.current_corpus(root)?;
+        if identity != &self.ingestion()?.builder || identity != &self.job.builder {
+            return Err("software planning guard refuses a substituted builder".into());
+        }
+        Ok(())
+    }
+    fn current_index_generation(&mut self, _: &MapRoot, _: &str) -> luma_content_store::Result<()> {
+        refused()
+    }
+    fn current_candidate(
+        &mut self,
+        root: &MapRoot,
+        record: &CorpusRecord,
+    ) -> luma_content_store::Result<()> {
+        self.current_corpus(root)?;
+        record.validate()
+    }
+}
+impl CorpusIndexJobBoundary for Guard<'_> {
+    fn current_job(
+        &mut self,
+        request: &IngestRequest,
+        progress: &IngestProgress,
+    ) -> luma_content_store::Result<()> {
+        if self.job.lineage()?.ingestion != (request, progress) {
+            return Err("software planning guard refuses a substituted ingestion".into());
+        }
+        Ok(())
+    }
+    fn verify_ingest_allocations(
+        &mut self,
+        _: &IngestCommitment,
+    ) -> luma_content_store::Result<()> {
+        refused()
+    }
+}
+impl StatisticsBoundary for Guard<'_> {
+    fn current_statistics(
+        &mut self,
+        _: &StatisticsRequest,
+        _: &StatisticsProgress,
+    ) -> luma_content_store::Result<()> {
+        refused()
+    }
+    fn verify_statistics_allocations(
+        &mut self,
+        _: &StatisticsCommitment,
+    ) -> luma_content_store::Result<()> {
+        refused()
+    }
+}
+impl CovarianceBoundary for Guard<'_> {
+    fn current_covariance(
+        &mut self,
+        _: &CovarianceRequest,
+        _: &CovarianceProgress,
+    ) -> luma_content_store::Result<()> {
+        refused()
+    }
+    fn verify_covariance_allocations(
+        &mut self,
+        _: &CovarianceCommitment,
+    ) -> luma_content_store::Result<()> {
+        refused()
+    }
+}
+impl ProjectionBoundary for Guard<'_> {
+    fn current_projection(
+        &mut self,
+        _: &ProjectionRequest,
+        _: &ProjectionProgress,
+    ) -> luma_content_store::Result<()> {
+        refused()
+    }
+    fn verify_projection_allocations(
+        &mut self,
+        _: &ProjectionCommitment,
+    ) -> luma_content_store::Result<()> {
+        refused()
+    }
+}
+impl VectorBoundary for Guard<'_> {
+    fn current_vectors(
+        &mut self,
+        _: &VectorRequest,
+        _: &VectorProgress,
+    ) -> luma_content_store::Result<()> {
+        refused()
+    }
+    fn verify_vector_allocations(
+        &mut self,
+        _: &VectorCommitment,
+    ) -> luma_content_store::Result<()> {
+        refused()
+    }
+}
+impl GenerationAuditBoundary for Guard<'_> {
+    fn current_generation_audit(
+        &mut self,
+        _: &GenerationJob,
+        _: &AuditProgress,
+    ) -> luma_content_store::Result<()> {
+        refused()
+    }
+    fn verify_audit_reservations(&mut self, _: &AuditCommitment) -> luma_content_store::Result<()> {
+        refused()
+    }
+}
+impl GenerationPublicationBoundary for Guard<'_> {
+    fn verify_original_phase_provenance(
+        &mut self,
+        _: &GenerationJob,
+        _: &AuditProgress,
+    ) -> luma_content_store::Result<()> {
+        refused()
+    }
+    fn reserve_generation(&mut self, _: &GenerationReview) -> luma_content_store::Result<()> {
+        refused()
+    }
+    fn verify_generation_allocations(
+        &mut self,
+        _: &GenerationCommitment,
+    ) -> luma_content_store::Result<()> {
+        refused()
+    }
+    fn release_generation_after_selection(
+        &mut self,
+        _: &GenerationCommitment,
+    ) -> luma_content_store::Result<()> {
+        refused()
+    }
+}
+impl CurrentGenerationBoundary for Guard<'_> {
+    fn current_generation(&mut self, _: &GenerationManifest) -> luma_content_store::Result<()> {
+        refused()
+    }
+}
+impl PageAccountingBoundary for Guard<'_> {
+    fn reserve_pages(&mut self, _: &PageReserve) -> luma_content_store::Result<()> {
+        refused()
+    }
+    fn observe_pages(
+        &mut self,
+        _: &PageDebitCommitment,
+        _: &CapturedPageMeasurements,
+    ) -> luma_content_store::Result<()> {
+        refused()
+    }
+    fn verify_pages(&mut self, _: &PageDebitCommitment) -> luma_content_store::Result<()> {
+        refused()
+    }
+    fn release_pages_after_selection(
+        &mut self,
+        _: &PageDebitCommitment,
+    ) -> luma_content_store::Result<()> {
+        refused()
+    }
+}
+impl phase::NativeIndexBoundary for Guard<'_> {
+    fn current_native_job(&mut self, job: &Job) -> Result<()> {
+        if job != self.job {
+            return Err("software planning guard refuses a substituted job".into());
+        }
+        Ok(())
+    }
+    fn current_native_operation(&mut self, input: &request::Input) -> Result<()> {
+        if input != self.input {
+            return Err("software planning guard refuses a substituted request".into());
+        }
+        Ok(())
+    }
+    fn current_plan_review(&mut self, _: &request::Input, _: &str) -> Result<()> {
+        refused()
+    }
+}
+/// The migrated owner's one retained artifact, returned only for its exact
+/// immutable digest and length after an owner inspection.
+struct Sources {
+    binding: OwnerBinding,
+}
+impl CorpusContent for Sources {
+    fn read_content<B: CorpusIndexBoundary>(
+        &mut self,
+        record: &CorpusRecord,
+        boundary: &mut B,
+    ) -> luma_content_store::Result<Vec<u8>> {
+        boundary.check(Access::Inspect {
+            binding: &self.binding,
+        })?;
+        if record.reference.content_sha256 != luma_content::sha256(BODY)
+            || record.content_bytes != BODY.len() as u64
+        {
+            return Err("software source holds only the retained owner artifact".into());
+        }
+        Ok(BODY.to_vec())
+    }
+}
+/// One ingestion Step over the exact selected first job.
+fn step(binding: &OwnerBinding, job: &Job, id: &str) -> request::Input {
+    request::Input {
+        schema_version: 1,
+        login: "admin".into(),
+        binding: binding.clone(),
+        request_id: id.repeat(32),
+        operation: request::Operation::Step {
+            job_id: "2".repeat(32),
+            expected_job_sha256: job.sha256().unwrap(),
+            window: request::Window {
+                maximum: 1,
+                read_bytes: 16 * 1024 * 1024,
+                write_bytes: 16 * 1024 * 1024,
+            },
+        },
+    }
+}
+/// The reconstructed ingestion plan of one Step, made by the real planner
+/// over the real store under the read-only software guard.
+fn plan(store: &ObjectStore, job: &Job, input: &request::Input) -> phase::Plan {
+    phase::plan(
+        store,
+        job,
+        input,
+        &mut Sources {
+            binding: input.binding.clone(),
+        },
+        &mut Guard { job, input },
+    )
+    .unwrap()
+}
+
+/// The selected first job's first ingestion phase is prepared under a new
+/// original over the exact reconstructed plan. Every substitute is refused
+/// before NV and leaves C and the store untouched; the preparation takes one
+/// dispatch, writes nothing to the store, and the cold reader replays it. A
+/// second preparation over the C-selected one is refused.
+#[test]
+fn actual_index_phase_preparation_refuses_substitutes_before_nv_then_one_dispatch_cold_reopen_replays(
+) {
+    let fixture = Fixture::new();
+    let Migrated {
+        owner,
+        store,
+        mut authority,
+        head,
+        ..
+    } = migrated(&fixture, true);
+    let current = builder();
+    let input = start(&owner.binding, &head, "1");
+    let (audit, source) = original(&input, &head, &current.0, 900);
+    let mut check = || Ok(());
+    cold(&fixture)
+        .unwrap()
+        .reserve_index_start_direct(
+            &input,
+            &current,
+            &mut software_worker_operation(&audit, source, &mut check),
+        )
+        .unwrap();
+    let (audit, source) = original(&input, &head, &current.0, 901);
+    let mut check = || Ok(());
+    cold(&fixture)
+        .unwrap()
+        .select_index_start_direct(
+            &store,
+            &input,
+            &current,
+            &mut software_worker_operation(&audit, source, &mut check),
+        )
+        .unwrap();
+    let calls = fixture.memory.0.borrow().calls;
+    let stored = store.inventory(read(), &mut authority, |_| Ok(())).unwrap();
+    let job = Job::beginning_data(
+        &input,
+        &head,
+        &current.0,
+        &selection_data_sha256(&head, None).unwrap(),
+    )
+    .unwrap();
+    let step_input = step(&owner.binding, &job, "4");
+    let planned = plan(&store, &job, &step_input);
+    let review = planned.review().unwrap();
+    assert_eq!(review.base_sha256, job.sha256().unwrap());
+    assert_eq!(review.input_sha256, step_input.sha256().unwrap());
+    let grant = "explicit-software-direct-index-phase";
+    let (audit, source) = effect(
+        &step_input,
+        &review.review_sha256,
+        grant,
+        "software index phase rpc 902",
+        902,
+    );
+    let (reused_audit, reused_source) = original(&input, &head, &current.0, 901);
+    let mut publish = source.clone();
+    publish.purpose = SourcePurpose::Publish;
+    let (stale_audit, stale_source) = effect(
+        &step_input,
+        &"ab".repeat(32),
+        grant,
+        "software index phase rpc 904",
+        904,
+    );
+    // A plan of another Step over the same job, under an original that binds
+    // this Step to that plan's review.
+    let other = step(&owner.binding, &job, "5");
+    let other_plan = plan(&store, &job, &other);
+    let other_review = other_plan.review().unwrap();
+    let (other_audit, other_source) = effect(
+        &step_input,
+        &other_review.review_sha256,
+        grant,
+        "software index phase rpc 905",
+        905,
+    );
+    let cases: [(&phase::Plan, Audit, TypedOperationSource, bool); 5] = [
+        (&planned, reused_audit, reused_source, true),
+        (&planned, audit.clone(), publish, true),
+        (&planned, stale_audit, stale_source, true),
+        (&other_plan, other_audit, other_source, true),
+        (&planned, audit.clone(), source.clone(), false),
+    ];
+    for (planned, audit, source, live) in cases {
+        let mut check = || {
+            if live {
+                Ok(())
+            } else {
+                Err("software original revoked".into())
+            }
+        };
+        assert!(cold(&fixture)
+            .unwrap()
+            .prepare_index_direct(
+                &step_input,
+                planned,
+                &mut software_worker_operation(&audit, source, &mut check),
+            )
+            .is_err());
+        assert_eq!(fixture.memory.0.borrow().calls, calls, "refused before NV");
+        assert_eq!(
+            store.inventory(read(), &mut authority, |_| Ok(())).unwrap(),
+            stored,
+            "refused before any store write"
+        );
+    }
+    let before = cold(&fixture).expect("the refused preparations leave the selected job");
+    let selected_job = before.descriptor().clone();
+    assert!(matches!(
+        selected_job.operation,
+        OperationData::IndexJobSelection { .. }
+    ));
+    let mut check = || Ok(());
+    let preparation = before
+        .prepare_index_direct(
+            &step_input,
+            &planned,
+            &mut software_worker_operation(&audit, source, &mut check),
+        )
+        .unwrap();
+    assert_eq!(
+        fixture.memory.0.borrow().calls,
+        calls + 1,
+        "one NV dispatch per phase preparation"
+    );
+    assert_eq!(
+        store.inventory(read(), &mut authority, |_| Ok(())).unwrap(),
+        stored,
+        "a preparation writes nothing to the store"
+    );
+    let reopened = cold(&fixture).expect("cold reopen replays the selected phase preparation");
+    let selected = reopened.descriptor();
+    match &selected.operation {
+        OperationData::IndexPreparation {
+            binding,
+            input_sha256,
+            preparation: retained,
+            original_authority,
+            ..
+        } => {
+            assert_eq!(binding, &owner.binding);
+            assert_eq!(input_sha256, &step_input.sha256().unwrap());
+            assert_eq!(retained, &preparation);
+            assert_eq!(original_authority, &audit);
+        }
+        _ => panic!("cold reopen did not select the phase preparation"),
+    }
+    assert_eq!(selected.sequence, selected_job.sequence + 1);
+    assert_eq!(selected.roots.owners, selected_job.roots.owners);
+    assert_ne!(
+        selected.roots.index_generations,
+        selected_job.roots.index_generations
+    );
+    assert_eq!(selected.roots.index_generations.entry_count, 1);
+    // The unresolved preparation stays charged: a second one is refused.
+    let (audit, source) = effect(
+        &other,
+        &other_review.review_sha256,
+        grant,
+        "software index phase rpc 903",
+        903,
+    );
+    let mut check = || Ok(());
+    assert!(reopened
+        .prepare_index_direct(
+            &other,
+            &other_plan,
+            &mut software_worker_operation(&audit, source, &mut check),
+        )
+        .is_err());
+    assert_eq!(fixture.memory.0.borrow().calls, calls + 1);
+    assert_eq!(
+        store.inventory(read(), &mut authority, |_| Ok(())).unwrap(),
+        stored
+    );
+    cold(&fixture).expect("the refused preparation leaves the selected one");
 }

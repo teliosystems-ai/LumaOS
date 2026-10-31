@@ -17,8 +17,8 @@ use inventory::{InventoryPlan, InventoryRoot};
 #[path = "effects/job.rs"]
 mod job;
 // The semantic proof's only consumer, the direct C index publisher, is
-// compiled only under test. Tests dispatch the Start reservation and the job
-// selection; an index phase preparation is not yet dispatched.
+// compiled only under test. Tests dispatch the Start reservation, the job
+// selection and an index phase preparation over that selected job.
 #[allow(dead_code)]
 #[path = "effects/verification.rs"]
 mod verification;
@@ -29,14 +29,14 @@ pub(in crate::content_checkpoint::custody::v2_publication) use verification::{
     VerifiedIndexSelection,
 };
 // Historical replay's only consumer, the cold direct C reader, is compiled
-// only under test. It replays a selected Start reservation and job selection;
-// an index phase preparation replay still has no consumer.
+// only under test. It replays a selected Start reservation, job selection and
+// index phase preparation.
 #[allow(dead_code)]
 #[path = "effects/selected.rs"]
 mod selected;
 #[allow(unused_imports)]
 pub(in crate::content_checkpoint::custody::v2_publication) use selected::{
-    replay_reserved_start_data, replay_selected_job_data, SelectedEventData,
+    replay_reserved_start_data, replay_selected_data, replay_selected_job_data, SelectedEventData,
     SelectedPreparationReader,
 };
 

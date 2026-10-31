@@ -513,6 +513,86 @@ fn interrupted_write_is_retained_and_measured_never_reused_as_complete() {
 }
 
 #[test]
+fn write_set_synchronization_reads_held_members_and_never_creates_or_adopts() {
+    let (fixture, store) = setup();
+    let hash = store
+        .prepare_page(
+            &[5; 4096],
+            write_budget(),
+            &mutation(),
+            &mut Guard::new(true),
+        )
+        .unwrap();
+    let member = ObjectWriteSpec {
+        sha256: hash,
+        bytes: 4096,
+    };
+    let inventory = |store: &ObjectStore| {
+        store
+            .inventory(read_budget(), &mut Guard::new(false), |_| Ok(()))
+            .unwrap()
+    };
+    let before = inventory(&store);
+    store
+        .synchronize_objects(
+            std::slice::from_ref(&member),
+            read_budget(),
+            &mut Guard::new(false),
+        )
+        .unwrap();
+    assert_eq!(inventory(&store), before);
+    // An absent member is never created, and no other length is the member.
+    let absent = ObjectWriteSpec {
+        sha256: luma_content::sha256(&[6; 4096]),
+        bytes: 4096,
+    };
+    let mut longer = member.clone();
+    longer.bytes += 1;
+    for set in [vec![member.clone(), absent.clone()], vec![longer], vec![]] {
+        assert!(store
+            .synchronize_objects(&set, read_budget(), &mut Guard::new(false))
+            .is_err());
+    }
+    assert!(!fixture.object(&absent.sha256).exists());
+    // Synchronization is read-only admission under current authority.
+    assert!(store
+        .synchronize_objects(
+            std::slice::from_ref(&member),
+            write_budget(),
+            &mut Guard::new(true)
+        )
+        .is_err());
+    let mut revoked = Guard::new(false);
+    revoked.revoked.set(true);
+    assert!(store
+        .synchronize_objects(std::slice::from_ref(&member), read_budget(), &mut revoked)
+        .is_err());
+    // An interrupted write under its hash name is retained, never made complete.
+    let bytes = vec![8; MAX_PAGE_BYTES];
+    let partial = ObjectWriteSpec {
+        sha256: luma_content::sha256(&bytes),
+        bytes: MAX_PAGE_BYTES as u32,
+    };
+    let path = fixture.object(&partial.sha256);
+    let mut guard = Guard::new(true);
+    let stop = guard.revoked.clone();
+    guard.hook = Some(Box::new(move || {
+        if path.exists() {
+            stop.set(true);
+        }
+    }));
+    assert!(store
+        .prepare_page(&bytes, write_budget(), &mutation(), &mut guard)
+        .is_err());
+    let retained = inventory(&store);
+    assert_eq!(retained.incomplete_objects, before.incomplete_objects + 1);
+    assert!(store
+        .synchronize_objects(&[member, partial], read_budget(), &mut Guard::new(false))
+        .is_err());
+    assert_eq!(inventory(&store), retained);
+}
+
+#[test]
 fn mutated_hardlinked_and_renamed_namespaces_fail_closed_without_adoption() {
     let (fixture, store) = setup();
     let hash = store

@@ -773,6 +773,52 @@ impl ObjectStore {
         guard.check()?;
         Ok(result)
     }
+    /// Makes every member of an exact write set durable before a C event may
+    /// reference it, including members an interrupted attempt wrote but never
+    /// synchronized, which reuse by `write_object` only re-reads. Each member
+    /// is read from the held descriptor that is then synchronized, with both
+    /// prefixes and the object root. Nothing is created, adopted or selected;
+    /// a missing, incomplete or differently sized member refuses.
+    pub fn synchronize_objects(
+        &self,
+        objects: &[ObjectWriteSpec],
+        budget: IoBudget,
+        boundary: &mut impl Boundary,
+    ) -> Result<()> {
+        if objects.is_empty() || budget.write_bytes != 0 || budget.new_files != 0 {
+            return Err(
+                "object synchronization requires a write set and read-only admission".into(),
+            );
+        }
+        let mut guard = Guard::new(boundary, &self.binding, budget, None)?;
+        self.check()?;
+        for object in objects {
+            object.validate()?;
+            let leaf = self.leaf(&object.sha256, false, &mut guard)?;
+            let value = read_member_observed(
+                &leaf.second,
+                &object.sha256,
+                MAX_PAGE_BYTES,
+                self.mount_id,
+                &mut guard,
+                || leaf.check(self),
+            )?;
+            if value.bytes.len() != object.bytes as usize
+                || luma_content::sha256(&value.bytes) != object.sha256
+            {
+                return Err("synchronized object differs from its exact write set".into());
+            }
+            value.file.sync_all()?;
+            leaf.second.sync_all()?;
+            leaf.first.sync_all()?;
+            value.recheck(&leaf.second, &object.sha256, self.mount_id)?;
+            leaf.check(self)?;
+            guard.check()?;
+        }
+        self.objects.sync_all()?;
+        self.check()?;
+        guard.check()
+    }
     pub(super) fn get_blob<B: Boundary>(
         &self,
         reference: &BlobReference,

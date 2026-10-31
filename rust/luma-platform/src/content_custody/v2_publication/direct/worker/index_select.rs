@@ -11,7 +11,8 @@
 //! C-selected accounting or exceeds it by complete C-reserved members and the
 //! directories that could hold them. Those members are content-addressed DATA
 //! the retry re-reads byte for byte before reuse; it writes the missing ones,
-//! and its measured inventory must still fit the reservation's liability. A
+//! synchronizes every member before C can reference it, and its measured
+//! inventory must still fit the reservation's liability. A
 //! partial member, a foreign object or any other difference is refused before
 //! any store write or NV dispatch. Recovering a partial member is later work;
 //! until a selection is published the reservation's liability stays charged.
@@ -438,6 +439,9 @@ fn select<A: Checkpoint>(
         if store.read_blob(&job, read_budget(), &mut current)? != plan.job_bytes() {
             return Err("actual job blob read-back differs from the C-derived job bytes".into());
         }
+        // A reused member may never have been synchronized by the attempt that
+        // wrote it; every member is made durable before C can reference it.
+        store.synchronize_objects(plan.objects(), read_budget(), &mut current)?;
         let after = store.inventory(read_budget(), &mut current, |_| Ok(()))?;
         writer.check(&mut current)?;
         drop(writer);

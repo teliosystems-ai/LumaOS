@@ -7,8 +7,11 @@
 use super::super::super::super::super::protocol::{
     software_worker_operation, OriginalCOperation, TypedOperationSource,
 };
+use super::super::super::backend::{verify_index_preparation, Backend};
+use super::super::super::reader::observe;
 use super::migration_cases::{migrated, Migrated, BODY};
-use super::worker_cases::cold;
+use super::progress_cases::ContentGuard;
+use super::worker_cases::{attribution, cold, provenance, worker};
 use super::*;
 use crate::content_checkpoint::custody::indexed::{
     selection_data_sha256, TransitionBase, TransitionReview,
@@ -17,6 +20,7 @@ use crate::content_checkpoint::custody::v2_publication::index::effects::CurrentB
 use crate::content_index::scope::original_usage;
 use crate::content_index::state::Job;
 use crate::content_index::{phase, request};
+use luma_content::{EditOrigin, Format};
 use luma_content_store::corpus_index::job::accounted::{
     CapturedPageMeasurements, PageAccountingBoundary, PageDebitCommitment, PageReserve,
 };
@@ -48,7 +52,8 @@ use luma_content_store::corpus_index::{
 use luma_content_store::v2::{
     BlobObjectPlan, IoBudget, MapRoot, Mutation, ObjectStore, PhysicalInventory,
 };
-use luma_content_store::{Access, Boundary, DecisionKind, ResourceBudget};
+use luma_content_store::{Access, Boundary, DecisionKind, Plan, Repository, ResourceBudget};
+use std::os::unix::fs::{DirBuilderExt, FileExt, OpenOptionsExt};
 use std::path::Path;
 
 /// Inventory walks and blob reads are read-only admissions.
@@ -497,6 +502,10 @@ impl<B: Boundary> Boundary for Interrupted<'_, B> {
 /// and the final retry reconciles with one NV dispatch and nothing more
 /// written. Partial and foreign members are refused before NV; the pure
 /// attribution test covers them, since no retry may adopt or remove them.
+/// The reconciled selection is then an ordinary selected cut: the first phase
+/// prepares over it and a brand-new owner's first V1 publication is dispatched
+/// over that preparation, which stays charged. Each migrated owner costs a real
+/// bounded migration, so this owner carries those steps too.
 #[test]
 fn actual_index_job_selection_reconciles_complete_members_of_interrupted_attempts() {
     let fixture = Fixture::new();
@@ -658,6 +667,91 @@ fn actual_index_job_selection_reconciles_complete_members_of_interrupted_attempt
         selected.roots.index_generations,
         reserved.roots.index_generations
     );
+    let first = Job::beginning_data(
+        &input,
+        &head,
+        &current.0,
+        &selection_data_sha256(&head, None).unwrap(),
+    )
+    .unwrap();
+    let step_input = step(&owner.binding, &first, "4");
+    let planned = plan(&store, &first, &step_input);
+    let grant = "explicit-software-direct-index-phase";
+    let (audit, source) = effect(
+        &step_input,
+        &planned.review().unwrap().review_sha256,
+        grant,
+        "software index phase rpc 803",
+        803,
+    );
+    let mut check = || Ok(());
+    reopened
+        .prepare_index_direct(
+            &step_input,
+            &planned,
+            &mut software_worker_operation(&audit, source, &mut check),
+        )
+        .unwrap();
+    let prepared = cold(&fixture).expect("a preparation replays over the reconciled selection");
+    let preparation = prepared.descriptor().clone();
+    assert!(matches!(
+        preparation.operation,
+        OperationData::IndexPreparation { .. }
+    ));
+    let calls = fixture.memory.0.borrow().calls;
+    publish_second_owner(&fixture, prepared, 804);
+    assert_eq!(
+        fixture.memory.0.borrow().calls,
+        calls + 1,
+        "one NV dispatch for the V1 publication"
+    );
+    let published = cold(&fixture).expect("cold V1 replay continues a selected preparation");
+    let after = published.descriptor().clone();
+    assert!(matches!(
+        after.operation,
+        OperationData::V1Publication { .. }
+    ));
+    assert_eq!(after.sequence, preparation.sequence + 1);
+    assert_eq!(after.previous_nv_head, preparation.selected_nv_head);
+    assert_eq!(
+        after.roots.owners.entry_count,
+        preparation.roots.owners.entry_count + 1
+    );
+    assert_eq!(
+        after.roots.index_generations,
+        preparation.roots.index_generations
+    );
+    // The preparation stays charged over the V1: a second one is refused.
+    let other = step(&owner.binding, &first, "5");
+    let other_plan = plan(&store, &first, &other);
+    let (audit, source) = effect(
+        &other,
+        &other_plan.review().unwrap().review_sha256,
+        grant,
+        "software index phase rpc 805",
+        805,
+    );
+    let mut check = || Ok(());
+    let refusal = published
+        .prepare_index_direct(
+            &other,
+            &other_plan,
+            &mut software_worker_operation(&audit, source, &mut check),
+        )
+        .err()
+        .expect("the selected preparation stays charged over the V1 publication");
+    assert!(refusal.to_string().contains("must remain charged"));
+    assert_eq!(fixture.memory.0.borrow().calls, calls + 1);
+    // Damage under the selected V1 is refused with no repair or dispatch. Its
+    // change time cannot be restored, so this ends the fixture.
+    let slot = &preparation.storage.as_ref().unwrap().descriptor_slot;
+    damage(&fixture, &slot.job, slot.number);
+    let refusal = cold(&fixture)
+        .err()
+        .expect("a damaged preparation frame refuses the cold reader")
+        .to_string();
+    assert!(refusal.contains("sealed tail inode change-time differs"));
+    assert_eq!(fixture.memory.0.borrow().calls, calls + 1);
 }
 
 /// Old and third-NV dispatch faults are the shared fenced dispatch already
@@ -964,11 +1058,305 @@ fn plan(store: &ObjectStore, job: &Job, input: &request::Input) -> phase::Plan {
     .unwrap()
 }
 
+/// The exact selected descriptor location of the current cut.
+fn selected_location(fixture: &Fixture) -> slots::SealedReference {
+    let cut = observe(
+        &mut fixture.memory.clone(),
+        &fixture.pages(),
+        &fixture.binding,
+        &mut || Ok(()),
+    )
+    .unwrap();
+    match cut.cell() {
+        control::Cell::Selected { descriptor, .. } => descriptor.clone(),
+        _ => panic!("the selected cut has no selected control cell"),
+    }
+}
+/// The retained body of one selected preparation.
+fn retained(descriptor: &mut Descriptor) -> ([&mut String; 3], &mut RecordRef, &mut Audit) {
+    match &mut descriptor.operation {
+        OperationData::IndexPreparation {
+            request_sha256,
+            input_sha256,
+            source_sha256,
+            preparation,
+            original_authority,
+            ..
+        } => (
+            [request_sha256, input_sha256, source_sha256],
+            preparation,
+            original_authority,
+        ),
+        _ => panic!("the forged candidate is not a phase preparation"),
+    }
+}
+/// One candidate at one location, refused by the cold verifier.
+fn refuses(
+    fixture: &Fixture,
+    candidate: &Descriptor,
+    location: &slots::SealedReference,
+    reason: &str,
+) {
+    let refusal = verify_index_preparation(&fixture.pages(), candidate, location, &mut || Ok(()))
+        .err()
+        .expect("the cold verifier refuses this candidate")
+        .to_string();
+    assert!(refusal.contains(reason), "{refusal}");
+}
+/// One forged copy of the selected preparation. Sealing recomputes its event
+/// digest and NV continuation and its location commits its own frame, so the
+/// refusal is of the forged field and not of those.
+fn forged(
+    fixture: &Fixture,
+    selected: &Descriptor,
+    location: &slots::SealedReference,
+    reason: &str,
+    change: impl FnOnce(&mut Descriptor),
+) {
+    let mut candidate = selected.clone();
+    change(&mut candidate);
+    let candidate = candidate.seal().unwrap();
+    let mut location = location.clone();
+    location.slot = candidate.storage.as_ref().unwrap().descriptor_slot.clone();
+    location.sha256 = hash(&candidate.slot_frame().unwrap());
+    refuses(fixture, &candidate, &location, reason);
+}
+/// Forged candidates reach the cold verifier directly, since no selected C cut
+/// can carry one to the reader: selecting it would take re-sealed slots, control
+/// cells and NV. The honest cut is the control, so each refusal is its forgery's.
+fn refuse_forged_preparations(
+    fixture: &Fixture,
+    selected: &Descriptor,
+    location: &slots::SealedReference,
+    job: &Descriptor,
+    job_location: &slots::SealedReference,
+) {
+    verify_index_preparation(&fixture.pages(), selected, location, &mut || Ok(()))
+        .expect("the honest selected preparation is the control");
+    let exact = "is not its exact selected descriptor location";
+    let lineage = "does not continue the exact authenticated old cut";
+    let lost = "lost the exact selected previous descriptor address";
+    let body = "substitutes exact checkpointed source/attribution/before tuple";
+    let layout = "differs from its deterministic reviewed layout";
+    let unsealed = "sealed tail data hash or exact EOF differs";
+    let job_storage = job.storage.as_ref().unwrap();
+    let forge = |reason: &str, change: &dyn Fn(&mut Descriptor)| {
+        forged(fixture, selected, location, reason, change)
+    };
+    let mut absent = selected.clone();
+    absent.storage = None;
+    refuses(
+        fixture,
+        &absent.seal().unwrap(),
+        location,
+        "has no selected storage",
+    );
+    let mut short = location.clone();
+    short.bytes -= 1;
+    refuses(fixture, selected, &short, exact);
+    let mut substituted = location.clone();
+    substituted.sha256 = "ab".repeat(32);
+    refuses(fixture, selected, &substituted, exact);
+    let mut moved = location.clone();
+    moved.slot.number += 1;
+    refuses(fixture, selected, &moved, exact);
+    let mut stale = location.clone();
+    stale.sealed_ctime_nanoseconds ^= 1;
+    refuses(
+        fixture,
+        selected,
+        &stale,
+        "sealed tail inode change-time differs from selected immutable seal",
+    );
+    forge(exact, &|candidate| {
+        let storage = candidate.storage.as_mut().unwrap();
+        storage.schema_version = 1;
+        storage.jobs = None;
+        storage.parent_allocation = None;
+    });
+    // Only bootstrap progress may be sequence one, so this cannot be sealed and
+    // the verifier's own validation refuses it.
+    let mut first = selected.clone();
+    first.sequence = 1;
+    first.global_ordinal = first.legacy.events + 2;
+    first.previous_descriptor_sha256 = None;
+    refuses(
+        fixture,
+        &first,
+        location,
+        "event/NV/ordinal continuation differs",
+    );
+    refuses(
+        fixture,
+        job,
+        job_location,
+        "refuses a different semantic event class",
+    );
+    forge(lost, &|candidate| {
+        candidate.previous_descriptor_sha256 = Some("ab".repeat(32));
+    });
+    forge(lost, &|candidate| {
+        candidate.storage.as_mut().unwrap().locations = job_storage.locations.clone();
+    });
+    forge(lineage, &|candidate| {
+        candidate.previous_descriptor_sha256 = job.previous_descriptor_sha256.clone();
+    });
+    forge(lineage, &|candidate| {
+        candidate.sequence += 1;
+        candidate.global_ordinal += 1;
+    });
+    forge(lineage, &|candidate| {
+        candidate.previous_nv_head = "ab".repeat(32);
+    });
+    forge(lineage, &|candidate| {
+        candidate.legacy.journal_sha256 = "ab".repeat(32);
+    });
+    forge("unrelated C roots", &|candidate| {
+        candidate.roots.owners.page.as_mut().unwrap().sha256 = "ab".repeat(32);
+    });
+    forge("role CAS differs", &|candidate| {
+        candidate.roots.index_generations = job.roots.index_generations.clone();
+    });
+    for field in 0..3 {
+        forge(body, &|candidate| {
+            *retained(candidate).0[field] = "ab".repeat(32);
+        });
+    }
+    forge(body, &|candidate| {
+        retained(candidate).2.checkpoint_head = "ab".repeat(32);
+    });
+    forge("no selected immutable record address", &|candidate| {
+        retained(candidate).1.sha256 = "ab".repeat(32);
+    });
+    forge("record complete bytes changed", &|candidate| {
+        retained(candidate).1.bytes -= 1;
+    });
+    forge(layout, &|candidate| {
+        let controls = &mut candidate.storage.as_mut().unwrap().controls;
+        controls.cells[0].instance_id = "ab".repeat(32);
+    });
+    forge(layout, &|candidate| {
+        candidate.storage.as_mut().unwrap().descriptor_slot.job = "ab".repeat(32);
+    });
+    forge("no selected allocation manifest", &|candidate| {
+        candidate.storage.as_mut().unwrap().jobs = job_storage.jobs.clone();
+    });
+    // The closure reads the forged frame's own sealed location before it
+    // reaches the delta and inventory checks, so a frame that is not the one on
+    // disk stops there. The honest cut over a disturbed store reaches them.
+    forge(unsealed, &|candidate| {
+        candidate.storage.as_mut().unwrap().post_allocation.files += 1;
+    });
+    forge(unsealed, &|candidate| {
+        candidate.storage.as_mut().unwrap().parent_allocation = None;
+    });
+}
+/// One disturbed store, refused by the verifier and the cold reader with no
+/// repair or dispatch.
+fn disturbed(
+    fixture: &Fixture,
+    selected: &Descriptor,
+    location: &slots::SealedReference,
+    reason: &str,
+) {
+    let calls = fixture.memory.0.borrow().calls;
+    refuses(fixture, selected, location, reason);
+    let refusal = cold(fixture)
+        .err()
+        .expect("a disturbed store refuses the cold reader")
+        .to_string();
+    assert!(refusal.contains(reason), "{refusal}");
+    assert_eq!(fixture.memory.0.borrow().calls, calls);
+}
+/// One torn page a crash left behind, a member of no selected cut.
+fn partial_page(fixture: &Fixture) {
+    let leaf = fixture.pages().root.join("pages").join("cd").join("cd");
+    fs::DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(&leaf)
+        .unwrap();
+    fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o400)
+        .open(leaf.join(format!("cdcd{}", "ab".repeat(30))))
+        .unwrap()
+        .write_all_at(b"partial", 0)
+        .unwrap();
+}
+/// Flips one byte of one sealed retained member in place.
+fn damage(fixture: &Fixture, job: &str, number: u32) {
+    let member = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(
+            fixture
+                .pages()
+                .root
+                .join("tails")
+                .join(job)
+                .join(format!("{number:08x}")),
+        )
+        .unwrap();
+    let mut byte = [0u8];
+    member.read_exact_at(&mut byte, 0).unwrap();
+    member.write_all_at(&[!byte[0]], 0).unwrap();
+}
+/// A brand-new second owner's first V1 publication over the current cut. The
+/// migrated owner's data directory also holds the v2 object store, so this
+/// owner has its own content repository.
+fn publish_second_owner(fixture: &Fixture, current: Backend<Memory>, number: u64) {
+    let binding = OwnerBinding {
+        installation: fixture.binding.installation.clone(),
+        owner: "55".repeat(32),
+        owner_generation: 1,
+    };
+    let body = b"a second owner's first version over a selected index preparation";
+    let capture = Plan::capture(
+        binding.clone(),
+        "document",
+        Format::Utf8Text,
+        body,
+        provenance("direct-index-second-owner", body, EditOrigin::Managed),
+    )
+    .unwrap();
+    let mut guard = ContentGuard {
+        owner: binding.clone(),
+        review: capture.review_sha256().into(),
+    };
+    let data = fixture.data.with_extension("second-owner");
+    fs::DirBuilder::new().mode(0o700).create(&data).unwrap();
+    let mut repository = Repository::create_at(&data, &capture, &mut guard).unwrap();
+    let held = repository.prepare(&capture, body, &mut guard).unwrap();
+    let commitment = held.commitment().canonical_bytes().unwrap();
+    let record = held.record_bytes().to_vec();
+    let expected = held.commitment().outcome_state();
+    let (profile, audit) = attribution(&binding, capture.review_sha256(), number);
+    let source = worker(&binding, profile, &commitment);
+    let mut check = || Ok(());
+    let state = current
+        .publish_v1_direct(
+            &commitment,
+            &record,
+            &mut software_worker_operation(&audit, source, &mut check),
+        )
+        .unwrap();
+    assert_eq!(state, expected);
+    held.publish(&mut guard).unwrap();
+    assert_eq!(repository.verified_state(&mut guard).unwrap(), state);
+    drop(repository);
+    fs::remove_dir_all(&data).unwrap();
+}
+
 /// The selected first job's first ingestion phase is prepared under a new
 /// original over the exact reconstructed plan. Every substitute is refused
 /// before NV and leaves C and the store untouched; the preparation takes one
 /// dispatch, writes nothing to the store, and the cold reader replays it. A
-/// second preparation over the C-selected one is refused.
+/// second preparation over the C-selected one is refused. Forged candidates
+/// of the selected cut are then each refused by the cold verifier with nothing
+/// changed, and a torn page, an unreviewed attempt and a damaged sealed member
+/// each refuse the verifier and the cold reader.
 #[test]
 fn actual_index_phase_preparation_refuses_substitutes_before_nv_then_one_dispatch_cold_reopen_replays(
 ) {
@@ -1079,6 +1467,7 @@ fn actual_index_phase_preparation_refuses_substitutes_before_nv_then_one_dispatc
     }
     let before = cold(&fixture).expect("the refused preparations leave the selected job");
     let selected_job = before.descriptor().clone();
+    let job_location = selected_location(&fixture);
     assert!(matches!(
         selected_job.operation,
         OperationData::IndexJobSelection { .. }
@@ -1102,7 +1491,7 @@ fn actual_index_phase_preparation_refuses_substitutes_before_nv_then_one_dispatc
         "a preparation writes nothing to the store"
     );
     let reopened = cold(&fixture).expect("cold reopen replays the selected phase preparation");
-    let selected = reopened.descriptor();
+    let selected = reopened.descriptor().clone();
     match &selected.operation {
         OperationData::IndexPreparation {
             binding,
@@ -1147,4 +1536,41 @@ fn actual_index_phase_preparation_refuses_substitutes_before_nv_then_one_dispatc
         stored
     );
     cold(&fixture).expect("the refused preparation leaves the selected one");
+    let location = selected_location(&fixture);
+    let charged = fixture.pages().inventory(&mut || Ok(())).unwrap();
+    refuse_forged_preparations(&fixture, &selected, &location, &selected_job, &job_location);
+    assert_eq!(fixture.memory.0.borrow().calls, calls + 1);
+    assert_eq!(
+        fixture.pages().inventory(&mut || Ok(())).unwrap(),
+        charged,
+        "a refused forgery allocates nothing"
+    );
+    cold(&fixture).expect("the forged candidates leave the selected preparation");
+    // The closure's checks run last first, since an earlier one hides the next.
+    // The last two cannot be undone, so this ends the fixture.
+    partial_page(&fixture);
+    disturbed(
+        &fixture,
+        &selected,
+        &location,
+        "actual complete physical closure differs from its selected exact delta",
+    );
+    fs::DirBuilder::new()
+        .mode(0o700)
+        .create(fixture.pages().root.join("attempts").join("cd".repeat(32)))
+        .unwrap();
+    disturbed(
+        &fixture,
+        &selected,
+        &location,
+        "selected C parent delta lost its actual current after observation",
+    );
+    let slot = &selected.storage.as_ref().unwrap().descriptor_slot;
+    damage(&fixture, &slot.job, 0);
+    disturbed(
+        &fixture,
+        &selected,
+        &location,
+        "sealed tail inode change-time differs from selected immutable seal",
+    );
 }

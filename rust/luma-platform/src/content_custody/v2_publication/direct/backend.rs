@@ -13,6 +13,17 @@ use super::super::*;
 #[path = "worker.rs"]
 mod worker;
 
+/// The cold preparation verifier alone, for refusal tests over forged
+/// candidates that no selected C cut can carry to the reader.
+pub(super) fn verify_index_preparation(
+    pages: &PageStore,
+    current: &Descriptor,
+    location: &slots::SealedReference,
+    check: &mut impl FnMut() -> Result<()>,
+) -> Result<()> {
+    worker::verify_cold_index_preparation(pages, current, location, check)
+}
+
 pub(in crate::content_checkpoint::custody) struct Backend<A: Checkpoint> {
     anchor: A,
     files: Files,

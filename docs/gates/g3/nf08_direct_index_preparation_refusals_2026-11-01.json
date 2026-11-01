@@ -1,0 +1,308 @@
+{
+  "schema_version": 1,
+  "recorded_on": "2026-11-01",
+  "status": "verified-component-tests-only-phase-run-index-publication-partial-member-recovery-and-c-reservation-open",
+  "scope": "G3 functional branch only: tests of the cold index preparation verifier's refusals, and the first event dispatched over a preparation cut, in a real migrated V2 store; no production caller, produced image, GWIN0 package, installed run or native C activation",
+  "branch_policy": {
+    "branch": "feature/g3-functional-beta",
+    "branched_from": "b69e09385a919f074d3ba9dfce45fb561ef6ab6f",
+    "g2_testing_and_gwin0_branch": "feature/g3-gwin0-beta",
+    "owner_decision": "On 29 October 2026 the owner kept further sequence-19 G2 testing and GWIN0 completion on feature/g3-gwin0-beta and moved G3 functional development to this branch in the words: complete G3 in a different branch till we fully test G2 and complete GWIN0. This checkpoint is the next step of that work and takes up the two test gaps the preparation checkpoint left open; no separate owner approval of it is claimed"
+  },
+  "implementation": [
+    "A test-only entry calls the cold preparation verifier directly with a candidate and location, since no selected C cut can carry a forged candidate to the reader: selecting one would take re-sealed slots, control cells and NV",
+    "The preparation test refuses forged candidates, then disturbs the store under the honest cut",
+    "The job reconciliation test now carries on past the selection: a preparation over the reconciled selection, a brand-new second owner's first V1 publication over that preparation, a second preparation and damage to the preparation's frame",
+    "No production check changed and these tests exposed no production gap. The publisher still has no production caller; production builds do not compile the direct publisher, its cold verifiers, the index effects module or the test-only entry"
+  ],
+  "production_change": "None. Commit bd0d65b touches two files, both compiled only under test",
+  "exact_sources": {
+    "refusal_snapshot": {
+      "commit": "bd0d65b4306218c920b582a8b595b91c367b33da",
+      "tree": "1a6c78edbe4894fa86b0ae14e1b592d95405b4ef",
+      "parent_commit": "acdc0d593139efec0f25aca8bf382fbfab19b9b3",
+      "rust_tree": "ad58a550c76a000f7cc402256ba99939f29ddf62",
+      "diff_from_preparation_record_head": "acdc0d5..bd0d65b: 2 files, 441 insertions, 4 deletions"
+    }
+  },
+  "verification": {
+    "environment": {
+      "container": "pinned tools image sha256:819dfe7772da1e3c76ffdc8f9ea4a1fa44c7c549bd4fa988e35d9397d87924b2",
+      "network": "none",
+      "memory_limit": "8g",
+      "cpu_limit": 6,
+      "cargo_build_jobs": 1,
+      "warnings_denied": true,
+      "test_profile": "The committed lightly optimized dev/test profile (opt-level 1, line-table debug info, debug assertions and overflow checks; release unchanged), checked by the run in profile.txt, with debuginfo off for the run",
+      "storage": "Disposable private ext4 work directories on drive D",
+      "authority": "Explicit software worker attribution, builder identity, resource lease and NV fixtures, not installed original PAM, the installed image builder, physical TPM or loaded LSM qualification"
+    },
+    "refusal_checks": {
+      "directory": "/mnt/d/LumaOS-builds/g3-cold-prep-refusal-check-20261101-a",
+      "commit": "bd0d65b4306218c920b582a8b595b91c367b33da",
+      "sha256sums_verified": true,
+      "sha256sums_sha256": "db188dd47465a2fb51702e503076163f185c55274fd2bc835eb1fe21692df9a0",
+      "admission_sha256": "d5d2b4f14ae3b2006d14c12ce4b12b379dc3c3531998c923fab514933bc729cf",
+      "profile_sha256": "920ef8d5b573664e83bb766758844d4b44f30533aaba07a735b8fcd2aeda01fc",
+      "format_check": {
+        "passed": true,
+        "diff_lines": 0,
+        "log_sha256": "ddc1be95830ff1e6212d6486d9306502853a524cd79defab4cdbd3cf9fb96ca5"
+      },
+      "warning_denied_test_build": {
+        "passed": true,
+        "packages": ["luma-content", "luma-content-store", "luma-platform"],
+        "log_sha256": "572d9608ec262c23467885ea843bfefcf6b5586f8ab563ef4c7f0a5379d82434",
+        "finished": "Finished test [optimized] target(s) in 21m 01s"
+      },
+      "tests": [
+        {
+          "filter": "custody::v2_publication::direct::initial::tests::index_cases custody::v2_publication::direct::backend::worker::index_selection::tests",
+          "log": "platform-index.log",
+          "log_sha256": "b1eb8a14bea9d270e06eaf823edd72e607072eb8362376a9713a37164f74ed63",
+          "passed": 5,
+          "failed": 0,
+          "filtered_out": 1619,
+          "seconds": 3946.34,
+          "required_ok": [
+            "content_checkpoint::custody::v2_publication::direct::backend::worker::index_selection::tests::a_walk_is_admitted_only_as_c_or_c_plus_complete_reserved_members",
+            "content_checkpoint::custody::v2_publication::direct::initial::tests::index_cases::actual_index_job_selection_reconciles_complete_members_of_interrupted_attempts",
+            "content_checkpoint::custody::v2_publication::direct::initial::tests::index_cases::actual_index_phase_preparation_refuses_substitutes_before_nv_then_one_dispatch_cold_reopen_replays",
+            "content_checkpoint::custody::v2_publication::direct::initial::tests::index_cases::actual_index_start_lost_nv_reply_is_fenced_without_adoption",
+            "content_checkpoint::custody::v2_publication::direct::initial::tests::index_cases::actual_index_start_refuses_substitutes_before_nv_then_one_dispatch_cold_reopen_replays"
+          ]
+        },
+        {
+          "filter": "luma-content and luma-content-store, unfiltered",
+          "log": "content.log",
+          "log_sha256": "6fbab39301626ce817aed97a488896ef7cbc6468d6b7581527db0008ac74eedf",
+          "results": {
+            "luma-content unit tests": ["ok", 102, 0, 0, 0.05],
+            "luma-content-store unit tests": ["ok", 356, 0, 0, 863.99],
+            "luma-content doc-tests": ["ok", 0, 0, 0, 0.00],
+            "luma-content-store doc-tests": ["ok", 3, 0, 0, 4.47]
+          }
+        },
+        {
+          "filter": "custody::v2_publication --skip index_cases --skip index_selection::tests",
+          "log": "platform-v2-publication.log",
+          "log_sha256": "7b095ac7f670396541b2aefe69e3cdb0c8bd5867ec4689755ceba65bb985bc4e",
+          "passed": 107,
+          "failed": 0,
+          "filtered_out": 1517,
+          "seconds": 1915.77,
+          "absent": [
+            "index_cases::",
+            "index_selection::tests::"
+          ]
+        },
+        {
+          "filter": "--skip custody::v2_publication",
+          "log": "platform-rest.log",
+          "log_sha256": "0056e496b8ee654a09febb87a957f68e3ba461972870553e25ac987593055eef",
+          "passed": 1470,
+          "failed": 0,
+          "ignored": 42,
+          "filtered_out": 112,
+          "seconds": 801.70
+        }
+      ],
+      "store": {
+        "before_sha256": "ec95f4df9fb1ae01edd6804b74a5ab955415842bf501f857587f2d70e29559e6",
+        "after_sha256": "df6ed96cd5b8e0516b60c81d2f5fad1931ee847247547889765f4da62c899cf2"
+      },
+      "results_format": "Each results entry is [result, passed, failed, filtered_out, seconds]"
+    },
+    "index_tests": [
+      "a_walk_is_admitted_only_as_c_or_c_plus_complete_reserved_members",
+      "actual_index_job_selection_reconciles_complete_members_of_interrupted_attempts",
+      "actual_index_phase_preparation_refuses_substitutes_before_nv_then_one_dispatch_cold_reopen_replays",
+      "actual_index_start_lost_nv_reply_is_fenced_without_adoption",
+      "actual_index_start_refuses_substitutes_before_nv_then_one_dispatch_cold_reopen_replays"
+    ],
+    "test_behaviour": [
+      "The honest selected preparation passes the verifier as the control",
+      "27 forged candidates are then each refused: 4 forged locations of the honest descriptor and 23 forged descriptors. refusal_cases gives each one's refusal",
+      "Forged descriptors are re-sealed, so the event digest and NV continuation are consistent and their location commits their own frame. The exceptions are the absent storage case, which is sealed but has no slot of its own and is presented at the honest location, the unsealed sequence one case, which cannot be sealed, and the job selection descriptor at its own true location",
+      "After the forged candidates the NV call count and page inventory are unchanged, and the honest cut still reopens",
+      "A torn page in no selection, then an unreviewed directory under attempts, then one flipped byte in sealed member 0 of the tail job that holds the preparation's slot are each refused by the verifier and by the cold reader with the expected text, with no NV dispatch and nothing repaired. They run in this order because an earlier check hides the next, and the last two cannot be undone, so they end the fixture",
+      "The job reconciliation test prepares over the reconciled selection, and a cold reopen selects that preparation",
+      "A brand-new second owner's first V1 publication is then one NV dispatch over the preparation cut, the first event dispatched over one. A cold reopen selects the V1 with sequence one higher, the previous NV head equal to the preparation's selected head, one more owner root entry and the index generations root unchanged",
+      "A second preparation over that V1 is refused with no further NV dispatch, with the text that an unresolved preparation must remain charged",
+      "One flipped byte in the preparation's frame then refuses the cold reader with no further NV dispatch, with the text that the sealed tail inode change-time differs",
+      "The other three index tests are unchanged and still pass"
+    ],
+    "refusal_cases": {
+      "format": "Each entry names the cases and the complete refusal text recorded in the log of pre-check attempt c. The committed test asserts a fragment of each text, and the full check passed those assertions on the commit. It prints nothing, so the check's own log holds no per-case text",
+      "cases": [
+        ["No storage in the descriptor", "cold index preparation has no selected storage"],
+        ["Location with its length reduced, its frame hash replaced or its slot number moved; a descriptor forged to storage schema 1 with no job index or parent delta", "cold index preparation is not its exact selected descriptor location"],
+        ["Location with a different seal time", "sealed tail inode change-time differs from selected immutable seal"],
+        ["Unsealed descriptor at sequence one", "paged C descriptor event/NV/ordinal continuation differs"],
+        ["The job selection descriptor at its own location", "cold index preparation verifier refuses a different semantic event class"],
+        ["A previous descriptor hash that names nothing; the job selection's location tree", "cold index preparation lost the exact selected previous descriptor address"],
+        ["The job selection's previous hash; a skipped sequence and ordinal; a forged previous NV head; a forged legacy journal hash", "cold index preparation does not continue the exact authenticated old cut"],
+        ["A forged owner root page hash", "selected preparation changes unrelated C roots/before cut or actual physical owner selection"],
+        ["The job selection's index generations root", "selected preparation role CAS differs from exact canonical retained data"],
+        ["A forged request, input or source hash; a forged original attribution checkpoint head", "selected preparation body substitutes exact checkpointed source/attribution/before tuple"],
+        ["A forged preparation record hash", "actual current C has no selected immutable record address"],
+        ["A preparation record length one short", "cold index preparation record complete bytes changed"],
+        ["A forged control cell instance; a forged descriptor job", "cold index preparation differs from its deterministic reviewed layout"],
+        ["The job selection's job index", "cold C progress has no selected allocation manifest"],
+        ["One more charged file; no parent delta. The closure reads the forged frame's own sealed location first, so these stop there and not at the delta and inventory checks", "sealed tail data hash or exact EOF differs"],
+        ["Honest cut over a torn page, verifier and cold reader", "cold C actual complete physical closure differs from its selected exact delta"],
+        ["Honest cut with an unreviewed attempts directory, verifier and cold reader", "selected C parent delta lost its actual current after observation"],
+        ["Honest cut over one damaged sealed member, verifier and cold reader", "sealed tail inode change-time differs from selected immutable seal"]
+      ]
+    },
+    "unreached_refusals": {
+      "note": "No case in these tests ends at the refusals below. Some may be reached by other tests of shared code; that is neither checked nor claimed here",
+      "cold_verifier": [
+        "cold index preparation is not its exact selected descriptor location, through sequence at most 1: Descriptor::validate refuses a preparation at sequence 0 or 1 first",
+        "cold index preparation has no previous full-frame commitment: Descriptor::validate refuses a missing commitment above sequence 1 first",
+        "cold index preparation previous direct storage absent",
+        "cold index preparation previous job index absent",
+        "cold index preparation current job index absent",
+        "cold index preparation reader refuses an unselected role/root",
+        "cold index preparation map proof substitutes requested logical key",
+        "cold index preparation record exceeds its closed class before I/O",
+        "cold index preparation role roots differ from independent preparation replay",
+        "cold index preparation repeats a complete record digest"
+      ],
+      "selected_replay": [
+        "selected preparation record exceeds closed class before private IO",
+        "selected preparation immutable record hash/length differs",
+        "selected preparation replacement index leaf differs",
+        "selected preparation overwrites existing liability or changes selected job/owner"
+      ],
+      "shared_closure": [
+        "cold C manifest changes selected source, review, membership or exact sizes",
+        "cold C selected index metadata omits/adds an exact reviewed physical member",
+        "cold C metadata aliases a selected slot",
+        "cold C semantic page is not actually sealed",
+        "cold C semantic bytes do not equal complete deterministic reconstruction",
+        "cold C current allocation member changes semantic/metadata role",
+        "current C progress omits the exact existing-parent allocation delta",
+        "current C parent delta changes the prior selected parent observation",
+        "cold selected parent lost blocks"
+      ],
+      "checks_with_no_text_of_their_own": [
+        "The current descriptor's phase require_ready check",
+        "The current descriptor's original_authority validate check",
+        "The previous descriptor's phase require_ready check"
+      ]
+    },
+    "test_time": {
+      "note": "By the log's stamps the two extended tests took 18m 16s and 18m 18s, and the whole filter took 159.22 seconds longer here than on 17b4293. No new migrated fixture was added, since one costs at least about 12 minutes locally",
+      "index_filter_seconds": 3946.34,
+      "same_filter_on_17b4293_seconds": 3787.12
+    },
+    "previous_head_ci": {
+      "run": 41253884530,
+      "commit": "acdc0d593139efec0f25aca8bf382fbfab19b9b3",
+      "conclusion": "failure",
+      "tpm_boundaries": "success, in 65m 23s. This is the acceptance evidence the preparation checkpoint left open for the task census fix",
+      "storage_boundaries": "success, in 2h 10m 26s",
+      "rust_boundaries": "failure, in 143m 26s of its 180. The content suites passed and so did 1582 platform tests (42 ignored), then the artifact CLI harness stopped at: artifact-read unexpected exit 1: luma-platform: No such file or directory (os error 2)",
+      "note": "This run is of acdc0d5, not of the refusal tests. The artifact-read step needs an installed Admin anchor and TPM and is not passed"
+    },
+    "total_platform_tests_in_build": 1624,
+    "full_platform_suite_run_locally": true,
+    "full_platform_suite_note": "The three platform filters are disjoint and together cover every luma-platform test once: index_cases with the index_selection unit tests, the rest of custody::v2_publication and everything outside custody::v2_publication (5 + 107 + 1512 = 1624, 42 of them ignored by their own attributes). Platform unit tests ran serially; the parallel test interference stays open. kernel_task_inventory_limit is one of the 42 ignored tests; it is unchanged since 17b4293, and this check did not repeat its stress",
+    "dispatched": "test builds only; no production caller"
+  },
+  "not_claimed": [
+    "CI acceptance of this snapshot, including its time budget; the push and its CI run follow this record",
+    "Every refusal of the cold verifier: unreached_refusals lists the ones no case reaches",
+    "A forged cut selected through C: forged candidates reach the verifier through the test-only entry and not through the reader. A disturbed store does reach the reader",
+    "An index Start or owner migration dispatched over a preparation cut; the only event dispatched over one is a brand-new second owner's first V1 publication",
+    "Which layer refuses the damaged preparation frame under the V1; the test asserts the refusal text only",
+    "Recovery of a torn page, stray attempt or damaged member; these tests show refusal only",
+    "Running the selected job's prepared phase or a published index generation",
+    "A specific refusal reason for the five substitutes refused before NV or the second preparation in the preparation test: they still assert an error, no NV dispatch and an unchanged store, not which check refused",
+    "Resolution or release of a selected preparation; it stays unresolved and charged",
+    "Recovery of a partial member or a foreign object; a store holding one is refused before NV and the reservation's liability stays charged",
+    "Verification of the identities of objects C already accounts for; the walk compares counters, so a same-size swap of a C-accounted object is not detected by it",
+    "Re-synchronization by other v2 writers that reuse an existing object through write_object",
+    "Cold re-verification of the job blob or other object-store bytes; the cold verifier replays the C records and roots only",
+    "A power-loss, crash-consistency or page-cache-drop test; the torn page is written by the test, not left by a crash",
+    "The pre-checks and format run below; they are retained aids, not gate checks",
+    "A C reservation of the fresh v2 namespace or joined protected C counters",
+    "A production index grant shape, a production caller, an installed run or native C activation",
+    "Reconciliation of an unselected pending worker attempt after a lost NV reply",
+    "Delta overlay, snapshot backup delivery or a V2 owner creation route",
+    "The 100000-object/500-ms NF08 measurement",
+    "Artifact CLI harness passage, installed PAM, physical TPM, loaded LSM or Hyper-V qualification",
+    "Any produced image or GWIN0 package; G3 and GWIN0 remain open"
+  ],
+  "retained_failed_attempts": [
+    {
+      "directory": "/mnt/d/LumaOS-builds/g3-cold-prep-refusal-precheck-20261101-a",
+      "commit": "Uncommitted working tree over acdc0d5",
+      "sha256sums_verified": true,
+      "sha256sums_sha256": "f0ce32cf8a45a7923a54151f3a74e66a646f04bf6415c71f4af4dff6e840a14c",
+      "diff_lines": 19,
+      "logs": {
+        "admission.txt": "307ec301a10aec1e74b2d9b66e089b6434833adbd8ea21ff9bd682c00da4ad79",
+        "fmt.log": "baf6fe5cb6127e38236f76fc1217a465b5ee6836d5d9545e467d55556fc2e56b",
+        "fmt.diff": "dc6ce93d69192e83ff66d916b35dbc3c03306929c18851d391b625388e4ecca8",
+        "build-tests.log": "cfd28924107fb2fa4bbd273c3b1e4828a6641d8ed799eba32a807420ed475388"
+      },
+      "results": {
+        "fmt.log": "exit=0 with a diff moving one import",
+        "build-tests.log": "exit=101 with E0308"
+      },
+      "cause": "The new damage helper took a u64 member number, but a slot number is a u32, and rustfmt wanted one import moved",
+      "correction": "The helper's type and the import were corrected before attempt b"
+    },
+    {
+      "directory": "/mnt/d/LumaOS-builds/g3-cold-prep-refusal-precheck-20261101-b",
+      "commit": "Uncommitted working tree over acdc0d5",
+      "sha256sums_verified": true,
+      "sha256sums_sha256": "84984e928d245d92292af5ad79e5a2f6de93228014cc73c88389d7160a6f98f2",
+      "diff_lines": 0,
+      "logs": {
+        "admission.txt": "5c550fd99bd937efa51fdcec7652b0b5bc78769841f1c79a9ad7f44200e07e26",
+        "fmt.log": "23ed903b045cedf27183b82670602eea313c9cd7b0b78f569c7061ea5b4f4b7d",
+        "fmt.diff": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "build-tests.log": "779a656424abd0f5ec4e6c44974e1d4e1f001851b551c7b7c5ef63698e3f0ab9",
+        "platform-refusals.log": "183cd3e6b400cd12b52ff94837ff699d82e72cd94c96afb3589c8ffa7ee5f23d"
+      },
+      "results": {
+        "platform-refusals.log": "2 passed, 0 failed, 1622 filtered out, 2146.79 seconds, in a lenient form that printed each outcome and did not assert its text"
+      },
+      "cause": "Its tests passed only because the form was lenient. Sealing refused four forgeries before they reached the verifier, and five expected texts were not the verifier's. Forged closure cases stopped at the frame read, so they did not reach the closure's own checks",
+      "correction": "The four forgeries were rebuilt to reach the verifier, the expected texts were corrected, and a torn page and an unreviewed attempt under the honest cut were added to reach the closure. Attempt c matched every text, and the test was then made strict before commit bd0d65b"
+    }
+  ],
+  "retained_precheck_aids": [
+    {
+      "directory": "/mnt/d/LumaOS-builds/g3-cold-prep-refusal-precheck-20261101-c",
+      "commit": "Uncommitted working tree over acdc0d5",
+      "sha256sums_verified": true,
+      "sha256sums_sha256": "f83cb40352160f2cbb9869279f742ddc7cabd1f7994ad55c611da268b6f47b17",
+      "diff_lines": 0,
+      "logs": {
+        "admission.txt": "9dffed1c1cc0f23490dbd2f6a46c42e0691158c606225b4f23d1f9464d08f48c",
+        "fmt.log": "7480f16e7766cd0881ea25430045747222161a485969bb33281a6fc0042c6976",
+        "fmt.diff": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "build-tests.log": "605b58977d83c67ecf64ff9f75a3c2db4bec70ddbef718b32864a7d70ce4353a",
+        "platform-refusals.log": "bac837daa7f91f3b1d34c35c4a2d197efba0670d906a791222c133e8d7eeb443"
+      },
+      "results": {
+        "platform-refusals.log": "2 passed, 0 failed, 1622 filtered out, 2185.84 seconds; 33 printed outcomes, 27 forged candidates and 3 disturbed stores for both the verifier and the cold reader, each matching its expected text"
+      },
+      "purpose": "The lenient form's log is the only record of each case's complete refusal text"
+    },
+    {
+      "directory": "/mnt/d/LumaOS-builds/g3-cold-prep-refusal-fmt-20261101-a",
+      "commit": "Uncommitted strict working tree over acdc0d5",
+      "diff_lines": 0,
+      "logs": {
+        "fmt.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "fmt.diff": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "purpose": "A format-only run of the strict form before the commit. It wrote no SHA256SUMS, and both files are empty. The check on bd0d65b repeats the format check and is the evidence"
+    }
+  ]
+}

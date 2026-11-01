@@ -2399,3 +2399,32 @@ task set before that census; `kernel_check` and production are unchanged. On
 that snapshot the fixed test passed all 61000 local runs. CI timing can differ,
 so the pushed branch's TPM job is the acceptance evidence. See the
 [task census test note](../native/evidence/NATIVE_TASK_CENSUS_TEST_2026-10-31.md).
+
+CI run 41253884530 on `acdc0d5` passed the TPM and storage boundary jobs; the
+TPM job is the acceptance evidence for the task census fix. Its rust job passed
+the content suites and 1582 platform tests (42 ignored), then stopped at
+`artifact-read`, the known blocker above. That job took 143 of its 180 minutes.
+
+`bd0d65b` tests the cold preparation verifier's refusals. A test-only entry
+calls the verifier directly, since no selected C cut can carry a forged
+candidate to the reader, and the honest cut is the control. Four forged
+locations and 23 forged descriptors are each refused for the expected reason
+with no NV dispatch and nothing allocated, and the honest cut still reopens. A
+torn page outside every selection, an unreviewed attempt directory and one
+damaged sealed member then reach the late closure checks and refuse both the
+verifier and the cold reader, with no repair or dispatch. In the job
+reconciliation test, a brand-new second owner's first V1 publishes over a
+preparation that follows a reconciled selection. That is the first dispatch
+over a preparation cut, and it replays cold. The preparation stays charged, so
+a second one is refused, and damage to its frame refuses the cold reader. No
+production check changed and no production gap appeared. On snapshot `bd0d65b`,
+format was clean and the warning-denied test build passed. The five index tests,
+the `luma-content` and `luma-content-store` suites, the other 107
+`custody::v2_publication` tests and the remaining 1470 platform tests passed
+(42 ignored), so each of the 1624 platform tests ran once, serially. Not every
+refusal path is reached; the
+[preparation refusal checkpoint](gates/g3/nf08_direct_index_preparation_refusals_2026-11-01.json)
+lists the ones that are not. Running the selected job's prepared phase,
+publishing an index generation, recovering a partial or foreign member, a C
+namespace reservation and the items above remain open. G3 and GWIN0 are not
+complete.

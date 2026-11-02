@@ -8,6 +8,10 @@ mod cold;
 mod index_preparation;
 #[path = "worker/index_prepare_cold.rs"]
 mod index_prepared;
+#[path = "worker/index_run_cold.rs"]
+mod index_ran;
+#[path = "worker/index_run.rs"]
+mod index_run;
 #[path = "worker/index_select_cold.rs"]
 mod index_selected;
 #[path = "worker/index_select.rs"]
@@ -22,6 +26,7 @@ mod storage;
 mod v1;
 pub(super) use cold::verify_selected as verify_cold_v1;
 pub(super) use index_prepared::verify_selected as verify_cold_index_preparation;
+pub(super) use index_ran::verify_selected as verify_cold_index_phase;
 pub(super) use index_selected::verify_selected as verify_cold_index_selection;
 pub(super) use index_start::verify_selected as verify_cold_index_start;
 pub(super) use migration::verify_selected as verify_cold_migration;
@@ -57,6 +62,7 @@ enum Completed {
     IndexPreparation(RecordRef),
     IndexJobReservation(RecordRef),
     IndexJobSelection(RecordRef),
+    IndexPhaseSelection(RecordRef),
     OwnerMigration(RecordRef),
 }
 impl<A: Checkpoint> Backend<A> {
@@ -76,6 +82,7 @@ impl<A: Checkpoint> Backend<A> {
                 Completed::IndexPreparation(_)
                 | Completed::IndexJobReservation(_)
                 | Completed::IndexJobSelection(_)
+                | Completed::IndexPhaseSelection(_)
                 | Completed::OwnerMigration(_) => {
                     Err("closed V1 consumer received a different semantic completion class".into())
                 }
@@ -94,6 +101,7 @@ impl<A: Checkpoint> Backend<A> {
             Completed::V1(_)
             | Completed::IndexJobReservation(_)
             | Completed::IndexJobSelection(_)
+            | Completed::IndexPhaseSelection(_)
             | Completed::OwnerMigration(_) => Err(
                 "closed index-preparation consumer received a different semantic completion class"
                     .into(),
@@ -112,6 +120,7 @@ impl<A: Checkpoint> Backend<A> {
             Completed::V1(_)
             | Completed::IndexPreparation(_)
             | Completed::IndexJobSelection(_)
+            | Completed::IndexPhaseSelection(_)
             | Completed::OwnerMigration(_) => Err(
                 "closed index-Start consumer received a different semantic completion class".into(),
             ),

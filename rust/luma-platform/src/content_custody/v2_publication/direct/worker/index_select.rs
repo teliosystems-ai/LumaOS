@@ -29,14 +29,14 @@ use luma_content_store::{Access, Boundary, DecisionKind, ResourceBudget};
 use std::fs::File;
 use std::os::unix::fs::MetadataExt;
 
-fn read_budget() -> IoBudget {
+pub(super) fn read_budget() -> IoBudget {
     IoBudget {
         read_bytes: 512 * 1024 * 1024,
         write_bytes: 0,
         new_files: 0,
     }
 }
-fn observation_budget() -> IoBudget {
+pub(super) fn observation_budget() -> IoBudget {
     IoBudget {
         read_bytes: 128 * 1024,
         write_bytes: 0,
@@ -458,6 +458,26 @@ fn select<A: Checkpoint>(
             original,
         )?
         .into_parts();
+    selected_transition(backend, parts, input, original, SelectedClass::Job)
+}
+
+/// The event a verified selection becomes. Everything else about the
+/// transition is the same for both.
+#[derive(Clone, Copy)]
+pub(super) enum SelectedClass {
+    Job,
+    Phase,
+}
+
+/// Rebuilds one verified selection's owner and index edits over the actual
+/// selected cut. It replaces both roles together, for one NV dispatch.
+pub(super) fn selected_transition<A: Checkpoint>(
+    backend: &mut Backend<A>,
+    parts: effects::SelectionParts,
+    input: &request::Input,
+    original: &mut OriginalCOperation<'_>,
+    class: SelectedClass,
+) -> Result<VerifiedTransition> {
     let selected = Selector::for_descriptor(&backend.descriptor)?;
     if parts.base != selected
         || parts.owner_root != backend.descriptor.roots.owners
@@ -467,7 +487,7 @@ fn select<A: Checkpoint>(
         || parts.source_sha256 != hash(&COperation::Worker(original).source_bytes()?)
         || parts.input_sha256 != input.sha256()?
     {
-        return Err("verified index job selection changed actual C/source/owner/finite effect before exact storage planning".into());
+        return Err("verified index selection changed actual C/source/owner/finite effect before exact storage planning".into());
     }
     let expected_owner = backend.lookup(
         &parts.owner_root,
@@ -483,7 +503,7 @@ fn select<A: Checkpoint>(
         || expected_index.as_deref() != Some(parts.expected_index_value.as_slice())
     {
         return Err(
-            "verified index job selection no longer matches actual selected owner/index CAS".into(),
+            "verified index selection no longer matches actual selected owner/index CAS".into(),
         );
     }
     let mut records = BTreeMap::new();
@@ -498,11 +518,11 @@ fn select<A: Checkpoint>(
                 .checked_add(value.len())
                 .map_or(true, |n| n > 16 * 1024 * 1024)
         {
-            return Err("verified index job selection records exceed the actual direct finite window before allocation".into());
+            return Err("verified index selection records exceed the actual direct finite window before allocation".into());
         }
         bytes += value.len();
         if records.insert(reference.sha256, value).is_some() {
-            return Err("verified index job selection repeats a complete record digest".into());
+            return Err("verified index selection repeats a complete record digest".into());
         }
     }
     if records
@@ -510,7 +530,7 @@ fn select<A: Checkpoint>(
         .map(|value| value.len() as u64)
         != Some(parts.selection.bytes)
     {
-        return Err("verified index job selection omits its actual canonical record bytes".into());
+        return Err("verified index selection omits its actual canonical record bytes".into());
     }
     let owner_edits = vec![map::Edit {
         key: parts.owner_root.key(&parts.owner_literal)?,
@@ -525,13 +545,23 @@ fn select<A: Checkpoint>(
     let mut context = backend.context()?;
     context.review_sha256 = Some(parts.input_sha256.clone());
     let request_sha256 = original.source_binding().request_sha256.clone();
-    let operation = OperationData::IndexJobSelection {
-        binding: parts.binding,
-        request_sha256: request_sha256.clone(),
-        input_sha256: parts.input_sha256.clone(),
-        source_sha256: parts.source_sha256.clone(),
-        selection: parts.selection.clone(),
-        original_authority: parts.original_authority,
+    let operation = match class {
+        SelectedClass::Job => OperationData::IndexJobSelection {
+            binding: parts.binding,
+            request_sha256: request_sha256.clone(),
+            input_sha256: parts.input_sha256.clone(),
+            source_sha256: parts.source_sha256.clone(),
+            selection: parts.selection.clone(),
+            original_authority: parts.original_authority,
+        },
+        SelectedClass::Phase => OperationData::IndexPhaseSelection {
+            binding: parts.binding,
+            request_sha256: request_sha256.clone(),
+            input_sha256: parts.input_sha256.clone(),
+            source_sha256: parts.source_sha256.clone(),
+            selection: parts.selection.clone(),
+            original_authority: parts.original_authority,
+        },
     };
     operation.validate()?;
     let mut cache = Memory {
@@ -584,17 +614,13 @@ fn select<A: Checkpoint>(
     cache.backend.live(&mut || cache.original.check())?;
     if Selector::for_descriptor(&cache.backend.descriptor)? != selected {
         return Err(
-            "actual C changed during independently replayed index job-selection role maps".into(),
+            "actual C changed during independently replayed index selection role maps".into(),
         );
     }
     let mut roots = cache.backend.descriptor.roots.clone();
     let mut next = next.into_iter();
-    roots.owners = next
-        .next()
-        .ok_or("index job selection lost its owner root")?;
-    roots.index_generations = next
-        .next()
-        .ok_or("index job selection lost its index root")?;
+    roots.owners = next.next().ok_or("index selection lost its owner root")?;
+    roots.index_generations = next.next().ok_or("index selection lost its index root")?;
     Ok(VerifiedTransition {
         base: selected,
         base_frame_sha256: cache.backend.descriptor_frame_sha256.clone(),
@@ -611,7 +637,10 @@ fn select<A: Checkpoint>(
         operation,
         // Both roles are replaced; neither is an unchanged read-CAS.
         read_cas: Vec::new(),
-        outcome: Completed::IndexJobSelection(parts.selection),
+        outcome: match class {
+            SelectedClass::Job => Completed::IndexJobSelection(parts.selection),
+            SelectedClass::Phase => Completed::IndexPhaseSelection(parts.selection),
+        },
     })
 }
 

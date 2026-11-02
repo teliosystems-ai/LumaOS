@@ -166,6 +166,7 @@ pub(in crate::content_checkpoint::custody::v2_publication) fn verify_selected(
                 | OperationData::OwnerMigration { .. }
                 | OperationData::IndexJobReservation { .. }
                 | OperationData::IndexJobSelection { .. }
+                | OperationData::IndexPhaseSelection { .. }
                 | OperationData::IndexPreparation { .. }
         )
     {

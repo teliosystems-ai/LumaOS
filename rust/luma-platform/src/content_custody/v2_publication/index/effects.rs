@@ -16,28 +16,34 @@ use inventory::{InventoryPlan, InventoryRoot};
 #[allow(dead_code)]
 #[path = "effects/job.rs"]
 mod job;
+// The same for the record that resolves one prepared phase window.
+#[allow(dead_code)]
+#[path = "effects/phase_selection.rs"]
+mod phase_selection;
 // The semantic proof's only consumer, the direct C index publisher, is
 // compiled only under test. Tests dispatch the Start reservation, the job
-// selection and an index phase preparation over that selected job.
+// selection, an index phase preparation over that selected job and the phase
+// selection that resolves it.
 #[allow(dead_code)]
 #[path = "effects/verification.rs"]
 mod verification;
 #[allow(unused_imports)]
 pub(in crate::content_checkpoint::custody::v2_publication) use verification::{
-    verify_index_preparation, verify_index_selection, verify_index_start, CurrentBuilder,
-    JobSelectionPlan, PreparationView, PreparedKind, SelectionParts, VerifiedIndexPreparation,
+    selected_index_state, verify_index_phase_selection, verify_index_preparation,
+    verify_index_selection, verify_index_start, CurrentBuilder, JobSelectionPlan,
+    PhaseSelectionPlan, PreparationView, PreparedKind, SelectionParts, VerifiedIndexPreparation,
     VerifiedIndexSelection,
 };
 // Historical replay's only consumer, the cold direct C reader, is compiled
-// only under test. It replays a selected Start reservation, job selection and
-// index phase preparation.
+// only under test. It replays a selected Start reservation, job selection,
+// index phase preparation and phase selection.
 #[allow(dead_code)]
 #[path = "effects/selected.rs"]
 mod selected;
 #[allow(unused_imports)]
 pub(in crate::content_checkpoint::custody::v2_publication) use selected::{
-    replay_reserved_start_data, replay_selected_data, replay_selected_job_data, SelectedEventData,
-    SelectedPreparationReader,
+    replay_reserved_start_data, replay_selected_data, replay_selected_job_data,
+    replay_selected_phase_data, SelectedEventData, SelectedPreparationReader,
 };
 
 const PREPARATION_DOMAIN: &str = "luma-c-index-preparation-v1";

@@ -3,6 +3,7 @@
 //! NOT writer Go: actual C allocation/tails, owner creation observation and the
 //! single durable C dispatch must all finish before a worker can write.
 use super::job::{JobReservation, JobSelection};
+use super::phase_selection::PhaseSelection;
 use super::*;
 use crate::content_index::builder::FixedBuilder;
 use luma_content_store::corpus_index::BuilderIdentity;
@@ -430,8 +431,8 @@ pub(in crate::content_checkpoint::custody::v2_publication) fn verify_index_start
     )
 }
 
-/// The C event parts of one job selection. The owner leaf and the index leaf
-/// change together in one cut; neither is a writer Go.
+/// The C event parts of one job or phase selection. The owner leaf and the
+/// index leaf change together in one cut; neither is a writer Go.
 pub(in crate::content_checkpoint::custody::v2_publication) struct SelectionParts {
     pub(in crate::content_checkpoint::custody::v2_publication) base: Selector,
     pub(in crate::content_checkpoint::custody::v2_publication) owner_root: map::Root,
@@ -448,8 +449,8 @@ pub(in crate::content_checkpoint::custody::v2_publication) struct SelectionParts
     pub(in crate::content_checkpoint::custody::v2_publication) source_sha256: String,
     pub(in crate::content_checkpoint::custody::v2_publication) original_authority: Audit,
 }
-/// Move-only, like VerifiedIndexPreparation; only JobSelectionPlan::finish
-/// constructs it.
+/// Move-only, like VerifiedIndexPreparation; only JobSelectionPlan::finish and
+/// PhaseSelectionPlan::finish construct it.
 pub(in crate::content_checkpoint::custody::v2_publication) struct VerifiedIndexSelection {
     parts: SelectionParts,
 }
@@ -674,4 +675,245 @@ pub(in crate::content_checkpoint::custody::v2_publication) fn verify_index_selec
         job_bytes,
         attributed,
     })
+}
+
+/// The C-verified run of one selected prepared window. It holds no writer Go:
+/// the store writer still needs the actual original boundary, and the
+/// preparation stays charged until the C event built by `finish` is published.
+pub(in crate::content_checkpoint::custody::v2_publication) struct PhaseSelectionPlan {
+    observed: Observed,
+    before: Base,
+    leaf: Leaf,
+    preparation: Preparation,
+    preparation_ref: RecordRef,
+    objects: Vec<ObjectWriteSpec>,
+    attributed: Attribution,
+}
+impl PhaseSelectionPlan {
+    pub(in crate::content_checkpoint::custody::v2_publication) fn head(&self) -> &OwnerHeadV2 {
+        &self.observed.head
+    }
+    pub(in crate::content_checkpoint::custody::v2_publication) fn head_ref(&self) -> &RecordRef {
+        &self.observed.head_ref
+    }
+    /// The physical accounting of the C-selected owner leaf.
+    pub(in crate::content_checkpoint::custody::v2_publication) fn physical(
+        &self,
+    ) -> &PhysicalInventory {
+        &self.observed.physical
+    }
+    /// The exact ordered objects of the C-selected preparation.
+    pub(in crate::content_checkpoint::custody::v2_publication) fn objects(
+        &self,
+    ) -> &[ObjectWriteSpec] {
+        &self.objects
+    }
+    /// The C-selected job the window starts from.
+    pub(in crate::content_checkpoint::custody::v2_publication) fn job(
+        &self,
+    ) -> Result<&BlobReference> {
+        Ok(self
+            .leaf
+            .current_job
+            .as_ref()
+            .ok_or("index phase selection lost its C-selected job")?)
+    }
+    pub(in crate::content_checkpoint::custody::v2_publication) fn liability(
+        &self,
+    ) -> &policy::Liability {
+        &self.preparation.liability
+    }
+    /// `physical_after` is the store inventory measured after the window's
+    /// objects, next job and candidate were written; it must stay inside the
+    /// prepared liability. The same original operation that was verified must
+    /// still be current.
+    pub(in crate::content_checkpoint::custody::v2_publication) fn finish(
+        self,
+        view: &mut impl PreparationView,
+        next_job: &BlobReference,
+        candidate: &BlobReference,
+        extension_sha256: &str,
+        physical_after: &PhysicalInventory,
+        original: &mut OriginalCOperation<'_>,
+    ) -> Result<VerifiedIndexSelection> {
+        original.check()?;
+        let input = &self.preparation.input;
+        let review_sha256 = &self.preparation.review.review_sha256;
+        if original_data(input, review_sha256, original)? != self.attributed {
+            return Err(
+                "index phase selection finishes under a different original operation".into(),
+            );
+        }
+        let selection = PhaseSelection::data(
+            &self.before,
+            &self.preparation,
+            &self.preparation_ref,
+            &self.leaf,
+            next_job,
+            candidate,
+            extension_sha256,
+            physical_after,
+            &self.attributed,
+            &mut || original.check(),
+        )?;
+        let bytes = selection.bytes()?;
+        let reference = RecordRef {
+            sha256: hash(&bytes),
+            bytes: bytes.len() as u64,
+        };
+        let binding = &self.before.binding;
+        let next_leaf = Leaf {
+            schema_version: 2,
+            binding: binding.clone(),
+            current_generation: self.leaf.current_generation.clone(),
+            current_job: Some(selection.next_job().clone()),
+            preparation: None,
+        };
+        let (index_value, leaf_record) = replacement(&next_leaf, binding)?;
+        let owner = OwnerLeaf::V2 {
+            binding: binding.clone(),
+            head: self.observed.head_ref.clone(),
+            physical: physical_after.clone(),
+        };
+        owner.validate(&binding.installation, &self.observed.descriptor.legacy)?;
+        let owner_value = serde_json::to_vec(&owner)?;
+        if owner_value.len() > map::MAX_VALUE_BYTES {
+            return Err("index phase selection owner leaf exceeds its bounded map value".into());
+        }
+        let expected_index_value = self
+            .observed
+            .index_value
+            .clone()
+            .ok_or("index phase selection lost its C-selected preparation leaf")?;
+        unchanged(view, &self.observed, original)?;
+        let input_sha256 = input.sha256()?;
+        let binding = binding.clone();
+        let observed = self.observed;
+        Ok(VerifiedIndexSelection {
+            parts: SelectionParts {
+                base: observed.base,
+                owner_root: observed.descriptor.roots.owners,
+                index_root: observed.descriptor.roots.index_generations,
+                owner_literal: observed.literal,
+                expected_owner_value: observed.owner_value,
+                replacement_owner_value: owner_value,
+                expected_index_value,
+                replacement_index_value: index_value,
+                records: vec![(reference.clone(), bytes), leaf_record],
+                selection: reference,
+                binding,
+                input_sha256,
+                source_sha256: hash(&serde_json::to_vec(&(
+                    "luma-c-original-worker-source-v1",
+                    original.source_binding(),
+                ))?),
+                original_authority: original.audit().clone(),
+            },
+        })
+    }
+}
+
+/// A prepared window runs only under a NEW original operation for the same
+/// Step. C compares the reconstructed plan with the selected preparation and
+/// replays that record over the plan's ordered objects; the record itself is
+/// never trusted and its inventory pages are not needed here.
+pub(in crate::content_checkpoint::custody::v2_publication) fn verify_index_phase_selection(
+    view: &mut impl PreparationView,
+    input: &request::Input,
+    plan: &phase::Plan,
+    original: &mut OriginalCOperation<'_>,
+) -> Result<PhaseSelectionPlan> {
+    original.check()?;
+    input.validate()?;
+    if !matches!(input.operation, request::Operation::Step { .. }) {
+        return Err("index phase selection requires the exact prepared Step request".into());
+    }
+    let review = plan.review()?;
+    let attributed = original_data(input, &review.review_sha256, original)?;
+    let objects = plan.planned_objects(|| original.check())?;
+    let observed = observe(view, input, original)?;
+    let value = observed
+        .index_value
+        .as_ref()
+        .ok_or("index phase selection requires a C-selected preparation")?;
+    let reference = Reference::parse(value, &input.binding)?;
+    let leaf = Leaf::parse(
+        &checked_record(view, &reference.record, LEAF_BYTES, original)?,
+        &input.binding,
+    )?;
+    let preparation_ref = match (&leaf.current_job, &leaf.preparation) {
+        (Some(job), Some(prepared)) if job.sha256 == review.base_sha256 => prepared.clone(),
+        _ => return Err(
+            "index phase selection requires an unresolved preparation over the exact selected job"
+                .into(),
+        ),
+    };
+    let preparation = Preparation::parse(&checked_record(
+        view,
+        &preparation_ref,
+        PREPARATION_BYTES as usize,
+        original,
+    )?)?;
+    let before = observed.before(Some(leaf.sha256()?))?;
+    let prepared = &preparation.base;
+    // The cut advanced past the preparation; its owner, physical accounting
+    // and segments did not.
+    if preparation.input != *input
+        || preparation.review != review
+        || before.binding != prepared.binding
+        || before.owner_sha256 != prepared.owner_sha256
+        || before.physical != prepared.physical
+        || before.segments != prepared.segments
+    {
+        return Err(
+            "index phase selection differs from the C-selected preparation owner/input/review"
+                .into(),
+        );
+    }
+    preparation.replay_data(
+        prepared,
+        input,
+        &review,
+        &objects,
+        &preparation.original,
+        &mut || original.check(),
+    )?;
+    if attributed.effect.operation_id == preparation.original.effect.operation_id {
+        return Err(
+            "index phase selection requires a new original operation, not the preparation one"
+                .into(),
+        );
+    }
+    unchanged(view, &observed, original)?;
+    Ok(PhaseSelectionPlan {
+        observed,
+        before,
+        leaf,
+        preparation,
+        preparation_ref,
+        objects,
+        attributed,
+    })
+}
+
+/// The job, unresolved preparation and physical accounting one selected leaf
+/// names, read the way an event starts. Tests compare it with the store, since
+/// a later job is reachable only through its selected reference.
+pub(in crate::content_checkpoint::custody::v2_publication) fn selected_index_state(
+    view: &mut impl PreparationView,
+    input: &request::Input,
+    original: &mut OriginalCOperation<'_>,
+) -> Result<(Option<BlobReference>, bool, PhysicalInventory)> {
+    let observed = observe(view, input, original)?;
+    let value = observed
+        .index_value
+        .as_ref()
+        .ok_or("selected index state requires a C-selected leaf")?;
+    let reference = Reference::parse(value, &input.binding)?;
+    let leaf = Leaf::parse(
+        &checked_record(view, &reference.record, LEAF_BYTES, original)?,
+        &input.binding,
+    )?;
+    let prepared = leaf.has_preparation();
+    Ok((leaf.current_job, prepared, observed.physical))
 }

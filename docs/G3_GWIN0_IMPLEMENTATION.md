@@ -2452,3 +2452,43 @@ The 7200-second deadline and 180-minute job limits are unchanged. CI has not run
 this change, so its CI budget stays unproven until a pushed commit's jobs pass.
 See the
 [content mount read note](../native/evidence/NATIVE_CONTENT_MOUNT_READ_2026-11-01.md).
+
+The prepared window now runs in component tests, on top of that mount read
+change. Under a new original for the same Step, `run_index_phase_direct` writes
+the one-item ingest window, the next job and the candidate, reads the job and
+candidate back, synchronizes the objects and measures the inventory. One NV
+dispatch then selects a `PhaseSelection` record, which resolves the preparation:
+the leaf's preparation is cleared, its current job becomes the next job, and the
+owner's physical accounting becomes the measured inventory. A cold reopen replays
+the event from C's records and roots. The next job, candidate and inventory are
+selection data, so that replay does not re-read the store bytes.
+
+Before the honest run, a run with no preparation and six substitutes are each
+refused with their own text, no NV dispatch and an unchanged store. Afterwards
+the same run over the new cut is refused, and 24 forged candidates are each
+refused by the cold verifier. In the preparation test, a source lost after the
+window writes stops the attempt before NV. The whole preparation stays charged,
+and the retry is refused at writer begin because the store is ahead of C's
+accounting; no transition here recovers that store. In the job reconciliation
+test, the run also passes over a second owner's V1. Damage to the V1's frame
+under the run is refused, but the same damage to the preparation's frame, now two
+events back, was not. The reader checks the selected frame and the one before it.
+
+On snapshot `4213feb`, format was clean, the plain and warning-denied test builds
+passed, the content suites passed, and each of the 1626 platform tests ran once,
+serially (42 ignored). An earlier full check of the same commit reported success
+while running the lenient binary of a retained test aid, so it is retained as a
+failed attempt and is not evidence. The evidence run stamped its sources first
+and compiled `luma-platform`. Its script reported `failures=1` from a guard of
+its own that expected the word `Checking`; every build, format and test step
+passed.
+
+Platform test time rose from 2924 to 4805 seconds, because the index tests rose
+from 1327 to 3215 seconds. Scaled the way the mount note scales it, that is an
+estimated 5420 seconds against the 7200-second CI deadline, and one more slice of
+this size would pass it. The cause has not been measured. CI has not run this
+snapshot. See the
+[phase run checkpoint](gates/g3/nf08_direct_index_phase_run_2026-11-01.json).
+Publishing an index generation, recovering a stopped attempt or a partial or
+foreign member, a C namespace reservation and the items above remain open. G3 and
+GWIN0 are not complete.

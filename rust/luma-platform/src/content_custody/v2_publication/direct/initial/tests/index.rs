@@ -1,13 +1,13 @@
-//! Actual first index job Start reservations, job selections and first phase
-//! preparations of the closed direct worker over a real migrated V2 owner in a
-//! real bootstrapped C cut and its real v2 object store. The builder identity,
-//! original worker attribution, planning boundary, resources and NV are
-//! explicit software fixtures, not the installed image builder or installed
-//! qualification.
+//! Actual first index job Start reservations, job selections, first phase
+//! preparations and prepared window runs of the closed direct worker over a
+//! real migrated V2 owner in a real bootstrapped C cut and its real v2 object
+//! store. The builder identity, original worker attribution, planning boundary,
+//! resources and NV are explicit software fixtures, not the installed image
+//! builder or installed qualification.
 use super::super::super::super::super::protocol::{
     software_worker_operation, OriginalCOperation, TypedOperationSource,
 };
-use super::super::super::backend::{verify_index_preparation, Backend};
+use super::super::super::backend::{verify_index_phase, verify_index_preparation, Backend};
 use super::super::super::reader::observe;
 use super::migration_cases::{migrated, Migrated, BODY};
 use super::progress_cases::ContentGuard;
@@ -504,8 +504,9 @@ impl<B: Boundary> Boundary for Interrupted<'_, B> {
 /// attribution test covers them, since no retry may adopt or remove them.
 /// The reconciled selection is then an ordinary selected cut: the first phase
 /// prepares over it and a brand-new owner's first V1 publication is dispatched
-/// over that preparation, which stays charged. Each migrated owner costs a real
-/// bounded migration, so this owner carries those steps too.
+/// over that preparation, which stays charged. The prepared window then runs
+/// over the V1's advanced cut and resolves the charge. Each migrated owner costs
+/// a real bounded migration, so this owner carries those steps too.
 #[test]
 fn actual_index_job_selection_reconciles_complete_members_of_interrupted_attempts() {
     let fixture = Fixture::new();
@@ -742,16 +743,56 @@ fn actual_index_job_selection_reconciles_complete_members_of_interrupted_attempt
         .expect("the selected preparation stays charged over the V1 publication");
     assert!(refusal.to_string().contains("must remain charged"));
     assert_eq!(fixture.memory.0.borrow().calls, calls + 1);
-    // Damage under the selected V1 is refused with no repair or dispatch. Its
+    // The cut advanced past the preparation, not its owner or accounting, so
+    // its window still runs under a new original and replays over the V1.
+    let (audit, source) = effect(
+        &step_input,
+        &planned.review().unwrap().review_sha256,
+        grant,
+        "software index phase run rpc 806",
+        806,
+    );
+    let mut check = || Ok(());
+    cold(&fixture)
+        .unwrap()
+        .run_index_phase_direct(
+            &store,
+            &first,
+            &step_input,
+            plan(&store, &first, &step_input),
+            &mut Sources {
+                binding: step_input.binding.clone(),
+            },
+            &mut software_worker_operation(&audit, source, &mut check),
+        )
+        .unwrap();
+    assert_eq!(
+        fixture.memory.0.borrow().calls,
+        calls + 2,
+        "one NV dispatch for the window"
+    );
+    let ran = cold(&fixture).expect("cold reopen replays a window run over the V1");
+    assert!(matches!(
+        ran.descriptor().operation,
+        OperationData::IndexPhaseSelection { .. }
+    ));
+    assert_eq!(ran.descriptor().sequence, after.sequence + 1);
+    assert_ne!(ran.descriptor().roots.owners, after.roots.owners);
+    assert_ne!(
+        ran.descriptor().roots.index_generations,
+        after.roots.index_generations
+    );
+    // The reader checks the selected frame and the one before it, so damage to
+    // the V1 under the selected run is refused with no repair or dispatch. Its
     // change time cannot be restored, so this ends the fixture.
-    let slot = &preparation.storage.as_ref().unwrap().descriptor_slot;
+    let slot = &after.storage.as_ref().unwrap().descriptor_slot;
     damage(&fixture, &slot.job, slot.number);
     let refusal = cold(&fixture)
         .err()
-        .expect("a damaged preparation frame refuses the cold reader")
+        .expect("a damaged previous frame refuses the cold reader")
         .to_string();
     assert!(refusal.contains("sealed tail inode change-time differs"));
-    assert_eq!(fixture.memory.0.borrow().calls, calls + 1);
+    assert_eq!(fixture.memory.0.borrow().calls, calls + 2);
 }
 
 /// Old and third-NV dispatch faults are the shared fenced dispatch already
@@ -1025,6 +1066,18 @@ impl CorpusContent for Sources {
         Ok(BODY.to_vec())
     }
 }
+/// A source lost after the window's writes: the store re-verification that
+/// reads it fails, so the attempt ends with every write ahead of C.
+struct Stopped;
+impl CorpusContent for Stopped {
+    fn read_content<B: CorpusIndexBoundary>(
+        &mut self,
+        _: &CorpusRecord,
+        _: &mut B,
+    ) -> luma_content_store::Result<Vec<u8>> {
+        Err("software source lost after the window writes".into())
+    }
+}
 /// One ingestion Step over the exact selected first job.
 fn step(binding: &OwnerBinding, job: &Job, id: &str) -> request::Input {
     request::Input {
@@ -1090,6 +1143,24 @@ fn retained(descriptor: &mut Descriptor) -> ([&mut String; 3], &mut RecordRef, &
         _ => panic!("the forged candidate is not a phase preparation"),
     }
 }
+/// The retained body of one selected phase selection.
+fn ran(descriptor: &mut Descriptor) -> ([&mut String; 3], &mut RecordRef, &mut Audit) {
+    match &mut descriptor.operation {
+        OperationData::IndexPhaseSelection {
+            request_sha256,
+            input_sha256,
+            source_sha256,
+            selection,
+            original_authority,
+            ..
+        } => (
+            [request_sha256, input_sha256, source_sha256],
+            selection,
+            original_authority,
+        ),
+        _ => panic!("the forged candidate is not a phase selection"),
+    }
+}
 /// One candidate at one location, refused by the cold verifier.
 fn refuses(
     fixture: &Fixture,
@@ -1103,9 +1174,35 @@ fn refuses(
         .to_string();
     assert!(refusal.contains(reason), "{refusal}");
 }
-/// One forged copy of the selected preparation. Sealing recomputes its event
+/// One candidate at one location, refused by the cold phase-selection verifier.
+fn refuses_run(
+    fixture: &Fixture,
+    candidate: &Descriptor,
+    location: &slots::SealedReference,
+    reason: &str,
+) {
+    let refusal = verify_index_phase(&fixture.pages(), candidate, location, &mut || Ok(()))
+        .err()
+        .expect("the cold verifier refuses this candidate")
+        .to_string();
+    assert!(refusal.contains(reason), "{refusal}");
+}
+/// One forged copy of a selected descriptor. Sealing recomputes its event
 /// digest and NV continuation and its location commits its own frame, so the
 /// refusal is of the forged field and not of those.
+fn sealed(
+    selected: &Descriptor,
+    location: &slots::SealedReference,
+    change: impl FnOnce(&mut Descriptor),
+) -> (Descriptor, slots::SealedReference) {
+    let mut candidate = selected.clone();
+    change(&mut candidate);
+    let candidate = candidate.seal().unwrap();
+    let mut location = location.clone();
+    location.slot = candidate.storage.as_ref().unwrap().descriptor_slot.clone();
+    location.sha256 = hash(&candidate.slot_frame().unwrap());
+    (candidate, location)
+}
 fn forged(
     fixture: &Fixture,
     selected: &Descriptor,
@@ -1113,12 +1210,7 @@ fn forged(
     reason: &str,
     change: impl FnOnce(&mut Descriptor),
 ) {
-    let mut candidate = selected.clone();
-    change(&mut candidate);
-    let candidate = candidate.seal().unwrap();
-    let mut location = location.clone();
-    location.slot = candidate.storage.as_ref().unwrap().descriptor_slot.clone();
-    location.sha256 = hash(&candidate.slot_frame().unwrap());
+    let (candidate, location) = sealed(selected, location, change);
     refuses(fixture, &candidate, &location, reason);
 }
 /// Forged candidates reach the cold verifier directly, since no selected C cut
@@ -1251,6 +1343,119 @@ fn refuse_forged_preparations(
         candidate.storage.as_mut().unwrap().parent_allocation = None;
     });
 }
+/// The same closure over the selected event that resolves a preparation. The
+/// honest cut is the control. Its record names the store's next job and
+/// candidate; those are selected DATA, so no forgery of them can be replayed
+/// from C alone and none is listed here. Both after roles are read back against
+/// the canonical retained data first, so only a root with those exact values and
+/// a different tree reaches the whole-root comparison, and that takes selected
+/// pages no forged frame has.
+fn refuse_forged_runs(
+    fixture: &Fixture,
+    selected: &Descriptor,
+    location: &slots::SealedReference,
+    prepared: &Descriptor,
+    prepared_location: &slots::SealedReference,
+) {
+    verify_index_phase(&fixture.pages(), selected, location, &mut || Ok(()))
+        .expect("the honest selected phase selection is the control");
+    let exact = "is not its exact selected descriptor location";
+    let lineage = "does not continue the exact authenticated old cut";
+    let lost = "lost the exact selected previous descriptor address";
+    let body = "substitutes exact checkpointed source/attribution/before tuple";
+    let role = "role CAS differs";
+    let layout = "differs from its deterministic reviewed layout";
+    let unsealed = "sealed tail data hash or exact EOF differs";
+    let prepared_storage = prepared.storage.as_ref().unwrap();
+    let forge = |reason: &str, change: &dyn Fn(&mut Descriptor)| {
+        let (candidate, location) = sealed(selected, location, change);
+        refuses_run(fixture, &candidate, &location, reason);
+    };
+    let mut absent = selected.clone();
+    absent.storage = None;
+    refuses_run(
+        fixture,
+        &absent.seal().unwrap(),
+        location,
+        "has no selected storage",
+    );
+    let mut short = location.clone();
+    short.bytes -= 1;
+    refuses_run(fixture, selected, &short, exact);
+    let mut substituted = location.clone();
+    substituted.sha256 = "ab".repeat(32);
+    refuses_run(fixture, selected, &substituted, exact);
+    refuses_run(
+        fixture,
+        prepared,
+        prepared_location,
+        "refuses a different semantic event class",
+    );
+    forge(lost, &|candidate| {
+        candidate.previous_descriptor_sha256 = Some("ab".repeat(32));
+    });
+    forge(lost, &|candidate| {
+        candidate.storage.as_mut().unwrap().locations = prepared_storage.locations.clone();
+    });
+    forge(lineage, &|candidate| {
+        candidate.previous_descriptor_sha256 = prepared.previous_descriptor_sha256.clone();
+    });
+    forge(lineage, &|candidate| {
+        candidate.sequence += 1;
+        candidate.global_ordinal += 1;
+    });
+    forge(lineage, &|candidate| {
+        candidate.previous_nv_head = "ab".repeat(32);
+    });
+    forge("no selected semantic page address", &|candidate| {
+        candidate.roots.owners.page.as_mut().unwrap().sha256 = "ab".repeat(32);
+    });
+    forge("unrelated C roots", &|candidate| {
+        let mut signers = candidate.roots.owners.clone();
+        signers.kind = map::Kind::Signers;
+        candidate.roots.signers = signers;
+    });
+    forge(role, &|candidate| {
+        candidate.roots.owners = prepared.roots.owners.clone();
+    });
+    forge(role, &|candidate| {
+        candidate.roots.index_generations = prepared.roots.index_generations.clone();
+    });
+    forge(body, &|candidate| {
+        *ran(candidate).0[0] = "ab".repeat(32);
+    });
+    forge("retained owner/preparation/input", &|candidate| {
+        *ran(candidate).0[1] = "ab".repeat(32);
+    });
+    forge(body, &|candidate| {
+        *ran(candidate).0[2] = "ab".repeat(32);
+    });
+    forge(body, &|candidate| {
+        ran(candidate).2.checkpoint_head = "ab".repeat(32);
+    });
+    forge("no selected immutable record address", &|candidate| {
+        ran(candidate).1.sha256 = "ab".repeat(32);
+    });
+    forge("record complete bytes changed", &|candidate| {
+        ran(candidate).1.bytes -= 1;
+    });
+    forge(layout, &|candidate| {
+        let controls = &mut candidate.storage.as_mut().unwrap().controls;
+        controls.cells[0].instance_id = "ab".repeat(32);
+    });
+    forge(layout, &|candidate| {
+        candidate.storage.as_mut().unwrap().descriptor_slot.job = "ab".repeat(32);
+    });
+    forge("no selected allocation manifest", &|candidate| {
+        candidate.storage.as_mut().unwrap().jobs = prepared_storage.jobs.clone();
+    });
+    forge(unsealed, &|candidate| {
+        candidate.storage.as_mut().unwrap().post_allocation.files += 1;
+    });
+    forge(unsealed, &|candidate| {
+        candidate.storage.as_mut().unwrap().parent_allocation = None;
+    });
+}
 /// One disturbed store, refused by the verifier and the cold reader with no
 /// repair or dispatch.
 fn disturbed(
@@ -1355,8 +1560,10 @@ fn publish_second_owner(fixture: &Fixture, current: Backend<Memory>, number: u64
 /// dispatch, writes nothing to the store, and the cold reader replays it. A
 /// second preparation over the C-selected one is refused. Forged candidates
 /// of the selected cut are then each refused by the cold verifier with nothing
-/// changed, and a torn page, an unreviewed attempt and a damaged sealed member
-/// each refuse the verifier and the cold reader.
+/// changed. A window attempt that stops after its writes stays ahead of C with
+/// no dispatch, the preparation still charged and its retry refused, and a torn
+/// page, an unreviewed attempt and a damaged sealed member each refuse the
+/// verifier and the cold reader.
 #[test]
 fn actual_index_phase_preparation_refuses_substitutes_before_nv_then_one_dispatch_cold_reopen_replays(
 ) {
@@ -1546,6 +1753,84 @@ fn actual_index_phase_preparation_refuses_substitutes_before_nv_then_one_dispatc
         "a refused forgery allocates nothing"
     );
     cold(&fixture).expect("the forged candidates leave the selected preparation");
+    // Its source is lost only after the writes, so they stay ahead of C and the
+    // retry is refused. Nothing can select them, so this ends the store's use.
+    let (audit, source) = effect(
+        &step_input,
+        &review.review_sha256,
+        grant,
+        "software index phase run rpc 906",
+        906,
+    );
+    let mut check = || Ok(());
+    let refusal = cold(&fixture)
+        .unwrap()
+        .run_index_phase_direct(
+            &store,
+            &job,
+            &step_input,
+            plan(&store, &job, &step_input),
+            &mut Stopped,
+            &mut software_worker_operation(&audit, source, &mut check),
+        )
+        .err()
+        .expect("a lost source stops the attempt")
+        .to_string();
+    assert!(
+        refusal.contains("lost after the window writes"),
+        "{refusal}"
+    );
+    assert_eq!(
+        fixture.memory.0.borrow().calls,
+        calls + 1,
+        "stopped before NV"
+    );
+    let ahead = store.inventory(read(), &mut authority, |_| Ok(())).unwrap();
+    assert!(ahead.regular_files > stored.regular_files);
+    assert_eq!(ahead.incomplete_objects, stored.incomplete_objects);
+    let (audit, source) = effect(
+        &step_input,
+        &review.review_sha256,
+        grant,
+        "software index phase run rpc 907",
+        907,
+    );
+    let mut check = || Ok(());
+    let mut after = cold(&fixture).expect("the stopped attempt leaves the selected preparation");
+    let mut operation = software_worker_operation(&audit, source, &mut check);
+    assert_eq!(
+        after
+            .selected_index_state(&step_input, &mut operation)
+            .unwrap(),
+        (Some(first_job(&input, &head, &current.0).1), true, stored),
+        "the whole preparation stays charged over the old accounting"
+    );
+    let refusal = after
+        .run_index_phase_direct(
+            &store,
+            &job,
+            &step_input,
+            plan(&store, &job, &step_input),
+            &mut Sources {
+                binding: step_input.binding.clone(),
+            },
+            &mut operation,
+        )
+        .err()
+        .expect("the store ahead of C refuses the retry")
+        .to_string();
+    assert!(
+        refusal.contains("differs from C's accounting at writer begin"),
+        "{refusal}"
+    );
+    assert_eq!(fixture.memory.0.borrow().calls, calls + 1);
+    assert_eq!(
+        store.inventory(read(), &mut authority, |_| Ok(())).unwrap(),
+        ahead,
+        "the refused retry writes nothing"
+    );
+    assert_eq!(fixture.pages().inventory(&mut || Ok(())).unwrap(), charged);
+    cold(&fixture).expect("the refused retry leaves the selected preparation");
     // The closure's checks run last first, since an earlier one hides the next.
     // The last two cannot be undone, so this ends the fixture.
     partial_page(&fixture);
@@ -1573,4 +1858,347 @@ fn actual_index_phase_preparation_refuses_substitutes_before_nv_then_one_dispatc
         &location,
         "sealed tail inode change-time differs from selected immutable seal",
     );
+}
+
+/// The selected preparation's one window runs under a new original for the
+/// same Step. Every substitute, a run with no preparation and a base that is
+/// not the selected job are refused before NV with the store untouched. The
+/// honest run writes the window, the next job and the candidate, then one
+/// dispatch selects them together with the measured accounting and resolves
+/// the preparation; the cold reader replays it. The same run over the new cut
+/// is refused, and forged candidates of it are each refused by the cold
+/// verifier with nothing changed.
+#[test]
+fn actual_index_phase_run_refuses_substitutes_before_nv_then_one_dispatch_resolves_the_preparation()
+{
+    let fixture = Fixture::new();
+    let Migrated {
+        owner,
+        store,
+        mut authority,
+        head,
+        ..
+    } = migrated(&fixture, true);
+    let current = builder();
+    let input = start(&owner.binding, &head, "1");
+    let (audit, source) = original(&input, &head, &current.0, 900);
+    let mut check = || Ok(());
+    cold(&fixture)
+        .unwrap()
+        .reserve_index_start_direct(
+            &input,
+            &current,
+            &mut software_worker_operation(&audit, source, &mut check),
+        )
+        .unwrap();
+    let (audit, source) = original(&input, &head, &current.0, 901);
+    let mut check = || Ok(());
+    cold(&fixture)
+        .unwrap()
+        .select_index_start_direct(
+            &store,
+            &input,
+            &current,
+            &mut software_worker_operation(&audit, source, &mut check),
+        )
+        .unwrap();
+    let job = Job::beginning_data(
+        &input,
+        &head,
+        &current.0,
+        &selection_data_sha256(&head, None).unwrap(),
+    )
+    .unwrap();
+    let step_input = step(&owner.binding, &job, "4");
+    let review = plan(&store, &job, &step_input).review().unwrap();
+    let grant = "explicit-software-direct-index-phase";
+    let content = |input: &request::Input| Sources {
+        binding: input.binding.clone(),
+    };
+    let calls = fixture.memory.0.borrow().calls;
+    let stored = store.inventory(read(), &mut authority, |_| Ok(())).unwrap();
+    // No window runs before C selected a preparation.
+    let (audit, source) = effect(
+        &step_input,
+        &review.review_sha256,
+        grant,
+        "software index phase run rpc 910",
+        910,
+    );
+    let mut check = || Ok(());
+    let refusal = cold(&fixture)
+        .unwrap()
+        .run_index_phase_direct(
+            &store,
+            &job,
+            &step_input,
+            plan(&store, &job, &step_input),
+            &mut content(&step_input),
+            &mut software_worker_operation(&audit, source, &mut check),
+        )
+        .err()
+        .expect("no window runs without a selected preparation")
+        .to_string();
+    assert!(
+        refusal.contains("requires an unresolved preparation over the exact selected job"),
+        "{refusal}"
+    );
+    assert_eq!(fixture.memory.0.borrow().calls, calls, "refused before NV");
+    let (audit, source) = effect(
+        &step_input,
+        &review.review_sha256,
+        grant,
+        "software index phase rpc 902",
+        902,
+    );
+    let (prepared_audit, prepared_source) = (audit.clone(), source.clone());
+    let mut check = || Ok(());
+    let preparation = cold(&fixture)
+        .unwrap()
+        .prepare_index_direct(
+            &step_input,
+            &plan(&store, &job, &step_input),
+            &mut software_worker_operation(&audit, source, &mut check),
+        )
+        .unwrap();
+    let calls = fixture.memory.0.borrow().calls;
+    let (audit, source) = effect(
+        &step_input,
+        &review.review_sha256,
+        grant,
+        "software index phase run rpc 903",
+        903,
+    );
+    let mut publish = source.clone();
+    publish.purpose = SourcePurpose::Publish;
+    let (stale_audit, stale_source) = effect(
+        &step_input,
+        &"ab".repeat(32),
+        grant,
+        "software index phase run rpc 904",
+        904,
+    );
+    // A genuine original of another Step over the same job, which C never
+    // prepared.
+    let other = step(&owner.binding, &job, "5");
+    let other_review = plan(&store, &job, &other).review().unwrap();
+    let (other_audit, other_source) = effect(
+        &other,
+        &other_review.review_sha256,
+        grant,
+        "software index phase run rpc 905",
+        905,
+    );
+    // A valid job of another id, which C never selected.
+    let mut foreign = input.clone();
+    match &mut foreign.operation {
+        request::Operation::Start { job_id, .. } => *job_id = "3".repeat(32),
+        _ => panic!("the first request is a Start"),
+    }
+    let foreign = Job::beginning_data(
+        &foreign,
+        &head,
+        &current.0,
+        &selection_data_sha256(&head, None).unwrap(),
+    )
+    .unwrap();
+    let cases: [(
+        &Job,
+        &request::Input,
+        Audit,
+        TypedOperationSource,
+        bool,
+        &str,
+    ); 6] = [
+        (
+            &job,
+            &step_input,
+            prepared_audit,
+            prepared_source,
+            true,
+            "requires a new original operation",
+        ),
+        (
+            &job,
+            &step_input,
+            audit.clone(),
+            publish,
+            true,
+            "differs from the actual original index source",
+        ),
+        (
+            &job,
+            &step_input,
+            stale_audit,
+            stale_source,
+            true,
+            "genuine original IndexPrepare purpose/source",
+        ),
+        (
+            &job,
+            &other,
+            other_audit,
+            other_source,
+            true,
+            "differs from the C-selected preparation owner/input/review",
+        ),
+        (
+            &job,
+            &step_input,
+            audit.clone(),
+            source.clone(),
+            false,
+            "software original revoked",
+        ),
+        (
+            &foreign,
+            &step_input,
+            audit.clone(),
+            source.clone(),
+            true,
+            "base differs from the C-selected job blob",
+        ),
+    ];
+    for (base, planned, audit, source, live, reason) in cases {
+        let mut check = || {
+            if live {
+                Ok(())
+            } else {
+                Err("software original revoked".into())
+            }
+        };
+        let refusal = cold(&fixture)
+            .unwrap()
+            .run_index_phase_direct(
+                &store,
+                base,
+                planned,
+                plan(&store, &job, planned),
+                &mut content(planned),
+                &mut software_worker_operation(&audit, source, &mut check),
+            )
+            .err()
+            .expect("the substituted run is refused")
+            .to_string();
+        assert!(refusal.contains(reason), "{refusal}");
+        assert_eq!(fixture.memory.0.borrow().calls, calls, "refused before NV");
+        assert_eq!(
+            store.inventory(read(), &mut authority, |_| Ok(())).unwrap(),
+            stored,
+            "refused before any store write"
+        );
+    }
+    let before = cold(&fixture).expect("the refused runs leave the selected preparation");
+    let prepared = before.descriptor().clone();
+    let prepared_location = selected_location(&fixture);
+    assert!(matches!(
+        prepared.operation,
+        OperationData::IndexPreparation { .. }
+    ));
+    let mut check = || Ok(());
+    let selection = before
+        .run_index_phase_direct(
+            &store,
+            &job,
+            &step_input,
+            plan(&store, &job, &step_input),
+            &mut content(&step_input),
+            &mut software_worker_operation(&audit, source.clone(), &mut check),
+        )
+        .unwrap();
+    assert_ne!(selection, preparation);
+    assert_eq!(
+        fixture.memory.0.borrow().calls,
+        calls + 1,
+        "one NV dispatch per window run"
+    );
+    let written = store.inventory(read(), &mut authority, |_| Ok(())).unwrap();
+    assert!(written.regular_files > stored.regular_files);
+    assert_eq!(written.incomplete_objects, stored.incomplete_objects);
+    let mut reopened = cold(&fixture).expect("cold reopen replays the selected window run");
+    let selected = reopened.descriptor().clone();
+    match &selected.operation {
+        OperationData::IndexPhaseSelection {
+            binding,
+            input_sha256,
+            selection: retained,
+            original_authority,
+            ..
+        } => {
+            assert_eq!(binding, &owner.binding);
+            assert_eq!(input_sha256, &step_input.sha256().unwrap());
+            assert_eq!(retained, &selection);
+            assert_eq!(original_authority, &audit);
+        }
+        _ => panic!("cold reopen did not select the window run"),
+    }
+    assert_eq!(selected.sequence, prepared.sequence + 1);
+    assert_ne!(selected.roots.owners, prepared.roots.owners);
+    assert_ne!(
+        selected.roots.index_generations,
+        prepared.roots.index_generations
+    );
+    assert_eq!(selected.roots.index_generations.entry_count, 1);
+    // One event selected the next job and the measured accounting and resolved
+    // the charge. The next job reaches a test only through its selected reference.
+    let mut check = || Ok(());
+    let (next, charged, physical) = reopened
+        .selected_index_state(
+            &step_input,
+            &mut software_worker_operation(&audit, source, &mut check),
+        )
+        .unwrap();
+    assert!(!charged, "the event resolves the preparation");
+    assert_eq!(physical, written, "C selects the measured inventory");
+    let next = next.expect("the selected leaf names the next job");
+    let advanced = Job::parse(&store.read_blob(&next, read(), &mut authority).unwrap()).unwrap();
+    assert_eq!(advanced.sha256().unwrap(), next.sha256);
+    assert_eq!(advanced.job_id, job.job_id);
+    assert_ne!(next.sha256, job.sha256().unwrap());
+    // The window is not repeatable: the preparation it consumed is gone.
+    let (audit, source) = effect(
+        &step_input,
+        &review.review_sha256,
+        grant,
+        "software index phase run rpc 906",
+        906,
+    );
+    let mut check = || Ok(());
+    let refusal = reopened
+        .run_index_phase_direct(
+            &store,
+            &job,
+            &step_input,
+            plan(&store, &job, &step_input),
+            &mut content(&step_input),
+            &mut software_worker_operation(&audit, source, &mut check),
+        )
+        .err()
+        .expect("a resolved preparation does not run twice")
+        .to_string();
+    assert!(
+        refusal.contains("requires an unresolved preparation over the exact selected job"),
+        "{refusal}"
+    );
+    assert_eq!(fixture.memory.0.borrow().calls, calls + 1);
+    assert_eq!(
+        store.inventory(read(), &mut authority, |_| Ok(())).unwrap(),
+        written
+    );
+    let location = selected_location(&fixture);
+    let pages = fixture.pages().inventory(&mut || Ok(())).unwrap();
+    refuse_forged_runs(
+        &fixture,
+        &selected,
+        &location,
+        &prepared,
+        &prepared_location,
+    );
+    assert_eq!(fixture.memory.0.borrow().calls, calls + 1);
+    assert_eq!(
+        fixture.pages().inventory(&mut || Ok(())).unwrap(),
+        pages,
+        "a refused forgery allocates nothing"
+    );
+    cold(&fixture).expect("the forged candidates leave the selected run");
 }

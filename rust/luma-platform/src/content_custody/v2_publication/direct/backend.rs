@@ -24,6 +24,16 @@ pub(super) fn verify_index_preparation(
     worker::verify_cold_index_preparation(pages, current, location, check)
 }
 
+/// The cold phase-selection verifier alone, for the same kind of refusal test.
+pub(super) fn verify_index_phase(
+    pages: &PageStore,
+    current: &Descriptor,
+    location: &slots::SealedReference,
+    check: &mut impl FnMut() -> Result<()>,
+) -> Result<()> {
+    worker::verify_cold_index_phase(pages, current, location, check)
+}
+
 pub(in crate::content_checkpoint::custody) struct Backend<A: Checkpoint> {
     anchor: A,
     files: Files,
@@ -168,6 +178,16 @@ impl<A: Checkpoint> Backend<A> {
                 )?;
             } else if matches!(
                 candidate.descriptor().operation,
+                OperationData::IndexPhaseSelection { .. }
+            ) {
+                worker::verify_cold_index_phase(
+                    &pages,
+                    candidate.descriptor(),
+                    location,
+                    &mut live,
+                )?;
+            } else if matches!(
+                candidate.descriptor().operation,
                 OperationData::IndexPreparation { .. }
             ) {
                 worker::verify_cold_index_preparation(
@@ -202,6 +222,7 @@ impl<A: Checkpoint> Backend<A> {
             OperationData::IndexPreparation{..}=>return Err("direct reader requires independently reconstructed index preparation lineage before selecting this event class".into()),
             OperationData::IndexJobReservation{..}=>return Err("direct reader requires independently reconstructed index Start reservation lineage before selecting this event class".into()),
             OperationData::IndexJobSelection{..}=>return Err("direct reader requires independently reconstructed index job selection lineage before selecting this event class".into()),
+            OperationData::IndexPhaseSelection{..}=>return Err("direct reader requires independently reconstructed index phase selection lineage before selecting this event class".into()),
             OperationData::OwnerMigration{..}=>return Err("direct reader requires independently reconstructed owner migration lineage before selecting this event class".into()),
         }
         };

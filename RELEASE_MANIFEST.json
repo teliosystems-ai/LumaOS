@@ -149,6 +149,7 @@
     "docs/gates/g3/nf08_direct_custody_observer_2026-10-22.json",
     "docs/gates/g3/nf08_direct_index_job_reconciliation_2026-10-31.json",
     "docs/gates/g3/nf08_direct_index_job_selection_2026-10-31.json",
+    "docs/gates/g3/nf08_direct_index_phase_run_2026-11-01.json",
     "docs/gates/g3/nf08_direct_index_preparation_2026-10-31.json",
     "docs/gates/g3/nf08_direct_index_preparation_refusals_2026-11-01.json",
     "docs/gates/g3/nf08_direct_index_start_2026-10-30.json",

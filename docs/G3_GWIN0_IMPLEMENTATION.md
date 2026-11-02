@@ -2486,9 +2486,23 @@ passed.
 Platform test time rose from 2924 to 4805 seconds, because the index tests rose
 from 1327 to 3215 seconds. Scaled the way the mount note scales it, that is an
 estimated 5420 seconds against the 7200-second CI deadline, and one more slice of
-this size would pass it. The cause has not been measured. CI has not run this
-snapshot. See the
+this size would pass it. CI has not run this snapshot. See the
 [phase run checkpoint](gates/g3/nf08_direct_index_phase_run_2026-11-01.json).
+
+That cost was then measured and reduced, which changes production code.
+`PageStore::check` read the mount table six times, once for its root and once for
+each child, and one `Backend::live` ran three store checks. Mount reads took about
+492 of the phase run test's 929 seconds. A store check now reads the table once,
+after all its directories, and one `live` runs one store check. No refusal
+condition was dropped, but a mount entry that goes bad and recovers between the old
+reads is no longer seen. On snapshot `5796045`, format was clean, both
+warning-denied builds passed, the content suites passed, and each of the 1627
+platform tests ran once, serially (42 ignored). Platform test time fell from 4805
+to 2185 seconds, and the same scaling now estimates about 2465 seconds. That is
+still an estimate, because CI has run none of this work. The
+[test cost note](../native/evidence/NATIVE_CONTENT_TEST_COST_2026-11-02.md) holds
+the measurements, a retained failed check and a prediction that proved wrong.
+
 Publishing an index generation, recovering a stopped attempt or a partial or
 foreign member, a C namespace reservation and the items above remain open. G3 and
 GWIN0 are not complete.

@@ -400,8 +400,7 @@ impl<A: Checkpoint> Backend<A> {
         }
         let result = (|| -> Result<()> {
             check()?;
-            self.pages.check()?;
-            if !self.pages.absent("selected.json")? || !self.pages.absent("pending.json")? {
+            if !self.pages.all_absent(&["selected.json", "pending.json"])? {
                 return Err("direct reader detected a conflicting format without fallback".into());
             }
             if self.anchor.read()? != self.nv {

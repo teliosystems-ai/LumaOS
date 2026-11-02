@@ -261,7 +261,7 @@ impl PageStore {
         Ok(())
     }
     pub(super) fn check(&self) -> Result<()> {
-        self.pin.check()?;
+        self.pin.held()?;
         if fs::canonicalize(&self.root)? != self.root {
             return Err("paged C root alias changed".into());
         }
@@ -288,12 +288,14 @@ impl PageStore {
             return Err("unknown paged C root member".into());
         }
         for current in &self.children {
-            current.check()?;
+            current.held()?;
             if current.mount != self.pin.mount || current.identity.0 != self.pin.identity.0 {
                 return Err("paged C namespace crossed installed mount".into());
             }
         }
-        Ok(())
+        // Root and children now share one device and mount id, so they name the
+        // same kernel mount entry; read it once, after all of them.
+        self.pin.installed()
     }
     fn path(&self, name: &str) -> Result<PathBuf> {
         if name.is_empty()
@@ -628,12 +630,20 @@ impl PageStore {
         self.allocation_completed()
     }
     pub(super) fn absent(&self, name: &str) -> Result<bool> {
+        self.all_absent(&[name])
+    }
+    /// One check precedes every lookup, so a caller with several names needs no
+    /// check of its own and no second one between names.
+    pub(super) fn all_absent(&self, names: &[&str]) -> Result<bool> {
         self.check()?;
-        match fs::symlink_metadata(self.path(name)?) {
-            Ok(_) => Ok(false),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(true),
-            Err(e) => Err(e.into()),
+        for name in names {
+            match fs::symlink_metadata(self.path(name)?) {
+                Ok(_) => return Ok(false),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => return Err(e.into()),
+            }
         }
+        Ok(true)
     }
     /// Rename only already allocated files; never allocate or regenerate bytes
     /// after an NV dispatch. All source/destination paths remain fixed namespace.

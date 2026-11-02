@@ -348,6 +348,28 @@ fn direct_backend_poison_is_monotone_after_actual_nv_or_original_control_changes
         backend.live(&mut || Ok(())).is_err(),
         "restored byte equality cannot revive the old fenced handle"
     );
+    for name in ["selected.json", "pending.json"] {
+        let mut backend = Backend::open(
+            fixture.memory.clone(),
+            fixture.files(),
+            fixture.binding.clone(),
+            &mut || Ok(()),
+        )
+        .unwrap();
+        backend.live(&mut || Ok(())).unwrap();
+        let conflicting = fixture.root.join("paged-v3").join(name);
+        fs::File::create(&conflicting).unwrap();
+        assert!(backend
+            .live(&mut || Ok(()))
+            .unwrap_err()
+            .to_string()
+            .contains("conflicting format"));
+        fs::remove_file(&conflicting).unwrap();
+        assert!(
+            backend.live(&mut || Ok(())).is_err(),
+            "removing the conflicting name cannot revive the old fenced handle"
+        );
+    }
     let mut backend = Backend::open(
         fixture.memory.clone(),
         fixture.files(),

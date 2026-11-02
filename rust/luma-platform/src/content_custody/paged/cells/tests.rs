@@ -194,3 +194,24 @@ fn selected_control_identity_cannot_cross_c_binding_or_directory_generation() {
     assert!(controls.read(0, &mut || Ok(())).is_err());
     assert!(pages.check().is_err());
 }
+#[test]
+fn absent_names_take_one_store_check_first_and_any_present_name_counts() {
+    let fixture = Fixture::new();
+    let pages = fixture.pages();
+    assert!(pages
+        .all_absent(&["selected.json", "pending.json"])
+        .unwrap());
+    fs::File::create(pages.root.join("pending.json")).unwrap();
+    assert!(!pages
+        .all_absent(&["pending.json", "selected.json"])
+        .unwrap());
+    assert!(!pages
+        .all_absent(&["selected.json", "pending.json"])
+        .unwrap());
+    assert!(pages.absent("selected.json").unwrap());
+    assert!(!pages.absent("pending.json").unwrap());
+    assert!(pages.all_absent(&["selected.json", "../other"]).is_err());
+    fs::File::create(pages.root.join("unknown")).unwrap();
+    assert!(pages.all_absent(&["selected.json"]).is_err());
+    assert!(pages.all_absent(&[]).is_err());
+}

@@ -158,6 +158,15 @@ impl PersistentDirectory {
         Ok(pin)
     }
     fn check(&self) -> Result<()> {
+        self.held()?;
+        // All four descriptors now share one device and mount id, so they name
+        // the same kernel mount entry; read it once, after all of them.
+        self.installed()
+    }
+    fn installed(&self) -> Result<()> {
+        Self::installed_mount(&self.file, self.mount)
+    }
+    fn held(&self) -> Result<()> {
         let current = Self::open(&self.path)?;
         let current_parent = Self::open(
             self.path
@@ -184,9 +193,7 @@ impl PersistentDirectory {
                 Self::ext4(file)?;
             }
         }
-        // All four descriptors now share one device and mount id, so they name
-        // the same kernel mount entry; read it once, after all of them.
-        Self::installed_mount(&self.file, self.mount)
+        Ok(())
     }
 }
 

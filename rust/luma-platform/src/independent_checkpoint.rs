@@ -65,10 +65,6 @@ impl PersistentDirectory {
         Ok(())
     }
     fn installed_mount(file: &File, expected: u64) -> Result<()> {
-        Self::ext4(file)?;
-        if Self::mount(file)? != expected {
-            return Err("persistent content mount identity changed".into());
-        }
         let metadata = file.metadata()?;
         let device = unsafe {
             format!(
@@ -86,6 +82,9 @@ impl PersistentDirectory {
         }
         let mut text = String::new();
         info.take(262145).read_to_string(&mut text)?;
+        Self::mount_evidence(&text, expected, &device)
+    }
+    fn mount_evidence(text: &str, expected: u64, device: &str) -> Result<()> {
         if text.is_empty() || text.len() > 262144 || text.lines().count() > 4096 {
             return Err("kernel mount inventory exceeds closed content admission bounds".into());
         }
@@ -182,10 +181,12 @@ impl PersistentDirectory {
                             .into(),
                     );
                 }
-                Self::installed_mount(file, self.mount)?;
+                Self::ext4(file)?;
             }
         }
-        Ok(())
+        // All four descriptors now share one device and mount id, so they name
+        // the same kernel mount entry; read it once, after all of them.
+        Self::installed_mount(&self.file, self.mount)
     }
 }
 

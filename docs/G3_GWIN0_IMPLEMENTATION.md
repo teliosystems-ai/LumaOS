@@ -2428,3 +2428,27 @@ lists the ones that are not. Running the selected job's prepared phase,
 publishing an index generation, recovering a partial or foreign member, a C
 namespace reservation and the items above remain open. G3 and GWIN0 are not
 complete.
+
+CI run 41275178599 on `64e71fc` passed the storage job. Its rust job stopped at
+`artifact-read` after 153 of its 180 minutes, and the TPM job stopped at its
+7200-second suite deadline on both attempts, at about test 501 of 1624. This was
+not a regression from `bd0d65b`: the serial suite was already near the limit on
+slower runners. A profiled migration test spent about 285 of its 395 seconds in
+4,709,800 opens of `/proc/self/mountinfo`, because
+`PersistentDirectory::check` parsed the mount table once for each of its four
+descriptors.
+
+Snapshot `4a08d79` over `64e71fc` changes that production check, unlike the
+test-only checkpoints above. `check` now parses the table once, after all four
+descriptors pass their identity, mount id and ext4 checks. Those checks give
+the four descriptors one device and mount id, so they name one kernel entry, and
+the single parse is at least as late as the old fourth parse. The parse moved
+into a pure function, and a new test gives it its first direct refusal coverage.
+Mountinfo opens in the measured test fell to exactly one quarter with the same
+work done, and platform test time fell from 6664 to 2924 seconds locally. On that
+snapshot, format was clean and the warning-denied test build passed, and each of
+the 1625 platform tests ran once, serially (42 ignored), with the content suites.
+The 7200-second deadline and 180-minute job limits are unchanged. CI has not run
+this change, so its CI budget stays unproven until a pushed commit's jobs pass.
+See the
+[content mount read note](../native/evidence/NATIVE_CONTENT_MOUNT_READ_2026-11-01.md).

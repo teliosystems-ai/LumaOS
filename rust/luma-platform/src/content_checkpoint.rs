@@ -602,6 +602,35 @@ pub(crate) mod tests {
         assert_ne!(mount, 0);
         assert_eq!(PersistentDirectory::mount(&directory).unwrap(), mount);
     }
+    #[test]
+    fn content_authority_mount_evidence_is_one_exact_writable_ext4_entry() {
+        let entry = |id: u32, device: &str, options: &str, filesystem: &str| {
+            format!("{id} 1 {device} / /content {options} shared:2 - {filesystem} /dev/sda1 rw\n")
+        };
+        let evidence = |text: &str| PersistentDirectory::mount_evidence(text, 42, "8:1");
+        let exact = entry(42, "8:1", "rw,relatime", "ext4");
+        let unrelated = entry(7, "0:5", "ro,nosuid", "proc");
+        evidence(&exact).unwrap();
+        evidence(&format!("{unrelated}{exact}{unrelated}")).unwrap();
+        evidence(&format!("{exact}{}", unrelated.repeat(4095))).unwrap();
+        for refused in [
+            String::new(),
+            unrelated.clone(),
+            format!("{exact}{exact}"),
+            entry(42, "8:2", "rw,relatime", "ext4"),
+            entry(42, "8:1", "rw,relatime", "xfs"),
+            entry(42, "8:1", "ro,relatime", "ext4"),
+            entry(42, "8:1", "relatime", "ext4"),
+            entry(42, "8:1", "rw,ro", "ext4"),
+            "42 1 8:1 / /content rw\n".to_string(),
+            "42 1 8:1 /content - ext4 /dev/sda1 rw\n".to_string(),
+            "42 1 8:1 / /content rw - ext4 /dev/sda1\n".to_string(),
+            format!("{exact}{}", unrelated.repeat(4096)),
+            format!("{exact}{}", " ".repeat(262144)),
+        ] {
+            assert!(evidence(&refused).is_err(), "{:.80}", refused);
+        }
+    }
     fn fixture_genesis(root: &Path, installation: &str) -> [u8; 32] {
         let metadata = fs::metadata(root).unwrap();
         let value = serde_json::json!({"schema_version":1,

@@ -31,7 +31,13 @@ cd "$snapshot/rust"
 export CARGO_TARGET_DIR=/tmp/luma-storage-target
 export RUSTFLAGS=-Dwarnings
 cargo fmt --check
-cargo test --offline --locked -p luma-platform -- --test-threads=1 2>&1 | tee "$output/rust-tests.txt"
+# The NF08 direct index group needs only the storage root and runs once, in
+# the workflow's index-boundaries job, which rust-boundaries and the TPM suite
+# also skip.
+cargo test --offline --locked -p luma-platform -- --test-threads=1 \
+    --skip content_checkpoint::custody::v2_publication::direct::initial::tests::index_cases:: \
+    --skip content_checkpoint::custody::v2_publication::direct::backend::worker::index_selection::tests:: \
+    2>&1 | tee "$output/rust-tests.txt"
 # A filter that matches nothing still exits zero, so require the one test.
 unshare --mount --propagation private env LUMA_CUSTODY_MOUNT_TEST=1 \
     cargo test --offline --locked -p luma-platform \

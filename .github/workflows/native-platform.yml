@@ -178,9 +178,10 @@ jobs:
 # NF08 direct index group, the index_cases and index_selection test modules,
 # also runs real index phases through Publish and takes about an hour serially.
 # It needs only the storage root, so it runs once, in index-boundaries, which
-# refuses to start if either module path names no test. rust-boundaries and the
-# TPM suite skip the same two paths and still run every other luma-platform
-# test; a plain local cargo test runs all of them, as nothing is ignored. The
+# refuses to start if either module path names no test. rust-boundaries,
+# storage-boundaries and the TPM suite skip the same two paths and still run
+# every other luma-platform test; a plain local cargo test runs all of them, as
+# nothing is ignored. The
 # serial runs keep the longer job limits above. Dev/test builds
 # use opt-level 1 with debug assertions and overflow checks kept on, and
 # line-table debug info so the staged TPM test executable stays under its

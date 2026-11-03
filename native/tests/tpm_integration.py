@@ -116,7 +116,8 @@ def main():
             # The serial suite includes real bounded owner migrations; this
             # deadline only bounds a hung run. The NF08 direct index group
             # needs only the storage root, not this TPM, and runs once in the
-            # workflow's index-boundaries job, which rust-boundaries also skips.
+            # workflow's index-boundaries job, which rust-boundaries and
+            # storage-boundaries also skip.
             run(['cargo', 'test', '--offline', '--locked', '-p', 'luma-platform', '--', '--nocapture',
                  '--test-threads=1',
                  '--skip', 'content_checkpoint::custody::v2_publication::direct::initial::tests::index_cases::',

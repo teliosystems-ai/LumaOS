@@ -202,7 +202,8 @@ fn setup(
     }
     let mut inner = inner;
     let mut selected_statistics = initial_statistics;
-    for _ in 0..128 {
+    let started = std::time::Instant::now();
+    for _ in 0..fixture::windows(128, texts.len()) {
         if selected_statistics.complete {
             break;
         }
@@ -233,6 +234,7 @@ fn setup(
         inner.set_write(true);
     }
     assert!(selected_statistics.complete);
+    fixture::report_phase("statistics", texts.len(), started);
     let covariance = CovarianceRequest {
         schema_version: 1,
         statistics: statistics.clone(),
@@ -261,7 +263,8 @@ fn setup(
             })
             .collect(),
     };
-    for _ in 0..32 {
+    let started = std::time::Instant::now();
+    for _ in 0..fixture::windows(32, texts.len()) {
         if b.selected_covariance.complete {
             break;
         }
@@ -290,6 +293,7 @@ fn setup(
         b.inner.set_write(true);
     }
     assert!(b.selected_covariance.complete);
+    fixture::report_phase("covariance", texts.len(), started);
     let selected = b.selected_covariance.clone();
     let matrix =
         read_covariance_matrix(&store, &covariance, &selected, read_budget(), &mut b).unwrap();
@@ -321,8 +325,10 @@ pub(super) fn completed_fixture(
     Guard,
 ) {
     let (fixture, store, request, _matrix, mut b) = setup(texts, dimensions);
-    for _ in 0..256 {
+    let started = std::time::Instant::now();
+    for _ in 0..fixture::windows(256, texts.len()) {
         if b.selected_projection.as_ref().unwrap().cursor.complete {
+            fixture::report_phase("projection", texts.len(), started);
             return (
                 fixture,
                 store,

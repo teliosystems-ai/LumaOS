@@ -5,6 +5,9 @@ use super::*;
 use crate::corpus_index::{CorpusQueryKind, CorpusQueryResults};
 use audit::{AuditCommitment, AuditPhase, AuditProgress, GenerationAuditBoundary};
 
+mod latency;
+mod observed;
+
 struct Guard {
     inner: fixture::Guard,
     job: GenerationJob,
@@ -240,14 +243,19 @@ fn audit_step(store: &ObjectStore, b: &mut Guard, maximum: usize) -> AuditCommit
     value
 }
 fn complete_audit(store: &ObjectStore, b: &mut Guard) {
-    for _ in 0..256 {
+    let documents = b.job.corpus().entry_count as usize;
+    let scaled = documents >= crate::corpus_index::job::tests::SCALE_DOCUMENTS;
+    let started = std::time::Instant::now();
+    for _ in 0..crate::corpus_index::job::tests::windows(256, documents) {
         if b.audit.phase == AuditPhase::Complete {
+            crate::corpus_index::job::tests::report_phase("audit", documents, started);
             return;
         }
-        let maximum = if b.audit.phase == AuditPhase::Coverage {
-            2
-        } else {
-            3
+        let maximum = match (b.audit.phase == AuditPhase::Coverage, scaled) {
+            (true, false) => 2,
+            (false, false) => 3,
+            (true, true) => 128,
+            (false, true) => 4096,
         };
         audit_step(store, b, maximum);
     }

@@ -2735,3 +2735,23 @@ existing live, VM and optical media modules on the host, and a read-only check
 that the sequence-19 export inventory and checksum rows match the download
 layout. Sequence 20 is not built, signed or tested. No image was written to a
 USB stick, installed or updated. None of this closes a gate.
+
+### NF08 observed query latency, 3 November 2026
+
+A content-store test runs lexical and semantic generation queries in the native
+IndexRead Query arm's order, through a Reader-shaped envelope and a boundary
+shaped like the native Gate. It matches the local store, withholds output on
+refusal and re-proves each returned hit four times. The generation query path now
+hashes the validated manifest once per request, as data, and every refresh still
+asks the boundary for the current selection. An ignored benchmark over a
+deterministic 1,024-object corpus measured an overall P95 first result of 448.860
+ms, against 529.260 ms before the change, in an 8 GiB network-less development
+container on a laptop. The boundary accounts for 90.620 ms of that P95. Each query
+would make about 170,000 native current checks on average and up to 342,000, each
+reading three TPM NV anchors, and that cost is not measured. Building the
+1,024-object generation took 4932 seconds, 4245 of them in projection, so a
+100,000-object build needs an owner decision on its time and storage, and the 500
+ms target there needs a sub-linear candidate path and fewer current checks per
+page. No production code selects a generation, so the native Query arm still
+refuses every query. This is development evidence only
+([3 November checkpoint](gates/g3/nf08_search_observed_query_latency_2026-11-03.json)).

@@ -81,6 +81,25 @@ fn limits() -> CorpusIndexLimits {
         floating_operations: 100_000_000,
     }
 }
+/// Corpus size from which the ignored NF08 latency fixture lifts the small
+/// fixtures' window caps and job limits to the validated maxima. No default
+/// test reaches it.
+pub(super) const SCALE_DOCUMENTS: usize = 1024;
+pub(super) fn windows(small: usize, documents: usize) -> usize {
+    if documents >= SCALE_DOCUMENTS {
+        1 << 22
+    } else {
+        small
+    }
+}
+pub(super) fn report_phase(phase: &str, documents: usize, started: std::time::Instant) {
+    if documents >= SCALE_DOCUMENTS {
+        eprintln!(
+            "nf08-scale phase {phase} documents {documents} seconds {:.3}",
+            started.elapsed().as_secs_f64()
+        );
+    }
+}
 fn seed_mutation() -> Mutation {
     Mutation {
         review_sha256: "c".repeat(64),
@@ -283,12 +302,22 @@ fn setup(texts: &[&str]) -> (Fixture, ObjectStore, IngestRequest, Sources, Guard
         job_sha256: "f".repeat(64),
         corpus: root,
         builder: builder(),
-        limits: CorpusIndexLimits {
-            read_bytes: 8 * 1024 * 1024 * 1024,
-            write_bytes: 1024 * 1024 * 1024,
-            source_bytes: MAX_INDEX_SOURCE_BYTES,
-            postings: MAX_INDEX_POSTINGS,
-            floating_operations: 2_000_000_000,
+        limits: if texts.len() >= SCALE_DOCUMENTS {
+            CorpusIndexLimits {
+                read_bytes: 128 * 1024 * 1024 * 1024,
+                write_bytes: 64 * 1024 * 1024 * 1024,
+                source_bytes: MAX_INDEX_SOURCE_BYTES,
+                postings: MAX_INDEX_POSTINGS,
+                floating_operations: 64_000_000_000,
+            }
+        } else {
+            CorpusIndexLimits {
+                read_bytes: 8 * 1024 * 1024 * 1024,
+                write_bytes: 1024 * 1024 * 1024,
+                source_bytes: MAX_INDEX_SOURCE_BYTES,
+                postings: MAX_INDEX_POSTINGS,
+                floating_operations: 2_000_000_000,
+            }
         },
     };
     let guard = Guard::job(&request, &IngestProgress::beginning(&request).unwrap());
@@ -322,7 +351,10 @@ fn effect(value: &IngestPlan) -> Mutation {
 pub(super) fn completed_fixture(
     texts: &[&str],
 ) -> (Fixture, ObjectStore, IngestRequest, IngestProgress, Guard) {
+    let started = std::time::Instant::now();
     let (fixture, store, request, mut sources, mut guard) = setup(texts);
+    report_phase("corpus", texts.len(), started);
+    let started = std::time::Instant::now();
     while !guard.selected.as_ref().unwrap().complete(&request).unwrap() {
         let plan = plan(&store, &request, &mut sources, &mut guard);
         let mutation = effect(&plan);
@@ -333,6 +365,7 @@ pub(super) fn completed_fixture(
         guard.selected = Some(prepared.commitment.next.clone());
         guard.write = true;
     }
+    report_phase("ingest", texts.len(), started);
     (
         fixture,
         store,

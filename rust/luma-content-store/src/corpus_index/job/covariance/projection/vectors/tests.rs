@@ -237,7 +237,8 @@ fn next(
     prepared.commitment().clone()
 }
 fn complete(store: &ObjectStore, sources: &mut Sources, b: &mut Guard, maximum: usize) {
-    for _ in 0..128 {
+    let documents = b.request.corpus().entry_count as usize;
+    for _ in 0..crate::corpus_index::job::tests::windows(128, documents) {
         if b.selected.complete {
             return;
         }
@@ -249,7 +250,9 @@ pub(super) fn completed_fixture(
     texts: &[&str],
 ) -> (crate::corpus_index::job::tests::Fixture, ObjectStore, Guard) {
     let (fixture, store, mut guard, mut sources) = setup(texts);
+    let started = std::time::Instant::now();
     complete(&store, &mut sources, &mut guard, MAX_VECTOR_DOCUMENTS);
+    crate::corpus_index::job::tests::report_phase("vectors", texts.len(), started);
     (fixture, store, guard)
 }
 

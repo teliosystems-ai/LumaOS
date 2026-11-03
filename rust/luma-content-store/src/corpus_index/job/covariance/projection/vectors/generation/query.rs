@@ -7,16 +7,27 @@ use std::collections::BinaryHeap;
 
 struct Current<'a, B: CurrentGenerationBoundary> {
     manifest: &'a GenerationManifest,
+    /// The canonical hash of the immutably borrowed, already validated
+    /// manifest, computed once. It is DATA, not a cached current observation:
+    /// every refresh below still asks the boundary for the current selection.
+    selected: String,
     b: &'a mut B,
 }
-impl<B: CurrentGenerationBoundary> Current<'_, B> {
+impl<'a, B: CurrentGenerationBoundary> Current<'a, B> {
+    fn new(manifest: &'a GenerationManifest, b: &'a mut B) -> Result<Self> {
+        Ok(Self {
+            manifest,
+            selected: manifest.sha256()?,
+            b,
+        })
+    }
     fn current(&mut self) -> Result<()> {
         self.b.check(Access::Inspect {
             binding: &self.manifest.corpus.binding,
         })?;
         self.b.current_generation(self.manifest)?;
         self.b
-            .current_index_generation(&self.manifest.corpus, &self.manifest.sha256()?)?;
+            .current_index_generation(&self.manifest.corpus, &self.selected)?;
         self.b.current_corpus(&self.manifest.corpus)?;
         self.b
             .current_builder(&self.manifest.corpus, &self.manifest.builder)
@@ -61,7 +72,7 @@ impl<B: CurrentGenerationBoundary> CorpusIndexBoundary for Current<'_, B> {
         self.current()
     }
     fn current_index_generation(&mut self, root: &MapRoot, generation: &str) -> Result<()> {
-        if root != &self.manifest.corpus || generation != self.manifest.sha256()? {
+        if root != &self.manifest.corpus || generation != self.selected {
             return Err("query generation substitution".into());
         }
         self.current()
@@ -95,10 +106,7 @@ impl VerifiedGeneration {
                 "supplied descriptor differs from actual current generation selector".into(),
             );
         }
-        let mut live = Current {
-            manifest: &manifest,
-            b,
-        };
+        let mut live = Current::new(&manifest, b)?;
         live.current()?;
         if limits.write_bytes != 0 {
             return Err("generation opening requires read-only resources".into());
@@ -134,17 +142,15 @@ impl VerifiedGeneration {
         if limits.write_bytes != 0 {
             return Err("generation query requires finite read-only resources".into());
         }
-        let mut live = Current {
-            manifest: &self.manifest,
-            b,
-        };
+        let mut live = Current::new(&self.manifest, b)?;
         live.current()?;
         let root = &self.manifest.corpus;
+        let selected = live.selected.clone();
         let mut meter = Meter::new(
             root,
             &self.manifest.builder,
             limits,
-            Some(self.manifest.sha256()?),
+            Some(selected),
             &mut live,
         )?;
         let (job, model) = read_inputs(store, &self.manifest, &mut meter, &mut live)?;

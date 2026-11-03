@@ -1,0 +1,313 @@
+{
+  "schema_version": 1,
+  "recorded_on": "2026-11-03",
+  "status": "unsigned-integrated-workspace-and-inference-rootfs-software-verified",
+  "scope": "One profile-W schema3 distribution package containing the distinct thirty-second first-account/manual-workspace and five-minute compact-inference profiles, with the unchanged thirty-second compute contract. This is not firmware-bootable Windows media, a native Ubuntu image, installed qualification, a native GTK workspace, or a general Linux product-grant bridge",
+  "retained_source_commit": "ce84c8c3d014e80864ca2538df333092079bbd96",
+  "release_id": "luma-wsl-dev-g3-gwin0-integrated-20261103",
+  "profile": "W",
+  "embedded_identity_schema": 3,
+  "embedded_runtime_profile": "luma-windows-hosted-workspace-v1",
+  "initial_default_uid": 65534,
+  "initial_wsl_flags": 0,
+  "initial_root_and_nobody_accounts_locked": true,
+  "session_seconds": {
+    "existing_deterministic_compute": 30,
+    "distinct_workspace_bootstrap_health_or_repair": 30,
+    "distinct_compact_inference": 300
+  },
+  "implementation": [
+    "native/image/windows_integrated.py selects the workspace base at initial staging, then composes its real PAM/runtime closure, the pinned completion/model closure, and one package with both opt-in flags. Fresh destinations are exclusive; failed or previous builds are not overwritten",
+    "Both closed descriptors and every runtime/model member join the same publisher-required file inventory. Schema3 identity, nobody default UID65534 and WSL flags0 remain unchanged; creating the separately authenticated UID/GID1000 account does not change the default worker identity",
+    "The inference runtime traversal now starts with the actual compiled platform worker as well as the private CPU completion runtime. Worker-only dependencies, including libsystemd.so.0, belong to both exact runtime manifests rather than only generic package RequiredFiles",
+    "The production Windows inspector validates both descriptors under the closed workspace identity before reporting inference presence. The post-validation summary now reports the actual combined composition rather than treating schema3 as workspace-only",
+    "The Windows manual console remains model-disabled unless a separate explicit inference operation is requested. The package does not turn health, PAM history, a Read receipt or package inspection into a product grant or Export authority",
+    "Later native Life or other native-image development is not retroactively attributed to this retained profile-W package. Hyper-V remains owner-deferred and GWIN1/GWIN2 are not claimed complete by this record",
+    "The 2026-11-03 refresh recompiles the platform worker from the frozen gwin0-refresh-source-20261103-ce84c8c-a cut of ce84c8c (the feature/g3-functional-beta head: the ae16cde merge of feature/g3-gwin0-beta a5a5bc7, which adds the read-only coexistence planner and Hyper-V download tooling, plus the ce84c8c release-inventory fix) and recomposes the unchanged profile-W composition with the retained PAM helper, runtime archive and model",
+    "The cut was captured from a clean detached worktree at ce84c8c. The freeze join establishes that every captured record is its ce84c8c blob (*.ps1 as the CRLF checkout .gitattributes requires) and that the differences from the 2026-10-31 cut are the 6528ea1..ce84c8c git diff of the captured folders (23 added, 52 changed, 0 removed) plus 43 records outside rust/ that differ only in line endings, because the 2026-10-31 cut was captured from the main checkout",
+    "The refresh worker is the workspace release profile (fat LTO, overflow checks, abort on panic, strip) under the owner-approved 8 GiB / 2 CPU / one-job assembly bound. The release profile is unchanged at ce84c8c; the [profile.dev] settings added in 36bf3b0 do not apply to this build. No debug-profile worker was rebuilt and the 64 MiB cap is unchanged"
+  ],
+  "actual_package": {
+    "directory": "D:/LumaOS-builds/gwin-integrated-package-20261103-ce84c8c-J2BhtOSg-public/package",
+    "private_build_directory": "/mnt/luma-build/work/gwin-integrated-package-20261103-ce84c8c-J2BhtOSg",
+    "rootfs_bytes": 2636566528,
+    "rootfs_sha256": "14699de8367fd2f962335d5c67bcb71022bc569a0ad7b0392c49b89e6ede13f0",
+    "manifest_bytes": 14863,
+    "manifest_sha256": "0ab2bb43951a4e90d083a29d24c045f371ce4fe4ca29ade3375e83718271646f",
+    "archive_members": 225,
+    "content_bytes": 2636397579,
+    "publisher_required_files": 91,
+    "integrated_stage_record": "D:/LumaOS-builds/gwin-integrated-package-20261103-ce84c8c-J2BhtOSg-public/integrated-stage.json",
+    "integrated_stage_record_sha256": "760e5b11352b43d3db1d97db78fe285f4ea7740123c4ce46d45f517e4ba47836",
+    "actual_composition_verification": "D:/LumaOS-builds/gwin-integrated-package-20261103-ce84c8c-J2BhtOSg-public/integrated-verification.json",
+    "actual_composition_verification_sha256": "c5a828e082567426a639ae1ef768e5728464c46007c9777184f2fb1bdeb944ed",
+    "complete_checksums": "D:/LumaOS-builds/gwin-integrated-package-20261103-ce84c8c-J2BhtOSg-public/SHA256SUMS",
+    "complete_checksums_sha256": "7144f023af9e5801bd8f6169f1c801b4698535d0535e8b3b970eb359e6153def",
+    "fresh_workspace_then_inference_composition_passed": true,
+    "both_runtime_worker_dependency_closures_checked": true,
+    "existing_output_recomposition_refused": true,
+    "package_authenticated": false,
+    "package_signed": false,
+    "firmware_bootable_windows_media": false
+  },
+  "workspace_runtime": {
+    "profile": "luma-windows-hosted-workspace-v1",
+    "profile_sha256": "e2e4d1c3a22f1a6fb10f8477c31f1dd1655f4ac147368d39b9ec146674b8c441",
+    "runtime_manifest_sha256": "c38b06874d7811d6287a756a2e03fa21e55e03364be79420fafa810c789d61ff",
+    "runtime_files": 29,
+    "actual_worker_dependency_members": 20,
+    "actual_worker_libsystemd_dependency_in_manifest": true,
+    "actual_pam_helper_sha256": "b8c68aa6f30323c725257edb73be83e5364bae3ff351bdbadc994ace4237837b",
+    "retained_pam_helper_build_record": "docs/gates/gwin0/workspace_bootstrap_2026-10-20.json",
+    "account_created": false,
+    "actual_installed_pam_authenticated": false,
+    "actual_workspace_console_launched": false
+  },
+  "inference_runtime": {
+    "profile": "luma-windows-hosted-inference-v1",
+    "runtime": "llama.cpp-b11100-cpu-amd64-completion",
+    "profile_sha256": "458f229f4763df7323ad602535621425ec10b543d16db17e8f273e569ffeda4f",
+    "runtime_manifest_sha256": "1130d69b9e2aabce6530500adec0f3c663f5da7c342c5c1d416000eb3f65a817",
+    "runtime_files": 41,
+    "actual_worker_dependency_members": 20,
+    "actual_worker_libsystemd_dependency_in_manifest": true,
+    "private_cpu_runtime_members": 18,
+    "runtime_archive_sha256": "a836c913236ab4533ef9aaf49f0e1ad2955c8159869d7eec1a9072a92e13d61b",
+    "model_path": "usr/share/luma-os/models/qwen3-4b-q4-k-m.gguf",
+    "model_bytes": 2497280256,
+    "model_sha256": "7485fe6f11af29433bc51cab58009521f205840f5b4ae3a32fa7f92e8534fdf5",
+    "full_actual_pinned_model_and_runtime_used": true,
+    "model_streamed_without_loading_it_as_a_byte_array": true,
+    "inference_executed_in_this_run": false,
+    "gpu_qualification_claimed": false
+  },
+  "elf_and_source_join": {
+    "record": "D:/LumaOS-builds/gwin-integrated-package-20261103-ce84c8c-J2BhtOSg-public/source-artifact-join.json",
+    "record_sha256": "a5d5343ec1889b0a205c5544a295189cc72bd72423493b99e13e027fe4d85553",
+    "actual_stripped_platform_bytes": 22120944,
+    "actual_stripped_platform_sha256": "63e9b64d4a797a0433c3c6ad2c7327a43e9ce8997381d99cb9fbfb377fb56559",
+    "actual_profile": "release",
+    "actual_stripped_by": "cargo release profile strip = true",
+    "actual_release_profile": [
+      "overflow-checks = true",
+      "panic = \"abort\"",
+      "strip = true",
+      "lto = true"
+    ],
+    "actual_rustc_version": "rustc 1.75.0 (82e1608df 2023-12-21) (built from a source tarball)",
+    "actual_cargo_version": "cargo 1.75.0",
+    "actual_build_seconds": 689,
+    "compiler_container_bound": {
+      "memory_bytes": 8589934592,
+      "swap_additional_bytes": 0,
+      "cpus": 2,
+      "cargo_build_jobs": 1,
+      "network": "none",
+      "rustflags": "-Dwarnings"
+    },
+    "platform_build_unit": "/mnt/luma-build/work/gwin0-refresh-platform-release-20261103-ce84c8c-0L4dSoQQ",
+    "platform_build_scope_sha256": "7158766cf20ea8a378d499860c8823118aa6f5dbcb05abbced89f33b135b013d",
+    "platform_build_log_sha256": "5ea70a8106962efeb1d7eeb078a3177222c8b8f733620c3287828dda0eb5edb3",
+    "compiler_metadata_record": "D:/LumaOS-builds/gwin-integrated-package-20261103-ce84c8c-J2BhtOSg-public/compiled-binary.json",
+    "compiler_metadata_sha256": "34df1a0eb70d3d245ac6c143bc43d69aedbf038c47d710545aa5097e40e94bc1",
+    "elf_source_manifest_sha256": "173bfbdd833ee2f6ac3ccf7e734bb9fde4a02a9544faa831eff26de90cd26f5d",
+    "package_source_manifest_sha256": "173bfbdd833ee2f6ac3ccf7e734bb9fde4a02a9544faa831eff26de90cd26f5d",
+    "source_freeze": "/mnt/luma-build/work/gwin0-refresh-source-20261103-ce84c8c-a",
+    "source_freeze_join_sha256": "a57b6be0b97d37da9b7f17b534a7d3545e563abfc7571d8658cb37815cf628ec",
+    "package_source_files": 980,
+    "rust_source_files": 414,
+    "every_rust_source_record_and_captured_byte_identical_to_actual_elf_cut": true,
+    "package_source_capture_identical_to_elf_cut": true,
+    "executable_cap_bytes": 67108864,
+    "source_build_is_installed_qualification": false,
+    "debug_profile_worker_rebuilt": false,
+    "earlier_failed_debug_build_record": "docs/gates/gwin0/combined_workspace_inference_2026-10-27.json",
+    "source_freeze_head": "ce84c8c3d014e80864ca2538df333092079bbd96",
+    "source_freeze_captured_tree_equals_head": true,
+    "source_freeze_records_equal_to_head_blob": 955,
+    "source_freeze_records_crlf_checkout_of_head_blob": 25,
+    "previous_source_freeze": "/mnt/luma-build/work/gwin0-refresh-source-20261031-a",
+    "previous_source_freeze_build_inputs_sha256": "565dff8fa433183d7589aff9c7bea5fc7cec28ba1d8a73c178c4e7196d986cfb",
+    "source_records_added_since_previous": 23,
+    "source_records_changed_since_previous": 52,
+    "source_records_removed_since_previous": 0,
+    "source_records_line_ending_only_since_previous": 43,
+    "rust_records_added_since_previous": 18,
+    "rust_records_changed_since_previous": 37,
+    "rust_records_line_ending_only_since_previous": 0
+  },
+  "software_verification": {
+    "python_contract_tests": 21,
+    "python_tests_ignored": 0,
+    "python_log": "D:/LumaOS-builds/gwin-integrated-package-20261103-ce84c8c-J2BhtOSg-public/contracts.log",
+    "python_log_sha256": "f5f89891bd0377e3edc9f4604f296798c760427b4f8edd44747cc63a76456bd9",
+    "windows_package_assertions": 170,
+    "windows_package_test_log": "D:/LumaOS-builds/gwin-integrated-package-20261103-ce84c8c-J2BhtOSg-public/package-tests.log",
+    "windows_package_test_log_sha256": "b294a157f47a573dde85e7c6421b2452f2201c5a8424bb4cf4c15815f5b2e3f9",
+    "actual_combined_composition_regression_passed": true,
+    "test_scope": "The model-free constructor tests explicitly mock effects and do not stand in for a product worker. The separate mandatory-real-input regression composed the actual retained platform/PAM ELF inputs and complete pinned model/archive. It checked initial account bytes/modes, schema3 identity, both publisher/runtime joins, both recursive twenty-member worker closures and exclusive-output refusal",
+    "offline_builder_image": "sha256:819dfe7772da1e3c76ffdc8f9ea4a1fa44c7c549bd4fa988e35d9397d87924b2",
+    "composition_container_memory_bytes": 1073741824,
+    "composition_container_swap_additional_bytes": 0,
+    "supplied_platform_or_pam_elf_executed": false,
+    "model_executed": false,
+    "windows_package_test_powershell": "Windows PowerShell 5.1.26100.9444 (Desktop), as test-package.ps1 requires"
+  },
+  "public_export": {
+    "record": "D:/LumaOS-builds/gwin-integrated-package-20261103-ce84c8c-J2BhtOSg-public/export-verification.json",
+    "record_sha256": "71682d3a173f37e556b71996d196269be8ad17815f82c9f198a80cb45a47c474",
+    "complete_manifest_and_rootfs_copy_readback_verified": true,
+    "old_packaged_copies_deleted": false,
+    "private_staging_deleted_at_record_creation": false,
+    "rebuildable_private_paths_retained": [
+      "/mnt/luma-build/work/gwin-integrated-package-20261103-ce84c8c-J2BhtOSg/integrated-stage/rootfs",
+      "/mnt/luma-build/work/gwin-integrated-package-20261103-ce84c8c-J2BhtOSg/integrated-package"
+    ],
+    "all_980_captured_source_files_copy_readback_verified": true
+  },
+  "actual_windows_inspection": {
+    "record": "D:/LumaOS-builds/gwin-integrated-package-20261103-ce84c8c-J2BhtOSg-public/windows-inspection.json",
+    "record_sha256": "a0fa9874a84549956fc74e33d39df21a27758b94d994a3a732760af5b27cdfff",
+    "production_inspector": "packaging/windows/Luma.Package.psm1:Test-LumaWslPackage",
+    "actual_complete_archive_and_manifest_hashes_match_export_readback": true,
+    "inspector_sources_match_captured_package_source": true,
+    "package_module_sha256": "fed18f4d36a6bc4fde89de07a37db8a2d29e0b7c4beb5f41d7a197ccf9539d33",
+    "package_inspector_cs_sha256": "7d15a78a18b3327e4ae28daec8efd87616791fd30218f9577b909d5365019111",
+    "hosted_compute_profile": true,
+    "hosted_inference_profile": true,
+    "hosted_workspace_profile": true,
+    "structure_valid": true,
+    "content_valid": true,
+    "package_authenticated": false,
+    "signer_verified": false,
+    "runtime_qualified": false,
+    "product_installation_admitted": false,
+    "distribution_imported": false,
+    "host_settings_changed": false,
+    "production_qualified": false,
+    "gate_closing": false,
+    "inspection_powershell": "PowerShell 7.6.9 (Core)",
+    "windows_powershell_51_crosscheck": {
+      "record": "D:/LumaOS-builds/gwin-integrated-package-20261103-ce84c8c-J2BhtOSg-public/windows-inspection-ps51-crosscheck.json",
+      "record_sha256": "94e87b1dc7ec028cba2226a112ab7aaafc83bed4dd371cccd1692544068bc0bc",
+      "runner_sha256": "a3be994b1c4c1edca7d709ca9211ef7606c7a585e25d0a1c582720f708832ad8",
+      "powershell_version": "5.1.26100.9444",
+      "compared_inspection_fields": 25,
+      "inspection_fields_equal": true
+    }
+  },
+  "current_wsl_observation": {
+    "record": "D:/LumaOS-builds/gwin-integrated-package-20261103-ce84c8c-J2BhtOSg-public/wsl-kernel-observation.json",
+    "record_sha256": "8c9757e61905bf6707653a9cb8354f2a0d02eb8fda0601dbab5e65a8088c6382",
+    "kernel": "6.18.33.2-microsoft-standard-WSL2",
+    "apparmor_parameter": "N",
+    "apparmor_enabled": false,
+    "lsm_interface_status": "interface-absent",
+    "installed_confinement_qualified": false,
+    "kernel_or_policy_changed": false,
+    "qualification_limit": "The current WSL environment cannot confirm the required enforcing AppArmor worker context. Source compilation, offline policy parsing, package content inspection and a read-only disabled-kernel observation are not enforcement qualification"
+  },
+  "remaining_qualification": [
+    "Independently authenticated installation/release artifacts and real original-Admin TPM/CNG/NV custody on a qualified Windows host; content validation is not signing or commissioning",
+    "Actual host encryption and managed-policy admission, enforcing WSL AppArmor/cgroups, original-user account/PAM/health/manual/inference journeys, interrupted recovery, two-user isolation and existing-distribution coexistence",
+    "Native Ubuntu G3 final-image build and native boot/security/recovery/hardware acceptance are separate deliverables and are not established by this Windows rootfs package"
+  ],
+  "service_installed": false,
+  "provider_changed": false,
+  "host_accounts_changed": false,
+  "physical_tpm_mutated": false,
+  "encryption_changed": false,
+  "distribution_imported": false,
+  "native_gui_launched": false,
+  "native_product_grant_bridge_available": false,
+  "new_firmware_bootable_image_produced_by_this_record": false,
+  "g3_complete": false,
+  "gwin0_complete": false,
+  "production_qualified": false,
+  "gate_closing": false,
+  "supersedes_for_current_source": {
+    "record": "docs/gates/gwin0/combined_workspace_inference_2026-10-31.json",
+    "retained_unchanged": true,
+    "earlier_package_deleted": false,
+    "reason": "Refresh of the same profile-W composition from the ce84c8c cut. The platform worker source changed after 6528ea1 (18 Rust records added and 37 changed, chiefly content_custody direct index publication); the captured Windows sources add the read-only coexistence planner and Hyper-V download tooling (5 packaging/windows records added and 4 changed); the 2026-10-31 package remains retained evidence for 6528ea1"
+  },
+  "built_from_branch_commit": "ce84c8c3d014e80864ca2538df333092079bbd96",
+  "comparison_with_previous_package": {
+    "record": "D:/LumaOS-builds/gwin-integrated-package-20261103-ce84c8c-J2BhtOSg-public/package-comparison-20261031.json",
+    "record_sha256": "53c77d3e57891cca0844fa0afb75e3b49e8d1e80b8700099268309bc9bb66a5d",
+    "runner_sha256": "38f2a2989092f99534924eba83f2779cc81315b3090d02a3fbdbf344581657e1",
+    "previous_record": "docs/gates/gwin0/combined_workspace_inference_2026-10-31.json",
+    "previous_package_directory": "D:/LumaOS-builds/gwin-integrated-package-20261031-cAX3a2u0-public/package",
+    "previous_archive_members": 225,
+    "archive_members": 225,
+    "archive_members_added": [],
+    "archive_members_removed": [],
+    "archive_members_changed": {
+      "usr/bin/luma-platform": [
+        "sha256",
+        "size"
+      ],
+      "usr/lib/luma/platform.json": [
+        "sha256"
+      ],
+      "usr/libexec/luma-os/luma-platform": [
+        "sha256",
+        "size"
+      ],
+      "usr/share/luma-os/hosted-inference-runtime.json": [
+        "sha256"
+      ],
+      "usr/share/luma-os/hosted-inference.json": [
+        "sha256"
+      ],
+      "usr/share/luma-os/hosted-workspace-runtime.json": [
+        "sha256"
+      ],
+      "usr/share/luma-os/hosted-workspace.json": [
+        "sha256"
+      ]
+    },
+    "previous_publisher_required_files": 91,
+    "publisher_required_files": 91,
+    "publisher_required_files_added": [],
+    "publisher_required_files_removed": [],
+    "publisher_required_files_changed": {
+      "usr/bin/luma-platform": [
+        "bytes",
+        "sha256"
+      ],
+      "usr/lib/luma/platform.json": [
+        "sha256"
+      ],
+      "usr/libexec/luma-os/luma-platform": [
+        "bytes",
+        "sha256"
+      ],
+      "usr/share/luma-os/hosted-inference-runtime.json": [
+        "sha256"
+      ],
+      "usr/share/luma-os/hosted-inference.json": [
+        "sha256"
+      ],
+      "usr/share/luma-os/hosted-workspace-runtime.json": [
+        "sha256"
+      ],
+      "usr/share/luma-os/hosted-workspace.json": [
+        "sha256"
+      ]
+    },
+    "manifest_top_level_fields_changed": [
+      "release_id"
+    ],
+    "rootfs_bytes_delta": -16384,
+    "content_bytes_delta": -16384,
+    "previous_source_files": 957,
+    "source_files": 980,
+    "source_files_added": 23,
+    "source_files_removed": 0,
+    "source_files_changed": 95,
+    "every_archive_member_read_and_hashed_in_both_packages": true,
+    "production_qualified": false,
+    "gate_closing": false
+  }
+}

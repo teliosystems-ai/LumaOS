@@ -56,6 +56,43 @@ pub(super) fn verify_index_job_selection(
     worker::verify_cold_index_selection(pages, current, location, check)
 }
 
+/// The one independent lineage verifier for a selected direct descriptor
+/// above sequence one, chosen by its event class. The cold reader and fresh
+/// recovery of an already-new dispatch both use it, so recovery never
+/// completes a cut the cold reader would not select.
+pub(in crate::content_checkpoint::custody) fn verify_selected_class(
+    files: &Files,
+    pages: &PageStore,
+    current: &Descriptor,
+    location: &slots::SealedReference,
+    check: &mut impl FnMut() -> Result<()>,
+) -> Result<()> {
+    match &current.operation {
+        OperationData::V1Publication { .. } => {
+            worker::verify_cold_v1(files, pages, current, location, check)
+        }
+        OperationData::OwnerMigration { .. } => {
+            worker::verify_cold_migration(files, pages, current, location, check)
+        }
+        OperationData::IndexJobReservation { .. }
+        | OperationData::IndexAdvanceReservation { .. } => {
+            worker::verify_cold_index_start(pages, current, location, check)
+        }
+        OperationData::IndexJobSelection { .. } | OperationData::IndexAdvanceSelection { .. } => {
+            worker::verify_cold_index_selection(pages, current, location, check)
+        }
+        OperationData::IndexPhaseSelection { .. } => {
+            worker::verify_cold_index_phase(pages, current, location, check)
+        }
+        OperationData::IndexPreparation { .. } => {
+            worker::verify_cold_index_preparation(pages, current, location, check)
+        }
+        OperationData::BootstrapProgress { .. } => {
+            bootstrap::direct_progress::verify_selected(files, pages, current, location, check)
+        }
+    }
+}
+
 pub(in crate::content_checkpoint::custody) struct Backend<A: Checkpoint> {
     anchor: A,
     files: Files,
@@ -156,79 +193,7 @@ impl<A: Checkpoint> Backend<A> {
                 }
                 check()
             };
-            if matches!(
-                candidate.descriptor().operation,
-                OperationData::V1Publication { .. }
-            ) {
-                worker::verify_cold_v1(
-                    &files,
-                    &pages,
-                    candidate.descriptor(),
-                    location,
-                    &mut live,
-                )?;
-            } else if matches!(
-                candidate.descriptor().operation,
-                OperationData::OwnerMigration { .. }
-            ) {
-                worker::verify_cold_migration(
-                    &files,
-                    &pages,
-                    candidate.descriptor(),
-                    location,
-                    &mut live,
-                )?;
-            } else if matches!(
-                candidate.descriptor().operation,
-                OperationData::IndexJobReservation { .. }
-                    | OperationData::IndexAdvanceReservation { .. }
-            ) {
-                worker::verify_cold_index_start(
-                    &pages,
-                    candidate.descriptor(),
-                    location,
-                    &mut live,
-                )?;
-            } else if matches!(
-                candidate.descriptor().operation,
-                OperationData::IndexJobSelection { .. }
-                    | OperationData::IndexAdvanceSelection { .. }
-            ) {
-                worker::verify_cold_index_selection(
-                    &pages,
-                    candidate.descriptor(),
-                    location,
-                    &mut live,
-                )?;
-            } else if matches!(
-                candidate.descriptor().operation,
-                OperationData::IndexPhaseSelection { .. }
-            ) {
-                worker::verify_cold_index_phase(
-                    &pages,
-                    candidate.descriptor(),
-                    location,
-                    &mut live,
-                )?;
-            } else if matches!(
-                candidate.descriptor().operation,
-                OperationData::IndexPreparation { .. }
-            ) {
-                worker::verify_cold_index_preparation(
-                    &pages,
-                    candidate.descriptor(),
-                    location,
-                    &mut live,
-                )?;
-            } else {
-                bootstrap::direct_progress::verify_selected(
-                    &files,
-                    &pages,
-                    candidate.descriptor(),
-                    location,
-                    &mut live,
-                )?;
-            }
+            verify_selected_class(&files, &pages, candidate.descriptor(), location, &mut live)?;
             candidate
         } else {
             match &candidate.descriptor().operation {

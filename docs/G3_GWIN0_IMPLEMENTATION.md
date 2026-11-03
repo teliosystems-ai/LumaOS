@@ -2664,8 +2664,43 @@ filtered out, in 129.49 and 348.13 seconds. Before the split the whole suite too
 local figures, against 1.0 to 1.26 in the two earlier runs, so the CI ratio varies
 more between runs than those two showed, and the job limits keep their margin.
 
-Recovering a stopped attempt or a partial or foreign member, a C namespace
-reservation and the items above remain open. G3 and GWIN0 are not complete.
+A lost reply of a direct index event can now be recovered, recorded in the
+[recovery checkpoint](gates/g3/nf08_direct_index_recovery_2026-11-03.json). Each
+index event class writes all of its store and C allocations before its one C
+advance, and nothing follows the advance but the rewrite of its pending frame to
+Completed. When NV selected the event but its reply was lost, completing that
+frame therefore selects exactly what the cold reader verifies. The fresh dispatch
+recovery that covered only bootstrap progress now also takes the six index
+classes, under its unchanged rules: one exact Prepared frame, the actual NV head
+equal to the selected head throughout, a separate fresh original Admin whose
+operation id and request digest differ from the event's, and matching review,
+attempt and expected-descriptor digests. It verifies the cut with the class
+verifier that `Backend::open` now calls in place of its own chain, so recovery
+cannot complete a cut the cold reader would not select. Direct V1 and owner
+migration stay fenced, refused as soon as the cut is observed, because each is
+acknowledged in a later step that this recovery does not take. Old-NV and
+third-NV replies of every class stay fenced, with all allocations retained and
+no retry, guessed adoption or second C advance.
+
+The Start test that showed a lost reply fenced now goes on to recover it. Six
+inexact or revoked recoveries are refused, each with nothing changed. The exact
+one completes the frame with no further NV dispatch and an unchanged store
+inventory, a cold reopen selects it, and a second recovery is refused. The V1 and
+migration fault tests now also require recovery to refuse. Only the Start
+reservation's lost reply is tested, and the other five index classes reach the
+same code. The review gains an `operation_class` field and recovery one refusal
+text. No production code changed. On snapshot `5f067f5`, format was clean, the
+warning-denied test check and the plain check passed, and the three changed tests
+and two progress recovery tests passed when filtered. The Start test took 97
+seconds, about 15 more than before, in the `index-boundaries` job. Neither the
+full suite nor CI has run this change.
+
+Recovering a stopped attempt, whose C advance did not happen or was not seen,
+needs a retired-restart record, and a C namespace reservation needs its own
+event; each is a new `OperationData` shape compiled into production builds.
+Repairing a partial member needs a new content-store API, and a foreign member
+cannot be attributed to an attempt. These and the items above remain open. G3
+and GWIN0 are not complete.
 
 ### Read-only WSL resource coexistence planner, 3 November 2026
 

@@ -16,6 +16,8 @@
 //! partial member, a foreign object or any other difference is refused before
 //! any store write or NV dispatch. Recovering a partial member is later work;
 //! until a selection is published the reservation's liability stays charged.
+//! A selection whose C event NV selected but whose reply was lost is completed
+//! only by a separate fresh exact original Admin recovery of its pending frame.
 //!
 //! A reserved next job follows the same write path. Its bytes come from the
 //! caller's base job, which C compares with the selected reference by digest

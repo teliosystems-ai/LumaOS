@@ -12,7 +12,10 @@ observations (five gated) run against one of three read-only media:
   xHCI controller (a written USB stick).
 
 Only the three medium checks differ: the kernel command line, the block-device
-inventory and the media mount. Secure Boot stays on. The firmware variables are
+inventory and the media mount. q35 adds an empty AHCI DVD drive unless the
+command names an IDE or SCSI device, so the disk media run without QEMU's
+defaults and name its standard VGA: the guest then sees no optical device at
+all. Secure Boot stays on. The firmware variables are
 fresh and enroll only the public certificate exported beside the medium as
 PK, KEK and db; nothing falls back to a reduced-security boot. TCG only: no
 KVM, network, physical device or host TPM. The guest has 8 GiB of RAM because
@@ -51,6 +54,8 @@ ATTACHED = {
 }
 FIRMWARE = '/usr/share/OVMF/OVMF_CODE_4M.secboot.fd'
 VARIABLES = '/usr/share/OVMF/OVMF_VARS_4M.fd'
+# Disk media only: drops q35's default empty DVD drive (sr0) and legacy parallel port; keeps its VGA.
+NO_DEFAULT_OPTICAL = ['-nodefaults', '-vga', 'std']
 
 
 def file_sha256(path):
@@ -75,7 +80,7 @@ def media_arguments(medium, media):
 
 def qemu_command(medium, media, variables, socket_dir):
     return ['qemu-system-x86_64', '-machine', 'q35,accel=tcg', '-m', str(MEMORY_MIB), '-smp', '2',
-            '-cpu', 'max',
+            '-cpu', 'max', *([] if medium == 'optical' else NO_DEFAULT_OPTICAL),
             '-drive', f'if=pflash,format=raw,readonly=on,file={FIRMWARE}',
             '-drive', f'if=pflash,format=raw,file={variables}',
             *media_arguments(medium, media),

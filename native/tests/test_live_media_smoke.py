@@ -50,6 +50,27 @@ class CommandTests(unittest.TestCase):
                 self.assertNotIn('kvm', joined)
                 self.assertIn('-nic none', joined)
 
+    def test_disk_media_run_without_the_default_optical_drive(self):
+        # Without -nodefaults, q35 attached an empty DVD drive that the usb-disk
+        # block-device check of sequence-20 attempt a found as sr0.
+        self.assertNotIn('-nodefaults', smoke.qemu_command('optical', '/work/artifacts/m', '/work/vm-a/f', '/tmp/s'))
+        for medium in ('virtio-disk', 'usb-disk'):
+            with self.subTest(medium=medium):
+                command = smoke.qemu_command(medium, '/work/artifacts/m', '/work/vm-a/firmware.fd', '/tmp/s')
+                self.assertEqual(command.count('-nodefaults'), 1)
+                self.assertEqual(command[command.index('-vga') + 1], 'std')
+                for optical in ('cdrom', 'ide-cd', 'scsi-cd', '-cdrom'):
+                    self.assertNotIn(optical, ' '.join(command))
+                without = [value for value in command if value not in smoke.NO_DEFAULT_OPTICAL]
+                self.assertEqual(without, ['qemu-system-x86_64', '-machine', 'q35,accel=tcg', '-m', '8192', '-smp', '2',
+                                           '-cpu', 'max',
+                                           '-drive', f'if=pflash,format=raw,readonly=on,file={smoke.FIRMWARE}',
+                                           '-drive', 'if=pflash,format=raw,file=/work/vm-a/firmware.fd',
+                                           *smoke.media_arguments(medium, '/work/artifacts/m'),
+                                           '-nic', 'none', '-display', 'none', '-monitor', 'none',
+                                           '-serial', 'unix:/tmp/s/console.sock,server=on,wait=off',
+                                           '-qmp', 'unix:/tmp/s/qmp.sock,server=on,wait=off', '-no-reboot'])
+
     def test_disk_media_attach_as_a_virtio_disk_or_a_removable_usb_stick(self):
         self.assertEqual(smoke.media_arguments('virtio-disk', '/work/artifacts/a.img'),
                          ['-drive', 'if=none,id=media,format=raw,readonly=on,file=/work/artifacts/a.img',

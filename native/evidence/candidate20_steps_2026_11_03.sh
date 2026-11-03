@@ -14,7 +14,8 @@
 #   assemble     LETTER FROZEN                 heavy, about 70 minutes
 #   verify       LETTER FROZEN BUILD_ID        heavy, about 20 minutes
 #   update-compat LETTER BUILD_ID              light, read-only: 19 -> 20 update geometry
-#   smoke       LETTER FROZEN BUILD_ID MEDIUM heavy; MEDIUM is usb-disk, virtio-disk or optical
+#   smoke-harness LETTER COMMIT                light: the fixed smoke harness at COMMIT, SHA-256 pinned
+#   smoke       LETTER FROZEN BUILD_ID MEDIUM [ATTEMPT]  heavy; MEDIUM is usb-disk, virtio-disk or optical
 #   download     LETTER FROZEN BUILD_ID [copy] heavy; never signs, uploads or publishes
 #   download19   LETTER FROZEN [copy]          the same layout for the sequence-19 export
 #
@@ -37,6 +38,11 @@ RELEASE_PUBLIC_SHA256=62588a16a8901fbdf20cdfee1c1df5c243e85022693f6edb275a51366d
 PCR_PUBLIC_SHA256=b55221f37d366b64367db37394852d7af70b328a9c8173f5aa2e499762bfad26
 VERIFIER=native/evidence/candidate20_image_verify_2026_11_03.py
 VERIFIER_SHA256=0bf5e76526ee06d12d73eb158ca2e5e9c41fa2e18b76bcd7fc50362488dfddfa
+# The cut's smoke harness leaves q35's default empty DVD drive on a disk boot:
+# usb-disk smoke attempt a failed its block-device check on sr0. Attempts b-z
+# mount this pinned fixed harness over the frozen one; nothing else changes.
+SMOKE_HARNESS=native/image/live_media_smoke.py
+SMOKE_HARNESS_SHA256=576bdc8c223d090af558b36b48cab636d9fdb2d6a9ecf02e518084a62ce5263d
 PRIOR=$WORK/candidate19-source-20261028-a
 PRIOR_SHA256=7d05afd79e9e26ed689c3d5c4ed6764da037f6aa21bab1a94546ca8087252be8
 INPUTS=$D/native-inputs/20261019T135331Z-desktop
@@ -188,6 +194,9 @@ assembly log prints its source snapshot (the first minutes of assemble).
      $self smoke $letter FROZEN BUILD_ID optical      (continuity only)
        each 7-15 min (sequence 19: disk 7, optical 13), 10 GiB container;
        software TCG with emulated Secure Boot
+ 5b. $self smoke-harness $letter COMMIT; then smoke as above with ATTEMPT b-z
+       the cut's harness leaves q35's empty DVD drive on a disk boot; a later
+       attempt runs the pinned fixed harness and keeps every earlier attempt
   6. $self download $letter FROZEN BUILD_ID copy
      $self download19 $letter FROZEN copy
        not yet measured, estimated 15-30 min each at 2 GiB (hash, decompress 16 GB,
@@ -201,6 +210,7 @@ Outputs created (each step refuses one that exists):
   docker volume luma-native-build-BUILD_ID
   $WORK/candidate20-image-verification-$DAY-$letter, $D/candidate20-image-verification-BUILD_ID-$letter.log
   /work/vm-candidate20-$DAY-MEDIUM-secureboot-tcg in that volume, $D/candidate20-MEDIUM-smoke-BUILD_ID.log
+  (attempt b-z: the same names ending -ATTEMPT), $aids/live_media_smoke.py
   $D/downloads/candidate20-BUILD_ID-$letter, $D/downloads/candidate19-$SEQ19_BUILD-$letter
 Never overwritten: every earlier native, native-inputs and native-sources folder, the
 candidate15-19 logs and records, $PRIOR and its records, $SPEECH, $INPUTS, the
@@ -469,28 +479,55 @@ print('UPDATE-COMPATIBLE: platform.rs update() geometry and sequence checks woul
 PY
 }
 
+smoke_harness() {  # LETTER COMMIT: takes the fixed harness into the attempt's aids
+    local letter=$1 commit=$2 part
+    paths "$letter"
+    test -d "$aids" || die "the attempt aids are missing: $aids"
+    test ! -e "$aids/live_media_smoke.py" || die 'the fixed smoke harness was already taken'
+    part=$aids/live_media_smoke.py.part
+    git -c safe.directory="$REPO" -C "$REPO" show "$commit:$SMOKE_HARNESS" > "$part"
+    if [ "$(sha256sum "$part" | cut -d' ' -f1)" != "$SMOKE_HARNESS_SHA256" ]; then
+        rm -f "$part"; die "the harness at $commit differs from its pin"
+    fi
+    chmod 444 "$part"
+    mv "$part" "$aids/live_media_smoke.py"
+    sha256sum "$aids/live_media_smoke.py"
+}
+
 smoke() {
-    local letter=$1 pin=$2 build_id=$3 medium=$4 suffix
+    local letter=$1 pin=$2 build_id=$3 medium=$4 attempt=${5:-a} suffix
     paths "$letter"
     case $medium in optical) suffix=iso;; usb-disk|virtio-disk) suffix=img;; *) die 'medium is usb-disk, virtio-disk or optical';; esac
+    [[ "$attempt" =~ ^[a-z]$ ]] || die 'smoke attempt must be one lowercase letter'
     host_check smoke
     load_frozen "$pin"
     verified "$letter" "$build_id"
     store_check "luma-native-build-$build_id" 2
     local media_sha256
     media_sha256=$(sums_row "$D/native/$build_id" "$RELEASE.$suffix") || die "the export SHA256SUMS has no single $RELEASE.$suffix row"
-    local log=$D/candidate20-$medium-smoke-$build_id.log
+    # Attempt a ran the cut's harness under the original names; a later attempt
+    # runs the pinned fixed harness and carries its letter.
+    local log=$D/candidate20-$medium-smoke-$build_id.log work=/work/vm-candidate20-$DAY-$medium-secureboot-tcg
+    local harness=()
+    if [ "$attempt" != a ]; then
+        log=$D/candidate20-$medium-smoke-$build_id-$attempt.log
+        work=$work-$attempt
+        [ "$(sha256sum "$aids/live_media_smoke.py" | cut -d' ' -f1)" = "$SMOKE_HARNESS_SHA256" ] \
+            || die 'the fixed smoke harness is missing or differs from its pin; run smoke-harness first'
+        harness=(--mount "type=bind,src=$aids/live_media_smoke.py,dst=/repo/$SMOKE_HARNESS,readonly")
+    fi
     test ! -e "$log" || die "this smoke was already run: $log"
     docker run --rm --network none --memory 10g --memory-swap 10g --cpus 2 --pids-limit 128 \
         --mount "type=volume,src=luma-native-build-$build_id,dst=/work" \
         --mount "type=bind,src=$frozen,dst=/repo,readonly" \
+        "${harness[@]}" \
         --env PYTHONDONTWRITEBYTECODE=1 \
         "$TOOLS" python3 -B /repo/native/image/live_media_smoke.py \
         --medium "$medium" \
         --media "/work/artifacts/$RELEASE.$suffix" \
         --media-sha256 "$media_sha256" \
         --certificate-sha256 "$CERT_SHA256" \
-        --work "/work/vm-candidate20-$DAY-$medium-secureboot-tcg" 2>&1 | tee "$log"
+        --work "$work" 2>&1 | tee "$log"
 }
 
 download() {  # EXPORT SEQUENCE COMMIT CUT OUTPUT COPY LOG...
@@ -541,10 +578,14 @@ case $step in
         [ "$#" = 2 ] || die 'usage: update-compat LETTER BUILD_ID'
         letter_ok "$1"; build_ok "$2"
         update_compat "$1" "$2";;
+    smoke-harness)
+        [ "$#" = 2 ] || die 'usage: smoke-harness LETTER COMMIT'
+        letter_ok "$1"; [[ "$2" =~ ^[0-9a-f]{40}$ ]] || die 'COMMIT must be a 40-hex commit'
+        smoke_harness "$1" "$2";;
     smoke)
-        [ "$#" = 4 ] || die 'usage: smoke LETTER FROZEN BUILD_ID MEDIUM'
+        [ "$#" -ge 4 ] && [ "$#" -le 5 ] || die 'usage: smoke LETTER FROZEN BUILD_ID MEDIUM [ATTEMPT]'
         letter_ok "$1"; sha_ok "$2"; build_ok "$3"
-        smoke "$1" "$2" "$3" "$4";;
+        smoke "$@";;
     download)
         [ "$#" -ge 3 ] && [ "$#" -le 4 ] || die 'usage: download LETTER FROZEN BUILD_ID [copy]'
         letter_ok "$1"; sha_ok "$2"; build_ok "$3"; paths "$1"
@@ -552,9 +593,10 @@ case $step in
         load_frozen "$2"
         verified "$1" "$3"
         # Build log references: the assembly log naming this build, its
-        # verification log and every smoke log of this build.
+        # verification log and every smoke log of this build, failed attempts included.
         mapfile -t logs < <({ grep -l -F -- "$3" "$D"/candidate20-assembly-*.log
-                              ls "$D/candidate20-image-verification-$3-$1.log" "$D"/candidate20-*-smoke-"$3".log
+                              ls "$D/candidate20-image-verification-$3-$1.log" "$D"/candidate20-*-smoke-"$3".log \
+                                 "$D"/candidate20-*-smoke-"$3"-[a-z].log
                             } 2>/dev/null | sort -u)
         download "$D/native/$3" 20 "$HEAD" "candidate20-source-$DAY-$1" "$D/downloads/candidate20-$3-$1" \
             "${4:-}" "${logs[@]}";;
@@ -572,5 +614,5 @@ case $step in
             "$D/candidate19-vm-smoke-$SEQ19_BUILD.log" \
             "$D/candidate19-optical-smoke-$SEQ19_BUILD.log";;
     *)
-        sed -n '2,25p' "${BASH_SOURCE[0]}"; exit 2;;
+        sed -n '2,26p' "${BASH_SOURCE[0]}"; exit 2;;
 esac

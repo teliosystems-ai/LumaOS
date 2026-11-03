@@ -244,6 +244,26 @@ PowerShell 7 ran no assertion and is retained. The package is under
 The 2026-10-20 and 2026-10-27 packages remain retained. This refresh is
 unsigned, uninstalled and unqualified, and WSL AppArmor is still `N`.
 
+The [2026-11-03 refresh record](gates/gwin0/combined_workspace_inference_2026-11-03.json)
+recomposes the same profile-W package from the `ce84c8c` cut (the
+`feature/g3-functional-beta` head, which adds the read-only coexistence planner
+and Hyper-V download tooling). The cut was captured from a clean detached
+worktree; all 980 captured records equal their `ce84c8c` blobs (25 `*.ps1` as
+CRLF checkouts), and all 414 Rust files are identical to the compiled cut. The
+release platform worker, built under the same 8 GiB / 2 CPU bound, is
+22,120,944 stripped bytes; no debug-profile worker was rebuilt. The
+2,636,566,528-byte rootfs passed full public read-back, 21 Python tests, 170
+Windows package assertions under Windows PowerShell 5.1 and production
+inspection of 225 members and 91 publisher pins, repeated under Windows
+PowerShell 5.1 with all 25 fields equal. Against the 2026-10-31 package only
+the two worker copies, `platform.json` and the four runtime descriptors and
+manifests differ. The package is under
+`D:/LumaOS-builds/gwin-integrated-package-20261103-ce84c8c-J2BhtOSg-public/package`,
+and the [owner test note](gates/gwin0/OWNER_TEST_NOTE_2026-11-03.md) gives its
+checksums and download installation steps. The 2026-10-20, 2026-10-27 and
+2026-10-31 packages remain retained. This refresh is unsigned, uninstalled and
+unqualified, and WSL AppArmor is still `N`.
+
 The native workspace has explicit per-turn review and a fresh finite Infer
 grant. Native admission checks the reviewed worker/model/input commitment.
 Capture remains local data: separately admitted ASR may transcribe a selected

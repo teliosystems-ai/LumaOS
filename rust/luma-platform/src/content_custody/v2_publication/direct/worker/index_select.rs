@@ -16,12 +16,17 @@
 //! partial member, a foreign object or any other difference is refused before
 //! any store write or NV dispatch. Recovering a partial member is later work;
 //! until a selection is published the reservation's liability stays charged.
+//!
+//! A reserved next job follows the same write path. Its bytes come from the
+//! caller's base job, which C compares with the selected reference by digest
+//! and the worker re-reads from the store before writing.
 use super::index_preparation::View;
 use super::*;
 use crate::content_checkpoint::custody::v2_publication::index::effects;
+use crate::content_index::state::Job;
 use crate::content_index::{policy, request};
 use luma_content_store::v2::{
-    Allocation, AppendCommitment, AppendWriterBoundary, HeldNamespaceObservation,
+    Allocation, AppendCommitment, AppendWriterBoundary, BlobReference, HeldNamespaceObservation,
     HeldWriterObservation, IoBudget, Mutation, ObjectStore, ObjectWriteSpec, OwnerBoundary,
     PhysicalInventory,
 };
@@ -374,6 +379,44 @@ impl<A: Checkpoint> Backend<A> {
             ),
         }
     }
+    /// Writes the reserved next job blob and NV-selects it for the actual
+    /// original worker. The reservation is never trusted: C re-derives it from
+    /// the caller's job, which must be the C-selected and stored one.
+    pub(in crate::content_checkpoint::custody::v2_publication) fn select_index_advance_direct(
+        mut self,
+        store: &ObjectStore,
+        input: &request::Input,
+        job: &Job,
+        builder: &impl effects::CurrentBuilder,
+        original: &mut OriginalCOperation<'_>,
+    ) -> Result<RecordRef> {
+        let token = select_advance(&mut self, store, input, job, builder, original)?;
+        let expected = match &token.outcome {
+            Completed::IndexAdvanceSelection(reference) => reference.clone(),
+            _ => return Err("index Advance selection built a different completion class".into()),
+        };
+        match super::storage::publish(self, token, original)? {
+            Completed::IndexAdvanceSelection(reference) if reference == expected => Ok(reference),
+            _ => Err(
+                "closed index Advance-selection consumer received a different semantic completion"
+                    .into(),
+            ),
+        }
+    }
+}
+
+/// One C-verified job blob write. `base` names the job the write starts from;
+/// it is read back from the store, since C alone cannot re-derive a later job.
+struct JobWrite<'p> {
+    head: &'p OwnerHeadV2,
+    head_ref: &'p RecordRef,
+    physical: &'p PhysicalInventory,
+    job_bytes: &'p [u8],
+    next_job: &'p BlobReference,
+    objects: &'p [ObjectWriteSpec],
+    review_sha256: &'p str,
+    liability: &'p policy::Liability,
+    base: Option<(&'p BlobReference, &'p [u8])>,
 }
 
 fn select<A: Checkpoint>(
@@ -399,55 +442,23 @@ fn select<A: Checkpoint>(
         builder,
         original,
     )?;
-    let write = write_budget(plan.objects().len(), plan.liability())?;
-    let mutation = Mutation {
-        review_sha256: plan.review_sha256().to_owned(),
-        decision: DecisionKind::Published,
-        source_bytes: u64::try_from(plan.job_bytes().len())?,
-    };
-    // Every store bound below re-proves the same NV cut and live original.
-    let physical_after = {
-        let mut current = Current {
-            backend: &mut *backend,
-            original: &mut *original,
-            store,
-            binding: input.binding.clone(),
-            head: plan.head_ref().clone(),
-            physical: plan.physical().clone(),
-            observed: None,
-            review: mutation.review_sha256.clone(),
-            source_bytes: mutation.source_bytes,
-            write,
-            namespace: None,
-            held: None,
-        };
-        let mut walk = Walk::new(plan.objects());
-        let observed = store.inventory(read_budget(), &mut current, |allocation| {
-            walk.visit(allocation)
-        })?;
-        walk.attribute(&current.physical, &observed)?;
-        current.observed = Some(observed);
-        current.namespace = Some(store.observe_namespace(observation_budget(), &mut current)?);
-        let writer = store.prepare_index_observed(plan.head(), &mutation, write, &mut current)?;
-        let job = writer.prepare_blob(plan.job_bytes(), write, &mutation, &mut current, |b| {
-            b.live()?;
-            Ok(())
-        })?;
-        if job != *plan.next_job() {
-            return Err("actual job blob differs from the C-reserved job reference".into());
-        }
-        if store.read_blob(&job, read_budget(), &mut current)? != plan.job_bytes() {
-            return Err("actual job blob read-back differs from the C-derived job bytes".into());
-        }
-        // A reused member may never have been synchronized by the attempt that
-        // wrote it; every member is made durable before C can reference it.
-        store.synchronize_objects(plan.objects(), read_budget(), &mut current)?;
-        let after = store.inventory(read_budget(), &mut current, |_| Ok(()))?;
-        writer.check(&mut current)?;
-        drop(writer);
-        current.live()?;
-        after
-    };
+    let physical_after = write_job(
+        backend,
+        store,
+        input,
+        JobWrite {
+            head: plan.head(),
+            head_ref: plan.head_ref(),
+            physical: plan.physical(),
+            job_bytes: plan.job_bytes(),
+            next_job: plan.next_job(),
+            objects: plan.objects(),
+            review_sha256: plan.review_sha256(),
+            liability: plan.liability(),
+            base: None,
+        },
+        original,
+    )?;
     let parts = plan
         .finish(
             &mut View {
@@ -461,12 +472,134 @@ fn select<A: Checkpoint>(
     selected_transition(backend, parts, input, original, SelectedClass::Job)
 }
 
+fn select_advance<A: Checkpoint>(
+    backend: &mut Backend<A>,
+    store: &ObjectStore,
+    input: &request::Input,
+    job: &Job,
+    builder: &impl effects::CurrentBuilder,
+    original: &mut OriginalCOperation<'_>,
+) -> Result<VerifiedTransition> {
+    backend.descriptor.phase.require_ready()?;
+    original.check()?;
+    if original.source_binding().purpose != SourcePurpose::IndexPrepare
+        || original.source_binding().binding != input.binding
+    {
+        return Err("index Advance selection differs from the actual original index source".into());
+    }
+    let plan = effects::verify_index_advance_selection(
+        &mut View {
+            backend: &mut *backend,
+            remaining: READ_BUDGET,
+        },
+        input,
+        job,
+        builder,
+        original,
+    )?;
+    let base_bytes = job.canonical_bytes()?;
+    let physical_after = write_job(
+        backend,
+        store,
+        input,
+        JobWrite {
+            head: plan.head(),
+            head_ref: plan.head_ref(),
+            physical: plan.physical(),
+            job_bytes: plan.job_bytes(),
+            next_job: plan.next_job(),
+            objects: plan.objects(),
+            review_sha256: plan.review_sha256(),
+            liability: plan.liability(),
+            base: Some((plan.job()?, &base_bytes)),
+        },
+        original,
+    )?;
+    let parts = plan
+        .finish(
+            &mut View {
+                backend: &mut *backend,
+                remaining: READ_BUDGET,
+            },
+            &physical_after,
+            original,
+        )?
+        .into_parts();
+    selected_transition(backend, parts, input, original, SelectedClass::Advance)
+}
+
+/// Walks the actual store, writes one reserved job blob and measures the store
+/// after it. Every store bound below re-proves the same NV cut and live
+/// original.
+fn write_job<A: Checkpoint>(
+    backend: &mut Backend<A>,
+    store: &ObjectStore,
+    input: &request::Input,
+    plan: JobWrite<'_>,
+    original: &mut OriginalCOperation<'_>,
+) -> Result<PhysicalInventory> {
+    let write = write_budget(plan.objects.len(), plan.liability)?;
+    let mutation = Mutation {
+        review_sha256: plan.review_sha256.to_owned(),
+        decision: DecisionKind::Published,
+        source_bytes: u64::try_from(plan.job_bytes.len())?,
+    };
+    let mut current = Current {
+        backend,
+        original,
+        store,
+        binding: input.binding.clone(),
+        head: plan.head_ref.clone(),
+        physical: plan.physical.clone(),
+        observed: None,
+        review: mutation.review_sha256.clone(),
+        source_bytes: mutation.source_bytes,
+        write,
+        namespace: None,
+        held: None,
+    };
+    let mut walk = Walk::new(plan.objects);
+    let observed = store.inventory(read_budget(), &mut current, |allocation| {
+        walk.visit(allocation)
+    })?;
+    walk.attribute(&current.physical, &observed)?;
+    current.observed = Some(observed);
+    current.namespace = Some(store.observe_namespace(observation_budget(), &mut current)?);
+    // Later jobs are not re-derivable from C alone: the selected reference
+    // resolves the caller's base through the store before anything is written.
+    if let Some((reference, bytes)) = plan.base {
+        if store.read_blob(reference, read_budget(), &mut current)? != bytes {
+            return Err("actual stored base job differs from the caller's job".into());
+        }
+    }
+    let writer = store.prepare_index_observed(plan.head, &mutation, write, &mut current)?;
+    let job = writer.prepare_blob(plan.job_bytes, write, &mutation, &mut current, |b| {
+        b.live()?;
+        Ok(())
+    })?;
+    if job != *plan.next_job {
+        return Err("actual job blob differs from the C-reserved job reference".into());
+    }
+    if store.read_blob(&job, read_budget(), &mut current)? != plan.job_bytes {
+        return Err("actual job blob read-back differs from the C-derived job bytes".into());
+    }
+    // A reused member may never have been synchronized by the attempt that
+    // wrote it; every member is made durable before C can reference it.
+    store.synchronize_objects(plan.objects, read_budget(), &mut current)?;
+    let after = store.inventory(read_budget(), &mut current, |_| Ok(()))?;
+    writer.check(&mut current)?;
+    drop(writer);
+    current.live()?;
+    Ok(after)
+}
+
 /// The event a verified selection becomes. Everything else about the
-/// transition is the same for both.
+/// transition is the same for all.
 #[derive(Clone, Copy)]
 pub(super) enum SelectedClass {
     Job,
     Phase,
+    Advance,
 }
 
 /// Rebuilds one verified selection's owner and index edits over the actual
@@ -562,6 +695,14 @@ pub(super) fn selected_transition<A: Checkpoint>(
             selection: parts.selection.clone(),
             original_authority: parts.original_authority,
         },
+        SelectedClass::Advance => OperationData::IndexAdvanceSelection {
+            binding: parts.binding,
+            request_sha256: request_sha256.clone(),
+            input_sha256: parts.input_sha256.clone(),
+            source_sha256: parts.source_sha256.clone(),
+            selection: parts.selection.clone(),
+            original_authority: parts.original_authority,
+        },
     };
     operation.validate()?;
     let mut cache = Memory {
@@ -640,6 +781,7 @@ pub(super) fn selected_transition<A: Checkpoint>(
         outcome: match class {
             SelectedClass::Job => Completed::IndexJobSelection(parts.selection),
             SelectedClass::Phase => Completed::IndexPhaseSelection(parts.selection),
+            SelectedClass::Advance => Completed::IndexAdvanceSelection(parts.selection),
         },
     })
 }

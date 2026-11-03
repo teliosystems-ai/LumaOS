@@ -1,8 +1,9 @@
-//! Cold lineage verifier for one selected direct index Start reservation. It
-//! replays the reservation's retained DATA over the authenticated previous cut
-//! alone, rebuilds the exact index role edit and then the deterministic
-//! physical closure. The retained builder identity is historical DATA, never
-//! proof of the current image, and nothing here dispatches.
+//! Cold lineage verifier for one selected direct index Start or Advance
+//! reservation. It replays the reservation's retained DATA over the
+//! authenticated previous cut alone, rebuilds the exact index role edit and
+//! then the deterministic physical closure. The retained builder identity is
+//! historical DATA, never proof of the current image, and nothing here
+//! dispatches.
 use super::super::super::super::super::paged::FILE_BYTES;
 use super::super::super::super::bootstrap::direct_progress::{
     verify_closure, Closure, Data as Replay,
@@ -10,7 +11,8 @@ use super::super::super::super::bootstrap::direct_progress::{
 use super::super::super::jobs::Role;
 use super::*;
 use crate::content_checkpoint::custody::v2_publication::index::effects::{
-    replay_reserved_start_data, SelectedEventData, SelectedPreparationReader,
+    replay_reserved_advance_data, replay_reserved_start_data, SelectedEventData,
+    SelectedPreparationReader,
 };
 use std::cell::RefCell;
 
@@ -90,9 +92,9 @@ impl<F: FnMut() -> Result<()>> SelectedPreparationReader for Reader<'_, '_, '_, 
 }
 
 /// Verifies that the actual selected descriptor is the exact deterministic
-/// index Start reservation over its authenticated previous cut. Only that last
-/// transition is reconstructed; the previous cut is bound by its frame hash and
-/// NV head.
+/// index Start or Advance reservation over its authenticated previous cut. Only
+/// that last transition is reconstructed; the previous cut is bound by its
+/// frame hash and NV head.
 pub(in crate::content_checkpoint::custody::v2_publication) fn verify_selected(
     pages: &PageStore,
     current: &Descriptor,
@@ -115,19 +117,48 @@ pub(in crate::content_checkpoint::custody::v2_publication) fn verify_selected(
             "cold index Start reservation is not its exact selected descriptor location".into(),
         );
     }
-    let OperationData::IndexJobReservation {
-        binding,
-        request_sha256,
-        input_sha256,
-        source_sha256,
-        reservation,
-        original_authority,
-    } = &current.operation
-    else {
-        return Err("cold index Start verifier refuses a different semantic event class".into());
-    };
+    let (advance, binding, request_sha256, input_sha256, source_sha256, reservation, authority) =
+        match &current.operation {
+            OperationData::IndexJobReservation {
+                binding,
+                request_sha256,
+                input_sha256,
+                source_sha256,
+                reservation,
+                original_authority,
+            } => (
+                false,
+                binding,
+                request_sha256,
+                input_sha256,
+                source_sha256,
+                reservation,
+                original_authority,
+            ),
+            OperationData::IndexAdvanceReservation {
+                binding,
+                request_sha256,
+                input_sha256,
+                source_sha256,
+                reservation,
+                original_authority,
+            } => (
+                true,
+                binding,
+                request_sha256,
+                input_sha256,
+                source_sha256,
+                reservation,
+                original_authority,
+            ),
+            _ => {
+                return Err(
+                    "cold index Start verifier refuses a different semantic event class".into(),
+                )
+            }
+        };
     current.phase.require_ready()?;
-    original_authority.validate()?;
+    authority.validate()?;
     let current_context = map::Context {
         binding: current.binding.clone(),
         selected_descriptor_sha256: hash(&current.bytes()?),
@@ -167,6 +198,8 @@ pub(in crate::content_checkpoint::custody::v2_publication) fn verify_selected(
                 | OperationData::IndexJobReservation { .. }
                 | OperationData::IndexJobSelection { .. }
                 | OperationData::IndexPhaseSelection { .. }
+                | OperationData::IndexAdvanceReservation { .. }
+                | OperationData::IndexAdvanceSelection { .. }
                 | OperationData::IndexPreparation { .. }
         )
     {
@@ -207,21 +240,33 @@ pub(in crate::content_checkpoint::custody::v2_publication) fn verify_selected(
             current_context: &current_context,
         };
         let mut live = || locations::Io::check(&mut **cell.borrow_mut());
-        let replayed = replay_reserved_start_data(
-            &mut reader,
-            &previous,
-            current,
-            SelectedEventData {
-                binding,
-                request_sha256: request_sha256.as_str(),
-                input_sha256: input_sha256.as_str(),
-                source_sha256: source_sha256.as_str(),
-                preparation: reservation,
-                original_authority,
-            },
-            READ_BUDGET,
-            &mut live,
-        )?;
+        let event = SelectedEventData {
+            binding,
+            request_sha256: request_sha256.as_str(),
+            input_sha256: input_sha256.as_str(),
+            source_sha256: source_sha256.as_str(),
+            preparation: reservation,
+            original_authority: authority,
+        };
+        let replayed = if advance {
+            replay_reserved_advance_data(
+                &mut reader,
+                &previous,
+                current,
+                event,
+                READ_BUDGET,
+                &mut live,
+            )?
+        } else {
+            replay_reserved_start_data(
+                &mut reader,
+                &previous,
+                current,
+                event,
+                READ_BUDGET,
+                &mut live,
+            )?
+        };
         replayed
     };
     let context = map::Context {
@@ -293,7 +338,11 @@ pub(in crate::content_checkpoint::custody::v2_publication) fn verify_selected(
             literal: historical.owner_literal,
             value: historical.expected_owner_value,
         }],
-        outcome: Completed::IndexJobReservation(reservation.clone()),
+        outcome: if advance {
+            Completed::IndexAdvanceReservation(reservation.clone())
+        } else {
+            Completed::IndexJobReservation(reservation.clone())
+        },
     };
     let plan =
         super::storage::layout(&previous.binding, Some(previous_storage), &token, &mut data)?;

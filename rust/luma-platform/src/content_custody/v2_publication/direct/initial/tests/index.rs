@@ -1,15 +1,18 @@
 //! Actual first index job Start reservations, job selections, first phase
-//! preparations and prepared window runs of the closed direct worker over a
-//! real migrated V2 owner in a real bootstrapped C cut and its real v2 object
-//! store. The builder identity, original worker attribution, planning boundary,
-//! resources and NV are explicit software fixtures, not the installed image
-//! builder or installed qualification.
+//! preparations, prepared window runs and phase Advances of the closed direct
+//! worker over a real migrated V2 owner in a real bootstrapped C cut and its
+//! real v2 object store. The builder identity, original worker attribution,
+//! planning boundary, resources and NV are explicit software fixtures, not the
+//! installed image builder or installed qualification.
 use super::super::super::super::super::protocol::{
     software_worker_operation, OriginalCOperation, TypedOperationSource,
 };
-use super::super::super::backend::{verify_index_phase, verify_index_preparation, Backend};
+use super::super::super::backend::{
+    verify_index_job_selection, verify_index_phase, verify_index_preparation,
+    verify_index_reservation, Backend,
+};
 use super::super::super::reader::observe;
-use super::migration_cases::{migrated, Migrated, BODY};
+use super::migration_cases::{migrated, Authority, Migrated, BODY};
 use super::progress_cases::ContentGuard;
 use super::worker_cases::{attribution, cold, provenance, worker};
 use super::*;
@@ -17,8 +20,9 @@ use crate::content_checkpoint::custody::indexed::{
     selection_data_sha256, TransitionBase, TransitionReview,
 };
 use crate::content_checkpoint::custody::v2_publication::index::effects::CurrentBuilder;
+use crate::content_checkpoint::custody::v2_publication::index::Leaf;
 use crate::content_index::scope::original_usage;
-use crate::content_index::state::Job;
+use crate::content_index::state::{Job, Stage};
 use crate::content_index::{phase, request};
 use luma_content::{EditOrigin, Format};
 use luma_content_store::corpus_index::job::accounted::{
@@ -1174,17 +1178,9 @@ fn refuses(
         .to_string();
     assert!(refusal.contains(reason), "{refusal}");
 }
-/// One candidate at one location, refused by the cold phase-selection verifier.
-fn refuses_run(
-    fixture: &Fixture,
-    candidate: &Descriptor,
-    location: &slots::SealedReference,
-    reason: &str,
-) {
-    let refusal = verify_index_phase(&fixture.pages(), candidate, location, &mut || Ok(()))
-        .err()
-        .expect("the cold verifier refuses this candidate")
-        .to_string();
+/// One refused call, with its exact reason.
+fn refused_with<T>(result: Result<T>, reason: &str) {
+    let refusal = result.err().expect("this call is refused").to_string();
     assert!(refusal.contains(reason), "{refusal}");
 }
 /// One forged copy of a selected descriptor. Sealing recomputes its event
@@ -1343,62 +1339,69 @@ fn refuse_forged_preparations(
         candidate.storage.as_mut().unwrap().parent_allocation = None;
     });
 }
-/// The same closure over the selected event that resolves a preparation. The
-/// honest cut is the control. Its record names the store's next job and
-/// candidate; those are selected DATA, so no forgery of them can be replayed
-/// from C alone and none is listed here. Both after roles are read back against
-/// the canonical retained data first, so only a root with those exact values and
-/// a different tree reaches the whole-root comparison, and that takes selected
-/// pages no forged frame has.
-fn refuse_forged_runs(
+/// What one selected event class gives the forgery closure: its cold verifier,
+/// its retained body, the cut before it and the refusals that differ by class.
+struct Forgeries<'a> {
+    verify: fn(&Fixture, &Descriptor, &slots::SealedReference) -> Result<()>,
+    body: fn(&mut Descriptor) -> ([&mut String; 3], &mut RecordRef, &mut Audit),
+    prior: &'a Descriptor,
+    prior_location: &'a slots::SealedReference,
+    owners: &'a map::Root,
+    owners_reason: &'a str,
+    page_reason: &'a str,
+    index_reason: &'a str,
+    input_reason: &'a str,
+}
+/// The same closure over a selected event after the first preparation. The
+/// honest cut is the control. A phase run's record names the store's next job
+/// and candidate and an Advance names its reserved next job; those are selected
+/// DATA, so no forgery of them can be replayed from C alone and none is listed
+/// here. Both after roles are read back against the canonical retained data
+/// first, so only a root with those exact values and a different tree reaches
+/// the whole-root comparison, and that takes selected pages no forged frame has.
+fn refuse_forged_events(
     fixture: &Fixture,
     selected: &Descriptor,
     location: &slots::SealedReference,
-    prepared: &Descriptor,
-    prepared_location: &slots::SealedReference,
+    class: Forgeries<'_>,
 ) {
-    verify_index_phase(&fixture.pages(), selected, location, &mut || Ok(()))
-        .expect("the honest selected phase selection is the control");
+    (class.verify)(fixture, selected, location).expect("the honest selected event is the control");
     let exact = "is not its exact selected descriptor location";
     let lineage = "does not continue the exact authenticated old cut";
     let lost = "lost the exact selected previous descriptor address";
     let body = "substitutes exact checkpointed source/attribution/before tuple";
-    let role = "role CAS differs";
     let layout = "differs from its deterministic reviewed layout";
     let unsealed = "sealed tail data hash or exact EOF differs";
-    let prepared_storage = prepared.storage.as_ref().unwrap();
+    let prior_storage = class.prior.storage.as_ref().unwrap();
+    let refuse = |candidate: &Descriptor, location: &slots::SealedReference, reason: &str| {
+        refused_with((class.verify)(fixture, candidate, location), reason);
+    };
     let forge = |reason: &str, change: &dyn Fn(&mut Descriptor)| {
         let (candidate, location) = sealed(selected, location, change);
-        refuses_run(fixture, &candidate, &location, reason);
+        refuse(&candidate, &location, reason);
     };
     let mut absent = selected.clone();
     absent.storage = None;
-    refuses_run(
-        fixture,
-        &absent.seal().unwrap(),
-        location,
-        "has no selected storage",
-    );
+    refuse(&absent.seal().unwrap(), location, "has no selected storage");
     let mut short = location.clone();
     short.bytes -= 1;
-    refuses_run(fixture, selected, &short, exact);
+    refuse(selected, &short, exact);
     let mut substituted = location.clone();
     substituted.sha256 = "ab".repeat(32);
-    refuses_run(fixture, selected, &substituted, exact);
-    refuses_run(
-        fixture,
-        prepared,
-        prepared_location,
+    refuse(selected, &substituted, exact);
+    refuse(
+        class.prior,
+        class.prior_location,
         "refuses a different semantic event class",
     );
     forge(lost, &|candidate| {
         candidate.previous_descriptor_sha256 = Some("ab".repeat(32));
     });
     forge(lost, &|candidate| {
-        candidate.storage.as_mut().unwrap().locations = prepared_storage.locations.clone();
+        candidate.storage.as_mut().unwrap().locations = prior_storage.locations.clone();
     });
     forge(lineage, &|candidate| {
-        candidate.previous_descriptor_sha256 = prepared.previous_descriptor_sha256.clone();
+        candidate.previous_descriptor_sha256 = class.prior.previous_descriptor_sha256.clone();
     });
     forge(lineage, &|candidate| {
         candidate.sequence += 1;
@@ -1407,7 +1410,7 @@ fn refuse_forged_runs(
     forge(lineage, &|candidate| {
         candidate.previous_nv_head = "ab".repeat(32);
     });
-    forge("no selected semantic page address", &|candidate| {
+    forge(class.page_reason, &|candidate| {
         candidate.roots.owners.page.as_mut().unwrap().sha256 = "ab".repeat(32);
     });
     forge("unrelated C roots", &|candidate| {
@@ -1415,29 +1418,29 @@ fn refuse_forged_runs(
         signers.kind = map::Kind::Signers;
         candidate.roots.signers = signers;
     });
-    forge(role, &|candidate| {
-        candidate.roots.owners = prepared.roots.owners.clone();
+    forge(class.owners_reason, &|candidate| {
+        candidate.roots.owners = class.owners.clone();
     });
-    forge(role, &|candidate| {
-        candidate.roots.index_generations = prepared.roots.index_generations.clone();
-    });
-    forge(body, &|candidate| {
-        *ran(candidate).0[0] = "ab".repeat(32);
-    });
-    forge("retained owner/preparation/input", &|candidate| {
-        *ran(candidate).0[1] = "ab".repeat(32);
+    forge(class.index_reason, &|candidate| {
+        candidate.roots.index_generations = class.prior.roots.index_generations.clone();
     });
     forge(body, &|candidate| {
-        *ran(candidate).0[2] = "ab".repeat(32);
+        *(class.body)(candidate).0[0] = "ab".repeat(32);
+    });
+    forge(class.input_reason, &|candidate| {
+        *(class.body)(candidate).0[1] = "ab".repeat(32);
     });
     forge(body, &|candidate| {
-        ran(candidate).2.checkpoint_head = "ab".repeat(32);
+        *(class.body)(candidate).0[2] = "ab".repeat(32);
+    });
+    forge(body, &|candidate| {
+        (class.body)(candidate).2.checkpoint_head = "ab".repeat(32);
     });
     forge("no selected immutable record address", &|candidate| {
-        ran(candidate).1.sha256 = "ab".repeat(32);
+        (class.body)(candidate).1.sha256 = "ab".repeat(32);
     });
     forge("record complete bytes changed", &|candidate| {
-        ran(candidate).1.bytes -= 1;
+        (class.body)(candidate).1.bytes -= 1;
     });
     forge(layout, &|candidate| {
         let controls = &mut candidate.storage.as_mut().unwrap().controls;
@@ -1447,7 +1450,7 @@ fn refuse_forged_runs(
         candidate.storage.as_mut().unwrap().descriptor_slot.job = "ab".repeat(32);
     });
     forge("no selected allocation manifest", &|candidate| {
-        candidate.storage.as_mut().unwrap().jobs = prepared_storage.jobs.clone();
+        candidate.storage.as_mut().unwrap().jobs = prior_storage.jobs.clone();
     });
     forge(unsealed, &|candidate| {
         candidate.storage.as_mut().unwrap().post_allocation.files += 1;
@@ -2187,12 +2190,23 @@ fn actual_index_phase_run_refuses_substitutes_before_nv_then_one_dispatch_resolv
     );
     let location = selected_location(&fixture);
     let pages = fixture.pages().inventory(&mut || Ok(())).unwrap();
-    refuse_forged_runs(
+    refuse_forged_events(
         &fixture,
         &selected,
         &location,
-        &prepared,
-        &prepared_location,
+        Forgeries {
+            verify: |fixture, candidate, location| {
+                verify_index_phase(&fixture.pages(), candidate, location, &mut || Ok(()))
+            },
+            body: ran,
+            prior: &prepared,
+            prior_location: &prepared_location,
+            owners: &prepared.roots.owners,
+            owners_reason: "role CAS differs",
+            page_reason: "no selected semantic page address",
+            index_reason: "role CAS differs",
+            input_reason: "retained owner/preparation/input",
+        },
     );
     assert_eq!(fixture.memory.0.borrow().calls, calls + 1);
     assert_eq!(
@@ -2201,4 +2215,960 @@ fn actual_index_phase_run_refuses_substitutes_before_nv_then_one_dispatch_resolv
         "a refused forgery allocates nothing"
     );
     cold(&fixture).expect("the forged candidates leave the selected run");
+}
+
+const ADVANCE_GRANT: &str = "explicit-software-direct-index-advance";
+
+/// One Advance of the exact selected job.
+fn advance_request(binding: &OwnerBinding, job: &Job, id: &str) -> request::Input {
+    request::Input {
+        schema_version: 1,
+        login: "admin".into(),
+        binding: binding.clone(),
+        request_id: id.repeat(32),
+        operation: request::Operation::Advance {
+            job_id: "2".repeat(32),
+            expected_job_sha256: job.sha256().unwrap(),
+        },
+    }
+}
+/// The original worker effect for one Advance, computed independently of the
+/// module under test from the documented transition review recipe over the
+/// selected owner leaf with no preparation.
+fn advance_original(
+    input: &request::Input,
+    head: &OwnerHeadV2,
+    job: &Job,
+    leaf: &Leaf,
+    builder: &BuilderIdentity,
+    number: u64,
+) -> (Audit, TypedOperationSource) {
+    let selection = selection_data_sha256(head, Some(leaf)).unwrap();
+    let next = job.advance_data(input).unwrap();
+    let core = job.advance_review_data(input).unwrap();
+    let bytes = next.canonical_bytes().unwrap();
+    let planned = BlobObjectPlan::data(&input.binding, &bytes, || Ok(())).unwrap();
+    let objects = planned.write_set(|| Ok(())).unwrap();
+    let review = TransitionReview::data(
+        input,
+        TransitionBase {
+            owner: head,
+            job: Some(job),
+            selection_sha256: &selection,
+            builder,
+        },
+        core,
+        planned.reference().clone(),
+        objects,
+    )
+    .unwrap()
+    .review_sha256;
+    effect(
+        input,
+        &review,
+        ADVANCE_GRANT,
+        &format!("software index Advance rpc {number}"),
+        number,
+    )
+}
+/// The retained body of one selected Advance reservation.
+fn reserved_advance(descriptor: &mut Descriptor) -> ([&mut String; 3], &mut RecordRef, &mut Audit) {
+    match &mut descriptor.operation {
+        OperationData::IndexAdvanceReservation {
+            request_sha256,
+            input_sha256,
+            source_sha256,
+            reservation,
+            original_authority,
+            ..
+        } => (
+            [request_sha256, input_sha256, source_sha256],
+            reservation,
+            original_authority,
+        ),
+        _ => panic!("the forged candidate is not an Advance reservation"),
+    }
+}
+/// The retained body of one selected Advance selection.
+fn selected_advance(descriptor: &mut Descriptor) -> ([&mut String; 3], &mut RecordRef, &mut Audit) {
+    match &mut descriptor.operation {
+        OperationData::IndexAdvanceSelection {
+            request_sha256,
+            input_sha256,
+            source_sha256,
+            selection,
+            original_authority,
+            ..
+        } => (
+            [request_sha256, input_sha256, source_sha256],
+            selection,
+            original_authority,
+        ),
+        _ => panic!("the forged candidate is not an Advance selection"),
+    }
+}
+/// The same retained fields under the Start or Advance class of the same shape.
+fn reclassed(descriptor: &mut Descriptor) {
+    descriptor.operation = match descriptor.operation.clone() {
+        OperationData::IndexJobReservation {
+            binding,
+            request_sha256,
+            input_sha256,
+            source_sha256,
+            reservation,
+            original_authority,
+        } => OperationData::IndexAdvanceReservation {
+            binding,
+            request_sha256,
+            input_sha256,
+            source_sha256,
+            reservation,
+            original_authority,
+        },
+        OperationData::IndexAdvanceReservation {
+            binding,
+            request_sha256,
+            input_sha256,
+            source_sha256,
+            reservation,
+            original_authority,
+        } => OperationData::IndexJobReservation {
+            binding,
+            request_sha256,
+            input_sha256,
+            source_sha256,
+            reservation,
+            original_authority,
+        },
+        OperationData::IndexJobSelection {
+            binding,
+            request_sha256,
+            input_sha256,
+            source_sha256,
+            selection,
+            original_authority,
+        } => OperationData::IndexAdvanceSelection {
+            binding,
+            request_sha256,
+            input_sha256,
+            source_sha256,
+            selection,
+            original_authority,
+        },
+        OperationData::IndexAdvanceSelection {
+            binding,
+            request_sha256,
+            input_sha256,
+            source_sha256,
+            selection,
+            original_authority,
+        } => OperationData::IndexJobSelection {
+            binding,
+            request_sha256,
+            input_sha256,
+            source_sha256,
+            selection,
+            original_authority,
+        },
+        _ => panic!("the reclassed cut is not a Start or Advance event"),
+    };
+}
+/// One selected descriptor with its location.
+type Cut = (Descriptor, slots::SealedReference);
+fn cut(fixture: &Fixture) -> Cut {
+    (
+        cold(fixture).unwrap().descriptor().clone(),
+        selected_location(fixture),
+    )
+}
+/// One real owner whose first and only ingestion window ran, so its selected job
+/// is complete and an Advance is its next step, with the cuts on the way there.
+struct Ingested {
+    start: request::Input,
+    reserved: Cut,
+    selected: Cut,
+    prepared: Descriptor,
+    windowed: Cut,
+    job: Job,
+    step: request::Input,
+    advanced: Job,
+    next: luma_content_store::v2::BlobReference,
+}
+/// Also pins the Advance consumers over the phase preparation, the one cut of
+/// this path that holds one: neither takes it for an Advance reservation.
+fn ingested(
+    fixture: &Fixture,
+    binding: &OwnerBinding,
+    store: &ObjectStore,
+    authority: &mut Authority,
+    head: &OwnerHeadV2,
+    current: &Fixed,
+) -> Ingested {
+    let input = start(binding, head, "1");
+    let (audit, source) = original(&input, head, &current.0, 900);
+    let mut check = || Ok(());
+    cold(fixture)
+        .unwrap()
+        .reserve_index_start_direct(
+            &input,
+            current,
+            &mut software_worker_operation(&audit, source, &mut check),
+        )
+        .unwrap();
+    let reserved = cut(fixture);
+    let (audit, source) = original(&input, head, &current.0, 901);
+    let mut check = || Ok(());
+    cold(fixture)
+        .unwrap()
+        .select_index_start_direct(
+            store,
+            &input,
+            current,
+            &mut software_worker_operation(&audit, source, &mut check),
+        )
+        .unwrap();
+    let selected = cut(fixture);
+    let job = Job::beginning_data(
+        &input,
+        head,
+        &current.0,
+        &selection_data_sha256(head, None).unwrap(),
+    )
+    .unwrap();
+    let step_input = step(binding, &job, "4");
+    let review = plan(store, &job, &step_input).review().unwrap();
+    let grant = "explicit-software-direct-index-phase";
+    let (audit, source) = effect(
+        &step_input,
+        &review.review_sha256,
+        grant,
+        "software index phase rpc 902",
+        902,
+    );
+    let mut check = || Ok(());
+    cold(fixture)
+        .unwrap()
+        .prepare_index_direct(
+            &step_input,
+            &plan(store, &job, &step_input),
+            &mut software_worker_operation(&audit, source, &mut check),
+        )
+        .unwrap();
+    let prepared = cold(fixture).unwrap().descriptor().clone();
+    let calls = fixture.memory.0.borrow().calls;
+    let early = advance_request(binding, &job, "5");
+    let (audit, source) = effect(
+        &early,
+        &"ab".repeat(32),
+        ADVANCE_GRANT,
+        "software index Advance rpc 904",
+        904,
+    );
+    let mut check = || Ok(());
+    refused_with(
+        cold(fixture).unwrap().reserve_index_advance_direct(
+            &early,
+            &job,
+            current,
+            &mut software_worker_operation(&audit, source.clone(), &mut check),
+        ),
+        "pending C preparation fences phase advance",
+    );
+    let mut check = || Ok(());
+    refused_with(
+        cold(fixture).unwrap().select_index_advance_direct(
+            store,
+            &early,
+            &job,
+            current,
+            &mut software_worker_operation(&audit, source, &mut check),
+        ),
+        "unknown field `review`",
+    );
+    assert_eq!(fixture.memory.0.borrow().calls, calls, "refused before NV");
+    let (audit, source) = effect(
+        &step_input,
+        &review.review_sha256,
+        grant,
+        "software index phase run rpc 903",
+        903,
+    );
+    let mut check = || Ok(());
+    cold(fixture)
+        .unwrap()
+        .run_index_phase_direct(
+            store,
+            &job,
+            &step_input,
+            plan(store, &job, &step_input),
+            &mut Sources {
+                binding: binding.clone(),
+            },
+            &mut software_worker_operation(&audit, source.clone(), &mut check),
+        )
+        .unwrap();
+    let windowed = cut(fixture);
+    let mut check = || Ok(());
+    let (next, _, _) = cold(fixture)
+        .unwrap()
+        .selected_index_state(
+            &step_input,
+            &mut software_worker_operation(&audit, source, &mut check),
+        )
+        .unwrap();
+    let next = next.expect("the selected leaf names the next job");
+    let advanced = Job::parse(&store.read_blob(&next, read(), &mut *authority).unwrap()).unwrap();
+    Ingested {
+        start: input,
+        reserved,
+        selected,
+        prepared,
+        windowed,
+        job,
+        step: step_input,
+        advanced,
+        next,
+    }
+}
+
+/// One Advance moves a selected job whose phase is complete into its next phase
+/// through two events, as a Start does: a reservation charges the reviewed next
+/// job and writes nothing, then a selection under a new original writes it and
+/// resolves the charge. Every substitute is refused before NV with the store
+/// untouched. No other consumer takes the Advance reservation for its own record,
+/// and an Advance consumer takes no other record. An interrupted selection
+/// reconciles its complete members with one dispatch. Forged and reclassed cuts
+/// are each refused by the cold verifier, which replays shape and arithmetic only
+/// because a later job cannot be re-derived from C alone.
+#[test]
+fn actual_index_advance_selects_its_reserved_next_job_and_refuses_substitutes_before_nv() {
+    let fixture = Fixture::new();
+    let Migrated {
+        owner,
+        store,
+        mut authority,
+        head,
+        ..
+    } = migrated(&fixture, true);
+    let current = builder();
+    let Ingested {
+        start: first,
+        reserved: first_reserved,
+        selected: first_selected,
+        prepared,
+        windowed: (windowed, windowed_location),
+        job,
+        step: step_input,
+        advanced,
+        next,
+    } = ingested(
+        &fixture,
+        &owner.binding,
+        &store,
+        &mut authority,
+        &head,
+        &current,
+    );
+    let advance = advance_request(&owner.binding, &advanced, "6");
+    let leaf = Leaf {
+        schema_version: 2,
+        binding: owner.binding.clone(),
+        current_generation: None,
+        current_job: Some(next.clone()),
+        preparation: None,
+    };
+    let (audit, source) = advance_original(&advance, &head, &advanced, &leaf, &current.0, 910);
+    let stale = |input: &request::Input, number: u64| {
+        effect(
+            input,
+            &"ab".repeat(32),
+            ADVANCE_GRANT,
+            &format!("software index Advance rpc {number}"),
+            number,
+        )
+    };
+    // A valid job of another id, which C never selected.
+    let mut foreign = first.clone();
+    match &mut foreign.operation {
+        request::Operation::Start { job_id, .. } => *job_id = "3".repeat(32),
+        _ => panic!("the first request is a Start"),
+    }
+    let foreign = Job::beginning_data(
+        &foreign,
+        &head,
+        &current.0,
+        &selection_data_sha256(&head, None).unwrap(),
+    )
+    .unwrap();
+    let stranger = Fixed(BuilderIdentity {
+        source_sha256: "c".repeat(64),
+        runtime_sha256: "e".repeat(64),
+    });
+    let attributed = "genuine original IndexPrepare purpose/source";
+    let lineage = "index job advance is not over the exact C-selected lineage/builder";
+    let changed = "index job CAS/owner/request changed; fresh review is required";
+    let mut publish = source.clone();
+    publish.purpose = SourcePurpose::Publish;
+    let older = advance_request(&owner.binding, &job, "6");
+    let reused = advance_request(&owner.binding, &advanced, "4");
+    let calls = fixture.memory.0.borrow().calls;
+    let stored = store.inventory(read(), &mut authority, |_| Ok(())).unwrap();
+    let cases: [(
+        &Job,
+        &request::Input,
+        &Fixed,
+        (Audit, TypedOperationSource),
+        bool,
+        &str,
+    ); 9] = [
+        (
+            &advanced,
+            &advance,
+            &current,
+            (audit.clone(), publish),
+            true,
+            attributed,
+        ),
+        (
+            &advanced,
+            &advance,
+            &current,
+            stale(&advance, 911),
+            true,
+            attributed,
+        ),
+        (
+            &advanced,
+            &advance,
+            &current,
+            (audit.clone(), source.clone()),
+            false,
+            "software original revoked",
+        ),
+        (
+            &foreign,
+            &advance,
+            &current,
+            (audit.clone(), source.clone()),
+            true,
+            lineage,
+        ),
+        (
+            &job,
+            &advance,
+            &current,
+            (audit.clone(), source.clone()),
+            true,
+            lineage,
+        ),
+        (
+            &advanced,
+            &advance,
+            &stranger,
+            (audit.clone(), source.clone()),
+            true,
+            lineage,
+        ),
+        (
+            &advanced,
+            &older,
+            &current,
+            stale(&older, 912),
+            true,
+            changed,
+        ),
+        (
+            &advanced,
+            &reused,
+            &current,
+            stale(&reused, 913),
+            true,
+            changed,
+        ),
+        (
+            &advanced,
+            &step_input,
+            &current,
+            stale(&step_input, 914),
+            true,
+            "index job advance requires an exact Advance request",
+        ),
+    ];
+    for (base, planned, identity, (audit, source), live, reason) in cases {
+        let mut check = || {
+            if live {
+                Ok(())
+            } else {
+                Err("software original revoked".into())
+            }
+        };
+        refused_with(
+            cold(&fixture).unwrap().reserve_index_advance_direct(
+                planned,
+                base,
+                identity,
+                &mut software_worker_operation(&audit, source, &mut check),
+            ),
+            reason,
+        );
+        assert_eq!(fixture.memory.0.borrow().calls, calls, "refused before NV");
+        assert_eq!(
+            store.inventory(read(), &mut authority, |_| Ok(())).unwrap(),
+            stored,
+            "refused before any store write"
+        );
+    }
+    let mut check = || Ok(());
+    let reservation = cold(&fixture)
+        .unwrap()
+        .reserve_index_advance_direct(
+            &advance,
+            &advanced,
+            &current,
+            &mut software_worker_operation(&audit, source.clone(), &mut check),
+        )
+        .unwrap();
+    assert_eq!(
+        fixture.memory.0.borrow().calls,
+        calls + 1,
+        "one NV dispatch per Advance reservation"
+    );
+    assert_eq!(
+        store.inventory(read(), &mut authority, |_| Ok(())).unwrap(),
+        stored,
+        "a reservation writes no store object"
+    );
+    let mut reopened = cold(&fixture).expect("cold reopen replays the Advance reservation");
+    let reserved = reopened.descriptor().clone();
+    let reserved_location = selected_location(&fixture);
+    match &reserved.operation {
+        OperationData::IndexAdvanceReservation {
+            binding,
+            input_sha256,
+            reservation: retained,
+            original_authority,
+            ..
+        } => {
+            assert_eq!(binding, &owner.binding);
+            assert_eq!(input_sha256, &advance.sha256().unwrap());
+            assert_eq!(retained, &reservation);
+            assert_eq!(original_authority, &audit);
+        }
+        _ => panic!("cold reopen did not select the Advance reservation"),
+    }
+    assert_eq!(reserved.sequence, windowed.sequence + 1);
+    assert_eq!(reserved.roots.owners, windowed.roots.owners);
+    assert_ne!(
+        reserved.roots.index_generations,
+        windowed.roots.index_generations
+    );
+    let mut check = || Ok(());
+    let (selected_job, charged, physical) = reopened
+        .selected_index_state(
+            &advance,
+            &mut software_worker_operation(&audit, source.clone(), &mut check),
+        )
+        .unwrap();
+    assert!(charged, "the reservation stays charged");
+    assert_eq!(physical, stored);
+    assert_eq!(selected_job, Some(next.clone()));
+    // No other consumer takes it, and no second writer starts. The window's plan
+    // is over the job before it, since the complete job has no window to plan.
+    let calls = fixture.memory.0.borrow().calls;
+    let other = step(&owner.binding, &job, "5");
+    let review = plan(&store, &job, &other).review().unwrap();
+    let (other_audit, other_source) = effect(
+        &other,
+        &review.review_sha256,
+        "explicit-software-direct-index-phase",
+        "software index phase rpc 915",
+        915,
+    );
+    let mut check = || Ok(());
+    refused_with(
+        cold(&fixture).unwrap().prepare_index_direct(
+            &other,
+            &plan(&store, &job, &other),
+            &mut software_worker_operation(&other_audit, other_source.clone(), &mut check),
+        ),
+        "must remain charged",
+    );
+    let mut check = || Ok(());
+    refused_with(
+        cold(&fixture).unwrap().run_index_phase_direct(
+            &store,
+            &job,
+            &other,
+            plan(&store, &job, &other),
+            &mut Sources {
+                binding: other.binding.clone(),
+            },
+            &mut software_worker_operation(&other_audit, other_source, &mut check),
+        ),
+        "requires an unresolved preparation over the exact selected job",
+    );
+    let (start_audit, start_source) = original(&first, &head, &current.0, 916);
+    let mut check = || Ok(());
+    refused_with(
+        cold(&fixture).unwrap().select_index_start_direct(
+            &store,
+            &first,
+            &current,
+            &mut software_worker_operation(&start_audit, start_source, &mut check),
+        ),
+        "index job selection requires a reserved first job and no selected job",
+    );
+    let mut check = || Ok(());
+    refused_with(
+        cold(&fixture).unwrap().reserve_index_advance_direct(
+            &advance,
+            &advanced,
+            &current,
+            &mut software_worker_operation(&audit, source.clone(), &mut check),
+        ),
+        "pending C preparation fences phase advance",
+    );
+    assert_eq!(fixture.memory.0.borrow().calls, calls, "refused before NV");
+    assert_eq!(
+        store.inventory(read(), &mut authority, |_| Ok(())).unwrap(),
+        stored,
+        "refused before any store write"
+    );
+    // A reservation changes no owner, so its owner substitutes come from a cut
+    // whose owners differ and stop at the unrelated roots.
+    refuse_forged_events(
+        &fixture,
+        &reserved,
+        &reserved_location,
+        Forgeries {
+            verify: |fixture, candidate, location| {
+                verify_index_reservation(&fixture.pages(), candidate, location, &mut || Ok(()))
+            },
+            body: reserved_advance,
+            prior: &windowed,
+            prior_location: &windowed_location,
+            owners: &prepared.roots.owners,
+            owners_reason: "unrelated C roots",
+            page_reason: "unrelated C roots",
+            index_reason: "role CAS differs",
+            input_reason: "substitutes exact checkpointed source/attribution/before tuple",
+        },
+    );
+    // The selection's original is a new operation over the same exact review.
+    let (selection_audit, selection_source) =
+        advance_original(&advance, &head, &advanced, &leaf, &current.0, 917);
+    let mut publish = selection_source.clone();
+    publish.purpose = SourcePurpose::Publish;
+    let different = advance_request(&owner.binding, &advanced, "7");
+    let reservation_differs = "differs from the C-selected reservation owner/input/builder";
+    let cases: [(
+        &Job,
+        &request::Input,
+        &Fixed,
+        (Audit, TypedOperationSource),
+        bool,
+        &str,
+    ); 8] = [
+        (
+            &advanced,
+            &advance,
+            &current,
+            (audit.clone(), source.clone()),
+            true,
+            "requires a new original operation, not the reservation one",
+        ),
+        (
+            &advanced,
+            &advance,
+            &current,
+            (selection_audit.clone(), publish),
+            true,
+            "index Advance selection differs from the actual original index source",
+        ),
+        (
+            &advanced,
+            &advance,
+            &current,
+            stale(&advance, 918),
+            true,
+            attributed,
+        ),
+        (
+            &advanced,
+            &different,
+            &current,
+            advance_original(&different, &head, &advanced, &leaf, &current.0, 919),
+            true,
+            reservation_differs,
+        ),
+        (
+            &advanced,
+            &advance,
+            &stranger,
+            (selection_audit.clone(), selection_source.clone()),
+            true,
+            reservation_differs,
+        ),
+        (
+            &job,
+            &advance,
+            &current,
+            (selection_audit.clone(), selection_source.clone()),
+            true,
+            lineage,
+        ),
+        (
+            &foreign,
+            &advance,
+            &current,
+            (selection_audit.clone(), selection_source.clone()),
+            true,
+            lineage,
+        ),
+        (
+            &advanced,
+            &advance,
+            &current,
+            (selection_audit.clone(), selection_source.clone()),
+            false,
+            "software original revoked",
+        ),
+    ];
+    for (base, planned, identity, (audit, source), live, reason) in cases {
+        let mut check = || {
+            if live {
+                Ok(())
+            } else {
+                Err("software original revoked".into())
+            }
+        };
+        refused_with(
+            cold(&fixture).unwrap().select_index_advance_direct(
+                &store,
+                planned,
+                base,
+                identity,
+                &mut software_worker_operation(&audit, source, &mut check),
+            ),
+            reason,
+        );
+        assert_eq!(fixture.memory.0.borrow().calls, calls, "refused before NV");
+        assert_eq!(
+            store.inventory(read(), &mut authority, |_| Ok(())).unwrap(),
+            stored,
+            "refused before any store write"
+        );
+    }
+    // The actual worker writes every member and is revoked right after the last
+    // one: the next job is complete and nothing is selected.
+    let next_bytes = advanced
+        .advance_data(&advance)
+        .unwrap()
+        .canonical_bytes()
+        .unwrap();
+    let planned = BlobObjectPlan::data(&advance.binding, &next_bytes, || Ok(())).unwrap();
+    let members = planned.write_set(|| Ok(())).unwrap();
+    assert_eq!(members.len(), 3, "one chunk, one group and the blob index");
+    let paths: Vec<PathBuf> = members
+        .iter()
+        .map(|member| object_path(&fixture, &member.sha256))
+        .collect();
+    assert!(paths.iter().all(|path| !path.exists()));
+    let last = (paths[2].clone(), members[2].bytes);
+    let mut check = || {
+        if written(&last.0, last.1) {
+            Err("software original revoked after the last reserved member".into())
+        } else {
+            Ok(())
+        }
+    };
+    refused_with(
+        cold(&fixture).unwrap().select_index_advance_direct(
+            &store,
+            &advance,
+            &advanced,
+            &current,
+            &mut software_worker_operation(&selection_audit, selection_source, &mut check),
+        ),
+        "software original revoked after the last reserved member",
+    );
+    assert_eq!(fixture.memory.0.borrow().calls, calls, "revoked before NV");
+    let complete = store.inventory(read(), &mut authority, |_| Ok(())).unwrap();
+    assert_eq!(complete.regular_files, stored.regular_files + 3);
+    assert_eq!(complete.incomplete_objects, stored.incomplete_objects);
+    // A new original reconciles: one dispatch and nothing rewritten.
+    let (audit, source) = advance_original(&advance, &head, &advanced, &leaf, &current.0, 920);
+    let mut check = || Ok(());
+    let selection = cold(&fixture)
+        .expect("the interrupted attempt leaves the Advance reservation")
+        .select_index_advance_direct(
+            &store,
+            &advance,
+            &advanced,
+            &current,
+            &mut software_worker_operation(&audit, source.clone(), &mut check),
+        )
+        .unwrap();
+    assert_ne!(selection, reservation);
+    assert_eq!(
+        fixture.memory.0.borrow().calls,
+        calls + 1,
+        "one NV dispatch per Advance selection"
+    );
+    assert_eq!(
+        store.inventory(read(), &mut authority, |_| Ok(())).unwrap(),
+        complete,
+        "nothing more is written"
+    );
+    let mut reopened = cold(&fixture).expect("cold reopen replays the Advance selection");
+    let selected = reopened.descriptor().clone();
+    let location = selected_location(&fixture);
+    match &selected.operation {
+        OperationData::IndexAdvanceSelection {
+            binding,
+            input_sha256,
+            selection: retained,
+            original_authority,
+            ..
+        } => {
+            assert_eq!(binding, &owner.binding);
+            assert_eq!(input_sha256, &advance.sha256().unwrap());
+            assert_eq!(retained, &selection);
+            assert_eq!(original_authority, &audit);
+        }
+        _ => panic!("cold reopen did not select the Advance selection"),
+    }
+    assert_eq!(selected.sequence, reserved.sequence + 1);
+    assert_ne!(selected.roots.owners, reserved.roots.owners);
+    assert_ne!(
+        selected.roots.index_generations,
+        reserved.roots.index_generations
+    );
+    assert_eq!(selected.roots.index_generations.entry_count, 1);
+    let mut check = || Ok(());
+    let (selected_job, charged, physical) = reopened
+        .selected_index_state(
+            &advance,
+            &mut software_worker_operation(&audit, source, &mut check),
+        )
+        .unwrap();
+    assert!(!charged, "the event resolves the reservation");
+    assert_eq!(physical, complete, "C selects the measured inventory");
+    let selected_job = selected_job.expect("the selected leaf names the next job");
+    assert_eq!(&selected_job, planned.reference());
+    let statistics = Job::parse(
+        &store
+            .read_blob(&selected_job, read(), &mut authority)
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(statistics.sha256().unwrap(), selected_job.sha256);
+    assert!(matches!(statistics.stage, Stage::Statistics { .. }));
+    assert_eq!(statistics.job_id, advanced.job_id);
+    assert_eq!(statistics.revision, advanced.revision + 1);
+    assert_eq!(
+        statistics.previous_job_sha256,
+        Some(advanced.sha256().unwrap())
+    );
+    assert_eq!(statistics.last_request_id, advance.request_id);
+    // The Advance is not repeatable, and the new job's phase has not run.
+    let calls = fixture.memory.0.borrow().calls;
+    let (audit, source) = advance_original(&advance, &head, &advanced, &leaf, &current.0, 921);
+    let mut check = || Ok(());
+    refused_with(
+        cold(&fixture).unwrap().select_index_advance_direct(
+            &store,
+            &advance,
+            &advanced,
+            &current,
+            &mut software_worker_operation(&audit, source.clone(), &mut check),
+        ),
+        "requires a reservation over a selected job",
+    );
+    let mut check = || Ok(());
+    refused_with(
+        cold(&fixture).unwrap().reserve_index_advance_direct(
+            &advance,
+            &advanced,
+            &current,
+            &mut software_worker_operation(&audit, source, &mut check),
+        ),
+        lineage,
+    );
+    let further = advance_request(&owner.binding, &statistics, "7");
+    let (audit, source) = stale(&further, 922);
+    let mut check = || Ok(());
+    refused_with(
+        cold(&fixture).unwrap().reserve_index_advance_direct(
+            &further,
+            &statistics,
+            &current,
+            &mut software_worker_operation(&audit, source, &mut check),
+        ),
+        "phase advance requires exact completed current phase",
+    );
+    let pages = fixture.pages().inventory(&mut || Ok(())).unwrap();
+    refuse_forged_events(
+        &fixture,
+        &selected,
+        &location,
+        Forgeries {
+            verify: |fixture, candidate, location| {
+                verify_index_job_selection(&fixture.pages(), candidate, location, &mut || Ok(()))
+            },
+            body: selected_advance,
+            prior: &reserved,
+            prior_location: &reserved_location,
+            owners: &reserved.roots.owners,
+            owners_reason: "role CAS differs",
+            page_reason: "no selected semantic page address",
+            index_reason: "role CAS differs",
+            input_reason: "retained owner/reservation/input",
+        },
+    );
+    // Neither record class answers for the other. The two reservations share
+    // every field name and fail on meaning; the two selections fail on shape.
+    for (cut, location, reason) in [
+        (
+            &reserved,
+            &reserved_location,
+            "index job reservation record changes exact before/review/quota DATA",
+        ),
+        (
+            &first_reserved.0,
+            &first_reserved.1,
+            "index job advance record is not an exact Advance request",
+        ),
+    ] {
+        let (candidate, location) = sealed(cut, location, reclassed);
+        refused_with(
+            verify_index_reservation(&fixture.pages(), &candidate, &location, &mut || Ok(())),
+            reason,
+        );
+    }
+    for (cut, location, reason) in [
+        (&selected, &location, "unknown field `next_job`"),
+        (&first_selected.0, &first_selected.1, "unknown field `job`"),
+    ] {
+        let (candidate, location) = sealed(cut, location, reclassed);
+        refused_with(
+            verify_index_job_selection(&fixture.pages(), &candidate, &location, &mut || Ok(())),
+            reason,
+        );
+    }
+    assert_eq!(
+        fixture.memory.0.borrow().calls,
+        calls,
+        "refused with no dispatch"
+    );
+    assert_eq!(
+        store.inventory(read(), &mut authority, |_| Ok(())).unwrap(),
+        complete
+    );
+    assert_eq!(
+        fixture.pages().inventory(&mut || Ok(())).unwrap(),
+        pages,
+        "a refused forgery allocates nothing"
+    );
+    cold(&fixture).expect("the forged candidates leave the selected Advance");
 }

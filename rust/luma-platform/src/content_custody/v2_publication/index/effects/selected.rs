@@ -4,6 +4,7 @@
 //! liability. The actual cold consumer separately verifies map/slot/physical
 //! closure and the descriptor's typed operation under its fresh caller checks.
 use super::job::{JobReservation, JobSelection};
+use super::job_advance::{AdvanceSelection, JobAdvance};
 use super::phase_selection::PhaseSelection;
 use super::*;
 
@@ -436,6 +437,93 @@ pub(in crate::content_checkpoint::custody::v2_publication) fn replay_reserved_st
     })
 }
 
+/// The same historical DATA replay for a checkpoint-selected Advance
+/// reservation. The selected job's bytes live in the store, which cold replay
+/// does not open, so `Job::advance_data` is NOT repeated here: this proves the
+/// record's closure over the retained owner and leaf and its compiled liability
+/// and capacity arithmetic. Every later store opening compares the store with
+/// the owner leaf.
+pub(in crate::content_checkpoint::custody::v2_publication) fn replay_reserved_advance_data(
+    reader: &mut impl SelectedPreparationReader,
+    before: &Descriptor,
+    after: &Descriptor,
+    event: SelectedEventData<'_>,
+    mut read_credit: u64,
+    check: &mut impl FnMut() -> Result<()>,
+) -> Result<HistoricalPreparationData> {
+    selected_cut(before, after, &event, false, check)?;
+    let bytes = record(
+        reader,
+        event.preparation,
+        PREPARATION_BYTES as usize,
+        &mut read_credit,
+        check,
+    )?;
+    let reservation = JobAdvance::parse(&bytes)?;
+    if reservation.input().binding != *event.binding
+        || reservation.original().rpc_sha256 != event.request_sha256
+        || reservation.input().sha256()? != event.input_sha256
+        || reservation.original().effect != *event.original_authority
+        || historical_source_sha256(reservation.original(), &reservation.input().binding)?
+            != event.source_sha256
+        || reservation.base().descriptor_sha256 != hash(&before.bytes()?)
+        || reservation.base().nv_head != before.selected_nv_head
+    {
+        return Err("selected Advance reservation body substitutes exact checkpointed source/attribution/before tuple".into());
+    }
+    let owner = selected_owner(reader, before, event.binding, &mut read_credit, check)?;
+    let old_ref = Reference::parse(
+        owner
+            .index_value
+            .as_ref()
+            .ok_or("selected Advance reservation original index absent")?,
+        event.binding,
+    )?;
+    let old_leaf = Leaf::parse(
+        &record(reader, &old_ref.record, LEAF_BYTES, &mut read_credit, check)?,
+        event.binding,
+    )?;
+    if owner.head.binding != *event.binding {
+        return Err("selected Advance reservation changes its original owner".into());
+    }
+    let base = Base {
+        binding: event.binding.clone(),
+        descriptor_sha256: hash(&before.bytes()?),
+        nv_head: before.selected_nv_head.clone(),
+        owner_sha256: owner.head.sha256()?,
+        physical: owner.physical.clone(),
+        segments: owner.head.history.segments,
+        index_sha256: Some(old_leaf.sha256()?),
+    };
+    reservation.replay_shape(&base, &old_leaf, &owner.head)?;
+    let mut next_leaf = old_leaf;
+    next_leaf.preparation = Some(event.preparation.clone());
+    let (replacement, leaf_ref, leaf_bytes) = replacement_leaf(&next_leaf, event.binding)?;
+    // The final actual leaf read must fit the remaining finite credit.
+    if read_credit < leaf_ref.bytes + 1 {
+        return Err("selected replacement-leaf credit exhausted before Advance replay".into());
+    }
+    after_cas(
+        reader,
+        after,
+        &owner,
+        &owner.owner_value,
+        &replacement,
+        &leaf_ref,
+        &leaf_bytes,
+        check,
+    )?;
+    let records = vec![(event.preparation.clone(), bytes), (leaf_ref, leaf_bytes)];
+    check()?;
+    Ok(HistoricalPreparationData {
+        owner_literal: owner.literal,
+        expected_owner_value: owner.owner_value,
+        expected_index_value: owner.index_value,
+        replacement_index_value: replacement,
+        records,
+    })
+}
+
 /// The owner and index role CAS of one selected job or phase. Like
 /// HistoricalPreparationData it is DATA for the cold map-delta verifier only.
 pub(in crate::content_checkpoint::custody::v2_publication) struct HistoricalSelectionData {
@@ -559,6 +647,120 @@ pub(in crate::content_checkpoint::custody::v2_publication) fn replay_selected_jo
     if read_credit < leaf_ref.bytes + 1 {
         return Err(
             "selected replacement-leaf credit exhausted before job selection replay".into(),
+        );
+    }
+    after_cas(
+        reader,
+        after,
+        &owner,
+        &owner_value,
+        &replacement,
+        &leaf_ref,
+        &leaf_bytes,
+        check,
+    )?;
+    let records = vec![(event.preparation.clone(), bytes), (leaf_ref, leaf_bytes)];
+    check()?;
+    Ok(HistoricalSelectionData {
+        owner_literal: owner.literal,
+        expected_owner_value: owner.owner_value,
+        replacement_owner_value: owner_value,
+        expected_index_value,
+        replacement_index_value: replacement,
+        records,
+    })
+}
+
+/// The same historical DATA replay for a checkpoint-selected next job. The
+/// consumed reservation is read from the before cut and the measured physical
+/// delta is checked against its reserved liability. The base and next job bytes
+/// are NOT re-read here: `Job::advance_data` needs the store, the measured
+/// inventory is selection DATA, and every later store opening compares the
+/// store with the owner leaf this event selects.
+pub(in crate::content_checkpoint::custody::v2_publication) fn replay_selected_advance_data(
+    reader: &mut impl SelectedPreparationReader,
+    before: &Descriptor,
+    after: &Descriptor,
+    event: SelectedEventData<'_>,
+    mut read_credit: u64,
+    check: &mut impl FnMut() -> Result<()>,
+) -> Result<HistoricalSelectionData> {
+    selected_cut(before, after, &event, true, check)?;
+    let bytes = record(
+        reader,
+        event.preparation,
+        PREPARATION_BYTES as usize,
+        &mut read_credit,
+        check,
+    )?;
+    let selection = AdvanceSelection::parse(&bytes)?;
+    if selection.base().binding != *event.binding
+        || selection.original().rpc_sha256 != event.request_sha256
+        || selection.original().effect != *event.original_authority
+        || historical_source_sha256(selection.original(), event.binding)? != event.source_sha256
+        || selection.base().descriptor_sha256 != hash(&before.bytes()?)
+        || selection.base().nv_head != before.selected_nv_head
+    {
+        return Err("selected advance selection body substitutes exact checkpointed source/attribution/before tuple".into());
+    }
+    let owner = selected_owner(reader, before, event.binding, &mut read_credit, check)?;
+    let expected_index_value = owner
+        .index_value
+        .clone()
+        .ok_or("selected advance selection original reservation leaf absent")?;
+    let old_ref = Reference::parse(&expected_index_value, event.binding)?;
+    let old_leaf = Leaf::parse(
+        &record(reader, &old_ref.record, LEAF_BYTES, &mut read_credit, check)?,
+        event.binding,
+    )?;
+    let reservation = JobAdvance::parse(&record(
+        reader,
+        selection.reservation(),
+        PREPARATION_BYTES as usize,
+        &mut read_credit,
+        check,
+    )?)?;
+    selection.validate_against(&reservation, selection.reservation(), &old_leaf)?;
+    let base = Base {
+        binding: event.binding.clone(),
+        descriptor_sha256: hash(&before.bytes()?),
+        nv_head: before.selected_nv_head.clone(),
+        owner_sha256: owner.head.sha256()?,
+        physical: owner.physical.clone(),
+        segments: owner.head.history.segments,
+        index_sha256: Some(old_leaf.sha256()?),
+    };
+    if selection.base() != &base
+        || owner.head.binding != *event.binding
+        || reservation.input().binding != *event.binding
+        || reservation.input().sha256()? != event.input_sha256
+    {
+        return Err(
+            "selected advance selection differs from its retained owner/reservation/input".into(),
+        );
+    }
+    let next_leaf = Leaf {
+        schema_version: 2,
+        binding: event.binding.clone(),
+        current_generation: old_leaf.current_generation.clone(),
+        current_job: Some(selection.next_job().clone()),
+        preparation: None,
+    };
+    let (replacement, leaf_ref, leaf_bytes) = replacement_leaf(&next_leaf, event.binding)?;
+    let next_owner = OwnerLeaf::V2 {
+        binding: event.binding.clone(),
+        head: owner.head_ref.clone(),
+        physical: selection.physical_after().clone(),
+    };
+    next_owner.validate(&event.binding.installation, &before.legacy)?;
+    let owner_value = serde_json::to_vec(&next_owner)?;
+    if owner_value.len() > map::MAX_VALUE_BYTES {
+        return Err("selected advance selection owner leaf exceeds its bounded map value".into());
+    }
+    // The final actual leaf read must fit the remaining finite credit.
+    if read_credit < leaf_ref.bytes + 1 {
+        return Err(
+            "selected replacement-leaf credit exhausted before advance selection replay".into(),
         );
     }
     after_cas(

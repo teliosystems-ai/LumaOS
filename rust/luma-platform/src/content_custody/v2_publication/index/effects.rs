@@ -20,30 +20,37 @@ mod job;
 #[allow(dead_code)]
 #[path = "effects/phase_selection.rs"]
 mod phase_selection;
+// The same for the records of one phase advance.
+#[allow(dead_code)]
+#[path = "effects/job_advance.rs"]
+mod job_advance;
 // The semantic proof's only consumer, the direct C index publisher, is
 // compiled only under test. Tests dispatch the Start reservation, the job
-// selection, an index phase preparation over that selected job and the phase
-// selection that resolves it.
+// selection, an index phase preparation over that selected job, the phase
+// selection that resolves it and the reservation and selection of a phase
+// advance.
 #[allow(dead_code)]
 #[path = "effects/verification.rs"]
 mod verification;
 #[allow(unused_imports)]
 pub(in crate::content_checkpoint::custody::v2_publication) use verification::{
-    selected_index_state, verify_index_phase_selection, verify_index_preparation,
-    verify_index_selection, verify_index_start, CurrentBuilder, JobSelectionPlan,
-    PhaseSelectionPlan, PreparationView, PreparedKind, SelectionParts, VerifiedIndexPreparation,
+    selected_index_state, verify_index_advance, verify_index_advance_selection,
+    verify_index_phase_selection, verify_index_preparation, verify_index_selection,
+    verify_index_start, AdvanceSelectionPlan, CurrentBuilder, JobSelectionPlan, PhaseSelectionPlan,
+    PreparationView, PreparedKind, SelectionParts, VerifiedIndexPreparation,
     VerifiedIndexSelection,
 };
 // Historical replay's only consumer, the cold direct C reader, is compiled
 // only under test. It replays a selected Start reservation, job selection,
-// index phase preparation and phase selection.
+// index phase preparation, phase selection and both events of a phase advance.
 #[allow(dead_code)]
 #[path = "effects/selected.rs"]
 mod selected;
 #[allow(unused_imports)]
 pub(in crate::content_checkpoint::custody::v2_publication) use selected::{
-    replay_reserved_start_data, replay_selected_data, replay_selected_job_data,
-    replay_selected_phase_data, SelectedEventData, SelectedPreparationReader,
+    replay_reserved_advance_data, replay_reserved_start_data, replay_selected_advance_data,
+    replay_selected_data, replay_selected_job_data, replay_selected_phase_data, SelectedEventData,
+    SelectedPreparationReader,
 };
 
 const PREPARATION_DOMAIN: &str = "luma-c-index-preparation-v1";

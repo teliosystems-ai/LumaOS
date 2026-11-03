@@ -1,5 +1,6 @@
 //! Fixtures are explicit DATA, not native PAM/C selection or creator evidence.
 use super::job::JobReservation;
+use super::job_advance::{AdvanceSelection, JobAdvance};
 use super::*;
 use crate::content_checkpoint::custody::indexed::selection_data_sha256;
 use crate::content_checkpoint::custody::paged::{self, cells, slots};
@@ -7,7 +8,9 @@ use crate::content_checkpoint::custody::protocol::{
     software_worker_operation, TypedOperationSource,
 };
 use crate::content_checkpoint::custody::v2_publication as publication;
+use crate::content_index::state::Job;
 use luma_content_store::corpus_index::{BuilderIdentity, CorpusIndexLimits};
+use luma_content_store::v2::BlobObjectPlan;
 use std::cell::Cell;
 use std::collections::BTreeMap;
 fn binding() -> OwnerBinding {
@@ -540,6 +543,584 @@ fn start_reservation_refuses_relabelled_attribution_and_uncovered_capacity() {
         r.original(),
         &mut revoke
     )
+    .is_err());
+}
+
+// Advance fixtures: an empty corpus completes ingestion with no window, so the
+// first job advances as plain DATA. The leaf is explicit, never a C selection.
+struct Advancing {
+    record: JobAdvance,
+    reference: RecordRef,
+    leaf: Leaf,
+    owner: OwnerHeadV2,
+    job: Job,
+    input: request::Input,
+    before: Base,
+}
+fn advancing() -> Advancing {
+    let owner = owner();
+    let start = start_input(&owner);
+    let selected = selection_data_sha256(&owner, None).unwrap();
+    let job = Job::beginning_data(&start, &owner, &builder(), &selected).unwrap();
+    let job_bytes = job.canonical_bytes().unwrap();
+    let planned = BlobObjectPlan::data(&start.binding, &job_bytes, || Ok(())).unwrap();
+    let leaf = Leaf {
+        schema_version: 2,
+        binding: binding(),
+        current_generation: None,
+        current_job: Some(planned.reference().clone()),
+        preparation: None,
+    };
+    let before = Base {
+        index_sha256: Some(leaf.sha256().unwrap()),
+        ..start_base(&owner)
+    };
+    let input = request::Input {
+        request_id: "3".repeat(32),
+        operation: request::Operation::Advance {
+            job_id: job.job_id.clone(),
+            expected_job_sha256: job.sha256().unwrap(),
+        },
+        ..start
+    };
+    let builder = builder();
+    let transition =
+        JobAdvance::transition_data(&before, &leaf, &owner, &job, &input, &builder, &mut || {
+            Ok(())
+        })
+        .unwrap();
+    let original = attributed(&input, &transition.review_sha256);
+    let record = JobAdvance::data(
+        &before,
+        &leaf,
+        &owner,
+        &job,
+        &input,
+        &builder,
+        &original,
+        &mut || Ok(()),
+    )
+    .unwrap();
+    let bytes = record.bytes().unwrap();
+    let reference = RecordRef {
+        sha256: hash(&bytes),
+        bytes: bytes.len() as u64,
+    };
+    Advancing {
+        record,
+        reference,
+        leaf,
+        owner,
+        job,
+        input,
+        before,
+    }
+}
+/// The reservation event changed only the leaf's preparation field.
+fn reserved_leaf(a: &Advancing) -> Leaf {
+    Leaf {
+        preparation: Some(a.reference.clone()),
+        ..a.leaf.clone()
+    }
+}
+fn selection_base(a: &Advancing) -> Base {
+    Base {
+        index_sha256: Some(reserved_leaf(a).sha256().unwrap()),
+        ..a.before.clone()
+    }
+}
+/// The same request under the new operation a selection must carry.
+fn reselected(a: &Advancing) -> Attribution {
+    let mut original = a.record.original().clone();
+    original.effect.operation_id = Some("b".repeat(32));
+    original
+}
+/// One written job blob, well inside the compiled metadata liability.
+fn job_written(before: &PhysicalInventory) -> PhysicalInventory {
+    PhysicalInventory {
+        regular_files: before.regular_files + 1,
+        directories: before.directories + 2,
+        allocated_bytes: before.allocated_bytes + 4096,
+        logical_bytes: before.logical_bytes + 1000,
+        ..before.clone()
+    }
+}
+fn selection(a: &Advancing) -> AdvanceSelection {
+    let base = selection_base(a);
+    AdvanceSelection::data(
+        &base,
+        &a.record,
+        &a.reference,
+        &reserved_leaf(a),
+        &job_written(&base.physical),
+        &reselected(a),
+        &mut || Ok(()),
+    )
+    .unwrap()
+}
+fn refused<T: std::fmt::Debug>(result: Result<T>, reason: &str) {
+    let error = result.unwrap_err().to_string();
+    assert!(error.contains(reason), "{error}");
+}
+fn relabelled(bytes: &[u8], domain: &str, other: &str) -> Vec<u8> {
+    let text = std::str::from_utf8(bytes).unwrap();
+    assert_eq!(text.matches(domain).count(), 1, "{domain}");
+    text.replacen(domain, other, 1).into_bytes()
+}
+#[test]
+fn advance_reservation_is_canonical_closed_data_with_exact_metadata_liability() {
+    let a = advancing();
+    let bytes = a.record.bytes().unwrap();
+    assert!(bytes.len() < PREPARATION_BYTES as usize);
+    assert_eq!(JobAdvance::parse(&bytes).unwrap(), a.record);
+    assert_eq!(a.record.base(), &a.before);
+    assert_eq!(a.record.input(), &a.input);
+    assert_eq!(a.record.builder(), &builder());
+    assert_eq!(
+        a.record.transition().next_job.bytes,
+        a.job
+            .advance_data(&a.input)
+            .unwrap()
+            .canonical_bytes()
+            .unwrap()
+            .len() as u64
+    );
+    assert!(
+        JobAdvance::parse(serde_json::to_string_pretty(&a.record).unwrap().as_bytes()).is_err()
+    );
+    let mut extra = bytes.clone();
+    assert_eq!(extra.pop(), Some(b'}'));
+    extra.extend_from_slice(b",\"go\":true}");
+    assert!(JobAdvance::parse(&extra).is_err());
+    let text = std::str::from_utf8(&bytes).unwrap();
+    assert!(text.starts_with("{\"schema_version\":1,"));
+    let mut tampered = vec![
+        text.replacen("{\"schema_version\":1,", "{\"schema_version\":2,", 1)
+            .into_bytes(),
+        relabelled(
+            &bytes,
+            "luma-c-index-job-advance-v1",
+            "luma-c-index-job-advance-v2",
+        ),
+    ];
+    for (section, field) in [
+        ("\"liability\":{", "allocated_bytes"),
+        ("\"liability\":{", "regular_files"),
+        ("\"capacity\":{", "retained_records"),
+        ("\"base\":{", "segments"),
+        ("\"base\":{", "allocated_bytes"),
+        ("\"input\":{", "owner_generation"),
+        ("\"next_job\":{", "bytes"),
+    ] {
+        tampered.push(bump(&bytes, section, field));
+    }
+    for (case, changed) in tampered.iter().enumerate() {
+        assert_ne!(changed, &bytes, "case {case}");
+        // Still well-formed canonical DATA: the refusal below is semantic.
+        let value: JobAdvance = serde_json::from_slice(changed).unwrap();
+        assert_eq!(&serde_json::to_vec(&value).unwrap(), changed, "case {case}");
+        assert!(JobAdvance::parse(changed).is_err(), "case {case}");
+    }
+}
+#[test]
+fn advance_replay_refuses_changed_job_builder_leaf_and_current_callback() {
+    let a = advancing();
+    let original = a.record.original().clone();
+    let replay = |base: &Base, leaf: &Leaf, job: &Job, identity: &BuilderIdentity| {
+        a.record.replay_data(
+            base,
+            leaf,
+            &a.owner,
+            job,
+            &a.input,
+            identity,
+            &original,
+            &mut || Ok(()),
+        )
+    };
+    replay(&a.before, &a.leaf, &a.job, &builder()).unwrap();
+    let mut other = builder();
+    other.runtime_sha256 = "f".repeat(64);
+    refused(
+        replay(&a.before, &a.leaf, &a.job, &other),
+        "is not over the exact C-selected lineage/builder",
+    );
+    // The job is bound to the leaf by its full hash.
+    let start = request::Input {
+        request_id: "4".repeat(32),
+        ..start_input(&a.owner)
+    };
+    let selected = selection_data_sha256(&a.owner, None).unwrap();
+    let another = Job::beginning_data(&start, &a.owner, &builder(), &selected).unwrap();
+    refused(
+        replay(&a.before, &a.leaf, &another, &builder()),
+        "is not over the exact C-selected lineage/builder",
+    );
+    // An unresolved leaf fences a second writer, whatever base names it.
+    let leaf = reserved_leaf(&a);
+    refused(
+        replay(&selection_base(&a), &leaf, &a.job, &builder()),
+        "replaces current owner/input or an unresolved leaf",
+    );
+    let unselected = Leaf {
+        current_job: None,
+        ..a.leaf.clone()
+    };
+    let base = Base {
+        index_sha256: Some(unselected.sha256().unwrap()),
+        ..a.before.clone()
+    };
+    refused(
+        replay(&base, &unselected, &a.job, &builder()),
+        "has no selected current job",
+    );
+    for field in 0..4 {
+        let mut changed = a.before.clone();
+        match field {
+            0 => changed.physical.allocated_bytes += 4096,
+            1 => changed.nv_head = "d".repeat(64),
+            2 => changed.descriptor_sha256 = "d".repeat(64),
+            _ => changed.index_sha256 = Some("7".repeat(64)),
+        }
+        assert!(
+            replay(&changed, &a.leaf, &a.job, &builder()).is_err(),
+            "field {field}"
+        );
+    }
+    let mut changed = a.input.clone();
+    changed.request_id = "e".repeat(32);
+    assert!(a
+        .record
+        .replay_data(
+            &a.before,
+            &a.leaf,
+            &a.owner,
+            &a.job,
+            &changed,
+            &builder(),
+            &original,
+            &mut || Ok(())
+        )
+        .is_err());
+    let mut revoke = || -> Result<()> { Err("fixture revoked".into()) };
+    refused(
+        a.record.replay_data(
+            &a.before,
+            &a.leaf,
+            &a.owner,
+            &a.job,
+            &a.input,
+            &builder(),
+            &original,
+            &mut revoke,
+        ),
+        "fixture revoked",
+    );
+}
+#[test]
+fn advance_refuses_a_spent_request_relabelled_original_and_uncovered_capacity() {
+    let a = advancing();
+    // The next job is reconstructed; the job already names this request.
+    let spent = request::Input {
+        request_id: a.job.last_request_id.clone(),
+        ..a.input.clone()
+    };
+    refused(
+        JobAdvance::transition_data(
+            &a.before,
+            &a.leaf,
+            &a.owner,
+            &a.job,
+            &spent,
+            &builder(),
+            &mut || Ok(()),
+        ),
+        "fresh review is required",
+    );
+    refused(
+        JobAdvance::transition_data(
+            &a.before,
+            &a.leaf,
+            &a.owner,
+            &a.job,
+            &input(),
+            &builder(),
+            &mut || Ok(()),
+        ),
+        "requires an exact Advance request",
+    );
+    assert!(JobAdvance::data(
+        &a.before,
+        &a.leaf,
+        &a.owner,
+        &a.job,
+        &a.input,
+        &builder(),
+        &attributed(&a.input, &"9".repeat(64)),
+        &mut || Ok(())
+    )
+    .is_err());
+    // The compiled quota is inclusive; the advance's own metadata must fit.
+    let mut full = a.before.clone();
+    full.physical.allocated_bytes = 64 * 1024 * 1024 * 1024;
+    refused(
+        JobAdvance::data(
+            &full,
+            &a.leaf,
+            &a.owner,
+            &a.job,
+            &a.input,
+            &builder(),
+            a.record.original(),
+            &mut || Ok(()),
+        ),
+        "exceeds the compiled quota",
+    );
+}
+#[test]
+fn advance_selection_is_canonical_closed_data_inside_its_reserved_liability() {
+    let a = advancing();
+    let value = selection(&a);
+    let leaf = reserved_leaf(&a);
+    let base = selection_base(&a);
+    let bytes = value.bytes().unwrap();
+    assert!(bytes.len() < PREPARATION_BYTES as usize);
+    assert_eq!(AdvanceSelection::parse(&bytes).unwrap(), value);
+    assert_eq!(value.base(), &base);
+    assert_eq!(value.reservation(), &a.reference);
+    assert_eq!(value.next_job(), &a.record.transition().next_job);
+    assert_eq!(value.physical_after(), &job_written(&base.physical));
+    assert_eq!(value.original(), &reselected(&a));
+    value
+        .validate_against(&a.record, &a.reference, &leaf)
+        .unwrap();
+    assert!(
+        AdvanceSelection::parse(serde_json::to_string_pretty(&value).unwrap().as_bytes()).is_err()
+    );
+    let mut extra = bytes.clone();
+    assert_eq!(extra.pop(), Some(b'}'));
+    extra.extend_from_slice(b",\"go\":true}");
+    assert!(AdvanceSelection::parse(&extra).is_err());
+    let text = std::str::from_utf8(&bytes).unwrap();
+    assert!(text.starts_with("{\"schema_version\":1,"));
+    let mut tampered = vec![
+        text.replacen("{\"schema_version\":1,", "{\"schema_version\":2,", 1)
+            .into_bytes(),
+        relabelled(
+            &bytes,
+            "luma-c-index-advance-selection-v1",
+            "luma-c-index-advance-selection-v2",
+        ),
+    ];
+    for (section, field) in [
+        ("\"capacity\":{", "retained_records"),
+        ("\"physical_after\":{", "allocated_bytes"),
+        ("\"base\":{", "segments"),
+    ] {
+        tampered.push(bump(&bytes, section, field));
+    }
+    for (case, changed) in tampered.iter().enumerate() {
+        assert_ne!(changed, &bytes, "case {case}");
+        let value: AdvanceSelection = serde_json::from_slice(changed).unwrap();
+        assert_eq!(&serde_json::to_vec(&value).unwrap(), changed, "case {case}");
+        assert!(AdvanceSelection::parse(changed).is_err(), "case {case}");
+    }
+    // These two parse alone. Only the exact reservation they consume refuses.
+    for section in ["\"next_job\":{", "\"reservation\":{"] {
+        let forged: AdvanceSelection =
+            serde_json::from_slice(&bump(&bytes, section, "bytes")).unwrap();
+        refused(
+            forged.validate_against(&a.record, &a.reference, &leaf),
+            "inside its reserved liability",
+        );
+    }
+}
+#[test]
+fn advance_selection_refuses_a_substituted_reservation_leaf_or_measured_delta() {
+    let a = advancing();
+    let leaf = reserved_leaf(&a);
+    let base = selection_base(&a);
+    let original = reselected(&a);
+    let written = job_written(&base.physical);
+    let select = |base: &Base,
+                  reference: &RecordRef,
+                  leaf: &Leaf,
+                  after: &PhysicalInventory,
+                  original: &Attribution| {
+        AdvanceSelection::data(
+            base,
+            &a.record,
+            reference,
+            leaf,
+            after,
+            original,
+            &mut || Ok(()),
+        )
+    };
+    select(&base, &a.reference, &leaf, &written, &original).unwrap();
+    let other = RecordRef {
+        bytes: a.reference.bytes + 1,
+        ..a.reference.clone()
+    };
+    refused(
+        select(&base, &other, &leaf, &written, &original),
+        "names a different reservation record",
+    );
+    // The reservation event, the job it names and the base each stay exact.
+    let unreserved = Base {
+        index_sha256: Some(a.leaf.sha256().unwrap()),
+        ..base.clone()
+    };
+    refused(
+        select(&unreserved, &a.reference, &a.leaf, &written, &original),
+        "inside its reserved liability",
+    );
+    let moved = Leaf {
+        current_job: None,
+        ..leaf.clone()
+    };
+    refused(
+        select(&base, &a.reference, &moved, &written, &original),
+        "inside its reserved liability",
+    );
+    for field in 0..3 {
+        let mut changed = base.clone();
+        match field {
+            0 => changed.owner_sha256 = "d".repeat(64),
+            1 => changed.segments += 1,
+            _ => changed.physical.allocated_bytes += 4096,
+        }
+        refused(
+            select(&changed, &a.reference, &leaf, &written, &original),
+            "inside its reserved liability",
+        );
+    }
+    // A selection needs its own operation, never the reservation's.
+    refused(
+        select(&base, &a.reference, &leaf, &written, a.record.original()),
+        "inside its reserved liability",
+    );
+    let mut profile = original.clone();
+    profile.profile = "other".into();
+    assert!(select(&base, &a.reference, &leaf, &written, &profile).is_err());
+    // The reserved liability is inclusive; the measured delta stays inside it.
+    let p = &base.physical;
+    let limit = a.record.liability();
+    let exact = PhysicalInventory {
+        allocated_bytes: p.allocated_bytes + limit.allocated_bytes,
+        regular_files: p.regular_files + limit.regular_files,
+        directories: p.directories + limit.directories,
+        ..p.clone()
+    };
+    select(&base, &a.reference, &leaf, &exact, &original).unwrap();
+    for (case, after) in [
+        PhysicalInventory {
+            allocated_bytes: exact.allocated_bytes + 1,
+            ..exact.clone()
+        },
+        PhysicalInventory {
+            regular_files: exact.regular_files + 1,
+            ..exact.clone()
+        },
+        PhysicalInventory {
+            directories: exact.directories + 1,
+            ..exact.clone()
+        },
+        PhysicalInventory {
+            allocated_bytes: p.allocated_bytes - 1,
+            ..p.clone()
+        },
+        PhysicalInventory {
+            regular_files: p.regular_files - 1,
+            ..p.clone()
+        },
+        PhysicalInventory {
+            directories: p.directories - 1,
+            ..p.clone()
+        },
+        PhysicalInventory {
+            logical_bytes: p.logical_bytes - 1,
+            ..p.clone()
+        },
+        PhysicalInventory {
+            incomplete_objects: p.incomplete_objects + 1,
+            ..p.clone()
+        },
+    ]
+    .iter()
+    .enumerate()
+    {
+        let result = select(&base, &a.reference, &leaf, after, &original);
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("inside its reserved liability"),
+            "case {case}"
+        );
+    }
+    let mut revoke = || -> Result<()> { Err("fixture revoked".into()) };
+    refused(
+        AdvanceSelection::data(
+            &base,
+            &a.record,
+            &a.reference,
+            &leaf,
+            &written,
+            &original,
+            &mut revoke,
+        ),
+        "fixture revoked",
+    );
+}
+/// The two reservation classes share every field name, so a relabelled record
+/// passes the closed shape and reaches semantic validation.
+#[test]
+fn index_records_refuse_each_others_exact_and_relabelled_bytes() {
+    let a = advancing();
+    let advance = a.record.bytes().unwrap();
+    let advanced = selection(&a).bytes().unwrap();
+    let start = reserved().0.bytes().unwrap();
+    let phase = prepared().0.bytes().unwrap();
+    for bytes in [&advance, &advanced, &start] {
+        assert!(Preparation::parse(bytes).is_err());
+    }
+    for bytes in [&advance, &advanced, &phase] {
+        assert!(JobReservation::parse(bytes).is_err());
+    }
+    for bytes in [&advanced, &start, &phase] {
+        assert!(JobAdvance::parse(bytes).is_err());
+    }
+    for bytes in [&advance, &start, &phase] {
+        assert!(AdvanceSelection::parse(bytes).is_err());
+    }
+    for bytes in [&advance, &advanced, &start, &phase] {
+        assert!(super::job::JobSelection::parse(bytes).is_err());
+        assert!(super::phase_selection::PhaseSelection::parse(bytes).is_err());
+    }
+    refused(
+        JobAdvance::parse(&relabelled(
+            &start,
+            "luma-c-index-job-reservation-v1",
+            "luma-c-index-job-advance-v1",
+        )),
+        "is not an exact Advance request",
+    );
+    refused(
+        JobReservation::parse(&relabelled(
+            &advance,
+            "luma-c-index-job-advance-v1",
+            "luma-c-index-job-reservation-v1",
+        )),
+        "changes exact before/review/quota DATA",
+    );
+    // A selection record names the job under a different field, so it stops
+    // at the closed shape before the domain check can matter.
+    assert!(super::job::JobSelection::parse(&relabelled(
+        &advanced,
+        "luma-c-index-advance-selection-v1",
+        "luma-c-index-job-selection-v1",
+    ))
     .is_err());
 }
 

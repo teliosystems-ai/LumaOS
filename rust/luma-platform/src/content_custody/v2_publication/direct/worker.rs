@@ -63,6 +63,8 @@ enum Completed {
     IndexJobReservation(RecordRef),
     IndexJobSelection(RecordRef),
     IndexPhaseSelection(RecordRef),
+    IndexAdvanceReservation(RecordRef),
+    IndexAdvanceSelection(RecordRef),
     OwnerMigration(RecordRef),
 }
 impl<A: Checkpoint> Backend<A> {
@@ -83,6 +85,8 @@ impl<A: Checkpoint> Backend<A> {
                 | Completed::IndexJobReservation(_)
                 | Completed::IndexJobSelection(_)
                 | Completed::IndexPhaseSelection(_)
+                | Completed::IndexAdvanceReservation(_)
+                | Completed::IndexAdvanceSelection(_)
                 | Completed::OwnerMigration(_) => {
                     Err("closed V1 consumer received a different semantic completion class".into())
                 }
@@ -102,6 +106,8 @@ impl<A: Checkpoint> Backend<A> {
             | Completed::IndexJobReservation(_)
             | Completed::IndexJobSelection(_)
             | Completed::IndexPhaseSelection(_)
+            | Completed::IndexAdvanceReservation(_)
+            | Completed::IndexAdvanceSelection(_)
             | Completed::OwnerMigration(_) => Err(
                 "closed index-preparation consumer received a different semantic completion class"
                     .into(),
@@ -121,8 +127,32 @@ impl<A: Checkpoint> Backend<A> {
             | Completed::IndexPreparation(_)
             | Completed::IndexJobSelection(_)
             | Completed::IndexPhaseSelection(_)
+            | Completed::IndexAdvanceReservation(_)
+            | Completed::IndexAdvanceSelection(_)
             | Completed::OwnerMigration(_) => Err(
                 "closed index-Start consumer received a different semantic completion class".into(),
+            ),
+        }
+    }
+    pub(in crate::content_checkpoint::custody::v2_publication) fn reserve_index_advance_direct(
+        mut self,
+        input: &crate::content_index::request::Input,
+        job: &crate::content_index::state::Job,
+        builder: &impl crate::content_checkpoint::custody::v2_publication::index::effects::CurrentBuilder,
+        original: &mut OriginalCOperation<'_>,
+    ) -> Result<RecordRef> {
+        let token = index_preparation::advance(&mut self, input, job, builder, original)?;
+        match storage::publish(self, token, original)? {
+            Completed::IndexAdvanceReservation(reference) => Ok(reference),
+            Completed::V1(_)
+            | Completed::IndexPreparation(_)
+            | Completed::IndexJobReservation(_)
+            | Completed::IndexJobSelection(_)
+            | Completed::IndexPhaseSelection(_)
+            | Completed::IndexAdvanceSelection(_)
+            | Completed::OwnerMigration(_) => Err(
+                "closed index-Advance consumer received a different semantic completion class"
+                    .into(),
             ),
         }
     }

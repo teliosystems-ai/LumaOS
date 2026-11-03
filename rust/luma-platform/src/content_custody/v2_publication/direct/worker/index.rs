@@ -3,6 +3,7 @@
 //! here against actual current direct roots; no supplied next roots are used.
 use super::*;
 use crate::content_checkpoint::custody::v2_publication::index::effects::{self, PreparationView};
+use crate::content_index::state::Job;
 use crate::content_index::{phase, request};
 
 pub(super) struct View<'a, A: Checkpoint> {
@@ -112,6 +113,32 @@ pub(super) fn start<A: Checkpoint>(
         original,
     )
 }
+pub(super) fn advance<A: Checkpoint>(
+    backend: &mut Backend<A>,
+    input: &request::Input,
+    job: &Job,
+    builder: &impl effects::CurrentBuilder,
+    original: &mut OriginalCOperation<'_>,
+) -> Result<VerifiedTransition> {
+    original.check()?;
+    let proof = effects::verify_index_advance(
+        &mut View {
+            backend,
+            remaining: READ_BUDGET,
+        },
+        input,
+        job,
+        builder,
+        original,
+    )?;
+    finish(
+        backend,
+        input,
+        proof,
+        effects::PreparedKind::Advance,
+        original,
+    )
+}
 fn finish<A: Checkpoint>(
     backend: &mut Backend<A>,
     input: &request::Input,
@@ -207,6 +234,17 @@ fn finish<A: Checkpoint>(
                 original_authority: parts.original_authority,
             },
             Completed::IndexJobReservation(parts.preparation),
+        ),
+        effects::PreparedKind::Advance => (
+            OperationData::IndexAdvanceReservation {
+                binding: parts.binding,
+                request_sha256: request_sha256.clone(),
+                input_sha256: parts.input_sha256.clone(),
+                source_sha256: parts.source_sha256.clone(),
+                reservation: parts.preparation.clone(),
+                original_authority: parts.original_authority,
+            },
+            Completed::IndexAdvanceReservation(parts.preparation),
         ),
     };
     operation.validate()?;

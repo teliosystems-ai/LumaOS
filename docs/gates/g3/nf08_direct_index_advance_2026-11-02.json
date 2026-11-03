@@ -1,0 +1,594 @@
+{
+  "schema_version": 1,
+  "recorded_on": "2026-11-02",
+  "status": "verified-component-tests-only-index-publication-partial-member-recovery-and-c-reservation-open",
+  "scope": "G3 functional branch only: one metadata-only phase Advance of a selected completed job, reserved in C and selected by a second NV dispatch in a real migrated V2 store, with a cold replay of both events; no production caller, produced image, GWIN0 package, installed run or native C activation",
+  "branch_policy": {
+    "branch": "feature/g3-functional-beta",
+    "branched_from": "b69e09385a919f074d3ba9dfce45fb561ef6ab6f",
+    "g2_testing_and_gwin0_branch": "feature/g3-gwin0-beta",
+    "owner_decision": "On 29 October 2026 the owner kept further sequence-19 G2 testing and GWIN0 completion on feature/g3-gwin0-beta and moved G3 functional development to this branch in the words: complete G3 in a different branch till we fully test G2 and complete GWIN0. This checkpoint is the next step of that work; no separate owner approval of it is claimed"
+  },
+  "implementation": [
+    "reserve_index_advance_direct (direct/worker.rs) takes an Advance request and the job the caller holds. C requires that job's digest to equal the selected leaf's current job, and the leaf must have no unresolved preparation. The reservation takes one NV dispatch and writes nothing to the store",
+    "The JobAdvance record (index/effects/job_advance.rs, domain luma-c-index-job-advance-v1) reconstructs the next job from the selected job and the current fixed builder. No worker JSON, review hash or job bytes are accepted as input. An advance writes one job blob and no window objects, so it has its own reservation and selection in place of a phase preparation",
+    "select_index_advance_direct (direct/worker/index_select.rs) runs under a new original operation. It reads the base job through the store, compares it with the caller's job before writing, writes the reserved next job and reads it back",
+    "The AdvanceSelection record (domain luma-c-index-advance-selection-v1) names the reservation, the next job, the measured physical accounting and the new original. One NV dispatch selects it, so the leaf's current job becomes the next job and the event resolves the reservation",
+    "direct/worker/index_cold.rs and index_select_cold.rs, with index/effects/selected.rs, replay both events from a cold reopen. The replay proves the record shape, the liability and capacity arithmetic and the input, source and attribution tuple. The next job and measured inventory are selection data, so it does not re-read the store bytes",
+    "The publisher still has no production caller. Production builds do not compile the direct publisher, its cold verifiers, the index effects module or the test-only IndexAdvanceReservation and IndexAdvanceSelection variants"
+  ],
+  "production_change": "None from this slice: its 17 files change only code compiled under test. The checked snapshot also carries the harness and mount test fix set (10 files, 384 insertions, 37 deletions), which changes tests, the native harness and the fixture sweep. Its one line outside those files in rust/luma-platform/src/content_custody/paged.rs declares a #[cfg(test)] test module, so it changes no production code either",
+  "exact_sources": {
+    "advance_snapshot": {
+      "commit": "2c635e037b44b4b0d81a9bb9372d3c0958d6fb77",
+      "tree": "4c29679efce010838fbc9ece131cc4b073b33e0c",
+      "parent_commit": "d38aa7fc9cfd8ea18ca719e2d8e0f3547c5354a5",
+      "rust_tree": "a9cba0f4bb57595199b8087247a4190d1c5bbd7e",
+      "diff_from_previous_head": "d38aa7f..2c635e0: 28 files, 3589 insertions, 254 deletions",
+      "diff_of_this_slice": "17 files under rust/luma-platform/src/content_custody, 3098 insertions, 205 deletions",
+      "diff_of_the_fix_set": "d38aa7f..8aedc0b: 10 files, 384 insertions, 37 deletions",
+      "remaining_file": "native/evidence/NATIVE_CONTENT_TEST_COST_2026-11-02.md, the 28th file, is a note",
+      "snapshot_diff_sha256": "0e2b58bed1110069185c0940745c524911f3acd4137a576de294344e9996b45b",
+      "note": "An unreferenced commit of the working tree. No branch or index moved, and it is on no branch. A later commit of these sources has a different commit id; if its rust directory is unchanged it has the rust_tree above"
+    }
+  },
+  "verification": {
+    "environment": {
+      "container": "pinned tools image sha256:819dfe7772da1e3c76ffdc8f9ea4a1fa44c7c549bd4fa988e35d9397d87924b2",
+      "network": "none",
+      "memory_limit": "8g",
+      "cpu_limit": 6,
+      "cargo_build_jobs": 1,
+      "warnings_denied": true,
+      "test_profile": "The committed lightly optimized dev/test profile (opt-level 1, line-table debug info, debug assertions and overflow checks; release unchanged), checked by the run in profile.txt, with debuginfo off for the run",
+      "storage": "Disposable private ext4 work directories on the build store",
+      "authority": "Explicit software worker attribution, builder identity, resource lease and NV fixtures, not installed original PAM, the installed image builder, physical TPM or loaded LSM qualification"
+    },
+    "advance_checks": {
+      "directory": "/mnt/d/LumaOS-builds/g3-advance-check-20261102-a",
+      "commit": "2c635e037b44b4b0d81a9bb9372d3c0958d6fb77",
+      "sha256sums_verified": true,
+      "sha256sums_sha256": "4d7f873be3845e1e11585d5085510b996056a7d93317eb2f7739d60c469ebe27",
+      "admission_sha256": "bfd3e3d4afa7cd8ce06186c49f806414f559d58579ac3225c3a2248d87d33f75",
+      "profile_sha256": "920ef8d5b573664e83bb766758844d4b44f30533aaba07a735b8fcd2aeda01fc",
+      "reported_failures": 0,
+      "rebuild_guards": "This run stamped the extracted sources before building and required 'Compiling luma-platform' in check-plain.log and build-tests.log, which is present in both, and no FORGED or REFUSAL marker in any platform log, and there is none",
+      "format_check": {
+        "passed": true,
+        "diff_lines": 0,
+        "log_sha256": "467130f691b3a158d6e29fbc587cd4b9c5c181371b96ebba2537fb6423439f87"
+      },
+      "plain_build_check": {
+        "passed": true,
+        "command": "cargo check --offline --locked -p luma-platform",
+        "log_sha256": "d60c572a32b33dca1ea591108ac6f355fbdf42d0052dfb9aa03c3d7c2d286dc7",
+        "finished": "Finished dev [optimized] target(s) in 52.34s"
+      },
+      "warning_denied_test_build": {
+        "passed": true,
+        "packages": [
+          "luma-content",
+          "luma-content-store",
+          "luma-platform"
+        ],
+        "log_sha256": "91add80b76a567428069e0ae4e8d0e32d15af576ba977cf7280ee439761008c6",
+        "finished": "Finished test [optimized] target(s) in 22m 31s"
+      },
+      "tests": [
+        {
+          "filter": "custody::v2_publication::direct::initial::tests::index_cases custody::v2_publication::direct::backend::worker::index_selection::tests",
+          "log": "platform-index.log",
+          "log_sha256": "c699dee73b747abe40e6c77f0f7e0165df36ed1fc084c8a878fee8b650637f4c",
+          "passed": 7,
+          "failed": 0,
+          "filtered_out": 1628,
+          "seconds": 1216.52,
+          "required_ok": [
+            "content_checkpoint::custody::v2_publication::direct::backend::worker::index_selection::tests::a_walk_is_admitted_only_as_c_or_c_plus_complete_reserved_members",
+            "content_checkpoint::custody::v2_publication::direct::initial::tests::index_cases::actual_index_advance_selects_its_reserved_next_job_and_refuses_substitutes_before_nv",
+            "content_checkpoint::custody::v2_publication::direct::initial::tests::index_cases::actual_index_job_selection_reconciles_complete_members_of_interrupted_attempts",
+            "content_checkpoint::custody::v2_publication::direct::initial::tests::index_cases::actual_index_phase_preparation_refuses_substitutes_before_nv_then_one_dispatch_cold_reopen_replays",
+            "content_checkpoint::custody::v2_publication::direct::initial::tests::index_cases::actual_index_phase_run_refuses_substitutes_before_nv_then_one_dispatch_resolves_the_preparation",
+            "content_checkpoint::custody::v2_publication::direct::initial::tests::index_cases::actual_index_start_lost_nv_reply_is_fenced_without_adoption",
+            "content_checkpoint::custody::v2_publication::direct::initial::tests::index_cases::actual_index_start_refuses_substitutes_before_nv_then_one_dispatch_cold_reopen_replays"
+          ]
+        },
+        {
+          "filter": "luma-content and luma-content-store, unfiltered",
+          "log": "content.log",
+          "log_sha256": "17a928fce7e6aebae18200c9176b0c60631710109842c8458c7a1edd2fd7eadd",
+          "results": {
+            "luma-content unit tests": [
+              "ok",
+              102,
+              0,
+              0,
+              0.06
+            ],
+            "luma-content-store unit tests": [
+              "ok",
+              356,
+              0,
+              0,
+              924.63
+            ],
+            "luma-content doc-tests": [
+              "ok",
+              0,
+              0,
+              0,
+              0
+            ],
+            "luma-content-store doc-tests": [
+              "ok",
+              3,
+              0,
+              0,
+              8.03
+            ]
+          }
+        },
+        {
+          "filter": "custody::v2_publication --skip index_cases --skip index_selection::tests",
+          "log": "platform-v2-publication.log",
+          "log_sha256": "e72ab6ffce048c8ddd8159d934e27375ab7c7ddf66b2d2cbceba2e8c87f8fbf7",
+          "passed": 113,
+          "failed": 0,
+          "filtered_out": 1522,
+          "seconds": 407.54,
+          "absent": [
+            "index_cases::",
+            "index_selection::tests::"
+          ]
+        },
+        {
+          "filter": "--skip custody::v2_publication",
+          "log": "platform-rest.log",
+          "log_sha256": "0d80f1f7022fc75da2020450cb90e30986e480ffaaba3d32779e5f615ac36042",
+          "passed": 1472,
+          "failed": 0,
+          "ignored": 43,
+          "filtered_out": 120,
+          "seconds": 899.28
+        }
+      ],
+      "store": {
+        "before_sha256": "755d2aee90e221fc6b61dc78304f61dd6675b252cf6931a8c428fd0da9831865",
+        "after_sha256": "946b15e366aea06b8ae91969a37833e12d6282152f4bb37b88a6e85f9a6dfcdf"
+      },
+      "results_format": "Each results entry is [result, passed, failed, filtered_out, seconds]"
+    },
+    "same_snapshot_checks": {
+      "native_tests": {
+        "directory": "/mnt/d/LumaOS-builds/g3-native-d",
+        "sha256sums_verified": true,
+        "sha256sums_sha256": "09fa2abe3a85c5d55c0fc33a21c5dc358973c933c5551cf2f8bbacb0d946f396",
+        "result": "Ran 967 tests, OK (skipped=2)"
+      },
+      "harness_and_mount": {
+        "directory": "/mnt/d/LumaOS-builds/g3-validate-c",
+        "sha256sums_verified": true,
+        "sha256sums_sha256": "7068d99b506bda60abb7ea000509ebed8c6c26f02ffc1dc7f7264e34d387a7ce",
+        "harness": "CATALOG_CLI_FIXTURE_PASSED and ARTIFACT_CLI_FIXTURE_PASSED in a CI-shaped container. Gate admission itself was not exercised",
+        "mount": "The crossed installed mount refusal test, 1 passed"
+      }
+    },
+    "index_tests": [
+      "a_walk_is_admitted_only_as_c_or_c_plus_complete_reserved_members",
+      "actual_index_advance_selects_its_reserved_next_job_and_refuses_substitutes_before_nv",
+      "actual_index_job_selection_reconciles_complete_members_of_interrupted_attempts",
+      "actual_index_phase_preparation_refuses_substitutes_before_nv_then_one_dispatch_cold_reopen_replays",
+      "actual_index_phase_run_refuses_substitutes_before_nv_then_one_dispatch_resolves_the_preparation",
+      "actual_index_start_lost_nv_reply_is_fenced_without_adoption",
+      "actual_index_start_refuses_substitutes_before_nv_then_one_dispatch_cold_reopen_replays"
+    ],
+    "effects_tests_added": [
+      "advance_reservation_is_canonical_closed_data_with_exact_metadata_liability",
+      "advance_replay_refuses_changed_job_builder_leaf_and_current_callback",
+      "advance_refuses_a_spent_request_relabelled_original_and_uncovered_capacity",
+      "advance_selection_is_canonical_closed_data_inside_its_reserved_liability",
+      "advance_selection_refuses_a_substituted_reservation_leaf_or_measured_delta",
+      "index_records_refuse_each_others_exact_and_relabelled_bytes"
+    ],
+    "test_behaviour": [
+      "New test: over the preparation cut left by the ingest window helper, a reservation is refused because a pending preparation fences an Advance, and a selection fails parsing that preparation record as an Advance reservation",
+      "Over the selected completed job, 9 reservation substitutes are each refused with a specific text, no NV dispatch and an unchanged store inventory. before_nv_refusals gives each text",
+      "The honest reservation is one NV dispatch and leaves the store unchanged. A cold reopen selects it with the same binding, input, reservation and original, with sequence one higher, the owners root unchanged and the index generations root changed. The selected state shows it charged, the physical accounting equal to the stored inventory and the current job unchanged",
+      "No other consumer takes the reservation: a phase preparation, a phase run, a Start selection and a second reservation are each refused with no NV dispatch and an unchanged store",
+      "24 forged candidates of the reservation are then each refused by the cold verifier, and the NV call count and page inventory stay unchanged",
+      "8 selection substitutes are each refused with no NV dispatch and an unchanged store",
+      "An interrupted selection: the actual worker writes all 3 members (one chunk, one group, a blob index) and its original is revoked right after the last, so nothing reaches NV and incomplete objects stay unchanged. A new original reconciles those members with one dispatch and writes nothing more",
+      "A cold reopen selects the Advance with sequence one higher, changed owners and index generations roots and one index generations entry, the reservation resolved and the physical accounting equal to the measured inventory. The job read through its selected reference is Stage::Statistics with the same job id, one higher revision, the old job as previous_job_sha256 and the Advance as last_request_id",
+      "The Advance is not repeatable: a second selection, a second reservation over the old job and an Advance of the new Statistics job are each refused",
+      "24 forged candidates of the selection are then each refused by the cold verifier with the same closure",
+      "Neither record class answers for the other: each of the two reservation classes and each of the two selection classes is relabelled as its counterpart in a sealed candidate and refused. No dispatch happens, the store and page inventories stay unchanged and the selected event still reopens",
+      "18 effects tests pass, six of them new, in the unit form of the same records"
+    ],
+    "before_nv_refusals": {
+      "format": "Each entry names a case and the fragment its test asserts. Each is refused with no NV dispatch and an unchanged store inventory. The interrupted selection is the one exception, since it stops after its writes",
+      "reservation_cases": [
+        [
+          "A reservation over an unresolved preparation",
+          "pending C preparation fences phase advance"
+        ],
+        [
+          "A selection over an unresolved preparation",
+          "unknown field `review`"
+        ],
+        [
+          "A source with the Publish purpose; an original for a stale review",
+          "genuine original IndexPrepare purpose/source"
+        ],
+        [
+          "A revoked original",
+          "software original revoked"
+        ],
+        [
+          "A valid job of another id; the prior job; a stranger builder",
+          "index job advance is not over the exact C-selected lineage/builder"
+        ],
+        [
+          "An older request; a reused request id",
+          "index job CAS/owner/request changed; fresh review is required"
+        ],
+        [
+          "A Step request",
+          "index job advance requires an exact Advance request"
+        ]
+      ],
+      "charged_reservation_cases": [
+        [
+          "A phase preparation",
+          "must remain charged"
+        ],
+        [
+          "A phase run",
+          "requires an unresolved preparation over the exact selected job"
+        ],
+        [
+          "A Start selection",
+          "index job selection requires a reserved first job and no selected job"
+        ],
+        [
+          "A second reservation",
+          "pending C preparation fences phase advance"
+        ]
+      ],
+      "selection_cases": [
+        [
+          "The reservation's own original",
+          "requires a new original operation, not the reservation one"
+        ],
+        [
+          "A source with the Publish purpose",
+          "index Advance selection differs from the actual original index source"
+        ],
+        [
+          "An original for a stale review",
+          "genuine original IndexPrepare purpose/source"
+        ],
+        [
+          "A different request; a stranger builder",
+          "differs from the C-selected reservation owner/input/builder"
+        ],
+        [
+          "The prior job; a foreign job",
+          "index job advance is not over the exact C-selected lineage/builder"
+        ],
+        [
+          "A revoked original",
+          "software original revoked"
+        ],
+        [
+          "An original revoked after the last member",
+          "software original revoked after the last reserved member"
+        ]
+      ],
+      "after_selection_cases": [
+        [
+          "The same selection again",
+          "requires a reservation over a selected job"
+        ],
+        [
+          "A reservation over the old job",
+          "index job advance is not over the exact C-selected lineage/builder"
+        ],
+        [
+          "An Advance of the fresh Statistics job",
+          "phase advance requires exact completed current phase"
+        ]
+      ]
+    },
+    "refusal_cases": {
+      "format": "Each entry names the cases and the complete refusal text recorded in the log of pre-check attempt b. The test on this snapshot asserts a fragment of each text, and the full check passed those assertions. It prints nothing, so the check's own log holds no per-case text",
+      "reservation": [
+        [
+          "No storage in the descriptor",
+          "cold index Start reservation has no selected storage"
+        ],
+        [
+          "Location with its length reduced; location with its frame hash replaced",
+          "cold index Start reservation is not its exact selected descriptor location"
+        ],
+        [
+          "The prior descriptor at its own location",
+          "cold index Start verifier refuses a different semantic event class"
+        ],
+        [
+          "A previous descriptor hash that names nothing; the prior location tree",
+          "cold index Start reservation lost the exact selected previous descriptor address"
+        ],
+        [
+          "The prior descriptor's previous hash; a skipped sequence and ordinal; a forged previous NV head",
+          "cold index Start reservation does not continue the exact authenticated old cut"
+        ],
+        [
+          "A forged owner root page hash; a signers root carrying the owners page; the owner root of the earlier preparation cut",
+          "selected preparation changes unrelated C roots/before cut or actual physical owner selection"
+        ],
+        [
+          "The prior index generations root",
+          "selected preparation role CAS differs from exact canonical retained data"
+        ],
+        [
+          "A forged request hash, input hash, source hash or attribution checkpoint head",
+          "selected Advance reservation body substitutes exact checkpointed source/attribution/before tuple"
+        ],
+        [
+          "A forged reservation record hash",
+          "actual current C has no selected immutable record address"
+        ],
+        [
+          "A reservation record length one short",
+          "cold index Start record complete bytes changed"
+        ],
+        [
+          "A forged control cell instance; a forged descriptor job",
+          "cold index Start reservation differs from its deterministic reviewed layout"
+        ],
+        [
+          "The prior job index",
+          "cold C progress has no selected allocation manifest"
+        ],
+        [
+          "One more charged file; no parent delta. The closure reads the forged frame's own sealed location first, so these stop there and not at the delta and inventory checks",
+          "sealed tail data hash or exact EOF differs"
+        ]
+      ],
+      "reservation_note": "The Advance reservation goes through the Start reservation's verifier, whose texts name Start. A reservation changes no owner, so the owner substitute comes from the earlier preparation cut, whose owners differ, and stops at the unrelated roots with the forged page hash",
+      "selection": [
+        [
+          "No storage in the descriptor",
+          "cold index job selection has no selected storage"
+        ],
+        [
+          "Location with its length reduced; location with its frame hash replaced",
+          "cold index job selection is not its exact selected descriptor location"
+        ],
+        [
+          "The reservation descriptor at its own location",
+          "cold index job selection verifier refuses a different semantic event class"
+        ],
+        [
+          "A previous descriptor hash that names nothing; the prior location tree",
+          "cold index job selection lost the exact selected previous descriptor address"
+        ],
+        [
+          "The prior descriptor's previous hash; a skipped sequence and ordinal; a forged previous NV head",
+          "cold index job selection does not continue the exact authenticated old cut"
+        ],
+        [
+          "A forged owner root page hash",
+          "actual current C has no selected semantic page address"
+        ],
+        [
+          "A signers root carrying the owners page",
+          "selected preparation changes unrelated C roots/before cut or actual physical owner selection"
+        ],
+        [
+          "The prior owner root; the prior index generations root",
+          "selected preparation role CAS differs from exact canonical retained data"
+        ],
+        [
+          "A forged request hash, source hash or attribution checkpoint head",
+          "selected advance selection body substitutes exact checkpointed source/attribution/before tuple"
+        ],
+        [
+          "A forged input hash",
+          "selected advance selection differs from its retained owner/reservation/input"
+        ],
+        [
+          "A forged selection record hash",
+          "actual current C has no selected immutable record address"
+        ],
+        [
+          "A selection record length one short",
+          "cold index job selection record complete bytes changed"
+        ],
+        [
+          "A forged control cell instance; a forged descriptor job",
+          "cold index job selection differs from its deterministic reviewed layout"
+        ],
+        [
+          "The prior job index",
+          "cold C progress has no selected allocation manifest"
+        ],
+        [
+          "One more charged file; no parent delta",
+          "sealed tail data hash or exact EOF differs"
+        ]
+      ],
+      "relabelled_records": [
+        [
+          "An Advance reservation relabelled as a Start reservation",
+          "index job reservation record changes exact before/review/quota DATA"
+        ],
+        [
+          "A Start reservation relabelled as an Advance reservation",
+          "index job advance record is not an exact Advance request"
+        ],
+        [
+          "An Advance selection relabelled as a job selection",
+          "unknown field `next_job`"
+        ],
+        [
+          "A job selection relabelled as an Advance selection",
+          "unknown field `job`"
+        ]
+      ]
+    },
+    "unreached_refusals": {
+      "note": "No printed case of pre-check attempt b ends at the refusals below. Some may be reached by other tests of shared code; that is neither checked nor claimed here",
+      "record": [
+        "index job advance record changes exact before/review/quota DATA",
+        "C job advance exceeds fixed 64 KiB record",
+        "independent C job advance replay differs from exact selected job/builder/plan",
+        "index job advance replay has no selected current job",
+        "cold C job advance replay differs from the exact selected owner/leaf",
+        "reserved next job is rebuilt only from its reserved job",
+        "rebuilt next job differs from the reserved reference/write set",
+        "index advance selection record changes exact base/job/quota DATA",
+        "C advance selection exceeds fixed 64 KiB record"
+      ],
+      "cold_verifier": [
+        "cold index job selection reader refuses an unselected role/root",
+        "cold index job selection map proof substitutes requested logical key",
+        "cold index job selection record exceeds its closed class before I/O",
+        "cold index job selection has no previous full-frame commitment",
+        "cold index job selection previous direct storage absent",
+        "cold index job selection previous job index absent",
+        "cold index job selection current job index absent",
+        "cold index job selection lost its owner root",
+        "cold index job selection lost its index root",
+        "cold index job selection role roots differ from independent selection replay",
+        "cold index job selection repeats a complete record digest"
+      ],
+      "selected_replay": [
+        "selected Advance reservation original index absent",
+        "selected Advance reservation changes its original owner",
+        "selected replacement-leaf credit exhausted before Advance replay",
+        "selected advance selection original reservation leaf absent",
+        "selected advance selection owner leaf exceeds its bounded map value",
+        "selected replacement-leaf credit exhausted before advance selection replay"
+      ],
+      "selection_verifier": [
+        "index phase advance requires a C-selected job",
+        "fixed index builder changed during job advance",
+        "index advance selection lost its C-selected job",
+        "index advance selection finishes under a different original operation",
+        "index advance selection owner leaf exceeds its bounded map value",
+        "index advance selection lost its C-selected reservation leaf",
+        "index advance selection requires the exact reserved Advance request",
+        "index advance selection requires a C-selected reservation",
+        "independent next job review differs from the C-selected reservation",
+        "fixed index builder changed during advance selection"
+      ],
+      "worker": [
+        "index Advance selection built a different completion class",
+        "closed index Advance-selection consumer received a different semantic completion",
+        "actual stored base job differs from the caller's job",
+        "actual job blob differs from the C-reserved job reference",
+        "actual job blob read-back differs from the C-derived job bytes"
+      ],
+      "shared_closure": "The Advance adds no disturbed-store cases. Its reservation goes through the Start verifier and its selection through the job selection verifier, so the unreached refusals of those verifiers apply to it as well"
+    },
+    "test_time": {
+      "note": "Local figures, then the CI figure scaled from them. The two ratios are 0.675, measured on d38aa7f's rust tree (1475.90 CI seconds over the local total below), and 7516/6663.81, the mount read note's scale. They differ by a factor of 1.67, the reason is not traced, and CI has not run this snapshot. The before figures are from a check of a snapshot with d38aa7f's rust tree. The 7200-second deadline and 180-minute job limits are unchanged",
+      "index_filter_seconds": 1216.52,
+      "same_filter_before_this_slice_seconds": 895.23,
+      "platform_total_seconds": 2523.34,
+      "platform_total_before_this_slice_seconds": 2185.11,
+      "before_this_slice_directory": "/mnt/d/LumaOS-builds/g3-test-cost-check-20261102-c",
+      "per_test_minutes": {
+        "a_walk_is_admitted_only_as_c_or_c_plus_complete_reserved_members": "0m 00s",
+        "actual_index_advance_selects_its_reserved_next_job_and_refuses_substitutes_before_nv": "5m 14s",
+        "actual_index_job_selection_reconciles_complete_members_of_interrupted_attempts": "3m 48s",
+        "actual_index_phase_preparation_refuses_substitutes_before_nv_then_one_dispatch_cold_reopen_replays": "4m 01s",
+        "actual_index_phase_run_refuses_substitutes_before_nv_then_one_dispatch_resolves_the_preparation": "3m 51s",
+        "actual_index_start_lost_nv_reply_is_fenced_without_adoption": "1m 24s",
+        "actual_index_start_refuses_substitutes_before_nv_then_one_dispatch_cold_reopen_replays": "1m 58s"
+      },
+      "ci_measured_before_this_slice": {
+        "run": 41398711108,
+        "commit": "d38aa7fc9cfd8ea18ca719e2d8e0f3547c5354a5",
+        "full_platform_suite_seconds": 1475.9
+      },
+      "estimated_ci_platform_suite_seconds_on_measured_ratio": 1704,
+      "estimated_ci_platform_suite_seconds_on_old_ratio": 2846,
+      "estimated_margin_against_7200_seconds_on_measured_ratio": 5496,
+      "estimated_margin_against_7200_seconds_on_old_ratio": 4354
+    },
+    "previous_head_ci": {
+      "run": 41398711108,
+      "commit": "d38aa7fc9cfd8ea18ca719e2d8e0f3547c5354a5",
+      "conclusion": "failure",
+      "storage_boundaries": "passed",
+      "tpm_boundaries": "passed: 1585 passed, 0 failed, 42 ignored in 1475.90 seconds, in results/transcript.txt of the native-tpm-boundaries artifact, sha256 965014837d8057045197b18e58d98f19b8981596d7c3d5e2fbd2db4aa2d05274, the value its result.json records",
+      "rust_boundaries": "Failed at step 4 on the artifact-read harness step. The fix set on this snapshot answers that, and CI has not run it",
+      "note": "This run is of d38aa7f, not of this snapshot"
+    },
+    "total_platform_tests_in_build": 1635,
+    "full_platform_suite_run_locally": true,
+    "full_platform_suite_note": "The three platform filters are disjoint and together cover every luma-platform test once: index_cases with the index_selection unit tests, the rest of custody::v2_publication and everything outside custody::v2_publication (7 + 113 + 1515 = 1635, 43 of them ignored by their own attributes). Platform unit tests ran serially; the parallel test interference stays open. kernel_task_inventory_limit is one of the ignored tests; it is unchanged since 17b4293, and this check did not repeat its stress",
+    "dispatched": "test builds only; no production caller"
+  },
+  "not_claimed": [
+    "CI acceptance of this snapshot, including its time budget. Neither this slice nor the fix set is committed or pushed",
+    "Gate admission of the artifact CLI; the harness exercises the gated commands' refusal, and an enrolled Admin anchor in a TPM-backed installed laboratory stays open",
+    "Every refusal of the record, the cold verifiers or the selected replay: unreached_refusals lists the ones no case reaches",
+    "A forged cut selected through C: forged candidates reach the verifier through the test-only entry and not through the reader",
+    "Disturbed-store cases for either Advance event",
+    "A rebuild of the next job from a cold reopen; the cold replay proves the record shape, liability and capacity arithmetic and the input, source and attribution tuple, and the next job is selected data",
+    "Any Advance past Ingest; the test's corpus is one item and it advances into Statistics only",
+    "Any later window; only an ingest window runs on this snapshot, and every later-phase boundary method refuses",
+    "A published index generation; the selected leaf names a next job and no generation is published",
+    "Crash reconciliation of a stopped reservation, or release of a charge; the interrupted selection is a revoked original the test arranges, reconciled by a new original, and a partial member or foreign object is not covered",
+    "A power-loss, crash-consistency or page-cache-drop test",
+    "Reconciliation of an unselected pending worker attempt after a lost NV reply",
+    "The pre-checks and aids below; they are retained aids, not gate checks",
+    "A C reservation of the fresh v2 namespace or joined protected C counters",
+    "A production index grant shape, a production caller, an installed run or native C activation",
+    "Delta overlay, snapshot backup delivery or a V2 owner creation route",
+    "The 100000-object/500-ms NF08 measurement",
+    "Installed PAM, physical TPM, loaded LSM or Hyper-V qualification",
+    "Any produced image or GWIN0 package; G3 and GWIN0 remain open"
+  ],
+  "retained_failed_attempts": [
+    {
+      "directory": "/mnt/d/LumaOS-builds/g3-advance-first-20261102-a",
+      "commit": "3ed2f93f43b8a9d66d4c0012efe0a855ca6765f0",
+      "sha256sums_verified": false,
+      "sha256sums_note": "This first-run script writes no SHA256SUMS, so the hashes below are of the files themselves",
+      "logs": {
+        "admission.txt": "e015568f6682fe3450257934b0f217c18445612a6c381d1e934c5a90a05fd071",
+        "check-tests.log": "4e67b4882d6662acb88fc880da321154c4416e0314480a2845915e1b755edf29"
+      },
+      "results": {
+        "check-tests.log": "E0412 cannot find type BlobReference at index_select.rs:415 and :419"
+      },
+      "cause": "The new selection code named a type it did not import",
+      "correction": "The import was added before attempt b"
+    }
+  ],
+  "retained_precheck_aids": [
+    {
+      "directory": "/mnt/d/LumaOS-builds/g3-advance-first-20261102-b",
+      "commit": "b44109969073d46c1e870afc6a4437c0eca8f526",
+      "sha256sums_verified": false,
+      "sha256sums_note": "This first-run script writes no SHA256SUMS, so the hashes below are of the files themselves",
+      "logs": {
+        "admission.txt": "46942dff8efa15e0fdfb47ddba4a53da5f356314eb5f2436ae30beb45b8416b8",
+        "check-tests.log": "8850123b24a62576b2dba24136b2a9e7da182488ebc84bf7e9fe7a0a6eae3194",
+        "check-plain.log": "1ee9b604e71d09fd7d238a3ebd1f85781e8a60c952d8c50d28704f312997b0f5",
+        "build-tests.log": "7de7aa110ddf6728f7f8f8df4870c4a4068ae4d89d31929b6ec6b8c49fdf671d",
+        "effects.log": "aa0277a5854e2e3ad9dbe932f4f267ccfc0a65743623c0eedb7cde540848a668",
+        "advance.log": "0a195a395c75913bc91036b8a531681e308322f9547f6fed8dc32cceb8892630"
+      },
+      "results": {
+        "effects.log": "18 passed, 0.12 seconds",
+        "advance.log": "1 passed, 302.42 seconds; with effects.log, 94 printed cases matched their expected text and 5 were placeholders, now pinned; none was accepted"
+      },
+      "purpose": "The lenient form's logs are the only record, from a fresh build of an aid, of each case's complete refusal text. The aid patches its extracted copy, so it differs from the snapshot of the same commit"
+    }
+  ]
+}

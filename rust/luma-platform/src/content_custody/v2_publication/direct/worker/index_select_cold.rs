@@ -1,9 +1,9 @@
-//! Cold lineage verifier for one selected direct index job selection. It
-//! replays the selection's retained DATA over the authenticated previous cut
-//! alone, rebuilds the exact owner and index role edits and then the
-//! deterministic physical closure. The measured store accounting is selection
-//! DATA bounded by the consumed reservation's liability; the store blob is not
-//! re-read here, and nothing here dispatches.
+//! Cold lineage verifier for one selected direct index job or Advance
+//! selection. It replays the selection's retained DATA over the authenticated
+//! previous cut alone, rebuilds the exact owner and index role edits and then
+//! the deterministic physical closure. The measured store accounting is
+//! selection DATA bounded by the consumed reservation's liability; the store
+//! blob is not re-read here, and nothing here dispatches.
 use super::super::super::super::super::paged::FILE_BYTES;
 use super::super::super::super::bootstrap::direct_progress::{
     verify_closure, Closure, Data as Replay,
@@ -11,7 +11,8 @@ use super::super::super::super::bootstrap::direct_progress::{
 use super::super::super::jobs::Role;
 use super::*;
 use crate::content_checkpoint::custody::v2_publication::index::effects::{
-    replay_selected_job_data, SelectedEventData, SelectedPreparationReader,
+    replay_selected_advance_data, replay_selected_job_data, SelectedEventData,
+    SelectedPreparationReader,
 };
 use std::cell::RefCell;
 
@@ -95,9 +96,9 @@ impl<F: FnMut() -> Result<()>> SelectedPreparationReader for Reader<'_, '_, '_, 
 }
 
 /// Verifies that the actual selected descriptor is the exact deterministic
-/// index job selection over its authenticated previous cut. Only that last
-/// transition is reconstructed; the previous cut is bound by its frame hash and
-/// NV head.
+/// index job or Advance selection over its authenticated previous cut. Only
+/// that last transition is reconstructed; the previous cut is bound by its
+/// frame hash and NV head.
 pub(in crate::content_checkpoint::custody::v2_publication) fn verify_selected(
     pages: &PageStore,
     current: &Descriptor,
@@ -120,21 +121,49 @@ pub(in crate::content_checkpoint::custody::v2_publication) fn verify_selected(
             "cold index job selection is not its exact selected descriptor location".into(),
         );
     }
-    let OperationData::IndexJobSelection {
-        binding,
-        request_sha256,
-        input_sha256,
-        source_sha256,
-        selection,
-        original_authority,
-    } = &current.operation
-    else {
-        return Err(
-            "cold index job selection verifier refuses a different semantic event class".into(),
-        );
-    };
+    let (advance, binding, request_sha256, input_sha256, source_sha256, selection, authority) =
+        match &current.operation {
+            OperationData::IndexJobSelection {
+                binding,
+                request_sha256,
+                input_sha256,
+                source_sha256,
+                selection,
+                original_authority,
+            } => (
+                false,
+                binding,
+                request_sha256,
+                input_sha256,
+                source_sha256,
+                selection,
+                original_authority,
+            ),
+            OperationData::IndexAdvanceSelection {
+                binding,
+                request_sha256,
+                input_sha256,
+                source_sha256,
+                selection,
+                original_authority,
+            } => (
+                true,
+                binding,
+                request_sha256,
+                input_sha256,
+                source_sha256,
+                selection,
+                original_authority,
+            ),
+            _ => {
+                return Err(
+                    "cold index job selection verifier refuses a different semantic event class"
+                        .into(),
+                )
+            }
+        };
     current.phase.require_ready()?;
-    original_authority.validate()?;
+    authority.validate()?;
     let current_context = map::Context {
         binding: current.binding.clone(),
         selected_descriptor_sha256: hash(&current.bytes()?),
@@ -175,6 +204,8 @@ pub(in crate::content_checkpoint::custody::v2_publication) fn verify_selected(
                 | OperationData::IndexJobReservation { .. }
                 | OperationData::IndexJobSelection { .. }
                 | OperationData::IndexPhaseSelection { .. }
+                | OperationData::IndexAdvanceReservation { .. }
+                | OperationData::IndexAdvanceSelection { .. }
                 | OperationData::IndexPreparation { .. }
         )
     {
@@ -215,21 +246,33 @@ pub(in crate::content_checkpoint::custody::v2_publication) fn verify_selected(
             current_context: &current_context,
         };
         let mut live = || locations::Io::check(&mut **cell.borrow_mut());
-        let replayed = replay_selected_job_data(
-            &mut reader,
-            &previous,
-            current,
-            SelectedEventData {
-                binding,
-                request_sha256: request_sha256.as_str(),
-                input_sha256: input_sha256.as_str(),
-                source_sha256: source_sha256.as_str(),
-                preparation: selection,
-                original_authority,
-            },
-            READ_BUDGET,
-            &mut live,
-        )?;
+        let event = SelectedEventData {
+            binding,
+            request_sha256: request_sha256.as_str(),
+            input_sha256: input_sha256.as_str(),
+            source_sha256: source_sha256.as_str(),
+            preparation: selection,
+            original_authority: authority,
+        };
+        let replayed = if advance {
+            replay_selected_advance_data(
+                &mut reader,
+                &previous,
+                current,
+                event,
+                READ_BUDGET,
+                &mut live,
+            )?
+        } else {
+            replay_selected_job_data(
+                &mut reader,
+                &previous,
+                current,
+                event,
+                READ_BUDGET,
+                &mut live,
+            )?
+        };
         replayed
     };
     let context = map::Context {
@@ -318,7 +361,11 @@ pub(in crate::content_checkpoint::custody::v2_publication) fn verify_selected(
         operation: current.operation.clone(),
         // Both roles are replaced; neither is an unchanged read-CAS.
         read_cas: Vec::new(),
-        outcome: Completed::IndexJobSelection(selection.clone()),
+        outcome: if advance {
+            Completed::IndexAdvanceSelection(selection.clone())
+        } else {
+            Completed::IndexJobSelection(selection.clone())
+        },
     };
     let plan =
         super::storage::layout(&previous.binding, Some(previous_storage), &token, &mut data)?;

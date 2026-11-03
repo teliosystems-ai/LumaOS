@@ -7,8 +7,8 @@ use super::super::*;
 // The closed worker-original publisher awaits its production consumers, direct
 // V1, C owner migration and C index publication. Only tests dispatch it. A
 // cold reader selects a V1 publication, an owner migration window, an index
-// Start reservation, an index job selection or an index phase preparation
-// only through its independent lineage verifier.
+// Start or Advance reservation, an index job or Advance selection or an index
+// phase preparation only through its independent lineage verifier.
 #[allow(dead_code)]
 #[path = "worker.rs"]
 mod worker;
@@ -32,6 +32,28 @@ pub(super) fn verify_index_phase(
     check: &mut impl FnMut() -> Result<()>,
 ) -> Result<()> {
     worker::verify_cold_index_phase(pages, current, location, check)
+}
+
+/// The cold Start or Advance reservation verifier alone, for the same kind of
+/// refusal test.
+pub(super) fn verify_index_reservation(
+    pages: &PageStore,
+    current: &Descriptor,
+    location: &slots::SealedReference,
+    check: &mut impl FnMut() -> Result<()>,
+) -> Result<()> {
+    worker::verify_cold_index_start(pages, current, location, check)
+}
+
+/// The cold job or Advance selection verifier alone, for the same kind of
+/// refusal test.
+pub(super) fn verify_index_job_selection(
+    pages: &PageStore,
+    current: &Descriptor,
+    location: &slots::SealedReference,
+    check: &mut impl FnMut() -> Result<()>,
+) -> Result<()> {
+    worker::verify_cold_index_selection(pages, current, location, check)
 }
 
 pub(in crate::content_checkpoint::custody) struct Backend<A: Checkpoint> {
@@ -159,6 +181,7 @@ impl<A: Checkpoint> Backend<A> {
             } else if matches!(
                 candidate.descriptor().operation,
                 OperationData::IndexJobReservation { .. }
+                    | OperationData::IndexAdvanceReservation { .. }
             ) {
                 worker::verify_cold_index_start(
                     &pages,
@@ -169,6 +192,7 @@ impl<A: Checkpoint> Backend<A> {
             } else if matches!(
                 candidate.descriptor().operation,
                 OperationData::IndexJobSelection { .. }
+                    | OperationData::IndexAdvanceSelection { .. }
             ) {
                 worker::verify_cold_index_selection(
                     &pages,
@@ -223,6 +247,8 @@ impl<A: Checkpoint> Backend<A> {
             OperationData::IndexJobReservation{..}=>return Err("direct reader requires independently reconstructed index Start reservation lineage before selecting this event class".into()),
             OperationData::IndexJobSelection{..}=>return Err("direct reader requires independently reconstructed index job selection lineage before selecting this event class".into()),
             OperationData::IndexPhaseSelection{..}=>return Err("direct reader requires independently reconstructed index phase selection lineage before selecting this event class".into()),
+            OperationData::IndexAdvanceReservation{..}=>return Err("direct reader requires independently reconstructed index Advance reservation lineage before selecting this event class".into()),
+            OperationData::IndexAdvanceSelection{..}=>return Err("direct reader requires independently reconstructed index Advance selection lineage before selecting this event class".into()),
             OperationData::OwnerMigration{..}=>return Err("direct reader requires independently reconstructed owner migration lineage before selecting this event class".into()),
         }
         };

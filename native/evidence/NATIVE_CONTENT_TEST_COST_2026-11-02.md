@@ -83,8 +83,23 @@ Two tests cover the new form:
   now places each conflicting name in turn. The running backend refuses it, and
   removing the name does not revive the fenced handle.
 
-The `crossed installed mount` refusal has no test, because reaching it needs a
-second mount. That was already so before this change.
+An earlier version of this note said the `crossed installed mount` refusal has no
+test because reaching it needs a second mount. The refusal had no test, but the
+reason was wrong. A second mount alone reaches earlier refusals: a bind in place is
+refused when the child is captured, and one added later is refused by the held pin
+of what it covers. The crossing refusal needs the root's mount to change between
+the root's `held` and a child's `held` within one check.
+
+`actual_binds_and_a_mount_moved_during_one_check_are_refused` in
+`paged/mount_tests.rs` now covers all three. A second thread keeps moving one
+mount over the root while the check repeats. The test is ignored by default and
+needs a disposable container with a private mount namespace. It passed on
+unreferenced snapshot `fcaa032`, refused on check 79, in
+`D:\LumaOS-builds\g3-validate-b\mount.log` (`SHA256SUMS` sha256
+`5c4eb7efe21b4cd4efe1e65a8a4da67fa70a7e431a8f57d9470586d698db0515`). The check
+number depends on timing. `run_storage_boundaries.sh` now runs this test, and CI
+has not run that step yet. The G2 fixture sweep gained the lane `custody-mounts`,
+which is unit-tested and has not been executed by the sweep itself.
 
 ## Local check
 
@@ -141,14 +156,62 @@ repeated on it.
 
 Before these runs I predicted that `fsync` and `write` would stay at exactly 1217
 and 1094, as the migration test's 837 did in the mount read note. That prediction
-was wrong: three runs of one binary differ from each other. The differences come
-only from `slots::Directory::fill`, from `allocate_window`, `create_instance` and
-`physical::allocate` under `publish`, and from `ObjectStore::leaf`'s `mkdir`.
-Slot windows are allocated once per up to 16 page specifications, so these counts
-follow the specification count of a run. Fixture content varying per run is the
-likely cause, which was inferred and not traced. Run `b` lies inside the range of
-the other three on both counts, so these counts show no change in the work done,
-but they do not prove it as exact equality would.
+was wrong: three runs of one binary differ from each other, and no exact figure can
+be predicted for this test. An earlier version of this note called fixture content
+varying per run the likely cause, which was inferred. A later trace found the real
+cause.
+
+Fixing the random seed does not stop the variation. With `getrandom` seeded by an
+`LD_PRELOAD` shim, two runs of one seed gave 1227 and 1240 `fsync` calls. The test
+read no other randomness: `/dev/urandom` reads were 0, `getrandom` returned exactly
+32 bytes per call, and neither `content_custody` nor `luma-content-store` uses a
+`HashMap` or `HashSet`. Three runs of one seed, with every call in sequence, show
+where the counts move:
+
+| Count | Run 1 | Run 2 | Run 3 |
+| --- | --- | --- | --- |
+| `fsync` | 1222 | 1223 | 1210 |
+| `write` | 1095 | 1094 | 1090 |
+| slots created, each one `getrandom` | 132 | 132 | 130 |
+| of those, in `reserve_index_start_direct` | 12 | 11 | 8 |
+| of those, in `migrate_owner_direct` | 73 | 72 | 72 |
+| of those, in the other four callers | 47 | 49 | 50 |
+| `fsync` sealing location tree nodes | 90 | 90 | 84 |
+| `write` sealing location tree nodes | 55 | 55 | 52 |
+| object shard `mkdir` `fsync` | 37 | 38 | 37 |
+
+The chain runs from the records to the counts:
+
+- slot references and other records hold values of the run: inode, ctime, device,
+  mount id and instance id. Their bytes, and so their content hashes, differ even
+  with a fixed random seed;
+- object keys are those hashes, so they land differently in the location tree,
+  whose fanout is 16. `direct/worker/storage.rs` sizes each publication's exact slot
+  set from that tree's new nodes, so a batch that touches more leaves needs more
+  slots;
+- each slot costs one `getrandom`, six `fsync` calls and about two `write` calls, and
+  each sealed node adds its own;
+- the same hashes decide which `objects/xx/yy` shard directories already exist, and
+  a new one costs `mkdir` `fsync` calls.
+
+This follows from a hash-keyed tree over records that name their own inodes. It is
+not a fault, and no production code changes for it. Across every run measured,
+`fsync` stayed within 1207 to 1240 and `write` within 1087 to 1098. Run `b` lies
+inside both ranges, so these counts show no change in the work done, but they do
+not prove it as exact equality would.
+
+| Directory | What it holds | `SHA256SUMS` sha256 |
+| --- | --- | --- |
+| `D:\LumaOS-builds\g3-fsync-seeded-b` | seeded and unseeded counts | `44d86b830ada6a77bb24317fa997365f4ad97181bac70e603ebb65c43479dfb1` |
+| `D:\LumaOS-builds\g3-fsync-sequence-a` | three seeded call sequences | `bf61a4f1e5981dab76fbc656e77d03a69f0fa1521a8d15bff19f825223667ced` |
+| `D:\LumaOS-builds\g3-fsync-sequence-a-resolved-b` | the same with resolved stacks | `e39d06ce08654acb62cf3c292c5d82c159c6fd76ff3c0b644aca79360ceb12bb` |
+
+All three ran one test binary, sha256
+`7d825cf9f1575416b7f7196dc80b93d0f0d4e6d4b3b0cef3af871e102a4e7cd8`. Attempt
+`g3-fsync-seeded-a` is retained as failed: its shim did not compile
+(`stringop-truncation`) and no count came from it. The first resolver filtered
+frames after tidying their names and dropped the custody frames, so only the
+filtered-first output above is used.
 
 Run `c`'s stack profile has 23,341 samples, none lost and 4 at the depth limit.
 Inclusive seconds of 255.0:
@@ -200,15 +263,64 @@ Filter times against the phase run check
 
 The remaining platform tests took 882.76, 904.02 and 887.68 seconds across the
 three checks, 5.0% to 7.5% above the before figure, while the control did not
-rise. Nothing measured here explains that. The first of the three predates the new
-test that this filter gained, so that test is not the reason.
+rise. The first of the three predates the new test that this filter gained, so
+that test is not the reason.
+
+An A/B run then measured this filter on both commits in one session. Old is
+`4213feb`, the commit behind the before figure. New is `8aedc0b`. The order was
+old, new, new, old, so that steady drift falls on both sides. Evidence is
+`D:\LumaOS-builds\g3-rise-ab-b` (`SHA256SUMS` sha256
+`d0fe04d2a8d51d0513bc34133933911c38bc29c2cf0f46e73fa119325fb437be`).
+
+| Run | Commit | `finished in`, s |
+| --- | --- | --- |
+| 1 | old | 794.63 |
+| 2 | new | 851.09 |
+| 3 | new | 883.72 |
+| 4 | old | 883.52 |
+
+The old commit moved 88.89 seconds, 11.2%, with no code change, which is more than
+the whole rise. Both new runs sit inside the old range. The rise is therefore not
+attributed to the code. The means differ by 28.33 seconds, 3.4%, and with two runs
+a side and this spread, that does not show the code costs nothing either.
+
+These totals are not comparable with the table above. All four runs used a test
+binary copied out of the target, so 40 tests failed for lack of the helpers and of
+a path uid 989 can reach. The same 40 failed on all four runs. In the three checks
+those tests carried about 5% of this filter's time and about 2.3 seconds of the
+mean rise.
+
+The drift itself is not traced. Between run 1 and run 4 the largest rises are in
+account creation, the request journal and admin governance tests, while the slowest
+test, `staging::tests::thousand_snapshot_cycles_leave_no_payloads`, fell from 170 to
+165 seconds. Inside WSL, `MemAvailable` stayed between 11310252 and 11329852 kB, the
+store had 60.95 GiB free and the five other containers each stayed under 0.2% CPU,
+so neither memory nor store space accounts for it. Nothing was measured on the
+Windows side.
 
 ## CI budget
 
 The 7200-second deadline and the 180-minute job limits stay unchanged. Scaled the
-same way, the estimate falls from 5420 to about 2465 seconds. That is an estimate.
-CI has not run the mount read change, the prepared phase slice or this change, and
-the `tpm-boundaries` result on a pushed commit is the acceptance evidence.
+same way, the estimate fell from 5420 to about 2465 seconds.
+
+CI has since run this change. On `d38aa7f`, run 41398711108, `tpm-boundaries`
+passed. Its full platform suite took 1475.90 seconds, 1585 passed and 42 ignored,
+in `results/transcript.txt` of the `native-tpm-boundaries` artifact (sha256
+`965014837d8057045197b18e58d98f19b8981596d7c3d5e2fbd2db4aa2d05274`, the value its
+`result.json` records). That is the acceptance evidence, and it leaves 5724 seconds
+of the deadline.
+
+The estimate was 989 seconds high. CI ran the suite at 0.675 of the local time,
+where the scale used until now was 1.128. The two ratios differ by a factor of 1.67
+and the reason is not traced, so a ratio from one commit does not predict another.
+Later slices should state the local figure, the scaled figure on both ratios and
+the next measured CI figure.
+
+The direct Advance slice is the first to do so. On snapshot `2c635e0` the platform
+suite took 2523.34 seconds locally, up from 2185.11, and its one new test took 314 of
+them. That scales to about 1704 seconds on the 0.675 ratio and 2846 on the 1.128
+one, leaving 5496 or 4354 seconds of the deadline. CI has not run that snapshot, so
+there is no measured figure yet.
 
 The mount read note stays as dated history, but its closing paragraph no longer
 holds. It said that further reduction would need a change notification or fewer

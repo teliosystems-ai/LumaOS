@@ -2503,6 +2503,75 @@ still an estimate, because CI has run none of this work. The
 [test cost note](../native/evidence/NATIVE_CONTENT_TEST_COST_2026-11-02.md) holds
 the measurements, a retained failed check and a prediction that proved wrong.
 
+CI then ran `d38aa7f` in run 41398711108, so the statements above that CI has run
+none of this work are history. `tpm-boundaries` and `storage-boundaries` passed.
+The full platform suite took 1475.90 seconds in the TPM job, 1585 passed and 42
+ignored, which leaves 5724 seconds of the deadline. The 2465-second estimate was
+989 seconds high: CI ran at 0.675 of the local time, not the 1.128 used until now,
+and that difference is not traced.
+
+`rust-boundaries` failed on that run, at `artifact-read` in the artifact fixture.
+The command sits behind the laboratory gate, a tools container has no enrolled
+Admin anchor, and the gate's first read found no `/run/luma-admin`. Since `2e62f4d`
+the fixture's native refusal cases had passed for the same reason, the gate, and
+not for the refusal they named. The harness now takes gated commands past the gate
+with a `past-gate` route, compiled only into the test executable and only inside
+the verified disposable container, which calls the same production functions as
+`main`. `exercise_gate` compares its list with `main.rs` and shows the binary's
+gate refusing all 14 gated commands with no effect. The refusal cases now name
+their reason, `storage is not block-backed`, so they prove that refusal. An absent
+broker on block-backed storage is not reached, and admission through the gate
+still needs an enrolled Admin anchor in a TPM-backed installed laboratory. The
+catalog fixture's crash point had also gone stale: `recheck-2` no longer preceded
+COMMIT, and `recheck-5` does. No production code or gate changed. Both fixtures
+passed in a container shaped like the CI step, and CI has not run them yet.
+
+Three items reported with `d38aa7f` are resolved. Its commit message says the
+`crossed installed mount` refusal has no test because reaching it needs a second
+mount. That reason was wrong: a second mount alone reaches earlier refusals, and
+this one needs the root's mount to change within one check.
+`actual_binds_and_a_mount_moved_during_one_check_are_refused` now covers all three
+in a disposable private mount namespace, and it passed. `run_storage_boundaries.sh`
+runs it, which CI has not done yet. The G2 fixture sweep gained the `custody-mounts`
+lane, which is unit-tested and has not been executed by the sweep itself. The
+ignored test count is now 43.
+
+The `fsync` and `write` counts vary between runs of one binary because records hold
+inodes and other values of the run, so their hashes place objects differently in
+the location tree, which sizes each publication's slot set. A fixed random seed
+does not stop it, and it needs no change. The earlier explanation, fixture content,
+was inferred and is withdrawn.
+
+The 5.0% to 7.5% rise in the remaining platform tests is not attributed to the
+code. An A/B run moved 11.2% on the old commit alone, more than the whole rise,
+and both new runs sat inside that range. With two runs a side, this does not show
+the code costs nothing. Memory and store space stayed steady. The drift itself is
+untraced, and the Windows side was not measured. All three are in the
+[test cost note](../native/evidence/NATIVE_CONTENT_TEST_COST_2026-11-02.md).
+
+A direct Advance now runs in component tests, recorded in the
+[Advance checkpoint](gates/g3/nf08_direct_index_advance_2026-11-02.json). A completed
+phase moves to the next in two events, as a Start does. The reservation charges the
+reviewed next job and writes nothing. The selection, under a new original, writes
+that job's blob and resolves the charge with one NV dispatch. The next job is rebuilt
+from the selected job and the current fixed builder, so no worker JSON, review hash
+or job bytes are accepted as input.
+
+Nine reservation and eight selection substitutes are refused before NV with the
+store unchanged, and no other consumer takes the reservation. An interrupted
+selection keeps its three complete members, and a new original reconciles them with
+one dispatch and writes nothing more. The cold verifier refuses forged and reclassed
+cuts. Cold replay covers the record's shape, the liability and capacity arithmetic
+and the input, source and attribution tuple, not the job itself. No production code
+changed.
+
+On snapshot `2c635e0`, format was clean, the plain and warning-denied test builds
+passed, the content suites passed, and each of the 1592 platform tests ran once,
+serially (43 ignored). The native tests and both fixtures passed on the same
+snapshot. Platform test time rose from 2185 to 2523 seconds, 314 of them the new
+Advance test. That scales to about 1704 seconds on the measured CI ratio and 2846 on
+the older one, against the 7200-second deadline. CI has not run this snapshot.
+
 Publishing an index generation, recovering a stopped attempt or a partial or
 foreign member, a C namespace reservation and the items above remain open. G3 and
 GWIN0 are not complete.

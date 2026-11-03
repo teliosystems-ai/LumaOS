@@ -175,6 +175,8 @@ pub(in crate::content_checkpoint::custody::v2_publication) fn verify_selected(
                 | OperationData::IndexJobReservation { .. }
                 | OperationData::IndexJobSelection { .. }
                 | OperationData::IndexPhaseSelection { .. }
+                | OperationData::IndexAdvanceReservation { .. }
+                | OperationData::IndexAdvanceSelection { .. }
                 | OperationData::IndexPreparation { .. }
         )
     {

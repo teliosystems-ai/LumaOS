@@ -57,6 +57,18 @@ from DVD+R DL or a virtual CD, installation from either medium and installed
 acceptance remain to be tested on another host; see the
 [sequence-19 handoff](../native/evidence/G2_NATIVE_DESKTOP_CANDIDATE_19_2026-10-28.md).
 
+The owner has since set two requirements: no optical drive is used to test the
+images, and every image is installed from a downloadable location. The ISO is
+not hybrid, so the GPT raw disk image, shipped as `<release>.img.zst` and
+decompressed to `<release>.img`, is the medium for a USB stick of at least
+32 GB and for a VM raw disk; the ISO remains only a VM DVD-file option. The
+owner tests sequences 19 and 20 together on installed and physical hosts, with
+sequence 20 assumed to contain the sequence-19 components. Sequence 20 is
+prepared but not built. The
+[download acceptance handoff](../native/evidence/NATIVE_DOWNLOAD_ACCEPTANCE_19_20_2026-11-03.md)
+gives the download layout and checksum steps, certificate enrollment with Secure
+Boot kept on, and the install, update and recovery checks for both sequences.
+
 These are Linux-based Luma guests under Windows, not replacement Microsoft
 Windows installation media. The current Windows deliverable is profile W;
 profile-V bootable desktop media is explicitly deferred. Native profile-N

@@ -2667,3 +2667,29 @@ or another hypervisor) interacts with the PCR7/LUKS2 sealing. The Hyper-V guest
 drivers in the initrd are unconfirmed, and local-key vTPM custody needs an owner
 decision. Manual steps are in the
 [Hyper-V runbook](HYPERV_MANUAL_TEST_RUNBOOK.md). None of this closes a gate.
+
+### Sequence-20 download-only preparation, 3 November 2026
+
+The owner set two requirements: no optical drive is used to test the images,
+and every image installs from a downloadable location. Acceptance that needs
+installed or physical hosts is the owner's and covers sequences 19 and 20
+together, with sequence 20 assumed to contain the sequence-19 components. The
+ISO is not hybrid, so the GPT raw disk image is the USB-stick and VM raw-disk
+medium, and the build pipeline needs no change. `native/image/live_media_smoke.py`
+runs the ten required and five gated live checks against a `usb-disk`,
+`virtio-disk` or `optical` medium. `native/image/download_manifest.py` lays out a
+download set from a completed export, renders `SHA256SUMS` sorted by name,
+writes it last and prints its pin. `native/evidence/candidate20_steps_2026_11_03.sh`
+takes the cut and attempt letter as parameters for the freeze, source tests,
+assembly, verification, 19-to-20 update geometry, smoke and download steps.
+`native/evidence/NATIVE_DOWNLOAD_ACCEPTANCE_19_20_2026-11-03.md` is the owner
+handoff for both sequences. The laboratory certificate reaches the firmware `db`
+by owner enrollment on a physical machine, or by a disposable OVMF variable
+store under QEMU; Hyper-V cannot take it, so W030 and W032 stay blocked. Secure
+Boot stays on in every path.
+
+Only light validation ran: 41 new unit tests (3 skipped without zstd), the
+existing live, VM and optical media modules on the host, and a read-only check
+that the sequence-19 export inventory and checksum rows match the download
+layout. Sequence 20 is not built, signed or tested. No image was written to a
+USB stick, installed or updated. None of this closes a gate.

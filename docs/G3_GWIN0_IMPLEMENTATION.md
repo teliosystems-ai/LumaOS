@@ -2642,9 +2642,21 @@ outside the live checks, so a much larger cut needs fewer observations per
 boundary call or fewer windows, and either changes what this slice claims. CI has
 not run this change.
 
+CI now runs the NF08 direct index group, the `index_cases` and `index_selection`
+test modules, once, in a new `index-boundaries` job, and `rust-boundaries` and the
+TPM suite skip those two module paths. The group's eight tests, the chain test
+among them, take about 3585 of the suite's estimated 4873 local seconds and read
+only the storage root, not the TPM fixture, so running them in both suite jobs
+added time without adding coverage. No test is marked ignored, so a plain local
+`cargo test` still runs all of them, and the new job refuses to start if either
+path names no test, so a rename cannot empty it silently. At the measured CI ratio
+each suite job should take about 1290 to 1625 seconds and the new job about 3585
+to 4520, within its 180 minutes. Tests added under those two modules count against
+that job's limit, not the TPM deadline. CI has not run the split.
+
 Recovering a stopped attempt or a partial or foreign member, a C namespace
-reservation, a chain test cheap enough for the next slice and the items above
-remain open. G3 and GWIN0 are not complete.
+reservation, a CI run of the split and the items above remain open. G3 and GWIN0
+are not complete.
 
 ### Read-only WSL resource coexistence planner, 3 November 2026
 

@@ -352,6 +352,16 @@ checks, and the live checks are the designed before-and-after re-observation of 
 writer at each boundary call, so a much larger cut needs a decision on that
 observation or on the slice's window claims.
 
+CI then moved that cost out of the two suite jobs. The NF08 direct index group, the
+`index_cases` and `index_selection` test modules of `custody::v2_publication::direct`,
+is eight tests including the chain test, and after this cut it takes about 3585 of
+the suite's estimated 4873 local seconds. It reads only the storage root, so it now
+runs once, in a separate `index-boundaries` job, and `rust-boundaries` and the TPM
+suite skip those two paths. On the 1.0–1.26 ratio each suite job should take about
+1290 to 1625 seconds against the TPM job's 7200-second deadline, and the index job
+about 3585 to 4520 within its 180-minute limit. No test is marked ignored, and the
+index job refuses to start if either path names no test. CI has not run the split.
+
 The mount read note stays as dated history, but its closing paragraph no longer
 holds. It said that further reduction would need a change notification or fewer
 checks per item, and that the budget did not need either. The prepared phase slice

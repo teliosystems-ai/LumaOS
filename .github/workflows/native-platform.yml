@@ -41,7 +41,9 @@ jobs:
           bash -euc 'chmod 0700 /storage;
           test "$(stat -f -c %T /storage)" = ext2/ext3;
           cargo test --offline --locked -p luma-content -p luma-content-store;
-          cargo test --offline --locked -p luma-platform -- --test-threads=1;
+          cargo test --offline --locked -p luma-platform -- --test-threads=1
+          --skip content_checkpoint::custody::v2_publication::direct::initial::tests::index_cases::
+          --skip content_checkpoint::custody::v2_publication::direct::backend::worker::index_selection::tests::;
           cargo build --offline --locked;
           bash /repo/native/image/test_artifact_cli.sh'
       - name: Builder and harness syntax
@@ -65,6 +67,37 @@ jobs:
           docker run --rm --network none
           --mount type=bind,src="$PWD",dst=/repo,readonly
           --workdir /repo/rust luma-native-tools:ci cargo fmt --check
+
+  index-boundaries:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build pinned Ubuntu toolchain
+        run: >-
+          docker build
+          --build-arg UBUNTU_BASE=ubuntu@sha256:008173c23f95b170204355c12626cb5a965d779a7e1283b09e9cffbb1bf33ca3
+          -f native/image/Dockerfile.tools -t luma-native-tools:ci native/image
+      - name: NF08 direct index tests through real C owner migrations and Publish
+        run: >-
+          docker run --rm --network none
+          --ulimit memlock=671088640:671088640
+          --mount type=bind,src="$PWD",dst=/repo,readonly
+          --env CARGO_TARGET_DIR=/tmp/luma-target
+          --env RUSTFLAGS=-Dwarnings
+          --env LUMA_STORAGE_TEST_ROOT=/storage
+          --mount type=volume,dst=/storage
+          --mount type=volume,dst=/var/lib
+          --workdir /repo/rust luma-native-tools:ci
+          bash -euc 'chmod 0700 /storage;
+          test "$(stat -f -c %T /storage)" = ext2/ext3;
+          cases=content_checkpoint::custody::v2_publication::direct::initial::tests::index_cases::;
+          selection=content_checkpoint::custody::v2_publication::direct::backend::worker::index_selection::tests::;
+          for group in "$cases" "$selection"; do
+          cargo test --offline --locked -p luma-platform -- --list "$group" > /tmp/group;
+          grep -x ".*: test" /tmp/group;
+          done;
+          cargo test --offline --locked -p luma-platform -- --test-threads=1 "$cases" "$selection"'
 
   storage-boundaries:
     runs-on: ubuntu-24.04
@@ -141,9 +174,14 @@ jobs:
 # 640 MiB memlock bound as the retained evidence runs. luma-platform unit tests
 # observe process-wide kernel state (descriptors, OFD locks, threads, model
 # credential census) and run serially, as in every retained evidence run.
-# The direct C owner migration and index Start tests each perform real bounded
-# owner migrations, so the full serial suite, which every job still runs in
-# full, needs the longer job limits above; no test is skipped. Dev/test builds
+# The direct C owner migration tests perform real bounded owner migrations. The
+# NF08 direct index group, the index_cases and index_selection test modules,
+# also runs real index phases through Publish and takes about an hour serially.
+# It needs only the storage root, so it runs once, in index-boundaries, which
+# refuses to start if either module path names no test. rust-boundaries and the
+# TPM suite skip the same two paths and still run every other luma-platform
+# test; a plain local cargo test runs all of them, as nothing is ignored. The
+# serial runs keep the longer job limits above. Dev/test builds
 # use opt-level 1 with debug assertions and overflow checks kept on, and
 # line-table debug info so the staged TPM test executable stays under its
 # unchanged 512 MiB cap.

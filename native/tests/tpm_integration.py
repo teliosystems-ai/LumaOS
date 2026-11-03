@@ -113,11 +113,15 @@ def main():
                  '-i', work/'genesis', '0x01804c41'])
             environment['LUMA_TPM_TEST_ADMISSION'] = 'occupied'
             run(admission)
-            # The whole serial suite includes real bounded owner
-            # migrations, also under the index Start tests; this deadline only
-            # bounds a hung run.
+            # The serial suite includes real bounded owner migrations; this
+            # deadline only bounds a hung run. The NF08 direct index group
+            # needs only the storage root, not this TPM, and runs once in the
+            # workflow's index-boundaries job, which rust-boundaries also skips.
             run(['cargo', 'test', '--offline', '--locked', '-p', 'luma-platform', '--', '--nocapture',
-                 '--test-threads=1'], timeout=7200)
+                 '--test-threads=1',
+                 '--skip', 'content_checkpoint::custody::v2_publication::direct::initial::tests::index_cases::',
+                 '--skip', 'content_checkpoint::custody::v2_publication::direct::backend::worker::index_selection::tests::'],
+                timeout=7200)
             # Real PAM/shadow account checks, confined to this fresh container.
             # Never create, expire or lock an account on the Windows/WSL host.
             pam_profile = Path('/etc/pam.d/luma-admin')

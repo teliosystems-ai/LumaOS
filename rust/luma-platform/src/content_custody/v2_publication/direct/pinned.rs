@@ -46,7 +46,7 @@ impl Pinned {
     }
     pub fn check(&self, check: &mut impl FnMut() -> Result<()>) -> Result<()> {
         check()?;
-        self.parent.check()?;
+        // MemberParent::open checks the parent before it opens the name.
         let named = self.parent.open(&self.path, libc::O_RDONLY, 0)?;
         for file in [&self.file, &named] {
             let metadata = file.metadata()?;

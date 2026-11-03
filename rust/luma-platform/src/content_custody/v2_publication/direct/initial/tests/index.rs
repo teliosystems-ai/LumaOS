@@ -3320,9 +3320,11 @@ struct Walk<'a> {
     current: &'a Fixed,
 }
 impl Walk<'_> {
-    /// C prepares one reviewed window of `job`.
-    fn prepare(&self, job: &Job, input: &request::Input, number: u64) {
-        let review = plan(self.store, job, input).review().unwrap();
+    /// C prepares one reviewed window of `job`, and names the review. One plan
+    /// serves both the original's review and the call.
+    fn prepare(&self, job: &Job, input: &request::Input, number: u64) -> phase::WindowReview {
+        let planned = plan(self.store, job, input);
+        let review = planned.review().unwrap();
         let (audit, source) = effect(
             input,
             &review.review_sha256,
@@ -3335,22 +3337,21 @@ impl Walk<'_> {
             .unwrap()
             .prepare_index_direct(
                 input,
-                &plan(self.store, job, input),
+                &planned,
                 &mut software_worker_operation(&audit, source, &mut check),
             )
             .unwrap();
+        review
     }
-    /// The original of one direct run of `input`'s window, reviewed over `job`.
+    /// The original of one direct run of `input`'s window under its plan.
     fn run_original(
-        &self,
-        job: &Job,
         input: &request::Input,
+        planned: &phase::Plan,
         number: u64,
     ) -> (Audit, TypedOperationSource) {
-        let review = plan(self.store, job, input).review().unwrap();
         effect(
             input,
-            &review.review_sha256,
+            &planned.review().unwrap().review_sha256,
             PHASE_GRANT,
             &format!("software index phase run rpc {number}"),
             number,
@@ -3381,7 +3382,8 @@ impl Walk<'_> {
     /// C selects one prepared window under a new original, and a cold reopen
     /// replays it and finds the measured inventory and no open charge.
     fn run(&mut self, job: &Job, input: &request::Input, number: u64) -> (Job, BlobReference) {
-        let (audit, source) = self.run_original(job, input, number);
+        let planned = plan(self.store, job, input);
+        let (audit, source) = Self::run_original(input, &planned, number);
         let mut check = || Ok(());
         cold(self.fixture)
             .unwrap()
@@ -3389,7 +3391,7 @@ impl Walk<'_> {
                 self.store,
                 job,
                 input,
-                plan(self.store, job, input),
+                planned,
                 &mut Sources {
                     binding: input.binding.clone(),
                 },
@@ -3441,10 +3443,10 @@ impl Walk<'_> {
             .store
             .inventory(read(), &mut *self.authority, |_| Ok(()))
             .unwrap();
-        let (audit, source) = self.run_original(job, planned, number);
+        let plan = plan(self.store, job, planned);
+        let (audit, source) = Self::run_original(planned, &plan, number);
         let mut check = || Ok(());
         let backend = cold(self.fixture).unwrap();
-        let plan = plan(self.store, job, planned);
         let mut content = Sources {
             binding: planned.binding.clone(),
         };
@@ -3494,7 +3496,8 @@ impl Walk<'_> {
         input: &request::Input,
         number: u64,
     ) -> (BlobReference, Job, BlobReference) {
-        let (audit, source) = self.run_original(job, input, number);
+        let planned = plan(self.store, job, input);
+        let (audit, source) = Self::run_original(input, &planned, number);
         let mut check = || Ok(());
         cold(self.fixture)
             .unwrap()
@@ -3502,7 +3505,7 @@ impl Walk<'_> {
                 self.store,
                 job,
                 input,
-                plan(self.store, job, input),
+                planned,
                 &mut Sources {
                     binding: input.binding.clone(),
                 },
@@ -3708,11 +3711,7 @@ fn actual_index_phases_run_through_c_and_publish_one_generation() {
         assert!(matches!(job.stage, Stage::Statistics { .. }));
         let number = 950 + 2 * windows;
         let input = window(&job, number);
-        let written = plan(&store, &job, &input)
-            .review()
-            .unwrap()
-            .maximum_write_bytes;
-        walk.prepare(&job, &input, number);
+        let written = walk.prepare(&job, &input, number).maximum_write_bytes;
         let (prior, prior_location) = cut(&fixture);
         let next = walk.run(&job, &input, number + 1);
         if written > 0 && !paged {

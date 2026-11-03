@@ -4,6 +4,7 @@
 use super::super::super::super::super::protocol::{
     software_worker_operation, TypedOperationSource,
 };
+use super::super::super::super::bootstrap::direct_progress as progress;
 use super::super::super::backend::Backend;
 use super::progress_cases::{open, proposal, step, ContentGuard};
 use super::*;
@@ -442,6 +443,21 @@ fn actual_worker_nv_faults_are_fenced_without_redispatch_or_content_adoption() {
             "all new content is allocated before the sole dispatch"
         );
         assert!(cold(&fixture).is_err());
+        let refusal = progress::recovery_review(
+            &mut fixture.memory.clone(),
+            &fixture.files(),
+            &fixture.pages(),
+            &fixture.binding,
+            &mut || Ok(()),
+        )
+        .err()
+        .expect("fresh dispatch recovery stays fenced for direct V1")
+        .to_string();
+        if matches!(fault, Fault::Lost) {
+            assert!(refusal.contains(
+                "direct dispatch recovery covers only bootstrap progress and direct index event classes"
+            ));
+        }
         assert_eq!(fixture.memory.0.borrow().calls, 4, "no redispatch");
         assert_eq!(fixture.pages().inventory(&mut || Ok(())).unwrap(), after);
         assert_eq!(

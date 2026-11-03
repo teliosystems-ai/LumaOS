@@ -7,6 +7,7 @@
 use super::super::super::super::super::protocol::{
     software_worker_operation, OriginalCOperation, TypedOperationSource,
 };
+use super::super::super::super::bootstrap::direct_progress as progress;
 use super::super::super::backend::{
     verify_index_job_selection, verify_index_phase, verify_index_preparation,
     verify_index_reservation, Backend,
@@ -801,15 +802,19 @@ fn actual_index_job_selection_reconciles_complete_members_of_interrupted_attempt
 }
 
 /// Old and third-NV dispatch faults are the shared fenced dispatch already
-/// exercised on the worker and migration routes; the index route keeps the
-/// lost actual reply, where NV advanced and nothing may be adopted.
+/// exercised on the worker, migration and progress routes. On the index route
+/// a lost actual reply, where NV advanced, stays fenced from the cold reader
+/// and from any redispatch. Only a separate fresh exact original Admin
+/// recovery completes its one pending frame, with no second C advance and no
+/// new allocation; every inexact or revoked recovery leaves it pending.
 #[test]
-fn actual_index_start_lost_nv_reply_is_fenced_without_adoption() {
+fn actual_index_start_lost_nv_reply_needs_fresh_exact_admin_recovery_without_redispatch() {
     let fixture = Fixture::new();
     let Migrated { owner, head, .. } = migrated(&fixture, true);
     let current = builder();
     let input = start(&owner.binding, &head, "1");
     let (audit, source) = original(&input, &head, &current.0, 700);
+    let original_request = source.request_sha256.clone();
     let calls = fixture.memory.0.borrow().calls;
     let backend = cold(&fixture).unwrap();
     fixture.memory.0.borrow_mut().fault = Fault::Lost;
@@ -823,6 +828,92 @@ fn actual_index_start_lost_nv_reply_is_fenced_without_adoption() {
         .is_err());
     assert!(cold(&fixture).is_err());
     assert_eq!(fixture.memory.0.borrow().calls, calls + 1, "no redispatch");
+    let review = || {
+        progress::recovery_review(
+            &mut fixture.memory.clone(),
+            &fixture.files(),
+            &fixture.pages(),
+            &fixture.binding,
+            &mut || Ok(()),
+        )
+    };
+    let reviewed = review().unwrap();
+    assert_eq!(reviewed["operation_class"], "index-job-reservation");
+    assert_eq!(reviewed["actual_nv_is_new"], true);
+    let expected = reviewed["review_sha256"].as_str().unwrap();
+    let before = fixture.pages().inventory(&mut || Ok(())).unwrap();
+    let wrong = "dd".repeat(32);
+    for case in 0..6 {
+        let (mut recovery, mut admin) = fixture.source(true, &reviewed, 701);
+        match case {
+            0 => recovery.operation_id = audit.operation_id.clone(),
+            1 => admin.request_sha256 = original_request.clone(),
+            2 => admin.paged_control.as_mut().unwrap().attempt_sha256 = Some(wrong.clone()),
+            3 => {
+                admin
+                    .paged_control
+                    .as_mut()
+                    .unwrap()
+                    .expected_selected_descriptor_sha256 = Some(wrong.clone())
+            }
+            _ => {}
+        }
+        let mut check = || {
+            if case == 5 {
+                Err("explicit software original recovery revoked".into())
+            } else {
+                Ok(())
+            }
+        };
+        assert!(progress::reconcile(
+            fixture.memory.clone(),
+            fixture.files(),
+            fixture.pages(),
+            fixture.binding.clone(),
+            if case == 4 { wrong.as_str() } else { expected },
+            &mut software_admin_operation(&recovery, admin, &mut check),
+        )
+        .is_err());
+        assert_eq!(fixture.memory.0.borrow().calls, calls + 1);
+        assert_eq!(fixture.pages().inventory(&mut || Ok(())).unwrap(), before);
+        assert_eq!(review().unwrap(), reviewed, "the dispatch stays pending");
+        assert!(cold(&fixture).is_err());
+    }
+    let (recovery, admin) = fixture.source(true, &reviewed, 701);
+    let mut check = || Ok(());
+    let recovered = progress::reconcile(
+        fixture.memory.clone(),
+        fixture.files(),
+        fixture.pages(),
+        fixture.binding.clone(),
+        expected,
+        &mut software_admin_operation(&recovery, admin, &mut check),
+    )
+    .unwrap();
+    let OperationData::IndexJobReservation {
+        original_authority, ..
+    } = &recovered.descriptor().operation
+    else {
+        panic!("recovery completes the exact pending Start reservation")
+    };
+    assert_eq!(*original_authority, audit);
+    assert_eq!(
+        fixture.memory.0.borrow().calls,
+        calls + 1,
+        "no second C advance"
+    );
+    assert_eq!(
+        fixture.pages().inventory(&mut || Ok(())).unwrap(),
+        before,
+        "only the existing pending inode changes"
+    );
+    let reopened = cold(&fixture).expect("the cold reader selects the recovered reservation");
+    assert_eq!(
+        reopened.descriptor().bytes().unwrap(),
+        recovered.descriptor().bytes().unwrap()
+    );
+    assert!(review().is_err(), "a completed dispatch is not recoverable");
+    assert_eq!(fixture.memory.0.borrow().calls, calls + 1);
 }
 
 fn refused() -> luma_content_store::Result<()> {

@@ -9,7 +9,10 @@
 //! The store must equal the C-selected accounting when the writer begins. A
 //! failed attempt keeps the preparation's full liability charged; metadata
 //! objects derive from measured effects, so a retry cannot attribute them in
-//! advance, and reconciling such an attempt is later work.
+//! advance, and reconciling such an attempt is later work. An attempt whose
+//! one C event NV selected but whose reply was lost has not failed: only a
+//! separate fresh exact original Admin recovery completes its pending frame,
+//! with no retry and no second C advance.
 //!
 //! A Publish runs the same way and also writes the generation manifest, which
 //! the event names beside the next job. Only a Publish carries the fixed

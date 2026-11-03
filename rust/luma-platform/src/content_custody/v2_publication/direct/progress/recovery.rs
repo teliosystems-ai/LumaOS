@@ -1,8 +1,68 @@
-//! Fresh recovery may complete only a proved already-new progress dispatch.
-//! Rejected/third-NV attempts retain all allocations and uncertainty. There is
-//! no retry, guessed adoption, authority renewal or second C advance here.
+//! Fresh recovery may complete only a proved already-new dispatch of bootstrap
+//! progress or of a direct index event. Each of those classes writes all of
+//! its store and C allocations before its one C advance and has nothing after
+//! it but the pending completion, so completing the pending frame selects
+//! exactly what the cold reader verifies. Direct V1 and owner migration stay
+//! fenced. Rejected/third-NV attempts retain all allocations and uncertainty.
+//! There is no retry, guessed adoption, authority renewal or second C advance
+//! here.
+use super::super::super::direct::backend::verify_selected_class;
 use super::super::super::direct::reader::{self, ObservedCut};
 use super::*;
+
+/// The event classes fresh recovery may complete, each with the original
+/// request and authority that the recovery must not reuse.
+fn recoverable(operation: &OperationData) -> Result<(&'static str, &String, &Audit)> {
+    match operation {
+        OperationData::BootstrapProgress {
+            request_sha256,
+            original_authority,
+            ..
+        } => Ok(("bootstrap-progress", request_sha256, original_authority)),
+        OperationData::IndexPreparation {
+            request_sha256,
+            original_authority,
+            ..
+        } => Ok(("index-preparation", request_sha256, original_authority)),
+        OperationData::IndexJobReservation {
+            request_sha256,
+            original_authority,
+            ..
+        } => Ok(("index-job-reservation", request_sha256, original_authority)),
+        OperationData::IndexJobSelection {
+            request_sha256,
+            original_authority,
+            ..
+        } => Ok(("index-job-selection", request_sha256, original_authority)),
+        OperationData::IndexPhaseSelection {
+            request_sha256,
+            original_authority,
+            ..
+        } => Ok(("index-phase-selection", request_sha256, original_authority)),
+        OperationData::IndexAdvanceReservation {
+            request_sha256,
+            original_authority,
+            ..
+        } => Ok((
+            "index-advance-reservation",
+            request_sha256,
+            original_authority,
+        )),
+        OperationData::IndexAdvanceSelection {
+            request_sha256,
+            original_authority,
+            ..
+        } => Ok((
+            "index-advance-selection",
+            request_sha256,
+            original_authority,
+        )),
+        OperationData::V1Publication { .. } | OperationData::OwnerMigration { .. } => Err(
+            "direct dispatch recovery covers only bootstrap progress and direct index event classes"
+                .into(),
+        ),
+    }
+}
 
 fn observed<A: Checkpoint>(
     anchor: &mut A,
@@ -13,6 +73,7 @@ fn observed<A: Checkpoint>(
 ) -> Result<(ObservedCut, String, String, String)> {
     let cut = reader::observe(anchor, pages, binding, check)?;
     let descriptor = cut.descriptor();
+    recoverable(&descriptor.operation)?;
     let control::PendingFrame::Prepared { pending } = cut.pending() else {
         return Err("direct progress recovery requires one exact uncompleted dispatch".into());
     };
@@ -34,7 +95,7 @@ fn observed<A: Checkpoint>(
         }
         check()
     };
-    verify_selected(files, pages, descriptor, location, &mut live)?;
+    verify_selected_class(files, pages, descriptor, location, &mut live)?;
     let control::Base::Slot {
         cell:
             control::Cell::Selected {
@@ -76,8 +137,10 @@ pub(in crate::content_checkpoint::custody) fn recovery_review<A: Checkpoint>(
     check: &mut impl FnMut() -> Result<()>,
 ) -> Result<serde_json::Value> {
     let (cut, attempt, review, selected) = observed(anchor, files, pages, binding, check)?;
+    let (class, ..) = recoverable(&cut.descriptor().operation)?;
     Ok(
         serde_json::json!({"schema_version":4,"profile":"luma-c-direct-progress-recovery-v4",
+        "operation_class":class,
         "stable_review_sha256":cut.descriptor().phase.review_sha256,"review_sha256":review,
         "attempt_sha256":attempt,"expected_selected_descriptor_sha256":selected,
         "actual_nv_head":cut.descriptor().selected_nv_head,"actual_nv_is_new":true,
@@ -107,14 +170,7 @@ pub(in crate::content_checkpoint::custody) fn reconcile<A: Checkpoint>(
     let audit = authority.audit();
     audit.validate()?;
     let opaque = tpm::decode::<16>(&source.job)?;
-    let OperationData::BootstrapProgress {
-        request_sha256,
-        original_authority,
-        ..
-    } = &descriptor.operation
-    else {
-        return Err("progress recovery operation class changed".into());
-    };
+    let (_, request_sha256, original_authority) = recoverable(&descriptor.operation)?;
     if expected_review != review
         || source.command != "content-custody-paged-reconcile"
         || source.installation != binding.installation

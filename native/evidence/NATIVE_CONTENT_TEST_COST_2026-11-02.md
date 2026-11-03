@@ -360,7 +360,20 @@ runs once, in a separate `index-boundaries` job, and `rust-boundaries` and the T
 suite skip those two paths. On the 1.0–1.26 ratio each suite job should take about
 1290 to 1625 seconds against the TPM job's 7200-second deadline, and the index job
 about 3585 to 4520 within its 180-minute limit. No test is marked ignored, and the
-index job refuses to start if either path names no test. CI has not run the split.
+index job refuses to start if either path names no test.
+
+CI run 41707675273 ran the split on `acceef8`, which has the rust tree of
+`0806194`. The first attempt failed in every job at the toolchain image build when
+the Ubuntu snapshot mirror returned 502, and the re-run passed all four jobs. The
+index job's guard listed all eight tests, and the job passed them in 1895.66
+seconds after a 7 m 42 s test build. `rust-boundaries` and the TPM suite each
+passed the other 1587 tests, with 43 ignored and the eight filtered out, in 129.49
+and 348.13 seconds, so 1595 tests passed across the jobs, as before. The jobs took
+about 19, 29 and 44 minutes end to end. Against the local figures of about 3585
+seconds for the index group and about 1288 for the rest, that is 0.53 for the index
+group and 0.10 to 0.27 for the rest, not the 1.0 to 1.26 of the two earlier runs.
+The CI ratio therefore varies more between runs than those two showed; the
+180-minute limits and the 7200-second deadline are left as they are.
 
 The mount read note stays as dated history, but its closing paragraph no longer
 holds. It said that further reduction would need a change notification or fewer

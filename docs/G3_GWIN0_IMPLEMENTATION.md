@@ -2652,11 +2652,20 @@ added time without adding coverage. No test is marked ignored, so a plain local
 path names no test, so a rename cannot empty it silently. At the measured CI ratio
 each suite job should take about 1290 to 1625 seconds and the new job about 3585
 to 4520, within its 180 minutes. Tests added under those two modules count against
-that job's limit, not the TPM deadline. CI has not run the split.
+that job's limit, not the TPM deadline.
+
+CI run 41707675273 then ran the split on `acceef8`, whose rust tree is that of
+`0806194`. Its first attempt failed in every job at the toolchain image build,
+when the Ubuntu snapshot mirror returned 502; the re-run passed all four jobs.
+`index-boundaries` passed the eight tests in 1895.66 seconds, and `rust-boundaries`
+and the TPM suite each passed the other 1587, with 43 ignored and the eight
+filtered out, in 129.49 and 348.13 seconds. Before the split the whole suite took
+6569.80 and 5376.88 seconds in those jobs. These times are 0.1 to 0.53 of the
+local figures, against 1.0 to 1.26 in the two earlier runs, so the CI ratio varies
+more between runs than those two showed, and the job limits keep their margin.
 
 Recovering a stopped attempt or a partial or foreign member, a C namespace
-reservation, a CI run of the split and the items above remain open. G3 and GWIN0
-are not complete.
+reservation and the items above remain open. G3 and GWIN0 are not complete.
 
 ### Read-only WSL resource coexistence planner, 3 November 2026
 

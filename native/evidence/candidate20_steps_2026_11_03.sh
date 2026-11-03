@@ -335,8 +335,9 @@ source_tests() {
     }
     # rustfmt runs alone first: a later full check would not stop on a format miss.
     run_step rustfmt rust cargo fmt --check
+    # luma-platform has no library target; its tests are in the binary.
     if [ "$#" -gt 0 ]; then
-        run_step rust-tests rust cargo test --offline --locked -p luma-platform --lib -- "$@" --test-threads=4
+        run_step rust-tests rust cargo test --offline --locked -p luma-platform --bin luma-platform -- "$@" --test-threads=4
         grep -E '^test result:' "$logs/rust-tests.log" | tail -5 || true
     fi
     df -B1 /mnt/luma-build | tail -1 > "$logs/store-after.txt"

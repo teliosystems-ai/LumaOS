@@ -555,7 +555,7 @@ Requirement mapping remains partial:
 | A060, T20 | Current owner-generation/Read grants for verified invoice and generic-content search, exact historical pages and generation-fenced delivery | General per-result access policy, semantic collections/search and installed revocation qualification |
 | W005, V01 | Read-only platform observations, calculated storage and exact supplied release-tuple comparison | Authenticated release policy, encryption and enterprise policy checks |
 | W006, V01/V03 | Collision refusal, compute archive validation, separate TPM/CNG custody source, protected UTC protocol, durable signed deployment/trust/runtime histories and original Admin ceremonies | Installed custody/dependency and recovery qualification; authenticated complete product root filesystem, SID-owned content/effect integration and real inference |
-| W009, V04/T13 | Observed free-memory planning check with an explicit Windows reserve | Effective guest limits, other guest workloads, measured host coexistence and installed worker cgroups |
+| W009, V04/T13 | Observed free-memory planning check with an explicit Windows reserve; read-only coexistence planner over the exact global WSL configuration, sampled Windows foreground and other-WSL peaks and the hosted inference start budget, with review-only limit proposals | Installed LocalSystem service-VM attribution, guest-observed limits, installed worker cgroups, measured QW04/V04 host coexistence and joining the reserve to dispatch-time admission |
 
 No requirement in this table is marked complete by these development slices.
 
@@ -2051,3 +2051,55 @@ remain open. Installation, physical optical or USB boot, graphical and
 installed security or recovery acceptance did not run. See the
 [sequence-19 handoff](../native/evidence/G2_NATIVE_DESKTOP_CANDIDATE_19_2026-10-28.md)
 and [execution record](../native/evidence/candidate19_execution_2026-10-28.json).
+
+### Read-only WSL resource coexistence planner, 3 November 2026
+
+`packaging/windows/coexistence.ps1` plans W009 without changing the host. It
+reads the current user's global `.wslconfig` exactly, and anything it cannot
+interpret blocks planning. It derives the effective WSL VM limit from the
+configured value, capped at physical memory, or from WSL's default of half of
+physical memory. Swap is never counted as model capacity. The planner samples
+Windows available memory and the shared `vmmemWSL` process. The highest limit
+it allows leaves the peak Windows use plus a 1-GiB low-water reserve; the lowest
+covers the peak other-WSL use plus the 5905580032-byte inference start budget.
+A proposal names only `[wsl2] memory`, the affected distributions and a planned
+restart, and is never applied. The planner never edits configuration, stops WSL
+or reserves memory.
+
+Its 101 assertions passed, all 20 deliberate mutants were caught, and the 166
+preflight assertions still pass. A five-sample observation on the development
+host found no feasible limit, with `.wslconfig` unchanged. The installed service
+runs its slot as LocalSystem, so its VM is a second process that interactive
+planning cannot attribute and reports as blocked. That, two-user coexistence and
+Windows responsiveness under load are rows R1 to R4 and U1 to U4 of the new
+[manual qualification runbook](gates/gwin0/MANUAL_QUALIFICATION_RUNBOOK.md),
+which no one has run yet. GWIN0 is not complete.
+
+### Hyper-V download deployment tooling, 3 November 2026
+
+Profile V remains deferred, but its W030–W033 deployment tooling now exists.
+`packaging/windows/check-hyperv-host.ps1` reads the host's Hyper-V readiness and
+changes nothing. The `plan-hyperv.ps1` Download set verifies a downloaded ISO or
+VHDX against `SHA256SUMS` with an independently supplied pin, and plans a
+Generation 2 VM with fixed memory, Secure Boot on, a local-key vTPM, the media
+copied and attached as a file, no network adapter by default, checkpoints
+disabled and no automatic start. It plans by default. `-Apply` refuses a plan
+with blockers, a captured observation, a caller who is neither elevated nor a
+Hyper-V Administrators member, dynamic memory, Secure Boot off or a changed
+media lease. Immediately before creating, it checks again that neither the VM
+nor its directory exists. After creation it reads every setting back against the
+plan; on any difference it stops, lists what it created and the owner's cleanup
+commands, and deletes nothing.
+
+This is verified only against mocked Hyper-V cmdlets under Windows PowerShell
+5.1: 167 deployment and 76 planning assertions passed. PowerShell 7 fails in the
+existing `Luma.Preflight.psm1`, so 5.1 is required. The development host cannot
+run it: it is Windows Home without Hyper-V, its D volume is exFAT and it has too
+little memory. A capable host needs Pro or Enterprise, NTFS storage and at least
+16 GB of RAM with WSL stopped. Three items remain open. The lab-signed image
+is expected to be refused by every Hyper-V Secure Boot template, and every trust
+path (a distribution shim with MOK, an own reviewed shim under the UEFI CA 2023,
+or another hypervisor) interacts with the PCR7/LUKS2 sealing. The Hyper-V guest
+drivers in the initrd are unconfirmed, and local-key vTPM custody needs an owner
+decision. Manual steps are in the
+[Hyper-V runbook](HYPERV_MANUAL_TEST_RUNBOOK.md). None of this closes a gate.

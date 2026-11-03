@@ -1,0 +1,101 @@
+{
+  "schema_version": 1,
+  "recorded_on": "2026-11-03",
+  "stage": "GWIN0",
+  "base_commit": "36bf3b0",
+  "status": "wsl-resource-coexistence-planner-software-verified",
+  "scope": "Read-only W009 WSL resource coexistence planner with a manual qualification runbook for the remaining installed rows; not installed-product, Windows-headroom or two-user qualification",
+  "source_sha256": {
+    "packaging/windows/Luma.Coexistence.psm1": "d8386178cdaf2cf44c46d5ba84aa88e97dfe8c2d196717108c6d1cbfbef3452a",
+    "packaging/windows/coexistence.ps1": "59e8aaab8367326508c08f9ae8160193a7df6cadfe2ee7b1d806b0a1df14baa5",
+    "packaging/windows/test-coexistence.ps1": "a1965362002bd38c3e20771651b99d7a6908997e06c8f73a27e1218a29a0f7ed",
+    "packaging/windows/README.md": "9a89b3e36deef4677cf491ff4c1a52f4c0299f3dfb244d0d576d531e59c23c19",
+    "docs/gates/gwin0/MANUAL_QUALIFICATION_RUNBOOK.md": "94a0984f8fbeb00ac9694612bdd267da9e38ce30254f74433a4c2b789a165e78"
+  },
+  "unchanged_dependencies_sha256": {
+    "packaging/windows/Luma.Preflight.psm1": "3439ded7a8082bfdbd8412e2dbc949a6697f3a1e42db0dba2baad13006e69cae",
+    "packaging/windows/preflight.ps1": "107c5c9fe4122afed6877d87af5f65f95874115fe7c29b94c7498e2e168d4bfe",
+    "packaging/windows/test-preflight.ps1": "fddaafadf774c3dbcceb0b8734d9085a68db1a7a7b1a36997ed7c7eaa66ea7b4"
+  },
+  "validation": {
+    "coexistence_assertions_passed": 101,
+    "coexistence_assertions_failed": 0,
+    "preflight_assertions_passed": 166,
+    "preflight_assertions_failed": 0,
+    "windows_powershell_edition": "5.1",
+    "process_only_remote_signed_approved": true,
+    "persistent_execution_policy_changed": false,
+    "constants_joined_to_hosted_inference_contract": true,
+    "mutants_run": 20,
+    "mutants_killed": 20,
+    "mutants_survived": 0
+  },
+  "implemented": [
+    "Exact, bounded (64 KiB) read of the current user's global .wslconfig with no reparse following; strict UTF-8, control-character, canonical [wsl2] section and memory/swap/processors key, duplicate-key and unit checks fail to an unknown state that blocks planning and proposes nothing",
+    "Effective WSL VM limit derived as the configured memory value, the configured value capped at physical memory, or the WSL default of half of physical memory; configured swap is reported but never counted as model capacity",
+    "Sampled observation of Windows available memory and the single per-user vmmemWSL working set and private bytes, with the configuration hashed before and after sampling and the inventory read through the existing preflight wsl --list parser",
+    "Peak Windows foreground use across samples plus a 1-GiB low-water reserve bounds the maximum VM limit; peak other WSL resident use plus the 5905580032-byte hosted inference start budget bounds the minimum, both constants joined by test to HostedInferenceContract",
+    "Closed-record validation of every observation field; an ambiguous or unreadable VM process, an inconsistent sample, a changed configuration, an unavailable inventory or a stopped shared VM with other WSL2 distributions registered yields blocked-observation",
+    "Statuses blocked-observation, current-limit-fits, change-proposed and no-feasible-limit; a proposal names only the [wsl2] memory setting, a whole-GiB or whole-MiB value, the direction, every affected WSL2 distribution and its state, and requires a WSL restart and owner-reviewed maintenance with applied=false",
+    "The planner never edits .wslconfig, never stops, starts or terminates WSL, never reserves memory and never raises memory automatically; a no-feasible-limit result proposes nothing",
+    "Product distribution names accept LumaOS- development names and the exact LumaHosted-<release>-<generation>-<installation> slot form",
+    "Manual qualification runbook covers installed first launch, TTY, PAM and health; protection and provider; real compact inference; scoped ingestion; lifecycle and resource coexistence including Windows headroom; confinement; and the W022 two-user proof, from a downloaded package location with no optical media"
+  ],
+  "proof": {
+    "directory": "D:/LumaOS-builds/gwin-coexistence-development-8c19391b2b8c7966b0e8142560532dae",
+    "live_observation_path": "D:/LumaOS-builds/gwin-coexistence-development-8c19391b2b8c7966b0e8142560532dae/live-coexistence.json",
+    "live_observation_sha256": "d439fa8afef623f4feb84fd2cd75aa3798ea668106b6c2c5329d7ec4349bc81f",
+    "mutation_results_path": "D:/LumaOS-builds/gwin-coexistence-development-8c19391b2b8c7966b0e8142560532dae/mutation-results.txt",
+    "mutation_results_sha256": "4371cd818e26943a911003456b44b883124b3117c994290e9018e4645eedd234",
+    "mutation_harness_path": "D:/LumaOS-builds/gwin-coexistence-development-8c19391b2b8c7966b0e8142560532dae/mutate.py",
+    "mutation_harness_sha256": "9cbdb0688092cf86beb444a48fbaec8df427aee30f3e33202808ec0928a30eee",
+    "mutated_module_sha256": "d8386178cdaf2cf44c46d5ba84aa88e97dfe8c2d196717108c6d1cbfbef3452a"
+  },
+  "actual_read_only_host_observation": {
+    "observed_at_utc": "2026-11-03T13:35:28.3540168Z",
+    "samples": 5,
+    "status": "no-feasible-limit",
+    "total_memory_bytes": 16989728768,
+    "effective_vm_limit_bytes": 12884901888,
+    "effective_vm_limit_basis": "configured",
+    "configured_swap_bytes": 2147483648,
+    "swap_counted_as_model_capacity": false,
+    "peak_windows_in_use_bytes": 10019405824,
+    "required_windows_reserve_bytes": 11093147648,
+    "other_wsl_peak_resident_bytes": 6907113472,
+    "inference_start_bytes": 5905580032,
+    "other_wsl2_distributions": [
+      "Ubuntu",
+      "docker-desktop"
+    ],
+    "affected_distribution_states": {
+      "Ubuntu": "Running",
+      "docker-desktop": "Stopped"
+    },
+    "feasible_vm_limit": null,
+    "proposed_change": null,
+    "wsl_config_sha256_before_and_after": "fc58369d24debd9befc329ab2f47dad208da4b168214a6ada530505d7577be86",
+    "wsl_config_unchanged": true,
+    "interpretation": "On this development host the measured Windows reserve and the other WSL use plus compact inference start cannot both fit; the planner proposes nothing and admits nothing"
+  },
+  "primary_references": [
+    "https://learn.microsoft.com/windows/wsl/wsl-config",
+    "https://learn.microsoft.com/windows/win32/cimwin32prov/win32-operatingsystem",
+    "https://learn.microsoft.com/dotnet/api/system.diagnostics.process.privatememorysize64"
+  ],
+  "limitations": [
+    "The installed hosted service imports its slot as LocalSystem; that slot does not appear in the owner's wsl --list, and a second vmmemWSL process makes interactive planning return blocked-observation. Attribution of the service VM and the configuration WSL applies to it needs the installed runbook rows.",
+    "Luma.Preflight.psm1 -DistributionName accepts only LumaOS- names, so preflight cannot yet name a LumaHosted- slot; the coexistence planner accepts both forms. Preflight was not edited because profile V imports it.",
+    "Each Windows user has a separate WSL VM; other users' VMs count as Windows-side use here and are not attributed. Two-user coexistence (W022) remains a runbook row.",
+    "Windows foreground responsiveness under the declared workload (QW04), combined saturation (V04), guest-observed limits, installed per-service cgroup limits and joining the measured reserve to dispatch-time inference admission are not measured.",
+    "The development host was observed read-only and is not a qualified target. No runbook row has been executed.",
+    "No host settings, .wslconfig, account, service, distribution, policy or encryption configuration changed. WSL was not shut down or terminated. No model was executed."
+  ],
+  "gwin0_complete": false,
+  "service_installed": false,
+  "distribution_imported": false,
+  "host_configuration_changed": false,
+  "automatic_memory_change": false,
+  "production_qualified": false,
+  "gate_closing": false
+}

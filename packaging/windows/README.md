@@ -10,11 +10,25 @@ live-installer VHDX is that completed desktop deployment.
 `native/image/hyperv_image.py` performs offline, independently pinned raw-to-VHDX
 conversion with held read-only inputs, exact guest-byte comparison and new
 output files. It does not execute the guest, establish firmware trust, create a
-VM or provide an installed clone. `plan-hyperv.ps1` is a read-only planner over
-pinned public media and explicit resource observations; even a structurally
-valid plan does not authorize deployment. Current lab-certificate trust,
-per-VM TPM/key-protector commissioning, target installation/recovery and ISO
-boot support remain separate implementation and acceptance work.
+VM or provide an installed clone. With pinned VHDX conversion inputs,
+`plan-hyperv.ps1` remains a read-only planner; even a structurally valid plan
+does not authorize deployment. Current lab-certificate trust, per-VM
+TPM/key-protector commissioning, target installation/recovery and ISO boot
+support remain separate implementation and acceptance work.
+
+For Profile V media downloaded as `.iso` or `.vhdx`, `check-hyperv-host.ps1`
+reports read-only host prerequisites and sizing. `plan-hyperv.ps1
+-Sha256SumsPath -Sha256SumsSha256 -ImagePath` checks the held media against an
+independently pinned `SHA256SUMS` and plans a Generation 2 VM. It has fixed
+memory, Secure Boot on with a Microsoft UEFI CA or open-source template, a
+local-key-protector vTPM, no network adapter and no integration services by
+default, and checkpoints off. Only an explicit `-Apply`, run elevated on a
+capable Hyper-V host, creates that VM. It never starts the VM, replaces an
+existing VM or changes host features. These scripts need Windows PowerShell
+5.1. See the
+[Hyper-V manual test runbook](../../docs/HYPERV_MANUAL_TEST_RUNBOOK.md) for
+host preparation, the owner steps and the expected Secure Boot refusal of the
+current lab-signed image.
 
 The physical-capacity tests compile the real hosted authority and exercise
 small ordinary-user NTFS fixtures; they do not provision the System-owned
@@ -23,7 +37,11 @@ authority or mutate host TPM custody:
 ```powershell
 powershell.exe -NoProfile -ExecutionPolicy RemoteSigned -File .\packaging\windows\test-hosted-capacity.ps1 -BuildRoot D:\LumaOS-builds -FixtureRoot C:\Users\hakim\LumaOS\.luma
 powershell.exe -NoProfile -ExecutionPolicy RemoteSigned -File .\packaging\windows\test-hyperv-plan.ps1 -WorkRoot D:\LumaOS-builds
+powershell.exe -NoProfile -ExecutionPolicy RemoteSigned -File .\packaging\windows\test-hyperv-deploy.ps1 -WorkRoot D:\LumaOS-builds
 ```
+
+`test-hyperv-deploy.ps1` runs the download, plan and apply paths against
+mocked Hyper-V cmdlets only.
 
 Use an existing local NTFS fixture directory inside the development workspace;
 the test creates a unique small subdirectory. Compiler and bulk outputs remain
@@ -275,6 +293,58 @@ refused. JSON files are bounded to 64 KiB and 16 object or array nesting levels;
 duplicate or escaped property names are refused before accepting a record.
 Storage capacity and release tuple comparison are not encryption, enterprise
 authorization, effective guest-limit, other-workload or confinement proofs.
+
+## Read-only WSL coexistence planning
+
+The W009 coexistence planner samples the shared WSL VM against Windows use and
+the global WSL limit:
+
+```powershell
+.\packaging\windows\test-coexistence.ps1
+.\packaging\windows\coexistence.ps1 -ProductDistribution LumaOS-Dev -Samples 10 -IntervalMilliseconds 1000
+```
+
+`-ProductDistribution` accepts a development `LumaOS-` name or the exact
+`LumaHosted-INSTALLATION-SEQUENCE-PACKAGE` slot name that the installed hosted
+authority imports. The name only labels that distribution and leaves it out of
+the other-distribution list. While it runs, its memory is still part of the
+shared VM figures, so the planner counts it as other WSL use.
+
+The installed service runs `wsl.exe` as LocalSystem. Its slot, its WSL VM and
+the configuration that WSL applies to it therefore belong to that account, not
+to the caller. The caller's inventory does not list the slot, and while the
+service VM runs a second `vmmemWSL` makes the result `blocked-observation`.
+Planning from an interactive account is a pre-install or product-stopped
+observation; the service VM itself remains installed qualification.
+
+It reads `%UserProfile%\.wslconfig` (bounded, before and after sampling), the
+`wsl.exe --list --verbose` inventory, Windows total/available memory and the
+current user's `vmmemWSL` working set and private bytes. Only the canonical
+`[wsl2]` `memory`, `swap` and `processors` keys are interpreted; an ambiguous
+value, noncanonical key or section, duplicate, non-UTF-8 or oversized file is
+`unknown` and blocks planning instead of being defaulted. An absent setting
+uses the WSL default of half the physical memory, and a value above physical
+memory is capped.
+
+The measured Windows foreground reserve is the peak of total minus available
+minus the VM working set across samples, plus the 1-GiB low-water reserve of
+the hosted inference contract. Other WSL use is the peak of the VM working set
+and private bytes. A limit fits only when it leaves that reserve to Windows and
+still covers other WSL use plus the 5.5-GiB compact inference start budget;
+swap is never counted as model capacity. When another distribution is
+registered but the VM is not running, when more than one `vmmemWSL` exists
+(another signed-in user's VM) or when the configuration changes during
+sampling, the result is `blocked-observation`.
+
+`change-proposed` only displays a reviewed maintenance action: the single
+`[wsl2] memory` value, whether it creates a new global file, every affected
+WSL2 distribution and the need to restart WSL. `applied`,
+`global_wsl_settings_changed`, `wsl_shutdown_issued` and
+`automatic_memory_change` stay false; the scripts never write the file or stop
+WSL. `no-feasible-limit` means this host cannot meet both bounds with its
+measured workload. A pass is a planning observation only: the guest-observed
+limit, installed per-service cgroups, QW04/V04 responsiveness and dispatch-time
+admission remain installed qualification.
 
 ## Offline package content validation
 

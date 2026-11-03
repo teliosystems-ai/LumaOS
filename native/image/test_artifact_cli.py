@@ -2,17 +2,87 @@
 
 Production publishers must refuse absent resources. Successful publication here
 uses a separate Rust unit-test executable, not a production broker fallback.
+The laboratory gate stops gated commands on the binary here, because this
+container has no enrolled Admin anchor. The same executable carries them past
+the gate to the production function, and exercise_gate proves the gate itself.
+Past the gate a publisher stops at its storage check, so this file proves that
+refusal; an absent broker on block-backed storage is not reached here.
 """
 import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import tempfile
 
 from assemble import package_skill_registry
 from test_catalog_cli import exercise_catalog
+from test_workflow_cli import NO_BLOCK_STORAGE
+
+# Every command main.rs gates, with arguments that would reach its function.
+GATED = {
+    'workflow-invoice-prepare':('gate-probe','gate-probe','0'),
+    'workflow-invoice-advance':('gate-probe','a'*64),
+    'workflow-invoice-cancel':('gate-probe','a'*64),
+    'workflow-invoice-reconcile':('gate-probe',),
+    'artifact-publish-invoice':('gate-probe',),
+    'artifact-read':('request-1',),
+    'artifact-reconcile':('gate-probe','a'*64),
+    'artifact-abort':('gate-probe','a'*64),
+    'artifact-catalog-publish-invoice':('gate-probe','gate-probe','0'),
+    'artifact-catalog-read':('invoices','1'),
+    'artifact-catalog-retain':('gate-probe','a'*64),
+    'artifact-catalog-import-legacy':('request-1','a'*64),
+    'invoice-calculate':(),
+    'scoped-file-read':('gate-probe',),
+}
+SYNTHETIC = ('invoice-calculate','artifact-publish-invoice',
+             'artifact-catalog-publish-invoice','artifact-reconcile')
+PAST_GATE_OUTPUT = b'\nLUMA_PAST_GATE_OUTPUT\n'
+
+
+def gate_commands():
+    source = Path('/repo/rust/luma-platform/src/main.rs').read_text()
+    before, _ = source.split('platform::require_production_activation()?;\n'
+                             '        admin_governance::reject_laboratory_effects_after_bootstrap()?;',1)
+    return re.findall(r'"([a-z-]+)"',before.rsplit('matches!(',1)[1])
+
+
+def state_digest(state):
+    digest = hashlib.sha256()
+    for path in sorted(state.rglob('*')):
+        detail = path.lstat()
+        digest.update(f'{path.relative_to(state)}\0{detail.st_mode}\0{detail.st_size}\0'.encode())
+        if path.is_file() and not path.is_symlink():
+            digest.update(path.read_bytes())
+    return digest.hexdigest()
+
+
+def exercise_gate(binary,state,source):
+    """The binary's gate in front of each command, without an Admin anchor.
+
+    This proves refusal with no effect. Admission still needs an enrolled Admin
+    anchor in a TPM-backed installed laboratory, which is not exercised here.
+    """
+    assert sorted(gate_commands()) == sorted(GATED), gate_commands()
+    before = state_digest(state)
+
+    def refused(reason):
+        for command,args in GATED.items():
+            result = subprocess.run([str(binary),command,*args],input=source,capture_output=True,timeout=30)
+            assert result.returncode != 0 and result.stdout == b'', (command,result)
+            assert result.stderr == f'luma-platform: {reason}\n'.encode(), (command,result.stderr)
+
+    refused('No such file or directory (os error 2)')
+    # Any missing file gives that error; this one comes from the anchor's lock.
+    admin = Path('/run/luma-admin')
+    admin.mkdir()
+    admin.chmod(0o755)
+    refused('unsafe Admin state directory')
+    admin.rmdir()
+    assert state_digest(state) == before
 
 
 def main():
@@ -54,15 +124,18 @@ def main():
         package_skill_registry(Path('/'),keys)
 
         def run(*args, data=None, success=True, uid=None, fault=None, exit_code=None,
-                native=False, resource_fault=None, resource_generation=None):
+                production=False, resource_fault=None, resource_generation=None, refusal=None):
             environment = dict(os.environ)
             if fault is not None:
                 environment['LUMA_ARTIFACT_TEST_FAULT'] = fault
-            publication_fixture = (not native and args[0] in
-                ('invoice-calculate','artifact-publish-invoice','artifact-catalog-publish-invoice','artifact-reconcile'))
+            # The fixture requires root, so a uid stays on the binary and its gate.
+            gated = uid is None and args[0] in GATED
+            publication_fixture = gated and not production and args[0] in SYNTHETIC
+            past_gate = gated and not publication_fixture
             command = [str(binary),*args]
-            if publication_fixture:
-                environment['LUMA_PUBLICATION_TEST_ARGS'] = json.dumps(args,separators=(',',':'))
+            if publication_fixture or past_gate:
+                selected = args if publication_fixture else ('past-gate',*args)
+                environment['LUMA_PUBLICATION_TEST_ARGS'] = json.dumps(selected,separators=(',',':'))
                 if resource_fault is not None:
                     environment['LUMA_PUBLICATION_TEST_RESOURCE_FAULT'] = resource_fault
                 if resource_generation is not None:
@@ -75,6 +148,14 @@ def main():
                 raise AssertionError(f'{args[0]} unexpected exit {result.returncode}: {result.stderr.decode()}')
             if exit_code is not None and result.returncode != exit_code:
                 raise AssertionError(f'{args[0]} did not execute the requested abrupt-exit fixture')
+            if refusal is not None and refusal.encode() not in result.stderr:
+                raise AssertionError(f'{args[0]} refused for another reason: {result.stderr.decode()}')
+            output = result.stdout
+            if past_gate:
+                # The marker precedes dispatch, so what follows is the command's.
+                _, marker, output = output.partition(PAST_GATE_OUTPUT)
+                assert marker, (args[0],result.stdout,result.stderr)
+                assert b'unsupported publication fixture command' not in result.stderr, args
             if publication_fixture and success:
                 lines = [line for line in result.stdout.splitlines() if line.startswith(b'{')]
                 assert len(lines) == 1, result.stdout
@@ -84,19 +165,20 @@ def main():
                     assert value['source_sha256'] == hashlib.sha256(data).hexdigest()
                     return value['report'].encode('utf-8') + b'\n'
                 return lines[0]
-            if native and args[0] == 'invoice-calculate' and not success:
-                assert result.stdout == b'', 'native refused calculation published bytes'
-            return result.stdout
+            if production and args[0] == 'invoice-calculate' and not success:
+                assert output == b'', 'refused production calculation published bytes'
+            return output
 
         run('artifact-store-status',success=False)
         run('artifact-store-init')
         run('artifact-store-init',success=False)
-        run('invoice-calculate',data=source,success=False,native=True)
-        run('invoice-calculate',data=b'not,csv\n',success=False,native=True)
-        run('invoice-calculate',data=source,success=False,native=True,uid=990)
+        run('invoice-calculate',data=source,success=False,production=True,refusal=NO_BLOCK_STORAGE)
+        run('invoice-calculate',data=b'not,csv\n',success=False,production=True,refusal=NO_BLOCK_STORAGE)
+        run('invoice-calculate',data=source,success=False,production=True,uid=990)
         pure = run('invoice-calculate',data=source).rstrip(b'\n')
         before = json.loads(run('artifact-store-status'))
-        run('artifact-publish-invoice','no-resource',data=source,success=False,native=True)
+        run('artifact-publish-invoice','no-resource',data=source,success=False,production=True,
+            refusal=NO_BLOCK_STORAGE)
         run('artifact-publish-invoice','no-admission',data=source,success=False,resource_fault='calculate')
         run('artifact-publish-invoice','fenced-admission',data=source,success=False,resource_fault='recheck-1')
         assert json.loads(run('artifact-store-status')) == before
@@ -138,7 +220,8 @@ def main():
             resource_fault='recheck-2')
         fenced = json.loads(run('artifact-store-status'))['pending']
         assert fenced['state'] == 'prepared' and fenced['receipt']['resource_lease'] is not None
-        run('artifact-reconcile','fenced-prepared',fenced['review_sha256'],success=False,native=True)
+        run('artifact-reconcile','fenced-prepared',fenced['review_sha256'],success=False,production=True,
+            refusal=NO_BLOCK_STORAGE)
         run('artifact-reconcile','fenced-prepared',fenced['review_sha256'],success=False,
             resource_fault='recheck-1')
         assert json.loads(run('artifact-store-status'))['pending'] == fenced
@@ -163,7 +246,8 @@ def main():
         pending = json.loads(run('artifact-store-status'))['pending']
         assert pending['state'] == 'prepared'
         # Operator review is not a replacement for unavailable broker provenance.
-        run('artifact-reconcile','prepared',pending['review_sha256'],success=False,native=True)
+        run('artifact-reconcile','prepared',pending['review_sha256'],success=False,production=True,
+            refusal=NO_BLOCK_STORAGE)
         assert json.loads(run('artifact-store-status'))['pending'] == pending
         run('artifact-reconcile','prepared','f'*64,success=False)
         run('artifact-reconcile','prepared',pending['review_sha256'])
@@ -179,7 +263,8 @@ def main():
         report.write_bytes(b'tampered')
         run('artifact-read','request-1',success=False)
         run('artifact-publish-invoice','request-1',data=source,success=False)
-    print('ARTIFACT_CLI_FIXTURE_PASSED: native absent-resource refusal, init, read, reviewed recovery, retained abort, conflicts, denial, tamper; publication/replay use explicit synthetic test executable')
+        exercise_gate(binary,state,source)
+    print('ARTIFACT_CLI_FIXTURE_PASSED: gate refusal of every gated command without an Admin anchor, refusal without block-backed storage, init, read, reviewed recovery, retained abort, conflicts, denial, tamper; past-gate commands and publication/replay use the test executable; gate admission not exercised')
 
 
 if __name__ == '__main__':

@@ -3,7 +3,7 @@ import hashlib
 import json
 import sqlite3
 from contextlib import closing
-from test_workflow_cli import exercise_unavailable_workflow_resources
+from test_workflow_cli import NO_BLOCK_STORAGE, exercise_unavailable_workflow_resources
 
 
 def exercise_catalog(run,state,source,pure):
@@ -13,7 +13,8 @@ def exercise_catalog(run,state,source,pure):
     catalog = state/'artifact-catalog'
     publish = 'artifact-catalog-publish-invoice'
     before = json.loads(run('artifact-catalog-status'))
-    run(publish,'no-resource','no-resource','0',data=source,success=False,native=True)
+    run(publish,'no-resource','no-resource','0',data=source,success=False,production=True,
+        refusal=NO_BLOCK_STORAGE)
     run(publish,'no-admission','no-admission','0',data=source,success=False,resource_fault='calculate')
     run(publish,'fenced-admission','fenced-admission','0',data=source,success=False,resource_fault='recheck-1')
     assert json.loads(run('artifact-catalog-status')) == before
@@ -83,10 +84,11 @@ def exercise_catalog(run,state,source,pure):
     exercise_legacy_import(run,state,source,pure)
     exercise_unavailable_workflow_resources(run,state,source)
     # A result fenced immediately before WAL COMMIT leaves no version/receipt.
+    # A fresh object is authorized five times, and the fifth precedes COMMIT.
     before = json.loads(run('artifact-catalog-status'))
     late_source = source.replace(b'184.25',b'184.99')
     run(publish,'late-fence','late-fence','0',data=late_source,success=False,
-        resource_fault='recheck-2')
+        resource_fault='recheck-5')
     fenced = json.loads(run('artifact-catalog-status'))
     assert fenced['records'] == before['records'] and len(fenced['orphans']) == 1
     fresh = json.loads(run(publish,'late-fence','late-fence','0',data=late_source,resource_generation=3))
@@ -97,7 +99,7 @@ def exercise_catalog(run,state,source,pure):
     obj.write_bytes(b'tampered')
     run('artifact-catalog-status',success=False)
     run('artifact-catalog-read','invoices','1',success=False)
-    print('CATALOG_CLI_FIXTURE_PASSED: native absent-resource refusal, WAL, versions, dedup, CAS, abrupt process exits, replay, retention, append-only, tamper; publication uses explicit synthetic computation fixture')
+    print('CATALOG_CLI_FIXTURE_PASSED: refusal without block-backed storage, WAL, versions, dedup, CAS, abrupt process exits, replay, retention, append-only, tamper; publication uses explicit synthetic computation fixture')
 
 
 def exercise_legacy_import(run,state,source,pure):

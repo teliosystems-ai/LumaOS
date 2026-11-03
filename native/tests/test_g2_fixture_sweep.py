@@ -40,15 +40,24 @@ class FixtureSweepTests(unittest.TestCase):
 
     def test_every_current_ignored_entry_has_precise_fixture_or_child_owner(self):
         inventory = SWEEP.ignored_inventory(ROOT)
-        self.assertEqual(len(inventory), 42)
+        self.assertEqual(len(inventory), 43)
         self.assertEqual(len(SWEEP.CHILDREN), 7)
         external = set(inventory) - set(SWEEP.CHILDREN)
-        self.assertEqual(len(external), 35)
+        self.assertEqual(len(external), 36)
         for name in external:
             self.assertTrue(any(name in lane['required'] for lane in SWEEP.LANES.values()))
         for child, (lane, parent) in SWEEP.CHILDREN.items():
             self.assertIn(parent, SWEEP.LANES[lane]['required'])
             self.assertNotIn(child, SWEEP.LANES[lane]['required'])
+
+    def test_custody_mount_entry_carries_the_name_libtest_runs(self):
+        inventory = SWEEP.ignored_inventory(ROOT)
+        self.assertEqual(inventory[SWEEP.CUSTODY_MOUNT_TEST]['path'], 'content_custody/paged/mount_tests.rs')
+        self.assertFalse(set(SWEEP.LIBTEST_NAMES) & set(inventory))
+        evidence = SWEEP.verify_execution('custody-mounts', [rust(SWEEP.CUSTODY_MOUNT_TEST)], {})
+        self.assertEqual(evidence['named_executions'], {SWEEP.CUSTODY_MOUNT_TEST: 1})
+        with self.assertRaises(ValueError):
+            SWEEP.verify_execution('custody-mounts', [rust(list(SWEEP.LIBTEST_NAMES)[0])], {})
 
     def test_positive_named_kernel_execution_records_children_without_double_count(self):
         text = ''.join(rust(name) for name in SWEEP.KERNEL)
@@ -118,7 +127,7 @@ class FixtureSweepTests(unittest.TestCase):
 
     def test_private_mount_authority_is_only_closed_optional_lanes(self):
         selected = [name for name, lane in SWEEP.LANES.items() if lane.get('mounts')]
-        self.assertEqual(selected, ['storage', 'recovery-enospc'])
+        self.assertEqual(selected, ['storage', 'recovery-enospc', 'custody-mounts'])
         self.assertNotIn('SYS_ADMIN', SWEEP.CAPS)
         self.assertNotIn('SYS_TIME', SWEEP.CAPS)
         self.assertTrue(SWEEP.LANES['utc-upstream-units']['capless'])

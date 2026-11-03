@@ -6,6 +6,9 @@ import sqlite3
 from contextlib import closing
 from pathlib import Path
 
+# /var is the container's overlay, so a publisher refuses before seeking a broker.
+NO_BLOCK_STORAGE = 'storage is not block-backed'
+
 
 def exercise_unavailable_workflow_resources(run, state, source):
     """The tools fixture has no installed resource broker or block-backed /var.
@@ -19,15 +22,17 @@ def exercise_unavailable_workflow_resources(run, state, source):
     run('workflow-store-init', success=False)
     before = json.loads(run('workflow-store-status'))
     for data in (source, b'not,csv\n'):
-        run('workflow-invoice-prepare', 'unavailable-resource', 'summary', '0', data=data, success=False)
+        run('workflow-invoice-prepare', 'unavailable-resource', 'summary', '0', data=data, success=False,
+            refusal=NO_BLOCK_STORAGE)
     after = json.loads(run('workflow-store-status'))
     assert before == after and after['runs'] == 0 and after['pending'] == []
     assert list((state/'workflow-runs/objects').iterdir()) == []
     run('workflow-invoice-status', 'unavailable-resource', success=False)
-    run('workflow-invoice-advance', 'unavailable-resource', 'a'*64, success=False)
-    run('workflow-invoice-cancel', 'unavailable-resource', 'a'*64, success=False)
+    run('workflow-invoice-advance', 'unavailable-resource', 'a'*64, success=False, refusal='workflow run not found')
+    run('workflow-invoice-cancel', 'unavailable-resource', 'a'*64, success=False, refusal='workflow run not found')
+    run('workflow-invoice-reconcile', 'unavailable-resource', success=False, refusal='workflow run not found')
     run('workflow-invoice-prepare', 'unavailable-resource', 'summary', '0', data=source, success=False, uid=990)
-    print('WORKFLOW_RESOURCE_REFUSAL_CLI_PASSED: unavailable broker/storage never calculates or checkpoints')
+    print('WORKFLOW_RESOURCE_REFUSAL_CLI_PASSED: no block-backed storage never calculates or checkpoints; broker absence not reached')
 
 
 def exercise_workflow(run, state, source, pure):

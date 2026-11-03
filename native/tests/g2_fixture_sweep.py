@@ -56,6 +56,10 @@ TPM = names('tpm', 'emulator_install_admission', 'emulator_nv_journal_and_rollba
             'emulator_restart_and_external_change', 'emulator_rejects_missing_or_redefined_index') + names(
     'sealed_credential', 'emulator_signed_credential') + names('authentication', 'local_pam_account')
 MOUNT_TEST = names('recovery_export', 'actual_full_filesystem_retains_partial_and_never_publishes_final')[0]
+CUSTODY_MOUNT_TEST = 'content_checkpoint::custody::paged::mount_tests::actual_binds_and_a_mount_moved_during_one_check_are_refused'
+# The inventory derives a name from the file path. This file is mounted under
+# another module and is itself the test module, so libtest names it differently.
+LIBTEST_NAMES = {'content_custody::paged::mount_tests::tests::actual_binds_and_a_mount_moved_during_one_check_are_refused': CUSTODY_MOUNT_TEST}
 MODEL_CUSTODY_CASES = tuple('MODEL_CUSTODY_SCOPE_CASE=' + case for case in (
     'actual-nonadmin-pam-and-tpm-purpose', 'wrong-actual-pam-principal',
     'ordinary-admin-refused', 'general-session-refused',
@@ -101,6 +105,7 @@ LANES = {
     'qmp-display': {'script': 'qmp_display_integration.py', 'required': (), 'timeout': 120},
     'storage': {'script': 'staging_linux_integration.py', 'required': (), 'timeout': 900, 'mounts': True},
     'recovery-enospc': {'required': (MOUNT_TEST,), 'timeout': 600, 'mounts': True},
+    'custody-mounts': {'required': (CUSTODY_MOUNT_TEST,), 'timeout': 600, 'mounts': True},
 }
 
 
@@ -133,6 +138,7 @@ def ignored_inventory(repo):
         module = '::'.join(relative.with_suffix('').parts)
         for reason, function in re.findall(r'#\[ignore(?:\s*=\s*"([^"]*)")?\]\s*fn\s+([A-Za-z_][A-Za-z0-9_]*)', bounded(path, 2 * 1024 * 1024).decode()):
             name = module + '::tests::' + function
+            name = LIBTEST_NAMES.get(name, name)
             if name in result:
                 raise ValueError('duplicate ignored entry')
             result[name] = {'path': relative.as_posix(), 'reason': reason}
@@ -354,6 +360,8 @@ def inside(lane_name):
             run(['/usr/bin/python3', '-B', script], repo)
     elif lane_name == 'recovery-enospc':
         run(['unshare', '--mount', '--propagation', 'private', 'env', 'LUMA_EXPORT_MOUNT_TEST=1', *exact(MOUNT_TEST)])
+    elif lane_name == 'custody-mounts':
+        run(['unshare', '--mount', '--propagation', 'private', 'env', 'LUMA_CUSTODY_MOUNT_TEST=1', *exact(CUSTODY_MOUNT_TEST)])
     elif lane_name == 'native-source':
         environment['LUMA_CHRONY_RELEASE_UPSTREAM'] = str(extract_reviewed_utc(repo, output))
         run(['/usr/bin/python3', '-B', '-W', 'error', '-m', 'unittest', 'discover', '-s', 'native/tests', '-p', 'test_*.py', '-v'], repo, 900)

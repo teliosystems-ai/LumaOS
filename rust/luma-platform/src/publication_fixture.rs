@@ -2,15 +2,19 @@
 //! This substitutes synthetic computation, never native resource authority.
 //! Inside the verified container it also substitutes an empty fixed-handle
 //! observation for the absent TPM, never an enrolled Admin or release anchor.
-use crate::{artifact_catalog, artifacts, calculation, resources, workflow_resource, Result};
+//! The past-gate route runs the unchanged command past the laboratory gate, which
+//! an unenrolled tools container cannot open; the gate has its own native cases.
+use crate::{
+    artifact_catalog, artifacts, calculation, resources, workflow_resource, workflow_runs, Result,
+};
 use std::io::Write;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 static DISPOSABLE: AtomicBool = AtomicBool::new(false);
 
-/// True only after `execute` verified the disposable CLI container and the TPM
-/// device nodes are still absent; ordinary unit tests never set it.
+/// True only after `disposable` verified the CLI container and the TPM device
+/// nodes are still absent; ordinary unit tests never set it.
 pub(crate) fn absent_tpm_verified() -> bool {
     DISPOSABLE.load(Ordering::SeqCst)
         && !Path::new("/dev/tpm0").exists()
@@ -24,6 +28,35 @@ fn arguments(value: Option<&str>) -> Result<Vec<String>> {
         Some("artifact-publish-invoice") if args.len() == 2 => Ok(args),
         Some("artifact-catalog-publish-invoice") if args.len() == 4 => Ok(args),
         Some("artifact-reconcile") if args.len() == 3 => Ok(args),
+        Some("past-gate") if args.len() > 1 => Ok(args),
+        _ => Err("unsupported publication fixture command".into()),
+    }
+}
+
+/// The dispatch of `main` for a command the gate would have stopped. Nothing
+/// here is synthetic: each arm is the production function with its arguments.
+fn past_gate(args: &[String]) -> Result<()> {
+    let args: Vec<&str> = args.iter().map(String::as_str).collect();
+    match args.as_slice() {
+        ["invoice-calculate"] => calculation::calculate_stdin(),
+        ["artifact-publish-invoice", request] => artifacts::publish_invoice(request),
+        ["artifact-read", request] => artifacts::read(request),
+        ["artifact-reconcile", request, review] => artifacts::reconcile(request, review),
+        ["artifact-abort", request, review] => artifacts::abort(request, review),
+        ["artifact-catalog-publish-invoice", request, artifact, expected] => {
+            artifact_catalog::publish_invoice(request, artifact, expected)
+        }
+        ["artifact-catalog-read", artifact, version] => artifact_catalog::read(artifact, version),
+        ["artifact-catalog-retain", request, review] => artifact_catalog::retain(request, review),
+        ["artifact-catalog-import-legacy", request, review] => {
+            artifact_catalog::import_legacy(request, review)
+        }
+        ["workflow-invoice-prepare", request, artifact, expected] => {
+            workflow_runs::prepare(request, artifact, expected)
+        }
+        ["workflow-invoice-advance", request, review] => workflow_runs::advance(request, review),
+        ["workflow-invoice-cancel", request, review] => workflow_runs::cancel(request, review),
+        ["workflow-invoice-reconcile", request] => workflow_runs::reconcile(request, None),
         _ => Err("unsupported publication fixture command".into()),
     }
 }
@@ -39,19 +72,39 @@ fn disposable() -> Result<()> {
     {
         return Err("publication fixture requires the isolated disposable CLI container".into());
     }
+    DISPOSABLE.store(true, Ordering::SeqCst);
     Ok(())
 }
 
-fn execute(args: &[String]) -> Result<serde_json::Value> {
+fn execute(args: &[String]) -> Result<Option<serde_json::Value>> {
     disposable()?;
-    DISPOSABLE.store(true, Ordering::SeqCst);
+    if args[0] == "past-gate" {
+        println!("\nLUMA_PAST_GATE_OUTPUT");
+        std::io::stdout().flush()?;
+        past_gate(&args[1..])?;
+        return Ok(None);
+    }
+    synthetic(args).map(Some)
+}
+
+fn synthetic(args: &[String]) -> Result<serde_json::Value> {
     let generation = std::env::var("LUMA_PUBLICATION_TEST_GENERATION").unwrap_or("1".into());
     let parsed = generation.parse::<u64>()?;
     if parsed == 0 || parsed.to_string() != generation {
         return Err("noncanonical synthetic generation".into());
     }
     let fault = std::env::var("LUMA_PUBLICATION_TEST_RESOURCE_FAULT").unwrap_or_default();
-    if !["", "calculate", "recheck-1", "recheck-2", "recheck-3"].contains(&fault.as_str()) {
+    if ![
+        "",
+        "calculate",
+        "recheck-1",
+        "recheck-2",
+        "recheck-3",
+        "recheck-4",
+        "recheck-5",
+    ]
+    .contains(&fault.as_str())
+    {
         return Err("unknown computation fixture fault".into());
     }
     if args[0] == "invoice-calculate" {
@@ -142,12 +195,22 @@ fn disposable_publication() {
                 .len(),
             2
         );
+        assert!(arguments(Some("[\"past-gate\"]")).is_err());
+        // Only the closing arm has this text, so no production function ran.
+        for refused in ["artifact-store-init", "artifact-read"] {
+            assert_eq!(
+                past_gate(&[refused.to_string()]).unwrap_err().to_string(),
+                "unsupported publication fixture command"
+            );
+        }
         return;
     }
     let result = arguments(value.as_deref()).and_then(|args| execute(&args));
     match result {
         Ok(result) => {
-            println!("\n{result}");
+            if let Some(result) = result {
+                println!("\n{result}");
+            }
             std::io::stdout().flush().unwrap();
             std::process::exit(0);
         }

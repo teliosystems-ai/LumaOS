@@ -20,13 +20,13 @@ D cache directory searchable by unprivileged fixture children, and
 store its data on D. The runner pins the inspected local tools image identity
 for the complete run and never pulls an image.
 
-The default selection has 24 lanes. `--private-mounts` includes the storage
-and recovery ENOSPC fixtures, using SYS_ADMIN only in disposable container
-namespaces. Those lanes receive neither host devices nor a privileged
+The default selection has 24 lanes. `--private-mounts` includes the storage,
+recovery ENOSPC and custody mount fixtures, using SYS_ADMIN only in disposable
+container namespaces. Those lanes receive neither host devices nor a privileged
 container. Repeated `--lane NAME` selects an explicit subset; omitted lanes
 remain listed as unexecuted rather than passed.
 
-The inventory maps all 42 currently ignored Rust entries: 35 independently
+The inventory maps all 43 currently ignored Rust entries: 36 independently
 launchable fixtures and seven child-only entries owned by their parent tests.
 Children are not double-counted. A new ignored entry without an explicit
 mapping fails the sweep. Each selected lane must retain positive named test

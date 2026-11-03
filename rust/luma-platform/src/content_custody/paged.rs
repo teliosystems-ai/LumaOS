@@ -11,6 +11,9 @@ use std::path::Path;
 #[cfg_attr(not(test), allow(dead_code))]
 #[path = "paged/cells.rs"]
 pub(super) mod cells;
+#[cfg(test)]
+#[path = "paged/mount_tests.rs"]
+mod mount_tests;
 #[cfg_attr(not(test), allow(dead_code))]
 #[path = "paged/slots.rs"]
 pub(super) mod slots;

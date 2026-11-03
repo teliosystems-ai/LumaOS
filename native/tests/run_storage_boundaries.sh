@@ -32,6 +32,12 @@ export CARGO_TARGET_DIR=/tmp/luma-storage-target
 export RUSTFLAGS=-Dwarnings
 cargo fmt --check
 cargo test --offline --locked -p luma-platform -- --test-threads=1 2>&1 | tee "$output/rust-tests.txt"
+# A filter that matches nothing still exits zero, so require the one test.
+unshare --mount --propagation private env LUMA_CUSTODY_MOUNT_TEST=1 \
+    cargo test --offline --locked -p luma-platform \
+    actual_binds_and_a_mount_moved_during_one_check_are_refused \
+    -- --ignored --nocapture --test-threads=1 2>&1 | tee "$output/custody-mount-test.txt"
+grep -q '^test result: ok\. 1 passed' "$output/custody-mount-test.txt"
 cargo build --offline --locked
 install -D -m 0755 "$CARGO_TARGET_DIR/debug/luma-platform" /usr/libexec/luma-os/luma-platform
 unit_directory=$(mktemp -d /tmp/luma-storage-units-XXXXXXXX)

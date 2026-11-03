@@ -330,6 +330,28 @@ slice added about 2825 local seconds, more than the smaller margin, so on the ol
 ratio another slice of this size would miss the deadline unless the chain test's
 cost comes down first. CI has not run this snapshot either.
 
+CI then ran the same platform tests, on `3fc030d` in run 41637221648 and on
+`8401811` in run 41658331702; both commits have the rust tree of `b9d06bc`. The
+suite took 6726.52 seconds in the first run's TPM job, and 5376.88 and 6569.80
+seconds in the second run's TPM and rust jobs. That is 1.0 to 1.26 times the local
+figure, so the 0.675 ratio did not hold for this commit, and the slowest run left
+473 seconds of the deadline.
+
+The chain test's cost then came down. On snapshot `0806194` it passed in 2448.29
+seconds locally, against 2749 in the full check of `b9d06bc` and 2768.20 in a timing
+aid of the same rust tree, a saving of about 301 seconds (11%). At the 1.0–1.26
+ratio that is 301 to 379 CI seconds, and the test costs about 2448 to 3085 CI
+seconds. The whole `custody::v2_publication` module, run once as three disjoint
+filters, passed 123 tests in 3954.64 seconds against 4429.57: 474.93 seconds less
+locally, 475 to 598 in CI terms. Nearly all of the saving comes from removing a
+back-to-back duplicate parent check in `Pinned::check` in the test-only
+`direct/pinned.rs`, which every live check of C calls seven times. The rest comes
+from planning each window once in the test walk. No claim, refusal, window count or
+the `verify_chain` walk changed. About 846 seconds of the test lie outside C's live
+checks, and the live checks are the designed before-and-after re-observation of the
+writer at each boundary call, so a much larger cut needs a decision on that
+observation or on the slice's window claims.
+
 The mount read note stays as dated history, but its closing paragraph no longer
 holds. It said that further reduction would need a change notification or fewer
 checks per item, and that the budget did not need either. The prepared phase slice

@@ -2612,9 +2612,39 @@ the older one, against the 7200-second deadline. The older ratio leaves about 11
 seconds, less than this slice added, so the chain test's cost has to come down
 before another slice of this size. CI has not run this snapshot.
 
+CI then ran this work. Run 41637221648 on `3fc030d` passed `rust-boundaries`,
+including both artifact fixtures past the gate, and `storage-boundaries`. Its TPM
+job passed the full platform suite, 1595 passed and 43 ignored in 6726.52
+seconds, then failed in `tpm_integration.py`. The plain `cargo build` there runs
+under a 240-second deadline, and since the development profile became lightly
+optimised that build takes longer on the runner, which had pre-built only the
+test executables. `8401811` builds the binary beside that pre-build, outside the
+deadline. Run 41658331702 on `8401811` passed all three jobs. The full platform
+suite took 5376.88 seconds in the TPM job and 6569.80 seconds in the rust job,
+which used 133 of its 180 minutes. Every measurement exceeded the 3612-second
+estimate, and the slowest, 6726.52 seconds, also exceeded the 6032-second one.
+Runner variance alone has left as little as 473 seconds of the TPM deadline, so
+the chain test's cost has to come down before the next slice of this size.
+
+The chain test's cost then came down by about a tenth. Profiled alone, 69% of
+its time went to 5.76 million live checks of C, about 0.33 ms each, from the
+designed re-observation of the writer before and after each boundary call.
+`Pinned::check` in the test-only `direct/pinned.rs` checked the member parent and
+then opened a name in it, and the open checks the parent first, so each of the
+seven pinned checks in every live check paid that observation twice. The explicit
+call is gone, with the same refusals in the same order, and the test's walk now
+plans each window once. On snapshot `0806194`, format was clean and the plain and
+warning-denied test builds passed. The chain test took 2448.29 seconds locally
+instead of 2749, and the `custody::v2_publication` module, its 123 tests run once,
+took 3954.64 seconds instead of 4429.57. At the measured CI ratio of 1.0 to 1.26
+that saves 475 to 598 seconds of the suite. About 846 seconds of the test lie
+outside the live checks, so a much larger cut needs fewer observations per
+boundary call or fewer windows, and either changes what this slice claims. CI has
+not run this change.
+
 Recovering a stopped attempt or a partial or foreign member, a C namespace
-reservation, a cheaper chain test and the items above remain open. G3 and GWIN0 are
-not complete.
+reservation, a chain test cheap enough for the next slice and the items above
+remain open. G3 and GWIN0 are not complete.
 
 ### Read-only WSL resource coexistence planner, 3 November 2026
 

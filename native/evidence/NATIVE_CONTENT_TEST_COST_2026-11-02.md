@@ -375,6 +375,24 @@ group and 0.10 to 0.27 for the rest, not the 1.0 to 1.26 of the two earlier runs
 The CI ratio therefore varies more between runs than those two showed; the
 180-minute limits and the 7200-second deadline are left as they are.
 
+Run 41725414198 on `e9a11aa`, which adds the lost-reply recovery to the Start test
+and a content-store query test, passed all four jobs. The index job passed the
+eight tests in 2786.59 seconds after an 11 m 04 s test build, and `rust-boundaries`
+and the TPM suite passed the other 1587 in 283.51 and 137.91 seconds. That is 0.78
+of the local index figure, against 0.53 before, with the Start test about 15
+seconds longer locally, and 0.11 to 0.22 for the rest. Those jobs took about 60,
+21 and 18 minutes end to end.
+
+This run also showed what the record above missed. `storage-boundaries` runs the
+luma-platform suite from its own runner script, `native/tests/run_storage_boundaries.sh`,
+and the split did not change that script, so the job still ran all 1595 tests, the
+index group included. It took 3950.44 seconds and 86 minutes end to end in run
+41707675273, that run's longest job, and 1949.33 seconds and 52 minutes in this
+one. The index group therefore ran twice in both runs, not once. That runner now
+skips the same two paths, so the group runs once, in `index-boundaries`, and the
+storage job's suite should fall to about what the other two jobs take for the rest,
+129.49 to 348.13 seconds in these runs. CI has not run that change.
+
 The mount read note stays as dated history, but its closing paragraph no longer
 holds. It said that further reduction would need a change notification or fewer
 checks per item, and that the budget did not need either. The prepared phase slice

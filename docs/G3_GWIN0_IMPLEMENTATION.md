@@ -2692,8 +2692,19 @@ same code. The review gains an `operation_class` field and recovery one refusal
 text. No production code changed. On snapshot `5f067f5`, format was clean, the
 warning-denied test check and the plain check passed, and the three changed tests
 and two progress recovery tests passed when filtered. The Start test took 97
-seconds, about 15 more than before, in the `index-boundaries` job. Neither the
-full suite nor CI has run this change.
+seconds, about 15 more than before, in the `index-boundaries` job.
+
+CI run 41725414198 on `e9a11aa`, which merges this recovery and the observed query
+test recorded below, passed all four jobs. `index-boundaries` passed the eight
+index tests, the recovering Start test among them, in 2786.59 seconds, and
+`rust-boundaries` and the TPM suite each passed the other 1587, with 43 ignored and
+the eight filtered out, in 283.51 and 137.91 seconds. The run also showed that
+`storage-boundaries` had run the whole suite, the index group included, in both
+runs since the split. Its runner script has its own `cargo test` line, which the
+split did not change. That job took 3950.44 seconds in run 41707675273, 86 minutes
+end to end and that run's longest job, and 1949.33 seconds here, so the group ran
+twice, not once as the record of that run says. The storage runner now skips the
+same two paths, so the group runs once, as chosen; CI has not run that change.
 
 Recovering a stopped attempt, whose C advance did not happen or was not seen,
 needs a retired-restart record, and a C namespace reservation needs its own
@@ -2799,3 +2810,5 @@ ms target there needs a sub-linear candidate path and fewer current checks per
 page. No production code selects a generation, so the native Query arm still
 refuses every query. This is development evidence only
 ([3 November checkpoint](gates/g3/nf08_search_observed_query_latency_2026-11-03.json)).
+CI run 41725414198 on `e9a11aa` passed the new test in `rust-boundaries`, among
+357 content-store tests, and skipped the ignored benchmark.

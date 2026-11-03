@@ -5,7 +5,7 @@
 use super::super::super::super::super::protocol::{
     software_worker_operation, TypedOperationSource,
 };
-use super::worker_cases::{attribution, cold, ready, worker, Owner};
+use super::worker_cases::{attribution, cold, ready, ready_with, worker, Owner};
 use super::*;
 use luma_content_store::v2::migration::{
     review_migration, MigrationBoundary, MigrationPrefix, MigrationReview,
@@ -158,7 +158,11 @@ pub(super) struct Migrated {
 /// a selected prefix and a second window. A wide first window also retains
 /// one blob and may complete the owner at once.
 pub(super) fn migrated(fixture: &Fixture, wide: bool) -> Migrated {
-    let (owner, mut current) = ready(fixture);
+    migrated_with(fixture, wide, None)
+}
+/// `further` is a second artifact, as in [`ready_with`].
+pub(super) fn migrated_with(fixture: &Fixture, wide: bool, further: Option<&[u8]>) -> Migrated {
+    let (owner, mut current) = ready_with(fixture, further);
     let (store, authority, review) = side(fixture, &owner);
     let mut previous = None;
     let mut windows = 0;

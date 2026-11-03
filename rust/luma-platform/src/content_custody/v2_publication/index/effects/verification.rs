@@ -63,7 +63,7 @@ impl VerifiedIndexPreparation {
     }
 }
 
-fn checked_record(
+pub(super) fn checked_record(
     view: &mut impl PreparationView,
     reference: &RecordRef,
     maximum: usize,
@@ -812,14 +812,15 @@ impl PhaseSelectionPlan {
         &self.preparation.liability
     }
     /// `physical_after` is the store inventory measured after the window's
-    /// objects, next job and candidate were written; it must stay inside the
-    /// prepared liability. The same original operation that was verified must
-    /// still be current.
+    /// objects, next job and candidate were written, with the generation of a
+    /// Publish; it must stay inside the prepared liability. The same original
+    /// operation that was verified must still be current.
     pub(in crate::content_checkpoint::custody::v2_publication) fn finish(
         self,
         view: &mut impl PreparationView,
         next_job: &BlobReference,
         candidate: &BlobReference,
+        generation: Option<&BlobReference>,
         extension_sha256: &str,
         physical_after: &PhysicalInventory,
         original: &mut OriginalCOperation<'_>,
@@ -839,6 +840,7 @@ impl PhaseSelectionPlan {
             &self.leaf,
             next_job,
             candidate,
+            generation,
             extension_sha256,
             physical_after,
             &self.attributed,
@@ -850,13 +852,7 @@ impl PhaseSelectionPlan {
             bytes: bytes.len() as u64,
         };
         let binding = &self.before.binding;
-        let next_leaf = Leaf {
-            schema_version: 2,
-            binding: binding.clone(),
-            current_generation: self.leaf.current_generation.clone(),
-            current_job: Some(selection.next_job().clone()),
-            preparation: None,
-        };
+        let next_leaf = selected_leaf(binding, &self.leaf, selection.next_job(), generation);
         let (index_value, leaf_record) = replacement(&next_leaf, binding)?;
         let owner = OwnerLeaf::V2 {
             binding: binding.clone(),
@@ -902,9 +898,9 @@ impl PhaseSelectionPlan {
 }
 
 /// A prepared window runs only under a NEW original operation for the same
-/// Step. C compares the reconstructed plan with the selected preparation and
-/// replays that record over the plan's ordered objects; the record itself is
-/// never trusted and its inventory pages are not needed here.
+/// Step or Publish. C compares the reconstructed plan with the selected
+/// preparation and replays that record over the plan's ordered objects; the
+/// record itself is never trusted and its inventory pages are not needed here.
 pub(in crate::content_checkpoint::custody::v2_publication) fn verify_index_phase_selection(
     view: &mut impl PreparationView,
     input: &request::Input,
@@ -913,8 +909,13 @@ pub(in crate::content_checkpoint::custody::v2_publication) fn verify_index_phase
 ) -> Result<PhaseSelectionPlan> {
     original.check()?;
     input.validate()?;
-    if !matches!(input.operation, request::Operation::Step { .. }) {
-        return Err("index phase selection requires the exact prepared Step request".into());
+    if !matches!(
+        input.operation,
+        request::Operation::Step { .. } | request::Operation::Publish { .. }
+    ) {
+        return Err(
+            "index phase selection requires the exact prepared Step or Publish request".into(),
+        );
     }
     let review = plan.review()?;
     let attributed = original_data(input, &review.review_sha256, original)?;
@@ -1072,13 +1073,7 @@ impl AdvanceSelectionPlan {
             bytes: bytes.len() as u64,
         };
         let binding = &self.before.binding;
-        let next_leaf = Leaf {
-            schema_version: 2,
-            binding: binding.clone(),
-            current_generation: self.leaf.current_generation.clone(),
-            current_job: Some(selection.next_job().clone()),
-            preparation: None,
-        };
+        let next_leaf = selected_leaf(binding, &self.leaf, selection.next_job(), None);
         let (index_value, leaf_record) = replacement(&next_leaf, binding)?;
         let owner = OwnerLeaf::V2 {
             binding: binding.clone(),
@@ -1226,6 +1221,27 @@ pub(in crate::content_checkpoint::custody::v2_publication) fn selected_index_sta
     input: &request::Input,
     original: &mut OriginalCOperation<'_>,
 ) -> Result<(Option<BlobReference>, bool, PhysicalInventory)> {
+    let (leaf, physical) = selected_index_leaf(view, input, original)?;
+    let prepared = leaf.has_preparation();
+    Ok((leaf.current_job, prepared, physical))
+}
+
+/// The generation this cut serves, which only a selected Publish names.
+pub(in crate::content_checkpoint::custody::v2_publication) fn selected_index_generation(
+    view: &mut impl PreparationView,
+    input: &request::Input,
+    original: &mut OriginalCOperation<'_>,
+) -> Result<Option<BlobReference>> {
+    Ok(selected_index_leaf(view, input, original)?
+        .0
+        .current_generation)
+}
+
+fn selected_index_leaf(
+    view: &mut impl PreparationView,
+    input: &request::Input,
+    original: &mut OriginalCOperation<'_>,
+) -> Result<(Leaf, PhysicalInventory)> {
     let observed = observe(view, input, original)?;
     let value = observed
         .index_value
@@ -1236,6 +1252,5 @@ pub(in crate::content_checkpoint::custody::v2_publication) fn selected_index_sta
         &checked_record(view, &reference.record, LEAF_BYTES, original)?,
         &input.binding,
     )?;
-    let prepared = leaf.has_preparation();
-    Ok((leaf.current_job, prepared, observed.physical))
+    Ok((leaf, observed.physical))
 }

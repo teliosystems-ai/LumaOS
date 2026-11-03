@@ -322,6 +322,14 @@ them. That scales to about 1704 seconds on the 0.675 ratio and 2846 on the 1.128
 one, leaving 5496 or 4354 seconds of the deadline. CI has not run that snapshot, so
 there is no measured figure yet.
 
+The direct Publish slice follows it. On snapshot `b9d06bc` the platform suite took
+5347.88 seconds locally, and its one new chain test took 2749 of them (3116 in an
+earlier aid run of the same commit). That scales to about 3612 seconds on the 0.675
+ratio and 6032 on the 1.128 one, leaving 3588 or 1168 seconds of the deadline. The
+slice added about 2825 local seconds, more than the smaller margin, so on the older
+ratio another slice of this size would miss the deadline unless the chain test's
+cost comes down first. CI has not run this snapshot either.
+
 The mount read note stays as dated history, but its closing paragraph no longer
 holds. It said that further reduction would need a change notification or fewer
 checks per item, and that the budget did not need either. The prepared phase slice

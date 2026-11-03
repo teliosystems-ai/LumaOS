@@ -34,12 +34,19 @@ mod job_advance;
 mod verification;
 #[allow(unused_imports)]
 pub(in crate::content_checkpoint::custody::v2_publication) use verification::{
-    selected_index_state, verify_index_advance, verify_index_advance_selection,
-    verify_index_phase_selection, verify_index_preparation, verify_index_selection,
-    verify_index_start, AdvanceSelectionPlan, CurrentBuilder, JobSelectionPlan, PhaseSelectionPlan,
-    PreparationView, PreparedKind, SelectionParts, VerifiedIndexPreparation,
-    VerifiedIndexSelection,
+    selected_index_generation, selected_index_state, verify_index_advance,
+    verify_index_advance_selection, verify_index_phase_selection, verify_index_preparation,
+    verify_index_selection, verify_index_start, AdvanceSelectionPlan, CurrentBuilder,
+    JobSelectionPlan, PhaseSelectionPlan, PreparationView, PreparedKind, SelectionParts,
+    VerifiedIndexPreparation, VerifiedIndexSelection,
 };
+// The job chain's only consumer, the direct C index publisher, is compiled
+// only under test.
+#[allow(dead_code)]
+#[path = "effects/chain.rs"]
+mod chain;
+#[allow(unused_imports)]
+pub(in crate::content_checkpoint::custody::v2_publication) use chain::ChainLink;
 // Historical replay's only consumer, the cold direct C reader, is compiled
 // only under test. It replays a selected Start reservation, job selection,
 // index phase preparation, phase selection and both events of a phase advance.
@@ -54,6 +61,24 @@ pub(in crate::content_checkpoint::custody::v2_publication) use selected::{
 };
 
 const PREPARATION_DOMAIN: &str = "luma-c-index-preparation-v1";
+
+/// The leaf a selected window or advance leaves behind: its preparation is
+/// resolved, it names the next job, and the generation already served stays
+/// selected unless this selection publishes another.
+fn selected_leaf(
+    binding: &OwnerBinding,
+    old: &Leaf,
+    next_job: &BlobReference,
+    generation: Option<&BlobReference>,
+) -> Leaf {
+    Leaf {
+        schema_version: 2,
+        binding: binding.clone(),
+        current_generation: generation.or(old.current_generation.as_ref()).cloned(),
+        current_job: Some(next_job.clone()),
+        preparation: None,
+    }
+}
 
 /// Exact selected before-DATA. In particular, reservations are NOT allocated
 /// files and may not be added to these actual physical counters.

@@ -1,6 +1,8 @@
 //! Exact metadata extension after real measured phase preparation. The C-owned
 //! reservation is mandatory before any owner job/candidate object is written.
+use super::super::state::Stage;
 use super::*;
+use luma_content_store::corpus_index::MAX_INDEX_PAGE_BYTES;
 use luma_content_store::v2::{BlobObjectPlan, BlobReference, Mutation, ObjectWriteSpec};
 
 pub(super) struct MetadataAttempt {
@@ -47,6 +49,7 @@ pub(crate) struct MetadataWriteSet {
     pub native_review_sha256: String,
     pub next_job: BlobReference,
     pub candidate: BlobReference,
+    pub generation: Option<BlobReference>,
     pub objects: Vec<ObjectWriteSpec>,
     pub object_writes: u32,
     pub read_bytes: u64,
@@ -65,6 +68,15 @@ impl MetadataWriteSet {
         }
         self.next_job.validate()?;
         self.candidate.validate()?;
+        if let Some(generation) = &self.generation {
+            generation.validate()?;
+            if generation.binding != self.next_job.binding
+                || generation.bytes == 0
+                || generation.bytes > MAX_INDEX_PAGE_BYTES as u64
+            {
+                return Err("index metadata extension names an outsized generation".into());
+            }
+        }
         if self.schema_version != 1
             || self.next_job.binding != self.candidate.binding
             || self.next_job.bytes > MAX_JOB as u64
@@ -131,7 +143,20 @@ pub(crate) trait IndexMetadataBoundary:
 pub(crate) struct PreparedMetadata {
     pub next_job: BlobReference,
     pub candidate: BlobReference,
+    pub generation: Option<BlobReference>,
     pub extension_sha256: String,
+}
+
+/// A Publish selects the manifest it wrote as a blob, so a later read resolves
+/// the selected reference like every other. Its one chunk is the page that
+/// Publish wrote, which adds only the group and index objects.
+// Used only by index-run, which awaits the C index publisher.
+#[allow(dead_code)]
+pub(crate) fn generation_bytes(next: &Job) -> Result<Option<Vec<u8>>> {
+    Ok(match &next.stage {
+        Stage::Published { manifest } => Some(manifest.canonical_bytes()?),
+        _ => None,
+    })
 }
 
 #[allow(dead_code)]
@@ -159,6 +184,7 @@ impl ObservedPreparation<'_> {
         }
         let job_bytes = next.canonical_bytes()?;
         let candidate_bytes = candidate.canonical_bytes()?;
+        let manifest_bytes = generation_bytes(&next)?;
         let mut refresh = || {
             self.writer.check(b)?;
             b.current_native_job(base)?;
@@ -168,9 +194,17 @@ impl ObservedPreparation<'_> {
         let job_plan = BlobObjectPlan::data(&next.source_owner.binding, &job_bytes, &mut refresh)?;
         let candidate_plan =
             BlobObjectPlan::data(&next.source_owner.binding, &candidate_bytes, &mut refresh)?;
+        let generation_plan = manifest_bytes
+            .as_ref()
+            .map(|bytes| BlobObjectPlan::data(&next.source_owner.binding, bytes, &mut refresh))
+            .transpose()?;
         let mut unique = std::collections::BTreeMap::new();
         let mut objects = Vec::new();
-        for object in job_plan.objects().chain(candidate_plan.objects()) {
+        for object in job_plan
+            .objects()
+            .chain(candidate_plan.objects())
+            .chain(generation_plan.iter().flat_map(|plan| plan.objects()))
+        {
             refresh()?;
             if let Some(old) = unique.insert(object.sha256(), object.bytes()) {
                 if old != object.bytes() {
@@ -180,8 +214,14 @@ impl ObservedPreparation<'_> {
                 objects.push(object.specification());
             }
         }
-        let object_writes =
-            u32::try_from(job_plan.objects().count() + candidate_plan.objects().count())?;
+        let object_writes = u32::try_from(
+            job_plan.objects().count()
+                + candidate_plan.objects().count()
+                + generation_plan
+                    .iter()
+                    .flat_map(|plan| plan.objects())
+                    .count(),
+        )?;
         let extension = MetadataWriteSet {
             schema_version: 1,
             input_sha256: input.sha256()?,
@@ -190,6 +230,9 @@ impl ObservedPreparation<'_> {
             native_review_sha256: self.review.review_sha256.clone(),
             next_job: job_plan.reference().clone(),
             candidate: candidate_plan.reference().clone(),
+            generation: generation_plan
+                .as_ref()
+                .map(|plan| plan.reference().clone()),
             objects,
             object_writes,
             read_bytes: u64::from(object_writes) * 32768,
@@ -212,7 +255,11 @@ impl ObservedPreparation<'_> {
         let mutation = Mutation {
             review_sha256,
             decision: luma_content_store::DecisionKind::Published,
-            source_bytes: job_bytes.len() as u64 + candidate_bytes.len() as u64,
+            source_bytes: job_bytes.len() as u64
+                + candidate_bytes.len() as u64
+                + manifest_bytes
+                    .as_ref()
+                    .map_or(0, |bytes| bytes.len() as u64),
         };
         let prepare = |bytes: &[u8],
                        plan: &BlobObjectPlan<'_>,
@@ -246,12 +293,17 @@ impl ObservedPreparation<'_> {
         };
         let next_job = prepare(&job_bytes, &job_plan, b)?;
         let candidate = prepare(&candidate_bytes, &candidate_plan, b)?;
+        let generation = match (&manifest_bytes, &generation_plan) {
+            (Some(bytes), Some(plan)) => Some(prepare(bytes, plan, b)?),
+            _ => None,
+        };
         b.check_index_metadata(input, base, &extension)?;
         self.writer.check(b)?;
         self.metadata.complete()?;
         Ok(PreparedMetadata {
             next_job,
             candidate,
+            generation,
             extension_sha256,
         })
     }
@@ -277,6 +329,7 @@ mod tests {
             native_review_sha256: "f".repeat(64),
             next_job: plan.reference().clone(),
             candidate: plan.reference().clone(),
+            generation: None,
             objects: plan.write_set(|| Ok(())).unwrap(),
             object_writes,
             read_bytes: u64::from(object_writes) * 32768,
@@ -302,6 +355,16 @@ mod tests {
         assert!(changed.canonical_bytes().is_err());
         changed = value.clone();
         changed.next_job.bytes = MAX_JOB as u64 + 1;
+        assert!(changed.canonical_bytes().is_err());
+        changed = value.clone();
+        changed.generation = Some(changed.next_job.clone());
+        changed.canonical_bytes().unwrap();
+        let generation = changed.generation.as_mut().unwrap();
+        generation.binding.owner_generation += 1;
+        assert!(changed.canonical_bytes().is_err());
+        changed = value.clone();
+        changed.generation = Some(changed.next_job.clone());
+        changed.generation.as_mut().unwrap().bytes = MAX_INDEX_PAGE_BYTES as u64 + 1;
         assert!(changed.canonical_bytes().is_err());
         let mut changed = value;
         changed.schema_version = 2;

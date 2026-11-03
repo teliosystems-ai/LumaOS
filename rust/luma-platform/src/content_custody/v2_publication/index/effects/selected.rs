@@ -739,13 +739,7 @@ pub(in crate::content_checkpoint::custody::v2_publication) fn replay_selected_ad
             "selected advance selection differs from its retained owner/reservation/input".into(),
         );
     }
-    let next_leaf = Leaf {
-        schema_version: 2,
-        binding: event.binding.clone(),
-        current_generation: old_leaf.current_generation.clone(),
-        current_job: Some(selection.next_job().clone()),
-        preparation: None,
-    };
+    let next_leaf = selected_leaf(event.binding, &old_leaf, selection.next_job(), None);
     let (replacement, leaf_ref, leaf_bytes) = replacement_leaf(&next_leaf, event.binding)?;
     let next_owner = OwnerLeaf::V2 {
         binding: event.binding.clone(),
@@ -789,9 +783,10 @@ pub(in crate::content_checkpoint::custody::v2_publication) fn replay_selected_ad
 /// consumed preparation is read from the before cut and replayed over the
 /// inventory pages its own event retained, and the measured physical delta is
 /// checked against its prepared liability. The event writes no inventory page.
-/// The store bytes are NOT re-read here: the next job, the candidate and the
-/// measured inventory are selection DATA, and every later store opening
-/// compares the store with the owner leaf this event selects.
+/// The store bytes are NOT re-read here: the next job, the candidate, a
+/// published generation and the measured inventory are selection DATA, and
+/// every later store opening compares the store with the owner leaf this event
+/// selects.
 pub(in crate::content_checkpoint::custody::v2_publication) fn replay_selected_phase_data(
     reader: &mut impl SelectedPreparationReader,
     before: &Descriptor,
@@ -854,13 +849,12 @@ pub(in crate::content_checkpoint::custody::v2_publication) fn replay_selected_ph
             "selected phase selection differs from its retained owner/preparation/input".into(),
         );
     }
-    let next_leaf = Leaf {
-        schema_version: 2,
-        binding: event.binding.clone(),
-        current_generation: old_leaf.current_generation.clone(),
-        current_job: Some(selection.next_job().clone()),
-        preparation: None,
-    };
+    let next_leaf = selected_leaf(
+        event.binding,
+        &old_leaf,
+        selection.next_job(),
+        selection.generation(),
+    );
     let (replacement, leaf_ref, leaf_bytes) = replacement_leaf(&next_leaf, event.binding)?;
     let next_owner = OwnerLeaf::V2 {
         binding: event.binding.clone(),

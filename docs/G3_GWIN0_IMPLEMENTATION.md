@@ -2572,6 +2572,46 @@ snapshot. Platform test time rose from 2185 to 2523 seconds, 314 of them the new
 Advance test. That scales to about 1704 seconds on the measured CI ratio and 2846 on
 the older one, against the 7200-second deadline. CI has not run this snapshot.
 
-Publishing an index generation, recovering a stopped attempt or a partial or
-foreign member, a C namespace reservation and the items above remain open. G3 and
-GWIN0 are not complete.
+Every later index phase now runs through C in component tests, and one Publish
+selects an index generation, recorded in the
+[Publish checkpoint](gates/g3/nf08_direct_index_publish_2026-11-03.json). A window
+of Statistics, Covariance, Projection, Vectors or Audit runs only over the
+C-selected job and binds the one commitment it reaches, so a different commitment
+on replay is refused. After Audit, a prepared Publish writes the generation
+manifest beside the next job and its candidate, reads all three back, compares
+them with the verified window and takes one NV dispatch. The owner then names that generation as current.
+Lexical AND queries over it answer across both of the test owner's artifacts.
+
+The generation's provenance is the C history itself. Before the generation is
+reserved, the publisher requires the installation's builder to equal the audited
+job's. It then walks the C descriptors back to the job's Start, and each job must
+be derived again from the one before it. No hash, receipt or flag stands in for
+that walk. The walk is bounded at 4096 events and four read budgets, a longer
+history is refused, and compacting one is later work.
+
+The test's first run found a real defect. Each direct event creates its job
+namespace under the `tails` directory, which needs another block after about 56
+events. The worker reviewed growth of the `attempts` directory only, so the next
+window was refused. The reviewed parent is now `tails`, under a v5 delta that
+refuses the v4 one. That run's timing is void because the host slept during it.
+
+Two files compiled into production builds change, and neither has a production
+caller. The parent delta validator accepts only v5. The index metadata extension
+gains a `generation` field that every extension now serialises, as `null` when
+absent, so every extension's digest changes. Of the 36 refusal texts this slice
+adds, no case reaches 33. They include every disturbed or forged history the walk
+reads, a substituted later-phase job or commitment and an outsized or foreign
+generation.
+
+On snapshot `b9d06bc`, format was clean, the plain and warning-denied test builds
+passed, the content suites passed, and each of the 1595 platform tests ran once,
+serially (43 ignored). The native tests and both fixtures passed on the same
+snapshot. Platform test time rose from 2523 to 5348 seconds, 2749 of them the new
+chain test. That scales to about 3612 seconds on the measured CI ratio and 6032 on
+the older one, against the 7200-second deadline. The older ratio leaves about 1170
+seconds, less than this slice added, so the chain test's cost has to come down
+before another slice of this size. CI has not run this snapshot.
+
+Recovering a stopped attempt or a partial or foreign member, a C namespace
+reservation, a cheaper chain test and the items above remain open. G3 and GWIN0 are
+not complete.

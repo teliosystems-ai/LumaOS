@@ -10,6 +10,10 @@
 //! failed attempt keeps the preparation's full liability charged; metadata
 //! objects derive from measured effects, so a retry cannot attribute them in
 //! advance, and reconciling such an attempt is later work.
+//!
+//! A Publish runs the same way and also writes the generation manifest, which
+//! the event names beside the next job. Only a Publish carries the fixed
+//! builder, and its provenance walks the C history back to the job's start.
 use super::index_preparation::View;
 use super::index_selection::{observation_budget, read_budget, selected_transition, SelectedClass};
 use super::*;
@@ -55,14 +59,36 @@ use luma_content_store::{Access, Boundary, DecisionKind, ResourceBudget};
 use std::fs::File;
 use std::os::unix::fs::MetadataExt;
 
+#[path = "index_chain.rs"]
+mod chain;
+
 fn refused() -> luma_content_store::Result<()> {
-    Err("index phase run admits only its one selected ingest window".into())
+    Err("index phase run refuses this boundary for its selected window".into())
+}
+
+/// The one commitment a window reaches. The store binds it after writing and again
+/// after replay, so the replay must name what the writer recorded. Its totals hold
+/// the reviewed charge, and what C selects as physical truth is the inventory
+/// measured later. This is logical accounting and not a kernel witness.
+#[derive(Default)]
+struct WindowCommitment(Option<String>);
+impl WindowCommitment {
+    fn bind(&mut self, commitment: &[u8]) -> luma_content_store::Result<()> {
+        let commitment = hash(commitment);
+        match &self.0 {
+            None => self.0 = Some(commitment),
+            Some(first) if *first == commitment => {}
+            Some(_) => return Err("index phase run commitment changed before selection".into()),
+        }
+        Ok(())
+    }
 }
 
 /// The actual C point and original worker that every content-store bound
 /// re-observes, with the one reviewed window it may run. There is no default
-/// success: each later phase, recovery and owner append is refused, and each
-/// reservation below is the exact one the C-selected preparation charged.
+/// success: a phase, recovery or owner append with no opened boundary below is
+/// refused, and each reservation below is the exact one the C-selected preparation
+/// charged.
 struct Current<'a, 'b, 'c, 's, A: Checkpoint> {
     backend: &'a mut Backend<A>,
     original: &'b mut OriginalCOperation<'c>,
@@ -81,6 +107,9 @@ struct Current<'a, 'b, 'c, 's, A: Checkpoint> {
     extension: Option<MetadataWriteSet>,
     reserve: Option<PageReserve>,
     debit: Option<PageDebitCommitment>,
+    commitment: WindowCommitment,
+    builder: Option<&'s dyn effects::CurrentBuilder>,
+    provenance: bool,
 }
 impl<A: Checkpoint> Current<'_, '_, '_, '_, A> {
     fn live(&mut self) -> Result<()> {
@@ -96,6 +125,15 @@ impl<A: Checkpoint> Current<'_, '_, '_, '_, A> {
     }
     fn ingestion(&self) -> luma_content_store::Result<&IngestRequest> {
         Ok(self.job.lineage()?.ingestion.0)
+    }
+    /// Binds this window's commitment to the object set C charged, which
+    /// `reserve_index_objects` proved equal to the preparation's.
+    fn bind_window(&mut self, commitment: &[u8]) -> luma_content_store::Result<()> {
+        self.live()?;
+        if !self.objects_reserved {
+            return Err("index phase run commitment precedes its reserved objects".into());
+        }
+        self.commitment.bind(commitment)
     }
 }
 impl<A: Checkpoint> Boundary for Current<'_, '_, '_, '_, A> {
@@ -132,11 +170,19 @@ impl<A: Checkpoint> Boundary for Current<'_, '_, '_, '_, A> {
                 source_bytes,
                 storage_bytes,
             } => {
-                // The metadata writer reviews its two blobs as its own source.
-                let metadata = self
-                    .extension
-                    .as_ref()
-                    .and_then(|value| value.next_job.bytes.checked_add(value.candidate.bytes));
+                // The metadata writer reviews its blobs as its own source.
+                let metadata = self.extension.as_ref().and_then(|value| {
+                    value
+                        .next_job
+                        .bytes
+                        .checked_add(value.candidate.bytes)?
+                        .checked_add(
+                            value
+                                .generation
+                                .as_ref()
+                                .map_or(0, |manifest| manifest.bytes),
+                        )
+                });
                 *binding == self.binding
                     && decision == DecisionKind::Published
                     && review_sha256 == self.review.core_review_sha256
@@ -289,10 +335,14 @@ impl<A: Checkpoint> CorpusIndexJobBoundary for Current<'_, '_, '_, '_, A> {
 impl<A: Checkpoint> StatisticsBoundary for Current<'_, '_, '_, '_, A> {
     fn current_statistics(
         &mut self,
-        _: &StatisticsRequest,
-        _: &StatisticsProgress,
+        request: &StatisticsRequest,
+        progress: &StatisticsProgress,
     ) -> luma_content_store::Result<()> {
-        refused()
+        self.live()?;
+        if self.job.lineage()?.statistics != Some((request, progress)) {
+            return Err("index phase run refuses a substituted statistics job".into());
+        }
+        Ok(())
     }
     fn verify_statistics_allocations(
         &mut self,
@@ -304,76 +354,150 @@ impl<A: Checkpoint> StatisticsBoundary for Current<'_, '_, '_, '_, A> {
 impl<A: Checkpoint> CovarianceBoundary for Current<'_, '_, '_, '_, A> {
     fn current_covariance(
         &mut self,
-        _: &CovarianceRequest,
-        _: &CovarianceProgress,
+        request: &CovarianceRequest,
+        progress: &CovarianceProgress,
     ) -> luma_content_store::Result<()> {
-        refused()
+        self.live()?;
+        if self.job.lineage()?.covariance != Some((request, progress)) {
+            return Err("index phase run refuses a substituted covariance job".into());
+        }
+        Ok(())
     }
     fn verify_covariance_allocations(
         &mut self,
-        _: &CovarianceCommitment,
+        value: &CovarianceCommitment,
     ) -> luma_content_store::Result<()> {
-        refused()
+        self.current_covariance(&value.request, &value.base)?;
+        if value.review.sha256()? != self.review.core_review_sha256
+            || value.review.write_charge > self.review.maximum_write_bytes
+        {
+            return Err("index phase run covariance commitment differs from its review".into());
+        }
+        self.bind_window(&value.canonical_bytes()?)
     }
 }
 impl<A: Checkpoint> ProjectionBoundary for Current<'_, '_, '_, '_, A> {
     fn current_projection(
         &mut self,
-        _: &ProjectionRequest,
-        _: &ProjectionProgress,
+        request: &ProjectionRequest,
+        progress: &ProjectionProgress,
     ) -> luma_content_store::Result<()> {
-        refused()
+        self.live()?;
+        if self.job.lineage()?.projection != Some((request, progress)) {
+            return Err("index phase run refuses a substituted projection job".into());
+        }
+        Ok(())
     }
     fn verify_projection_allocations(
         &mut self,
-        _: &ProjectionCommitment,
+        value: &ProjectionCommitment,
     ) -> luma_content_store::Result<()> {
-        refused()
+        self.current_projection(&value.request, &value.base)?;
+        if value.review.sha256()? != self.review.core_review_sha256
+            || value.review.write_charge > self.review.maximum_write_bytes
+        {
+            return Err("index phase run projection commitment differs from its review".into());
+        }
+        self.bind_window(&value.canonical_bytes()?)
     }
 }
 impl<A: Checkpoint> VectorBoundary for Current<'_, '_, '_, '_, A> {
     fn current_vectors(
         &mut self,
-        _: &VectorRequest,
-        _: &VectorProgress,
+        request: &VectorRequest,
+        progress: &VectorProgress,
     ) -> luma_content_store::Result<()> {
-        refused()
+        self.live()?;
+        if self.job.lineage()?.vectors != Some((request, progress)) {
+            return Err("index phase run refuses a substituted vector job".into());
+        }
+        Ok(())
     }
     fn verify_vector_allocations(
         &mut self,
-        _: &VectorCommitment,
+        value: &VectorCommitment,
     ) -> luma_content_store::Result<()> {
-        refused()
+        self.current_vectors(&value.request, &value.base)?;
+        // The canonical form proves the next totals do not fall below the base.
+        let commitment = value.canonical_bytes()?;
+        if value.review_sha256 != self.review.core_review_sha256
+            || value.next.totals.write_bytes - value.base.totals.write_bytes
+                > self.review.maximum_write_bytes
+        {
+            return Err("index phase run vector commitment differs from its review".into());
+        }
+        self.bind_window(&commitment)
     }
 }
 impl<A: Checkpoint> GenerationAuditBoundary for Current<'_, '_, '_, '_, A> {
     fn current_generation_audit(
         &mut self,
-        _: &GenerationJob,
-        _: &AuditProgress,
+        job: &GenerationJob,
+        progress: &AuditProgress,
     ) -> luma_content_store::Result<()> {
-        refused()
+        self.live()?;
+        if self.job.lineage()?.audit != Some((job, progress)) {
+            return Err("index phase run refuses a substituted audit job".into());
+        }
+        Ok(())
     }
-    fn verify_audit_reservations(&mut self, _: &AuditCommitment) -> luma_content_store::Result<()> {
-        refused()
+    /// An Audit window writes no objects, so what it binds is the empty set C charged.
+    fn verify_audit_reservations(
+        &mut self,
+        value: &AuditCommitment,
+    ) -> luma_content_store::Result<()> {
+        self.current_generation_audit(&value.job, &value.base)?;
+        if value.review_sha256 != self.review.core_review_sha256 {
+            return Err("index phase run audit commitment differs from its review".into());
+        }
+        self.bind_window(&value.canonical_bytes()?)
     }
 }
 impl<A: Checkpoint> GenerationPublicationBoundary for Current<'_, '_, '_, '_, A> {
+    /// Publication binds the audited job to the C history that selected every
+    /// job before it, under this installation's fixed builder. A plain window
+    /// run has no builder, so it is refused. Each call re-proves the C point
+    /// live, so the history cannot change between plan and replay and one walk
+    /// serves both.
     fn verify_original_phase_provenance(
         &mut self,
-        _: &GenerationJob,
-        _: &AuditProgress,
+        job: &GenerationJob,
+        audit: &AuditProgress,
     ) -> luma_content_store::Result<()> {
-        refused()
+        self.current_generation_audit(job, audit)?;
+        let Some(builder) = self.builder else {
+            return refused();
+        };
+        if !self.provenance {
+            self.verify_chain(builder)?;
+            self.provenance = true;
+        }
+        self.live()
     }
-    fn reserve_generation(&mut self, _: &GenerationReview) -> luma_content_store::Result<()> {
-        refused()
+    fn reserve_generation(&mut self, review: &GenerationReview) -> luma_content_store::Result<()> {
+        self.live()?;
+        if !self.provenance
+            || !self.objects_reserved
+            || review.sha256()? != self.review.core_review_sha256
+        {
+            return Err(
+                "index phase run generation review differs from its selected window".into(),
+            );
+        }
+        Ok(())
     }
     fn verify_generation_allocations(
         &mut self,
-        _: &GenerationCommitment,
+        value: &GenerationCommitment,
     ) -> luma_content_store::Result<()> {
-        refused()
+        self.current_generation_audit(&value.job, &value.audit)?;
+        if !self.provenance
+            || value.review.sha256()? != self.review.core_review_sha256
+            || value.review.write_charge > self.review.maximum_write_bytes
+        {
+            return Err("index phase run generation commitment differs from its review".into());
+        }
+        self.bind_window(&value.canonical_bytes()?)
     }
     fn release_generation_after_selection(
         &mut self,
@@ -531,7 +655,7 @@ impl<A: Checkpoint> Backend<A> {
     pub(in crate::content_checkpoint::custody::v2_publication) fn run_index_phase_direct<
         C: CorpusContent,
     >(
-        mut self,
+        self,
         store: &ObjectStore,
         base: &Job,
         input: &request::Input,
@@ -539,7 +663,45 @@ impl<A: Checkpoint> Backend<A> {
         content: &mut C,
         original: &mut OriginalCOperation<'_>,
     ) -> Result<RecordRef> {
-        let token = run(&mut self, store, base, input, plan, content, original)?;
+        self.run_selected(store, base, input, plan, content, None, original)
+    }
+    /// Runs the selected Publish preparation and NV-selects the generation it
+    /// writes. Publication alone needs the fixed builder: provenance walks the
+    /// C history that selected every job before the audited one.
+    #[allow(clippy::too_many_arguments)]
+    pub(in crate::content_checkpoint::custody::v2_publication) fn publish_index_generation_direct<
+        C: CorpusContent,
+    >(
+        self,
+        store: &ObjectStore,
+        base: &Job,
+        input: &request::Input,
+        plan: phase::Plan,
+        content: &mut C,
+        builder: &dyn effects::CurrentBuilder,
+        original: &mut OriginalCOperation<'_>,
+    ) -> Result<RecordRef> {
+        if !matches!(input.operation, request::Operation::Publish { .. }) {
+            return Err(
+                "index generation publication requires the exact prepared Publish request".into(),
+            );
+        }
+        self.run_selected(store, base, input, plan, content, Some(builder), original)
+    }
+    #[allow(clippy::too_many_arguments)]
+    fn run_selected<C: CorpusContent>(
+        mut self,
+        store: &ObjectStore,
+        base: &Job,
+        input: &request::Input,
+        plan: phase::Plan,
+        content: &mut C,
+        builder: Option<&dyn effects::CurrentBuilder>,
+        original: &mut OriginalCOperation<'_>,
+    ) -> Result<RecordRef> {
+        let token = run(
+            &mut self, store, base, input, plan, content, builder, original,
+        )?;
         let expected = match &token.outcome {
             Completed::IndexPhaseSelection(reference) => reference.clone(),
             _ => return Err("index phase run built a different completion class".into()),
@@ -566,8 +728,24 @@ impl<A: Checkpoint> Backend<A> {
             original,
         )
     }
+    /// The generation this cut selects, if a Publish selected one.
+    pub(in crate::content_checkpoint::custody::v2_publication) fn selected_index_generation(
+        &mut self,
+        input: &request::Input,
+        original: &mut OriginalCOperation<'_>,
+    ) -> Result<Option<BlobReference>> {
+        effects::selected_index_generation(
+            &mut View {
+                backend: self,
+                remaining: READ_BUDGET,
+            },
+            input,
+            original,
+        )
+    }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn run<A: Checkpoint, C: CorpusContent>(
     backend: &mut Backend<A>,
     store: &ObjectStore,
@@ -575,6 +753,7 @@ fn run<A: Checkpoint, C: CorpusContent>(
     input: &request::Input,
     plan: phase::Plan,
     content: &mut C,
+    builder: Option<&dyn effects::CurrentBuilder>,
     original: &mut OriginalCOperation<'_>,
 ) -> Result<VerifiedTransition> {
     backend.descriptor.phase.require_ready()?;
@@ -608,7 +787,7 @@ fn run<A: Checkpoint, C: CorpusContent>(
         new_files: 32768,
     };
     // Every store bound below re-proves the same NV cut and live original.
-    let (next_job, candidate, extension_sha256, physical_after) = {
+    let (next_job, candidate, generation, extension_sha256, physical_after) = {
         let mut current = Current {
             backend: &mut *backend,
             original: &mut *original,
@@ -627,6 +806,9 @@ fn run<A: Checkpoint, C: CorpusContent>(
             extension: None,
             reserve: None,
             debit: None,
+            commitment: WindowCommitment::default(),
+            builder,
+            provenance: false,
         };
         // Later jobs are not re-derivable from C alone: the selected reference
         // resolves the caller's base through the store.
@@ -649,10 +831,19 @@ fn run<A: Checkpoint, C: CorpusContent>(
         let commitment = prepared.commitment();
         let next =
             phase::verify_phase_data(store, base, input, &commitment, content, &mut current)?;
+        let manifest = observed::generation_bytes(&next)?;
+        let generation_differs = match (&metadata.generation, &manifest) {
+            (None, None) => false,
+            (Some(reference), Some(bytes)) => {
+                store.read_blob(reference, read_budget(), &mut current)? != *bytes
+            }
+            _ => true,
+        };
         if store.read_blob(&metadata.next_job, read_budget(), &mut current)?
             != next.canonical_bytes()?
             || store.read_blob(&metadata.candidate, read_budget(), &mut current)?
                 != commitment.canonical_bytes()?
+            || generation_differs
         {
             return Err("actual index metadata read-back differs from the verified window".into());
         }
@@ -669,6 +860,7 @@ fn run<A: Checkpoint, C: CorpusContent>(
         (
             metadata.next_job,
             metadata.candidate,
+            metadata.generation,
             metadata.extension_sha256,
             after,
         )
@@ -681,10 +873,27 @@ fn run<A: Checkpoint, C: CorpusContent>(
             },
             &next_job,
             &candidate,
+            generation.as_ref(),
             &extension_sha256,
             &physical_after,
             original,
         )?
         .into_parts();
     selected_transition(backend, parts, input, original, SelectedClass::Phase)
+}
+
+#[cfg(test)]
+mod commitment_tests {
+    use super::WindowCommitment;
+
+    #[test]
+    fn a_window_commitment_cannot_change_between_writing_and_replay() {
+        let mut window = WindowCommitment::default();
+        window.bind(b"written").unwrap();
+        window.bind(b"written").unwrap();
+        assert_eq!(
+            window.bind(b"replayed").unwrap_err().to_string(),
+            "index phase run commitment changed before selection"
+        );
+    }
 }

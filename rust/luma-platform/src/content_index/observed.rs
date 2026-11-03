@@ -38,7 +38,7 @@ use luma_content_store::v2::head::OwnerHeadV2;
 use luma_content_store::v2::MapRoot;
 pub(crate) use metadata::IndexMetadataBoundary;
 #[cfg(test)]
-pub(crate) use metadata::MetadataWriteSet;
+pub(crate) use metadata::{generation_bytes, MetadataWriteSet};
 
 struct Checked<'a, 'b, B: NativeIndexBoundary + OwnerBoundary + AppendWriterBoundary> {
     inner: &'a mut B,

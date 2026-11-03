@@ -12,7 +12,7 @@ use super::super::super::backend::{
     verify_index_reservation, Backend,
 };
 use super::super::super::reader::observe;
-use super::migration_cases::{migrated, Authority, Migrated, BODY};
+use super::migration_cases::{migrated, migrated_with, Authority, Migrated, BODY};
 use super::progress_cases::ContentGuard;
 use super::worker_cases::{attribution, cold, provenance, worker};
 use super::*;
@@ -32,8 +32,8 @@ use luma_content_store::corpus_index::job::covariance::projection::vectors::gene
     AuditCommitment, AuditProgress, GenerationAuditBoundary,
 };
 use luma_content_store::corpus_index::job::covariance::projection::vectors::generation::{
-    CurrentGenerationBoundary, GenerationCommitment, GenerationJob, GenerationManifest,
-    GenerationPublicationBoundary, GenerationReview,
+    query::VerifiedGeneration, CurrentGenerationBoundary, GenerationCommitment, GenerationJob,
+    GenerationManifest, GenerationPublicationBoundary, GenerationReview,
 };
 use luma_content_store::corpus_index::job::covariance::projection::vectors::{
     VectorBoundary, VectorCommitment, VectorProgress, VectorRequest,
@@ -51,10 +51,11 @@ use luma_content_store::corpus_index::job::{
     CorpusIndexJobBoundary, IngestCommitment, IngestProgress, IngestRequest,
 };
 use luma_content_store::corpus_index::{
-    BuilderIdentity, CorpusContent, CorpusIndexBoundary, CorpusIndexLimits, CorpusRecord,
+    BuilderIdentity, CorpusContent, CorpusIndexBoundary, CorpusIndexLimits, CorpusQueryKind,
+    CorpusRecord, MAX_INDEX_POSTINGS, MAX_INDEX_SOURCE_BYTES,
 };
 use luma_content_store::v2::{
-    BlobObjectPlan, IoBudget, MapRoot, Mutation, ObjectStore, PhysicalInventory,
+    BlobObjectPlan, BlobReference, IoBudget, MapRoot, Mutation, ObjectStore, PhysicalInventory,
 };
 use luma_content_store::{Access, Boundary, DecisionKind, Plan, Repository, ResourceBudget};
 use std::os::unix::fs::{DirBuilderExt, FileExt, OpenOptionsExt};
@@ -825,11 +826,12 @@ fn actual_index_start_lost_nv_reply_is_fenced_without_adoption() {
 }
 
 fn refused() -> luma_content_store::Result<()> {
-    Err("software planning guard refuses every effect and later phase".into())
+    Err("software planning guard refuses every effect".into())
 }
-/// A read-only software planning boundary over the exact C-selected first job
-/// and one Step request. It admits only finite owner inspection of that job's
-/// own corpus and builder, and refuses every effect and later phase.
+/// A read-only software planning boundary over the exact C-selected job and one
+/// request. It admits only finite owner inspection of that job's own corpus,
+/// builder and lineage, and refuses every effect. A Publish plans here too, and
+/// the run boundary is what proves its provenance.
 struct Guard<'a> {
     job: &'a Job,
     input: &'a request::Input,
@@ -912,10 +914,13 @@ impl CorpusIndexJobBoundary for Guard<'_> {
 impl StatisticsBoundary for Guard<'_> {
     fn current_statistics(
         &mut self,
-        _: &StatisticsRequest,
-        _: &StatisticsProgress,
+        request: &StatisticsRequest,
+        progress: &StatisticsProgress,
     ) -> luma_content_store::Result<()> {
-        refused()
+        if self.job.lineage()?.statistics != Some((request, progress)) {
+            return Err("software planning guard refuses a substituted statistics job".into());
+        }
+        Ok(())
     }
     fn verify_statistics_allocations(
         &mut self,
@@ -927,10 +932,13 @@ impl StatisticsBoundary for Guard<'_> {
 impl CovarianceBoundary for Guard<'_> {
     fn current_covariance(
         &mut self,
-        _: &CovarianceRequest,
-        _: &CovarianceProgress,
+        request: &CovarianceRequest,
+        progress: &CovarianceProgress,
     ) -> luma_content_store::Result<()> {
-        refused()
+        if self.job.lineage()?.covariance != Some((request, progress)) {
+            return Err("software planning guard refuses a substituted covariance job".into());
+        }
+        Ok(())
     }
     fn verify_covariance_allocations(
         &mut self,
@@ -942,10 +950,13 @@ impl CovarianceBoundary for Guard<'_> {
 impl ProjectionBoundary for Guard<'_> {
     fn current_projection(
         &mut self,
-        _: &ProjectionRequest,
-        _: &ProjectionProgress,
+        request: &ProjectionRequest,
+        progress: &ProjectionProgress,
     ) -> luma_content_store::Result<()> {
-        refused()
+        if self.job.lineage()?.projection != Some((request, progress)) {
+            return Err("software planning guard refuses a substituted projection job".into());
+        }
+        Ok(())
     }
     fn verify_projection_allocations(
         &mut self,
@@ -957,10 +968,13 @@ impl ProjectionBoundary for Guard<'_> {
 impl VectorBoundary for Guard<'_> {
     fn current_vectors(
         &mut self,
-        _: &VectorRequest,
-        _: &VectorProgress,
+        request: &VectorRequest,
+        progress: &VectorProgress,
     ) -> luma_content_store::Result<()> {
-        refused()
+        if self.job.lineage()?.vectors != Some((request, progress)) {
+            return Err("software planning guard refuses a substituted vector job".into());
+        }
+        Ok(())
     }
     fn verify_vector_allocations(
         &mut self,
@@ -972,22 +986,27 @@ impl VectorBoundary for Guard<'_> {
 impl GenerationAuditBoundary for Guard<'_> {
     fn current_generation_audit(
         &mut self,
-        _: &GenerationJob,
-        _: &AuditProgress,
+        job: &GenerationJob,
+        progress: &AuditProgress,
     ) -> luma_content_store::Result<()> {
-        refused()
+        if self.job.lineage()?.audit != Some((job, progress)) {
+            return Err("software planning guard refuses a substituted audit job".into());
+        }
+        Ok(())
     }
     fn verify_audit_reservations(&mut self, _: &AuditCommitment) -> luma_content_store::Result<()> {
         refused()
     }
 }
 impl GenerationPublicationBoundary for Guard<'_> {
+    /// A plan has no C history to bind, so it holds only the selected job. What
+    /// Publish needs here is the run boundary's to prove from that history.
     fn verify_original_phase_provenance(
         &mut self,
-        _: &GenerationJob,
-        _: &AuditProgress,
+        job: &GenerationJob,
+        progress: &AuditProgress,
     ) -> luma_content_store::Result<()> {
-        refused()
+        self.current_generation_audit(job, progress)
     }
     fn reserve_generation(&mut self, _: &GenerationReview) -> luma_content_store::Result<()> {
         refused()
@@ -1048,7 +1067,83 @@ impl phase::NativeIndexBoundary for Guard<'_> {
         refused()
     }
 }
-/// The migrated owner's one retained artifact, returned only for its exact
+/// A read-only software query boundary over the one generation the test read
+/// back from C's selection. It admits only finite inspection of that
+/// generation's own corpus, builder and digest, and refuses every effect.
+struct Selected<'a>(&'a GenerationManifest);
+impl Boundary for Selected<'_> {
+    fn admit(
+        &mut self,
+        binding: &OwnerBinding,
+        budget: ResourceBudget,
+    ) -> luma_content_store::Result<()> {
+        if binding != &self.0.corpus.binding
+            || budget.write_bytes != 0
+            || budget.additional_storage_bytes != 0
+        {
+            return Err("software query guard admits only finite owner reads".into());
+        }
+        Ok(())
+    }
+    fn check(&mut self, access: Access<'_>) -> luma_content_store::Result<()> {
+        if !matches!(access, Access::Inspect { binding } if binding == &self.0.corpus.binding) {
+            return Err("software query guard is read-only".into());
+        }
+        Ok(())
+    }
+}
+impl CorpusIndexBoundary for Selected<'_> {
+    fn current_corpus(&mut self, root: &MapRoot) -> luma_content_store::Result<()> {
+        if root != &self.0.corpus {
+            return Err("software query guard refuses a substituted corpus".into());
+        }
+        Ok(())
+    }
+    fn current_builder(
+        &mut self,
+        root: &MapRoot,
+        identity: &BuilderIdentity,
+    ) -> luma_content_store::Result<()> {
+        self.current_corpus(root)?;
+        if identity != &self.0.builder {
+            return Err("software query guard refuses a substituted builder".into());
+        }
+        Ok(())
+    }
+    fn current_index_generation(
+        &mut self,
+        root: &MapRoot,
+        generation: &str,
+    ) -> luma_content_store::Result<()> {
+        self.current_corpus(root)?;
+        if generation != self.0.sha256()? {
+            return Err("software query guard refuses a substituted generation".into());
+        }
+        Ok(())
+    }
+    fn current_candidate(
+        &mut self,
+        root: &MapRoot,
+        record: &CorpusRecord,
+    ) -> luma_content_store::Result<()> {
+        self.current_corpus(root)?;
+        record.validate()
+    }
+}
+impl CurrentGenerationBoundary for Selected<'_> {
+    fn current_generation(
+        &mut self,
+        manifest: &GenerationManifest,
+    ) -> luma_content_store::Result<()> {
+        if manifest != self.0 {
+            return Err("software query guard refuses another generation".into());
+        }
+        Ok(())
+    }
+}
+/// The second artifact of an owner whose corpus needs more than one window.
+const SECOND: &[u8] = b"other distinct words held by the second retained artifact";
+/// The migrated owner's retained artifacts, each returned only for its exact
 /// immutable digest and length after an owner inspection.
 struct Sources {
     binding: OwnerBinding,
@@ -1062,12 +1157,14 @@ impl CorpusContent for Sources {
         boundary.check(Access::Inspect {
             binding: &self.binding,
         })?;
-        if record.reference.content_sha256 != luma_content::sha256(BODY)
-            || record.content_bytes != BODY.len() as u64
-        {
-            return Err("software source holds only the retained owner artifact".into());
-        }
-        Ok(BODY.to_vec())
+        [BODY, SECOND]
+            .into_iter()
+            .find(|body| {
+                record.reference.content_sha256 == luma_content::sha256(body)
+                    && record.content_bytes == body.len() as u64
+            })
+            .map(<[u8]>::to_vec)
+            .ok_or_else(|| "software source holds only the retained owner artifacts".into())
     }
 }
 /// A source lost after the window's writes: the store re-verification that
@@ -1082,26 +1179,48 @@ impl CorpusContent for Stopped {
         Err("software source lost after the window writes".into())
     }
 }
-/// One ingestion Step over the exact selected first job.
-fn step(binding: &OwnerBinding, job: &Job, id: &str) -> request::Input {
+/// A window that may write, bounded by its phase's own `maximum`.
+fn sized_window(maximum: u16) -> request::Window {
+    request::Window {
+        maximum,
+        read_bytes: 16 * 1024 * 1024,
+        write_bytes: 16 * 1024 * 1024,
+    }
+}
+/// One Step over the exact selected job, bounded by `window`.
+fn windowed_step(
+    binding: &OwnerBinding,
+    job: &Job,
+    request_id: String,
+    window: request::Window,
+) -> request::Input {
     request::Input {
         schema_version: 1,
         login: "admin".into(),
         binding: binding.clone(),
-        request_id: id.repeat(32),
+        request_id,
         operation: request::Operation::Step {
             job_id: "2".repeat(32),
             expected_job_sha256: job.sha256().unwrap(),
-            window: request::Window {
-                maximum: 1,
-                read_bytes: 16 * 1024 * 1024,
-                write_bytes: 16 * 1024 * 1024,
-            },
+            window,
         },
     }
 }
-/// The reconstructed ingestion plan of one Step, made by the real planner
-/// over the real store under the read-only software guard.
+/// One Step over the exact selected job, bounded by its phase's own `maximum`.
+fn sized_step(
+    binding: &OwnerBinding,
+    job: &Job,
+    request_id: String,
+    maximum: u16,
+) -> request::Input {
+    windowed_step(binding, job, request_id, sized_window(maximum))
+}
+/// One ingestion Step of one document over the exact selected first job.
+fn step(binding: &OwnerBinding, job: &Job, id: &str) -> request::Input {
+    sized_step(binding, job, id.repeat(32), 1)
+}
+/// The reconstructed plan of one Step, made by the real planner over the real
+/// store under the read-only software guard.
 fn plan(store: &ObjectStore, job: &Job, input: &request::Input) -> phase::Plan {
     phase::plan(
         store,
@@ -1843,10 +1962,10 @@ fn actual_index_phase_preparation_refuses_substitutes_before_nv_then_one_dispatc
         &location,
         "actual complete physical closure differs from its selected exact delta",
     );
-    fs::DirBuilder::new()
-        .mode(0o700)
-        .create(fixture.pages().root.join("attempts").join("cd".repeat(32)))
-        .unwrap();
+    // A name added and removed again moves only the tails parent's change time.
+    let stray = fixture.pages().root.join("tails").join("cd".repeat(32));
+    fs::DirBuilder::new().mode(0o700).create(&stray).unwrap();
+    fs::remove_dir(&stray).unwrap();
     disturbed(
         &fixture,
         &selected,
@@ -2221,12 +2340,28 @@ const ADVANCE_GRANT: &str = "explicit-software-direct-index-advance";
 
 /// One Advance of the exact selected job.
 fn advance_request(binding: &OwnerBinding, job: &Job, id: &str) -> request::Input {
+    identified_advance(binding, job, id.repeat(32))
+}
+fn identified_advance(binding: &OwnerBinding, job: &Job, request_id: String) -> request::Input {
     request::Input {
         schema_version: 1,
         login: "admin".into(),
         binding: binding.clone(),
-        request_id: id.repeat(32),
+        request_id,
         operation: request::Operation::Advance {
+            job_id: "2".repeat(32),
+            expected_job_sha256: job.sha256().unwrap(),
+        },
+    }
+}
+/// One Publish of the exact selected job.
+fn identified_publish(binding: &OwnerBinding, job: &Job, request_id: String) -> request::Input {
+    request::Input {
+        schema_version: 1,
+        login: "admin".into(),
+        binding: binding.clone(),
+        request_id,
+        operation: request::Operation::Publish {
             job_id: "2".repeat(32),
             expected_job_sha256: job.sha256().unwrap(),
         },
@@ -2381,8 +2516,9 @@ fn cut(fixture: &Fixture) -> Cut {
         selected_location(fixture),
     )
 }
-/// One real owner whose first and only ingestion window ran, so its selected job
-/// is complete and an Advance is its next step, with the cuts on the way there.
+/// One real owner whose first ingestion window ran, with the cuts on the way
+/// there. For a one-artifact owner that window is the only one, so its selected
+/// job is complete and an Advance is its next step.
 struct Ingested {
     start: request::Input,
     reserved: Cut,
@@ -3171,4 +3307,537 @@ fn actual_index_advance_selects_its_reserved_next_job_and_refuses_substitutes_be
         "a refused forgery allocates nothing"
     );
     cold(&fixture).expect("the forged candidates leave the selected Advance");
+}
+
+const PHASE_GRANT: &str = "explicit-software-direct-index-phase";
+
+/// The direct path of one migrated owner, walked one selected step at a time.
+struct Walk<'a> {
+    fixture: &'a Fixture,
+    store: &'a ObjectStore,
+    authority: &'a mut Authority,
+    head: &'a OwnerHeadV2,
+    current: &'a Fixed,
+}
+impl Walk<'_> {
+    /// C prepares one reviewed window of `job`.
+    fn prepare(&self, job: &Job, input: &request::Input, number: u64) {
+        let review = plan(self.store, job, input).review().unwrap();
+        let (audit, source) = effect(
+            input,
+            &review.review_sha256,
+            PHASE_GRANT,
+            &format!("software index phase rpc {number}"),
+            number,
+        );
+        let mut check = || Ok(());
+        cold(self.fixture)
+            .unwrap()
+            .prepare_index_direct(
+                input,
+                &plan(self.store, job, input),
+                &mut software_worker_operation(&audit, source, &mut check),
+            )
+            .unwrap();
+    }
+    /// The original of one direct run of `input`'s window, reviewed over `job`.
+    fn run_original(
+        &self,
+        job: &Job,
+        input: &request::Input,
+        number: u64,
+    ) -> (Audit, TypedOperationSource) {
+        let review = plan(self.store, job, input).review().unwrap();
+        effect(
+            input,
+            &review.review_sha256,
+            PHASE_GRANT,
+            &format!("software index phase run rpc {number}"),
+            number,
+        )
+    }
+    /// The job a selected leaf names, one revision past `job`.
+    fn selected(
+        &mut self,
+        job: &Job,
+        input: &request::Input,
+        next: Option<BlobReference>,
+    ) -> (Job, BlobReference) {
+        let next = next.expect("the selected leaf names the next job");
+        let selected = Job::parse(
+            &self
+                .store
+                .read_blob(&next, read(), &mut *self.authority)
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(selected.sha256().unwrap(), next.sha256);
+        assert_eq!(selected.job_id, job.job_id);
+        assert_eq!(selected.revision, job.revision + 1);
+        assert_eq!(selected.previous_job_sha256, Some(job.sha256().unwrap()));
+        assert_eq!(selected.last_request_id, input.request_id);
+        (selected, next)
+    }
+    /// C selects one prepared window under a new original, and a cold reopen
+    /// replays it and finds the measured inventory and no open charge.
+    fn run(&mut self, job: &Job, input: &request::Input, number: u64) -> (Job, BlobReference) {
+        let (audit, source) = self.run_original(job, input, number);
+        let mut check = || Ok(());
+        cold(self.fixture)
+            .unwrap()
+            .run_index_phase_direct(
+                self.store,
+                job,
+                input,
+                plan(self.store, job, input),
+                &mut Sources {
+                    binding: input.binding.clone(),
+                },
+                &mut software_worker_operation(&audit, source.clone(), &mut check),
+            )
+            .unwrap();
+        let mut check = || Ok(());
+        let (next, charged, physical) = cold(self.fixture)
+            .expect("cold reopen replays the phase selection")
+            .selected_index_state(
+                input,
+                &mut software_worker_operation(&audit, source, &mut check),
+            )
+            .unwrap();
+        assert!(!charged, "the event resolves the preparation");
+        assert_eq!(
+            physical,
+            self.store
+                .inventory(read(), &mut *self.authority, |_| Ok(()))
+                .unwrap(),
+            "C selects the measured inventory"
+        );
+        self.selected(job, input, next)
+    }
+    /// One refused run of `planned`, reviewed over `job`, against the base `base`.
+    /// It reaches neither NV nor the store.
+    fn refused(
+        &mut self,
+        base: &Job,
+        job: &Job,
+        planned: &request::Input,
+        number: u64,
+        reason: &str,
+    ) {
+        self.refused_by(base, job, planned, number, None, reason)
+    }
+    /// The same, as a Publish under `builder` when one is given.
+    fn refused_by(
+        &mut self,
+        base: &Job,
+        job: &Job,
+        planned: &request::Input,
+        number: u64,
+        builder: Option<&Fixed>,
+        reason: &str,
+    ) {
+        let calls = self.fixture.memory.0.borrow().calls;
+        let stored = self
+            .store
+            .inventory(read(), &mut *self.authority, |_| Ok(()))
+            .unwrap();
+        let (audit, source) = self.run_original(job, planned, number);
+        let mut check = || Ok(());
+        let backend = cold(self.fixture).unwrap();
+        let plan = plan(self.store, job, planned);
+        let mut content = Sources {
+            binding: planned.binding.clone(),
+        };
+        let mut original = software_worker_operation(&audit, source, &mut check);
+        refused_with(
+            match builder {
+                None => backend.run_index_phase_direct(
+                    self.store,
+                    base,
+                    planned,
+                    plan,
+                    &mut content,
+                    &mut original,
+                ),
+                Some(builder) => backend.publish_index_generation_direct(
+                    self.store,
+                    base,
+                    planned,
+                    plan,
+                    &mut content,
+                    builder,
+                    &mut original,
+                ),
+            },
+            reason,
+        );
+        assert_eq!(
+            self.fixture.memory.0.borrow().calls,
+            calls,
+            "refused before NV"
+        );
+        assert_eq!(
+            self.store
+                .inventory(read(), &mut *self.authority, |_| Ok(()))
+                .unwrap(),
+            stored,
+            "refused before any store write"
+        );
+    }
+    /// C publishes the prepared generation of the audited `job` under the fixed
+    /// builder and a new original, and a cold reopen replays it, finds the
+    /// measured inventory and no open charge, and names the generation and the
+    /// published job.
+    fn publish(
+        &mut self,
+        job: &Job,
+        input: &request::Input,
+        number: u64,
+    ) -> (BlobReference, Job, BlobReference) {
+        let (audit, source) = self.run_original(job, input, number);
+        let mut check = || Ok(());
+        cold(self.fixture)
+            .unwrap()
+            .publish_index_generation_direct(
+                self.store,
+                job,
+                input,
+                plan(self.store, job, input),
+                &mut Sources {
+                    binding: input.binding.clone(),
+                },
+                self.current,
+                &mut software_worker_operation(&audit, source.clone(), &mut check),
+            )
+            .unwrap();
+        let mut check = || Ok(());
+        let mut original = software_worker_operation(&audit, source, &mut check);
+        let mut reopened = cold(self.fixture).expect("cold reopen replays the publication");
+        let generation = reopened
+            .selected_index_generation(input, &mut original)
+            .unwrap()
+            .expect("C selects the published generation");
+        let (next, charged, physical) =
+            reopened.selected_index_state(input, &mut original).unwrap();
+        assert!(!charged, "the event resolves the preparation");
+        assert_eq!(
+            physical,
+            self.store
+                .inventory(read(), &mut *self.authority, |_| Ok(()))
+                .unwrap(),
+            "C selects the measured inventory"
+        );
+        let (published, reference) = self.selected(job, input, next);
+        (generation, published, reference)
+    }
+    /// One Advance of the selected job at `reference`: a reservation, then a
+    /// selection under a new original. It uses `number` and `number + 1`.
+    fn advance(
+        &mut self,
+        job: &Job,
+        reference: &BlobReference,
+        number: u64,
+    ) -> (Job, BlobReference) {
+        let binding = &job.source_owner.binding;
+        let advance = identified_advance(binding, job, format!("{number:032x}"));
+        let leaf = Leaf {
+            schema_version: 2,
+            binding: binding.clone(),
+            current_generation: None,
+            current_job: Some(reference.clone()),
+            preparation: None,
+        };
+        let builder = &self.current.0;
+        let (audit, source) = advance_original(&advance, self.head, job, &leaf, builder, number);
+        let mut check = || Ok(());
+        cold(self.fixture)
+            .unwrap()
+            .reserve_index_advance_direct(
+                &advance,
+                job,
+                self.current,
+                &mut software_worker_operation(&audit, source, &mut check),
+            )
+            .unwrap();
+        let (audit, source) =
+            advance_original(&advance, self.head, job, &leaf, builder, number + 1);
+        let mut check = || Ok(());
+        cold(self.fixture)
+            .unwrap()
+            .select_index_advance_direct(
+                self.store,
+                &advance,
+                job,
+                self.current,
+                &mut software_worker_operation(&audit, source.clone(), &mut check),
+            )
+            .unwrap();
+        let mut check = || Ok(());
+        let (next, charged, _) = cold(self.fixture)
+            .expect("cold reopen replays the Advance selection")
+            .selected_index_state(
+                &advance,
+                &mut software_worker_operation(&audit, source, &mut check),
+            )
+            .unwrap();
+        assert!(!charged, "the event resolves the reservation");
+        self.selected(job, &advance, next)
+    }
+    /// Runs every window of `job`'s phase and names how many it took. Each window
+    /// uses two numbers from `number`.
+    fn finish(
+        &mut self,
+        mut job: Job,
+        mut reference: BlobReference,
+        number: u64,
+        window: request::Window,
+    ) -> (Job, BlobReference, u64) {
+        let binding = job.source_owner.binding.clone();
+        let stage = std::mem::discriminant(&job.stage);
+        let mut windows = 0;
+        while !job.stage.complete().unwrap() {
+            assert!(windows < 16, "a bounded phase did not finish");
+            assert_eq!(std::mem::discriminant(&job.stage), stage);
+            let number = number + 2 * windows;
+            let input = windowed_step(&binding, &job, format!("{number:032x}"), window);
+            self.prepare(&job, &input, number);
+            (job, reference) = self.run(&job, &input, number + 1);
+            windows += 1;
+        }
+        (job, reference, windows)
+    }
+}
+
+/// A two-artifact owner takes the direct path up to publication: two ingestion
+/// windows, then every window of Statistics, Covariance, Projection, Vectors and
+/// Audit with an Advance between each. With two documents Statistics reaches a
+/// merge, so a selected window writes real pages. Each Covariance window writes one
+/// matrix blob, a later Projection window resumes from selected state, a later
+/// Vectors window resumes from a selected frontier, and Audit writes no owner
+/// object. The wrong window bound, a missing or resolved preparation, a superseded
+/// job and another genuine window are each refused before NV with the store
+/// untouched, and the forged cuts of a page window are refused by the cold
+/// verifier. A complete Audit takes no further Advance. C prepares a Publish; the
+/// phase run and another builder are each refused before NV with the store
+/// untouched, and the audited builder publishes one generation whose provenance C
+/// proves from its own history back to the job's Start. A cold reopen selects it,
+/// it answers lexical queries over both artifacts, and a replayed Publish is
+/// refused. One chain, because each case needs every step before it.
+#[test]
+fn actual_index_phases_run_through_c_and_publish_one_generation() {
+    let fixture = Fixture::new();
+    let Migrated {
+        owner,
+        store,
+        mut authority,
+        head,
+        ..
+    } = migrated_with(&fixture, true, Some(SECOND));
+    let binding = &owner.binding;
+    let current = builder();
+    let Ingested {
+        advanced: first, ..
+    } = ingested(&fixture, binding, &store, &mut authority, &head, &current);
+    assert!(
+        !first.stage.complete().unwrap(),
+        "the second artifact holds ingestion open"
+    );
+    let mut walk = Walk {
+        fixture: &fixture,
+        store: &store,
+        authority: &mut authority,
+        head: &head,
+        current: &current,
+    };
+    let id = |number: u64| format!("{number:032x}");
+    let second = sized_step(binding, &first, id(930), 1);
+    walk.prepare(&first, &second, 930);
+    let (ingest, reference) = walk.run(&first, &second, 931);
+    assert!(
+        ingest.stage.complete().unwrap(),
+        "the second window finishes ingestion"
+    );
+    let (statistics, _) = walk.advance(&ingest, &reference, 932);
+    assert!(matches!(statistics.stage, Stage::Statistics { .. }));
+    // Statistics takes one fixed window bound, refused while planning.
+    let wrong = sized_step(binding, &statistics, id(934), 1);
+    refused_with(
+        phase::plan(
+            &store,
+            &statistics,
+            &wrong,
+            &mut Sources {
+                binding: binding.clone(),
+            },
+            &mut Guard {
+                job: &statistics,
+                input: &wrong,
+            },
+        ),
+        "statistics has one fixed4096-posting maximum",
+    );
+    let window = |job: &Job, number: u64| sized_step(binding, job, id(number), 4096);
+    let unprepared = "requires an unresolved preparation over the exact selected job";
+    let input = window(&statistics, 935);
+    walk.refused(&statistics, &statistics, &input, 936, unprepared);
+    walk.prepare(&statistics, &input, 937);
+    walk.refused(
+        &ingest,
+        &statistics,
+        &input,
+        938,
+        "base differs from the C-selected job blob",
+    );
+    let other = window(&statistics, 939);
+    walk.refused(
+        &statistics,
+        &statistics,
+        &other,
+        940,
+        "differs from the C-selected preparation owner/input/review",
+    );
+    let (mut job, mut reference) = walk.run(&statistics, &input, 941);
+    walk.refused(&statistics, &statistics, &input, 942, unprepared);
+    // Every further window, until the phase is complete. The first that writes
+    // pages also proves the forged cuts of a page window.
+    let mut windows = 0;
+    let mut paged = false;
+    while !job.stage.complete().unwrap() {
+        windows += 1;
+        assert!(windows <= 8, "bounded statistics did not finish");
+        assert!(matches!(job.stage, Stage::Statistics { .. }));
+        let number = 950 + 2 * windows;
+        let input = window(&job, number);
+        let written = plan(&store, &job, &input)
+            .review()
+            .unwrap()
+            .maximum_write_bytes;
+        walk.prepare(&job, &input, number);
+        let (prior, prior_location) = cut(&fixture);
+        let next = walk.run(&job, &input, number + 1);
+        if written > 0 && !paged {
+            paged = true;
+            let (selected, location) = cut(&fixture);
+            refuse_forged_events(
+                &fixture,
+                &selected,
+                &location,
+                Forgeries {
+                    verify: |fixture, candidate, location| {
+                        verify_index_phase(&fixture.pages(), candidate, location, &mut || Ok(()))
+                    },
+                    body: ran,
+                    prior: &prior,
+                    prior_location: &prior_location,
+                    owners: &prior.roots.owners,
+                    owners_reason: "role CAS differs",
+                    page_reason: "no selected semantic page address",
+                    index_reason: "role CAS differs",
+                    input_reason: "retained owner/preparation/input",
+                },
+            );
+        }
+        (job, reference) = next;
+    }
+    assert!(paged, "a Statistics window wrote real pages");
+    let (next, next_reference) = walk.advance(&job, &reference, 980);
+    assert!(matches!(next.stage, Stage::Covariance { .. }));
+    let (job, reference, covariance) = walk.finish(next, next_reference, 984, sized_window(1));
+    let (next, _) = walk.advance(&job, &reference, 1000);
+    assert!(matches!(next.stage, Stage::Projection { .. }));
+    // One pair first, so what remains resumes selected state whatever the number of
+    // features, and one wide window for the rest, since each window costs a C cycle.
+    let input = windowed_step(binding, &next, id(1002), sized_window(1));
+    walk.prepare(&next, &input, 1002);
+    let (next, next_reference) = walk.run(&next, &input, 1003);
+    assert!(
+        !next.stage.complete().unwrap(),
+        "one pair left the phase open"
+    );
+    let (job, reference, _) = walk.finish(next, next_reference, 1004, sized_window(8192));
+    let (next, next_reference) = walk.advance(&job, &reference, 1040);
+    assert!(matches!(next.stage, Stage::Vectors { .. }));
+    let (job, reference, vectors) = walk.finish(next, next_reference, 1042, sized_window(1));
+    let (next, next_reference) = walk.advance(&job, &reference, 1080);
+    assert!(matches!(next.stage, Stage::Audit { .. }));
+    let (job, _, audit) = walk.finish(
+        next,
+        next_reference,
+        1082,
+        request::Window {
+            maximum: 128,
+            read_bytes: 24 * 1024 * 1024,
+            write_bytes: 0,
+        },
+    );
+    refused_with(
+        job.advance_data(&identified_advance(binding, &job, id(1120))),
+        "complete audit requires separately reviewed publication",
+    );
+    let input = identified_publish(binding, &job, id(1122));
+    walk.prepare(&job, &input, 1122);
+    walk.refused(
+        &job,
+        &job,
+        &input,
+        1123,
+        "index phase run refuses this boundary for its selected window",
+    );
+    let other = Fixed(BuilderIdentity {
+        source_sha256: "f".repeat(64),
+        runtime_sha256: "e".repeat(64),
+    });
+    walk.refused_by(
+        &job,
+        &job,
+        &input,
+        1124,
+        Some(&other),
+        "index provenance builder differs from the audited job's",
+    );
+    let (generation, published, _) = walk.publish(&job, &input, 1125);
+    let Stage::Published { manifest } = &published.stage else {
+        panic!("C selects a published job");
+    };
+    let bytes = store
+        .read_blob(&generation, read(), &mut *walk.authority)
+        .unwrap();
+    assert_eq!(bytes, manifest.canonical_bytes().unwrap());
+    assert_eq!(generation.sha256, manifest.sha256().unwrap());
+    // The selected generation answers queries over both retained artifacts.
+    let limits = CorpusIndexLimits {
+        read_bytes: 128 * 1024 * 1024,
+        write_bytes: 0,
+        source_bytes: MAX_INDEX_SOURCE_BYTES,
+        postings: MAX_INDEX_POSTINGS,
+        floating_operations: 100_000_000,
+    };
+    let verified = VerifiedGeneration::open(
+        &store,
+        &bytes,
+        &generation.sha256,
+        limits,
+        &mut Selected(manifest),
+    )
+    .unwrap();
+    for (query, expected) in [("distinct", 1), ("retained", 2)] {
+        let found = verified
+            .query(
+                &store,
+                CorpusQueryKind::LexicalAnd,
+                query,
+                10,
+                limits,
+                &mut Selected(manifest),
+            )
+            .unwrap();
+        assert_eq!(found.total_matches, expected, "{query}");
+        assert_eq!(found.matches.len() as u64, expected, "{query}");
+        assert!(!found.truncated, "{query}");
+    }
+    walk.refused_by(&job, &job, &input, 1126, Some(&current), unprepared);
+    cold(&fixture).expect("the refused replay leaves the publication");
+    // One document in each Covariance and Vectors window, and Audit covers the
+    // corpus before its postings.
+    assert_eq!((covariance, vectors, audit), (2, 2, 2));
 }

@@ -1,0 +1,586 @@
+{
+  "schema_version": 1,
+  "recorded_on": "2026-11-03",
+  "status": "verified-component-tests-only-recovery-and-c-reservation-open",
+  "scope": "G3 functional branch only: the windows of every later index phase run through C, and one Publish writes an index generation and NV-selects it, with the C history from the job's Start as its provenance, in a real migrated V2 store with cold replays; no production caller, produced image, GWIN0 package, installed run or native C activation",
+  "branch_policy": {
+    "branch": "feature/g3-functional-beta",
+    "branched_from": "b69e09385a919f074d3ba9dfce45fb561ef6ab6f",
+    "g2_testing_and_gwin0_branch": "feature/g3-gwin0-beta",
+    "owner_decision": "On 29 October 2026 the owner kept further sequence-19 G2 testing and GWIN0 completion on feature/g3-gwin0-beta and moved G3 functional development to this branch in the words: complete G3 in a different branch till we fully test G2 and complete GWIN0. This checkpoint is the next step of that work; no separate owner approval of it is claimed"
+  },
+  "previous_checkpoint": "docs/gates/g3/nf08_direct_index_advance_2026-11-02.json",
+  "implementation": [
+    "run_index_phase_direct (direct/worker/index_run.rs) now runs a selected window of every phase. On the Advance snapshot it admitted only an ingest window. The Statistics, Covariance, Projection, Vectors and Audit boundaries each refuse a job other than the C-selected one. Covariance, Projection, Vectors and Audit also refuse a commitment that differs from the reviewed window, then bind it. Statistics charges its pages through the page reserve and debit that the preparation reviewed",
+    "WindowCommitment holds the one commitment a window reaches. The store binds it after writing and again after replay, and a second, different commitment is refused. It cannot be bound before the reserved objects are",
+    "publish_index_generation_direct takes a prepared Publish request and the installation's fixed builder. The window writes the generation manifest as one more metadata blob beside the next job and the candidate, reads all three back and compares them with the verified window. The PhaseSelection record (domain luma-c-index-phase-selection-v1) gains a generation field, which a Publish must carry and every other window must leave out. One NV dispatch selects it and the owner leaf then names the generation as current",
+    "Provenance: before a generation is reserved, verify_chain (direct/worker/index_chain.rs) requires the builder to equal the audited job's. It then walks the C descriptors from the current one back to the job's Start. Each event that selected a job for this owner is read as a ChainLink (index/effects/chain.rs), a Start, window or Advance record that derives that job again from the one before it. The newest job must be the audited job. Each earlier descriptor must be the exact full frame its successor committed to. The walk is bounded at 4096 events and four C read budgets, and a longer history refuses publication",
+    "A plain window run has no builder, so its generation boundary refuses. Every later generation boundary (release and current generation) still refuses",
+    "Parent growth: job namespaces are created under the tails parent, which gains one directory entry per direct event and, after about 56 events, another block. The parent allocation delta is now luma-c-direct-tails-parent-allocation-v5 over the tails parent. Every other existing C directory must keep its allocated blocks",
+    "selected_index_generation reads the generation the selected owner leaf names, and the cold phase replay rebuilds that leaf with the published generation",
+    "The test owner holds two artifacts, so ingestion takes two windows and the corpus has two records"
+  ],
+  "production_change": {
+    "summary": "Two files compiled into production builds change, and neither change has a production caller. The rest of the slice is compiled only under test",
+    "parent_allocation": "rust/luma-platform/src/content_custody/v2_publication/parent_allocation.rs: Delta::validate, which production StorageSelection::validate calls, now accepts only schema 5 with the domain luma-c-direct-tails-parent-allocation-v5 and refuses the v4 attempts-parent delta. Only the test-only direct publisher writes a delta, so no production record carries one",
+    "metadata": "rust/luma-platform/src/content_index/observed/metadata.rs: MetadataWriteSet gains a generation field. It is always serialised, so every extension's canonical bytes now carry \"generation\":null and its digest changes. A named generation must share the next job's binding and hold 1 to MAX_INDEX_PAGE_BYTES bytes, else \"index metadata extension names an outsized generation\". prepare_metadata, which writes the manifest of a Publish, remains dead code in production builds",
+    "observed": "rust/luma-platform/src/content_index/observed.rs changes only a #[cfg(test)] re-export"
+  },
+  "exact_sources": {
+    "publish_snapshot": {
+      "commit": "b9d06bc81915acb2cf7168881105cf60171ac404",
+      "tree": "4fd6888ac597437cf6341f5f01a7ac7948e5764a",
+      "parent_commit": "d38aa7fc9cfd8ea18ca719e2d8e0f3547c5354a5",
+      "rust_tree": "dc74036e6605512e1c9b038e71337a485a1b0773",
+      "diff_from_previous_head": "d38aa7f..b9d06bc: 42 files, 5883 insertions, 438 deletions",
+      "diff_from_advance_snapshot": "2c635e0..b9d06bc: 19 files, 2316 insertions, 206 deletions",
+      "diff_of_this_slice": "15 files under rust/luma-platform/src, 1632 insertions, 202 deletions",
+      "remaining_files": "The other 4 files are the Advance checkpoint's record, its two document rows and its cost note (684 insertions, 4 deletions)",
+      "snapshot_diff_sha256": "6f4460f09fd7b7426f114c131657cd239daaa09640a5f3b8e4d28b382d4cf78b",
+      "note": "An unreferenced commit of the working tree. No branch or index moved, and it is on no branch. A later commit of these sources has a different commit id; if its rust directory is unchanged it has the rust_tree above"
+    }
+  },
+  "verification": {
+    "environment": {
+      "container": "pinned tools image sha256:819dfe7772da1e3c76ffdc8f9ea4a1fa44c7c549bd4fa988e35d9397d87924b2",
+      "network": "none",
+      "memory_limit": "8g",
+      "cpu_limit": 6,
+      "cargo_build_jobs": 1,
+      "warnings_denied": true,
+      "test_profile": "The committed lightly optimized dev/test profile (opt-level 1, line-table debug info, debug assertions and overflow checks; release unchanged), checked by the run in profile.txt, with debuginfo off for the run",
+      "storage": "Disposable private ext4 work directories on the build store",
+      "authority": "Explicit software worker attribution, builder identity, resource lease and NV fixtures, not installed original PAM, the installed image builder, physical TPM or loaded LSM qualification"
+    },
+    "publish_checks": {
+      "directory": "/mnt/d/LumaOS-builds/g3-publish-check-20261103-a",
+      "commit": "b9d06bc81915acb2cf7168881105cf60171ac404",
+      "sha256sums_verified": true,
+      "sha256sums_sha256": "164c28adca8dc0102507d564cdd3b880e513c246ece04a20b14dba5151008173",
+      "admission_sha256": "e8a69d0ab38384b5e8fdace7ddccd99a8cda76c5aeb5e81080133150c48a23ce",
+      "profile_sha256": "920ef8d5b573664e83bb766758844d4b44f30533aaba07a735b8fcd2aeda01fc",
+      "reported_failures": 0,
+      "rebuild_guards": "This run stamped the extracted sources before building and required 'Compiling luma-platform' in check-plain.log and build-tests.log, which is present in both, and no FORGED or REFUSAL marker in any platform log, and there is none",
+      "format_check": {
+        "passed": true,
+        "diff_lines": 0,
+        "log_sha256": "ff81f994640699802bc4bbf252d45d4abde3c3fcc4d03e145ee4034f1312055a"
+      },
+      "plain_build_check": {
+        "passed": true,
+        "command": "cargo check --offline --locked -p luma-platform",
+        "log_sha256": "51c2d0581239b3c16b7937bea2e4518bc92b0984aa49e5c557d837f55349b53c",
+        "finished": "Finished dev [optimized] target(s) in 48.60s"
+      },
+      "warning_denied_test_build": {
+        "passed": true,
+        "packages": [
+          "luma-content",
+          "luma-content-store",
+          "luma-platform"
+        ],
+        "log_sha256": "1a741a94678f176bb0a53affadb1e43a385fdf1d2697b88a657640d8c12e08e2",
+        "finished": "Finished test [optimized] target(s) in 22m 47s"
+      },
+      "tests": [
+        {
+          "filter": "custody::v2_publication::direct::initial::tests::index_cases custody::v2_publication::direct::backend::worker::index_selection::tests",
+          "log": "platform-index.log",
+          "log_sha256": "b837e053632a206c78f0fdfaa959760d66aee44bd8b256a5fea632e2fbaf1434",
+          "passed": 8,
+          "failed": 0,
+          "filtered_out": 1630,
+          "seconds": 3942.25,
+          "required_ok": [
+            "content_checkpoint::custody::v2_publication::direct::backend::worker::index_selection::tests::a_walk_is_admitted_only_as_c_or_c_plus_complete_reserved_members",
+            "content_checkpoint::custody::v2_publication::direct::initial::tests::index_cases::actual_index_advance_selects_its_reserved_next_job_and_refuses_substitutes_before_nv",
+            "content_checkpoint::custody::v2_publication::direct::initial::tests::index_cases::actual_index_job_selection_reconciles_complete_members_of_interrupted_attempts",
+            "content_checkpoint::custody::v2_publication::direct::initial::tests::index_cases::actual_index_phase_preparation_refuses_substitutes_before_nv_then_one_dispatch_cold_reopen_replays",
+            "content_checkpoint::custody::v2_publication::direct::initial::tests::index_cases::actual_index_phase_run_refuses_substitutes_before_nv_then_one_dispatch_resolves_the_preparation",
+            "content_checkpoint::custody::v2_publication::direct::initial::tests::index_cases::actual_index_phases_run_through_c_and_publish_one_generation",
+            "content_checkpoint::custody::v2_publication::direct::initial::tests::index_cases::actual_index_start_lost_nv_reply_is_fenced_without_adoption",
+            "content_checkpoint::custody::v2_publication::direct::initial::tests::index_cases::actual_index_start_refuses_substitutes_before_nv_then_one_dispatch_cold_reopen_replays"
+          ]
+        },
+        {
+          "filter": "luma-content and luma-content-store, unfiltered",
+          "log": "content.log",
+          "log_sha256": "7c042d48de1910825b3d96cce46e96f9a997ff4ebc69ea86567e60d4c03533d8",
+          "results": {
+            "luma-content unit tests": [
+              "ok",
+              102,
+              0,
+              0,
+              0.06
+            ],
+            "luma-content-store unit tests": [
+              "ok",
+              356,
+              0,
+              0,
+              2696.57
+            ],
+            "luma-content doc-tests": [
+              "ok",
+              0,
+              0,
+              0,
+              0
+            ],
+            "luma-content-store doc-tests": [
+              "ok",
+              3,
+              0,
+              0,
+              18.02
+            ]
+          }
+        },
+        {
+          "filter": "custody::v2_publication --skip index_cases --skip index_selection::tests",
+          "log": "platform-v2-publication.log",
+          "log_sha256": "09f24a09bd9b817958e96e8adc875ca8e71057b2128ba21cdf7067e14ffcf8a7",
+          "passed": 115,
+          "failed": 0,
+          "filtered_out": 1523,
+          "seconds": 487.32,
+          "absent": [
+            "index_cases::",
+            "index_selection::tests::"
+          ],
+          "required_ok": [
+            "parents::tests::actual_job_namespaces_grow_only_the_reviewed_tails_parent",
+            "parent_allocation::tests::exact_parent_delta_is_bounded_identity_data_not_a_free_allocation_exemption",
+            "commitment_tests::a_window_commitment_cannot_change_between_writing_and_replay"
+          ]
+        },
+        {
+          "filter": "--skip custody::v2_publication",
+          "log": "platform-rest.log",
+          "log_sha256": "802edd8b97ad0ec8d8f2af3b8252c60b6917af4cd945eba337674af1f23df137",
+          "passed": 1472,
+          "failed": 0,
+          "ignored": 43,
+          "filtered_out": 123,
+          "seconds": 918.31,
+          "required_ok": [
+            "observed::metadata::tests::exact_metadata_inventory_is_closed_bounded_owner_bound_data"
+          ]
+        }
+      ],
+      "store": {
+        "before_sha256": "79192262ad3fa5260cf6bbae3ccd5241ba4bc8454a67102690f22bd552b9aeb0",
+        "after_sha256": "80f148b43c2e4c5702a9aa2cc7451fcf1ae2e2c4824d0f6c221809630584e228"
+      },
+      "results_format": "Each results entry is [result, passed, failed, filtered_out, seconds]"
+    },
+    "same_snapshot_checks": {
+      "native_tests": {
+        "directory": "/mnt/d/LumaOS-builds/g3-native-e",
+        "sha256sums_verified": true,
+        "sha256sums_sha256": "cb176905b6835ca8e455ad3095aade7f1759bd45bcc809955850aca9a9ae6157",
+        "result": "Ran 967 tests, OK (skipped=2)"
+      },
+      "harness_and_mount": {
+        "directory": "/mnt/d/LumaOS-builds/g3-validate-d",
+        "sha256sums_verified": true,
+        "sha256sums_sha256": "e4aca15ada58e20f88e1f1e6e43854aa8c45e26cdb652741542b49ff16d3c402",
+        "harness": "CATALOG_CLI_FIXTURE_PASSED and ARTIFACT_CLI_FIXTURE_PASSED in a CI-shaped container. Gate admission itself was not exercised",
+        "mount": "The crossed installed mount refusal test, 1 passed"
+      }
+    },
+    "index_tests": [
+      "a_walk_is_admitted_only_as_c_or_c_plus_complete_reserved_members",
+      "actual_index_advance_selects_its_reserved_next_job_and_refuses_substitutes_before_nv",
+      "actual_index_job_selection_reconciles_complete_members_of_interrupted_attempts",
+      "actual_index_phase_preparation_refuses_substitutes_before_nv_then_one_dispatch_cold_reopen_replays",
+      "actual_index_phase_run_refuses_substitutes_before_nv_then_one_dispatch_resolves_the_preparation",
+      "actual_index_phases_run_through_c_and_publish_one_generation",
+      "actual_index_start_lost_nv_reply_is_fenced_without_adoption",
+      "actual_index_start_refuses_substitutes_before_nv_then_one_dispatch_cold_reopen_replays"
+    ],
+    "unit_tests_changed": [
+      "actual_job_namespaces_grow_only_the_reviewed_tails_parent (new): 64 job names under tails cross into another ext4 block, the delta is accepted and verify_after passes; the same growth under attempts is refused with \"an unreviewed existing C directory changed allocated blocks\"",
+      "a_window_commitment_cannot_change_between_writing_and_replay (new): the same commitment binds twice, a different one is refused with \"index phase run commitment changed before selection\"",
+      "exact_parent_delta_is_bounded_identity_data_not_a_free_allocation_exemption: also refuses the v4 domain and schema 4",
+      "exact_metadata_inventory_is_closed_bounded_owner_bound_data: a generation with the next job's reference is accepted, and a generation of another owner generation or one byte over MAX_INDEX_PAGE_BYTES is refused. The test asserts only that each is an error"
+    ],
+    "test_behaviour": [
+      "New test actual_index_phases_run_through_c_and_publish_one_generation, beside the seven index tests of the Advance snapshot. Each case needs every step before it, so it is one test. With the two new unit tests the build holds 1638 platform tests, up from 1635",
+      "The owner holds two artifacts. Two ingestion windows run and the first leaves ingestion open. An Advance selects Statistics",
+      "Statistics: a window of another size is refused while planning. Over the C-selected job a run with no preparation, a run whose base is the ingest job and a run of a different window are each refused with no NV dispatch and an unchanged store inventory, and so is a second run of the window just selected",
+      "Every further Statistics window runs until the phase is complete, at most 8. The first that writes pages also proves 24 forged cuts of the selected page window against the cold phase-selection verifier. refusal_cases gives each text",
+      "An Advance selects each later phase, and its windows run until complete: Covariance one document a window, Projection one pair and then one wide window, Vectors one document a window and Audit one bounded window. Covariance, Vectors and Audit each take 2 windows",
+      "After Audit, another Advance is refused because publication is reviewed separately. The Publish is prepared, then refused as a plain window run and refused under another builder, each with no NV dispatch and an unchanged store inventory",
+      "The Publish under the audited job's builder takes one NV dispatch. A cold reopen names the generation, the preparation is resolved and the physical accounting equals the measured inventory. The job read through its selected reference is Stage::Published. The generation blob is the manifest's canonical bytes and its digest is the manifest's",
+      "VerifiedGeneration::open accepts the generation, and lexical AND queries answer over both retained artifacts: \"distinct\" matches 1 and \"retained\" matches 2, neither truncated",
+      "The same Publish again is refused because no unresolved preparation remains, and a cold reopen still selects the publication"
+    ],
+    "before_nv_refusals": {
+      "format": "Each entry names a case and the fragment its test asserts. Each window-run case is refused with no NV dispatch and an unchanged store inventory; the first and last are refused before any store or C access",
+      "cases": [
+        [
+          "A Statistics window of another size",
+          "statistics has one fixed4096-posting maximum"
+        ],
+        [
+          "A Statistics run with no preparation; the same run after its selection; the Publish again after its selection",
+          "requires an unresolved preparation over the exact selected job"
+        ],
+        [
+          "A Statistics run whose base is the ingest job",
+          "base differs from the C-selected job blob"
+        ],
+        [
+          "A run of a different Statistics window",
+          "differs from the C-selected preparation owner/input/review"
+        ],
+        [
+          "The prepared Publish run as a plain window",
+          "index phase run refuses this boundary for its selected window"
+        ],
+        [
+          "The prepared Publish under another builder",
+          "index provenance builder differs from the audited job's"
+        ],
+        [
+          "An Advance of the completed Audit job",
+          "complete audit requires separately reviewed publication"
+        ]
+      ]
+    },
+    "refusal_cases": {
+      "format": "Each entry names the cases and the complete refusal text recorded in the log of aid d. The full check asserted a fragment of each text and prints nothing, so its own log holds no per-case text",
+      "selection": [
+        [
+          "No storage in the descriptor",
+          "cold index phase selection has no selected storage"
+        ],
+        [
+          "Location with its length reduced; location with its frame hash replaced",
+          "cold index phase selection is not its exact selected descriptor location"
+        ],
+        [
+          "The preparation descriptor at its own location",
+          "cold index phase selection verifier refuses a different semantic event class"
+        ],
+        [
+          "A previous descriptor hash that names nothing; the preparation's location tree",
+          "cold index phase selection lost the exact selected previous descriptor address"
+        ],
+        [
+          "The preparation's previous hash; a skipped sequence and ordinal; a forged previous NV head",
+          "cold index phase selection does not continue the exact authenticated old cut"
+        ],
+        [
+          "A forged owner root page hash",
+          "actual current C has no selected semantic page address"
+        ],
+        [
+          "A signers root carrying the owners page",
+          "selected preparation changes unrelated C roots/before cut or actual physical owner selection"
+        ],
+        [
+          "The preparation's owner root; the preparation's index generations root",
+          "selected preparation role CAS differs from exact canonical retained data"
+        ],
+        [
+          "A forged request hash, source hash or attribution checkpoint head",
+          "selected phase selection body substitutes exact checkpointed source/attribution/before tuple"
+        ],
+        [
+          "A forged input hash",
+          "selected phase selection differs from its retained owner/preparation/input"
+        ],
+        [
+          "A forged selection record hash",
+          "actual current C has no selected immutable record address"
+        ],
+        [
+          "A selection record length one short",
+          "cold index phase selection record complete bytes changed"
+        ],
+        [
+          "A forged control cell instance; a forged descriptor job",
+          "cold index phase selection differs from its deterministic reviewed layout"
+        ],
+        [
+          "The preparation's job index",
+          "cold C progress has no selected allocation manifest"
+        ],
+        [
+          "One more charged file; no parent delta. The closure reads the forged frame's own sealed location first, so these stop there and not at the delta and inventory checks",
+          "sealed tail data hash or exact EOF differs"
+        ]
+      ],
+      "note": "The same 24 forgeries ran over an ingest window in the phase-run checkpoint (nf08_direct_index_phase_run_2026-11-01.json) and end at the same texts here, over a Statistics window that wrote pages. They are not run over a Publish selection"
+    },
+    "unreached_refusals": {
+      "note": "This slice adds 36 refusal texts outside test code. A printed case of aid d ends at 2 of them and a new unit test asserts 1. No case ends at the 33 below, grouped by file. Some may be reached by other tests of shared code; that is neither checked nor claimed here",
+      "reached": [
+        "index provenance builder differs from the audited job's",
+        "index phase run refuses this boundary for its selected window",
+        "index phase run commitment changed before selection"
+      ],
+      "progress/parents.rs": [
+        "exact direct tails parent observation missing"
+      ],
+      "worker/index_chain.rs": [
+        "index provenance does not end at the audited job",
+        "index provenance job is not derived from the job before it",
+        "index provenance Start does not derive its first job",
+        "index provenance exceeds its bounded C history",
+        "index provenance reached the first descriptor before the job's Start",
+        "index provenance C read budget exhausted before I/O",
+        "index provenance descriptor frame changed",
+        "index provenance does not continue the exact authenticated C history"
+      ],
+      "worker/index_run.rs": [
+        "index phase run commitment precedes its reserved objects",
+        "index phase run refuses a substituted statistics job",
+        "index phase run refuses a substituted covariance job",
+        "index phase run covariance commitment differs from its review",
+        "index phase run refuses a substituted projection job",
+        "index phase run projection commitment differs from its review",
+        "index phase run refuses a substituted vector job",
+        "index phase run vector commitment differs from its review",
+        "index phase run refuses a substituted audit job",
+        "index phase run audit commitment differs from its review",
+        "index phase run generation review differs from its selected window",
+        "index phase run generation commitment differs from its review",
+        "index generation publication requires the exact prepared Publish request"
+      ],
+      "effects/chain.rs": [
+        "index provenance Start names a different owner",
+        "index provenance window names a different owner",
+        "index provenance advance names a different owner",
+        "index provenance begins only at a job Start",
+        "index provenance Start reserved a different builder",
+        "index provenance window differs from its prepared review",
+        "index provenance advance reserved a different builder",
+        "index provenance derives a job only from a window or an advance"
+      ],
+      "effects/phase_selection.rs": [
+        "index phase selection names an outsized or foreign generation"
+      ],
+      "effects/verification.rs": [
+        "index phase selection requires the exact prepared Step or Publish request"
+      ],
+      "observed/metadata.rs": [
+        "index metadata extension names an outsized generation"
+      ]
+    },
+    "test_time": {
+      "note": "Local figures, then the CI figure scaled from them. The two ratios are 0.675, measured on d38aa7f's rust tree (1475.90 CI seconds over the 2185.11-second local total of the same tree), and 7516/6663.81, the mount read note's scale. They differ by a factor of 1.67, the reason is not traced, and CI has not run this snapshot. The 7200-second deadline and 180-minute job limits are unchanged",
+      "index_filter_seconds": 3942.25,
+      "same_filter_on_advance_snapshot_seconds": 1216.52,
+      "platform_total_seconds": 5347.88,
+      "platform_total_on_advance_snapshot_seconds": 2523.34,
+      "advance_snapshot_check": {
+        "directory": "/mnt/d/LumaOS-builds/g3-advance-check-20261102-a",
+        "sha256sums_verified": true,
+        "sha256sums_sha256": "4d7f873be3845e1e11585d5085510b996056a7d93317eb2f7739d60c469ebe27"
+      },
+      "per_test_minutes": {
+        "a_walk_is_admitted_only_as_c_or_c_plus_complete_reserved_members": "0m 00s",
+        "actual_index_advance_selects_its_reserved_next_job_and_refuses_substitutes_before_nv": "5m 03s",
+        "actual_index_job_selection_reconciles_complete_members_of_interrupted_attempts": "3m 45s",
+        "actual_index_phase_preparation_refuses_substitutes_before_nv_then_one_dispatch_cold_reopen_replays": "3m 49s",
+        "actual_index_phase_run_refuses_substitutes_before_nv_then_one_dispatch_resolves_the_preparation": "3m 52s",
+        "actual_index_phases_run_through_c_and_publish_one_generation": "45m 49s",
+        "actual_index_start_lost_nv_reply_is_fenced_without_adoption": "1m 22s",
+        "actual_index_start_refuses_substitutes_before_nv_then_one_dispatch_cold_reopen_replays": "2m 02s"
+      },
+      "chain_test_in_aid_d": {
+        "seconds": 3115.62,
+        "log_stamps_utc_plus_1": {
+          "started": "08:11:17",
+          "statistics_bound_refused": "08:22:37",
+          "forged_cuts": "08:28:40-08:28:47",
+          "advance_after_audit_refused": "08:54:35",
+          "other_builder_refused": "08:55:05",
+          "publish_replay_refused": "09:03:13"
+        },
+        "note": "Between the other builder's refusal and the refused replay the test publishes, walks the C history, reopens cold and queries the generation. That span is about 8 minutes; which part takes the time is not measured"
+      },
+      "ci_measured_on_previous_head": {
+        "run": 41398711108,
+        "commit": "d38aa7fc9cfd8ea18ca719e2d8e0f3547c5354a5",
+        "full_platform_suite_seconds": 1475.9
+      },
+      "estimated_ci_platform_suite_seconds_on_measured_ratio": 3612,
+      "estimated_ci_platform_suite_seconds_on_old_ratio": 6032,
+      "estimated_margin_against_7200_seconds_on_measured_ratio": 3588,
+      "estimated_margin_against_7200_seconds_on_old_ratio": 1168
+    },
+    "previous_head_ci": {
+      "run": 41398711108,
+      "commit": "d38aa7fc9cfd8ea18ca719e2d8e0f3547c5354a5",
+      "conclusion": "failure",
+      "storage_boundaries": "passed",
+      "tpm_boundaries": "passed: 1585 passed, 0 failed, 42 ignored in 1475.90 seconds, in results/transcript.txt of the native-tpm-boundaries artifact, sha256 965014837d8057045197b18e58d98f19b8981596d7c3d5e2fbd2db4aa2d05274, the value its result.json records",
+      "rust_boundaries": "Failed at step 4 on the artifact-read harness step. The fix set on this snapshot answers that, and CI has not run it",
+      "note": "This run is of d38aa7f, not of this snapshot"
+    },
+    "total_platform_tests_in_build": 1638,
+    "full_platform_suite_run_locally": true,
+    "full_platform_suite_note": "The three platform filters are disjoint and together cover every luma-platform test once: index_cases with the index_selection unit tests, the rest of custody::v2_publication and everything outside custody::v2_publication (8 + 115 + 1515 = 1638, 43 of them ignored by their own attributes). Platform unit tests ran serially; the parallel test interference stays open. kernel_task_inventory_limit is one of the ignored tests; it is unchanged since 17b4293, and this check did not repeat its stress",
+    "dispatched": "test builds only; no production caller"
+  },
+  "not_claimed": [
+    "CI acceptance of this snapshot, including its time budget. Neither this slice, the Advance slice nor the fix set is committed or pushed",
+    "Gate admission of the artifact CLI; the harness exercises the gated commands' refusal, and an enrolled Admin anchor in a TPM-backed installed laboratory stays open",
+    "Every refusal this slice adds: unreached_refusals lists the 33 no case reaches. In particular no case disturbs or forges the C history the provenance walk reads, exceeds its bounds, substitutes a later-phase job or commitment, or names an outsized or foreign generation; only the builder refusal of the walk is reached",
+    "Forged cuts of a Publish selection; the forged cases run over a Statistics window only",
+    "A lost or changed generation blob after selection",
+    "Crash reconciliation of a stopped window or Publish attempt, release of a charge, or recovery of a partial or foreign member",
+    "A C reservation of the fresh v2 namespace or joined protected C counters",
+    "History compaction; the walk refuses a history longer than 4096 events or four read budgets, and bounding it otherwise is later work",
+    "Any query other than the lexical AND queries above, or a query through a production reader",
+    "A power-loss, crash-consistency or page-cache-drop test",
+    "A reduced test cost; the chain test alone ran for 45m 49s in the full check and 51m 56s in aid d",
+    "The pre-checks and aids below; they are retained aids, not gate checks",
+    "A production index grant shape, a production caller, an installed run or native C activation",
+    "Delta overlay, snapshot backup delivery or a V2 owner creation route",
+    "The 100000-object/500-ms NF08 measurement",
+    "Installed PAM, physical TPM, loaded LSM or Hyper-V qualification",
+    "Any produced image or GWIN0 package; G3 and GWIN0 remain open"
+  ],
+  "retained_failed_attempts": [
+    {
+      "directory": "/mnt/d/LumaOS-builds/g3-chain-first-20261102-a",
+      "commit": "78d57a86db0b584074c07e6090e418ed0de134a5",
+      "sha256sums_verified": false,
+      "sha256sums_note": "This pre-check script writes no SHA256SUMS, so the hashes below are of the files themselves",
+      "logs": {
+        "admission.txt": "bece693356a679702cb23df1814d83f44e386797c2bffb51898546ea8ea6744a",
+        "check-tests.log": "5fe38c81ca6f11fd6d07f912963fd3bc4d158aa0f0259a215076e370332a6074"
+      },
+      "results": {
+        "check-tests.log": "unused variable: `next_reference` at index.rs:3596, denied as an error"
+      },
+      "cause": "The test kept a binding it no longer used",
+      "correction": "Removed before attempt b"
+    },
+    {
+      "directory": "/mnt/d/LumaOS-builds/g3-chain-first-20261102-b",
+      "commit": "5f564d91c5353440a2c07f9d456ffe33c91c07f7",
+      "sha256sums_verified": false,
+      "sha256sums_note": "This pre-check script writes no SHA256SUMS, so the hashes below are of the files themselves",
+      "logs": {
+        "admission.txt": "750ec2d57c4e6353d92c6e368015c1de019a96126036a010d3ba7943d8722fb7",
+        "check-tests.log": "e4171337db2c175d0e077d051a9d910d7440710f8bcc3051b840a360190f9262",
+        "check-plain.log": "31d4a0d8ed2aa509528918b000c7802b030fc80b99ed75b910375a741a217f87",
+        "build-tests.log": "4eb9cbe0a83f349761dcfcf65a5e37e06253821ae20751b1037d0859359fa418",
+        "chain.log": "24dd02a4db3e7febca1cadd8a68bc04d5d9bb019e0e792df6a4d20b3e51b3bc5"
+      },
+      "results": {
+        "chain.log": "0 passed, 1 failed (then named actual_index_phases_run_through_c_up_to_audit_and_publish_stays_refused). It panicked at index.rs:3328 with \"worker write changed an unreviewed existing directory allocation\". 31 printed cases matched their expected text before it stopped and none was accepted"
+      },
+      "cause": "Each direct event creates its job namespace under the tails parent. After about 56 events tails needed another directory block, and the worker allowed only the attempts parent to grow, so the next window was refused. The refusal is the designed behaviour for an unreviewed growth; the review named the wrong parent",
+      "correction": "The reviewed growing parent became tails, with a v5 delta that refuses the v4 one and a unit test that grows tails past one block",
+      "timing": "Void. The log reports 2129.28 seconds of test time, but its start and end stamps are 2026-11-02T17:27:37Z and 2026-11-03T06:16:25Z. The host slept during the run and the monotonic clock does not count that"
+    },
+    {
+      "directory": "/mnt/d/LumaOS-builds/g3-chain-first-20261102-c",
+      "commit": "497d6efd9234c1f2e98af83d8c07f930787956bc",
+      "sha256sums_verified": false,
+      "sha256sums_note": "This pre-check script writes no SHA256SUMS, so the hashes below are of the files themselves",
+      "logs": {
+        "admission.txt": "a14f078189c2c1fa2416c9b6fa764b0c313e2cef58a6e206153e6ae8cfa4b034",
+        "check-tests.log": "401159157cc370e2a6fec04492fb5530415818b521d56192a23457f5fbede464",
+        "check-plain.log": "9b318856828416f4f6a7f802b45c53e6bbcf979bf2ae1300b0dc3316ac3f99db"
+      },
+      "results": {
+        "check-tests.log": "passed",
+        "check-plain.log": "constant `GROWING` is never used and associated function `grown` is never used, denied as errors"
+      },
+      "cause": "Only the test-only direct publisher uses them, and parent_allocation.rs is compiled in production builds",
+      "correction": "Both are #[cfg(test)] on the snapshot"
+    }
+  ],
+  "retained_precheck_aids": [
+    {
+      "directory": "/mnt/d/LumaOS-builds/g3-chain-first-20261102-d",
+      "commit": "b9d06bc81915acb2cf7168881105cf60171ac404",
+      "sha256sums_verified": false,
+      "sha256sums_note": "This pre-check script writes no SHA256SUMS, so the hashes below are of the files themselves",
+      "logs": {
+        "admission.txt": "d9cefec53448d46abf43a93992dcb56536c0c7e55bb6365c4976252989b80db2",
+        "check-tests.log": "4d0559e514a86df169796a03c83bb3ab9871922c915a3f61310551fd00954452",
+        "check-plain.log": "79086abe542236ce1c5330aa829e1ab0bd451dce61f5933cc73b58afe188a033",
+        "build-tests.log": "f3ca4a38fc29358ad0c6f6033e3471e35417b5229d5ffec4d890e99dbfe2a715",
+        "parents.log": "0dd95c1ad3615d283ae582cc6a51e44b20fdc7357b3f654f50f21a318bbe0878",
+        "chain.log": "60a1ad1db0d6376e5288c9356f69aeee0b2572381e466062109290f9e77dfe6e",
+        "commitment.log": "b436f786e073a356825daf10daadf3f5fc2006d575361f6e1526072bd33ae62c"
+      },
+      "results": {
+        "parents.log": "3 passed, 0.7 seconds",
+        "chain.log": "1 passed, 3115.62 seconds; 35 printed cases matched their expected text, none was a placeholder and none was accepted",
+        "commitment.log": "1 passed, 0 seconds"
+      },
+      "purpose": "The lenient form's logs are the only record, from a fresh build of an aid, of each case's complete refusal text. The aid patches its extracted copy, so it differs from the snapshot of the same commit"
+    },
+    {
+      "directory": "/mnt/d/LumaOS-builds/g3-statistics-first-20261102-a",
+      "commit": "f1f718ed4b8853c36fc195d790118a42f8579a6a",
+      "sha256sums_verified": false,
+      "logs": {
+        "admission.txt": "263fe024fbb4e8ed0b38d64e26b72e2fcf3b7a95857ad5c98c2b48071af13128",
+        "check-tests.log": "68cb78928d26e2a899339c684fd02fdf573a07ba973173fb4a3387bee0b6ed9a",
+        "check-plain.log": "776dc50b4242c194e4d6fb1bd406a06d2ba0013292e12f9e5dc6a000cf3631f1",
+        "build-tests.log": "435aa8482ae686974d2cf413ccfbf2fb40ea64204e1f624ed3104098a3f034aa",
+        "statistics.log": "0e6d4160c45c5752ac5be4eff22437b6f4d67c8d71786f5cf1259a0367160ab7"
+      },
+      "results": {
+        "statistics.log": "1 passed, 847.28 seconds; 32 printed cases matched, none accepted"
+      },
+      "purpose": "An earlier stage of the chain test that ran Statistics and found Covariance refused"
+    },
+    {
+      "directory": "/mnt/d/LumaOS-builds/g3-covariance-first-20261102-a",
+      "commit": "de5f49606d7b06b4b3c4d5ecf0717ea6500482d4",
+      "sha256sums_verified": false,
+      "logs": {
+        "admission.txt": "384d5935490ff62d48516f9279462a2af94062d6ff9ede782783f88c66e4c94b",
+        "check-tests.log": "909993e9f0af9ab972ca9a7980a87d7c315b5ce85d69efdb71ce4e5a9c447342",
+        "check-plain.log": "0ea28c3c4dfb005c12e946de4bb7d1957d9bffd703ead2892259d92ff8d569fd",
+        "build-tests.log": "73ad953a2f8bda9f91f9ed11483fe6bfd5b88dd035becc50036ea94ceed825da",
+        "covariance.log": "001ce79ae7f3f19fb99b6a6d96f2b1b17a80557e63d57fdc980661778f78b888",
+        "commitment.log": "2f24600cf11cfd7d8a4a589a98df20e6553e4ba9aa3a83d1cc32aeef51be2e61"
+      },
+      "results": {
+        "covariance.log": "1 passed, 1230.43 seconds; 32 printed cases matched, none accepted",
+        "commitment.log": "1 passed"
+      },
+      "purpose": "An earlier stage of the chain test that ran Statistics and Covariance and found Projection refused"
+    },
+    {
+      "directory": "/mnt/d/LumaOS-builds/g3-quick-check-20261103-a",
+      "sha256sums_verified": false,
+      "logs": {
+        "check-tests.log": "f023eb0e98ae494101e71ccced687dc09440758e7ead2de563af366e26d53489",
+        "fmt-diff.txt": "95a041ebd3705c112e60458cc838d775371abc6caea9d745d4822032a168b789"
+      },
+      "results": {
+        "fmt-diff.txt": "126 lines of rustfmt changes",
+        "check-tests.log": "Finished dev [optimized] target(s) in 1m 31s"
+      },
+      "purpose": "A format and test-build check of the working tree before an aid. It records no commit. The format changes it found were applied before the next aid"
+    },
+    {
+      "directory": "/mnt/d/LumaOS-builds/g3-quick-check-20261103-b",
+      "sha256sums_verified": false,
+      "logs": {
+        "check-tests.log": "a00c28473c2d9a6dc471f5aa25e1a00312a2bb8742002ec61f1b600a4062f12f",
+        "fmt-diff.txt": "490d5a693c0aca286334850e310637857cb17fee6e7facd77045dc3bcbe32da8"
+      },
+      "results": {
+        "fmt-diff.txt": "16 lines of rustfmt changes",
+        "check-tests.log": "Finished dev [optimized] target(s) in 1m 36s"
+      },
+      "purpose": "A format and test-build check of the working tree before an aid. It records no commit. The format changes it found were applied before the next aid"
+    }
+  ]
+}

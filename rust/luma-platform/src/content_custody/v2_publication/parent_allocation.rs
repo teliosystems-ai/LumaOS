@@ -3,6 +3,11 @@
 //! these filesystem timestamps and identities are not independent authority.
 use super::*;
 pub(super) const MAX_GROWTH: u64 = 64 * 1024;
+/// Every direct event creates its job namespace here, so this parent gains
+/// one entry per event and eventually another directory block.
+#[cfg(test)]
+pub(super) const GROWING: &str = "tails";
+const DOMAIN: &str = "luma-c-direct-tails-parent-allocation-v5";
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub(super) struct Observation {
@@ -35,11 +40,22 @@ pub(super) struct Delta {
     pub after: Observation,
 }
 impl Delta {
+    #[cfg(test)]
+    pub fn grown(before: Observation, after: Observation) -> Result<Self> {
+        let value = Self {
+            schema_version: 5,
+            domain: DOMAIN.into(),
+            before,
+            after,
+        };
+        value.validate()?;
+        Ok(value)
+    }
     pub fn validate(&self) -> Result<()> {
         self.before.validate()?;
         self.after.validate()?;
-        if self.schema_version != 4
-            || self.domain != "luma-c-direct-attempts-parent-allocation-v4"
+        if self.schema_version != 5
+            || self.domain != DOMAIN
             || (self.before.device, self.before.inode, self.before.mount)
                 != (self.after.device, self.after.inode, self.after.mount)
             || self
@@ -65,22 +81,21 @@ mod tests {
             ctime_seconds: i64::MIN,
             ctime_nanoseconds: 999_999_999,
         };
-        Delta {
-            schema_version: 4,
-            domain: "luma-c-direct-attempts-parent-allocation-v4".into(),
-            after: Observation {
+        Delta::grown(
+            before.clone(),
+            Observation {
                 allocated_bytes: 4096 + MAX_GROWTH,
                 ctime_seconds: i64::MAX,
-                ..before.clone()
+                ..before
             },
-            before,
-        }
+        )
+        .unwrap()
     }
     #[test]
     fn exact_parent_delta_is_bounded_identity_data_not_a_free_allocation_exemption() {
         let valid = delta();
         valid.validate().unwrap();
-        for index in 0..9 {
+        for index in 0..11 {
             let mut candidate = valid.clone();
             match index {
                 0 => candidate.after.allocated_bytes += 512,
@@ -91,6 +106,8 @@ mod tests {
                 5 => candidate.after.ctime_nanoseconds = 1_000_000_000,
                 6 => candidate.before.ctime_nanoseconds = -1,
                 7 => candidate.after.allocated_bytes -= 1,
+                8 => candidate.domain = "luma-c-direct-attempts-parent-allocation-v4".into(),
+                9 => candidate.schema_version = 4,
                 _ => candidate.domain = "different-parent".into(),
             }
             assert!(
@@ -106,14 +123,14 @@ mod tests {
     fn parent_delta_decoder_refuses_unknown_fields_and_duplicate_members() {
         let bytes = serde_json::to_string(&delta()).unwrap();
         let unknown = bytes.replacen(
-            "\"schema_version\":4",
-            "\"schema_version\":4,\"authority\":true",
+            "\"schema_version\":5",
+            "\"schema_version\":5,\"authority\":true",
             1,
         );
         assert!(serde_json::from_str::<Delta>(&unknown).is_err());
         let duplicate = bytes.replacen(
-            "\"schema_version\":4",
-            "\"schema_version\":4,\"schema_version\":4",
+            "\"schema_version\":5",
+            "\"schema_version\":5,\"schema_version\":5",
             1,
         );
         assert!(serde_json::from_str::<Delta>(&duplicate).is_err());

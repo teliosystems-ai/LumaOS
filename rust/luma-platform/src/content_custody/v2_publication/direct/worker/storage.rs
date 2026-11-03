@@ -3,7 +3,7 @@
 //! A failed/unknown dispatch retains every charged allocation and fixed pending
 //! frame; there is no reserve-bin release, automatic retry or hash fallback.
 use super::super::super::super::super::paged::cells;
-use super::super::super::super::parent_allocation::{Delta, Observation, MAX_GROWTH};
+use super::super::super::super::parent_allocation::{Delta, Observation, GROWING, MAX_GROWTH};
 use super::super::super::jobs::{self, Disposition, Manifest, Member, Role};
 use super::super::super::reader;
 use super::*;
@@ -309,15 +309,8 @@ impl Parents {
         let mut delta = None;
         for parent in &self.0 {
             let after = observe_parent(&parent.pin, check)?;
-            if parent.name == "attempts" {
-                let value = Delta {
-                    schema_version: 4,
-                    domain: "luma-c-direct-attempts-parent-allocation-v4".into(),
-                    before: parent.before.clone(),
-                    after,
-                };
-                value.validate()?;
-                delta = Some(value);
+            if parent.name == GROWING {
+                delta = Some(Delta::grown(parent.before.clone(), after)?);
             } else if (
                 parent.before.device,
                 parent.before.inode,

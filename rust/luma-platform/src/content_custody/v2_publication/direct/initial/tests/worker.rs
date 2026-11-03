@@ -70,7 +70,46 @@ pub(super) fn cold(fixture: &Fixture) -> Result<Backend<Memory>> {
         &mut || Ok(()),
     )
 }
+/// One legacy publication of one artifact, in the original journal and the
+/// actual content repository.
+fn published(
+    fixture: &Fixture,
+    repository: &mut Repository,
+    plan: &Plan,
+    body: &[u8],
+    binding: &OwnerBinding,
+    number: u64,
+) -> VerifiedState {
+    let mut guard = ContentGuard {
+        owner: binding.clone(),
+        review: plan.review_sha256().into(),
+    };
+    let held = repository.prepare(plan, body, &mut guard).unwrap();
+    let commitment = held.commitment().canonical_bytes().unwrap();
+    let record = held.record_bytes().to_vec();
+    let (profile, audit) = attribution(binding, plan.review_sha256(), number);
+    let mut legacy = fixture.store();
+    let wanted = legacy
+        .publish(
+            &commitment,
+            &record,
+            &profile,
+            "8:1",
+            &audit,
+            &mut || Ok(()),
+        )
+        .unwrap();
+    drop(legacy);
+    held.publish(&mut guard).unwrap();
+    assert_eq!(repository.verified_state(&mut guard).unwrap(), wanted);
+    wanted
+}
 pub(super) fn ready(fixture: &Fixture) -> (Owner, Backend<Memory>) {
+    ready_with(fixture, None)
+}
+/// `further` is a second artifact of the same owner, published before bootstrap
+/// finishes, so the owner's corpus holds two records.
+pub(super) fn ready_with(fixture: &Fixture, further: Option<&[u8]>) -> (Owner, Backend<Memory>) {
     let binding = OwnerBinding {
         installation: fixture.binding.installation.clone(),
         owner: "22".repeat(32),
@@ -90,31 +129,25 @@ pub(super) fn ready(fixture: &Fixture) -> (Owner, Backend<Memory>) {
         review: plan.review_sha256().into(),
     };
     let mut repository = Repository::create_at(&fixture.data, &plan, &mut guard).unwrap();
-    let held = repository.prepare(&plan, body, &mut guard).unwrap();
-    let commitment = held.commitment().canonical_bytes().unwrap();
-    let record = held.record_bytes().to_vec();
-    let (profile, audit) = attribution(&binding, plan.review_sha256(), 40);
-    let mut legacy = fixture.store();
-    let wanted = legacy
-        .publish(
-            &commitment,
-            &record,
-            &profile,
-            "8:1",
-            &audit,
-            &mut || Ok(()),
+    let mut wanted = published(fixture, &mut repository, &plan, body, &binding, 40);
+    if let Some(body) = further {
+        let plan = Plan::capture(
+            binding.clone(),
+            "second-document",
+            Format::Utf8Text,
+            body,
+            provenance("direct-worker-second-artifact", body, EditOrigin::Managed),
         )
         .unwrap();
-    drop(legacy);
-    held.publish(&mut guard).unwrap();
-    assert_eq!(repository.verified_state(&mut guard).unwrap(), wanted);
+        wanted = published(fixture, &mut repository, &plan, body, &binding, 41);
+    }
     fixture.dispatch().unwrap();
     let mut backend = open(fixture);
     let proposal = proposal(fixture, &mut backend, 2);
     let current = step(fixture, backend, &proposal, 3).unwrap();
     assert_eq!(current.descriptor().phase.state, bootstrap::State::Ready);
     assert_eq!(current.descriptor().roots.owners.entry_count, 1);
-    assert_eq!(fixture.memory.0.borrow().calls, 3);
+    assert_eq!(fixture.memory.0.borrow().calls, further.map_or(3, |_| 4));
     (
         Owner {
             binding,

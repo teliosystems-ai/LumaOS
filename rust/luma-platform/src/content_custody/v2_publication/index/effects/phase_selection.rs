@@ -6,10 +6,11 @@ use luma_content_store::v2::BlobReference;
 
 const SELECTION_DOMAIN: &str = "luma-c-index-phase-selection-v1";
 
-/// One prepared Step window after its exact objects, next job and candidate
+/// One prepared Step or Publish after its exact objects, next job and candidate
 /// were written under a new original operation and its physical delta stayed
-/// inside the prepared liability. Publishing this record resolves the
-/// preparation: the measured inventory replaces the charge.
+/// inside the prepared liability. A Publish alone also names the generation it
+/// selects. Publishing this record resolves the preparation: the measured
+/// inventory replaces the charge.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub(super) struct PhaseSelection {
@@ -19,6 +20,7 @@ pub(super) struct PhaseSelection {
     preparation: RecordRef,
     next_job: BlobReference,
     candidate: BlobReference,
+    generation: Option<BlobReference>,
     extension_sha256: String,
     physical_after: PhysicalInventory,
     capacity: policy::CapacitySummary,
@@ -33,6 +35,7 @@ impl PhaseSelection {
         leaf: &Leaf,
         next_job: &BlobReference,
         candidate: &BlobReference,
+        generation: Option<&BlobReference>,
         extension_sha256: &str,
         physical_after: &PhysicalInventory,
         original: &Attribution,
@@ -47,6 +50,7 @@ impl PhaseSelection {
             preparation: preparation_ref.clone(),
             next_job: next_job.clone(),
             candidate: candidate.clone(),
+            generation: generation.cloned(),
             extension_sha256: extension_sha256.into(),
             physical_after: physical_after.clone(),
             capacity,
@@ -74,6 +78,15 @@ impl PhaseSelection {
         self.base.validate()?;
         self.next_job.validate()?;
         self.candidate.validate()?;
+        if let Some(generation) = &self.generation {
+            generation.validate()?;
+            if generation.binding != self.base.binding
+                || generation.bytes == 0
+                || generation.bytes > GENERATION_BYTES
+            {
+                return Err("index phase selection names an outsized or foreign generation".into());
+            }
+        }
         digest(&self.extension_sha256)?;
         self.capacity.validate_data()?;
         if self.schema_version != 1
@@ -122,6 +135,7 @@ impl PhaseSelection {
                 .map_or(false, |delta| delta <= limit)
         };
         if self.preparation != *preparation_ref
+            || self.generation.is_some() != (preparation.review.phase == "publish")
             || selected.as_ref() != Some(preparation_ref)
             || leaf.current_job.as_ref().map(|job| job.sha256.as_str())
                 != Some(preparation.review.base_sha256.as_str())
@@ -175,6 +189,12 @@ impl PhaseSelection {
     }
     pub(super) fn next_job(&self) -> &BlobReference {
         &self.next_job
+    }
+    pub(super) fn candidate(&self) -> &BlobReference {
+        &self.candidate
+    }
+    pub(super) fn generation(&self) -> Option<&BlobReference> {
+        self.generation.as_ref()
     }
     pub(super) fn physical_after(&self) -> &PhysicalInventory {
         &self.physical_after

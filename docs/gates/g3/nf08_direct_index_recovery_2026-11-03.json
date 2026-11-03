@@ -1,0 +1,172 @@
+{
+  "schema_version": 1,
+  "recorded_on": "2026-11-03",
+  "status": "verified-filtered-component-tests-only-stopped-attempt-partial-member-and-c-reservation-open",
+  "scope": "G3 functional branch only: test-only completion, by a separate fresh exact original Admin recovery, of a direct index event whose one C advance NV selected but whose reply was lost, through the existing direct progress recovery and the cold reader's own class verifier; direct V1 and owner migration stay fenced; no production caller, produced image, GWIN0 package, installed run or native C activation",
+  "branch_policy": {
+    "branch": "feature/g3-functional-beta",
+    "branched_from": "b69e09385a919f074d3ba9dfce45fb561ef6ab6f",
+    "g2_testing_and_gwin0_branch": "feature/g3-gwin0-beta",
+    "owner_decision": "On 29 October 2026 the owner kept further sequence-19 G2 testing and GWIN0 completion on feature/g3-gwin0-beta and moved G3 functional development to this branch in the words: complete G3 in a different branch till we fully test G2 and complete GWIN0. This checkpoint is the next step of that work; no separate owner approval of it is claimed"
+  },
+  "previous_checkpoint": "docs/gates/g3/nf08_direct_index_publish_2026-11-03.json",
+  "implementation": [
+    "Fresh dispatch recovery (direct/progress/recovery.rs) completed only a lost reply of bootstrap progress. It now also completes a lost reply of each direct index event class: IndexPreparation, IndexJobReservation, IndexJobSelection, IndexPhaseSelection, IndexAdvanceReservation and IndexAdvanceSelection. Each of those writes all of its store and C allocations before its one C advance (storage::publish), and has nothing after the advance but the rewrite of its pending frame to Completed. Completing that frame therefore selects exactly what the cold reader verifies, and recovery writes nothing else",
+    "Direct V1 publication and owner migration stay fenced. recoverable refuses them with \"direct dispatch recovery covers only bootstrap progress and direct index event classes\" right after the C cut is observed, before its pending frame is examined or its lineage verified. V1 is acknowledged by its worker only on a Completed reply, and migration has a later acknowledgement step that this recovery does not take",
+    "backend.rs gains verify_selected_class, the one lineage verifier for a selected direct descriptor above sequence one, chosen by its event class. Backend::open's chain of seven class checks is replaced by one call to it with the same verifiers in the same order, and recovery calls the same function, so recovery never completes a cut the cold reader would not select",
+    "Every other recovery rule is unchanged: one exact Prepared pending frame whose next cell is the actual selected cell, a sequence above one, the actual NV head equal to the descriptor's selected head throughout, a separate fresh original whose operation id and request digest differ from the event's original, the reconcile command, a RecoverResource use of content-custody-paged-reconcile-v3 over the exact review, and matching attempt and expected-descriptor digests. The review and attempt hash domains are unchanged",
+    "recovery_review now names the event class in a new operation_class field of its JSON. The reconcile let-else on BootstrapProgress and its text \"progress recovery operation class changed\" are gone, because the class gate now precedes it",
+    "Old-NV and third-NV replies of every class remain fenced, with all allocations retained and no retry, guessed adoption, authority renewal or second C advance",
+    "Doc comments in worker/index_run.rs and worker/index_select.rs say that a lost reply after NV selected is not a failure and is completed only by that recovery"
+  ],
+  "production_change": "None. Every changed source is compiled only under test: v2_publication.rs declares the direct module #[cfg(test)] and bootstrap.rs declares direct_progress #[cfg(test)]",
+  "exact_sources": {
+    "recovery_snapshot": {
+      "commit": "5f067f5f298e588bdff420f5177d8ddae7dc78e4",
+      "tree": "59f8073041d933170133755f783154091e3bac31",
+      "parent_commit": "acceef887ec6e3aa39aa7202b738f52dad1888a1",
+      "rust_tree": "2d98973675b48a55df07e0aeadfafada9420472f",
+      "diff_of_this_slice": "7 files under rust/luma-platform/src/content_custody/v2_publication/direct, 238 insertions, 89 deletions",
+      "branch_commit": "11675f97dff205dacd80d29d26101cf3ccb74d7c",
+      "note": "An unreferenced commit of the working tree over acceef8, made with this record set aside. No branch or index moved. The branch commit 11675f9, also over acceef8, has the same tree and the same rust_tree"
+    }
+  },
+  "verification": {
+    "environment": {
+      "container": "pinned tools image sha256:819dfe7772da1e3c76ffdc8f9ea4a1fa44c7c549bd4fa988e35d9397d87924b2",
+      "network": "none",
+      "memory_limit": "8g",
+      "cpu_limit": 6,
+      "cargo_build_jobs": 2,
+      "warnings_denied": true,
+      "test_profile": "The committed lightly optimized dev/test profile, with debuginfo off for the run",
+      "storage": "Disposable private ext4 work directories on the build store",
+      "authority": "Explicit software worker attribution, software original Admin recovery, builder identity, resource lease and NV fixtures, not installed original PAM, the installed image builder, physical TPM or loaded LSM qualification"
+    },
+    "checks": {
+      "directory": "/mnt/d/LumaOS-builds/nf08-core-verify-p2-b",
+      "commit": "5f067f5f298e588bdff420f5177d8ddae7dc78e4",
+      "admission_sha256": "3f94300cad79e029df75e285f4f331245e1ecc9976943b94e8cc72a471e43472",
+      "format_check": {
+        "passed": true,
+        "diff_lines": 0,
+        "log_sha256": "35fed3d8c8134c3a51a912c59afc7c81e991981e200705891504688361542ac2"
+      },
+      "warning_denied_test_check": {
+        "passed": true,
+        "command": "cargo check --offline --locked -p luma-platform --tests",
+        "log_sha256": "060e9ba027352d9800c29028b1ca6df32d1e106404ac96ecdcce32dadf272f3b",
+        "finished": "Finished dev [optimized] target(s) in 1m 28s"
+      },
+      "plain_build_check": {
+        "passed": true,
+        "command": "cargo check --offline --locked -p luma-platform",
+        "log_sha256": "c95ed0e4a425500169b78e1e4d81f2a02862da4ec45a46b3a194fc3e453ab9b5",
+        "finished": "Finished dev [optimized] target(s) in 38.91s"
+      },
+      "earlier_format_miss": "The previous snapshot of this slice, f9694f1, failed format on one assert_eq! line that rustfmt splits, and its checks did not run. The line was split by hand, and 5f067f5 is the result"
+    },
+    "filtered_tests": {
+      "directory": "/mnt/d/LumaOS-builds/nf08-core-p2-a",
+      "commit": "5f067f5f298e588bdff420f5177d8ddae7dc78e4",
+      "admission_sha256": "d688b3a3a63ceed3d6782970ae43f53415f4cebf5dffb4f3c52238af7cbbc4c8",
+      "rebuild_guards": "The run stamped the extracted sources before building and required 'Compiling luma-platform' in build-tests.log, which is present, and no platform log has a FORGED or REFUSAL marker",
+      "test_build": {
+        "passed": true,
+        "command": "cargo test --offline --locked -p luma-platform --no-run",
+        "log_sha256": "7850b871a117531af5845ab9636e2aa7241b7fcd5cf3558b114995e22e16f3b2",
+        "finished": "Finished test [optimized] target(s) in 11m 53s",
+        "platform_tests_in_build": 1638
+      },
+      "results_format": "Each filter ran alone, serially, with --test-threads=1 --nocapture",
+      "tests": [
+        {
+          "test": "content_checkpoint::custody::v2_publication::direct::initial::tests::index_cases::actual_index_start_lost_nv_reply_needs_fresh_exact_admin_recovery_without_redispatch",
+          "log": "index.log",
+          "log_sha256": "97b3fdeccc518b911c9dd165be411d5b5fec046c56c6a9c526443443b683206f",
+          "passed": 1,
+          "failed": 0,
+          "seconds": 97.08,
+          "ci_job": "index-boundaries"
+        },
+        {
+          "test": "content_checkpoint::custody::v2_publication::direct::initial::tests::worker_cases::actual_worker_nv_faults_are_fenced_without_redispatch_or_content_adoption",
+          "log": "worker.log",
+          "log_sha256": "da84ece8c9d57403903dc195a3313a1aa6153fd5887168258c33e5b0ae0f36d9",
+          "passed": 1,
+          "failed": 0,
+          "seconds": 24.59,
+          "ci_job": "rust-boundaries and the TPM suite"
+        },
+        {
+          "test": "content_checkpoint::custody::v2_publication::direct::initial::tests::migration_cases::actual_owner_migration_nv_faults_are_fenced_without_adoption",
+          "log": "migration.log",
+          "log_sha256": "078e96f7a6b40c0e331b2099dd5b3e0f2c9429632a44c489fd4d0204dfd3436d",
+          "passed": 1,
+          "failed": 0,
+          "seconds": 48.06,
+          "ci_job": "rust-boundaries and the TPM suite"
+        },
+        {
+          "test": "content_checkpoint::custody::v2_publication::direct::initial::tests::progress_cases::actual_progress_lost_new_reply_requires_distinct_recovery_and_never_redispatches",
+          "log": "progress-lost.log",
+          "log_sha256": "d758c09259baee464551e96ca977c69ab15efbd058c77a1a78854ec043f4ee86",
+          "passed": 1,
+          "failed": 0,
+          "seconds": 5.55,
+          "ci_job": "rust-boundaries and the TPM suite",
+          "changed": false
+        },
+        {
+          "test": "content_checkpoint::custody::v2_publication::direct::initial::tests::progress_cases::actual_old_and_third_nv_progress_remain_fenced_without_retry_or_allocation_adoption",
+          "log": "progress-old.log",
+          "log_sha256": "47dfd17129186e1c2558cd6fd62cd07b053ccc48e3e64d4b4e56cfa6204b8cd3",
+          "passed": 1,
+          "failed": 0,
+          "seconds": 8.76,
+          "ci_job": "rust-boundaries and the TPM suite",
+          "changed": false
+        }
+      ]
+    },
+    "test_behaviour": [
+      "actual_index_start_lost_nv_reply_needs_fresh_exact_admin_recovery_without_redispatch replaces actual_index_start_lost_nv_reply_is_fenced_without_adoption and keeps its first part: a Start reservation whose NV selected but whose reply was lost fails, the cold reader refuses the store and there is no redispatch",
+      "The recovery review then names operation_class index-job-reservation with actual_nv_is_new true",
+      "Six recoveries are refused, each with no NV dispatch, an unchanged store inventory, the same review and a still-refusing cold reader: one reusing the event's original operation id, one reusing its request digest, a wrong attempt digest, a wrong expected-descriptor digest, a wrong expected review, and one whose authority check reports revocation",
+      "The exact recovery completes the pending frame as the IndexJobReservation whose original authority is the event's own. It takes no NV dispatch, and the store inventory is unchanged. A cold reopen selects the same descriptor bytes, and a second review is refused because nothing is pending",
+      "actual_worker_nv_faults_are_fenced_without_redispatch_or_content_adoption and actual_owner_migration_nv_faults_are_fenced_without_adoption now also require the recovery review to refuse after every NV fault. After a lost reply, where NV did select, the refusal is the class gate's text",
+      "The two progress tests are unchanged and show that bootstrap progress recovery and its old-NV and third-NV fencing still pass through the new class gate and the shared verifier",
+      "The renamed test is still in index_cases, so the index-boundaries job still names it, and no test module was added. Its old name appears only in earlier gate records, which describe earlier snapshots"
+    ],
+    "refusal_texts": {
+      "added": [
+        "direct dispatch recovery covers only bootstrap progress and direct index event classes"
+      ],
+      "removed": [
+        "progress recovery operation class changed"
+      ],
+      "note": "The removed text belonged to a let-else on BootstrapProgress in reconcile. The class gate now runs first in observed, so that branch could no longer be reached"
+    },
+    "test_cost": {
+      "index_test_seconds": 97.08,
+      "replaced_test_seconds_in_the_publish_full_check": 82,
+      "added_index_job_seconds_estimate": 15,
+      "suite_job_addition": "One recovery review per NV fault in the worker and migration fault tests, refused at the class gate or earlier; it was not timed separately from those tests",
+      "chain_test": "actual_index_phases_run_through_c_and_publish_one_generation is not changed"
+    }
+  },
+  "not_claimed": [
+    "The full platform suite on this snapshot; only the filtered tests below ran. The integrated full check is separate",
+    "CI acceptance of this snapshot",
+    "Recovery of a stopped index attempt whose C advance did not happen (old NV) or was not observed (third NV). Its store and C allocations stay retained, and a later attempt over the same baseline is refused before reservation. Releasing them needs a retired-restart record like the bootstrap resume's, which is a new OperationData shape in v2_publication.rs, compiled into production builds",
+    "Recovery of a partial or foreign member. Objects are written in place under their final names, so repairing a partial one needs a new luma-content-store API, and a foreign file cannot be attributed to an attempt because page debits are measured per attempt",
+    "A C reservation of the fresh v2 namespace; it needs a new OperationData variant in v2_publication.rs",
+    "Recovery of a lost reply of direct V1 publication or owner migration",
+    "A lost reply of any index class other than the Start reservation in a test. The other five index classes reach the same shared code, and their cold verifiers are the ones each class's own tests run, but no test loses their reply",
+    "Old-NV and third-NV replies on the index route in a test; they share the fenced dispatch the worker, migration and progress tests run",
+    "A power-loss, crash-consistency or page-cache-drop test",
+    "A production index grant shape, a production caller, an installed run or native C activation",
+    "Installed PAM, physical TPM, loaded LSM or Hyper-V qualification",
+    "Any produced image or GWIN0 package; G3 and GWIN0 remain open"
+  ]
+}

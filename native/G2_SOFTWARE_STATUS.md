@@ -1,6 +1,6 @@
 # G2 software completion register
 
-Updated 2026-10-28. **The delivered compact-profile software candidate passes its recorded software verification; G2 is not closed.** This register separates
+Updated 2026-11-04. **The delivered compact-profile software candidate passes its recorded software verification; G2 is not closed.** This register separates
 work that can be executed in the current Windows/Ubuntu WSL/VM environment
 from production deployment decisions and physical qualification. It does not
 change the frozen reference release, governing requirements, or exit criteria.
@@ -15,19 +15,26 @@ requirement.
 
 ### Current image and continued G3 development
 
-The [sequence-19 desktop handoff](evidence/G2_NATIVE_DESKTOP_CANDIDATE_19_2026-10-28.md)
-is the current native Ubuntu candidate, exported on 2026-10-28 from `6528ea1`.
-It carries the sequence-18 fixes for the live-mode `/run` namespace paths and
-names the RAM that live staging needs. Its offline image verification and the
-disk image's Secure Boot live-system/final-storage-teardown VM smoke passed. Its
-signed ISO booted under emulated Secure Boot in an 8-GiB guest and passed all
-ten required and all five gated optical checks. No unit failed, the UTC recovery
-keeper and producer path were active, no ordering cycle appeared, and signed
-media verification exited zero. Live verification or installation of this
-payload needs at least 8 GiB of RAM. Installation, physical USB/optical boot,
-graphical/installed security/recovery, physical TPM and production
-qualification did not run. See the exact
-[execution record](evidence/candidate19_execution_2026-10-28.json). The
+Sequence 20 is the current native Ubuntu candidate, exported on 2026-11-03 from
+`e9a11aa`, which adds the NF08 direct index lost-reply recovery to the
+sequence-19 components. Install, update, boot health and recovery code is
+unchanged from sequence 19. The owner tests both sequences together from
+download sets, without an optical drive, using the
+[download-only acceptance handoff](evidence/NATIVE_DOWNLOAD_ACCEPTANCE_19_20_2026-11-03.md).
+Sequence 20's offline image verification passed, and a static check found that
+its update over sequence 19 would be admitted. Its raw disk image booted under
+emulated Secure Boot in an 8-GiB guest as a removable USB device on xHCI and as
+a virtio disk, passing all ten required and all five gated checks each time.
+Download sets for both sequences are built and pinned, but not uploaded.
+Installation, the 19-to-20 update, physical USB boot, graphical/installed
+security/recovery, physical TPM and production qualification did not run. See
+the exact [execution record](evidence/candidate20_execution_2026-11-03.json).
+
+The [sequence-19 desktop handoff](evidence/G2_NATIVE_DESKTOP_CANDIDATE_19_2026-10-28.md),
+exported on 2026-10-28 from `6528ea1`, and its
+[execution record](evidence/candidate19_execution_2026-10-28.json) are
+retained; its signed ISO passed all ten required and all five gated optical
+checks in an 8-GiB guest. The
 [sequence-18](evidence/G2_NATIVE_DESKTOP_CANDIDATE_18_2026-10-28.md),
 [sequence-17](evidence/G2_NATIVE_DESKTOP_CANDIDATE_17_2026-10-27.md) and
 [sequence-16](evidence/G2_NATIVE_DESKTOP_CANDIDATE_16_2026-10-19.md) handoffs
@@ -37,7 +44,7 @@ and their [sequence-18](evidence/candidate18_execution_2026-10-28.json),
 are retained.
 
 Later G3/GWIN0 work targets [distinct final deployments](../docs/G3_GWIN0_DELIVERY.md).
-It does not turn sequence 19 into a Windows image or a complete G3 release.
+It does not turn sequence 20 into a Windows image or a complete G3 release.
 The dated checkpoints below retain their original source and test scope.
 
 ### Approved QA session extension and beta development branch

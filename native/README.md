@@ -12,8 +12,10 @@ image and Rust platform implementation. It is outside the historical Python
 - [Exact-image native Ubuntu test handoff](evidence/TEST_IMAGE_2026-09-28.md)
 - [Implementation plan](image/BUILD_PLAN.md)
 - [Current G2 software completion register](G2_SOFTWARE_STATUS.md)
-- [Current sequence-19 native Ubuntu test image and installation guide](evidence/G2_NATIVE_DESKTOP_CANDIDATE_19_2026-10-28.md)
-- [Current sequence-19 build, offline verification, VM and optical evidence](evidence/candidate19_execution_2026-10-28.json)
+- [Current sequences 19 and 20 download-only owner acceptance guide](evidence/NATIVE_DOWNLOAD_ACCEPTANCE_19_20_2026-11-03.md)
+- [Current sequence-20 build, offline verification, USB-class and virtio VM and download-set evidence](evidence/candidate20_execution_2026-11-03.json)
+- [Previous sequence-19 native Ubuntu test image and installation guide](evidence/G2_NATIVE_DESKTOP_CANDIDATE_19_2026-10-28.md)
+- [Previous sequence-19 build, offline verification, VM and optical evidence](evidence/candidate19_execution_2026-10-28.json)
 - [Previous sequence-18 native Ubuntu test image and installation guide](evidence/G2_NATIVE_DESKTOP_CANDIDATE_18_2026-10-28.md)
 - [Previous sequence-17 native Ubuntu test image and installation guide](evidence/G2_NATIVE_DESKTOP_CANDIDATE_17_2026-10-27.md)
 - [Previous sequence-16 native Ubuntu test image and installation guide](evidence/G2_NATIVE_DESKTOP_CANDIDATE_16_2026-10-19.md)
@@ -28,19 +30,22 @@ image and Rust platform implementation. It is outside the historical Python
 G2 remains in progress. Headless and candidate GNOME/Wayland desktop images are
 laboratory-signed, not a complete production OS or hardware certification.
 Bulk builds, images and VM disks are on the owner-designated D: drive; source
-stays on C:. The [current image handoff](evidence/G2_NATIVE_DESKTOP_CANDIDATE_19_2026-10-28.md)
-identifies the sequence-19 desktop candidate exported on 2026-10-28. Its fourteen
-offline image checks and software-emulated Secure Boot live-startup/final-storage
-teardown test of the disk image passed. Its signed optical ISO booted under
-emulated Secure Boot in an 8-GiB guest and passed all ten required and all five
-gated checks, including no failed units, an active UTC recovery keeper and
-signed media verification; this fixes the sequence-18 optical defects in a
-booted image. Live verification or installation of the desktop payload needs at
-least 8 GiB of RAM. Installation, physical USB/optical boot, graphical/installed
-security and recovery, physical TPM and production qualification remain open.
-It is native Ubuntu media, not a Windows image or complete G3 release.
-Subsequent G3/GWIN0 source changes require their own identified builds and
-tests. The
+stays on C:. The [current owner handoff](evidence/NATIVE_DOWNLOAD_ACCEPTANCE_19_20_2026-11-03.md)
+covers the sequence-20 desktop candidate, exported on 2026-11-03 from `e9a11aa`,
+together with sequence 19. No optical drive is used: every image installs
+from a downloaded file. Sequence 20's fourteen offline image checks passed. Its
+raw disk image booted under emulated Secure Boot in an 8-GiB guest, once as a
+removable USB device on xHCI and once as a virtio disk, and passed all ten
+required and all five gated checks each time. Download sets for both sequences
+are laid out on D: and pinned in the handoff. Agents do not upload them, and
+the owner chooses the download location. Live verification or installation of
+the desktop payload needs at least 8 GiB of RAM. Installation, the 19-to-20
+update, physical USB boot, graphical/installed security and recovery,
+physical TPM and production qualification remain open. It is native Ubuntu
+media, not a Windows image or complete G3 release. Subsequent G3/GWIN0 source
+changes require their own identified builds and tests. The
+[sequence-19 handoff](evidence/G2_NATIVE_DESKTOP_CANDIDATE_19_2026-10-28.md),
+whose signed ISO passed its optical smoke, and the
 [sequence-18](evidence/G2_NATIVE_DESKTOP_CANDIDATE_18_2026-10-28.md),
 [sequence-17](evidence/G2_NATIVE_DESKTOP_CANDIDATE_17_2026-10-27.md) and
 [sequence-16](evidence/G2_NATIVE_DESKTOP_CANDIDATE_16_2026-10-19.md) handoffs

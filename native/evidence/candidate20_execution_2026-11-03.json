@@ -1,0 +1,1002 @@
+{
+ "schema_version": 1,
+ "date": "2026-11-03",
+ "status": "built-offline-verified-update-compatible-usb-and-virtio-disk-live-secure-boot-smokes-passed-download-sets-19-and-20-built",
+ "scope": "Standalone Ubuntu 24.04 amd64 UEFI desktop laboratory installation/recovery disk image, tested from a downloadable raw disk image attached as a USB-class or virtio disk; the separately built UEFI-only optical ISO is not needed and was not booted. Not an application installed into existing Ubuntu, a Windows image or a WSL package",
+ "operator_handoff": "NATIVE_DOWNLOAD_ACCEPTANCE_19_20_2026-11-03.md",
+ "owner_requirements": [
+  "No optical drive is used to test the images",
+  "Every image installs from a downloadable location; the owner chooses it and uploads; agents never upload",
+  "Acceptance that needs installed or physical hosts is done by the owner for sequences 19 and 20 together"
+ ],
+ "source": {
+  "commit": "e9a11aa",
+  "head": "e9a11aac64ce6da55dd706cd3a22ebd64fb0ed4c",
+  "snapshot": "/mnt/luma-build/work/candidate20-source-20261103-a",
+  "build_inputs_sha256": "39b77ac64b7cf892f7d4735bc11e0c5fb2941871a77aa06ce2b25bccea92d6f9",
+  "frozen_files": 904,
+  "frozen_bytes": 15628956,
+  "join_record": "/mnt/luma-build/work/candidate20-source-20261103-a.join.json",
+  "join_record_bytes": 7248,
+  "join_record_sha256": "8e9493cd937260e002d48349a4feb43efc4a391f453f60f0495e6bc0e04b12b3",
+  "prior_cut": "/mnt/luma-build/work/candidate19-source-20261028-a (6528ea1, build inputs 7d05afd79e9e26ed689c3d5c4ed6764da037f6aa21bab1a94546ca8087252be8; sequence 19)",
+  "changed_from_prior_cut": [
+   "native/image/build_storage.py",
+   "native/image/test_artifact_cli.py",
+   "native/image/test_catalog_cli.py",
+   "native/image/test_workflow_cli.py",
+   "native/tests/g2_fixture_sweep.py",
+   "native/tests/run_recovery_export.sh",
+   "native/tests/run_storage_boundaries.sh",
+   "native/tests/run_tpm_boundaries.sh",
+   "native/tests/staging_linux_integration.py",
+   "native/tests/test_g2_fixture_sweep.py",
+   "native/tests/tpm_integration.py",
+   "rust/Cargo.toml",
+   "rust/luma-content-store/src/corpus_index/job/covariance/projection/tests.rs",
+   "rust/luma-content-store/src/corpus_index/job/covariance/projection/vectors/generation/query.rs",
+   "rust/luma-content-store/src/corpus_index/job/covariance/projection/vectors/generation/tests.rs",
+   "rust/luma-content-store/src/corpus_index/job/covariance/projection/vectors/tests.rs",
+   "rust/luma-content-store/src/corpus_index/job/statistics/selected.rs",
+   "rust/luma-content-store/src/corpus_index/job/statistics/tests.rs",
+   "rust/luma-content-store/src/corpus_index/job/tests.rs",
+   "rust/luma-content-store/src/v2/objects.rs",
+   "rust/luma-content-store/src/v2/tests.rs",
+   "rust/luma-platform/src/admin_service/peer.rs",
+   "rust/luma-platform/src/content_checkpoint.rs",
+   "rust/luma-platform/src/content_custody/indexed.rs",
+   "rust/luma-platform/src/content_custody/indexed/compute.rs",
+   "rust/luma-platform/src/content_custody/paged.rs",
+   "rust/luma-platform/src/content_custody/paged/cells/tests.rs",
+   "rust/luma-platform/src/content_custody/protocol.rs",
+   "rust/luma-platform/src/content_custody/v2_publication.rs",
+   "rust/luma-platform/src/content_custody/v2_publication/bootstrap.rs",
+   "rust/luma-platform/src/content_custody/v2_publication/direct/backend.rs",
+   "rust/luma-platform/src/content_custody/v2_publication/direct/initial/tests.rs",
+   "rust/luma-platform/src/content_custody/v2_publication/direct/initial/tests/progress.rs",
+   "rust/luma-platform/src/content_custody/v2_publication/direct/initial/tests/resume.rs",
+   "rust/luma-platform/src/content_custody/v2_publication/direct/pinned.rs",
+   "rust/luma-platform/src/content_custody/v2_publication/direct/progress.rs",
+   "rust/luma-platform/src/content_custody/v2_publication/direct/progress/cold.rs",
+   "rust/luma-platform/src/content_custody/v2_publication/direct/progress/parents.rs",
+   "rust/luma-platform/src/content_custody/v2_publication/direct/progress/recovery.rs",
+   "rust/luma-platform/src/content_custody/v2_publication/direct/worker.rs",
+   "rust/luma-platform/src/content_custody/v2_publication/direct/worker/index.rs",
+   "rust/luma-platform/src/content_custody/v2_publication/direct/worker/storage.rs",
+   "rust/luma-platform/src/content_custody/v2_publication/direct/worker/v1.rs",
+   "rust/luma-platform/src/content_custody/v2_publication/index/effects.rs",
+   "rust/luma-platform/src/content_custody/v2_publication/index/effects/inventory.rs",
+   "rust/luma-platform/src/content_custody/v2_publication/index/effects/selected.rs",
+   "rust/luma-platform/src/content_custody/v2_publication/index/effects/tests.rs",
+   "rust/luma-platform/src/content_custody/v2_publication/index/effects/verification.rs",
+   "rust/luma-platform/src/content_custody/v2_publication/parent_allocation.rs",
+   "rust/luma-platform/src/content_index/observed.rs",
+   "rust/luma-platform/src/content_index/observed/metadata.rs",
+   "rust/luma-platform/src/content_index/state.rs",
+   "rust/luma-platform/src/credential_observer.rs",
+   "rust/luma-platform/src/independent_checkpoint.rs",
+   "rust/luma-platform/src/publication_fixture.rs"
+  ],
+  "added_since_prior_cut": [
+   "native/image/download_manifest.py",
+   "native/image/live_media_smoke.py",
+   "native/tests/test_download_manifest.py",
+   "native/tests/test_live_media_smoke.py",
+   "rust/luma-content-store/src/corpus_index/job/covariance/projection/vectors/generation/tests/latency.rs",
+   "rust/luma-content-store/src/corpus_index/job/covariance/projection/vectors/generation/tests/observed.rs",
+   "rust/luma-platform/src/content_custody/paged/mount_tests.rs",
+   "rust/luma-platform/src/content_custody/v2_publication/direct/initial/tests/index.rs",
+   "rust/luma-platform/src/content_custody/v2_publication/direct/initial/tests/migration.rs",
+   "rust/luma-platform/src/content_custody/v2_publication/direct/initial/tests/worker.rs",
+   "rust/luma-platform/src/content_custody/v2_publication/direct/worker/cold.rs",
+   "rust/luma-platform/src/content_custody/v2_publication/direct/worker/index_chain.rs",
+   "rust/luma-platform/src/content_custody/v2_publication/direct/worker/index_cold.rs",
+   "rust/luma-platform/src/content_custody/v2_publication/direct/worker/index_prepare_cold.rs",
+   "rust/luma-platform/src/content_custody/v2_publication/direct/worker/index_run.rs",
+   "rust/luma-platform/src/content_custody/v2_publication/direct/worker/index_run_cold.rs",
+   "rust/luma-platform/src/content_custody/v2_publication/direct/worker/index_select.rs",
+   "rust/luma-platform/src/content_custody/v2_publication/direct/worker/index_select/tests.rs",
+   "rust/luma-platform/src/content_custody/v2_publication/direct/worker/index_select_cold.rs",
+   "rust/luma-platform/src/content_custody/v2_publication/direct/worker/migration.rs",
+   "rust/luma-platform/src/content_custody/v2_publication/index/effects/chain.rs",
+   "rust/luma-platform/src/content_custody/v2_publication/index/effects/job.rs",
+   "rust/luma-platform/src/content_custody/v2_publication/index/effects/job_advance.rs",
+   "rust/luma-platform/src/content_custody/v2_publication/index/effects/phase_selection.rs"
+  ],
+  "removed_since_prior_cut": [],
+  "files_differing_from_head_only_by_working_tree_crlf": 25,
+  "head_line_ending_record": "/mnt/luma-build/work/candidate20-source-20261103-a.head-eol.json",
+  "head_line_ending_record_bytes": 6721,
+  "head_line_ending_record_sha256": "6da438c04a0b0f9949787b8e9cd1ca5216c1331796dca5e318d05c4c5b876d5a",
+  "head_line_ending_list_subset_of_sequence_19_list": true,
+  "rust_files_changed_since_prior_cut": [
+   "rust/Cargo.toml",
+   "rust/luma-content-store/src/corpus_index/job/covariance/projection/tests.rs",
+   "rust/luma-content-store/src/corpus_index/job/covariance/projection/vectors/generation/query.rs",
+   "rust/luma-content-store/src/corpus_index/job/covariance/projection/vectors/generation/tests.rs",
+   "rust/luma-content-store/src/corpus_index/job/covariance/projection/vectors/tests.rs",
+   "rust/luma-content-store/src/corpus_index/job/statistics/selected.rs",
+   "rust/luma-content-store/src/corpus_index/job/statistics/tests.rs",
+   "rust/luma-content-store/src/corpus_index/job/tests.rs",
+   "rust/luma-content-store/src/v2/objects.rs",
+   "rust/luma-content-store/src/v2/tests.rs",
+   "rust/luma-platform/src/admin_service/peer.rs",
+   "rust/luma-platform/src/content_checkpoint.rs",
+   "rust/luma-platform/src/content_custody/indexed.rs",
+   "rust/luma-platform/src/content_custody/indexed/compute.rs",
+   "rust/luma-platform/src/content_custody/paged.rs",
+   "rust/luma-platform/src/content_custody/paged/cells/tests.rs",
+   "rust/luma-platform/src/content_custody/protocol.rs",
+   "rust/luma-platform/src/content_custody/v2_publication.rs",
+   "rust/luma-platform/src/content_custody/v2_publication/bootstrap.rs",
+   "rust/luma-platform/src/content_custody/v2_publication/direct/backend.rs",
+   "rust/luma-platform/src/content_custody/v2_publication/direct/initial/tests.rs",
+   "rust/luma-platform/src/content_custody/v2_publication/direct/initial/tests/progress.rs",
+   "rust/luma-platform/src/content_custody/v2_publication/direct/initial/tests/resume.rs",
+   "rust/luma-platform/src/content_custody/v2_publication/direct/pinned.rs",
+   "rust/luma-platform/src/content_custody/v2_publication/direct/progress.rs",
+   "rust/luma-platform/src/content_custody/v2_publication/direct/progress/cold.rs",
+   "rust/luma-platform/src/content_custody/v2_publication/direct/progress/parents.rs",
+   "rust/luma-platform/src/content_custody/v2_publication/direct/progress/recovery.rs",
+   "rust/luma-platform/src/content_custody/v2_publication/direct/worker.rs",
+   "rust/luma-platform/src/content_custody/v2_publication/direct/worker/index.rs",
+   "rust/luma-platform/src/content_custody/v2_publication/direct/worker/storage.rs",
+   "rust/luma-platform/src/content_custody/v2_publication/direct/worker/v1.rs",
+   "rust/luma-platform/src/content_custody/v2_publication/index/effects.rs",
+   "rust/luma-platform/src/content_custody/v2_publication/index/effects/inventory.rs",
+   "rust/luma-platform/src/content_custody/v2_publication/index/effects/selected.rs",
+   "rust/luma-platform/src/content_custody/v2_publication/index/effects/tests.rs",
+   "rust/luma-platform/src/content_custody/v2_publication/index/effects/verification.rs",
+   "rust/luma-platform/src/content_custody/v2_publication/parent_allocation.rs",
+   "rust/luma-platform/src/content_index/observed.rs",
+   "rust/luma-platform/src/content_index/observed/metadata.rs",
+   "rust/luma-platform/src/content_index/state.rs",
+   "rust/luma-platform/src/credential_observer.rs",
+   "rust/luma-platform/src/independent_checkpoint.rs",
+   "rust/luma-platform/src/publication_fixture.rs"
+  ],
+  "verifier_fixture_sources": [
+   "native/image/assemble.py",
+   "native/image/export.py",
+   "native/tests/content_contract_cli.py",
+   "native/tests/test_workspace_recovery.py",
+   "native/tests/test_workspace_workflow.py"
+  ],
+  "verifier_fixture_sources_unchanged_since_sequence_19": true,
+  "step_script": "native/evidence/candidate20_steps_2026_11_03.sh",
+  "step_script_bytes": 34363,
+  "step_script_sha256": "496b581a552c16eeb7e51a88d9a1ce804f1003ef80ed5d646ba186292c9d02fb",
+  "step_script_commit": "d3372cb",
+  "step_script_until_usb_disk_smoke_attempt_a": {
+   "commit": "436cdba",
+   "bytes": 31815,
+   "sha256": "8744a2f73f0f5897b98237d458e76e2858b98dc9482bb9c7ac9fce50cbf3834c"
+  },
+  "step_script_note": "Committed in 6102ed4 and 436cdba (unchanged at e9a11aa), which ran every step up to the failed usb-disk smoke attempt a; d3372cb adds smoke-harness and the smoke ATTEMPT argument and ran every later step. native/evidence is outside the frozen build inputs, so the operator copy is the checked-out file"
+ },
+ "assembly": {
+  "build_id": "20261103T215655Z-desktop",
+  "volume": "luma-native-build-20261103T215655Z-desktop",
+  "export_directory": "D:/LumaOS-builds/native/20261103T215655Z-desktop",
+  "public_exports": 13,
+  "checksum_rows": 12,
+  "release": "luma-native-lab-20260927-desktop-20",
+  "sequence": 20,
+  "log": {
+   "path": "D:/LumaOS-builds/candidate20-assembly-20261103T215654Z.log",
+   "bytes": 41993,
+   "sha256": "e3f67a449bf6daef705fc9c7363dccef1fd585e40295200d48d548f5a9b646b9"
+  },
+  "optimized_release_compile": "passed in 11m 22s",
+  "kernel": "6.8.0-142-generic",
+  "verity_root_hash": "8e0e5312f2370508206484876cefb7810a1a11ecf959269eff0aa51af033215c",
+  "root_bytes": 6442450944,
+  "hash_bytes": 50733056,
+  "environment": "lab",
+  "edition": "desktop",
+  "build_json": {
+   "path": "D:/LumaOS-builds/native/20261103T215655Z-desktop/build.json",
+   "bytes": 22415,
+   "sha256": "afe543ef281a845d5ff7092f72aa1be566389043340ca9fe785d4ec2bef75047"
+  },
+  "export_sha256sums": {
+   "path": "D:/LumaOS-builds/native/20261103T215655Z-desktop/SHA256SUMS",
+   "bytes": 1069,
+   "sha256": "8f83f708d4906f72e57ecb38c92d46aed4dfa4a0e4fed4f6f7719c8cdff280a8"
+  },
+  "exported_build_status_preserved": "built-not-yet-boot-tested",
+  "production_signed": false
+ },
+ "artifacts": {
+  "export_files": {
+   "boot-policy.json": {
+    "sha256": "3d37d7dcdf2ba99350dece527cc1e9fab9d37cd6043ecd86f7537d465459c287",
+    "bytes": 2166,
+    "rehashed_equal": true
+   },
+   "luma-native-lab-20260927-desktop-20.img": {
+    "sha256": "573da1f61ef646c7c3bacf616a2c8bd6b6ca15eb8a3c39c7ea5042387d581519",
+    "in_export": false
+   },
+   "luma-native-lab-20260927-desktop-20.img.zst": {
+    "sha256": "9fee72c4b167e54697e23d50fa87c9b5e5a70a08ea64fa5d40b52d98ef7fb5ad",
+    "bytes": 3690817887
+   },
+   "luma-native-lab-20260927-desktop-20.iso": {
+    "sha256": "b10302ca335987ea09878228b79d6acdc6d857ac260ba66bb88dc17a1e80a363",
+    "bytes": 7225763840
+   },
+   "native-source.tar.zst": {
+    "sha256": "c7ea2cef16e47bf78c88bc11d4805ed5f5018a8c8e34822c66aa70dbd20c25b9",
+    "bytes": 2914458,
+    "rehashed_equal": true
+   },
+   "optical-media.json": {
+    "sha256": "20040ba771cbaaf838b8f27c5576a11d39c40dbad367099f4d7ba772ee1185a7",
+    "bytes": 1786,
+    "rehashed_equal": true
+   },
+   "packages.lock": {
+    "sha256": "05b1dc02df7729570d2570dfce45e51e55305236ff493c21c4cf14dc613368e7",
+    "bytes": 28474,
+    "rehashed_equal": true
+   },
+   "release.json": {
+    "sha256": "cf0ab7000d074078c74b62c596cf4386da0c28f2503b76c070eeb52b40c521d5",
+    "bytes": 995,
+    "rehashed_equal": true
+   },
+   "release.sig": {
+    "sha256": "9e5b8f9a52ec1a416dfb601325f028c1f51cc8e342d748cc19ddcb03ad058cee",
+    "bytes": 64,
+    "rehashed_equal": true
+   },
+   "secureboot.cer": {
+    "sha256": "2637785a3cb4798db902bf62732324984d3f2475d7f2eecc318442772d9c06c8",
+    "bytes": 1073,
+    "rehashed_equal": true
+   },
+   "source-lock.json": {
+    "sha256": "eb932cdc66f5cf80620ba0ed4a8550be0b04994fa0a7e22a10841f3d4bb89483",
+    "bytes": 136370,
+    "rehashed_equal": true
+   },
+   "toolchain-packages.lock": {
+    "sha256": "674dfe922b7eca733e893b85b9560a82e11d0a58235e87ac78fa1f7ef5e86668",
+    "bytes": 11083,
+    "rehashed_equal": true
+   }
+  },
+  "raw_image_note": "The raw .img is not in the export; its SHA256SUMS row was checked by decompressing the .img.zst in the offline verification and again by each download step",
+  "optical_iso": {
+   "bytes": 7225763840,
+   "sha256": "b10302ca335987ea09878228b79d6acdc6d857ac260ba66bb88dc17a1e80a363",
+   "member_count": 10,
+   "all_member_bytes_compared": true,
+   "efi_el_torito_verified": true,
+   "boot_qualified": false,
+   "note": "Built and checked, but not booted for sequence 20: the owner requires no optical drive, so the smokes used the raw disk image"
+  },
+  "private_keys_exported": false
+ },
+ "source_tests": {
+  "logs": "D:/LumaOS-builds/candidate20-source-tests-20261103a-a",
+  "python": {
+   "log": {
+    "path": "D:/LumaOS-builds/candidate20-source-tests-20261103a-a/python.log",
+    "bytes": 2199,
+    "sha256": "1aa9d1c8472d1e34b2f86d4ed6cbd4eafc73454cfeeb8fea8d15485fc726a719"
+   },
+   "ran": 1008,
+   "seconds": 149.935,
+   "result": "OK",
+   "skipped": 4
+  },
+  "rustfmt": {
+   "log": {
+    "path": "D:/LumaOS-builds/candidate20-source-tests-20261103a-a/rustfmt.log",
+    "bytes": 59,
+    "sha256": "6617d5f7e7ce85a788efb1a060b971e4b5afdbfefb5330078f9d643dd4da0dd1"
+   },
+   "exit_code": 0
+  },
+  "store_before": {
+   "path": "D:/LumaOS-builds/candidate20-source-tests-20261103a-a/store-before.txt",
+   "bytes": 74,
+   "sha256": "7636aa7671df751b60473d6d8caa46aac60920a11fe8b0571257ece012d9a7d3"
+  },
+  "store_after": {
+   "path": "D:/LumaOS-builds/candidate20-source-tests-20261103a-a/store-after.txt",
+   "bytes": 74,
+   "sha256": "7ae1ef9f4015e3e4678ff96600c35cff87af1b0ca33233e498e7e0f8632bcdfa"
+  },
+  "rust_tests_in_this_step": false,
+  "rust_coverage": {
+   "source": "CI run 41725414198 on e9a11aa, the exact cut (.github/workflows/native-platform.yml)",
+   "result": "all four jobs passed",
+   "index_boundaries": "8 passed in 2786.59 s (the NF08 direct index group)",
+   "rust_boundaries": "1587 passed, 43 ignored, 8 filtered out in 283.51 s",
+   "tpm_boundaries": "1587 passed, 43 ignored, 8 filtered out in 137.91 s",
+   "storage_boundaries": "1595 passed in 1949.33 s"
+  }
+ },
+ "offline_image_verification": {
+  "status": "passed",
+  "evidence": "/mnt/luma-build/work/candidate20-image-verification-20261103-a/verification.json",
+  "evidence_bytes": 11243,
+  "evidence_sha256": "d214ee991f40d79a8b0bbc3cd580c8850cef4c46e9721b00bcdfcf3524f37845",
+  "evidence_status": "candidate20-offline-image-and-export-verification-passed",
+  "build_identity": {
+   "build_id": "20261103T215655Z-desktop",
+   "export_directory": "D:/LumaOS-builds/native/20261103T215655Z-desktop",
+   "volume": "luma-native-build-20261103T215655Z-desktop"
+  },
+  "log": {
+   "path": "D:/LumaOS-builds/candidate20-image-verification-20261103T215655Z-desktop-a.log",
+   "bytes": 9971,
+   "sha256": "4f30ac5a49eb0b092af501b694040ef2e0a5aa6bb8a120da226eb46a5a2cb0ab"
+  },
+  "verifier": "native/evidence/candidate20_image_verify_2026_11_03.py",
+  "verifier_bytes": 59653,
+  "verifier_sha256": "0bf5e76526ee06d12d73eb158ca2e5e9c41fa2e18b76bcd7fc50362488dfddfa",
+  "executed_copies": [
+   "live_media_smoke.py",
+   "verify.py"
+  ],
+  "checks_passed": 14,
+  "checks_failed": 0,
+  "checks": [
+   "exact-selected-build-volume-export-and-source-evidence-mount-identities",
+   "verifier-only-four-fixed-instance-template-extraction-compatibility",
+   "all-explicitly-selected-frozen-source-records-match",
+   "thirteen-public-exports-and-twelve-checksum-rows",
+   "exact-tested-product-subset-and-complete-compressed-source-archive",
+   "compressed-image-stream-equals-exact-raw-disk",
+   "primary-backup-GPT-partition-content-and-zero-slack",
+   "lab-release-signature-verity-and-four-measured-signed-UKIs",
+   "exact-offline-payload-and-ESP-member-inventories-and-bytes",
+   "optical-ISO9660-El-Torito-EFI-FAT-and-signed-optical-UKI-offline",
+   "browser-v2-actual-image-library-fixed-ELF-launcher-and-profile-pins",
+   "packaged-native-UI-overlay-policies-and-native-primary-launcher",
+   "signed-root-QEMU-global-KSM-default-disabled-boot-helper-masked-and-not-enabled",
+   "actual-packaged-release-binary-30CLI-4workflow-4recovery-DATA-fixtures"
+  ],
+  "packaged_cli": {
+   "contract_tests_passed": 30,
+   "installed_product_authority_exercised": false,
+   "recovery_data_cases": {
+    "actual_native_data_canonicalizers_checked": 4,
+    "archive_decrypted": false,
+    "installed_graphical_qualified": false,
+    "pam_authorized": false,
+    "restore_or_retirement_executed": false
+   },
+   "workflow_data_cases": {
+    "actual_native_engine_reopen_recalculation_cases": 4,
+    "authority_returned": false,
+    "effects_executed": false,
+    "graphical_qualified": false,
+    "owner_authenticated": false,
+    "schema_version": 1
+   },
+   "zero_skips": true
+  },
+  "packaged_release_binary_sha256": "502d8ecc02427dffac90ffdba2eff6dbaff2c92bf1236bfea7ecea805b50efd3",
+  "packaged_release_binary_differs_from_sequence_19": true,
+  "sequence_19_packaged_release_binary_sha256": "7b05289eeddd900813ede087ab78c2ed379697acb38b39cd433dcbe32f318708",
+  "public_pins": {
+   "pcr_public_sha256": "b55221f37d366b64367db37394852d7af70b328a9c8173f5aa2e499762bfad26",
+   "release_public_sha256": "62588a16a8901fbdf20cdfee1c1df5c243e85022693f6edb275a51366d01878f",
+   "secureboot_cert_sha256": "2637785a3cb4798db902bf62732324984d3f2475d7f2eecc318442772d9c06c8"
+  },
+  "source_pins": {
+   "files": 904,
+   "sha256": "39b77ac64b7cf892f7d4735bc11e0c5fb2941871a77aa06ce2b25bccea92d6f9"
+  },
+  "limitations": [
+   "Public signature pins establish only this identified laboratory builder check, not production custody.",
+   "No model weights are embedded or inference/QA executed by this verification.",
+   "DATA fixtures do not exercise original PAM, grants, live C authority or installed AppArmor/cgroups.",
+   "The exact named unconfined userns compatibility policy is packaged data, not proof of its loaded label or full application confinement.",
+   "QEMU defaults/unit-mask checks are image data, not observations of loaded units or kernel KSM state.",
+   "No boot, installation, real security/recovery, firmware, physical TPM or native certification was executed.",
+   "The optical ISO, El Torito catalog and EFI FAT were parsed offline; no optical-media or firmware boot was executed.",
+   "Hardware writer, input-capture and speech records are image-data checks, not device, portal or ASR observations.",
+   "Filesystem/kernel I/O and child reaping have no hard wall-clock completion guarantee."
+  ],
+  "qualification": {
+   "g2_closed": false,
+   "gate_closing": false,
+   "image_boot_executed": false,
+   "installation_executed": false,
+   "installed_enforcement_qualified": false,
+   "native_qualified": false,
+   "pam_or_product_grants_exercised": false,
+   "physical_tpm_accessed": false,
+   "production_custody_qualified": false,
+   "restore_or_retirement_executed": false
+  }
+ },
+ "smoke_harness": {
+  "frozen": {
+   "path": "/mnt/luma-build/work/candidate20-source-20261103-a/native/image/live_media_smoke.py",
+   "bytes": 17087,
+   "sha256": "5bd5a95cfe6e354b21011cb3400191f0933afb6b318d29682b0dbb866edf20ef",
+   "used_by": "attempt a"
+  },
+  "fixed": {
+   "commit": "d3372cb8907cd26a1e8f3e33388061306fbdf9c3",
+   "path": "native/image/live_media_smoke.py",
+   "sha256": "576bdc8c223d090af558b36b48cab636d9fdb2d6a9ecf02e518084a62ce5263d",
+   "aid": "/mnt/luma-build/work/candidate20-aids-20261103-a/live_media_smoke.py",
+   "bytes": 17495,
+   "aid_sha256": "576bdc8c223d090af558b36b48cab636d9fdb2d6a9ecf02e518084a62ce5263d",
+   "used_by": "attempts b-z, bind-mounted read-only over /repo/native/image/live_media_smoke.py"
+  },
+  "change": "q35 attaches an empty AHCI DVD drive (guest sr0) unless the command names an IDE or SCSI device; disk media now run with -nodefaults -vga std. A paused QEMU 8.2.2 inventory in the tools image showed that only the empty ide-cd and the legacy isa-parallel port go; VGA, serial, AHCI, xHCI, usb-storage, virtio-blk and the pflash firmware are unchanged. The optical command is unchanged",
+  "frozen_inputs_changed": false
+ },
+ "live_smokes": {
+  "usb-disk": {
+   "attempt": "b",
+   "log": {
+    "path": "D:/LumaOS-builds/candidate20-usb-disk-smoke-20261103T215655Z-desktop-b.log",
+    "bytes": 13337,
+    "sha256": "f690e536042e876e54603708d8ba00a54e04e48546deab844a31e9cb521469b3"
+   },
+   "result": "passed",
+   "medium": "usb-disk",
+   "media_sha256": "573da1f61ef646c7c3bacf616a2c8bd6b6ca15eb8a3c39c7ea5042387d581519",
+   "media_unchanged": true,
+   "acceleration": "tcg",
+   "guest_memory_mib": 8192,
+   "secure_boot_tested": true,
+   "attached_block_devices": [
+    "read-only removable USB mass-storage disk on xHCI carrying the raw GPT image"
+   ],
+   "root_shell_reached": true,
+   "required_checks": {
+    "broker-and-reference-active": "passed",
+    "guest-secure-boot-enabled": "passed",
+    "inventory": "passed",
+    "live-disk-command-line": "passed",
+    "live-disk-media-mount": "passed",
+    "only-live-disk-loop-and-dm-block-devices": "passed",
+    "reference-apparmor-enforce": "passed",
+    "status": "passed",
+    "tpm-probe": "passed",
+    "verity-root": "passed"
+   },
+   "gated_checks": {
+    "no-failed-units": "passed",
+    "no-ordering-cycle-in-journal": "passed",
+    "recovery-keeper-active": "passed",
+    "recovery-producer-path-active": "passed",
+    "signed-media-verify": "passed"
+   },
+   "observation_exit_codes": {
+    "failed-units": 0,
+    "loop-inventory": 0,
+    "media-mount": 0,
+    "memory": 0,
+    "no-failed-units": 0,
+    "no-ordering-cycle-in-journal": 0,
+    "ordering-cycle-journal": 0,
+    "recovery-keeper-active": 0,
+    "recovery-keeper-journal": 0,
+    "recovery-producer-path-active": 0,
+    "signed-media-verify": 0,
+    "utc-units": 0,
+    "verity-status": 0
+   },
+   "clean_shutdown": "passed",
+   "ordering_cycle_in_boot_transcript": false,
+   "ordering_cycle_in_serial_log": false,
+   "serial_log_sha256": "dd1dd1b1396ea5190ee9ac598c27f38d31b0818c92f5895d7cb9e47f6b92b70d",
+   "harness_sha256": "576bdc8c223d090af558b36b48cab636d9fdb2d6a9ecf02e518084a62ce5263d",
+   "host_memory_admission": {
+    "guest_memory_mib": 8192,
+    "host_available_bytes": 11583651840,
+    "host_reserve_bytes": 2147483648,
+    "reservation": false
+   },
+   "error": null,
+   "qemu_without_defaults": true,
+   "qemu_command": [
+    "qemu-system-x86_64",
+    "-machine",
+    "q35,accel=tcg",
+    "-m",
+    "8192",
+    "-smp",
+    "2",
+    "-cpu",
+    "max",
+    "-nodefaults",
+    "-vga",
+    "std",
+    "-drive",
+    "if=pflash,format=raw,readonly=on,file=/usr/share/OVMF/OVMF_CODE_4M.secboot.fd",
+    "-drive",
+    "if=pflash,format=raw,file=/work/vm-candidate20-20261103-usb-disk-secureboot-tcg-b/firmware.fd",
+    "-device",
+    "qemu-xhci,id=xhci",
+    "-drive",
+    "if=none,id=usbstick,format=raw,readonly=on,file=/work/artifacts/luma-native-lab-20260927-desktop-20.img",
+    "-device",
+    "usb-storage,bus=xhci.0,drive=usbstick,removable=on,bootindex=1",
+    "-nic",
+    "none",
+    "-display",
+    "none",
+    "-monitor",
+    "none",
+    "-serial",
+    "unix:/tmp/luma-vm-po6sjrbu/console.sock,server=on,wait=off",
+    "-qmp",
+    "unix:/tmp/luma-vm-po6sjrbu/qmp.sock,server=on,wait=off",
+    "-no-reboot",
+    "-chardev",
+    "socket,id=luma-tpm,path=/tmp/luma-vm-tpm-yxvm_fyo/control.sock",
+    "-tpmdev",
+    "emulator,id=luma-tpm,chardev=luma-tpm",
+    "-device",
+    "tpm-tis,tpmdev=luma-tpm"
+   ],
+   "result_json": "/work/vm-candidate20-20261103-usb-disk-secureboot-tcg-b/result.json in volume luma-native-build-20261103T215655Z-desktop",
+   "log_text_markers": {
+    "var_mount_unmount_failure": false
+   },
+   "accepted_attempt": "b"
+  },
+  "virtio-disk": {
+   "attempt": "b",
+   "log": {
+    "path": "D:/LumaOS-builds/candidate20-virtio-disk-smoke-20261103T215655Z-desktop-b.log",
+    "bytes": 13366,
+    "sha256": "22e0c8321cd1e1fd4f29de6c2592de290b172fee25bef27da6e64d53890dcb27"
+   },
+   "result": "passed",
+   "medium": "virtio-disk",
+   "media_sha256": "573da1f61ef646c7c3bacf616a2c8bd6b6ca15eb8a3c39c7ea5042387d581519",
+   "media_unchanged": true,
+   "acceleration": "tcg",
+   "guest_memory_mib": 8192,
+   "secure_boot_tested": true,
+   "attached_block_devices": [
+    "read-only virtio disk carrying the raw GPT image"
+   ],
+   "root_shell_reached": true,
+   "required_checks": {
+    "broker-and-reference-active": "passed",
+    "guest-secure-boot-enabled": "passed",
+    "inventory": "passed",
+    "live-disk-command-line": "passed",
+    "live-disk-media-mount": "passed",
+    "only-live-disk-loop-and-dm-block-devices": "passed",
+    "reference-apparmor-enforce": "passed",
+    "status": "passed",
+    "tpm-probe": "passed",
+    "verity-root": "passed"
+   },
+   "gated_checks": {
+    "no-failed-units": "passed",
+    "no-ordering-cycle-in-journal": "passed",
+    "recovery-keeper-active": "passed",
+    "recovery-producer-path-active": "passed",
+    "signed-media-verify": "passed"
+   },
+   "observation_exit_codes": {
+    "failed-units": 0,
+    "loop-inventory": 0,
+    "media-mount": 0,
+    "memory": 0,
+    "no-failed-units": 0,
+    "no-ordering-cycle-in-journal": 0,
+    "ordering-cycle-journal": 0,
+    "recovery-keeper-active": 0,
+    "recovery-keeper-journal": 0,
+    "recovery-producer-path-active": 0,
+    "signed-media-verify": 0,
+    "utc-units": 0,
+    "verity-status": 0
+   },
+   "clean_shutdown": "passed",
+   "ordering_cycle_in_boot_transcript": false,
+   "ordering_cycle_in_serial_log": false,
+   "serial_log_sha256": "ad28fc15d6f5bb5a98da2a4510a63d2fa97b36214e87f190e725e91fa3bd1101",
+   "harness_sha256": "576bdc8c223d090af558b36b48cab636d9fdb2d6a9ecf02e518084a62ce5263d",
+   "host_memory_admission": {
+    "guest_memory_mib": 8192,
+    "host_available_bytes": 11601076224,
+    "host_reserve_bytes": 2147483648,
+    "reservation": false
+   },
+   "error": null,
+   "qemu_without_defaults": true,
+   "qemu_command": [
+    "qemu-system-x86_64",
+    "-machine",
+    "q35,accel=tcg",
+    "-m",
+    "8192",
+    "-smp",
+    "2",
+    "-cpu",
+    "max",
+    "-nodefaults",
+    "-vga",
+    "std",
+    "-drive",
+    "if=pflash,format=raw,readonly=on,file=/usr/share/OVMF/OVMF_CODE_4M.secboot.fd",
+    "-drive",
+    "if=pflash,format=raw,file=/work/vm-candidate20-20261103-virtio-disk-secureboot-tcg-b/firmware.fd",
+    "-drive",
+    "if=none,id=media,format=raw,readonly=on,file=/work/artifacts/luma-native-lab-20260927-desktop-20.img",
+    "-device",
+    "virtio-blk-pci,drive=media,serial=LUMA-LIVE,bootindex=1",
+    "-nic",
+    "none",
+    "-display",
+    "none",
+    "-monitor",
+    "none",
+    "-serial",
+    "unix:/tmp/luma-vm-ugsymlwr/console.sock,server=on,wait=off",
+    "-qmp",
+    "unix:/tmp/luma-vm-ugsymlwr/qmp.sock,server=on,wait=off",
+    "-no-reboot",
+    "-chardev",
+    "socket,id=luma-tpm,path=/tmp/luma-vm-tpm-gae5g1xo/control.sock",
+    "-tpmdev",
+    "emulator,id=luma-tpm,chardev=luma-tpm",
+    "-device",
+    "tpm-tis,tpmdev=luma-tpm"
+   ],
+   "result_json": "/work/vm-candidate20-20261103-virtio-disk-secureboot-tcg-b/result.json in volume luma-native-build-20261103T215655Z-desktop",
+   "log_text_markers": {
+    "var_mount_unmount_failure": false
+   },
+   "accepted_attempt": "b"
+  }
+ },
+ "retained_failed_or_diagnostic_attempts": [
+  {
+   "name": "candidate20 usb-disk live smoke attempt a",
+   "log": {
+    "path": "D:/LumaOS-builds/candidate20-usb-disk-smoke-20261103T215655Z-desktop.log",
+    "bytes": 10833,
+    "sha256": "5f08343ed2782a298daf9171c2ac938015efed66f021c8800c7b832712be3123"
+   },
+   "result_json": "/work/vm-candidate20-20261103-usb-disk-secureboot-tcg/result.json in volume luma-native-build-20261103T215655Z-desktop",
+   "result": "failed",
+   "error": "RuntimeError: Guest command exit 1, expected 0: test -z \"$(ls /sys/class/block | grep -Ev '^(loop[0-9]+|sda|sda[0-9]+|dm-[0-9]+|zram[0-9]+)$')\" && test \"$(cat /sys/class/block/sda/ro)\" = 1 && readlink -f /dev/disk/by-partlabel/luma-payload | grep -Ex '/dev/sda[0-9]+' && readlink -f /sys/class/block/sda | grep -q /usb && test \"$(cat /sys/class/block/sda/removable)\" = 1; see /work/vm-candidate20-20261103-usb-disk-secureboot-tcg/usb-disk-live/serial.log",
+   "root_shell_reached": true,
+   "secure_boot_tested": true,
+   "media_unchanged": true,
+   "serial_log_sha256": "e7d308dceae4bb04078456e24dfb86ca67ae8394d64db202d7ee97a8f6007625",
+   "harness_sha256": "5bd5a95cfe6e354b21011cb3400191f0933afb6b318d29682b0dbb866edf20ef",
+   "outcome": "Reached a root shell under Secure Boot, then failed required check only-live-disk-loop-and-dm-block-devices: the guest listed sr0, the empty DVD drive q35 adds by default. The image was not at fault; the virtio-disk smoke would have failed the same way, so it was not run with the frozen harness; its only run is attempt b, with the fixed harness, after usb-disk attempt b",
+   "retained_unchanged": true
+  }
+ ],
+ "download_sets": {
+  "sequence_20": {
+   "folder": "D:/LumaOS-builds/downloads/candidate20-20261103T215655Z-desktop-a",
+   "sha256sums": {
+    "path": "D:/LumaOS-builds/downloads/candidate20-20261103T215655Z-desktop-a/SHA256SUMS",
+    "bytes": 1312,
+    "sha256": "1c2c4af2242366462a11df5f1a1516647f5c30487f38ca071874f77bcb99a802"
+   },
+   "sha256sums_rows": 15,
+   "files_present": [
+    "SHA256SUMS",
+    "VERIFY.txt",
+    "boot-policy.json",
+    "build.json",
+    "download-manifest.json",
+    "luma-native-lab-20260927-desktop-20.img.zst",
+    "luma-native-lab-20260927-desktop-20.iso",
+    "native-source.tar.zst",
+    "optical-media.json",
+    "packages.lock",
+    "release.json",
+    "release.sig",
+    "secureboot.cer",
+    "source-lock.json",
+    "toolchain-packages.lock"
+   ],
+   "listed_not_shipped": [
+    "luma-native-lab-20260927-desktop-20.img"
+   ],
+   "bytes_present": 10919711526,
+   "small_files_rehashed_equal": true,
+   "manifest": {
+    "path": "D:/LumaOS-builds/downloads/candidate20-20261103T215655Z-desktop-a/download-manifest.json",
+    "bytes": 7719,
+    "sha256": "8e6834f54b5c7b4e8c8b6626a96ec8257382b788b3f21633ef627cd98ff1ad27"
+   },
+   "raw_image": {
+    "bytes": 16190013440,
+    "check": "decompressed-and-hashed",
+    "name": "luma-native-lab-20260927-desktop-20.img",
+    "sha256": "573da1f61ef646c7c3bacf616a2c8bd6b6ca15eb8a3c39c7ea5042387d581519",
+    "shipped": false
+   },
+   "source": {
+    "commit": "e9a11aac64ce6da55dd706cd3a22ebd64fb0ed4c",
+    "cut": "candidate20-source-20261103-a",
+    "source_lock_sha256": "eb932cdc66f5cf80620ba0ed4a8550be0b04994fa0a7e22a10841f3d4bb89483"
+   },
+   "export": {
+    "directory": "/mnt/d/LumaOS-builds/native/20261103T215655Z-desktop",
+    "sha256sums_sha256": "8f83f708d4906f72e57ecb38c92d46aed4dfa4a0e4fed4f6f7719c8cdff280a8"
+   },
+   "build_logs": [
+    {
+     "bytes": 41993,
+     "path": "/mnt/d/LumaOS-builds/candidate20-assembly-20261103T215654Z.log",
+     "sha256": "e3f67a449bf6daef705fc9c7363dccef1fd585e40295200d48d548f5a9b646b9"
+    },
+    {
+     "bytes": 9971,
+     "path": "/mnt/d/LumaOS-builds/candidate20-image-verification-20261103T215655Z-desktop-a.log",
+     "sha256": "4f30ac5a49eb0b092af501b694040ef2e0a5aa6bb8a120da226eb46a5a2cb0ab"
+    },
+    {
+     "bytes": 13337,
+     "path": "/mnt/d/LumaOS-builds/candidate20-usb-disk-smoke-20261103T215655Z-desktop-b.log",
+     "sha256": "f690e536042e876e54603708d8ba00a54e04e48546deab844a31e9cb521469b3"
+    },
+    {
+     "bytes": 10833,
+     "path": "/mnt/d/LumaOS-builds/candidate20-usb-disk-smoke-20261103T215655Z-desktop.log",
+     "sha256": "5f08343ed2782a298daf9171c2ac938015efed66f021c8800c7b832712be3123"
+    },
+    {
+     "bytes": 13366,
+     "path": "/mnt/d/LumaOS-builds/candidate20-virtio-disk-smoke-20261103T215655Z-desktop-b.log",
+     "sha256": "22e0c8321cd1e1fd4f29de6c2592de290b172fee25bef27da6e64d53890dcb27"
+    }
+   ],
+   "payload_in_package": true,
+   "signed": false,
+   "uploaded": false,
+   "origin_authenticated": false,
+   "log": {
+    "path": "D:/LumaOS-builds/downloads/candidate20-20261103T215655Z-desktop-a.log",
+    "bytes": 419,
+    "sha256": "9eb3c1159e6f9f6301b6c5528b1d41f54b3d5bede4263d2c223720172b0fd6ae"
+   }
+  },
+  "sequence_19": {
+   "folder": "D:/LumaOS-builds/downloads/candidate19-20261028T162354Z-desktop-a",
+   "sha256sums": {
+    "path": "D:/LumaOS-builds/downloads/candidate19-20261028T162354Z-desktop-a/SHA256SUMS",
+    "bytes": 1312,
+    "sha256": "261a47f218dbc08f24eba7591203f84a21c2a2a64f48a5213d057149cf71008a"
+   },
+   "sha256sums_rows": 15,
+   "files_present": [
+    "SHA256SUMS",
+    "VERIFY.txt",
+    "boot-policy.json",
+    "build.json",
+    "download-manifest.json",
+    "luma-native-lab-20260927-desktop-19.img.zst",
+    "luma-native-lab-20260927-desktop-19.iso",
+    "native-source.tar.zst",
+    "optical-media.json",
+    "packages.lock",
+    "release.json",
+    "release.sig",
+    "secureboot.cer",
+    "source-lock.json",
+    "toolchain-packages.lock"
+   ],
+   "listed_not_shipped": [
+    "luma-native-lab-20260927-desktop-19.img"
+   ],
+   "bytes_present": 10919757775,
+   "small_files_rehashed_equal": true,
+   "manifest": {
+    "path": "D:/LumaOS-builds/downloads/candidate19-20261028T162354Z-desktop-a/download-manifest.json",
+    "bytes": 7492,
+    "sha256": "f244c8f826f3da34b5b5cf04ea66960882c8428b75477e00496d414fd8c06d0c"
+   },
+   "raw_image": {
+    "bytes": 16190013440,
+    "check": "decompressed-and-hashed",
+    "name": "luma-native-lab-20260927-desktop-19.img",
+    "sha256": "082337e4d206f1edd31bdfb44912f93e1b10726d02b5d60a150267674a101756",
+    "shipped": false
+   },
+   "source": {
+    "commit": "6528ea1411b2dc0057bbc1ecdbaad538df21b4f3",
+    "cut": "candidate19-source-20261028-a",
+    "source_lock_sha256": "f452c120e3a883dbaf563d2894fb0d7df431a5bfe7a0248946393f3c04256578"
+   },
+   "export": {
+    "directory": "/mnt/d/LumaOS-builds/native/20261028T162354Z-desktop",
+    "sha256sums_sha256": "d440805f8c8aabe69a7dfc852acabadbbdb57eb04ff19e587d59847ce85492bf"
+   },
+   "build_logs": [
+    {
+     "bytes": 41993,
+     "path": "/mnt/d/LumaOS-builds/candidate19-assembly-20261028T162354Z.log",
+     "sha256": "56d9ddf57e56a9e42801aa3a7f115fc1bff3abdbcf1dccfc07cd7d48f62eba5a"
+    },
+    {
+     "bytes": 9975,
+     "path": "/mnt/d/LumaOS-builds/candidate19-image-verification-20261028T162354Z-desktop-a.log",
+     "sha256": "2ed8318e34ef042b452356c85800b93e4b276236b8d9b39badd7fc5940d7cce7"
+    },
+    {
+     "bytes": 7334,
+     "path": "/mnt/d/LumaOS-builds/candidate19-vm-smoke-20261028T162354Z-desktop.log",
+     "sha256": "da5ddc6823f3a465c28925c016a2e1df8a90453f593c132d16b4fd624e0bca3b"
+    },
+    {
+     "bytes": 12717,
+     "path": "/mnt/d/LumaOS-builds/candidate19-optical-smoke-20261028T162354Z-desktop.log",
+     "sha256": "28cab5cbef3200eaef9a79aa9425d52f8a5ac7510fc42b06a7b70f23a0dd7117"
+    }
+   ],
+   "payload_in_package": true,
+   "signed": false,
+   "uploaded": false,
+   "origin_authenticated": false,
+   "log": {
+    "path": "D:/LumaOS-builds/downloads/candidate19-20261028T162354Z-desktop-a.log",
+    "bytes": 419,
+    "sha256": "b83625d05841c2a4e28c6329d885730939ede65a20dfc56d39f828d447e77fec"
+   }
+  }
+ },
+ "chain_outputs": [
+  {
+   "path": "D:/LumaOS-builds/candidate20-chain-20261103-a.out",
+   "bytes": 23117,
+   "sha256": "f11eeba81bc276f9acc7e4b5ff0e656ea3e8bde2d1c01ff9e6d96a771bf226e5",
+   "lock": [
+    "lock taken coordinator 2026-11-03T23:20:35Z sequence-20 verify, smokes and downloads a",
+    "lock released 2026-11-03T23:48:15Z"
+   ],
+   "step_exits": [
+    "=== step_exit=0: verify a 39b77ac64b7cf892f7d4735bc11e0c5fb2941871a77aa06ce2b25bccea92d6f9 20261103T215655Z-desktop (2026-11-03T23:41:57Z)",
+    "=== step_exit=0: update-compat a 20261103T215655Z-desktop (2026-11-03T23:41:57Z)",
+    "=== step_exit=1: smoke a 39b77ac64b7cf892f7d4735bc11e0c5fb2941871a77aa06ce2b25bccea92d6f9 20261103T215655Z-desktop usb-disk (2026-11-03T23:48:14Z)"
+   ],
+   "download_pins": []
+  },
+  {
+   "path": "D:/LumaOS-builds/candidate20-chain-20261103-b.out",
+   "bytes": 29841,
+   "sha256": "68915592a7648d730b901f0024a64d680c7f32643145e80040eed9404371b7ae",
+   "lock": [
+    "lock taken coordinator 2026-11-03T23:58:04Z sequence-20 smoke attempt b and download sets a",
+    "lock released 2026-11-04T00:49:40Z"
+   ],
+   "step_exits": [
+    "=== step_exit=0: smoke-harness a d3372cb8907cd26a1e8f3e33388061306fbdf9c3 (2026-11-03T23:58:12Z)",
+    "=== step_exit=0: smoke a 39b77ac64b7cf892f7d4735bc11e0c5fb2941871a77aa06ce2b25bccea92d6f9 20261103T215655Z-desktop usb-disk b (2026-11-04T00:12:07Z)",
+    "=== step_exit=0: smoke a 39b77ac64b7cf892f7d4735bc11e0c5fb2941871a77aa06ce2b25bccea92d6f9 20261103T215655Z-desktop virtio-disk b (2026-11-04T00:24:32Z)",
+    "=== step_exit=0: download a 39b77ac64b7cf892f7d4735bc11e0c5fb2941871a77aa06ce2b25bccea92d6f9 20261103T215655Z-desktop copy (2026-11-04T00:37:56Z)",
+    "=== step_exit=0: download19 a 39b77ac64b7cf892f7d4735bc11e0c5fb2941871a77aa06ce2b25bccea92d6f9 copy (2026-11-04T00:49:40Z)"
+   ],
+   "download_pins": [
+    {
+     "release": "luma-native-lab-20260927-desktop-20",
+     "sha256sums_sha256": "1c2c4af2242366462a11df5f1a1516647f5c30487f38ca071874f77bcb99a802",
+     "sha256sums_bytes": 1312,
+     "files": 15
+    },
+    {
+     "release": "luma-native-lab-20260927-desktop-19",
+     "sha256sums_sha256": "261a47f218dbc08f24eba7591203f84a21c2a2a64f48a5213d057149cf71008a",
+     "sha256sums_bytes": 1312,
+     "files": 15
+    }
+   ]
+  }
+ ],
+ "update_compatibility": {
+  "step": "update-compat a 20261103T215655Z-desktop (read-only; no container)",
+  "checked": {
+   "geometry_and_identity_equal": {
+    "edition": true,
+    "environment": true,
+    "hash_bytes": true,
+    "root_bytes": true
+   },
+   "new": {
+    "architecture": "amd64",
+    "edition": "desktop",
+    "environment": "lab",
+    "hash_bytes": 50733056,
+    "release": "luma-native-lab-20260927-desktop-20",
+    "root_bytes": 6442450944,
+    "sequence": 20,
+    "ubuntu": "24.04"
+   },
+   "old": {
+    "architecture": "amd64",
+    "edition": "desktop",
+    "environment": "lab",
+    "hash_bytes": 50733056,
+    "release": "luma-native-lab-20260927-desktop-19",
+    "root_bytes": 6442450944,
+    "sequence": 19,
+    "ubuntu": "24.04"
+   },
+   "same_secureboot_certificate": true,
+   "sequence_increases": true
+  },
+  "verdict": "platform.rs update() geometry and sequence checks would admit 19 -> 20",
+  "scope": "Static check of what platform.rs update() compares against installed.json, and that both exports carry the pinned laboratory certificate; no update was run"
+ },
+ "host_storage_health": {
+  "device": "D: Sonnics USB 3.0, 932 GiB exFAT",
+  "windows_volume_health_status": "Warning (as recorded with sequences 17 to 19; not re-read for this record)",
+  "d_free_bytes_at_record": 174213038080,
+  "repair_or_replacement_performed": false,
+  "owner_action_required": "Back up D: and repair or replace the disk; no disk-repair command was run"
+ },
+ "known_issues": [
+  {
+   "issue": "systemd fails unmounting var.mount at shutdown",
+   "observed_in": [
+    "sequence-16 to 19 disk smokes",
+    "sequence-18 and 19 optical smokes",
+    "sequence-20 smokes, see live_smokes.*.log_text_markers"
+   ],
+   "impact": "Warning only so far: dracut old-root teardown completes and LUMA_SHUTDOWN_STORAGE_CLEAN appears; no warning-free shutdown is claimed",
+   "open": true
+  },
+  {
+   "issue": "Installed-mode namespace paths under /var/lib/luma-os",
+   "detail": "Unchanged since sequence 19: their start on an installed boot is not yet observed",
+   "open": true
+  },
+  {
+   "issue": "model_vm_test live install memory fixture",
+   "detail": "Unchanged 6144 MiB fixture; a live install of this payload needs at least 8 GiB",
+   "open": true
+  }
+ ],
+ "remaining": {
+  "owner_acceptance": "The owner runs NATIVE_DOWNLOAD_ACCEPTANCE_19_20_2026-11-03.md: install 19 from its download set, update to 20, fall back and recover, then install 20 fresh, on QEMU/OVMF and on a physical machine from a USB stick",
+  "native_qualification": [
+   "Reviewed destructive target installation and actual installed boot from the downloaded disk image",
+   "Physical UEFI boot from a USB stick written from the download set",
+   "The 19 -> 20 update, its fallback and power-loss behaviour under Secure Boot",
+   "Loaded native security and graphical/Wayland/WebKit sandbox behavior",
+   "Existing-owner physical TPM, independent A/R/C/U custody commissioning and protected UTC dependencies",
+   "Account/session/finite-grant and model admission on the installed target",
+   "Secure Boot and verity rejection, encrypted storage and recovery acceptance"
+  ],
+  "development_not_reclassified_as_testing": [
+   "NF08 100,000-object/500-ms discovery path, Current::check batching and a production generation-selection route",
+   "Native C activation with physical tails/accounting, authenticated snapshot delivery and installed restore",
+   "Profile-W package signing, installation and enforcing WSL confinement; profile-V Hyper-V deployment"
+  ],
+  "gwin0_refresh_relation": "A GWIN0 package was refreshed from the same e9a11aa cut (luma-wsl-dev-g3-gwin0-integrated-20261103-e9a11aa); it is unsigned, uninstalled and unqualified",
+  "production_release": "Independent production custody, model catalog/trust, signing, a download host and applicable qualification remain separate from this laboratory-signed candidate"
+ },
+ "qualification": {
+  "wsl_restarted_or_memory_configuration_changed": false,
+  "wsl_configuration_in_effect": "Owner-approved .wslconfig memory=12GB, swap=2GB recorded with sequence 17; no WSL, power or pagefile setting changed for sequence 20",
+  "physical_disk_firmware_or_tpm_mutated": false,
+  "uploaded": false,
+  "signed_with_owner_key": false,
+  "usb_class_vm_boot_tested": true,
+  "usb_boot_qualified": false,
+  "native_machine_qualified": false,
+  "installed_security_or_recovery_qualified": false,
+  "update_qualified": false,
+  "production_custody_qualified": false,
+  "g2_closed": false,
+  "g3_closed": false,
+  "gwin0_closed": false
+ }
+}

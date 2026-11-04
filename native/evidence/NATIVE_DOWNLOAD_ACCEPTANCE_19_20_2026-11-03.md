@@ -13,15 +13,32 @@ sequence-19 components, so the two sequences are tested as one run: install
   `6528ea1411b2dc0057bbc1ecdbaad538df21b4f3`, release
   `luma-native-lab-20260927-desktop-19`, kernel `6.8.0-142-generic`. Its record
   is [G2_NATIVE_DESKTOP_CANDIDATE_19_2026-10-28.md](G2_NATIVE_DESKTOP_CANDIDATE_19_2026-10-28.md).
-- **Sequence 20 is not built yet.** Every sequence-20 value in this document is
-  marked PENDING. The coordinator fills them in from the build outputs.
-- **Neither download set has been produced or uploaded yet.** Agents never
-  upload. The owner chooses the HTTPS location and uploads the folders.
+- **Sequence 20 is built.** Build `20261103T215655Z-desktop`, source commit
+  `e9a11aac64ce6da55dd706cd3a22ebd64fb0ed4c`, release
+  `luma-native-lab-20260927-desktop-20`, kernel `6.8.0-142-generic`. Its record
+  is [candidate20_execution_2026-11-03.json](candidate20_execution_2026-11-03.json).
+  The offline image and export verification passed all 14 checks. A static
+  check found that `luma-platform update` would accept 20 over 19: the same
+  geometry, edition and environment, a higher sequence, and the same
+  laboratory certificate. No update was run.
+- **Both download sets are produced on the build host and not uploaded.** They
+  are `D:\LumaOS-builds\downloads\candidate19-20261028T162354Z-desktop-a` and
+  `D:\LumaOS-builds\downloads\candidate20-20261103T215655Z-desktop-a`. Each has
+  15 files, `SHA256SUMS` pinned in section 3, and a raw image that was
+  decompressed from the `.img.zst` and hashed. Agents never upload. The owner
+  chooses the HTTPS location and uploads the folders.
 - **None of the steps below has been run by an agent** on a physical machine,
   on a USB stick, from a download, or as an install or update of these two
-  sequences. Agents have run only the sequence-19 VM smokes named in its record
-  (a live boot of the disk image and of the ISO under QEMU with Secure Boot).
-  Neither smoke installed anything.
+  sequences. Agents have run only live VM smokes under QEMU with Secure Boot:
+  for sequence 19, the disk image and the ISO (named in its record); for
+  sequence 20, the raw disk image as a removable USB mass-storage device on
+  xHCI and as a virtio disk. No smoke installed anything.
+- The sequence-20 USB smoke passed on its second attempt. The first attempt
+  reached a root shell under Secure Boot, then failed the harness's own check
+  that the guest sees only the live disk: QEMU's q35 machine adds an empty DVD
+  drive, which the guest listed as `sr0`. The harness now starts disk media
+  with `-nodefaults -vga std` (commit `d3372cb`); the image was unchanged. The
+  failed attempt is kept in the record.
 - Nothing here is production-signed. The images and `secureboot.cer` are signed
   with the laboratory key.
 
@@ -82,8 +99,8 @@ from the download folder or the download location.
 
 | Set | `SHA256SUMS` pin | Status |
 | --- | --- | --- |
-| Sequence-19 download set (`candidate19-20261028T162354Z-desktop-<letter>`) | PENDING: printed as `sha256sums_sha256` by the `download19` step | not produced |
-| Sequence-20 download set (`candidate20-<BUILD_ID>-<letter>`) | PENDING: printed as `sha256sums_sha256` by the `download` step | not built |
+| Sequence-19 download set (`candidate19-20261028T162354Z-desktop-a`) | `261a47f218dbc08f24eba7591203f84a21c2a2a64f48a5213d057149cf71008a` (1,312 bytes, 15 rows) | produced on the build host, not uploaded |
+| Sequence-20 download set (`candidate20-20261103T215655Z-desktop-a`) | `1c2c4af2242366462a11df5f1a1516647f5c30487f38ca071874f77bcb99a802` (1,312 bytes, 15 rows) | produced on the build host, not uploaded |
 | Sequence-19 export folder itself | `d440805f8c8aabe69a7dfc852acabadbbdb57eb04ff19e587d59847ce85492bf` (1,069 bytes, 12 rows) | exists on the build host |
 
 A download set holds the export files, `build.json`, `VERIFY.txt`,
@@ -112,11 +129,33 @@ must match whichever `SHA256SUMS` you check.
 `build.json` (22,415 bytes) is not in the export `SHA256SUMS`; the download
 set's `SHA256SUMS` lists it.
 
-**Sequence 20** (`luma-native-lab-20260927-desktop-20`): PENDING. The build
-must keep environment `lab`, edition `desktop`, `root_bytes` 6442450944 and
-`hash_bytes` 50733056, or the 19-to-20 update cannot be tested; the
-`update-compat` step checks this before the set is made. The image size, the
-kernel version and every file hash are not known until the build runs.
+**Sequence 20** (`luma-native-lab-20260927-desktop-20`, build
+`20261103T215655Z-desktop`, kernel `6.8.0-142-generic`):
+
+| File | Bytes | SHA-256 |
+| --- | ---: | --- |
+| `.img` | 16,190,013,440 | `573da1f61ef646c7c3bacf616a2c8bd6b6ca15eb8a3c39c7ea5042387d581519` |
+| `.img.zst` | 3,690,817,887 | `9fee72c4b167e54697e23d50fa87c9b5e5a70a08ea64fa5d40b52d98ef7fb5ad` |
+| `.iso` (optional) | 7,225,763,840 | `b10302ca335987ea09878228b79d6acdc6d857ac260ba66bb88dc17a1e80a363` |
+| `secureboot.cer` | 1,073 | `2637785a3cb4798db902bf62732324984d3f2475d7f2eecc318442772d9c06c8` |
+| `release.json` | 995 | `cf0ab7000d074078c74b62c596cf4386da0c28f2503b76c070eeb52b40c521d5` |
+| `release.sig` | 64 | `9e5b8f9a52ec1a416dfb601325f028c1f51cc8e342d748cc19ddcb03ad058cee` |
+| `boot-policy.json` | 2,166 | `3d37d7dcdf2ba99350dece527cc1e9fab9d37cd6043ecd86f7537d465459c287` |
+| `optical-media.json` | 1,786 | `20040ba771cbaaf838b8f27c5576a11d39c40dbad367099f4d7ba772ee1185a7` |
+| `packages.lock` | 28,474 | `05b1dc02df7729570d2570dfce45e51e55305236ff493c21c4cf14dc613368e7` |
+| `source-lock.json` | 136,370 | `eb932cdc66f5cf80620ba0ed4a8550be0b04994fa0a7e22a10841f3d4bb89483` |
+| `toolchain-packages.lock` | 11,083 | `674dfe922b7eca733e893b85b9560a82e11d0a58235e87ac78fa1f7ef5e86668` |
+| `native-source.tar.zst` | 2,914,458 | `c7ea2cef16e47bf78c88bc11d4805ed5f5018a8c8e34822c66aa70dbd20c25b9` |
+
+`build.json` is 22,415 bytes, SHA-256
+`afe543ef281a845d5ff7092f72aa1be566389043340ca9fe785d4ec2bef75047`. The export
+`SHA256SUMS` itself is 1,069 bytes with 12 rows, SHA-256
+`8f83f708d4906f72e57ecb38c92d46aed4dfa4a0e4fed4f6f7719c8cdff280a8`. The
+sequence-20 release keeps environment `lab`, edition `desktop`, `root_bytes`
+6442450944 and `hash_bytes` 50733056, as the 19-to-20 update needs. The raw
+image is the same size as sequence 19's, `packages.lock` and
+`toolchain-packages.lock` are byte-identical to sequence 19's, and the kernel is
+the same.
 
 ## 4. Download and verify
 
@@ -343,6 +382,9 @@ held in RAM and refuses with less than 6732 MiB for it.
 
 In the guest the target is `/dev/disk/by-id/virtio-LUMA-VM-TARGET`. Every
 medium is attached read-only, so the VM cannot change a downloaded image.
+The q35 machine also adds an empty DVD drive, which the guest shows as `sr0`.
+It holds nothing and can be ignored; the agents' disk smokes remove it with
+`-nodefaults -vga std`.
 
 Example, the first live boot of sequence 19 from a USB stick:
 
@@ -590,8 +632,8 @@ sudo sha256sum /dev/disk/by-partlabel/luma-root-a /dev/disk/by-partlabel/luma-ha
 ```
 
 Expected: `luma.slot=b`; release `luma-native-lab-20260927-desktop-20`;
-`LUMA_BOOT_HEALTH_OK`; `installed.json` at sequence 20; `NO-PENDING`; the
-kernel the sequence-20 record names (PENDING); Secure Boot `1`; the slot-A
+`LUMA_BOOT_HEALTH_OK`; `installed.json` at sequence 20; `NO-PENDING`; kernel
+`6.8.0-142-generic`; Secure Boot `1`; the slot-A
 hashes equal to S4. The user's files and settings from S3 are still there.
 Check the GNOME login and session again.
 
@@ -772,7 +814,7 @@ Results are `pass`, `fail`, `blocked` or `not_applicable`. Rows follow the
 | 4 | Live command line, verity root, read-only payload mount | S1 | A104, A005 | P3 | as listed in S1 | |
 | 5 | Inventory before install | S1 | A001, A108 | P0 | lists the target with serial, WWN and size | |
 | 6 | TPM probe, AppArmor enforce, no failed unit, keeper and producer active | S1 | A104 | P3 | all pass | |
-| 7 | Ubuntu 24.04 and kernel track | S1, S3, S6 | A101, A103 | P3 | `24.04`; 19: `6.8.0-142-generic`; 20: PENDING | |
+| 7 | Ubuntu 24.04 and kernel track | S1, S3, S6 | A101, A103 | P3 | `24.04`; 19 and 20: `6.8.0-142-generic` | |
 | 8 | Payload verify (signed release record) | S1 | A097, FR05 | P3 | exit 0, release named | |
 | 9 | Exact destination disk, `ERASE <identity>` | S2 | A002, A108 | P0, P1 | identity shown; nothing written before confirmation | |
 | 10 | Explicit accounts, four credentials, no empty password | S2, S3 | A006 | P1 | prompts as described; `awk` prints nothing | |
@@ -828,9 +870,9 @@ Admin recovery credential (check the S2 serial log; see S2), the export archive
 
 ## 11. What sequence 20 changes
 
-Sequence 20 is cut from the G3 functional branch after sequence 19's commit
-`6528ea1`. Up to `8401811` that is 44 commits; the build record names the
-final cut. They change:
+Sequence 20 is cut from the G3 functional branch at `e9a11aa`, 57 commits after
+sequence 19's commit `6528ea1` (904 captured files, build inputs
+`39b77ac6…`). They change:
 
 - NF08 content search and custody code (content index, v2 publication, the
   content store, content checkpoint, credential observer, independent
@@ -852,14 +894,14 @@ sequence 19.
 - Mounting the update stick by hand on the installed system (S5) has not been
   exercised. Whether the installed desktop mounts the stick by itself is not
   known.
-- Booting from a USB-class device has not been tested: the agents' smokes used
-  a virtio disk and a CD. The `usb-disk` medium of `live_media_smoke.py` is
-  new and has not run.
+- A USB-class boot has been tested only in a VM: the sequence-20 live smoke
+  attached the image as a removable USB mass-storage device on QEMU's xHCI
+  controller. Sequence 19 has not been booted as a USB device, and no physical
+  USB controller or stick has been used.
 - No physical machine, physical stick, Rufus or Win32 Disk Imager has been
   used with these images.
 - A stick larger than the image (backup GPT not at the end) has not been booted.
 - KVM with Secure Boot, and a GNOME session in a VM, have not been exercised.
 - `luma-platform update` needs about 3.3 GiB free on the encrypted `/var`, and
   the live session needs 8 GiB of RAM.
-- Sequence-20 values (hashes, sizes, kernel, geometry) are pending until it is
-  built.
+- The sequence-20 ISO has been verified offline but not booted.

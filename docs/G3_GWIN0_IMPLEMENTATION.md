@@ -2799,6 +2799,40 @@ that the sequence-19 export inventory and checksum rows match the download
 layout. Sequence 20 is not built, signed or tested. No image was written to a
 USB stick, installed or updated. None of this closes a gate.
 
+### Sequence-20 native candidate, 3 November 2026
+
+Sequence 20 was built from the `e9a11aa` cut (904 captured files, build inputs
+`39b77ac6…`), which merges the NF08 direct index lost-reply recovery into the
+sequence-19 components. `platform.rs`, `main.rs`, `bundle.rs` and `staging.rs`
+are unchanged, so install, update, boot health and recovery run the sequence-19
+code. The packaged platform binary is new because NF08 content code changed. The
+optimized release compile passed in 11 m 22 s and the build exited zero with the
+committed release profile, and all fourteen offline image checks passed. Its
+geometry, edition, environment and laboratory certificate equal sequence 19's,
+so a static check of what `update()` compares found that 19 to 20 would be
+admitted; no update ran.
+
+The raw disk image passed the Secure Boot live smoke twice, once as a removable
+USB mass-storage device on xHCI and once as a virtio disk (QEMU TCG, fresh
+Secure Boot variables, software TPM, 8 GiB guest). Both met all ten required
+and all five gated checks, with a clean shutdown, and left the image
+unchanged. The first USB attempt failed after reaching a root shell: q35's
+default empty DVD drive appeared as `sr0` and broke the harness's
+only-the-live-disk check. `d3372cb` starts disk media with `-nodefaults
+-vga std`, and the fixed harness was mounted over the frozen copy for the
+retry. The frozen inputs did not change, and the failed attempt is retained.
+The ISO was verified offline but not booted. Download sets for sequences 19
+and 20 were laid out on the build host with `SHA256SUMS` pins `261a47f2…` and
+`1c2c4af2…`; both raw images were decompressed and hashed. Nothing was
+uploaded or owner-signed.
+
+The `var.mount` unmount warning, installed-mode `/var/lib/luma-os` paths and the
+6144 MiB `model_vm_test` fixture remain open. Installation, update, physical USB
+boot, graphical and installed security or recovery acceptance are the owner's.
+See the [owner handoff](../native/evidence/NATIVE_DOWNLOAD_ACCEPTANCE_19_20_2026-11-03.md)
+and [execution record](../native/evidence/candidate20_execution_2026-11-03.json).
+None of this closes a gate.
+
 ### NF08 observed query latency, 3 November 2026
 
 A content-store test runs lexical and semantic generation queries in the native

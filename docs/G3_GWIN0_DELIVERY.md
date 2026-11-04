@@ -276,6 +276,29 @@ checksums and download installation steps. The 2026-10-20, 2026-10-27 and
 2026-10-31 packages remain retained. This refresh is unsigned, uninstalled and
 unqualified, and WSL AppArmor is still `N`.
 
+The [`e9a11aa` refresh record](gates/gwin0/combined_workspace_inference_2026-11-03-e9a11aa.json)
+recomposes the same profile-W package from the `e9a11aa` cut (the
+`feature/g3-functional-beta` head and sequence-20 native build cut, which
+merges the NF08 direct index lost-reply recovery; the Windows sources are
+unchanged since `ce84c8c`). The cut was captured from a clean detached
+worktree; all 986 captured records equal their `e9a11aa` blobs (25 `*.ps1` as
+CRLF checkouts), and all 416 Rust files are identical to the compiled cut. The
+release platform worker, built under the same 8 GiB / 2 CPU bound, is
+22,120,944 stripped bytes; no debug-profile worker was rebuilt. The
+2,636,566,528-byte rootfs passed full public read-back, 21 Python tests, 170
+Windows package assertions under Windows PowerShell 5.1 and production
+inspection of 225 members and 91 publisher pins, repeated under Windows
+PowerShell 5.1 with all 25 fields equal. Against the 2026-11-03 `ce84c8c`
+package only the two worker copies, `platform.json` and the four runtime
+descriptors and manifests differ, and the manifest changes only its release ID.
+The package is under
+`D:/LumaOS-builds/gwin-integrated-package-20261103-e9a11aa-2wCUNqTs-public/package`,
+and the [owner test note](gates/gwin0/OWNER_TEST_NOTE_2026-11-03-e9a11aa.md)
+gives its checksums and download installation steps. The 2026-10-20,
+2026-10-27, 2026-10-31 and 2026-11-03 `ce84c8c` packages remain retained. This
+refresh is unsigned, uninstalled and unqualified, and WSL AppArmor is still
+`N`.
+
 The native workspace has explicit per-turn review and a fresh finite Infer
 grant. Native admission checks the reviewed worker/model/input commitment.
 Capture remains local data: separately admitted ASR may transcribe a selected

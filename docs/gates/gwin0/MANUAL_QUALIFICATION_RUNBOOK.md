@@ -514,9 +514,9 @@ P3 refusal.
 
 Preconditions: F2 passed. The release's inference profile is lab-only, so the
 environment is `lab`. Use the runtime manifest and profile SHA-256 values from
-the release record. For the 2026-11-03 package these are
-`1130d69b9e2aabce6530500adec0f3c663f5da7c342c5c1d416000eb3f65a817` and
-`458f229f4763df7323ad602535621425ec10b543d16db17e8f273e569ffeda4f`, for the
+the release record. For the 2026-11-03 `e9a11aa` package these are
+`f4b0a49240ccbda3bb1d667ccf9e3a556f090b9dd8725b1319ac60486762e42a` and
+`6625d600b1be72aebed54c3333b569a84d38ac2c898679c19d9119c097a3084c`, for the
 model Qwen3-4B Q4_K_M
 (`7485fe6f11af29433bc51cab58009521f205840f5b4ae3a32fa7f92e8534fdf5`, 2497280256
 bytes) on llama.cpp b11100 CPU.

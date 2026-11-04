@@ -391,7 +391,20 @@ index group included. It took 3950.44 seconds and 86 minutes end to end in run
 one. The index group therefore ran twice in both runs, not once. That runner now
 skips the same two paths, so the group runs once, in `index-boundaries`, and the
 storage job's suite should fall to about what the other two jobs take for the rest,
-129.49 to 348.13 seconds in these runs. CI has not run that change.
+129.49 to 348.13 seconds in these runs.
+
+Run 41736194164 on `b240ccf`, whose Rust sources equal `e9a11aa`'s, ran that change
+and passed all four jobs. `storage-boundaries` passed 1587, with 43 ignored and the
+eight filtered out, in 268.00 seconds, down from 1949.33, and took about 46 minutes
+end to end, so the group ran once. `rust-boundaries` and the TPM suite passed the
+same 1587 in 349.57 and 347.29 seconds, the TPM job about 34 minutes and well within
+its 7200-second deadline. The index job passed the eight tests in 4951.39 seconds
+after an 8 m 33 s test build and took about 100 minutes, the run's longest job, with
+80 minutes of its 180-minute limit left. That is 1.38 of the local index figure and
+0.21 to 0.27 for the rest. Every index test took 1.77 to 1.82 times as long as in run
+41725414198, the chain test 3492.05 seconds against 1972.91, with identical code,
+so the runner was slower throughout. A run 1.8 times slower again than this one
+would not fit the limit; the limits are left as they are.
 
 The mount read note stays as dated history, but its closing paragraph no longer
 holds. It said that further reduction would need a change notification or fewer

@@ -2704,7 +2704,15 @@ runs since the split. Its runner script has its own `cargo test` line, which the
 split did not change. That job took 3950.44 seconds in run 41707675273, 86 minutes
 end to end and that run's longest job, and 1949.33 seconds here, so the group ran
 twice, not once as the record of that run says. The storage runner now skips the
-same two paths, so the group runs once, as chosen; CI has not run that change.
+same two paths, so the group runs once, as chosen.
+
+CI run 41736194164 on `b240ccf`, with the same Rust sources, ran that change and
+passed all four jobs. `storage-boundaries` passed the 1587 in 268.00 seconds, down
+from 1949.33, in about 46 minutes end to end, so the group ran once.
+`rust-boundaries` and the TPM suite passed them in 349.57 and 347.29 seconds. The
+index job passed the eight tests in 4951.39 seconds and took about 100 minutes of
+its 180-minute limit; every index test took 1.77 to 1.82 times as long as in the
+previous run on identical code, so the runner was slower throughout.
 
 Recovering a stopped attempt, whose C advance did not happen or was not seen,
 needs a retired-restart record, and a C namespace reservation needs its own
